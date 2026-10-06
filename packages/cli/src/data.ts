@@ -2,6 +2,15 @@
 // without a table, the user tables; with one, its newest (or oldest) documents as a table, a JSON array or
 // one per line, each value printed as Convex's CLI prints it.
 import { fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
+import {
+  argumentError,
+  invalidArgument,
+  invalidChoice,
+  missingArgument,
+  optionsIn,
+  tooManyArguments,
+  unknownOption,
+} from "./args.ts";
 import type { Io } from "./io.ts";
 import { acquireTarget } from "./local-deployment.ts";
 import { adminRequest, NO_DEPLOYMENT, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
@@ -15,7 +24,14 @@ List the deployment's tables, or print a table's documents.
 
 This works with system tables, such as \`_storage\`, in addition to your own tables.
 
+  List system tables:           bunvex data --system
+  List documents in one:        bunvex data --system _tables
+
+With --system, every system table is listed and readable, the deployment's private ones included, as
+stored (an admin key with permission to view data; read-only).
+
 Options:
+  --system             list the system tables, or print one's documents (private ones too)
   --limit <n>          list only the \`n\` most recently created documents (default: 100)
   --order <choice>     order the documents by their \`_creationTime\`: asc or desc (default: desc)
   --format <format>    jsonArray (aka json): a JSON array of objects; jsonLines (aka jsonl): an object per
@@ -61,6 +77,17 @@ async function paginated(target: Target, path: string, args: Record<string, unkn
   return results;
 }
 
+/** One query's value. */
+async function query(target: Target, path: string, args: Record<string, unknown>) {
+  const r = (await adminRequest(target, "/api/query", { path, args })) as {
+    status: string;
+    value?: unknown;
+    errorMessage?: string;
+  };
+  if (r.status !== "success") throw new Error(r.errorMessage ?? `${path} failed`);
+  return r.value;
+}
+
 /** Convex's `logDocumentsTable`; the lines, and whether any was cut to the terminal's width. */
 export function documentsTable(
   rows: Record<string, string>[],
@@ -92,54 +119,48 @@ export async function dataCommand(args: string[], io: Io): Promise<number> {
     return 0;
   }
   const taken = takeTargetFlags(args);
-  if (typeof taken === "string") {
-    io.err(`bunvex data: ${taken}`);
-    return 2;
-  }
+  // Convex's `data` shows its help after an argument error.
+  if (typeof taken === "string") return argumentError(io, taken, DATA_USAGE);
+  const positional: string[] = [];
   let table: string | undefined;
   let limit = 100;
   let order: "asc" | "desc" = "desc";
   let format: Format | undefined;
+  let system = false;
   const r = taken.rest;
   for (let i = 0; i < r.length; i++) {
     const a = r[i]!;
     const value = (flag: string) => (a.includes("=") ? a.slice(flag.length + 1) : r[++i]);
     if (a === "--limit" || a.startsWith("--limit=")) {
       const v = value("--limit");
-      const n = Number(v);
-      if (!v || !/^\d+$/.test(v) || n <= 0) {
-        io.err(`bunvex data: option '--limit <n>' argument '${v ?? ""}' is invalid. Not a positive number.`);
-        return 2;
-      }
+      if (v === undefined) return argumentError(io, missingArgument("--limit <n>"), DATA_USAGE);
+      // Convex's `parsePositiveInteger`: a number (`+v`), above 0.
+      const n = +v;
+      if (Number.isNaN(n)) return argumentError(io, invalidArgument("--limit <n>", v, "Not a number."), DATA_USAGE);
+      if (n <= 0) return argumentError(io, invalidArgument("--limit <n>", v, "Not a positive number."), DATA_USAGE);
       limit = n;
     } else if (a === "--order" || a.startsWith("--order=")) {
       const v = value("--order");
-      if (v !== "asc" && v !== "desc") {
-        io.err(
-          `bunvex data: option '--order <choice>' argument '${v ?? ""}' is invalid. Allowed choices are asc, desc.`,
-        );
-        return 2;
-      }
+      if (v === undefined) return argumentError(io, missingArgument("--order <choice>"), DATA_USAGE);
+      if (v !== "asc" && v !== "desc")
+        return argumentError(io, invalidChoice("--order <choice>", v, ["asc", "desc"]), DATA_USAGE);
       order = v;
     } else if (a === "--format" || a.startsWith("--format=")) {
       const v = value("--format");
-      if (!FORMATS.includes(v as Format)) {
-        io.err(
-          `bunvex data: option '--format <format>' argument '${v ?? ""}' is invalid. Allowed choices are ${FORMATS.join(", ")}.`,
-        );
-        return 2;
-      }
+      if (v === undefined) return argumentError(io, missingArgument("--format <format>"), DATA_USAGE);
+      if (!FORMATS.includes(v as Format))
+        return argumentError(io, invalidChoice("--format <format>", v, FORMATS), DATA_USAGE);
       format = v as Format;
+    } else if (a === "--system") {
+      system = true;
     } else if (a === "--component" || a.startsWith("--component=")) {
-      // DV (STUDY-43 D1): no components yet.
-      io.err("bunvex data: --component: bunvex does not have components yet.");
-      return 2;
-    } else if (!a.startsWith("-") && table === undefined) table = a;
-    else {
-      io.err(`bunvex data: unknown option ${a}\n\n${DATA_USAGE}`);
-      return 2;
-    }
+      // DV-224 (STUDY-43 D1): no components yet.
+      return argumentError(io, "--component: bunvex does not have components yet.");
+    } else if (!a.startsWith("-")) positional.push(a);
+    else return argumentError(io, unknownOption(a, optionsIn(DATA_USAGE)), DATA_USAGE);
   }
+  if (positional.length > 1) return argumentError(io, tooManyArguments("data", 1, positional.length), DATA_USAGE);
+  table = positional[0];
 
   let acquired: Awaited<ReturnType<typeof acquireTarget>>;
   try {
@@ -154,6 +175,23 @@ export async function dataCommand(args: string[], io: Io): Promise<number> {
   }
   const target = acquired.target;
   try {
+    if (system && table === undefined) {
+      // bunvex's system-table browser (STUDY-131 AD-24): name and one line on each, as the catalog has them
+      const tables = (await query(target, "_system/debug/systemTables", {})) as {
+        name: string;
+        description: string;
+        appVisible: boolean;
+        documentCount: number | null;
+      }[];
+      const width = Math.max(...tables.map((t) => t.name.length));
+      const counts = tables.map((t) => (t.documentCount === null ? "?" : String(t.documentCount)));
+      const countWidth = Math.max(...counts.map((c) => c.length));
+      for (const [i, t] of tables.entries())
+        io.out(
+          `${t.name.padEnd(width)}  ${counts[i]!.padStart(countWidth)}  ${t.appVisible ? "public " : "private"}  ${t.description}`,
+        );
+      return 0;
+    }
     if (table === undefined) {
       const tables = (await paginated(target, "_system/cli/tables", {})) as { name: string }[];
       if (tables.length === 0) {
@@ -169,9 +207,14 @@ export async function dataCommand(args: string[], io: Io): Promise<number> {
       );
       return 0;
     }
-    const data = (await paginated(target, "_system/cli/tableData", { table, order }, limit + 1)).map(
-      (d) => fromJsonValue(d as JSONValue) as Record<string, Value>,
-    );
+    const data = (
+      await paginated(
+        target,
+        system ? "_system/debug/systemTable" : "_system/cli/tableData",
+        { table, order },
+        limit + 1,
+      )
+    ).map((d) => fromJsonValue(d as JSONValue) as Record<string, Value>);
     if (data.length === 0) {
       io.err("There are no documents in this table.");
       return 0;

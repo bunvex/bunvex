@@ -44,10 +44,14 @@ bunvex/
 │   │   ├── engine                   snapshots, query cache by read-set ✅ · Convex's OCC retries/error (STUDY-21) ✅
 │   │   ├── write-throughput         the 4 MiB/s write throughput limit (STUDY-78)                ✅
 │   │   ├── determinism              frozen Date, seeded Math.random, no fetch/timers in txs   ✅
+│   │   ├── tracing                  spans, W3C trace context, samplers; index reads and commits
+│   │   │                            traced when a span is current (STUDY-131 AD-26)              ✅
+│   │   ├── runtime                  the clock and timers; TestRuntime, virtual time for tests (STUDY-132) 🟡
 │   │   ├── subscriptions            subscriptions, invalidation, dedupe (transport-agnostic)  ✅
 │   │   ├── index-worker             background backfill of new indexes (STUDY-29)             ✅
 │   │   ├── retention                garbage-collect old versions (STUDY-33)                   ✅
 │   │   ├── search-indexes           the search indexes of the active tables (STUDY-45)        🟡
+│   │   ├── virtual-tables           _storage / _scheduled_functions over Convex's system tables (STUDY-125) ✅
 │   │   └── persistence/             the Persistence INTERFACE (contract PERSIST-01)           ✅
 │   │       ├── memory               memory + append-only log (no dependencies)                ✅
 │   │       └── sqlite               bun:sqlite (no dependencies)                              ✅
@@ -77,7 +81,9 @@ bunvex/
 │   │   ├── admin                    admin/deploy keys, health, stats                          🟡 → M
 │   │   ├── persistence (config)     PERSISTENCE=, PERSISTENCE_URL=, Convex's POSTGRES_URL=… and DO_NOT_REQUIRE_SSL= ✅ · FILE_STORAGE=, env vars M
 │   │   ├── logs                     console.log from functions → logLines (STUDY-20) ✅ · streaming D
-│   │   └── metrics                  Prometheus                                                D
+│   │   ├── traces                   OTLP/HTTP JSON exporter, OTEL_* configuration, spans per request,
+│   │   │                            WebSocket message, function, transition, job (STUDY-131 AD-26) ✅
+│   │   └── metrics                  Prometheus /metrics, both ports (STUDY-114)                ✅
 │   │
 │   ├── file-storage/                @bunvex/file-storage              ← the BYTES of files    ✅
 │   │   ├── local                    local disk (STUDY-32)                                      ✅
@@ -134,7 +140,7 @@ bunvex/
 │   │   ├── typecheck                tsc or tsgo on the functions (STUDY-117)                  ✅
 │   │   ├── logs, data                                                                          D
 │   │   ├── import, export                                                                      D
-│   │   └── mcp                      for AI agents                                              D
+│   │   └── mcp                      MCP server for AI tools: the official SDK, zod (STUDY-121) ✅
 │   │
 │   ├── testing/                     @bunvex/testing  the REAL engine in memory, to test functions M
 │   │

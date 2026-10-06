@@ -29,6 +29,8 @@ import {
   OutOfRetentionError,
   type QueryJournal,
   ReadSetIndex,
+  SPAN_KIND,
+  type Span,
   stringifyValue,
   TooManyWritesError,
 } from "@bunvex/core";
@@ -257,8 +259,33 @@ export type SyncDeps = {
    * `SUBSCRIPTION_INVALIDATION_HISTORY` from the environment, else 8. 0 records nothing.
    */
   invalidationHistory?: number;
+  /**
+   * The `/metrics` histograms the sync protocol records (STUDY-114), as Convex's sync worker: the arguments'
+   * bytes of each ModifyQuerySet (its added queries'), Mutation and Action message, and each message sent.
+   */
+  metrics?: SyncMetrics;
   /** The WS ping interval and the client timeout; defaults: Convex's 5 s and 120 s. For tests. */
   wsHeartbeat?: Partial<WsHeartbeatOptions>;
+};
+
+type Observer = { observe(v: number): void };
+export type SyncMetrics = {
+  queryModificationArgs: Observer;
+  mutationArgs: Observer;
+  actionArgs: Observer;
+  transitionMessageSize: Observer;
+};
+
+/**
+ * Arguments' bytes as the client sent them (its JSON), as Convex's `args.get().len()`; 0 for arguments too deep
+ * to serialize again (the function refuses them as too nested), so measuring never ends the message.
+ */
+const argsBytes = (args: v1.JSONValue[]) => {
+  try {
+    return Buffer.byteLength(JSON.stringify(args));
+  } catch {
+    return 0;
+  }
 };
 
 /** One query run at one snapshot, ready to splice into frames. */
@@ -348,6 +375,12 @@ export class SyncHub {
   /** The read-set of each watched key's latest execution: what a commit is matched against (STUDY-08 D9). */
   readonly reads = new ReadSetIndex<string>();
   readonly sessions = new Set<SyncSession>();
+  /** The queries subscribed to across every session (read when `/metrics` is scraped). */
+  subscriptionCount(): number {
+    let n = 0;
+    for (const s of this.sessions) n += s.querySetSize;
+    return n;
+  }
   /** A WebSocket mutation's time limit (tests lower it). */
   mutationTimeoutMs = SYNC_WORKER_PROCESS_TIMEOUT_MS;
   /** Bumped when deployed code changes (STUDY-35): runs of an older generation are not reused. */
@@ -810,6 +843,16 @@ export class SyncHub {
 
 type Socket = ServerWebSocket<{ session: SyncSession }>;
 
+/** A client message's span name, after `sync-worker/` (Convex's sync worker names its roots so). */
+const MESSAGE_SPANS: Record<v1.ClientMessage["type"], string> = {
+  Connect: "connect",
+  ModifyQuerySet: "modify-query-set",
+  Mutation: "mutation",
+  Action: "action",
+  Authenticate: "authenticate",
+  Event: "event",
+};
+
 /** One connection's sync state and its message handling. */
 export class SyncSession {
   sessionId: string | null = null;
@@ -817,6 +860,10 @@ export class SyncSession {
   private received = { querySet: 0, identity: 0 };
   private version: v1.StateVersion = { querySet: 0, ts: 0n, identity: 0 };
   private queries = new Map<number, SessionQuery>();
+  /** The queries subscribed to (the `/metrics` subscriptions gauge). */
+  get querySetSize(): number {
+    return this.queries.size;
+  }
   private pending: (v1.AddQuery | v1.RemoveQuery)[] = [];
   private identityChanged = false;
   /** Who this connection acts as (STUDY-27), and when its token expires (seconds; none without a token). */
@@ -878,8 +925,11 @@ export class SyncSession {
   transitionChunks = false;
 
   private sendTransition(json: string) {
+    if (this.closed || !this.ws) return;
+    // A transition's size is its whole message's, before it is chunked (Convex measures it in the worker).
+    this.hub.deps.metrics?.transitionMessageSize.observe(Buffer.byteLength(json));
     const frames = transitionFrames(json, this.transitionChunks);
-    for (let i = 0; i < frames.length; i++) this.send(frames[i]!, i === frames.length - 1);
+    for (let i = 0; i < frames.length; i++) this.write(frames[i]!, i === frames.length - 1);
   }
 
   /**
@@ -894,8 +944,15 @@ export class SyncSession {
   private head = 0;
   private transitionsInBuffer = 0;
 
+  /** Send a message other than a transition (Convex's worker measures every message it sends). */
+  private send(frame: string) {
+    if (this.closed || !this.ws) return;
+    this.hub.deps.metrics?.transitionMessageSize.observe(Buffer.byteLength(frame));
+    this.write(frame);
+  }
+
   /** `transition`: the frame is a transition's (its last frame, when it is sent in chunks). */
-  private send(frame: string, transition = false) {
+  private write(frame: string, transition = false) {
     if (this.closed || !this.ws) return;
     const ws = this.ws;
     if (this.head === this.inBuffer.length) {
@@ -973,7 +1030,8 @@ export class SyncSession {
    */
   private fail(f: SyncFailure) {
     if (this.closed) return;
-    if (isDeterministicUserError(f.code)) this.send(v1.encodeServerMessage({ type: "FatalError", error: f.msg }));
+    // Not measured: Convex sends its fatal errors outside the worker loop that measures messages.
+    if (isDeterministicUserError(f.code)) this.write(v1.encodeServerMessage({ type: "FatalError", error: f.msg }));
     const frame = closeFrame(f);
     if (frame) this.ws?.close(frame.code, frame.reason);
     else this.ws?.close(0);
@@ -1010,8 +1068,41 @@ export class SyncSession {
     } catch (e) {
       return this.badRequest((e as Error).message);
     }
-    this.inbox = this.inbox.then(() => (this.closed ? undefined : this.handle(m))).catch((e) => this.internalError(e));
+    const tracer = this.hub.deps.engine.tracer;
+    if (tracer.on) return this.tracedMessage(m, Buffer.byteLength(frame));
+    this.inbox = this.inbox
+      .then(() => (this.closed ? undefined : this.handle(m, null)))
+      .catch((e) => this.internalError(e));
   }
+
+  /**
+   * A message with its trace (STUDY-131 AD-26): a root span per message, as Convex's sync worker opens
+   * `sync-worker/mutation` and `sync-worker/action` roots. The sync protocol carries no trace context (nor
+   * does Convex's), so a message cannot continue a client's trace. A mutation's or action's span ends with
+   * its response; a query set or identity change is the parent of the transition it starts.
+   */
+  private tracedMessage(m: v1.ClientMessage, bytes: number) {
+    const tracer = this.hub.deps.engine.tracer;
+    const span = tracer.root(`sync-worker/${MESSAGE_SPANS[m.type]}`, SPAN_KIND.server);
+    span?.set("bunvex.sync.message_bytes", bytes).set("bunvex.sync.session_id", this.sessionId ?? undefined);
+    const owned = m.type === "Mutation" || m.type === "Action";
+    this.inbox = this.inbox
+      .then(async () => {
+        if (this.closed) return span?.finish();
+        try {
+          await tracer.within(span, () => this.handle(m, span));
+        } catch (e) {
+          span?.fail(e);
+          throw e;
+        } finally {
+          if (!owned) span?.finish();
+        }
+      })
+      .catch((e) => this.internalError(e));
+  }
+
+  /** The traced message (its span) a transition about to run was asked for by, if any. */
+  private transitionParent: Span | null = null;
 
   /**
    * End the connection with an `AuthError` (Convex: the error message, the identity version, then a close
@@ -1019,7 +1110,8 @@ export class SyncSession {
    */
   private authError(error: string, authUpdateAttempted: boolean) {
     if (this.closed) return;
-    this.send(
+    // Not measured, as a FatalError.
+    this.write(
       v1.encodeServerMessage({ type: "AuthError", error, baseVersion: this.received.identity, authUpdateAttempted }),
     );
     this.ws?.close(0);
@@ -1059,7 +1151,7 @@ export class SyncSession {
     return this.caller;
   }
 
-  private async handle(m: v1.ClientMessage) {
+  private async handle(m: v1.ClientMessage, span: Span | null) {
     switch (m.type) {
       case "Connect": {
         this.sessionId = m.sessionId;
@@ -1074,7 +1166,13 @@ export class SyncSession {
           );
         return;
       }
-      case "ModifyQuerySet":
+      case "ModifyQuerySet": {
+        const metrics = this.hub.deps.metrics;
+        if (metrics) {
+          let bytes = 0;
+          for (const q of m.modifications) if (q.type === "Add") bytes += argsBytes(q.args);
+          metrics.queryModificationArgs.observe(bytes);
+        }
         if (m.baseVersion !== this.received.querySet)
           return this.badRequest(
             `Base version ${m.baseVersion} passed up doesn't match the current version ${this.received.querySet}`,
@@ -1083,11 +1181,15 @@ export class SyncSession {
           return this.internalError(new Error(`query set version ${m.newVersion} does not follow ${m.baseVersion}`));
         this.pending.push(...m.modifications);
         this.received.querySet = m.newVersion;
+        if (span) this.transitionParent = span.set("bunvex.sync.modifications", m.modifications.length);
         return this.schedule();
+      }
       case "Mutation":
-        return this.mutation(m);
+        this.hub.deps.metrics?.mutationArgs.observe(argsBytes(m.args));
+        return this.mutation(m, span);
       case "Action":
-        return this.action(m);
+        this.hub.deps.metrics?.actionArgs.observe(argsBytes(m.args));
+        return this.action(m, span);
       case "Authenticate": {
         if (m.baseVersion !== this.received.identity)
           return this.internalError(
@@ -1125,6 +1227,7 @@ export class SyncSession {
         }
         this.received.identity++;
         this.identityChanged = true;
+        if (span) this.transitionParent = span;
         return this.schedule();
       }
       case "Event":
@@ -1203,7 +1306,34 @@ export class SyncSession {
     }
   }
 
-  private async transition() {
+  /**
+   * Traced, a transition is a `sync-worker/update-queries` span (Convex's root of the same name): under the
+   * message that asked for it, else (a commit invalidated a query) a trace of its own, with the queries it
+   * re-ran under it.
+   */
+  private transition(): Promise<void> {
+    // Not async: untraced, the transition's own promise, with no extra turn.
+    return this.hub.deps.engine.tracer.on ? this.tracedTransition() : this.runTransition(null);
+  }
+
+  private async tracedTransition() {
+    const tracer = this.hub.deps.engine.tracer;
+    const parent = this.transitionParent;
+    this.transitionParent = null;
+    const span = parent
+      ? parent.child("sync-worker/update-queries")
+      : tracer.root("sync-worker/update-queries", SPAN_KIND.internal);
+    try {
+      await tracer.within(span, () => this.runTransition(span));
+    } catch (e) {
+      span?.fail(e);
+      throw e;
+    } finally {
+      span?.finish();
+    }
+  }
+
+  private async runTransition(span: Span | null) {
     const { engine } = this.hub.deps;
     const caller = this.currentCaller();
     if (caller === null) return;
@@ -1309,13 +1439,20 @@ export class SyncSession {
 
     const end: v1.StateVersion = { querySet, ts: wireTs(ts), identity };
     const endText = versionJson(end);
-    this.sendTransition(
+    const transition =
       `{"type":"Transition","startVersion":${this.versionText},"endVersion":${endText},` +
-        `"modifications":[${[...modifications.values()].join(",")}],` +
-        // serverTs: the server's clock when sending, in ns (Convex's `inject_server_ts`): the client measures
-        // the transit time with it and `clientClockSkew` (a null there reads as 1970 and warns on every frame).
-        `"clientClockSkew":${this.clientClockSkew ?? null},"serverTs":${BigInt(Date.now()) * 1_000_000n}}`,
-    );
+      `"modifications":[${[...modifications.values()].join(",")}],` +
+      // serverTs: the server's clock when sending, in ns (Convex's `inject_server_ts`): the client measures
+      // the transit time with it and `clientClockSkew` (a null there reads as 1970 and warns on every frame).
+      `"clientClockSkew":${this.clientClockSkew ?? null},"serverTs":${BigInt(Date.now()) * 1_000_000n}}`;
+    this.sendTransition(transition);
+    if (span)
+      span
+        .set("bunvex.sync.queries", this.queries.size)
+        .set("bunvex.sync.queries_rerun", stale.length)
+        .set("bunvex.sync.modifications", modifications.size)
+        .set("bunvex.sync.bytes", Buffer.byteLength(transition))
+        .set("bunvex.sync.ts", ts);
     this.version = end;
     this.versionText = endText;
     this.hub.stats.transitions++;
@@ -1406,15 +1543,19 @@ export class SyncSession {
     }
   }
 
-  private mutation(m: v1.MutationRequest) {
+  /** `span`: the message's, traced; it ends once the mutation is answered (its time in the queue included). */
+  private mutation(m: v1.MutationRequest, span: Span | null) {
     // Convex's `mutation_queue_length`: the mutations still waiting when this one arrives (not the running one).
     const queued = this.pendingMutations - (this.mutationRunning ? 1 : 0);
-    if (queued >= MAX_PENDING_MUTATIONS)
+    if (queued >= MAX_PENDING_MUTATIONS) {
+      span?.fail("TooManyConcurrentMutations").finish();
       return this.fail({
         code: "RateLimited",
         shortMsg: "TooManyConcurrentMutations",
         msg: `Too many concurrent mutations (${MAX_PENDING_MUTATIONS})`,
       });
+    }
+    span?.set("bunvex.function.path", m.udfPath).set("bunvex.sync.request_id", m.requestId);
     this.pendingMutations++;
     // Queued before any await, so the queue order is the order frames arrived (STUDY-22).
     this.mutations = this.mutations.then(async () => {
@@ -1484,33 +1625,42 @@ export class SyncSession {
             this.response("MutationResponse", m.requestId, out, r.ok ? v1.encodeU64(wireTs(r.value.ts)) : null),
           );
         }
+        // Traced, the transition that follows the response belongs to this message's trace.
+        if (span) this.transitionParent = span;
         this.schedule();
       } finally {
         this.pendingMutations--;
         this.mutationRunning = false;
+        span?.finish();
       }
     });
   }
 
-  private action(m: v1.ActionRequest) {
-    if (this.inflightActions > MAX_INFLIGHT_ACTIONS)
+  /** `span`: the message's, traced; it ends once the action is answered. */
+  private action(m: v1.ActionRequest, span: Span | null) {
+    span?.set("bunvex.function.path", m.udfPath).set("bunvex.sync.request_id", m.requestId);
+    if (this.inflightActions > MAX_INFLIGHT_ACTIONS) {
+      span?.fail("TooManyInflightActionsForSingleClient").finish();
       return this.fail({
         code: "RateLimited",
         shortMsg: "TooManyInflightActionsForSingleClient",
         msg: `Too many inflight actions (${MAX_INFLIGHT_ACTIONS})`,
       });
+    }
     const caller = this.requestCaller(m.requestId);
-    if (caller === null) return;
+    if (caller === null) return span?.finish();
     let component: string | null;
     try {
       component = componentOf(m.componentPath, caller);
     } catch (e) {
+      span?.fail(e).finish();
       return this.internalError(e);
     }
     if (component !== null) {
-      void collectLogs(async () => Promise.reject(componentNotFound(component!))).then((r) =>
-        this.send(this.response("ActionResponse", m.requestId, r)),
-      );
+      void collectLogs(async () => Promise.reject(componentNotFound(component!))).then((r) => {
+        this.send(this.response("ActionResponse", m.requestId, r));
+        span?.finish();
+      });
       return;
     }
     this.inflightActions++;
@@ -1524,9 +1674,11 @@ export class SyncSession {
         if (!r.ok && (isSystemError(r.error) || r.error instanceof TooManyConcurrentRequestsError))
           return this.internalError(r.error);
         this.send(this.response("ActionResponse", m.requestId, r));
+        if (span) this.transitionParent = span;
         this.schedule();
       } finally {
         this.inflightActions--;
+        span?.finish();
       }
     })();
   }

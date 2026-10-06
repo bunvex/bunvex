@@ -1,12 +1,14 @@
 // The dashboard's system functions for schedules and crons (STUDY-30 §3.5), as Convex's
 // npm-packages/system-udfs/convex/_system/frontend: same names, arguments and result shapes. Their results
 // are Convex's private documents (`_scheduled_jobs`, `_scheduled_job_args`, `_cron_jobs`, `_cron_next_run`,
-// `_cron_job_logs`): times in ns as int64, args as bytes, `state.type`. bunvex stores these differently
-// (S2), so the documents are built on the way out.
+// `_cron_job_logs`): times in ns as int64, args as bytes, `state.type`. The scheduler's are stored so
+// (STUDY-125) and returned as they are; the crons' are built on the way out.
 //
 // Only an admin may call them (Convex's `queryPrivateSystem("ViewData")`); clients cannot, as no `_system`
 // name is in the public registry. Admin keys (Phase 3 item 6) will expose them over HTTP and WebSocket.
 import {
+  APP_VISIBLE_SYSTEM_TABLES,
+  AUTH_TABLE,
   type AuditLogActor,
   type Caller,
   CRON_JOB_LOGS_TABLE,
@@ -17,17 +19,22 @@ import {
   ENVIRONMENT_VARIABLES_TABLE,
   type Engine,
   EXPORTS_TABLE,
+  getJob,
   insertAuditLogEvents,
-  type JobDoc,
   LOG_SINKS_TABLE,
   type PaginationOptions,
-  type PaginationResult,
   readBackendState,
-  SCHEDULED_FUNCTIONS_TABLE,
+  SCHEDULED_JOB_ARGS_TABLE,
+  SCHEDULED_JOBS_TABLE,
+  SCHEMAS_TABLE,
+  type ScheduledJobDoc,
   SNAPSHOT_IMPORTS_TABLE,
   STORAGE_TABLE,
   SYSTEM_ACTOR,
+  SYSTEM_TABLE_DESCRIPTIONS,
+  schemaValidationProgress,
   stringifyValue,
+  TableSummariesUnavailableError,
   type Tx,
 } from "@bunvex/core";
 import { type GenericValidator, type Value, v } from "@bunvex/values";
@@ -50,27 +57,6 @@ const canonical = (udfPath: string) => {
   const [m, f] = i === -1 ? [udfPath, "default"] : [udfPath.slice(0, i), udfPath.slice(i + 1)];
   return `${m.endsWith(".js") ? m : `${m}.js`}:${f}`;
 };
-
-/** A job as Convex's `_scheduled_jobs` document. The args live with the job here, so `argsId` is its id. */
-function scheduledJobDoc(d: JobDoc) {
-  const state =
-    d.state.kind === "inProgress"
-      ? { type: "inProgress", requestId: d.state.requestId, executionId: d.state.executionId }
-      : d.state.kind === "failed"
-        ? { type: "failed", error: d.state.error }
-        : { type: d.state.kind };
-  return {
-    _id: d._id,
-    _creationTime: d._creationTime,
-    udfPath: d.name,
-    argsId: d._id,
-    state,
-    ...(d.nextTs === undefined ? {} : { nextTs: ns(d.nextTs) }),
-    ...(d.completedTime === undefined ? {} : { completedTs: ns(d.completedTime) }),
-    originalScheduledTs: ns(d.scheduledTime),
-    ...(d.systemErrors === undefined ? {} : { attempts: { systemErrors: BigInt(d.systemErrors), occErrors: 0n } }),
-  };
-}
 
 type Doc = Record<string, unknown> & { _id: string; _creationTime: number };
 const cronJobDoc = (d: Doc) => {
@@ -132,6 +118,11 @@ export type SystemQuery = {
   op?: DeploymentOp;
   /** Any admin may run it (Convex's `noPermissionRequired`). */
   noPermissionRequired?: true;
+  /**
+   * Only an admin's own call reaches it (the HTTP API, a sync session, the server in process): function code
+   * (an action's `runQuery`) never does, whatever its caller. For bunvex's debug queries (STUDY-131 AD-24).
+   */
+  adminCallOnly?: true;
   handler: (db: Tx, args: never, env: SystemEnv) => Promise<unknown>;
 };
 export type SystemMutation = SystemQuery;
@@ -161,6 +152,31 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
         const { secretAccessKey: _, ...config } = r.config;
         return { ...r, config };
       });
+    },
+  },
+  // The deployed auth providers (STUDY-129), as Convex's: the `_auth` documents as stored, oldest first.
+  "_system/frontend/listAuthProviders": {
+    args: {},
+    handler: (db) => db.asSystem(() => db.query(AUTH_TABLE).order("asc").collect()),
+  },
+  // The schemas (Convex's `_system/frontend/getSchemas`; the MCP server's `tables` tool, STUDY-121): the
+  // active one's JSON, and the one being validated (pending or validated), each left out when there is none.
+  "_system/frontend/getSchemas": {
+    args: { componentId },
+    op: "ViewData",
+    handler: async (db) => {
+      const rows = (await db.asSystem(() => db.query(SCHEMAS_TABLE).collect())) as unknown as {
+        state: string;
+        schema: string;
+      }[];
+      const one = (state: string) => rows.find((r) => r.state === state);
+      const [active, pending, validated] = [one("active"), one("pending"), one("validated")];
+      if (pending && validated) throw new Error("Unexpectedly found both pending and validated schemas");
+      const inProgress = pending ?? validated;
+      return {
+        ...(active ? { active: active.schema } : {}),
+        ...(inProgress ? { inProgress: inProgress.schema } : {}),
+      };
     },
   },
   // The deployment's run state (STUDY-63), as Convex's `_system/frontend/backendState`.
@@ -245,6 +261,52 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
         .order(order)
         .paginate({ ...paginationOpts, maximumRowsRead, maximumBytesRead }),
   },
+  // bunvex's system-table browser (STUDY-131 AD-24, an addition: Convex has none). Every system table the
+  // catalog has, private ones included, with its description and size. Read-only (a query), an admin's own
+  // call with ViewData only.
+  "_system/debug/systemTables": {
+    args: {},
+    adminCallOnly: true,
+    handler: async (db) =>
+      db.asSystem(async () => {
+        const out = [];
+        for (const name of db.systemTableNames())
+          out.push({
+            name,
+            description: SYSTEM_TABLE_DESCRIPTIONS[name] ?? "",
+            // readable by apps through `db.system` (projected), or private to the deployment
+            appVisible: APP_VISIBLE_SYSTEM_TABLES.includes(name),
+            // null while the table summaries are still bootstrapping after a start
+            documentCount: await db.countTable(name).catch((e) => {
+              if (e instanceof TableSummariesUnavailableError) return null;
+              throw e;
+            }),
+          });
+        return out;
+      }),
+  },
+  // A page of one system table, as `_system/cli/tableData` pages a user table, but past the hidden index:
+  // documents as stored, every field (for `_storage`, the hidden ones too).
+  "_system/debug/systemTable": {
+    args: {
+      table: v.string(),
+      order: v.optional(v.union(v.literal("asc"), v.literal("desc"))),
+      paginationOpts: paginationOptsValidator,
+    },
+    adminCallOnly: true,
+    handler: async (
+      db,
+      { table, order, paginationOpts }: { table: string; order?: "asc" | "desc"; paginationOpts: PaginationOptions },
+    ) => {
+      if (!table.startsWith("_")) throw new Error(`"${table}" is not a system table.`);
+      return db.asSystem(() =>
+        db
+          .query(table)
+          .order(order ?? "asc")
+          .paginate({ ...paginationOpts, maximumRowsRead, maximumBytesRead }),
+      );
+    },
+  },
   // The CLI's `function-spec` reads the API's URL with it (Convex's `_system/cli/convexUrl:cloudUrl`, renamed
   // by rule 5): the deployment's `BUNVEX_CLOUD_URL`.
   "_system/cli/deploymentUrl:cloudUrl": {
@@ -281,29 +343,24 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
     args: { componentId, paginationOpts: paginationOptsValidator, udfPath: v.optional(v.string()) },
     handler: async (db, { paginationOpts, udfPath }: { paginationOpts: PaginationOptions; udfPath?: string }) => {
       const opts = { ...paginationOpts, maximumRowsRead, maximumBytesRead };
-      const r: PaginationResult = await db.asSystem(() =>
+      return db.asSystem(() =>
         udfPath === undefined
           ? db
-              .query(SCHEDULED_FUNCTIONS_TABLE)
+              .query(SCHEDULED_JOBS_TABLE)
               .withIndex("by_next_ts", (q) => q.gt("nextTs", null))
               .order("asc")
               .paginate(opts)
           : db
-              .query(SCHEDULED_FUNCTIONS_TABLE)
-              .withIndex("by_udf_path_and_next_event_ts", (q) => q.eq("name", canonical(udfPath)).gt("nextTs", null))
+              .query(SCHEDULED_JOBS_TABLE)
+              .withIndex("by_udf_path_and_next_event_ts", (q) => q.eq("udfPath", canonical(udfPath)).gt("nextTs", null))
               .order("asc")
               .paginate(opts),
       );
-      return { ...r, page: r.page.map((d) => scheduledJobDoc(d as unknown as JobDoc)) };
     },
   },
   "_system/frontend/scheduler:getArgs": {
-    args: { componentId, argsId: v.string() },
-    handler: async (db, { argsId }: { argsId: string }) => {
-      const id = db.asSystemSync(() => db.normalizeId(SCHEDULED_FUNCTIONS_TABLE, argsId));
-      const d = id && ((await db.asSystem(() => db.get(SCHEDULED_FUNCTIONS_TABLE, id))) as unknown as JobDoc | null);
-      return d ? { _id: d._id, _creationTime: d._creationTime, args: argsBytes(d.args) } : null;
-    },
+    args: { componentId, argsId: v.id(SCHEDULED_JOB_ARGS_TABLE) },
+    handler: async (db, { argsId }: { argsId: string }) => db.asSystem(() => db.get(SCHEDULED_JOB_ARGS_TABLE, argsId)),
   },
   // The audit log (STUDY-48), as Convex's `paginatedDeploymentEvents`: newest first from `minDate` (clamped
   // to the retention), up to `maxDate`, of the given members and actions.
@@ -397,6 +454,15 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
   "_system/cli/tableSize": {
     args: { tableName: v.string() },
     handler: async (db, { tableName }: { tableName: string }) => db.asSystem(() => db.countTable(tableName)),
+  },
+  // The pending schema's validation progress (STUDY-127), as Convex's: its attempts' counters summed.
+  "_system/frontend/getSchemas:schemaValidationProgress": {
+    args: { componentId },
+    handler: async (db) =>
+      db.asSystem(async () => {
+        const rows = (await db.query(SCHEMAS_TABLE).collect()) as unknown as { _id: string; state: string }[];
+        return schemaValidationProgress(db, rows.find((r) => r.state === "pending")?._id ?? null);
+      }),
   },
   "_system/frontend/tableSize": {
     args: { tableName: v.string(), componentId },
@@ -529,9 +595,9 @@ export const MAX_JOBS_CANCEL_BATCH = 1000;
 /** Convex's `POST /api/cancel_job` (admin, WriteData): cancel one job; a finished or unknown one is a no-op. */
 export async function cancelScheduledJob(engine: Engine, id: string, actor: AuditLogActor = SYSTEM_ACTOR) {
   await engine.mutation(async (db) => {
-    const jobId = db.asSystemSync(() => db.normalizeId(SCHEDULED_FUNCTIONS_TABLE, id));
+    const jobId = db.asSystemSync(() => db.normalizeId(SCHEDULED_JOBS_TABLE, id));
     if (!jobId) throw new Error(`Invalid ID "${id}" for table _scheduled_jobs`);
-    const job = (await db.asSystem(() => db.get(SCHEDULED_FUNCTIONS_TABLE, jobId))) as unknown as JobDoc | null;
+    const job = await getJob(db, jobId);
     await cancelJob(db, jobId, Date.now());
     // As Convex, in the cancel's transaction, whether the job was still pending or not.
     await insertAuditLogEvents(db, [auditEvents.cancelScheduledFunction(id, job?.name ?? null)], actor);
@@ -547,24 +613,24 @@ export async function cancelAllScheduledJobs(
   opts: { udfPath?: string; startNextTs?: bigint; endNextTs?: bigint } = {},
   actor: AuditLogActor = SYSTEM_ACTOR,
 ): Promise<number> {
-  const lo = opts.startNextTs === undefined ? null : Number(opts.startNextTs) / 1_000_000;
-  const hi = opts.endNextTs === undefined ? null : Number(opts.endNextTs) / 1_000_000;
+  const lo = opts.startNextTs ?? null;
+  const hi = opts.endNextTs ?? null;
   let total = 0;
   for (;;) {
     const n = await engine.mutation(async (db) => {
       const jobs = (await db.asSystem(() =>
         (opts.udfPath === undefined
-          ? db.query(SCHEDULED_FUNCTIONS_TABLE).withIndex("by_next_ts", (q) => {
+          ? db.query(SCHEDULED_JOBS_TABLE).withIndex("by_next_ts", (q) => {
               const b = lo === null ? q.gt("nextTs", null) : q.gte("nextTs", lo);
               return hi === null ? b : b.lt("nextTs", hi);
             })
-          : db.query(SCHEDULED_FUNCTIONS_TABLE).withIndex("by_udf_path_and_next_event_ts", (q) => {
-              const b0 = q.eq("name", canonical(opts.udfPath!));
+          : db.query(SCHEDULED_JOBS_TABLE).withIndex("by_udf_path_and_next_event_ts", (q) => {
+              const b0 = q.eq("udfPath", canonical(opts.udfPath!));
               const b = lo === null ? b0.gt("nextTs", null) : b0.gte("nextTs", lo);
               return hi === null ? b : b.lt("nextTs", hi);
             })
         ).take(MAX_JOBS_CANCEL_BATCH),
-      )) as unknown as JobDoc[];
+      )) as unknown as ScheduledJobDoc[];
       const now = Date.now();
       for (const j of jobs) await cancelJob(db, j._id, now);
       // As Convex: one event per batch that canceled anything.

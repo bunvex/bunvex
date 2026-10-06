@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { defineSchema, defineTable, type SchemaDefinition } from "../src/schema.ts";
+import { defineSchema, defineTable, documentTypeError, type SchemaDefinition } from "../src/schema.ts";
+import { schemaToJson } from "../src/schema-json.ts";
 
 const schema = defineSchema({
   users: defineTable({ name: v.string(), age: v.optional(v.number()) }).index("by_name", ["name"]),
@@ -71,8 +72,26 @@ describe("defineSchema / defineTable: documents are validated on write (STUDY-14
 
   test("defineTable takes an object of validators, v.object, a union of objects or v.any", () => {
     expect(defineTable({ a: v.string() }).document.kind).toBe("object");
-    expect(() => defineTable(v.string() as never)).toThrow("must be v.object(...), a v.union of objects, or v.any()");
-    expect(() => defineTable(v.union(v.object({}), v.string()) as never)).toThrow("must be v.object");
     expect(() => defineSchema({ t: {} as never })).toThrow("must be defined with defineTable");
+  });
+
+  test("a validator a table cannot have: accepted when declared, refused at push, as Convex (STUDY-14 §6)", () => {
+    const of = (d: unknown) => documentTypeError(defineSchema({ ok: defineTable({}), t: defineTable(d as never) }));
+    // Convex's `defineTable` checks nothing: the declaration works.
+    expect(defineTable(v.string() as never).document.kind).toBe("string");
+    expect(of(v.object({ a: v.string() }))).toBeNull();
+    expect(of(v.any())).toBeNull();
+    expect(of(v.union(v.object({}), v.object({ k: v.string() })))).toBeNull();
+    expect(of(v.string())).toBe(
+      "The document validator in a schema must be an object, a union of objects, or `v.any()`. Found v.string().",
+    );
+    expect(of(v.union(v.object({}), v.array(v.string()), v.null()))).toBe(
+      "The document validator in a schema must be an object, a union of objects, or `v.any()`. Found v.array(v.string()).",
+    );
+    // Convex's export check: a document validator whose JSON is not an object.
+    const broken = { isValidator: true, kind: "object", json: "nope" };
+    expect(() => schemaToJson(defineSchema({ t: defineTable(broken as never) }))).toThrow(
+      new Error("Invalid validator: please make sure that the parameter of `defineTable` is valid"),
+    );
   });
 });

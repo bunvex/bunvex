@@ -1,15 +1,18 @@
 // The Database screen's section column (UI-01 §23): search, "Create table" where the credential can write,
-// then one link per table with its size and a marker on tables the schema does not declare. Resizable, its
+// then one link per table with its size and a marker on tables the schema does not declare; for a credential
+// that may view data, "Show system tables" lists the system tables under them (STUDY-131 AD-24). Resizable, its
 // width kept in this browser. Below lg it is a picker above the table instead.
+import { Checkbox } from "@bunvex/ui/components/checkbox";
 import { Input } from "@bunvex/ui/components/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";
-import { Table2 } from "lucide-react";
+import { Lock, Table2 } from "lucide-react";
 import { useId, useState } from "react";
 import type { TableInfo } from "../data-source.ts";
 import { DashLink, tableRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { SECTION_ITEM, SectionColumn } from "../shell/section-column.tsx";
 import { CreateTable } from "./create-table.tsx";
+import { useCanViewSystemTables, useShowSystemTables, useSystemTables } from "./system-table.tsx";
 
 const WIDTH_KEY = "bunvex-dashboard:tables-width";
 export function TablesSidebar(props: { tables: TableInfo[]; current: string; canCreate: boolean }) {
@@ -19,7 +22,15 @@ export function TablesSidebar(props: { tables: TableInfo[]; current: string; can
   const pickerLabel = useId();
   const navigate = tableRoute.useNavigate();
   const sorted = [...tables].sort((a, b) => a.name.localeCompare(b.name));
-  const shown = sorted.filter((t) => t.name.toLowerCase().includes(query.trim().toLowerCase()));
+  const matches = (name: string) => name.toLowerCase().includes(query.trim().toLowerCase());
+  const shown = sorted.filter((t) => matches(t.name));
+  // the system tables (STUDY-131 AD-24): behind a switch, for a credential that may view data; an open
+  // system table keeps them listed
+  const canViewSystem = useCanViewSystemTables();
+  const [showSystem, setShowSystem] = useShowSystemTables();
+  const systemListed = canViewSystem && (showSystem || current.startsWith("_"));
+  const systemTables = useSystemTables(systemListed).filter((t) => matches(t.name));
+  const systemSwitchId = useId();
   return (
     <>
       {sorted.length > 0 && (
@@ -96,6 +107,44 @@ export function TablesSidebar(props: { tables: TableInfo[]; current: string; can
               )
             )}
           </ul>
+          {canViewSystem && (
+            <div className="flex items-center gap-2 px-3 pt-4 pb-1">
+              <Checkbox
+                id={systemSwitchId}
+                checked={showSystem}
+                onCheckedChange={(checked) => setShowSystem(checked === true)}
+              />
+              <label htmlFor={systemSwitchId} className="text-xs text-muted-foreground">
+                Show system tables
+              </label>
+            </div>
+          )}
+          {systemListed && (
+            <>
+              <h3 className="px-3 pt-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+                System tables
+              </h3>
+              <ul aria-label="System tables">
+                {systemTables.map((t) => (
+                  <li key={t.name}>
+                    <DashLink
+                      link={{ to: "/database/$table", params: { table: t.name } }}
+                      className={SECTION_ITEM}
+                      title={t.description}
+                    >
+                      <Lock className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      <span className="min-w-0 flex-1 truncate font-mono text-xs">{t.name}</span>
+                      {t.documentCount !== null && (
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          {formatCount(t.documentCount)}
+                        </span>
+                      )}
+                    </DashLink>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </nav>
       </SectionColumn>
     </>

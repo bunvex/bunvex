@@ -77,6 +77,8 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
   memoryBytes = 0;
   private estimates = new Map<string, number>();
   private seq = 0;
+  /** The commit ts of each change that gave one (a backfill step keeps only the changes after its ts). */
+  private changedAt = new Map<string, number>();
 
   protected abstract open(bytes: Uint8Array): S;
   protected abstract noDeletes(segment: S): D;
@@ -121,10 +123,12 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
     }
   }
 
-  /** Put a document's current state (null: deleted). */
-  set(id: string, doc: Doc | null) {
+  /** Put a document's current state (null: deleted), as of commit `ts` when there is one. */
+  set(id: string, doc: Doc | null, ts?: number) {
     if (!this.changed.has(id)) this.deleteFromSegments(id);
     this.changed.set(id, ++this.seq);
+    if (ts === undefined) this.changedAt.delete(id);
+    else this.changedAt.set(id, ts);
     this.memorySet(id, doc);
     const size = this.estimate(doc);
     this.memoryBytes += size - (this.estimates.get(id) ?? 0);
@@ -162,13 +166,11 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
     return docs.length ? this.build(docs) : null;
   }
 
-  /** The live documents of `parts` as one segment (null: none). */
-  protected buildLive(parts: SegmentPart<S, D>[]): Uint8Array | null {
-    const docs: [string, Doc][] = [];
-    for (const p of parts)
-      for (let d = 0; d < p.segment.numDocs; d++) if (!p.deletes.has(d)) docs.push([p.segment.id(d), p.segment.get(d)]);
-    return docs.length ? this.build(docs) : null;
-  }
+  /**
+   * The live documents of `parts` merged into one segment. Which documents are live is read before the first
+   * `pause`: the deletes made after it are not in it.
+   */
+  protected abstract merge(parts: SegmentPart<S, D>[], pause: () => Promise<void>): Promise<Uint8Array>;
 
   /** Prepares a flush of the memory part (see `PreparedFlush`). */
   prepareFlush(): PreparedFlush<S, D> {
@@ -196,12 +198,74 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
       part = this.part(segment, this.noDeletes(segment), keys);
     }
     for (const [id, seq] of this.changed) {
-      if (seq <= f.seq) {
-        this.memorySet(id, null);
-        this.changed.delete(id);
-        this.memoryBytes -= this.estimates.get(id) ?? 0;
-        this.estimates.delete(id);
-      } else if (part) {
+      if (seq <= f.seq) this.forget(id);
+      else if (part) {
+        const d = part.segment.docOf(id);
+        if (d >= 0 && part.deletes.delete(d)) part.version++;
+      }
+    }
+    if (part) this.segments.push(part);
+    return part;
+  }
+
+  /** Drops a change from the memory part (what it held is in the segments now). */
+  private forget(id: string) {
+    this.memorySet(id, null);
+    this.changed.delete(id);
+    this.changedAt.delete(id);
+    this.memoryBytes -= this.estimates.get(id) ?? 0;
+    this.estimates.delete(id);
+  }
+
+  /** A built segment as it is stored with no deletes: its documents, id, and its empty deletes' bytes. */
+  describe(segment: Uint8Array): { segment: S; deletes: Uint8Array } {
+    const opened = this.open(segment);
+    return { segment: opened, deletes: this.noDeletes(opened).encode() };
+  }
+
+  /** `docs` as a segment of this index (null: none). */
+  buildSegment(docs: [string, Doc][]): Uint8Array | null {
+    return docs.length ? this.build(docs) : null;
+  }
+
+  /** Marks these documents' copies deleted in every segment (a backfill step's updates to earlier pages). */
+  deleteFromAll(ids: Iterable<string>) {
+    for (const id of ids) this.deleteFromSegments(id);
+  }
+
+  /** The deletes of every segment whose deletes changed since they were stored, encoded now. */
+  changedDeletes(): PreparedFlush<S, D>["deletes"] {
+    return this.segments
+      .filter((p) => p.version !== p.persisted)
+      .map((p) => ({ part: p, version: p.version, bytes: p.deletes.encode() }));
+  }
+
+  /**
+   * A backfill step is stored (Convex's incremental backfill): its segment — the table read at `ts` from its
+   * cursor, and the earlier pages' documents changed since the last step — joins the index with the stored
+   * deletes, and the memory part keeps only the changes committed after `ts` (their copies in the new segment
+   * deleted), as Convex truncates its memory index to the step's ts.
+   */
+  commitBackfill(
+    segment: Uint8Array | null,
+    deletes: PreparedFlush<S, D>["deletes"],
+    ts: number,
+    keys?: SegmentPart<S, D>["keys"],
+  ): SegmentPart<S, D> | null {
+    for (const d of deletes) {
+      if (!this.segments.includes(d.part))
+        throw new Error("a backfilled segment was replaced before the step committed");
+      d.part.persisted = d.version;
+    }
+    let part: SegmentPart<S, D> | null = null;
+    if (segment) {
+      const opened = this.open(segment);
+      part = this.part(opened, this.noDeletes(opened), keys);
+    }
+    for (const id of [...this.changed.keys()]) {
+      const at = this.changedAt.get(id);
+      if (at !== undefined && at <= ts) this.forget(id);
+      else if (part) {
         const d = part.segment.docOf(id);
         if (d >= 0 && part.deletes.delete(d)) part.version++;
       }
@@ -211,8 +275,15 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
   }
 
   /** Prepares merging `parts` (segments of this index) into one segment of their live documents. */
-  prepareCompaction(parts: SegmentPart<S, D>[]): PreparedCompaction<S, D> {
-    return { parts, captured: parts.map((p) => p.deletes.clone()), segment: this.buildLive(parts) };
+  async prepareCompaction(
+    parts: SegmentPart<S, D>[],
+    pause: () => Promise<void> = async () => {},
+  ): Promise<PreparedCompaction<S, D>> {
+    // The deletes as the merge reads them: both at once, before it first pauses.
+    const captured = parts.map((p) => p.deletes.clone());
+    const live = parts.some((p) => p.deletes.live > 0);
+    const merged = live ? this.merge(parts, pause) : null;
+    return { parts, captured, segment: merged && (await merged) };
   }
 
   /** The deletes `c`'s parts got since `c.captured`, applied to `part`; `c.captured` brought up to date. */

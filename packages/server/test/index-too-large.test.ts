@@ -3,7 +3,7 @@
 // session with 1013 and the code; an action's runMutation gets a plain Error it may catch; a scheduled mutation
 // is retried later. The refusal wakes the flusher, and writes go through again once it has flushed.
 import { afterEach, expect, test } from "bun:test";
-import { defineSchema, defineTable, Engine, type SearchSnapshotStore } from "@bunvex/core";
+import { defineSchema, defineTable, Engine, type SearchSegmentStore } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { v } from "@bunvex/values";
 import { action, Functions, mutation, query } from "../src/functions.ts";
@@ -23,7 +23,7 @@ const schema = defineSchema({
 const MESSAGE =
   "Too many writes to notes.search_text. Spread your writes out over time or throttle them to avoid errors. If you’re importing data into a new application, consider removing the index and adding it again after the import (you can re-add the index as a staged index to avoid blocking your pushes).";
 
-function blobs(): SearchSnapshotStore {
+function blobs(): SearchSegmentStore {
   const map = new Map<string, Uint8Array>();
   let n = 0;
   return {
@@ -43,7 +43,7 @@ function blobs(): SearchSnapshotStore {
 async function full() {
   const p = await MemoryPersistence.open(null, { durable: false });
   const engine = await new Engine(schema, p, {
-    searchSnapshots: blobs(),
+    searchStorage: blobs(),
     searchSegmentLimits: {
       textSoftLimitBytes: 2 ** 40,
       vectorSoftLimitBytes: 2 ** 40,

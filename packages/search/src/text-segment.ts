@@ -6,6 +6,7 @@
 import { fieldnormToId } from "./bm25.ts";
 import {
   Bitset,
+  mergeTables,
   NO_FILTER_KEY as NO_KEY,
   SegmentFileError,
   SegmentKind,
@@ -228,6 +229,131 @@ export class TextSegment {
       w.strings(keys.map((x) => x.key));
       w.u32(Uint32Array.from(entries, (e) => ord.get(e.doc.filters[field]!) ?? NO_KEY));
     }
+    return w.finish();
+  }
+
+  /**
+   * The live documents of `parts` as one segment (Convex's compaction), from their posting lists and forward
+   * indexes without rebuilding a document: the parts' id and term tables are merged (each is sorted), so term
+   * ordinals keep their order. A term no live document has is left out. `pause` is awaited every few thousand
+   * documents, so a large merge lets other work run (and may abort it by throwing).
+   */
+  static async merge(
+    parts: readonly { segment: TextSegment; deletes: TextSegmentDeletes }[],
+    filterFields: readonly string[],
+    pause: () => Promise<void> = async () => {},
+  ): Promise<Uint8Array> {
+    const segs = parts.map((p) => p.segment);
+    for (const s of segs)
+      if (JSON.stringify(s.filterFields) !== JSON.stringify(filterFields))
+        throw new Error("segments of another definition");
+    // The live documents in id order: each part's are sorted, so the parts are merged.
+    const ids = mergeTables(
+      segs.map((s) => s.ids),
+      (k, d) => !parts[k]!.deletes.has(d),
+    );
+    const n = ids.strings.length;
+    const source = new Uint32Array(n); // part of each new document
+    const local = new Uint32Array(n); // its number there
+    ids.remap.forEach((r, k) => {
+      for (let d = 0; d < r.length; d++)
+        if (r[d]! >= 0) {
+          source[r[d]!] = k;
+          local[r[d]!] = d;
+        }
+    });
+    // The terms some live document has, in byte order.
+    const terms = mergeTables(
+      segs.map((s) => s.terms),
+      (k, t) => segs[k]!.df(t) - parts[k]!.deletes.df(t) > 0,
+    );
+    const numTerms = terms.strings.length;
+
+    const creationTime = new Float64Array(n);
+    const length = new Uint32Array(n);
+    const fieldnorm = new Uint8Array(n);
+    const bytes = new Uint32Array(n);
+    const docStart = new Uint32Array(n + 1);
+    let postings = 0;
+    let totalTokens = 0;
+    let indexedBytes = 0;
+    for (let i = 0; i < n; i++) {
+      const s = segs[source[i]!]!;
+      const d = local[i]!;
+      creationTime[i] = s.creationTimes[d]!;
+      length[i] = s.lengths[d]!;
+      fieldnorm[i] = s.fieldnorms[d]!;
+      bytes[i] = s.docBytes[d]!;
+      totalTokens += s.lengths[d]!;
+      indexedBytes += s.docBytes[d]!;
+      docStart[i] = postings;
+      postings += s.docStart[d + 1]! - s.docStart[d]!;
+      if (i % 8192 === 8191) await pause();
+    }
+    docStart[n] = postings;
+    const docTerm = new Uint32Array(postings);
+    const docTf = new Uint32Array(postings);
+    const df = new Uint32Array(numTerms);
+    for (let i = 0; i < n; i++) {
+      const k = source[i]!;
+      const s = segs[k]!;
+      const d = local[i]!;
+      const remap = terms.remap[k]!;
+      let at = docStart[i]!;
+      for (let j = s.docStart[d]!; j < s.docStart[d + 1]!; j++) {
+        const g = remap[s.docTerm[j]!]!;
+        docTerm[at] = g;
+        docTf[at] = s.docTf[j]!;
+        df[g]!++;
+        at++;
+      }
+      if (i % 8192 === 8191) await pause();
+    }
+    const postingStart = new Uint32Array(numTerms + 1);
+    for (let t = 0; t < numTerms; t++) postingStart[t + 1] = postingStart[t]! + df[t]!;
+    const fill = postingStart.slice(0, numTerms);
+    const postingDoc = new Uint32Array(postings);
+    const postingTf = new Uint32Array(postings);
+    for (let i = 0; i < n; i++) {
+      for (let k = docStart[i]!; k < docStart[i + 1]!; k++) {
+        const at = fill[docTerm[k]!]!++;
+        postingDoc[at] = i;
+        postingTf[at] = docTf[k]!;
+      }
+      if (i % 8192 === 8191) await pause();
+    }
+
+    const w = new SegmentWriter(SegmentKind.Text);
+    w.json({
+      uid: crypto.randomUUID(),
+      numDocs: n,
+      numTerms,
+      totalTokens,
+      indexedBytes,
+      filterFields: [...filterFields],
+    } satisfies TextSegmentMeta);
+    w.strings(ids.strings);
+    w.f64(creationTime);
+    w.u32(length);
+    w.bytes(fieldnorm);
+    w.u32(bytes);
+    w.strings(terms.strings);
+    w.u32(postingStart);
+    w.u32(postingDoc);
+    w.u32(postingTf);
+    w.u32(docStart);
+    w.u32(docTerm);
+    w.u32(docTf);
+    filterFields.forEach((_, f) => {
+      const keys = mergeTables(segs.map((s) => s.filterKeys[f]!));
+      w.strings(keys.strings);
+      w.u32(
+        Uint32Array.from({ length: n }, (_, i) => {
+          const ord = segs[source[i]!]!.filterOrds[f]![local[i]!]!;
+          return ord === NO_KEY ? NO_KEY : keys.remap[source[i]!]![ord]!;
+        }),
+      );
+    });
     return w.finish();
   }
 

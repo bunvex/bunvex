@@ -9,7 +9,8 @@
 //   - An action runs at most once: its job is marked in progress (committed) before it starts. A job
 //     found in progress that this process is not running was cut short (a crash), so it fails with
 //     "Transient error while executing action" and never runs again.
-// - Completed jobs are deleted after the retention window (7 days).
+// - Jobs live in `_scheduled_jobs`, their arguments in `_scheduled_job_args` (STUDY-125); the executor reads both.
+// - Completed jobs are deleted with their arguments after the retention window (7 days).
 import {
   BACKEND_STATE_TABLE,
   type Caller,
@@ -25,11 +26,14 @@ import {
   isJobId,
   isStopped,
   type JobDoc,
+  jobArgs,
   nextJobTs,
   OccError,
   patchJob,
   readBackendState,
-  SCHEDULED_FUNCTIONS_TABLE,
+  SCHEDULED_BY_NEXT_TS,
+  SCHEDULED_JOBS_TABLE,
+  SPAN_KIND,
   stringifyValue,
   TooManyWritesError,
   type Tx,
@@ -236,18 +240,18 @@ export class ScheduledJobExecutor {
 
   start() {
     // Woken by commits that touch the queue (a job scheduled, canceled or rescheduled): no polling.
-    let jobs = this.engine.catalog.table(SCHEDULED_FUNCTIONS_TABLE);
-    let byNextTs = jobs.indexes.get("by_next_ts")!.id;
+    let jobs = this.engine.catalog.table(SCHEDULED_JOBS_TABLE);
+    let byNextTs = jobs.indexes.get(SCHEDULED_BY_NEXT_TS)!.id;
     // And by a pause or unpause (STUDY-63), as Convex's executors subscribe to `_backend_state`.
     const backendState = this.engine.catalog.table(BACKEND_STATE_TABLE).byId.id;
     this.engine.committer.onCommit((entries) => {
       // The table replaced with an empty one (`/api/delete_scheduled_functions_table`, STUDY-113; the catalog
       // changes before the listeners run): its new index from now on, and the sleep until a job that is gone
       // dropped. A job running meanwhile finds its document gone, and records nothing.
-      const now = this.engine.catalog.table(SCHEDULED_FUNCTIONS_TABLE);
+      const now = this.engine.catalog.table(SCHEDULED_JOBS_TABLE);
       if (now.id !== jobs.id) {
         jobs = now;
-        byNextTs = now.indexes.get("by_next_ts")!.id;
+        byNextTs = now.indexes.get(SCHEDULED_BY_NEXT_TS)!.id;
         this.poke();
         return;
       }
@@ -291,14 +295,26 @@ export class ScheduledJobExecutor {
         // The next job ready to start, for the app metrics' lag: a due job left waiting, else the next one.
         let ready: number | null | undefined;
         if (free > 0) {
-          const due = await this.engine.query((db) => dueJobs(db, now, free + this.running.size));
-          for (const job of due) {
+          // Each job with its arguments (`_scheduled_job_args`), read at the same snapshot; a job whose arguments
+          // cannot be read fails its attempt as a system error.
+          const due = await this.engine.query(async (db) => {
+            const jobs = await dueJobs(db, now, free + this.running.size);
+            return Promise.all(
+              jobs.map(async (job) => ({
+                job,
+                args: this.running.has(job._id)
+                  ? []
+                  : await jobArgs(db, job).catch((e: unknown) => ({ error: (e as Error).message })),
+              })),
+            );
+          });
+          for (const { job, args } of due) {
             if (this.running.size >= this.o.parallelism) {
               if (!this.running.has(job._id)) ready = job.nextTs;
               break;
             }
             if (this.running.has(job._id)) continue;
-            const p = this.execute(job).finally(() => {
+            const p = this.execute(job, args).finally(() => {
               this.running.delete(job._id);
               this.poke();
             });
@@ -307,7 +323,9 @@ export class ScheduledJobExecutor {
         }
         nextAt = await this.engine.query((db) => nextJobTs(db, now));
         // At full capacity Convex keeps the time it had.
-        this.logStats(free > 0 ? (ready === undefined ? nextAt : ready) : this.lastReady, now);
+        const oldest = free > 0 ? (ready === undefined ? nextAt : ready) : this.lastReady;
+        this.oldestReady = oldest;
+        this.logStats(oldest, now);
       } catch (e) {
         if (e instanceof CommitterStoppedError) return;
         console.error("scheduled functions: the executor failed, retrying", e);
@@ -332,6 +350,21 @@ export class ScheduledJobExecutor {
 
   private lastStatsLog = 0;
   private lastReady: number | null = null;
+  /** The ready time of the oldest runnable job the last loop saw (`/metrics`), ms; null with none. */
+  private oldestReady: number | null = null;
+
+  /** Scheduled functions running now. */
+  get runningJobs(): number {
+    return this.running.size;
+  }
+
+  /**
+   * Convex's `scheduled_job_backlog_seconds`: how long the oldest runnable job has waited, 0 with none. It
+   * keeps growing while the loop does not run again, so a stalled executor shows.
+   */
+  backlogSeconds(now = wallClock()): number {
+    return this.oldestReady === null ? 0 : Math.max(0, now - this.oldestReady) / 1000;
+  }
 
   /**
    * Convex's scheduler stats for the app metrics (`log_scheduled_job_stats`): logged when the next ready
@@ -366,25 +399,38 @@ export class ScheduledJobExecutor {
     return now !== null && stringifyValue(now) === stringifyValue(job);
   }
 
-  private async execute(job: JobDoc) {
+  /**
+   * Traced (STUDY-131 AD-26), each run is a `scheduler/run` trace of its own, with the function's execution
+   * under it (Convex's scheduler opens a root span per job too).
+   */
+  private execute(job: JobDoc, args: Value[] | { error: string }): Promise<void> {
+    const tracer = this.engine.tracer;
+    if (!tracer.on) return this.executeJob(job, args);
+    const span = tracer.root("scheduler/run", SPAN_KIND.consumer);
+    span?.set("bunvex.scheduler.job_id", job._id).set("bunvex.function.path", job.name);
+    return tracer.within(span, () => this.executeJob(job, args)).finally(() => span?.finish());
+  }
+
+  private async executeJob(job: JobDoc, args: Value[] | { error: string }) {
     this.stats.started++;
     const target = this.functions.scheduledKind(job.name);
     try {
+      if (!Array.isArray(args)) throw new Error(args.error);
       if (job.state.kind === "inProgress") {
         // Picked up in progress, but not running here: an action cut short. Never run it again.
         await this.finish(job, { kind: "failed", error: "Transient error while executing action" });
       } else if ("error" in target) {
         await this.finish(job, { kind: "failed", error: target.error });
       } else if (target.kind === "mutation") {
-        await this.runMutation(job);
+        await this.runMutation(job, args[0]);
       } else {
-        await this.runAction(job);
+        await this.runAction(job, args[0]);
       }
     } catch (e) {
       if (e instanceof CommitterStoppedError) return;
       // A system error: try again later, with Convex's backoff.
       this.stats.systemErrors++;
-      const failures = (job.systemErrors ?? 0) + 1;
+      const failures = job.systemErrors + 1;
       const delay = backoff(failures, this.o.errorInitialBackoffMs, this.o.errorMaxBackoffMs);
       await this.engine
         .mutation(async (db) => {
@@ -402,8 +448,8 @@ export class ScheduledJobExecutor {
     if (state.kind === "failed") this.stats.failed++;
   }
 
-  private async runMutation(job: JobDoc) {
-    const body = this.functions.scheduledMutationBody(job.name, job.args[0], job._id);
+  private async runMutation(job: JobDoc, args: Value | undefined) {
+    const body = this.functions.scheduledMutationBody(job.name, args, job._id);
     const retries = { n: 0 };
     for (let occFailures = 0; ; ) {
       try {
@@ -432,7 +478,7 @@ export class ScheduledJobExecutor {
           // A job that changed meanwhile did not run.
           (ran) => (ran ? { returnBytes: rawValueSize((value ?? null) as Value) } : { skip: true }),
           undefined,
-          job.args[0],
+          args,
         );
         if (ran) this.stats.succeeded++;
         return;
@@ -452,7 +498,7 @@ export class ScheduledJobExecutor {
     }
   }
 
-  private async runAction(job: JobDoc) {
+  private async runAction(job: JobDoc, args: Value | undefined) {
     const requestId = randomId();
     const executionId = randomId();
     const started = await this.engine.mutation(async (db) => {
@@ -463,7 +509,7 @@ export class ScheduledJobExecutor {
     if (!started) return;
     let state: JobDoc["state"];
     try {
-      await this.functions.runAction(job.name, job.args[0], asJob(job._id), {
+      await this.functions.runAction(job.name, args, asJob(job._id), {
         job: job._id,
         internal: true,
         waitForPermit: true,
