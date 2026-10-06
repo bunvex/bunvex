@@ -210,6 +210,7 @@ Key bunvex facts behind the statuses:
 | float64 total order (`total_cmp`: −NaN < −∞ < … < −0 < +0 < … < +∞ < NaN) | sorting.rs | done (#21) | IEEE total order; −0 < +0. |
 | int64 ordered numerically and separately from float64 (1n ≠ 1) | sorting.rs | done (#21) | Its own tag below float64. |
 | Strings ordered by UTF-8 bytes | sorting.rs; values/compare_utf8.ts | done | Escaped, 0x00-terminated UTF-8 in keyenc. |
+| A string with a lone surrogate never crosses into the backend | isolate/src/execution_scope.rs; isolate/src/helpers.rs; value/src/serialized_args_ext.rs | done (STUDY-135) | Writes, queries, nested calls and the scheduler fail with serde's "Received invalid json: …" and its column in Convex's syscall text; a result fails its function; a client's arguments are "Invalid arguments provided"; logs and messages carry U+FFFD; an application error's data holding one is left out (string data: DV-431). Checked against Convex in the differential tests. |
 | Bytes ordered lexicographically | sorting.rs | done | Tag exists. The `_id` tiebreaker uses it. |
 | Arrays ordered element-wise; objects by (field, value) pairs in field order | sorting.rs | done (#21) | Array and object tags; objects by sorted field names. |
 | Missing index fields sort as `undefined`, which is distinct from `null` | sorting.rs (`write_sort_key_or_undefined`) | done (#21) | `undefined` below `null` (B6). |
@@ -362,8 +363,8 @@ Key bunvex facts behind the statuses:
 
 | Status | Count |
 |---|---|
-| done | 232 |
+| done | 233 |
 | partial | 3 |
 | missing | 10 |
 | n/a (a decided divergence) | 1 |
-| **total** | **246** |
+| **total** | **247** |

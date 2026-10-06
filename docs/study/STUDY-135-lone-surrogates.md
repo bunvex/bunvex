@@ -1,6 +1,6 @@
 # STUDY-135 — Strings with a lone surrogate, refused where Convex refuses them
 
-- **Status:** accepted (STUDY-122 D3 decided A; Q1 B, DV-431; Q2 A; owner, 2026-10-06)
+- **Status:** implemented (STUDY-122 D3 decided A; Q1 B, DV-431; Q2 A; owner, 2026-10-06)
 - **Convex source read:** commit `4577b903` of get-convex/convex-backend; `serde_json` 1.0.151 (its `Cargo.lock`)
 - **Related:** [STUDY-122](STUDY-122-differential-testing.md) (D3: the differential tests found it),
   [STUDY-20](STUDY-20-function-errors-and-logs.md), [STUDY-41](STUDY-41-nested-calls-and-execution-limit.md)
@@ -93,6 +93,27 @@ All with `H = "\ud800"` and `L = "\udc00"`.
 ## 5. Additions
 
 None.
+
+## 5b. Built
+
+- **`@bunvex/values`:** `jsonSurrogateError` (serde_json 1.0.151's `parse_unicode_escape`; columns in bytes,
+  one byte taken past a lone high surrogate) and `refuseLoneSurrogates`.
+- **`core/tx.ts`:** `db.insert` / `patch` / `replace` and `queryStream` / `queryPage`, with Convex's texts.
+- **`server`:** nested calls, an action's calls, the scheduler, results (`checkReturns`), client arguments
+  (`checkArgs`), log lines (`makeLogLine`), and messages and data (`describeUncaught`).
+- **Tests:**
+  - `values/test/surrogates.test.ts`, `core/test/lone-surrogates.test.ts` and
+    `server/test/lone-surrogates.test.ts`.
+  - The differential program "lone surrogates along each path" (`app/surrogates.ts`) gives the same answer on
+    Convex for every case.
+  - The `limit` op's case 8 is compared again.
+- **Measurement** (500 inserts of 10-string documents, and a 500-document result, median of 9 runs, three
+  rounds):
+
+  | | `main` | With this |
+  |---|---|---|
+  | 500 inserts | 9.1–9.6 ms | 9.1–9.9 ms |
+  | A 500-document result | 0.59–0.60 ms | 0.59–0.61 ms |
 
 ## 6. Open points to probe while building
 

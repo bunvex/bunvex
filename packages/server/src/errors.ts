@@ -15,7 +15,14 @@ import {
   PersistenceReadError,
   QueryCursorError,
 } from "@bunvex/core";
-import { isBunvexError, type JSONValue, toJsonValue, type Value } from "@bunvex/values";
+import {
+  isBunvexError,
+  type JSONValue,
+  toJsonValue,
+  type Value,
+  valueHasLoneSurrogate,
+  withoutLoneSurrogates,
+} from "@bunvex/values";
 import { ActionTimeoutError } from "./action-timeout.ts";
 import { mapStack } from "./stack-map.ts";
 
@@ -84,7 +91,7 @@ export function describeUncaught(e: unknown): UncaughtError {
   if (e instanceof ValidatorError) return { message: e.message };
   if (!isError(e)) {
     const what = typeof e === "object" && e !== null ? "#<Object>" : String(e);
-    return { message: `Uncaught ${what}\n` };
+    return { message: withoutLoneSurrogates(`Uncaught ${what}\n`) };
   }
   // The app's frames only, mapped to its sources (STUDY-95), from the stack after the message (a message may
   // hold a nested function's frames, which are part of the message).
@@ -95,14 +102,18 @@ export function describeUncaught(e: unknown): UncaughtError {
     .join("");
   let head = uncaughtLine(e.name, e.message);
   let data: JSONValue | undefined;
-  if (isBunvexError(e)) {
+  // Data holding a lone surrogate does not reach Convex's Rust (STUDY-135): with object data its error has none
+  // (Q2), and with string data bunvex does the same where Convex fails as a system error (Q1, DV-431).
+  if (isBunvexError(e) && !valueHasLoneSurrogate(e.data)) {
     try {
       data = toJsonValue((e.data === undefined ? null : e.data) as Value);
     } catch (invalid) {
       head = `BunvexError with invalid data: ${(invalid as Error).message}`;
     }
   }
-  return data === undefined ? { message: `${head}\n${frames}` } : { message: `${head}\n${frames}`, data };
+  // Convex reads the message into Rust with a lossy conversion: a lone surrogate becomes U+FFFD (STUDY-135).
+  const message = withoutLoneSurrogates(`${head}\n${frames}`);
+  return data === undefined ? { message } : { message, data };
 }
 
 /** An error's stack without its first lines, `<name>: <message>`, when the stack starts with them. */

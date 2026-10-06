@@ -95,6 +95,20 @@ export const inHandleScope = <T>(s: Scope, fn: () => T): T => scope.run(s, fn);
  * A function's name, a handle resolved to the path it names: in `db` when given (a query's or
  * mutation's transaction), else in a transaction of its own.
  */
+/**
+ * Convex's `getFunctionAddress` (components/paths.ts): how a call's syscall names its function, `{name}` or
+ * `{functionHandle}` for a handle. Its text is part of what serde reads first (STUDY-135).
+ */
+export function functionAddress(ref: unknown): Record<string, string> {
+  let name: string;
+  try {
+    name = typeof ref === "string" ? ref : getFunctionName(ref as AnyFunctionReference);
+  } catch {
+    return {};
+  }
+  return isFunctionHandle(name) ? { functionHandle: name } : { name };
+}
+
 export async function functionNameOf(ref: unknown, db: Tx | null, engine: Engine): Promise<string> {
   const name = typeof ref === "string" ? ref : getFunctionName(ref as AnyFunctionReference);
   if (!isFunctionHandle(name)) return name;

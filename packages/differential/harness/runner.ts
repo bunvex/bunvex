@@ -33,7 +33,9 @@ export type Call =
   | { kind: "page"; read: Record<string, unknown>; numItems: number; from: string | null; as: string }
   | { kind: "action"; steps: ActionStep[] }
   /** The validated mutation, with these arguments (maybe refused). */
-  | { kind: "typed"; args: Record<string, unknown> };
+  | { kind: "typed"; args: Record<string, unknown> }
+  /** Any function of the app, by path, with these arguments. */
+  | { kind: "call"; fn: "query" | "mutation" | "action"; path: string; args: Record<string, unknown> };
 export type Program = Call[];
 
 type Record_ = { steps: Step[]; dump: unknown; ids: IdMap };
@@ -92,6 +94,9 @@ export async function run(backend: Backend, program: Program, opts: { reset?: bo
         call.steps.forEach((st, i) => {
           if (st.kind === "mutation") learn(st.ops, body.value![i]);
         });
+    } else if (call.kind === "call") {
+      const answer = await backend.call(call.fn, call.path, call.args);
+      steps.push({ kind: call.fn, path: call.path, args: call.args, answer });
     } else if (call.kind === "typed") {
       const answer = await backend.call("mutation", "ops:typed", call.args);
       steps.push({ kind: "mutation", path: "ops:typed", args: call.args, answer });

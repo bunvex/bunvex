@@ -23,6 +23,7 @@ import {
   MAX_COMMIT_TS,
   MAX_VALUE_NESTING,
   rawValueSize,
+  refuseLoneSurrogates,
   TOO_NESTED_MESSAGE,
   toJsonValue,
   type Value,
@@ -47,7 +48,7 @@ import { type Interval, type LoggedIndexWrite, OutOfRetentionError, type SearchR
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { failExecution, monotonicNow, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { engineOwned } from "./engine-owned.ts";
-import { type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
+import { type ExpressionOrValue, expressionJson, type FilterBuilder, filterBuilder } from "./filter.ts";
 import { readNextIndexId } from "./index-ids.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { internalIdOf } from "./internal-id.ts";
@@ -251,6 +252,8 @@ type QState = {
   iterated: boolean;
   /** A `withSearchIndex` query (STUDY-45): the index and the builder's filters, in order. */
   search?: SearchSpec;
+  /** `withIndex`'s name and expressions as the app wrote them: the text Convex sends (STUDY-135). */
+  index?: { name: string; exprs: RangeExpr[] };
   /**
    * A virtual table's query (`db.system`, STUDY-125): each system document read is mapped to the virtual
    * shape before the operators see it, so filters run on the virtual fields, as Convex's.
@@ -364,6 +367,14 @@ function extractCommitTs(
     return { value: out, paths };
   }
   return { value, paths };
+}
+
+/** A patch's value as Convex's `patchValueToJson` writes it: a top-level `undefined` is `{$undefined: null}`. */
+function patchJson(fields: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(fields).sort())
+    out[k] = fields[k] === undefined ? { $undefined: null } : toJsonValue(fields[k] as Value);
+  return out;
 }
 
 /** Convex's message for a written value past the nesting limit (`with_argument_error`, the syscall's `value`). */
@@ -1624,6 +1635,7 @@ export class Tx {
     // (Convex's `insert` syscall parses `value`, then `table`); an unsupported type throws below, and mutating
     // `fields` afterwards cannot change what is written.
     const x = extractCommitTs(fields, this.writtenNesting(), "insert");
+    refuseLoneSurrogates(x.value, () => JSON.stringify({ table, value: toJsonValue(x.value as Value) }));
     const t = this.findTable(table) ?? (await this.createTable(table));
     // Convex's generator (STUDY-01): 14 random bytes, then the transaction's day number (big-endian). The
     // randomness is the real CSPRNG, drawn outside the deterministic execution.
@@ -1665,6 +1677,7 @@ export class Tx {
     // Convex parses the patch before it reads the document. Each field's value is a value of its own, so the
     // patch object may be one level deeper than the limit.
     const x = extractCommitTs(fields, this.writtenNesting() + 1, "patch");
+    refuseLoneSurrogates(x.value, () => JSON.stringify({ id, value: patchJson(x.value as Record<string, unknown>) }));
     const t = this.findTable(table);
     const cur = await this.read(table, id, "db.patch");
     if (!cur || !t) throw new Error(`Update on nonexistent document ID ${id}`);
@@ -1693,6 +1706,7 @@ export class Tx {
 
   private async replaceIn(table: string, id: string, value: Record<string, unknown>) {
     const x = extractCommitTs(value, this.writtenNesting(), "replace"); // before the read, as in Convex
+    refuseLoneSurrogates(x.value, () => JSON.stringify({ id, value: toJsonValue(x.value as Value) }));
     const t = this.findTable(table);
     const cur = await this.read(table, id, "db.replace");
     if (!cur || !t) throw new Error(`Replace on nonexistent document ID ${id}`);
@@ -2232,6 +2246,42 @@ export function isQueryObject(value: unknown): boolean {
   return value instanceof QueryImpl || value instanceof VirtualQuery;
 }
 
+const RANGE_TYPE = { eq: "Eq", gt: "Gt", gte: "Gte", lt: "Lt", lte: "Lte" } as const;
+
+/**
+ * A query whose range, filters or search hold a lone surrogate fails where Convex's does (STUDY-135): serde
+ * parses the `queryStream` / `queryPage` text first, built here as Convex's `query_impl.ts` writes it (the
+ * source, then the operators, `take`'s limit last), for serde's column.
+ */
+function refuseLoneSurrogatesInQuery(table: string, st: QState, take: number | null) {
+  const values = [
+    st.index?.exprs.map((e) => e.value),
+    st.ops.map((op) => ("filter" in op ? expressionJson(op.filter) : null)),
+    st.search?.filters.map((f) => f.value),
+  ];
+  refuseLoneSurrogates(values, () => {
+    const json = (v: unknown) => (v === undefined ? { $undefined: null } : toJsonValue(v as Value));
+    const order = st.orderSet ? (st.desc ? "desc" : "asc") : null;
+    const source = st.search
+      ? {
+          type: "Search",
+          indexName: `${table}.${st.search.name}`,
+          filters: st.search.filters.map((f) => ({ type: f.type, fieldPath: f.field, value: json(f.value) })),
+        }
+      : st.index
+        ? {
+            type: "IndexRange",
+            indexName: `${table}.${st.index.name}`,
+            range: st.index.exprs.map((e) => ({ type: RANGE_TYPE[e.op], fieldPath: e.field, value: json(e.value) })),
+            order,
+          }
+        : { type: "FullTableScan", tableName: table, order };
+    const ops: QueryOp[] = take === null ? st.ops : [...st.ops, { limit: take }];
+    const operators = ops.map((op) => ("filter" in op ? { filter: expressionJson(op.filter) } : { limit: op.limit }));
+    return JSON.stringify({ query: { source, operators } });
+  });
+}
+
 class QueryImpl implements TxQueryChained {
   constructor(
     protected readonly tx: Tx,
@@ -2257,6 +2307,7 @@ class QueryImpl implements TxQueryChained {
     if (this.st.closed || this.st.iterated) throw reusedError();
     this.st.closed = true;
     try {
+      refuseLoneSurrogatesInQuery(this.table, this.st, take);
       checkOps(this.st.ops, "queryStream", take !== null);
     } catch (e) {
       return Promise.reject(e);
@@ -2320,6 +2371,7 @@ class QueryImpl implements TxQueryChained {
     if (this.st.closed || this.st.iterated) throw reusedError();
     this.st.closed = true;
     return (async () => {
+      refuseLoneSurrogatesInQuery(this.table, this.st, null);
       checkOps(this.st.ops, "queryPage");
       return this.tx.paginate(this.table, this.st, opts);
     })();
@@ -2330,6 +2382,7 @@ class QueryImpl implements TxQueryChained {
     if (this.st.closed) throw reusedError();
     this.st.iterated = true;
     // Convex starts the stream here, synchronously: its checks throw from this call.
+    refuseLoneSurrogatesInQuery(this.table, this.st, null);
     checkOps(this.st.ops, "queryStream");
     return this.tx.iterate(this.st);
   }
@@ -2346,7 +2399,9 @@ class QueryInitializerImpl extends QueryImpl implements TxQuery {
       if (!t) return;
       const found = this.tx.resolveIndex(t, name);
       n.ix = found;
-      n.range = f ? compileRange(found, f(new IndexRangeBuilder()).exprs) : FULL;
+      const exprs = f ? f(new IndexRangeBuilder()).exprs : [];
+      n.index = { name, exprs };
+      n.range = f ? compileRange(found, exprs) : FULL;
     });
   }
 

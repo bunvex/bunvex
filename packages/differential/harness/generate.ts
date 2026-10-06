@@ -9,13 +9,8 @@ import type { ActionStep, Call, Program, ProgramOp } from "./runner.ts";
 type Value = null | boolean | number | string | Value[] | { [k: string]: Value };
 const UNDEFINED = { $undefined: true } as const;
 
-/**
- * The cases of the app's `limit` op compared on both backends. Case 8, a string with a lone surrogate, is left
- * out: Convex refuses it with its JSON parser's message ("Received invalid json: unexpected end of hex escape
- * at line 1 column N", the column a place in its syscall's arguments), bunvex stores it. The owner decided
- * bunvex refuses it with Convex's message (STUDY-122 §4, D3: A); the case joins when that is built.
- */
-export const LIMIT_CASES = [0, 1, 2, 3, 4, 5, 6, 7, 9, 10];
+/** The cases of the app's `limit` op compared on both backends: all of them (case 8, a lone surrogate, STUDY-135). */
+export const LIMIT_CASES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 /** Values an index or a filter compares: a few of each type, so they meet. */
 const keyValue = fc.constantFrom<Value>("a", "b", "c", "", 1, 2, -1, 0.5, null, true);

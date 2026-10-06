@@ -18,6 +18,13 @@ export { formatExportFloat, fromExportJson, toExportJson } from "./export-json.t
 export { type DecodedId, decodeId, encodeId, IdDecodeError, idTableNumber } from "./id.ts";
 export { keyBytesLength, keyToValues, valuesToKey } from "./sorting.ts";
 export {
+  hasLoneSurrogate,
+  jsonSurrogateError,
+  refuseLoneSurrogates,
+  valueHasLoneSurrogate,
+  withoutLoneSurrogates,
+} from "./surrogates.ts";
+export {
   type GenericId,
   type GenericValidator,
   type Infer,

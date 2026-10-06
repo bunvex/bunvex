@@ -94,7 +94,9 @@ export function errorText(message: string, ids?: IdMap): string {
 export function answerShape(a: Step["answer"], ids: IdMap, times: number[]): unknown {
   const body = a.body as Record<string, unknown> | string;
   if (typeof body !== "object" || body === null) return { status: a.status, text: body };
-  if (body.status === "success") return { ok: normalize(body.value, ids, times) };
+  // The function's log lines, when it wrote any (STUDY-135: a lone surrogate in one is U+FFFD).
+  const logs = Array.isArray(body.logLines) && body.logLines.length ? { logs: body.logLines } : {};
+  if (body.status === "success") return { ok: normalize(body.value, ids, times), ...logs };
   if (body.status === "error")
     return {
       error: errorText(String(body.errorMessage ?? ""), ids),

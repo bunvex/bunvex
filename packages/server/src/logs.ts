@@ -12,6 +12,7 @@
 // strings, the function log (function-log.ts, STUDY-47) as they are.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { wallClock } from "@bunvex/core";
+import { withoutLoneSurrogates } from "@bunvex/values";
 import inspect from "object-inspect";
 import { mapStack } from "./stack-map.ts";
 
@@ -234,7 +235,9 @@ function cutToBytes(s: string, bytes: number): string {
 }
 
 /** A line of `messages`, cut at MAX_LOG_LINE_LENGTH bytes (Convex's `LogLineStructured::new_developer_log_line`). */
-export function makeLogLine(level: LogLevel, messages: string[], timestamp = wallClock()): LogLine {
+export function makeLogLine(level: LogLevel, raw: string[], timestamp = wallClock()): LogLine {
+  // Convex reads each message into Rust with a lossy conversion: a lone surrogate becomes U+FFFD (STUDY-135).
+  const messages = raw.map(withoutLoneSurrogates);
   const total = messages.reduce((n, m) => n + byteLength(m) + 1, 0) - 1;
   if (total <= MAX_LOG_LINE_LENGTH) return { level, messages, isTruncated: false, timestamp };
   const kept: string[] = [];
