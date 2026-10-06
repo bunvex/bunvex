@@ -42,6 +42,7 @@ import {
   type GenericValidator,
   hasCommitTs,
   isBunvexError,
+  isBytes,
   isSimpleObject,
   MAX_VALUE_NESTING,
   measureRawValue,
@@ -60,6 +61,24 @@ import { isolateFetch, nodeFetch } from "./action-fetch.ts";
  * same as that round trip, without building the JSON).
  */
 const acrossCall = (value: unknown): Value => copyValue((value === undefined ? null : value) as Value);
+
+/**
+ * A nested call's arguments as the callee gets them: Convex sends `convexToJson(args)`, which Rust parses into a
+ * `ConvexValue` (its objects sorted), so the callee sees a copy with each object's fields sorted and no
+ * `undefined` field. The arguments are checked by the callee (`checkArgs`), so this only copies: anything that
+ * is not plain data is left as it is, for that check to refuse with Convex's message.
+ */
+function acrossArgs(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(acrossArgs);
+  if (isBytes(v)) return v.slice(0);
+  if (!isSimpleObject(v)) return v;
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(v).sort()) {
+    const x = (v as Record<string, unknown>)[k];
+    if (x !== undefined) out[k] = acrossArgs(x);
+  }
+  return out;
+}
 
 /**
  * A mutation's result must be a value before it commits: Convex converts it inside the run
@@ -1577,7 +1596,7 @@ export class Functions {
       return body(db);
     }
     const f = this.fn(name, kind, false);
-    const a = this.checkArgs(f, args === undefined ? {} : args, measured);
+    const a = acrossArgs(this.checkArgs(f, args === undefined ? {} : args, measured)) as AnyArgs;
     if (depth >= MAX_NESTED_CALL_DEPTH)
       throw new Error("Cross component call depth limit exceeded. Do you have an infinite loop in your app?");
     if (opts?.useStaleSnapshot) {
@@ -2070,7 +2089,7 @@ export class Functions {
         checkActionAlive();
         return acrossCall(
           await unavailableAsError(
-            this.runQuery(actionTarget(await functionNameOf(n, null, this.engine)), a, false, caller),
+            this.runQuery(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
           ),
         );
       },
@@ -2078,14 +2097,14 @@ export class Functions {
         checkActionAlive();
         return acrossCall(
           await unavailableAsError(
-            this.runMutation(actionTarget(await functionNameOf(n, null, this.engine)), a, false, caller),
+            this.runMutation(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
           ),
         );
       },
       runAction: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
         return acrossCall(
-          await this.runAction(actionTarget(await functionNameOf(n, null, this.engine)), a, caller, {
+          await this.runAction(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), caller, {
             internal: true,
             authError,
           }),
