@@ -18,6 +18,7 @@ import type {
   DocLogRow,
   DocPrune,
   DocWrite,
+  IndexId,
   IndexPrune,
   IndexWrite,
   Lease,
@@ -25,6 +26,7 @@ import type {
   LogCommit,
   Persistence,
   RetentionStore,
+  TabletId,
 } from "./index.ts";
 import { LeaseLostError } from "./index.ts";
 import {
@@ -40,7 +42,12 @@ import { ProcessLock } from "./lock.ts";
 /** Diagnostic switch: write + fdatasync on the JS thread instead of the thread pool. */
 const SYNC_LOG = process.env.BUNVEX_SYNC_LOG === "1";
 
-type Version<T> = { ts: number; v: T };
+/**
+ * One version, stamped with its commit's sequence number in this process (`seq`, an index into
+ * `MemoryPersistence.tsOf`), not the ts itself: a read walks many versions, and comparing small numbers is
+ * much cheaper than comparing `bigint` timestamps. A read turns its snapshot ts into a sequence bound once.
+ */
+type Version<T> = { seq: number; v: T };
 
 /** What the first line of a log says about it (PERSIST-01 C10). `complete`: the line has its terminator. */
 function firstRecord(line: string, complete: boolean, store: string): "header" | "commit" | "torn" {
@@ -61,13 +68,13 @@ function firstRecord(line: string, complete: boolean, store: string): "header" |
     checkLayoutVersion(r.layout, store);
     return "header";
   }
-  if (r && typeof r === "object" && typeof r.ts === "number" && Array.isArray(r.docs) && Array.isArray(r.idx))
+  if (r && typeof r === "object" && typeof r.ts === "string" && Array.isArray(r.docs) && Array.isArray(r.idx))
     return "commit"; // a log written before C10: the same layout, version 1
   throw foreign();
 }
 
 /** The first position in `xs` (sorted by ts) whose ts is above `ts`. */
-function firstAbove(xs: { ts: number }[], ts: number, from = 0) {
+function firstAbove(xs: { ts: bigint }[], ts: bigint, from = 0) {
   let lo = from;
   let hi = xs.length;
   while (lo < hi) {
@@ -78,17 +85,18 @@ function firstAbove(xs: { ts: number }[], ts: number, from = 0) {
   return lo;
 }
 
-/** Drop the versions at or below ts; how many went. */
-function pruneVersions(vs: { ts: number }[], ts: number) {
-  const n = firstAbove(vs, ts);
+/** Drop the versions at or below sequence `seq`; how many went. */
+function pruneVersions(vs: Version<unknown>[], seq: number) {
+  let n = 0;
+  while (n < vs.length && vs[n].seq <= seq) n++;
   if (n) vs.splice(0, n);
   return n;
 }
 
-/** Newest version at or before ts (versions are appended in ts order). */
-function visible<T>(vs: Version<T>[] | undefined, ts: number): Version<T> | undefined {
+/** Newest version at or before sequence `seq` (versions are appended in commit order). */
+function visible<T>(vs: Version<T>[] | undefined, seq: number): Version<T> | undefined {
   if (!vs) return undefined;
-  for (let i = vs.length - 1; i >= 0; i--) if (vs[i].ts <= ts) return vs[i];
+  for (let i = vs.length - 1; i >= 0; i--) if (vs[i].seq <= seq) return vs[i];
   return undefined;
 }
 
@@ -100,7 +108,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   private lock: ProcessLock | null = null;
   private logPath: string | null = null;
   private docs = new Map<string, Version<string | null>[]>(); // `${table}:${id}` → versions
-  private indexes = new Map<number, BTree<Uint8Array, Version<string | null>[]>>();
+  private indexes = new Map<IndexId, BTree<Uint8Array, Version<string | null>[]>>();
   private fh: FileHandle | null = null;
   private pending: Buffer[] = [];
   /** A flush's write in flight (setGlobal appends after it). */
@@ -111,19 +119,34 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     this.durable = opts.durable;
   }
 
-  private lastTs = 0;
+  private lastTs = 0n;
+  /** Every applied commit's ts, by sequence number (ascending): what a version's `seq` stands for. */
+  private tsOf: bigint[] = [];
+  /** The sequence of the last commit at or before `ts` (-1: none). */
+  private seqAt(ts: bigint): number {
+    const xs = this.tsOf;
+    if (xs.length && xs[xs.length - 1] <= ts) return xs.length - 1;
+    let lo = 0;
+    let hi = xs.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (xs[mid] <= ts) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo - 1;
+  }
   /** The highest ts made durable by a flush (or replayed from the log): readLog's bound (PERSIST-01 C11). */
-  private durableTs = 0;
+  private durableTs = 0n;
   /** The log by ts (C11): every commit that wrote index entries, in ts order (apply is called in ts order).
    *  The write arrays are the ones `apply` received, shared with the B-trees' keys: no copy. */
-  private commits: { ts: number; writes: IndexWrite[] }[] = [];
+  private commits: { ts: bigint; writes: IndexWrite[] }[] = [];
   /** The document log (C12): every commit that wrote documents, in ts order. */
-  private docCommits: { ts: number; docs: DocWrite[] }[] = [];
+  private docCommits: { ts: bigint; docs: DocWrite[] }[] = [];
   /** Where each log starts once retention has forgotten its head (compacted when it gets long). */
   private commitsHead = 0;
   private docCommitsHead = 0;
   /** The ts of the last index commit retention forgot: the prevTs of the first one left. */
-  private forgottenTs = 0;
+  private forgottenTs = 0n;
   /** Persistence globals (C14), replayed from the log. */
   private globals = new Map<string, string>();
 
@@ -228,9 +251,9 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       if (nl === -1) break; // torn: no terminator
       const line = text.slice(pos, nl);
       let rec: {
-        ts: number;
+        ts: string;
         docs: DocWrite[];
-        idx: [number, string, string | null][];
+        idx: [IndexId, string, string | null][];
         layout?: unknown;
         global?: string;
         value?: unknown;
@@ -255,7 +278,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
         continue;
       }
       this.applyMemory(
-        rec.ts,
+        BigInt(rec.ts),
         rec.docs,
         rec.idx.map(([index, key, id]) => ({ index, key: new Uint8Array(Buffer.from(key, "base64")), id })),
       );
@@ -274,9 +297,10 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return this.lastTs;
   }
 
-  auditLiveDocs(table: number, ts: number) {
+  auditLiveDocs(table: TabletId, ts: bigint) {
     let n = 0;
-    for (const [k, vs] of this.docs) if (k.startsWith(`${table}:`) && visible(vs, ts)?.v != null) n++;
+    const seq = this.seqAt(ts);
+    for (const [k, vs] of this.docs) if (k.startsWith(`${table}:`) && visible(vs, seq)?.v != null) n++;
     return n;
   }
 
@@ -288,7 +312,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return { docs, idx };
   }
 
-  private tree(index: number) {
+  private tree(index: IndexId) {
     let t = this.indexes.get(index);
     if (!t) {
       t = new BTree<Uint8Array, Version<string | null>[]>(undefined, compareKeys);
@@ -297,35 +321,37 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return t;
   }
 
-  apply(ts: number, docs: DocWrite[], idx: IndexWrite[]) {
+  apply(ts: bigint, docs: DocWrite[], idx: IndexWrite[]) {
     this.assertWriter();
     this.applyMemory(ts, docs, idx);
     if (this.fh !== null) {
-      // The log record: ts + the writes. JSON keeps the prototype honest about bytes written; a real
-      // engine would use a binary frame with a checksum.
+      // The log record: ts (a decimal string: JSON has no 64-bit integers) + the writes. JSON keeps the
+      // prototype honest about bytes written; a real engine would use a binary frame with a checksum.
       this.pending.push(
         Buffer.from(
-          `${JSON.stringify({ ts, docs, idx: idx.map((e) => [e.index, Buffer.from(e.key).toString("base64"), e.id]) })}\n`,
+          `${JSON.stringify({ ts: String(ts), docs, idx: idx.map((e) => [e.index, Buffer.from(e.key).toString("base64"), e.id]) })}\n`,
         ),
       );
     }
   }
 
-  private applyMemory(ts: number, docs: DocWrite[], idx: IndexWrite[]) {
+  private applyMemory(ts: bigint, docs: DocWrite[], idx: IndexWrite[]) {
     this.lastTs = ts;
+    const seq = this.tsOf.length;
+    this.tsOf.push(ts);
     if (idx.length) this.commits.push({ ts, writes: idx });
     if (docs.length) this.docCommits.push({ ts, docs });
     for (const d of docs) {
       const k = `${d.table}:${d.id}`;
       const vs = this.docs.get(k);
-      if (vs) vs.push({ ts, v: d.json });
-      else this.docs.set(k, [{ ts, v: d.json }]);
+      if (vs) vs.push({ seq, v: d.json });
+      else this.docs.set(k, [{ seq, v: d.json }]);
     }
     for (const e of idx) {
       const t = this.tree(e.index);
       const vs = t.get(e.key);
-      if (vs) vs.push({ ts, v: e.id });
-      else t.set(e.key, [{ ts, v: e.id }]);
+      if (vs) vs.push({ seq, v: e.id });
+      else t.set(e.key, [{ seq, v: e.id }]);
     }
   }
 
@@ -361,10 +387,10 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
 
   /** PERSIST-01 C11: a binary search for the first commit after `afterTs`, then a walk. Bounded by what a
    *  flush made durable: a group applied but still being written is not returned. */
-  readLog(afterTs: number, upToTs: number, limit: number): LogCommit[] {
+  readLog(afterTs: bigint, upToTs: bigint, limit: number): LogCommit[] {
     const out: LogCommit[] = [];
     if (limit <= 0) return out;
-    const hi = Math.min(upToTs, this.durableTs);
+    const hi = upToTs < this.durableTs ? upToTs : this.durableTs;
     const cs = this.commits;
     const lo = firstAbove(cs, afterTs, this.commitsHead);
     let prevTs = lo > this.commitsHead ? cs[lo - 1].ts : this.forgottenTs;
@@ -376,10 +402,10 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   }
 
   /** PERSIST-01 C12, as readLog over the document commits. */
-  readDocumentLog(afterTs: number, upToTs: number, limit: number): DocLogRow[] {
+  readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): DocLogRow[] {
     const out: DocLogRow[] = [];
     if (limit <= 0) return out;
-    const hi = Math.min(upToTs, this.durableTs);
+    const hi = upToTs < this.durableTs ? upToTs : this.durableTs;
     const cs = this.docCommits;
     for (
       let i = firstAbove(cs, afterTs, this.docCommitsHead), n = 0;
@@ -395,17 +421,17 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   }
 
   /** PERSIST-01 C13: drop the versions from RAM, and forget the log up to `through`. */
-  pruneIndexes(entries: IndexPrune[], through: number) {
+  pruneIndexes(entries: IndexPrune[], through: bigint) {
     this.assertWriter();
     let n = 0;
     for (const e of entries) {
       const t = this.indexes.get(e.index);
       const vs = t?.get(e.key);
       if (!vs) continue;
-      n += pruneVersions(vs, e.ts);
+      n += pruneVersions(vs, this.seqAt(e.ts));
       if (!vs.length) t!.delete(e.key);
     }
-    this.commitsHead = firstAbove(this.commits, Math.min(through, this.durableTs), this.commitsHead);
+    this.commitsHead = firstAbove(this.commits, through < this.durableTs ? through : this.durableTs, this.commitsHead);
     if (this.commitsHead > 0) this.forgottenTs = this.commits[this.commitsHead - 1].ts;
     if (this.commitsHead > 1024 && this.commitsHead * 2 > this.commits.length) {
       this.commits = this.commits.slice(this.commitsHead);
@@ -414,17 +440,21 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return n;
   }
 
-  pruneDocuments(entries: DocPrune[], through: number) {
+  pruneDocuments(entries: DocPrune[], through: bigint) {
     this.assertWriter();
     let n = 0;
     for (const e of entries) {
       const k = `${e.table}:${e.id}`;
       const vs = this.docs.get(k);
       if (!vs) continue;
-      n += pruneVersions(vs, e.ts);
+      n += pruneVersions(vs, this.seqAt(e.ts));
       if (!vs.length) this.docs.delete(k);
     }
-    this.docCommitsHead = firstAbove(this.docCommits, Math.min(through, this.durableTs), this.docCommitsHead);
+    this.docCommitsHead = firstAbove(
+      this.docCommits,
+      through < this.durableTs ? through : this.durableTs,
+      this.docCommitsHead,
+    );
     if (this.docCommitsHead > 1024 && this.docCommitsHead * 2 > this.docCommits.length) {
       this.docCommits = this.docCommits.slice(this.docCommitsHead);
       this.docCommitsHead = 0;
@@ -449,21 +479,22 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     }
   }
 
-  scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
+  scan(index: IndexId, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
     const t = this.indexes.get(index);
     const out: string[] = [];
     if (!t || limit <= 0) return out;
+    const seq = this.seqAt(ts);
     if (desc) {
       for (const [k, vs] of t.entriesReversed(hi)) {
         if (compareKeys(k, hi) >= 0) continue; // entriesReversed(hi) starts AT hi (inclusive)
         if (compareKeys(k, lo) < 0) break;
-        const v = visible(vs, ts);
+        const v = visible(vs, seq);
         if (v && v.v !== null) out.push(v.v);
         if (out.length >= limit) break;
       }
     } else {
       t.forRange(lo, hi, false, (_k, vs) => {
-        const v = visible(vs, ts);
+        const v = visible(vs, seq);
         if (v && v.v !== null) out.push(v.v);
         if (out.length >= limit) return { break: true };
       });
@@ -471,14 +502,15 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return out;
   }
 
-  get(table: number, id: string, ts: number) {
-    return visible(this.docs.get(`${table}:${id}`), ts)?.v ?? null;
+  get(table: TabletId, id: string, ts: bigint) {
+    return visible(this.docs.get(`${table}:${id}`), this.seqAt(ts))?.v ?? null;
   }
 
-  getVersions(table: number, ids: string[], ts: number) {
+  getVersions(table: TabletId, ids: string[], ts: bigint) {
+    const seq = this.seqAt(ts);
     return ids.map((id) => {
-      const v = visible(this.docs.get(`${table}:${id}`), ts);
-      return v && v.v !== null ? { json: v.v, ts: v.ts } : null;
+      const v = visible(this.docs.get(`${table}:${id}`), seq);
+      return v && v.v !== null ? { json: v.v, ts: this.tsOf[v.seq] } : null;
     });
   }
 

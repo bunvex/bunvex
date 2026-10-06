@@ -61,7 +61,7 @@ export async function hasLogIndex() {
   return have.some((i) => JSON.stringify(i.key) === JSON.stringify({ ts: 1 }));
 }
 /** K25: an index row above the durable prefix, written behind the driver's back. */
-export async function strayLogRow(ts: number) {
+export async function strayLogRow(ts: bigint) {
   await raw((db) => db.collection("indexes").insertOne({ x: 960, k: "ff", ts, d: "stray" }));
 }
 

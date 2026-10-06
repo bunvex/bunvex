@@ -12,7 +12,7 @@ const meta = (n: number, name = `t${n}`, state: TableMeta["state"] = "active"): 
   _id: `id${n}`,
   name,
   number: 10_001 + n,
-  tablet: 100 + n,
+  tablet: `t${100 + n}`,
   state,
 });
 const user = (count: number) => Array.from({ length: count }, (_, i) => meta(i));

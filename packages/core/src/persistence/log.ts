@@ -3,13 +3,13 @@
 import type { IndexWrite, LogCommit } from "./index.ts";
 
 /** One `indexes` row, as a by-ts read returns it. */
-export type LogRow = IndexWrite & { ts: number };
+export type LogRow = IndexWrite & { ts: bigint };
 
 /**
  * Cut `rows` (whole commits, sorted by ts) into commits. `prevTs` is the ts of the newest commit at or
- * before the read's `afterTs` (0 if none): the first commit's predecessor.
+ * before the read's `afterTs` (0n if none): the first commit's predecessor.
  */
-export function groupLog(rows: LogRow[], prevTs: number): LogCommit[] {
+export function groupLog(rows: LogRow[], prevTs: bigint): LogCommit[] {
   const out: LogCommit[] = [];
   let cur: LogCommit | null = null;
   for (const r of rows) {

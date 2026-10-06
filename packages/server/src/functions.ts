@@ -112,6 +112,7 @@ import { canonicalPath, functionNameOf, inHandleScope } from "./function-handles
 import {
   type CallerName,
   type Completion,
+  type ExecutionLinks,
   type FunctionLog,
   type IdentityType,
   NO_USAGE,
@@ -572,6 +573,8 @@ export type SourcedCaller = Caller & {
   retries?: { n: number };
   /** Its caller runs it again when it loses an OCC conflict (the scheduler's and crons' loops): `willRetry`. */
   retriesOcc?: boolean;
+  /** A sync query's place in the subscriptions inspector, for its log entry's links (STUDY-131 AD-27). */
+  subscription?: ExecutionLinks["subscription"];
 };
 
 /** Convex's `function_args_bytes`: the length of the arguments' JSON array, as the client sent it. */
@@ -795,6 +798,12 @@ export class Functions {
     r.runReason = sourced?.runReason ?? null;
     r.mutationQueueLength = sourced?.mutationQueueLength ?? null;
     r.retries = sourced?.retries ?? { n: 0 };
+    // Why it ran and its trace, for the dashboard (STUDY-131 AD-27).
+    if (sourced?.subscription || span)
+      r.links = {
+        ...(sourced?.subscription && { subscription: sourced.subscription }),
+        ...(span && { trace: { traceId: span.traceId, spanId: span.spanId } }),
+      };
     r.send = r.environment === "isolate" ? this.isolateSender : nodeSender;
     if (sourced?.source === "Scheduler") r.schedulerJobId = caller?.request?.scheduledFunctionId ?? null;
     if (udfType !== "HttpAction") {
@@ -1054,6 +1063,7 @@ export class Functions {
       executionTimestamp: r.start / 1000,
       identityType: r.identityType,
       environment: r.environment,
+      ...(r.links && { links: r.links }),
     };
   }
 
@@ -1497,7 +1507,7 @@ export class Functions {
     // The snapshot in nanoseconds; reading it makes the result time-dependent, as `Date.now()` does.
     const getSnapshotTs = () => {
       observeTime();
-      return BigInt(db.snapshot) * 1000n;
+      return db.snapshot;
     };
     const meta = { getFunctionMetadata, getTransactionMetrics, getDeploymentMetadata, getSnapshotTs };
     return f.kind === "mutation" ? { ...meta, getRequestMetadata } : meta;
@@ -1884,7 +1894,7 @@ export class Functions {
    * A query at snapshot `ts` (≤ the visible ts), as JSON: the HTTP API's `query_at_ts`. Through the query
    * cache, as in Convex: a result cached at or before `ts` and still valid at `ts` answers it.
    */
-  async runQueryAtJson(name: string, args: unknown, ts: number, caller?: Caller): Promise<string> {
+  async runQueryAtJson(name: string, args: unknown, ts: bigint, caller?: Caller): Promise<string> {
     // As Convex's snapshot manager: a transaction may not begin further back than MAX_TRANSACTION_WINDOW
     // (OutOfRetention, a "try again later" system error). Every other transaction begins at the latest ts.
     this.engine.committer.checkBeginTs(ts);
@@ -1911,7 +1921,7 @@ export class Functions {
     fromClient = true,
     caller?: Caller,
     deadline?: Deadline,
-  ): Promise<{ value: unknown; ts: number }> {
+  ): Promise<{ value: unknown; ts: bigint }> {
     // The name is the write source other mutations' OCC errors cite (STUDY-21).
     if (isSystemPath(name))
       return this.engine.mutationWithTs(
@@ -1947,7 +1957,7 @@ export class Functions {
     request: SessionRequestId,
     caller?: Caller,
     deadline?: Deadline,
-  ): Promise<{ ts: number } & ({ value: unknown } | { replayed: SessionRequestOutcome })> {
+  ): Promise<{ ts: bigint } & ({ value: unknown } | { replayed: SessionRequestOutcome })> {
     const run = () =>
       this.engine.sessionMutation(
         isSystemPath(name)

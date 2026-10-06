@@ -9,12 +9,16 @@ import {
   aes128GcmSivOpen,
   aes128GcmSivSeal,
   type Caller,
+  compareInternalIds,
   DATA_SYNC_PROGRESS_TABLE,
   type Engine,
   hasRetention,
   insertAuditLogEvents,
+  internalIdBytes,
+  internalIdString,
   OutOfRetentionError,
   type TableDef,
+  type TabletId,
   type Tx,
 } from "@bunvex/core";
 import { decodeId, encodeId, fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
@@ -35,7 +39,7 @@ export const DATA_SYNC_LIMITS = {
   pageSize: Number(process.env.DATA_SYNC_PAGE_SIZE_LIMIT ?? 16384),
   pageBytes: Number(process.env.DATA_SYNC_PAGE_BYTES_LIMIT ?? 1 << 26),
   maxRowsRead: Number(process.env.DATA_SYNC_MAX_ROWS_READ ?? 32768),
-  byIdFreshnessUs: Number(process.env.DATA_SYNC_BY_ID_FRESHNESS_SECONDS ?? 30) * 1_000_000,
+  byIdFreshnessNs: BigInt(Math.round(Number(process.env.DATA_SYNC_BY_ID_FRESHNESS_SECONDS ?? 30) * 1000)) * 1_000_000n,
   progressWriteIntervalMs: Number(process.env.DATA_SYNC_PROGRESS_WRITE_INTERVAL_MS ?? 5000),
 };
 export type DataSyncLimits = typeof DATA_SYNC_LIMITS;
@@ -51,11 +55,11 @@ const expired = () =>
 
 // ---------------------------------------------------------------- the cursor (Convex's protobuf)
 
-type TabletRef = { tablet: number; component: string; table: string };
+type TabletRef = { tablet: TabletId; component: string; table: string };
 type InProgress = TabletRef & { currentId: string | null; docsSynced: number };
 export type DataSyncCursor = {
-  /** Microseconds (the wire has Convex's nanoseconds). */
-  syncedTs: number;
+  /** Nanoseconds, as on the wire. */
+  syncedTs: bigint;
   synced: TabletRef[];
   /** The table being walked by id; null once every table is synced (Convex's `Synced`). */
   current: InProgress | null;
@@ -129,15 +133,11 @@ function readProto(buf: Uint8Array): Map<number, (bigint | Uint8Array)[]> {
   return fields;
 }
 
-/** A bunvex tablet as Convex's 16-byte `TabletId` (big-endian). */
-const tabletBytes = (tablet: number) => {
-  const b = new Uint8Array(16);
-  new DataView(b.buffer).setBigUint64(8, BigInt(tablet));
-  return b;
-};
-const tabletOf = (b: Uint8Array) => {
+/** A tablet as Convex's 16-byte `TabletId`: its internal id's bytes. */
+const tabletBytes = (tablet: TabletId) => internalIdBytes(tablet);
+const tabletOf = (b: Uint8Array): TabletId => {
   if (b.length !== 16) throw new Error("bad tablet id");
-  return Number(new DataView(b.buffer, b.byteOffset, 16).getBigUint64(8));
+  return internalIdString(b);
 };
 
 function encodeTablet(t: TabletRef, extra?: (w: ProtoWriter) => void) {
@@ -147,7 +147,7 @@ function encodeTablet(t: TabletRef, extra?: (w: ProtoWriter) => void) {
 }
 
 export function encodeCursor(c: DataSyncCursor): Uint8Array {
-  const w = new ProtoWriter().uint(1, BigInt(c.syncedTs) * 1000n);
+  const w = new ProtoWriter().uint(1, c.syncedTs);
   for (const t of c.synced) w.lenDelimited(2, encodeTablet(t));
   if (c.current === null) w.lenDelimited(3, []);
   else {
@@ -185,7 +185,7 @@ export function decodeCursor(buf: Uint8Array): DataSyncCursor {
       m,
     };
   };
-  const syncedTs = Number((need(one(f, 1), "synced_ts") as bigint) / 1000n);
+  const syncedTs = need(one(f, 1), "synced_ts") as bigint;
   const synced = (f.get(2) ?? []).map((b) => {
     const { m: _, ...t } = tablet(b as Uint8Array);
     return t;
@@ -269,11 +269,11 @@ export function clientPrefix(req: Request): string {
 // ---------------------------------------------------------------- one page
 
 type Target = { t: TableDef; cols: Columns };
-export type DataSyncValue = { table: string; ts: number; deleted: boolean; json: string };
+export type DataSyncValue = { table: string; ts: bigint; deleted: boolean; json: string };
 export type DataSyncStatus =
   | { type: "snapshotting" }
-  | { type: "stale"; snapshotTs: number }
-  | { type: "upToDate"; snapshotTs: number };
+  | { type: "stale"; snapshotTs: bigint }
+  | { type: "upToDate"; snapshotTs: bigint };
 export type DataSyncPage = {
   status: DataSyncStatus;
   truncates: string[];
@@ -316,7 +316,7 @@ function reconcile(c: DataSyncCursor, targets: Target[]): DataSyncCursor {
   return { ...c, synced, current };
 }
 
-function statusOf(c: DataSyncCursor, latest: number): DataSyncStatus {
+function statusOf(c: DataSyncCursor, latest: bigint): DataSyncStatus {
   if (c.current !== null) return { type: "snapshotting" };
   return c.syncedTs < latest ? { type: "stale", snapshotTs: c.syncedTs } : { type: "upToDate", snapshotTs: c.syncedTs };
 }
@@ -346,7 +346,7 @@ export async function dataSyncPage(
   );
   const values: DataSyncValue[] = [];
   try {
-    if (c.current !== null && latest - c.syncedTs < limits.byIdFreshnessUs)
+    if (c.current !== null && latest - c.syncedTs < limits.byIdFreshnessNs)
       c = await byIdPage(engine, c, byTablet, values, limits);
     else c = await tsPage(engine, c, latest, byTablet, values, limits);
   } catch (e) {
@@ -362,7 +362,7 @@ export async function dataSyncPage(
 async function byIdPage(
   engine: Engine,
   c: DataSyncCursor,
-  byTablet: Map<number, Target>,
+  byTablet: Map<TabletId, Target>,
   values: DataSyncValue[],
   limits: DataSyncLimits,
 ): Promise<DataSyncCursor> {
@@ -413,18 +413,18 @@ async function byIdPage(
 async function tsPage(
   engine: Engine,
   c: DataSyncCursor,
-  latest: number,
-  byTablet: Map<number, Target>,
+  latest: bigint,
+  byTablet: Map<TabletId, Target>,
   values: DataSyncValue[],
   limits: DataSyncLimits,
 ): Promise<DataSyncCursor> {
   const store = engine.persistence;
   if (!hasRetention(store)) throw new Error("this persistence has no document log");
   // The log after the cursor must still be in the document retention window.
-  if (c.syncedTs + 1 < (engine.retention?.minDocumentTs ?? 0)) throw expired();
+  if (c.syncedTs < (engine.retention?.minDocumentTs ?? 0n)) throw expired();
   const synced = new Set(c.synced.map((s) => s.tablet));
   const cur = c.current;
-  const captured = (tablet: number, id: string) =>
+  const captured = (tablet: TabletId, id: string) =>
     synced.has(tablet) ||
     (cur !== null && tablet === cur.tablet && cur.currentId !== null && compareIds(id, cur.currentId) <= 0);
   let after = c.syncedTs;
@@ -438,18 +438,18 @@ async function tsPage(
       exhausted = true;
       break;
     }
-    const commits = new Map<number, typeof rows>();
+    const commits = new Map<bigint, typeof rows>();
     for (const r of rows) (commits.get(r.ts) ?? commits.set(r.ts, []).get(r.ts)!).push(r);
-    for (const [ts, commit] of [...commits].sort(([a], [b]) => a - b)) {
+    for (const [ts, commit] of [...commits].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
       if (
         committedAny &&
         (rowsRead >= limits.maxRowsRead || values.length >= limits.pageSize || bytes >= limits.pageBytes)
       )
         break outer;
-      commit.sort((a, b) => a.table - b.table || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      commit.sort((a, b) => compareInternalIds(a.table, b.table) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       const out: DataSyncValue[] = [];
       let commitBytes = 0;
-      const live = new Map<number, string[]>();
+      const live = new Map<TabletId, string[]>();
       for (const r of commit)
         if (!r.deleted && captured(r.table, r.id) && byTablet.has(r.table))
           live.set(r.table, [...(live.get(r.table) ?? []), r.id]);
@@ -519,7 +519,7 @@ type ProgressRow = { _id: string; syncId: string; lastUpdatedMs: number; state: 
 function progressState(engine: Engine, page: DataSyncPage): ProgressState {
   const c = page.cursor;
   if (c.current !== null) {
-    const count = (tablet: number) => engine.tableSummaries.count(tablet);
+    const count = (tablet: TabletId) => engine.tableSummaries.count(tablet);
     return {
       type: "Snapshotting",
       numTablesSynced: c.synced.length,
@@ -536,7 +536,7 @@ function progressState(engine: Engine, page: DataSyncPage): ProgressState {
     type: page.status.type === "upToDate" ? "UpToDate" : "Stale",
     totalTables: c.synced.length,
     numDocumentsSynced: c.numDocsSynced,
-    syncedTs: BigInt(c.syncedTs) * 1000n,
+    syncedTs: c.syncedTs,
   };
 }
 
@@ -662,10 +662,9 @@ export async function dataSync(engine: Engine, req: Request, caller: Caller): Pr
   const status =
     page.status.type === "snapshotting"
       ? `{"type":"snapshotting"}`
-      : `{"type":${JSON.stringify(page.status.type)},"snapshotTs":${BigInt(page.status.snapshotTs) * 1000n}}`;
+      : `{"type":${JSON.stringify(page.status.type)},"snapshotTs":${page.status.snapshotTs}}`;
   const values = page.values.map(
-    (v) =>
-      `{"component":"","table":${JSON.stringify(v.table)},"ts":${BigInt(v.ts) * 1000n},"deleted":${v.deleted},"value":${v.json}}`,
+    (v) => `{"component":"","table":${JSON.stringify(v.table)},"ts":${v.ts},"deleted":${v.deleted},"value":${v.json}}`,
   );
   return `{"status":${status},"truncates":[${page.truncates.map((t) => `{"component":"","table":${JSON.stringify(t)}}`).join(",")}],"values":[${values.join(",")}],"syncId":${JSON.stringify(page.cursor.syncId)},"pagination":{"hasMore":true,"nextCursor":${JSON.stringify(sealCursor(engine, page.cursor))}}}`;
 }
@@ -684,11 +683,11 @@ export async function cursorFromDeltas(engine: Engine, req: Request): Promise<st
   const raw = body.cursor;
   if (typeof raw !== "string" || !/^\d+$/.test(raw))
     throw bad("InvalidDataSyncCursor", "The document_deltas cursor is not a valid timestamp");
-  const ts = Number(BigInt(raw) / 1000n);
+  const ts = BigInt(raw);
   const targets = dataSyncTargets(engine, selectionArg(body.selection));
   if (ts > engine.committer.visibleTs)
     throw bad("InvalidDataSyncCursor", "document_deltas cursor is ahead of the deployment's latest timestamp");
-  if (ts + 1 < (engine.retention?.minDocumentTs ?? 0)) throw expired();
+  if (ts < (engine.retention?.minDocumentTs ?? 0n)) throw expired();
   const cursor: DataSyncCursor = {
     syncedTs: ts,
     synced: targets.map((x) => ref(x.t)),

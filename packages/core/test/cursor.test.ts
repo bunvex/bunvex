@@ -10,7 +10,13 @@ const codec: CursorCodec = {
   key: kbkdfCtrHmacSha256(instanceSecretBytes(SECRET), "cursor", 16),
   instanceName: "carnitas",
 };
-const fp = queryFingerprint({ tablet: 1, index: 2, lo: new Uint8Array([1]), hi: new Uint8Array([2]), desc: false });
+const fp = queryFingerprint({
+  tablet: "t1",
+  index: "i2",
+  lo: new Uint8Array([1]),
+  hi: new Uint8Array([2]),
+  desc: false,
+});
 const hex = (b: Uint8Array | number[]) => Buffer.from(b).toString("hex");
 
 test("the sealed bytes: version 7, then the InstanceCursor proto under the cursor key, deterministic", () => {
@@ -36,8 +42,8 @@ test("round trips; another query, instance or tampering is refused with Convex's
   expect(decodeCursor(codec, encodeCursor(codec, after, fp), fp)).toEqual(after);
   expect(decodeCursor(codec, encodeCursor(codec, "end", fp), fp)).toBe("end");
   const other = queryFingerprint({
-    tablet: 1,
-    index: 2,
+    tablet: "t1",
+    index: "i2",
     lo: new Uint8Array([1]),
     hi: new Uint8Array([3]),
     desc: false,

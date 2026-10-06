@@ -7,10 +7,11 @@ import { type IndexedDoc, SegmentedTextIndex, type TextHit, type TextQuery, toke
 import { keyBytesLength, type Value } from "@bunvex/values";
 import { OutOfRetentionError, type SearchDoc } from "./committer.ts";
 import { encodeKey, prefixEnd } from "./keyenc.ts";
+import type { IndexId, TabletId } from "./persistence/index.ts";
 import { type Doc, fieldValue, type SearchIndexDef, type TableDef } from "./schema.ts";
 
 /** How long the log of recent changes is kept: transactions older than this cannot search (5 minutes). */
-export const SEARCH_LOG_RETENTION_US = 5 * 60 * 1_000_000;
+export const SEARCH_LOG_RETENTION_NS = 5n * 60n * 1_000_000_000n;
 
 /** An `eq` value as the index compares it: its sort key (so int64 ≠ float64; a missing field is `undefined`). */
 export const filterKey = (v: unknown): string => Buffer.from(encodeKey([v as never])).toString("hex");
@@ -29,11 +30,11 @@ const filterReadKey = (field: string, key: string) =>
 const point = (k: Uint8Array) => ({ lo: k, hi: Uint8Array.of(...k, 0) });
 
 export function searchReadIntervals(
-  index: number,
+  index: IndexId,
   terms: { term: string; prefix: boolean }[],
   filters: [string, string][],
 ) {
-  const out: { index: number; lo: Uint8Array; hi: Uint8Array }[] = [];
+  const out: { index: IndexId; lo: Uint8Array; hi: Uint8Array }[] = [];
   for (const t of terms) {
     const k = termKey(t.term);
     out.push(t.prefix ? { index, lo: k, hi: prefixEnd(k) } : { index, ...point(k) });
@@ -43,10 +44,10 @@ export function searchReadIntervals(
 }
 
 export type SearchIndexEntry = {
-  /** The synthetic index id of its read-set keys (negative: never a real index). */
-  readIndex: number;
+  /** The synthetic index id of its read-set keys (`text:<n>`: never a real index's id). */
+  readIndex: IndexId;
   table: string;
-  tablet: number;
+  tablet: TabletId;
   name: string;
   def: SearchIndexDef;
   staged: boolean;
@@ -59,9 +60,9 @@ export type SearchIndexEntry = {
   /** The index: its segments and memory part (STUDY-111). */
   index: SegmentedTextIndex;
   /** Changes applied after the backfill began, oldest first: what each document was before. */
-  log: { ts: number; id: string; before: IndexedDoc | null }[];
+  log: { ts: bigint; id: string; before: IndexedDoc | null }[];
   /** Commits at or before this ts can no longer be undone from `log`. */
-  retainedFrom: number;
+  retainedFrom: bigint;
   /** Documents a commit set while the backfill ran: the backfill's older copy must not replace them. */
   touched: Set<string> | null;
 };
@@ -104,9 +105,9 @@ export class SearchIndexes {
     return [...this.entries.values()];
   }
   /** One synthetic id per (tablet, index), kept across rebuilds, so read-sets taken before still match. */
-  private readIds = new Map<string, number>();
+  private readIds = new Map<string, IndexId>();
 
-  private static key = (tablet: number, name: string) => `${tablet}\u0000${name}`;
+  private static key = (tablet: TabletId, name: string) => `${tablet}\u0000${name}`;
 
   get(t: TableDef, name: string): SearchIndexEntry | undefined {
     return this.entries.get(SearchIndexes.key(t.id, name));
@@ -116,10 +117,10 @@ export class SearchIndexes {
    * The indexes of one table. Every write asks (the usage meter, the commit's index maintenance), so they are
    * grouped when the set changes, not filtered on each call; a table without any shares one empty list.
    */
-  forTablet(tablet: number): readonly SearchIndexEntry[] {
+  forTablet(tablet: TabletId): readonly SearchIndexEntry[] {
     return this.byTablet.get(tablet) ?? NONE;
   }
-  private byTablet = new Map<number, SearchIndexEntry[]>();
+  private byTablet = new Map<TabletId, SearchIndexEntry[]>();
 
   /**
    * Make the set of indexes the declared ones of the active tables; returns the new ones, to backfill.
@@ -127,7 +128,7 @@ export class SearchIndexes {
    */
   reconcile(
     wanted: { table: TableDef; name: string; def: SearchIndexDef; staged: boolean }[],
-    visibleTs: number,
+    visibleTs: bigint,
     /** The first reconcile after the process started: every index is rebuilt, not new (STUDY-79). */
     bootstrapping = false,
   ) {
@@ -145,7 +146,7 @@ export class SearchIndexes {
       }
       let readIndex = this.readIds.get(k);
       if (readIndex === undefined) {
-        readIndex = -(this.readIds.size + 1);
+        readIndex = `text:${this.readIds.size + 1}`;
         this.readIds.set(k, readIndex);
       }
       const e: SearchIndexEntry = {
@@ -181,7 +182,7 @@ export class SearchIndexes {
    * the new states `commitWrites` already computed, by index).
    */
   apply(
-    ts: number,
+    ts: bigint,
     writes: Iterable<{ table: TableDef; id: string; next: Doc | null }>,
     indexed?: Map<SearchIndexEntry, Map<string, IndexedDoc>>,
   ) {
@@ -194,7 +195,7 @@ export class SearchIndexes {
     // Keep the log to the retention window.
     for (const e of this.entries.values()) {
       let drop = 0;
-      while (drop < e.log.length && e.log[drop]!.ts < ts - SEARCH_LOG_RETENTION_US) drop++;
+      while (drop < e.log.length && e.log[drop]!.ts < ts - SEARCH_LOG_RETENTION_NS) drop++;
       if (drop) {
         e.retainedFrom = e.log[drop - 1]!.ts;
         e.log.splice(0, drop);
@@ -208,7 +209,7 @@ export class SearchIndexes {
    */
   commitWrites(writes: Iterable<{ table: TableDef; id: string; old: Doc | null; next: Doc | null }>) {
     const docs: SearchDoc[] = [];
-    const keys: { index: number; key: Uint8Array; id: string | null }[] = [];
+    const keys: { index: IndexId; key: Uint8Array; id: string | null }[] = [];
     const indexed = new Map<SearchIndexEntry, Map<string, IndexedDoc>>();
     for (const w of writes)
       for (const e of this.forTablet(w.table.id)) {
@@ -254,7 +255,7 @@ export class SearchIndexes {
    * Search `e` as of `snapshot`, with a transaction's pending writes (`null`: deleted) on top. The changes
    * committed after the snapshot are undone first.
    */
-  search(e: SearchIndexEntry, q: TextQuery, snapshot: number, pending: Map<string, Doc | null>): TextHit[] {
+  search(e: SearchIndexEntry, q: TextQuery, snapshot: bigint, pending: Map<string, Doc | null>): TextHit[] {
     if (snapshot < e.retainedFrom) throw new OutOfRetentionError(snapshot, e.retainedFrom);
     const overlay = new Map<string, IndexedDoc | null>();
     for (const c of e.log) if (c.ts > snapshot && !overlay.has(c.id)) overlay.set(c.id, c.before);

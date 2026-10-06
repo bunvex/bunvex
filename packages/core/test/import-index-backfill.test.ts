@@ -11,7 +11,7 @@ import { defineSchema, defineTable } from "../src/schema.ts";
 import { convexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
 
 type Row = Record<string, unknown>;
-const identity = ["tablet", "name", "table_id", "descriptor"];
+const identity: string[] = [];
 const schema = defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]) });
 const open = async (s = schema, opts = {}) => {
   const p = await MemoryPersistence.open(null, { durable: false });
@@ -19,13 +19,13 @@ const open = async (s = schema, opts = {}) => {
 };
 
 /** Every revision of the `_index` row `name` of tablet `tablet`, oldest first, as stored. */
-async function history(p: MemoryPersistence, e: Engine, tablet: number, name: string): Promise<Row[]> {
+async function history(p: MemoryPersistence, e: Engine, tablet: string, name: string): Promise<Row[]> {
   const index = e.catalog.table(INDEX_TABLE).id;
   const out: Row[] = [];
-  for (const r of p.readDocumentLog(0, e.committer.visibleTs, 1e6)) {
+  for (const r of p.readDocumentLog(0n, e.committer.visibleTs, 1e6)) {
     if (r.table !== index || r.deleted) continue;
     const json = JSON.parse((await p.get(index, r.id, r.ts))!) as Row;
-    if (json.tablet === tablet && json.name === name) out.push(json);
+    if (json.table_id === tablet && json.descriptor === name) out.push(json);
   }
   return out;
 }
@@ -47,7 +47,7 @@ test("a copied index starts Backfilling and is enabled before the table is hande
   for (const [i, r] of revs.entries()) expect(shapeDiff(r, convex[i], identity)).toEqual([]);
   // Its backfill's row, as Convex's: the empty table counted.
   const rowId = (await e.query((db) => db.asSystem(() => db.query(INDEX_TABLE).collect()))).find(
-    (r) => r.tablet === hidden.id && r.name === "by_n",
+    (r) => r.table_id === hidden.id && r.descriptor === "by_n",
   )!._id;
   const backfill = (await e.query((db) => db.asSystem(() => db.query(INDEX_BACKFILLS_TABLE).collect()))).find(
     (r) => r.indexId === rowId,

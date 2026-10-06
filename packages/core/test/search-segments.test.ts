@@ -102,7 +102,7 @@ test("over its soft limit a memory part is flushed; after a crash a start replay
   });
   await e1.searchFlushed();
   expect(e1.searchStats.flushes).toBeGreaterThanOrEqual(2); // a text and a vector segment
-  const state = (await readSearchIndexStates(p)) as { indexes: { kind: string; ts: number }[] };
+  const state = (await readSearchIndexStates(p)) as { indexes: { kind: string; ts: bigint }[] };
   expect(state.indexes.map((s) => s.kind).sort()).toEqual(["text", "vector"]);
   await crash(e1);
 
@@ -196,7 +196,7 @@ test("a state not trusted is not used: changed definition, outside retention, mi
   await changed.close();
 
   const b = await seeded();
-  await b.p.setGlobal("document_min_snapshot_ts", tsGlobal(Number.MAX_SAFE_INTEGER));
+  await b.p.setGlobal("document_min_snapshot_ts", tsGlobal((1n << 63n) - 1n));
   const old = await open(b.p, b.store);
   expect(old.searchStats.fromSegments).toBe(0);
   expect(await answers(old)).toEqual(b.expected);

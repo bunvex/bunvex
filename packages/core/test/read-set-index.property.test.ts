@@ -12,7 +12,7 @@ import { ReadSetIndex } from "../src/read-set-index.ts";
 import { runs } from "./property-runs.ts";
 import { keyPart } from "./value-arbitraries.ts";
 
-const indexId = fc.integer({ min: 0, max: 2 });
+const indexId = fc.constantFrom("i0", "i1", "i2");
 const point = fc.tuple(indexId, fc.array(keyPart, { minLength: 1, maxLength: 2 })).map(([index, t]) => ({
   index,
   key: encodeKey(t),
@@ -32,7 +32,7 @@ const interval: fc.Arbitrary<Interval> = fc.oneof(
 type Action =
   | { kind: "set"; owner: number; reads: Interval[] }
   | { kind: "delete"; owner: number }
-  | { kind: "match"; writes: { index: number; key: Uint8Array }[]; useBounds: boolean };
+  | { kind: "match"; writes: { index: string; key: Uint8Array }[]; useBounds: boolean };
 const owner = fc.integer({ min: 0, max: 7 });
 const action: fc.Arbitrary<Action> = fc.oneof(
   fc.record({ kind: fc.constant("set" as const), owner, reads: fc.array(interval, { maxLength: 4 }) }),
@@ -44,7 +44,7 @@ const action: fc.Arbitrary<Action> = fc.oneof(
   }),
 );
 
-const contains = (i: Interval, w: { index: number; key: Uint8Array }) =>
+const contains = (i: Interval, w: { index: string; key: Uint8Array }) =>
   i.index === w.index && compareKeys(i.lo, w.key) <= 0 && compareKeys(w.key, i.hi) < 0;
 
 test("set / delete / match agree with a plain list of read-sets", () => {

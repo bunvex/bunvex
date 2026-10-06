@@ -10,6 +10,7 @@ import { encodeKey, type Persistence } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { insertItem, newEngine } from "../packages/persistence-conformance/src/workload.ts";
+import { tid } from "./ids.ts";
 
 const mode = process.argv[2] ?? "write";
 const drivers = (process.argv[3] ?? "sqlite,postgres").split(",");
@@ -17,6 +18,8 @@ const DIR = process.env.DIR ?? `${import.meta.dir}/../.data/readlog`;
 const SECS = Number(process.env.SECS ?? 5);
 const RUNS = Number(process.env.RUNS ?? 3);
 const COMMITS = Number(process.env.COMMITS ?? 100_000);
+/** The largest int64: a log read up to every commit. */
+const MAX_TS = (1n << 63n) - 1n;
 mkdirSync(DIR, { recursive: true });
 
 type Driver = {
@@ -149,18 +152,18 @@ async function catchup(name: string) {
   const st = await d.open(true);
   const leased = "acquireLease" in st;
   if (leased) await (st as any).acquireLease({ holder: "bench", ttlMs: 600_000 });
-  let ts = Number((await st.maxTs?.()) ?? 0);
+  let ts = (await st.maxTs?.()) ?? 0n;
   const t0 = performance.now();
   for (let c = 0; c < COMMITS; c++) {
-    ts += 1 + Math.floor(Math.random() * 1000);
+    ts += BigInt(1 + Math.floor(Math.random() * 1000));
     const id = `d${c}`;
     st.apply(
       ts,
-      [{ table: 1, id, json: `{"c":${c},"title":"an item","amount":42}` }],
+      [{ table: tid(1), id, json: `{"c":${c},"title":"an item","amount":42}` }],
       [
-        { index: 1, key: encodeKey([id]), id },
-        { index: 2, key: encodeKey([ts, id]), id },
-        { index: 3, key: encodeKey([`t${c % 16}`, ts, id]), id },
+        { index: tid(1), key: encodeKey([id]), id },
+        { index: tid(2), key: encodeKey([ts, id]), id },
+        { index: tid(3), key: encodeKey([`t${c % 16}`, ts, id]), id },
       ],
     );
     if (c % 200 === 199) await st.flush();
@@ -177,11 +180,11 @@ async function catchup(name: string) {
       [2, 1000],
       [3, 100],
     ]) {
-      let after = 0;
+      let after = 0n;
       let n = 0;
       const t1 = performance.now();
       for (;;) {
-        const cs = await st.readLog!(after, Number.MAX_SAFE_INTEGER, page);
+        const cs = await st.readLog!(after, MAX_TS, page);
         if (!cs.length) break;
         n += cs.length;
         after = cs[cs.length - 1].ts;
@@ -191,7 +194,7 @@ async function catchup(name: string) {
       const polls: number[] = [];
       for (let i = 0; i < 50; i++) {
         const t = performance.now();
-        await st.readLog!(last, Number.MAX_SAFE_INTEGER, page);
+        await st.readLog!(last, MAX_TS, page);
         polls.push(performance.now() - t);
       }
       report({

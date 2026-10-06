@@ -65,7 +65,7 @@ export async function syncFunctionHandles(db: Tx, paths: Iterable<string>) {
   }
   for (const row of existing.values())
     if (row.deletedTs === null || row.deletedTs === undefined)
-      await db.asSystem(() => db.patch(FUNCTION_HANDLES_TABLE, row._id, { deletedTs: BigInt(db.snapshot) * 1000n }));
+      await db.asSystem(() => db.patch(FUNCTION_HANDLES_TABLE, row._id, { deletedTs: db.snapshot }));
 }
 
 /** The handle of the function at canonical `path` (Convex's `FunctionHandlesModel::get`). */

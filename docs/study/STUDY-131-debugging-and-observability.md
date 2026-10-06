@@ -1,6 +1,6 @@
 # STUDY-131 — Seeing inside a deployment: system tables, subscriptions, traces
 
-- **Status:** accepted (owner, 2026-10-05): AD-24 to AD-27, AD-26 with an in-house exporter, and T1 module by module. AD-26 built (§9).
+- **Status:** accepted (owner, 2026-10-05): AD-24 to AD-27, AD-26 with an in-house exporter, and T1 module by module. AD-26 built (§9); AD-27 built (§10).
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
 - **Related:** [STUDY-08](STUDY-08-cache-and-subscriptions.md) (read sets, invalidation), [STUDY-12](STUDY-12-dashboard.md)
   (dashboard), [STUDY-58](STUDY-58-app-metrics.md) (app metrics), STUDY-114 (Prometheus `/metrics`), STUDY-125–130
@@ -700,3 +700,133 @@ Spans go to a collector in another process.
 | this branch, tracing off | 53 655 (56 112) | 29 861 (32 587) |
 
 The same, within the noise.
+
+## 10. AD-27 built: "why did this run" links from Logs
+
+### 10.1 What Convex does
+
+- **The function log.** `FunctionExecution` (`crates/application/src/function_log.rs`) keeps, per run, its path,
+  caller, timing, usage, `cachedResult`, OCC info and request and execution ids. It records why a sync query ran
+  only coarsely: `query_invocation` becomes the log streams' `run_reason` (`FunctionRunReason`,
+  `crates/common/src/log_streaming.rs`, the V2 `function_execution` event; V1 drops it). That says "a data change",
+  never which commit, mutation or key.
+- **Endpoints.** `stream_function_logs` and `stream_udf_execution` (`crates/local_backend/src/logs.rs`) send
+  `FunctionExecutionJson` with nothing about the cause.
+- **Clients.** The CLI's `logs` (`npm-packages/convex/src/cli/lib/logs.ts`) casts the JSON to
+  `FunctionExecution`; `--jsonl` prints each entry as it came. Its dashboard (`dashboard-common/src/lib/appMetrics.ts`,
+  `streamFunctionLogs`, header `dashboard-0.0.0`) casts it the same way and copies named fields into its own log
+  rows (`useLogs.ts`). Neither validates, so an extra field is ignored.
+- **Traces.** Convex exports none (§9.1), so nothing links a log line to a trace.
+
+### 10.2 What an app observes
+
+Nothing. Function code, the client protocol and every Convex-format output are unchanged (§10.4).
+
+### 10.3 How bunvex does it
+
+**What a Completion carries.** `Completion.links` (`function-log.ts`, `ExecutionLinks`):
+
+- `subscription`, on a sync query's run (the first run and a cache hit served to another session too):
+  - `argsDigest`: the inspector's 12-hex digest of the canonical arguments, computed once per subscription;
+  - `reason`: `invalidation`, `newSubscriber`, `identityChange`, `codeChange` or `retry`, the inspector's words;
+  - `invalidation`: `{ seq, commitTs }` of the invalidation the run answers, or null.
+- `trace`: `{ traceId, spanId }` of the run's span, when the run was traced (AD-26).
+
+**Which invalidation.** The inspector's records now carry `seq`, their number in the follow feed, and
+`/api/debug/subscriptions` returns it in `history`. When the sync hub runs a key for a data change, it asks the
+inspector for the newest invalidation of that key whose new result has not been sent yet (`SyncInspector.pending`).
+Two commits before one run: the run reads at the newer one, so that one is linked. With the ring off (size 0),
+nothing is recorded and `invalidation` is null; the digest and reason still are given.
+
+**Who gets it.** Only `GET /api/stream_function_logs` from a client whose `bunvex-client` header starts with
+`dashboard-` (`isDashboardClient`). Admin key with ViewLogs, as the endpoint already requires. The data is
+ids and a digest, nothing from the documents.
+
+**The dashboard** (`packages/dashboard`, on the mock).
+
+- Contract: `LogEntry.execution.links` (`ExecutionLinks`, `ExecutionRunReason` in `data-source.ts`); a server
+  source maps them from the Completion's `links`. The invalidation history entry gains an optional `seq`. The
+  contract suite checks links where given (`expectExecutionLinks`): a query's run, a 12-hex digest, a known
+  reason, an invalidation only for the reason `invalidation`, W3C-shaped non-zero ids.
+- Logs details: a "Why it ran" section. The cause in words (with the commit ts), a link "Open the invalidation"
+  (or "Open in Subscriptions" without one) to `/subscriptions?path=&args=&seq=`, and the trace id with a copy
+  button.
+- Trace link: the `traceUrl` prop of `<Dashboard>` (the dev host reads `VITE_BUNVEX_TRACE_URL`), unset by default.
+  `{traceId}` and `{spanId}` are replaced; a template without `{traceId}` (a base URL such as Jaeger's
+  `…/trace/`) gets the id appended. Unset, the id is shown with no link.
+- Subscriptions: `args` opens the live query with that path and digest (the session that ran it, before those
+  that reused its run); `seq` marks that invalidation in "Why it ran" (`aria-current`). If the ring has moved past
+  it, the panel says so.
+- Mock: `invalidateSomething()` lands an invalidation (as `watchInvalidations`' tick did) and logs the re-run of
+  the query it invalidated, with its links and a trace id, from a random stream of its own so the rest of the
+  mock's data stays as it was. The follow tick and every fourth log tick call it.
+
+**Not done.** The transition a commit causes is still a trace of its own (§9.3), with no OpenTelemetry span link
+to the commit's trace. The log entry names the invalidation (commit ts, mutation) instead; a span link can be
+added if wanted.
+
+### 10.4 Divergences and additions
+
+None beyond AD-27. Convex's formats are unchanged:
+
+- the CLI (`npm-cli-*`) and a client with no header get Convex's `FunctionExecutionJson` from
+  `stream_function_logs`, so `logs --jsonl` prints what it printed;
+- `stream_udf_execution` never carries `links`;
+- the log sinks' events (`function_execution` and the rest) are untouched.
+
+Convex's own dashboard names itself in `Convex-Client: dashboard-0.0.0`, a header bunvex does not read (it reads
+`bunvex-client`), so it gets Convex's entries too. Were it sent `links`, it would ignore them: it reads the JSON
+without validation and copies named fields (§10.1).
+
+### 10.5 Tests
+
+- `packages/server/test/log-links.test.ts`:
+  - a re-run query's Completion names the invalidation the inspector shows (same digest, `seq` and commit ts; the
+    follow feed has the same `seq`); its first run is `newSubscriber` with none;
+  - its trace and span ids match the `query m:byAuthor` span an in-process collector received; a mutation sent
+    over HTTP has a trace and no subscription link;
+  - the CLI and a client with no header get no `links`; `stream_udf_execution` neither, even for the dashboard;
+  - without tracing, the subscription link alone; an HTTP query has none;
+  - with the ring at 0, a re-run still says `invalidation`, with null;
+  - `SyncInspector.pending`: the newest unsent of two, null once sent, none from a rerun record.
+- `packages/dashboard/test/log-links.test.tsx`:
+  - the mock's re-run names a live query whose newest history entry has that `seq` and commit ts, and is the newest
+    log line;
+  - `traceHref`: placeholders, a base URL, unset; the Subscriptions screen's `args` and `seq` parameters;
+  - the details: the cause and commit ts, the link's path, digest and `seq`, the trace id, no trace link by
+    default (axe); with a template, the trace link (`_blank`, `noopener`); a line without links has no section;
+  - following the link opens Subscriptions on that query with exactly that invalidation marked (axe); a `seq` no
+    longer in the history says so.
+
+**Sabotage.** Each change below was made, the matching test file run, and the code restored (`git diff` clean).
+Every one was caught.
+
+| Sabotage | Caught by |
+|---|---|
+| `pending` never finds the invalidation | server "a re-run query's log entry …", "the invalidation a run answers …" |
+| `pending` returns the oldest unsent, not the newest | server "the invalidation a run answers …" |
+| `links` sent to every client | server "the CLI and an unnamed client …" |
+| `links` sent on `stream_udf_execution` too | server "the CLI and an unnamed client …" |
+| the run's span not recorded | server "a re-run query's log entry …" |
+| a first run called an invalidation | server "a re-run query's log entry …" |
+| `seq` missing from the inspector's history | server "a re-run query's log entry …" |
+| the trace URL template ignored | dashboard "the trace URL template …", "with a trace URL template …" |
+| Subscriptions ignores `args` | dashboard "following the link …", "an invalidation no longer in …" |
+| the invalidation not marked | dashboard "following the link …" |
+| the mock links the wrong invalidation | dashboard "the mock's re-runs …", "following the link …" |
+| the details drop the link's `seq` | dashboard "say why the query ran …", "following the link …" |
+
+### 10.6 Measurement
+
+The re-run path gains a lookup in the key's ring (at most 8 records), a digest computed once per subscription,
+and a small object per Completion. `packages/server/bench/sync-rerun-links.ts`: one in-process session with 1000
+queries that each read the whole table, so every commit re-runs all 1000. Timed from the mutation's call until the
+transition is sent; 60 commits per run, tracing off, the ring at 8. Main's server sources and this branch's ran
+interleaved, 12 runs each, Bun 1.4.2, Apple Silicon, load average 8–11 from other sessions.
+
+| | p50 per commit, median of runs (best) | mean per commit, median of runs |
+|---|--:|--:|
+| main | 57.0 ms (52.5) | 57.4 ms |
+| this branch | 54.7 ms (52.2) | 55.3 ms |
+
+About 55 µs per re-run on both: the difference is within the run-to-run noise.

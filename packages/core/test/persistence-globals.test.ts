@@ -41,11 +41,11 @@ test("the retention globals: an int64 of nanoseconds, as Convex's", async () => 
     expect(shapeDiff(value, convex[key])).toEqual([]);
     expect(value).toHaveProperty("$integer");
   }
-  // Nanoseconds: the µs window × 1000, read back as it was.
+  // Nanoseconds, read back as they were.
   const min = p.getGlobal(RETENTION_GLOBALS.minIndexTs);
   expect(min).toEqual(tsGlobal(e.retention!.minIndexTs));
   expect(readTsGlobal(min)).toBe(e.retention!.minIndexTs);
-  expect(readTsGlobal(convex[RETENTION_GLOBALS.minIndexTs])).toBe(1791233764257871);
+  expect(readTsGlobal(convex[RETENTION_GLOBALS.minIndexTs])).toBe(1791233764257871000n);
 });
 
 test("table_summary_v2: JsonInteger strings and Convex's shape JSON", async () => {
@@ -59,9 +59,9 @@ test("table_summary_v2: JsonInteger strings and Convex's shape JSON", async () =
   // `_tables`' own summary against Convex's.
   const tablesTablet = String(e.catalog.tables.get("_tables")!.id);
   expect(shapeDiff(ours.tables[tablesTablet], convex.tables["ca0vqcsTaoYPWanyp_ZQ-w"])).toEqual([]);
-  // The ts in nanoseconds: the summaries' µs × 1000.
-  expect(fromJsonInteger(ours.ts) % 1000n).toBe(0n);
-  expect(Number(fromJsonInteger(ours.ts) / 1000n)).toBeLessThanOrEqual(e.committer.visibleTs);
+  // The ts in nanoseconds: the commit ts the summaries are at.
+  expect(fromJsonInteger(ours.ts)).toBeGreaterThan(0n);
+  expect(fromJsonInteger(ours.ts)).toBeLessThanOrEqual(e.committer.visibleTs);
   expect(fromJsonInteger(convex.ts)).toBe(1791233999266279000n);
 });
 
