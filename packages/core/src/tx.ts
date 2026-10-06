@@ -49,6 +49,7 @@ import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, quer
 import { failExecution, monotonicNow, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { engineOwned } from "./engine-owned.ts";
 import { type ExpressionOrValue, expressionJson, type FilterBuilder, filterBuilder } from "./filter.ts";
+import { type IndexCache, keyBytes } from "./index-cache.ts";
 import { readNextIndexId } from "./index-ids.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { internalIdOf } from "./internal-id.ts";
@@ -438,6 +439,8 @@ export class Tx {
    * a traced span, else null and no read looks at the clock.
    */
   indexSpans: IndexReadSpans | null = null;
+  /** STUDY-136 prototype: the engine's index cache, when enabled. */
+  indexCache: IndexCache | null = null;
   /** Documents and bytes read from the snapshot, counted against Convex's limits. */
   private docsRead = 0;
   private bytesRead = 0;
@@ -960,7 +963,19 @@ export class Tx {
     this.retention?.check(this.snapshot);
     const spans = this.indexSpans;
     const start = spans ? monotonicNow() : 0;
-    const version = await storeCall(() => this.persistence.get(t.id, internalIdOf(id), this.snapshot));
+    const cache = this.indexCache;
+    const version = await storeCall(() =>
+      cache
+        ? cache.read(
+            `g${t.byId.id}|${id}`,
+            { index: t.byId.id, lo: k, hi: prefixEnd(k) },
+            this.snapshot,
+            () => this.persistence.get(t.id, internalIdOf(id), this.snapshot),
+            (v) => (v ? v.json.length : 8),
+            (a, b) => a?.json === b?.json && a?.ts === b?.ts,
+          )
+        : this.persistence.get(t.id, internalIdOf(id), this.snapshot),
+    );
     if (spans) spans.record(t.byId, version ? 1 : 0, start);
     this.retention?.check(this.snapshot);
     if (!version) return null;
@@ -1172,7 +1187,20 @@ export class Tx {
     // The index range and its documents, each at its entry's ts, in one call (one round trip on a remote store).
     const rows = await storeCall(async () => {
       try {
-        return await this.persistence.scan(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc);
+        const cache = this.indexCache;
+        if (!cache) return await this.persistence.scan(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc);
+        return await cache.read(
+          `s${ix.id}|${keyBytes(lo)}|${keyBytes(hi)}|${limit}|${st.desc ? 1 : 0}`,
+          { index: ix.id, lo, hi },
+          this.snapshot,
+          () => this.persistence.scan(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc),
+          (rows) => {
+            let n = 16;
+            for (const r of rows) n += r.json.length + 48;
+            return n;
+          },
+          (a, b) => a.length === b.length && a.every((r, i) => r.json === b[i]!.json && r.ts === b[i]!.ts),
+        );
       } catch (e) {
         // As snapshotRange does: a reference retention pruned during the read is a snapshot too old. Checked
         // here, before storeCall makes the failure a PersistenceReadError.

@@ -112,6 +112,7 @@ import {
   wallClock,
 } from "./determinism.ts";
 import { EnvironmentVariables } from "./environment-variables.ts";
+import { IndexCache } from "./index-cache.ts";
 import { readNextIndexId } from "./index-ids.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
 import { opaqueToInspect } from "./inspect.ts";
@@ -320,6 +321,8 @@ export const TABLE_DELETION_BATCH = 1000;
 
 export class Engine {
   readonly committer: Committer;
+  /** STUDY-136 prototype: the index cache, null unless enabled. */
+  readonly indexCache: IndexCache | null;
   /** The resolved tables and indexes (ids from `_tables` / `_index`), loaded by `init()`. */
   catalog: Catalog = new Catalog();
   /** Signs pagination cursors: INSTANCE_SECRET, or the one stored in `_instance` (set by init()). */
@@ -449,6 +452,8 @@ export class Engine {
       beforeSearchCompactionCommit?: () => Promise<void>;
       /** The background index backfill's knobs (Convex's INDEX_BACKFILL_*; STUDY-29). */
       indexBackfill?: IndexBackfillOptions;
+      /** STUDY-136 prototype: cache persistence index reads (off by default). */
+      indexCache?: { maxBytes?: number; verifyPercent?: number };
       /**
        * How a flush that failed with a transient error is retried (STUDY-25 L4): Convex's backoff, 100 ms
        * doubling up to 10 s with full jitter, as many times as it takes (the lease bounds it).
@@ -468,6 +473,12 @@ export class Engine {
     this.installValidators(schema);
     this.committer = new Committer(persistence, opts.writeLogRetention, undefined, opts.flushRetry, opts.writeBatch);
     this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
+    // STUDY-136 prototype: INDEX_CACHE_PROTOTYPE_VERIFY=<percent> turns it on everywhere (the test suite run).
+    const forced = process.env.INDEX_CACHE_PROTOTYPE_VERIFY;
+    if (forced !== undefined && !opts.indexCache) opts = { ...opts, indexCache: { verifyPercent: Number(forced) } };
+    this.indexCache = opts.indexCache
+      ? new IndexCache(this.committer, opts.indexCache.maxBytes, opts.indexCache.verifyPercent)
+      : null;
     this.writeThroughput = new WriteThroughputLimiter(opts.writeThroughput ?? writeThroughputFromEnv());
     this.committer.writeThroughput = this.writeThroughput;
     // A count at an older snapshot (STUDY-107) needs the changes since: kept as long as the write log keeps them.
@@ -2817,6 +2828,7 @@ export class Engine {
     // Only a mutation hands out creation times: a query begun meanwhile must not hide its cursor.
     if (kind === "mutation") this.lastTx = tx;
     tx.retention = this.retention;
+    tx.indexCache = this.indexCache;
     tx.identity = caller.identity;
     tx.systemIdentity = caller.systemIdentity === true;
     tx.request = caller.request ?? null;

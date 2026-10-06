@@ -417,6 +417,12 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
+| ID | bunvex (proposed) | Convex | Observable | Why | Source |
+|---|---|---|---|---|---|
+| DV-432 | The index cache validates an entry lazily, when it is looked up, against the write log (`changedBetween`), as the query cache does | Invalidates eagerly at commit (`apply_writes`), with a two-phase populate (`populate_id`, `AtomicCache`) | no | Same results; no populate/invalidate race to guard; reuses the query cache's check | [STUDY-136 I2](../study/STUDY-136-index-cache.md#4-decisions-for-the-owner) |
+| DV-433 | `INDEX_CACHE_VERIFY_PERCENT` defaults to 0 (the knob kept for a shadow run) | 100: every hit is also read from persistence and compared | no (performance) | At 100 the cache takes no load off the store (STUDY-136 §1.6) | [STUDY-136 I3](../study/STUDY-136-index-cache.md#4-decisions-for-the-owner) |
+| DV-434 | The index cache is off for the memory driver | Always on (Convex has no in-memory store) | no (performance) | Measured −1%, and worse under writes (STUDY-136 §3.4) | [STUDY-136 I5](../study/STUDY-136-index-cache.md#4-decisions-for-the-owner) |
+
 DV-366 (STUDY-110 L3) was decided by the owner (2026-10-05, #426: do not match the site proxy's limit of 4) and is in [Decided divergences](#decided-divergences).
 DV-400 (STUDY-125 V1) was accepted (owner, 2026-10-05) and is in [Decided divergences](#decided-divergences).
 DV-401 (STUDY-125 V2) was decided to match Convex (owner, 2026-10-05), then built (STUDY-125 §7): it is in [Resolved to match Convex](#resolved-to-match-convex).
