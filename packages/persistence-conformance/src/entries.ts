@@ -117,21 +117,11 @@ export async function indexEntryChecks(mod: DriverModule, check: Check) {
   // The same (index, key, ts) again replaces the entry: here with its removal.
   await st.writeIndexEntries([{ index: LATE, key: late("b"), table: null, id: null, ts: 200n }]);
   const replaced = await view(st, 400n);
-  // They add no commit: the log's commits are the three applied ones (a store that reads its log from
-  // `indexes` by ts may list the entries in those commits' write sets; C17 leaves that open), and maxTs stays.
-  const commits = st.readLog ? (await st.readLog(0n, MAX, 1000)).map((c) => [c.ts, c.prevTs]) : null;
+  // They are not a commit: maxTs stays.
   const top = await st.maxTs?.();
   check(
-    json(replaced) === json(['a@300:{"a":2}']) &&
-      (commits === null ||
-        json(commits) ===
-          json([
-            [100n, 0n],
-            [200n, 100n],
-            [300n, 200n],
-          ])) &&
-      (top === undefined || top === 300n),
-    `K36 an entry at the same index, key and ts replaces it; the entries add no commit to the log and move no maxTs (${json(replaced)}, log ${json(commits)}, maxTs ${top})`,
+    json(replaced) === json(['a@300:{"a":2}']) && (top === undefined || top === 300n),
+    `K36 an entry at the same index, key and ts replaces it; the entries move no maxTs (${json(replaced)}, maxTs ${top})`,
   );
   if (leased && hasLease(st)) await st.releaseLease();
   await st.close();

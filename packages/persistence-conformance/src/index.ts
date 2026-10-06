@@ -7,7 +7,7 @@
 // stops answering: calls fail within the timeout) and K21 (transient errors are retried, ambiguous commits
 // stop the committer); for drivers that record their layout (PERSIST-01 C10), K22 (layout version) and K23
 // (read-only flag); K24 (a background index backfill under concurrent writers, STUDY-29) runs on every
-// driver; for drivers with the log by timestamp (C11, `readLog`), K25; K26 (bounded flushes: a group written
+// driver; K26 (bounded flushes: a group written
 // in write batches of whole commits, DV-62) on every driver; for drivers with retention (C12–C14: the document
 // log, pruning, globals), K27–K29; K30 (index references to a missing or deleted document are not hidden),
 // K31 (one id in two tables is two documents) and K35 (the exact-ts join) on every driver (C15, C6); K32
@@ -46,7 +46,6 @@ import { fromJsonValue } from "@bunvex/values";
 import { batchChecks } from "./batch.ts";
 import { indexEntryChecks, prevTsChecks } from "./entries.ts";
 import { tid } from "./ids.ts";
-import { logChecks } from "./log.ts";
 import { nanosecondChecks } from "./nanos.ts";
 import { freezableProxy } from "./proxy.ts";
 import { referenceChecks } from "./references.ts";
@@ -85,12 +84,6 @@ export type DriverModule = {
   /** Remote stores (K20): open the existing store through `via` (a TCP proxy to `target()`) instead of its own
    *  address, with the given client-side call timeout (STUDY-25 L3). */
   openThrough?(via: { host: string; port: number }, opts: { timeoutMs: number }): Promise<Persistence>;
-  /** Drivers with a ts index (K25): remove it, as in a store written before PERSIST-01 C11 (store closed). */
-  dropLogIndex?(): Promise<void>;
-  /** Whether the store has its ts index (K25: it is built once the lease is held). */
-  hasLogIndex?(): Promise<boolean>;
-  /** Remote drivers (K25): write one index row at `ts` straight into the store, bypassing the lease. */
-  strayLogRow?(ts: bigint): Promise<void>;
 };
 
 // K3 also runs K4–K5; K10 runs K10–K19; K27 runs K27–K29; K30 runs K30, K31 and K35
@@ -108,7 +101,6 @@ export type Check =
   | "K22"
   | "K23"
   | "K24"
-  | "K25"
   | "K26"
   | "K27"
   | "K30"
@@ -131,8 +123,6 @@ export type ConformanceOptions = {
   requireLayout?: boolean;
   /** The driver is a remote store with client-side call timeouts (STUDY-25 L3): K20 not running is a failure. */
   requireTimeouts?: boolean;
-  /** The driver claims PERSIST-01 C11 (the log by timestamp): a missing `readLog` is a failure, not a skip. */
-  requireReadLog?: boolean;
   /** The driver claims PERSIST-01 C12–C14 (retention): missing methods are a failure, not a skip. */
   requireRetention?: boolean;
   /** The driver claims PERSIST-01 C16 (document versions): a missing `getVersions` is a failure, not a skip. */
@@ -1346,7 +1336,6 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   await st.close();
   if (want("K3")) await k3to5(await mod.open(true));
   if (want("K24")) await k24();
-  if (want("K25")) await logChecks(mod, check, log, !!opts.requireReadLog);
   if (want("K27"))
     await retentionChecks(mod, check, log, !!opts.requireRetention).catch((e) => check(false, `K27–K29 threw: ${e}`));
   if (want("K30")) await referenceChecks(mod, check).catch((e) => check(false, `K30, K31, K35 threw: ${e}`));

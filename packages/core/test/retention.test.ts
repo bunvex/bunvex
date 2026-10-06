@@ -295,16 +295,19 @@ describe("retention", () => {
     const ids: string[] = [];
     for (let i = 0; i < 100; i++) ids.push((await e.mutation((db) => db.insert("items", { n: i }))) as string);
     for (const id of ids) await e.mutation((db) => db.patch(id, { n: -1 }));
+    for (const id of ids) await e.mutation((db) => db.patch(id, { n: -2 }));
     await e.retention!.advance();
     const t0 = performance.now();
     await e.retention!.deleteDocuments();
-    // 200+ document versions at 400 a second take at least half a second.
+    // 200 replaced versions (one per patch) at 400 a second take at least half a second.
     expect(performance.now() - t0).toBeGreaterThan(450);
     expect(e.retention!.stats.documentRowsDeleted).toBeGreaterThanOrEqual(100);
   });
 
   test("a pass stops at its cap and the next one continues where it stopped", async () => {
     const { e } = await open(":memory:", { ...manual, maxPerPass: 20 });
+    // More commits than one page of the document log (256), so a pass can stop between pages.
+    await churn(e);
     await churn(e);
     const r = e.retention!;
     await r.advance();

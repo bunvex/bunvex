@@ -46,7 +46,6 @@ import {
   type DocPrune,
   type DocVersion,
   type DocWrite,
-  groupLog,
   type IndexEntryAt,
   type IndexedDoc,
   type IndexId,
@@ -57,8 +56,6 @@ import {
   type Lease,
   type LeaseAcquire,
   LeaseLostError,
-  type LogCommit,
-  type LogRow,
   type OpenOptions,
   opaqueToInspect,
   type Persistence,
@@ -605,55 +602,7 @@ export class MongoPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
     return versionsInOrder(ids, found);
   }
 
-  /**
-   * PERSIST-01 C11. The bound is the lease document's maxTs (the durable prefix, written in the same
-   * transaction as each group; for a store never leased, the old commit marker). Rows come from the ts
-   * index in order and are cut into commits; the read stops at the first row of commit `limit + 1`.
-   */
-  async readLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<LogCommit[]> {
-    if (limit <= 0) return [];
-    // A read (STUDY-25 L3/L5): every round trip bounded by the call timeout, the whole read run once more
-    // after a timeout.
-    return this.read(async (progress) => {
-      const lease = await this.metaMajority.findOne({ _id: "lease" });
-      progress();
-      const durable = (lease?.maxTs as bigint | undefined) ?? (await this.metaMajority.findOne({ _id: "commit" }))?.ts;
-      progress();
-      const hi = durable !== undefined && durable < upToTs ? (durable as bigint) : upToTs;
-      if (hi <= afterTs) return [];
-      const rows: LogRow[] = [];
-      let commits = 0;
-      let lastTs = -1n;
-      const cursor = this.idxMajority
-        .find({ ts: { $gt: afterTs, $lte: hi } }, { projection: { _id: 0, x: 1, k: 1, ts: 1, tb: 1, d: 1 } })
-        .sort({ ts: 1 })
-        // Batches sized to the request: the driver's default getMore takes up to 16 MB, i.e. the whole rest
-        // of the log, for the one row that tells us commit `limit` is complete.
-        .batchSize(Math.min(Math.max(limit * 4 + 1, 101), 10_000));
-      try {
-        for await (const r of cursor) {
-          progress(); // a row came: its batch's round trip is over
-          if (r.ts !== lastTs) {
-            if (commits === limit) break;
-            commits++;
-            lastTs = r.ts;
-          }
-          rows.push({ ts: r.ts, index: r.x, key: Buffer.from(r.k, "hex"), table: r.tb, id: r.d });
-        }
-      } finally {
-        await cursor.close();
-      }
-      if (!rows.length) return [];
-      const [prev] = await this.idxMajority
-        .find({ ts: { $lte: afterTs } }, { projection: { _id: 0, ts: 1 } })
-        .sort({ ts: -1 })
-        .limit(1)
-        .toArray();
-      return groupLog(rows, (prev?.ts as bigint | undefined) ?? 0n);
-    });
-  }
-
-  /** PERSIST-01 C12: as readLog, over `documents`. */
+  /** PERSIST-01 C12, the document log by ts. */
   async readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<DocLogRow[]> {
     if (limit <= 0) return [];
     return this.read(async (progress) => {

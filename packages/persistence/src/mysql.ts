@@ -41,7 +41,6 @@ import {
   type DocVersion,
   type DocWrite,
   decodeLayoutVersion,
-  groupLog,
   type IndexEntryAt,
   type IndexedDoc,
   type IndexId,
@@ -52,7 +51,6 @@ import {
   type Lease,
   type LeaseAcquire,
   LeaseLostError,
-  type LogCommit,
   MYSQL_MAX_CHUNK_BYTES,
   type OpenOptions,
   opaqueToInspect,
@@ -691,42 +689,7 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
     return versionsInOrder(ids, found);
   }
 
-  /**
-   * PERSIST-01 C11, one statement (one consistent read): the bound is the lease row's max_ts (the durable
-   * prefix, written in the same transaction as each group); the derived table walks the ts index to the
-   * last of the first `limit` commits, and the rows up to it come back in ts order, with the newest ts at
-   * or before `afterTs`.
-   */
-  async readLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<LogCommit[]> {
-    if (limit <= 0) return [];
-    // One statement, so a read (STUDY-25 L3/L5): bounded by the call timeout, run once more on another
-    // connection after an operational error.
-    const [rows] = (await this.read((c) =>
-      c.query(
-        `select i.ts, i.index_id, i.key_prefix, i.key_suffix, i.table_id, i.document_id,
-              (select max(ts) from indexes where ts <= ?) as prev
-       from indexes i
-       where i.ts > ? and i.ts <= (select max(c.ts) from (select distinct ts from indexes
-         where ts > ? and ts <= least(?, coalesce((select max_ts from bunvex_lease where id = 1), ?))
-         order by ts limit ${Math.floor(limit)}) c)
-       order by i.ts`,
-        [afterTs, afterTs, afterTs, upToTs, upToTs],
-      ),
-    )) as any;
-    if (!rows.length) return [];
-    return groupLog(
-      (rows as any[]).map((r) => ({
-        ts: BigInt(r.ts),
-        index: r.index_id as string,
-        key: r.key_suffix ? Buffer.concat([r.key_prefix, r.key_suffix]) : (r.key_prefix as Uint8Array),
-        table: r.table_id as string | null,
-        id: r.document_id as string | null,
-      })),
-      BigInt(rows[0].prev ?? 0),
-    );
-  }
-
-  /** PERSIST-01 C12: as readLog, over `documents`. */
+  /** PERSIST-01 C12, the document log by ts. */
   async readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<DocLogRow[]> {
     if (limit <= 0) return [];
     const [rows] = (await this.read((c) =>

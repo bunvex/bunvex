@@ -27,7 +27,6 @@ import type {
   InternalId,
   Lease,
   LeaseAcquire,
-  LogCommit,
   Persistence,
   RetentionStore,
   TabletId,
@@ -139,18 +138,12 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     }
     return lo - 1;
   }
-  /** The highest ts made durable by a flush (or replayed from the log): readLog's bound (PERSIST-01 C11). */
+  /** The highest ts made durable by a flush (or replayed from the log): the document log's bound (PERSIST-01 C12). */
   private durableTs = 0n;
-  /** The log by ts (C11): every commit that wrote index entries, in ts order (apply is called in ts order).
-   *  The write arrays are the ones `apply` received, shared with the B-trees' keys: no copy. */
-  private commits: { ts: bigint; writes: IndexWrite[] }[] = [];
   /** The document log (C12): every commit that wrote documents, in ts order. */
   private docCommits: { ts: bigint; docs: DocWrite[] }[] = [];
-  /** Where each log starts once retention has forgotten its head (compacted when it gets long). */
-  private commitsHead = 0;
+  /** Where the document log starts once retention has forgotten its head (compacted when it gets long). */
   private docCommitsHead = 0;
-  /** The ts of the last index commit retention forgot: the prevTs of the first one left. */
-  private forgottenTs = 0n;
   /** Persistence globals (C14), replayed from the log. */
   private globals = new Map<string, string>();
 
@@ -367,9 +360,6 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     this.lastTs = ts;
     const seq = this.tsOf.length;
     this.tsOf.push(ts);
-    // Only the persistence fields: what `readLog` returns, as a store keeps them.
-    if (idx.length)
-      this.commits.push({ ts, writes: idx.map((e) => ({ index: e.index, key: e.key, table: e.table, id: e.id })) });
     if (docs.length) this.docCommits.push({ ts, docs });
     for (const d of docs) {
       const k = `${d.table}:${d.id}`;
@@ -415,23 +405,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     this.durableTs = top;
   }
 
-  /** PERSIST-01 C11: a binary search for the first commit after `afterTs`, then a walk. Bounded by what a
-   *  flush made durable: a group applied but still being written is not returned. */
-  readLog(afterTs: bigint, upToTs: bigint, limit: number): LogCommit[] {
-    const out: LogCommit[] = [];
-    if (limit <= 0) return out;
-    const hi = upToTs < this.durableTs ? upToTs : this.durableTs;
-    const cs = this.commits;
-    const lo = firstAbove(cs, afterTs, this.commitsHead);
-    let prevTs = lo > this.commitsHead ? cs[lo - 1].ts : this.forgottenTs;
-    for (let i = lo; i < cs.length && cs[i].ts <= hi && out.length < limit; i++) {
-      out.push({ ts: cs[i].ts, prevTs, writes: cs[i].writes.slice() });
-      prevTs = cs[i].ts;
-    }
-    return out;
-  }
-
-  /** PERSIST-01 C12, as readLog over the document commits. */
+  /** PERSIST-01 C12: a binary search for the first commit after `afterTs`, then a walk. */
   readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): DocLogRow[] {
     const out: DocLogRow[] = [];
     if (limit <= 0) return out;
@@ -461,12 +435,6 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       if (!vs) continue;
       n += pruneVersions(vs, this.seqAt(e.ts));
       if (!vs.length) t!.delete(e.key);
-    }
-    this.commitsHead = firstAbove(this.commits, through < this.durableTs ? through : this.durableTs, this.commitsHead);
-    if (this.commitsHead > 0) this.forgottenTs = this.commits[this.commitsHead - 1].ts;
-    if (this.commitsHead > 1024 && this.commitsHead * 2 > this.commits.length) {
-      this.commits = this.commits.slice(this.commitsHead);
-      this.commitsHead = 0;
     }
     return n;
   }

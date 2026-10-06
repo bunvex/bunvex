@@ -1,7 +1,8 @@
 // K27–K29 — what retention needs from a store (PERSIST-01 C12–C14, STUDY-33):
 //   K27 the document log by timestamp (`readDocumentLog`), against a reference model;
-//   K28 pruning: deleting what retention computes for a window leaves every snapshot at or above it
-//       answering exactly as before, removes exactly the superseded rows, and is idempotent;
+//   K28 pruning: deleting what retention computes for a window from the document log's revision pairs
+//       (`prevTs`, as Convex's retention) leaves every snapshot at or above it answering exactly as before,
+//       removes exactly the superseded rows, and is idempotent;
 //   K29 persistence globals (durable across a reopen), and the fence: a writer without the lease can
 //       neither prune nor set a global.
 import {
@@ -38,12 +39,48 @@ const FULL_HI = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
 type DocRow = { ts: bigint; id: string; deleted: boolean; prevTs: bigint | null };
 type IdxRow = { ts: bigint; index: string; key: Uint8Array; deleted: boolean };
 
-/** What retention deletes for the rows of the log at or below the window: a live row supersedes the
- *  versions below it; a tombstone takes itself too. */
-const indexPrunes = (rows: { ts: bigint; index: string; key: Uint8Array; deleted: boolean }[]): IndexPrune[] =>
-  rows.map((r) => ({ index: r.index, key: r.key, ts: r.deleted ? r.ts : r.ts - 1n }));
-const docPrunes = (rows: { ts: bigint; table: string; id: string; deleted: boolean }[]): DocPrune[] =>
-  rows.map((r) => ({ table: r.table, id: r.id, ts: r.deleted ? r.ts : r.ts - 1n }));
+const kId = (id: string) => encodeKey([id]);
+const kVal = (v: number, id: string) => encodeKey([v, id]);
+/** The table's indexes and each one's key for a document `{v}` (BACKFILL is keyed as BY_ID). */
+const keysOf = (id: string, v: number) => [
+  { index: BY_ID, key: kId(id) },
+  { index: BY_VAL, key: kVal(v, id) },
+  { index: BACKFILL, key: kId(id) },
+];
+
+/**
+ * The index rows retention deletes for document log rows at or below the window, as the engine derives them
+ * (Convex's `expired_index_entries`): for each version that replaced one (`prevTs`), the replaced version's key
+ * on every index of the table at or below `prevTs`, and at or below the new version's ts when the key changed
+ * or the document was deleted (the tombstone the new version wrote). `valueAt` is a version's `v`, null when
+ * there is no live version at exactly that ts.
+ */
+async function indexPrunes(
+  rows: { ts: bigint; id: string; deleted: boolean; prevTs: bigint | null }[],
+  valueAt: (id: string, ts: bigint) => number | null | Promise<number | null>,
+): Promise<IndexPrune[]> {
+  const out: IndexPrune[] = [];
+  for (const r of rows) {
+    if (r.prevTs === null) continue;
+    const before = await valueAt(r.id, r.prevTs);
+    if (before === null) continue;
+    const after = r.deleted ? null : await valueAt(r.id, r.ts);
+    const now = after === null ? null : keysOf(r.id, after);
+    for (const [i, { index, key }] of keysOf(r.id, before).entries()) {
+      out.push({ index, key, ts: r.prevTs });
+      if (!now || hex(now[i].key) !== hex(key)) out.push({ index, key, ts: r.ts });
+    }
+  }
+  return out;
+}
+/** The document versions retention deletes (Convex's `expired_documents`): the version each row replaced, and
+ *  a delete's own tombstone. */
+const docPrunes = (rows: { ts: bigint; table: string; id: string; deleted: boolean; prevTs: bigint | null }[]) =>
+  rows.flatMap((r): DocPrune[] => [
+    ...(r.prevTs === null ? [] : [{ table: r.table, id: r.id, ts: r.prevTs }]),
+    ...(r.deleted ? [{ table: r.table, id: r.id, ts: r.ts }] : []),
+  ]);
+const canonPrunes = (p: IndexPrune[]) => p.map((e) => `${e.index}:${hex(e.key)}:${e.ts}`).sort();
 
 /** Rows that must remain after pruning at `w`: everything above it, and each key's newest row at or below
  *  it when that row is live. */
@@ -77,19 +114,83 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
   await lease(st, "k26");
 
   // A workload over one table with three indexes: by id, by a value (keys move: a tombstone at the old
-  // key), and one written by index-only commits (a backfill). Inserts, rewrites at the same key, moves,
-  // deletes, and tombstones of documents that never lived (created and deleted in one transaction).
+  // key), and one only ever written by a backfill (`writeIndexEntries` at a document version's own ts, C17).
+  // Inserts, rewrites at the same key, moves, deletes, and tombstones of documents that never lived (created
+  // and deleted in one transaction).
   const docRows: DocRow[] = [];
   const idxRows: IdxRow[] = [];
   const docCommits: { ts: bigint; rows: DocRow[] }[] = [];
   const live = new Map<string, number>();
   const ids = Array.from({ length: 40 }, (_, i) => `d${i}`);
-  const kId = (id: string) => encodeKey([id]);
-  const kVal = (v: number, id: string) => encodeKey([v, id]);
-  // Each document's newest version's ts: the next version's `prevTs`.
+  // Each live document's newest version's ts: the next version's `prevTs` (none after a delete: a new document).
   const lastTs = new Map<string, bigint>();
-  let ts = 5000n;
+  // Each live version's `v`, by `id@ts`: the model's `valueAt`.
+  const values = new Map<string, number>();
   const commitTs: bigint[] = [];
+  const commit = (
+    at: bigint,
+    docs: { table: string; id: string; json: string | null; prevTs: bigint | null }[],
+    idx: IndexWrite[],
+  ) => {
+    st.apply(at, docs, idx);
+    commitTs.push(at);
+    const drs = docs.map((d) => ({ ts: at, id: d.id, deleted: d.json === null, prevTs: d.prevTs }));
+    for (const d of docs) {
+      if (d.json === null) lastTs.delete(d.id);
+      else {
+        lastTs.set(d.id, at);
+        values.set(`${d.id}@${at}`, JSON.parse(d.json).v);
+      }
+    }
+    docRows.push(...drs);
+    if (drs.length) docCommits.push({ ts: at, rows: drs });
+    for (const e of idx) idxRows.push({ ts: at, index: e.index, key: e.key, deleted: e.id === null });
+  };
+  const backfilled = new Set<string>();
+  const backfill = async (of: string[]) => {
+    const entries = of
+      .filter((id) => lastTs.has(id) && !backfilled.has(`${id}@${lastTs.get(id)}`))
+      .map((id) => ({ index: BACKFILL, key: kId(id), table: TABLE, id, ts: lastTs.get(id)! }));
+    if (!entries.length) return;
+    await st.writeIndexEntries(entries);
+    for (const e of entries) {
+      backfilled.add(`${e.id}@${e.ts}`);
+      idxRows.push({ ts: e.ts, index: BACKFILL, key: e.key, deleted: false });
+    }
+  };
+
+  // Two fixed cases below the first window: m0 moves from v 1 to v 2 (its entry at 1000 and the tombstone at
+  // its old key at 1001 go); b0's backfill entry at 1002 is superseded by its version at 1003 (it goes too).
+  const put = (id: string, key: Uint8Array, index = BY_ID): IndexWrite => ({ index, key, table: TABLE, id });
+  commit(
+    1000n,
+    [{ table: TABLE, id: "m0", json: `{"v":1}`, prevTs: null }],
+    [put("m0", kId("m0")), put("m0", kVal(1, "m0"), BY_VAL)],
+  );
+  commit(
+    1001n,
+    [{ table: TABLE, id: "m0", json: `{"v":2}`, prevTs: 1000n }],
+    [
+      put("m0", kId("m0")),
+      { index: BY_VAL, key: kVal(1, "m0"), table: null, id: null },
+      put("m0", kVal(2, "m0"), BY_VAL),
+    ],
+  );
+  commit(
+    1002n,
+    [{ table: TABLE, id: "b0", json: `{"v":3}`, prevTs: null }],
+    [put("b0", kId("b0")), put("b0", kVal(3, "b0"), BY_VAL)],
+  );
+  await st.flush();
+  await backfill(["b0"]);
+  commit(
+    1003n,
+    [{ table: TABLE, id: "b0", json: `{"v":3,"c":1}`, prevTs: 1002n }],
+    [put("b0", kId("b0")), put("b0", kVal(3, "b0"), BY_VAL)],
+  );
+  await st.flush();
+
+  let ts = 5000n;
   for (let c = 0; c < 400; ) {
     const group = 1 + rnd(6);
     for (let g = 0; g < group && c < 400; g++, c++) {
@@ -100,11 +201,7 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
         docs.push({ table: TABLE, id, json, prevTs: lastTs.get(id) ?? null });
       const entry = (index: string, key: Uint8Array, id: string | null) =>
         idx.push({ index, key, table: id === null ? null : TABLE, id });
-      if (Math.random() < 0.1) {
-        // Index-only commits (log and pruning only: these entries have no document at their ts, so no check
-        // scans this index).
-        for (const id of ids.filter(() => Math.random() < 0.2)) entry(BACKFILL, kId(id), id);
-      } else {
+      {
         const touched = new Set<string>();
         for (let w = 0; w < 1 + rnd(4); w++) {
           const id = ids[rnd(ids.length)];
@@ -138,15 +235,11 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
         }
       }
       if (!docs.length && !idx.length) continue;
-      st.apply(ts, docs, idx);
-      commitTs.push(ts);
-      const drs = docs.map((d) => ({ ts, id: d.id, deleted: d.json === null, prevTs: d.prevTs }));
-      for (const d of docs) lastTs.set(d.id, ts);
-      docRows.push(...drs);
-      if (drs.length) docCommits.push({ ts, rows: drs });
-      for (const e of idx) idxRows.push({ ts, index: e.index, key: e.key, deleted: e.id === null });
+      commit(ts, docs, idx);
     }
     await st.flush();
+    // A backfill of some live documents at their newest version's ts (no scan reads BACKFILL: pruning only).
+    if (Math.random() < 0.3) await backfill(ids.filter(() => Math.random() < 0.2));
   }
   const last = commitTs[commitTs.length - 1];
 
@@ -242,25 +335,42 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
     ];
     const before = await snapshotAnswers(st, at);
     const rowsBefore = await rowCount(st);
-    // Below the window the log holds what retention left, so the first commit's prevTs may change.
-    const above = async (s: Store) =>
-      (await s.readLog?.(w, MAX, 1_000_000))?.map((c, i) => ({
-        ts: String(c.ts),
-        prevTs: i === 0 ? "0" : String(c.prevTs),
-        writes: c.writes,
-      }));
-    const logAbove = await above(st);
     const docLogAbove = await docLog(st, w, MAX, 1_000_000);
-    const ixLog = (await st.readLog!(cursor, w, 1_000_000)).flatMap((c) =>
-      c.writes.map((e) => ({ ts: c.ts, index: e.index, key: e.key, deleted: e.id === null })),
-    );
+    // The prunes as the engine computes them: the document log's revision pairs, each version read back with
+    // `get` (only a live version at exactly that ts counts) and its keys re-derived.
     const dLog = await st.readDocumentLog(cursor, w, 1_000_000);
-    const deleted = await pruneInChunks(st, indexPrunes(ixLog), docPrunes(dLog), w);
+    const ip = await indexPrunes(dLog, async (id, t) => {
+      const v = await st.get(TABLE, id, t);
+      return v && v.ts === t ? JSON.parse(v.json).v : null;
+    });
+    const valueAt = (id: string, t: bigint) => values.get(`${id}@${t}`) ?? null;
+    check(
+      same(
+        canonPrunes(ip),
+        canonPrunes(
+          await indexPrunes(
+            docRows.filter((r) => r.ts > cursor && r.ts <= w),
+            valueAt,
+          ),
+        ),
+      ),
+      `K28 the index prunes re-derived at ${w} from the document log (prevTs pairs, versions read with get) match the model (${ip.length} entries)`,
+    );
+    const deleted = await pruneInChunks(st, ip, docPrunes(dLog), w);
     const after = await snapshotAnswers(st, at);
     const rowsAfter = await rowCount(st);
+    // Every index row the model's prunes (every window so far) cover is gone.
+    const prunedTo = new Map<string, bigint>();
+    for (const p of await indexPrunes(
+      docRows.filter((r) => r.ts <= w),
+      valueAt,
+    )) {
+      const k = `${p.index}:${hex(p.key)}`;
+      if ((prunedTo.get(k) ?? -1n) < p.ts) prunedTo.set(k, p.ts);
+    }
     const wantRows = {
       docs: survivors(docRows, (r) => r.id, w),
-      idx: survivors(idxRows, (r) => `${r.index}:${hex(r.key)}`, w),
+      idx: idxRows.filter((r) => r.ts > (prunedTo.get(`${r.index}:${hex(r.key)}`) ?? -1n)).length,
     };
     check(
       same(before, after),
@@ -272,15 +382,28 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
         `K28 exactly the superseded rows are gone (${JSON.stringify(rowsBefore)} → ${JSON.stringify(rowsAfter)}, want ${JSON.stringify(wantRows)}; ${deleted} reported)`,
       );
     else log("  K28 row counts not checked: the driver has no auditRowCount");
-    const again = await pruneInChunks(st, indexPrunes(ixLog), docPrunes(dLog), w);
+    if (cursor === 0n) {
+      // The fixed cases: nothing is left at m0's old key nor of b0's superseded backfill entry (a stale entry
+      // joins no document version: the scan would throw or return it).
+      const scanAt = async (index: string, t: bigint) => {
+        try {
+          return (await st.scan(TABLE, index, FULL_LO, FULL_HI, t, 100, false)).map((d) => `${d.id}@${d.ts}`);
+        } catch (e) {
+          return `threw ${(e as Error)?.name}`;
+        }
+      };
+      const got = [await scanAt(BY_VAL, 1000n), await scanAt(BACKFILL, 1002n), await scanAt(BY_VAL, 1001n)];
+      check(
+        same(got, [[], [], ["m0@1001"]]),
+        `K28 a key whose document moved keeps no entry at the replaced version's ts, and a backfill entry superseded by a later version is pruned (${json(got)})`,
+      );
+    }
+    const again = await pruneInChunks(st, ip, docPrunes(dLog), w);
     check(
       again === 0 && same(await snapshotAnswers(st, at), before),
       `K28 pruning the same window again deletes nothing`,
     );
-    check(
-      same(await above(st), logAbove) && same(await docLog(st, w, MAX, 1_000_000), docLogAbove),
-      `K28 the logs above the window are untouched`,
-    );
+    check(same(await docLog(st, w, MAX, 1_000_000), docLogAbove), `K28 the document log above the window is untouched`);
     cursor = w;
   }
 

@@ -251,7 +251,6 @@ export {
   type LeaseAcquire,
   LeaseHeldError,
   LeaseLostError,
-  type LogCommit,
   type OpenOptions,
   type Persistence,
   ReadOnlyError,

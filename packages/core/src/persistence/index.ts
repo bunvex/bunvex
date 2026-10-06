@@ -28,12 +28,6 @@ export type IndexWrite = { index: IndexId; key: Uint8Array; table: TabletId | nu
 export type IndexedDoc = { id: InternalId; ts: bigint; json: string };
 /** An index entry at a past ts: an index backfill's, at its document version's own ts (PERSIST-01 C17). */
 export type IndexEntryAt = IndexWrite & { ts: bigint };
-/**
- * One commit of the store's log (PERSIST-01 C11): its ts, its index write set (as `apply` received it; the
- * order inside a commit is unspecified), and `prevTs`, the ts of the commit just before it in the log (0 if
- * none). Timestamps (nanoseconds in a `bigint`, as Convex's u64) are sparse, so `prevTs` is how a reader tells a gap from the next commit.
- */
-export type LogCommit = { ts: bigint; prevTs: bigint; writes: IndexWrite[] };
 
 export interface Persistence {
   /** Apply one commit's writes at `ts`. Called by the committer, possibly several times per group. */
@@ -84,13 +78,6 @@ export interface Persistence {
    * fail-stop (the embedded drivers).
    */
   isTransient?(e: unknown): boolean;
-  /**
-   * PERSIST-01 C11, the log by timestamp: the durable commits with `afterTs < ts <= upToTs`, in ts order, at
-   * most `limit` of them and never part of one. Never a commit above the durable prefix (`maxTs`), so
-   * never one of an unflushed group. Read from `indexes` by ts (every commit writes index entries).
-   * Optional for third-party drivers; every first-party driver has it.
-   */
-  readLog?(afterTs: bigint, upToTs: bigint, limit: number): LogCommit[] | Promise<LogCommit[]>;
   /**
    * PERSIST-01 C14: a persistence global (Convex's `persistence_globals`), JSON, or null if unset. Required:
    * a start finds the catalog from the bootstrap globals (STUDY-133 §5.2).
@@ -207,7 +194,7 @@ export type DocPrune = { table: TabletId; id: InternalId; ts: bigint };
 export interface RetentionStore {
   /**
    * PERSIST-01 C12, the document log by timestamp: the stored document versions of the durable commits with
-   * `afterTs < ts <= upToTs`, in ts order, whole commits only, at most `limit` commits. Like `readLog`, never
+   * `afterTs < ts <= upToTs`, in ts order, whole commits only, at most `limit` commits. Never
    * a commit above the durable prefix. Below the retention window it returns what retention left.
    */
   readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): DocLogRow[] | Promise<DocLogRow[]>;
@@ -236,7 +223,7 @@ export {
   ReadOnlyError,
   type ReadOnlyFlag,
 } from "./layout.ts";
-export { groupLog, type LogRow } from "./log.ts";
+
 export { retryOnce, UnsureCommitError } from "./retry.ts";
 export { type IndexRow, type LiveEntry, type Page, type PageRequest, scanLatest, scanLatestSync } from "./scan.ts";
 export { MAX_KEY_PREFIX_LEN, type SplitRow, type SplitSource, splitKey, splitPages } from "./split.ts";

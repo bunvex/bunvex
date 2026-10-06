@@ -13,6 +13,7 @@ import {
   commitWriteBytes,
   type DocWrite,
   type Engine,
+  hasRetention,
   type IndexWrite,
   type Persistence,
   WRITE_BATCH_MAX_BYTES,
@@ -224,13 +225,13 @@ export async function batchChecks(
       log(`  K26 kill ${k}: live docs ${live}, index entries ${JSON.stringify(counts)} (torn commit)`);
       bad++;
     }
-    // A prefix: every commit a flush carried at or below M is in the store's log (no batch lost under a later
-    // one that landed).
-    if (st.readLog) {
+    // A prefix: every commit a flush carried at or below M is in the store's document log (no batch lost under
+    // a later one that landed; every commit of the workload writes documents).
+    if (hasRetention(st)) {
       const below = announced.filter((t) => t <= M);
       if (below.length) {
         const from = below.reduce((a, b) => (b < a ? b : a)) - 1n;
-        const got = new Set((await st.readLog(from, M, 10_000_000)).map((c) => c.ts));
+        const got = new Set((await st.readDocumentLog(from, M, 10_000_000)).map((r) => r.ts));
         const missing = below.filter((t) => !got.has(t));
         if (missing.length) {
           log(
