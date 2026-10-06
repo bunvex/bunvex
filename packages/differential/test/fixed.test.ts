@@ -128,6 +128,32 @@ const PROGRAMS: Record<string, Program> = {
     },
     { kind: "read", read: { table: "b", index: "by_x" } },
   ],
+  // Found by the generator (#486): bound errors name Convex's value (the equality already there) and print
+  // values as Convex's `Display`; an equality and a bound on one field is Convex's inequality error.
+  "index range bound errors": [
+    { kind: "apply", ops: [{ kind: "insert", table: "a", doc: { k: "a", n: 1 }, as: "r1" }] },
+    ...(
+      [
+        [
+          { field: "k", op: "eq", value: "a" },
+          { field: "k", op: "eq", value: "b" },
+        ],
+        [
+          { field: "k", op: "eq", value: 1 },
+          { field: "k", op: "eq", value: 2.5 },
+        ],
+        [
+          { field: "k", op: "eq", value: 1 },
+          { field: "k", op: "gt", value: 0 },
+        ],
+        [
+          { field: "k", op: "gt", value: 1 },
+          { field: "k", op: "gte", value: 2 },
+        ],
+        [{ field: "n", op: "eq", value: 1 }],
+      ] as const
+    ).map((range) => ({ kind: "read" as const, read: { table: "a", index: "by_k_n", range } })),
+  ],
   "errors of bad calls": [
     { kind: "apply", ops: [{ kind: "patch", id: { ref: "nothing" }, fields: { n: 1 } }] },
     { kind: "apply", ops: [{ kind: "insert", table: "a", doc: { $bad: 1 }, as: "r1" }] },
