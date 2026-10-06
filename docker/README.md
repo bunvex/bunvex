@@ -55,6 +55,7 @@ Set these in the shell or in a `.env` file next to `docker-compose.yml`:
 | `INSTANCE_NAME`, `INSTANCE_SECRET` | The instance's name and secret (32 bytes, hex). By default, generated on the first start and kept in the volume. |
 | `REDACT_LOGS_TO_CLIENT` | Keep functions' log lines and errors' details from clients. |
 | `DOCUMENT_RETENTION_DELAY` | How long old document versions are kept, in seconds (default here: 2 days). |
+| `DISABLE_METRICS_ENDPOINT` | `true` (the default here, as Convex's file) answers `/metrics` with 404; `false` serves the Prometheus metrics there, on both ports, with no auth ([STUDY-114](../docs/study/STUDY-114-prometheus-metrics.md)). |
 
 **Screening outbound requests (SSRF).** An action's `fetch` can reach any address the container can,
 including private ones and cloud metadata. As Convex's `--convex-http-proxy`, `--http-proxy <url>` sends

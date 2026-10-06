@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeId, v } from "@bunvex/values";
-import { SCHEDULED_FUNCTIONS_TABLE, TABLES_TABLE } from "../src/catalog.ts";
+import { SCHEDULED_JOB_ARGS_TABLE, SCHEDULED_JOBS_TABLE, TABLES_TABLE } from "../src/catalog.ts";
 import { Engine, TABLE_DELETION_BATCH } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
@@ -202,13 +202,13 @@ test("replaceWithEmptyTables: a system table emptied in one commit, same number 
     engine.mutation((db) => insertJob(db, { name, args: [{}], scheduledTime: 1, now: 1 }));
   const old = await job(e, "a.js:f");
   await job(e, "b.js:g");
-  const before = e.catalog.table(SCHEDULED_FUNCTIONS_TABLE);
+  const before = e.catalog.table(SCHEDULED_JOBS_TABLE);
   let inCommit = 0;
-  await e.replaceWithEmptyTables([SCHEDULED_FUNCTIONS_TABLE], async () => {
+  await e.replaceWithEmptyTables([SCHEDULED_JOBS_TABLE, SCHEDULED_JOB_ARGS_TABLE], async () => {
     inCommit++;
   });
   expect(inCommit).toBe(1);
-  const after = e.catalog.table(SCHEDULED_FUNCTIONS_TABLE);
+  const after = e.catalog.table(SCHEDULED_JOBS_TABLE);
   expect(after.id).not.toBe(before.id);
   expect(after.number).toBe(before.number);
   expect([...after.indexes.keys()].sort()).toEqual([...before.indexes.keys()].sort());
@@ -219,6 +219,6 @@ test("replaceWithEmptyTables: a system table emptied in one commit, same number 
   await e.close();
   const again = await open();
   expect((await again.query((db) => dueJobs(db, 10, 100))).map((j) => j.name)).toEqual(["c.js:h"]);
-  expect(again.catalog.table(SCHEDULED_FUNCTIONS_TABLE).id).toBe(after.id);
+  expect(again.catalog.table(SCHEDULED_JOBS_TABLE).id).toBe(after.id);
   await again.close();
 });

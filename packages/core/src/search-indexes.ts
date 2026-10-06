@@ -136,7 +136,10 @@ export class SearchIndexes {
     for (const w of wanted) {
       const k = SearchIndexes.key(w.table.id, w.name);
       const old = this.entries.get(k);
-      if (old && JSON.stringify(old.def) === JSON.stringify(w.def) && old.staged === w.staged) {
+      // The same definition keeps its index, staged or not: un-staging a built index enables it at once, as
+      // Convex's `Backfilled { staged }` (STUDY-111 PR 8).
+      if (old && JSON.stringify(old.def) === JSON.stringify(w.def)) {
+        old.staged = w.staged;
         next.set(k, old);
         continue;
       }
@@ -160,7 +163,8 @@ export class SearchIndexes {
         touched: new Set(),
       };
       next.set(k, e);
-      if (!w.staged) added.push(e);
+      // A staged index is built too (Convex's `Backfilling { staged }`, then `Backfilled { staged }`).
+      added.push(e);
     }
     this.entries = next;
     this.byTablet = new Map();
@@ -183,7 +187,6 @@ export class SearchIndexes {
   ) {
     for (const w of writes)
       for (const e of this.forTablet(w.table.id)) {
-        if (e.staged) continue;
         e.log.push({ ts, id: w.id, before: e.index.get(w.id) });
         e.index.set(w.id, w.next ? (indexed?.get(e)?.get(w.id) ?? indexedDoc(e.def, w.next)) : null, ts);
         e.touched?.add(w.id);

@@ -3,6 +3,15 @@
 // summary and ask before anything is deleted, start it, then follow its progress to the end.
 import { existsSync, statSync } from "node:fs";
 import { extname, resolve } from "node:path";
+import {
+  argumentError,
+  invalidChoice,
+  missingArgument,
+  missingRequiredArgument,
+  optionsIn,
+  tooManyArguments,
+  unknownOption,
+} from "./args.ts";
 import type { Io } from "./io.ts";
 import { acquireTarget } from "./local-deployment.ts";
 import { adminRequest, NO_DEPLOYMENT, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
@@ -86,10 +95,9 @@ export async function importCommand(args: string[], io: Io, opts: { pollMs?: num
     return 0;
   }
   const taken = takeTargetFlags(args);
-  if (typeof taken === "string") {
-    io.err(`bunvex import: ${taken}`);
-    return 2;
-  }
+  // Convex's `import` shows its help after an argument error.
+  if (typeof taken === "string") return argumentError(io, taken, IMPORT_USAGE);
+  const positional: string[] = [];
   let path: string | undefined;
   let table: string | undefined;
   let format: Format | undefined;
@@ -107,31 +115,25 @@ export async function importCommand(args: string[], io: Io, opts: { pollMs?: num
       mode = flagMode;
       modes.push(flagMode);
     } else if (a === "-y" || a === "--yes") yes = true;
-    else if (a === "--table" || a.startsWith("--table=")) table = value("--table");
-    else if (a === "--format" || a.startsWith("--format=")) {
+    else if (a === "--table" || a.startsWith("--table=")) {
+      table = value("--table");
+      if (table === undefined) return argumentError(io, missingArgument("--table <table>"), IMPORT_USAGE);
+    } else if (a === "--format" || a.startsWith("--format=")) {
       const f = value("--format");
-      if (!FORMATS.includes(f as Format)) {
-        io.err(
-          `bunvex import: option '--format <format>' argument '${f}' is invalid. Allowed choices are ${FORMATS.join(", ")}.`,
-        );
-        return 2;
-      }
+      if (f === undefined) return argumentError(io, missingArgument("--format <format>"), IMPORT_USAGE);
+      if (!FORMATS.includes(f as Format))
+        return argumentError(io, invalidChoice("--format <format>", f, FORMATS), IMPORT_USAGE);
       format = f as Format;
-    } else if (!a.startsWith("-") && path === undefined) path = a;
-    else {
-      io.err(`bunvex import: unknown option ${a}\n\n${IMPORT_USAGE}`);
-      return 2;
-    }
+    } else if (!a.startsWith("-")) positional.push(a);
+    else return argumentError(io, unknownOption(a, optionsIn(IMPORT_USAGE)), IMPORT_USAGE);
   }
-  if (modes.length > 1) {
-    const flag = (m: string) => `--${m === "replaceAll" ? "replace-all" : m}`;
-    io.err(`bunvex import: option '${flag(modes[1]!)}' cannot be used with option '${flag(modes[0]!)}'`);
-    return 2;
-  }
-  if (!path) {
-    io.err(`bunvex import: missing required argument 'path'\n\n${IMPORT_USAGE}`);
-    return 2;
-  }
+  // Convex declares the modes as conflicting by their flags (`.conflicts("--append")`), which commander compares
+  // with attribute names, so the check never fires: `--append` wins, then `--replace` (cli/lib/convexImport.ts).
+  if (modes.length > 1)
+    mode = modes.includes("append") ? "append" : modes.includes("replace") ? "replace" : "replaceAll";
+  path = positional[0];
+  if (!path) return argumentError(io, missingRequiredArgument("path"), IMPORT_USAGE);
+  if (positional.length > 1) return argumentError(io, tooManyArguments("import", 1, positional.length), IMPORT_USAGE);
   const file = resolve(io.cwd, path);
   if (!existsSync(file)) {
     io.err(`Error: Path ${path} does not exist.`);

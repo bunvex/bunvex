@@ -1,7 +1,7 @@
 // The dashboard's system functions for schedules and crons (STUDY-30 §3.5): Convex's names, arguments and
 // private document shapes; cancel one / cancel all.
 import { afterEach, describe, expect, test } from "bun:test";
-import { defineSchema, defineTable, Engine, getJob, insertJob } from "@bunvex/core";
+import { defineSchema, defineTable, Engine, getJob, insertJob, msToNs } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { v } from "@bunvex/values";
 import { cronJobs, cronSpecs } from "../src/cron.ts";
@@ -61,19 +61,34 @@ describe("_system/frontend schedules", () => {
     expect(r.isDone).toBe(true);
     expect(r.page.map((d) => d._id)).toEqual([sooner, later]);
     const d = r.page[0];
+    // The `_scheduled_jobs` document as stored (STUDY-125), Convex's `SerializedScheduledJob`.
     expect(Object.keys(d).sort()).toEqual([
       "_creationTime",
       "_id",
       "argsId",
+      "attempts",
+      "completedTs",
+      "component",
       "nextTs",
       "originalScheduledTs",
       "state",
+      "udfArgs",
       "udfPath",
     ]);
-    expect(d).toMatchObject({ udfPath: "m.js:b", argsId: sooner, state: { type: "pending" } });
+    expect(d).toMatchObject({
+      component: "",
+      udfPath: "m.js:b",
+      udfArgs: null,
+      completedTs: null,
+      state: { type: "pending" },
+      attempts: { systemErrors: 0n, occErrors: 0n },
+    });
+    // The arguments live in `_scheduled_job_args`, not under the job's id.
+    expect(typeof d.argsId).toBe("string");
+    expect(d.argsId).not.toBe(sooner);
     expect(typeof d.nextTs).toBe("bigint");
     const job = (await engine.query((db) => getJob(db, sooner)))!;
-    expect(d.originalScheduledTs).toBe(BigInt(Math.round(job.scheduledTime * 1e6)));
+    expect(d.originalScheduledTs).toBe(msToNs(job.scheduledTime));
     // One function's, by either spelling.
     for (const udfPath of ["m:a", "m.js:a"]) {
       const mine = (await sys("_system/frontend/paginatedScheduledJobs", {
@@ -98,7 +113,7 @@ describe("_system/frontend schedules", () => {
     })) as {
       page: { state: unknown }[];
     };
-    expect(r.page[0].state).toEqual({ type: "inProgress", requestId: "r1", executionId: "e1" });
+    expect(r.page[0].state).toEqual({ executionId: "e1", requestId: "r1", type: "inProgress" });
   });
 
   test("pages follow their cursor", async () => {
@@ -121,13 +136,25 @@ describe("_system/frontend schedules", () => {
     expect(new Set(seen).size).toBe(7);
   });
 
-  test("scheduler:getArgs: the args as the bytes of their JSON array; null for an unknown id", async () => {
-    const { schedule, sys } = await setup();
+  test("scheduler:getArgs: the `_scheduled_job_args` document, its args the bytes of their JSON array", async () => {
+    const { schedule, sys, engine } = await setup();
     const id = await schedule("m:a", 60_000, 42);
-    const r = (await sys("_system/frontend/scheduler:getArgs", { argsId: id })) as { _id: string; args: ArrayBuffer };
-    expect(r._id).toBe(id);
+    const { argsId } = (await engine.query((db) => getJob(db, id)))!;
+    const r = (await sys("_system/frontend/scheduler:getArgs", { argsId })) as { _id: string; args: ArrayBuffer };
+    expect(Object.keys(r).sort()).toEqual(["_creationTime", "_id", "args"]);
+    expect(r._id).toBe(argsId!);
     expect(JSON.parse(new TextDecoder().decode(r.args))).toEqual([{ n: 42 }]);
-    expect(await sys("_system/frontend/scheduler:getArgs", { argsId: "nope" })).toBeNull();
+    // Convex's `v.id("_scheduled_job_args")`: a job's id, or no id at all, is refused.
+    for (const bad of [id, "nope"])
+      expect(await sys("_system/frontend/scheduler:getArgs", { argsId: bad }).catch((e: Error) => e.message)).toContain(
+        "ArgumentValidationError",
+      );
+    // Deleted with its job: null.
+    await engine.mutation(async (db) => {
+      const { deleteJob } = await import("@bunvex/core");
+      await deleteJob(db, { _id: id, argsId });
+    });
+    expect(await sys("_system/frontend/scheduler:getArgs", { argsId })).toBeNull();
   });
 
   test("arguments are checked, and clients cannot call system functions", async () => {
@@ -136,7 +163,7 @@ describe("_system/frontend schedules", () => {
       "ArgumentValidationError",
     );
     expect(await functions.runQuery("_system/frontend/listCronJobs", {}).catch((e: Error) => e.message)).toBe(
-      "Could not find public function for '_system/frontend/listCronJobs'.",
+      "Operation query not permitted",
     );
   });
 

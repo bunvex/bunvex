@@ -204,13 +204,10 @@ export function stateToRow(s: IndexSegmentsState): SearchIndexRow {
       size_bytes_total: r.bytes,
       id: r.id,
     }));
+    const snapshot = { data: { data_type: "MultiSegment", segments }, ts: s.ts, version: TEXT_SNAPSHOT_VERSION };
+    // Built and staged: Convex's `Backfilled2 { snapshot, staged }`; built and enabled: `Snapshotted`.
     if (!building)
-      onDiskState = {
-        state: "snapshotted",
-        data: { data_type: "MultiSegment", segments },
-        ts: s.ts,
-        version: TEXT_SNAPSHOT_VERSION,
-      };
+      onDiskState = s.staged ? { state: "backfilled2", snapshot, staged: true } : { state: "snapshotted", ...snapshot };
     else if (!segments.length && s.backfill!.cursor === null) onDiskState = { state: "backfilling", staged: s.staged };
     else
       onDiskState = {
@@ -237,7 +234,9 @@ export function stateToRow(s: IndexSegmentsState): SearchIndexRow {
     num_deleted: r.deleted,
     id: r.id,
   }));
-  if (!building) onDiskState = { state: "snapshotted", data: { data_type: "MultiSegment", segments }, ts: s.ts };
+  const snapshot = { data: { data_type: "MultiSegment", segments }, ts: s.ts };
+  if (!building)
+    onDiskState = s.staged ? { state: "backfilled2", snapshot, staged: true } : { state: "snapshotted", ...snapshot };
   else
     onDiskState = {
       state: "backfilling",
@@ -273,10 +272,15 @@ export function rowToState(row: Record<string, unknown>): IndexSegmentsState | n
           bytes: g.size_bytes_total as number,
           id: g.id as string,
         }));
-      if (o.state === "snapshotted") {
-        if (o.version !== TEXT_SNAPSHOT_VERSION) return null;
-        const data = o.data as { segments: unknown };
-        return { kind: "text", tablet, name, def, ts: o.ts as number, segments: segs(data.segments), staged: false };
+      if (o.state === "snapshotted" || o.state === "backfilled2") {
+        const snap = (o.state === "snapshotted" ? o : o.snapshot) as {
+          data: { segments: unknown };
+          ts: number;
+          version: number;
+        };
+        if (snap.version !== TEXT_SNAPSHOT_VERSION) return null;
+        const staged = o.state === "backfilled2" && !!o.staged;
+        return { kind: "text", tablet, name, def, ts: snap.ts, segments: segs(snap.data.segments), staged };
       }
       if (o.state === "backfilling")
         return { kind: "text", tablet, name, def, ts: 0, segments: [], backfill: { cursor: null }, staged: !!o.staged };
@@ -310,9 +314,10 @@ export function rowToState(row: Record<string, unknown>): IndexSegmentsState | n
           bytes: (g.num_vectors as number) * def.dimensions * 4,
           id: g.id as string,
         }));
-      if (o.state === "snapshotted") {
-        const data = o.data as { segments: unknown };
-        return { kind: "vector", tablet, name, def, ts: o.ts as number, segments: segs(data.segments), staged: false };
+      if (o.state === "snapshotted" || o.state === "backfilled2") {
+        const snap = (o.state === "snapshotted" ? o : o.snapshot) as { data: { segments: unknown }; ts: number };
+        const staged = o.state === "backfilled2" && !!o.staged;
+        return { kind: "vector", tablet, name, def, ts: snap.ts, segments: segs(snap.data.segments), staged };
       }
       if (o.state === "backfilling") {
         const cursor = o.table_scan_cursor as ArrayBuffer | null;

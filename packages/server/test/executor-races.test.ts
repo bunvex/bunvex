@@ -7,9 +7,9 @@
 // cancel or the delete commits while the mutation is running: its commit conflicts, and the retry sees the
 // change.
 import { afterEach, describe, expect, test } from "bun:test";
-import { CRON_JOB_LOGS_TABLE, defineSchema, defineTable, Engine, getJob, type JobDoc } from "@bunvex/core";
+import { CRON_JOB_LOGS_TABLE, defineSchema, defineTable, Engine, getJob, type JobDoc, jobArgs } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
-import { v } from "@bunvex/values";
+import { type Value, v } from "@bunvex/values";
 import { type Crons, cronJobs, cronSpecs } from "../src/cron.ts";
 import { CronJobExecutor } from "../src/cron-executor.ts";
 import { type CronJob, dueCrons } from "../src/cron-model.ts";
@@ -72,7 +72,12 @@ describe("scheduled jobs", () => {
     // Not started: the test hands jobs to the executor, as Convex's `test_one_off_scheduled_job_executor_run`.
     const executor = new ScheduledJobExecutor(s.engine, s.functions, fast);
     stops.push(() => executor.stop());
-    const execute = (job: JobDoc) => (executor as unknown as { execute(j: JobDoc): Promise<void> }).execute(job);
+    // With its arguments, as the executor reads them (`_scheduled_job_args`) when it picks the job.
+    const execute = async (job: JobDoc) =>
+      (executor as unknown as { execute(j: JobDoc, args: Value[]): Promise<void> }).execute(
+        job,
+        await s.engine.query((db) => jobArgs(db, job)),
+      );
     const read = (id: string) => s.engine.query((db) => getJob(db, id));
     return { ...s, executor, execute, read };
   }
