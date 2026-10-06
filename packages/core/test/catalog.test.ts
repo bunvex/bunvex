@@ -66,12 +66,13 @@ describe("catalog (_tables / _index)", () => {
           _next_persistence_index_id: 554,
           _schema_validation_progress: 549,
           _schema_validations: 555,
+          _component_definitions: 543,
+          _components: 544,
           _instance: 9999,
-          _next_tablet_id: 9997,
           users: 10001,
           posts: 10002,
         });
-        expect([...e.catalog.table("posts").indexes.keys()]).toEqual(["by_id", "by_creation_time", "by_author"]);
+        expect([...e.catalog.table("posts").indexes.keys()].sort()).toEqual(["by_author", "by_creation_time", "by_id"]);
       },
     );
   });
@@ -122,7 +123,7 @@ describe("catalog (_tables / _index)", () => {
       await e.mutation((db) => db.insert("items", { a: 2, b: 1 }));
       await e.mutation((db) => db.insert("items", { a: 1, b: 2 }));
     });
-    let oldId = 0;
+    let oldId = "";
     await open(defineSchema({ items: defineTable(v.any()).index("by_x", ["a"]).index("by_y", ["b"]) }), async (e) => {
       oldId = e.catalog.table("items").indexes.get("by_x")!.id;
     });
@@ -173,15 +174,15 @@ test("fixed system numbers: a table created before keeps its number; a system ta
   const { planCatalog } = await import("../src/catalog.ts");
   const anyDoc = v.any();
   // A store numbered in order before (its `_file_storage` at 522): nothing moves.
-  const before = [{ _id: "x", name: "_file_storage", number: 522, tablet: 30, state: "active" as const }];
+  const before = [{ _id: "x", name: "_file_storage", number: 522, tablet: "t30", state: "active" as const }];
   expect(planCatalog([{ name: "_file_storage", indexes: {}, document: anyDoc }], before, []).insertTables).toEqual([]);
   // A new system table without a fixed number: the first free one that no system table reserves — with
   // 515 taken, not 516 (`_exports`'s) but 517.
-  const with515 = [{ _id: "z", name: "_old", number: 515, tablet: 32, state: "active" as const }];
+  const with515 = [{ _id: "z", name: "_old", number: 515, tablet: "t32", state: "active" as const }];
   const planned = planCatalog([{ name: "_new_system", indexes: {}, document: anyDoc }], with515, []).insertTables;
   expect(planned.map((t) => t.number)).toEqual([517]);
   // A fixed number already taken (an import moved a table there): the next free unreserved one.
-  const taken = [{ _id: "y", name: "_other", number: 540, tablet: 31, state: "active" as const }];
+  const taken = [{ _id: "y", name: "_other", number: 540, tablet: "t31", state: "active" as const }];
   expect(
     planCatalog([{ name: "_file_storage", indexes: {}, document: anyDoc }], taken, []).insertTables[0]!.number,
   ).toBe(515);
@@ -200,6 +201,9 @@ test("system indexes as Convex declares them: `_creationTime` last except SYSTEM
   await e.close();
   // Convex's fields, index by index (crates/model, crates/database/src/bootstrap_model).
   expect(fields).toEqual({
+    "_tables.by_name": ["name"],
+    "_schemas.by_state": ["state"],
+    "_components.by_parent_and_name": ["parent", "name"],
     "_session_requests.by_session_id_and_request_id": ["sessionId", "requestId"],
     "_index_backfills.by_index_id": ["indexId", "_creationTime"],
     "_scheduled_jobs.by_completed_ts": ["completedTs"],

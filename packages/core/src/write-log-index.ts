@@ -9,7 +9,9 @@
 // over every log entry × its writes × every interval. Convex's cost is the same.
 
 import type { Conflict, Interval, LogEntry } from "./committer.ts";
+import { compareInternalIds } from "./internal-id.ts";
 import { compareKeys } from "./keyenc.ts";
+import type { IndexId } from "./persistence/index.ts";
 
 type Write = LogEntry["writes"][number];
 
@@ -24,15 +26,15 @@ export type IntervalSet = { lo: Uint8Array[]; hi: Uint8Array[] };
  * ascending id order (Convex walks its read-set's `BTreeMap` by index). Empty intervals contain nothing
  * and are dropped.
  */
-export function intervalSetsByIndex(reads: readonly Interval[]): [number, IntervalSet][] {
-  const by = new Map<number, Interval[]>();
+export function intervalSetsByIndex(reads: readonly Interval[]): [IndexId, IntervalSet][] {
+  const by = new Map<IndexId, Interval[]>();
   for (const r of reads) {
     if (compareKeys(r.lo, r.hi) >= 0) continue;
     const list = by.get(r.index);
     if (list) list.push(r);
     else by.set(r.index, [r]);
   }
-  const out: [number, IntervalSet][] = [];
+  const out: [IndexId, IntervalSet][] = [];
   for (const [index, list] of by) {
     list.sort((a, b) => compareKeys(a.lo, b.lo));
     const set: IntervalSet = { lo: [list[0].lo], hi: [list[0].hi] };
@@ -48,7 +50,7 @@ export function intervalSetsByIndex(reads: readonly Interval[]): [number, Interv
     }
     out.push([index, set]);
   }
-  return out.sort((a, b) => a[0] - b[0]);
+  return out.sort((a, b) => compareInternalIds(a[0], b[0]));
 }
 
 /** Whether `key` is in one of the set's intervals: the only candidate is the last one starting at or before it. */
@@ -64,7 +66,7 @@ export function intervalSetContains(set: IntervalSet, key: Uint8Array): boolean 
 }
 
 export class WritesByIndex {
-  private columns = new Map<number, Column>();
+  private columns = new Map<IndexId, Column>();
 
   /** How many indexes have writes in the log. */
   get indexCount(): number {
@@ -122,7 +124,7 @@ export class WritesByIndex {
    * `sourceOf` gives the write source of the commit at a ts.
    */
   conflict(
-    reads: readonly [number, IntervalSet][],
+    reads: readonly [IndexId, IntervalSet][],
     from: bigint,
     to: bigint,
     sourceOf: (ts: bigint) => string | undefined,

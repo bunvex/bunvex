@@ -4,6 +4,7 @@
 // "none" the backend is stopped: scheduled functions and crons wait, and file storage refuses.
 import { BACKEND_STATE_TABLE } from "./catalog.ts";
 import type { LogEntry } from "./committer.ts";
+import type { IndexId } from "./persistence/index.ts";
 import type { Tx } from "./tx.ts";
 
 export type BackendState = { system: string; usage_limit: string; user: string };
@@ -38,7 +39,7 @@ export class BackendStateCache {
   private writtenTs = 0n;
   private cached: { from: bigint; state: BackendState; exists: boolean } | null = null;
 
-  constructor(private readonly byIdIndex: () => number) {}
+  constructor(private readonly byIdIndex: () => IndexId | undefined) {}
 
   /** Commits, as they become visible (before any transaction can begin at their ts). */
   observe(entries: LogEntry[]) {

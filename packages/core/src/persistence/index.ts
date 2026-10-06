@@ -4,11 +4,17 @@
 // @bunvex/persistence-conformance.
 
 /** One document version. `json === null` is a delete. */
-export type DocWrite = { table: number; id: string; json: string | null };
+/**
+ * A table's persistence id (Convex's `TabletId`): the internal id of its `_tables` document, as Convex prints it
+ * (base64url without padding, 22 characters). An index's (`IndexId`) is its `_index` document's (STUDY-133 §5.1).
+ */
+export type TabletId = string;
+export type IndexId = string;
+export type DocWrite = { table: TabletId; id: string; json: string | null };
 /** A document version as `getVersions` returns it (PERSIST-01 C16): its JSON and the ts it was written at. */
 export type DocVersion = { json: string; ts: bigint } | null;
 /** One index entry version. `id === null` means the entry was removed. `key` is opaque (keyenc bytes). */
-export type IndexWrite = { index: number; key: Uint8Array; id: string | null };
+export type IndexWrite = { index: IndexId; key: Uint8Array; id: string | null };
 /**
  * One commit of the store's log (PERSIST-01 C11): its ts, its index write set (as `apply` received it; the
  * order inside a commit is unspecified), and `prevTs`, the ts of the commit just before it in the log (0 if
@@ -24,7 +30,7 @@ export interface Persistence {
   /** Index range [lo, hi) as of `ts`: live document ids, in byte order of the key (reversed if `desc`),
    *  up to `limit`. Embedded drivers answer synchronously; remote ones return a promise. */
   scan(
-    index: number,
+    index: IndexId,
     lo: Uint8Array,
     hi: Uint8Array,
     ts: bigint,
@@ -32,14 +38,14 @@ export interface Persistence {
     desc: boolean,
   ): string[] | Promise<string[]>;
   /** The document version visible at `ts` (JSON), or null. */
-  get(table: number, id: string, ts: bigint): string | null | Promise<string | null>;
+  get(table: TabletId, id: string, ts: bigint): string | null | Promise<string | null>;
   /**
    * PERSIST-01 C16, document versions: for each id, the version of `(table, id)` visible at `ts` and the ts
    * it was written at, or null (missing, or deleted at `ts`); one answer per id, in order, duplicates
    * included. One round trip on a remote store. Optional for third-party drivers; every first-party driver
    * has it (streaming export's per-document timestamps, STUDY-69).
    */
-  getVersions?(table: number, ids: string[], ts: bigint): DocVersion[] | Promise<DocVersion[]>;
+  getVersions?(table: TabletId, ids: string[], ts: bigint): DocVersion[] | Promise<DocVersion[]>;
   /** The highest durable commit ts (recovery on open). */
   maxTs?(): bigint | Promise<bigint>;
   /**
@@ -59,8 +65,15 @@ export interface Persistence {
    * Optional for third-party drivers; every first-party driver has it.
    */
   readLog?(afterTs: bigint, upToTs: bigint, limit: number): LogCommit[] | Promise<LogCommit[]>;
+  /**
+   * PERSIST-01 C14: a persistence global (Convex's `persistence_globals`), JSON, or null if unset. Required:
+   * a start finds the catalog from the bootstrap globals (STUDY-133 §5.2).
+   */
+  getGlobal(key: string): unknown | Promise<unknown>;
+  /** PERSIST-01 C14: set a global; refused (`LeaseLostError`) once the lease is lost. */
+  setGlobal(key: string, value: unknown): void | Promise<void>;
   /** AUDIT ONLY (conformance K6, never used by the engine): live documents of a table at ts. */
-  auditLiveDocs?(table: number, ts: bigint): number | Promise<number>;
+  auditLiveDocs?(table: TabletId, ts: bigint): number | Promise<number>;
   /** AUDIT ONLY (conformance K21): the rows stored at exactly `ts`, duplicates included. */
   auditRowsAt?(ts: bigint): { docs: number; idx: number } | Promise<{ docs: number; idx: number }>;
   /** AUDIT ONLY (conformance K27): every stored row, every version and tombstone included. */
@@ -99,7 +112,7 @@ export const hasLease = (p: Persistence): p is Persistence & Lease =>
  */
 export class DanglingReferenceError extends Error {
   constructor(
-    readonly index: number,
+    readonly index: IndexId,
     readonly id: string,
     readonly ts: bigint,
     readonly deleted: boolean,
@@ -155,11 +168,11 @@ export class LeaseHeldError extends Error {
 }
 
 /** One stored document version, as the document log returns it (PERSIST-01 C12). */
-export type DocLogRow = { ts: bigint; table: number; id: string; deleted: boolean };
+export type DocLogRow = { ts: bigint; table: TabletId; id: string; deleted: boolean };
 /** A retention delete (PERSIST-01 C13): every stored version of one index key at or below `ts`. */
-export type IndexPrune = { index: number; key: Uint8Array; ts: bigint };
+export type IndexPrune = { index: IndexId; key: Uint8Array; ts: bigint };
 /** A retention delete (PERSIST-01 C13): every stored version of one document at or below `ts`. */
-export type DocPrune = { table: number; id: string; ts: bigint };
+export type DocPrune = { table: TabletId; id: string; ts: bigint };
 
 /**
  * What retention needs from a store (STUDY-33, Convex's `retention.rs`). Optional per driver: without it
@@ -180,10 +193,6 @@ export interface RetentionStore {
    */
   pruneIndexes(entries: IndexPrune[], through: bigint): number | Promise<number>;
   pruneDocuments(entries: DocPrune[], through: bigint): number | Promise<number>;
-  /** PERSIST-01 C14: a persistence global (Convex's `persistence_globals`), JSON, or null if unset. */
-  getGlobal(key: string): unknown | Promise<unknown>;
-  /** PERSIST-01 C14: set a global; refused (`LeaseLostError`) once the lease is lost. */
-  setGlobal(key: string, value: unknown): void | Promise<void>;
 }
 
 export const hasRetention = (p: Persistence): p is Persistence & RetentionStore =>
@@ -193,8 +202,8 @@ export const hasRetention = (p: Persistence): p is Persistence & RetentionStore 
  *  entry whose document does not exist at `ts` rejects with `DanglingReferenceError` (C15), never skipped. */
 export interface ScanDocs {
   scanDocs(
-    table: number,
-    index: number,
+    table: TabletId,
+    index: IndexId,
     lo: Uint8Array,
     hi: Uint8Array,
     ts: bigint,

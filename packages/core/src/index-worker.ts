@@ -26,7 +26,14 @@ import {
 } from "./catalog.ts";
 import { type Committer, ConflictError } from "./committer.ts";
 import { compareKeys, encodeKey, prefixEnd } from "./keyenc.ts";
-import { DanglingReferenceError, type IndexWrite, type Persistence, type ScanDocs } from "./persistence/index.ts";
+import {
+  DanglingReferenceError,
+  type IndexId,
+  type IndexWrite,
+  type Persistence,
+  type ScanDocs,
+  type TabletId,
+} from "./persistence/index.ts";
 import { type Doc, type IndexDef, indexKey, SYSTEM_INDEXES, type TableDef } from "./schema.ts";
 import { decodeDoc, type Tx } from "./tx.ts";
 
@@ -56,15 +63,15 @@ const FULL_HI = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
 export interface IndexWorkerHost {
   readonly committer: Committer;
   readonly persistence: Persistence;
-  readonly catalog: { byTablet(tablet: number): TableDef | undefined };
+  readonly catalog: { byTablet(tablet: TabletId): TableDef | undefined };
   /** Run a system transaction (OCC retries included). */
   system<T>(body: (db: Tx) => Promise<T>, source: string): Promise<T>;
   /** Install a committed `_index` change into the catalog (called from the commit's visibility). */
-  installIndexChanges(changes: { enable: number[]; disable: number[]; drop: number[] }, ts: bigint): void;
+  installIndexChanges(changes: { enable: IndexId[]; disable: IndexId[]; drop: IndexId[] }, ts: bigint): void;
   /** Finish the schema change if nothing it waits for is still backfilling; true once finished. */
   finishSchema(): Promise<boolean>;
   /** The table's document count from the table summaries, or null while they are not built (Convex's `table_count`). */
-  tableCount?(tablet: number): number | null;
+  tableCount?(tablet: TabletId): number | null;
 }
 
 /** A token bucket over index entries, as Convex's `governor` quota: `rate` per second, bursts up to `rate`. */
@@ -122,7 +129,7 @@ export class IndexWorker {
    * `emptyTables`: nothing can have written them yet, so their count is 0 while the summaries are not built.
    */
   async backfillNow(metas: IndexMeta[], emptyTables = false) {
-    const byTablet = new Map<number, IndexMeta[]>();
+    const byTablet = new Map<TabletId, IndexMeta[]>();
     for (const m of metas) byTablet.set(m.tablet, [...(byTablet.get(m.tablet) ?? []), m]);
     for (const group of byTablet.values()) await this.backfillTable(group, emptyTables);
   }
@@ -147,7 +154,7 @@ export class IndexWorker {
           return;
         }
         // As Convex's `queue_index_backfill`: the indexes of one table are filled in one pass over it.
-        const byTablet = new Map<number, IndexMeta[]>();
+        const byTablet = new Map<TabletId, IndexMeta[]>();
         for (const m of backfilling) byTablet.set(m.tablet, [...(byTablet.get(m.tablet) ?? []), m]);
         const groups = [...byTablet.values()];
         let next = 0;
@@ -307,7 +314,7 @@ export class IndexWorker {
     // an index of a system table, or a system index, is enabled at once. Its `_index_backfills` row stays, as
     // Convex's (nothing there deletes one).
     await this.host.system(async (db) => {
-      const enabled: number[] = [];
+      const enabled: IndexId[] = [];
       for (const m of metas) {
         const row = await db.get(INDEX_TABLE, m._id);
         const cur = row ? indexMeta(row as Record<string, unknown>) : null;

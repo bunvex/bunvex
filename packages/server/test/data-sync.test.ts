@@ -3,7 +3,7 @@
 // limits (a commit never split), catching up along the log while a table is walked, `Convex-Client`, the
 // progress rows with `create_data_sync`, the other routes, and the errors.
 import { afterEach, describe, expect, test } from "bun:test";
-import { DEPLOYMENT_AUDIT_LOG_TABLE, defineSchema, defineTable, Engine } from "@bunvex/core";
+import { compareInternalIds, DEPLOYMENT_AUDIT_LOG_TABLE, defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { toJsonValue, v } from "@bunvex/values";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
@@ -87,8 +87,8 @@ describe("the cursor", () => {
     const [id] = await t.call("m:put", { table: "a", n: 1 });
     const c: DataSyncCursor = {
       syncedTs: 1_700_000_000_000_123_456n,
-      synced: [{ tablet: 7, component: "", table: "x" }],
-      current: { tablet: 9, component: "", table: "a", currentId: id, docsSynced: 3 },
+      synced: [{ tablet: "AAAAAAAAAAAAAAAAAAAABw", component: "", table: "x" }],
+      current: { tablet: "AAAAAAAAAAAAAAAAAAAACQ", component: "", table: "a", currentId: id, docsSynced: 3 },
       syncId: "fivetran-abc",
       numDocsSynced: 42,
     };
@@ -120,12 +120,16 @@ test("a cold start: truncate, then each table by id (revision ts), then up to da
     { component: "", table: "a" },
     { component: "", table: "b" },
   ]);
-  const values = pages.flatMap((p) => p.values);
-  expect(values.map((x: any) => [x.table, x.deleted])).toEqual([
+  // Tables walked in tablet order (their `_tables` rows' internal ids, as Convex's), which is random.
+  const aFirst = compareInternalIds(t.engine.catalog.table("a").id, t.engine.catalog.table("b").id) < 0;
+  const all = pages.flatMap((p) => p.values);
+  const fromA: [string, boolean][] = [
     ["a", false],
     ["a", false],
-    ["b", false],
-  ]);
+  ];
+  const fromB: [string, boolean][] = [["b", false]];
+  expect(all.map((x: any) => [x.table, x.deleted])).toEqual(aFirst ? [...fromA, ...fromB] : [...fromB, ...fromA]);
+  const values = [...all.filter((x: any) => x.table === "a"), ...all.filter((x: any) => x.table === "b")];
   // export_json values; `ts` the revision's (nanoseconds).
   expect(values[0].value.k).toBe(1);
   const aTs = values[0].ts;
@@ -173,6 +177,11 @@ test("limits: by-id pages of `pageSize`; a log page never splits a commit; catch
   const small = { ...DATA_SYNC_LIMITS, pageSize: 2, maxRowsRead: 2 };
   const ids = () => crypto.randomUUID();
   let page = await dataSyncPage(t.engine, null, all, ids, small);
+  // Tables are walked in tablet order (random): an empty `b` first takes a page of its own.
+  if (compareInternalIds(t.engine.catalog.table("b").id, t.engine.catalog.table("a").id) < 0) {
+    expect(page.values.length).toBe(0);
+    page = await dataSyncPage(t.engine, page.cursor, all, ids, small);
+  }
   expect(page.values.length).toBe(2);
   const first = page.values.map((x) => JSON.parse(x.json)._id as string);
   expect(page.cursor.current?.docsSynced).toBe(2);

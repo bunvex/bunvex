@@ -16,6 +16,13 @@ export {
   setUsageLimitStopState,
   setUserStopState,
 } from "./backend-state.ts";
+export {
+  BOOTSTRAP_GLOBALS,
+  BOOTSTRAP_TABLES,
+  bootstrapStore,
+  loadCatalog,
+  readBootstrapIds,
+} from "./bootstrap.ts";
 export { bundledModule, provideBundledModules } from "./bundled-modules.ts";
 export {
   AUTH_TABLE,
@@ -204,6 +211,13 @@ export {
 } from "./environment-variables.ts";
 export { Expression, type ExpressionOrValue, filterBuilder } from "./filter.ts";
 export { opaqueToInspect } from "./inspect.ts";
+export {
+  compareInternalIds,
+  internalIdBytes,
+  internalIdOf,
+  internalIdString,
+  tabletOf,
+} from "./internal-id.ts";
 export { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 export {
   afterValues,
@@ -225,6 +239,7 @@ export {
   type DocWrite,
   hasLease,
   hasRetention,
+  type IndexId,
   type IndexPrune,
   type IndexWrite,
   LAYOUT_VERSION,
@@ -240,6 +255,7 @@ export {
   type ReadOnlyFlag,
   type RetentionStore,
   type ScanDocs,
+  type TabletId,
   UnsureCommitError,
 } from "./persistence/index.ts";
 export {

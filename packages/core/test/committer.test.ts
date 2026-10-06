@@ -96,7 +96,7 @@ describe("committer fail-stop on persistence failure (Convex: the committer shut
 test("a commit queued right after another resolves, in the same microtask chain, is not lost", async () => {
   const p = await MemoryPersistence.open(null, { durable: false });
   const c = new Committer(p, {}, () => 0n); // a stopped clock: timestamps 1, 2, 3… (as the asserts expect)
-  const idx = (n: number) => [{ index: 9, key: new Uint8Array([n]), id: `d${n}` }];
+  const idx = (n: number) => [{ index: "ix9", key: new Uint8Array([n]), id: `d${n}` }];
   const second = c
     .commit({ snapshot: 0n, reads: [], docs: [], idx: idx(1) })
     .then(() => c.commit({ snapshot: 1n, reads: [], docs: [], idx: idx(2) }));
@@ -108,8 +108,8 @@ test("changedBetween: whether a commit in (from, to] wrote into the reads, and t
   const p = await MemoryPersistence.open(null, { durable: false });
   let now = 0n; // a stopped clock: timestamps 1, 2, 3…
   const c = new Committer(p, { maxRetentionNs: 10n }, () => now);
-  const idx = (n: number) => [{ index: 9, key: new Uint8Array([n]), id: `d${n}` }];
-  const reads = (lo: number, hi: number) => [{ index: 9, lo: new Uint8Array([lo]), hi: new Uint8Array([hi]) }];
+  const idx = (n: number) => [{ index: "ix9", key: new Uint8Array([n]), id: `d${n}` }];
+  const reads = (lo: number, hi: number) => [{ index: "ix9", lo: new Uint8Array([lo]), hi: new Uint8Array([hi]) }];
   for (let n = 1; n <= 3; n++) await c.commit({ snapshot: BigInt(n - 1), reads: [], docs: [], idx: idx(n) });
   // ts 1, 2, 3 wrote keys 1, 2, 3.
   expect(c.changedBetween(reads(2, 3), 0n, 3n)).toBe(true);

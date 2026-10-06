@@ -39,7 +39,7 @@ async function rows(e: Engine) {
   )) as Record<string, unknown>[];
   const out: Record<string, Record<string, unknown>> = {};
   const isDatabase = (r: Record<string, unknown>) => (r.config as { type: string }).type === "database";
-  for (const r of all) if (!isDatabase(r)) out[r.name as string] = r.config as Record<string, unknown>;
+  for (const r of all) if (!isDatabase(r)) out[r.descriptor as string] = r.config as Record<string, unknown>;
   return { search: out, database: all.filter(isDatabase).length };
 }
 

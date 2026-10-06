@@ -21,7 +21,8 @@ describe("ReadSetIndex (STUDY-08 D9)", () => {
   const makeKey = (r: () => number) =>
     Uint8Array.from({ length: Math.floor(r() * 4) }, () => [0, 1, 2, 0x7f, 0xff][Math.floor(r() * 5)]);
 
-  const makeInterval = (r: () => number, index: number): Interval => {
+  const makeInterval = (r: () => number, n: number): Interval => {
+    const index = `i${n}`;
     const a = makeKey(r);
     switch (Math.floor(r() * 6)) {
       case 0: // empty: lo == hi
@@ -40,7 +41,7 @@ describe("ReadSetIndex (STUDY-08 D9)", () => {
   };
 
   /** Today's linear scan: the reference the index must agree with. */
-  const linear = (owners: Map<number, Interval[]>, writes: { index: number; key: Uint8Array; id: null }[]) =>
+  const linear = (owners: Map<number, Interval[]>, writes: { index: string; key: Uint8Array; id: null }[]) =>
     [...owners].filter(([, reads]) => overlaps(writes, reads)).map(([o]) => o);
 
   for (const seed of [1, 2, 3, 42, 1234, 99999]) {
@@ -62,7 +63,7 @@ describe("ReadSetIndex (STUDY-08 D9)", () => {
         } else {
           // Writes on random keys and on the exact bounds of registered intervals.
           const writes = Array.from({ length: 1 + Math.floor(r() * 3) }, () => ({
-            index: Math.floor(r() * 3),
+            index: `i${Math.floor(r() * 3)}`,
             key: r() < 0.5 && bounds.length ? bounds[Math.floor(r() * bounds.length)] : makeKey(r),
             id: null,
           }));
@@ -76,8 +77,8 @@ describe("ReadSetIndex (STUDY-08 D9)", () => {
 
   test("a key at an interval's lo is inside, a key at its hi is not", () => {
     const index = new ReadSetIndex<string>();
-    index.set("a", [{ index: 1, lo: Uint8Array.from([5]), hi: Uint8Array.from([9]) }]);
-    const at = (k: number[], i = 1) => [...index.matching([{ index: i, key: Uint8Array.from(k) }])];
+    index.set("a", [{ index: "i1", lo: Uint8Array.from([5]), hi: Uint8Array.from([9]) }]);
+    const at = (k: number[], i = 1) => [...index.matching([{ index: `i${i}`, key: Uint8Array.from(k) }])];
     expect(at([5])).toEqual(["a"]);
     expect(at([8, 0xff])).toEqual(["a"]);
     expect(at([9])).toEqual([]);
@@ -87,9 +88,9 @@ describe("ReadSetIndex (STUDY-08 D9)", () => {
 
   test("an owner is reported once however many of its intervals and writes match", () => {
     const index = new ReadSetIndex<string>();
-    const all = { index: 0, lo: new Uint8Array(0), hi: OPEN_END };
-    index.set("a", [all, all, { index: 0, lo: Uint8Array.from([1]), hi: Uint8Array.from([2]) }]);
-    const w = { index: 0, key: Uint8Array.from([1]) };
+    const all = { index: "i0", lo: new Uint8Array(0), hi: OPEN_END };
+    index.set("a", [all, all, { index: "i0", lo: Uint8Array.from([1]), hi: Uint8Array.from([2]) }]);
+    const w = { index: "i0", key: Uint8Array.from([1]) };
     expect([
       ...index.matchingEntries([
         {
@@ -109,12 +110,12 @@ describe("ReadSetIndex (STUDY-08 D9)", () => {
     for (let i = 0; i < 500; i++)
       index.set(i, [
         {
-          index: 0,
+          index: "i0",
           lo: Uint8Array.from([i >> 8, i & 0xff]),
           hi: Uint8Array.from([(1000 - i) >> 8, (1000 - i) & 0xff]),
         },
       ]);
-    const at = (k: number) => [...index.matching([{ index: 0, key: Uint8Array.from([k >> 8, k & 0xff]) }])].length;
+    const at = (k: number) => [...index.matching([{ index: "i0", key: Uint8Array.from([k >> 8, k & 0xff]) }])].length;
     expect(at(500)).toBe(500);
     expect(at(100)).toBe(101); // owners 0..100
     expect(at(900)).toBe(100); // owners 0..99
@@ -127,7 +128,11 @@ describe("ReadSetIndex (STUDY-08 D9)", () => {
       for (let o = 0; o < 300; o++)
         index.set(
           o,
-          Array.from({ length: 1 + (o % 4) }, () => ({ index: o % 5, lo: Uint8Array.from([o % 7]), hi: OPEN_END })),
+          Array.from({ length: 1 + (o % 4) }, () => ({
+            index: `i${o % 5}`,
+            lo: Uint8Array.from([o % 7]),
+            hi: OPEN_END,
+          })),
         );
     expect(index.size).toBe(300);
     let expected = 0;

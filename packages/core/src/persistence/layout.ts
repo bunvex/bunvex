@@ -9,7 +9,7 @@
 // ("data migration in progress") unless the caller allows it, as Convex's readers and migration tools do.
 
 /** The layout every driver writes today. Bump it, with an upgrade, when a layout changes (PERSIST-01 C10). */
-export const LAYOUT_VERSION = 2;
+export const LAYOUT_VERSION = 3;
 
 /** The store was written with a layout this bunvex cannot read, or is not a bunvex store at all. */
 export class LayoutError extends Error {

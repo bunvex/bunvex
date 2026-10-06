@@ -73,12 +73,12 @@ test("the restore uses the checkpoint (not a scan), and drops tablets that no lo
   // A checkpoint that says more than the documents do, and knows a tablet the catalog does not.
   const c = (await p.getGlobal(TABLE_SUMMARY_GLOBAL)) as { tables: Record<string, any> };
   c.tables[tablet]!.totalSize = jsonInteger(fromJsonInteger(c.tables[tablet]!.totalSize) + 1000n);
-  c.tables[999_999] = c.tables[tablet];
+  c.tables["AAAAAAAAAAAAAAAAAAAAAA"] = c.tables[tablet];
   await p.setGlobal(TABLE_SUMMARY_GLOBAL, c);
   const e2 = await open(p);
   expect(e2.summariesRestored).toBe(true);
   expect(summaries(e2).t.size).toBe(expected.t.size + 1000);
-  expect(e2.tableSummaries.get(999_999).count).toBe(0);
+  expect(e2.tableSummaries.get("AAAAAAAAAAAAAAAAAAAAAA").count).toBe(0);
   await e2.close();
 });
 

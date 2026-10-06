@@ -28,7 +28,7 @@ const INDEXES = 4;
 const key = (k: number) => encodeKey([k]);
 const minTs = (xs: bigint[]) => xs.reduce((a, b) => (b < a ? b : a));
 const rand = (r: () => number, n: number) => BigInt(Math.floor(r() * n));
-type Entry = { ts: bigint; writes: { index: number; key: Uint8Array; id: string | null }[]; source?: string };
+type Entry = { ts: bigint; writes: { index: string; key: Uint8Array; id: string | null }[]; source?: string };
 type Internals = {
   validate(p: { snapshot: bigint; reads: Interval[] }): Conflict | OutOfRetentionError | null;
   byIndex: { writeCount: number; indexCount: number };
@@ -80,7 +80,8 @@ function expectSame(
   // …and Convex's choice.
   const pending = !want.some((c) => c.writeTs <= published);
   const side = pending ? want : want.filter((c) => c.writeTs <= published);
-  const index = Math.min(...side.map((c) => c.index as number));
+  // Index ids here are engine-only strings (`i1`…), which sort as strings (`compareInternalIds`).
+  const index = side.map((c) => c.index as string).sort()[0];
   expect(g.index, what).toBe(index);
   const inIndex = side.filter((c) => c.index === index);
   if (pending) {
@@ -93,7 +94,7 @@ function expectSame(
 function randomReads(r: () => number): Interval[] {
   const n = Math.floor(r() * 5); // 0..4 intervals, some on the same index, some overlapping
   return Array.from({ length: n }, () => {
-    const index = 1 + Math.floor(r() * INDEXES);
+    const index = `i${1 + Math.floor(r() * INDEXES)}`;
     const kind = r();
     if (kind < 0.35) {
       const k = key(Math.floor(r() * KEYS));
@@ -110,7 +111,7 @@ function randomCommitWrites(r: () => number): IndexWrite[] {
   const n = Math.floor(r() * 6); // 0..5 index-key writes
   return Array.from({ length: n }, () => {
     const k = Math.floor(r() * KEYS);
-    return { index: 1 + Math.floor(r() * INDEXES), key: key(k), id: r() < 0.25 ? null : `d${k}` };
+    return { index: `i${1 + Math.floor(r() * INDEXES)}`, key: key(k), id: r() < 0.25 ? null : `d${k}` };
   });
 }
 
@@ -229,10 +230,10 @@ describe("commit validation through the indexed write log (STUDY-06 D11)", () =>
     for (let t = 0; t < 2_000; t++) {
       const reads = randomReads(r);
       const sets = new Map(intervalSetsByIndex(reads));
-      expect([...sets.keys()]).toEqual([...sets.keys()].sort((a, b) => a - b));
+      expect([...sets.keys()]).toEqual([...sets.keys()].sort());
       for (const set of sets.values())
         for (let i = 1; i < set.lo.length; i++) expect(Buffer.compare(set.hi[i - 1], set.lo[i])).toBeLessThan(0);
-      for (let index = 1; index <= INDEXES; index++)
+      for (const index of Array.from({ length: INDEXES }, (_, i) => `i${i + 1}`))
         for (let k = 0; k <= KEYS; k++)
           for (const kk of [key(k), new Uint8Array([...key(k), 0])]) {
             const set = sets.get(index);

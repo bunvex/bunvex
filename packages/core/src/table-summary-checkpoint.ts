@@ -7,7 +7,7 @@
 // to the same counts and sizes. A checkpoint it cannot use — none, unreadable, ahead of the store, or outside
 // document retention — falls back to the scan (DV-318; Convex retries it forever, the summaries unavailable).
 import { outsideExecution } from "./determinism.ts";
-import type { DocLogRow, Persistence, RetentionStore } from "./persistence/index.ts";
+import type { DocLogRow, Persistence, RetentionStore, TabletId } from "./persistence/index.ts";
 import { fromJsonInteger, readTsGlobal } from "./persistence-globals.ts";
 import type { Doc } from "./schema.ts";
 import type { SummaryCheckpoint, TableSummaries } from "./table-summaries.ts";
@@ -34,7 +34,7 @@ export type SummaryCheckpointOptions = {
   random?: () => number;
 };
 
-type Store = Persistence & Pick<RetentionStore, "readDocumentLog" | "getGlobal" | "setGlobal">;
+type Store = Persistence & Pick<RetentionStore, "readDocumentLog">;
 
 /** Whether the store has what checkpoints need: the document log, versions and globals. */
 export function canCheckpoint(p: Persistence): p is Store {
@@ -55,7 +55,7 @@ export async function restoreSummaries(
   store: Store,
   summaries: TableSummaries,
   at: bigint,
-  tablets: Set<number>,
+  tablets: Set<TabletId>,
   decode: (json: string) => Doc,
 ): Promise<boolean> {
   const raw = (await store.getGlobal(TABLE_SUMMARY_GLOBAL)) as SummaryCheckpoint | null;
@@ -75,7 +75,7 @@ export async function restoreSummaries(
     return false;
   }
   // Every document the log changed after the checkpoint, by table.
-  const changed = new Map<number, Set<string>>();
+  const changed = new Map<TabletId, Set<string>>();
   for (let cursor = from; cursor < at; ) {
     const rows: DocLogRow[] = await store.readDocumentLog(cursor, at, LOG_PAGE);
     if (!rows.length) break;

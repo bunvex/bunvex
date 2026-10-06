@@ -9,6 +9,8 @@
 import type { Value } from "@bunvex/values";
 import { IndexesUnavailableError } from "./catalog.ts";
 import { OutOfRetentionError } from "./committer.ts";
+import { internalIdBytes } from "./internal-id.ts";
+import type { TabletId } from "./persistence/index.ts";
 import { fromJsonInteger, jsonInteger } from "./persistence-globals.ts";
 import type { Doc } from "./schema.ts";
 import {
@@ -52,7 +54,7 @@ export class TableSummariesUnavailableError extends IndexesUnavailableError {
 /** Convex's message for `count()` while the summaries bootstrap (`async_syscall.rs`, `count`). */
 const COUNT_UNAVAILABLE = "Table count unavailable while bootstrapping";
 
-type Write = { tablet: number; old: Doc | null; next: Doc | null };
+type Write = { tablet: TabletId; old: Doc | null; next: Doc | null };
 
 /** Shape changes waiting to be folded in: past this many, they are folded in the background. */
 const FOLD_AFTER = 1000;
@@ -61,7 +63,7 @@ const FOLD_AFTER = 1000;
 const NO_PIN = (1n << 63n) - 1n;
 
 export class TableSummaries {
-  private tables = new Map<number, { count: number; size: number; shape: Shape }>();
+  private tables = new Map<TabletId, { count: number; size: number; shape: Shape }>();
   /**
    * Each commit's documents, not yet in the shapes: counts and sizes are kept at once, shapes when asked
    * (or in the background), so a commit pays no more than Convex's (whose shapes only move at checkpoints).
@@ -80,7 +82,7 @@ export class TableSummaries {
    * The recent commits' count changes (STUDY-107), oldest first from `deltaHead`: a transaction counts at its
    * snapshot, as Convex's (whose count is its snapshot's summary), not at the latest commit.
    */
-  private deltas: { ts: bigint; tablet: number; d: number }[] = [];
+  private deltas: { ts: bigint; tablet: TabletId; d: number }[] = [];
   private deltaHead = 0;
   /** The build's snapshot: no count is known before it. */
   private builtFloor = 0n;
@@ -126,14 +128,14 @@ export class TableSummaries {
   }
 
   /** One table's summary (an empty one for a table with no documents). */
-  get(tablet: number): TableSummary {
+  get(tablet: TabletId): TableSummary {
     if (!this.ready) throw new TableSummariesUnavailableError();
     this.fold();
     return this.tables.get(tablet) ?? { count: 0, size: 0, shape: NEVER };
   }
 
   /** One table's count, without folding the shapes in (the commit path's cost). */
-  count(tablet: number): number {
+  count(tablet: TabletId): number {
     if (!this.ready) throw new TableSummariesUnavailableError();
     return this.tables.get(tablet)?.count ?? 0;
   }
@@ -143,7 +145,7 @@ export class TableSummaries {
    * since. Before the build, Convex's bootstrapping error. A snapshot no running transaction pinned and older
    * than the write log keeps is out of retention (a transaction begun there, as Convex refuses one).
    */
-  countAt(tablet: number, snapshot: bigint): number {
+  countAt(tablet: TabletId, snapshot: bigint): number {
     if (!this.ready || snapshot < this.builtFloor) throw new TableSummariesUnavailableError(COUNT_UNAVAILABLE);
     if (snapshot < this.droppedTs) throw new OutOfRetentionError(snapshot, this.droppedTs);
     let n = this.tables.get(tablet)?.count ?? 0;
@@ -235,13 +237,15 @@ export class TableSummaries {
    * The build from a checkpoint (STUDY-72): its summaries for the tablets that still exist, as of the build's
    * snapshot `at`; `replace` then moves each document the log changed since the checkpoint.
    */
-  restore(at: bigint, checkpoint: SummaryCheckpoint, tablets: Set<number>) {
-    const tables = new Map<number, { count: number; size: number; shape: Shape }>();
+  restore(at: bigint, checkpoint: SummaryCheckpoint, tablets: Set<TabletId>) {
+    const tables = new Map<TabletId, { count: number; size: number; shape: Shape }>();
     for (const [key, t] of Object.entries(checkpoint.tables)) {
-      const tablet = Number(key);
+      // Keyed by tablet, as Convex prints a `TabletId`.
+      const tablet: TabletId = key;
+      internalIdBytes(tablet);
       const size = Number(fromJsonInteger(t.totalSize));
       const shape = shapeFromJson(t.inferredTypeWithOptionalFields);
-      if (!Number.isSafeInteger(tablet) || !Number.isSafeInteger(size)) throw new Error("not a summary checkpoint");
+      if (!Number.isSafeInteger(size)) throw new Error("not a summary checkpoint");
       if (tablets.has(tablet) && shape.n > 0) tables.set(tablet, { count: shape.n, size, shape });
     }
     this.tables = tables;
@@ -251,7 +255,7 @@ export class TableSummaries {
   }
 
   /** A document's version at the checkpoint (`old`) replaced by its version at the build's snapshot. */
-  replace(tablet: number, old: Doc | null, next: Doc | null) {
+  replace(tablet: TabletId, old: Doc | null, next: Doc | null) {
     if (old || next) this.applyOne({ tablet, old, next });
   }
 
@@ -275,7 +279,7 @@ export class TableSummaries {
   }
 
   /** The build: every document of a tablet as of the build's snapshot `at`. */
-  build(at: bigint, tablet: number, docs: Iterable<Doc>) {
+  build(at: bigint, tablet: TabletId, docs: Iterable<Doc>) {
     this.builtAt = at;
     this.at = at;
     this.builtFloor = at;

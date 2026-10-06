@@ -545,14 +545,14 @@ export class SyncHub {
 
   private indexTables: {
     catalog: unknown;
-    map: Map<number, { table: string; name: string; fields: string[] }>;
+    map: Map<string, { table: string; name: string; fields: string[] }>;
   } | null = null;
 
   /** An index's table, name and key fields, by id (rebuilt when the catalog changes). */
-  indexOf(index: number): { table: string; name: string; fields: string[] } | undefined {
+  indexOf(index: string): { table: string; name: string; fields: string[] } | undefined {
     const catalog = this.deps.engine.catalog;
     if (this.indexTables?.catalog !== catalog) {
-      const map = new Map<number, { table: string; name: string; fields: string[] }>();
+      const map = new Map<string, { table: string; name: string; fields: string[] }>();
       for (const t of catalog.tables.values())
         for (const ix of [...t.indexes.values(), ...t.pending])
           map.set(ix.id, {

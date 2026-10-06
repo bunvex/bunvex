@@ -3,12 +3,13 @@
 // there. A random history (inserts, rewrites, deletes, re-inserts, another table with the same ids) is
 // checked against a reference model at random snapshots, with unknown and repeated ids, and against `get`.
 import { hasLease, type Persistence } from "@bunvex/core";
+import { tid } from "./ids.ts";
 import type { DriverModule } from "./index.ts";
 
 type Check = (ok: boolean, what: string) => void;
 
-const TABLE = 990;
-const OTHER = 991;
+const TABLE = tid(990);
+const OTHER = tid(991);
 const rnd = (n: number) => Math.floor(Math.random() * n);
 
 /** JSON with timestamps (`bigint`) as decimal strings. */
@@ -31,7 +32,7 @@ export async function versionChecks(mod: DriverModule, check: Check, log: (l: st
     const commits: bigint[] = [];
     for (let c = 0; c < 200; c++) {
       ts += BigInt(1 + rnd(50));
-      const docs: { table: number; id: string; json: string | null }[] = [];
+      const docs: { table: string; id: string; json: string | null }[] = [];
       const touched = new Set<string>();
       for (let w = 0; w < 1 + rnd(5); w++) {
         const table = Math.random() < 0.2 ? OTHER : TABLE;
@@ -50,7 +51,7 @@ export async function versionChecks(mod: DriverModule, check: Check, log: (l: st
       if (Math.random() < 0.3) await st.flush();
     }
     await st.flush();
-    const want = (table: number, id: string, at: bigint) => {
+    const want = (table: string, id: string, at: bigint) => {
       const vs = (history.get(`${table}:${id}`) ?? []).filter((v) => v.ts <= at);
       const v = vs[vs.length - 1];
       return v && v.json !== null ? { json: v.json, ts: v.ts } : null;

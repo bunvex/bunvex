@@ -42,6 +42,7 @@ import {
   type DocWrite,
   decodeLayoutVersion,
   groupLog,
+  type IndexId,
   type IndexPrune,
   type IndexWrite,
   LAYOUT_VERSION,
@@ -65,6 +66,7 @@ import {
   scanLatest,
   splitKey,
   splitPages,
+  type TabletId,
   UnsureCommitError,
   withTimeout,
 } from "@bunvex/core/persistence";
@@ -73,17 +75,17 @@ import { loadPeer } from "./peer.ts";
 import { explainTlsError, postgresTls, type TlsOptions } from "./tls.ts";
 
 // ts as a decimal string: the rows travel as JSON, which has no 64-bit integers.
-type DocRow = [number, string, string, string | null, boolean];
+type DocRow = [string, string, string, string | null, boolean];
 // index id, key_prefix, key_suffix (or null), key_suffix_hash, ts, deleted, document id — keys as hex
-type IdxRow = [number, string, string | null, string, string, boolean, string | null];
+type IdxRow = [string, string, string | null, string, string, boolean, string | null];
 const hex = (b: Uint8Array) => Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString("hex");
 
 const STORE = "this Postgres database";
 /** bunvex's columns, as information_schema names their types: how an unversioned store is recognised. */
 const COLUMNS = {
-  documents: ["table_id integer", "id text", "ts bigint", "json_value text", "deleted boolean"],
+  documents: ["table_id text", "id text", "ts bigint", "json_value text", "deleted boolean"],
   indexes: [
-    "index_id integer",
+    "index_id text",
     "key_prefix bytea",
     "key_suffix bytea",
     "key_suffix_hash bytea",
@@ -261,10 +263,10 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
           await tx.unsafe(`select pg_advisory_xact_lock(7236154418350)`); // any fixed key: "bunvex" bootstrap
           progress();
           await tx.unsafe(`
-          create table if not exists documents (table_id int not null, id text not null, ts bigint not null,
+          create table if not exists documents (table_id text not null, id text not null, ts bigint not null,
             json_value text, deleted boolean not null, primary key (table_id, id, ts));
           ${have.documents ? "" : "create index if not exists documents_by_ts on documents (ts); -- the document log (PERSIST-01 C12)"}
-          create table if not exists indexes (index_id int not null, key_prefix bytea not null, key_suffix bytea,
+          create table if not exists indexes (index_id text not null, key_prefix bytea not null, key_suffix bytea,
             key_suffix_hash bytea not null, ts bigint not null, deleted boolean not null, document_id text);
           -- (key, ts desc): an ascending scan reads each key's newest version first, straight off the index.
           create unique index if not exists indexes_by_key on indexes (index_id, key_prefix, key_suffix_hash, ts desc);
@@ -477,9 +479,9 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     // One jsonb parameter per statement, expanded server-side (postgres.js does not bind boolean[]/bytea[]
     // arrays for unnest). Keys travel as hex. At most 1 024 rows per statement, as Convex's
     // `INSERTS_PER_STATEMENT` (DV-62): a large commit is several statements of one transaction.
-    const docInsert = `insert into documents select (r->>0)::int, r->>1, (r->>2)::bigint, r->>3, (r->>4)::boolean
+    const docInsert = `insert into documents select r->>0, r->>1, (r->>2)::bigint, r->>3, (r->>4)::boolean
       from jsonb_array_elements($1::text::jsonb) r`;
-    const idxInsert = `insert into indexes select (r->>0)::int, decode(r->>1, 'hex'), decode(r->>2, 'hex'),
+    const idxInsert = `insert into indexes select r->>0, decode(r->>1, 'hex'), decode(r->>2, 'hex'),
       decode(r->>3, 'hex'), (r->>4)::bigint, (r->>5)::boolean, r->>6
       from jsonb_array_elements($1::text::jsonb) r`;
     // As Convex's `transact`: if the connection is lost before the transaction began, nothing was sent, and
@@ -526,7 +528,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
    * left. That order is the key order unless a key is longer than the prefix, so a result holding such a
    * key (or a bound that long) falls back to the paged, group-sorting scan.
    */
-  async scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
+  async scan(index: IndexId, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
     if (limit <= 0) return [];
     if (lo.length <= MAX_KEY_PREFIX_LEN && hi.length <= MAX_KEY_PREFIX_LEN) {
       const dir = desc ? "desc" : "asc";
@@ -545,7 +547,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     return scanLatest(splitPages(this.splitSource(index, ts, desc), desc), lo, hi, limit, desc);
   }
 
-  private splitSource(index: number, ts: bigint, desc: boolean) {
+  private splitSource(index: IndexId, ts: bigint, desc: boolean) {
     const dir = desc ? "desc" : "asc";
     const at = String(ts);
     const toRow = (r: any): SplitRow => ({
@@ -581,7 +583,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     };
   }
 
-  async get(table: number, id: string, ts: bigint) {
+  async get(table: TabletId, id: string, ts: bigint) {
     const [r] = await this.read((sql) =>
       sql.unsafe(
         `select json_value, deleted from documents where table_id = $1 and id = $2 and ts <= $3 order by ts desc limit 1`,
@@ -591,7 +593,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     return r && !r.deleted ? (r.json_value as string) : null;
   }
 
-  async getVersions(table: number, ids: string[], ts: bigint) {
+  async getVersions(table: TabletId, ids: string[], ts: bigint) {
     const found = new Map<string, { json: string | null; ts: bigint }>();
     const unique = [...new Set(ids)];
     for (let i = 0; i < unique.length; i += VERSIONS_CHUNK) {
@@ -608,8 +610,8 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
   }
 
   async scanDocs(
-    table: number,
-    index: number,
+    table: TabletId,
+    index: IndexId,
     lo: Uint8Array,
     hi: Uint8Array,
     ts: bigint,
@@ -688,7 +690,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     return groupLog(
       rows.map((r) => ({
         ts: BigInt(r.ts),
-        index: r.index_id as number,
+        index: r.index_id as string,
         key: r.key_suffix ? Buffer.concat([r.key_prefix, r.key_suffix]) : (r.key_prefix as Uint8Array),
         id: r.document_id as string | null,
       })),
@@ -716,7 +718,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
         { prepare: false },
       ),
     );
-    return rows.map((r) => ({ ts: BigInt(r.ts), table: r.table_id as number, id: r.id as string, deleted: r.deleted }));
+    return rows.map((r) => ({ ts: BigInt(r.ts), table: r.table_id as string, id: r.id as string, deleted: r.deleted }));
   }
 
   /** PERSIST-01 C13: one statement per batch, behind the epoch check (see the header). */
@@ -728,7 +730,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     });
     return this.fenced(
       `delete from indexes i using jsonb_array_elements($1::text::jsonb) r
-       where i.index_id = (r->>0)::int and i.key_prefix = decode(r->>1, 'hex')
+       where i.index_id = r->>0 and i.key_prefix = decode(r->>1, 'hex')
          and i.key_suffix_hash = decode(r->>2, 'hex') and i.ts <= (r->>3)::bigint`,
       rows,
     );
@@ -738,7 +740,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     if (!entries.length) return 0;
     return this.fenced(
       `delete from documents d using jsonb_array_elements($1::text::jsonb) r
-       where d.table_id = (r->>0)::int and d.id = r->>1 and d.ts <= (r->>2)::bigint`,
+       where d.table_id = r->>0 and d.id = r->>1 and d.ts <= (r->>2)::bigint`,
       entries.map((e) => [e.table, e.id, String(e.ts)]),
     );
   }
@@ -794,7 +796,7 @@ export class PostgresPersistence implements Persistence, ScanDocs, Lease, ReadOn
     return BigInt(r.m);
   }
 
-  async auditLiveDocs(table: number, ts: bigint) {
+  async auditLiveDocs(table: TabletId, ts: bigint) {
     const [r] = await this.read((sql) =>
       sql.unsafe(
         `select count(*)::int as n from (select distinct on (id) json_value from documents

@@ -9,12 +9,16 @@ import {
   aes128GcmSivOpen,
   aes128GcmSivSeal,
   type Caller,
+  compareInternalIds,
   DATA_SYNC_PROGRESS_TABLE,
   type Engine,
   hasRetention,
   insertAuditLogEvents,
+  internalIdBytes,
+  internalIdString,
   OutOfRetentionError,
   type TableDef,
+  type TabletId,
   type Tx,
 } from "@bunvex/core";
 import { decodeId, encodeId, fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
@@ -51,7 +55,7 @@ const expired = () =>
 
 // ---------------------------------------------------------------- the cursor (Convex's protobuf)
 
-type TabletRef = { tablet: number; component: string; table: string };
+type TabletRef = { tablet: TabletId; component: string; table: string };
 type InProgress = TabletRef & { currentId: string | null; docsSynced: number };
 export type DataSyncCursor = {
   /** Nanoseconds, as on the wire. */
@@ -129,15 +133,11 @@ function readProto(buf: Uint8Array): Map<number, (bigint | Uint8Array)[]> {
   return fields;
 }
 
-/** A bunvex tablet as Convex's 16-byte `TabletId` (big-endian). */
-const tabletBytes = (tablet: number) => {
-  const b = new Uint8Array(16);
-  new DataView(b.buffer).setBigUint64(8, BigInt(tablet));
-  return b;
-};
-const tabletOf = (b: Uint8Array) => {
+/** A tablet as Convex's 16-byte `TabletId`: its internal id's bytes. */
+const tabletBytes = (tablet: TabletId) => internalIdBytes(tablet);
+const tabletOf = (b: Uint8Array): TabletId => {
   if (b.length !== 16) throw new Error("bad tablet id");
-  return Number(new DataView(b.buffer, b.byteOffset, 16).getBigUint64(8));
+  return internalIdString(b);
 };
 
 function encodeTablet(t: TabletRef, extra?: (w: ProtoWriter) => void) {
@@ -362,7 +362,7 @@ export async function dataSyncPage(
 async function byIdPage(
   engine: Engine,
   c: DataSyncCursor,
-  byTablet: Map<number, Target>,
+  byTablet: Map<TabletId, Target>,
   values: DataSyncValue[],
   limits: DataSyncLimits,
 ): Promise<DataSyncCursor> {
@@ -414,7 +414,7 @@ async function tsPage(
   engine: Engine,
   c: DataSyncCursor,
   latest: bigint,
-  byTablet: Map<number, Target>,
+  byTablet: Map<TabletId, Target>,
   values: DataSyncValue[],
   limits: DataSyncLimits,
 ): Promise<DataSyncCursor> {
@@ -424,7 +424,7 @@ async function tsPage(
   if (c.syncedTs < (engine.retention?.minDocumentTs ?? 0n)) throw expired();
   const synced = new Set(c.synced.map((s) => s.tablet));
   const cur = c.current;
-  const captured = (tablet: number, id: string) =>
+  const captured = (tablet: TabletId, id: string) =>
     synced.has(tablet) ||
     (cur !== null && tablet === cur.tablet && cur.currentId !== null && compareIds(id, cur.currentId) <= 0);
   let after = c.syncedTs;
@@ -446,10 +446,10 @@ async function tsPage(
         (rowsRead >= limits.maxRowsRead || values.length >= limits.pageSize || bytes >= limits.pageBytes)
       )
         break outer;
-      commit.sort((a, b) => a.table - b.table || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      commit.sort((a, b) => compareInternalIds(a.table, b.table) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       const out: DataSyncValue[] = [];
       let commitBytes = 0;
-      const live = new Map<number, string[]>();
+      const live = new Map<TabletId, string[]>();
       for (const r of commit)
         if (!r.deleted && captured(r.table, r.id) && byTablet.has(r.table))
           live.set(r.table, [...(live.get(r.table) ?? []), r.id]);
@@ -519,7 +519,7 @@ type ProgressRow = { _id: string; syncId: string; lastUpdatedMs: number; state: 
 function progressState(engine: Engine, page: DataSyncPage): ProgressState {
   const c = page.cursor;
   if (c.current !== null) {
-    const count = (tablet: number) => engine.tableSummaries.count(tablet);
+    const count = (tablet: TabletId) => engine.tableSummaries.count(tablet);
     return {
       type: "Snapshotting",
       numTablesSynced: c.synced.length,

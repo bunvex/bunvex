@@ -22,7 +22,9 @@
 
 Two logical collections, Convex's shape:
 
-- **documents**: `(table_id, id, ts) → json | deleted`. Every version of every document, never updated
+- **documents**: `(table_id, id, ts) → json | deleted`. `table_id` is the table's tablet and `index_id` (below)
+  the index's id, Convex's: the internal ids of their `_tables` and `_index` rows (STUDY-133 §5.2), passed as
+  22-character base64url strings. Every version of every document, never updated
   in place.
 - **indexes**: `(index_id, key, ts) → document_id | deleted`. Every version of every index entry.
 
@@ -303,10 +305,13 @@ log; a driver that keeps its log apart from its rows (memory) may forget the log
 `getGlobal(key)` returns a JSON value or null; `setGlobal(key, value)` stores one, durable when it returns,
 and only for the lease holder (`LeaseLostError` otherwise). They are Convex's `persistence_globals`: SQL
 stores keep them in that table (with `layout_version`), MongoDB in a `persistence_globals` collection, the
-memory driver as records of its log. Retention keeps its windows and cursors there.
+memory driver as records of its log. Retention keeps its windows and cursors there, and every store keeps
+Convex's four bootstrap globals (`tables_table_id`, `index_table_id`, `tables_by_id`, `index_by_id`: JSON
+strings), from which a start finds the catalog (STUDY-133 §5.2).
 
-C12–C14 are optional in the interface (`hasRetention`; without them the engine keeps every version);
-required of the first-party drivers, which all implement them. Conformance K27–K29.
+C14 is required of every driver (the bootstrap needs it). C12–C13 are optional in the interface
+(`hasRetention`; without them the engine keeps every version); required of the first-party drivers, which all
+implement them. Conformance K27–K29.
 
 ## C15 — index references
 

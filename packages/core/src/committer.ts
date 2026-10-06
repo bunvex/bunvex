@@ -18,19 +18,19 @@
 import { monotonicNow, outsideExecution, wallClockNs } from "./determinism.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { compareKeys } from "./keyenc.ts";
-import type { DocWrite, IndexWrite, Persistence } from "./persistence/index.ts";
+import type { DocWrite, IndexId, IndexWrite, Persistence } from "./persistence/index.ts";
 import { type CommitSpans, detached } from "./tracing.ts";
 import { intervalSetsByIndex, WritesByIndex } from "./write-log-index.ts";
 import type { WriteThroughputLimiter } from "./write-throughput.ts";
 
-export type Interval = { index: number; lo: Uint8Array; hi: Uint8Array };
+export type Interval = { index: IndexId; lo: Uint8Array; hi: Uint8Array };
 /**
  * One commit in the write log: its index-key writes (`id` is the document whose entry it is, null for a
  * removed entry) and its write source (the mutation's name, when the caller gave one).
  */
 export type LogEntry = {
   ts: bigint;
-  writes: { index: number; key: Uint8Array; id: string | null }[];
+  writes: { index: IndexId; key: Uint8Array; id: string | null }[];
   source?: string;
   /** The documents a commit wrote into search indexes, before and after (STUDY-45 PR 3), for OCC. */
   searchDocs?: SearchDoc[];
@@ -38,13 +38,13 @@ export type LogEntry = {
 
 /** A written document as one search index sees it: its tokens and filter keys (a version: old or new). */
 export type SearchDoc = {
-  index: number;
+  index: IndexId;
   id: string;
   tokens: ReadonlySet<string>;
   filters: Readonly<Record<string, string>>;
 };
 /** A mutation's search: its index, its query terms (the last maybe a prefix) and its `eq` filters. */
-export type SearchRead = { index: number; terms: { term: string; prefix: boolean }[]; filters: [string, string][] };
+export type SearchRead = { index: IndexId; terms: { term: string; prefix: boolean }[]; filters: [string, string][] };
 
 /**
  * Convex's OCC rule for searches (`QueryReads::overlaps`, crates/search/src/query.rs): a written version
@@ -78,7 +78,7 @@ export function overlaps(writes: LogEntry["writes"], reads: Interval[]): boolean
  * wrote into its read-set (its ts, the index and document of the write, and its write source). Absent
  * fields are unknown, e.g. for a snapshot older than the write log.
  */
-export type Conflict = { writeTs: bigint; index?: number; id?: string | null; source?: string };
+export type Conflict = { writeTs: bigint; index?: IndexId; id?: string | null; source?: string };
 
 /**
  * Convex's write-log knobs (crates/common/src/knobs.rs `WRITE_LOG_MIN_RETENTION_SECS`,
@@ -280,7 +280,7 @@ type PendingCommit = {
    * Log-only writes (STUDY-45 PR 3): the synthetic keys of the search indexes, for the query cache and
    * subscriptions; never persisted.
    */
-  logExtra?: { index: number; key: Uint8Array; id: string | null }[];
+  logExtra?: { index: IndexId; key: Uint8Array; id: string | null }[];
   /** The search indexes' versions this commit writes, and the searches it read, for OCC. */
   searchDocs?: SearchDoc[];
   searchReads?: SearchRead[];

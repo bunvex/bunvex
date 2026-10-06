@@ -20,6 +20,7 @@ import {
   v,
 } from "@bunvex/values";
 import { encodeKey, type KeyValue } from "./keyenc.ts";
+import type { IndexId, TabletId } from "./persistence/index.ts";
 
 export type FieldValue = null | boolean | number | string;
 /** Flatten an intersection for display (Convex's `Expand`). */
@@ -32,7 +33,7 @@ export type Doc = { _id: string; _creationTime: number; [k: string]: unknown };
  * that enabled it while this process ran: a snapshot older than that must not read it (0: enabled at load).
  */
 export type IndexDef = {
-  id: number;
+  id: IndexId;
   table: string;
   name: string;
   fields: string[];
@@ -40,7 +41,7 @@ export type IndexDef = {
   staged?: boolean;
   readyTs?: bigint;
   /** The read of its `_index` document a query records (built on first use; never mutated). */
-  metaRead?: { index: number; lo: Uint8Array; hi: Uint8Array };
+  metaRead?: { index: IndexId; lo: Uint8Array; hi: Uint8Array };
 };
 /**
  * A resolved table: `id` is the persistence table id ("tablet"), `number` the Convex table number.
@@ -49,7 +50,7 @@ export type IndexDef = {
  * (Convex's `IndexRegistry` enabled / pending split, STUDY-29).
  */
 export type TableDef = {
-  id: number;
+  id: TabletId;
   number: number;
   name: string;
   /** Its `_tables` document's id: a transaction that uses the table reads it (STUDY-42 PR 2). */

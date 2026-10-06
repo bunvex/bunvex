@@ -7,6 +7,7 @@ import { type IndexedDoc, SegmentedTextIndex, type TextHit, type TextQuery, toke
 import { keyBytesLength, type Value } from "@bunvex/values";
 import { OutOfRetentionError, type SearchDoc } from "./committer.ts";
 import { encodeKey, prefixEnd } from "./keyenc.ts";
+import type { IndexId, TabletId } from "./persistence/index.ts";
 import { type Doc, fieldValue, type SearchIndexDef, type TableDef } from "./schema.ts";
 
 /** How long the log of recent changes is kept: transactions older than this cannot search (5 minutes). */
@@ -29,11 +30,11 @@ const filterReadKey = (field: string, key: string) =>
 const point = (k: Uint8Array) => ({ lo: k, hi: Uint8Array.of(...k, 0) });
 
 export function searchReadIntervals(
-  index: number,
+  index: IndexId,
   terms: { term: string; prefix: boolean }[],
   filters: [string, string][],
 ) {
-  const out: { index: number; lo: Uint8Array; hi: Uint8Array }[] = [];
+  const out: { index: IndexId; lo: Uint8Array; hi: Uint8Array }[] = [];
   for (const t of terms) {
     const k = termKey(t.term);
     out.push(t.prefix ? { index, lo: k, hi: prefixEnd(k) } : { index, ...point(k) });
@@ -43,10 +44,10 @@ export function searchReadIntervals(
 }
 
 export type SearchIndexEntry = {
-  /** The synthetic index id of its read-set keys (negative: never a real index). */
-  readIndex: number;
+  /** The synthetic index id of its read-set keys (`text:<n>`: never a real index's id). */
+  readIndex: IndexId;
   table: string;
-  tablet: number;
+  tablet: TabletId;
   name: string;
   def: SearchIndexDef;
   staged: boolean;
@@ -104,9 +105,9 @@ export class SearchIndexes {
     return [...this.entries.values()];
   }
   /** One synthetic id per (tablet, index), kept across rebuilds, so read-sets taken before still match. */
-  private readIds = new Map<string, number>();
+  private readIds = new Map<string, IndexId>();
 
-  private static key = (tablet: number, name: string) => `${tablet}\u0000${name}`;
+  private static key = (tablet: TabletId, name: string) => `${tablet}\u0000${name}`;
 
   get(t: TableDef, name: string): SearchIndexEntry | undefined {
     return this.entries.get(SearchIndexes.key(t.id, name));
@@ -116,10 +117,10 @@ export class SearchIndexes {
    * The indexes of one table. Every write asks (the usage meter, the commit's index maintenance), so they are
    * grouped when the set changes, not filtered on each call; a table without any shares one empty list.
    */
-  forTablet(tablet: number): readonly SearchIndexEntry[] {
+  forTablet(tablet: TabletId): readonly SearchIndexEntry[] {
     return this.byTablet.get(tablet) ?? NONE;
   }
-  private byTablet = new Map<number, SearchIndexEntry[]>();
+  private byTablet = new Map<TabletId, SearchIndexEntry[]>();
 
   /**
    * Make the set of indexes the declared ones of the active tables; returns the new ones, to backfill.
@@ -145,7 +146,7 @@ export class SearchIndexes {
       }
       let readIndex = this.readIds.get(k);
       if (readIndex === undefined) {
-        readIndex = -(this.readIds.size + 1);
+        readIndex = `text:${this.readIds.size + 1}`;
         this.readIds.set(k, readIndex);
       }
       const e: SearchIndexEntry = {
@@ -208,7 +209,7 @@ export class SearchIndexes {
    */
   commitWrites(writes: Iterable<{ table: TableDef; id: string; old: Doc | null; next: Doc | null }>) {
     const docs: SearchDoc[] = [];
-    const keys: { index: number; key: Uint8Array; id: string | null }[] = [];
+    const keys: { index: IndexId; key: Uint8Array; id: string | null }[] = [];
     const indexed = new Map<SearchIndexEntry, Map<string, IndexedDoc>>();
     for (const w of writes)
       for (const e of this.forTablet(w.table.id)) {

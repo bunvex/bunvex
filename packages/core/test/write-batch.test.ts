@@ -58,8 +58,8 @@ function commitOf(n: number, size: number) {
   const idx: IndexWrite[] = [];
   for (let i = 0; i < n; i++) {
     const id = `d${seq++}`;
-    docs.push({ table: 1, id, json: JSON.stringify({ id, pad: "x".repeat(size) }) });
-    idx.push({ index: 1, key: encodeKey([id]), id });
+    docs.push({ table: "t1", id, json: JSON.stringify({ id, pad: "x".repeat(size) }) });
+    idx.push({ index: "ix1", key: encodeKey([id]), id });
   }
   return { snapshot: 0n, reads: [], docs, idx };
 }
@@ -110,7 +110,7 @@ describe("bounded flushes (DV-62, Convex's write batcher)", () => {
     expect(flushes.map((f) => f.ts.length)).toEqual([2, 1]);
     expect(flushes[0].docs).toBe(501);
     expect(flushes[1].ts).toEqual([afterTs]);
-    for (const d of huge.docs) expect(inner.get(1, d.id, hugeTs)).not.toBeNull();
+    for (const d of huge.docs) expect(inner.get("t1", d.id, hugeTs)).not.toBeNull();
   });
 
   test("custom caps (the engine's writeBatch option)", async () => {

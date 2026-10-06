@@ -24,7 +24,7 @@ export type InvalidationRecord = {
   /** The mutation (or system writer) that committed, when it gave its name. */
   source: string | null;
   /** The first write of the commit inside the key's reads: its index and full index key. */
-  index: number;
+  index: string;
   key: Uint8Array;
   /** ms from the match until a transition carried the new result; null until then. */
   sentAfterMs: number | null;
@@ -75,7 +75,7 @@ export class SyncInspector {
     execKey: string,
     commitTs: bigint,
     source: string | undefined,
-    write: { index: number; key: Uint8Array },
+    write: { index: string; key: Uint8Array },
   ) {
     const r: InvalidationRecord = {
       kind: "invalidation",

@@ -288,6 +288,6 @@ async function readState(e: Engine) {
     async (db: { query(t: string): { collect(): Promise<unknown> } }) => db.query(INDEX_TABLE).collect(),
     true,
   )) as Record<string, unknown>[];
-  const row = rows.find((r) => r.name === "by_n");
+  const row = rows.find((r) => r.descriptor === "by_n");
   return row && indexMeta(row).state;
 }

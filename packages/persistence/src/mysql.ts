@@ -41,6 +41,7 @@ import {
   type DocWrite,
   decodeLayoutVersion,
   groupLog,
+  type IndexId,
   type IndexPrune,
   type IndexWrite,
   LAYOUT_VERSION,
@@ -63,6 +64,7 @@ import {
   scanLatest,
   splitKey,
   splitPages,
+  type TabletId,
   UnsureCommitError,
   withTimeout,
 } from "@bunvex/core/persistence";
@@ -70,8 +72,8 @@ import type * as mysqlDriver from "mysql2/promise";
 import { loadPeer } from "./peer.ts";
 import { explainTlsError, mysqlTls, type TlsOptions } from "./tls.ts";
 
-type DocRow = [number, string, bigint, string | null, boolean];
-type IdxRow = [number, Buffer, Buffer | null, Buffer, bigint, boolean, string | null];
+type DocRow = [string, string, bigint, string | null, boolean];
+type IdxRow = [string, Buffer, Buffer | null, Buffer, bigint, boolean, string | null];
 /** A row's bytes in the INSERT's SQL text, bounded above: a string character is at most 3 UTF-8 bytes (an
  *  escaped one 2), a buffer is sent as X'hex' (2 per byte), plus the numbers, quotes and separators. */
 const docRowBytes = (r: DocRow) => 64 + 3 * r[1].length + (r[3] === null ? 0 : 3 * r[3].length);
@@ -89,9 +91,9 @@ const drop = (c: Conn) => {
 const STORE = "this MySQL database";
 /** bunvex's columns, as information_schema names their types: how an unversioned store is recognised. */
 const COLUMNS = {
-  documents: ["table_id int", "id varchar", "ts bigint", "json_value mediumtext", "deleted tinyint"],
+  documents: ["table_id varchar", "id varchar", "ts bigint", "json_value mediumtext", "deleted tinyint"],
   indexes: [
-    "index_id int",
+    "index_id varchar",
     "key_prefix varbinary",
     "key_suffix longblob",
     "key_suffix_hash varbinary",
@@ -293,11 +295,11 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
       try {
         await c.query(`select get_lock('bunvex_bootstrap', 10)`);
         progress();
-        await c.query(`create table if not exists documents (table_id int not null, id varchar(64) not null,
+        await c.query(`create table if not exists documents (table_id varchar(32) not null, id varchar(64) not null,
           ts bigint not null, json_value mediumtext, deleted boolean not null, primary key (table_id, id, ts),
           key documents_by_ts (ts))`); // the document log (PERSIST-01 C12)
         progress();
-        await c.query(`create table if not exists indexes (index_id int not null, key_prefix varbinary(2500) not null,
+        await c.query(`create table if not exists indexes (index_id varchar(32) not null, key_prefix varbinary(2500) not null,
           key_suffix longblob, key_suffix_hash varbinary(32) not null, ts bigint not null, deleted boolean not null,
           document_id varchar(64), primary key (index_id, key_prefix, key_suffix_hash, ts desc),
           key indexes_by_ts (ts))`); // the ts index: the log by ts (PERSIST-01 C11)
@@ -570,7 +572,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     });
   }
 
-  private latestEntries(index: number, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
+  private latestEntries(index: IndexId, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
     const dir = desc ? "desc" : "asc";
     const toRow = (r: any): SplitRow => ({
       prefix: r.key_prefix as Uint8Array, // a Buffer is a Uint8Array: no copy
@@ -614,11 +616,11 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     );
   }
 
-  scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
+  scan(index: IndexId, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
     return this.latestEntries(index, lo, hi, ts, limit, desc);
   }
 
-  async get(table: number, id: string, ts: bigint) {
+  async get(table: TabletId, id: string, ts: bigint) {
     const [rows] = (await this.read((c) =>
       c.execute(
         `select json_value, deleted from documents where table_id = ? and id = ? and ts <= ? order by ts desc limit 1`,
@@ -629,7 +631,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     return r && !r.deleted ? (r.json_value as string) : null;
   }
 
-  async getVersions(table: number, ids: string[], ts: bigint) {
+  async getVersions(table: TabletId, ids: string[], ts: bigint) {
     const found = new Map<string, { json: string | null; ts: bigint }>();
     const unique = [...new Set(ids)];
     for (let i = 0; i < unique.length; i += VERSIONS_CHUNK) {
@@ -649,8 +651,8 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
   }
 
   async scanDocs(
-    table: number,
-    index: number,
+    table: TabletId,
+    index: IndexId,
     lo: Uint8Array,
     hi: Uint8Array,
     ts: bigint,
@@ -705,7 +707,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     return groupLog(
       (rows as any[]).map((r) => ({
         ts: BigInt(r.ts),
-        index: r.index_id as number,
+        index: r.index_id as string,
         key: r.key_suffix ? Buffer.concat([r.key_prefix, r.key_suffix]) : (r.key_prefix as Uint8Array),
         id: r.document_id as string | null,
       })),
@@ -728,7 +730,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     )) as any;
     return (rows as any[]).map((r) => ({
       ts: BigInt(r.ts),
-      table: r.table_id as number,
+      table: r.table_id as string,
       id: r.id as string,
       deleted: !!r.deleted,
     }));
@@ -745,7 +747,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     if (!entries.length) return 0;
     await this.assertEpoch();
     // We implicitly delete everything below each ts, so only the highest per key matters (Convex's v5).
-    const top = new Map<string, { index: number; prefix: Buffer; hash: Buffer; ts: bigint }>();
+    const top = new Map<string, { index: IndexId; prefix: Buffer; hash: Buffer; ts: bigint }>();
     for (const e of entries) {
       const k = splitKey(e.key);
       const prefix = Buffer.from(k.prefix);
@@ -827,7 +829,7 @@ export class MysqlPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     return BigInt(rows[0].m);
   }
 
-  async auditLiveDocs(table: number, ts: bigint) {
+  async auditLiveDocs(table: TabletId, ts: bigint) {
     const [rows] = (await this.read((c) =>
       c.query(
         `select count(*) as n from (select json_value, row_number() over (partition by id order by ts desc) rn

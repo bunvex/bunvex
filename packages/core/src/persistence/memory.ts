@@ -18,6 +18,7 @@ import type {
   DocLogRow,
   DocPrune,
   DocWrite,
+  IndexId,
   IndexPrune,
   IndexWrite,
   Lease,
@@ -25,6 +26,7 @@ import type {
   LogCommit,
   Persistence,
   RetentionStore,
+  TabletId,
 } from "./index.ts";
 import { LeaseLostError } from "./index.ts";
 import {
@@ -106,7 +108,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   private lock: ProcessLock | null = null;
   private logPath: string | null = null;
   private docs = new Map<string, Version<string | null>[]>(); // `${table}:${id}` → versions
-  private indexes = new Map<number, BTree<Uint8Array, Version<string | null>[]>>();
+  private indexes = new Map<IndexId, BTree<Uint8Array, Version<string | null>[]>>();
   private fh: FileHandle | null = null;
   private pending: Buffer[] = [];
   /** A flush's write in flight (setGlobal appends after it). */
@@ -251,7 +253,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       let rec: {
         ts: string;
         docs: DocWrite[];
-        idx: [number, string, string | null][];
+        idx: [IndexId, string, string | null][];
         layout?: unknown;
         global?: string;
         value?: unknown;
@@ -295,7 +297,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return this.lastTs;
   }
 
-  auditLiveDocs(table: number, ts: bigint) {
+  auditLiveDocs(table: TabletId, ts: bigint) {
     let n = 0;
     const seq = this.seqAt(ts);
     for (const [k, vs] of this.docs) if (k.startsWith(`${table}:`) && visible(vs, seq)?.v != null) n++;
@@ -310,7 +312,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return { docs, idx };
   }
 
-  private tree(index: number) {
+  private tree(index: IndexId) {
     let t = this.indexes.get(index);
     if (!t) {
       t = new BTree<Uint8Array, Version<string | null>[]>(undefined, compareKeys);
@@ -477,7 +479,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     }
   }
 
-  scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
+  scan(index: IndexId, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
     const t = this.indexes.get(index);
     const out: string[] = [];
     if (!t || limit <= 0) return out;
@@ -500,11 +502,11 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return out;
   }
 
-  get(table: number, id: string, ts: bigint) {
+  get(table: TabletId, id: string, ts: bigint) {
     return visible(this.docs.get(`${table}:${id}`), this.seqAt(ts))?.v ?? null;
   }
 
-  getVersions(table: number, ids: string[], ts: bigint) {
+  getVersions(table: TabletId, ids: string[], ts: bigint) {
     const seq = this.seqAt(ts);
     return ids.map((id) => {
       const v = visible(this.docs.get(`${table}:${id}`), seq);

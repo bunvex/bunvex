@@ -8,16 +8,17 @@
 //   K31 one id in two tables is two documents: `get`, `scan` and `scanDocs` each answer with their own
 //       table's document.
 import { encodeKey, hasLease, type Persistence, type ScanDocs } from "@bunvex/core";
+import { tid } from "./ids.ts";
 import type { DriverModule } from "./index.ts";
 
 type Check = (ok: boolean, what: string) => void;
 
-const TABLE = 980;
-const INDEX = 980;
-const TABLE_A = 981;
-const TABLE_B = 982;
-const INDEX_A = 981;
-const INDEX_B = 982;
+const TABLE = tid(980);
+const INDEX = tid(980);
+const TABLE_A = tid(981);
+const TABLE_B = tid(982);
+const INDEX_A = tid(981);
+const INDEX_B = tid(982);
 const FULL_LO = new Uint8Array(0);
 const FULL_HI = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
 const MAX = (1n << 63n) - 1n;

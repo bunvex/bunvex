@@ -46,6 +46,7 @@ import {
   type DocPrune,
   type DocWrite,
   groupLog,
+  type IndexId,
   type IndexPrune,
   type IndexWrite,
   LAYOUT_VERSION,
@@ -65,6 +66,7 @@ import {
   retryOnce,
   type ScanDocs,
   scanLatest,
+  type TabletId,
   UnsureCommitError,
   withTimeout,
 } from "@bunvex/core/persistence";
@@ -72,8 +74,8 @@ import type { Collection, Db, MongoClient } from "mongodb";
 import { loadPeer } from "./peer.ts";
 
 // Timestamps are int64s (nanoseconds, above 2^53): the client decodes them as `bigint` (`useBigInt64`).
-type DocRow = { t: number; i: string; ts: bigint; j: string | null };
-type IdxRow = { x: number; k: string; ts: bigint; d: string | null };
+type DocRow = { t: TabletId; i: string; ts: bigint; j: string | null };
+type IdxRow = { x: IndexId; k: string; ts: bigint; d: string | null };
 const maxTs = (a: bigint, b: bigint) => (a > b ? a : b);
 
 const hex = (k: Uint8Array) => Buffer.from(k).toString("hex");
@@ -482,9 +484,10 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
             // concurrent takeover makes this a write conflict (retried by withTransaction, then refused here).
             // It also refuses a group that is there already (maxTs reached its top under our epoch): an earlier
             // attempt's COMMIT that landed after the lease read above (STUDY-25 L4; MongoDB has no unique key
-            // on the rows to refuse it).
+            // on the rows to refuse it). The bootstrap writes at ts 0 (STUDY-133 §5.2), which a new store's
+            // lease already records.
             const f = await this.meta.updateOne(
-              { _id: "lease", epoch: this.epoch, maxTs: { $lt: top } },
+              { _id: "lease", epoch: this.epoch, maxTs: top === 0n ? { $lte: 0n } : { $lt: top } },
               { $set: { maxTs: top } },
               { session },
             );
@@ -515,7 +518,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     await session.endSession();
   }
 
-  private latest(index: number, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
+  private latest(index: IndexId, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
     return scanLatest(
       async (p) => {
         const rows = await this.read(() =>
@@ -541,18 +544,18 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     );
   }
 
-  scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
+  scan(index: IndexId, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
     return this.latest(index, lo, hi, ts, limit, desc);
   }
 
-  async get(table: number, id: string, ts: bigint) {
+  async get(table: TabletId, id: string, ts: bigint) {
     const r = await this.read(() =>
       this.docs.findOne({ t: table, i: id, ts: { $lte: ts } }, { sort: { ts: -1 }, projection: { j: 1 } }),
     );
     return r ? r.j : null;
   }
 
-  async getVersions(table: number, ids: string[], ts: bigint) {
+  async getVersions(table: TabletId, ids: string[], ts: bigint) {
     const found = new Map<string, { json: string | null; ts: bigint }>();
     const unique = [...new Set(ids)];
     for (let i = 0; i < unique.length; i += VERSIONS_CHUNK) {
@@ -571,8 +574,8 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
   }
 
   async scanDocs(
-    table: number,
-    index: number,
+    table: TabletId,
+    index: IndexId,
     lo: Uint8Array,
     hi: Uint8Array,
     ts: bigint,
@@ -748,7 +751,7 @@ export class MongoPersistence implements Persistence, ScanDocs, Lease, ReadOnlyF
     });
   }
 
-  async auditLiveDocs(table: number, ts: bigint) {
+  async auditLiveDocs(table: TabletId, ts: bigint) {
     const [r] = await this.read(() =>
       this.docs
         .aggregate<{ n: number }>([

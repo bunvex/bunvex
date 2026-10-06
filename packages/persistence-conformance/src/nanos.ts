@@ -3,14 +3,15 @@
 // Linux-written Convex store has them) stay two distinct, ordered commits through a reopen: `maxTs`, `get`,
 // `getVersions`, `scan`, `readLog` and `readDocumentLog` all see the exact values.
 import { encodeKey, hasLease, hasRetention, type Persistence } from "@bunvex/core";
+import { tid } from "./ids.ts";
 import type { DriverModule } from "./index.ts";
 
 type Check = (ok: boolean, what: string) => void;
 
 const FULL_LO = new Uint8Array(0);
 const FULL_HI = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
-const TABLE = 995;
-const INDEX = 996;
+const TABLE = tid(995);
+const INDEX = tid(996);
 /** Real nanoseconds (2026-10-06), far above 2^53, with a sub-microsecond part. */
 const T1 = 1_791_292_886_001_695_123n;
 const T2 = T1 + 1n;

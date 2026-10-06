@@ -18,7 +18,7 @@ function losing(p: Persistence, lost: { id: string | null }, onLost = () => {}):
   return new Proxy(p, {
     get(target, prop) {
       if (prop === "get")
-        return (table: number, id: string, ts: bigint) => {
+        return (table: string, id: string, ts: bigint) => {
           if (id !== lost.id) return target.get(table, id, ts);
           onLost();
           return null;

@@ -10,9 +10,10 @@
 
 import type { Interval, LogEntry } from "./committer.ts";
 import { compareKeys } from "./keyenc.ts";
+import type { IndexId } from "./persistence/index.ts";
 
 type Node<K> = {
-  index: number;
+  index: IndexId;
   lo: Uint8Array;
   hi: Uint8Array;
   owner: K;
@@ -27,10 +28,10 @@ type Node<K> = {
 };
 
 /** A point written into an index: what a commit's log entry carries per write. */
-export type IndexPoint = { index: number; key: Uint8Array };
+export type IndexPoint = { index: IndexId; key: Uint8Array };
 
 export class ReadSetIndex<K> {
-  private trees = new Map<number, Node<K>>();
+  private trees = new Map<IndexId, Node<K>>();
   private owners = new Map<K, Node<K>[]>();
   private nextSeq = 0;
   private intervals = 0;

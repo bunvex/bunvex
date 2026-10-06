@@ -3,6 +3,7 @@
 // write set and the ts of the commit before it (`prevTs`), so a reader can detect a gap even though
 // timestamps are sparse.
 import { Engine, encodeKey, hasLease, type IndexWrite, type LogCommit, type Persistence } from "@bunvex/core";
+import { tid } from "./ids.ts";
 import type { DriverModule } from "./index.ts";
 import { insertItem, newEngine, schemaWithAmount } from "./workload.ts";
 
@@ -81,7 +82,7 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
       const writes: IndexWrite[] = [];
       const used = new Set<string>();
       for (let w = 0; w < 1 + rnd(5); w++) {
-        const index = 960 + rnd(2);
+        const index = tid(960 + rnd(2));
         const key = keyPool[rnd(keyPool.length)];
         const u = `${index}:${hex(key)}`;
         if (used.has(u)) continue;
@@ -93,7 +94,7 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
       const docsToo = Math.random() < 0.7;
       if (!docsToo) indexOnly++;
       const docs = docsToo
-        ? writes.map((w, i) => ({ table: 960, id: w.id ?? `gone${c}-${i}`, json: w.id ? `{"c":${c}}` : null }))
+        ? writes.map((w, i) => ({ table: tid(960), id: w.id ?? `gone${c}-${i}`, json: w.id ? `{"c":${c}}` : null }))
         : [];
       st.apply(ts, docs, writes);
       model.push({ ts, writes });
@@ -165,8 +166,8 @@ export async function logChecks(mod: DriverModule, check: Check, log: (l: string
     let t = last;
     for (let i = 0; i < 3; i++) {
       t += 10n;
-      const writes = [{ index: 960, key: encodeKey([`pending${i}`]), id: `p${i}` }];
-      st.apply(t, [{ table: 960, id: `p${i}`, json: "{}" }], writes);
+      const writes = [{ index: tid(960), key: encodeKey([`pending${i}`]), id: `p${i}` }];
+      st.apply(t, [{ table: tid(960), id: `p${i}`, json: "{}" }], writes);
       pending.push({ ts: t, writes });
     }
     const before = await read(st, last, MAX, 100);

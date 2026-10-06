@@ -11,6 +11,7 @@
 // LISTENERS (throughput: that many no-op commit listeners, as the server registers about 8; default 0).
 import { encodeKey, type IndexWrite, type Persistence } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
+import { tid } from "./ids.ts";
 
 const W = Number(process.env.W ?? 64);
 const SECS = Number(process.env.SECS ?? 10);
@@ -34,11 +35,11 @@ function itemWrite(tenant: string, createdAt: number) {
   const id = crypto.randomUUID();
   const json = JSON.stringify({ tenantId: tenant, title: "new item", status: "open", amount: 42, createdAt });
   const idx: IndexWrite[] = [
-    { index: 1, key: encodeKey([id]), id },
-    { index: 2, key: encodeKey([tenant, createdAt, id]), id },
-    { index: 3, key: encodeKey([createdAt, id]), id },
+    { index: tid(1), key: encodeKey([id]), id },
+    { index: tid(2), key: encodeKey([tenant, createdAt, id]), id },
+    { index: tid(3), key: encodeKey([createdAt, id]), id },
   ];
-  return { docs: [{ table: 1, id, json }], idx };
+  return { docs: [{ table: tid(1), id, json }], idx };
 }
 
 type Stats = { logLength?: number; logBytes?: number; outOfRetention?: number; conflicts: number; groups: number };
@@ -116,11 +117,11 @@ async function lag() {
       if (snap === undefined) continue;
       const name = `lagged${n++}`;
       const k = encodeKey([name]);
-      const reads = [{ index: 9, lo: k, hi: encodeKey([`${name}\u0000`]) }];
+      const reads = [{ index: tid(9), lo: k, hi: encodeKey([`${name}\u0000`]) }];
       attempts++;
       const t = performance.now();
       try {
-        await c.commit({ snapshot: snap, reads, docs: [], idx: [{ index: 9, key: k, id: `l${n}` }] });
+        await c.commit({ snapshot: snap, reads, docs: [], idx: [{ index: tid(9), key: k, id: `l${n}` }] });
       } catch {
         failed++;
       }

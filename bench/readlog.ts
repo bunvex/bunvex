@@ -10,6 +10,7 @@ import { encodeKey, type Persistence } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { insertItem, newEngine } from "../packages/persistence-conformance/src/workload.ts";
+import { tid } from "./ids.ts";
 
 const mode = process.argv[2] ?? "write";
 const drivers = (process.argv[3] ?? "sqlite,postgres").split(",");
@@ -158,11 +159,11 @@ async function catchup(name: string) {
     const id = `d${c}`;
     st.apply(
       ts,
-      [{ table: 1, id, json: `{"c":${c},"title":"an item","amount":42}` }],
+      [{ table: tid(1), id, json: `{"c":${c},"title":"an item","amount":42}` }],
       [
-        { index: 1, key: encodeKey([id]), id },
-        { index: 2, key: encodeKey([ts, id]), id },
-        { index: 3, key: encodeKey([`t${c % 16}`, ts, id]), id },
+        { index: tid(1), key: encodeKey([id]), id },
+        { index: tid(2), key: encodeKey([ts, id]), id },
+        { index: tid(3), key: encodeKey([`t${c % 16}`, ts, id]), id },
       ],
     );
     if (c % 200 === 199) await st.flush();

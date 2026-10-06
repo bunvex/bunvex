@@ -158,7 +158,7 @@ describe("retention", () => {
     });
     const get = p.get.bind(p);
     let held = false;
-    p.get = ((table: number, docId: string, ts: bigint) => {
+    p.get = ((table: string, docId: string, ts: bigint) => {
       if (docId !== id || held) return get(table, docId, ts);
       held = true;
       entered();

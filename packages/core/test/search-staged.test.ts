@@ -65,8 +65,8 @@ async function states(e: Engine) {
     db.asSystem(() =>
       (db as unknown as { query(t: string): { collect(): Promise<unknown[]> } }).query("_index").collect(),
     ),
-  )) as { name: string; config?: { onDiskState: Record<string, unknown> } }[];
-  return Object.fromEntries(rows.filter((r) => r.config).map((r) => [r.name, r.config!.onDiskState]));
+  )) as { descriptor: string; config?: { onDiskState: Record<string, unknown> } }[];
+  return Object.fromEntries(rows.filter((r) => r.config).map((r) => [r.descriptor, r.config!.onDiskState]));
 }
 
 test("a staged index is built and kept Backfilled { staged }; un-staging it enables it at once", async () => {

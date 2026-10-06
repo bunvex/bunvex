@@ -15,6 +15,7 @@
 import type { Catalog } from "./catalog.ts";
 import { ENVIRONMENT_VARIABLES_TABLE } from "./catalog.ts";
 import type { Committer } from "./committer.ts";
+import type { IndexId } from "./persistence/index.ts";
 import { compileRange, type Tx } from "./tx.ts";
 
 export const ENV_VAR_NAME_MAX_LENGTH = 256;
@@ -106,7 +107,7 @@ export class EnvironmentVariables {
   }
 
   /** Each name's read interval, built once (bounded: names come from code, but not trusted to be few). */
-  private intervals = new Map<string, { index: number; lo: Uint8Array; hi: Uint8Array }>();
+  private intervals = new Map<string, { index: IndexId; lo: Uint8Array; hi: Uint8Array }>();
 
   /** Record that `db` read the variable `name` (set or not): a change to it invalidates the read. */
   recordRead(db: Tx, name: string) {

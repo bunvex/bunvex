@@ -15,6 +15,7 @@ import {
   type Persistence,
   type RetentionStore,
 } from "@bunvex/core";
+import { tid } from "./ids.ts";
 import type { DriverModule } from "./index.ts";
 
 type Check = (ok: boolean, what: string) => void;
@@ -27,21 +28,21 @@ const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 /** Deep equality by JSON, timestamps (`bigint`) as decimal strings. */
 const json = (x: unknown) => JSON.stringify(x, (_k, v) => (typeof v === "bigint" ? String(v) : v));
 const same = (a: unknown, b: unknown) => json(a) === json(b);
-const TABLE = 970;
-const BY_ID = 970;
-const BY_VAL = 971;
-const BACKFILL = 972;
+const TABLE = tid(970);
+const BY_ID = tid(970);
+const BY_VAL = tid(971);
+const BACKFILL = tid(972);
 const FULL_LO = new Uint8Array(0);
 const FULL_HI = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
 
 type DocRow = { ts: bigint; id: string; deleted: boolean };
-type IdxRow = { ts: bigint; index: number; key: Uint8Array; deleted: boolean };
+type IdxRow = { ts: bigint; index: string; key: Uint8Array; deleted: boolean };
 
 /** What retention deletes for the rows of the log at or below the window: a live row supersedes the
  *  versions below it; a tombstone takes itself too. */
-const indexPrunes = (rows: { ts: bigint; index: number; key: Uint8Array; deleted: boolean }[]): IndexPrune[] =>
+const indexPrunes = (rows: { ts: bigint; index: string; key: Uint8Array; deleted: boolean }[]): IndexPrune[] =>
   rows.map((r) => ({ index: r.index, key: r.key, ts: r.deleted ? r.ts : r.ts - 1n }));
-const docPrunes = (rows: { ts: bigint; table: number; id: string; deleted: boolean }[]): DocPrune[] =>
+const docPrunes = (rows: { ts: bigint; table: string; id: string; deleted: boolean }[]): DocPrune[] =>
   rows.map((r) => ({ table: r.table, id: r.id, ts: r.deleted ? r.ts : r.ts - 1n }));
 
 /** Rows that must remain after pruning at `w`: everything above it, and each key's newest row at or below
@@ -91,7 +92,7 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
     const group = 1 + rnd(6);
     for (let g = 0; g < group && c < 400; g++, c++) {
       ts += BigInt(1 + (Math.random() < 0.3 ? 0 : rnd(3000)));
-      const docs: { table: number; id: string; json: string | null }[] = [];
+      const docs: { table: string; id: string; json: string | null }[] = [];
       const idx: IndexWrite[] = [];
       if (Math.random() < 0.1) {
         for (const id of ids.filter(() => Math.random() < 0.2)) idx.push({ index: BACKFILL, key: kId(id), id });
@@ -142,7 +143,7 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
   const docLog = async (s: Store, a: bigint, b: bigint, n: number) =>
     (await s.readDocumentLog(a, b, n)).map((r) => ({ ts: r.ts, id: r.id, deleted: r.deleted, t: r.table }));
   const expectDocLog = (a: bigint, b: bigint, n: number) => {
-    const out: { ts: bigint; id: string; deleted: boolean; t: number }[] = [];
+    const out: { ts: bigint; id: string; deleted: boolean; t: string }[] = [];
     if (n <= 0) return out;
     let k = 0;
     for (const c of docCommits) {
@@ -153,7 +154,7 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
     }
     return out;
   };
-  const canon = (rows: { ts: bigint; id: string; deleted: boolean; t: number }[]) =>
+  const canon = (rows: { ts: bigint; id: string; deleted: boolean; t: string }[]) =>
     rows.map((r) => `${r.ts}:${r.t}:${r.id}:${r.deleted ? 1 : 0}`).sort();
   {
     let bad = 0;

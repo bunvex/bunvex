@@ -64,7 +64,7 @@ function readSetJson(ctx: Ctx, reads: readonly Interval[]) {
   });
 }
 
-function writtenKeyJson(ctx: Ctx, index: number, key: Uint8Array) {
+function writtenKeyJson(ctx: Ctx, index: string, key: Uint8Array) {
   const ix = ctx.sync.indexOf(index);
   const b = describeBound(key, true);
   return {

@@ -42,6 +42,7 @@ import {
 } from "@bunvex/core";
 import { fromJsonValue } from "@bunvex/values";
 import { batchChecks } from "./batch.ts";
+import { tid } from "./ids.ts";
 import { logChecks } from "./log.ts";
 import { nanosecondChecks } from "./nanos.ts";
 import { freezableProxy } from "./proxy.ts";
@@ -179,13 +180,13 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     }));
     st.apply(
       1n,
-      entries.map((x) => ({ table: 900, id: x.id, json: "{}" })),
-      entries.map((x) => ({ index: 900, key: x.key, id: x.id })),
+      entries.map((x) => ({ table: tid(900), id: x.id, json: "{}" })),
+      entries.map((x) => ({ index: tid(900), key: x.key, id: x.id })),
     );
     await st.flush();
     const want = [...entries].sort((a, b) => compareKeys(a.key, b.key)).map((x) => x.id);
-    const asc = await st.scan(900, FULL_LO, FULL_HI, 1n, 100000, false);
-    const desc = await st.scan(900, FULL_LO, FULL_HI, 1n, 100000, true);
+    const asc = await st.scan(tid(900), FULL_LO, FULL_HI, 1n, 100000, false);
+    const desc = await st.scan(tid(900), FULL_LO, FULL_HI, 1n, 100000, true);
     check(
       JSON.stringify(asc) === JSON.stringify(want) && JSON.stringify(desc) === JSON.stringify([...want].reverse()),
       `K1 byte order over ${entries.length} mixed-type keys (asc and desc)`,
@@ -208,8 +209,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         touched.add(id);
         const del = Math.random() < 0.25;
         const v = del ? null : JSON.stringify({ c, id });
-        docs.push({ table: 901, id, json: v });
-        idx.push({ index: 901, key: keyOf(id), id: del ? null : id });
+        docs.push({ table: tid(901), id, json: v });
+        idx.push({ index: tid(901), key: keyOf(id), id: del ? null : id });
         model.set(id, [...(model.get(id) ?? []), { ts, v }]);
       }
       st.apply(BigInt(ts), docs, idx);
@@ -223,9 +224,9 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         const vs = model.get(id)?.filter((x) => x.ts <= T) ?? [];
         return vs.length ? vs[vs.length - 1].v : null;
       };
-      for (let i = 0; i < 60; i++) if ((await st.get(901, `d${i}`, BigInt(T))) !== at(`d${i}`)) bad++;
+      for (let i = 0; i < 60; i++) if ((await st.get(tid(901), `d${i}`, BigInt(T))) !== at(`d${i}`)) bad++;
       const want = [...model.keys()].filter((id) => at(id) !== null).sort((a, b) => compareKeys(keyOf(a), keyOf(b)));
-      const got = await st.scan(901, FULL_LO, FULL_HI, BigInt(T), 1000, false);
+      const got = await st.scan(tid(901), FULL_LO, FULL_HI, BigInt(T), 1000, false);
       if (JSON.stringify(got) !== JSON.stringify(want)) bad++;
     }
     check(bad === 0, `K2 snapshot reads equal the reference model at 60 random past snapshots (${bad} mismatches)`);
@@ -246,8 +247,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       const idx = [];
       for (const [i, del] of writes) {
         const v = del ? null : JSON.stringify({ ts, i });
-        docs.push({ table: 903, id: id(i), json: v });
-        idx.push({ index: 903, key: keyOf(i), id: del ? null : id(i) });
+        docs.push({ table: tid(903), id: id(i), json: v });
+        idx.push({ index: tid(903), key: keyOf(i), id: del ? null : id(i) });
         model.set(i, [...(model.get(i) ?? []), { ts, v }]);
       }
       st.apply(BigInt(ts), docs, idx);
@@ -289,10 +290,10 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
             const want = ordered.slice(0, limit);
             const loKey = lo === 0 ? FULL_LO : keyOf(lo);
             const hiKey = hi === N ? FULL_HI : keyOf(hi);
-            const got = await st.scan(903, loKey, hiKey, BigInt(T), limit, desc);
+            const got = await st.scan(tid(903), loKey, hiKey, BigInt(T), limit, desc);
             if (JSON.stringify(got) !== JSON.stringify(want.map(id))) bad++;
             if (scanDocs) {
-              const docs = await scanDocs(903, 903, loKey, hiKey, BigInt(T), limit, desc);
+              const docs = await scanDocs(tid(903), tid(903), loKey, hiKey, BigInt(T), limit, desc);
               if (JSON.stringify(docs) !== JSON.stringify(want.map((i) => at(i, T)))) bad++;
             }
           }
@@ -333,8 +334,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       ts++;
       st.apply(
         BigInt(ts),
-        ws.map(([i, del]) => ({ table: 904, id: entries[i].id, json: del ? null : JSON.stringify({ i, ts }) })),
-        ws.map(([i, del]) => ({ index: 904, key: entries[i].key, id: del ? null : entries[i].id })),
+        ws.map(([i, del]) => ({ table: tid(904), id: entries[i].id, json: del ? null : JSON.stringify({ i, ts }) })),
+        ws.map(([i, del]) => ({ index: tid(904), key: entries[i].key, id: del ? null : entries[i].id })),
       );
       for (const [i, del] of ws) model.set(entries[i].id, [...(model.get(entries[i].id) ?? []), { ts, live: !del }]);
       await st.flush();
@@ -359,13 +360,13 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
             const live = ordered.slice(a, b).filter((e) => liveAt(e.id, T));
             const want = (desc ? live.reverse() : live).slice(0, limit).map((e) => e.id);
             probes++;
-            const got = await st.scan(904, lo, hi, BigInt(T), limit, desc);
+            const got = await st.scan(tid(904), lo, hi, BigInt(T), limit, desc);
             if (JSON.stringify(got) !== JSON.stringify(want)) {
               bad++;
               if (bad <= 3) log(`  K9 mismatch T=${T} limit=${limit} desc=${desc} [${a},${b}): ${got} vs ${want}`);
             }
             if (scanDocs) {
-              const docs = await scanDocs(904, 904, lo, hi, BigInt(T), limit, desc);
+              const docs = await scanDocs(tid(904), tid(904), lo, hi, BigInt(T), limit, desc);
               if (docs.length !== want.length) bad++;
             }
           }
@@ -620,8 +621,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       if (!hasLease(s)) throw new Error("driver lost its lease between opens");
       return s;
     };
-    const TABLE = 950;
-    const INDEX = 951;
+    const TABLE = tid(950);
+    const INDEX = tid(951);
     const row = (ts: bigint, id: string) =>
       [[{ table: TABLE, id, json: `{"ts":${ts}}` }], [{ index: INDEX, key: encodeKey([id]), id }]] as const;
 
@@ -751,9 +752,9 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         const instanceId = e.catalog.table("_instance").id;
         const tables = Number(await e.persistence.auditLiveDocs?.(tablesId, at));
         const secrets = Number(await e.persistence.auditLiveDocs?.(instanceId, at));
-        // one `_tables` document per table (the two bootstrap tables, `_tables` and `_index`, have none);
+        // one `_tables` document per table (`_tables` and `_index` included, as Convex's bootstrap writes them);
         // one secret. A second catalog would double the `_tables` documents.
-        catalogOk = secrets === 1 && tables === e.catalog.tables.size - 2;
+        catalogOk = secrets === 1 && tables === e.catalog.tables.size;
         await e.close();
       }
       for (const r of lost) if (!(r.reason instanceof LeaseHeldError)) log(`  K17: loser failed with ${r.reason}`);
@@ -1055,13 +1056,13 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       const leased = hasLease(st);
       if (leased) await st.acquireLease({ holder: "k20", ttlMs: TTL });
       const put = (ts: bigint, id: string) =>
-        st.apply(ts, [{ table: 960, id, json: `{"ts":${ts}}` }], [{ index: 961, key: encodeKey([id]), id }]);
+        st.apply(ts, [{ table: tid(960), id, json: `{"ts":${ts}}` }], [{ index: tid(961), key: encodeKey([id]), id }]);
       put(10n, "a");
       await st.flush();
-      const healthy = await st.get(960, "a", 10n);
+      const healthy = await st.get(tid(960), "a", 10n);
 
       proxy.freeze();
-      const read = await timed(Promise.resolve(st.get(960, "a", 10n)));
+      const read = await timed(Promise.resolve(st.get(tid(960), "a", 10n)));
       // A driver may run a timed-out read once more (STUDY-25 L5: Convex's Postgres driver does), so up to two
       // timeouts.
       check(
@@ -1094,7 +1095,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       );
 
       proxy.thaw();
-      const again = await timed(Promise.resolve(st.get(960, "a", 10n)));
+      const again = await timed(Promise.resolve(st.get(tid(960), "a", 10n)));
       check(
         again.answered && again.value === healthy && healthy !== null,
         `K20 once the store answers again, so do calls, without reopening (${again.what})`,
@@ -1104,7 +1105,9 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
 
       // Through the engine: a commit whose flush times out is not acknowledged while the store does not answer;
       // the committer retries it (STUDY-25 L4, transient), and once the store answers it is acknowledged, its
-      // rows stored once.
+      // rows stored once. On a new store: an engine bootstraps one (STUDY-133 §5.2), and refuses rows without
+      // its globals, as the driver-level writes above are.
+      await (await mod.open(true)).close();
       const e = await newEngine(await mod.openThrough!(proxy, { timeoutMs: T }), {
         lease: { ttlMs: 60_000 },
         flushRetry: { onRetry: () => {} },
@@ -1211,18 +1214,18 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       if (leased) await st.acquireLease({ holder: "k21", ttlMs: 60_000 });
       st.apply(
         10n,
-        [{ table: 970, id: "k21read", json: `{"v":1}` }],
-        [{ index: 971, key: encodeKey(["k21read"]), id: "k21read" }],
+        [{ table: tid(970), id: "k21read", json: `{"v":1}` }],
+        [{ index: tid(971), key: encodeKey(["k21read"]), id: "k21read" }],
       );
       await st.flush();
       proxy.resetOn(/k21read/, 1);
-      const once = await settle(Promise.resolve(st.get(970, "k21read", 10n)));
+      const once = await settle(Promise.resolve(st.get(tid(970), "k21read", 10n)));
       check(
         proxy.fired.resets === 1 && once.ok && once.value === `{"v":1}`,
         `K21 a read whose connection is lost runs once more, on a fresh connection, and answers (L5; ${once.what}, ${proxy.fired.resets} reset)`,
       );
       proxy.resetOn(/k21read/, 2);
-      const twice = await settle(Promise.resolve(st.get(970, "k21read", 10n)));
+      const twice = await settle(Promise.resolve(st.get(tid(970), "k21read", 10n)));
       check(
         proxy.fired.resets === 3 && !twice.ok,
         `K21 a read that loses its connection twice fails: one retry only (L5; ${twice.what}, ${proxy.fired.resets - 1} resets)`,
@@ -1230,7 +1233,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       if (leased) await st.releaseLease();
       await st.close();
 
-      // L4: a connection lost in the middle of a flush.
+      // L4: a connection lost in the middle of a flush, on a new store (an engine bootstraps it).
+      await (await mod.open(true)).close();
       const e = await newEngine(await mod.openThrough!(proxy, { timeoutMs: T }), {
         lease: { ttlMs: 60_000 },
         flushRetry: { onRetry: () => {} },

@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import { BunvexError } from "@bunvex/values";
 import { aes128GcmSivOpen, aes128GcmSivSeal } from "./aead.ts";
+import type { IndexId, TabletId } from "./persistence/index.ts";
 
 export type CursorPosition = { after: Uint8Array } | "end";
 
@@ -31,8 +32,8 @@ const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64url");
  * another filter is refused (STUDY-17 D3). A query with no operator keeps the fingerprint it always had.
  */
 export function queryFingerprint(parts: {
-  tablet: number;
-  index: number;
+  tablet: TabletId;
+  index: IndexId;
   lo: Uint8Array;
   hi: Uint8Array;
   desc: boolean;

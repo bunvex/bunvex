@@ -16,7 +16,7 @@ const schema = defineSchema({
     .searchIndex("search_s", { searchField: "s", filterFields: ["b"] }),
 });
 // bunvex's identity fields and Convex's (STUDY-133, DV-428).
-const identity = ["tablet", "name", "table_id", "descriptor"];
+const identity: string[] = [];
 
 function blobs(): SearchSegmentStore {
   const map = new Map<string, Uint8Array>();
@@ -46,7 +46,7 @@ async function history(p: MemoryPersistence, e: Engine, name: string): Promise<R
   for (const r of p.readDocumentLog(0n, e.committer.visibleTs, 1e6)) {
     if (r.table !== index || r.deleted) continue;
     const json = JSON.parse((await p.get(index, r.id, r.ts))!) as Row;
-    if (json.tablet === tablet && json.name === name) out.push(json);
+    if (json.table_id === tablet && json.descriptor === name) out.push(json);
   }
   return out;
 }
@@ -93,7 +93,7 @@ test("_index_backfills rows of a new table: the database index's with its cursor
   const rows = await system<Row[]>(e, INDEX_BACKFILLS_TABLE);
   const indexRows = await system<Row[]>(e, INDEX_TABLE);
   const idOf = (name: string) =>
-    indexRows.find((r) => r.name === name && r.tablet === e.catalog.table("things").id)!._id;
+    indexRows.find((r) => r.descriptor === name && r.table_id === e.catalog.table("things").id)!._id;
   const db = rows.find((r) => r.indexId === idOf("by_s_n"));
   const search = rows.find((r) => r.indexId === idOf("search_s"));
   const [convexSearch, convexDb] = convexRows("_index_backfills");
@@ -142,7 +142,7 @@ test("a push's index on a table with documents: the rows, its backfill's count, 
     "Backfilled2",
     "Enabled",
   ]);
-  const meta = (await system<Row[]>(e, INDEX_TABLE)).filter((r) => r.name === "by_s_n").map(indexMeta);
+  const meta = (await system<Row[]>(e, INDEX_TABLE)).filter((r) => r.descriptor === "by_s_n").map(indexMeta);
   expect(meta.map((m) => [m.state, m.indexId === t.indexes.get("by_s_n")!.id])).toEqual([["enabled", true]]);
   // The backfills' rows: the table's count from the summaries, the documents indexed, kept after the backfill.
   await e.searchReady();
@@ -150,7 +150,7 @@ test("a push's index on a table with documents: the rows, its backfill's count, 
   const progress = backfills.find((r) => r.indexId === meta[0]!._id)!;
   expect(progress.totalDocs).toBe(30n);
   expect(shapeDiff(stored(progress), convexRows("_index_backfills")[1])).toEqual([]);
-  const searchId = (await system<Row[]>(e, INDEX_TABLE)).find((r) => r.name === "search_s")!._id;
+  const searchId = (await system<Row[]>(e, INDEX_TABLE)).find((r) => r.descriptor === "search_s")!._id;
   const searchProgress = backfills.find((r) => r.indexId === searchId)!;
   expect([searchProgress.totalDocs, searchProgress.numDocsIndexed]).toEqual([30n, 30n]);
   expect(shapeDiff(stored(searchProgress), convexRows("_index_backfills")[0])).toEqual([]);

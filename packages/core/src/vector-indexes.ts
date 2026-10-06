@@ -4,6 +4,7 @@
 // then kept up to date by every commit as it becomes visible. A search sees the latest visible state, as
 // Convex's (`now_ts_for_reads`): vector search runs in actions, outside any transaction.
 import { SegmentedVectorIndex, type VectorDoc } from "@bunvex/search";
+import type { TabletId } from "./persistence/index.ts";
 import { type Doc, fieldValue, type TableDef, type VectorIndexDef } from "./schema.ts";
 import { filterKey } from "./search-indexes.ts";
 
@@ -17,7 +18,7 @@ export type Entry = VectorDoc;
 
 export type VectorIndexEntry = {
   table: string;
-  tablet: number;
+  tablet: TabletId;
   name: string;
   def: VectorIndexDef;
   staged: boolean;
@@ -75,7 +76,7 @@ export class VectorIndexes {
   all(): VectorIndexEntry[] {
     return [...this.entries.values()];
   }
-  private static key = (tablet: number, name: string) => `${tablet}\u0000${name}`;
+  private static key = (tablet: TabletId, name: string) => `${tablet}\u0000${name}`;
 
   get(t: TableDef, name: string): VectorIndexEntry | undefined {
     return this.entries.get(VectorIndexes.key(t.id, name));
@@ -85,10 +86,10 @@ export class VectorIndexes {
    * The indexes of one table. Every write asks (the usage meter, the commit's index maintenance), so they are
    * grouped when the set changes, not filtered on each call; a table without any shares one empty list.
    */
-  forTablet(tablet: number): readonly VectorIndexEntry[] {
+  forTablet(tablet: TabletId): readonly VectorIndexEntry[] {
     return this.byTablet.get(tablet) ?? NONE;
   }
-  private byTablet = new Map<number, VectorIndexEntry[]>();
+  private byTablet = new Map<TabletId, VectorIndexEntry[]>();
 
   /** Make the set of indexes the declared ones of the active tables; returns the new ones, to backfill. */
   reconcile(

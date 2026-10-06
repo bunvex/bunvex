@@ -15,6 +15,7 @@ import type {
   DocLogRow,
   DocPrune,
   DocWrite,
+  IndexId,
   IndexPrune,
   IndexWrite,
   Lease,
@@ -22,6 +23,7 @@ import type {
   LogCommit,
   Persistence,
   RetentionStore,
+  TabletId,
 } from "./index.ts";
 import { LeaseLostError } from "./index.ts";
 import {
@@ -47,8 +49,8 @@ declare module "bun:sqlite" {
 
 /** bunvex's columns, as `pragma table_info` declares them: how an unversioned store is recognised. */
 const COLUMNS = {
-  documents: ["table_id integer", "id text", "ts integer", "json_value text", "deleted integer"],
-  indexes: ["index_id integer", "key blob", "ts integer", "deleted integer", "document_id text"],
+  documents: ["table_id text", "id text", "ts integer", "json_value text", "deleted integer"],
+  indexes: ["index_id text", "key blob", "ts integer", "deleted integer", "document_id text"],
 };
 
 export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
@@ -90,9 +92,9 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     this.db.exec(`pragma journal_mode = wal; pragma synchronous = ${opts.durable ? "full" : "off"};
       pragma temp_store = memory; pragma cache_size = -262144;`);
     this.db.exec(`
-      create table if not exists documents (table_id integer not null, id text not null, ts integer not null,
+      create table if not exists documents (table_id text not null, id text not null, ts integer not null,
         json_value text, deleted integer not null, primary key (table_id, id, ts)) without rowid;
-      create table if not exists indexes (index_id integer not null, key blob not null, ts integer not null,
+      create table if not exists indexes (index_id text not null, key blob not null, ts integer not null,
         deleted integer not null, document_id text, primary key (index_id, key, ts)) without rowid;
       create table if not exists persistence_globals (key text primary key, json_value text not null);
       create table if not exists read_only (id integer primary key);`);
@@ -254,14 +256,14 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     const hi = this.inTx ? minTs(upToTs, this.durableTs ?? 0n) : upToTs;
     const rows = this.logRows.all(afterTs, hi, limit) as {
       ts: bigint;
-      index_id: bigint;
+      index_id: string;
       key: Uint8Array;
       document_id: string | null;
     }[];
     if (!rows.length) return [];
     const prev = this.logPrev.get(afterTs) as { m: bigint | null };
     return groupLog(
-      rows.map((r) => ({ ts: r.ts, index: Number(r.index_id), key: r.key, id: r.document_id })),
+      rows.map((r) => ({ ts: r.ts, index: r.index_id, key: r.key, id: r.document_id })),
       prev.m ?? 0n,
     );
   }
@@ -271,8 +273,8 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     if (limit <= 0) return [];
     const hi = this.inTx ? minTs(upToTs, this.durableTs ?? 0n) : upToTs;
     return (
-      this.docLogRows.all(afterTs, hi, limit) as { ts: bigint; table_id: bigint; id: string; deleted: bigint }[]
-    ).map((r) => ({ ts: r.ts, table: Number(r.table_id), id: r.id, deleted: !!r.deleted }));
+      this.docLogRows.all(afterTs, hi, limit) as { ts: bigint; table_id: string; id: string; deleted: bigint }[]
+    ).map((r) => ({ ts: r.ts, table: r.table_id, id: r.id, deleted: !!r.deleted }));
   }
 
   /** PERSIST-01 C13. Inside a group still being applied, the deletes join its transaction. */
@@ -318,7 +320,7 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return { docs: Number(r.docs), idx: Number(r.idx) };
   }
 
-  scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
+  scan(index: IndexId, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
     const q = desc ? this.scanDesc : this.scanAsc;
     return scanLatestSync(
       (p) =>
@@ -334,12 +336,12 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     );
   }
 
-  get(table: number, id: string, ts: bigint) {
+  get(table: TabletId, id: string, ts: bigint) {
     const r = this.getDoc.get(table, id, ts) as any;
     return r && !r.deleted ? (r.json_value as string) : null;
   }
 
-  getVersions(table: number, ids: string[], ts: bigint) {
+  getVersions(table: TabletId, ids: string[], ts: bigint) {
     // Embedded: one indexed lookup per id is the fastest form (no round trips to save).
     return ids.map((id) => {
       const r = this.getDoc.get(table, id, ts) as any;
@@ -347,7 +349,7 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     });
   }
 
-  auditLiveDocs(table: number, ts: bigint) {
+  auditLiveDocs(table: TabletId, ts: bigint) {
     const r = this.db
       .query(`select count(*) as n from (select json_value, row_number() over (partition by id order by ts desc) rn
               from documents where table_id = ? and ts <= ?) where rn = 1 and json_value is not null`)

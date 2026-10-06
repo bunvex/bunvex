@@ -2,7 +2,7 @@
 
 - **Status:** accepted (owner, 2026-10-05): the goal, the design and Q1–Q11 decided (§8a); the PR series
   of §7 is being built.
-- **Built so far:** PR 1 (ns `bigint` timestamps).
+- **Built so far:** PR 1 (ns `bigint` timestamps), PR 2 (identity).
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend; the binary
   `precompiled-2026-09-28-5c7cb5b/convex-local-backend` for the probes in §1.12.
 - **bunvex code read:** `main` at `64f396f7`.
@@ -725,3 +725,29 @@ The probe scripts (`inject.py`, `cx.sh`, `shapes.py`, the ts bench) are in the s
 - Measured (engine, in-process, M-series, median of 3 × 4 s; ops/s main → PR 1): memory insert 40 384 → 39 903,
   patch 31 825 → 31 720, get 280 213 → 298 602, index range 7 376 → 7 224 (a back-to-back rerun after the
   sequence change; 6 045 → 4 719 before it); SQLite insert 7 176 → 7 336, patch 5 064 → 5 120, get 92 168 → 96 434, index range 775 → 793.
+
+### PR 2 — identity
+
+- A table's tablet is the internal id of its `_tables` row and an index's id the internal id of its `_index`
+  row, carried as 22-character base64url strings (`internal-id.ts`); `_next_tablet_id` is gone (DV-408).
+  `_tables` rows are `{name, number, state}`, `_index` rows `{table_id, descriptor, config}` for database,
+  search and vector indexes alike (DV-428); `table_summary_v2` is keyed by tablet ids.
+- A new store is bootstrapped at ts 0 (`bootstrap.ts`, Convex's `Database::initialize`): the ten bootstrap
+  tables in Convex's order and numbers, their `_tables` rows, `by_id` / `by_creation_time` (none for `_index`)
+  then the declared system indexes, `persistenceIndexId` 1–26, `_next_persistence_index_id` at 27, then the
+  four globals. A start reads the globals and loads `_index` and `_tables` through their `by_id` indexes, with
+  Convex's checks and messages ("missing _tables.by_id global", "Missing `by_id` index for …", "Table … is
+  missing but has one or more indexes"). `getGlobal` / `setGlobal` are required of every driver (C14).
+- `planCatalog` no longer allocates tablets; `writeCatalogChanges` inserts the `_tables` rows first and names
+  each new index's table by the tablet its row got. A table without `by_creation_time` (`_index`) is read
+  through `by_id`.
+- Drivers keep their columns, typed text (`varchar(32)` on MySQL) for the ids; PR 3 makes them Convex's bytes.
+- Tests: `bootstrap.test.ts` (the 37 rows at ts 0 field by field, the globals, a reopen, the two load
+  failures), the rewritten tablet and index id tests, the row-shape tests now comparing whole rows. Sabotage:
+  a `_tables` row whose id is not the tablet (13 red), a `by_creation_time` index on `_index` (red: the
+  bootstrap rows), no `by_id` check at load (red: the load failure), a `tablet` field on `_tables` rows (red:
+  the bootstrap rows).
+- Measured (engine, median of 3 × 4 s, ops/s, main → PR 1 → PR 2): memory insert 47 788 → 49 344 → 48 228,
+  patch 35 416 → 36 336 → 35 888, get 318 202 → 320 672 → 307 194, index range 6 696 → 6 880 → 6 544; SQLite
+  insert 7 648 → 7 737 → 7 232, patch 5 632 → 5 528 → 5 240, get 108 237 → 106 472 → 104 949, index range
+  792 → 808 → 834. SQLite writes lose ~6 % to text keys in place of integers; PR 3 replaces them with 16 bytes.

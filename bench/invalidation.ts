@@ -4,11 +4,12 @@
 // index writes (old and new key in both indexes).
 //   bun bench/invalidation.ts            Env: NS (comma list, default 1000,10000,100000), COMMITS (default 2000)
 import { encodeKey, type Interval, type LogEntry, overlaps, prefixEnd, ReadSetIndex } from "@bunvex/core";
+import { tid } from "./ids.ts";
 
 const NS = (process.env.NS ?? "1000,10000,100000").split(",").map(Number);
 const COMMITS = Number(process.env.COMMITS ?? 2000);
-const BY_ID = 1;
-const BY_OWNER = 2;
+const BY_ID = tid(1);
+const BY_OWNER = tid(2);
 
 const idKey = (i: number) => encodeKey([`id${i}`]);
 const ownerKey = (o: number, i: number) => encodeKey([o, `id${i}`]);

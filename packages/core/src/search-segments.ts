@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { StoredSegment } from "@bunvex/search";
-import type { DocLogRow, Persistence, RetentionStore } from "./persistence/index.ts";
+import type { DocLogRow, Persistence, RetentionStore, TabletId } from "./persistence/index.ts";
 import { readTsGlobal } from "./persistence-globals.ts";
 import type { Doc, SearchIndexDef, VectorIndexDef } from "./schema.ts";
 
@@ -223,7 +223,7 @@ export type SegmentRef = { segment: string; deletes: string; docs: number; delet
  */
 export type IndexSegmentsState = {
   kind: "text" | "vector";
-  tablet: number;
+  tablet: TabletId;
   name: string;
   def: SearchIndexDef | VectorIndexDef;
   /**
@@ -237,7 +237,7 @@ export type IndexSegmentsState = {
   staged: boolean;
 };
 
-export const stateKey = (kind: "text" | "vector", tablet: number, name: string) =>
+export const stateKey = (kind: "text" | "vector", tablet: TabletId, name: string) =>
   `${kind}\u0000${tablet}\u0000${name}`;
 
 /** Two definitions of one kind are the same index: Convex's spec, whose filter fields are a set. */
@@ -257,8 +257,11 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const cursorBytes = (cursor: string) => encoder.encode(cursor).buffer as ArrayBuffer;
 
-/** An `_index` row of a search or vector index, as stored: `config` as Convex serializes `IndexConfig`. */
-export type SearchIndexRow = { _id?: string; tablet: number; name: string; config: Record<string, unknown> };
+/**
+ * An `_index` row of a search or vector index, as stored: Convex's `SerializedTabletIndexMetadata`, `table_id`
+ * (the tablet), `descriptor` (the name) and `config` as Convex serializes `IndexConfig`.
+ */
+export type SearchIndexRow = { _id?: string; table_id: TabletId; descriptor: string; config: Record<string, unknown> };
 
 /** Whether an `_index` row is a search or vector index's (a database index's `config` is of type `database`). */
 export const isSearchIndexRow = (row: Record<string, unknown>) => {
@@ -300,8 +303,8 @@ export function stateToRow(s: IndexSegmentsState): SearchIndexRow {
       };
     const def = s.def as SearchIndexDef;
     return {
-      tablet: s.tablet,
-      name: s.name,
+      table_id: s.tablet,
+      descriptor: s.name,
       config: { type: "search", searchField: def.searchField, filterFields, onDiskState },
     };
   }
@@ -326,8 +329,8 @@ export function stateToRow(s: IndexSegmentsState): SearchIndexRow {
     };
   const def = s.def as VectorIndexDef;
   return {
-    tablet: s.tablet,
-    name: s.name,
+    table_id: s.tablet,
+    descriptor: s.name,
     config: { type: "vector", dimensions: def.dimensions, vectorField: def.vectorField, filterFields, onDiskState },
   };
 }
@@ -337,8 +340,8 @@ export function rowToState(row: Record<string, unknown>): IndexSegmentsState | n
   try {
     const c = row.config as Record<string, unknown>;
     const o = c.onDiskState as Record<string, unknown>;
-    const tablet = row.tablet as number;
-    const name = row.name as string;
+    const tablet = row.table_id as TabletId;
+    const name = row.descriptor as string;
     const filterFields = c.filterFields as string[];
     if (c.type === "search") {
       const def = { searchField: c.searchField as string, filterFields } as SearchIndexDef;
@@ -427,7 +430,7 @@ export function rowToState(row: Record<string, unknown>): IndexSegmentsState | n
   }
 }
 
-type Store = Persistence & Pick<RetentionStore, "readDocumentLog" | "getGlobal" | "setGlobal">;
+type Store = Persistence & Pick<RetentionStore, "readDocumentLog">;
 
 /** Whether the store has what segments need: the document log, versions and globals. */
 export function canPersistSegments(p: Persistence): p is Store {
@@ -472,7 +475,7 @@ export class SearchSegmentsState {
       if (!isSearchIndexRow(r)) continue;
       const s = rowToState(r);
       const kind = (r.config as { type: string }).type === "search" ? "text" : "vector";
-      const key = stateKey(kind, r.tablet as number, r.name as string);
+      const key = stateKey(kind, r.table_id as TabletId, r.descriptor as string);
       this.ids.set(key, r._id as string);
       if (s) this.states.set(key, s);
     }
@@ -526,11 +529,11 @@ export class SearchSegmentsState {
   }
 
   /** The id of an index's `_index` row, once written. */
-  rowId(kind: "text" | "vector", tablet: number, name: string): string | undefined {
+  rowId(kind: "text" | "vector", tablet: TabletId, name: string): string | undefined {
     return this.ids.get(stateKey(kind, tablet, name));
   }
 
-  get(kind: "text" | "vector", tablet: number, name: string): IndexSegmentsState | undefined {
+  get(kind: "text" | "vector", tablet: TabletId, name: string): IndexSegmentsState | undefined {
     return this.states.get(stateKey(kind, tablet, name));
   }
 
@@ -589,7 +592,7 @@ export class SearchSegmentsState {
    */
   async usable(
     kind: "text" | "vector",
-    tablet: number,
+    tablet: TabletId,
     name: string,
     def: SearchIndexDef | VectorIndexDef,
     at: bigint,
@@ -645,18 +648,21 @@ export function segmentRefs(
  * The log is read once per table from the oldest ts any of its indexes asks for.
  */
 export class SegmentReplay {
-  private reads = new Map<number, { since: bigint; changes: Promise<Map<string, { ts: bigint; doc: Doc | null }>> }>();
+  private reads = new Map<
+    TabletId,
+    { since: bigint; changes: Promise<Map<string, { ts: bigint; doc: Doc | null }>> }
+  >();
 
   constructor(
     private store: Store,
     readonly at: bigint,
     private decode: (json: string) => Doc,
     /** The oldest ts each table's indexes start from (the log is read once from there). */
-    private oldest: Map<number, bigint>,
+    private oldest: Map<TabletId, bigint>,
   ) {}
 
   /** Each document of `tablet` the log changed in `(since, at]`, at its state as of `at`. */
-  async since(tablet: number, since: bigint): Promise<[string, Doc | null][]> {
+  async since(tablet: TabletId, since: bigint): Promise<[string, Doc | null][]> {
     let r = this.reads.get(tablet);
     if (!r) {
       const oldest = this.oldest.get(tablet) ?? since;
@@ -670,7 +676,7 @@ export class SegmentReplay {
     return out;
   }
 
-  private read(tablet: number, since: bigint) {
+  private read(tablet: TabletId, since: bigint) {
     return changedSince(this.store, tablet, since, this.at, this.decode);
   }
 }
@@ -681,7 +687,7 @@ export class SegmentReplay {
  */
 export async function changedSince(
   store: Store,
-  tablet: number,
+  tablet: TabletId,
   since: bigint,
   at: bigint,
   decode: (json: string) => Doc,

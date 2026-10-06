@@ -3,10 +3,14 @@
 // `_index`, read and written by ordinary transactions. Ids are assigned once and never reused, so
 // reordering or editing the declared schema never re-points existing data.
 //
-// `_tables` and `_index` themselves have FIXED ids — that is how startup finds everything else (Convex
-// keeps their ids in persistence globals instead).
+// As in Convex (STUDY-133 §5.2), a table's persistence id (its tablet) IS the internal id of its `_tables`
+// document, and an index's id the internal id of its `_index` document; `_tables` and `_index` have rows of
+// their own, written at ts 0 when the store is created (bootstrap.ts), and four persistence globals name
+// them so that a start can find everything else.
 import type { Value } from "@bunvex/values";
 import { opaqueToInspect } from "./inspect.ts";
+import { indexIdOf, tabletOf } from "./internal-id.ts";
+import type { IndexId, TabletId } from "./persistence/index.ts";
 import { type DeclaredTable, type IndexDef, SYSTEM_INDEXES, type TableDef } from "./schema.ts";
 
 export const TABLES_TABLE = "_tables";
@@ -92,8 +96,9 @@ export const CRON_JOB_LOGS_TABLE = "_cron_job_logs";
 /** Progress checkpoints of index backfills (Convex's `_index_backfills`, STUDY-29). */
 export const INDEX_BACKFILLS_TABLE = "_index_backfills";
 export const INDEX_BACKFILLS_INDEX = "by_index_id";
-/** The next tablet id to hand out (STUDY-04 §7): `{nextId}`, so a purged table's id is never given again. */
-export const NEXT_TABLET_ID_TABLE = "_next_tablet_id";
+/** Components (DV-55: bunvex has none yet): Convex's root `_components` / `_component_definitions` rows. */
+export const COMPONENTS_TABLE = "_components";
+export const COMPONENT_DEFINITIONS_TABLE = "_component_definitions";
 /**
  * Search index workers' state (Convex's `_index_worker_metadata`, STUDY-111): per search or vector index (its
  * `_index` row's id), the ts it was fast-forwarded to.
@@ -145,9 +150,10 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _next_persistence_index_id: 554,
   _schema_validation_progress: 549,
   _schema_validations: 555,
+  _component_definitions: 543,
+  _components: 544,
   // bunvex's own.
   _instance: 9_999,
-  _next_tablet_id: 9_997,
 };
 const RESERVED_SYSTEM_NUMBERS = new Set(Object.values(SYSTEM_TABLE_NUMBERS));
 
@@ -186,7 +192,8 @@ export const SYSTEM_TABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   _schema_validation_progress: "The counters of each schema validation attempt.",
   _index_worker_metadata: "Search and vector index workers' state: the ts each index was fast-forwarded to.",
   _next_persistence_index_id: "The next index id to hand out.",
-  _next_tablet_id: "The next tablet (a table's storage id) to hand out, so a purged table's is never reused.",
+  _components: "The deployment's components (only the root one: bunvex has no components yet).",
+  _component_definitions: "The deployment's component definitions (only the root app's).",
   _auth: "The deployed auth providers, one document per provider.",
   _db: "The database globals: the data version and the storage type pinned at the first start.",
   _instance: "The deployment's own settings, such as the generated instance secret.",
@@ -199,15 +206,26 @@ export const SYSTEM_TABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
  * documents removed in the background, then its metadata).
  */
 export type TableState = "active" | "hidden" | "deleting";
-export type TableMeta = { _id: string; name: string; number: number; tablet: number; state: TableState };
+/** A table's `_tables` row; `tablet` is its id's internal id, not a field. */
+export type TableMeta = { _id: string; name: string; number: number; tablet: TabletId; state: TableState };
 /**
- * A `_tables` row as stored: Convex's `SerializedTableMetadata` (crates/common/src/bootstrap_model/tables.rs), whose
- * `number` is an int64 (STUDY-134). The catalog works on numbers; rows are converted when written and read.
+ * A `_tables` row as stored: Convex's `SerializedTableMetadata` (crates/common/src/bootstrap_model/tables.rs):
+ * `name`, `number` an int64 (STUDY-134), `state`; no `namespace` (a root component's table). The catalog works
+ * on numbers; rows are converted when written and read.
  */
-export const tableRow = <T extends { number: number }>(t: T) => ({ ...t, number: BigInt(t.number) });
-/** A `_tables` row read back, its `number` a number again. */
-export const tableMeta = (row: Record<string, unknown>): TableMeta =>
-  ({ ...row, number: Number(row.number as bigint | number) }) as TableMeta;
+export const tableRow = (t: { name: string; number: number; state: TableState }) => ({
+  name: t.name,
+  number: BigInt(t.number),
+  state: t.state,
+});
+/** A `_tables` row read back: its `number` a number again, its tablet its id's internal id. */
+export const tableMeta = (row: Record<string, unknown>): TableMeta => ({
+  _id: row._id as string,
+  name: row.name as string,
+  number: Number(row.number as bigint | number),
+  tablet: tabletOf(row._id as string),
+  state: (row.state as TableState | undefined) ?? "active",
+});
 /** Convex's `MAX_USER_TABLES` (crates/database/src/bootstrap_model/table.rs): active user tables, at most. */
 export const MAX_USER_TABLES = 10_000;
 
@@ -233,11 +251,13 @@ export const activeTables = (tables: TableMeta[]) => tables.filter((t) => (t.sta
 export type IndexState = "backfilling" | "backfilled" | "enabled";
 export type IndexMeta = {
   _id: string;
-  tablet: number;
+  tablet: TabletId;
   name: string;
   fields: string[];
-  /** The id persistence keys the index's entries by (Convex's `persistenceIndexId`). */
-  indexId: number;
+  /** The id persistence keys the index's entries by: its `_index` row's internal id (Convex's `IndexId`). */
+  indexId: IndexId;
+  /** Convex's `persistenceIndexId`, from `_next_persistence_index_id` (STUDY-128): never reused. */
+  persistenceIndexId: number;
   state: IndexState;
   staged?: boolean;
   /** While backfilling: a commit ts at or before the index's creation (Convex's `indexCreatedLowerBound`). */
@@ -247,14 +267,17 @@ export type IndexMeta = {
 };
 
 /**
- * A database index's `_index` row as stored: Convex's `SerializedTabletIndexMetadata`, `config` its
- * `SerializedIndexConfig::Database` (crates/common/src/bootstrap_model/index/index_config.rs): `fields`
- * (`by_id`'s are empty, its key is the id alone), `onDiskState` (`Backfilling` with its `backfillState`,
- * `Backfilled2`, `Enabled`) and the int64 `persistenceIndexId` (STUDY-134). Timestamps are Convex's
- * nanoseconds. `tablet` and `name` stand for Convex's `table_id` and `descriptor`: bunvex's identities, which
- * the persistence layout decides (STUDY-133), as in the search rows (STUDY-111).
+ * A database index's `_index` row as stored: Convex's `SerializedTabletIndexMetadata`
+ * (crates/common/src/bootstrap_model/index/index_metadata.rs): `table_id` (the tablet), `descriptor` (the
+ * name) and `config`, its `SerializedIndexConfig::Database` (index_config.rs): `fields` (`by_id`'s are empty,
+ * its key is the id alone), `onDiskState` (`Backfilling` with its `backfillState`, `Backfilled2`, `Enabled`)
+ * and the int64 `persistenceIndexId` (STUDY-134). Timestamps are nanoseconds.
  */
-export function indexRow(m: Omit<IndexMeta, "_id">): { tablet: number; name: string; config: Record<string, Value> } {
+export function indexRow(m: Omit<IndexMeta, "_id" | "indexId">): {
+  table_id: TabletId;
+  descriptor: string;
+  config: Record<string, Value>;
+} {
   let onDiskState: Record<string, Value>;
   if (m.state === "enabled") onDiskState = { type: "Enabled" };
   else if (m.state === "backfilled") onDiskState = { type: "Backfilled2", staged: m.staged ?? false };
@@ -268,13 +291,13 @@ export function indexRow(m: Omit<IndexMeta, "_id">): { tablet: number; name: str
       },
     };
   return {
-    tablet: m.tablet,
-    name: m.name,
+    table_id: m.tablet,
+    descriptor: m.name,
     config: {
       type: "database",
       fields: m.name === "by_id" ? [] : m.fields,
       onDiskState,
-      persistenceIndexId: BigInt(m.indexId),
+      persistenceIndexId: BigInt(m.persistenceIndexId),
     },
   };
 }
@@ -283,13 +306,14 @@ export function indexRow(m: Omit<IndexMeta, "_id">): { tablet: number; name: str
 export function indexMeta(row: Record<string, unknown>): IndexMeta {
   const c = row.config as { fields: string[]; onDiskState: Record<string, unknown>; persistenceIndexId: bigint };
   const o = c.onDiskState;
-  const name = row.name as string;
+  const name = row.descriptor as string;
   const m: IndexMeta = {
     _id: row._id as string,
-    tablet: row.tablet as number,
+    tablet: row.table_id as TabletId,
     name,
     fields: name === "by_id" ? SYSTEM_INDEXES.by_id! : c.fields,
-    indexId: Number(c.persistenceIndexId),
+    indexId: indexIdOf(row._id as string),
+    persistenceIndexId: Number(c.persistenceIndexId ?? 0),
     state: o.type === "Enabled" ? "enabled" : o.type === "Backfilled2" ? "backfilled" : "backfilling",
   };
   if (o.type === "Backfilled2") m.staged = o.staged as boolean;
@@ -307,7 +331,7 @@ export function indexStatePatch(
   m: IndexMeta,
   change: Partial<Pick<IndexMeta, "state" | "staged" | "retentionStarted">>,
 ) {
-  const { _id: _, ...rest } = m;
+  const { _id: _, indexId: __, ...rest } = m;
   return { config: indexRow({ ...rest, ...change }).config };
 }
 
@@ -425,7 +449,7 @@ export class IndexStagedError extends Error {
 export type CatalogIndex = {
   name: string;
   fields: string[];
-  id: number;
+  id: IndexId;
   state?: IndexState;
   staged?: boolean;
   metaId?: string;
@@ -435,13 +459,13 @@ export class Catalog {
   readonly tables = new Map<string, TableDef>();
   private readonly numbers = new Map<number, TableDef>();
   /** Hidden tables (an import's), by tablet: invisible to functions. */
-  readonly hidden = new Map<number, TableDef>();
+  readonly hidden = new Map<TabletId, TableDef>();
   /** Tables being deleted, by tablet: invisible; the deletion worker empties them. */
-  readonly deleting = new Map<number, TableDef>();
+  readonly deleting = new Map<TabletId, TableDef>();
 
   add(
     name: string,
-    tablet: number,
+    tablet: TabletId,
     number: number,
     indexes: CatalogIndex[],
     state: TableState = "active",
@@ -473,7 +497,7 @@ export class Catalog {
    * tables to `deleting` (an activation lists the tables it replaces there), `activate` makes hidden tables
    * active, `gone` drops a deleted table entirely.
    */
-  withTableStates(c: { activate?: number[]; delete?: number[]; gone?: number[] }): Catalog {
+  withTableStates(c: { activate?: TabletId[]; delete?: TabletId[]; gone?: TabletId[] }): Catalog {
     const out = new Catalog();
     for (const t of this.tables.values()) {
       out.tables.set(t.name, t);
@@ -506,7 +530,7 @@ export class Catalog {
   }
 
   /** The table whose persistence id is `tablet`, if any. */
-  byTablet(tablet: number): TableDef | undefined {
+  byTablet(tablet: TabletId): TableDef | undefined {
     for (const t of this.tables.values()) if (t.id === tablet) return t;
     return this.hidden.get(tablet) ?? this.deleting.get(tablet);
   }
@@ -516,7 +540,7 @@ export class Catalog {
    * transactions that began before it keep the catalog they started with, as Convex's index registry is
    * part of a snapshot. `enabled` indexes serve reads from `readyTs`, that commit's ts.
    */
-  withIndexChanges(changes: { enable: number[]; disable: number[]; drop: number[] }, readyTs: bigint): Catalog {
+  withIndexChanges(changes: { enable: IndexId[]; disable: IndexId[]; drop: IndexId[] }, readyTs: bigint): Catalog {
     const c = new Catalog();
     for (const t of this.tables.values()) {
       const nt: TableDef = { ...t, indexes: new Map(), pending: [] };
@@ -561,29 +585,39 @@ export class Catalog {
   }
 }
 
-const systemIndexes = (first: number) =>
-  Object.entries(SYSTEM_INDEXES).map(([name, fields], i) => ({ name, fields, id: first + i }));
+/**
+ * What a start needs to find everything else (Convex's `BootstrapTableIds`, from the persistence globals
+ * `tables_table_id`, `index_table_id`, `tables_by_id`, `index_by_id`): the tablets of `_tables` and `_index`
+ * and the ids of their `by_id` indexes.
+ */
+export type BootstrapIds = { tablesTablet: TabletId; indexTablet: TabletId; tablesById: IndexId; indexById: IndexId };
 
-/** The catalog before anything is read: only the two bootstrap tables, at their fixed ids. */
-export function bootstrapCatalog(): Catalog {
+/** The catalog before anything is read: the two bootstrap tables, each with its `by_id` index only. */
+export function bootstrapCatalog(ids: BootstrapIds): Catalog {
   const c = new Catalog();
-  c.add(TABLES_TABLE, 1, 513, systemIndexes(1));
-  c.add(INDEX_TABLE, 2, 514, systemIndexes(3));
+  c.add(TABLES_TABLE, ids.tablesTablet, 513, [{ name: "by_id", fields: SYSTEM_INDEXES.by_id!, id: ids.tablesById }]);
+  c.add(INDEX_TABLE, ids.indexTablet, 514, [{ name: "by_id", fields: SYSTEM_INDEXES.by_id!, id: ids.indexById }]);
   return c;
 }
-/** The first persistence ids handed out to user tables and indexes. */
-const FIRST_TABLET = 3;
-const FIRST_INDEX_ID = 5;
+
+/** A table a schema change creates: its `_tables` row's fields (its tablet is that row's id, once written). */
+export type NewTable = { name: string; number: number; state: TableState };
+/**
+ * An index a schema change creates: on an existing table (`tablet`) or on one it creates (`table`, by name); its
+ * id is its `_index` row's, once written.
+ */
+export type NewIndex = Omit<IndexMeta, "_id" | "indexId" | "tablet"> & { tablet?: TabletId; table: string };
 
 export type CatalogChanges = {
-  insertTables: Omit<TableMeta, "_id">[];
-  insertIndexes: Omit<IndexMeta, "_id">[];
+  insertTables: NewTable[];
+  insertIndexes: NewIndex[];
   deleteIndexes: string[]; // `_index` document ids
   /** Pending indexes whose `staged` flag the schema changed (Convex patches them when the push starts). */
   restageIndexes: IndexMeta[];
-  /** The tablet allocator's next value once `insertTables` took theirs (STUDY-04 §7): the caller writes it. */
-  nextTablet: number;
-  /** The index id allocator's next value once `insertIndexes` took theirs (STUDY-128): the caller writes it. */
+  /**
+   * The `persistenceIndexId` allocator's next value once `insertIndexes` took theirs (STUDY-128): the caller
+   * writes it.
+   */
   nextIndexId: number;
 };
 
@@ -595,6 +629,7 @@ const sameFields = (a: string[], b: string[]) => a.length === b.length && a.ever
  * has. Every other system index declares `_creationTime` as its last field.
  */
 export const SYSTEM_INDEXES_WITHOUT_CREATION_TIME: ReadonlySet<string> = new Set([
+  "_components.by_parent_and_name",
   "_function_handles.by_component_path",
   "_cron_jobs.by_name",
   "_cron_job_logs.by_name_and_ts",
@@ -608,7 +643,9 @@ export const SYSTEM_INDEXES_WITHOUT_CREATION_TIME: ReadonlySet<string> = new Set
   "_scheduled_jobs.by_next_ts",
   "_scheduled_jobs.by_completed_ts",
   "_scheduled_jobs.by_udf_path_and_next_event_ts",
+  "_schemas.by_state",
   "_session_requests.by_session_id_and_request_id",
+  "_tables.by_name",
 ]);
 
 /** A copy of a table's indexes (an import's hidden table): its fields as they are, nothing added. */
@@ -623,7 +660,9 @@ export const HIDDEN_TABLE_PLACEHOLDER = "\u0000hidden";
 function wantedIndexes(d: DeclaredTable): Map<string, { fields: string[]; staged: boolean }> {
   const staged = new Set(d.staged ?? []);
   const out = new Map<string, { fields: string[]; staged: boolean }>();
-  for (const [name, fields] of Object.entries(SYSTEM_INDEXES)) out.set(name, { fields, staged: false });
+  // `_index` has only `by_id` (Convex's bootstrap: "_index … can only have the by_id index").
+  for (const [name, fields] of Object.entries(SYSTEM_INDEXES))
+    if (d.name !== INDEX_TABLE || name === "by_id") out.set(name, { fields, staged: false });
   const exact = d.name === HIDDEN_TABLE_PLACEHOLDER;
   const system = d.name.startsWith("_");
   for (const [name, fields] of Object.entries(d.indexes)) {
@@ -656,28 +695,24 @@ export function planCatalog(
   tables: TableMeta[],
   indexes: IndexMeta[],
   userTables = true,
-  indexAllocator?: number,
-  tabletAllocator?: number,
+  /** The next `persistenceIndexId` (`_next_persistence_index_id`, STUDY-128): never a dropped index's. */
+  nextPersistenceIndexId?: number,
 ): CatalogChanges {
-  // A new table's tablet comes from its allocator (`_next_tablet_id`, STUDY-04 §7): never a purged table's; a
-  // new index's id from its own (`_next_persistence_index_id`, STUDY-128): never a dropped index's. Only the
-  // store's first catalog commit runs before they exist, when nothing was purged or dropped yet.
-  let nextTablet = tabletAllocator ?? Math.max(FIRST_TABLET - 1, ...tables.map((t) => t.tablet)) + 1;
-  let nextIndexId = indexAllocator ?? Math.max(FIRST_INDEX_ID - 1, ...indexes.map((i) => i.indexId)) + 1;
+  // A new table's tablet is its `_tables` row's id, and a new index's id its `_index` row's: the caller writes
+  // the rows (`writeCatalogChanges`). Random, so never a purged table's or a dropped index's.
+  let nextIndexId = nextPersistenceIndexId ?? Math.max(0, ...indexes.map((i) => i.persistenceIndexId)) + 1;
   const changes: CatalogChanges = {
     insertTables: [],
     insertIndexes: [],
     deleteIndexes: [],
     restageIndexes: [],
-    nextTablet,
     nextIndexId,
   };
-  // The bootstrap tables' fixed numbers are taken too (they have no `_tables` document of their own).
-  const usedNumbers = new Set([513, 514, ...tables.map((t) => t.number)]);
+  const usedNumbers = new Set(tables.map((t) => t.number));
   const active = activeTables(tables);
   let userTableCount = active.filter((t) => !t.name.startsWith("_")).length;
   for (const d of declared) {
-    let tablet = active.find((t) => t.name === d.name)?.tablet;
+    const tablet = active.find((t) => t.name === d.name)?.tablet;
     const isNew = tablet === undefined;
     if (tablet === undefined) {
       if (userTables && !d.name.startsWith("_") && userTableCount++ >= MAX_USER_TABLES) throw new TooManyTablesError();
@@ -692,10 +727,9 @@ export function planCatalog(
         while (usedNumbers.has(number) || (system && RESERVED_SYSTEM_NUMBERS.has(number))) number++;
       }
       usedNumbers.add(number);
-      tablet = nextTablet++;
-      changes.insertTables.push({ name: d.name, number, tablet, state: "active" });
+      changes.insertTables.push({ name: d.name, number, state: "active" });
     }
-    const stored = indexes.filter((i) => i.tablet === tablet);
+    const stored = tablet === undefined ? [] : indexes.filter((i) => i.tablet === tablet);
     const wanted = wantedIndexes(d);
     for (const [name, { fields, staged }] of wanted) {
       const enabled = stored.find((i) => i.name === name && i.state === "enabled");
@@ -712,13 +746,13 @@ export function planCatalog(
       // As Convex's: a new table's `by_id` and `by_creation_time`, and a new system table's indexes, are enabled
       // at once (`new_enabled`); a user index is backfilled even on a new, empty table (`new_backfilling`).
       const state = isNew && (name in SYSTEM_INDEXES || d.name.startsWith("_")) ? "enabled" : "backfilling";
-      const meta: Omit<IndexMeta, "_id"> = { tablet, name, fields, indexId: nextIndexId++, state };
+      const meta: NewIndex = { table: d.name, name, fields, persistenceIndexId: nextIndexId++, state };
+      if (tablet !== undefined) meta.tablet = tablet;
       if (state !== "enabled") meta.staged = staged;
       changes.insertIndexes.push(meta);
     }
     for (const i of stored) if (!wanted.has(i.name) && i.state !== "enabled") changes.deleteIndexes.push(i._id);
   }
-  changes.nextTablet = nextTablet;
   changes.nextIndexId = nextIndexId;
   return changes;
 }
@@ -768,9 +802,23 @@ export function finishCatalog(declared: Iterable<DeclaredTable>, tables: TableMe
 
 export const hasFinishChanges = (f: FinishChanges) => f.enable.length + f.disable.length + f.drop.length > 0;
 
-/** Build the resolved catalog from the stored metadata (bootstrap tables included). */
+/**
+ * Build the resolved catalog from the stored metadata (the bootstrap tables are rows like any other), after
+ * Convex's checks of it (`verify_invariants`, crates/database/src/database.rs; `IndexRegistry::bootstrap`): every
+ * active or hidden table has an enabled `by_id`, and every index's table exists.
+ */
 export function buildCatalog(tables: TableMeta[], indexes: IndexMeta[]): Catalog {
-  const c = bootstrapCatalog();
+  const c = new Catalog();
+  const known = new Set(tables.map((t) => t.tablet));
+  for (const i of indexes)
+    if (!known.has(i.tablet))
+      throw new CatalogError(`Table ${JSON.stringify(i.tablet)} is missing but has one or more indexes`);
+  for (const t of tables)
+    if (
+      t.state !== "deleting" &&
+      !indexes.some((i) => i.tablet === t.tablet && i.name === "by_id" && i.state === "enabled")
+    )
+      throw new CatalogError(`Missing \`by_id\` index for ${t.name}`);
   for (const t of tables)
     c.add(
       t.name,
@@ -790,6 +838,14 @@ export function buildCatalog(tables: TableMeta[], indexes: IndexMeta[]): Catalog
       t._id,
     );
   return c;
+}
+
+/** The stored catalog is not one a start can load (Convex's load failures, in its words). */
+export class CatalogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CatalogError";
+  }
 }
 
 // Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).

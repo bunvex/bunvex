@@ -6,12 +6,14 @@
 
 import type { DashboardShape } from "@bunvex/core";
 import {
+  compareInternalIds,
   type Engine,
   hasRetention,
   OutOfRetentionError,
   reduceShape,
   shapeOf,
   type TableDef,
+  type TabletId,
   UnionBuilder,
 } from "@bunvex/core";
 import { compareUtf8, formatExportFloat, fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
@@ -175,7 +177,7 @@ export function streamedTables(engine: Engine): TableDef[] {
   const c = engine.catalog;
   return [...c.tables.values(), ...c.hidden.values()]
     .filter((t) => !t.name.startsWith("_"))
-    .sort((a, b) => a.id - b.id);
+    .sort((a, b) => compareInternalIds(a.id, b.id));
 }
 
 /** `list_snapshot`: one table's documents at `snapshot`, by id, a page at a time. */
@@ -191,11 +193,11 @@ export async function listSnapshot(deps: Deps, args: Record<string, unknown>): P
     if (snapshotNs > now) throw bad("SnapshotTooNew", `Snapshot value ${snapshotNs} is in the future.`);
     if (now - snapshotNs > LIST_SNAPSHOT_MAX_AGE_NS) throw tooOld(snapshotNs);
   }
-  let cursor: { tablet: number; id: string | null } | null = null;
+  let cursor: { tablet: TabletId; id: string | null } | null = null;
   if (args.cursor !== undefined && args.cursor !== null) {
     try {
       const c = JSON.parse(args.cursor as string) as { tablet: unknown; id: unknown };
-      if (typeof c.tablet !== "number" || (c.id !== null && typeof c.id !== "string")) throw new Error();
+      if (typeof c.tablet !== "string" || (c.id !== null && typeof c.id !== "string")) throw new Error();
       cursor = { tablet: c.tablet, id: c.id };
     } catch {
       throw bad(
@@ -206,7 +208,7 @@ export async function listSnapshot(deps: Deps, args: Record<string, unknown>): P
   }
   const tables = streamedTables(engine)
     .map((t) => ({ t, cols: tableSelection(selection, t.name) }))
-    .filter((x) => x.cols !== null && (cursor === null || x.t.id >= cursor.tablet));
+    .filter((x) => x.cols !== null && (cursor === null || compareInternalIds(x.t.id, cursor.tablet) >= 0));
   const out = (values: string[], next: string | null) =>
     `{"values":[${values.join(",")}],"snapshot":${snapshotNs},"cursor":${next === null ? "null" : JSON.stringify(next)},"hasMore":${next !== null}}`;
   if (tables.length === 0) return out([], null);
@@ -279,7 +281,7 @@ export async function documentDeltas(deps: Deps, args: Record<string, unknown>):
         hasMore = true;
         break outer;
       }
-      commit.sort((a, b) => a.table - b.table || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      commit.sort((a, b) => compareInternalIds(a.table, b.table) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       for (const r of commit) {
         rowsRead++;
         const t = engine.catalog.byTablet(r.table);
