@@ -8,10 +8,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeId, v } from "@bunvex/values";
-import { TABLES_TABLE } from "../src/catalog.ts";
+import { SCHEDULED_JOB_ARGS_TABLE, SCHEDULED_JOBS_TABLE, TABLES_TABLE } from "../src/catalog.ts";
 import { Engine, TABLE_DELETION_BATCH } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
+import { dueJobs, getJob, insertJob } from "../src/scheduled-jobs.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
 
 const schema = defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]) });
@@ -190,4 +191,34 @@ test("deleteTables: one commit; a pending schema that uses a deleted table fails
   expect(row.state).toBe("failed");
   expect(row.error).toBe('Failed to delete table "loose" because it appears in the schema');
   await e.close();
+});
+
+test("replaceWithEmptyTables: a system table emptied in one commit, same number and indexes, and so after a restart", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "bunvex-hidden-"));
+  dirs.push(dir);
+  const open = async () => new Engine(schema, new SqlitePersistence(join(dir, "db.sqlite"), { durable: true })).init();
+  const e = await open();
+  const job = (engine: Engine, name: string) =>
+    engine.mutation((db) => insertJob(db, { name, args: [{}], scheduledTime: 1, now: 1 }));
+  const old = await job(e, "a.js:f");
+  await job(e, "b.js:g");
+  const before = e.catalog.table(SCHEDULED_JOBS_TABLE);
+  let inCommit = 0;
+  await e.replaceWithEmptyTables([SCHEDULED_JOBS_TABLE, SCHEDULED_JOB_ARGS_TABLE], async () => {
+    inCommit++;
+  });
+  expect(inCommit).toBe(1);
+  const after = e.catalog.table(SCHEDULED_JOBS_TABLE);
+  expect(after.id).not.toBe(before.id);
+  expect(after.number).toBe(before.number);
+  expect([...after.indexes.keys()].sort()).toEqual([...before.indexes.keys()].sort());
+  expect(await e.query((db) => dueJobs(db, 10, 100))).toEqual([]);
+  expect(await e.query((db) => getJob(db, old))).toBeNull();
+  await deleted(e);
+  await job(e, "c.js:h");
+  await e.close();
+  const again = await open();
+  expect((await again.query((db) => dueJobs(db, 10, 100))).map((j) => j.name)).toEqual(["c.js:h"]);
+  expect(again.catalog.table(SCHEDULED_JOBS_TABLE).id).toBe(after.id);
+  await again.close();
 });

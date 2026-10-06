@@ -141,7 +141,13 @@ test("bunvex import: the format and --table rules", async () => {
   expect(warned.err[0]).toBe(
     "Warning: Extension of file data.json (.json) does not match specified format: jsonLines (.jsonl).",
   );
-  expect((await t.run(["data.json", "--table", "x", "--append", "--replace"])).code).toBe(2);
+  // --append with --replace: no error, as Convex's (its conflict check never fires); --append wins.
+  const both = await t.run(["data.json", "--table", "x", "--replace", "--append"]);
+  expect(both.code).toBe(0);
+  expect(both.err.join("\n")).not.toContain("error:");
+  const two = await t.run(["a.json", "b.json"]);
+  expect([two.code, two.err[0]]).toEqual([1, "error: too many arguments for 'import'. Expected 1 argument but got 2."]);
+  expect((await t.run([])).err[0]).toBe("error: missing required argument 'path'");
   // Without an extension, --format decides.
   const arr = await t.run(["data", "--format", "jsonArray", "--table", "empty"]);
   expect(arr.err.at(-1)).toBe('Added 0 documents to table "empty".');

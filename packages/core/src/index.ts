@@ -18,12 +18,14 @@ export {
 } from "./backend-state.ts";
 export { bundledModule, provideBundledModules } from "./bundled-modules.ts";
 export {
+  AUTH_TABLE,
   BACKEND_STATE_TABLE,
   CANONICAL_URLS_TABLE,
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
   DATA_SYNC_PROGRESS_TABLE,
+  DATABASE_GLOBALS_TABLE,
   DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
@@ -33,6 +35,7 @@ export {
   IndexesUnavailableError,
   IndexStagedError,
   type IndexState,
+  indexTooLarge,
   LOG_SINKS_TABLE,
   MAX_USER_TABLES,
   MODULES_TABLE,
@@ -40,11 +43,14 @@ export {
   SCHEDULED_FUNCTIONS_TABLE,
   SCHEDULED_JOB_ARGS_TABLE,
   SCHEDULED_JOBS_TABLE,
+  SCHEMA_VALIDATION_PROGRESS_TABLE,
+  SCHEMA_VALIDATIONS_TABLE,
   SCHEMAS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
   SOURCE_PACKAGES_TABLE,
-  STORAGE_DELETIONS_TABLE,
   STORAGE_TABLE,
+  SYSTEM_TABLE_DESCRIPTIONS,
+  SYSTEM_TABLE_NUMBERS,
   SYSTEM_TO_VIRTUAL_TABLE,
   searchIndexesUnavailable,
   TooManyTablesError,
@@ -102,6 +108,13 @@ export type {
   WithOptionalSystemFields,
   WithoutSystemFields,
 } from "./data-model.ts";
+export {
+  DATABASE_VERSION,
+  type DatabaseGlobals,
+  readDatabaseGlobals,
+  type StorageTagInitializer,
+  type StorageType,
+} from "./database-globals.ts";
 export type {
   BaseDatabaseReader,
   BaseDatabaseReaderWithTable,
@@ -135,6 +148,7 @@ export {
   failExecution,
   formatDuration,
   installDeterminismIn,
+  monotonicNow,
   newUserTimer,
   observeTime,
   outsideExecution,
@@ -190,7 +204,17 @@ export {
 export { Expression, type ExpressionOrValue, filterBuilder } from "./filter.ts";
 export { opaqueToInspect } from "./inspect.ts";
 export { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
-export { compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
+export {
+  afterValues,
+  boundText,
+  compareKeys,
+  describeBound,
+  encodeKey,
+  type KeyBound,
+  type KeyValue,
+  keyValueText,
+  prefixEnd,
+} from "./keyenc.ts";
 export {
   DanglingReferenceError,
   DatabaseTimeoutError,
@@ -217,10 +241,18 @@ export {
   type ScanDocs,
   UnsureCommitError,
 } from "./persistence/index.ts";
-export { MAX_CACHE_AGE_MS, QUERY_CACHE_MAX_BYTES, QueryCache } from "./query-cache.ts";
+export {
+  type CachedResult,
+  type CacheEntry,
+  MAX_CACHE_AGE_MS,
+  type MissReason,
+  QUERY_CACHE_MAX_BYTES,
+  QueryCache,
+} from "./query-cache.ts";
 export { MAX_QUERY_OPERATORS } from "./query-ops.ts";
 export { type IndexPoint, ReadSetIndex } from "./read-set-index.ts";
 export { RETENTION_GLOBALS, Retention, type RetentionOptions } from "./retention.ts";
+export { type Runtime, type RuntimeTimer, realRuntime } from "./runtime.ts";
 export {
   argsFromBytes,
   argsToBytes,
@@ -256,6 +288,7 @@ export {
   type DocValidator,
   defineSchema,
   defineTable,
+  documentTypeError,
   docValidator,
   type Expand,
   type FieldValue,
@@ -273,6 +306,7 @@ export {
   type SchemaValidators,
   type SearchIndexDef,
   type SystemFieldValidators,
+  stagedDocumentError,
   type TableDef,
   TableDefinition,
 } from "./schema.ts";
@@ -283,7 +317,13 @@ export {
   schemaToJson,
   type TableJson,
 } from "./schema-json.ts";
-export { SEARCH_SNAPSHOT_GLOBAL, type SearchSnapshotStore } from "./search-snapshot.ts";
+export {
+  type SchemaValidation,
+  type SchemaValidationProgress,
+  schemaValidationProgress,
+  type ValidationState,
+} from "./schema-validations.ts";
+export type { SearchSegmentStore } from "./search-segments.ts";
 export {
   SESSION_CLEANUP_CHUNK,
   SESSION_CLEANUP_ROWS_PER_SECOND,
@@ -302,9 +342,31 @@ export {
   tableShape,
   UnionBuilder,
 } from "./shapes.ts";
-export { SystemReader } from "./system-reader.ts";
+export { APP_VISIBLE_SYSTEM_TABLES, SystemReader } from "./system-reader.ts";
 export { TableReader, TableWriter } from "./table-scope.ts";
 export { TableSummaries, TableSummariesUnavailableError, type TableSummary } from "./table-summaries.ts";
+export {
+  type AttributeValue,
+  CommitSpans,
+  DEFAULT_SAMPLER,
+  detached,
+  IndexReadSpans,
+  NO_TRACER,
+  newSpanId,
+  newTraceId,
+  parseSampler,
+  parseTraceparent,
+  type RemoteParent,
+  type Sampler,
+  SPAN_KIND,
+  Span,
+  type SpanKind,
+  type SpanSink,
+  STATUS,
+  sampled,
+  Tracer,
+  unixNanos,
+} from "./tracing.ts";
 export {
   formatBytes,
   ImportIdError,

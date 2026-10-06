@@ -7,6 +7,8 @@
 // Only an admin may call them (Convex's `queryPrivateSystem("ViewData")`); clients cannot, as no `_system`
 // name is in the public registry. Admin keys (Phase 3 item 6) will expose them over HTTP and WebSocket.
 import {
+  APP_VISIBLE_SYSTEM_TABLES,
+  AUTH_TABLE,
   type AuditLogActor,
   type Caller,
   CRON_JOB_LOGS_TABLE,
@@ -24,11 +26,15 @@ import {
   readBackendState,
   SCHEDULED_JOB_ARGS_TABLE,
   SCHEDULED_JOBS_TABLE,
+  SCHEMAS_TABLE,
   type ScheduledJobDoc,
   SNAPSHOT_IMPORTS_TABLE,
   STORAGE_TABLE,
   SYSTEM_ACTOR,
+  SYSTEM_TABLE_DESCRIPTIONS,
+  schemaValidationProgress,
   stringifyValue,
+  TableSummariesUnavailableError,
   type Tx,
 } from "@bunvex/core";
 import { type GenericValidator, type Value, v } from "@bunvex/values";
@@ -112,6 +118,11 @@ export type SystemQuery = {
   op?: DeploymentOp;
   /** Any admin may run it (Convex's `noPermissionRequired`). */
   noPermissionRequired?: true;
+  /**
+   * Only an admin's own call reaches it (the HTTP API, a sync session, the server in process): function code
+   * (an action's `runQuery`) never does, whatever its caller. For bunvex's debug queries (STUDY-131 AD-24).
+   */
+  adminCallOnly?: true;
   handler: (db: Tx, args: never, env: SystemEnv) => Promise<unknown>;
 };
 export type SystemMutation = SystemQuery;
@@ -141,6 +152,31 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
         const { secretAccessKey: _, ...config } = r.config;
         return { ...r, config };
       });
+    },
+  },
+  // The deployed auth providers (STUDY-129), as Convex's: the `_auth` documents as stored, oldest first.
+  "_system/frontend/listAuthProviders": {
+    args: {},
+    handler: (db) => db.asSystem(() => db.query(AUTH_TABLE).order("asc").collect()),
+  },
+  // The schemas (Convex's `_system/frontend/getSchemas`; the MCP server's `tables` tool, STUDY-121): the
+  // active one's JSON, and the one being validated (pending or validated), each left out when there is none.
+  "_system/frontend/getSchemas": {
+    args: { componentId },
+    op: "ViewData",
+    handler: async (db) => {
+      const rows = (await db.asSystem(() => db.query(SCHEMAS_TABLE).collect())) as unknown as {
+        state: string;
+        schema: string;
+      }[];
+      const one = (state: string) => rows.find((r) => r.state === state);
+      const [active, pending, validated] = [one("active"), one("pending"), one("validated")];
+      if (pending && validated) throw new Error("Unexpectedly found both pending and validated schemas");
+      const inProgress = pending ?? validated;
+      return {
+        ...(active ? { active: active.schema } : {}),
+        ...(inProgress ? { inProgress: inProgress.schema } : {}),
+      };
     },
   },
   // The deployment's run state (STUDY-63), as Convex's `_system/frontend/backendState`.
@@ -224,6 +260,52 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
         .query(table)
         .order(order)
         .paginate({ ...paginationOpts, maximumRowsRead, maximumBytesRead }),
+  },
+  // bunvex's system-table browser (STUDY-131 AD-24, an addition: Convex has none). Every system table the
+  // catalog has, private ones included, with its description and size. Read-only (a query), an admin's own
+  // call with ViewData only.
+  "_system/debug/systemTables": {
+    args: {},
+    adminCallOnly: true,
+    handler: async (db) =>
+      db.asSystem(async () => {
+        const out = [];
+        for (const name of db.systemTableNames())
+          out.push({
+            name,
+            description: SYSTEM_TABLE_DESCRIPTIONS[name] ?? "",
+            // readable by apps through `db.system` (projected), or private to the deployment
+            appVisible: APP_VISIBLE_SYSTEM_TABLES.includes(name),
+            // null while the table summaries are still bootstrapping after a start
+            documentCount: await db.countTable(name).catch((e) => {
+              if (e instanceof TableSummariesUnavailableError) return null;
+              throw e;
+            }),
+          });
+        return out;
+      }),
+  },
+  // A page of one system table, as `_system/cli/tableData` pages a user table, but past the hidden index:
+  // documents as stored, every field (for `_storage`, the hidden ones too).
+  "_system/debug/systemTable": {
+    args: {
+      table: v.string(),
+      order: v.optional(v.union(v.literal("asc"), v.literal("desc"))),
+      paginationOpts: paginationOptsValidator,
+    },
+    adminCallOnly: true,
+    handler: async (
+      db,
+      { table, order, paginationOpts }: { table: string; order?: "asc" | "desc"; paginationOpts: PaginationOptions },
+    ) => {
+      if (!table.startsWith("_")) throw new Error(`"${table}" is not a system table.`);
+      return db.asSystem(() =>
+        db
+          .query(table)
+          .order(order ?? "asc")
+          .paginate({ ...paginationOpts, maximumRowsRead, maximumBytesRead }),
+      );
+    },
   },
   // The CLI's `function-spec` reads the API's URL with it (Convex's `_system/cli/convexUrl:cloudUrl`, renamed
   // by rule 5): the deployment's `BUNVEX_CLOUD_URL`.
@@ -357,10 +439,30 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
       return (a._creationTime as number) > (b._creationTime as number) ? a : b;
     },
   },
+  // `bunvex dev` waits on it after a schema validation failure (STUDY-120, Convex's `_system/cli/queryTable`):
+  // it reads the whole table (its count) and returns a new random number each run, so a subscription to it
+  // gets a new result whenever any of the table's documents changes.
+  "_system/cli/queryTable": {
+    args: { tableName: v.string() },
+    op: "ViewData",
+    handler: async (db, { tableName }: { tableName: string }) => {
+      await db.asSystem(() => db.countTable(tableName));
+      return Math.random();
+    },
+  },
   // Convex's `tableSize` system functions (STUDY-52 PR 2): a table's document count, from the summaries.
   "_system/cli/tableSize": {
     args: { tableName: v.string() },
     handler: async (db, { tableName }: { tableName: string }) => db.asSystem(() => db.countTable(tableName)),
+  },
+  // The pending schema's validation progress (STUDY-127), as Convex's: its attempts' counters summed.
+  "_system/frontend/getSchemas:schemaValidationProgress": {
+    args: { componentId },
+    handler: async (db) =>
+      db.asSystem(async () => {
+        const rows = (await db.query(SCHEMAS_TABLE).collect()) as unknown as { _id: string; state: string }[];
+        return schemaValidationProgress(db, rows.find((r) => r.state === "pending")?._id ?? null);
+      }),
   },
   "_system/frontend/tableSize": {
     args: { tableName: v.string(), componentId },

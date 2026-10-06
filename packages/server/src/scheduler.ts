@@ -33,6 +33,7 @@ import {
   readBackendState,
   SCHEDULED_BY_NEXT_TS,
   SCHEDULED_JOBS_TABLE,
+  SPAN_KIND,
   stringifyValue,
   TooManyWritesError,
   type Tx,
@@ -44,7 +45,16 @@ import {
   getFunctionName,
   type OptionalRestArgs,
 } from "@bunvex/protocol";
-import { type GenericId, hasCommitTs, isSimpleObject, rawValueSize, type Value } from "@bunvex/values";
+import {
+  type GenericId,
+  hasCommitTs,
+  isSimpleObject,
+  MAX_VALUE_NESTING,
+  measureRawValue,
+  rawValueSize,
+  TOO_NESTED_MESSAGE,
+  type Value,
+} from "@bunvex/values";
 import { describeUncaught, newRequestId } from "./errors.ts";
 import { functionNameOf } from "./function-handles.ts";
 import { type Functions, type SourcedCaller, THROTTLED } from "./functions.ts";
@@ -117,8 +127,11 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
     const name = functions.scheduledTarget(
       await functionNameOf(fn, "db" in target ? target.db : null, functions.engineOf()),
     );
-    // As Convex's `validate_schedule_args`: arguments travel as plain values, so a commit timestamp
-    // placeholder cannot (STUDY-53).
+    // As Convex's `validate_schedule_args`: the positional args, `[args]`, are parsed as a value, so they nest
+    // at most 63 levels (STUDY-109); they travel as plain values, so a commit timestamp placeholder cannot
+    // (STUDY-53).
+    if (measureRawValue([args]).nesting > MAX_VALUE_NESTING)
+      throw new Error(`Invalid arguments for ${name}: ${TOO_NESTED_MESSAGE}`);
     if (hasCommitTs(args))
       throw new Error(`Invalid arguments for ${name}: Field name $commitTs starts with '$', which is reserved.`);
     return write(async (db) => {
@@ -227,10 +240,21 @@ export class ScheduledJobExecutor {
 
   start() {
     // Woken by commits that touch the queue (a job scheduled, canceled or rescheduled): no polling.
-    const byNextTs = this.engine.catalog.table(SCHEDULED_JOBS_TABLE).indexes.get(SCHEDULED_BY_NEXT_TS)!.id;
+    let jobs = this.engine.catalog.table(SCHEDULED_JOBS_TABLE);
+    let byNextTs = jobs.indexes.get(SCHEDULED_BY_NEXT_TS)!.id;
     // And by a pause or unpause (STUDY-63), as Convex's executors subscribe to `_backend_state`.
     const backendState = this.engine.catalog.table(BACKEND_STATE_TABLE).byId.id;
     this.engine.committer.onCommit((entries) => {
+      // The table replaced with an empty one (`/api/delete_scheduled_functions_table`, STUDY-113; the catalog
+      // changes before the listeners run): its new index from now on, and the sleep until a job that is gone
+      // dropped. A job running meanwhile finds its document gone, and records nothing.
+      const now = this.engine.catalog.table(SCHEDULED_JOBS_TABLE);
+      if (now.id !== jobs.id) {
+        jobs = now;
+        byNextTs = now.indexes.get(SCHEDULED_BY_NEXT_TS)!.id;
+        this.poke();
+        return;
+      }
       if (entries.some((e) => e.writes.some((w) => w.index === byNextTs || w.index === backendState))) this.poke();
     }, "scheduler");
     this.loop = this.run();
@@ -299,7 +323,9 @@ export class ScheduledJobExecutor {
         }
         nextAt = await this.engine.query((db) => nextJobTs(db, now));
         // At full capacity Convex keeps the time it had.
-        this.logStats(free > 0 ? (ready === undefined ? nextAt : ready) : this.lastReady, now);
+        const oldest = free > 0 ? (ready === undefined ? nextAt : ready) : this.lastReady;
+        this.oldestReady = oldest;
+        this.logStats(oldest, now);
       } catch (e) {
         if (e instanceof CommitterStoppedError) return;
         console.error("scheduled functions: the executor failed, retrying", e);
@@ -324,6 +350,21 @@ export class ScheduledJobExecutor {
 
   private lastStatsLog = 0;
   private lastReady: number | null = null;
+  /** The ready time of the oldest runnable job the last loop saw (`/metrics`), ms; null with none. */
+  private oldestReady: number | null = null;
+
+  /** Scheduled functions running now. */
+  get runningJobs(): number {
+    return this.running.size;
+  }
+
+  /**
+   * Convex's `scheduled_job_backlog_seconds`: how long the oldest runnable job has waited, 0 with none. It
+   * keeps growing while the loop does not run again, so a stalled executor shows.
+   */
+  backlogSeconds(now = wallClock()): number {
+    return this.oldestReady === null ? 0 : Math.max(0, now - this.oldestReady) / 1000;
+  }
 
   /**
    * Convex's scheduler stats for the app metrics (`log_scheduled_job_stats`): logged when the next ready
@@ -358,7 +399,19 @@ export class ScheduledJobExecutor {
     return now !== null && stringifyValue(now) === stringifyValue(job);
   }
 
-  private async execute(job: JobDoc, args: Value[] | { error: string }) {
+  /**
+   * Traced (STUDY-131 AD-26), each run is a `scheduler/run` trace of its own, with the function's execution
+   * under it (Convex's scheduler opens a root span per job too).
+   */
+  private execute(job: JobDoc, args: Value[] | { error: string }): Promise<void> {
+    const tracer = this.engine.tracer;
+    if (!tracer.on) return this.executeJob(job, args);
+    const span = tracer.root("scheduler/run", SPAN_KIND.consumer);
+    span?.set("bunvex.scheduler.job_id", job._id).set("bunvex.function.path", job.name);
+    return tracer.within(span, () => this.executeJob(job, args)).finally(() => span?.finish());
+  }
+
+  private async executeJob(job: JobDoc, args: Value[] | { error: string }) {
     this.stats.started++;
     const target = this.functions.scheduledKind(job.name);
     try {
