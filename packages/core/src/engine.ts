@@ -139,6 +139,7 @@ import {
   type Doc,
   documentValidator,
   MAX_VECTOR_DIMENSIONS,
+  maintainedIndexes,
   referencedTables,
   type SchemaDefinition,
   SYSTEM_INDEXES,
@@ -537,8 +538,11 @@ export class Engine {
       if (!this.closed) console.error(`bunvex: table summaries failed to build: ${err.message}`);
     });
     // So does retention (STUDY-33, Convex's leader-only `LeaderRetentionManager`), on a store that has it.
-    if (hasRetention(this.persistence) && typeof this.persistence.readLog === "function") {
-      this.retention = new Retention(this.persistence, this.committer, this.opts.retention);
+    if (hasRetention(this.persistence)) {
+      this.retention = new Retention(this.persistence, this.committer, this.opts.retention, (tablet) => {
+        const t = this.catalog.byTablet(tablet);
+        return t ? maintainedIndexes(t) : [];
+      });
       await this.retention.start();
     }
     return this;

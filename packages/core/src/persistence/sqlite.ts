@@ -24,7 +24,6 @@ import type {
   InternalId,
   Lease,
   LeaseAcquire,
-  LogCommit,
   Persistence,
   RetentionStore,
   TabletId,
@@ -41,7 +40,6 @@ import {
   type ReadOnlyFlag,
 } from "./layout.ts";
 import { ProcessLock } from "./lock.ts";
-import { groupLog } from "./log.ts";
 import { scanLatestSync } from "./scan.ts";
 
 // Bun's per-statement switch (since 1.1.x), missing from its type declarations: integers come back as `bigint`.
@@ -70,7 +68,6 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   private scanDesc;
   private getDoc;
   private docAt;
-  private logRows;
   private logPrev;
   private docLogRows;
   private pruneIdx;
@@ -78,8 +75,8 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   private inTx = false;
   /** The highest ts applied since the last flush. */
   private top = 0n;
-  /** The highest durable ts, once this handle writes: readLog's bound while a group sits uncommitted in
-   *  this connection's open transaction (PERSIST-01 C11). Only the lock holder writes, so it stays exact. */
+  /** The highest durable ts, once this handle writes: the document log's bound while a group sits
+   *  uncommitted in this connection's open transaction (PERSIST-01 C12). Only the lock holder writes, so it stays exact. */
   private durableTs: bigint | null = null;
 
   constructor(
@@ -126,14 +123,7 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       .safeIntegers(true);
     // An index entry's document at the entry's own ts (Convex's exact-ts join, DV-67 reversed).
     this.docAt = this.db.prepare(`select json_value, deleted from documents where table_id = ? and id = ? and ts = ?`);
-    // The rows of the first ?3 commits in (?1, ?2], in ts order: the inner query walks the ts index to find
-    // the last of those commits, the outer one reads every row up to it.
-    this.logRows = this.db
-      .prepare(`select ts, index_id, key, table_id, document_id from indexes
-        where ts > ?1 and ts <= (select max(ts) from (select distinct ts from indexes
-                                 where ts > ?1 and ts <= ?2 order by ts limit ?3))
-        order by ts`)
-      .safeIntegers(true);
+    // The newest ts written (the durable prefix, once a flush has committed it).
     this.logPrev = this.db.prepare(`select max(ts) as m from indexes where ts <= ?`).safeIntegers(true);
     this.docLogRows = this.db
       .prepare(`select ts, table_id, id, deleted, prev_ts from documents
@@ -272,27 +262,8 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     }
   }
 
-  /** PERSIST-01 C11. Committed rows are durable (a flush is one transaction); rows of a group applied but
-   *  not yet flushed are visible to this connection only, and the bound leaves them out. */
-  readLog(afterTs: bigint, upToTs: bigint, limit: number): LogCommit[] {
-    if (limit <= 0) return [];
-    const hi = this.inTx ? minTs(upToTs, this.durableTs ?? 0n) : upToTs;
-    const rows = this.logRows.all(afterTs, hi, limit) as {
-      ts: bigint;
-      index_id: string;
-      key: Uint8Array;
-      table_id: string | null;
-      document_id: string | null;
-    }[];
-    if (!rows.length) return [];
-    const prev = this.logPrev.get(afterTs) as { m: bigint | null };
-    return groupLog(
-      rows.map((r) => ({ ts: r.ts, index: r.index_id, key: r.key, table: r.table_id, id: r.document_id })),
-      prev.m ?? 0n,
-    );
-  }
-
-  /** PERSIST-01 C12, as readLog over `documents`. */
+  /** PERSIST-01 C12. Rows of a group applied but not yet flushed are visible to this connection only; the
+   *  bound leaves them out. */
   readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): DocLogRow[] {
     if (limit <= 0) return [];
     const hi = this.inTx ? minTs(upToTs, this.durableTs ?? 0n) : upToTs;

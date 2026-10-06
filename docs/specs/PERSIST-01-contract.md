@@ -11,7 +11,7 @@
 > **v2.5, 1 Oct 2026:** C11 (the log by timestamp) and K25, from STUDY-24 H11 (K24 is the index backfill's,
 > STUDY-29). **v2.6, 1 Oct 2026:** C4 bounded flushes (the committer writes a group in write batches, DV-62)
 > and K26, from STUDY-06 §10. **v2.7, 1 Oct 2026:** C12–C14 (the document log, pruning, globals: what retention
-> needs) and K27–K29, from STUDY-33. **v2.8, 3 Oct 2026:** C15 (index references), from STUDY-09 §1.6; K30–K31. **v2.9, 3 Oct 2026:** C16 (document versions) and K32, for streaming export's per-document timestamps (owner, 2026-10-03). **v3.0, 6 Oct 2026 (STUDY-133 PR 3):** internal ids and `prev_ts` in C1; `scan` returns documents through the exact-ts join (C3, C6; `scanDocs` is gone); `get` returns a version; C15 rewritten for the join; C17 (index entries at past timestamps); K30–K31 rewritten, K34–K36. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> needs) and K27–K29, from STUDY-33. **v2.8, 3 Oct 2026:** C15 (index references), from STUDY-09 §1.6; K30–K31. **v2.9, 3 Oct 2026:** C16 (document versions) and K32, for streaming export's per-document timestamps (owner, 2026-10-03). **v3.0, 6 Oct 2026 (STUDY-133 PR 3):** internal ids and `prev_ts` in C1; `scan` returns documents through the exact-ts join (C3, C6; `scanDocs` is gone); `get` returns a version; C15 rewritten for the join; C17 (index entries at past timestamps); K30–K31 rewritten, K34–K36. **v3.1, 6 Oct 2026 (STUDY-133 PR 10):** retention walks the document log by `prev_ts`, as Convex's: C11 (`readLog`) and K25 retired, C12–C13 and K27–K28 rewritten. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -250,48 +250,30 @@ are in `@bunvex/core/persistence` (`layout.ts`); the current layout is `LAYOUT_V
   `layoutVersion`, `setLayoutVersion`, `makeForeign` and `foreignIntact` hooks, and an `open` that takes
   `allowReadOnly`.
 
-## C11 — the log by timestamp
+## C11 — the log by timestamp (retired)
 
-The store's commits, read in ts order: what a follower, a catch-up after a dropped stream, retention and
-export read (STUDY-24 §4.3, decided as H11 by the owner on 2026-10-01; STUDY-09 D6). The log is the
-**`indexes`** collection by ts, not `documents`: every commit the engine makes writes index entries (each
-document version rewrites its `by_id` entry). An index backfill's entries are not commits (C17).
-
-`readLog(afterTs, upToTs, limit)` returns `LogCommit[]`, `{ ts, prevTs, writes }`:
-
-- **The window.** Exactly the commits with `afterTs < ts ≤ min(upToTs, M)`, where `M` is the durable
-  prefix (C4/C7: `maxTs()`), in increasing ts order. A commit applied but not yet made durable by its
-  `flush()`, or a group in flight, is never returned, whatever `upToTs` says. Neither is a row above `M`
-  (the remains of an interrupted flush, before recovery deletes them).
-- **Whole commits.** At most `limit` commits, never part of one: a commit's entries all come back, or the
-  commit is left for the next call. `limit ≤ 0` returns nothing.
-- **`writes`** is the commit's index write set, `(index, key, id | null)` as `apply` received it (`null`:
-  the entry was removed), which is the committer's `LogEntry.writes`. The order inside a commit is
-  unspecified. Keys come back whole, however the store splits them (C3).
-- **`prevTs`** is the ts of the commit just before this one in the log, or 0 if there is none: for the
-  first commit returned, the newest commit with `ts ≤ afterTs`. Timestamps are sparse (C1), so a reader
-  cannot tell a gap from `ts` alone: it checks `prevTs` against the last ts it holds, and catches up with
-  `readLog(last, …)` when they differ. Paging is `readLog(lastTsOfThePreviousPage, upTo, n)`.
-- **Cost.** Every driver keeps an index on `indexes.ts` (memory: the commits in an array, appended in ts
-  order). A call reads the index and the rows it returns, never a scan of the store (STUDY-24 §4.3.1
-  has the numbers). It needs no lease and writes nothing. On a remote store it is a read (C8, C9): bounded
-  by the call timeout and run once more after a timeout or a lost connection.
-- **The ts index on an existing store.** It is created with the tables. A store written before C11 gets it
-  as an upgrade would: Postgres, MySQL and SQLite build it when the lease is acquired (a plain index build
-  blocks writers, so only the holder does it, before it writes, in one timed call that is not retried);
-  MongoDB at open, like its other indexes
-  (STUDY-25 L1), since its index builds do not block writers.
-
-Optional in the interface (a third-party driver without it behaves as before); required of the first-party
-drivers, which all implement it: memory, sqlite, postgres, mysql and mongodb. Conformance K25.
+Removed by STUDY-133 PR 10. It was `readLog(afterTs, upToTs, limit)`: the commits with their index write
+sets, read from `indexes` by ts (STUDY-24 H11). Its only reader was the index retention pass, which now walks
+the document log (C12) by `prev_ts` and re-derives the replaced versions' index keys, as Convex's retention
+does; Convex has no such read. The number is kept so the others do not move. Drivers still keep their
+`indexes` ts indexes until PRs 4–7 give each one Convex's DDL.
 
 ## C12 — the document log by timestamp
 
 `readDocumentLog(afterTs, upToTs, limit)` returns `{ ts, table, id, deleted, prevTs }[]` (`prevTs` as
-written, C1): the stored document versions of the commits with `afterTs < ts ≤ min(upToTs, M)`, in ts order, with C11's rules (durable only,
-whole commits, at most `limit` commits, a read that needs no lease). Retention reads it to find the
-document versions a newer one supersedes (STUDY-33 R2). Every driver keeps an index on `documents.ts`,
-created as C11's: with the tables, or for an existing store when the lease is acquired (MongoDB at open).
+written, C1): the stored document versions of the commits with `afterTs < ts ≤ min(upToTs, M)`, in ts order.
+
+- **Durable only.** `M` is the durable prefix (C4/C7: `maxTs()`). A commit applied but not yet made durable by
+  its `flush()`, or a group in flight, is never returned, whatever `upToTs` says; neither is a row above `M`
+  (the remains of an interrupted flush, before recovery deletes them).
+- **Whole commits.** At most `limit` commits, never part of one. `limit ≤ 0` returns nothing. Paging is
+  `readDocumentLog(lastTsOfThePreviousPage, upTo, n)`.
+- **Cost.** A read of an index on `documents.ts` and the rows it returns, never a scan of the store. It needs
+  no lease and writes nothing; on a remote store it is a read (C8, C9). The index is created with the tables,
+  or for an existing store when the lease is acquired (MongoDB at open).
+
+Retention reads it for both of its passes (STUDY-33, as Convex's `retention.rs`): each row whose `prevTs` is
+set is a revision pair, the version it replaced and itself (C13).
 
 ## C13 — pruning
 
@@ -300,10 +282,17 @@ stored version of one index key `(index, key)` or one document `(table, id)` at 
 (Convex's `ts <= X` deletes), and return how many rows went. `through` is how far the caller read the
 log; a driver that keeps its log apart from its rows (memory) may forget the log up to there.
 
-- **What the engine deletes.** Only versions that no snapshot at or above its window can see (STUDY-33):
-  for a row of the log at or below the window, a live row supersedes the versions below it (`ts − 1`), and a
-  tombstone takes itself too (`ts`). A store must answer every snapshot at or above that window exactly as
-  before. Below it, reads (and the logs, C11/C12) return what is left.
+- **What the engine deletes.** Only versions that no snapshot at or above its window can see (STUDY-33), from
+  the revision pairs of the document log (C12) at or below the window, as Convex's retention:
+  - index entries (Convex's `expired_index_entries`): for each row with a `prevTs`, both versions are read
+    back with `get`, and the replaced version's key on every index of its table is pruned at `prevTs`; when
+    the new version's key differs or the document was deleted, at the row's own `ts` too (the tombstone the
+    new version wrote). A row without `prevTs` replaced nothing;
+  - documents (Convex's `expired_documents`): `(table, id, prevTs)` for each row with a `prevTs`, and
+    `(table, id, ts)` for a delete (its tombstone).
+
+  A store must answer every snapshot at or above that window exactly as before. Below it, reads (and the
+  document log, C12) return what is left.
 - **Idempotent.** Pruning the same entries again deletes nothing; a remote store may run a prune once more
   after a lost connection (C9).
 - **Only the lease holder** prunes. A prune by a process without the lease throws `LeaseLostError` and
@@ -359,10 +348,9 @@ each entry at the ts of the document version it indexes, so that the exact-ts jo
   included).
 - **Seen like any entry.** A scan at `T ≥ ts` sees the entry (unless a newer one of its key shadows it); one
   at `T < ts` does not.
-- **Not a commit.** The call adds no commit to the log (C11: the commits and their `prevTs` chain are
-  unchanged) and does not move `maxTs`. Whether the entries appear in the write set of an existing commit at
-  the same ts is unspecified: a store whose log is its `indexes` by ts (SQL, MongoDB) lists them there, memory
-  does not; readers of the log must not depend on either.
+- **Not a commit.** The call writes no document version, so the document log (C12) is unchanged, and it does
+  not move `maxTs`. Retention prunes the entries like any other: an entry at a version's ts goes once a newer
+  version of its document is at or below the window (C13).
 - **Durable when it returns**, and survives a reopen.
 - **Only the lease holder** writes: a caller without the lease gets `LeaseLostError` and nothing is written.
 
@@ -393,18 +381,18 @@ Required of every driver. Conformance K36 (and K24, through the engine's backfil
 | K21 | transient errors are retried (C9, remote stores) | the proxy of K20 resets the connection of a request carrying a marker, or lets a COMMIT through and drops every answer after it: a read whose connection is lost answers through one retry, and fails when the retry loses its connection too; a connection lost in the middle of a flush is retried: the commit is acknowledged once and stored once (all three stores; DV-123); a COMMIT that lands while its answer is lost is retried, found landed through the lease record and acknowledged exactly once, the committer still running, and after a reopen the store holds the group exactly once (`auditRowsAt`), with `maxTs` at its ts (DV-124) |
 | K22 | layout version | a new store records `LAYOUT_VERSION` and reopens; with its record removed (a store written before C10) it opens with its data and is stamped again; with a future or unknown version (`2`, `999`, `"v1-beta"`) it is refused with `LayoutError` naming it, and the record is left as it was; a store bunvex did not write (Convex's own tables, or a stranger's file) is refused with `LayoutError` and not written to |
 | K23 | read-only flag | after `setReadOnly(true)`, opening for writing fails with `ReadOnlyError`; `allowReadOnly` opens it and reads its data; after `setReadOnly(false)`, a writer opens and commits |
-| K25 | the log by timestamp (C11) | 300 random commits on a fresh store (sparse timestamps, removed entries, index-only commits, keys longer than 2500 bytes) flushed in groups. `readLog` over the whole log, over 300 random windows (bounds on commits, inside gaps and outside the log; empty windows; limits from 0 up) and paged by 7 equals the reference model: whole commits in ts order, exact write sets, an unbroken `prevTs` chain. A group applied but not flushed is not returned; the log is the same after a reopen. Through the engine, the log between two snapshots is exactly the committer's commits and their write sets (the committer's developer ids mapped to internal ids); a background index backfill (STUDY-29) adds nothing to the log (C17), and its entries cover every document, each at its document version's own ts |
-| K26 | bounded flushes (C4, DV-62) | through the engine: 64 writers of 2 KiB documents and one 1 100-document commit, under an injected limit that fails any flush breaking the batch rule (everything before its last commit under 64 documents and 64 KiB): groups are split, no flush is over, the large commit is visible whole at its ts, every document stored; flushes of split groups failing transiently (before the store, or after it with the answer lost) are retried: every commit acknowledged once and stored once, in ts order; SIGKILL in the middle of split groups (a child announces each flush's timestamps before it starts): `maxTs` ≥ the last acknowledged commit, no torn commit, and every announced commit at or below `maxTs` is in `readLog` (a prefix) |
-| K27 | the document log (C12) | 400 random commits (inserts, rewrites at the same key, moved keys, deletes, tombstones of documents that never lived, index-only commits) flushed in groups: `readDocumentLog` over the whole log and 200 random windows with limits equals the reference model, whole commits in ts order, each row with its `prevTs` |
-| K28 | pruning (C13) | at two successive windows, the prunes retention computes from both logs, applied in random chunks: scans (asc, desc, limited) and gets at snapshots at and above the window answer exactly as before; exactly the superseded rows are gone (`auditRowCount` against the model) and the reported count matches; pruning again deletes nothing; the logs above the window are unchanged; a commit after pruning reads back |
+| K25 | retired (C11) | removed by STUDY-133 PR 10 with `readLog`: retention reads the document log (C12), as Convex's |
+| K26 | bounded flushes (C4, DV-62) | through the engine: 64 writers of 2 KiB documents and one 1 100-document commit, under an injected limit that fails any flush breaking the batch rule (everything before its last commit under 64 documents and 64 KiB): groups are split, no flush is over, the large commit is visible whole at its ts, every document stored; flushes of split groups failing transiently (before the store, or after it with the answer lost) are retried: every commit acknowledged once and stored once, in ts order; SIGKILL in the middle of split groups (a child announces each flush's timestamps before it starts): `maxTs` ≥ the last acknowledged commit, no torn commit, and every announced commit at or below `maxTs` is in `readDocumentLog` (a prefix) |
+| K27 | the document log (C12) | 400 random commits (inserts, rewrites at the same key, moved keys, deletes, tombstones of documents that never lived; backfill entries written by `writeIndexEntries` at document versions' own ts) flushed in groups: `readDocumentLog` over the whole log and 200 random windows with limits equals the reference model, whole commits in ts order, each row with its `prevTs` |
+| K28 | pruning (C13) | at two successive windows, the prunes retention computes from the document log's revision pairs (`prevTs`; both versions read with `get`, their keys re-derived) equal the model's, and, applied in random chunks: scans (asc, desc, limited) and gets at snapshots at and above the window answer exactly as before; exactly the superseded rows are gone (`auditRowCount` against the model) and the reported count matches; a key whose document moved keeps no entry at the replaced version's ts, and a backfill entry superseded by a later version is gone; pruning again deletes nothing; the document log above the window is unchanged; a commit after pruning reads back |
 | K29 | globals and the fence (C14, C13) | a global reads back as set (null when unset) and survives a reopen; after `releaseLease`, `pruneIndexes`, `pruneDocuments` and `setGlobal` throw `LeaseLostError` and change nothing; on TTL leases, a holder whose lease was taken over is refused the same way |
 | K30 | index references (C15) | an index entry whose document was never written and one whose document was deleted while the entry stayed, among live ones: `scan` over the whole index (both directions), over each broken entry alone and below the delete rejects with `DanglingReferenceError` carrying the right `deleted` flag; `get` is null for both (and the deleted one reads below its delete); ranges with no broken entry return their documents, each with its ts. From Convex's `query_dangling_reference` and `query_reference_deleted_doc` |
 | K31 | one id in two tables (C15) | the same id written in two tables in one commit (different documents, one index each), then replaced in one and deleted in the other: `get` and `scan` answer each table's own document at every snapshot. From Convex's `same_internal_id_multiple_tables` |
 | K35 | the exact-ts join (C6) | an entry at ts 60 for a document whose only version is at 50 rejects with `DanglingReferenceError` (`deleted` false, the entry's ts 60), although the version at 50 is visible at 60; an entry at 50 joins the version at 50, also after the document gets a version at 70 (read at a snapshot above 70). From Convex's `index_scan_inner` join on `(table, id, ts)` |
 | K32 | document versions (C16) | a random history of 200 commits over two tables with the same ids (inserts, rewrites, deletes, re-inserts), flushed in random groups: `getVersions` at 120 random snapshots, with unknown and repeated ids, equals the reference model (version and ts, null when missing or deleted) and agrees with `get`; no ids give `[]` |
-| K33 | nanosecond timestamps (C1) | two commits one nanosecond apart at a real ns ts above 2^53 (2026-10-06, with a sub-µs part), then a reopen: `maxTs`, `get` (at T1, T1 + 1 ns, T1 − 1 ns), `getVersions`, `scan`, `readLog` (`prevTs` too) and `readDocumentLog` return the exact values. STUDY-133 PR 1 |
+| K33 | nanosecond timestamps (C1) | two commits one nanosecond apart at a real ns ts above 2^53 (2026-10-06, with a sub-µs part), then a reopen: `maxTs`, `get` (at T1, T1 + 1 ns, T1 − 1 ns), `getVersions`, `scan` and `readDocumentLog` return the exact values. STUDY-133 PR 1 |
 | K34 | `prev_ts` (C1, C12) | versions written directly at 10, 20 and 30 (a delete) with `prevTs` null, 10 and 20: `readDocumentLog` returns them as written after a reopen; through the engine, an insert, two patches and a delete: each version's `prevTs` is the ts of the one before it (null for the insert). STUDY-133 PR 3 |
-| K36 | index entries at past timestamps (C17) | three commits (ts 100, 200, 300; a document's second version at 300), then `writeIndexEntries` for a new index at each document's own ts (300 and 200): a scan at 250 sees only the entry at 200, one at 400 both, each joined to its version; an entry at the same (index, key, ts) replaces the stored one (here a removal); the log's commits stay `[100, 200, 300]` with their `prevTs` chain and `maxTs` stays 300; the entries survive a reopen; with another handle holding the lease, `writeIndexEntries` throws `LeaseLostError` and nothing changes. STUDY-133 PR 3 |
+| K36 | index entries at past timestamps (C17) | three commits (ts 100, 200, 300; a document's second version at 300), then `writeIndexEntries` for a new index at each document's own ts (300 and 200): a scan at 250 sees only the entry at 200, one at 400 both, each joined to its version; an entry at the same (index, key, ts) replaces the stored one (here a removal); `maxTs` stays 300; the entries survive a reopen; with another handle holding the lease, `writeIndexEntries` throws `LeaseLostError` and nothing changes. STUDY-133 PR 3 |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit

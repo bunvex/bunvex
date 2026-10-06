@@ -1,7 +1,7 @@
 // K33 — nanosecond timestamps (PERSIST-01 C1, STUDY-133 §5.3): a commit ts is a 64-bit integer of nanoseconds,
 // above 2^53, stored and read back exactly. Two commits one nanosecond apart (inside one microsecond, as a
 // Linux-written Convex store has them) stay two distinct, ordered commits through a reopen: `maxTs`, `get`,
-// `getVersions`, `scan`, `readLog` and `readDocumentLog` all see the exact values.
+// `getVersions`, `scan` and `readDocumentLog` all see the exact values.
 import { encodeKey, hasLease, hasRetention, type Persistence } from "@bunvex/core";
 import { tid } from "./ids.ts";
 import type { DriverModule } from "./index.ts";
@@ -60,13 +60,6 @@ export async function nanosecondChecks(mod: DriverModule, check: Check) {
         at2[1]!.json === `{"v":2}`,
       "K33 scan at T1 and T1 + 1ns sees one and two entries, each joined at its own exact ns",
     );
-    if (st.readLog) {
-      const log = await st.readLog(T1 - 1n, T2, 10);
-      check(
-        log.length === 2 && log[0]!.ts === T1 && log[1]!.ts === T2 && log[1]!.prevTs === T1,
-        "K33 readLog returns both commits at their exact ns, the second's prevTs the first's",
-      );
-    }
     if (hasRetention(st)) {
       const docs = await st.readDocumentLog(T1 - 1n, T2, 10);
       check(

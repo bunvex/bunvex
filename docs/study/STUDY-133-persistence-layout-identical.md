@@ -778,3 +778,26 @@ The probe scripts (`inject.py`, `cx.sh`, `shapes.py`, the ts bench) are in the s
   conflict of a mutation older than an index). Sabotage: `prevTs: null` (red), the SQLite join by `ts >=` (red),
   backfill entries at the snapshot (red), no catalog touches (red), memory log without `prevTs` (K34 red),
   `insert or ignore` for entries (K36 red), Postgres entries without the fence (K36 red).
+
+### PR 10 — retention by `prev_ts`
+
+- The index pass is Convex's `expired_index_entries`: it walks the document log (PERSIST-01 C12) up to the
+  window. For each version with a `prev_ts` it reads both versions, re-derives the replaced version's key on
+  every index of the table (enabled or being built), and deletes that key at or below `prev_ts`. Where the key
+  changed or the document was deleted, it also deletes the tombstone the new version wrote, at or below its
+  ts. A predecessor already pruned is skipped, as Convex's. DV-154 reversed.
+- The document pass is Convex's `expired_documents`: each version's predecessor at `prev_ts`, and a delete's
+  own tombstone. DV-155 reversed. DV-419 is resolved in full.
+- `readLog` (PERSIST-01 C11, the `indexes` log by ts) had no other reader and is removed from the interface
+  and from every driver, with conformance K25 (PERSIST-01 v3.1). Convex has no such read. DV-120 (followers
+  read `indexes` by ts) is resolved with it: the log is `documents` by ts.
+- An index tombstone with no `prev_ts` is never pruned. Only a document created and deleted in one
+  transaction would write one, and the engine writes no index entry for that.
+- Measured: 4000 documents with two indexes, 5 patches each (20 000 revision pairs), passes run to the end by
+  hand, median of 3, ms, load average ~15. Memory: index pass 80 → 148, document pass 9 → 6. SQLite: index
+  pass 827 → 1008, document pass 335 → 246. The index pass now reads two versions per pair, as Convex's.
+  This is background work, rate-limited in production.
+- Tests: `retention-prev-ts.test.ts` (a moved key, a backfilled index, the document pass, a pruned
+  predecessor) and conformance K27–K29 deriving the prunes from the store's revision pairs. Sabotage: no
+  tombstone prune (red), prune at `prevTs - 1` (red), always prune at the new ts (red), the document pass
+  without a delete's tombstone (red), without the pruned-predecessor skip (red).

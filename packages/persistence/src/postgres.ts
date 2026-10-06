@@ -42,7 +42,6 @@ import {
   type DocVersion,
   type DocWrite,
   decodeLayoutVersion,
-  groupLog,
   type IndexEntryAt,
   type IndexedDoc,
   type IndexId,
@@ -53,7 +52,6 @@ import {
   type Lease,
   type LeaseAcquire,
   LeaseLostError,
-  type LogCommit,
   MAX_KEY_PREFIX_LEN,
   type OpenOptions,
   opaqueToInspect,
@@ -664,59 +662,17 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
     return versionsInOrder(ids, found);
   }
 
-  /**
-   * PERSIST-01 C11, one statement (one snapshot): the bound is the lease row's max_ts (the durable prefix,
-   * written in the same transaction as each group), `c` walks the ts index to the last of the first
-   * `limit` commits, and the rows up to it come back in ts order with the newest ts at or before `afterTs`
-   * (one more index probe).
-   */
-  async readLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<LogCommit[]> {
+  /** PERSIST-01 C12, the document log by ts. */
+  async readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<DocLogRow[]> {
     if (limit <= 0) return [];
+    const [after, upTo, n] = inlineBounds(afterTs, upToTs, limit);
     // The bounds are inlined, not bound: a prepared statement may switch to a generic plan after five runs,
     // and without the values Postgres estimates a range on ts as a large part of the table and plans
     // sequential scans (36 ms against 0.7 ms at 300k rows, measured with plan_cache_mode =
     // force_generic_plan). Inlined, every call gets the index plan. They are integers, checked here.
-    const [after, upTo, n] = inlineBounds(afterTs, upToTs, limit);
-    // `c` finds the first `limit` commit timestamps one index probe at a time (a loose index scan): a plain
-    // `select distinct ts … order by ts limit n` is planned from statistics, and on a log that just grew
-    // they say the range is small, so Postgres hashes the whole range and sorts it (54 ms against 3 ms for
-    // 1000 commits at 300k rows, measured); `order by ts limit 1` walks the index whatever they say.
-    // One statement, so a read (STUDY-25 L3/L5): bounded by the call timeout, run once more on a fresh pool
-    // if its connection was lost or it timed out.
-    const rows = await this.read((sql) =>
-      sql.unsafe(
-        `with recursive
-         b as (select least(${upTo}, coalesce((select max_ts from bunvex_lease where id = 1), ${upTo})) as hi),
-         c(ts, n) as (
-           (select ts, 1 from indexes, b where ts > ${after} and ts <= b.hi order by ts limit 1)
-           union all
-           select (select i.ts from indexes i, b where i.ts > c.ts and i.ts <= b.hi order by i.ts limit 1), c.n + 1
-           from c where c.n < ${n} and c.ts is not null)
-       select ts, index_id, key_prefix, key_suffix, table_id, document_id,
-              (select max(ts) from indexes where ts <= ${after}) as prev
-       from indexes where ts > ${after} and ts <= (select max(ts) from c) order by ts`,
-        [],
-        { prepare: false },
-      ),
-    );
-    if (!rows.length) return [];
-    return groupLog(
-      rows.map((r) => ({
-        ts: BigInt(r.ts),
-        index: r.index_id as string,
-        key: r.key_suffix ? Buffer.concat([r.key_prefix, r.key_suffix]) : (r.key_prefix as Uint8Array),
-        table: r.table_id as string | null,
-        id: r.document_id as string | null,
-      })),
-      BigInt(rows[0].prev ?? 0),
-    );
-  }
-
-  /** PERSIST-01 C12: as readLog, over `documents`. */
-  async readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): Promise<DocLogRow[]> {
-    if (limit <= 0) return [];
-    const [after, upTo, n] = inlineBounds(afterTs, upToTs, limit);
-    // Bounds inlined and commits found one index probe at a time, for readLog's reasons.
+    // Commits are found one index probe at a time (a loose index scan): a plain `select distinct ts … order by
+    // ts limit n` is planned from statistics, and on a log that just grew they say the range is small, so
+    // Postgres hashes the whole range and sorts it (54 ms against 3 ms for 1000 commits at 300k rows).
     const rows = await this.read((sql) =>
       sql.unsafe(
         `with recursive

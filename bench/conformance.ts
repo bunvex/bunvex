@@ -24,8 +24,6 @@ for (const name of drivers) {
     requireLayout: ["memory", "sqlite", "postgres", "mysql", "mongodb"].includes(name),
     // The remote stores bound every call on the client side (STUDY-25 L3): K20 must run.
     requireTimeouts: ["postgres", "mysql", "mongodb"].includes(name),
-    // PERSIST-01 C11 (the log by timestamp): every first-party driver has readLog.
-    requireReadLog: true,
     // PERSIST-01 C12–C14 (retention: the document log, pruning, globals): every first-party driver.
     requireRetention: true,
     // PERSIST-01 C16 (document versions): every first-party driver.
