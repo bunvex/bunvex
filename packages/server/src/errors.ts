@@ -15,7 +15,14 @@ import {
   PersistenceReadError,
   QueryCursorError,
 } from "@bunvex/core";
-import { isBunvexError, type JSONValue, toJsonValue, type Value, valueHasLoneSurrogate } from "@bunvex/values";
+import {
+  isBunvexError,
+  type JSONValue,
+  toJsonValue,
+  type Value,
+  valueHasLoneSurrogate,
+  withoutLoneSurrogates,
+} from "@bunvex/values";
 import { ActionTimeoutError } from "./action-timeout.ts";
 import { mapStack } from "./stack-map.ts";
 
@@ -84,7 +91,7 @@ export function describeUncaught(e: unknown): UncaughtError {
   if (e instanceof ValidatorError) return { message: e.message };
   if (!isError(e)) {
     const what = typeof e === "object" && e !== null ? "#<Object>" : String(e);
-    return { message: `Uncaught ${what}\n`.toWellFormed() };
+    return { message: withoutLoneSurrogates(`Uncaught ${what}\n`) };
   }
   // The app's frames only, mapped to its sources (STUDY-95), from the stack after the message (a message may
   // hold a nested function's frames, which are part of the message).
@@ -105,7 +112,7 @@ export function describeUncaught(e: unknown): UncaughtError {
     }
   }
   // Convex reads the message into Rust with a lossy conversion: a lone surrogate becomes U+FFFD (STUDY-135).
-  const message = `${head}\n${frames}`.toWellFormed();
+  const message = withoutLoneSurrogates(`${head}\n${frames}`);
   return data === undefined ? { message } : { message, data };
 }
 

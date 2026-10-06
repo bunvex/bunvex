@@ -2,8 +2,16 @@
 // partner; a Rust string cannot. Convex sends values to Rust as `JSON.stringify` text, which escapes such a
 // unit as `\udXXX`, and `serde_json` refuses the escape. These helpers find one, and say what serde says.
 
+// A high surrogate with no low one after it, or a low one with no high one before it. (Not `isWellFormed` /
+// `toWellFormed`: an app's tsconfig need not have ES2024's lib, and it typechecks these sources.)
+const LONE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+const LONE_ALL = new RegExp(LONE.source, "g");
+
 /** True when `s` holds a lone surrogate. */
-export const hasLoneSurrogate = (s: string): boolean => !s.isWellFormed();
+export const hasLoneSurrogate = (s: string): boolean => LONE.test(s);
+
+/** `s` with each lone surrogate replaced by U+FFFD, as Convex's lossy conversion into Rust does. */
+export const withoutLoneSurrogates = (s: string): string => (LONE.test(s) ? s.replace(LONE_ALL, "\ufffd") : s);
 
 /**
  * True when a string anywhere in `v` (a field name included) holds a lone surrogate. Iterative: a value may

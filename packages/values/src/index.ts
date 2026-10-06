@@ -22,6 +22,7 @@ export {
   jsonSurrogateError,
   refuseLoneSurrogates,
   valueHasLoneSurrogate,
+  withoutLoneSurrogates,
 } from "./surrogates.ts";
 export {
   type GenericId,

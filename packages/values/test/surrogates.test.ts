@@ -1,7 +1,7 @@
 // Lone surrogates (STUDY-135): finding one, and serde_json's message for the JSON text Convex sends. The
 // columns are the ones Convex's local backend answered (STUDY-135 §1.2), each for the syscall text shown.
 import { describe, expect, test } from "bun:test";
-import { hasLoneSurrogate, jsonSurrogateError, valueHasLoneSurrogate } from "../src/index.ts";
+import { hasLoneSurrogate, jsonSurrogateError, valueHasLoneSurrogate, withoutLoneSurrogates } from "../src/index.ts";
 
 const H = "\ud800";
 const L = "\udc00";
@@ -15,6 +15,11 @@ describe("finding a lone surrogate", () => {
     expect(valueHasLoneSurrogate({ [`f${H}`]: 1 })).toBe(true);
     expect(valueHasLoneSurrogate({ a: [1, "é", null, 2n, new ArrayBuffer(2)] })).toBe(false);
   });
+});
+
+test("U+FFFD in place of each lone surrogate, a pair kept, as Convex's lossy conversion", () => {
+  expect(withoutLoneSurrogates(`a${H}b${L}c😀${L}${H}`)).toBe("a\ufffdb\ufffdc😀\ufffd\ufffd");
+  expect(withoutLoneSurrogates("plain")).toBe("plain");
 });
 
 describe("serde_json's message for the text JSON.stringify writes", () => {

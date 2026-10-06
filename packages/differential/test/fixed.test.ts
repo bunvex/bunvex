@@ -261,6 +261,20 @@ const PROGRAMS: Record<string, Program> = {
     { kind: "typed", args: { n: 5, bad: true } },
     { kind: "read", read: { table: "b" } },
   ],
+  // STUDY-135: a lone surrogate along each path, every message and column as Convex's.
+  "lone surrogates along each path": [
+    { kind: "call", fn: "mutation", path: "surrogates:writes", args: {} },
+    { kind: "call", fn: "query", path: "surrogates:queries", args: {} },
+    { kind: "call", fn: "mutation", path: "surrogates:nested", args: {} },
+    { kind: "call", fn: "action", path: "surrogates:fromAction", args: {} },
+    { kind: "call", fn: "query", path: "surrogates:ret", args: {} },
+    { kind: "call", fn: "mutation", path: "surrogates:retObject", args: {} },
+    { kind: "call", fn: "action", path: "surrogates:retAction", args: {} },
+    { kind: "call", fn: "query", path: "surrogates:echoQ", args: { s: "\ud800" } },
+    { kind: "call", fn: "mutation", path: "surrogates:logs", args: {} },
+    { kind: "call", fn: "mutation", path: "surrogates:throwsMessage", args: {} },
+    { kind: "call", fn: "mutation", path: "surrogates:throwsDataObject", args: {} },
+  ],
   "writes past the limits, caught and not": [
     ...LIMITS.map((which) => ({ kind: "apply" as const, ops: [{ kind: "limit" as const, which, catch: true }] })),
     ...LIMITS.map((which) => ({ kind: "apply" as const, ops: [{ kind: "limit" as const, which }] })),
