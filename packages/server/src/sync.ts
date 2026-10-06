@@ -52,7 +52,7 @@ import { wsRequestId } from "./function-log.ts";
 import { type AdminCaller, callerOf, type Deadline, Functions, type SourcedCaller } from "./functions.ts";
 import type { RunReason } from "./log-events.ts";
 import { cachedQueryLogs, collectLogs, type LogLine, type WithLogLines } from "./logs.ts";
-import { invalidationHistoryFromEnv, type RerunReason, SyncInspector } from "./sync-inspector.ts";
+import { argsDigest, invalidationHistoryFromEnv, type RerunReason, SyncInspector } from "./sync-inspector.ts";
 
 /**
  * Mutations one connection may have waiting behind the one running (Convex's OPERATION_QUEUE_BUFFER_SIZE:
@@ -310,7 +310,7 @@ const jsonBytes = (value: v1.JSONValue) => {
 
 /** One query run at one snapshot, ready to splice into frames. */
 export type Execution = {
-  ts: number;
+  ts: bigint;
   reads: Interval[];
   /** The journal the run ended with, serialized as it travels (null: none). */
   journal: string | null;
@@ -350,7 +350,7 @@ export type SessionQuery = {
   /** The last result sent to the client, its hash, and the ts up to which it is known to be valid. */
   exec: Execution | null;
   hash: string | null;
-  validAt: number;
+  validAt: bigint;
   /** Why its next run happens (Convex's `QueryInvocation`, the log streams' `run_reason`; STUDY-74). */
   runReason?: RunReason;
   /** For the inspector (STUDY-131 AD-25): its last result came from another run (not its own), and when. */
@@ -358,6 +358,8 @@ export type SessionQuery = {
   lastRunAt?: number;
   /** Why its next run happens when no invalidation causes it: new code, or a retry. */
   rerunBecause?: "codeChange" | "retry";
+  /** Its arguments' digest, as the inspector shows it: computed once, for its log entries' links (AD-27). */
+  argsDigest?: string;
 };
 
 /**
@@ -545,14 +547,14 @@ export class SyncHub {
 
   private indexTables: {
     catalog: unknown;
-    map: Map<number, { table: string; name: string; fields: string[] }>;
+    map: Map<string, { table: string; name: string; fields: string[] }>;
   } | null = null;
 
   /** An index's table, name and key fields, by id (rebuilt when the catalog changes). */
-  indexOf(index: number): { table: string; name: string; fields: string[] } | undefined {
+  indexOf(index: string): { table: string; name: string; fields: string[] } | undefined {
     const catalog = this.deps.engine.catalog;
     if (this.indexTables?.catalog !== catalog) {
-      const map = new Map<number, { table: string; name: string; fields: string[] }>();
+      const map = new Map<string, { table: string; name: string; fields: string[] }>();
       for (const t of catalog.tables.values())
         for (const ix of [...t.indexes.values(), ...t.pending])
           map.set(ix.id, {
@@ -606,7 +608,7 @@ export class SyncHub {
    */
   resultAt(
     q: SessionQuery,
-    ts: number,
+    ts: bigint,
     caller: Caller,
     session?: SyncSession,
   ): Promise<{ exec: Execution; idPart: string; cached?: boolean }> {
@@ -623,7 +625,7 @@ export class SyncHub {
     const valid = (l: Execution | undefined): l is Execution =>
       l !== undefined &&
       l.generation === this.generation &&
-      !committer.changedBetween(l.reads, Math.min(l.ts, ts), Math.max(l.ts, ts));
+      !(l.ts < ts ? committer.changedBetween(l.reads, l.ts, ts) : committer.changedBetween(l.reads, ts, l.ts));
     // Where the query lives now, when that is shared or this caller's.
     if (q.idPart === SHARED || q.idPart === mine) {
       const l = this.latest.get(q.key);
@@ -667,7 +669,7 @@ export class SyncHub {
       functions.logged(
         "Query",
         q.udfPath,
-        { ...caller, source: "SyncWorker", runReason: q.runReason ?? "initialSubscription" } as SourcedCaller,
+        this.syncCaller(q, caller),
         async () => {
           cachedQueryLogs.replay(lines, error === undefined);
           if (error !== undefined) throw error;
@@ -680,10 +682,37 @@ export class SyncHub {
     );
   }
 
+  /**
+   * The caller a sync query's run is logged with: the sync worker, its run reason, and its place in the
+   * inspector (STUDY-131 AD-27): its arguments' digest, why it ran, and the invalidation it answers, if any.
+   */
+  private syncCaller(q: SessionQuery, caller: Caller): SourcedCaller {
+    const runReason = q.runReason ?? "initialSubscription";
+    const reason =
+      q.rerunBecause ??
+      (runReason === "initialSubscription"
+        ? "newSubscriber"
+        : runReason === "identityChange"
+          ? "identityChange"
+          : "invalidation");
+    const pending = reason === "invalidation" ? this.inspector.pending(q.key) : null;
+    q.argsDigest ??= argsDigest(q.argsJson);
+    return {
+      ...caller,
+      source: "SyncWorker",
+      runReason,
+      subscription: {
+        argsDigest: q.argsDigest,
+        reason,
+        invalidation: pending && { seq: pending.seq, commitTs: pending.commitTs },
+      },
+    } as SourcedCaller;
+  }
+
   /** A run of `q` at `ts` for the key `at`, joined by every caller that asks for the same one meanwhile. */
   private flight(
     q: SessionQuery,
-    ts: number,
+    ts: bigint,
     caller: Caller,
     at: string,
     session: SyncSession | undefined,
@@ -728,7 +757,7 @@ export class SyncHub {
    * while `wanted()`: the store timed out or lost its connection, or the lease was lost for a moment. Any
    * other failure of the server is thrown (the connection closes with 1011).
    */
-  private async execute(q: SessionQuery, ts: number, caller: Caller, wanted: () => boolean): Promise<Execution> {
+  private async execute(q: SessionQuery, ts: bigint, caller: Caller, wanted: () => boolean): Promise<Execution> {
     for (let failures = 0; ; failures++) {
       try {
         return await this.executeOnce(q, ts, caller);
@@ -750,7 +779,7 @@ export class SyncHub {
     return false;
   }
 
-  private async executeOnce(q: SessionQuery, ts: number, caller: Caller): Promise<Execution> {
+  private async executeOnce(q: SessionQuery, ts: bigint, caller: Caller): Promise<Execution> {
     this.stats.executions++;
     const generation = this.generation;
     const { engine, functions, fromWire } = this.deps;
@@ -767,7 +796,7 @@ export class SyncHub {
       functions.logged(
         "Query",
         q.udfPath,
-        { ...caller, source: "SyncWorker", runReason: q.runReason ?? "initialSubscription" } as SourcedCaller,
+        this.syncCaller(q, caller),
         async () => {
           if (q.component !== undefined) throw componentNotFound(q.component);
           const kept = cachedQueryLogs.wrap(functions.queryBody(q.udfPath, fromWire(q.args, q.udfPath), true, caller));
@@ -1176,7 +1205,7 @@ export class SyncSession {
       case "Connect": {
         this.sessionId = m.sessionId;
         if (m.clientTs > 0) this.clientClockSkew = m.clientTs - Date.now();
-        const latest = wireTs(this.hub.deps.engine.committer.visibleTs);
+        const latest = this.hub.deps.engine.committer.visibleTs;
         // A client that saw a later ts talked to a backend with writes this one does not have.
         if (m.maxObservedTimestamp !== undefined && m.maxObservedTimestamp > latest)
           return this.internalError(
@@ -1382,7 +1411,7 @@ export class SyncSession {
           idPart: SHARED,
           exec: null,
           hash: null,
-          validAt: 0,
+          validAt: 0n,
         };
         q.key = keyOf(q);
         this.queries.set(m.queryId, q);
@@ -1394,7 +1423,7 @@ export class SyncSession {
     // Watch the new keys before running, so a commit during the run is not missed.
     if (this.keysChanged) this.watchKeys();
 
-    let ts: number;
+    let ts: bigint;
     let stale: [number, SessionQuery][];
     let results: { exec: Execution; idPart: string; cached?: boolean }[];
     for (let failures = 0; ; failures++) {
@@ -1457,7 +1486,7 @@ export class SyncSession {
     for (const q of this.queries.values()) q.validAt = ts;
     if (this.keysChanged) this.watchKeys();
 
-    const end: v1.StateVersion = { querySet, ts: wireTs(ts), identity };
+    const end: v1.StateVersion = { querySet, ts, identity };
     const endText = versionJson(end);
     const transition =
       `{"type":"Transition","startVersion":${this.versionText},"endVersion":${endText},` +
@@ -1637,13 +1666,11 @@ export class SyncSession {
         if (r.ok && "replayed" in r.value) {
           const { result, logLines } = r.value.replayed;
           const out: WithLogLines<unknown> = { ok: true, value: undefined, logLines };
-          this.send(this.response("MutationResponse", m.requestId, out, v1.encodeU64(wireTs(r.value.ts)), result));
+          this.send(this.response("MutationResponse", m.requestId, out, v1.encodeU64(r.value.ts), result));
         } else {
           const out: WithLogLines<unknown> =
             r.ok && "value" in r.value ? { ok: true, value: r.value.value, logLines: r.logLines } : r;
-          this.send(
-            this.response("MutationResponse", m.requestId, out, r.ok ? v1.encodeU64(wireTs(r.value.ts)) : null),
-          );
+          this.send(this.response("MutationResponse", m.requestId, out, r.ok ? v1.encodeU64(r.value.ts) : null));
         }
         // Traced, the transition that follows the response belongs to this message's trace.
         if (span) this.transitionParent = span;
@@ -1793,15 +1820,6 @@ export function transitionFrames(json: string, chunks: boolean): string[] {
     JSON.stringify({ type: "TransitionChunk", chunk, partNumber, totalParts: parts.length, transitionId }),
   );
 }
-/**
- * A commit ts as Convex's clients see it: wall-clock nanoseconds in a u64. bunvex counts microseconds (a JS
- * number is exact only to 2^53; STUDY-06 D9), so the wire value is × 1000: same magnitude and order as
- * Convex's, at microsecond resolution.
- */
-export const wireTs = (us: number) => BigInt(us) * 1000n;
-/** A wire ts back in bunvex's microseconds (rounded down: a snapshot at or before it). */
-export const fromWireTs = (ns: bigint) => Number(ns / 1000n);
-
 /** The last ts encoded: every session of a round sends the same one. */
 let lastTs: [bigint, string] = [0n, v1.encodeU64(0n)];
 const encodeTs = (ts: bigint) => {

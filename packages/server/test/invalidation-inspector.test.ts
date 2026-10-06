@@ -102,7 +102,12 @@ test("a mutation's invalidation: its commit, source, table and key decoded, and 
   const [q] = queriesOf((await t.get("/api/debug/subscriptions")).body);
   const inv = q.history.filter((h: any) => h.kind === "invalidation");
   expect(inv).toHaveLength(1);
-  expect(inv[0]).toMatchObject({ commitTs: ts, source: "m:send", table: "messages", index: "messages.by_author" });
+  expect(inv[0]).toMatchObject({
+    commitTs: Number(ts),
+    source: "m:send",
+    table: "messages",
+    index: "messages.by_author",
+  });
   expect(inv[0].key.values[0]).toBe("ana");
   expect(inv[0].key.values).toHaveLength(3); // the author, the _creationTime, the written document's id
   expect(typeof inv[0].key.values[2]).toBe("string");
@@ -141,7 +146,7 @@ test("the ring keeps the last N; 0 records nothing", async () => {
   expect(q.history).toHaveLength(3);
   const commits = q.history.map((h: any) => h.commitTs);
   expect(commits).toEqual([...commits].sort((a: number, b: number) => b - a)); // newest first
-  expect(commits[0]).toBe(t.engine.committer.visibleTs);
+  expect(commits[0]).toBe(Number(t.engine.committer.visibleTs));
   expect((await t.get("/api/debug/subscriptions")).body.historySize).toBe(3);
 
   const off = await setup(0);

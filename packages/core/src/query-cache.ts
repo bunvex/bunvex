@@ -21,9 +21,9 @@ export type CachedResult = {
   /** What the caller's companion stored with it (the execution's log lines). */
   extra: unknown;
   /** The snapshot the query ran at. */
-  originalTs: number;
+  originalTs: bigint;
   /** The ts up to which `reads` are known unchanged (Convex's token ts). */
-  tokenTs: number;
+  tokenTs: bigint;
   reads: Interval[];
   /** Whether the run read the clock: then the result expires after MAX_CACHE_AGE_MS. */
   observedTime: boolean;
@@ -38,7 +38,7 @@ export type WaitingEntry = {
   kind: "waiting";
   id: number;
   /** The snapshot the execution runs at. */
-  ts: number;
+  ts: bigint;
   /** Settles with the result when it is stored under this entry's key, with null otherwise (retry). */
   result: Promise<CachedResult | null>;
   size: number;
@@ -121,7 +121,7 @@ export class QueryCache {
   }
 
   /** Mark `key` as being computed at `ts`; `settle` hands its outcome to whoever waits. */
-  putWaiting(key: string, ts: number): { id: number; settle(r: CachedResult | null): void } {
+  putWaiting(key: string, ts: bigint): { id: number; settle(r: CachedResult | null): void } {
     const id = this.nextWaitingId++;
     let settle!: (r: CachedResult | null) => void;
     const result = new Promise<CachedResult | null>((ok) => (settle = ok));
@@ -137,7 +137,7 @@ export class QueryCache {
   }
 
   /** Drop the result of `key` computed at `originalTs`, if it is still there. */
-  removeReady(key: string, originalTs: number) {
+  removeReady(key: string, originalTs: bigint) {
     const e = this.entries.get(key);
     if (e?.kind === "ready" && e.result.originalTs === originalTs) this.delete(key, e);
   }

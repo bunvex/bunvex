@@ -50,7 +50,7 @@ export function parseEnvFile(text: string): Record<string, string> {
 }
 
 /** The target options as Convex's commander spells them (`lib/command.ts`), for its messages. */
-const TARGET_SPECS: Record<string, string> = {
+export const TARGET_SPECS: Record<string, string> = {
   "--url": "--url <url>",
   "--admin-key": "--admin-key <adminKey>",
   "--env-file": "--env-file <envFile>",

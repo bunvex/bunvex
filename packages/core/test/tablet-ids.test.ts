@@ -1,10 +1,10 @@
-// Tablet ids are never reused (STUDY-04 §7): Convex's tables have random UUIDs, bunvex's integer tablets come
-// from `_next_tablet_id`, so a table created after another was purged never gets its id.
+// Tablet ids are never reused (STUDY-04 §7, STUDY-133 §5.2): as Convex's, a table's tablet is the internal id of
+// its `_tables` document (random), so a table created after another was purged never gets its id.
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { v } from "@bunvex/values";
+import { decodeId, v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import type { Persistence } from "../src/persistence/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
@@ -30,14 +30,8 @@ async function engine(path: string, schema: SchemaDefinition = defineSchema({}))
   engines.push(e);
   return e;
 }
-const counter = async (e: Engine) => {
-  const rows = (await e.query((db) => db.asSystem(() => db.query("_next_tablet_id").collect()))) as unknown as {
-    nextId: bigint;
-  }[];
-  expect(rows).toHaveLength(1);
-  return rows[0]!.nextId;
-};
 const allTablets = (e: Engine) => [...e.catalog.tables.values()].map((t) => t.id);
+const internal = (id: string) => Buffer.from(decodeId(id).internalId).toString("base64url");
 /** Delete `name` and wait until the deletion worker purged it (its `_tables` document gone). */
 async function purge(e: Engine, name: string) {
   const tablet = e.catalog.table(name).id;
@@ -46,50 +40,52 @@ async function purge(e: Engine, name: string) {
   for (let i = 0; i < 500 && e.catalog.byTablet(tablet); i++) await Bun.sleep(5);
   expect(e.catalog.byTablet(tablet)).toBeUndefined();
   const metas = (await e.query((db) => db.asSystem(() => db.query("_tables").collect()))) as unknown as {
-    tablet: number;
+    _id: string;
   }[];
-  expect(metas.some((m) => m.tablet === tablet)).toBe(false);
+  expect(metas.some((m) => internal(m._id) === tablet)).toBe(false);
   return tablet;
 }
 
 describe("tablet ids, never reused (STUDY-04 §7)", () => {
-  test("a fresh store has the counter (number 9997), one above the highest tablet", async () => {
+  test("a table's tablet is the internal id of its `_tables` document, for every table", async () => {
     const e = await engine(logPath());
-    expect(e.catalog.table("_next_tablet_id").number).toBe(9997);
-    expect(Number(await counter(e))).toBe(Math.max(...allTablets(e)) + 1);
+    await e.mutation((db) => db.insert("items", { a: 1 }));
+    const rows = (await e.query((db) => db.asSystem(() => db.query("_tables").collect()))) as unknown as {
+      _id: string;
+      name: string;
+    }[];
+    expect(rows.length).toBeGreaterThan(10);
+    for (const r of rows) expect(e.catalog.table(r.name).id).toBe(internal(r._id));
+    expect(new Set(allTablets(e)).size).toBe(allTablets(e).length);
+    expect(e.catalog.tables.has("_next_tablet_id")).toBe(false);
   });
 
   test("a purged table's tablet is not given to the next table, also after a restart", async () => {
     const path = logPath();
     const e = await engine(path);
     await e.mutation((db) => db.insert("gone", { a: 1 }));
-    // The newest table has the highest tablet: the one `max + 1` would hand out again.
-    expect(e.catalog.table("gone").id).toBe(Math.max(...allTablets(e)));
     const purged = await purge(e, "gone");
-    const before = await counter(e);
-    await e.mutation((db) => db.insert("next", { a: 1 }));
-    expect(e.catalog.table("next").id).toBe(Number(before));
-    expect(e.catalog.table("next").id).toBeGreaterThan(purged);
+    await e.mutation((db) => db.insert("gone", { a: 1 }));
+    expect(e.catalog.table("gone").id).not.toBe(purged);
     // Again across a restart, with a hidden table (an import's) this time.
-    const purgedNext = await purge(e, "next");
+    const purgedNext = await purge(e, "gone");
     await e.close();
     engines.splice(engines.indexOf(e), 1);
     await open.pop()!.close();
     const again = await engine(path);
-    const hidden = await again.createHiddenTable("other");
-    expect(hidden.id).toBeGreaterThan(purgedNext);
-    expect(await counter(again)).toBe(BigInt(hidden.id + 1));
+    const hidden = await again.createHiddenTable("gone");
+    expect([purged, purgedNext]).not.toContain(hidden.id);
   });
 
   test("a table the schema declares at a start does not get a purged table's tablet", async () => {
     const path = logPath();
     const e = await engine(path);
-    await e.mutation((db) => db.insert("gone", { a: 1 }));
-    const purged = await purge(e, "gone");
+    await e.mutation((db) => db.insert("fresh", { a: 1 }));
+    const purged = await purge(e, "fresh");
     await e.close();
     engines.splice(engines.indexOf(e), 1);
     await open.pop()!.close();
     const again = await engine(path, defineSchema({ fresh: defineTable(v.any()) }));
-    expect(again.catalog.table("fresh").id).toBeGreaterThan(purged);
+    expect(again.catalog.table("fresh").id).not.toBe(purged);
   });
 });

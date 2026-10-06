@@ -152,21 +152,21 @@ test("while the summaries are built: Convex's TableSummariesUnavailable (uncatch
 
 test("a count's changes are kept as long as the write log keeps its commits", () => {
   const s = new TableSummaries();
-  let logStart = 0;
+  let logStart = 0n;
   s.retainedAfter = () => logStart;
   s.finish();
-  s.apply(1, [{ tablet: 7, old: null, next: { _id: "a" } as never }]);
-  s.apply(2, [{ tablet: 7, old: null, next: { _id: "b" } as never }]);
-  expect([s.countAt(7, 0), s.countAt(7, 1), s.countAt(7, 2), s.countAt(8, 1)]).toEqual([0, 1, 2, 0]);
-  logStart = 2; // the write log dropped the commits at ts 1 and 2
-  s.apply(3, [{ tablet: 8, old: null, next: { _id: "c" } as never }]);
-  expect([s.countAt(7, 2), s.countAt(8, 2), s.countAt(8, 3)]).toEqual([2, 0, 1]);
-  expect(() => s.countAt(7, 1)).toThrow(OutOfRetentionError);
+  s.apply(1n, [{ tablet: "t7", old: null, next: { _id: "a" } as never }]);
+  s.apply(2n, [{ tablet: "t7", old: null, next: { _id: "b" } as never }]);
+  expect([s.countAt("t7", 0n), s.countAt("t7", 1n), s.countAt("t7", 2n), s.countAt("t8", 1n)]).toEqual([0, 1, 2, 0]);
+  logStart = 2n; // the write log dropped the commits at ts 1 and 2
+  s.apply(3n, [{ tablet: "t8", old: null, next: { _id: "c" } as never }]);
+  expect([s.countAt("t7", 2n), s.countAt("t8", 2n), s.countAt("t8", 3n)]).toEqual([2, 0, 1]);
+  expect(() => s.countAt("t7", 1n)).toThrow(OutOfRetentionError);
 });
 
 test("the engine drops a count's changes with the write log's commits", async () => {
   const e = await new Engine(schema, await MemoryPersistence.open(null, { durable: false }), {
-    writeLogRetention: { minRetentionUs: 0, maxRetentionUs: 0 },
+    writeLogRetention: { minRetentionNs: 0n, maxRetentionNs: 0n },
   }).init();
   await e.summariesReady();
   await e.mutation((db) => db.insert("t", { x: 1 }));
@@ -184,7 +184,7 @@ test("the engine drops a count's changes with the write log's commits", async ()
 /** Run `start` (one transaction that counts, waits, counts again) while commits push the write log past it. */
 async function countAcrossCommits(start: (e: Engine, body: (db: Tx) => Promise<number[]>) => Promise<number[]>) {
   const e = await new Engine(schema, await MemoryPersistence.open(null, { durable: false }), {
-    writeLogRetention: { minRetentionUs: 0, maxRetentionUs: 0 },
+    writeLogRetention: { minRetentionNs: 0n, maxRetentionNs: 0n },
   }).init();
   await e.summariesReady();
   await e.mutation((db) => db.insert("t", { x: 1 }));
@@ -219,20 +219,20 @@ test("a running transaction counts at its snapshot for its whole life, past the 
 
 test("pins: changes are kept while a transaction holds an older snapshot, dropped after", () => {
   const s = new TableSummaries();
-  s.retainedAfter = () => Number.POSITIVE_INFINITY; // the write log keeps nothing
+  s.retainedAfter = () => (1n << 63n) - 1n; // the write log keeps nothing
   s.finish();
-  const unpin = s.pin(1);
-  const unpinAgain = s.pin(1);
-  for (let ts = 2; ts <= 4; ts++) s.apply(ts, [{ tablet: 7, old: null, next: { _id: `d${ts}` } as never }]);
-  expect(s.countAt(7, 1)).toBe(0);
+  const unpin = s.pin(1n);
+  const unpinAgain = s.pin(1n);
+  for (let ts = 2n; ts <= 4n; ts++) s.apply(ts, [{ tablet: "t7", old: null, next: { _id: `d${ts}` } as never }]);
+  expect(s.countAt("t7", 1n)).toBe(0);
   unpin();
-  s.apply(5, [{ tablet: 7, old: null, next: { _id: "d5" } as never }]);
-  expect(s.countAt(7, 1)).toBe(0); // still held once
+  s.apply(5n, [{ tablet: "t7", old: null, next: { _id: "d5" } as never }]);
+  expect(s.countAt("t7", 1n)).toBe(0); // still held once
   unpinAgain();
   unpinAgain(); // twice is once
-  s.apply(6, [{ tablet: 7, old: null, next: { _id: "d6" } as never }]);
-  expect(() => s.countAt(7, 1)).toThrow(OutOfRetentionError);
-  expect(s.countAt(7, 6)).toBe(5);
+  s.apply(6n, [{ tablet: "t7", old: null, next: { _id: "d6" } as never }]);
+  expect(() => s.countAt("t7", 1n)).toThrow(OutOfRetentionError);
+  expect(s.countAt("t7", 6n)).toBe(5);
 });
 
 test("db.system.query counts any system table, as Convex's 1.0/count; unknown names are 0", async () => {

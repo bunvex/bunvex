@@ -28,6 +28,8 @@ export type ReadRange = {
 export type QueryHistoryEntry =
   | {
       kind: "invalidation";
+      /** Its number in the follow stream; what a log entry's link names (STUDY-131 AD-27). */
+      seq?: number;
       /** Wall-clock ms when the commit was matched. */
       at: number;
       commitTs: number;
@@ -108,7 +110,7 @@ export type QueryCacheSnapshot = {
 };
 
 /** An invalidation as the follow stream delivers it. */
-export type InvalidationEvent = Extract<QueryHistoryEntry, { kind: "invalidation" }> & {
+export type InvalidationEvent = Omit<Extract<QueryHistoryEntry, { kind: "invalidation" }>, "seq"> & {
   seq: number;
   path: string;
   argsDigest: string;

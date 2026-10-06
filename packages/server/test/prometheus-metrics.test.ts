@@ -226,7 +226,7 @@ test("a mutation increments the function, commit and persistence series", async 
   expect(delta("bunvex_database_write_batch_commits_count")).toBe(2);
   expect(delta("bunvex_database_write_batch_commits_sum")).toBe(2);
   expect(delta("bunvex_database_commit_persistence_write_seconds_count")).toBe(2);
-  expect(sample(after, "bunvex_database_visible_ts_seconds")).toBeCloseTo(t.engine.committer.visibleTs / 1e6);
+  expect(sample(after, "bunvex_database_visible_ts_seconds")).toBeCloseTo(Number(t.engine.committer.visibleTs) / 1e9);
   expect(delta("bunvex_database_visible_ts_seconds")).toBeGreaterThan(0);
 });
 

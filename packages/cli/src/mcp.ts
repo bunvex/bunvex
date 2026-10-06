@@ -6,9 +6,11 @@
 // bunvex's choices (owner, 2026-10-05): no `insights` tool (DV-392); the deployment is reached with its URL and
 // admin key, with no cloud login (DV-393); the server's name is bunvex's (DV-394); a self-hosted deployment is
 // "production" for the guards, a local deployment is not (DV-395).
+
 import { Server } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
+import { argumentError, missingArgument, optionsIn, tooManyArguments, unknownCommand, unknownOption } from "./args.ts";
 import type { Io } from "./io.ts";
 import { MCP_TOOLS, type McpContext, McpToolError, TOOL_NAMES } from "./mcp-tools.ts";
 import { TARGET_OPTIONS, takeTargetFlags } from "./target.ts";
@@ -50,14 +52,18 @@ function parse(args: string[]): Parsed | string {
     const [name, inline] = a.includes("=") ? [a.slice(0, a.indexOf("=")), a.slice(a.indexOf("=") + 1)] : [a, undefined];
     if (name === "--project-dir" || name === "--disable-tools") {
       const v = inline ?? r[++i];
-      if (v === undefined) return `${name} needs a value`;
+      if (v === undefined)
+        return missingArgument(
+          name === "--project-dir" ? "--project-dir <project-dir>" : "--disable-tools <tool-names>",
+        );
       if (name === "--project-dir") o.projectDir = v;
       else o.disableTools = v;
     } else if (a === "--cautiously-allow-production-pii") o.cautiouslyAllowProductionPii = true;
     else if (a === "--dangerously-enable-production-deployments") o.dangerouslyEnableProductionDeployments = true;
     // Convex's deprecated flag, now the default: hidden, a no-op.
     else if (a === "--disable-production-deployments") disableProduction = true;
-    else return `unknown option ${a}`;
+    else if (a.startsWith("-")) return unknownOption(a, optionsIn(MCP_USAGE));
+    else return tooManyArguments("start", 0, r.filter((x) => !x.startsWith("-")).length);
   }
   if (disableProduction && o.dangerouslyEnableProductionDeployments)
     return "option '--disable-production-deployments' cannot be used with option '--dangerously-enable-production-deployments'";
@@ -111,19 +117,23 @@ export function makeServer(ctx: McpContext, disableTools: string | undefined) {
 }
 
 export async function mcpCommand(args: string[], io: Io): Promise<number> {
-  if (args.includes("--help") || args.includes("-h") || args[0] !== "start") {
-    if (args[0] !== "start" && !args.includes("--help") && !args.includes("-h")) {
-      io.err(`bunvex mcp: expected \`start\`\n\n${MCP_USAGE}`);
-      return 2;
-    }
+  if (args.includes("--help") || args.includes("-h")) {
     io.out(MCP_USAGE);
     return 0;
   }
-  const o = parse(args.slice(1));
-  if (typeof o === "string") {
-    io.err(`bunvex mcp start: ${o}\n\n${MCP_USAGE}`);
-    return 2;
+  // As Convex's commander: `mcp` alone prints its help as an error; another word is an unknown command.
+  if (args.length === 0) {
+    io.err(MCP_USAGE);
+    return 1;
   }
+  if (args[0] !== "start")
+    return argumentError(
+      io,
+      args[0]!.startsWith("-") ? unknownOption(args[0]!, ["--help"]) : unknownCommand(args[0]!, ["start"]),
+    );
+  // Argument errors as Convex's commander prints them (STUDY-124); `mcp start` shows no help after them.
+  const o = parse(args.slice(1));
+  if (typeof o === "string") return argumentError(io, o);
   // The SDK calls the factory only once a client connects, so a bad `--disable-tools` is refused here.
   try {
     enabledTools(o.disableTools);
