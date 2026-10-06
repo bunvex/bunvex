@@ -4,10 +4,14 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { LIMIT_CASES } from "../harness/generate.ts";
 import { compare, type Program } from "../harness/runner.ts";
 
 const ready = existsSync(ORACLE_BIN);
 if (!ready) console.warn(`differential: skipped, no Convex backend at ${ORACLE_BIN}`);
+
+/** The `limit` op's cases compared (`app/ops.ts` `pastLimit`), and the one left out until it is decided. */
+const LIMITS = LIMIT_CASES;
 
 const PROGRAMS: Record<string, Program> = {
   "insert, patch, replace and delete": [
@@ -158,6 +162,110 @@ const PROGRAMS: Record<string, Program> = {
     { kind: "apply", ops: [{ kind: "patch", id: { ref: "nothing" }, fields: { n: 1 } }] },
     { kind: "apply", ops: [{ kind: "insert", table: "a", doc: { $bad: 1 }, as: "r1" }] },
     { kind: "apply", ops: [{ kind: "insert", table: "a", doc: { _id: "x" }, as: "r2" }] },
+  ],
+  // STUDY-122 phase 3: nested calls, actions, errors and limits.
+  "a caught nested mutation rolls back its own writes only": [
+    {
+      kind: "apply",
+      ops: [
+        { kind: "insert", table: "a", doc: { k: "outer" }, as: "r1" },
+        {
+          kind: "nested",
+          catch: true,
+          ops: [
+            { kind: "insert", table: "a", doc: { k: "inner" }, as: "r2" },
+            { kind: "patch", id: { ref: "r1" }, fields: { n: 1 } },
+            { kind: "throw", message: "inner failure" },
+          ],
+        },
+        { kind: "runQuery", read: { table: "a" } },
+        { kind: "nested", ops: [{ kind: "insert", table: "b", doc: { x: 1 }, as: "r3" }] },
+        { kind: "get", id: { ref: "r1" } },
+      ],
+    },
+    { kind: "read", read: { table: "b" } },
+  ],
+  "a nested query sees the transaction's writes": [
+    {
+      kind: "apply",
+      ops: [
+        { kind: "insert", table: "a", doc: { k: "a", n: 1 }, as: "r1" },
+        { kind: "runQuery", read: { table: "a", index: "by_k", range: [{ field: "k", op: "eq", value: "a" }] } },
+        { kind: "nested", ops: [{ kind: "runQuery", read: { table: "a" } }] },
+      ],
+    },
+  ],
+  "an uncaught nested failure fails the whole mutation": [
+    {
+      kind: "apply",
+      ops: [
+        { kind: "insert", table: "a", doc: { k: "kept?" }, as: "r1" },
+        { kind: "nested", ops: [{ kind: "throw", message: "inner failure" }] },
+      ],
+    },
+    { kind: "read", read: { table: "a" } },
+  ],
+  "application errors carry their data": [
+    { kind: "apply", ops: [{ kind: "throwData", data: { code: 7, list: [1, "a", null, true] } }] },
+    { kind: "apply", ops: [{ kind: "throwData", data: "a string" }] },
+    {
+      kind: "apply",
+      ops: [{ kind: "nested", catch: true, ops: [{ kind: "throwData", data: { nested: { deep: [1.5] } } }] }],
+    },
+    { kind: "action", steps: [{ kind: "throwData", data: { from: "action" } }] },
+    {
+      kind: "action",
+      steps: [
+        { kind: "mutation", catch: true, ops: [{ kind: "throwData", data: { from: "mutation" } }] },
+        { kind: "mutation", catch: true, ops: [{ kind: "throw", message: "plain" }] },
+      ],
+    },
+  ],
+  "an action's mutations stay when it fails later": [
+    {
+      kind: "action",
+      steps: [
+        { kind: "mutation", ops: [{ kind: "insert", table: "a", doc: { k: "act" }, as: "r1" }] },
+        { kind: "query", read: { table: "a" } },
+        {
+          kind: "mutation",
+          catch: true,
+          ops: [
+            { kind: "insert", table: "b", doc: { x: 2 }, as: "r2" },
+            { kind: "throw", message: "rolled back" },
+          ],
+        },
+        { kind: "throw", message: "action failure" },
+      ],
+    },
+    { kind: "read", read: { table: "a" } },
+    { kind: "read", read: { table: "b" } },
+  ],
+  "an action's answer": [
+    {
+      kind: "action",
+      steps: [
+        { kind: "mutation", ops: [{ kind: "insert", table: "a", doc: { k: "x", n: 2 }, as: "r1" }] },
+        { kind: "query", read: { table: "a", mode: "first" } },
+      ],
+    },
+    { kind: "apply", ops: [{ kind: "get", id: { ref: "r1" } }] },
+  ],
+  "validated arguments and result": [
+    { kind: "typed", args: { n: 1 } },
+    { kind: "typed", args: { n: 2, s: "s" } },
+    { kind: "typed", args: { n: "one" } },
+    { kind: "typed", args: {} },
+    { kind: "typed", args: { n: 3, extra: true } },
+    { kind: "typed", args: { n: 4, s: null } },
+    { kind: "typed", args: { n: 5, bad: true } },
+    { kind: "read", read: { table: "b" } },
+  ],
+  "writes past the limits, caught and not": [
+    ...LIMITS.map((which) => ({ kind: "apply" as const, ops: [{ kind: "limit" as const, which, catch: true }] })),
+    ...LIMITS.map((which) => ({ kind: "apply" as const, ops: [{ kind: "limit" as const, which }] })),
+    { kind: "read", read: { table: "a" } },
+    { kind: "read", read: { table: "b" } },
   ],
 };
 

@@ -21,7 +21,9 @@ backend is always started with `--disable-beacon`.
 - `harness/runner.ts`: a program (calls, ids as references, a page's cursor named for a later page), played on
   one backend or compared on both.
 - `harness/generate.ts`: generated programs (fast-check): writes and reads inside one mutation (the #410
-  class), queries and pages. Indexed and filtered fields take values from small pools, so ranges meet real
+  class), queries and pages; nested `runQuery` / `runMutation` (caught or not), actions (queries, mutations
+  and failures, each its own transaction), application errors with data, validated arguments and results,
+  and writes past the limits (phase 3). Indexed and filtered fields take values from small pools, so ranges meet real
   documents, ties and mixed types. Documents are named by position, so a failure shrinks to a small program.
 - `harness/compare.ts`: what is normalised before comparing (ids by first appearance, `_creationTime` by
   rank, request ids and stacks, a page's cursors) and the wording rewrites a decided divergence allows

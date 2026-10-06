@@ -4,10 +4,18 @@
 // take values of every kind the JSON format carries. A document is named by its position among the inserts
 // generated so far, so a failing program shrinks to a small one.
 import fc from "fast-check";
-import type { Call, Program, ProgramOp } from "./runner.ts";
+import type { ActionStep, Call, Program, ProgramOp } from "./runner.ts";
 
 type Value = null | boolean | number | string | Value[] | { [k: string]: Value };
 const UNDEFINED = { $undefined: true } as const;
+
+/**
+ * The cases of the app's `limit` op compared on both backends. Case 8, a string with a lone surrogate, is left
+ * out: Convex refuses it with its JSON parser's message ("Received invalid json: unexpected end of hex escape
+ * at line 1 column N", the column a place in its syscall's arguments), bunvex stores it. Whether bunvex
+ * refuses it with that message or with its own is the owner's call (STUDY-122 §4, D3).
+ */
+export const LIMIT_CASES = [0, 1, 2, 3, 4, 5, 6, 7, 9, 10];
 
 /** Values an index or a filter compares: a few of each type, so they meet. */
 const keyValue = fc.constantFrom<Value>("a", "b", "c", "", 1, 2, -1, 0.5, null, true);
@@ -134,9 +142,15 @@ type OpTemplate =
   | { kind: "insert"; table: "a" | "b"; doc: Record<string, unknown> }
   | { kind: "patch" | "replaceA" | "replaceB" | "delete" | "get"; doc: number; fields?: Record<string, unknown> }
   | { kind: "read"; read: Record<string, unknown>; mutateResult: boolean }
-  | { kind: "throw" };
+  | { kind: "throw" }
+  // Phase 3: an application error with data, a nested query, a write past a limit, a nested mutation.
+  | { kind: "throwData"; data: Value }
+  | { kind: "runQuery"; read: Record<string, unknown> }
+  | { kind: "limit"; which: number; catch: boolean }
+  | { kind: "nested"; ops: OpTemplate[]; catch: boolean };
 
-const opTemplate: fc.Arbitrary<OpTemplate> = fc.oneof(
+/** The operations of one transaction, with no nested mutation. */
+const flatOpTemplate: fc.Arbitrary<OpTemplate> = fc.oneof(
   { arbitrary: docA.map((doc) => ({ kind: "insert" as const, table: "a" as const, doc })), weight: 4 },
   { arbitrary: docB.map((doc) => ({ kind: "insert" as const, table: "b" as const, doc })), weight: 2 },
   {
@@ -160,12 +174,68 @@ const opTemplate: fc.Arbitrary<OpTemplate> = fc.oneof(
     weight: 3,
   },
   { arbitrary: fc.constant({ kind: "throw" as const }), weight: 1 },
+  { arbitrary: anyValue.map((data) => ({ kind: "throwData" as const, data })), weight: 1 },
+  { arbitrary: readArb.map((read) => ({ kind: "runQuery" as const, read })), weight: 1 },
+  {
+    // Rare: each limit's write is the same few calls, and a whole mutation fails when it is not caught.
+    arbitrary: fc
+      .tuple(fc.constantFrom(...LIMIT_CASES), fc.boolean())
+      .map(([which, c]) => ({ kind: "limit" as const, which, catch: c })),
+    weight: 1,
+  },
 );
+
+/** An operation, a nested mutation among them (one level: deeper is the `limit` op's job). */
+const opTemplate: fc.Arbitrary<OpTemplate> = fc.oneof(
+  { arbitrary: flatOpTemplate, weight: 12 },
+  {
+    arbitrary: fc
+      .tuple(fc.array(flatOpTemplate, { minLength: 1, maxLength: 4 }), fc.boolean())
+      .map(([ops, c]) => ({ kind: "nested" as const, ops, catch: c })),
+    weight: 2,
+  },
+);
+
+type StepTemplate =
+  | { kind: "query"; read: Record<string, unknown> }
+  | { kind: "mutation"; ops: OpTemplate[]; catch: boolean }
+  | { kind: "throw" }
+  | { kind: "throwData"; data: Value };
+
+const stepTemplate: fc.Arbitrary<StepTemplate> = fc.oneof(
+  { arbitrary: readArb.map((read) => ({ kind: "query" as const, read })), weight: 2 },
+  {
+    arbitrary: fc
+      .tuple(fc.array(opTemplate, { minLength: 1, maxLength: 4 }), fc.boolean())
+      .map(([ops, c]) => ({ kind: "mutation" as const, ops, catch: c })),
+    weight: 4,
+  },
+  { arbitrary: fc.constant({ kind: "throw" as const }), weight: 1 },
+  { arbitrary: anyValue.map((data) => ({ kind: "throwData" as const, data })), weight: 1 },
+);
+
+/** Arguments for the validated mutation: right, wrong, missing or extra. */
+const typedArgs = fc.record(
+  {
+    n: fc.oneof(
+      fc.integer({ min: -5, max: 5 }),
+      fc.double({ noNaN: true }),
+      fc.string({ maxLength: 3 }),
+      fc.constant(null),
+    ),
+    s: fc.oneof(fc.string({ maxLength: 3 }), fc.constant(null), fc.integer()),
+    bad: fc.boolean(),
+    extra: fc.constant(1),
+  },
+  { requiredKeys: [] },
+) as fc.Arbitrary<Record<string, unknown>>;
 
 type CallTemplate =
   | { kind: "apply"; ops: OpTemplate[] }
   | { kind: "read"; read: Record<string, unknown> }
-  | { kind: "page"; read: Record<string, unknown>; numItems: number; continueFrom: number | null };
+  | { kind: "page"; read: Record<string, unknown>; numItems: number; continueFrom: number | null }
+  | { kind: "action"; steps: StepTemplate[] }
+  | { kind: "typed"; args: Record<string, unknown> };
 
 const callTemplate: fc.Arbitrary<CallTemplate> = fc.oneof(
   {
@@ -179,6 +249,13 @@ const callTemplate: fc.Arbitrary<CallTemplate> = fc.oneof(
       .map(([read, numItems, continueFrom]) => ({ kind: "page" as const, read, numItems, continueFrom })),
     weight: 2,
   },
+  {
+    arbitrary: fc
+      .array(stepTemplate, { minLength: 1, maxLength: 4 })
+      .map((steps) => ({ kind: "action" as const, steps })),
+    weight: 2,
+  },
+  { arbitrary: typedArgs.map((args) => ({ kind: "typed" as const, args })), weight: 1 },
 );
 
 /** Turn templates into a program: document indexes become references to earlier inserts, pages chain. */
@@ -201,40 +278,56 @@ export function build(templates: CallTemplate[]): Program {
       program.push({ kind: "page", read, numItems, from: prev ? prev.name : null, as: name });
       continue;
     }
-    const ops: ProgramOp[] = [];
-    // Inserts of this call are known to its later operations (they reference the ids it creates only after
-    // it commits, so a reference names an insert of an earlier call).
+    if (t.kind === "typed") {
+      program.push({ kind: "typed", args: t.args });
+      continue;
+    }
+    // Inserts are known to later calls (a reference names an insert of an earlier call: ids exist only once
+    // their call commits).
     const before = inserted.length;
     const ref = (i: number) => ({ ref: before === 0 ? "none" : inserted[i % before]! });
-    for (const op of t.ops) {
-      switch (op.kind) {
-        case "insert": {
-          const as = `r${inserted.length}`;
-          inserted.push(as);
-          ops.push({ kind: "insert", table: op.table, doc: op.doc, as });
-          break;
+    const opsOf = (templates: OpTemplate[]): ProgramOp[] =>
+      templates.map((op): ProgramOp => {
+        switch (op.kind) {
+          case "insert": {
+            const as = `r${inserted.length}`;
+            inserted.push(as);
+            return { kind: "insert", table: op.table, doc: op.doc, as };
+          }
+          case "patch":
+            return { kind: "patch", id: ref(op.doc), fields: op.fields! };
+          case "replaceA":
+          case "replaceB":
+            return { kind: "replace", id: ref(op.doc), doc: op.fields! };
+          case "delete":
+            return { kind: "delete", id: ref(op.doc) };
+          case "get":
+            return { kind: "get", id: ref(op.doc) };
+          case "read":
+            return { kind: "read", read: op.read, ...(op.mutateResult ? { mutateResult: true } : {}) };
+          case "throw":
+            return { kind: "throw", message: "generated failure" };
+          case "throwData":
+            return { kind: "throwData", data: op.data };
+          case "runQuery":
+            return { kind: "runQuery", read: op.read };
+          case "limit":
+            return { kind: "limit", which: op.which, ...(op.catch ? { catch: true } : {}) };
+          default:
+            return { kind: "nested", ops: opsOf(op.ops), ...(op.catch ? { catch: true } : {}) };
         }
-        case "patch":
-          ops.push({ kind: "patch", id: ref(op.doc), fields: op.fields! });
-          break;
-        case "replaceA":
-        case "replaceB":
-          ops.push({ kind: "replace", id: ref(op.doc), doc: op.fields! });
-          break;
-        case "delete":
-          ops.push({ kind: "delete", id: ref(op.doc) });
-          break;
-        case "get":
-          ops.push({ kind: "get", id: ref(op.doc) });
-          break;
-        case "read":
-          ops.push({ kind: "read", read: op.read, ...(op.mutateResult ? { mutateResult: true } : {}) });
-          break;
-        case "throw":
-          ops.push({ kind: "throw", message: "generated failure" });
-          break;
-      }
+      });
+    if (t.kind === "action") {
+      const steps = t.steps.map((st): ActionStep => {
+        if (st.kind === "mutation")
+          return { kind: "mutation", ops: opsOf(st.ops), ...(st.catch ? { catch: true } : {}) };
+        if (st.kind === "throw") return { kind: "throw", message: "generated failure" };
+        return st;
+      });
+      program.push({ kind: "action", steps });
+      continue;
     }
+    const ops = opsOf(t.ops);
     program.push({ kind: "apply", ops });
   }
   return program;
