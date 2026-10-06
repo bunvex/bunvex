@@ -38,8 +38,9 @@ async function rows(e: Engine) {
     ),
   )) as Record<string, unknown>[];
   const out: Record<string, Record<string, unknown>> = {};
-  for (const r of all) if (r.config) out[r.name as string] = r.config as Record<string, unknown>;
-  return { search: out, database: all.filter((r) => !r.config).length };
+  const isDatabase = (r: Record<string, unknown>) => (r.config as { type: string }).type === "database";
+  for (const r of all) if (!isDatabase(r)) out[r.name as string] = r.config as Record<string, unknown>;
+  return { search: out, database: all.filter(isDatabase).length };
 }
 
 test("one row per search and vector index, in Convex's shape, from backfilling to snapshotted", async () => {
@@ -47,7 +48,8 @@ test("one row per search and vector index, in Convex's shape, from backfilling t
   const e = await new Engine(full, p, { searchStorage: blobs() }).init();
   await e.searchReady();
   await Bun.sleep(10);
-  expect((await rows(e)).search.search_title!.onDiskState).toEqual({ state: "backfilling", staged: true });
+  // A staged index is built too, then kept Convex's `Backfilled2 { snapshot, staged }`.
+  expect(((await rows(e)).search.search_title!.onDiskState as { state: string }).state).toBe("backfilled2");
   await e.mutation((db) => db.insert("notes", { body: "hello", kind: "a", author: "x", title: "t", v: [1, 0] }));
   await e.close();
   const e2 = await new Engine(full, p, { searchStorage: blobs() }).init();
@@ -89,8 +91,8 @@ test("one row per search and vector index, in Convex's shape, from backfilling t
     "num_vectors",
     "segment_key",
   ]);
-  // A staged index (not built): backfilling, staged.
-  expect(search.search_title!.onDiskState).toEqual({ state: "backfilling", staged: true });
+  const staged = search.search_title!.onDiskState as { state: string; staged: boolean; snapshot: { version: number } };
+  expect([staged.state, staged.staged, staged.snapshot.version]).toEqual(["backfilled2", true, 2]);
   // The database indexes' rows are as before: by_id, by_creation_time and by_kind for `notes`, and the rest.
   expect(database).toBeGreaterThan(3);
   await e2.close();

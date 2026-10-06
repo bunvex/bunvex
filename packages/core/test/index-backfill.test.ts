@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { v } from "@bunvex/values";
-import { INDEX_BACKFILLS_TABLE, INDEX_TABLE } from "../src/catalog.ts";
+import { backfillMeta, INDEX_BACKFILLS_TABLE, INDEX_TABLE, indexMeta } from "../src/catalog.ts";
 import { Engine, type IndexBackfillOptions } from "../src/engine.ts";
 import { prefixEnd } from "../src/keyenc.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
@@ -194,7 +194,8 @@ describe("background index backfill (STUDY-29)", () => {
     expect(e.indexWorker!.stats.docsIndexed).toBeGreaterThan(0);
     const a = await audit(e, e.committer.visibleTs);
     expect(a).toEqual({ live: 6000, entries: 6000, unique: 6000, wrong: 0 });
-    expect(await readProgress(e)).toBeNull(); // the checkpoint is gone with the backfill
+    // The checkpoint stays after the backfill, as Convex's `_index_backfills` row does.
+    expect((await readProgress(e))?.cursor?.snapshotTs).toBeGreaterThan(0);
     await e.close();
   }, 60_000);
 
@@ -249,12 +250,12 @@ describe("background index backfill (STUDY-29)", () => {
     await e.close();
   }, 30_000);
 
-  test("an index of a new table is enabled at once; an unchanged schema starts no worker", async () => {
+  test("an index of a new table is backfilled before init returns; an unchanged schema starts no worker", async () => {
     const path = logPath();
     let e = await open(path, indexed);
-    expect(e.indexWorker).toBeNull();
-    await e.indexesReady();
+    // As Convex's, the new table's index was backfilled (an empty pass), then enabled: no wait for it.
     expect(await e.query((db) => db.query("items").withIndex("by_n").collect())).toEqual([]);
+    expect(await readState(e)).toBe("enabled");
     await e.close();
     e = await open(path, indexed);
     expect(e.indexWorker).toBeNull();
@@ -275,22 +276,18 @@ describe("background index backfill (STUDY-29)", () => {
 });
 
 async function readProgress(e: Engine) {
-  return (await (e as unknown as { runMutation(b: unknown, system: boolean): Promise<unknown> }).runMutation(
+  const row = (await (e as unknown as { runMutation(b: unknown, system: boolean): Promise<unknown> }).runMutation(
     async (db: { query(t: string): { first(): Promise<unknown> } }) => db.query(INDEX_BACKFILLS_TABLE).first(),
     true,
-  )) as {
-    numDocsIndexed: number;
-    cursor: { cursor: string | null } | null;
-  } | null;
+  )) as Record<string, unknown> | null;
+  return row && backfillMeta(row);
 }
 
 async function readState(e: Engine) {
   const rows = (await (e as unknown as { runMutation(b: unknown, system: boolean): Promise<unknown> }).runMutation(
     async (db: { query(t: string): { collect(): Promise<unknown> } }) => db.query(INDEX_TABLE).collect(),
     true,
-  )) as {
-    name: string;
-    state: string;
-  }[];
-  return rows.find((r) => r.name === "by_n")?.state;
+  )) as Record<string, unknown>[];
+  const row = rows.find((r) => r.name === "by_n");
+  return row && indexMeta(row).state;
 }

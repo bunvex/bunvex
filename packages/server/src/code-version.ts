@@ -144,7 +144,8 @@ const BUILTINS = new Set([
 /** A module's name as the registry keys it: its path without `.js` (`dir/file.js` → `dir/file`). */
 export const moduleName = (path: string) => path.replace(/\.js$/, "");
 const isDeps = (path: string) => path.startsWith("_deps/");
-const sha256 = (m: ModuleSource) =>
+/** A module's hash, as Convex's `hash_module_source`: sha256 of its source and its source map, in hex (the push's wire form). */
+export const moduleHash = (m: ModuleSource) =>
   createHash("sha256")
     .update(m.source)
     .update(m.sourceMap ?? "")
@@ -266,7 +267,7 @@ export class CodeVersion {
       } catch (e) {
         throw new InvalidModulesError(`Failed to analyze ${m.path}: ${uncaughtAtCompile(e)}`);
       }
-      modules.set(m.path, { source: m, module, hash: sha256(m) });
+      modules.set(m.path, { source: m, module, hash: moduleHash(m) });
     }
 
     // The server's modules, once per context.

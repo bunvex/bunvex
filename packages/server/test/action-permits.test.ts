@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { defineSchema, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
+import { TestRuntime } from "@bunvex/core/test-runtime";
 import { ActionPermits, TooManyConcurrentRequestsError } from "../src/action-permits.ts";
 import { action, Functions } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
@@ -30,24 +31,40 @@ describe("ActionPermits", () => {
   });
 
   test("a wait past the timeout fails with Convex's error", async () => {
-    const p = new ActionPermits(1, 30);
-    const hold = p.run(() => Bun.sleep(100));
-    const e = await p.run(async () => {}).catch((x) => x);
+    const rt = new TestRuntime();
+    const p = new ActionPermits(1, 30, rt);
+    const hold = p.run(() => rt.sleep(100));
+    const waiter = p.run(async () => {}).catch((x) => x);
+    await Bun.sleep(50); // real time does not count: only the runtime's
+    await rt.advance(29);
+    expect(p.outstanding.queued).toBe(1); // still waiting
+    await rt.advance(1);
+    const e = await waiter;
     expect(e).toBeInstanceOf(TooManyConcurrentRequestsError);
     expect((e as Error).message).toBe(
       "Too many concurrent requests. Your backend is limited to 1 concurrent actions. To raise the limit, set APPLICATION_MAX_CONCURRENT_V8_ACTIONS.",
     );
+    await rt.advance(70);
     await hold;
   });
 
   test("the HTTP API's /api/action answers 429 too", async () => {
     const engine = await new Engine(defineSchema({}), await MemoryPersistence.open(null, { durable: false })).init();
-    const functions = new Functions(engine, { actionPermits: new ActionPermits(1, 30) }).register("m", {
+    const rt = new TestRuntime();
+    const permits = new ActionPermits(1, 30, rt);
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    const functions = new Functions(engine, { actionPermits: permits }).register("m", {
       slow: action(async () => {
-        await Bun.sleep(150);
+        await released;
         return 1;
       }),
     });
+    /** The HTTP requests are real: wait for the state they lead to. */
+    const until = async (f: () => boolean) => {
+      for (let i = 0; i < 2000 && !f(); i++) await Bun.sleep(1);
+      expect(f()).toBe(true);
+    };
     const server = createServer({ engine, functions, port: 0 });
     try {
       const call = () =>
@@ -57,10 +74,14 @@ describe("ActionPermits", () => {
           body: JSON.stringify({ path: "m:slow", args: {} }),
         });
       const first = call();
-      await Bun.sleep(20);
-      const second = await call();
+      await until(() => permits.outstanding.running === 1);
+      const refused = call();
+      await until(() => permits.outstanding.queued === 1);
+      await rt.advance(30);
+      const second = await refused;
       expect(second.status).toBe(429);
       expect(((await second.json()) as { code: string }).code).toBe("TooManyConcurrentRequests");
+      release();
       expect((await first).status).toBe(200);
     } finally {
       server.stop();

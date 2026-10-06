@@ -1,10 +1,13 @@
 // Cron jobs in the database (Convex's CronModel, crates/model/src/cron_jobs/mod.rs):
 //   `_cron_jobs {name, cronSpec}`, `_cron_next_run {cronJobId, state, prevTs, nextTs}` and
 //   `_cron_job_logs {name, ts, udfPath, udfArgs, status, logLines, executionTime}` (newest 5 per cron).
+// The rows are Convex's (cron-rows.ts: int64s, nanoseconds, the arguments as bytes); what this module returns
+// is decoded (numbers, milliseconds, the argument array).
 import { CRON_JOB_LOGS_TABLE, CRON_JOBS_TABLE, CRON_NEXT_RUN_TABLE, type Tx } from "@bunvex/core";
-import type { Value } from "@bunvex/values";
+import { isCommitTsPlaceholder, isSimpleObject, toJsonValue, type Value } from "@bunvex/values";
 import type { CronSpec } from "./cron.ts";
 import { computeNextTs, type Rng } from "./cron-next.ts";
+import { argsBytes, cronSpecOf, cronSpecRow, msOfNs, nsOfMs } from "./cron-rows.ts";
 
 export type CronState = { type: "pending" } | { type: "inProgress"; requestId: string; executionId: string };
 export type CronJobDoc = { _id: string; _creationTime: number; name: string; cronSpec: CronSpec };
@@ -39,17 +42,64 @@ export const CRON_LOG_MAX_LOG_LINE_LENGTH = 1000;
 const sys = <T>(db: Tx, f: () => Promise<T>) => db.asSystem(f);
 export type NextOpts = { rng?: Rng; cronSplaySeconds?: number };
 
+/** A `_cron_jobs` row, decoded. */
+const jobOf = (row: Record<string, unknown>): CronJobDoc => ({
+  _id: row._id as string,
+  _creationTime: row._creationTime as number,
+  name: row.name as string,
+  cronSpec: cronSpecOf(row.cronSpec as Record<string, unknown>),
+});
+
+/** A `_cron_next_run` row, decoded. */
+function nextRunOfRow(row: Record<string, unknown>): CronNextRunDoc {
+  const s = row.state as Record<string, unknown>;
+  const state: CronState =
+    s.type === "inProgress"
+      ? { type: "inProgress", requestId: s.request_id as string, executionId: s.execution_id as string }
+      : { type: "pending" };
+  return {
+    _id: row._id as string,
+    _creationTime: row._creationTime as number,
+    cronJobId: row.cronJobId as string,
+    state,
+    prevTs: row.prevTs === null ? null : msOfNs(row.prevTs as bigint),
+    nextTs: msOfNs(row.nextTs as bigint),
+  };
+}
+
+/** A state as Convex's `CronJobState` row: the in-progress ids snake_case. */
+const stateRow = (s: CronState): Record<string, Value> =>
+  s.type === "inProgress" ? { type: "inProgress", request_id: s.requestId, execution_id: s.executionId } : s;
+
+/** Whether a value holds a commit timestamp placeholder (Convex: a `PendingValue` that is not concrete). */
+const pending = (v: unknown): boolean =>
+  isCommitTsPlaceholder(v) ||
+  (Array.isArray(v) ? v.some(pending) : isSimpleObject(v) && Object.values(v as object).some(pending));
+
+/**
+ * A run's status as Convex's `CronJobStatus` row: a result's value as its JSON text (`CronJobResult::Default`)
+ * — unless it holds the commit timestamp, which is stored as a value, resolved at commit — and the canceled
+ * count an int64.
+ */
+function statusRow(s: CronStatus): Record<string, Value> {
+  if (s.type === "canceled") return { type: "canceled", num_canceled: BigInt(s.num_canceled) };
+  if (s.type === "success" && s.result.type === "default" && !pending(s.result.value))
+    return { type: "success", result: { type: "default", value: JSON.stringify(toJsonValue(s.result.value)) } };
+  return s as Record<string, Value>;
+}
+
 async function listJobs(db: Tx): Promise<Map<string, CronJobDoc>> {
-  const docs = (await sys(db, () => db.query(CRON_JOBS_TABLE).collect())) as unknown as CronJobDoc[];
-  return new Map(docs.map((d) => [d.name, d]));
+  const rows = (await sys(db, () => db.query(CRON_JOBS_TABLE).collect())) as Record<string, unknown>[];
+  return new Map(rows.map((r) => [r.name as string, jobOf(r)]));
 }
 async function nextRunOf(db: Tx, cronJobId: string): Promise<CronNextRunDoc | null> {
-  return (await sys(db, () =>
+  const row = (await sys(db, () =>
     db
       .query(CRON_NEXT_RUN_TABLE)
       .withIndex("by_cron_job_id", (q) => q.eq("cronJobId", cronJobId))
       .unique(),
-  )) as unknown as CronNextRunDoc | null;
+  )) as Record<string, unknown> | null;
+  return row && nextRunOfRow(row);
 }
 
 const sameSpec = (a: CronSpec, b: CronSpec) => JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b));
@@ -81,13 +131,13 @@ export async function applyCrons(
   for (const [name, spec] of specs) {
     const job = old.get(name);
     if (!job) {
-      const cronJobId = await sys(db, () => db.insert(CRON_JOBS_TABLE, { name, cronSpec: spec }));
+      const cronJobId = await sys(db, () => db.insert(CRON_JOBS_TABLE, { name, cronSpec: cronSpecRow(spec) }));
       await sys(db, () =>
         db.insert(CRON_NEXT_RUN_TABLE, {
           cronJobId,
           state: { type: "pending" },
           prevTs: null,
-          nextTs: computeNextTs(spec.cronSchedule, null, now, o),
+          nextTs: nsOfMs(computeNextTs(spec.cronSchedule, null, now, o)),
         }),
       );
       diff.added.push(name);
@@ -101,11 +151,13 @@ export async function applyCrons(
           const run = await nextRunOf(db, job._id);
           if (!run) throw new Error("No next run found");
           await sys(db, () =>
-            db.patch(CRON_NEXT_RUN_TABLE, run._id, { nextTs: computeNextTs(spec.cronSchedule, null, now, o) }),
+            db.patch(CRON_NEXT_RUN_TABLE, run._id, {
+              nextTs: nsOfMs(computeNextTs(spec.cronSchedule, null, now, o)),
+            }),
           );
         }
       }
-      await sys(db, () => db.replace(CRON_JOBS_TABLE, job._id, { name, cronSpec: spec }));
+      await sys(db, () => db.replace(CRON_JOBS_TABLE, job._id, { name, cronSpec: cronSpecRow(spec) }));
       diff.updated.push(name);
     }
   }
@@ -122,8 +174,9 @@ export async function applyCrons(
 }
 
 async function toJob(db: Tx, run: CronNextRunDoc): Promise<CronJob | null> {
-  const job = (await sys(db, () => db.get(CRON_JOBS_TABLE, run.cronJobId))) as unknown as CronJobDoc | null;
-  if (!job) return null;
+  const row = (await sys(db, () => db.get(CRON_JOBS_TABLE, run.cronJobId))) as Record<string, unknown> | null;
+  if (!row) return null;
+  const job = jobOf(row);
   return {
     id: job._id,
     name: job.name,
@@ -142,27 +195,27 @@ export async function currentJob(db: Tx, cronJobId: string): Promise<CronJob | n
 }
 
 export async function dueCrons(db: Tx, now: number, limit: number): Promise<CronJob[]> {
-  const runs = (await sys(db, () =>
+  const rows = (await sys(db, () =>
     db
       .query(CRON_NEXT_RUN_TABLE)
-      .withIndex("by_next_ts", (q) => q.lte("nextTs", now))
+      .withIndex("by_next_ts", (q) => q.lte("nextTs", nsOfMs(now)))
       .take(limit),
-  )) as unknown as CronNextRunDoc[];
-  return (await Promise.all(runs.map((r) => toJob(db, r)))).filter((j): j is CronJob => j !== null);
+  )) as Record<string, unknown>[];
+  return (await Promise.all(rows.map((r) => toJob(db, nextRunOfRow(r))))).filter((j): j is CronJob => j !== null);
 }
 
 export async function nextCronTs(db: Tx, now: number): Promise<number | null> {
   const [r] = (await sys(db, () =>
     db
       .query(CRON_NEXT_RUN_TABLE)
-      .withIndex("by_next_ts", (q) => q.gt("nextTs", now))
+      .withIndex("by_next_ts", (q) => q.gt("nextTs", nsOfMs(now)))
       .take(1),
-  )) as unknown as CronNextRunDoc[];
-  return r?.nextTs ?? null;
+  )) as Record<string, unknown>[];
+  return r ? msOfNs(r.nextTs as bigint) : null;
 }
 
 export async function setCronState(db: Tx, job: CronJob, state: CronState) {
-  await sys(db, () => db.patch(CRON_NEXT_RUN_TABLE, job.runId, { state }));
+  await sys(db, () => db.patch(CRON_NEXT_RUN_TABLE, job.runId, { state: stateRow(state) }));
 }
 
 /** Keep the newest `keep` logs of cron `name`. */
@@ -189,10 +242,10 @@ export async function insertLog(
   await sys(db, () =>
     db.insert(CRON_JOB_LOGS_TABLE, {
       name: job.name,
-      ts,
+      ts: nsOfMs(ts),
       udfPath: job.cronSpec.udfPath,
-      udfArgs: job.cronSpec.udfArgs,
-      status,
+      udfArgs: argsBytes(job.cronSpec.udfArgs),
+      status: statusRow(status),
       logLines,
       executionTime,
     }),
@@ -223,7 +276,13 @@ export async function completeRun(db: Tx, job: CronJob, now: number, o: NextOpts
       0,
     );
   }
-  await sys(db, () => db.patch(CRON_NEXT_RUN_TABLE, job.runId, { state: { type: "pending" }, prevTs, nextTs }));
+  await sys(db, () =>
+    db.patch(CRON_NEXT_RUN_TABLE, job.runId, {
+      state: { type: "pending" },
+      prevTs: nsOfMs(prevTs),
+      nextTs: nsOfMs(nextTs),
+    }),
+  );
 }
 
 /** Convex's truncation of a run's log lines: up to 1000 characters in all. */

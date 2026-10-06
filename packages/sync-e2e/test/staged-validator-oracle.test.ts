@@ -23,14 +23,17 @@ const tables = (table: Any, v: Any) => ({
 });
 
 describe(".staged(), as the official package's", () => {
-  test("the schema JSON: each table's stagedDocumentType, absent without one", () => {
+  test("the schema JSON: each table's stagedDocumentType, as the backend stores the export (null without one)", () => {
     const theirs = JSON.parse((defineSchema(tables(defineTable, cv) as Any) as Any).export()) as { tables: Any[] };
+    // `schemaToJson` is the backend's stored form (STUDY-134): the export parsed, its tables by name, an absent
+    // `stagedDocumentType` null.
     const ours = schemaToJson(bunvexSchema(tables(bunvexTable, bv)));
-    const staged = (ts: Any[]) => ts.map((t) => [t.tableName, t.stagedDocumentType]);
+    const staged = (ts: Any[]) =>
+      ts
+        .map((t) => [t.tableName, t.stagedDocumentType ?? null])
+        .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
     expect(staged(ours.tables)).toEqual(staged(theirs.tables));
-    expect(ours.tables.map((t) => "stagedDocumentType" in t)).toEqual(
-      theirs.tables.map((t) => "stagedDocumentType" in t),
-    );
+    expect(ours.tables.every((t) => "stagedDocumentType" in t)).toBe(true);
   });
 
   test("a second call: the same error", () => {
