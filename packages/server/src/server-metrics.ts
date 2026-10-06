@@ -207,8 +207,8 @@ export class ServerMetrics {
     );
     r.collectedCounter(
       "bunvex_search_indexes_restored_total",
-      "Text and vector indexes restored from a snapshot at start",
-      () => this.sources?.engine.searchStats.restored ?? 0,
+      "Text and vector indexes restored from their persisted segments at start",
+      () => this.sources?.engine.searchStats.fromSegments ?? 0,
     );
 
     // The process.
