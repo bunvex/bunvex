@@ -73,7 +73,9 @@ test("a mutation's user time is its work between store calls", async () => {
   const r = await run("mutation", "m:readsAndWrites");
   expect(r.executionTime).toBeGreaterThanOrEqual((STORE_MS + BUSY_MS - 5) / 1000);
   expect(r.userExecutionTime).toBeGreaterThanOrEqual((BUSY_MS - 1) / 1000);
-  expect(r.userExecutionTime).toBeLessThan((BUSY_MS + STORE_MS / 2) / 1000);
+  // Counting the store's wait would give at least BUSY_MS + STORE_MS: under it, with room for a slow CI runner
+  // (two runs there read 73 ms against a 70 ms bound).
+  expect(r.userExecutionTime).toBeLessThan((BUSY_MS + STORE_MS - 10) / 1000);
 });
 
 test("an action's user time is its wall time, waits included, as Convex's", async () => {
