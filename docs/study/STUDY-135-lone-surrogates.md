@@ -1,6 +1,6 @@
 # STUDY-135 — Strings with a lone surrogate, refused where Convex refuses them
 
-- **Status:** proposed (STUDY-122 D3 decided A, owner, 2026-10-06; Q1 and Q2 below are open)
+- **Status:** accepted (STUDY-122 D3 decided A; Q1 B, DV-431; Q2 A; owner, 2026-10-06)
 - **Convex source read:** commit `4577b903` of get-convex/convex-backend; `serde_json` 1.0.151 (its `Cargo.lock`)
 - **Related:** [STUDY-122](STUDY-122-differential-testing.md) (D3: the differential tests found it),
   [STUDY-20](STUDY-20-function-errors-and-logs.md), [STUDY-41](STUDY-41-nested-calls-and-execution-limit.md)
@@ -87,8 +87,8 @@ All with `H = "\ud800"` and `L = "\udc00"`.
 
 | # | Question | Options | Recommendation |
 |---|---|---|---|
-| **Q1** — open | `throw new ConvexError(H)` (string data with a lone surrogate) is a system error on Convex: InternalServerError, and the client retries. | **A.** Match it: a system error. **B.** A function error carrying "Uncaught BunvexError: �" with no data (a divergence). | **B**: Convex's answer comes from a `?` on a parse failure, not a decision, and it makes a client retry a call that fails the same way each time. |
-| **Q2** — open | `throw new ConvexError({k: H})` (object data) keeps its message and loses `errorData` on Convex. | **A.** Match it: the message, no data. **B.** Keep the data with U+FFFD in place of the surrogate (a divergence). | **A**: the error still reaches the app as a function error, and the missing data is what apps observe. |
+| **Q1** — decided: **B** (owner, 2026-10-06; DV-431) | `throw new ConvexError(H)` (string data with a lone surrogate) is a system error on Convex: InternalServerError, and the client retries. | **A.** Match it: a system error. **B.** A function error carrying "Uncaught BunvexError: �" with no data (a divergence). | **B**: Convex's answer comes from a `?` on a parse failure, not a decision, and it makes a client retry a call that fails the same way each time. |
+| **Q2** — decided: **A** (owner, 2026-10-06) | `throw new ConvexError({k: H})` (object data) keeps its message and loses `errorData` on Convex. | **A.** Match it: the message, no data. **B.** Keep the data with U+FFFD in place of the surrogate (a divergence). | **A**: the error still reaches the app as a function error, and the missing data is what apps observe. |
 
 ## 5. Additions
 
