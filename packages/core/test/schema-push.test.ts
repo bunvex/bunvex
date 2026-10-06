@@ -324,3 +324,58 @@ describe("a push's schema change", () => {
     expect(schemaToJson(schemaFromJson(JSON.parse(JSON.stringify(j))))).toEqual(j);
   });
 });
+
+describe("a push of a schema already there (Convex's submit_pending, STUDY-35 §7)", () => {
+  const rows = (e: Engine) =>
+    e.query((db) => db.asSystem(() => db.query(SCHEMAS_TABLE).collect())) as unknown as Promise<
+      { _id: string; state: string }[]
+    >;
+  const complete = async (e: Engine, id: string) => {
+    await until(async () => (await e.schemaPushStatus(id)).type !== "inProgress");
+    return e.schemaPushStatus(id);
+  };
+
+  test("equal to the active schema: the active schema's id, complete at once, and its commit changes nothing", async () => {
+    const e = await open(tmp());
+    const p = await e.startSchemaPush(v1);
+    await complete(e, p.schemaId);
+    await e.commitSchemaPush(p.schemaId, async () => {});
+    // The same schema, declared again with its fields in another order: the active one.
+    const same = defineSchema({
+      items: defineTable({ tag: v.optional(v.string()), n: v.number() }).index("by_n", ["n"]),
+    });
+    const again = await e.startSchemaPush(same);
+    expect(again.schemaId).toBe(p.schemaId);
+    expect(await e.schemaPushStatus(again.schemaId)).toEqual({ type: "complete" });
+    const committed = await e.commitSchemaPush(again.schemaId, async () => "body ran");
+    expect(committed.value).toBe("body ran");
+    expect((await rows(e)).map((r) => [r._id, r.state])).toEqual([[p.schemaId, "active"]]);
+    await e.mutation((db) => db.insert("items", { n: 1 }));
+  });
+
+  test("equal to the pending schema: that one, not overwritten; a different one: a new pending schema", async () => {
+    const e = await open(tmp());
+    const a = await e.startSchemaPush(v1);
+    const b = await e.startSchemaPush(v1);
+    expect(b.schemaId).toBe(a.schemaId);
+    expect(await complete(e, a.schemaId)).toEqual({ type: "complete" });
+    const c = await e.startSchemaPush(v2);
+    expect(c.schemaId).not.toBe(a.schemaId);
+    expect(await e.schemaPushStatus(a.schemaId)).toEqual({ type: "raceDetected" });
+  });
+
+  test("a pending push, then the active schema again: the pending one is overwritten", async () => {
+    const e = await open(tmp());
+    const p = await e.startSchemaPush(v1);
+    await complete(e, p.schemaId);
+    await e.commitSchemaPush(p.schemaId, async () => {});
+    const pending = await e.startSchemaPush(v2);
+    const back = await e.startSchemaPush(v1);
+    expect(back.schemaId).toBe(p.schemaId);
+    expect(await e.schemaPushStatus(pending.schemaId)).toEqual({ type: "raceDetected" });
+    await e.commitSchemaPush(back.schemaId, async () => {});
+    await e.mutation((db) => db.insert("items", { n: 1 }));
+    expect((await byIndex(e, "by_n", "n", 1)).length).toBe(1);
+    expect((await rows(e)).find((r) => r.state === "active")!._id).toBe(p.schemaId);
+  });
+});

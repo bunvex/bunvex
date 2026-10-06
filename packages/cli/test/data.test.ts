@@ -134,3 +134,33 @@ test("bunvex data: tables, documents in each format, the limit warning, _storage
     "bunvex data: --component: bunvex does not have components yet.",
   ]);
 });
+
+test("bunvex data --system: every system table with its description; a private one's documents", async () => {
+  const t = await setup();
+  await t.engine.mutation((db) => db.insert("alpha", { n: 1 }));
+  const list = await t.run(["--system"]);
+  expect(list.code).toBe(0);
+  const lines = list.out.split("\n");
+  // `_tables` and `_index` come from the catalog; user tables never show
+  expect(lines.some((l) => /^_tables\s+\d+\s+private\s+Every table: its name/.test(l))).toBe(true);
+  expect(lines.some((l) => l.startsWith("_index "))).toBe(true);
+  expect(lines.some((l) => l.startsWith("alpha"))).toBe(false);
+  // the private `_index`: its documents, as `bunvex data` prints a table's (here as JSON lines)
+  const index = await t.run(["--system", "_index", "--format", "jsonl", "--order", "asc"]);
+  expect(index.code).toBe(0);
+  expect(index.out).toContain('"by_creation_time"');
+  // without --system the same table stays hidden: its reads find nothing (DV-360), so Convex's
+  // `npx convex data _index` prints that the table has no documents
+  const hidden = await t.run(["_index"]);
+  expect(hidden.code).toBe(0);
+  expect(hidden.out).toBe("");
+  expect(hidden.err.join("\n")).toContain("There are no documents in this table.");
+  // a user table is not a system table
+  const user = await t.run(["--system", "alpha"]);
+  expect(user.code).toBe(1);
+  expect(user.err.join("\n")).toContain('"alpha" is not a system table.');
+  // the pretty table and the limit warning work as for any table
+  const pretty = await t.run(["--system", "_index", "--limit", "1"]);
+  expect(pretty.out.split("\n")[0]).toStartWith("_id");
+  expect(pretty.err).toEqual(["Showing the 1 most recently created document. Use the --limit option to see more."]);
+});
