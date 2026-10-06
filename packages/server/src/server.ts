@@ -1,6 +1,6 @@
 // The transports: the HTTP one-shot API (Convex's `/api/{query,mutation,action}` shape) and the sync
 // protocol v1 at `/api/{version}/sync` (sync.ts, STUDY-23). One process: the committer is single by design.
-import { type AuthConfig, AuthenticationError, parseAuthConfig, TokenVerifier } from "@bunvex/auth";
+import { type AuthConfig, AuthenticationError, type AuthInfo, parseAuthConfig, TokenVerifier } from "@bunvex/auth";
 import {
   applyEnvVarChanges,
   BackendIsNotRunningError,
@@ -17,6 +17,7 @@ import {
   orderEnvVarChanges,
   parseValue,
   readBackendState,
+  SCHEDULED_FUNCTIONS_TABLE,
   SchemaEnforcementError,
   setUserStopState,
   stringifyValue,
@@ -25,7 +26,7 @@ import {
 } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
-import { decodeId, type Value } from "@bunvex/values";
+import { decodeId, TOO_NESTED_MESSAGE, type Value } from "@bunvex/values";
 import type { Server } from "bun";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { type AddressScreen, addressScreen, startAddressScreen } from "./address-screen.ts";
@@ -43,6 +44,7 @@ import {
 import { AppMetrics } from "./app-metrics.ts";
 import { APP_METRICS_ROUTES, appMetricsRoute, MetricsRequestError } from "./app-metrics-routes.ts";
 import { auditActor, auditEventJson, auditEvents, DEFAULT_AUDIT_LOG_LIMIT, MAX_AUDIT_LOG_LIMIT } from "./audit-log.ts";
+import { putAuthInfo, readAuthInfo } from "./auth-info.ts";
 import {
   REQUEST_DESTINATIONS,
   type RequestDestination,
@@ -51,7 +53,14 @@ import {
   withCanonical,
 } from "./canonical-urls.ts";
 import { requestVerdict, withClientVersionCheck } from "./client-version.ts";
-import { loadLatestCode, type SourcePackage, udfConfig, writeCodeRows, writePackage } from "./code-store.ts";
+import {
+  loadLatestCode,
+  peekUdfConfig,
+  type SourcePackage,
+  udfConfig,
+  writeCodeRows,
+  writePackage,
+} from "./code-store.ts";
 import { CodeVersion, type ModuleSource } from "./code-version.ts";
 import { withApiCors } from "./cors.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
@@ -70,7 +79,8 @@ import { ExportError, ExportService } from "./exports.ts";
 import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import { FunctionLog, LONG_POLL_MS, partJson, wantsStructuredLines, wsRequestId } from "./function-log.ts";
 import { badFunctionPath } from "./function-path.ts";
-import { type AdminCaller, adminCallerOf, callerOf, type Functions } from "./functions.ts";
+import { type AdminCaller, adminCallerOf, callerOf, type Functions, type SourcedCaller } from "./functions.ts";
+import { healthRoute, maxEchoBytesFromEnv, versionRoute } from "./health.ts";
 import { httpActionServer } from "./http-actions.ts";
 import { type HttpProxy, httpProxyUrl, proxiedFetch } from "./http-proxy.ts";
 import type { ImportFormat } from "./import-parse.ts";
@@ -78,6 +88,7 @@ import { ImportError, type ImportOptions, ImportRequestError, ImportService, MOD
 import {
   BadJsonBody,
   QUERY_BATCH,
+  RUN_TEST_FUNCTION,
   readJsonBody,
   UDF_POST,
   UDF_POST_ARGS_ONLY,
@@ -88,9 +99,12 @@ import { AuditLogLimitError } from "./log.ts";
 import { defaultLogSinkOptions, LogManager, LogSinkError, type LogSinkOptions } from "./log-sinks.ts";
 import { LOG_STREAM_ROUTE, logStreamRoute } from "./log-sinks-routes.ts";
 import { collectLogs, type WithLogLines } from "./logs.ts";
+import { isPlatformPath, openApiDocAt, openApiResponse } from "./openapi.ts";
 import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
+import { RequestLimit, requestLimitFromEnv, withRequestLimit } from "./request-limit.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
 import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
+import { metricsEndpointDisabled, ServerMetrics } from "./server-metrics.ts";
 import { sessionRetentionFromEnv, startSessionCleanup } from "./session-cleanup.ts";
 import { tableShapes } from "./shapes-route.ts";
 import { FileStorage, StorageError, startFileSweeps } from "./storage.ts";
@@ -111,9 +125,11 @@ import {
   SyncSession,
   splayOptions,
   supportsTransitionChunks,
+  type WsHeartbeatOptions,
   wireTs,
 } from "./sync.ts";
 import { cancelAllScheduledJobs, cancelScheduledJob } from "./system-functions.ts";
+import { standaloneQuery, type TestBundle, TestFunctionError } from "./test-function.ts";
 import { UsageGauges } from "./usage-gauges.ts";
 import { USAGE_LIMIT_ROUTE, UsageLimitError, UsageLimitWorker, UsageMeter, usageLimitRoute } from "./usage-limits.ts";
 import { defaultFormat, type Format, parseFormat, reformat } from "./value-format.ts";
@@ -151,6 +167,8 @@ export type ServerOptions = {
    * else two weeks, as Convex.
    */
   sessionRequestRetentionMs?: number | null;
+  /** The largest body `POST /echo` takes. Default: `MAX_ECHO_BYTES`, else 128 MiB, as Convex's knob (DV-375). */
+  maxEchoBytes?: number;
   /**
    * The auth config (STUDY-27): the default export of the app's `bunvex/auth.config.ts`, as Convex's
    * `convex/auth.config.ts`. Validated at start (an invalid one throws here). Without it, any token is
@@ -256,6 +274,21 @@ export type ServerOptions = {
    * Bun's largest, 2³² − 1. For tests.
    */
   wsBackpressureLimit?: number;
+  /**
+   * Answer `/metrics` with 404 `MetricsDisabled` instead of the Prometheus metrics (STUDY-114). Default:
+   * `DISABLE_METRICS_ENDPOINT` (only `true` turns it on), else off, as Convex's knob.
+   */
+  disableMetricsEndpoint?: boolean;
+  /**
+   * Requests the API and the site serve at once, together (STUDY-110); past it they wait their turn. Default:
+   * `HTTP_SERVER_MAX_CONCURRENT_REQUESTS`, else 128, as self-hosted Convex.
+   */
+  maxConcurrentRequests?: number;
+  /**
+   * The sync socket's WS ping interval and client timeout (STUDY-104). Defaults: Convex's 5 s and 120 s. For
+   * tests.
+   */
+  wsHeartbeat?: Partial<WsHeartbeatOptions>;
 };
 
 /**
@@ -274,10 +307,13 @@ const fromWire = (args: unknown, path: string) => {
     const one = Array.isArray(args) ? args[0] : args;
     return parseValue(JSON.stringify(one === undefined ? {} : one));
   } catch (e) {
-    // Convex's `parse_udf_args`: the backend's message, under the function's canonical path (STUDY-53).
-    throw new FunctionPathError(
-      `Invalid arguments for ${canonicalPath(path)}: ${(e as Error).message.replace("starts with a '$'", () => "starts with '$'")}`,
-    );
+    // Convex's `parse_udf_args`: the backend's message, under the function's canonical path (STUDY-53). Too
+    // deep for the stack to stringify (thousands of levels) is past the nesting limit too (STUDY-109).
+    const message =
+      e instanceof RangeError && e.message.includes("call stack")
+        ? TOO_NESTED_MESSAGE
+        : (e as Error).message.replace("starts with a '$'", () => "starts with '$'");
+    throw new FunctionPathError(`Invalid arguments for ${canonicalPath(path)}: ${message}`);
   }
 };
 
@@ -345,6 +381,10 @@ export function createServer(opts: ServerOptions) {
   // The app metrics (STUDY-58): what functions, the scheduler and subscriptions record.
   const appMetrics = new AppMetrics();
   functions.appMetrics = appMetrics;
+  // The Prometheus metrics (STUDY-114): served at `/metrics` unless DISABLE_METRICS_ENDPOINT is `true`.
+  const serverMetrics = new ServerMetrics();
+  functions.serverMetrics = serverMetrics;
+  const metricsDisabled = opts.disableMetricsEndpoint ?? metricsEndpointDisabled(process.env.DISABLE_METRICS_ENDPOINT);
   // Each limiter reports its running and queued functions (Convex's `Limiter::report_metrics`), from start.
   for (const [limiter, env, kind] of [
     [functions.limits.query, "isolate", "Query"],
@@ -367,13 +407,13 @@ export function createServer(opts: ServerOptions) {
   usageLimitWorker.start();
   engine.onOccRetry = (e) => functions.logOccRetry(e);
   const redact = opts.redactLogsToClient ?? envFlag(process.env.REDACT_LOGS_TO_CLIENT);
-  const makeVerifier = (auth: AuthConfig | undefined) =>
-    new TokenVerifier(auth === undefined ? [] : parseAuthConfig(auth), {
+  const makeVerifier = (infos: AuthInfo[]) =>
+    new TokenVerifier(infos, {
       redactErrors: redact,
       fetch: proxiedFetch(opts.authFetch ?? directFetch, httpProxy),
     });
   /** The auth config's verifier; a push replaces it with its auth.config's (STUDY-35). */
-  let verifier = makeVerifier(opts.auth);
+  let verifier = makeVerifier(opts.auth === undefined ? [] : parseAuthConfig(opts.auth));
   /** This deployment's admin keys (STUDY-34): checked against its instance name and secret. */
   const adminKeys = new AdminKeys(engine.instanceName, engine.derivedKey(ADMIN_KEY_PURPOSE));
   /**
@@ -530,6 +570,17 @@ export function createServer(opts: ServerOptions) {
   const requestError = (status: number, code: string, message: string) => json({ code, message }, status);
 
   /**
+   * `/metrics` (Convex's `metrics` meta route): the Prometheus text exposition, with no auth; 404
+   * `MetricsDisabled` when DISABLE_METRICS_ENDPOINT is `true`. A GET route: another method is a 405.
+   */
+  const metricsRoute = (req: Request): Response => {
+    if (req.method !== "GET" && req.method !== "HEAD")
+      return new Response(null, { status: 405, headers: { allow: "GET,HEAD" } });
+    if (metricsDisabled) return requestError(404, "MetricsDisabled", "/metrics endpoint disabled");
+    return new Response(serverMetrics.registry.encode(), { headers: { "content-type": "text/plain; charset=utf-8" } });
+  };
+
+  /**
    * The response to a function call, as Convex's `UdfResponse`: `{status:"success", value, logLines?}`, or
    * — still HTTP 200, as Convex's backend answers — `{status:"error", errorMessage, errorData?, logLines?}`.
    * A system failure is a 500 with the fixed internal message. `value` and `errorData` are in the request's
@@ -651,10 +702,13 @@ export function createServer(opts: ServerOptions) {
     formatError,
     fromWire,
     splay: splayOptions(opts.subscriptionSplay),
+    ...(opts.wsHeartbeat ? { wsHeartbeat: opts.wsHeartbeat } : {}),
     // Convex's `record_subscription_invalidations`: by write source (a function by its canonical path).
     onInvalidations: (events) => {
       const bySource = new Map<string, Map<string, number>>();
+      let total = 0;
       for (const e of events) {
+        total += e.count;
         if (e.source === undefined) continue;
         const source = functions.kindOf(e.source) === null ? e.source : canonicalPath(e.source);
         const m = bySource.get(source) ?? new Map<string, number>();
@@ -662,7 +716,9 @@ export function createServer(opts: ServerOptions) {
         bySource.set(source, m);
       }
       for (const [source, m] of bySource) appMetrics.recordInvalidations(source, m);
+      serverMetrics.invalidations(total);
     },
+    metrics: serverMetrics,
     verifyToken: (token) => verifier.verify(token),
     adminCaller: (key, impersonating) => {
       const admin = adminKeys.check(removeTypePrefix(key));
@@ -675,6 +731,15 @@ export function createServer(opts: ServerOptions) {
   });
   const scheduler = new ScheduledJobExecutor(engine, functions, { ...schedulerOptionsFromEnv(), ...opts.scheduler });
   scheduler.start();
+  serverMetrics.start({
+    engine,
+    syncSessions: () => sync.sessions.size,
+    syncSubscriptions: () => sync.subscriptionCount(),
+    syncStats: sync.stats,
+    schedulerRunning: () => scheduler.runningJobs,
+    schedulerBacklog: () => scheduler.backlogSeconds(),
+    schedulerStats: scheduler.stats,
+  });
   const specs = opts.crons ? cronSpecs(opts.crons, (id, name) => functions.cronTarget(id, name)) : new Map();
   const splay = process.env.CRON_SPLAY_SECONDS;
   const cronExecutor = new CronJobExecutor(engine, functions, specs, {
@@ -690,6 +755,7 @@ export function createServer(opts: ServerOptions) {
   // ---------------------------------------------------------------- request body caps (H3, F4)
   /** Bun's default `maxRequestBodySize`, the cap every route but uploads keeps. */
   const cap = opts.maxRequestBodySize ?? 128 * 1024 * 1024;
+  const maxEchoBytes = opts.maxEchoBytes ?? maxEchoBytesFromEnv();
   const payloadTooLarge = () => new Response("Payload Too Large", { status: 413 });
   /** A declared body over the cap: 413, as Bun answers it. */
   const bodyCap = (req: Request) => {
@@ -1020,6 +1086,16 @@ export function createServer(opts: ServerOptions) {
       );
       return new Response(null, { status: 200 });
     }
+    // Convex's `/api/delete_scheduled_functions_table {componentId?}` (scheduling.rs, the dashboard's "Delete
+    // all"): the scheduler's table replaced with an empty one in one commit, whatever it holds; 200, no body.
+    if (url.pathname === "/api/delete_scheduled_functions_table") {
+      if (body.componentId !== undefined && body.componentId !== null && body.componentId !== "")
+        return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
+      await engine.replaceWithEmptyTables([SCHEDULED_FUNCTIONS_TABLE], (db) =>
+        insertAuditLogEvents(db, [auditEvents.deleteScheduledJobsTable()], auditActor(caller)),
+      );
+      return new Response(null, { status: 200 });
+    }
     // Convex's `/api/delete_tables {tableNames, componentId}` (dashboard.rs): the tables deleted in one commit.
     if (url.pathname === "/api/delete_tables") {
       if (!Array.isArray(body.tableNames) || !body.tableNames.every((t) => typeof t === "string"))
@@ -1046,6 +1122,66 @@ export function createServer(opts: ServerOptions) {
     return requestError(404, "NotFound", `no route for ${url.pathname}`);
   };
 
+  /**
+   * Convex's `POST /api/run_test_function {adminKey, bundle, args, format, componentId?}` (STUDY-119): the
+   * admin key in the body (any key, as `must_be_admin_from_key`), `RunTestQuery`, then the bundle's default
+   * query run once, uncached, as the function tester (`Tester`); a `UdfResponse` in the requested format.
+   */
+  const testFunctionRoute = async (req: Request): Promise<Response> => {
+    if (req.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
+    let body: {
+      adminKey: string;
+      bundle: TestBundle | unknown[];
+      args: unknown;
+      format: string;
+      componentId?: string | null;
+    };
+    try {
+      body = await readJsonBody(req, () => new Response(capped(req).body).text(), RUN_TEST_FUNCTION);
+    } catch (e) {
+      if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
+      throw e;
+    }
+    // A struct may come as an array of its fields, as serde reads it.
+    const b = body.bundle;
+    const bundle: TestBundle = Array.isArray(b)
+      ? { path: b[0] as string, source: b[1] as string, sourceMap: b[2] as string, environment: b[3] as string }
+      : b;
+    let caller: Caller;
+    try {
+      caller = withRequest(adminCaller(body.adminKey, false), req);
+      functions.requireOperation(caller, "RunTestQuery");
+    } catch (e) {
+      const r = accessError(e);
+      if (r) return r;
+      throw e;
+    }
+    // bunvex has no components (STUDY-62): its own refusal, as `/api/shapes2` and `/api/delete_tables`.
+    if (body.componentId !== undefined && body.componentId !== null && body.componentId !== "")
+      return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
+    let found: Awaited<ReturnType<typeof standaloneQuery>>;
+    try {
+      // Read, never written: Convex sets them in a transaction it does not commit.
+      const config = await peekUdfConfig(engine);
+      found = await standaloneQuery(bundle, {
+        seed: config.seed,
+        timestamp: config.timestamp,
+        env: await deploymentEnv(),
+      });
+    } catch (e) {
+      if (e instanceof TestFunctionError) return requestError(e.status, e.code, e.message);
+      throw e;
+    }
+    const tester = { ...caller, source: "Tester" } as SourcedCaller;
+    return udfResponse(
+      await collectLogs(async () =>
+        functions.runStandaloneQueryJson(found.query, found.name, fromWire(body.args, found.name), tester),
+      ),
+      "query",
+      { format: body.format, client: req.headers.get("bunvex-client") },
+    );
+  };
+
   // Convex's CORS layer on `/api` (STUDY-67 H2).
   const apiOptions: Bun.Serve.Options<WsData, never> = {
     port: opts.port ?? 3210,
@@ -1055,7 +1191,12 @@ export function createServer(opts: ServerOptions) {
     maxRequestBodySize: Number.MAX_SAFE_INTEGER,
     websocket: {
       maxPayloadLength: 16 * 1024 * 1024, // Convex: tungstenite's 16 MiB frame cap (STUDY-64 §1.7)
+      // The sync session pings every 5 s and closes a client silent for 120 s (STUDY-104), so Bun's own ping
+      // (sent when the idle timeout nears) is off: one heartbeat, not two. The idle timeout stays, at Bun's
+      // largest, as a backstop: it only fires on a socket nothing has come in on for 16 minutes, which the
+      // session's timeout closes long before.
       idleTimeout: 960,
+      sendPings: false,
       // Never drop a frame (STUDY-64 W0): Bun's default drops what passes 16 MiB of unsent data, silently,
       // and the client then breaks ("Invalid start version") or waits forever for a response. A socket
       // whose buffer would pass the limit is closed instead; the client reconnects and resends (W1).
@@ -1066,6 +1207,14 @@ export function createServer(opts: ServerOptions) {
       },
       message(ws, raw) {
         ws.data.session.message(String(raw));
+      },
+      // Any frame from the client shows it is alive, as Convex's `last_received` (STUDY-104); Bun answers a
+      // client's ping with a pong by itself.
+      ping(ws) {
+        ws.data.session.heard();
+      },
+      pong(ws) {
+        ws.data.session.heard();
       },
       close(ws) {
         ws.data.session.close();
@@ -1089,9 +1238,17 @@ export function createServer(opts: ServerOptions) {
         if (srv.upgrade(req, { data, ...(headers ? { headers } : {}) })) return undefined as never;
         return new Response("upgrade failed", { status: 400 });
       }
-      if (url.pathname === "/version") return new Response("bunvex");
-      // Convex's health route: the deployment's name, as plain text (STUDY-34).
-      if (url.pathname === "/instance_name") return new Response(engine.instanceName);
+      // The meta `/version` and Convex's health routes: `/instance_name` (STUDY-34), `/instance_version`, `/`
+      // and `/echo` (STUDY-112), with no auth and their own body limit.
+      const health = healthRoute(req, url.pathname, engine.instanceName, maxEchoBytes);
+      if (health) return health;
+      // Prometheus metrics (STUDY-114): a meta route on both ports, as Convex's, open to anyone.
+      if (url.pathname === "/metrics") return metricsRoute(req);
+      // The OpenAPI documents (STUDY-115), with no auth; `/api/v1/` answers only the documented routes.
+      const openApiDoc = openApiDocAt(url.pathname);
+      if (openApiDoc) return openApiResponse(openApiDoc, req);
+      if (url.pathname.startsWith("/api/v1/") && !isPlatformPath(url.pathname))
+        return requestError(404, "NotFound", `no route for ${url.pathname}`);
       // HTTP actions under /http (Convex's nest): the prefix is stripped; long requests are not cut by Bun's
       // idle timeout (the 408 at 300 s is the HTTP action's own).
       if (url.pathname.startsWith("/api/storage/") && files) {
@@ -1124,12 +1281,15 @@ export function createServer(opts: ServerOptions) {
         (url.pathname === "/api/get_config_hashes" || url.pathname.startsWith("/api/deploy2/"))
       )
         return pushRoute(url, req);
+      // The function tester (STUDY-119): its admin key is in the body.
+      if (url.pathname === "/api/run_test_function") return testFunctionRoute(req);
       // The admin API (STUDY-34): each route needs an admin key, and its operation.
       if (
         url.pathname === "/stats" ||
         url.pathname === "/api/check_admin_key" ||
         /^\/api\/cancel_(all_)?jobs?$/.test(url.pathname) ||
         url.pathname === "/api/delete_tables" ||
+        url.pathname === "/api/delete_scheduled_functions_table" ||
         url.pathname === "/api/v1/list_audit_log_events" ||
         /^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) ||
         url.pathname === "/api/v1/get_canonical_urls" ||
@@ -1302,12 +1462,23 @@ export function createServer(opts: ServerOptions) {
     },
   };
   // The client version check wraps everything, CORS included (STUDY-67 H12, DV-315).
-  server = Bun.serve<WsData, never>(withClientVersionCheck(withApiCors(apiOptions)));
+  // The concurrent request limit (STUDY-110) is inside the client version check, as Convex's layers; one for
+  // the API and the site, as Convex's site proxy forwards into the backend's service.
+  const requestLimit =
+    opts.maxConcurrentRequests === undefined ? requestLimitFromEnv() : new RequestLimit(opts.maxConcurrentRequests);
+  server = Bun.serve<WsData, never>(withClientVersionCheck(withRequestLimit(withApiCors(apiOptions), requestLimit)));
+  /**
+   * The S3 key prefix of the stores made from the environment, recorded in `_db` by the first one used
+   * (STUDY-126): a store pinned to a local directory refuses S3, as Convex's `initialize_storage_tag`.
+   */
+  let s3PrefixOnce: Promise<string> | null = null;
+  const s3Prefix = () =>
+    (s3PrefixOnce ??= engine.initializeStorage({ tag: "s3" }).then((t) => (t as { s3Prefix: string }).s3Prefix));
   // The file storage, once the API's origin is known (its URLs start with it).
   const blobs =
     opts.fileStorage === undefined
       ? blobStoreFromEnv(process.env, {
-          s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
+          s3Prefix,
         })
       : opts.fileStorage;
   const cloudOrigin = opts.cloudOrigin ?? process.env.BUNVEX_CLOUD_ORIGIN ?? `http://127.0.0.1:${server.port}`;
@@ -1317,7 +1488,8 @@ export function createServer(opts: ServerOptions) {
   }
   const stopFileSweeps = files ? startFileSweeps(engine, files) : () => {};
 
-  // The site port (Convex's site proxy): HTTP actions at every path; `/version` first, as Convex's meta route.
+  // The site port (Convex's site proxy): HTTP actions at every path; `/version` and `/metrics` first, as Convex's
+  // meta routes.
   const sitePort =
     opts.sitePort === undefined
       ? server.port === undefined
@@ -1330,18 +1502,24 @@ export function createServer(opts: ServerOptions) {
     sitePort === null
       ? null
       : Bun.serve(
-          withClientVersionCheck({
-            port: sitePort,
-            ...(opts.hostname ? { hostname: opts.hostname } : {}),
-            idleTimeout: 120,
-            ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
-            fetch(req, srv) {
-              const url = new URL(req.url);
-              if (url.pathname === "/version") return new Response("bunvex");
-              srv.timeout(req, 0);
-              return serveHttpAction(req, url.pathname, url.search);
-            },
-          } as Bun.Serve.Options<undefined, never>),
+          withClientVersionCheck(
+            withRequestLimit(
+              {
+                port: sitePort,
+                ...(opts.hostname ? { hostname: opts.hostname } : {}),
+                idleTimeout: 120,
+                ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
+                fetch(req, srv) {
+                  const url = new URL(req.url);
+                  if (url.pathname === "/version") return versionRoute(req);
+                  if (url.pathname === "/metrics") return metricsRoute(req);
+                  srv.timeout(req, 0);
+                  return serveHttpAction(req, url.pathname, url.search);
+                },
+              } as Bun.Serve.Options<undefined, never>,
+              requestLimit,
+            ),
+          ),
         );
   /** The site's origin: Convex's `CONVEX_SITE_URL` default. */
   const siteOrigin = site
@@ -1363,12 +1541,13 @@ export function createServer(opts: ServerOptions) {
   };
   /** The deployed `auth.config.js`, re-evaluated when a variable changes (Convex's `reevaluate_existing_auth_config`). */
   let authModule: ModuleSource | null = null;
-  /** The auth providers in force, for a push's audit-log auth diff. */
-  let installedAuth: unknown[] | null = null;
-  const useAuth = (providers: unknown[] | null) => {
-    installedAuth = providers;
-    verifier = makeVerifier(providers === null ? undefined : ({ providers } as AuthConfig));
+  /** Check tokens against these providers: the ones a commit just stored in `_auth` (STUDY-129). */
+  const useAuth = (infos: AuthInfo[]) => {
+    verifier = makeVerifier(infos);
   };
+  /** An evaluated `auth.config`'s providers, as `_auth` stores them. */
+  const authInfos = (providers: unknown[] | null) =>
+    providers === null ? [] : parseAuthConfig({ providers } as never);
   /**
    * Make a code version live (STUDY-35): its functions replace every function at once, its router the
    * HTTP actions', its crons the stored ones (the same diff as at start); then every subscription to a
@@ -1379,14 +1558,14 @@ export function createServer(opts: ServerOptions) {
     opts.moduleStorage ??
     blobStoreFromEnv(process.env, {
       useCase: "modules",
-      s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
+      s3Prefix,
     });
   /** Snapshot exports (STUDY-42). */
   const exportStore =
     opts.exportStorage === undefined
       ? blobStoreFromEnv(process.env, {
           useCase: "exports",
-          s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
+          s3Prefix,
         })
       : opts.exportStorage;
   const exportService = exportStore
@@ -1453,7 +1632,7 @@ export function createServer(opts: ServerOptions) {
     opts.importStorage === undefined
       ? blobStoreFromEnv(process.env, {
           useCase: "snapshot_imports",
-          s3Prefix: () => engine.instanceSetting("s3Prefix", () => `bunvex-${crypto.randomUUID()}/`),
+          s3Prefix,
         })
       : opts.importStorage;
   const importService = importStore
@@ -1589,7 +1768,9 @@ export function createServer(opts: ServerOptions) {
         if (!code) return;
         await installCodeVersion(code.version);
         authModule = code.authConfig;
-        if (authModule) useAuth(await evaluateAuthConfig(engine, authModule, env));
+        // The providers stored by the last push or variable change, as Convex's token checks read `_auth`:
+        // nothing is evaluated at a start.
+        useAuth(await engine.query((db) => readAuthInfo(db)));
       })
     : // An embedded server's functions are registered in process: their handles now.
       engine
@@ -1599,13 +1780,12 @@ export function createServer(opts: ServerOptions) {
     console.error(`bunvex: could not load the deployed code: ${e instanceof Error ? e.message : e}`),
   );
 
-  const installCodeVersion = async (version: CodeVersion, o: { crons?: boolean; auth?: unknown[] | null } = {}) => {
+  const installCodeVersion = async (version: CodeVersion, o: { crons?: boolean; auth?: AuthInfo[] } = {}) => {
     const changed = functions.install(version.functions, version.moduleHashes);
     // The functions' handles (STUDY-50): a row per function, tombstones for the ones gone.
     await engine.mutation((db) => syncFunctionHandles(db, functions.functionPaths()), "_system/function_handles");
     httpOptions.router = version.router;
-    if (o.auth !== undefined)
-      verifier = makeVerifier(o.auth === null ? undefined : ({ providers: o.auth } as AuthConfig));
+    if (o.auth !== undefined) useAuth(o.auth);
     const crons =
       o.crons === false
         ? undefined
@@ -1622,10 +1802,8 @@ export function createServer(opts: ServerOptions) {
     cronExecutor,
     install: (version, auth, module) => {
       authModule = module;
-      installedAuth = auth;
       return installCodeVersion(version, { crons: false, auth });
     },
-    currentAuth: () => installedAuth,
     deploymentEnv,
   });
   /**
@@ -1672,8 +1850,11 @@ export function createServer(opts: ServerOptions) {
         else env[name] = value;
         providers = await evaluateAuthConfig(engine, authModule, env, "This change would make the auth config invalid");
       }
+      const infos = authInfos(providers);
       await engine.mutation(async (db) => {
         await setCanonicalUrl(db, destination, next);
+        // Convex's `reevaluate_existing_auth_config`, in the change's transaction.
+        if (authModule) await putAuthInfo(db, infos);
         await insertAuditLogEvents(
           db,
           [
@@ -1684,7 +1865,7 @@ export function createServer(opts: ServerOptions) {
           auditActor(caller),
         );
       }, "update_canonical_url");
-      if (authModule) useAuth(providers);
+      if (authModule) useAuth(infos);
       return new Response(null, { status: 200 });
     } catch (e) {
       if (e instanceof TableSummariesUnavailableError) return requestError(503, e.code, e.message);
@@ -1735,10 +1916,13 @@ export function createServer(opts: ServerOptions) {
             { ...withCanonical(builtinEnv, canonical), ...Object.fromEntries(after) },
             "This change would make the auth config invalid",
           );
+        const infos = authInfos(providers);
         const same = await engine.mutation(async (db) => {
           const now = await engine.environment.list(db);
           if (JSON.stringify(now) !== JSON.stringify(base)) return false;
           await engine.environment.update(db, changes, Object.keys(builtinEnv));
+          // Convex's `reevaluate_existing_auth_config`, in the update's transaction.
+          if (authModule) await putAuthInfo(db, infos);
           // Convex's events (lib.rs `update_environment_variables`), one per change in the order it is applied:
           // a set creates or updates, an unset of an existing variable deletes (so an unset and a set of one
           // name are a delete and a create); in the update's transaction.
@@ -1760,7 +1944,7 @@ export function createServer(opts: ServerOptions) {
         if (same) break;
         if (attempt >= 4) return requestError(409, "RaceDetected", "Environment variables changed during the update");
       }
-      if (authModule) useAuth(providers);
+      if (authModule) useAuth(authInfos(providers));
       return new Response(null, { status: 200 });
     } catch (e) {
       if (e instanceof EnvironmentVariableError || e instanceof PushError) return requestError(400, e.code, e.message);
@@ -1844,7 +2028,10 @@ export function createServer(opts: ServerOptions) {
     usageLimitWorker,
     /** Storage usage gauges (STUDY-73). */
     usageGauges,
+    /** The Prometheus metrics served at `/metrics` (STUDY-114). */
+    serverMetrics,
     stop: () => {
+      serverMetrics.stop();
       builtinScreen?.stop();
       functionLog.close();
       usageGauges.stop();
@@ -1865,6 +2052,7 @@ export function createServer(opts: ServerOptions) {
     shutdown: async () => {
       // Every background task that reads or writes the store stops before it closes: after this resolves,
       // nothing of the server touches the store (a caller may delete its files).
+      serverMetrics.stop();
       usageGauges.stop();
       logManager.stop();
       await usageLimitWorker.stop();

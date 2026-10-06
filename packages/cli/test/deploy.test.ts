@@ -185,7 +185,8 @@ export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => 
       "✖ TypeScript typecheck via `tsc` failed.",
       "To ignore failing typecheck, use `--typecheck=disable`.",
     ]);
-    expect(failed.out.join("\n")).toContain(`bunvex/a.ts(3,`);
+    // `--pretty true`, as Convex runs the compiler (STUDY-117): colored, `file:line:column`.
+    expect(Bun.stripANSI(failed.out.join("\n"))).toContain(`bunvex/a.ts:3:`);
     expect((await d.call("query", "a:q")).status).toBe("error"); // nothing was deployed
     expect(await main(["deploy", "--typecheck=disable", ...flags], io(app).it)).toBe(0);
     // Deployed despite the type error: its `returns` check fails at run time.

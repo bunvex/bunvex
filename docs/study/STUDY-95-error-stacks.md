@@ -108,3 +108,39 @@ Gap, for later: a function reading `error.stack` itself (or logging it as a stri
 
 **Cost.** An error with 8 app and 10 server frames: `describeUncaught` 5.9 µs instead of 2.4 µs (the map decoded
 once per module). A nested call captures its call site: 2.5 → 2.8 µs for a trivial nested query.
+
+## 6. Modules that do not compile or link (follow-up, 2026-10-05)
+
+**Convex.** A module is compiled with `v8::script_compiler::compile_module2` inside `with_try_catch`
+(`crates/isolate/src/execution_scope.rs:410`). The exception goes through `format_traceback`
+(`crates/isolate/src/error.rs:32`), which builds a `JsError` from the error's name, its message and its
+frames. A compile error is raised before any of the module's code runs, so no JavaScript frame is on the
+stack: the error reads `Uncaught SyntaxError: <message>`, with no frames. Instantiating a module whose
+import names an export that does not exist (also a `SyntaxError`) is the same. The push's analysis wraps the
+error as usual, and so does the function tester's "Could not analyze the given module:" (STUDY-119).
+
+**bunvex before.** `CodeVersion.load` reported these errors with `describeUncaught`. Their stacks hold no
+app frame, so `mapStack` returned them whole, with JavaScriptCore's `<parse>` and `instantiate` lines and
+the server's own frames (`node:vm`, `code-version.ts`) after the message. That broke this study's rule
+that only the app's frames show.
+
+**bunvex now.** `uncaughtAtCompile` (`packages/server/src/code-version.ts`) reports a compile or link failure
+as `Uncaught <Name>: <message>` alone, as Convex does. It is used for a push and for `/api/run_test_function`,
+which loads its module through the same code. An error thrown while a module *runs* (its import phase)
+keeps its app frames, as before.
+
+The message text itself is the engine's (JavaScriptCore's, e.g. "Unexpected token ';'. Expected ')' to end
+a compound expression."), not V8's; this is the same engine difference as DV-345, with no new divergence.
+
+**Tests.**
+- `code-version.test.ts`: a module that does not compile; an import of an export that does not exist. In
+  both, the whole message is two lines (the preamble, then `Failed to analyze …: Uncaught SyntaxError: …`)
+  with no `at` line, `<parse>`, `node:vm` or `code-version.ts`. A runtime error keeps `at f (m.js:2:…)`.
+- `push.test.ts`: the same over `deploy2/start_push` (400 `InvalidModules`).
+
+**Sabotage.**
+
+| Change | Failed |
+|---|---|
+| the frames kept (`uncaught(e)`) | both tests |
+| the realm check as `instanceof Error`, which misses a link error from the module's own context | the code-version test |

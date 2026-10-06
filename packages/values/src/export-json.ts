@@ -1,8 +1,9 @@
 // The snapshot export's value encoding (STUDY-42), Convex's "clean lossless" ConvexExportJSON
-// (crates/value/src/export.rs `export_clean_lossless`, serde_json with `float_roundtrip` and ryu):
+// (crates/value/src/export.rs `export_clean_lossless`, serde_json with `float_roundtrip`):
 //
 // - int64 (bigint) is a plain JSON integer; float64 always prints as a float (`123.0`, `-0.0`, `1.5e-7`,
-//   `1e21`), in ryu's shortest form, so an importer tells them apart;
+//   `1e+21`), in serde_json's shortest form (1.0.151, Convex's lockfile: a positive exponent has a `+`), so an
+//   importer tells them apart;
 // - NaN and ±Infinity are `{"$float": base64 of the little-endian bytes}`; bytes are `{"$bytes": base64}`;
 // - object keys in byte order (Convex's objects are BTreeMaps).
 // Decoding (`fromExportJson`) reads the same: an integer literal is int64, a number with a point or an
@@ -13,11 +14,14 @@ import { fromJsonValue, type JSONValue } from "./value.ts";
 
 const b64 = toBase64;
 
-/** A finite float64 as serde_json writes it (ryu's `format64`): shortest round-trip digits, always a float. */
+/**
+ * A finite float64 as serde_json writes it (Convex's 1.0.151, checked against it: STUDY-18 §8): shortest
+ * round-trip digits, always a float, `e+` before a positive exponent.
+ */
 export function formatExportFloat(n: number): string {
   if (Object.is(n, 0)) return "0.0";
   if (Object.is(n, -0)) return "-0.0";
-  // Between 1e-5 and 1e16 ryu writes the digits without an exponent, as JS's `String` does: the same text,
+  // Between 1e-5 and 1e16 serde_json writes the digits without an exponent, as JS's `String` does: the same text,
   // with ".0" after an integer. Most numbers are there; the general layout below handles the rest.
   const abs = Math.abs(n);
   if (abs >= 1e-5 && abs < 1e16) {
@@ -35,8 +39,8 @@ export function formatExportFloat(n: number): string {
   if (k >= 0 && kk <= 16) out = `${digits}${"0".repeat(k)}.0`;
   else if (kk > 0 && kk <= 16) out = `${digits.slice(0, kk)}.${digits.slice(kk)}`;
   else if (kk > -5 && kk <= 0) out = `0.${"0".repeat(-kk)}${digits}`;
-  else if (length === 1) out = `${digits}e${kk - 1}`;
-  else out = `${digits[0]}.${digits.slice(1)}e${kk - 1}`;
+  else if (length === 1) out = `${digits}e${kk > 0 ? "+" : ""}${kk - 1}`;
+  else out = `${digits[0]}.${digits.slice(1)}e${kk > 0 ? "+" : ""}${kk - 1}`;
   return sign + out;
 }
 

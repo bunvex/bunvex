@@ -24,7 +24,14 @@ List the deployment's tables, or print a table's documents.
 
 This works with system tables, such as \`_storage\`, in addition to your own tables.
 
+  List system tables:           bunvex data --system
+  List documents in one:        bunvex data --system _tables
+
+With --system, every system table is listed and readable, the deployment's private ones included, as
+stored (an admin key with permission to view data; read-only).
+
 Options:
+  --system             list the system tables, or print one's documents (private ones too)
   --limit <n>          list only the \`n\` most recently created documents (default: 100)
   --order <choice>     order the documents by their \`_creationTime\`: asc or desc (default: desc)
   --format <format>    jsonArray (aka json): a JSON array of objects; jsonLines (aka jsonl): an object per
@@ -70,6 +77,17 @@ async function paginated(target: Target, path: string, args: Record<string, unkn
   return results;
 }
 
+/** One query's value. */
+async function query(target: Target, path: string, args: Record<string, unknown>) {
+  const r = (await adminRequest(target, "/api/query", { path, args })) as {
+    status: string;
+    value?: unknown;
+    errorMessage?: string;
+  };
+  if (r.status !== "success") throw new Error(r.errorMessage ?? `${path} failed`);
+  return r.value;
+}
+
 /** Convex's `logDocumentsTable`; the lines, and whether any was cut to the terminal's width. */
 export function documentsTable(
   rows: Record<string, string>[],
@@ -108,6 +126,7 @@ export async function dataCommand(args: string[], io: Io): Promise<number> {
   let limit = 100;
   let order: "asc" | "desc" = "desc";
   let format: Format | undefined;
+  let system = false;
   const r = taken.rest;
   for (let i = 0; i < r.length; i++) {
     const a = r[i]!;
@@ -132,6 +151,8 @@ export async function dataCommand(args: string[], io: Io): Promise<number> {
       if (!FORMATS.includes(v as Format))
         return argumentError(io, invalidChoice("--format <format>", v, FORMATS), DATA_USAGE);
       format = v as Format;
+    } else if (a === "--system") {
+      system = true;
     } else if (a === "--component" || a.startsWith("--component=")) {
       // DV-224 (STUDY-43 D1): no components yet.
       return argumentError(io, "--component: bunvex does not have components yet.");
@@ -154,6 +175,23 @@ export async function dataCommand(args: string[], io: Io): Promise<number> {
   }
   const target = acquired.target;
   try {
+    if (system && table === undefined) {
+      // bunvex's system-table browser (STUDY-131 AD-24): name and one line on each, as the catalog has them
+      const tables = (await query(target, "_system/debug/systemTables", {})) as {
+        name: string;
+        description: string;
+        appVisible: boolean;
+        documentCount: number | null;
+      }[];
+      const width = Math.max(...tables.map((t) => t.name.length));
+      const counts = tables.map((t) => (t.documentCount === null ? "?" : String(t.documentCount)));
+      const countWidth = Math.max(...counts.map((c) => c.length));
+      for (const [i, t] of tables.entries())
+        io.out(
+          `${t.name.padEnd(width)}  ${counts[i]!.padStart(countWidth)}  ${t.appVisible ? "public " : "private"}  ${t.description}`,
+        );
+      return 0;
+    }
     if (table === undefined) {
       const tables = (await paginated(target, "_system/cli/tables", {})) as { name: string }[];
       if (tables.length === 0) {
@@ -169,9 +207,14 @@ export async function dataCommand(args: string[], io: Io): Promise<number> {
       );
       return 0;
     }
-    const data = (await paginated(target, "_system/cli/tableData", { table, order }, limit + 1)).map(
-      (d) => fromJsonValue(d as JSONValue) as Record<string, Value>,
-    );
+    const data = (
+      await paginated(
+        target,
+        system ? "_system/debug/systemTable" : "_system/cli/tableData",
+        { table, order },
+        limit + 1,
+      )
+    ).map((d) => fromJsonValue(d as JSONValue) as Record<string, Value>);
     if (data.length === 0) {
       io.err("There are no documents in this table.");
       return 0;
