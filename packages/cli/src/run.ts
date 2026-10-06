@@ -2,21 +2,33 @@
 // (npm-packages/convex/src/cli/run.ts, lib/run.ts): any kind, internal ones included (an admin key), through
 // `POST /api/function`; JSON5 arguments; `--identity` to act as a user; the function's log lines on stderr,
 // its result on stdout; the deployment's functions listed when the name is not one of them; `--push` deploys
-// first; `--watch` subscribes to a query over a WebSocket and prints each new result.
+// first; `--watch` subscribes to a query over a WebSocket and prints each new result; `--inline-query` evaluates
+// a readonly query through the deployment's function tester (STUDY-119).
 import { existsSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { BunvexClient, type Logger } from "@bunvex/client";
 import { makeFunctionReference } from "@bunvex/protocol";
 import { fromJsonValue, type JSONValue, toJsonValue, type Value } from "@bunvex/values";
+import {
+  argumentError,
+  conflictingOptions,
+  invalidChoice,
+  missingArgument,
+  optionsIn,
+  tooManyArguments,
+  unknownOption,
+} from "./args.ts";
 import { deployCommand, functionsDir } from "./deploy.ts";
+import { INLINE_QUERY_HELP, inlineQuerySource, runTestQuery, TestQueryRequestError } from "./inline-query.ts";
 import type { Io } from "./io.ts";
 import { parseJson5 } from "./json5.ts";
 import { acquireTarget } from "./local-deployment.ts";
 import { adminRequest, NO_DEPLOYMENT, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
 
-export const RUN_USAGE = `Usage: bunvex run [options] <functionName> [args]
+export const RUN_USAGE = `Usage: bunvex run [options] [functionName] [args]
 
-Run a function (query, mutation or action) on the deployment. Internal functions too.
+Run a function (query, mutation or action) on the deployment, internal ones too, or evaluate an inline
+readonly query.
 
   functionName   \`messages:list\`, \`dir/file\` (its default export), or \`api.messages.list\`
   args           a JSON5 object of arguments (default: {})
@@ -25,6 +37,8 @@ Options:
 ${TARGET_OPTIONS}
   --identity <json5>   act as this user (e.g. '{ name: "Ada", email: "ada@example.com" }')
   -w, --watch          a query: print its result, and again each time it changes (Ctrl-C to stop)
+  --inline-query <query>
+                       ${INLINE_QUERY_HELP}
   --push               deploy the functions first (with --typecheck / --codegen as \`bunvex deploy\`)
   --typecheck <mode>   for --push: enable, try (default) or disable
   --codegen <mode>     for --push: enable (default) or disable`;
@@ -172,19 +186,41 @@ function printValue(io: Io, value: Value) {
     : JSON.stringify(toJsonValue(value), null, 2);
 }
 
+/**
+ * `--inline-query` (STUDY-119, Convex's `runInlineQueryInDeployment`): the query's log lines on stderr as the
+ * server wrote them, its value on stdout (nothing for null); a failed run is `Query failed: <response>`.
+ */
+async function inlineQueryRun(io: Io, target: Target, inlineQuery: string): Promise<number> {
+  let result: Awaited<ReturnType<typeof runTestQuery>>;
+  try {
+    result = await runTestQuery(target, inlineQuerySource(inlineQuery));
+  } catch (e) {
+    if (!(e instanceof TestQueryRequestError)) throw e;
+    io.err(e.message);
+    return 1;
+  }
+  if (result.kind === "failure") {
+    io.err(`Query failed: ${JSON.stringify(result.payload, null, 2)}`);
+    return 1;
+  }
+  for (const line of result.logLines) io.err(line);
+  const value = fromJsonValue(result.value as JSONValue);
+  if (value !== null) io.out(printValue(io, value));
+  return 0;
+}
+
 export async function runCommand(args: string[], io: Io, opts: { signal?: AbortSignal } = {}): Promise<number> {
   if (args.includes("--help") || args.includes("-h")) {
     io.out(RUN_USAGE);
     return 0;
   }
   const taken = takeTargetFlags(args);
-  if (typeof taken === "string") {
-    io.err(`bunvex run: ${taken}`);
-    return 2;
-  }
+  // Convex's `run` shows its help after an argument error.
+  if (typeof taken === "string") return argumentError(io, taken, RUN_USAGE);
   let identity: string | undefined;
   let push = false;
   let watch = false;
+  let inlineQuery: string | undefined;
   const pushFlags: string[] = [];
   const positional: string[] = [];
   const r = taken.rest;
@@ -192,24 +228,49 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
     const a = r[i]!;
     const [name, inline] = a.includes("=") ? [a.slice(0, a.indexOf("=")), a.slice(a.indexOf("=") + 1)] : [a, undefined];
     if (name === "--push") push = true;
-    else if (name === "--identity" || name === "--typecheck" || name === "--codegen") {
+    // Convex keeps `--no-push` (hidden) for old scripts: it undoes an earlier `--push`, nothing more.
+    else if (name === "--no-push") push = false;
+    else if (name === "--identity" || name === "--typecheck" || name === "--codegen" || name === "--inline-query") {
       const v = inline ?? r[++i];
-      if (v === undefined) {
-        io.err(`bunvex run: ${name} needs a value`);
-        return 2;
-      }
+      const spec =
+        name === "--identity"
+          ? "--identity <identity>"
+          : name === "--inline-query"
+            ? "--inline-query <query>"
+            : `${name} <mode>`;
+      if (v === undefined) return argumentError(io, missingArgument(spec), RUN_USAGE);
+      const choices = name === "--typecheck" ? ["enable", "try", "disable"] : ["enable", "disable"];
+      if ((name === "--typecheck" || name === "--codegen") && !choices.includes(v))
+        return argumentError(io, invalidChoice(spec, v, choices), RUN_USAGE);
       if (name === "--identity") identity = v;
+      else if (name === "--inline-query") inlineQuery = v;
       else pushFlags.push(`${name}=${v}`);
     } else if (name === "--watch" || name === "-w") watch = true;
-    else if (a.startsWith("-") && a !== "-") {
-      io.err(`bunvex run: unknown option ${a}\n\n${RUN_USAGE}`);
+    else if (name === "--component" || name === "--typecheck-components" || name === "--live-component-sources") {
+      // DV-391: no components yet.
+      io.err(`bunvex run: ${name}: bunvex does not have components yet.`);
       return 2;
-    } else positional.push(a);
+    } else if (a.startsWith("-") && a !== "-")
+      return argumentError(io, unknownOption(a, optionsIn(RUN_USAGE)), RUN_USAGE);
+    else positional.push(a);
   }
-  if (!positional.length || positional.length > 2) {
-    io.err(`bunvex run: expected <functionName> [args]\n\n${RUN_USAGE}`);
-    return 2;
-  }
+  // Convex declares `--inline-query` in conflict with `--watch`: its parser (commander) refuses the pair first.
+  if (inlineQuery !== undefined && watch)
+    return argumentError(io, conflictingOptions("--inline-query <query>", "-w, --watch"), RUN_USAGE);
+  if (positional.length > 2) return argumentError(io, tooManyArguments("run", 2, positional.length), RUN_USAGE);
+  // Convex's `resolveRunTarget`, in its order.
+  const trimmed = inlineQuery?.trim();
+  const refuse = (message: string) => {
+    io.err(message);
+    return 1;
+  };
+  if (trimmed !== undefined && positional.length)
+    return refuse("`bunvex run` accepts either <functionName> or `--inline-query`, not both.");
+  if (trimmed === undefined && !positional.length)
+    return refuse("`bunvex run` requires either <functionName> or `--inline-query`.");
+  if (trimmed === "") return refuse("`--inline-query` must not be empty.");
+  if (trimmed !== undefined && identity !== undefined)
+    return refuse("`--inline-query` can't be combined with `--identity`.");
   let acquired: Awaited<ReturnType<typeof acquireTarget>>;
   try {
     acquired = await acquireTarget(taken.flags, io);
@@ -222,6 +283,16 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
     return 1;
   }
   const target = acquired.target;
+  if (trimmed !== undefined)
+    try {
+      if (push) {
+        const code = await deployCommand(["--url", target.url, "--admin-key", target.adminKey, ...pushFlags], io);
+        if (code !== 0) return 1;
+      }
+      return await inlineQueryRun(io, target, trimmed);
+    } finally {
+      await acquired.release();
+    }
   const [rawName, argsText = "{}"] = positional as [string, string?];
   try {
     let fnArgs: unknown;

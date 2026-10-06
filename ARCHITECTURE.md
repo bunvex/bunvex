@@ -48,6 +48,7 @@ bunvex/
 │   │   ├── index-worker             background backfill of new indexes (STUDY-29)             ✅
 │   │   ├── retention                garbage-collect old versions (STUDY-33)                   ✅
 │   │   ├── search-indexes           the search indexes of the active tables (STUDY-45)        🟡
+│   │   ├── virtual-tables           _storage / _scheduled_functions over Convex's system tables (STUDY-125) ✅
 │   │   └── persistence/             the Persistence INTERFACE (contract PERSIST-01)           ✅
 │   │       ├── memory               memory + append-only log (no dependencies)                ✅
 │   │       └── sqlite               bun:sqlite (no dependencies)                              ✅
@@ -77,7 +78,7 @@ bunvex/
 │   │   ├── admin                    admin/deploy keys, health, stats                          🟡 → M
 │   │   ├── persistence (config)     PERSISTENCE=, PERSISTENCE_URL=, Convex's POSTGRES_URL=… and DO_NOT_REQUIRE_SSL= ✅ · FILE_STORAGE=, env vars M
 │   │   ├── logs                     console.log from functions → logLines (STUDY-20) ✅ · streaming D
-│   │   └── metrics                  Prometheus                                                D
+│   │   └── metrics                  Prometheus /metrics, both ports (STUDY-114)                ✅
 │   │
 │   ├── file-storage/                @bunvex/file-storage              ← the BYTES of files    ✅
 │   │   ├── local                    local disk (STUDY-32)                                      ✅
@@ -130,9 +131,11 @@ bunvex/
 │   │   ├── codegen                  _generated/ api, server, dataModel (STUDY-36)             🟡
 │   │   ├── deploy                   bundle and push functions (STUDY-35)                      🟡
 │   │   ├── run, env                 run a function, env vars (STUDY-37)                       🟡
+│   │   ├── deployment               usage and usage limits (STUDY-118)                         ✅
+│   │   ├── typecheck                tsc or tsgo on the functions (STUDY-117)                  ✅
 │   │   ├── logs, data                                                                          D
 │   │   ├── import, export                                                                      D
-│   │   └── mcp                      for AI agents                                              D
+│   │   └── mcp                      MCP server for AI tools: the official SDK, zod (STUDY-121) ✅
 │   │
 │   ├── testing/                     @bunvex/testing  the REAL engine in memory, to test functions M
 │   │
@@ -201,6 +204,7 @@ values ◄── core ◄── persistence          protocol ◄── server �
                 ◄── testing ──► server                   react ──► client
                 ◄── sync-e2e ──► client, react, server (tests only, never published)
                 ◄── jepsen ──► client, server (consistency runs, tests only, never published)
+                   differential ──► bunvex (against Convex's backend, tests only, never published)
 cli ──► server, core, client                              bunvex ──► re-exports only
 
 ui ◄── dashboard ◄── apps/dashboard (──► ui)

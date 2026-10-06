@@ -15,13 +15,17 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   type Engine,
+  FILE_STORAGE_TABLE,
   ImportIdError,
   insertAuditLogEvents,
   OccError,
   occBackoffMs,
+  primaryVirtualTable,
   referencedTables,
   SNAPSHOT_IMPORTS_TABLE,
+  STORAGE_TABLE,
   SYSTEM_ACTOR,
+  SYSTEM_TO_VIRTUAL_TABLE,
   schemaToJson,
   type TableDef,
   type Tx,
@@ -53,8 +57,13 @@ export const MAX_IMPORT_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const BATCH_MAX_BYTES = 8 * 1024 * 1024;
 const BATCH_MAX_DOCUMENTS = 8000;
 const PAGE_SIZE = 1000;
-/** Tables Convex reaches through a virtual name (its `_storage`, `_scheduled_functions`). */
-const VIRTUAL_SYSTEM_TABLES = new Set(["_storage", "_scheduled_functions"]);
+/**
+ * An imported table's system table (STUDY-125): `_storage` is imported into `_file_storage`, as Convex's
+ * snapshot import does; any other name is its own table.
+ */
+const physicalName = (name: string) => (name === STORAGE_TABLE ? FILE_STORAGE_TABLE : name);
+/** A table's name in an import: a system table under the virtual table it backs (`_file_storage` → `_storage`). */
+const importName = (name: string) => primaryVirtualTable(name) ?? name;
 
 export type ImportMode = "RequireEmpty" | "Append" | "Replace" | "ReplaceAll";
 /** The modes as the HTTP API names them. */
@@ -570,9 +579,9 @@ export class ImportService {
           if (!t.name.startsWith("_") && !counts.has(t.name)) counts.set(t.name, 0);
       const changes: (TableChange & { missingId: boolean })[] = [];
       for (const name of [...counts.keys()].sort(byteOrder)) {
-        const isStorage = name === "_storage";
+        const isStorage = name === STORAGE_TABLE;
         if (name.startsWith("_") && !isStorage) continue;
-        const active = this.engine.catalog.tables.get(name);
+        const active = this.engine.catalog.tables.get(physicalName(name));
         const existing = active ? await this.count(active) : 0;
         let deleted = 0;
         if (row.mode === "Replace" || row.mode === "ReplaceAll") deleted = existing;
@@ -700,7 +709,7 @@ export class ImportService {
     const catalog = this.engine.catalog;
     const assignExisting = (name: string) => {
       if (toNumber.has(name)) return;
-      const active = catalog.tables.get(name);
+      const active = catalog.tables.get(physicalName(name));
       if (active && !numberToName.has(active.number)) {
         numberToName.set(active.number, name);
         toNumber.set(name, active.number);
@@ -713,7 +722,7 @@ export class ImportService {
     } else
       for (const t of catalog.tables.values()) {
         const imported = numberToName.get(t.number);
-        if (!toNumber.has(t.name) && imported !== undefined) throw tableConflict(imported, t.name);
+        if (!toNumber.has(importName(t.name)) && imported !== undefined) throw tableConflict(imported, t.name);
       }
     return toNumber;
   }
@@ -740,10 +749,10 @@ export class ImportService {
       // Prepare every table: a new hidden one, or (appending) the existing one.
       const defs = new Map<string, TableDef>();
       for (const name of [...numbers.keys()].sort(byteOrder)) {
-        if (name.startsWith("_") && name !== "_storage")
+        if (name.startsWith("_") && name !== STORAGE_TABLE)
           throw new ImportError("InvalidTableName", `Invalid table name ${name} starts with metadata prefix '_'`);
         const number = numbers.get(name);
-        const active = this.engine.catalog.tables.get(name);
+        const active = this.engine.catalog.tables.get(physicalName(name));
         let def: TableDef;
         const resumed = previous.get(name);
         const kept = resumed === undefined ? undefined : this.engine.catalog.hidden.get(resumed);
@@ -760,9 +769,9 @@ export class ImportService {
               "TableExists",
               `Table ${name} already exists. Please choose a new table name or use replace/append modes.`,
             );
-          def = await this.engine.createHiddenTable(name, {
+          def = await this.engine.createHiddenTable(physicalName(name), {
             ...(number !== undefined ? { number } : {}),
-            ...(active ? { copyIndexesOf: name } : {}),
+            ...(active ? { copyIndexesOf: physicalName(name) } : {}),
             replacing: replacedByAll,
           });
           hidden.push(def.id);
@@ -788,15 +797,15 @@ export class ImportService {
       // The tables as they will be once activated, for the schema's `v.id` checks.
       const schemaTables = new Map<number, string>();
       for (const t of catalog.tables.values())
-        if (!((mode === "ReplaceAll" && !t.name.startsWith("_")) || numbers.has(t.name)))
-          schemaTables.set(t.number, t.name);
+        if (!((mode === "ReplaceAll" && !t.name.startsWith("_")) || numbers.has(importName(t.name))))
+          schemaTables.set(t.number, importName(t.name));
       for (const [name, def] of defs) schemaTables.set(def.number, name);
 
       let total = 0;
       for (const t of tables) {
         const def = defs.get(t.name)!;
         const skipped = skip.get(t.name) ?? 0;
-        if (t.name === "_storage") await this.importStorage(row, t, def, parsed, schemaTables, skipped);
+        if (t.name === STORAGE_TABLE) await this.importStorage(row, t, def, parsed, schemaTables, skipped);
         else total += await this.importTable(row, t, def, schemaTables, skipped);
       }
 
@@ -868,7 +877,8 @@ export class ImportService {
           `conflict between \`${names[0]}\` and \`${names[1]}\` with table number ${number}`,
         );
       for (const t of this.engine.catalog.tables.values()) {
-        if (t.number !== number || defs.has(t.name) || (mode === "ReplaceAll" && !t.name.startsWith("_"))) continue;
+        if (t.number !== number || defs.has(importName(t.name)) || (mode === "ReplaceAll" && !t.name.startsWith("_")))
+          continue;
         throw tableConflict(names[0]!, t.name);
       }
     }
@@ -923,7 +933,10 @@ export class ImportService {
     return n;
   }
 
-  /** `_storage`: the files' metadata, then each file stored again under its id (Convex's `import_storage_table`). */
+  /**
+   * `_storage`: the files' metadata, then each file stored again under its id, as a `_file_storage` document
+   * (Convex's `import_storage_table`).
+   */
   private async importStorage(
     row: ImportRow,
     t: ImportTable,
@@ -988,8 +1001,8 @@ export class ImportService {
               ...(m._creationTime !== undefined ? { _creationTime: m._creationTime } : {}),
               storageId: m.internalId ?? crypto.randomUUID(),
               storageKey: written.key,
-              sha256,
-              size: written.size,
+              sha256: written.sha256.slice().buffer as ArrayBuffer,
+              size: BigInt(written.size),
               contentType: m.contentType ?? null,
             },
           ],
@@ -1023,10 +1036,12 @@ function streamFrom(it: AsyncIterable<Uint8Array>): ReadableStream<Uint8Array> {
 
 /** Convex's `table_conflict_error`. */
 function tableConflict(table: string, existing: string): ImportError {
-  const msg = VIRTUAL_SYSTEM_TABLES.has(existing)
-    ? `New table \`${table}\` has IDs that conflict with existing system table`
-    : existing.startsWith("_")
-      ? `New table \`${table}\` has IDs that conflict with existing internal table. Consider importing this table without \`_id\` fields or import into a new deployment.`
-      : `New table \`${table}\` has IDs that conflict with existing table \`${existing}\`. To delete all existing tables, import with \`bunvex import --replace-all\`.`;
+  // A system table that backs a virtual one (Convex's `associated_virtual_table_name`).
+  const msg =
+    SYSTEM_TO_VIRTUAL_TABLE[existing] !== undefined
+      ? `New table \`${table}\` has IDs that conflict with existing system table`
+      : existing.startsWith("_")
+        ? `New table \`${table}\` has IDs that conflict with existing internal table. Consider importing this table without \`_id\` fields or import into a new deployment.`
+        : `New table \`${table}\` has IDs that conflict with existing table \`${existing}\`. To delete all existing tables, import with \`bunvex import --replace-all\`.`;
   return new ImportError("TableConflict", msg);
 }
