@@ -65,7 +65,7 @@ function splitSource(vs: Version[], desc: boolean): SplitSource {
       prefix: long ? v.key.subarray(0, MAX_KEY_PREFIX_LEN) : v.key,
       suffix,
       hash: suffix ? new Uint8Array(createHash("sha256").update(suffix).digest()) : new Uint8Array(0),
-      ts: v.ts,
+      ts: BigInt(v.ts),
       deleted: v.id === null,
       id: v.id,
     };
@@ -73,7 +73,7 @@ function splitSource(vs: Version[], desc: boolean): SplitSource {
   const order = (a: (typeof rows)[0], b: (typeof rows)[0]) =>
     (desc
       ? compareKeys(b.prefix, a.prefix) || compareKeys(b.hash, a.hash)
-      : compareKeys(a.prefix, b.prefix) || compareKeys(a.hash, b.hash)) || b.ts - a.ts;
+      : compareKeys(a.prefix, b.prefix) || compareKeys(a.hash, b.hash)) || Number(b.ts - a.ts);
   return {
     async page({ lo, loStrict, hi, hiInclusive, n }) {
       return rows

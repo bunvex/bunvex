@@ -108,6 +108,7 @@ function App() {
         </>
       }
       devtools={import.meta.env.DEV}
+      traceUrl={import.meta.env.VITE_BUNVEX_TRACE_URL}
     />
   );
 }

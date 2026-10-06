@@ -12,6 +12,7 @@
 // Env: SIZES (comma list, default 1000,10000,50000,200000), REPS (max validations per shape, default 2000),
 // COMMITTER (module exporting `Committer`, default @bunvex/core: point it at another build to compare).
 import { encodeKey, type IndexWrite, type Interval, type Persistence } from "@bunvex/core";
+import { tid } from "./ids.ts";
 
 const SIZES = (process.env.SIZES ?? "1000,10000,50000,200000").split(",").map(Number);
 const REPS = Number(process.env.REPS ?? 2000);
@@ -23,37 +24,41 @@ function itemWrite(i: number) {
   const tenant = `t${i % 64}`;
   const createdAt = 1.79e12 + i;
   const idx: IndexWrite[] = [
-    { index: 1, key: encodeKey([id]), id },
-    { index: 2, key: encodeKey([tenant, createdAt, id]), id },
-    { index: 3, key: encodeKey([createdAt, id]), id },
+    { index: tid(1), key: encodeKey([id]), id },
+    { index: tid(2), key: encodeKey([tenant, createdAt, id]), id },
+    { index: tid(3), key: encodeKey([createdAt, id]), id },
   ];
   return { docs: [], idx };
 }
 
-type Validate = { validate(p: { snapshot: number; reads: Interval[] }): unknown };
+type Validate = { validate(p: { snapshot: bigint; reads: Interval[] }): unknown };
 
 for (const n of SIZES) {
   // Retention far beyond the fill time and size: every commit stays in the log.
-  const c = new Committer(nullPersistence, { minRetentionUs: 3.6e9, maxRetentionUs: 3.6e9, softMaxBytes: 2 ** 40 });
+  const c = new Committer(nullPersistence, {
+    minRetentionNs: 3_600_000_000_000n,
+    maxRetentionNs: 3_600_000_000_000n,
+    softMaxBytes: 2 ** 40,
+  });
   const snapshot = c.visibleTs;
-  const tss: number[] = [];
+  const tss: bigint[] = [];
   for (let i = 0; i < n; i += 1000) {
-    const batch: Promise<number>[] = [];
+    const batch: Promise<bigint>[] = [];
     for (let j = i; j < Math.min(n, i + 1000); j++)
       batch.push(c.commit({ snapshot: c.visibleTs, reads: [], ...itemWrite(j) }));
     tss.push(...(await Promise.all(batch)));
   }
   if (c.logLength !== n) throw new Error(`log holds ${c.logLength}, expected ${n}`);
-  const point = (index: number, key: Uint8Array): Interval => ({ index, lo: key, hi: new Uint8Array([...key, 0]) });
+  const point = (index: string, key: Uint8Array): Interval => ({ index, lo: key, hi: new Uint8Array([...key, 0]) });
   const shapes: Record<string, Interval[]> = {
-    "other-index": [point(9, encodeKey(["x"]))],
-    "by-id": [point(1, encodeKey(["nope"]))],
+    "other-index": [point(tid(9), encodeKey(["x"]))],
+    "by-id": [point(tid(1), encodeKey(["nope"]))],
     "range-10": Array.from({ length: 10 }, (_, k) => ({
-      index: 2,
+      index: tid(2),
       lo: encodeKey([`u${k}`]),
       hi: encodeKey([`u${k}`, 9e15]),
     })),
-    "hit-oldest": [point(1, itemWrite(0).idx[0].key)],
+    "hit-oldest": [point(tid(1), itemWrite(0).idx[0].key)],
   };
   const out: Record<string, number | string> = { bench: "occ-validation", log_entries: n };
   shapes["recent-100"] = shapes["by-id"];

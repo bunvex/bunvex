@@ -34,6 +34,8 @@ export function normalize(v: unknown, ids: IdMap, times: number[]): unknown {
     const out: Record<string, unknown> = {};
     for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
       if (k === "_creationTime" && typeof x === "number") out[k] = `t${times.indexOf(x)}`;
+      // A page's cursors are opaque and differ by design (DV-73): whether there is one is what compares.
+      else if ((k === "continueCursor" || k === "splitCursor") && typeof x === "string") out[k] = "<cursor>";
       else out[k] = normalize(x, ids, times);
     }
     return out;
@@ -61,6 +63,9 @@ const WORDING: [RegExp, string][] = [
   // DV-04
   [/ To learn about Convex's supported types, see https:\/\/docs\.convex\.dev\/using\/types\./g, ""],
   [/ is not a valid Convex value/g, " is not a valid value"],
+  // DV-04: the sentences that only point at Convex's docs.
+  [/\n?For more information see https:\/\/docs\.convex\.dev\/\S*/g, ""],
+  [/ See https:\/\/docs\.convex\.dev\/\S*( for (more )?details)?\.?/g, ""],
 ];
 
 /** A document id as it appears in a message: 31 to 37 characters of Crockford's base32, lower case. */

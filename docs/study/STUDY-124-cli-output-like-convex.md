@@ -37,7 +37,7 @@ Convex parses its arguments with commander 14 (`cli/program.ts`, one `Command` p
 
 **Which commands show help after the error.** The program, and `dev`, `deploy`, `run`, `import`, `export`,
 `data`, `logs`, `function-spec`, `dashboard`, `insights` and the deployment-token commands. `addCommand` does not
-copy the setting to subcommands. So `codegen`, `env` (and its subcommands), `typecheck` and `deployment …`
+copy the setting to subcommands. So `codegen`, `env` (and its subcommands), `typecheck`, `mcp …` and `deployment …`
 print the error line alone.
 
 **The messages:**
@@ -94,12 +94,15 @@ Scripts and operators see these streams, texts and exit codes.
   (`scratchpad/agent-cli1/oracle.ts`);
 - the candidates for a suggestion are the long options a command's help lists, plus `--help`.
 
-Every command uses them (`admin-key`, `codegen`, `data`, `deploy`, `dev`, `env`, `export`, `function-spec`,
-`import`, `logs`, `run`, and the program). Commands now check their argument counts before they connect.
+Every command uses them (`admin-key`, `codegen`, `data`, `deploy`, `deployment`, `dev`, `env`, `export`,
+`function-spec`, `import`, `logs`, `mcp`, `run`, `typecheck`, and the program). Commands now check their argument counts before they connect.
 
 Other changes that follow Convex:
 
-- `bunvex` and `bunvex env` with no subcommand print the help on stderr and exit 1.
+- `bunvex`, `bunvex env`, `bunvex mcp` and `bunvex deployment usage-limits` with no subcommand print the help
+  on stderr and exit 1.
+- `deployment` dispatches on its words first, as commander: an option another subcommand takes is unknown to
+  this one, and the suggestions come from this subcommand's options and the deployment flags.
 - `import` resolves several mode flags by Convex's precedence, and `dev` lets `--run` win over `--start`.
   bunvex used to refuse these combinations; Convex never does.
 - `--tail-logs` alone means `pause-on-deploy`.
@@ -146,6 +149,9 @@ Updated across `packages/cli/test`:
 | `logs` | `--history x`, and an unknown option with a suggestion. |
 | `run` | No function, and too many arguments. |
 | `function-spec`, `local-deployment` | Exit 1. |
+| `typecheck` | A bad or missing `--typescript-compiler`, an unknown option with a suggestion, too many arguments. |
+| `mcp` | The `--disable-production-deployments` conflict, and an unknown option with a suggestion. |
+| `deployment` | Choices and required options; an option of another subcommand; an unknown subcommand with a suggestion; too many arguments. |
 
 The oracle `scratchpad/agent-cli1/oracle.ts` runs commander 14.0.3 next to `args.ts`:
 

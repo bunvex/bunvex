@@ -1,6 +1,7 @@
 # STUDY-122 — Differential testing against Convex's own backend
 
-- **Status:** accepted (owner, 2026-10-05: D1 A, D2 A).
+- **Status:** accepted (owner, 2026-10-05: D1 A, D2 A). Phase 1 built (#429), phase 2 built (the generator,
+  `packages/differential/harness/generate.ts`): its first runs found #428 and #486.
 - **Convex source read:**
   - `main` of get-convex/convex-backend (`4577b9031`).
   - The last commits that still had tests: `bea52bde0` (Rust) and `c358201e1` (TypeScript), read locally,

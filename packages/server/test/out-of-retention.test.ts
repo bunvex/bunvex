@@ -19,7 +19,7 @@ async function setup() {
   const engine = await new Engine(
     defineSchema({ items: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
-    { writeLogRetention: { maxRetentionUs: 1_000 } }, // 1 ms, so a test can outlive it
+    { writeLogRetention: { maxRetentionNs: 1_000_000n } }, // 1 ms, so a test can outlive it
   ).init();
   const id = await engine.mutation((db) => db.insert("items", { n: 0 }));
   let runs = 0;
@@ -75,17 +75,17 @@ test("query_at_ts further back than MAX_TRANSACTION_WINDOW (10 s) answers 503; w
   // Commits 12 s and 24 s after the first: the clock is the committer's to move.
   const t0 = engine.committer.visibleTs;
   let now = t0;
-  (engine.committer as unknown as { clockUs: () => number }).clockUs = () => now;
-  now = t0 + 12_000_000;
+  (engine.committer as unknown as { clockNs: () => bigint }).clockNs = () => now;
+  now = t0 + 12_000_000_000n;
   await engine.mutation((db) => db.insert("items", { n: 4 }));
   const t12 = engine.committer.visibleTs;
-  now = t0 + 24_000_000;
+  now = t0 + 24_000_000_000n;
   await engine.mutation((db) => db.insert("items", { n: 5 }));
-  const at = (ts: number) =>
+  const at = (ts: bigint) =>
     fetch(`http://127.0.0.1:${port}/api/query_at_ts`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: "m:count", args: {}, ts: v1.encodeU64(BigInt(ts) * 1000n) }),
+      body: JSON.stringify({ path: "m:count", args: {}, ts: v1.encodeU64(ts) }),
     });
   // The window reaches back to 14 s; the snapshot in force then is the 12 s commit's.
   const tooEarly = await at(t0);

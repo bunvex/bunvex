@@ -249,7 +249,10 @@ describe("a request is one trace", () => {
     expect(attr(fn, "bunvex.function.documents_read")).toBe(0);
     const commit = spans.find((x) => x.name === "commit")!;
     expect(attr(commit, "bunvex.commit.documents")).toBe(1);
-    expect(attr(commit, "bunvex.commit.ts")).toBe(s.engine.committer.visibleTs);
+    // An int64 attribute, exact: the commit ts in nanoseconds.
+    expect(commit.attributes.find((a) => a.key === "bunvex.commit.ts")?.value).toEqual({
+      intValue: String(s.engine.committer.visibleTs),
+    });
   });
 
   test("a query: documents and bytes read; a cache hit is marked and reads nothing", async () => {

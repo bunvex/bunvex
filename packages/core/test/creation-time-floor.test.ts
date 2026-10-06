@@ -9,25 +9,28 @@ import { defineSchema, defineTable } from "../src/schema.ts";
 // store, ahead of the clock (STUDY-06 D9), and a new document must still sort after the ones it could read.
 describe("_creationTime and Date.now() are floored at the snapshot", () => {
   test("transactionStart: the clock, never below the snapshot rounded up to the ms, never the last one", () => {
-    expect(transactionStart(5_000_000, 9_000.5, 0)).toBe(9_000.5);
-    expect(transactionStart(9_000_001, 5_000, 0)).toBe(9_001);
-    expect(transactionStart(9_000_000, 5_000, 0)).toBe(9_000);
-    const again = transactionStart(9_000_001, 5_000, 9_001);
+    expect(transactionStart(5_000_000_000n, 9_000.5, 0)).toBe(9_000.5);
+    expect(transactionStart(9_000_000_001n, 5_000, 0)).toBe(9_001);
+    expect(transactionStart(9_000_000_000n, 5_000, 0)).toBe(9_000);
+    const again = transactionStart(9_000_000_001n, 5_000, 9_001);
     expect(again).toBeGreaterThan(9_001);
     expect(Math.floor(again)).toBe(9_001);
   });
 
   test("a restart whose stored timestamps are ahead of the clock: new documents and Date.now() follow them", async () => {
     const p = await MemoryPersistence.open(null, { durable: false });
-    const ahead = (Date.now() + 10_000) * 1000; // the last run's clock was 10 s ahead (µs)
+    const ahead = BigInt(Date.now() + 10_000) * 1_000_000n; // the last run's clock was 10 s ahead (ns)
     const realMaxTs = p.maxTs.bind(p);
-    p.maxTs = () => Math.max(realMaxTs(), ahead);
+    p.maxTs = () => {
+      const m = realMaxTs();
+      return m > ahead ? m : ahead;
+    };
     const e = await new Engine(defineSchema({ items: defineTable(v.any()) }), p).init();
     const { created, now } = await e.mutation(async (db) => {
       const id = await db.insert("items", { n: 1 });
       return { created: (await db.get("items", id))!._creationTime as number, now: Date.now() };
     });
-    const floor = Math.ceil(ahead / 1000);
+    const floor = Number((ahead + 999_999n) / 1_000_000n);
     expect(created).toBeGreaterThanOrEqual(floor);
     expect(now).toBeGreaterThanOrEqual(floor);
     expect(created).toBeGreaterThanOrEqual(now);
@@ -46,9 +49,12 @@ describe("_creationTime and Date.now() are floored at the snapshot", () => {
   test("a transaction starts after every _creationTime the one before it handed out, not only after its start", async () => {
     const p = await MemoryPersistence.open(null, { durable: false });
     // the floor dominates, mid-millisecond: both transactions' snapshots round up to the same ms
-    const ahead = (Date.now() + 10_000) * 1000 + 500;
+    const ahead = BigInt(Date.now() + 10_000) * 1_000_000n + 500_000n;
     const realMaxTs = p.maxTs.bind(p);
-    p.maxTs = () => Math.max(realMaxTs(), ahead);
+    p.maxTs = () => {
+      const m = realMaxTs();
+      return m > ahead ? m : ahead;
+    };
     const e = await new Engine(defineSchema({ items: defineTable(v.any()) }), p).init();
     // the first hands out many creation times; the second must start after all of them
     await e.mutation(async (db) => {

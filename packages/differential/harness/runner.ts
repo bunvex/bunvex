@@ -1,6 +1,7 @@
 // A program (STUDY-122 §3.1): calls of the app, its ids written as references (`{ ref: "r1" }`) that each
-// backend resolves to its own ids (those of earlier calls: a reference is resolved before its call is sent). `run` plays it on one backend; `compare` plays it on both and returns the
-// differences of the normalised records (each answer, then the final contents of every table).
+// backend resolves to its own ids (those of earlier calls: a reference is resolved before its call is sent),
+// and a page's cursor named for a later page to continue from. `run` plays it on one backend; `compare` plays
+// it on both and returns the differences of the normalised records (each answer, then every table's contents).
 
 import type { Backend } from "./backends.ts";
 import { answerShape, creationTimes, IdMap, normalize, type Step } from "./compare.ts";
@@ -15,14 +16,24 @@ export type ProgramOp =
   | { kind: "read"; read: Record<string, unknown>; mutateResult?: boolean }
   | { kind: "throw"; message: string }
   | { kind: "undefinedResult" };
-export type Call = { kind: "apply"; ops: ProgramOp[] } | { kind: "read"; read: Record<string, unknown> };
+export type Call =
+  | { kind: "apply"; ops: ProgramOp[] }
+  | { kind: "read"; read: Record<string, unknown> }
+  /** A page of `read`, from the start (`from` null) or from where the page named `from` ended. */
+  | { kind: "page"; read: Record<string, unknown>; numItems: number; from: string | null; as: string };
 export type Program = Call[];
 
 type Record_ = { steps: Step[]; dump: unknown; ids: IdMap };
 
 /** Play `program` on `backend`. */
-export async function run(backend: Backend, program: Program): Promise<Record_> {
+export async function run(backend: Backend, program: Program, opts: { reset?: boolean } = {}): Promise<Record_> {
+  // From empty tables, when a backend serves one program after another.
+  if (opts.reset) {
+    const r = await backend.call("mutation", "ops:reset", {});
+    if (!r.ok) throw new Error(`${backend.name}: reset failed: ${JSON.stringify(r.body)}`);
+  }
   const refs = new Map<string, string>();
+  const cursors = new Map<string, string | null>();
   const ids = new IdMap();
   const resolve = (x: unknown): unknown => {
     if (Array.isArray(x)) return x.map(resolve);
@@ -49,6 +60,16 @@ export async function run(backend: Backend, program: Program): Promise<Record_> 
           refs.set(op.as, id);
           ids.add(id, op.table);
         });
+    } else if (call.kind === "page") {
+      const cursor = call.from === null ? null : (cursors.get(call.from) ?? null);
+      const answer = await backend.call("query", "ops:page", {
+        read: resolve(call.read),
+        numItems: call.numItems,
+        cursor,
+      });
+      steps.push({ kind: "query", path: "ops:page", args: call, answer });
+      const body = answer.body as { status?: string; value?: { continueCursor?: string } };
+      if (answer.ok && body.status === "success") cursors.set(call.as, body.value?.continueCursor ?? null);
     } else {
       const answer = await backend.call("query", "ops:read", { read: resolve(call.read) });
       steps.push({ kind: "query", path: "ops:read", args: call.read, answer });
@@ -59,8 +80,13 @@ export async function run(backend: Backend, program: Program): Promise<Record_> 
 }
 
 /** The differences between the two backends' records of `program`, normalised; empty when they agree. */
-export async function compare(oracle: Backend, bunvex: Backend, program: Program): Promise<string[]> {
-  const [a, b] = await Promise.all([run(oracle, program), run(bunvex, program)]);
+export async function compare(
+  oracle: Backend,
+  bunvex: Backend,
+  program: Program,
+  opts: { reset?: boolean } = {},
+): Promise<string[]> {
+  const [a, b] = await Promise.all([run(oracle, program, opts), run(bunvex, program, opts)]);
   const view = (r: Record_) => {
     const times = [...creationTimes([r.steps.map((s) => s.answer.body), r.dump])].sort((x, y) => x - y);
     return {

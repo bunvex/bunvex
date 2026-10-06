@@ -34,7 +34,7 @@ class InjectedTransient extends Error {
   override name = "InjectedTransient";
 }
 
-type Flush = { commits: { ts: number; docs: number; bytes: number }[] };
+type Flush = { commits: { ts: bigint; docs: number; bytes: number }[] };
 
 /**
  * The driver's store, seen through a proxy that records what each flush carries and refuses one that breaks the
@@ -50,7 +50,7 @@ function recording(inner: Persistence, inject: (n: number) => "before" | "after"
   const store = new Proxy(inner, {
     get(t, k) {
       if (k === "apply")
-        return (ts: number, docs: DocWrite[], idx: IndexWrite[]) => {
+        return (ts: bigint, docs: DocWrite[], idx: IndexWrite[]) => {
           cur.commits.push({ ts, docs: docs.length, bytes: commitWriteBytes(docs, idx) });
           return t.apply(ts, docs, idx);
         };
@@ -84,7 +84,7 @@ function recording(inner: Persistence, inject: (n: number) => "before" | "after"
 }
 
 /** The `items` documents an engine's store holds at `ts`, by its tenant index. */
-async function itemsAt(e: Engine, ts: number) {
+async function itemsAt(e: Engine, ts: bigint) {
   const items = e.catalog.table("items");
   const ix = [...items.indexes.values()][0].id;
   return (await e.persistence.scan(ix, FULL_LO, FULL_HI, ts, 10_000_000, false)).length;
@@ -113,11 +113,11 @@ export async function batchChecks(
     const huge = e.mutation(insertPadded("huge", HUGE, 500)).catch(() => failed++);
     await Promise.all([...work, huge]);
     const hugeFlush = r.flushes.find((f) => f.commits.some((c) => c.docs === HUGE));
-    const hugeTs = hugeFlush?.commits.find((c) => c.docs === HUGE)?.ts ?? 0;
+    const hugeTs = hugeFlush?.commits.find((c) => c.docs === HUGE)?.ts ?? 0n;
     const visible = e.committer.visibleTs;
     const total = await itemsAt(e, visible);
-    const atHuge = hugeTs ? (await itemsAt(e, hugeTs)) - (await itemsAt(e, hugeTs - 1)) : 0;
-    const maxTs = Number((await e.persistence.maxTs?.()) ?? visible);
+    const atHuge = hugeTs ? (await itemsAt(e, hugeTs)) - (await itemsAt(e, hugeTs - 1n)) : 0;
+    const maxTs = (await e.persistence.maxTs?.()) ?? visible;
     const { batches, groups } = e.committer;
     check(
       failed === 0 &&
@@ -179,10 +179,10 @@ export async function batchChecks(
       env: { ...process.env, LEASE_TTL_MS: String(childTtlMs) },
       stdio: ["ignore", "pipe", "inherit"],
     });
-    let lastAck = 0;
+    let lastAck = 0n;
     let started = false;
     let split = false;
-    const announced: number[] = [];
+    const announced: bigint[] = [];
     let buf = "";
     child.stdout.on("data", (d) => {
       buf += d;
@@ -190,10 +190,12 @@ export async function batchChecks(
       buf = lines.pop()!;
       for (const l of lines) {
         if (l.startsWith("start")) started = true;
-        if (l.startsWith("flush ")) for (const t of l.slice(6).split(",")) announced.push(Number(t));
+        if (l.startsWith("flush ")) for (const t of l.slice(6).split(",")) announced.push(BigInt(t));
         if (l.startsWith("ack ")) {
-          const [ts, batches, groups] = l.slice(4).split(" ").map(Number);
-          lastAck = Math.max(lastAck, ts);
+          const [tsText, b, g] = l.slice(4).split(" ");
+          const ts = BigInt(tsText);
+          const [batches, groups] = [Number(b), Number(g)];
+          if (ts > lastAck) lastAck = ts;
           if (batches > groups) split = true;
         }
       }
@@ -207,7 +209,7 @@ export async function batchChecks(
 
     const st = await mod.open(false);
     const e = await newEngine(st, { lease: { waitMs: 20 * childTtlMs } });
-    const M = Number((await st.maxTs?.()) ?? 0);
+    const M = (await st.maxTs?.()) ?? 0n;
     if (M < lastAck) {
       log(`  K26 kill ${k}: maxTs ${M} < last acknowledged ${lastAck}`);
       bad++;
@@ -227,7 +229,7 @@ export async function batchChecks(
     if (st.readLog) {
       const below = announced.filter((t) => t <= M);
       if (below.length) {
-        const from = Math.min(...below) - 1;
+        const from = below.reduce((a, b) => (b < a ? b : a)) - 1n;
         const got = new Set((await st.readLog(from, M, 10_000_000)).map((c) => c.ts));
         const missing = below.filter((t) => !got.has(t));
         if (missing.length) {

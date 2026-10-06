@@ -1,8 +1,8 @@
 // The persistence globals' values as Convex encodes them (STUDY-134): a timestamp is an int64 of nanoseconds,
 // written as a value (`{"$integer": …}`, crates/database/src/retention.rs `write_persistence_global`) for the
 // retention globals, or as a `JsonInteger` string (base64 of the little-endian bytes,
-// crates/database/src/table_summary.rs) inside `table_summary_v2`. bunvex counts commit timestamps in
-// microseconds (DV-30): ×1000 written, ÷1000 read.
+// crates/database/src/table_summary.rs) inside `table_summary_v2`. bunvex's commit timestamps are the same
+// nanoseconds (STUDY-133 §5.3).
 import { fromJsonValue, toJsonValue } from "@bunvex/values";
 
 /** Convex's `JsonInteger::encode`: base64 of an int64's 8 little-endian bytes. */
@@ -20,21 +20,16 @@ export function fromJsonInteger(s: unknown): bigint {
   return new DataView(b.buffer, b.byteOffset, 8).getBigInt64(0, true);
 }
 
-/** A bunvex commit ts (µs) as Convex's nanoseconds. */
-export const tsNanos = (us: number): bigint => BigInt(Math.trunc(us)) * 1000n;
-/** Nanoseconds back to a bunvex commit ts (µs). */
-export const tsMicros = (ns: bigint): number => Number(ns / 1000n);
-
 /** A retention global's value: the ts as Convex writes it, `{"$integer": …}` of nanoseconds. */
-export const tsGlobal = (us: number): unknown => toJsonValue(tsNanos(us));
+export const tsGlobal = (ts: bigint): unknown => toJsonValue(ts);
 
-/** A retention global read back: its ts in µs, 0 when absent or not one. */
-export function readTsGlobal(v: unknown): number {
-  if (v === null || v === undefined) return 0;
+/** A retention global read back: its ts, 0n when absent or not one. */
+export function readTsGlobal(v: unknown): bigint {
+  if (v === null || v === undefined) return 0n;
   try {
     const n = fromJsonValue(v as never);
-    return typeof n === "bigint" && n >= 0n ? tsMicros(n) : 0;
+    return typeof n === "bigint" && n >= 0n ? n : 0n;
   } catch {
-    return 0;
+    return 0n;
   }
 }

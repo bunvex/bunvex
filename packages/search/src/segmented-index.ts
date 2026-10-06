@@ -78,7 +78,7 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
   private estimates = new Map<string, number>();
   private seq = 0;
   /** The commit ts of each change that gave one (a backfill step keeps only the changes after its ts). */
-  private changedAt = new Map<string, number>();
+  private changedAt = new Map<string, bigint>();
 
   protected abstract open(bytes: Uint8Array): S;
   protected abstract noDeletes(segment: S): D;
@@ -124,7 +124,7 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
   }
 
   /** Put a document's current state (null: deleted), as of commit `ts` when there is one. */
-  set(id: string, doc: Doc | null, ts?: number) {
+  set(id: string, doc: Doc | null, ts?: bigint) {
     if (!this.changed.has(id)) this.deleteFromSegments(id);
     this.changed.set(id, ++this.seq);
     if (ts === undefined) this.changedAt.delete(id);
@@ -249,7 +249,7 @@ export abstract class SegmentedIndex<S extends Segment<Doc>, D extends Deletes<D
   commitBackfill(
     segment: Uint8Array | null,
     deletes: PreparedFlush<S, D>["deletes"],
-    ts: number,
+    ts: bigint,
     keys?: SegmentPart<S, D>["keys"],
   ): SegmentPart<S, D> | null {
     for (const d of deletes) {

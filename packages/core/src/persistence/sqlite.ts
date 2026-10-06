@@ -9,12 +9,13 @@
 // Retention (PERSIST-01 C12–C14, STUDY-33): the document log reads `documents` by ts (`documents_by_ts`,
 // built when missing, as `indexes_by_ts`); prunes are `ts <= X` per key, Convex's SQLite statements;
 // globals are `persistence_globals` rows.
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { opaqueToInspect } from "../inspect.ts";
 import type {
   DocLogRow,
   DocPrune,
   DocWrite,
+  IndexId,
   IndexPrune,
   IndexWrite,
   Lease,
@@ -22,6 +23,7 @@ import type {
   LogCommit,
   Persistence,
   RetentionStore,
+  TabletId,
 } from "./index.ts";
 import { LeaseLostError } from "./index.ts";
 import {
@@ -38,10 +40,17 @@ import { ProcessLock } from "./lock.ts";
 import { groupLog } from "./log.ts";
 import { scanLatestSync } from "./scan.ts";
 
+// Bun's per-statement switch (since 1.1.x), missing from its type declarations: integers come back as `bigint`.
+declare module "bun:sqlite" {
+  interface Statement<ReturnType = unknown, ParamsType extends SQLQueryBindings[] = any[]> {
+    safeIntegers(enabled: boolean): this;
+  }
+}
+
 /** bunvex's columns, as `pragma table_info` declares them: how an unversioned store is recognised. */
 const COLUMNS = {
-  documents: ["table_id integer", "id text", "ts integer", "json_value text", "deleted integer"],
-  indexes: ["index_id integer", "key blob", "ts integer", "deleted integer", "document_id text"],
+  documents: ["table_id text", "id text", "ts integer", "json_value text", "deleted integer"],
+  indexes: ["index_id text", "key blob", "ts integer", "deleted integer", "document_id text"],
 };
 
 export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
@@ -62,10 +71,10 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   private pruneDoc;
   private inTx = false;
   /** The highest ts applied since the last flush. */
-  private top = 0;
+  private top = 0n;
   /** The highest durable ts, once this handle writes: readLog's bound while a group sits uncommitted in
    *  this connection's open transaction (PERSIST-01 C11). Only the lock holder writes, so it stays exact. */
-  private durableTs: number | null = null;
+  private durableTs: bigint | null = null;
 
   constructor(
     private path: string,
@@ -83,9 +92,9 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     this.db.exec(`pragma journal_mode = wal; pragma synchronous = ${opts.durable ? "full" : "off"};
       pragma temp_store = memory; pragma cache_size = -262144;`);
     this.db.exec(`
-      create table if not exists documents (table_id integer not null, id text not null, ts integer not null,
+      create table if not exists documents (table_id text not null, id text not null, ts integer not null,
         json_value text, deleted integer not null, primary key (table_id, id, ts)) without rowid;
-      create table if not exists indexes (index_id integer not null, key blob not null, ts integer not null,
+      create table if not exists indexes (index_id text not null, key blob not null, ts integer not null,
         deleted integer not null, document_id text, primary key (index_id, key, ts)) without rowid;
       create table if not exists persistence_globals (key text primary key, json_value text not null);
       create table if not exists read_only (id integer primary key);`);
@@ -100,19 +109,27 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
         where index_id = ?1 and key >= ?2 and key < ?3 and ts <= ?4 order by key ${dir}, ts desc limit ?5`);
     this.scanAsc = scan("asc");
     this.scanDesc = scan("desc");
-    this.getDoc = this.db.prepare(`select json_value, deleted, ts from documents
-        where table_id = ? and id = ? and ts <= ? order by ts desc limit 1`);
+    // Timestamps are nanoseconds above 2^53 (STUDY-133 §5.3): the statements that read them return
+    // integers as `bigint`.
+    this.getDoc = this.db
+      .prepare(`select json_value, deleted, ts from documents
+        where table_id = ? and id = ? and ts <= ? order by ts desc limit 1`)
+      .safeIntegers(true);
     // The rows of the first ?3 commits in (?1, ?2], in ts order: the inner query walks the ts index to find
     // the last of those commits, the outer one reads every row up to it.
-    this.logRows = this.db.prepare(`select ts, index_id, key, document_id from indexes
+    this.logRows = this.db
+      .prepare(`select ts, index_id, key, document_id from indexes
         where ts > ?1 and ts <= (select max(ts) from (select distinct ts from indexes
                                  where ts > ?1 and ts <= ?2 order by ts limit ?3))
-        order by ts`);
-    this.logPrev = this.db.prepare(`select max(ts) as m from indexes where ts <= ?`);
-    this.docLogRows = this.db.prepare(`select ts, table_id, id, deleted from documents
+        order by ts`)
+      .safeIntegers(true);
+    this.logPrev = this.db.prepare(`select max(ts) as m from indexes where ts <= ?`).safeIntegers(true);
+    this.docLogRows = this.db
+      .prepare(`select ts, table_id, id, deleted from documents
         where ts > ?1 and ts <= (select max(ts) from (select distinct ts from documents
                                  where ts > ?1 and ts <= ?2 order by ts limit ?3))
-        order by ts`);
+        order by ts`)
+      .safeIntegers(true);
     this.pruneIdx = this.db.prepare(`delete from indexes where index_id = ? and key = ? and ts <= ?`);
     this.pruneDoc = this.db.prepare(`delete from documents where table_id = ? and id = ? and ts <= ?`);
   }
@@ -212,10 +229,10 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     if (!this.inMemory && !this.lock) throw new LeaseLostError("another process holds this SQLite store");
   }
 
-  apply(ts: number, docs: DocWrite[], idx: IndexWrite[]) {
+  apply(ts: bigint, docs: DocWrite[], idx: IndexWrite[]) {
     this.assertWriter();
     if (!this.inTx) {
-      this.durableTs ??= Number((this.logPrev.get(Number.MAX_SAFE_INTEGER) as { m: number | null }).m ?? 0);
+      this.durableTs ??= (this.logPrev.get(MAX_I64) as { m: bigint | null }).m ?? 0n;
       this.db.exec("begin");
       this.inTx = true;
     }
@@ -234,29 +251,29 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
 
   /** PERSIST-01 C11. Committed rows are durable (a flush is one transaction); rows of a group applied but
    *  not yet flushed are visible to this connection only, and the bound leaves them out. */
-  readLog(afterTs: number, upToTs: number, limit: number): LogCommit[] {
+  readLog(afterTs: bigint, upToTs: bigint, limit: number): LogCommit[] {
     if (limit <= 0) return [];
-    const hi = this.inTx ? Math.min(upToTs, this.durableTs ?? 0) : upToTs;
+    const hi = this.inTx ? minTs(upToTs, this.durableTs ?? 0n) : upToTs;
     const rows = this.logRows.all(afterTs, hi, limit) as {
-      ts: number;
-      index_id: number;
+      ts: bigint;
+      index_id: string;
       key: Uint8Array;
       document_id: string | null;
     }[];
     if (!rows.length) return [];
-    const prev = this.logPrev.get(afterTs) as { m: number | null };
+    const prev = this.logPrev.get(afterTs) as { m: bigint | null };
     return groupLog(
       rows.map((r) => ({ ts: r.ts, index: r.index_id, key: r.key, id: r.document_id })),
-      Number(prev.m ?? 0),
+      prev.m ?? 0n,
     );
   }
 
   /** PERSIST-01 C12, as readLog over `documents`. */
-  readDocumentLog(afterTs: number, upToTs: number, limit: number): DocLogRow[] {
+  readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): DocLogRow[] {
     if (limit <= 0) return [];
-    const hi = this.inTx ? Math.min(upToTs, this.durableTs ?? 0) : upToTs;
+    const hi = this.inTx ? minTs(upToTs, this.durableTs ?? 0n) : upToTs;
     return (
-      this.docLogRows.all(afterTs, hi, limit) as { ts: number; table_id: number; id: string; deleted: number }[]
+      this.docLogRows.all(afterTs, hi, limit) as { ts: bigint; table_id: string; id: string; deleted: bigint }[]
     ).map((r) => ({ ts: r.ts, table: r.table_id, id: r.id, deleted: !!r.deleted }));
   }
 
@@ -303,7 +320,7 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return { docs: Number(r.docs), idx: Number(r.idx) };
   }
 
-  scan(index: number, lo: Uint8Array, hi: Uint8Array, ts: number, limit: number, desc: boolean) {
+  scan(index: IndexId, lo: Uint8Array, hi: Uint8Array, ts: bigint, limit: number, desc: boolean) {
     const q = desc ? this.scanDesc : this.scanAsc;
     return scanLatestSync(
       (p) =>
@@ -319,20 +336,20 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     );
   }
 
-  get(table: number, id: string, ts: number) {
+  get(table: TabletId, id: string, ts: bigint) {
     const r = this.getDoc.get(table, id, ts) as any;
     return r && !r.deleted ? (r.json_value as string) : null;
   }
 
-  getVersions(table: number, ids: string[], ts: number) {
+  getVersions(table: TabletId, ids: string[], ts: bigint) {
     // Embedded: one indexed lookup per id is the fastest form (no round trips to save).
     return ids.map((id) => {
       const r = this.getDoc.get(table, id, ts) as any;
-      return r && !r.deleted ? { json: r.json_value as string, ts: Number(r.ts) } : null;
+      return r && !r.deleted ? { json: r.json_value as string, ts: r.ts as bigint } : null;
     });
   }
 
-  auditLiveDocs(table: number, ts: number) {
+  auditLiveDocs(table: TabletId, ts: bigint) {
     const r = this.db
       .query(`select count(*) as n from (select json_value, row_number() over (partition by id order by ts desc) rn
               from documents where table_id = ? and ts <= ?) where rn = 1 and json_value is not null`)
@@ -342,13 +359,14 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
 
   // A flush is one SQLite transaction, so the newest ts of either table IS the last durable commit
   // (PERSIST-01 C4/C5). Both tables: a backfill commit writes index entries only (STUDY-24 S2).
-  maxTs() {
+  maxTs(): bigint {
     const r = this.db
       .query(
         `select max(coalesce((select max(ts) from documents), 0), coalesce((select max(ts) from indexes), 0)) as m`,
       )
-      .get() as { m: number };
-    return Number(r.m);
+      .safeIntegers(true)
+      .get() as { m: bigint };
+    return r.m;
   }
 
   close() {
@@ -357,6 +375,10 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     this.lock = null;
   }
 }
+
+/** The largest int64: a bound above every timestamp. */
+const MAX_I64 = (1n << 63n) - 1n;
+const minTs = (a: bigint, b: bigint) => (a < b ? a : b);
 
 // Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
 opaqueToInspect(SqlitePersistence);

@@ -387,10 +387,18 @@ export default query({ handler: async (ctx) => { console.log("n"); return (await
       ["bun", BIN, "mcp", "start", "--disable-production-deployments", "--dangerously-enable-production-deployments"],
       { env: { PATH: process.env.PATH ?? "" } },
     );
-    expect(conflict.exitCode).toBe(2);
-    expect(conflict.stderr.toString()).toContain(
-      "option '--disable-production-deployments' cannot be used with option '--dangerously-enable-production-deployments'",
+    // Argument errors as Convex's commander prints them (STUDY-124), with no help after them.
+    expect(conflict.exitCode).toBe(1);
+    expect(conflict.stderr.toString().trim()).toBe(
+      "error: option '--disable-production-deployments' cannot be used with option '--dangerously-enable-production-deployments'",
     );
+    const unknown = Bun.spawnSync(["bun", BIN, "mcp", "start", "--project-dri", "x"], {
+      env: { PATH: process.env.PATH ?? "" },
+    });
+    expect([unknown.exitCode, unknown.stderr.toString().trim()]).toEqual([
+      1,
+      "error: unknown option '--project-dri'\n(Did you mean --project-dir?)",
+    ]);
   });
 
   test("concurrent calls all answer (they run one at a time)", async () => {

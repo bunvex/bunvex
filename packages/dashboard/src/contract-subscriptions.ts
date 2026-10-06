@@ -3,7 +3,36 @@
 // read ranges with both bounds, a path filter that keeps only matching queries, a cache whose biggest entries
 // come biggest first, and `unauthorized` without `viewMetrics`.
 import { expect } from "bun:test";
-import type { DashboardDataSource, DataSourceError, SubscriptionsSnapshot } from "./data-source.ts";
+import type { DashboardDataSource, DataSourceError, LogEntry, SubscriptionsSnapshot } from "./data-source.ts";
+
+const REASONS = ["invalidation", "newSubscriber", "identityChange", "codeChange", "retry"];
+
+/**
+ * Log entries' "why it ran" links (STUDY-131 AD-27), where given: on a query's run, a 12-hex args digest and a
+ * known reason, an invalidation (positive seq and commit ts) only for an invalidation; trace ids as W3C writes
+ * them, never all zeros.
+ */
+export function expectExecutionLinks(entries: LogEntry[]) {
+  for (const e of entries) {
+    const links = e.execution?.links;
+    if (!links) continue;
+    const sub = links.subscription;
+    if (sub) {
+      expect(e.function?.kind).toBe("query");
+      expect(sub.argsDigest).toMatch(/^[0-9a-f]{12}$/);
+      expect(REASONS).toContain(sub.reason);
+      if (sub.invalidation !== null) {
+        expect(sub.reason).toBe("invalidation");
+        expect(Number.isSafeInteger(sub.invalidation.seq) && sub.invalidation.seq > 0).toBe(true);
+        expect(sub.invalidation.commitTs).toBeGreaterThan(0);
+      }
+    }
+    if (links.trace) {
+      expect(links.trace.traceId).toMatch(/^(?!0{32})[0-9a-f]{32}$/);
+      expect(links.trace.spanId).toMatch(/^(?!0{16})[0-9a-f]{16}$/);
+    }
+  }
+}
 
 type Ctx = {
   make: () => DashboardDataSource | Promise<DashboardDataSource>;

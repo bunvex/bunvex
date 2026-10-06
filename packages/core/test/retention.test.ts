@@ -111,7 +111,7 @@ describe("retention", () => {
     await e.retention!.deleteIndexes();
     await e.retention!.deleteDocuments();
     expect(garbage(db)).toEqual(g0);
-    expect(e.retention!.minIndexTs).toBe(e.committer.visibleTs - 3_600_000_000);
+    expect(e.retention!.minIndexTs).toBe(e.committer.visibleTs - 3_600_000_000_000n);
   });
 
   test("a transaction whose snapshot falls below the window fails its next read with OutOfRetention", async () => {
@@ -158,7 +158,7 @@ describe("retention", () => {
     });
     const get = p.get.bind(p);
     let held = false;
-    p.get = ((table: number, docId: string, ts: number) => {
+    p.get = ((table: string, docId: string, ts: bigint) => {
       if (docId !== id || held) return get(table, docId, ts);
       held = true;
       entered();
@@ -184,7 +184,7 @@ describe("retention", () => {
     await churn(e);
     const r = e.retention!;
     await r.advance();
-    expect(r.minIndexTs).toBe(e.committer.visibleTs - 1_000_000);
+    expect(r.minIndexTs).toBe(e.committer.visibleTs - 1_000_000_000n);
     expect(r.minDocumentTs).toBe(r.minIndexTs);
     const was = r.minIndexTs;
     r.opts.indexDelayMs = 10_000_000; // a longer delay never moves a window back

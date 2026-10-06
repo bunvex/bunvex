@@ -13,6 +13,7 @@ import {
   commitTsPlaceholder,
   copyValue,
   decodeId,
+  displayValue,
   encodeId,
   fromJsonValue,
   type GenericValidator,
@@ -34,31 +35,30 @@ import {
   databaseIndexRows,
   INDEX_TABLE,
   IndexBackfillingError,
-  type IndexMeta,
   IndexStagedError,
-  indexRow,
   planCatalog,
   searchIndexesUnavailable,
   TABLES_TABLE,
-  type TableMeta,
   tableMeta,
-  tableRow,
   VIRTUAL_TO_SYSTEM_TABLE,
 } from "./catalog.ts";
+import { writeCatalogChanges } from "./catalog-writes.ts";
 import { type Interval, OutOfRetentionError, type SearchRead } from "./committer.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { failExecution, monotonicNow, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { engineOwned } from "./engine-owned.ts";
 import { type ExpressionOrValue, type FilterBuilder, filterBuilder } from "./filter.ts";
-import { readNextIndexId, writeNextIndexId } from "./index-ids.ts";
+import { readNextIndexId } from "./index-ids.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
 import {
   DanglingReferenceError,
   type DocWrite,
+  type IndexId,
   type IndexWrite,
   type Persistence,
   type ScanDocs,
+  type TabletId,
 } from "./persistence/index.ts";
 import {
   checkOps,
@@ -85,7 +85,6 @@ import { rememberStagedSize, sizeOfVersion } from "./staged-size.ts";
 import { SystemReader, VirtualQuery } from "./system-reader.ts";
 import { TableReader, TableWriter } from "./table-scope.ts";
 import { TableSummariesUnavailableError } from "./table-summaries.ts";
-import { readNextTablet, writeNextTablet } from "./tablet-ids.ts";
 import type { IndexReadSpans } from "./tracing.ts";
 import { inVectorIndex, type VectorIndexes } from "./vector-indexes.ts";
 
@@ -140,9 +139,10 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
   let upper: { v: KeyValue; incl: boolean } | null = null;
   for (const e of exprs) {
     if (e.op === "eq") {
+      // Convex's `BTreeMap::insert` hands back the value already there: the message names it, not the new one.
       if (eqs.has(e.field))
         throw new Error(
-          `Already defined equality bound in index range. Can't add ${quoted(e.field)} == ${JSON.stringify(e.value)}.`,
+          `Already defined equality bound in index range. Can't add ${quoted(e.field)} == ${displayValue(eqs.get(e.field) as Value)}.`,
         );
       eqs.set(e.field, e.value);
       continue;
@@ -150,7 +150,7 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
     const isUpper = e.op === "lt" || e.op === "lte";
     if ((isUpper ? upper : lower) !== null)
       throw new Error(
-        `Already defined ${isUpper ? "upper" : "lower"} bound in index range. Can't add ${quoted(e.field)} ${COMPARATOR[e.op]} ${JSON.stringify(e.value)}.`,
+        `Already defined ${isUpper ? "upper" : "lower"} bound in index range. Can't add ${quoted(e.field)} ${COMPARATOR[e.op]} ${displayValue(e.value as Value)}.`,
       );
     if (ineqField !== null && ineqField !== e.field)
       throw new Error(
@@ -161,6 +161,11 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
     if (isUpper) upper = bound;
     else lower = bound;
   }
+  // A bound on a field an equality already fixes: Convex's "inequality" error, naming the equality's value.
+  if (ineqField !== null && eqs.has(ineqField))
+    throw new Error(
+      `Already defined inequality bound in index range. Can't add ${quoted(ineqField)} == ${displayValue(eqs.get(ineqField) as Value)}.`,
+    );
   const rank = new Map(withId.map((f, i) => [f, i]));
   for (const f of [...eqs.keys(), ...(ineqField ? [ineqField] : [])])
     if (!rank.has(f))
@@ -320,7 +325,7 @@ export type TxLimits = {
 /** What `Tx.rollback` restores (see `Tx.begin`). */
 export type Savepoint = {
   writes: Map<string, { table: TableDef; old: Doc | null; next: Doc | null }>;
-  pending: Map<number, BTree<Uint8Array, Doc | null>>;
+  pending: Map<IndexId, BTree<Uint8Array, Doc | null>>;
   createdTables: Tx["createdTables"];
   docsWritten: number;
   bytesWritten: number;
@@ -416,7 +421,7 @@ export class Tx {
    * The store's retention window (STUDY-33): every read from the store is checked against it before and
    * after (Convex's optimistic and final `validate_snapshot`), so a read that raced a prune fails too.
    */
-  retention: { check(ts: number): void } | null = null;
+  retention: { check(ts: bigint): void } | null = null;
   /**
    * Its index reads, one span per index (STUDY-131 AD-26): set by the engine when the transaction runs under
    * a traced span, else null and no read looks at the clock.
@@ -572,11 +577,11 @@ export class Tx {
       next: Doc | null;
       measured?: { size: number; nesting: number };
       /** The index keys `stage` computed, per index id, for `old` and `next` (null: none); reused at commit. */
-      keys?: { old?: Map<number, Uint8Array | null>; next?: Map<number, Uint8Array | null> };
+      keys?: { old?: Map<IndexId, Uint8Array | null>; next?: Map<IndexId, Uint8Array | null> };
     }
   >();
   /** Per index id: this transaction's pending entries, `key → doc` (written) or `null` (removed). */
-  private pending = new Map<number, BTree<Uint8Array, Doc | null>>();
+  private pending = new Map<IndexId, BTree<Uint8Array, Doc | null>>();
   /**
    * Where each written document holds `db.vars.commitTs` (STUDY-53): stored as the largest int64 until the
    * commit, handed back to the function as the placeholder, replaced by the commit timestamp at commit.
@@ -617,7 +622,7 @@ export class Tx {
   constructor(
     private catalog: Catalog,
     private persistence: Persistence,
-    readonly snapshot: number,
+    readonly snapshot: bigint,
     private readonly writable: boolean,
     /** The next `_creationTime` to hand out: the transaction's start time, then strictly increasing. */
     private nextCreationTime: number = wallClock(),
@@ -648,7 +653,7 @@ export class Tx {
     return t ?? this.createdTables.get(name)?.def;
   }
 
-  private dependedOn = new Set<number>();
+  private dependedOn = new Set<TabletId>();
   /**
    * Record that this transaction used table `t` as the catalog had it: a read of its `_tables` document, so
    * a commit that replaces or deletes the table (an import's activation, STUDY-42) conflicts with a mutation
@@ -662,10 +667,7 @@ export class Tx {
   }
 
   /** Tables this transaction created (STUDY-14: a write to an unknown table creates it, as in Convex). */
-  readonly createdTables = new Map<
-    string,
-    { def: TableDef; meta: Omit<TableMeta, "_id">; indexes: Omit<IndexMeta, "_id">[] }
-  >();
+  readonly createdTables = new Map<string, { def: TableDef }>();
   private systemDepth = 0;
 
   /** Who runs this transaction: the server's identity object (opaque here), or null without a token. */
@@ -734,8 +736,7 @@ export class Tx {
    * query or a subscription re-runs when the table is created.
    */
   private readMissingTable() {
-    const byCreation = this.catalog.table(TABLES_TABLE).indexes.get("by_creation_time")!;
-    this.recordInterval({ index: byCreation.id, lo: FULL.lo, hi: FULL.hi });
+    this.recordInterval({ index: defaultIndex(this.catalog.table(TABLES_TABLE)).id, lo: FULL.lo, hi: FULL.hi });
   }
 
   /** Create table `name` in this transaction: the next free Convex number, a fresh tablet, system indexes. */
@@ -752,23 +753,18 @@ export class Tx {
         indexes,
         true,
         await readNextIndexId(this),
-        await readNextTablet(this),
       );
-      const meta = plan.insertTables[0];
-      let metaId: string | undefined;
-      for (const t of plan.insertTables) metaId = await this.insert(TABLES_TABLE, tableRow(t));
-      await writeNextTablet(this, plan.nextTablet);
-      for (const i of plan.insertIndexes)
-        await this.insert(INDEX_TABLE, indexRow({ ...i, createdLowerBound: this.snapshot }));
-      await writeNextIndexId(this, plan.nextIndexId);
+      // Its `_tables` row's id gives the table its tablet; its indexes' rows give them their ids.
+      const written = await writeCatalogChanges(this, plan, this.snapshot);
+      const meta = written.tables.get(name)!;
       const def = new Catalog().add(
         name,
         meta.tablet,
         meta.number,
-        plan.insertIndexes.map((i) => ({ name: i.name, fields: i.fields, id: i.indexId })),
+        written.indexes.map((i) => ({ name: i.name, fields: i.fields, id: i.indexId })),
       );
-      def.metaId = metaId;
-      this.createdTables.set(name, { def, meta, indexes: plan.insertIndexes });
+      def.metaId = meta._id;
+      this.createdTables.set(name, { def });
       return def;
     } finally {
       this.systemDepth--;
@@ -779,7 +775,7 @@ export class Tx {
    * Called with the commit's ts once it is visible, before any commit listener runs: the engine installs a
    * catalog change there (STUDY-29), so nothing sees the commit with the old catalog.
    */
-  onCommitVisible: ((ts: number) => void) | null = null;
+  onCommitVisible: ((ts: bigint) => void) | null = null;
 
   /**
    * @internal (QueryImpl) The index `withIndex(name)` reads, as Convex's `require_enabled`: an enabled
@@ -790,7 +786,7 @@ export class Tx {
     const ix = t.indexes.get(name);
     if (!ix && this.searchIndexes?.get(t, name)) throw new Error(`Index ${t.name}.${name} is not a database index`);
     // An index enabled after this snapshot was still being built at it.
-    if (ix && (ix.readyTs ?? 0) <= this.snapshot) {
+    if (ix && (ix.readyTs ?? 0n) <= this.snapshot) {
       if (ix.metaId !== undefined && !(name in SYSTEM_INDEXES)) this.recordIndexMeta(ix);
       return ix;
     }
@@ -837,7 +833,7 @@ export class Tx {
    * reads are neither kept nor counted, and the whole of `index` is recorded (for OCC and subscriptions)
    * without counting against `databaseQueries`.
    */
-  async uncountedRead<T>(index: number, fn: () => Promise<T>): Promise<T> {
+  async uncountedRead<T>(index: IndexId | undefined, fn: () => Promise<T>): Promise<T> {
     const [docs, bytes] = [this.docsRead, this.bytesRead];
     try {
       return await this.unrecorded(fn);
@@ -848,7 +844,8 @@ export class Tx {
   }
 
   /** @internal The whole of `index`, recorded without counting against `databaseQueries` (`uncountedRead`). */
-  recordUncounted(index: number) {
+  recordUncounted(index: IndexId | undefined) {
+    if (index === undefined) return; // a table that does not exist yet: nothing to read
     this.readList.push({ index, lo: FULL.lo, hi: FULL.hi });
     this.uncountedReads++;
   }
@@ -951,7 +948,7 @@ export class Tx {
     if (!t) this.readMissingTable(); // a missing table has no rows; the read depends on _tables
     const st: QState = {
       t,
-      ix: t?.indexes.get("by_creation_time"),
+      ix: t && defaultIndex(t),
       range: FULL,
       desc: false,
       orderSet: false,
@@ -971,7 +968,7 @@ export class Tx {
     if (!t) this.readMissingTable();
     const st: QState = {
       t,
-      ix: t?.indexes.get("by_creation_time"),
+      ix: t && defaultIndex(t),
       range: FULL,
       desc: false,
       orderSet: false,
@@ -1015,7 +1012,7 @@ export class Tx {
     if (!this.systemAccess) throw new Error("queryDef is for system transactions");
     const st: QState = {
       t,
-      ix: t.indexes.get("by_creation_time"),
+      ix: defaultIndex(t),
       range: FULL,
       desc: false,
       orderSet: false,
@@ -1230,8 +1227,8 @@ export class Tx {
     this.paginated = true;
     const pipe = new Pipeline(st.ops);
     const fp = queryFingerprint({
-      tablet: st.t?.id ?? 0,
-      index: st.ix?.id ?? 0,
+      tablet: st.t?.id ?? "",
+      index: st.ix?.id ?? "",
       // A search's cursor belongs to its index and filters.
       lo: st.search
         ? new TextEncoder().encode(JSON.stringify(st.search, (_k, x) => (typeof x === "bigint" ? `${x}n` : x)))
@@ -1579,8 +1576,8 @@ export class Tx {
     // The version this transaction currently sees (its own last write, or the snapshot's).
     const current = prev ? prev.next : old;
     // The keys of the first version (the snapshot's) are those of `current` at the first write; kept since.
-    const oldKeys = prev ? prev.keys?.old : new Map<number, Uint8Array | null>();
-    const nextKeys = new Map<number, Uint8Array | null>();
+    const oldKeys = prev ? prev.keys?.old : new Map<IndexId, Uint8Array | null>();
+    const nextKeys = new Map<IndexId, Uint8Array | null>();
     for (const ix of maintainedIndexes(t)) {
       const curKey = current ? indexKey(ix, current) : null;
       const newKey = next ? indexKey(ix, next) : null;
@@ -1714,7 +1711,7 @@ export class Tx {
    * copy-on-write clone), the tables created and the write counts. Reads are never rolled back.
    */
   begin(): Savepoint {
-    const pending = new Map<number, BTree<Uint8Array, Doc | null>>();
+    const pending = new Map<IndexId, BTree<Uint8Array, Doc | null>>();
     for (const [ix, tree] of this.pending) pending.set(ix, tree.clone());
     return {
       writes: new Map(this.writes),
@@ -1770,7 +1767,7 @@ export class Tx {
   /** The vector indexes, for the bytes a write adds to them (STUDY-71). */
   vectorIndexes: VectorIndexes | null = null;
   /** A table's document count at a snapshot, from the table summaries (STUDY-52 PR 2); set by the engine. */
-  tableCount: ((tablet: number, snapshot: number) => number) | null = null;
+  tableCount: ((tablet: TabletId, snapshot: bigint) => number) | null = null;
 
   /**
    * The number of documents of `table` (Convex's internal `count()`: `db.query(table).count()` and its
@@ -1793,7 +1790,7 @@ export class Tx {
       this.readMissingTable();
       return 0;
     }
-    const ix = t.indexes.get("by_creation_time")!;
+    const ix = defaultIndex(t);
     this.recordInterval({ index: ix.id, lo: FULL.lo, hi: FULL.hi });
     let n = 0;
     try {
@@ -2062,6 +2059,12 @@ function checkSystemFields(
       throw new Error(`Field '${k}' starts with an underscore, which is only allowed for system fields like '_id'`);
 }
 
+/**
+ * The index a whole-table read walks: `by_creation_time`, or `by_id` for a table that has none (`_index`, which
+ * Convex gives only `by_id`).
+ */
+const defaultIndex = (t: TableDef): IndexDef => t.indexes.get("by_creation_time") ?? t.byId;
+
 /** Documents keep their fields sorted by name, as Convex objects do. */
 function sortFields(doc: Record<string, unknown>): Doc {
   const out: Record<string, unknown> = {};
@@ -2074,7 +2077,7 @@ function writtenKey(
   w: {
     old: Doc | null;
     next: Doc | null;
-    keys?: { old?: Map<number, Uint8Array | null>; next?: Map<number, Uint8Array | null> };
+    keys?: { old?: Map<IndexId, Uint8Array | null>; next?: Map<IndexId, Uint8Array | null> };
   },
   which: "old" | "next",
   ix: IndexDef,

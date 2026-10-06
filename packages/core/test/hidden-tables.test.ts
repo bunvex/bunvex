@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeId, v } from "@bunvex/values";
-import { SCHEDULED_JOB_ARGS_TABLE, SCHEDULED_JOBS_TABLE, TABLES_TABLE } from "../src/catalog.ts";
+import { SCHEDULED_JOB_ARGS_TABLE, SCHEDULED_JOBS_TABLE, TABLES_TABLE, tableMeta } from "../src/catalog.ts";
 import { Engine, TABLE_DELETION_BATCH } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
@@ -138,7 +138,7 @@ test("a deleted table disappears at once and is emptied in the background, acros
   await deleted(again);
   expect(again.catalog.deleting.size).toBe(0);
   const rows = await again.query((db) => db.asSystem(() => db.query(TABLES_TABLE).collect()));
-  expect(rows.some((r) => r.tablet === tablet)).toBe(false);
+  expect(rows.some((r) => tableMeta(r).tablet === tablet)).toBe(false);
   // The schema's table is created afresh, empty.
   expect(await names(again)).toEqual([]);
   await again.close();

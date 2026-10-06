@@ -24,7 +24,7 @@ export function splitKey(key: Uint8Array): { prefix: Uint8Array; suffix: Uint8Ar
 export type SplitRow = {
   prefix: Uint8Array;
   suffix: Uint8Array | null;
-  ts: number;
+  ts: bigint;
   deleted: boolean;
   id: string | null;
 };
@@ -84,7 +84,10 @@ export function splitPages(src: SplitSource, desc: boolean): (p: PageRequest) =>
       if (consumed.has(tag)) continue;
       consumed.add(tag);
       const group = (await src.group(p)).map((g) => ({ key: fullKey(g), ts: g.ts, deleted: g.deleted, id: g.id }));
-      group.sort((a, b) => (desc ? compareKeys(b.key, a.key) : compareKeys(a.key, b.key)) || b.ts - a.ts);
+      group.sort(
+        (a, b) =>
+          (desc ? compareKeys(b.key, a.key) : compareKeys(a.key, b.key)) || (b.ts > a.ts ? 1 : b.ts < a.ts ? -1 : 0),
+      );
       for (const g of group) rows.push({ key: g.key, deleted: g.deleted, id: g.id });
     }
     // Prefix bounds are exact when both bounds fit in a prefix (a key compares to a short bound as its

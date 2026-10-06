@@ -2,7 +2,7 @@
 // `document_deltas` from its snapshot (whole commits, deletes as `_deleted`), the three value encodings,
 // `json_schemas` and `get_table_column_names` from the inferred shapes, and the routes' errors and access.
 import { afterEach, describe, expect, test } from "bun:test";
-import { defineSchema, defineTable, Engine } from "@bunvex/core";
+import { compareInternalIds, defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { toJsonValue, v } from "@bunvex/values";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
@@ -97,13 +97,14 @@ test("list_snapshot: one table per page, by tablet then id, at one snapshot; the
   const [a1] = await t.call("m:put", { table: "a", n: 3, doc: { k: 1n } });
   await t.call("m:put", { table: "b", n: 2 });
   const { pages, snapshot, values } = await listAll(t);
-  expect(pages.map((p) => p.values.map((x: any) => x._table))).toEqual([
-    ["a", "a", "a"],
-    ["b", "b"],
-  ]);
+  // Tables in tablet order (their `_tables` rows' internal ids, as Convex's), which is random.
+  const aFirst = compareInternalIds(t.engine.catalog.table("a").id, t.engine.catalog.table("b").id) < 0;
+  const pageA = ["a", "a", "a"];
+  const pageB = ["b", "b"];
+  expect(pages.map((p) => p.values.map((x: any) => x._table))).toEqual(aFirst ? [pageA, pageB] : [pageB, pageA]);
   expect(pages.at(-1)).toMatchObject({ cursor: null, hasMore: false });
   // The fields in Convex's order; int64 in clean JSON as a string.
-  const firstRaw = (await t.get("list_snapshot", { snapshot })).text;
+  const firstRaw = (await t.get("list_snapshot", { snapshot, tableName: "a" })).text;
   expect(firstRaw).toMatch(/^\{"values":\[\{"_component":"","_table":"a","_ts":\d+,"_creationTime":/);
   // `_ts` is each document's revision (PERSIST-01 C16): one commit per table here, both before the snapshot.
   const tsOf = (table: string) => [
@@ -112,7 +113,7 @@ test("list_snapshot: one table per page, by tablet then id, at one snapshot; the
   const [aTs] = tsOf("a");
   expect(tsOf("a")).toHaveLength(1);
   expect(BigInt(aTs!)).toBeLessThan(BigInt(snapshot));
-  expect(values[0].k).toBe("1");
+  expect(values.find((x: any) => x._id === a1).k).toBe("1");
   expect(values.map((x) => x._id)).toContain(a1);
   // A single table, at the snapshot: a later insert is not in it.
   await t.call("m:put", { table: "b", n: 1 });
@@ -140,8 +141,9 @@ test("pages: 1024 documents a list_snapshot page; document_deltas pages at 128 r
   const t = await setup();
   await t.call("m:put", { table: "a", n: 1100 });
   const { pages } = await listAll(t);
-  // Then table b's (empty) page: a page never spans two tables.
-  expect(pages.map((p) => p.values.length)).toEqual([1024, 76, 0]);
+  // Table b's (empty) page before or after a's, in tablet order: a page never spans two tables.
+  const aFirst = compareInternalIds(t.engine.catalog.table("a").id, t.engine.catalog.table("b").id) < 0;
+  expect(pages.map((p) => p.values.length)).toEqual(aFirst ? [1024, 76, 0] : [0, 1024, 76]);
   const start = (await t.get("list_snapshot")).text;
   const snapshot = /"snapshot":(\d+)/.exec(start)![1]!;
   // One commit of 200 rows: one page.
