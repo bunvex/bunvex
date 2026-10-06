@@ -6,7 +6,7 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 219 | 3 | 10 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 232 | 3 | 10 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 161 | 2 | 2 |
 | Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 211 | 29 | 22 |
 
