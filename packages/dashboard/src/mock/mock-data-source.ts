@@ -58,6 +58,8 @@ import {
   type SnapshotImport,
   type SnapshotImportRequest,
   type StoredFile,
+  type SystemDocumentQuery,
+  type SystemTableInfo,
   type TableInfo,
   type TableMetric,
   type Timeseries,
@@ -87,6 +89,7 @@ import * as metrics from "./metrics.ts";
 import { createRandom, type Random } from "./random.ts";
 import { MockScheduler } from "./schedules.ts";
 import { MockSnapshots } from "./snapshots.ts";
+import { MockSystemTables } from "./system-tables.ts";
 import { MockTopology } from "./topology.ts";
 
 export type MockDataSourceOptions = FixtureOptions & {
@@ -202,6 +205,7 @@ export class MockDataSource implements DashboardDataSource {
   readonly audit: MockAudit;
   private readonly snapshots: MockSnapshots;
   private readonly topology: MockTopology;
+  private readonly systemTables: MockSystemTables;
   /** Who connects (UI-01 §33). Not part of the contract: tests read it. */
   readonly clients: MockClients;
   /** The app's users and their auth (UI-01 §25). Not part of the contract: tests read it. */
@@ -291,6 +295,13 @@ export class MockDataSource implements DashboardDataSource {
       now: opts.now ?? Date.now(),
       version: this.deployment.version,
       persistence: this.deployment.persistence,
+    });
+    this.systemTables = new MockSystemTables({
+      tables: () => [...this.tables.values()],
+      envVars: () => this.envVars.list(),
+      crons: () => this.scheduler.cronJobs(),
+      paused: () => this.paused,
+      createdAt: (opts.now ?? Date.now()) - 30 * 24 * 3_600_000,
     });
     const docs = fixture.tables.reduce((n, t) => n + t.documents.length, 0);
     this.stats = {
@@ -1205,6 +1216,43 @@ export class MockDataSource implements DashboardDataSource {
     return this.call(opts?.signal, () => {
       this.canViewTopology();
       return this.topology.snapshot();
+    });
+  }
+
+  // ---------------------------------------------------------------- system tables (STUDY-131 AD-24), read-only
+
+  private canViewSystemTables() {
+    if (!this.opts.capabilities.operations.includes("viewData"))
+      throw new DataSourceError("unauthorized", "this credential cannot view data");
+  }
+
+  listSystemTables(opts?: CallOptions): Promise<SystemTableInfo[]> {
+    return this.call(opts?.signal, () => {
+      this.canViewSystemTables();
+      return this.systemTables.list();
+    });
+  }
+
+  listSystemDocuments(q: SystemDocumentQuery, opts?: CallOptions): Promise<Page<Document>> {
+    return this.call(opts?.signal, () => {
+      this.canViewSystemTables();
+      if (!q.table.startsWith("_")) throw new DataSourceError("invalid_request", `"${q.table}" is not a system table.`);
+      checkNumItems(q.numItems);
+      const docs = this.systemTables.documents(q.table);
+      if (!docs) throw new DataSourceError("not_found", `There is no system table named "${q.table}".`);
+      const sign = q.order === "desc" ? -1 : 1;
+      const key = (d: Document): Key => [d._creationTime, d._id];
+      const inOrder = (a: Key, b: Key) => sign * compareValues(a, b);
+      const query = `system\u0000${q.table}\u0000${q.order ?? "asc"}`;
+      const after = q.cursor === null ? null : decodeCursor(q.cursor, query);
+      return paginate(
+        docs.sort((a, b) => inOrder(key(a), key(b))),
+        key,
+        inOrder,
+        after,
+        q.numItems,
+        query,
+      );
     });
   }
 

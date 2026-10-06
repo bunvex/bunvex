@@ -2,7 +2,7 @@
 // the next change, an unreachable deployment backs off), `--once`, `--until-success`, `--run`, `--start`,
 // (local deployments: local-deployment.test.ts).
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineSchema, Engine } from "@bunvex/core";
@@ -150,7 +150,13 @@ describe("bunvex dev", () => {
     const s = dev(app, d.url, "--start", "exit 3");
     expect(await s.done).toBe(1);
     expect(s.err).toContain("Command `exit 3` exited with code 3");
-    expect(await dev(app, d.url, "--run", "a:b", "--start", "true").done).toBe(2);
+    // Both: `--run` wins and `--start` is not run, as Convex's (its conflict check never fires, STUDY-124).
+    const both = dev(app, d.url, "--run", "hello:hi", "--start", "echo started > started.txt");
+    await both.until(() => both.out.includes('"ran"'));
+    await Bun.sleep(500);
+    expect(existsSync(join(app, "started.txt"))).toBe(false);
+    both.stop();
+    expect(await both.done).toBe(0);
   });
 
   test("the deployment's function logs on stderr (pause-on-deploy by default); --tail-logs disable", async () => {
@@ -204,6 +210,70 @@ describe("bunvex dev", () => {
     w.stop();
     expect(await w.done).toBe(0);
   }, 30_000);
+
+  test("a schema its documents fail: Convex's message, then a push once the table changes (STUDY-120)", async () => {
+    const d = await deployment();
+    const app = tmp();
+    const values = ["bunvex", "values"].join("/");
+    write(app, {
+      "bunvex/messages.ts": `import { mutation } from ${JSON.stringify(SERVER)};
+export const add = mutation(async ({ db }) => { await db.insert("messages", { body: 1 }); });
+export const fix = mutation(async ({ db }) => {
+  for (const m of await db.query("messages").collect()) await db.patch(m._id, { body: "fixed" });
+});
+export const other = mutation(async ({ db }) => { await db.insert("others", {}); });`,
+    });
+    const w = dev(app, d.url);
+    await w.until(() => w.ready() === 1);
+    const call = (path: string) =>
+      fetch(`${d.url}/api/mutation`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bunvex ${KEY}` },
+        body: JSON.stringify({ path, args: {} }),
+      });
+    expect((await call("messages:add")).status).toBe(200);
+    // A schema the stored document does not match.
+    write(app, {
+      "bunvex/schema.ts": `import { defineSchema, defineTable } from ${JSON.stringify(SERVER)};
+import { v } from ${JSON.stringify(values)};
+export default defineSchema({ messages: defineTable({ body: v.string() }) });`,
+    });
+    await w.until(() => w.err.some((l) => l.startsWith("✖ Schema validation failed.")));
+    const failure = w.err.find((l) => l.startsWith("✖ Schema validation failed."))!;
+    // Convex's two lines: the failure, then the error (which names the table and the document).
+    expect(failure.split("\n")[0]).toBe("✖ Schema validation failed.");
+    expect(failure.split("\n")[1]).toContain('"messages"');
+    expect(w.ready()).toBe(1);
+    // An unrelated table changing does not push.
+    await Bun.sleep(300);
+    expect((await call("messages:other")).status).toBe(200);
+    await Bun.sleep(700);
+    expect(w.ready()).toBe(1);
+    // No file changes: fixing the document is what makes dev push again (Convex's table watch).
+    expect((await call("messages:fix")).status).toBe(200);
+    await w.until(() => w.ready() === 2);
+    expect(w.err.filter((l) => l.startsWith("✖ Schema validation failed."))).toHaveLength(1);
+    w.stop();
+    expect(await w.done).toBe(0);
+  }, 30_000);
+
+  test("_system/cli/queryTable: a new result whenever the table changes, ViewData only", async () => {
+    const d = await deployment();
+    const sys = async (key: string | null) =>
+      (await (
+        await fetch(`${d.url}/api/query`, {
+          method: "POST",
+          headers: { "content-type": "application/json", ...(key ? { authorization: `Bunvex ${key}` } : {}) },
+          body: JSON.stringify({ path: "_system/cli/queryTable", args: { tableName: "messages" }, format: "json" }),
+        })
+      ).json()) as { status: string; value?: unknown; errorMessage?: string };
+    const a = await sys(KEY);
+    expect(a.status).toBe("success");
+    expect(typeof a.value).toBe("number");
+    expect(a.value as number).toBeGreaterThanOrEqual(0);
+    expect(a.value as number).toBeLessThan(1);
+    expect((await sys(null)).status).not.toBe("success");
+  });
 
   test("an unreachable deployment: backoff and retry; with --once, exit 1", async () => {
     const app = tmp();

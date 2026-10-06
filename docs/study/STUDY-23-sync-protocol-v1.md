@@ -309,7 +309,8 @@ This needs no server state across connections beyond `_session_requests`: every 
   become this), 1011 for internal errors, and `FatalError` then close for client errors (bad
   `baseVersion`, malformed messages). Today bunvex silently drops malformed frames.
 - The server sends a `Ping` after 15 s idle. Bun's WS pings stay on; `idleTimeout` is revisited to
-  match Convex's 120 s dead-peer threshold.
+  match Convex's 120 s dead-peer threshold. (Since STUDY-104: the session's own 5 s WS ping and 120 s
+  timeout, Bun's pings off; close frames follow Convex's `close_frame`.)
 
 ### 4.6 Authentication
 

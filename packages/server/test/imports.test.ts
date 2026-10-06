@@ -328,6 +328,19 @@ describe("modes, ids and the summary", () => {
     expect(c.body.message).toBe(
       "Hit an error while importing:\nNew table `c` has IDs that conflict with existing table `a`. To delete all existing tables, import with `bunvex import --replace-all`.",
     );
+    // Ids numbered as a system table: Convex's message names a system table behind a virtual one (the
+    // scheduler's `_scheduled_jobs` and `_scheduled_job_args`, STUDY-125) apart from an internal one.
+    for (const [number, existing] of [
+      [539, "system table"],
+      [550, "system table"],
+      [513, "internal table. Consider importing this table without `_id` fields or import into a new deployment."],
+    ] as const) {
+      const sysId = encodeId(number, new Uint8Array(16).fill(3));
+      const r = await t.importNow(`{"_id":"${sysId}"}\n`, `format=jsonLines&tableName=s${number}`);
+      expect(r.body.message).toBe(
+        `Hit an error while importing:\nNew table \`s${number}\` has IDs that conflict with existing ${existing}`,
+      );
+    }
     // A table numbered by `_tables` whose documents carry another table's ids: refused as Convex's.
     const zip = await zipOf([
       ["_tables/documents.jsonl", '{"name":"d","id":10050}\n'],
@@ -559,16 +572,27 @@ describe("a Convex ZIP with files", () => {
       [`_storage/${fileId}.txt`, "hi there"],
     ]);
     expect((await t.importNow(zip, "format=zip")).body).toEqual({ numWritten: 1 });
-    expect(t.engine.catalog.tables.get("_storage")!.number).toBe(540);
-    const [file] = (await t.engine.query((db) => db.asSystem(() => db.query("_storage").collect()))) as Doc[];
-    expect(file).toMatchObject({
+    // Imported into `_file_storage`, as Convex's (STUDY-125): `_storage` is its virtual name.
+    expect(t.engine.catalog.tables.has("_storage")).toBe(false);
+    expect(t.engine.catalog.tables.get("_file_storage")!.number).toBe(540);
+    const [file] = (await t.engine.query((db) => db.asSystem(() => db.query("_file_storage").collect()))) as Doc[];
+    expect({ ...file!, storageKey: null }).toEqual({
       _id: fileId,
       _creationTime: 1700000000000.25,
       storageId: "0b0f2c46-9d5c-4e2a-8f3a-3c1a2b4c5d6e",
+      storageKey: null,
+      sha256: Buffer.from(sha, "base64").buffer,
+      size: 8n,
+      contentType: "text/plain",
+    } as never);
+    // Apps read it as the virtual `_storage`, under the same id.
+    expect(await t.engine.query((db) => db.system.get(fileId))).toEqual({
+      _creationTime: 1700000000000.25,
+      _id: fileId,
+      contentType: "text/plain",
       sha256: sha,
       size: 8,
-      contentType: "text/plain",
-    });
+    } as never);
     // Served by its URL, and new uploads still work.
     const served = await fetch(`${t.api}/api/storage/0b0f2c46-9d5c-4e2a-8f3a-3c1a2b4c5d6e`);
     expect(await served.text()).toBe("hi there");
@@ -650,8 +674,8 @@ describe("round trip", () => {
     }
     expect(dst.engine.catalog.tables.has("other")).toBe(false);
     // The file: the same id and storage UUID, the same bytes.
-    const [srcFile] = (await src.engine.query((db) => db.asSystem(() => db.query("_storage").collect()))) as Doc[];
-    const [dstFile] = (await dst.engine.query((db) => db.asSystem(() => db.query("_storage").collect()))) as Doc[];
+    const [srcFile] = (await src.engine.query((db) => db.asSystem(() => db.query("_file_storage").collect()))) as Doc[];
+    const [dstFile] = (await dst.engine.query((db) => db.asSystem(() => db.query("_file_storage").collect()))) as Doc[];
     expect({ ...dstFile!, storageKey: null }).toEqual({ ...srcFile!, storageKey: null });
     expect(await new Response(await dst.files.get(dstFile!.storageKey as string)).text()).toBe("hello");
   });

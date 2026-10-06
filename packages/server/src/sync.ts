@@ -39,7 +39,15 @@ import { rawValueSize, type Value } from "@bunvex/values";
 import type { ServerWebSocket } from "bun";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { BadAdminKeyError } from "./admin-keys.ts";
-import { FunctionPathError, isSystemError, isTryAgainError, newRequestId, withRequestId } from "./errors.ts";
+import { closeFrame, isDeterministicUserError, type SyncFailure } from "./close-frame.ts";
+import {
+  FunctionPathError,
+  INTERNAL_SERVER_ERROR_MESSAGE,
+  isSystemError,
+  isTryAgainError,
+  newRequestId,
+  withRequestId,
+} from "./errors.ts";
 import { wsRequestId } from "./function-log.ts";
 import { type AdminCaller, callerOf, type Deadline, Functions, type SourcedCaller } from "./functions.ts";
 import type { RunReason } from "./log-events.ts";
@@ -64,13 +72,18 @@ export const SYNC_WORKER_PROCESS_TIMEOUT_MS = 60_000;
 export const HEARTBEAT_INTERVAL_MS = 15_000;
 const HEARTBEAT_CHECK_MS = 1_000;
 /**
+ * The WebSocket-level heartbeat (STUDY-104), as Convex's `run_sync_socket` (crates/local_backend/src/subs/mod.rs:
+ * HEARTBEAT_INTERVAL, CLIENT_TIMEOUT): a WS ping every 5 s, and a client that sent nothing at all (no message,
+ * no pong, no ping) for more than 120 s is closed with 1000 `ClientDisconnected`.
+ */
+export const WS_PING_INTERVAL_MS = 5_000;
+export const CLIENT_TIMEOUT_MS = 120_000;
+export type WsHeartbeatOptions = { pingIntervalMs: number; clientTimeoutMs: number };
+/**
  * Backpressure (Convex's SYNC_MAX_SEND_TRANSITION_COUNT, a knob; STUDY-64 §1.3): a session computes no new
  * transition while this many are waiting in its socket's send buffer behind the frame being written.
  */
 export const SYNC_MAX_SEND_TRANSITION_COUNT = 2;
-/** Close codes (RFC 6455): 1011 for an internal error, 1013 "try again later" for OCC and overload. */
-const CLOSE_INTERNAL_ERROR = 1011;
-const CLOSE_TRY_AGAIN_LATER = 1013;
 
 /**
  * Splaying (Convex's `SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD`, crates/common/src/knobs.rs): a commit that
@@ -240,7 +253,25 @@ export type SyncDeps = {
    * Convex's `InvalidationEvent`s: the app metrics' `subscription_invalidations` (STUDY-58).
    */
   onInvalidations?: (events: { source: string | undefined; table: string; count: number }[]) => void;
+  /**
+   * The `/metrics` histograms the sync protocol records (STUDY-114), as Convex's sync worker: the arguments'
+   * bytes of each ModifyQuerySet (its added queries'), Mutation and Action message, and each message sent.
+   */
+  metrics?: SyncMetrics;
+  /** The WS ping interval and the client timeout; defaults: Convex's 5 s and 120 s. For tests. */
+  wsHeartbeat?: Partial<WsHeartbeatOptions>;
 };
+
+type Observer = { observe(v: number): void };
+export type SyncMetrics = {
+  queryModificationArgs: Observer;
+  mutationArgs: Observer;
+  actionArgs: Observer;
+  transitionMessageSize: Observer;
+};
+
+/** Arguments' bytes as the client sent them (its JSON), as Convex's `args.get().len()`. */
+const argsBytes = (args: v1.JSONValue[]) => Buffer.byteLength(JSON.stringify(args));
 
 /** One query run at one snapshot, ready to splice into frames. */
 type Execution = {
@@ -321,6 +352,12 @@ export class SyncHub {
   /** The read-set of each watched key's latest execution: what a commit is matched against (STUDY-08 D9). */
   readonly reads = new ReadSetIndex<string>();
   readonly sessions = new Set<SyncSession>();
+  /** The queries subscribed to across every session (read when `/metrics` is scraped). */
+  subscriptionCount(): number {
+    let n = 0;
+    for (const s of this.sessions) n += s.querySetSize;
+    return n;
+  }
   /** A WebSocket mutation's time limit (tests lower it). */
   mutationTimeoutMs = SYNC_WORKER_PROCESS_TIMEOUT_MS;
   /** Bumped when deployed code changes (STUDY-35): runs of an older generation are not reused. */
@@ -333,8 +370,12 @@ export class SyncHub {
   /** Writable for tests. */
   unavailableRetryMs: number;
 
-  /** Sends each idle session its `Ping`; one timer for all sessions, not one re-armed per frame. */
+  /**
+   * Sends each idle session its `Ping`, each session its WS ping, and closes the silent ones; one timer for all
+   * sessions, not one re-armed per frame.
+   */
   private heartbeat: ReturnType<typeof setInterval>;
+  readonly wsHeartbeat: WsHeartbeatOptions;
 
   constructor(readonly deps: SyncDeps) {
     this.splay = deps.splay ?? splayOptions();
@@ -344,10 +385,17 @@ export class SyncHub {
       deps.unavailableRetryMs ?? knob(process.env, "SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY", 3) * 1000;
     deps.engine.committer.onCommit((entries) => this.onCommit(entries), "sync");
     this.retry = retryOptions(deps.retry);
-    this.heartbeat = setInterval(() => {
-      const now = performance.now();
-      for (const s of this.sessions) s.pingIfIdle(now);
-    }, HEARTBEAT_CHECK_MS);
+    this.wsHeartbeat = {
+      pingIntervalMs: deps.wsHeartbeat?.pingIntervalMs ?? WS_PING_INTERVAL_MS,
+      clientTimeoutMs: deps.wsHeartbeat?.clientTimeoutMs ?? CLIENT_TIMEOUT_MS,
+    };
+    this.heartbeat = setInterval(
+      () => {
+        const now = performance.now();
+        for (const s of this.sessions) s.heartbeat(now);
+      },
+      Math.min(HEARTBEAT_CHECK_MS, this.wsHeartbeat.pingIntervalMs),
+    );
     this.heartbeat.unref?.();
   }
 
@@ -746,6 +794,10 @@ export class SyncSession {
   private received = { querySet: 0, identity: 0 };
   private version: v1.StateVersion = { querySet: 0, ts: 0n, identity: 0 };
   private queries = new Map<number, SessionQuery>();
+  /** The queries subscribed to (the `/metrics` subscriptions gauge). */
+  get querySetSize(): number {
+    return this.queries.size;
+  }
   private pending: (v1.AddQuery | v1.RemoveQuery)[] = [];
   private identityChanged = false;
   /** Who this connection acts as (STUDY-27), and when its token expires (seconds; none without a token). */
@@ -762,6 +814,9 @@ export class SyncSession {
   private mutationRunning = false;
   private inflightActions = 0;
   private lastSent = performance.now();
+  /** When the client last sent a frame of any kind (Convex's `last_received`), and when it was last pinged. */
+  private lastReceived = performance.now();
+  private lastWsPing = performance.now();
   private ws: Socket | null = null;
   /** The execution keys this session watches (those of its queries), and whether they may have changed. */
   private watching = new Set<string>();
@@ -804,8 +859,11 @@ export class SyncSession {
   transitionChunks = false;
 
   private sendTransition(json: string) {
+    if (this.closed || !this.ws) return;
+    // A transition's size is its whole message's, before it is chunked (Convex measures it in the worker).
+    this.hub.deps.metrics?.transitionMessageSize.observe(Buffer.byteLength(json));
     const frames = transitionFrames(json, this.transitionChunks);
-    for (let i = 0; i < frames.length; i++) this.send(frames[i]!, i === frames.length - 1);
+    for (let i = 0; i < frames.length; i++) this.write(frames[i]!, i === frames.length - 1);
   }
 
   /**
@@ -820,8 +878,15 @@ export class SyncSession {
   private head = 0;
   private transitionsInBuffer = 0;
 
+  /** Send a message other than a transition (Convex's worker measures every message it sends). */
+  private send(frame: string) {
+    if (this.closed || !this.ws) return;
+    this.hub.deps.metrics?.transitionMessageSize.observe(Buffer.byteLength(frame));
+    this.write(frame);
+  }
+
   /** `transition`: the frame is a transition's (its last frame, when it is sent in chunks). */
-  private send(frame: string, transition = false) {
+  private write(frame: string, transition = false) {
     if (this.closed || !this.ws) return;
     const ws = this.ws;
     if (this.head === this.inBuffer.length) {
@@ -871,40 +936,71 @@ export class SyncSession {
     if (this.scheduled) this.schedule();
   }
 
-  pingIfIdle(now: number) {
+  /** The client sent a frame: a message, a pong or a ping (STUDY-104). */
+  heard(now = performance.now()) {
+    this.lastReceived = now;
+  }
+
+  /**
+   * The hub's tick (STUDY-104): a client silent for longer than the timeout is closed with 1000
+   * `ClientDisconnected`, as Convex's "Websocket ping/pong timeout"; otherwise it gets its WS ping when one is
+   * due, and an application `Ping` after 15 s without a frame from us.
+   */
+  heartbeat(now: number) {
+    const { pingIntervalMs, clientTimeoutMs } = this.hub.wsHeartbeat;
+    if (now - this.lastReceived > clientTimeoutMs)
+      return this.fail({ code: "ClientDisconnect", shortMsg: "ClientDisconnected", msg: "Client disconnected" });
+    if (now - this.lastWsPing >= pingIntervalMs && this.ws && !this.closed) {
+      this.lastWsPing = now;
+      this.ws.ping();
+    }
     if (now - this.lastSent >= HEARTBEAT_INTERVAL_MS) this.send(PING);
   }
 
-  /** End the connection. A client error is reported in a `FatalError` first, which the client does not retry. */
-  private fail(how: { fatal: string } | { code: number; reason: string }) {
+  /**
+   * End the connection (STUDY-104, `close-frame.ts`): a client error is reported in a `FatalError` first, which
+   * the client does not retry; then the error's close frame. A close without a code is an empty close frame
+   * (Bun's `close(0)`), which a client sees as 1005, as Convex's `Message::Close(None)`.
+   */
+  private fail(f: SyncFailure) {
     if (this.closed) return;
-    if ("fatal" in how) {
-      this.send(v1.encodeServerMessage({ type: "FatalError", error: how.fatal }));
-      this.ws?.close();
-    } else this.ws?.close(how.code, how.reason.slice(0, 123));
+    // Not measured: Convex sends its fatal errors outside the worker loop that measures messages.
+    if (isDeterministicUserError(f.code)) this.write(v1.encodeServerMessage({ type: "FatalError", error: f.msg }));
+    const frame = closeFrame(f);
+    if (frame) this.ws?.close(frame.code, frame.reason);
+    else this.ws?.close(0);
     this.close();
+  }
+
+  /** A client error: `FatalError`, then a close without a code. */
+  private badRequest(msg: string) {
+    this.fail({ code: "BadRequest", shortMsg: "BadRequest", msg });
   }
 
   private internalError(e: unknown) {
     console.error("bunvex sync:", e);
-    // Out of retention is Convex's `CloseCode::Again`: the client reconnects and resends the mutation.
-    // Too many functions at once (STUDY-68): Convex's rate-limited close, "try again", with its code.
+    // Too many functions at once (STUDY-68) and the write throughput limit (STUDY-78): Convex's rate-limited
+    // close, "try again", with its code.
     if (e instanceof TooManyConcurrentRequestsError || e instanceof TooManyWritesError)
-      return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: e.code });
+      return this.fail({ code: "RateLimited", shortMsg: e.code, msg: e.message });
     // A mutation that needed an index still being rebuilt (STUDY-79): "try again", with Convex's code.
-    if (e instanceof IndexesUnavailableError) return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: e.code });
+    if (e instanceof IndexesUnavailableError)
+      return this.fail({ code: "FeatureTemporarilyUnavailable", shortMsg: e.code, msg: e.message });
+    // Out of retention is Convex's `CloseCode::Again`: the client reconnects and resends the mutation.
     this.fail({
-      code: isTryAgainError(e) ? CLOSE_TRY_AGAIN_LATER : CLOSE_INTERNAL_ERROR,
-      reason: "InternalServerError",
+      code: isTryAgainError(e) ? "OutOfRetention" : "OperationalInternalServerError",
+      shortMsg: "InternalServerError",
+      msg: INTERNAL_SERVER_ERROR_MESSAGE,
     });
   }
 
   message(frame: string) {
+    this.heard();
     let m: v1.ClientMessage;
     try {
       m = v1.parseClientMessage(frame);
     } catch (e) {
-      return this.fail({ fatal: (e as Error).message });
+      return this.badRequest((e as Error).message);
     }
     const tracer = this.hub.deps.engine.tracer;
     if (tracer.on) return this.tracedMessage(m, Buffer.byteLength(frame));
@@ -942,13 +1038,17 @@ export class SyncSession {
   /** The traced message (its span) a transition about to run was asked for by, if any. */
   private transitionParent: Span | null = null;
 
-  /** End the connection with an `AuthError` (Convex: the error message, the identity version, no close frame). */
+  /**
+   * End the connection with an `AuthError` (Convex: the error message, the identity version, then a close
+   * without a code: `Unauthenticated` and `AuthUpdateFailed` have no close frame, STUDY-104).
+   */
   private authError(error: string, authUpdateAttempted: boolean) {
     if (this.closed) return;
-    this.send(
+    // Not measured, as a FatalError.
+    this.write(
       v1.encodeServerMessage({ type: "AuthError", error, baseVersion: this.received.identity, authUpdateAttempted }),
     );
-    this.ws?.close();
+    this.ws?.close(0);
     this.close();
   }
 
@@ -1000,20 +1100,29 @@ export class SyncSession {
           );
         return;
       }
-      case "ModifyQuerySet":
+      case "ModifyQuerySet": {
+        const metrics = this.hub.deps.metrics;
+        if (metrics) {
+          let bytes = 0;
+          for (const q of m.modifications) if (q.type === "Add") bytes += argsBytes(q.args);
+          metrics.queryModificationArgs.observe(bytes);
+        }
         if (m.baseVersion !== this.received.querySet)
-          return this.fail({
-            fatal: `Base version ${m.baseVersion} passed up doesn't match the current version ${this.received.querySet}`,
-          });
+          return this.badRequest(
+            `Base version ${m.baseVersion} passed up doesn't match the current version ${this.received.querySet}`,
+          );
         if (m.newVersion <= m.baseVersion)
           return this.internalError(new Error(`query set version ${m.newVersion} does not follow ${m.baseVersion}`));
         this.pending.push(...m.modifications);
         this.received.querySet = m.newVersion;
         if (span) this.transitionParent = span.set("bunvex.sync.modifications", m.modifications.length);
         return this.schedule();
+      }
       case "Mutation":
+        this.hub.deps.metrics?.mutationArgs.observe(argsBytes(m.args));
         return this.mutation(m, span);
       case "Action":
+        this.hub.deps.metrics?.actionArgs.observe(argsBytes(m.args));
         return this.action(m, span);
       case "Authenticate": {
         if (m.baseVersion !== this.received.identity)
@@ -1030,7 +1139,7 @@ export class SyncSession {
             this.token = null;
           } catch (e) {
             if (e instanceof BadAdminKeyError) return this.authError(e.message, false);
-            return this.fail({ fatal: (e as Error).message });
+            return this.badRequest((e as Error).message);
           }
           this.expiresAt = undefined; // admin identities do not expire (DV-163)
         } else if (m.tokenType === "User") {
@@ -1331,7 +1440,11 @@ export class SyncSession {
     const queued = this.pendingMutations - (this.mutationRunning ? 1 : 0);
     if (queued >= MAX_PENDING_MUTATIONS) {
       span?.fail("TooManyConcurrentMutations").finish();
-      return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: "TooManyConcurrentMutations" });
+      return this.fail({
+        code: "RateLimited",
+        shortMsg: "TooManyConcurrentMutations",
+        msg: `Too many concurrent mutations (${MAX_PENDING_MUTATIONS})`,
+      });
     }
     span?.set("bunvex.function.path", m.udfPath).set("bunvex.sync.request_id", m.requestId);
     this.pendingMutations++;
@@ -1382,7 +1495,7 @@ export class SyncSession {
         clearTimeout(timer);
         if (deadline.aborted) return;
         if (!r.ok && r.error instanceof OccError)
-          return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: r.error.code });
+          return this.fail({ code: "OCC", shortMsg: r.error.code, msg: r.error.message });
         // The write throughput limit (STUDY-78) closes the session with "try again", as Convex's: the client
         // reconnects and resends the mutation.
         if (
@@ -1419,7 +1532,11 @@ export class SyncSession {
     span?.set("bunvex.function.path", m.udfPath).set("bunvex.sync.request_id", m.requestId);
     if (this.inflightActions > MAX_INFLIGHT_ACTIONS) {
       span?.fail("TooManyInflightActionsForSingleClient").finish();
-      return this.fail({ code: CLOSE_TRY_AGAIN_LATER, reason: "TooManyInflightActionsForSingleClient" });
+      return this.fail({
+        code: "RateLimited",
+        shortMsg: "TooManyInflightActionsForSingleClient",
+        msg: `Too many inflight actions (${MAX_INFLIGHT_ACTIONS})`,
+      });
     }
     const caller = this.requestCaller(m.requestId);
     if (caller === null) return span?.finish();

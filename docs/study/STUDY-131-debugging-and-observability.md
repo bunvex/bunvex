@@ -200,9 +200,94 @@ The questions, as asked:
    starting with the flaky tests.
 4. **Order:** AD-24 (small, and it pairs with STUDY-125–130), then AD-25, then AD-26, then AD-27 and T1.
 
-## 7. AD-26 built: traces over OpenTelemetry
+## 7. Implementation: AD-24, system tables (built 2026-10-05)
 
-### 7.1 What Convex does, in detail
+**Server** (`packages/server/src/system-functions.ts`).
+
+- `_system/debug/systemTables` lists every system table the catalog has, by name. Each entry has a one-line
+  `description`, `appVisible` (apps read it through `db.system`: `_storage`, `_scheduled_functions`) and a
+  `documentCount` (null while the table summaries are still loading after a start).
+  - The names come from the engine's catalog (`Tx.systemTableNames()`), so `_tables` and `_index` (fixed, no
+    `_tables` row) are included. A table that STUDY-125–130 add, rename or make virtual shows up, or goes,
+    with no list to edit here.
+  - The descriptions are `SYSTEM_TABLE_DESCRIPTIONS`, next to `SYSTEM_TABLE_NUMBERS` in
+    `packages/core/src/catalog.ts`. A test checks that every numbered table has one. A catalog table without
+    a line is listed with an empty description.
+- `_system/debug/systemTable` pages through one system table, `{ table, order?, paginationOpts }`, as
+  `_system/cli/tableData` pages a user table. It reads past the hidden index (`asSystem`), so it returns
+  documents as stored, with every field (`_storage`'s hidden ones too). A name without `_` is refused
+  (`"notes" is not a system table.`); a system table the deployment does not have reads empty.
+- Both are queries (read-only by construction) and need ViewData. They are marked `adminCallOnly`: only an
+  admin's own call reaches them (the HTTP API, a sync session, the server in process). Function code never
+  does: an action's `runQuery` gets "Could not find public function", even when an admin ran the action.
+- The stored documents are already plain values (index fields, table states, schema JSON), so nothing needs
+  decoding on the way out.
+
+**CLI** (`packages/cli/src/data.ts`).
+
+- `bunvex data --system` prints one line per table: name, size, `public` / `private`, description.
+- `bunvex data --system <table>` prints the documents through `_system/debug/systemTable`, with `--limit`,
+  `--order` and `--format` as for any table.
+
+**Dashboard** (`packages/dashboard`, on the mock).
+
+- Contract: `data-source-system-tables.ts` adds the optional `listSystemTables` and `listSystemDocuments`
+  (`viewData`). Its part of the contract suite is `contract-system-tables.ts`:
+  - `_` names only, sorted, none of them a user table;
+  - pages that walk a table once in either order;
+  - a user table's name refused (`invalid_request`), and `unauthorized` without `viewData`.
+- Mock: `mock/system-tables.ts` builds the system tables from the mock's state when asked: `_tables`, `_index`,
+  `_schemas`, `_environment_variables`, `_cron_jobs`, `_backend_state`, `_instance`, and empty `_storage` and
+  `_scheduled_functions`. They follow its tables, variables, crons and pause.
+- Data screen:
+  - A "Show system tables" checkbox in the tables column, shown only when the source offers them and the
+    credential has `viewData`. It is a per-browser preference.
+  - It lists the system tables under the user tables, with their sizes and descriptions. An open system
+    table keeps the list shown.
+  - `/database/_name` opens a read-only view: the description, private or app-visible, the size, every field,
+    oldest or newest first. There is no editing, selection, filter or side panel.
+- A server-backed data source would map the two methods to the two system queries. Until the dashboard talks
+  to a server, the screen runs on the mock.
+
+**Tests.**
+
+- Server (`packages/server/test/system-tables-browser.test.ts`):
+  - every numbered table has a description;
+  - the listing equals the catalog's system tables, with sizes and `appVisible`;
+  - `_index` is refused through `_system/cli/tableData` and readable through the debug query;
+  - cursors walk `_tables` once, and `desc` reverses `asc`;
+  - a user table is refused, and a missing system table reads empty;
+  - refused with no key, without ViewData, and from an action's `runQuery` run by an admin.
+- CLI (`packages/cli/test/data.test.ts`): the listing, `_index` as JSON lines, `_index` without `--system`
+  still hidden, a user table refused, the pretty table and the limit warning.
+- Dashboard (`packages/dashboard/test/system-tables.test.tsx`, and the contract part in `mock.test.ts`):
+  - the checkbox shows and hides the list (with an axe check);
+  - `_tables` read-only, with its description and fields;
+  - newest first on demand;
+  - no checkbox and no documents without `viewData`;
+  - the mock follows a new table.
+
+**Sabotage** (each restored, `git diff` clean afterwards):
+
+| Break | Caught by |
+|---|---|
+| The function-code guard lets a function's call through (`adminCallOnly && inProcess`) | server: "refused … from function code" |
+| The name check lets a user table through | server: "a user table is not a system table"; CLI `--system` test |
+| The catalog listing drops `_index` | server: "the listing comes from the catalog"; CLI `--system` test |
+| `--system <table>` reads through `_system/cli/tableData` | CLI `--system` test |
+| The dashboard gates on `viewLogs` instead of `viewData` | dashboard: "a credential that may not view data …" |
+| The mock ignores `order: "desc"` | the contract's "pages walk a table once, either order" (4 mock variants) |
+
+**Not on a hot path.** Nothing runs unless an admin asks, so there is no measurement.
+
+**Found while building (not changed here).** Any action can already call any other `_system/*` query through
+`ctx.runQuery`. The non-client path (`fromClient = false`) skips the access check. Convex refuses a system
+function to a non-admin identity (`application_function_runner/mod.rs`, `path.is_system() &&
+!(identity.is_admin() || identity.is_system())`). AD-24's queries are closed to function code
+(`adminCallOnly`); the general gap is left for the owner.
+## 8. AD-26 built: traces over OpenTelemetry
+
+### 8.1 What Convex does, in detail
 
 - **Spans.** `fastrace` spans are opened all over the backend. The roots matter for the shape of a trace:
   - `stats_middleware` (`crates/common/src/http/mod.rs`, around line 755) wraps every HTTP request in a root
@@ -221,12 +306,12 @@ The questions, as asked:
   context, and a browser's `WebSocket` cannot set headers on its upgrade, so a client cannot continue its trace
   over the socket. bunvex does the same: a WebSocket message is always the root of its trace.
 
-### 7.2 What an app observes
+### 8.2 What an app observes
 
 Nothing. Tracing is off unless an OTLP endpoint is configured, and on it changes no response, timing contract or
 error. The collector sees the spans; `/stats` (ViewMetrics) gains a `tracing` object, `null` when off.
 
-### 7.3 How bunvex does it
+### 8.3 How bunvex does it
 
 **Where the code lives.**
 
@@ -375,13 +460,13 @@ owner's decision: no `@opentelemetry/*` dependency):
 Ids are drawn from 4 KiB blocks of `crypto.getRandomValues`, outside any deterministic execution, and are
 never all zero. Trace ids are fully random, so the W3C level-2 random flag holds, but bunvex does not set it.
 
-### 7.4 Divergences and additions
+### 8.4 Divergences and additions
 
 None beyond AD-26 itself. Span names follow Convex's where it has them: the route for an HTTP root,
 `sync-worker/mutation`, `sync-worker/action` and `sync-worker/update-queries`. The others, and every attribute,
 are bunvex's, with OpenTelemetry's semantic conventions for HTTP.
 
-### 7.5 Tests
+### 8.5 Tests
 
 - `packages/core/test/tracing.test.ts` (16 tests):
   - `traceparent` validity cases;
@@ -457,7 +542,7 @@ Every one was caught.
 | function span without its cache flag | query test |
 | transition bytes wrong | sync |
 
-### 7.6 Measurements
+### 8.6 Measurements
 
 Bun 1.4.2, Apple Silicon (8 cores), memory store, while other sessions loaded the machine (load average
 7–12). The runs are interleaved, so the medians and bests compare.
