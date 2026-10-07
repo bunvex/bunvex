@@ -864,3 +864,29 @@ The probe scripts (`inject.py`, `cx.sh`, `shapes.py`, the ts bench) are in the s
     same Postgres writes 2.70 KB of WAL per commit: it pays the same.
   - Convex's planner hints are comments on a stock Postgres (no pg_hint_plan); its index query avoids the
     sequential scan by putting its LIMIT inside the DISTINCT ON.
+
+### PR 6 — MySQL in Convex's v5 layout
+
+- The driver runs Convex's v5 `init_sql` and `init_lease` statement for statement: `BINARY(16)` ids, LONGBLOB
+  documents, `key_prefix` VARBINARY(2500) with `key_sha256` BINARY(32) of the whole key, Convex's `leases`,
+  `read_only` and `persistence_globals`. A fresh database's columns, indexes and `SHOW CREATE TABLE` equal those
+  of one the Convex binary created (`packages/persistence/test/fixtures/mysql-reference-schema.json`). No layout
+  record: the open checks the five tables' columns.
+- Documents are read as v0 (the JSON text, `null` when deleted) or v1 (the byte `0x01`, the sort key's length, then
+  the document's sort key as one LZ4 block with Convex's dictionary, format data; a deleted version is empty), and
+  written as Convex's `MYSQL_DOCUMENT_ENCODING` knob says: **0 by default** in bunvex, 1 in Convex (owner,
+  2026-10-07, DV-414, a decided divergence). With the first decoder v1 halved point gets of 3 KB documents (17 989
+  → 8 743 ops/s); decoding the sort key straight to JSON text (72 → 22 µs a document) left it 13 % behind main and
+  27 % behind v0 (11 998 / 10 483 / 14 271). v1 saves only storage; Convex reads v0, so cross-open still works. The LZ4 block codec is bunvex's own, from the format's specification
+  (`packages/persistence/src/lz4.ts`); it decodes all 137 v1 documents of a store the Convex binary wrote, and its
+  blocks are 0.99× the size of Convex's. LZ4 costs ~10 µs to compress and ~7 µs to decompress 2.3 KB; the v1
+  path's cost is mostly the JSON ↔ value ↔ sort-key conversions (≈4 µs for a 300-byte document, 50–70 µs for a
+  3 KB one).
+- The lease is Convex's (DV-413), as on Postgres: the newest start wins; the fence is a `FOR SHARE` read before
+  COMMIT; a retried flush finds a landed group by its rows.
+- Index scans take a page of keys and their newest ts from the primary key (grouped), then those rows and their
+  documents, as Convex's v5 `index_scan`. A form that kept each row whose ts is its key's newest, by a lookup per
+  row, took ~1 s a statement on a store with many versions.
+- Conformance documents are sorted-field JSON (v1 hands documents back re-serialized).
+- Checked locally with the Convex binary (`--db mysql-v5`): bunvex opened a database Convex created, wrote and read
+  back, and Convex then served it, taking the lease back (it loaded bunvex's v1 `_tables` / `_index` rows).

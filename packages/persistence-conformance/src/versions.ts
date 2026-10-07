@@ -41,7 +41,7 @@ export async function versionChecks(mod: DriverModule, check: Check, log: (l: st
         touched.add(`${table}:${id}`);
         const vs = history.get(`${table}:${id}`) ?? [];
         const alive = vs.length > 0 && vs[vs.length - 1]!.json !== null;
-        const json = alive && Math.random() < 0.3 ? null : `{"t":${table},"c":${c}}`;
+        const json = alive && Math.random() < 0.3 ? null : JSON.stringify({ c, t: table });
         const prevTs = vs.length ? vs[vs.length - 1]!.ts : null;
         vs.push({ ts, json });
         history.set(`${table}:${id}`, vs);

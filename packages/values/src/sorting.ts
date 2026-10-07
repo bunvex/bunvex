@@ -2,7 +2,7 @@
 // uses for index keys (`crates/value/src/sorting.rs`, after FoundationDB's tuple layer). Comparing two keys
 // byte-wise compares the values in Convex's order; a tuple is the concatenation of its values' keys.
 
-import { utf8Length } from "./bytes.ts";
+import { toBase64, utf8Length } from "./bytes.ts";
 import { isCommitTsPlaceholder, MAX_COMMIT_TS } from "./commit-ts.ts";
 import { isBytes, type Value } from "./value.ts";
 
@@ -195,6 +195,18 @@ class Reader {
   }
   /** Bytes up to an unescaped 0x00 (consumed), with each 0x00 0xFF read as 0x00. */
   escaped(): Uint8Array {
+    // Usually nothing is escaped: the bytes are a view up to the terminator, nothing copied.
+    const b = this.b;
+    const end = b.indexOf(TERMINATOR, this.i);
+    if (end >= 0 && b[end + 1] !== ESCAPE) {
+      const out = b.subarray(this.i, end);
+      this.i = end + 1;
+      return out;
+    }
+    return this.escapedSlow();
+  }
+  /** An escaped string or bytes, byte by byte. */
+  private escapedSlow(): Uint8Array {
     const out: number[] = [];
     for (;;) {
       const x = this.next();
@@ -213,6 +225,19 @@ class Reader {
 }
 
 const utf8Decoder = new TextDecoder();
+/** UTF-8 text; short ASCII (field names, ids, most strings) without a decoder call. */
+function text(b: Uint8Array): string {
+  if (b.length <= 64) {
+    let s = "";
+    for (let k = 0; k < b.length; k++) {
+      const c = b[k]!;
+      if (c > 0x7f) return utf8Decoder.decode(b);
+      s += String.fromCharCode(c);
+    }
+    return s;
+  }
+  return utf8Decoder.decode(b);
+}
 
 function read(r: Reader): Value | undefined {
   const tag = r.next();
@@ -222,20 +247,27 @@ function read(r: Reader): Value | undefined {
     if (tag === ZERO_INT) return 0n;
     const width = Math.abs(tag - ZERO_INT);
     const bytes = 1 << (width - 1);
+    if (bytes <= 4) {
+      // Up to 32 bits: a number, then one BigInt.
+      let u = 0;
+      for (let k = 0; k < bytes; k++) u = u * 256 + r.next();
+      const bits = bytes * 8;
+      return BigInt(u >= 2 ** (bits - 1) ? u - 2 ** bits : u);
+    }
     let u = 0n;
     for (let k = 0; k < bytes; k++) u = (u << 8n) | BigInt(r.next());
     return BigInt.asIntN(bytes * 8, u);
   }
   if (tag === FLOAT) {
-    const raw = new Uint8Array(8);
+    const raw = f64bytes;
     for (let k = 0; k < 8; k++) raw[k] = r.next();
     if (raw[0]! & 0x80) raw[0] = raw[0]! & 0x7f;
     else for (let k = 0; k < 8; k++) raw[k] = ~raw[k]! & 0xff;
-    return new DataView(raw.buffer).getFloat64(0);
+    return f64.getFloat64(0);
   }
   if (tag === FALSE) return false;
   if (tag === TRUE) return true;
-  if (tag === STRING) return utf8Decoder.decode(r.escaped());
+  if (tag === STRING) return text(r.escaped());
   if (tag === BYTES) return r.escaped().slice().buffer as ArrayBuffer;
   if (tag === ARRAY) {
     const out: Value[] = [];
@@ -259,11 +291,103 @@ function read(r: Reader): Value | undefined {
       if (r.b[r.i] === TERMINATOR && r.b[r.i + 1] === ESCAPE) {
         r.i += 2;
         name = "";
-      } else name = utf8Decoder.decode(r.escaped());
+      } else name = text(r.escaped());
       out[name] = read(r) as Value;
     }
   }
   throw new RangeError(`unknown type tag 0x${tag.toString(16)}`);
+}
+
+const le8 = new DataView(new ArrayBuffer(8));
+const le8bytes = new Uint8Array(le8.buffer);
+const tagged = (tag: string, bytes: Uint8Array) => `{"${tag}":"${toBase64(bytes)}"}`;
+
+/**
+ * An escaped string from the reader as a JSON string literal. Printable ASCII without `"` or `\` (field names,
+ * ids, most text) is copied char by char; anything else goes through `JSON.stringify`.
+ */
+function jsonString(r: Reader): string {
+  const b = r.b;
+  const start = r.i;
+  let s = '"';
+  for (let i = start; i < b.length; i++) {
+    const c = b[i]!;
+    if (c === TERMINATOR) {
+      if (b[i + 1] === ESCAPE) break; // an escaped 0x00: the slow path
+      r.i = i + 1;
+      return `${s}"`;
+    }
+    if (c < 0x20 || c > 0x7e || c === 0x22 || c === 0x5c) break;
+    s += String.fromCharCode(c);
+  }
+  r.i = start;
+  return JSON.stringify(text(r.escaped()));
+}
+
+/** One value from the reader, as the JSON text `JSON.stringify(toJsonValue(v))` writes (fields already sorted). */
+function readJson(r: Reader): string {
+  const tag = r.next();
+  if (tag === NULL) return "null";
+  if (tag >= ZERO_INT - 4 && tag <= ZERO_INT + 4) {
+    // The key holds the int's two's complement in its width, big-endian: reversed and sign-extended, that is
+    // its 8 little-endian bytes, with no BigInt.
+    const bytes = tag === ZERO_INT ? 0 : 1 << (Math.abs(tag - ZERO_INT) - 1);
+    for (let k = bytes - 1; k >= 0; k--) le8bytes[k] = r.next();
+    const fill = tag < ZERO_INT ? 0xff : 0;
+    for (let k = bytes; k < 8; k++) le8bytes[k] = fill;
+    return tagged("$integer", le8bytes);
+  }
+  if (tag === FLOAT) {
+    const raw = f64bytes;
+    for (let k = 0; k < 8; k++) raw[k] = r.next();
+    if (raw[0]! & 0x80) raw[0] = raw[0]! & 0x7f;
+    else for (let k = 0; k < 8; k++) raw[k] = ~raw[k]! & 0xff;
+    const x = f64.getFloat64(0);
+    if (!(Number.isNaN(x) || !Number.isFinite(x) || Object.is(x, -0))) return JSON.stringify(x);
+    le8.setFloat64(0, x, true);
+    return tagged("$float", le8bytes);
+  }
+  if (tag === FALSE) return "false";
+  if (tag === TRUE) return "true";
+  if (tag === STRING) return jsonString(r);
+  if (tag === BYTES) return tagged("$bytes", r.escaped());
+  if (tag === ARRAY) {
+    let out = "[";
+    for (let first = true; ; first = false) {
+      if (r.i < r.b.length && r.b[r.i] === TERMINATOR) {
+        r.i++;
+        return `${out}]`;
+      }
+      out += (first ? "" : ",") + readJson(r);
+    }
+  }
+  if (tag === OBJECT) {
+    let out = "{";
+    for (let first = true; ; first = false) {
+      if (r.i < r.b.length && r.b[r.i] === TERMINATOR && r.b[r.i + 1] !== ESCAPE) {
+        r.i++;
+        return `${out}}`;
+      }
+      let name: string;
+      if (r.b[r.i] === TERMINATOR && r.b[r.i + 1] === ESCAPE) {
+        r.i += 2;
+        name = '""';
+      } else name = jsonString(r);
+      out += `${first ? "" : ","}${name}:${readJson(r)}`;
+    }
+  }
+  throw new RangeError(`unknown type tag 0x${tag.toString(16)}`);
+}
+
+/**
+ * Exactly one value from its sort key, straight to its JSON text (`JSON.stringify(toJsonValue(v))`), without the
+ * value in between: MySQL's v1 documents are read this way (STUDY-133 Q4), on every read of one.
+ */
+export function sortKeyToJsonText(key: Uint8Array): string {
+  const r = new Reader(key);
+  const s = readJson(r);
+  if (r.i !== key.length) throw new RangeError("trailing bytes after the value");
+  return s;
 }
 
 /**
@@ -284,4 +408,16 @@ export function keyToValues(key: Uint8Array): { values: (Value | undefined)[]; c
     consumed = r.i;
   }
   return { values, consumed };
+}
+
+/**
+ * Exactly one value from its sort key (Convex's `ConvexValue::read_sort_key` with nothing left over): MySQL's
+ * v1 document encoding stores a document as its sort key (STUDY-133 Q4). Throws on anything but one whole value.
+ */
+export function sortKeyToValue(key: Uint8Array): Value {
+  const r = new Reader(key);
+  const v = read(r);
+  if (r.i !== key.length) throw new RangeError("trailing bytes after the value");
+  if (v === undefined) throw new RangeError("undefined is not a value");
+  return v;
 }

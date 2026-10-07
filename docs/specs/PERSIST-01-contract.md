@@ -11,7 +11,7 @@
 > **v2.5, 1 Oct 2026:** C11 (the log by timestamp) and K25, from STUDY-24 H11 (K24 is the index backfill's,
 > STUDY-29). **v2.6, 1 Oct 2026:** C4 bounded flushes (the committer writes a group in write batches, DV-62)
 > and K26, from STUDY-06 §10. **v2.7, 1 Oct 2026:** C12–C14 (the document log, pruning, globals: what retention
-> needs) and K27–K29, from STUDY-33. **v2.8, 3 Oct 2026:** C15 (index references), from STUDY-09 §1.6; K30–K31. **v2.9, 3 Oct 2026:** C16 (document versions) and K32, for streaming export's per-document timestamps (owner, 2026-10-03). **v3.0, 6 Oct 2026 (STUDY-133 PR 3):** internal ids and `prev_ts` in C1; `scan` returns documents through the exact-ts join (C3, C6; `scanDocs` is gone); `get` returns a version; C15 rewritten for the join; C17 (index entries at past timestamps); K30–K31 rewritten, K34–K36. **v3.1, 6 Oct 2026 (STUDY-133 PR 10):** retention walks the document log by `prev_ts`, as Convex's: C11 (`readLog`) and K25 retired, C12–C13 and K27–K28 rewritten. **v3.2, 6 Oct 2026 (STUDY-133 PR 4):** C10 for drivers in Convex's layout (no layout record, the tables' columns checked; SQLite first), C14's integers above 2^53 and `max_repeatable_ts`, K22 in two forms. **v3.3, 6 Oct 2026 (STUDY-133 PR 5):** C7 newest-wins leases (Convex's, DV-413; Postgres first) and their K10–K21 forms; K22 compares a fresh store's schema with the reference system's. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> needs) and K27–K29, from STUDY-33. **v2.8, 3 Oct 2026:** C15 (index references), from STUDY-09 §1.6; K30–K31. **v2.9, 3 Oct 2026:** C16 (document versions) and K32, for streaming export's per-document timestamps (owner, 2026-10-03). **v3.0, 6 Oct 2026 (STUDY-133 PR 3):** internal ids and `prev_ts` in C1; `scan` returns documents through the exact-ts join (C3, C6; `scanDocs` is gone); `get` returns a version; C15 rewritten for the join; C17 (index entries at past timestamps); K30–K31 rewritten, K34–K36. **v3.1, 6 Oct 2026 (STUDY-133 PR 10):** retention walks the document log by `prev_ts`, as Convex's: C11 (`readLog`) and K25 retired, C12–C13 and K27–K28 rewritten. **v3.2, 6 Oct 2026 (STUDY-133 PR 4):** C10 for drivers in Convex's layout (no layout record, the tables' columns checked; SQLite first), C14's integers above 2^53 and `max_repeatable_ts`, K22 in two forms. **v3.3, 6 Oct 2026 (STUDY-133 PR 5):** C7 newest-wins leases (Convex's, DV-413; Postgres first) and their K10–K21 forms; K22 compares a fresh store's schema with the reference system's. **v3.4, 6 Oct 2026 (STUDY-133 PR 6):** MySQL joins Convex's v5 layout and lease; C1 lets a store re-serialize a document (MySQL's v1 encoding); conformance writes documents in sorted-field JSON and K21's markers match bytes sent as hex. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -26,7 +26,10 @@ Two logical collections, Convex's shape:
   (below) the index's id, Convex's: the internal ids of their `_tables` and `_index` rows (STUDY-133 §5.2), passed
   as 22-character base64url strings. `id` is the document's **internal id** (the same 22-character form; the
   developer id `_id` is the engine's, `internalIdOf` maps it), never the developer id. A driver in Convex's
-  layout stores ids as their 16 bytes (SQLite `BLOB`, STUDY-133 PR 4). `prev_ts` is the ts of the
+  layout stores ids as their 16 bytes (SQLite `BLOB`, Postgres `BYTEA`, MySQL `BINARY(16)`; STUDY-133 PRs 4–6).
+  `json` is a document, a JSON object in Convex's internal form. A store may give it back re-serialized: MySQL
+  with Convex's v1 encoding (`MYSQL_DOCUMENT_ENCODING=1`: the document's sort key in an LZ4 block, DV-414) gives
+  its fields back in sorted order and its numbers as JSON writes them. The value is the same; the text need not be. `prev_ts` is the ts of the
   version this one replaces, null for a new document: the committer sets it (Convex's `committer.rs`), the store
   keeps it as written and returns it in the document log (C12). Every version of every document, never updated
   in place.
@@ -154,7 +157,7 @@ tail) runs only under the lock. Convex's SQLite store has no lock and loses writ
 (STUDY-25 L9, measured); bunvex diverges on purpose (owner, 2026-09-30).
 
 **Newest-wins leases (Convex's, DV-413).** A driver in Convex's layout on a database server (Postgres since
-STUDY-133 PR 5; MySQL and MongoDB in PRs 6–7) uses Convex's lease (`leaseScope = "newest"`) instead of the
+STUDY-133 PR 5, MySQL since PR 6; MongoDB in PR 7) uses Convex's lease (`leaseScope = "newest"`) instead of the
 record above. It reverses DV-14 on those drivers.
 
 - The lease is Convex's `leases` row `(id 1, ts)`: `ts` is its holder's start, in wall-clock nanoseconds.
@@ -252,7 +255,8 @@ A store is opened only if it is in a layout the driver reads, and only for writi
 read-only (STUDY-25 L6/L7, as Convex: its configured layout, refused over a different one, and its `read_only`
 table). The helpers and errors are in `@bunvex/core/persistence` (`layout.ts`).
 
-**Drivers in Convex's layout** (STUDY-133; SQLite since PR 4, Postgres, MySQL and MongoDB in PRs 5–7). The store
+**Drivers in Convex's layout** (STUDY-133; SQLite since PR 4, Postgres since PR 5, MySQL (v5) since PR 6;
+MongoDB in PR 7). The store
 is Convex's: its DDL, created with `IF NOT EXISTS` on every open as Convex does, and no layout record (DV-418).
 
 - **Open checks, writing nothing.** Before any write (DDL and pragmas included) and without the lease: each of
@@ -263,7 +267,7 @@ is Convex's: its DDL, created with `IF NOT EXISTS` on every open as Convex does,
   ports none of Convex's migrations); a newer one opens with a warning, as Convex's.
 - The read-only flag, below, is unchanged (DV-412 keeps SQLite's `read_only` table, which Convex ignores).
 
-**Drivers with a layout record** (Postgres, MySQL, MongoDB until their PRs; the memory driver's log keeps its
+**Drivers with a layout record** (MongoDB until its PR; the memory driver's log keeps its
 own header, since no other system reads it). The current layout is `LAYOUT_VERSION`.
 
 - **The record.** Every store holds its layout version: a `layout_version` row of `persistence_globals`

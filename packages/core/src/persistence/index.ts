@@ -223,6 +223,8 @@ export interface RetentionStore {
 export const hasRetention = (p: Persistence): p is Persistence & RetentionStore =>
   typeof (p as Partial<RetentionStore>).pruneIndexes === "function";
 
+// What a driver needs to store documents in another encoding than their JSON (MySQL's v1, STUDY-133 Q4).
+export { fromJsonValue, sortKeyToJsonText, sortKeyToValue, toJsonValue, valuesToKey } from "@bunvex/values";
 export { wallClockNs } from "../determinism.ts";
 export { opaqueToInspect } from "../inspect.ts";
 export { bytesToHex, internalIdBytes, internalIdHex, internalIdString } from "../internal-id.ts";
