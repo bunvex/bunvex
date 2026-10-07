@@ -210,6 +210,7 @@ export {
   orderEnvVarChanges,
 } from "./environment-variables.ts";
 export { Expression, type ExpressionOrValue, filterBuilder } from "./filter.ts";
+export { INDEX_CACHE_MAX_BYTES, IndexCache, IndexCacheMismatchError, type IndexCacheStats } from "./index-cache.ts";
 export { opaqueToInspect } from "./inspect.ts";
 export {
   compareInternalIds,

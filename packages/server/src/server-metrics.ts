@@ -116,6 +116,32 @@ export class ServerMetrics {
       "Queries the query cache did not have",
       () => this.sources?.engine.stats.cacheMisses ?? 0,
     );
+    // The index cache (STUDY-136): persistence index reads of every transaction.
+    const indexCache = () => this.sources?.engine.indexCache ?? null;
+    r.collectedCounter(
+      "bunvex_index_cache_hits_total",
+      "Index reads answered from the index cache",
+      () => indexCache()?.stats.hits ?? 0,
+    );
+    r.collectedCounter(
+      "bunvex_index_cache_misses_total",
+      "Index reads the index cache did not have, or had stale: read from persistence",
+      () => {
+        const m = indexCache()?.stats.misses;
+        return m ? m.new + m.stale : 0;
+      },
+    );
+    r.collectedCounter(
+      "bunvex_index_cache_invalidations_total",
+      "Index cache entries found stale (a commit wrote into their range) when looked up",
+      () => indexCache()?.stats.misses.stale ?? 0,
+    );
+    r.collectedCounter(
+      "bunvex_index_cache_size_evictions_total",
+      "Index cache entries pushed out by INDEX_CACHE_SIZE",
+      () => indexCache()?.stats.evictions ?? 0,
+    );
+    r.gauge("bunvex_index_cache_bytes", "Estimated bytes held by the index cache", () => indexCache()?.bytes ?? 0);
 
     // Sync.
     r.gauge("bunvex_sync_sessions", "WebSocket sync sessions open", () => this.sources?.syncSessions() ?? 0);

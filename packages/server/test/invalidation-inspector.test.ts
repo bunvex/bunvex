@@ -24,13 +24,13 @@ afterEach(async () => {
   for (const s of stops.splice(0).reverse()) await s();
 });
 
-async function setup(invalidationHistory?: number) {
+async function setup(invalidationHistory?: number, indexCache?: { verifyPercent?: number }) {
   const engine = await new Engine(
     defineSchema({
       messages: defineTable({ author: v.string(), body: v.string() }).index("by_author", ["author"]),
     }),
     await MemoryPersistence.open(null, { durable: false }),
-    { instanceName: NAME, instanceSecret: SECRET },
+    { instanceName: NAME, instanceSecret: SECRET, ...(indexCache ? { indexCache } : {}) },
   ).init();
   const functions = new Functions(engine).register("m", {
     byAuthor: query(({ db }, { author }: { author: string }) =>
@@ -196,6 +196,39 @@ test("the query cache: counters, misses by reason, the biggest entries with thei
   expect(e.readSet.find((r: any) => r.index === "messages.by_author").lo.values).toEqual(["ana"]);
 });
 
+test("the index cache: off on the memory driver by default; its counters, and in /metrics", async () => {
+  // The default, unless the run forces the cache on everywhere (CI's verified job sets INDEX_CACHE_SIZE).
+  if (process.env.INDEX_CACHE_SIZE === undefined) {
+    const off = await setup();
+    expect((await off.get("/api/debug/index_cache")).body).toEqual({ enabled: false });
+  }
+
+  const t = await setup(undefined, { verifyPercent: 100 });
+  await t.send("ana", "hi");
+  // No query-cache key: each run reads, the second through the index cache.
+  const byAuthor = (db: any) =>
+    db
+      .query("messages")
+      .withIndex("by_author", (q: any) => q.eq("author", "ana"))
+      .collect();
+  await t.engine.query(byAuthor);
+  await t.engine.query(byAuthor);
+  await t.send("ana", "again"); // writes into the range
+  await t.engine.query(byAuthor);
+  const { status, body } = await t.get("/api/debug/index_cache");
+  expect(status).toBe(200);
+  expect(body).toMatchObject({ enabled: true, verifyPercent: 100, mismatches: 0 });
+  expect(body.hits).toBeGreaterThanOrEqual(1);
+  expect(body.verified).toBe(body.hits);
+  expect(body.missReasons.stale).toBeGreaterThanOrEqual(1);
+  expect(body.entries).toBeGreaterThanOrEqual(1);
+  expect(body.bytes).toBeGreaterThan(0);
+  const metrics = await (await fetch(`http://127.0.0.1:${t.s.server.port}/metrics`)).text();
+  expect(metrics).toMatch(/bunvex_index_cache_hits_total [1-9]/);
+  expect(metrics).toMatch(/bunvex_index_cache_invalidations_total [1-9]/);
+  expect(metrics).toMatch(/bunvex_index_cache_bytes [1-9]/);
+});
+
 test("a miss after an eviction says so", async () => {
   const engine = await new Engine(
     defineSchema({ items: defineTable(v.any()) }),
@@ -213,7 +246,7 @@ test("a miss after an eviction says so", async () => {
 
 test("refused without an admin key and without ViewMetrics", async () => {
   const t = await setup();
-  for (const p of ["subscriptions", "query_cache", "invalidations?cursor=0&timeoutMs=0"]) {
+  for (const p of ["subscriptions", "query_cache", "index_cache", "invalidations?cursor=0&timeoutMs=0"]) {
     const anon = await t.get(`/api/debug/${p}`, null);
     expect(anon.status).toBe(403);
     expect((await t.get(`/api/debug/${p}`, READ_ONLY)).status).toBe(200);
