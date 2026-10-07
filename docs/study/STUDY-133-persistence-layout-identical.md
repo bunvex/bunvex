@@ -826,3 +826,41 @@ The probe scripts (`inject.py`, `cx.sh`, `shapes.py`, the ts bench) are in the s
   back; Convex then starts on that store, and on a fresh bunvex store, and serves. Not yet a test (PR 9), and
   the system tables' shapes are PR 8's.
 - Conformance ids are now valid internal ids (`did(name)`), since SQLite binds bytes.
+
+### PR 5 — Postgres in Convex's layout
+
+- The driver runs Convex's `init_sql` (single-tenant) statement for statement, so a fresh database's columns and
+  indexes equal those of one the Convex binary created (`packages/persistence/test/fixtures/postgres-reference-schema.json`).
+  Ids, tablets and index ids are BYTEA; `json_value` is the JSON's bytes and a deleted version stores `null`;
+  `key_sha256` is the SHA-256 of the whole key. No layout record: the open checks the five tables' columns.
+- The lease is Convex's `leases (id, ts)` (DV-413, reversing DV-14 here): a start takes it at once when its
+  wall-clock ns are newer; the previous holder fails its next write. The flush's last statement checks the row
+  `FOR SHARE`; a retried flush finds its group landed by its rows at its top ts while the lease is still ours
+  (DV-124's rule on this driver). An acquisition held up by a writer paused inside its flush ends the sessions
+  that block it. The lease row is inserted on every open when missing, as Convex.
+- A URL without a database connects to the instance name's, `-` → `_` (DV-417; DV-110 resolved).
+- Checked locally with the Convex binary: a Convex-created database opens in bunvex, takes writes and reads back;
+  Convex then starts on it (taking the lease from bunvex's later start) and serves.
+- Measured (engine, in process, local Postgres 17, median of 3 × 4 s, ops/s, PR 4 → PR 5): get 7 958 → 7 781,
+  range of 20 2 220 → 1 822, insert 9 560 → 7 800, patch 4 197 → 2 936. Convex's `indexes` index has no ts
+  column, so the planner priced a range's newest versions as a full sort and chose a sequential scan (32 ms
+  against 1.7 ms for a range over 160k rows); the pool now sets `enable_seqscan` and `enable_bitmapscan` off, as
+  Convex's planner hints do (range 1 168 → 1 822). Neither the `FOR SHARE` fence nor the third `documents` index
+  explains the write cost (each removed in turn: no change); the primary key led by `key_sha256` scatters index
+  inserts across the btree, which is Convex's layout.
+- **Investigated further (owner, 2026-10-06).** pg_stat_statements, a bun CPU profile and the Convex binary on
+  the same Postgres:
+  - The patch regression was postgres.js's per-connection catalog query (`fetch_types`), which took ~0.75–1.1 s
+    under `enable_seqscan = off` (12 calls, 9–13 s in a 4 s phase): `fetch_types` is off, and the two array
+    parameters travel as jsonb.
+  - About a quarter of the driver's CPU was `Buffer` hex conversions and node's `createHash`: ids and keys are
+    hexed from tables, tablets and indexes cached, SHA-256 is `Bun.SHA256`.
+  - A group that fits one statement per table is written by one statement (both inserts and the fence) inside its
+    transaction: three round trips instead of four. Without the transaction (one round trip) an attempt that
+    timed out could still land once the store answers again (K20, K21 red), so it stays a transaction.
+  - "The `key_sha256`-led primary key scatters inserts" is refuted: a key-ordered primary key, otherwise the same,
+    gained nothing. The database cost is row width (the 32-byte hash in the heap and both btrees): per insert
+    commit, 27 µs and 2.0 KB of WAL on PR 4's layout, 33.5 µs and 2.76 KB on Convex's. The Convex binary on the
+    same Postgres writes 2.70 KB of WAL per commit: it pays the same.
+  - Convex's planner hints are comments on a stock Postgres (no pg_hint_plan); its index query avoids the
+    sequential scan by putting its LIMIT inside the DISTINCT ON.

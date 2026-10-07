@@ -89,7 +89,10 @@ export async function adminKeyCommand(args: string[], io: Io): Promise<number> {
   if (name === undefined || secret === undefined) {
     let stored: Record<string, unknown> | null;
     try {
-      const store = await openPersistence(persistenceConfigFromEnv(io.env, () => {}));
+      const config = persistenceConfigFromEnv(io.env, () => {});
+      // The database a URL without one names is the instance's (DV-417).
+      if (name) config.instanceName = name;
+      const store = await openPersistence(config);
       try {
         stored = await readInstanceRecord(store);
       } finally {

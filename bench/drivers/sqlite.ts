@@ -62,3 +62,16 @@ export async function foreignIntact() {
     return tables === "documents" && mode === "delete" && n === 1;
   });
 }
+
+/** K22: the store's `sqlite_master`, without bunvex's `read_only` table (DV-412). */
+export async function schema() {
+  return raw((db) =>
+    db
+      .query(`select type, name, tbl_name, sql from sqlite_master where tbl_name <> 'read_only' order by type, name`)
+      .all(),
+  );
+}
+/** K22: the `sqlite_master` of a store the Convex binary created. */
+export async function referenceSchema() {
+  return Bun.file(REFERENCE).json();
+}

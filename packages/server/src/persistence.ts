@@ -9,15 +9,16 @@
 //
 // Convex's names are accepted too (DV-88; self-hosted/docker-build/run_backend.sh:17-32): when PERSISTENCE
 // is not set, POSTGRES_URL selects Postgres, else MYSQL_URL selects MySQL, else DATABASE_URL (deprecated
-// there) selects Postgres. bunvex's names win when both are set. Unlike Convex, the URL names the database
-// (DV-110): Convex derives it from the instance name and refuses a URL that names one.
+// there) selects Postgres. bunvex's names win when both are set. A Postgres or MySQL URL without a database
+// connects to the instance name's, `-` replaced by `_`, as Convex's (crates/clusters/src/lib.rs; DV-417); a
+// URL that names one keeps it (Convex refuses such a URL).
 //
 // TLS (STUDY-25 L8, DV-109), as Convex (crates/local_backend/src/config.rs:114-118, run_backend.sh:68):
 // Postgres and MySQL connections are encrypted and the certificate verified, unless DO_NOT_REQUIRE_SSL is
 // set to any non-empty value (`0` and `false` too, as the shell's `${VAR:+…}` reads it). PG_CA_FILE and
 // MYSQL_CA_FILE add a trusted CA. MongoDB has no Convex counterpart: its URL decides (`tls=true`).
 import { mkdirSync } from "node:fs";
-import { bundledModule, type Persistence } from "@bunvex/core";
+import { bundledModule, DEFAULT_INSTANCE_NAME, type Persistence } from "@bunvex/core";
 
 export type PersistenceConfig = {
   kind: string;
@@ -33,6 +34,8 @@ export type PersistenceConfig = {
   caFile?: string;
   /** The client-side timeout of one database call, for the remote drivers (default: each driver's). */
   timeoutMs?: number;
+  /** The deployment's name (`--instance-name`, INSTANCE_NAME): its database when the URL names none. */
+  instanceName?: string;
 };
 
 /** The environment variable that sets each remote driver's call timeout, in seconds. */
@@ -91,8 +94,19 @@ export function persistenceConfigFromEnv(
     requireSsl: !set(env, "DO_NOT_REQUIRE_SSL"),
     caFile,
     ...(timeout ? { timeoutMs: Number(timeout) * 1000 } : {}),
+    ...(set(env, "INSTANCE_NAME") ? { instanceName: env.INSTANCE_NAME } : {}),
   };
 }
+
+/** The URL with `database` as its path (Convex's `set_path`): after the authority, before a query or fragment. */
+export function withDatabase(url: string, database: string): string {
+  const m = /^([a-z][a-z0-9+.-]*:\/\/[^/?#]*)\/?([?#].*)?$/i.exec(url);
+  if (!m) throw new Error(`cannot add a database to ${url}`);
+  return `${m[1]}/${encodeURIComponent(database)}${m[2] ?? ""}`;
+}
+
+/** Convex's database name for an instance: its name with `-` replaced by `_`. */
+export const instanceDatabase = (instanceName: string) => instanceName.replaceAll("-", "_");
 
 /** The database a Postgres or MySQL URL names (its path), or undefined. */
 export function urlDatabase(url: string): string | undefined {
@@ -112,16 +126,13 @@ export async function openPersistence(c: PersistenceConfig): Promise<Persistence
     }
     return c.url;
   };
-  // DV-110: the URL decides the database, so it must name one. Convex's POSTGRES_URL / MYSQL_URL are written
-  // without one (Convex derives the name from the instance name); bunvex refuses rather than guess.
+  // DV-417, as Convex: a URL without a database (Convex's POSTGRES_URL / MYSQL_URL are written so) connects to
+  // the instance's, its name with `-` replaced by `_`; the default name's when none is configured, as the
+  // engine runs with it. A URL that names a database keeps it.
   const needDatabase = () => {
     const url = needUrl();
-    if (!urlDatabase(url))
-      throw new Error(
-        `${c.urlFrom ?? "PERSISTENCE_URL"} names no database: bunvex uses the database the URL names ` +
-          `and derives none. Add it to the URL's path, e.g. ${c.kind}://user@host/mydb`,
-      );
-    return url;
+    if (urlDatabase(url)) return url;
+    return withDatabase(url, instanceDatabase(c.instanceName || DEFAULT_INSTANCE_NAME));
   };
   switch (c.kind) {
     case "memory": {

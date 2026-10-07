@@ -85,7 +85,7 @@ The binary never generates a secret. The Docker scripts do that (`read_credentia
 
 **`bunvex-local-backend`** (L1)
 - It is a program of its own (`packages/server/src/local-backend.ts`, entry `packages/bunvex/bin/local-backend.ts`), compiled per platform as STUDY-39 compiles the CLI.
-- **Flags:** Convex's, with bunvex's names where rule 5 asks (`--cloud-origin` / `--site-origin`). Also `--db sqlite|postgres|mysql|mongodb`, and the `<db_spec>` positional. A Postgres/MySQL URL names its database (DV-110).
+- **Flags:** Convex's, with bunvex's names where rule 5 asks (`--cloud-origin` / `--site-origin`). Also `--db sqlite|postgres|mysql|mongodb`, and the `<db_spec>` positional. A Postgres/MySQL URL without a database connects to the instance name's, as Convex (DV-417; DV-110 before STUDY-133 PR 5).
 - **`--instance-secret` is required**, with Convex's message. `--instance-name` defaults to `bunvex-self-hosted`, as the store's default (Convex: `carnitas`).
 - **Subcommands and `--version`:** `keygen admin-key`, and `--version`.
 - **The release** (`release-binaries.yml`) carries `bunvex-local-backend-<target>.zip`. `bunvex-<target>.zip` (the CLI as one file) goes away.

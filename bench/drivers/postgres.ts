@@ -14,52 +14,88 @@ const raw = async <T>(f: (sql: postgres.Sql) => Promise<T>) => {
     await sql.end();
   }
 };
+/** Convex's five tables, and bunvex's lease table of the previous layout. */
 const drop = (sql: postgres.Sql) =>
-  sql.unsafe(`drop table if exists documents, indexes, bunvex_lease, persistence_globals, read_only`);
+  sql.unsafe(`drop table if exists documents, indexes, leases, read_only, persistence_globals, bunvex_lease`);
 
 export async function open(fresh: boolean, opts: OpenOptions = {}) {
   if (fresh) await raw(drop);
   return PostgresPersistence.open(process.env.PG_URL!, 16, { ...tls(), ...opts });
 }
 
-/** K14: a session other than ours holds the lease row's write lock, i.e. a writer is inside a flush. */
+/** K14: a session other than ours holds the lease row `FOR SHARE`, i.e. a writer is inside its flush's last
+ *  statement (the fence), waiting to commit. */
 export async function writerInsideFlush() {
   return raw(async (sql) => {
-    const [r] = await sql`select exists (select 1 from pg_locks where relation = to_regclass('bunvex_lease')
-      and granted and mode = 'RowExclusiveLock' and pid <> pg_backend_pid()) as inside`;
+    const [r] = await sql`select exists (select 1 from pg_locks where relation = to_regclass('leases')
+      and granted and mode = 'RowShareLock' and pid <> pg_backend_pid()) as inside`;
     return r.inside as boolean;
   });
 }
 
-// K22: the version record is a row of `persistence_globals`, read and written here behind the driver's back.
-export async function layoutVersion() {
-  const [r] = await raw((sql) => sql`select json_value from persistence_globals where key = 'layout_version'`);
-  return r ? JSON.parse(r.json_value) : null;
-}
-export async function setLayoutVersion(v: unknown) {
-  await raw((sql) =>
-    v === null
-      ? sql`delete from persistence_globals where key = 'layout_version'`
-      : sql`insert into persistence_globals values ('layout_version', ${JSON.stringify(v)})
-            on conflict (key) do update set json_value = excluded.json_value`,
+/** The schema of a database the Convex binary created (STUDY-133 §1.6): its columns and indexes. */
+const REFERENCE = `${import.meta.dir}/../../packages/persistence/test/fixtures/postgres-reference-schema.json`;
+type Reference = {
+  columns: { table: string; column: string; type: string; nullable: string; default: string | null }[];
+  indexes: { name: string; def: string }[];
+};
+
+/** K22: the schema as the fixture describes it, for the current schema. */
+export async function schema() {
+  const [r] = await raw(
+    (sql) => sql`select json_build_object(
+      'columns', (select json_agg(json_build_object('table', table_name, 'column', column_name, 'type', data_type,
+        'nullable', is_nullable, 'default', column_default) order by table_name, ordinal_position)
+        from information_schema.columns where table_schema = current_schema()),
+      'indexes', (select json_agg(json_build_object('name', indexname, 'def', indexdef) order by indexname)
+        from pg_indexes where schemaname = current_schema())) as j`,
   );
+  return r.j;
 }
-/** Convex's own Postgres layout (crates/postgres/src/sql.rs), with one row. */
+export async function referenceSchema() {
+  return Bun.file(REFERENCE).json();
+}
+
+/** K22: an empty store built from the reference system's schema (the fixture), not the driver's statements:
+ *  its tables, its indexes (the primary keys from their unique indexes), and Convex's lease row. */
+export async function makeReferenceStore() {
+  const ref = (await Bun.file(REFERENCE).json()) as Reference;
+  await raw(async (sql) => {
+    await drop(sql);
+    const tables = [...new Set(ref.columns.map((c) => c.table))];
+    for (const t of tables) {
+      const cols = ref.columns
+        .filter((c) => c.table === t)
+        .map(
+          (c) =>
+            `${c.column} ${c.type}${c.nullable === "NO" ? " not null" : ""}${c.default !== null ? ` default ${c.default}` : ""}`,
+        );
+      await sql.unsafe(`create table ${t} (${cols.join(", ")})`);
+    }
+    for (const ix of ref.indexes) {
+      await sql.unsafe(ix.def);
+      const table = /ON public\.(\w+)/.exec(ix.def)![1];
+      if (ix.name.endsWith("_pkey"))
+        await sql.unsafe(`alter table ${table} add constraint ${ix.name} primary key using index ${ix.name}`);
+    }
+    await sql.unsafe(`insert into leases (id, ts) values (1, 0)`);
+  });
+}
+/** K22: a store in bunvex's previous Postgres layout (text ids, JSON as text), with one row. */
 export async function makeForeign() {
   await raw(async (sql) => {
     await drop(sql);
-    await sql.unsafe(`create table documents (id bytea not null, ts bigint not null, table_id bytea not null,
-      json_value bytea not null, deleted boolean default false, prev_ts bigint, primary key (ts, table_id, id));
-      create table persistence_globals (key text not null primary key, json_value bytea not null);
-      insert into documents values ('\\x01', 1, '\\x02', '\\x7b7d', false, null);`);
+    await sql.unsafe(`create table documents (table_id text not null, id text not null, ts bigint not null,
+      json_value text, deleted boolean not null, prev_ts bigint, primary key (table_id, id, ts));
+      insert into documents values ('t', 'x', 1, '{}', false, null);`);
   });
 }
 export async function foreignIntact() {
   return raw(async (sql) => {
-    const [r] = await sql`select (select count(*) from documents)::int as n,
-      (select count(*) from persistence_globals)::int as g, to_regclass('indexes') is null
-        and to_regclass('bunvex_lease') is null and to_regclass('read_only') is null as untouched`;
-    return r.n === 1 && r.g === 0 && r.untouched;
+    const [r] = await sql`select (select count(*) from documents)::int as n, to_regclass('indexes') is null
+        and to_regclass('leases') is null and to_regclass('read_only') is null
+        and to_regclass('persistence_globals') is null as untouched`;
+    return r.n === 1 && r.untouched;
   });
 }
 
