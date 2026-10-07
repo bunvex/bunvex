@@ -34,6 +34,7 @@
 // group's rows are there: a group an earlier attempt did commit is acknowledged without writing (DV-124). One
 // that lands after that read hits the primary key: `UnsureCommitError`.
 import {
+  bytesToHex,
   checkStoreTables,
   chunkRows,
   DanglingReferenceError,
@@ -51,8 +52,9 @@ import {
   type IndexWrite,
   type InternalId,
   internalIdBytes,
+  internalIdHex,
   internalIdString,
-  keySha256,
+  keySha256Hex,
   type Lease,
   type LeaseAcquire,
   LeaseLostError,
@@ -85,9 +87,20 @@ import { explainTlsError, postgresTls, type TlsOptions } from "./tls.ts";
 type DocRow = [string, string, string, string | null, boolean, string | null];
 // index id, key_prefix, key_suffix (or null), key_sha256, ts, deleted, table id, document id
 type IdxRow = [string, string, string | null, string, string, boolean, string | null, string | null];
-const hex = (b: Uint8Array) => Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString("hex");
-/** An internal id's 16 bytes, as hex (it throws on anything but an internal id). */
-const idHex = (id: string) => hex(internalIdBytes(id));
+const hex = bytesToHex;
+/** An internal id's 16 bytes, as hex (it throws on anything but an internal id). Tablets and indexes repeat on
+ *  every row, so theirs are kept. */
+const idHexCache = new Map<string, string>();
+const idHex = (id: string) => internalIdHex(id);
+const cachedIdHex = (id: string) => {
+  let h = idHexCache.get(id);
+  if (h === undefined) {
+    h = internalIdHex(id);
+    if (idHexCache.size > 4096) idHexCache.clear();
+    idHexCache.set(id, h);
+  }
+  return h;
+};
 /** A BYTEA id read back: its internal id string. */
 const idOf = (b: Uint8Array) => internalIdString(b);
 /** A BYTEA parameter. */
@@ -97,7 +110,7 @@ const jsonOf = (b: Uint8Array) => Buffer.from(b.buffer, b.byteOffset, b.byteLeng
 /** A key as Convex stores it: prefix, suffix and the whole key's SHA-256, as hex. */
 function keyColumns(key: Uint8Array): [string, string | null, string] {
   const k = splitKey(key);
-  return [hex(k.prefix), k.suffix && hex(k.suffix), hex(keySha256(key))];
+  return [hex(k.prefix), k.suffix && hex(k.suffix), keySha256Hex(key)];
 }
 
 const STORE = "this Postgres database";
@@ -299,6 +312,10 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
         max: pool,
         onnotice: () => {},
         prepare: true,
+        // No catalog query per new connection: every parameter here is a scalar (rows travel as jsonb), and
+        // with the planner settings below that query took ~0.75 s per connection (measured), stalling every
+        // connection the pool opened under load.
+        fetch_types: false,
         ssl: ssl as postgresDriver.Options<{}>["ssl"],
         target_session_attrs,
         // A connection that cannot be opened within the timeout fails too (postgres.js counts whole seconds).
@@ -500,7 +517,7 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
     const t = String(ts);
     for (const d of docs)
       this.docs.push([
-        idHex(d.table),
+        cachedIdHex(d.table),
         idHex(d.id),
         t,
         d.json,
@@ -578,6 +595,21 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
         sql.begin(async (tx) => {
           began = true;
           progress();
+          // A group that fits one statement per table (most do): both inserts and the fence in ONE statement,
+          // inside the transaction (BEGIN, it, COMMIT: three round trips, not four). Still a transaction of its
+          // own, opened first, so an attempt that timed out never lands after the store answers again (C9).
+          if (docs.length <= POSTGRES_ROWS_PER_STATEMENT && idx.length <= POSTGRES_ROWS_PER_STATEMENT) {
+            const [f] = await tx.unsafe(
+              `with l as (select 1 from leases where id = 1 and ts = $3 for share),
+                d as (${docInsert} where exists (select 1 from l)),
+                w as (${INDEX_INSERT.replace("$1::text::jsonb", "$2::text::jsonb")} where exists (select 1 from l))
+             select count(*)::int as n from l`,
+              [JSON.stringify(docs), JSON.stringify(idx), String(this.leaseTs)] as any,
+            );
+            if (f.n !== 1) throw new LeaseLostError();
+            progress(); // COMMIT
+            return;
+          }
           const last = chunks.length - 1;
           for (let i = 0; i < last; i++) {
             await tx.unsafe(chunks[i][0], [JSON.stringify(chunks[i][1])]);
@@ -655,9 +687,9 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
     const rows = await this.read((sql) =>
       sql.unsafe(
         `select d.id, d.ts, d.json_value, d.deleted from documents d
-         join unnest($2::text[], $3::bigint[]) as e(id, ts) on d.id = decode(e.id, 'hex') and d.ts = e.ts
+         join jsonb_array_elements($2::text::jsonb) as e on d.id = decode(e->>0, 'hex') and d.ts = (e->>1)::bigint
          where d.table_id = $1`,
-        [bytes(table), entries.map((e) => idHex(e.id)), entries.map((e) => String(e.ts))] as any,
+        [bytes(table), JSON.stringify(entries.map((e) => [idHex(e.id), String(e.ts)]))] as any,
       ),
     );
     const byKey = new Map(rows.map((r) => [`${idOf(r.id)}\u0000${r.ts}`, r]));
@@ -723,9 +755,10 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
       const rows = await this.read((sql) =>
         sql.unsafe(
           `select distinct on (id) id, ts, json_value, deleted from documents
-           where table_id = $1 and id = any(array(select decode(x, 'hex') from unnest($2::text[]) x)) and ts <= $3
+           where table_id = $1 and ts <= $3
+             and id = any(array(select decode(x, 'hex') from jsonb_array_elements_text($2::text::jsonb) x))
            order by id, ts desc`,
-          [bytes(table), unique.slice(i, i + VERSIONS_CHUNK).map(idHex), String(ts)] as any,
+          [bytes(table), JSON.stringify(unique.slice(i, i + VERSIONS_CHUNK).map(idHex)), String(ts)] as any,
         ),
       );
       for (const r of rows) found.set(idOf(r.id), { json: r.deleted ? null : jsonOf(r.json_value), ts: BigInt(r.ts) });
@@ -774,7 +807,7 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
     if (!entries.length) return 0;
     const rows = entries.map((e) => {
       const [prefix, , sha] = keyColumns(e.key);
-      return [idHex(e.index), prefix, sha, String(e.ts)];
+      return [cachedIdHex(e.index), prefix, sha, String(e.ts)];
     });
     return this.fenced(
       `delete from indexes i using jsonb_array_elements($1::text::jsonb) r
@@ -903,13 +936,13 @@ const INDEX_INSERT = `insert into indexes (index_id, ts, key_prefix, key_suffix,
 function indexRow(e: IndexWrite, ts: string): IdxRow {
   const [prefix, suffix, sha] = keyColumns(e.key);
   return [
-    idHex(e.index),
+    cachedIdHex(e.index),
     prefix,
     suffix,
     sha,
     ts,
     e.id === null,
-    e.id === null ? null : idHex(e.table!),
+    e.id === null ? null : cachedIdHex(e.table!),
     e.id === null ? null : idHex(e.id),
   ];
 }

@@ -26,8 +26,11 @@ export function splitKey(key: Uint8Array): { prefix: Uint8Array; suffix: Uint8Ar
  * hash, and `splitPages` sorts such a group by the full key, as for `key_suffix_hash`.
  */
 export function keySha256(key: Uint8Array): Uint8Array {
-  return new Uint8Array(createHash("sha256").update(key).digest());
+  return new Uint8Array(Bun.SHA256.hash(key) as Uint8Array);
 }
+
+/** `keySha256` as hex, as the SQL drivers send it. */
+export const keySha256Hex = (key: Uint8Array): string => Bun.SHA256.hash(key, "hex") as string;
 
 /** One stored index row version, as a split-key store returns it. */
 export type SplitRow = {

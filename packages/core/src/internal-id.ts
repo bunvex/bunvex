@@ -20,6 +20,41 @@ export function internalIdBytes(s: string): Uint8Array {
   return new Uint8Array(Buffer.from(s, "base64url"));
 }
 
+const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"));
+const B64_DECODE = new Int8Array(128).fill(-1);
+for (let i = 0; i < 64; i++)
+  B64_DECODE["ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".charCodeAt(i)] = i;
+
+/** Bytes as lowercase hex, without a Buffer (the SQL drivers send ids and keys as hex, on every write). */
+export function bytesToHex(b: Uint8Array): string {
+  if (b.length > 256) return Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString("hex");
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += HEX[b[i]!]!;
+  return s;
+}
+
+/** An internal id's 16 bytes as hex, decoded straight from its base64url; throws on anything else. */
+export function internalIdHex(s: string): string {
+  if (typeof s !== "string" || s.length !== 22) return bytesToHex(internalIdBytes(s));
+  let out = "";
+  let acc = 0;
+  let bits = 0;
+  for (let i = 0; i < 22; i++) {
+    const c = s.charCodeAt(i);
+    const v = c < 128 ? B64_DECODE[c]! : -1;
+    if (v < 0) return bytesToHex(internalIdBytes(s)); // throws its error
+    acc = ((acc << 6) | v) & 0xffff;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out += HEX[(acc >> bits) & 0xff]!;
+    }
+  }
+  // 22 characters carry 132 bits: the last 4 must be zero, as in a canonical internal id.
+  if (acc & ((1 << bits) - 1)) return bytesToHex(internalIdBytes(s));
+  return out;
+}
+
 const B32 = "0123456789abcdefghjkmnpqrstvwxyz";
 const B32_DECODE = new Int8Array(128).fill(-1);
 for (let i = 0; i < 32; i++) B32_DECODE[B32.charCodeAt(i)] = i;

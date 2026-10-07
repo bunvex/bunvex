@@ -848,3 +848,19 @@ The probe scripts (`inject.py`, `cx.sh`, `shapes.py`, the ts bench) are in the s
   Convex's planner hints do (range 1 168 → 1 822). Neither the `FOR SHARE` fence nor the third `documents` index
   explains the write cost (each removed in turn: no change); the primary key led by `key_sha256` scatters index
   inserts across the btree, which is Convex's layout.
+- **Investigated further (owner, 2026-10-06).** pg_stat_statements, a bun CPU profile and the Convex binary on
+  the same Postgres:
+  - The patch regression was postgres.js's per-connection catalog query (`fetch_types`), which took ~0.75–1.1 s
+    under `enable_seqscan = off` (12 calls, 9–13 s in a 4 s phase): `fetch_types` is off, and the two array
+    parameters travel as jsonb.
+  - About a quarter of the driver's CPU was `Buffer` hex conversions and node's `createHash`: ids and keys are
+    hexed from tables, tablets and indexes cached, SHA-256 is `Bun.SHA256`.
+  - A group that fits one statement per table is written by one statement (both inserts and the fence) inside its
+    transaction: three round trips instead of four. Without the transaction (one round trip) an attempt that
+    timed out could still land once the store answers again (K20, K21 red), so it stays a transaction.
+  - "The `key_sha256`-led primary key scatters inserts" is refuted: a key-ordered primary key, otherwise the same,
+    gained nothing. The database cost is row width (the 32-byte hash in the heap and both btrees): per insert
+    commit, 27 µs and 2.0 KB of WAL on PR 4's layout, 33.5 µs and 2.76 KB on Convex's. The Convex binary on the
+    same Postgres writes 2.70 KB of WAL per commit: it pays the same.
+  - Convex's planner hints are comments on a stock Postgres (no pg_hint_plan); its index query avoids the
+    sequential scan by putting its LIMIT inside the DISTINCT ON.

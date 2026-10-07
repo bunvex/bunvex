@@ -177,5 +177,40 @@ describe.if(!!PG_URL)("Postgres in Convex's layout (PG_URL)", () => {
       await second.close();
     }
   });
+
+  // Convex's `indexes` index has no ts column, so without its planner settings Postgres plans a range's newest
+  // versions as a sequential scan and a sort (32 ms against 1.7 ms, measured): the driver's connections turn
+  // sequential and bitmap scans off, as Convex's hints do.
+  test("an index range over many versions walks the index, never a sequential scan", async () => {
+    const schema = defineSchema({ items: defineTable({ t: v.string(), n: v.number() }).index("by_t_n", ["t", "n"]) });
+    const e = await new Engine(schema, await open()).init();
+    engines.push(e);
+    const ids = (await e.mutation(async (db) => {
+      const out: string[] = [];
+      for (let i = 0; i < 400; i++) out.push(await db.insert("items", { t: `t${i % 4}`, n: i }));
+      return out;
+    })) as string[];
+    for (let round = 0; round < 5; round++)
+      await e.mutation(async (db) => {
+        for (const id of ids) await db.patch(id as never, { n: round * 1000 + ids.indexOf(id) });
+      });
+    await admin.unsafe("analyze indexes");
+    const seqScans = async () => {
+      await admin.unsafe("select pg_stat_force_next_flush()");
+      await Bun.sleep(1100); // the counters are flushed at most once a second
+      await admin.unsafe("select pg_stat_clear_snapshot()");
+      const [r] = await admin`select seq_scan from pg_stat_user_tables where relname = 'indexes'`;
+      return Number(r.seq_scan);
+    };
+    const before = await seqScans();
+    for (let i = 0; i < 50; i++)
+      await e.query((db) =>
+        db
+          .query("items")
+          .withIndex("by_t_n", (q) => q.eq("t", `t${i % 4}`))
+          .take(20),
+      );
+    expect((await seqScans()) - before).toBe(0);
+  });
 });
 if (!PG_URL) console.log("postgres-layout: set PG_URL to an empty scratch database to run these tests");

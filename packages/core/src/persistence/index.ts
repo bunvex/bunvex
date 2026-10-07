@@ -220,7 +220,7 @@ export const hasRetention = (p: Persistence): p is Persistence & RetentionStore 
 
 export { wallClockNs } from "../determinism.ts";
 export { opaqueToInspect } from "../inspect.ts";
-export { internalIdBytes, internalIdString } from "../internal-id.ts";
+export { bytesToHex, internalIdBytes, internalIdHex, internalIdString } from "../internal-id.ts";
 export { chunkRows, MYSQL_MAX_CHUNK_BYTES, POSTGRES_ROWS_PER_STATEMENT } from "./chunks.ts";
 export { decodeGlobal, encodeGlobal } from "./global-json.ts";
 export {
@@ -239,6 +239,7 @@ export { retryOnce, UnsureCommitError } from "./retry.ts";
 export { type IndexRow, type LiveEntry, type Page, type PageRequest, scanLatest, scanLatestSync } from "./scan.ts";
 export {
   keySha256,
+  keySha256Hex,
   MAX_KEY_PREFIX_LEN,
   type SplitRow,
   type SplitSource,
