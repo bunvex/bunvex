@@ -69,6 +69,11 @@ export interface Persistence {
   /** The highest durable commit ts (recovery on open). */
   maxTs?(): bigint | Promise<bigint>;
   /**
+   * True when every read is already an in-memory lookup (the memory driver): the engine's index cache
+   * (STUDY-136) would only add work, so it is off unless asked for (DV-434).
+   */
+  readonly readsInMemory?: boolean;
+  /**
    * Whether an error of `flush()` is transient (STUDY-25 L4, as Convex's `is_transient_db_error`): a timeout
    * or an "operational" error (a lost connection, a server shutting down). The committer retries a transient
    * flush failure with backoff, so a driver that classifies anything as transient MUST keep the group a failed

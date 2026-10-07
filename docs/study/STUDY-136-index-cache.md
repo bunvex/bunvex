@@ -1,7 +1,7 @@
 # STUDY-136 — The index cache: a cache of persistence index reads
 
-- **Status:** draft. Prototype and measurement on `study/136-index-cache`. Decisions I1–I6 (§4) wait on
-  the owner.
+- **Status:** implemented. I1–I6 accepted as recommended (owner, 2026-10-06: "sim pode seguir, vamos
+  implementar"); DV-432–DV-434 decided.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend. The history of
   `crates/indexing/src/index_cache` was read from `5eebe2be3` (2026-03-30) to `a21cba307` (2026-09-09).
   Background: Convex's talk "Scaling Infrastructure With Confidence in the Age of AI".
@@ -198,7 +198,7 @@ What a read costs per driver:
 
 ### 3.2 The design: Convex's cache, with lazy validation
 
-One `IndexCache` per engine (`packages/core/src/index-cache.ts` in the prototype):
+One `IndexCache` per engine (`packages/core/src/index-cache.ts`):
 
 - **An entry** is one `scan(index, lo, hi, limit, desc)` or one `get(id)`, with the result and the ts `t`
   it is known valid at.
@@ -243,23 +243,34 @@ One `IndexCache` per engine (`packages/core/src/index-cache.ts` in the prototype
   refuses reads there (`retention.check`).
 - **The rest.** Index changes, table deletion and imports are all commits, so they are in the log.
 
-### 3.3 The prototype
+### 3.3 As built
 
-On `study/136-index-cache`, about 150 lines:
+- **`packages/core/src/index-cache.ts`.** `IndexCache.scan` and `IndexCache.get`, keyed by index id, key
+  bytes, limit and order. The entries are kept in an LRU bounded by an estimate of their bytes (UTF-16
+  strings at two bytes a character, plus a fixed overhead per row and per entry). A read bigger than a
+  sixteenth of the budget is not kept. The stats are hits, misses by reason (`new`, `stale`), evictions,
+  verified hits and mismatches.
+- **`tx.ts`.** The two persistence read sites, `read` (`get`) and `storeRangeOf` (`scan`), go through
+  `tx.indexCache` when the engine has one. Both stay inside `storeCall` (user time paused) and around the
+  same retention checks as before.
+- **`Engine`.** `indexCacheOf` (`engine.ts`) builds the cache:
+  - The option `indexCache: false | { maxBytes, verifyPercent }` wins.
+  - Otherwise Convex's knobs apply: `INDEX_CACHE_SIZE` (bytes, default 512 MiB; `0` turns it off) and
+    `INDEX_CACHE_VERIFY_PERCENT` (0–100, default 0, DV-433). A malformed value fails the start.
+  - The memory driver declares `readsInMemory` (an optional `Persistence` field), and its engine gets no
+    cache unless the option or `INDEX_CACHE_SIZE` asks for one (DV-434).
+- **Verification**, as Convex's (§1.6). A verified hit that differs from persistence:
+  - logs `bunvex: index cache: the cached read … differs from persistence at ts …`;
+  - drops the entry;
+  - fails the read with `IndexCacheMismatchError`.
 
-- `packages/core/src/index-cache.ts`;
-- the two read sites in `tx.ts`, wired as `tx.indexCache`;
-- `Engine` option `indexCache: { maxBytes, verifyPercent }`, plus `INDEX_CACHE_PROTOTYPE_VERIFY=<percent>`
-  to force it on in every engine;
-- an LRU by bytes, default 64 MiB;
-- Convex's verification (§1.6): `verifyPercent` re-reads persistence on a hit, and a mismatch throws.
-
-**Correctness, so far.**
-
-- The core, server and testing suites (1400 tests) pass with the cache forced on and **100% of hits
-  verified** against persistence.
-- **Sabotage check.** With the validity check replaced by `true`, 381 core tests fail with "the cached
-  read … differs from persistence".
+  Convex panics the process instead; failing the one read is the closest a shared JS process gets without
+  taking every other request down with it.
+- **Observability.**
+  - Prometheus: `bunvex_index_cache_hits_total`, `_misses_total`, `_invalidations_total` (stale entries
+    found), `_size_evictions_total`, `_bytes`. These are Convex's metric set, minus its timing histograms.
+  - `GET /api/debug/index_cache` (ViewMetrics), next to AD-25's `query_cache`: the counters, misses by
+    reason, size and budget, or `{ enabled: false }`.
 
 ### 3.4 Measurement
 
@@ -285,6 +296,15 @@ is the mean of two 10 s phases, after a warm-up phase; "→" reads off → on. T
 | **SQLite**, 10% writes | 6 720 → **11 380 (1.7×)** | 2.4 → 1.2 | 23.8 → 13.0 | 2.72 → 0.18 | 93% |
 | **memory**, 10% writes | 13 173 → 13 018 (−1%) | 1.1 → 1.1 | 11.9 → 11.9 | 2.72 → 0.17 | 94% |
 | **memory**, the worst case | 19 800 → 15 800 (about −15% to −28%) | 0.86 → 1.0 | 1.45 → 1.7 | 3.0 → 1.89 | 37% |
+
+**As built**, the same bench rerun on the implementation (§3.3):
+
+| Run | ops/s | query p50 (ms) | mutation p50 (ms) | store calls / op | index-cache hit rate |
+|---|---|---|---|---|---|
+| Postgres, 10% writes | 2 360 → **9 773 (4.1×)** | 11.8 → 0.08 | 27.3 → 19.4 | 2.79 → 0.24 | 91% |
+| Postgres, `SCENARIO=unique` | 2 194 → **9 030 (4.1×)** | 12.2 → 0.09 | 27.1 → 20.5 | 3.0 → 0.25 | 92% |
+| Postgres, 50% writes | 2 343 → **5 213 (2.2×)** | 6.7 → 1.6 | 18.6 → 9.6 | 2.98 → 0.43 | 86% |
+| SQLite, 10% writes | 6 990 → **11 833 (1.7×)** | 2.3 → 1.2 | 22.4 → 12.7 | 2.73 → 0.18 | 93% |
 
 What the numbers say:
 
@@ -312,39 +332,91 @@ What the numbers say:
 - **The query cache is weak here on purpose.** Its keys are per user, so the index cache gets the
   repeated reads. When the query cache hits, the index cache is never reached.
 
-## 4. Decisions for the owner
+## 4. Decisions
 
 Nothing here changes what an app observes, so none of it is a divergence in behaviour. Some of it differs
-from Convex in mechanism or in knob defaults, and those are listed for the owner as the rule asks.
+from Convex in mechanism or in knob defaults, and those are listed for the owner as the rule asks. **All six
+were accepted as recommended (owner, 2026-10-06).**
 
-| # | Question | Options | Recommendation |
+| # | Question | Options | Recommendation (accepted) |
 |---|---|---|---|
 | I1 | Build an index cache at all | A: yes; B: no, the query cache is enough | **A**: 2.2–4.3× on Postgres in §3.4, mutations included; invisible to apps. |
-| I2 | Invalidation | A: lazy, against the write log (§3.2); B: eager at commit, as Convex | **A**: same results, no populate race, reuses `changedBetween`. Not observable. |
-| I3 | `INDEX_CACHE_VERIFY_PERCENT` default | A: 100, as Convex (every hit also reads persistence: no load taken off the store, a shadow mode); B: 0, with the knob kept for a shadow run | **B**: with A the cache gains nothing on a remote store (§1.6). A divergence in a knob default; recorded as a DV. |
+| I2 | Invalidation | A: lazy, against the write log (§3.2); B: eager at commit, as Convex | **A**: same results, no populate race, reuses `changedBetween`. Not observable. DV-432. |
+| I3 | `INDEX_CACHE_VERIFY_PERCENT` default | A: 100, as Convex (every hit also reads persistence: no load taken off the store, a shadow mode); B: 0, with the knob kept for a shadow run | **B**: with A the cache gains nothing on a remote store (§1.6). DV-433. |
 | I4 | `INDEX_CACHE_SIZE` | A: 512 MiB, as Convex; B: lower, e.g. 64 MiB, for a small self-hosted box | **A**, same knob name: it is a ceiling, not an allocation; the hot set of §3.4 was 8 MB. |
-| I5 | On for which drivers | A: all, as Convex; B: every driver but memory | **B**: memory measured −1% (and worse under writes); SQLite +70%. Convex has no in-memory store, so there is nothing to diverge from there; recorded anyway. |
-| I6 | Metrics | `bunvex_index_cache_{hits,misses,stale}_total`, `_bytes`, plus misses by reason in the debug route, as the query cache has (STUDY-114) | as proposed |
+| I5 | On for which drivers | A: all, as Convex; B: every driver but memory | **B**: memory measured −1% (and worse under writes); SQLite +70%. Convex has no in-memory store, so there is nothing to diverge from there; recorded anyway as DV-434. |
+| I6 | Metrics | `bunvex_index_cache_*` counters and bytes, plus misses by reason in a debug route, as the query cache has (STUDY-114) | as proposed; built as §3.3 |
 
 Tenancy (§1.5) has no counterpart: a bunvex process serves one deployment.
 
 ## 5. Tests
 
-- **Every existing test** runs with the cache forced on and every hit verified. CI gets one more matrix
-  leg, `INDEX_CACHE_VERIFY=100`. This is Convex's own guard (`cfg!(test)` always verifies).
-- **Unit**, on `IndexCache` with a fake committer:
-  - a hit at the same ts, at a later ts and at an earlier ts;
-  - a write in the interval makes a miss;
-  - a write outside it, or into another index, does not;
-  - a stamp below the log's start makes a miss;
-  - the LRU byte bound.
-- **The race of §1.4, as a property test (fast-check)**, the counterpart of Convex's shuttle tests:
-  - a deterministic scheduler interleaves fills (a read at `T`, then an `await` that is resolved at a
-    random point) with commits into and outside the interval;
-  - the invariant is Convex's: no lookup returns a result that differs from a fresh `scan` at its ts.
-  - The scheduler can reuse the controllable runtime of STUDY-132.
-- **Jepsen** (STUDY-57): the short run, with the cache on and verify at 100, over Postgres.
-- **The benchmark** (§3.4) stays in `bench/` for the "change that can affect performance" rule.
+**Unit and property tests:** `packages/core/test/index-cache.property.test.ts`, against a fake write log.
+
+- **The race of §1.4**, the counterpart of Convex's shuttle tests. Random sequences of:
+  - commits, which write or delete a key;
+  - scans (any range, limit and order) and gets, at the latest or an older snapshot;
+  - write-log purges;
+  - resolutions of pending persistence reads, in any order.
+
+  Each read's persistence call stays pending until the scheduler resolves it, so commits and other fills
+  land in between. Every completed read must equal the model's answer at its snapshot, with random byte
+  budgets (evictions mid-run) and with verification on or off. 500 cases; BUNVEX_PROPERTY_MULTIPLIER raises
+  it at night.
+- **Unit cases:**
+  - a hit at a later and at an earlier snapshot;
+  - a write in the range makes an entry stale; one outside it, or in another index, does not;
+  - a purged log makes a miss;
+  - a snapshot past the visible ts is neither served nor stored;
+  - LRU eviction and the size bound;
+  - a verified mismatch fails the read and drops the entry.
+
+**The knobs:** `packages/core/test/index-cache-knobs.test.ts`: defaults, `INDEX_CACHE_SIZE` and `0`, bad
+values, the option, and the memory driver.
+
+**The engine over real stores:** `bench/index-cache-verify.test.ts`.
+
+- **The workload.** 8 concurrent clients run random mutations: inserts, patches that move a document across
+  index ranges, deletes, and writes to another table. They also run random reads (`get`, ranges in both
+  orders with limits, `first`, a page, a whole collect) inside queries, at the latest and at older
+  snapshots, and inside mutations.
+- **The check.** Every hit is verified, so a single stale entry fails the test. The test also asserts that
+  the cache was exercised (hits, and stale entries).
+- **The control.** A last case replaces the cache with one that ignores the write log, and checks the
+  harness catches it.
+- **Where it runs.** Memory and SQLite in `bun test`; Postgres, MySQL and MongoDB in their CI conformance
+  jobs.
+- **OCC.** A mutation that exhausts its OCC retries under contention is counted, not failed: that is the
+  engine's answer, and slow stores make it likelier.
+
+**Everything else, with the cache on.** CI job `tests · index cache on, every hit verified` runs the core,
+server, testing, sync-e2e and bench suites with `INDEX_CACHE_SIZE=536870912 INDEX_CACHE_VERIFY_PERCENT=100`.
+That puts the cache in every engine, the memory driver's included, and verifies every hit, as Convex's
+`cfg!(test)` does. Outside that job, every SQLite engine in the suites runs with the cache on by default.
+
+**Jepsen** (STUDY-57) adds coverage, but it is not what guarantees the cache.
+
+- **The nightly runs** on Postgres, MySQL and MongoDB now have the cache on (the default) and unverified, so
+  a stale hit would reach the linearizability checker as a stale read.
+- **A local run** on Postgres with the cache on passed: 12 runs with partitions, kills and store faults.
+- **What it catches.** A cache that ignores the write log fails it at once (stale catalog reads).
+- **What it misses.** The subtle race of §1.4 (the fill stamped with "now") passed 6 runs, verified or
+  not: its workload rarely opens the window. The property test and the verified engine test each caught
+  that sabotage in 10 runs out of 10.
+
+**Sabotage checks**, each done by hand:
+
+- **Validity always true.** With the write-log check replaced by "unchanged":
+  - the core suite fails (381 tests in the prototype);
+  - the engine test fails on memory, SQLite and Postgres;
+  - Jepsen fails.
+- **The fill stamped with "now"** instead of its own snapshot (Convex's race):
+  - The property test fails, 10 runs out of 10. Its minimal counterexample is the race itself: a read
+    starts, a commit writes into its range, the read fills, and the next read gets the stale page.
+  - The engine test fails, 10 out of 10, on memory and SQLite, and on Postgres too.
+  - Jepsen does not catch it (above).
+
+**The benchmark.** §3.4 is `bench/index-cache.ts`, kept for the "change that can affect performance" rule.
 
 ## 6. Open questions
 

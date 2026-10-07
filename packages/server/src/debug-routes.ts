@@ -7,6 +7,8 @@
 //   reruns of its execution (`history`, newest first);
 // - `GET /api/debug/query_cache[?path=&limit=]`: the HTTP query cache's counters (misses by reason), and its
 //   biggest entries with their read sets;
+// - `GET /api/debug/index_cache`: the index cache's counters (STUDY-136): hits, misses by reason, evictions,
+//   verified hits and mismatches, its size and budget; `{ enabled: false }` when the engine has none;
 // - `GET /api/debug/invalidations?cursor=[&path=&timeoutMs=]`: invalidations after `cursor`, as a long poll
 //   (the log streams' style) for a screen that follows them.
 //
@@ -26,7 +28,7 @@ import type { Functions } from "./functions.ts";
 import type { Execution, SyncHub } from "./sync.ts";
 import { argsDigest, type FeedRecord, type HistoryRecord } from "./sync-inspector.ts";
 
-export const DEBUG_ROUTE = /^\/api\/debug\/(subscriptions|query_cache|invalidations)$/;
+export const DEBUG_ROUTE = /^\/api\/debug\/(subscriptions|query_cache|index_cache|invalidations)$/;
 /** The longest a follow request waits for an invalidation, as the log streams' long poll. */
 const FOLLOW_MAX_MS = 60_000;
 
@@ -197,6 +199,25 @@ async function invalidations(ctx: Ctx, url: URL, req: Request): Promise<Response
   return jsonResponse({ entries: shown, newCursor });
 }
 
+function indexCache(ctx: Ctx) {
+  const cache = ctx.engine.indexCache;
+  if (!cache) return { enabled: false };
+  const s = cache.stats;
+  return {
+    enabled: true,
+    entries: cache.entries,
+    bytes: cache.bytes,
+    maxBytes: cache.maxBytes,
+    verifyPercent: cache.verifyPercent,
+    hits: s.hits,
+    misses: s.misses.new + s.misses.stale,
+    missReasons: { ...s.misses },
+    evictions: s.evictions,
+    verified: s.verified,
+    mismatches: s.mismatches,
+  };
+}
+
 /** The inspector's routes; `null` when `url` is none of them. Throws the caller's access error. */
 export async function debugRoute(ctx: Ctx, url: URL, req: Request, caller: Caller): Promise<Response | null> {
   const m = DEBUG_ROUTE.exec(url.pathname);
@@ -204,5 +225,6 @@ export async function debugRoute(ctx: Ctx, url: URL, req: Request, caller: Calle
   ctx.functions.requireOperation(caller, "ViewMetrics");
   if (m[1] === "subscriptions") return jsonResponse(subscriptions(ctx, url));
   if (m[1] === "query_cache") return jsonResponse(queryCache(ctx, url));
+  if (m[1] === "index_cache") return jsonResponse(indexCache(ctx));
   return invalidations(ctx, url, req);
 }

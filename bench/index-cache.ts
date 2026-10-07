@@ -163,7 +163,7 @@ async function phase(on: boolean) {
   );
   const ops = qLat.length + mLat.length;
   const ic = (engine as any).indexCache as IndexCache | null;
-  const icHits = ic ? ic.stats.hits / Math.max(1, ic.stats.hits + ic.stats.misses) : 0;
+  const icHits = ic ? ic.stats.hits / Math.max(1, ic.stats.hits + ic.stats.misses.new + ic.stats.misses.stale) : 0;
   const out = {
     phase: phaseNo,
     indexCache: on ? "on" : "off",
@@ -176,7 +176,7 @@ async function phase(on: boolean) {
     mutationP99: pct(mLat, 0.99),
     queryCacheHitRate: Number(((engine.stats.cacheHits - hits0) / Math.max(1, qLat.length)).toFixed(3)),
     indexCacheHitRate: Number(icHits.toFixed(3)),
-    indexCacheMB: ic ? Number((ic.stats.bytes / 2 ** 20).toFixed(1)) : 0,
+    indexCacheMB: ic ? Number((ic.bytes / 2 ** 20).toFixed(1)) : 0,
     storeCallsPerOp: Number(((calls.scan + calls.get) / Math.max(1, ops)).toFixed(3)),
     storeCallsPerSec: Math.round((calls.scan + calls.get) / SECS),
   };

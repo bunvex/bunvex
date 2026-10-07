@@ -71,6 +71,25 @@ jobs:
       - if: needs.changes.outputs.code == 'false'
         run: bun run --cwd apps/site test
 
+  # STUDY-136: the engine's suites again with the index cache on in every engine (the memory driver's too) and
+  # every hit re-read from persistence and compared (Convex's own tests always verify). A stale cache entry
+  # anywhere fails a test with "index cache: the cached read … differs from persistence".
+  index-cache-verified:
+    name: tests · index cache on, every hit verified
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - env:
+          INDEX_CACHE_SIZE: "536870912"
+          INDEX_CACHE_VERIFY_PERCENT: "100"
+        run: bun test --isolate packages/core packages/server packages/testing packages/sync-e2e bench
+
   # The example apps end to end (STUDY-90): each is deployed to a bunvex-local-backend, its functions run
   # through the public client, and its front end typechecked and built.
   examples:
@@ -170,6 +189,12 @@ jobs:
           PG_URL: postgres://postgres:bunvex@127.0.0.1:5432/bunvex_k
           DO_NOT_REQUIRE_SSL: "1"
         run: bun run conformance
+      # STUDY-136: the index cache over the real store, every hit re-read and compared.
+      - name: index cache on Postgres, every hit verified
+        env:
+          PG_URL: postgres://postgres:bunvex@127.0.0.1:5432/bunvex_k
+          DO_NOT_REQUIRE_SSL: "1"
+        run: bun test bench/index-cache-verify.test.ts
       - name: TLS defaults on Postgres without TLS (refused by default; DO_NOT_REQUIRE_SSL connects)
         env:
           TLS_PG_PLAIN_URL: postgres://postgres:bunvex@127.0.0.1:5432/bunvex_k
@@ -203,6 +228,11 @@ jobs:
           MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
           DO_NOT_REQUIRE_SSL: "1"
         run: bun run conformance
+      - name: index cache on MySQL, every hit verified
+        env:
+          MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
+          DO_NOT_REQUIRE_SSL: "1"
+        run: bun test bench/index-cache-verify.test.ts
       - name: TLS defaults on MySQL with its own certificates (refused by default; DO_NOT_REQUIRE_SSL connects)
         env:
           TLS_MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
@@ -233,6 +263,10 @@ jobs:
           KILLS: "4"
           MONGO_URL: mongodb://127.0.0.1:27017/bunvex_k?replicaSet=rs0
         run: bun run conformance
+      - name: index cache on MongoDB, every hit verified
+        env:
+          MONGO_URL: mongodb://127.0.0.1:27017/bunvex_k?replicaSet=rs0
+        run: bun test bench/index-cache-verify.test.ts
 
   file-storage-s3:
     name: file storage · S3 (RustFS)

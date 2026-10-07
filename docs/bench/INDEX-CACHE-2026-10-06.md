@@ -78,3 +78,49 @@
 {"phase":4,"indexCache":"off","opsPerSec":17468,"queriesPerSec":1737,"mutationsPerSec":15731,"queryP50":0.939,"queryP99":2.869,"mutationP50":1.589,"mutationP99":11.068,"queryCacheHitRate":0,"indexCacheHitRate":0,"indexCacheMB":0,"storeCallsPerOp":3,"storeCallsPerSec":52403}
 {"phase":5,"indexCache":"on","opsPerSec":12644,"queriesPerSec":1265,"mutationsPerSec":11379,"queryP50":1.153,"queryP99":6.553,"mutationP50":1.928,"mutationP99":13.985,"queryCacheHitRate":0,"indexCacheHitRate":0.37,"indexCacheMB":0,"storeCallsPerOp":1.891,"storeCallsPerSec":23911}
 ```
+
+# As built (the same bench on the implementation, 2026-10-06)
+
+## pg-mixed (as built)
+
+```json
+{"KIND":"postgres","SCENARIO":"mixed","CHANNELS":1000,"MSGS":50,"USERS":10000,"WRITE_PCT":10,"CONC":32,"SECS":10,"ROUNDS":2,"SKEW":1,"seedMs":5475}
+{"phase":1,"indexCache":"off","opsPerSec":2330,"queriesPerSec":2099,"mutationsPerSec":230,"queryP50":11.878,"queryP99":25.609,"mutationP50":28.601,"mutationP99":54.027,"queryCacheHitRate":0.079,"indexCacheHitRate":0,"indexCacheMB":0,"storeCallsPerOp":2.788,"storeCallsPerSec":6494}
+{"phase":2,"indexCache":"off","opsPerSec":2396,"queriesPerSec":2151,"mutationsPerSec":245,"queryP50":11.679,"queryP99":25.558,"mutationP50":27.214,"mutationP99":50.784,"queryCacheHitRate":0.077,"indexCacheHitRate":0,"indexCacheMB":0,"storeCallsPerOp":2.794,"storeCallsPerSec":6695}
+{"phase":3,"indexCache":"on","opsPerSec":10111,"queriesPerSec":9118,"mutationsPerSec":994,"queryP50":0.076,"queryP99":10.359,"mutationP50":19.122,"mutationP99":58.232,"queryCacheHitRate":0.097,"indexCacheHitRate":0.913,"indexCacheMB":15.8,"storeCallsPerOp":0.238,"storeCallsPerSec":2410}
+{"phase":4,"indexCache":"off","opsPerSec":2323,"queriesPerSec":2095,"mutationsPerSec":228,"queryP50":11.938,"queryP99":35.502,"mutationP50":27.325,"mutationP99":55.043,"queryCacheHitRate":0.079,"indexCacheHitRate":0,"indexCacheMB":0,"storeCallsPerOp":2.785,"storeCallsPerSec":6469}
+{"phase":5,"indexCache":"on","opsPerSec":9435,"queriesPerSec":8493,"mutationsPerSec":942,"queryP50":0.081,"queryP99":10.419,"mutationP50":19.766,"mutationP99":77.229,"queryCacheHitRate":0.095,"indexCacheHitRate":0.911,"indexCacheMB":15.7,"storeCallsPerOp":0.245,"storeCallsPerSec":2311}
+```
+
+## pg-unique (as built)
+
+```json
+{"KIND":"postgres","SCENARIO":"unique","CHANNELS":1000,"MSGS":50,"USERS":10000,"WRITE_PCT":10,"CONC":32,"SECS":10,"ROUNDS":2,"SKEW":1,"seedMs":5008}
+{"phase":1,"indexCache":"off","opsPerSec":2266,"queriesPerSec":2049,"mutationsPerSec":218,"queryP50":11.767,"queryP99":25.655,"mutationP50":27.616,"mutationP99":81.469,"queryCacheHitRate":0,"indexCacheHitRate":0,"indexCacheMB":0,"storeCallsPerOp":3,"storeCallsPerSec":6799}
+{"phase":2,"indexCache":"off","opsPerSec":2228,"queriesPerSec":2002,"mutationsPerSec":226,"queryP50":12.087,"queryP99":25.86,"mutationP50":27.238,"mutationP99":49.85,"queryCacheHitRate":0,"indexCacheHitRate":0,"indexCacheMB":0,"storeCallsPerOp":3,"storeCallsPerSec":6684}
+{"phase":3,"indexCache":"on","opsPerSec":9444,"queriesPerSec":8490,"mutationsPerSec":954,"queryP50":0.091,"queryP99":11.4,"mutationP50":19.651,"mutationP99":55.415,"queryCacheHitRate":0,"indexCacheHitRate":0.917,"indexCacheMB":15.7,"storeCallsPerOp":0.249,"storeCallsPerSec":2349}
+{"phase":4,"indexCache":"off","opsPerSec":2160,"queriesPerSec":1942,"mutationsPerSec":218,"queryP50":12.244,"queryP99":35.552,"mutationP50":27.039,"mutationP99":59.839,"queryCacheHitRate":0,"indexCacheHitRate":0,"indexCacheMB":0,"storeCallsPerOp":3,"storeCallsPerSec":6481}
+{"phase":5,"indexCache":"on","opsPerSec":8615,"queriesPerSec":7751,"mutationsPerSec":865,"queryP50":0.093,"queryP99":11.616,"mutationP50":21.38,"mutationP99":59.613,"queryCacheHitRate":0,"indexCacheHitRate":0.914,"indexCacheMB":15.6,"storeCallsPerOp":0.257,"storeCallsPerSec":2212}
+```
+
+## pg-w50 (as built)
+
+```json
+{"KIND":"postgres","SCENARIO":"mixed","CHANNELS":1000,"MSGS":50,"USERS":10000,"WRITE_PCT":50,"CONC":32,"SECS":10,"ROUNDS":2,"SKEW":1,"seedMs":5164}
+{"phase":1,"indexCache":"off","opsPerSec":2544,"queriesPerSec":1271,"mutationsPerSec":1273,"queryP50":6.284,"queryP99":17.726,"mutationP50":17.526,"mutationP99":35.493,"queryCacheHitRate":0.015,"indexCacheHitRate":0,"indexCacheMB":0,"storeCallsPerOp":2.977,"storeCallsPerSec":7573}
+{"phase":2,"indexCache":"off","opsPerSec":2349,"queriesPerSec":1169,"mutationsPerSec":1180,"queryP50":6.617,"queryP99":20.31,"mutationP50":18.579,"mutationP99":39.09,"queryCacheHitRate":0.016,"indexCacheHitRate":0,"indexCacheMB":0,"storeCallsPerOp":2.976,"storeCallsPerSec":6990}
+{"phase":3,"indexCache":"on","opsPerSec":5243,"queriesPerSec":2622,"mutationsPerSec":2621,"queryP50":1.541,"queryP99":6.775,"mutationP50":9.583,"mutationP99":29.727,"queryCacheHitRate":0.016,"indexCacheHitRate":0.856,"indexCacheMB":15.1,"storeCallsPerOp":0.428,"storeCallsPerSec":2244}
+{"phase":4,"indexCache":"off","opsPerSec":2336,"queriesPerSec":1164,"mutationsPerSec":1172,"queryP50":6.706,"queryP99":25.399,"mutationP50":18.718,"mutationP99":42.709,"queryCacheHitRate":0.016,"indexCacheHitRate":0,"indexCacheMB":0,"storeCallsPerOp":2.977,"storeCallsPerSec":6953}
+{"phase":5,"indexCache":"on","opsPerSec":5182,"queriesPerSec":2577,"mutationsPerSec":2605,"queryP50":1.577,"queryP99":6.543,"mutationP50":9.653,"mutationP99":37.872,"queryCacheHitRate":0.018,"indexCacheHitRate":0.856,"indexCacheMB":15,"storeCallsPerOp":0.429,"storeCallsPerSec":2222}
+```
+
+## sqlite-mixed (as built)
+
+```json
+{"KIND":"sqlite","SCENARIO":"mixed","CHANNELS":1000,"MSGS":50,"USERS":10000,"WRITE_PCT":10,"CONC":32,"SECS":10,"ROUNDS":2,"SKEW":1,"seedMs":1076}
+{"phase":1,"indexCache":"off","opsPerSec":8058,"queriesPerSec":7245,"mutationsPerSec":814,"queryP50":2.015,"queryP99":5.029,"mutationP50":20.011,"mutationP99":49.326,"queryCacheHitRate":0.102,"indexCacheHitRate":0,"indexCacheMB":0,"storeCallsPerOp":2.724,"storeCallsPerSec":21951}
+{"phase":2,"indexCache":"off","opsPerSec":7399,"queriesPerSec":6659,"mutationsPerSec":740,"queryP50":2.188,"queryP99":9.451,"mutationP50":21.244,"mutationP99":55.072,"queryCacheHitRate":0.101,"indexCacheHitRate":0,"indexCacheMB":0,"storeCallsPerOp":2.727,"storeCallsPerSec":20180}
+{"phase":3,"indexCache":"on","opsPerSec":11945,"queriesPerSec":10765,"mutationsPerSec":1180,"queryP50":1.149,"queryP99":7.344,"mutationP50":12.52,"mutationP99":40.344,"queryCacheHitRate":0.104,"indexCacheHitRate":0.934,"indexCacheMB":15.9,"storeCallsPerOp":0.179,"storeCallsPerSec":2136}
+{"phase":4,"indexCache":"off","opsPerSec":6581,"queriesPerSec":5916,"mutationsPerSec":665,"queryP50":2.414,"queryP99":14.041,"mutationP50":23.555,"mutationP99":66.099,"queryCacheHitRate":0.101,"indexCacheHitRate":0,"indexCacheMB":0,"storeCallsPerOp":2.728,"storeCallsPerSec":17950}
+{"phase":5,"indexCache":"on","opsPerSec":11720,"queriesPerSec":10551,"mutationsPerSec":1170,"queryP50":1.158,"queryP99":6.658,"mutationP50":12.787,"mutationP99":41.669,"queryCacheHitRate":0.103,"indexCacheHitRate":0.933,"indexCacheMB":15.9,"storeCallsPerOp":0.181,"storeCallsPerSec":2122}
+```

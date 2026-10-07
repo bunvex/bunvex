@@ -112,7 +112,7 @@ import {
   wallClock,
 } from "./determinism.ts";
 import { EnvironmentVariables } from "./environment-variables.ts";
-import { IndexCache } from "./index-cache.ts";
+import { INDEX_CACHE_MAX_BYTES, IndexCache } from "./index-cache.ts";
 import { readNextIndexId } from "./index-ids.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
 import { opaqueToInspect } from "./inspect.ts";
@@ -321,7 +321,7 @@ export const TABLE_DELETION_BATCH = 1000;
 
 export class Engine {
   readonly committer: Committer;
-  /** STUDY-136 prototype: the index cache, null unless enabled. */
+  /** The index cache (STUDY-136): persistence index reads of every transaction; null when off. */
   readonly indexCache: IndexCache | null;
   /** The resolved tables and indexes (ids from `_tables` / `_index`), loaded by `init()`. */
   catalog: Catalog = new Catalog();
@@ -452,8 +452,12 @@ export class Engine {
       beforeSearchCompactionCommit?: () => Promise<void>;
       /** The background index backfill's knobs (Convex's INDEX_BACKFILL_*; STUDY-29). */
       indexBackfill?: IndexBackfillOptions;
-      /** STUDY-136 prototype: cache persistence index reads (off by default). */
-      indexCache?: { maxBytes?: number; verifyPercent?: number };
+      /**
+       * The index cache (STUDY-136): `false` turns it off. By default it is on, sized by INDEX_CACHE_SIZE
+       * (512 MiB) with INDEX_CACHE_VERIFY_PERCENT of its hits re-read and compared (0); off for the memory
+       * driver (DV-434) unless INDEX_CACHE_SIZE is set; INDEX_CACHE_SIZE=0 turns it off everywhere.
+       */
+      indexCache?: false | { maxBytes?: number; verifyPercent?: number };
       /**
        * How a flush that failed with a transient error is retried (STUDY-25 L4): Convex's backoff, 100 ms
        * doubling up to 10 s with full jitter, as many times as it takes (the lease bounds it).
@@ -473,12 +477,7 @@ export class Engine {
     this.installValidators(schema);
     this.committer = new Committer(persistence, opts.writeLogRetention, undefined, opts.flushRetry, opts.writeBatch);
     this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
-    // STUDY-136 prototype: INDEX_CACHE_PROTOTYPE_VERIFY=<percent> turns it on everywhere (the test suite run).
-    const forced = process.env.INDEX_CACHE_PROTOTYPE_VERIFY;
-    if (forced !== undefined && !opts.indexCache) opts = { ...opts, indexCache: { verifyPercent: Number(forced) } };
-    this.indexCache = opts.indexCache
-      ? new IndexCache(this.committer, opts.indexCache.maxBytes, opts.indexCache.verifyPercent)
-      : null;
+    this.indexCache = indexCacheOf(persistence, opts.indexCache, this.committer);
     this.writeThroughput = new WriteThroughputLimiter(opts.writeThroughput ?? writeThroughputFromEnv());
     this.committer.writeThroughput = this.writeThroughput;
     // A count at an older snapshot (STUDY-107) needs the changes since: kept as long as the write log keeps them.
@@ -3293,6 +3292,31 @@ function writeThroughputFromEnv(): WriteThroughputOptions {
 
 /** How a mutation runs: `throttled`, an app's mutation, checks the write throughput limit (STUDY-78). */
 export type MutationOptions = { throttled?: boolean };
+
+/**
+ * The engine's index cache (STUDY-136), from its option and Convex's knobs: INDEX_CACHE_SIZE (bytes, default
+ * 512 MiB; 0 turns it off) and INDEX_CACHE_VERIFY_PERCENT (default 0, DV-433; Convex's is 100). The memory
+ * driver already reads in memory: its engine has none unless INDEX_CACHE_SIZE or the option asks (DV-434).
+ */
+function indexCacheOf(
+  persistence: Persistence,
+  opt: false | { maxBytes?: number; verifyPercent?: number } | undefined,
+  committer: Committer,
+): IndexCache | null {
+  if (opt === false) return null;
+  const sizeEnv = process.env.INDEX_CACHE_SIZE;
+  const size = sizeEnv === undefined || sizeEnv === "" ? undefined : Number(sizeEnv);
+  if (size !== undefined && !(Number.isFinite(size) && size >= 0))
+    throw new Error(`INDEX_CACHE_SIZE must be a number of bytes, not ${JSON.stringify(sizeEnv)}`);
+  const maxBytes = opt?.maxBytes ?? size ?? INDEX_CACHE_MAX_BYTES;
+  if (maxBytes === 0) return null;
+  if (opt === undefined && size === undefined && persistence.readsInMemory === true) return null;
+  const verifyEnv = process.env.INDEX_CACHE_VERIFY_PERCENT;
+  const verify = opt?.verifyPercent ?? (verifyEnv === undefined || verifyEnv === "" ? 0 : Number(verifyEnv));
+  if (!(Number.isFinite(verify) && verify >= 0 && verify <= 100))
+    throw new Error(`INDEX_CACHE_VERIFY_PERCENT must be from 0 to 100, not ${JSON.stringify(verifyEnv)}`);
+  return new IndexCache(committer, maxBytes, verify);
+}
 
 /** UDF_CACHE_MAX_SIZE (bytes), as Convex's knob, else its default. */
 function cacheMaxBytesFromEnv(): number {

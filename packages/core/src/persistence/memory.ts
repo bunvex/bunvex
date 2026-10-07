@@ -105,6 +105,8 @@ function visible<T>(vs: Version<T>[] | undefined, seq: number): Version<T> | und
 }
 
 export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
+  /** Reads are map and B-tree lookups: no index cache (STUDY-136, DV-434). */
+  readonly readsInMemory = true;
   /** PERSIST-01 C7 as an OS lock next to the log, held for the process's life (STUDY-25 L9). */
   readonly leaseScope = "process";
   /** The log's single-writer lock. Replaying (and truncating a torn tail) happens only under it: another
