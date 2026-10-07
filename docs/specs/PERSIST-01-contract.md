@@ -11,7 +11,7 @@
 > **v2.5, 1 Oct 2026:** C11 (the log by timestamp) and K25, from STUDY-24 H11 (K24 is the index backfill's,
 > STUDY-29). **v2.6, 1 Oct 2026:** C4 bounded flushes (the committer writes a group in write batches, DV-62)
 > and K26, from STUDY-06 §10. **v2.7, 1 Oct 2026:** C12–C14 (the document log, pruning, globals: what retention
-> needs) and K27–K29, from STUDY-33. **v2.8, 3 Oct 2026:** C15 (index references), from STUDY-09 §1.6; K30–K31. **v2.9, 3 Oct 2026:** C16 (document versions) and K32, for streaming export's per-document timestamps (owner, 2026-10-03). **v3.0, 6 Oct 2026 (STUDY-133 PR 3):** internal ids and `prev_ts` in C1; `scan` returns documents through the exact-ts join (C3, C6; `scanDocs` is gone); `get` returns a version; C15 rewritten for the join; C17 (index entries at past timestamps); K30–K31 rewritten, K34–K36. **v3.1, 6 Oct 2026 (STUDY-133 PR 10):** retention walks the document log by `prev_ts`, as Convex's: C11 (`readLog`) and K25 retired, C12–C13 and K27–K28 rewritten. **v3.2, 6 Oct 2026 (STUDY-133 PR 4):** C10 for drivers in Convex's layout (no layout record, the tables' columns checked; SQLite first), C14's integers above 2^53 and `max_repeatable_ts`, K22 in two forms. **v3.3, 6 Oct 2026 (STUDY-133 PR 5):** C7 newest-wins leases (Convex's, DV-413; Postgres first) and their K10–K21 forms; K22 compares a fresh store's schema with the reference system's. **v3.4, 6 Oct 2026 (STUDY-133 PR 6):** MySQL joins Convex's v5 layout and lease; C1 lets a store re-serialize a document (MySQL's v1 encoding); conformance writes documents in sorted-field JSON and K21's markers match bytes sent as hex. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
+> needs) and K27–K29, from STUDY-33. **v2.8, 3 Oct 2026:** C15 (index references), from STUDY-09 §1.6; K30–K31. **v2.9, 3 Oct 2026:** C16 (document versions) and K32, for streaming export's per-document timestamps (owner, 2026-10-03). **v3.0, 6 Oct 2026 (STUDY-133 PR 3):** internal ids and `prev_ts` in C1; `scan` returns documents through the exact-ts join (C3, C6; `scanDocs` is gone); `get` returns a version; C15 rewritten for the join; C17 (index entries at past timestamps); K30–K31 rewritten, K34–K36. **v3.1, 6 Oct 2026 (STUDY-133 PR 10):** retention walks the document log by `prev_ts`, as Convex's: C11 (`readLog`) and K25 retired, C12–C13 and K27–K28 rewritten. **v3.2, 6 Oct 2026 (STUDY-133 PR 4):** C10 for drivers in Convex's layout (no layout record, the tables' columns checked; SQLite first), C14's integers above 2^53 and `max_repeatable_ts`, K22 in two forms. **v3.3, 6 Oct 2026 (STUDY-133 PR 5):** C7 newest-wins leases (Convex's, DV-413; Postgres first) and their K10–K21 forms; K22 compares a fresh store's schema with the reference system's. **v3.4, 6 Oct 2026 (STUDY-133 PR 6):** MySQL joins Convex's v5 layout and lease; C1 lets a store re-serialize a document (MySQL's v1 encoding); conformance writes documents in sorted-field JSON and K21's markers match bytes sent as hex. **v3.5, 7 Oct 2026 (STUDY-133 PR 7):** MongoDB in the analogue of Convex's Postgres layout (DV-416) with the newest-wins lease; the unique `_id` refuses a retried group that landed; an interrupted bootstrap is completed (C5). Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
 > `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
@@ -97,6 +97,11 @@ For a snapshot `T`:
 ts above `M` (the clock, or `M + 1` if the clock is behind), and `M` is the first snapshot served. A driver keeping state in memory (the memory+log store)
 rebuilds it from its log, ignoring a torn trailing record.
 
+A store whose only rows are the bootstrap's (ts 0) but which has none of the four bootstrap globals is a bootstrap
+interrupted between its rows and its globals (with the newest start winning the lease, a second start can take a
+new store from a first one there). The engine completes the globals from those rows, under its lease; a store with
+any later commit and no globals is refused, as Convex's ("missing _tables.by_id global").
+
 A driver in Convex's layout reads `M` from `documents` only, as Convex's `max_ts` (SQLite since STUDY-133 PR 4):
 every commit writes documents, and index entries at past timestamps (C17) are never above them. The engine
 then starts above `max(M, max_repeatable_ts, clock)` and records that bound first, as Convex's
@@ -157,8 +162,10 @@ tail) runs only under the lock. Convex's SQLite store has no lock and loses writ
 (STUDY-25 L9, measured); bunvex diverges on purpose (owner, 2026-09-30).
 
 **Newest-wins leases (Convex's, DV-413).** A driver in Convex's layout on a database server (Postgres since
-STUDY-133 PR 5, MySQL since PR 6; MongoDB in PR 7) uses Convex's lease (`leaseScope = "newest"`) instead of the
-record above. It reverses DV-14 on those drivers.
+STUDY-133 PR 5, MySQL since PR 6, MongoDB by analogy since PR 7) uses Convex's lease (`leaseScope = "newest"`)
+instead of the record above. It reverses DV-14 on those drivers. MongoDB's fence is a write of the lease document
+that matches only our ts, at the end of each flush's transaction: a takeover's update waits for it, or one of the
+two aborts on a write conflict.
 
 - The lease is Convex's `leases` row `(id 1, ts)`: `ts` is its holder's start, in wall-clock nanoseconds.
 - `acquireLease` sets `ts` to the caller's start when that is newer (`ts < $now`): **the newest process wins at
@@ -239,11 +246,9 @@ network closed, a server shutting down or not serving — are retried instead of
 - **Still unsure.** If the group turns out to be there anyway while it is re-run (an earlier attempt's COMMIT
   that was already sent landed after the lease read), the flush fails with `UnsureCommitError`
   (`@bunvex/core/persistence`), which is never transient: the committer stops, and after a restart the store
-  holds the group exactly once. Per store: Postgres and MySQL see a duplicate key on the primary keys of
-  `documents` and `indexes`; MongoDB, which has no unique key on the rows, sees its fence fail (it matches
-  only while the lease's `maxTs` is below the group's top) under our own epoch with `maxTs` ≥ the top. Before
-  the lease read, the MongoDB driver ends the failed attempt's session, whose transaction outlives its
-  connection on the server; a third-party driver must make the same check (C7's `max_ts` always allows it).
+  holds the group exactly once. Per store: Postgres, MySQL and MongoDB (its rows' `_id` is Convex's primary
+  key) see a duplicate key. Before its check, the MongoDB driver ends the failed attempt's session, whose
+  transaction outlives its connection on the server; a third-party driver must make the same check.
 - **Reads (the driver).** A read, or an idempotent init step, that fails because its connection was lost runs
   once more on a fresh connection (`retryOnce`; Convex's `with_retry`, `MYSQL_MAX_QUERY_RETRIES` = 1). Postgres
   also retries after a timeout (so a read waits up to two timeouts); MySQL does not. Never a statement inside
@@ -256,7 +261,8 @@ read-only (STUDY-25 L6/L7, as Convex: its configured layout, refused over a diff
 table). The helpers and errors are in `@bunvex/core/persistence` (`layout.ts`).
 
 **Drivers in Convex's layout** (STUDY-133; SQLite since PR 4, Postgres since PR 5, MySQL (v5) since PR 6;
-MongoDB in PR 7). The store
+MongoDB since PR 7, in the analogue of Convex's Postgres layout, DV-416: it checks the fields of a document of
+each collection). The store
 is Convex's: its DDL, created with `IF NOT EXISTS` on every open as Convex does, and no layout record (DV-418).
 
 - **Open checks, writing nothing.** Before any write (DDL and pragmas included) and without the lease: each of
@@ -267,12 +273,10 @@ is Convex's: its DDL, created with `IF NOT EXISTS` on every open as Convex does,
   ports none of Convex's migrations); a newer one opens with a warning, as Convex's.
 - The read-only flag, below, is unchanged (DV-412 keeps SQLite's `read_only` table, which Convex ignores).
 
-**Drivers with a layout record** (MongoDB until its PR; the memory driver's log keeps its
-own header, since no other system reads it). The current layout is `LAYOUT_VERSION`.
+**Drivers with a layout record** (only the memory driver's log, whose header no other system reads). The
+current layout is `LAYOUT_VERSION`.
 
-- **The record.** Every store holds its layout version: a `layout_version` row of `persistence_globals`
-  (SQL stores), `meta` `{_id: "layout"}` (MongoDB), or the log's first record `{"layout":N}` (memory+log).
-  Each driver's file header says where.
+- **The record.** The log's first record `{"layout":N}` (memory+log).
 - **Open checks, writing nothing.** Before any write (DDL included) and without the lease, since refusing
   is safe:
   - A recorded version other than `LAYOUT_VERSION` fails the open with `LayoutError`, naming it: newer,
@@ -312,8 +316,7 @@ written, C1): the stored document versions of the commits with `afterTs < ts ≤
   `readDocumentLog(lastTsOfThePreviousPage, upTo, n)`.
 - **Cost.** A read of an index led by `documents.ts` and the rows it returns, never a scan of the store. It
   needs no lease and writes nothing; on a remote store it is a read (C8, C9). In Convex's layout it is the
-  primary key `(ts, table_id, id)` (SQLite); elsewhere a ts index created with the tables, or for an existing
-  store when the lease is acquired (MongoDB at open).
+  primary key `(ts, table_id, id)` (SQLite, Postgres, MySQL; MongoDB an index led by `_id.ts`).
 
 Retention reads it for both of its passes (STUDY-33, as Convex's `retention.rs`): each row whose `prevTs` is
 set is a revision pair, the version it replaced and itself (C13).
@@ -482,3 +485,8 @@ Notes from validating the suite (each check was sabotaged and had to go red):
   is K30's v2.8 check moved from `scanDocs` to `scan`.
 - SIGKILL cannot tear a single `write()`: K6 exercises multi-step flushes (remote stores, commit
   markers); K7 covers the power-loss shape for the append-only log.
+- v3.5 (STUDY-133 PR 7), MongoDB in its analogue layout: the fence's lease write removed (K10, K12 red);
+  `landed()` always false (K21 red: the unique `_id` stops the retry with `UnsureCommitError`); the open's field
+  check removed (K22 red: bunvex's previous layout opened and was written to); the key prefix stored as raw
+  BinData, which orders by length first (K1 red). K17 first went red on MongoDB: two concurrent first starts left
+  a store with its bootstrap rows and no globals, which the completion in C5 fixed.

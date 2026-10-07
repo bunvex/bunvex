@@ -890,3 +890,21 @@ The probe scripts (`inject.py`, `cx.sh`, `shapes.py`, the ts bench) are in the s
 - Conformance documents are sorted-field JSON (v1 hands documents back re-serialized).
 - Checked locally with the Convex binary (`--db mysql-v5`): bunvex opened a database Convex created, wrote and read
   back, and Convex then served it, taking the lease back (it loaded bunvex's v1 `_tables` / `_index` rows).
+
+### PR 7 — MongoDB
+
+- The layout is §5.6's analogue of Convex's Postgres layout (DV-416): `documents` with Convex's primary key
+  `{ts, table_id, id}` as the `_id` (16-byte BinData ids, `Long` timestamps), `json_value` the JSON text or null,
+  `deleted`, `prev_ts`; `indexes` with `{index_id, key_prefix, key_sha256, ts}` as the `_id`, the prefix as
+  lowercase hex (BinData orders by length first), `key_suffix` BinData, `key_sha256` the whole key's SHA-256;
+  `persistence_globals`, `leases`, `read_only`. Secondary indexes: `(table_id, id, ts desc)`, `(ts, table_id,
+  id)` for the document log, and one per scan direction on `indexes` (each gives a key's versions newest
+  first). No `meta` collection and no layout record: the open checks one document of each collection.
+- The lease is Convex's by analogy (Q3): the newest start wins; a flush's transaction ends with a write of the
+  lease document that matches only our ts; a retried flush finds a landed group by its rows, and the unique
+  `_id` refuses one that lands later (`UnsureCommitError`). A takeover held up by a writer paused inside its
+  flush ends the other bunvex processes' open transactions.
+- Concurrent first starts (K17) could leave a store with its bootstrap rows at ts 0 and none of its globals:
+  the second start takes the lease between the first one's rows and its globals. The next start now completes
+  the globals from those rows (`completeBootstrap`); a store with any later commit is still refused, as Convex's.
+  This goes beyond Convex, which would refuse such a store too (an owner question in the PR).
