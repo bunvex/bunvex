@@ -79,9 +79,15 @@ const globalsOf = (p: Persistence) => p;
 export async function bootstrapStore(p: Persistence): Promise<void> {
   const store = globalsOf(p);
   if ((await store.getGlobal(BOOTSTRAP_GLOBALS.tablesById)) !== null) return;
-  // Convex bootstraps a store that is new; one with rows but without its globals cannot be read.
-  if (hasRetention(store) && (await store.readDocumentLog(-1n, (1n << 63n) - 1n, 1)).length)
-    throw new CatalogError("missing _tables.by_id global");
+  // Convex bootstraps a store that is new; one with rows but without its globals cannot be read. One whose only
+  // rows are the bootstrap's (ts 0) is a bootstrap interrupted between its rows and its globals: with the newest
+  // process winning the lease (DV-413), a second start can take the store from a first one right there. Its
+  // globals are completed from those rows, under our lease.
+  if (hasRetention(store) && (await store.readDocumentLog(-1n, (1n << 63n) - 1n, 1)).length) {
+    if ((await store.readDocumentLog(0n, (1n << 63n) - 1n, 1)).length || !(await completeBootstrap(store)))
+      throw new CatalogError("missing _tables.by_id global");
+    return;
+  }
   const now = wallClock();
   let creationTime = preciseClock();
   const nextCreationTime = () => {
@@ -154,6 +160,41 @@ export async function bootstrapStore(p: Persistence): Promise<void> {
   await store.setGlobal(BOOTSTRAP_GLOBALS.indexTablet, tabletOfName(INDEX_TABLE));
   await store.setGlobal(BOOTSTRAP_GLOBALS.tablesById, byTable(TABLES_TABLE)[0]!.id);
   await store.setGlobal(BOOTSTRAP_GLOBALS.indexById, byTable(INDEX_TABLE)[0]!.id);
+}
+
+/**
+ * The four globals of an interrupted bootstrap, from its rows at ts 0: `_tables`' tablet is the `_tables` row that
+ * names itself and lives in its own tablet; `_index`'s is the `_tables` row named `_index`; each `by_id` index is
+ * the `_index` row with that descriptor on that tablet. Whether every one was found (and written).
+ */
+async function completeBootstrap(store: Persistence & Pick<Required<Persistence>, "getGlobal">): Promise<boolean> {
+  if (!hasRetention(store)) return false;
+  const rows = (await store.readDocumentLog(-1n, 0n, 1)).filter((r) => !r.deleted);
+  const json = async (r: { table: TabletId; id: string }) => {
+    const v = await store.get(r.table, r.id, 0n);
+    return v ? (JSON.parse(v.json) as Record<string, unknown>) : null;
+  };
+  let tablesTablet: string | undefined;
+  for (const r of rows) if (r.table === r.id && (await json(r))?.name === TABLES_TABLE) tablesTablet = r.table;
+  if (!tablesTablet) return false;
+  let indexTablet: string | undefined;
+  for (const r of rows) if (r.table === tablesTablet && (await json(r))?.name === INDEX_TABLE) indexTablet = r.id;
+  if (!indexTablet) return false;
+  let tablesById: string | undefined;
+  let indexById: string | undefined;
+  for (const r of rows) {
+    if (r.table !== indexTablet) continue;
+    const d = await json(r);
+    if (d?.descriptor !== "by_id") continue;
+    if (d.table_id === tablesTablet) tablesById = r.id;
+    if (d.table_id === indexTablet) indexById = r.id;
+  }
+  if (!tablesById || !indexById) return false;
+  await store.setGlobal(BOOTSTRAP_GLOBALS.tablesTablet, tablesTablet);
+  await store.setGlobal(BOOTSTRAP_GLOBALS.indexTablet, indexTablet);
+  await store.setGlobal(BOOTSTRAP_GLOBALS.tablesById, tablesById);
+  await store.setGlobal(BOOTSTRAP_GLOBALS.indexById, indexById);
+  return true;
 }
 
 /** The four globals (Convex's `get_meta_ids`), with its messages when one is missing or not a string. */

@@ -5,7 +5,7 @@ import { MongoPersistence } from "@bunvex/persistence/mongodb";
 import { type Db, MongoClient } from "mongodb";
 
 const raw = async <T>(f: (db: Db) => Promise<T>) => {
-  const c = new MongoClient(process.env.MONGO_URL!, { appName: "conformance-probe" });
+  const c = new MongoClient(process.env.MONGO_URL!, { appName: "conformance-probe", useBigInt64: true });
   await c.connect();
   try {
     return await f(c.db());
@@ -52,22 +52,32 @@ export async function writerInsideFlush() {
   return ops.length > 0;
 }
 
-// K22: the version record is the `meta` document {_id: "layout"}, read and written here behind the driver's back.
-export async function layoutVersion() {
-  const d = await raw((db) => db.collection<any>("meta").findOne({ _id: "layout" }));
-  return d ? d.version : null;
-}
-export async function setLayoutVersion(v: unknown) {
-  await raw(async (db) => {
-    if (v === null) await db.collection<any>("meta").deleteOne({ _id: "layout" });
-    else await db.collection<any>("meta").updateOne({ _id: "layout" }, { $set: { version: v } }, { upsert: true });
-  });
-}
-/** Another application's `documents` collection, with one document. */
-export async function makeForeign() {
+// K22, the reference form (STUDY-133 §5.6; there is no reference system's store to copy: the layout's own
+// description).
+/** An empty store in the layout: its collections, their indexes and the lease document, nothing else. */
+export async function makeReferenceStore() {
+  await endBunvexSessions();
   await raw(async (db) => {
     await db.dropDatabase();
-    await db.collection("documents").insertOne({ id: "a1", ts: 1, table_id: "t", json_value: "{}", prev_ts: null });
+    for (const name of ["documents", "indexes", "leases", "read_only", "persistence_globals"])
+      await db.createCollection(name);
+    await db.collection("documents").createIndex({ "_id.table_id": 1, "_id.id": 1, "_id.ts": -1 });
+    await db.collection("documents").createIndex({ "_id.ts": 1, "_id.table_id": 1, "_id.id": 1 });
+    await db
+      .collection("indexes")
+      .createIndex({ "_id.index_id": 1, "_id.key_prefix": 1, "_id.key_sha256": 1, "_id.ts": -1 });
+    await db
+      .collection("indexes")
+      .createIndex({ "_id.index_id": 1, "_id.key_prefix": -1, "_id.key_sha256": -1, "_id.ts": -1 });
+    await db.collection<any>("leases").insertOne({ _id: 1, ts: 0n });
+  });
+}
+/** bunvex's previous MongoDB layout (`t`, `i`, `ts`, `j`, `p`), with one document. */
+export async function makeForeign() {
+  await endBunvexSessions();
+  await raw(async (db) => {
+    await db.dropDatabase();
+    await db.collection("documents").insertOne({ t: "t", i: "a1", ts: 1, j: "{}", p: null });
   });
 }
 export async function foreignIntact() {
