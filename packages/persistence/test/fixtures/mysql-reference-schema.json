@@ -1,0 +1,310 @@
+{
+  "create": [
+    "CREATE TABLE `documents` (\n  `id` binary(16) NOT NULL,\n  `ts` bigint NOT NULL,\n  `table_id` binary(16) NOT NULL,\n  `json_value` longblob NOT NULL,\n  `deleted` tinyint(1) DEFAULT '0',\n  `prev_ts` bigint DEFAULT NULL,\n  PRIMARY KEY (`ts`,`table_id`,`id`),\n  KEY `documents_by_table_and_id` (`table_id`,`id`,`ts`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC",
+    "CREATE TABLE `indexes` (\n  `index_id` binary(16) NOT NULL,\n  `ts` bigint NOT NULL,\n  `key_prefix` varbinary(2500) NOT NULL,\n  `key_suffix` longblob,\n  `key_sha256` binary(32) NOT NULL,\n  `deleted` tinyint(1) DEFAULT NULL,\n  `table_id` binary(16) DEFAULT NULL,\n  `document_id` binary(16) DEFAULT NULL,\n  PRIMARY KEY (`index_id`,`key_prefix`,`key_sha256`,`ts`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC",
+    "CREATE TABLE `leases` (\n  `id` bigint NOT NULL,\n  `ts` bigint NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC",
+    "CREATE TABLE `persistence_globals` (\n  `key` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,\n  `json_value` longblob NOT NULL,\n  PRIMARY KEY (`key`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC",
+    "CREATE TABLE `read_only` (\n  `id` bigint NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci ROW_FORMAT=DYNAMIC"
+  ],
+  "columns": [
+    {
+      "table": "documents",
+      "column": "id",
+      "type": "binary(16)",
+      "nullable": "NO",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "documents",
+      "column": "ts",
+      "type": "bigint",
+      "nullable": "NO",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "documents",
+      "column": "table_id",
+      "type": "binary(16)",
+      "nullable": "NO",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "documents",
+      "column": "json_value",
+      "type": "longblob",
+      "nullable": "NO",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "documents",
+      "column": "deleted",
+      "type": "tinyint(1)",
+      "nullable": "YES",
+      "default": "0",
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "documents",
+      "column": "prev_ts",
+      "type": "bigint",
+      "nullable": "YES",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "indexes",
+      "column": "index_id",
+      "type": "binary(16)",
+      "nullable": "NO",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "indexes",
+      "column": "ts",
+      "type": "bigint",
+      "nullable": "NO",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "indexes",
+      "column": "key_prefix",
+      "type": "varbinary(2500)",
+      "nullable": "NO",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "indexes",
+      "column": "key_suffix",
+      "type": "longblob",
+      "nullable": "YES",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "indexes",
+      "column": "key_sha256",
+      "type": "binary(32)",
+      "nullable": "NO",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "indexes",
+      "column": "deleted",
+      "type": "tinyint(1)",
+      "nullable": "YES",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "indexes",
+      "column": "table_id",
+      "type": "binary(16)",
+      "nullable": "YES",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "indexes",
+      "column": "document_id",
+      "type": "binary(16)",
+      "nullable": "YES",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "leases",
+      "column": "id",
+      "type": "bigint",
+      "nullable": "NO",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "leases",
+      "column": "ts",
+      "type": "bigint",
+      "nullable": "NO",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "persistence_globals",
+      "column": "key",
+      "type": "varchar(255)",
+      "nullable": "NO",
+      "default": null,
+      "charset": "utf8mb4",
+      "collation": "utf8mb4_0900_bin"
+    },
+    {
+      "table": "persistence_globals",
+      "column": "json_value",
+      "type": "longblob",
+      "nullable": "NO",
+      "default": null,
+      "charset": null,
+      "collation": null
+    },
+    {
+      "table": "read_only",
+      "column": "id",
+      "type": "bigint",
+      "nullable": "NO",
+      "default": null,
+      "charset": null,
+      "collation": null
+    }
+  ],
+  "indexes": [
+    {
+      "table": "documents",
+      "name": "documents_by_table_and_id",
+      "seq": 1,
+      "column": "table_id",
+      "subPart": null,
+      "nonUnique": 1
+    },
+    {
+      "table": "documents",
+      "name": "documents_by_table_and_id",
+      "seq": 2,
+      "column": "id",
+      "subPart": null,
+      "nonUnique": 1
+    },
+    {
+      "table": "documents",
+      "name": "documents_by_table_and_id",
+      "seq": 3,
+      "column": "ts",
+      "subPart": null,
+      "nonUnique": 1
+    },
+    {
+      "table": "documents",
+      "name": "PRIMARY",
+      "seq": 1,
+      "column": "ts",
+      "subPart": null,
+      "nonUnique": 0
+    },
+    {
+      "table": "documents",
+      "name": "PRIMARY",
+      "seq": 2,
+      "column": "table_id",
+      "subPart": null,
+      "nonUnique": 0
+    },
+    {
+      "table": "documents",
+      "name": "PRIMARY",
+      "seq": 3,
+      "column": "id",
+      "subPart": null,
+      "nonUnique": 0
+    },
+    {
+      "table": "indexes",
+      "name": "PRIMARY",
+      "seq": 1,
+      "column": "index_id",
+      "subPart": null,
+      "nonUnique": 0
+    },
+    {
+      "table": "indexes",
+      "name": "PRIMARY",
+      "seq": 2,
+      "column": "key_prefix",
+      "subPart": null,
+      "nonUnique": 0
+    },
+    {
+      "table": "indexes",
+      "name": "PRIMARY",
+      "seq": 3,
+      "column": "key_sha256",
+      "subPart": null,
+      "nonUnique": 0
+    },
+    {
+      "table": "indexes",
+      "name": "PRIMARY",
+      "seq": 4,
+      "column": "ts",
+      "subPart": null,
+      "nonUnique": 0
+    },
+    {
+      "table": "leases",
+      "name": "PRIMARY",
+      "seq": 1,
+      "column": "id",
+      "subPart": null,
+      "nonUnique": 0
+    },
+    {
+      "table": "persistence_globals",
+      "name": "PRIMARY",
+      "seq": 1,
+      "column": "key",
+      "subPart": null,
+      "nonUnique": 0
+    },
+    {
+      "table": "read_only",
+      "name": "PRIMARY",
+      "seq": 1,
+      "column": "id",
+      "subPart": null,
+      "nonUnique": 0
+    }
+  ],
+  "tables": [
+    {
+      "table": "documents",
+      "rowFormat": "Dynamic"
+    },
+    {
+      "table": "indexes",
+      "rowFormat": "Dynamic"
+    },
+    {
+      "table": "leases",
+      "rowFormat": "Dynamic"
+    },
+    {
+      "table": "persistence_globals",
+      "rowFormat": "Dynamic"
+    },
+    {
+      "table": "read_only",
+      "rowFormat": "Dynamic"
+    }
+  ]
+}

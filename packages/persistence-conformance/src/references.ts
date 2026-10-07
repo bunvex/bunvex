@@ -135,7 +135,7 @@ async function k31(st: Persistence, check: Check) {
   // One id, two tables, two different documents, one commit; each table has its own index.
   const id = did("shared");
   const jsonA = `{"t":"a"}`;
-  const jsonB = `{"t":"b","more":[1,2,3]}`;
+  const jsonB = `{"more":[1,2,3],"t":"b"}`;
   st.apply(
     30n,
     [

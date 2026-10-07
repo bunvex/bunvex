@@ -258,7 +258,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       const docs = [];
       const idx = [];
       for (const [i, del] of writes) {
-        const v = del ? null : JSON.stringify({ ts, i });
+        const v = del ? null : JSON.stringify({ i, ts });
         const prev = model.get(i)?.at(-1)?.ts;
         docs.push({ table: tid(903), id: id(i), json: v, prevTs: prev === undefined ? null : BigInt(prev) });
         idx.push({ index: tid(903), key: keyOf(i), table: del ? null : tid(903), id: del ? null : id(i) });
@@ -1399,6 +1399,10 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   //     lease: through the group's rows at its top ts, the lease still ours) and
   //     acknowledges it, exactly once (DV-124); the store holds the group exactly once (MongoDB has no unique
   //     key on its rows: the lease record is what tells).
+  /** A statement that carries `text`: as text, or as the hex of its bytes (a driver that sends documents and
+   *  keys as bytes in a SQL text, e.g. MySQL's v1 documents and its index keys, sends them as `X'…'`). */
+  const marker = (text: string) => new RegExp(`${text}|${Buffer.from(text).toString("hex")}`, "i");
+
   async function k21() {
     const T = 1000;
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -1450,7 +1454,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       });
       await e.mutation(insertItem("k21-base"));
       const base = await rowsOf(e, e.committer.visibleTs);
-      proxy.resetOn(/k21-reset/, 1);
+      proxy.resetOn(marker("k21-reset"), 1);
       const lost = await settle(e.mutation(insertItem("k21-reset")));
       const lostTs = e.committer.appliedTs;
       const lostStopped = e.committer.stopped;
@@ -1469,7 +1473,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
         lease: { ttlMs: 60_000 },
         flushRetry: { onRetry: () => {} },
       });
-      proxy.loseAnswersAfterCommit(/k21-unsure/);
+      proxy.loseAnswersAfterCommit(marker("k21-unsure"));
       const restore = (async () => {
         const deadline = Date.now() + 30 * T;
         while (!proxy.fired.loseAnswers && Date.now() < deadline) await sleep(5);
