@@ -8,9 +8,14 @@
   refuses it). 2 000 generated programs (seeds 1 and 2) then showed no difference. Phase 4 built: `.github/workflows/differential-nightly.yml`
   runs the fixed programs and about 20 minutes of generated ones every night (about 1 000 programs a minute),
   and a difference opens an issue with its seed and shrunk program for the triage of §3.2.
-- **Oracle:** the release `precompiled-2026-10-07-d8bdde0` since STUDY-137. The nightly of 2026-10-07 (#504)
-  found a bug of the previous release's paging over pending writes. Convex fixed it in 3071059; bunvex never
-  had it.
+- **#504 (7 Oct 2026), the oracle's bug:** a `take(2)` after an insert and a delete in the same mutation; Convex
+  returned the new document in place of two committed ones, bunvex the committed ones (correct). Convex fixed it
+  upstream on 5 Oct (get-convex/convex-backend#59211, its issue #585: pending writes past a snapshot page merged
+  into it), after the pinned release (`precompiled-2026-09-26-27ef234`). bunvex keeps it right with
+  `packages/core/test/own-writes-paging.test.ts`.
+- **Oracle:** the release `precompiled-2026-10-07-d8bdde0` since STUDY-137, which has that fix. bunvex first
+  followed Convex's `b352fab` (2 Oct, no more stacked `Uncaught Error:` prefixes on nested errors), on which two
+  fixed programs differed.
 - **Convex source read:**
   - `main` of get-convex/convex-backend (`4577b9031`).
   - The last commits that still had tests: `bea52bde0` (Rust) and `c358201e1` (TypeScript), read locally,
