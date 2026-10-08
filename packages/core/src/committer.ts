@@ -826,6 +826,11 @@ export class Committer {
     idleMs: number;
     /** The wait after the last bump; null while a bump is being written. */
     wait: number | null;
+    /**
+     * A commit was published while a bump was being written, perhaps above the bump's ts: the next bump is
+     * then due after `commitDelayMs`, not the idle period (Convex's `needs_follow_up_bump`, c04e2f7).
+     */
+    followUp: boolean;
     last: number;
     timer: ReturnType<typeof setTimeout> | null;
   } | null = null;
@@ -838,7 +843,7 @@ export class Committer {
    * `MAX_REPEATABLE_TIMESTAMP_COMMIT_DELAY`, 5 s) and otherwise every `idleMs` to twice that, jittered
    * (`MAX_REPEATABLE_TIMESTAMP_IDLE_FREQUENCY`, 1 h). With commits in flight it is the last durable ts, below
    * all of them; with none it takes the next commit ts, which is then also visible. A failed write is tried
-   * again after `commitDelayMs`.
+   * again after `commitDelayMs`, and so is one that a commit published during.
    */
   startRepeatableBumps(write: (ts: bigint) => Promise<void>, opts: { commitDelayMs?: number; idleMs?: number } = {}) {
     const commitDelayMs = opts.commitDelayMs ?? MAX_REPEATABLE_TS_COMMIT_DELAY_MS;
@@ -847,6 +852,7 @@ export class Committer {
       commitDelayMs,
       idleMs: opts.idleMs ?? MAX_REPEATABLE_TS_IDLE_MS,
       wait: commitDelayMs,
+      followUp: false,
       last: performance.now(),
       timer: null,
     };
@@ -871,6 +877,7 @@ export class Committer {
   /** After a published commit: the next bump is due `commitDelayMs` after the last one at the latest. */
   private bumpSoon() {
     const r = this.repeatable;
+    if (r && r.wait === null) r.followUp = true;
     if (!r || r.wait === null || r.wait <= r.commitDelayMs) return;
     r.wait = r.commitDelayMs;
     this.scheduleBump();
@@ -881,6 +888,7 @@ export class Committer {
     if (!r || this.stopped) return;
     r.timer = null;
     r.wait = null;
+    r.followUp = false;
     let ts: bigint;
     let idle = false;
     if (this.running || this.queue.length || this.appliedTs > this.visibleTs) ts = this.visibleTs;
@@ -900,7 +908,7 @@ export class Committer {
         this.wakeVisible();
       }
       // The real Math.random: this may run in the async context of a mutation.
-      r.wait = r.idleMs * (1 + outsideExecution(Math.random));
+      r.wait = r.followUp ? r.commitDelayMs : r.idleMs * (1 + outsideExecution(Math.random));
     } catch (e) {
       if (this.repeatable === r)
         console.error(`bunvex: max_repeatable_ts was not written: ${e instanceof Error ? e.message : String(e)}`);

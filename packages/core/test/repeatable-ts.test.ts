@@ -118,6 +118,29 @@ describe("max_repeatable_ts", () => {
     expect((await e.persistence.getGlobal(MAX_REPEATABLE_TS_GLOBAL)) as bigint).toBeGreaterThanOrEqual(ts);
   });
 
+  test("a commit published while a bump is written gets its own bump after the commit delay (Convex c04e2f7)", async () => {
+    const e = await open(join(dir(), "db.sqlite3"), { repeatableTs: { commitDelayMs: 20, idleMs: 60_000 } });
+    e.committer.stopRepeatableBumps();
+    const written: bigint[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    e.committer.startRepeatableBumps(
+      async (ts) => {
+        if (written.push(ts) === 1) await gate;
+      },
+      { commitDelayMs: 20, idleMs: 60_000 },
+    );
+    await until(() => written.length === 1); // the first bump is being written
+    const { ts } = await e.mutationWithTs((db) => db.insert("items", { n: 1 }));
+    expect(written[0]!).toBeLessThan(ts);
+    release();
+    // Not the idle bump an hour away: another after the commit delay, at or above the commit.
+    await until(() => written.length >= 2, 1000);
+    expect(written[1]!).toBeGreaterThanOrEqual(ts);
+  });
+
   test("an idle bump takes the next commit ts and makes it visible", async () => {
     const e = await open(join(dir(), "db.sqlite3"), { repeatableTs: { commitDelayMs: 10, idleMs: 10 } });
     const applied = e.committer.appliedTs;
