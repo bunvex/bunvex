@@ -426,7 +426,12 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-None as of 2026-10-08.
+| ID | Divergence | Convex | Observable | Recommendation | Source |
+|---|---|---|---|---|---|
+| DV-442 | Revisits DV-225 and DV-315: bunvex's client would announce its own version (`0.1.0-alpha.0`); the server would drop Convex's deprecation thresholds (bunvex's own start empty) and always send big transitions in chunks | Convex's client announces its npm version; the server refuses npm ≤ 0.19.1 and chunks only for npm ≥ 1.28.0 | yes (Convex clients older than the reference are no longer special-cased) | Accept: bunvex is its own product, Convex's client is a test oracle at the reference | [STUDY-139 P1–P3](../study/STUDY-139-product-and-oracle.md#4-decisions-to-take) |
+| DV-443 | Revisits DV-414: MySQL documents only in v0 (the JSON text); Convex's v1 (LZ4 with its dictionary) neither read nor written, `MYSQL_DOCUMENT_ENCODING` gone | writes v1 by default, reads both | operational (a MySQL store the Convex binary wrote no longer opens) | Accept: stores are crossed only in tests, on SQLite | [STUDY-139 P5](../study/STUDY-139-product-and-oracle.md#4-decisions-to-take) |
+
+STUDY-139 P4, P6 and P7 (remove the zip package reader and the two migrations of older bunvex stores; add the export-from-Convex import test) are not divergences; they await the owner in the study.
 
 DV-435–DV-439 (STUDY-137 R1–R5) were decided by the owner (2026-10-08, "approve the recommendations"): DV-437 is in [Decided divergences](#decided-divergences), the others in [Decided: match Convex (to be built)](#decided-match-convex-to-be-built).
 DV-366 (STUDY-110 L3) was decided by the owner (2026-10-05, #426: do not match the site proxy's limit of 4) and is in [Decided divergences](#decided-divergences).
