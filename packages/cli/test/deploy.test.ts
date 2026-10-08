@@ -530,7 +530,7 @@ describe("the checks before a push (STUDY-56), as Convex's deploy", () => {
 import { v } from ${JSON.stringify(VALUES)};
 export default defineSchema({ notes: defineTable({ body: ${validator}, other: v.optional(v.string()) })${indexes} });`,
     "bunvex/notes.ts": `import { mutation } from ${JSON.stringify(SERVER)};
-export const add = mutation(async ({ db }) => db.insert("notes", { body: "x" }));`,
+export const add = mutation(async ({ db }) => db.insert("notes", { body: "a note" }));`,
   });
   async function setup() {
     const d = await deployment();
@@ -589,7 +589,9 @@ export const add = mutation(async ({ db }) => db.insert("notes", { body: "x" }))
 
   test("a dry run warns about a slow schema walk; a CI platform names the push in the audit log", async () => {
     const { d, app, env } = await setup();
-    write(app, schema('.index("by_body", ["body"])', "v.union(v.string(), v.number())"));
+    // Narrower than `v.string()` and than the table's shape (a string), so the table must be walked; the
+    // documents still match, so the push goes through.
+    write(app, schema('.index("by_body", ["body"])', 'v.union(v.literal("a note"), v.number())'));
     const dry = io(app, { ...env, BUNVEX_MIN_BYTES_FOR_SCHEMA_WALK_WARNING: "1" });
     expect(await main(["deploy", "--typecheck=disable", "--dry-run"], dry.it)).toBe(0);
     expect(dry.err.join("\n")).toMatch(
