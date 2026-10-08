@@ -282,7 +282,7 @@ export async function usageLimitRoute(
       )) as unknown as string;
       await audit(db, "create_usage_limit", { id: newId, config: configValue(c) });
       return { ...c, _id: newId };
-    }, "create_usage_limit");
+    }, "_system/create_usage_limit");
     deps.wake();
     return Response.json({ usageLimit: responseOf(row) });
   }
@@ -301,7 +301,7 @@ export async function usageLimitRoute(
         current: configValue(c),
       });
       return { ...c, _id: old._id };
-    }, "update_usage_limit");
+    }, "_system/update_usage_limit");
     deps.wake();
     return Response.json({ usageLimit: responseOf(row) });
   }
@@ -311,7 +311,7 @@ export async function usageLimitRoute(
       const old = await mustGet(db, limitId);
       await db.asSystem(() => db.delete(USAGE_LIMITS_TABLE, old._id));
       await audit(db, "delete_usage_limit", { id: old._id, config: configValue(configOf(old)) });
-    }, "delete_usage_limit");
+    }, "_system/delete_usage_limit");
     deps.wake();
     return new Response(null, { status: 200 });
   }
@@ -404,7 +404,7 @@ export class UsageLimitWorker {
           metadata: { old_state: before.usage_limit, new_state: disable ? "disabled" : "none" },
         });
       if (events.length > 0) await insertAuditLogEvents(db, events as never, SYSTEM_ACTOR);
-    }, "usage_limit_enforcement");
+    }, "_system/usage_limit_enforcement");
   }
 }
 

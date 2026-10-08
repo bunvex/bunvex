@@ -773,7 +773,7 @@ export class Engine {
     return this.runMutation(
       (db) => initializeStorageType(db, init, this.instanceName, () => uuid),
       true,
-      "init_storage",
+      "_system/init_storage",
     );
   }
 
@@ -896,7 +896,7 @@ export class Engine {
         return true;
       },
       true,
-      "index_finish_schema",
+      "_system/index_finish_schema",
     );
     if (finished) this.settleReady();
     return finished;
@@ -1684,7 +1684,7 @@ export class Engine {
         return { id: row ? (row._id as string) : await db.insert(INDEX_BACKFILLS_TABLE, fields), done: 0 };
       },
       true,
-      "search_backfill_initialization",
+      "_system/search_backfill_initialization",
     );
     let total = done;
     return async (docs: number) => {
@@ -2185,7 +2185,7 @@ export class Engine {
         await deleteValidationsForSchema(db, schemaId);
       },
       true,
-      "schema_worker",
+      "_system/schema_worker",
     );
   }
 
@@ -2216,7 +2216,7 @@ export class Engine {
         );
       },
       true,
-      "init_app_system_tables",
+      "_system/init_app_system_tables",
     );
     if (!row) return;
     const schema = schemaFromJson(JSON.parse(row.schema as string) as SchemaJson);
@@ -2264,7 +2264,7 @@ export class Engine {
         return ids;
       },
       true,
-      "schema_validation_tracker_initialized",
+      "_system/schema_validation_tracker_initialized",
     );
     for (const [k, t] of walk.entries()) {
       const attempt = attempts[k]!;
@@ -2281,7 +2281,7 @@ export class Engine {
         inFlight = this.runMutation(
           (db) => recordValidationProgress(db, attempt, count, this.totalDocs(t.name)),
           true,
-          "schema_validation_progress_updated",
+          "_system/schema_validation_progress_updated",
         );
         return true;
       };
@@ -2308,7 +2308,7 @@ export class Engine {
       const marked = await this.runMutation(
         (db) => markValidationValid(db, attempt),
         true,
-        "schema_validation_progress_finished",
+        "_system/schema_validation_progress_finished",
       );
       if (!marked) return;
     }
@@ -2320,7 +2320,7 @@ export class Engine {
           await db.patch(SCHEMAS_TABLE, schemaId, { state: { state: "validated" } });
       },
       true,
-      "schema_worker",
+      "_system/schema_worker",
     );
   }
 
@@ -2373,7 +2373,7 @@ export class Engine {
         return { schemaId, state, addedIndexes, created, after };
       },
       true,
-      "start_push",
+      "_system/start_push",
     );
     this.catalog = buildCatalog(r.after.tables, r.after.indexes);
     if (await this.backfillNewTables(r.created, r.after.indexes)) r.after = await this.runMutation(readCatalog, true);
@@ -2504,7 +2504,7 @@ export class Engine {
         };
       },
       true,
-      "finish_push",
+      "_system/finish_push",
     );
     return r;
   }
@@ -2601,7 +2601,7 @@ export class Engine {
         db.onCommitVisible = install;
       },
       true,
-      "snapshot_import_enable_indexes",
+      "_system/snapshot_import_enable_indexes",
     );
     // Nothing to enable (no copied index, or a system table's, enabled by its backfill): no commit to wait for.
     if (!def) install();

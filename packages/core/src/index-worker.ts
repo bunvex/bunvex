@@ -143,7 +143,7 @@ export class IndexWorker {
         const backfilling = await this.host.system(
           async (db) =>
             databaseIndexRows(await db.query(INDEX_TABLE).collect()).filter((i) => i.state === "backfilling"),
-          "index_worker_scan",
+          "_system/index_worker_scan",
         );
         if (backfilling.length === 0) {
           await this.host.finishSchema();
@@ -208,7 +208,7 @@ export class IndexWorker {
         out.push(p);
       }
       return out;
-    }, "index_worker_backfill_initialization");
+    }, "_system/index_worker_backfill_initialization");
 
     // Resume after the least advanced checkpoint: re-writing an entry another index already has is harmless.
     let resumeAfter: string | null = null;
@@ -248,7 +248,7 @@ export class IndexWorker {
             }),
           );
         }
-      }, "index_worker_backfill_progress");
+      }, "_system/index_worker_backfill_progress");
       this.stats.checkpoints++;
     };
 
@@ -299,7 +299,7 @@ export class IndexWorker {
         if (cur?.state === "backfilling" && !cur.retentionStarted)
           await db.patch(INDEX_TABLE, m._id, indexStatePatch(cur, { retentionStarted: true }));
       }
-    }, "index_worker_retention_started");
+    }, "_system/index_worker_retention_started");
 
     // Done: as Convex's `finish_backfill`, a user index becomes `backfilled` (the schema change enables it);
     // an index of a system table, or a system index, is enabled at once. Its `_index_backfills` row stays, as
@@ -321,7 +321,7 @@ export class IndexWorker {
       }
       if (enabled.length)
         db.onCommitVisible = (ts) => this.host.installIndexChanges({ enable: enabled, disable: [], drop: [] }, ts);
-    }, "index_worker_finish_backfill");
+    }, "_system/index_worker_finish_backfill");
   }
 
   /**

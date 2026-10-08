@@ -456,7 +456,7 @@ export async function logStreamRoute(
         const sinkId = await addOrUpdateSink(db, config);
         await audit(db, auditEvents.createIntegration(sinkId, config.type));
         return sinkId;
-      }, "create_log_stream");
+      }, "_system/create_log_stream");
       deps.wake();
       return json(
         config.type === "webhook"
@@ -477,7 +477,7 @@ export async function logStreamRoute(
         await audit(db, auditEvents.updateIntegration(sinkId, row.config.type));
         // Verified again (Convex's `reset_log_sink_to_pending`).
         await patchSink(db, row._id, { status: { type: "pending" } });
-      }, "update_log_stream");
+      }, "_system/update_log_stream");
       deps.wake();
       return new Response(null, { status: 200 });
     }
@@ -489,7 +489,7 @@ export async function logStreamRoute(
         const row = await mustGetSink(db, sinkId);
         await patchSink(db, row._id, { status: { type: "deleting" } });
         await audit(db, auditEvents.deleteIntegration(row._id, row.config.type));
-      }, "delete_log_stream");
+      }, "_system/delete_log_stream");
       deps.wake();
       return new Response(null, { status: 200 });
     }
@@ -505,7 +505,7 @@ export async function logStreamRoute(
         await patchSink(db, row._id, { config: { ...row.config, hmacSecret } });
         await audit(db, auditEvents.updateIntegration(sinkId, "webhook"));
         return hmacSecret;
-      }, "rotate_webhook_secret");
+      }, "_system/rotate_webhook_secret");
       // As Convex's, the running sink keeps signing with the old secret until it restarts.
       return json({ logStreamType: "webhook", hmacSecret: secret });
     }

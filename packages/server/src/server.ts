@@ -987,7 +987,7 @@ export function createServer(opts: ServerOptions) {
           auditActor(caller),
         );
       return null;
-    }, "set_user_stop_state");
+    }, "_system/set_user_stop_state");
     return outcome === null ? new Response(null, { status: 200 }) : requestError(400, failed, outcome);
   };
 
@@ -1951,7 +1951,7 @@ export function createServer(opts: ServerOptions) {
           ],
           auditActor(caller),
         );
-      }, "update_canonical_url");
+      }, "_system/update_canonical_url");
       if (authModule) useAuth(infos);
       return new Response(null, { status: 200 });
     } catch (e) {
@@ -2027,7 +2027,7 @@ export function createServer(opts: ServerOptions) {
           });
           await insertAuditLogEvents(db, events, auditActor(caller));
           return true;
-        }, "update_env_vars");
+        }, "_system/update_env_vars");
         if (same) break;
         if (attempt >= 4) return requestError(409, "RaceDetected", "Environment variables changed during the update");
       }

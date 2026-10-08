@@ -568,7 +568,7 @@ export async function cancelScheduledJob(engine: Engine, id: string, actor: Audi
     await cancelJob(db, jobId, Date.now());
     // As Convex, in the cancel's transaction, whether the job was still pending or not.
     await insertAuditLogEvents(db, [auditEvents.cancelScheduledFunction(id, job?.name ?? null)], actor);
-  }, "cancel_job");
+  }, "_system/cancel_job");
 }
 
 /**
@@ -603,7 +603,7 @@ export async function cancelAllScheduledJobs(
       // As Convex: one event per batch that canceled anything.
       if (jobs.length > 0) await insertAuditLogEvents(db, [auditEvents.cancelAllScheduledFunctions()], actor);
       return jobs.length;
-    }, "cancel_all_jobs");
+    }, "_system/cancel_all_jobs");
     total += n;
     if (n < MAX_JOBS_CANCEL_BATCH) return total;
   }
