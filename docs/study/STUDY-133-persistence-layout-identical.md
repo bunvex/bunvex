@@ -1003,4 +1003,6 @@ bug fixed on its own.
   with the File API's type, as Convex's runtime (`udf-runtime/src/09_file.ts`); an HTTP action's
   `request.blob()` is typed by the Content-Type lower-cased, and `storage.get` likewise (`web-blob.ts`).
   `new Response(blob)` still takes its default Content-Type from Bun.
-- **M15:** a bug fixed on its own: the committer may still flush after SIGTERM released the SQLite lock.
+- **M15 (fixed on its own, #515):** `bunvex-local-backend` closed the engine twice on SIGINT/SIGTERM (the
+  server's shutdown, then its own stop); the second close flushed and fast-forwarded the search indexes after
+  the first had released the SQLite lock. `Engine.close()` now runs once; a second call waits for the first.
