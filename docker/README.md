@@ -48,10 +48,10 @@ Set these in the shell or in a `.env` file next to `docker-compose.yml`:
 |---|---|
 | `PORT`, `SITE_PROXY_PORT` | The host ports (default 3210, 3211). |
 | `BUNVEX_CLOUD_ORIGIN`, `BUNVEX_SITE_ORIGIN` | The public URLs of the API and HTTP actions: file URLs and the built-in `BUNVEX_CLOUD_URL` / `BUNVEX_SITE_URL` (default `http://127.0.0.1:<port>`). |
-| `POSTGRES_URL`, `MYSQL_URL` | Use Postgres or MySQL instead of SQLite. The URL names the database. |
+| `POSTGRES_URL`, `MYSQL_URL` | Use Postgres or MySQL instead of SQLite. Without a database in the URL, it connects to the instance name's (`bunvex_self_hosted` by default), as Convex. |
 | `PERSISTENCE`, `PERSISTENCE_URL` | Or name the driver: `sqlite`, `postgres`, `mysql`, `mongodb`. |
 | `DO_NOT_REQUIRE_SSL` | Allow an unencrypted database connection (a local database). |
-| `S3_STORAGE_FILES_BUCKET`, `S3_STORAGE_MODULES_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_ENDPOINT_URL`, `AWS_S3_FORCE_PATH_STYLE` | Keep files and pushed code in S3 (each use case whose bucket is set). |
+| `S3_STORAGE_FILES_BUCKET`, `S3_STORAGE_MODULES_BUCKET`, `S3_STORAGE_EXPORTS_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `S3_ENDPOINT_URL`, `AWS_S3_FORCE_PATH_STYLE` | Keep files, pushed code and exports in S3 (each use case whose bucket is set). |
 | `INSTANCE_NAME`, `INSTANCE_SECRET` | The instance's name and secret (32 bytes, hex). By default, generated on the first start and kept in the volume. |
 | `REDACT_LOGS_TO_CLIENT` | Keep functions' log lines and errors' details from clients. |
 | `DOCUMENT_RETENTION_DELAY` | How long old document versions are kept, in seconds (default here: 2 days). |
@@ -81,7 +81,7 @@ export INSTANCE_SECRET=$(openssl rand -hex 32)
 ```
 
 The database is `bunvex_local_backend.sqlite3` in the current directory; for Postgres,
-`--db postgres postgres://…/<database>` (the URL names the database). `--help` lists the other options (ports,
+`--db postgres postgres://…` (without a database in the URL, the instance name's, `-` replaced by `_`). `--help` lists the other options (ports,
 public origins, storage). To build it yourself: `bun scripts/build-binary.ts --host` (into `dist/bin/`).
 
 ## Build the image

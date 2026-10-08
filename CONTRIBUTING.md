@@ -6,8 +6,8 @@ change so we can agree on the design first.
 ## Setup
 
 ```sh
-bun install            # Bun 1.4+
-bun run check          # lint (Biome), typecheck (tsc strict), dependency rules, tests
+bun install            # Bun 1.4.2+
+bun run check          # lint (Biome), typecheck (tsc strict), dependency rules, tests, dashboard and site builds
 ```
 
 ## Where things live

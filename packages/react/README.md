@@ -23,6 +23,8 @@ export const App = () => (
 
 - `useQuery(query, args | "skip")`, `useQuery_experimental`, `useQueries`;
 - `useMutation(ref)` (and `.withOptimisticUpdate(fn)`), `useAction(ref)`;
-- `useBunvexConnectionState()`, `useBunvex()`.
-
-Next: `usePaginatedQuery`, auth helpers, and SSR hydration.
+- `useBunvexConnectionState()`, `useBunvex()`;
+- `usePaginatedQuery(query, args, { initialNumItems })`, with the `insertAtTop` / `insertAtPosition` /
+  `optimisticallyUpdateValueInPaginatedQuery` helpers;
+- `BunvexProviderWithAuth`, `useBunvexAuth()`, `<Authenticated>` / `<Unauthenticated>` / `<AuthLoading>`;
+- `usePreloadedQuery(preloaded)`, for a query preloaded on the server with `@bunvex/nextjs`.

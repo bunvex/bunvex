@@ -1,12 +1,12 @@
 # @bunvex/dashboard
 
 The bunvex dashboard screens: Health, Topology, Database, Schema, Files, Functions (with the function
-runner), Schedules, Authentication, Logs, History and Settings — the list, with where each is specified,
+runner), Schedules, Authentication, Logs, History, Subscriptions and Settings — the list, with where each is specified,
 is [UI-01 §0](../../docs/specs/UI-01-ui-and-dashboard.md). It never talks to a server itself: a host passes a `DashboardDataSource`, so the same screens serve a self-hosted deployment and a
 cloud control plane. `MockDataSource` serves development and tests.
 
-**Status:** every screen is built on the mock; no server implements the contract yet (it needs the
-server's admin API) — see [UI-01](../../docs/specs/UI-01-ui-and-dashboard.md) and
+**Status:** every screen is built on the mock; no data source calls a server yet (the server's admin API
+and the admin-key sign-in exist, a data source that calls them does not) — see [UI-01](../../docs/specs/UI-01-ui-and-dashboard.md) and
 [ARCHITECTURE.md](../../ARCHITECTURE.md).
 
 ## Mounting it
@@ -39,7 +39,7 @@ import { ThemeProvider } from "@bunvex/ui/theme";
 - **A new data source** implements `DashboardDataSource` (`@bunvex/dashboard/data-source`) and should pass
   `describeDataSourceContract` from `@bunvex/dashboard/contract` in its tests. Only the core methods are
   required; every other area (writes, the runner, deployment, state, metrics, snapshots, auth, auth admin,
-  topology, subscriptions, system tables) is optional, detected with `typeof`, and a screen or action without its method says so or
+  topology, clients, subscriptions, system tables) is optional, detected with `typeof`, and a screen or action without its method says so or
   hides itself (UI-01 §0).
 
 ## Extensions

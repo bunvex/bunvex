@@ -15,5 +15,8 @@ await client.mutation(api.messages.send, { body: "hi" }); // the list above alre
 
 - `BaseBunvexClient`: the protocol (subscribe, mutation, action, optimistic updates, connection state).
 - `BunvexClient`: callbacks, one-shot `query()`, for code that is not React.
+- `BunvexHttpClient`: one-shot queries, mutations and actions over HTTP, with no WebSocket.
+- `setAuth(fetchToken)` / `clearAuth()`: a JWT for `ctx.auth`, fetched again before it expires.
+- `PaginatedQueryClient`: paginated queries, behind `usePaginatedQuery`.
 
-Next: `@bunvex/react`, paginated queries, `setAuth` (with `@bunvex/auth`), and the HTTP client.
+The React bindings are [`@bunvex/react`](../react/README.md).
