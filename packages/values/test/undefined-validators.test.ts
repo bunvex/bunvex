@@ -44,7 +44,7 @@ describe("the builders' other checks, as Convex's", () => {
   test("entries that are not validators", () => {
     expect(message(() => v.object({ a: "nope" as never }))).toBe("v.object() entries must be validators");
     expect(message(() => v.union(v.string(), {} as never))).toBe("All members of v.union() must be validators");
-    expect(message(() => v.record({} as never, v.number()))).toBe("Key and value of v.record() must be validators");
+    expect(message(() => v.record({} as never, v.number()))).toBe("Key and value of v.record() but be validators");
   });
 
   test("v.literal takes a string, number, bigint or boolean; v.id a string table name", () => {

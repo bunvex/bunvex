@@ -34,7 +34,10 @@ few bug fixes. The commits with app-visible effects:
     - "A Fivetran sync" or "An Airbyte sync";
     - "A data import" for `snapshot_import*`;
     - "A Convex system operation" otherwise.
-  - Typos fixed: "must be validators" (`v.record()`); "so must specify an ApplicationID" (auth config).
+  - Typos fixed: "so must specify an ApplicationID" (auth config), and in the source "must be validators"
+    (`v.record()`). The published `convex` 1.46.0 still says "but be validators", and bunvex's message is
+    checked against that package (`sync-e2e/test/undefined-validators-oracle.test.ts`), so it keeps the
+    published words until a release carries the fix.
 - **75d250e — Write throughput by rows.**
   - Each commit records its rows (`document_writes.len() + index_writes.len()`) next to its bytes
     (`WriteVolume`, `crates/database/src/write_throughput_limiter.rs`).
@@ -111,7 +114,7 @@ Each item below has a test, and the test was run against the item's code removed
 |---|---|---|
 | b352fab prefix | `describeUncaught` keeps a message already `Uncaught <Name>: …` (`server/src/errors.ts`) | `action-nested-errors.test.ts` |
 | b352fab plurals | `PLURAL` in `server/src/action-permits.ts` | `function-limits.test.ts` |
-| b352fab messages | `SystemIdentityRequiredError`, the cron skip line, the two typos | `system-identity`, `admin-access`, `undefined-validators` tests |
+| b352fab messages | `SystemIdentityRequiredError`, the cron skip line, the auth config typo | `system-identity`, `admin-access` tests |
 | 75d250e | `WriteThroughputLimiter` records rows (`committer.ts`: docs + index writes); `MAX_ROWS_WRITTEN_PER_SECOND`; `exceeded()` bytes then rows; both messages "per second". bunvex keeps its "set … to raise the limit" sentence in place of the upgrade offer, as STUDY-78 decided. `formatWindow` is gone (unused) | `server/test/write-throughput.test.ts` |
 | 82e5c50 | `HTTP_ACTION_RESPONSE_LIMIT = 100 << 20`; `tooLarge` drops every later chunk and suppresses the size warning (`http-body.ts`, `limit-warnings.ts`) | `http-action-response-log.test.ts` |
 | 8ecf38b | `checkModulePath` prefixes `Invalid module path '<p>': `; `utf8Prefix` for the too-long prefix; `badModulePath` is the error alone (`function-path.ts`) | `function-path`, `get-query`, `run-test-function` tests |
