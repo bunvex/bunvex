@@ -225,3 +225,13 @@ there is nothing on it to compare.
 ## 6. Open questions
 
 None.
+
+## Arguments too deep to stringify (2026-10-08)
+
+Arguments thousands of levels deep are refused with the nesting message, as before; but in Bun (JSC) a
+`JSON.stringify` that overflows the stack takes about 1.6 s to throw, whatever the depth past ~50 000 levels, so a
+200 KB request of nested arrays held a CPU that long (twice over the sync protocol: once to measure, once to
+convert). `deep-values.ts` walks the arguments first, without recursion, stopping past 1 000 levels (far above the
+limit of 64, so no message changes), and each root once (the sync protocol measures, keys and converts the same
+arguments). Measured: +0.35 µs a call for small arguments, +14% of the conversion for a 0.74 MB argument; the
+100 000-level request is refused in ~50 ms instead of ~1.9 s.
