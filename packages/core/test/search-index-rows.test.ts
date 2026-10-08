@@ -4,9 +4,10 @@
 // Convex binary builds the index itself, Q5); bunvex's state, from backfilling to snapshotted with the segment
 // list, is in the `search_index_segments` global; gone with the index.
 import { describe, expect, test } from "bun:test";
-import { v } from "@bunvex/values";
+import { encodeId, v } from "@bunvex/values";
 import { readSearchIndexStates } from "../src/engine.ts";
 import { defineSchema, defineTable, Engine, type SearchSegmentStore } from "../src/index.ts";
+import { internalIdOf } from "../src/internal-id.ts";
 import type { TabletId } from "../src/persistence/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import {
@@ -196,17 +197,26 @@ describe("the states a start restores (STUDY-133 PR 9)", () => {
     return { state, writes, globals };
   };
 
-  test("a store from before the global: the rows' states are kept, then each row is rewritten as Convex's", async () => {
+  test("a store with no global: no state is kept, the index is built again; each row is rewritten as Convex's", async () => {
     const { state, writes, globals } = fresh();
+    // A row holding segments (bunvex's form before the global, STUDY-139 P6): not migrated.
     state.load([withId(stateToRow(text))], null);
-    expect(state.get("text", text.tablet, text.name)).toEqual(text);
-    await state.rewriteRows();
-    expect(writes).toEqual([[{ _id: "row1", row: indexRow(text) }]]);
-    const saved = readSavedStates(globals.get(SEGMENTS_GLOBAL));
-    expect(saved?.get(key)).toEqual({ rowId: "row1", state: text });
-    // Nothing changed: nothing written again.
+    expect(state.get("text", text.tablet, text.name)).toBeUndefined();
     await state.rewriteRows();
     expect(writes).toHaveLength(1);
+    expect(writes[0]![0]!._id).toBe("row1");
+    expect(readSavedStates(globals.get(SEGMENTS_GLOBAL))?.get(key)).toBeUndefined();
+  });
+
+  test("a fast-forward row is read by the index's internal id only, not its document id (STUDY-139 P6)", () => {
+    const { state } = fresh();
+    const docId = encodeId(1, new Uint8Array(16).fill(7));
+    state.load([{ ...indexRow(text), _id: docId }], new Map([[key, { rowId: docId, state: text }]]));
+    const meta = (ts: bigint) => ({ metadata: { fast_forward_ts: ts } });
+    state.loadForwarded([{ _id: "w1", index_id: docId, index_metadata: meta(9n) }]);
+    expect(state.currentTs(text)).toBe(5n);
+    state.loadForwarded([{ _id: "w1", index_id: internalIdOf(docId), index_metadata: meta(9n) }]);
+    expect(state.currentTs(text)).toBe(9n);
   });
 
   test("a saved state is used only with the row bunvex wrote for it", () => {

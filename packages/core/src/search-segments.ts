@@ -572,8 +572,8 @@ export class SearchSegmentsState {
 
   /**
    * The states at a start: each `_index` row's, from the global (`saved`), when the row is still the one bunvex
-   * wrote for it. A store from before the global (null) keeps its rows' states, which held the segments; anything
-   * else is no state, and the index is built from its table. Every row is rewritten in Convex's shape by the next
+   * wrote for it. Anything else (no global, another binary's row) is no state, and the index is built from its
+   * table: older stores are not migrated (STUDY-139 P6). Every row is rewritten in Convex's shape by the next
    * `update` (`rewriteRows`).
    */
   load(
@@ -588,7 +588,7 @@ export class SearchSegmentsState {
       const { _id, ...row } = r;
       this.stored.set(key, rowKey(row));
       const entry = saved?.get(key);
-      const s = saved === null ? rowToState(r) : entry && entry.rowId === _id && isOwnRow(r) ? entry.state : null;
+      const s = entry && entry.rowId === _id && isOwnRow(r) ? entry.state : null;
       if (s) this.states.set(key, s);
     }
   }
@@ -600,14 +600,11 @@ export class SearchSegmentsState {
 
   /**
    * The fast-forward ts of the `_index_worker_metadata` rows, by their `_index` row's internal id (Convex's
-   * `InternalId` string; a row from before STUDY-133 §12 M7 holds the document id, read too).
+   * `InternalId` string, STUDY-133 §12 M7). A row in another form is not read (STUDY-139 P6).
    */
   loadForwarded(rows: Record<string, unknown>[]) {
     const keyOf = new Map<string, string>();
-    for (const [k, id] of this.ids) {
-      keyOf.set(id, k);
-      keyOf.set(internalIdOf(id), k);
-    }
+    for (const [k, id] of this.ids) keyOf.set(internalIdOf(id), k);
     for (const r of rows) {
       const k = keyOf.get(r.index_id as string);
       const meta = r.index_metadata as { metadata?: { fast_forward_ts?: bigint } } | undefined;
