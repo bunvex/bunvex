@@ -1,6 +1,6 @@
 # STUDY-137 — Convex from 4577b90 to precompiled-2026-10-07-d8bdde0
 
-- **Status:** implemented, except the items in §4 that wait on the owner (DV-435–DV-439).
+- **Status:** implemented; §4 decided by the owner (2026-10-08, "approve the recommendations"): DV-435, DV-436, DV-438 and DV-439 to be matched, DV-437 kept until the upload lands upstream.
 - **Convex source read:** get-convex/convex-backend from `4577b9031` (2026-09-28, the parity reference until
   now) to the release tag `precompiled-2026-10-07-d8bdde0`. That is 138 commits, of which 72 touch the
   runtime, the CLI or the npm package; each of the 72 was read and checked against bunvex.
@@ -132,11 +132,11 @@ check. The limiter keeps no other state, and the hot path (`record`, the under-l
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| R1 (DV-435) | OCC conflicts caused by a system writer still read `A call to "<label>"`. Convex now prints a description of the writer, and four of its five descriptions contain "Convex" | The repository's rule bans "convex" in shipped strings. Recommendation: match the structure with bunvex's words: "An edit in the dashboard", "A Fivetran sync", "An Airbyte sync", "A data import", "A system operation" | pending (owner) |
-| R2 (DV-436) | `RegExp.$1`, `lastMatch`, `input` and the other legacy statics still work in functions. Convex removed them (644e25f) | Bun's JSC has them. Deleting them from each version's `vm` context is cheap. Recommendation: match Convex in the isolate context. It is not checked whether Convex's Node executor removes them too | pending (owner) |
-| R3 (DV-437) | `ctx.storage.store()` in a mutation still throws "not supported in queries and mutations yet". Convex's syscall now writes the row (fb75332), but nothing uploads the bytes yet | The series is half-built at this tag. Recommendation: keep the current behaviour until the upload lands upstream, then match | pending (owner) |
-| R4 (DV-438) | No `_schema_validations` rows for staged validators, and no 400 `StagedSchemaWithEnforcedValidatorChanges` (2ada334) | Needs a study update (STUDY-106/127): the background walk it prepares for is not in this tag. Recommendation: match the push refusal and the rows in a follow-up | pending (owner) |
-| R5 (DV-439) | Function arguments are not checked against the value limits (array length 8192, field count) before the call; Convex fails with `InvalidArguments` (4991db1 made the system functions' case a user error too) | A gap older than this range, not verified end to end. Recommendation: match in a follow-up | pending (owner) |
+| R1 (DV-435) | OCC conflicts caused by a system writer still read `A call to "<label>"`. Convex now prints a description of the writer, and four of its five descriptions contain "Convex" | The repository's rule bans "convex" in shipped strings. Recommendation: match the structure with bunvex's words: "An edit in the dashboard", "A Fivetran sync", "An Airbyte sync", "A data import", "A system operation" | **match** with bunvex's words (owner, 2026-10-08) |
+| R2 (DV-436) | `RegExp.$1`, `lastMatch`, `input` and the other legacy statics still work in functions. Convex removed them (644e25f) | Bun's JSC has them. Deleting them from each version's `vm` context is cheap. Recommendation: match Convex in the isolate context. It is not checked whether Convex's Node executor removes them too | **match** in the isolate context (owner, 2026-10-08) |
+| R3 (DV-437) | `ctx.storage.store()` in a mutation still throws "not supported in queries and mutations yet". Convex's syscall now writes the row (fb75332), but nothing uploads the bytes yet | The series is half-built at this tag. Recommendation: keep the current behaviour until the upload lands upstream, then match | **keep** until the upload lands upstream, then match (owner, 2026-10-08) |
+| R4 (DV-438) | No `_schema_validations` rows for staged validators, and no 400 `StagedSchemaWithEnforcedValidatorChanges` (2ada334) | Needs a study update (STUDY-106/127): the background walk it prepares for is not in this tag. Recommendation: match the push refusal and the rows in a follow-up | **match** in a follow-up, after STUDY-106/127 (owner, 2026-10-08) |
+| R5 (DV-439) | Function arguments are not checked against the value limits (array length 8192, field count) before the call; Convex fails with `InvalidArguments` (4991db1 made the system functions' case a user error too) | A gap older than this range, not verified end to end. Recommendation: match in a follow-up | **match** in a follow-up (owner, 2026-10-08) |
 
 Not divergences:
 

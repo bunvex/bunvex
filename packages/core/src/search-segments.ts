@@ -2,10 +2,13 @@
 // segments in the `search` blob use case plus a memory part (`@bunvex/search`'s `SegmentedIndex`); this module
 // keeps their state — which segments, current at which ts — and reads it back at a start.
 //
-// As Convex's, the state is each index's `_index` row: `{tablet, name, config}`, its `config` Convex's
-// `IndexConfig::Text` / `IndexConfig::Vector` as Convex serializes it (`type` "search" or "vector", the spec's
-// fields, `onDiskState` `backfilling` / `backfilling2` / `snapshotted` with the segment list). Every search and
-// vector index of the schema has one, so `_index` holds the rows Convex's does (STUDY-111 §3.7). A row names only
+// Every search and vector index of the schema has an `_index` row in Convex's shape (`{table_id, descriptor,
+// config}`, its `config` Convex's `IndexConfig::Text` / `IndexConfig::Vector`, every integer an Int64), so `_index`
+// holds the rows Convex's does (STUDY-111 §3.7). Convex cannot read bunvex's segments, nor bunvex Convex's, so the
+// row's `onDiskState` is always `backfilling` (with its `staged` flag): the Convex binary opening the store builds
+// the index itself (STUDY-133 Q5, DV-415). bunvex's own state — the segments, the ts they are current at, a
+// backfill's cursor — is in the bunvex-only global `search_index_segments`, by index, with the id of the row it
+// belongs to; a state whose row is gone, or is no longer the row bunvex wrote, is not used. The global names only
 // blobs already written. A start loads an index's segments and replays the document log since its ts, as Convex's
 // bootstrap; a state it cannot trust is not used, and the index is built from its table instead.
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -38,6 +41,8 @@ export function searchWorkersFromEnv(env: Record<string, string | undefined> = p
 
 /** A row as a comparable string (int64 fields are `bigint`s, which JSON cannot hold). */
 const rowKey = (row: unknown) => JSON.stringify(row, (_k, x) => (typeof x === "bigint" ? `${x}n` : x));
+/** The bunvex-only global holding each search and vector index's state (STUDY-133 Q5, DV-415). */
+export const SEGMENTS_GLOBAL = "search_index_segments";
 /** Retention's global for the oldest document snapshot it keeps (retention.ts). */
 const MIN_DOCUMENT_TS_GLOBAL = "document_min_snapshot_ts";
 /** Convex's `TextSnapshotVersion::current()` (V2UseStringIds): the version a text snapshot is written with. */
@@ -271,7 +276,97 @@ export const isSearchIndexRow = (row: Record<string, unknown>) => {
   return type === "search" || type === "vector";
 };
 
-/** A state as its `_index` row: Convex's `SerializedIndexConfig::Search` / `::Vector`. */
+/**
+ * The `_index` row bunvex writes for a state: Convex's `SerializedIndexConfig::Search` / `::Vector` with
+ * `onDiskState` `backfilling` (Convex's empty `Backfilling { staged }`, and the vector one with no segment and no
+ * cursor), so the Convex binary builds the index itself; `dimensions` an Int64, as Convex's `i64`.
+ */
+export function indexRow(s: IndexSegmentsState): SearchIndexRow {
+  const filterFields = [...s.def.filterFields].sort();
+  if (s.kind === "text")
+    return {
+      table_id: s.tablet,
+      descriptor: s.name,
+      config: {
+        type: "search",
+        searchField: (s.def as SearchIndexDef).searchField,
+        filterFields,
+        onDiskState: { state: "backfilling", staged: s.staged },
+      },
+    };
+  const def = s.def as VectorIndexDef;
+  return {
+    table_id: s.tablet,
+    descriptor: s.name,
+    config: {
+      type: "vector",
+      dimensions: BigInt(def.dimensions),
+      vectorField: def.vectorField,
+      filterFields,
+      onDiskState: {
+        state: "backfilling",
+        segments: [],
+        table_scan_cursor: null,
+        last_segment_ts: null,
+        staged: s.staged,
+      },
+    },
+  };
+}
+
+/** Whether a row is one `indexRow` wrote (so the state saved for it in the global is still its). */
+const isOwnRow = (row: Record<string, unknown>) => {
+  const o = (row.config as { onDiskState?: Record<string, unknown> } | undefined)?.onDiskState;
+  if (!o || o.state !== "backfilling") return false;
+  return (
+    o.segments === undefined || (Array.isArray(o.segments) && o.segments.length === 0 && o.table_scan_cursor === null)
+  );
+};
+
+/** The global's JSON: bigints and bytes tagged, so a state reads back as it was. */
+const encodeGlobal = (v: unknown) =>
+  JSON.parse(
+    JSON.stringify(v, (_k, x) =>
+      typeof x === "bigint"
+        ? { $bigint: x.toString() }
+        : x instanceof ArrayBuffer
+          ? { $bytes: Buffer.from(x).toString("base64") }
+          : x,
+    ),
+  );
+const decodeGlobal = (v: unknown) =>
+  JSON.parse(JSON.stringify(v), (_k, x) =>
+    x && typeof x === "object" && !Array.isArray(x)
+      ? typeof x.$bigint === "string"
+        ? BigInt(x.$bigint)
+        : typeof x.$bytes === "string"
+          ? (Buffer.from(x.$bytes, "base64").buffer as ArrayBuffer)
+          : x
+      : x,
+  );
+
+/** The global's content: each index's state as its full row, by state key, with the id of its `_index` row. */
+type SavedStates = { version: 1; indexes: Record<string, { rowId: string; row: SearchIndexRow }> };
+
+/** The states saved in the global, by state key (an absent or unreadable global: none). */
+export function readSavedStates(value: unknown): Map<string, { rowId: string; state: IndexSegmentsState }> | null {
+  if (value === null || value === undefined) return null;
+  const out = new Map<string, { rowId: string; state: IndexSegmentsState }>();
+  try {
+    const g = decodeGlobal(value) as SavedStates;
+    if (g.version !== 1) return out;
+    for (const [k, e] of Object.entries(g.indexes)) {
+      const state = rowToState(e.row as unknown as Record<string, unknown>);
+      if (state && typeof e.rowId === "string") out.set(k, { rowId: e.rowId, state });
+    }
+  } catch {}
+  return out;
+}
+
+/**
+ * A state as a full row: Convex's `SerializedIndexConfig::Search` / `::Vector` with the segment list. bunvex keeps
+ * it in its global (`search_index_segments`), not in `_index` (`indexRow`).
+ */
 export function stateToRow(s: IndexSegmentsState): SearchIndexRow {
   const filterFields = [...s.def.filterFields].sort();
   const building = s.backfill !== undefined;
@@ -456,6 +551,10 @@ export type IndexRowWrite = { _id?: string; row?: SearchIndexRow };
 export class SearchSegmentsState {
   private states = new Map<string, IndexSegmentsState>();
   private ids = new Map<string, string>();
+  /** Each index's `_index` row as stored, to write it only when it changes. */
+  private stored = new Map<string, string>();
+  /** The global as last written. */
+  private savedKey: string | null = null;
   /** Each index's fast-forward ts (Convex's `_index_worker_metadata`), by state key, with its row's id. */
   private forwarded = new Map<string, { ts: bigint; _id?: string }>();
   /** Where segments are mapped from, when they are read from disk (STUDY-111 PR 9). */
@@ -471,16 +570,32 @@ export class SearchSegmentsState {
     private write: (writes: IndexRowWrite[]) => Promise<string[]>,
   ) {}
 
-  /** The states of the rows read at a start (a row bunvex cannot read is no state: rewritten as backfilling). */
-  load(rows: Record<string, unknown>[]) {
+  /**
+   * The states at a start: each `_index` row's, from the global (`saved`), when the row is still the one bunvex
+   * wrote for it. A store from before the global (null) keeps its rows' states, which held the segments; anything
+   * else is no state, and the index is built from its table. Every row is rewritten in Convex's shape by the next
+   * `update` (`rewriteRows`).
+   */
+  load(
+    rows: Record<string, unknown>[],
+    saved: Map<string, { rowId: string; state: IndexSegmentsState }> | null = null,
+  ) {
     for (const r of rows) {
       if (!isSearchIndexRow(r)) continue;
-      const s = rowToState(r);
       const kind = (r.config as { type: string }).type === "search" ? "text" : "vector";
       const key = stateKey(kind, r.table_id as TabletId, r.descriptor as string);
       this.ids.set(key, r._id as string);
+      const { _id, ...row } = r;
+      this.stored.set(key, rowKey(row));
+      const entry = saved?.get(key);
+      const s = saved === null ? rowToState(r) : entry && entry.rowId === _id && isOwnRow(r) ? entry.state : null;
       if (s) this.states.set(key, s);
     }
+  }
+
+  /** Writes every row not yet in Convex's shape, and the global (at a start, after `load`). */
+  rewriteRows(): Promise<boolean> {
+    return this.update(() => true);
   }
 
   /**
@@ -561,14 +676,16 @@ export class SearchSegmentsState {
     stored?: () => void,
   ): Promise<boolean> {
     const run = this.writes.then(async () => {
-      const before = new Map([...this.states].map(([k, v]) => [k, rowKey(stateToRow(v))]));
       const keysBefore = this.files ? segmentKeys(this.states) : null;
       if (change(this.states) === false) return false;
       const writes: IndexRowWrite[] = [];
       const inserted: string[] = [];
+      const rows = new Map<string, string>();
       for (const [k, v] of this.states) {
-        const row = stateToRow(v);
-        if (before.get(k) === rowKey(row)) continue;
+        const row = indexRow(v);
+        const key = rowKey(row);
+        rows.set(k, key);
+        if (this.stored.get(k) === key) continue;
         const _id = this.ids.get(k);
         if (_id === undefined) inserted.push(k);
         writes.push(_id === undefined ? { row } : { _id, row });
@@ -580,7 +697,25 @@ export class SearchSegmentsState {
         inserted.forEach((k, i) => {
           this.ids.set(k, ids[i]!);
         });
-        for (const k of removed) this.ids.delete(k);
+        for (const k of removed) {
+          this.ids.delete(k);
+          this.stored.delete(k);
+        }
+        for (const [k, key] of rows) this.stored.set(k, key);
+      }
+      // Then the states, by row (the rows exist by now): what a start restores from.
+      if (this.store) {
+        const indexes: SavedStates["indexes"] = {};
+        for (const [k, v] of this.states) {
+          const rowId = this.ids.get(k);
+          if (rowId !== undefined) indexes[k] = { rowId, row: stateToRow(v) };
+        }
+        const value = encodeGlobal({ version: 1, indexes } satisfies SavedStates);
+        const key = JSON.stringify(value);
+        if (key !== this.savedKey) {
+          await this.store.setGlobal(SEGMENTS_GLOBAL, value);
+          this.savedKey = key;
+        }
       }
       stored?.();
       if (keysBefore) {

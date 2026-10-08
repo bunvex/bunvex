@@ -173,7 +173,8 @@ import {
   type IndexRowWrite,
   type IndexSegmentsState,
   isSearchIndexRow,
-  rowToState,
+  readSavedStates,
+  SEGMENTS_GLOBAL,
   type SearchCompactionConfig,
   type SearchSegmentLimits,
   type SearchSegmentStore,
@@ -1064,6 +1065,7 @@ export class Engine {
     }
     state.load(
       await this.runMutation((db) => db.query(INDEX_TABLE).collect() as Promise<Record<string, unknown>[]>, true),
+      store ? readSavedStates(await store.getGlobal(SEGMENTS_GLOBAL)) : null,
     );
     state.loadForwarded(
       await this.runMutation(
@@ -3423,7 +3425,9 @@ export async function readSystemRows(persistence: Persistence, table: string): P
 export async function readSearchIndexStates(persistence: Persistence): Promise<{ indexes: IndexSegmentsState[] }> {
   const ts = (await persistence.maxTs?.()) ?? 0n;
   const { indexRows } = await loadCatalogRows(persistence, await readBootstrapIds(persistence), ts);
-  return { indexes: indexRows.filter(isSearchIndexRow).flatMap((r) => rowToState(r) ?? []) };
+  const saved = readSavedStates(await persistence.getGlobal(SEGMENTS_GLOBAL));
+  const ids = new Set(indexRows.filter(isSearchIndexRow).map((r) => r._id as string));
+  return { indexes: [...(saved?.values() ?? [])].filter((e) => ids.has(e.rowId)).map((e) => e.state) };
 }
 
 /** Schema enforcement (STUDY-14): each declared table's validator, with the system fields added. */
