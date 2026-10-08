@@ -327,6 +327,24 @@ describe("running a code version", () => {
     expect((await call("action", "files:store")).value).toEqual(["text/plain", "text/plain"]);
   });
 
+  test('the legacy RegExp statics are gone in the isolate, as Convex\'s runtime; a "use node" module keeps them (DV-436)', async () => {
+    const { functions, call } = await server();
+    const probe = `(() => { /(a)(b)/.exec("xab"); return ["$1", "lastMatch", "input", "leftContext", "$&"].map((k) => typeof RegExp[k]); })()`;
+    const version = await load([
+      mod("iso.js", `import { query } from "@bunvex/server"; export const statics = query(async () => ${probe});`),
+      mod(
+        "nod.js",
+        `"use node"; import { action } from "@bunvex/server"; export const statics = action(async () => ${probe});`,
+        "node",
+      ),
+    ]);
+    functions.install(version.functions, version.moduleHashes);
+    expect((await call("query", "iso:statics")).value).toEqual(Array(5).fill("undefined"));
+    expect((await call("action", "nod:statics")).value).toEqual(Array(5).fill("string"));
+    // RegExp itself works as ever.
+    expect(/(a)(b)/.exec("xab")?.[1]).toBe("a");
+  });
+
   test("installing a version: every function at once; internal ones stay internal", async () => {
     const { functions, call } = await server();
     const version = await load(APP_V1);
