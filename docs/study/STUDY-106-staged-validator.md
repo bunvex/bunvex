@@ -281,6 +281,6 @@ stores `New document in table "t" does not match the schema: Value does not matc
 2.0\nValidator: v.string()`, which bunvex stores byte for byte (`staged-validations.test.ts`). 20 000 inserts cost
 the same with and without a staged validator (1.0–1.2 s either way, in noise).
 
-Found on the way (not built, for the owner): Convex's dry run commits (the first pass above), so a `deploy --dry-run`
+Found on the way, decided as DV-444 (owner, 2026-10-08: bunvex's dry run keeps writing nothing): Convex's dry run commits (the first pass above), so a `deploy --dry-run`
 on Convex writes a pending schema, overwriting an in-progress push, and creates the pushed tables; bunvex's dry run
 writes nothing. `convex codegen` against a deployment runs the same dry-run push.
