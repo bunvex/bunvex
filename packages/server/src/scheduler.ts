@@ -441,8 +441,7 @@ export class ScheduledJobExecutor {
       }
     } catch (e) {
       if (e instanceof CommitterStoppedError) return;
-      // A system error: try again later, with Convex's backoff.
-      this.stats.systemErrors++;
+      // A system error: try again later, with Convex's backoff. Counted once the attempt is recorded.
       const failures = job.systemErrors + 1;
       const delay = backoff(failures, this.o.errorInitialBackoffMs, this.o.errorMaxBackoffMs);
       await this.engine
@@ -451,6 +450,7 @@ export class ScheduledJobExecutor {
             await patchJob(db, job._id, { systemErrors: failures, nextTs: wallClock() + delay });
         }, "scheduled_job_system_error")
         .catch(() => {});
+      this.stats.systemErrors++;
     }
   }
 
