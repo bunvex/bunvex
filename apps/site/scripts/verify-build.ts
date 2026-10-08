@@ -10,7 +10,7 @@ const html = existsSync(join(OUT, "index.html")) ? readFileSync(join(OUT, "index
 
 if (!html) problems.push(`${OUT}/index.html is missing`);
 else {
-  if (!/<h1[\s>]/.test(html) || !html.includes(HERO.headline))
+  if (!/<h1[\s>]/.test(html) || !HERO.headline.every((part) => html.includes(part)))
     problems.push("index.html has no prerendered <h1> headline");
   if (!html.includes(`<link rel="canonical" href="${SITE.url}/"`)) problems.push("index.html has no canonical link");
   if (!html.includes('property="og:image"')) problems.push("index.html has no og:image");
