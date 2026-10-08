@@ -35,6 +35,8 @@ import { auditEvents } from "./audit-log.ts";
 import { putAuthInfo } from "./auth-info.ts";
 import {
   AUTH_CONFIG_MODULE,
+  buildPackage,
+  ModulesTooLargeError,
   readablePackage,
   type SourcePackage,
   storedModules,
@@ -299,6 +301,13 @@ export class PushService {
     if (req.componentDefinitions?.length)
       throw new PushError("ComponentsNotSupported", "Components are not supported by this deployment yet");
     const all = await this.resolveModules(req);
+    // Convex's `start_push` uploads and size-checks the package first (`upload_packages`, `verify_size`).
+    try {
+      buildPackage(req.appDefinition?.schema ? [...all, req.appDefinition.schema] : all);
+    } catch (e) {
+      if (e instanceof ModulesTooLargeError) throw new PushError(e.code, e.message);
+      throw e;
+    }
     const authModule = all.find((m) => m.path === AUTH_CONFIG);
     const modules = all.filter((m) => m.path !== AUTH_CONFIG);
     const config = await udfConfig(this.deps.engine, req.appDefinition?.udfServerVersion);
@@ -435,7 +444,9 @@ export class PushService {
     const indexDiff = indexAuditDiff(activeSchema, p.schema);
     // The providers the push stores in `_auth` (none without an auth.config, as Convex's `app_auth`).
     const auth = p.auth === null ? [] : parseAuthConfig({ providers: p.auth } as never);
-    const pkg = await writePackage(this.deps.modulesStore, [...p.modules, ...other]);
+    const pkg = await writePackage(this.deps.modulesStore, [...p.modules, ...other]).catch((e) => {
+      throw e instanceof ModulesTooLargeError ? new PushError(e.code, e.message, 400) : e;
+    });
     let committed: Awaited<ReturnType<Engine["commitSchemaPush"]>> & {
       value: { unused: SourcePackage[]; crons: CronDiff; authDiff: { added: string[]; removed: string[] } };
     };
