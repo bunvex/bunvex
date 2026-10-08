@@ -48,7 +48,9 @@ const schemaState = async (e: Engine, id: string) => {
   return row && schemaStateOf(row);
 };
 const loose = defineSchema({ items: defineTable(v.any()) });
-const strict = defineSchema({ items: defineTable({ n: v.number() }) });
+// A validator the table's shape cannot prove (it knows `n` is a number, not which), so the push walks the
+// documents (Convex's `supersetOfShape` would skip a plain `v.number()`; STUDY-106 §7.4).
+const strict = defineSchema({ items: defineTable({ n: v.union(v.literal(0), v.literal(1)) }) });
 
 /** An engine whose active schema accepts anything, with `n` documents in `items`. */
 async function withItems(path: string, n: number, bad = false) {
@@ -57,7 +59,7 @@ async function withItems(path: string, n: number, bad = false) {
   await until(async () => (await e.schemaPushStatus(p0.schemaId)).type === "complete");
   await e.commitSchemaPush(p0.schemaId, async () => {});
   await e.mutation(async (db) => {
-    for (let i = 0; i < n; i++) await db.insert("items", { n: bad && i === n - 1 ? "bad" : i });
+    for (let i = 0; i < n; i++) await db.insert("items", { n: bad && i === n - 1 ? "bad" : i % 2 });
   });
   await e.summariesReady();
   return e;
@@ -113,7 +115,9 @@ describe("schema validation attempts and progress, as Convex's (STUDY-127)", () 
     await until(async () => (await rows(f, "_schema_validations")).length === 1);
     // A different schema (one equal to the pending one would be that one, as Convex's `submit_pending`).
     const newer = await f.startSchemaPush(
-      defineSchema({ items: defineTable({ n: v.float64(), note: v.optional(v.string()) }) }),
+      defineSchema({
+        items: defineTable({ n: v.union(v.literal(0), v.literal(1), v.literal(2)), note: v.optional(v.string()) }),
+      }),
     );
     expect(await schemaState(f, older.schemaId)).toBe("overwritten");
     await until(async () => (await schemaState(f, newer.schemaId)) === "validated");
@@ -132,7 +136,7 @@ describe("schema validation attempts and progress, as Convex's (STUDY-127)", () 
     await e.summariesReady();
     const p = await e.startSchemaPush(
       defineSchema({
-        items: defineTable({ n: v.number() }),
+        items: defineTable({ n: v.union(v.literal(0), v.literal(1)) }),
         gone: defineTable({ x: v.string() }),
         fresh: defineTable({ y: v.string() }),
       }),

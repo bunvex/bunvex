@@ -199,6 +199,7 @@ import {
   type SessionRequestId,
   type SessionRequestOutcome,
 } from "./session-requests.ts";
+import { NEVER } from "./shapes.ts";
 import { TableSummaries, TableSummariesUnavailableError } from "./table-summaries.ts";
 import {
   canCheckpoint,
@@ -206,9 +207,9 @@ import {
   SummaryCheckpointer,
   type SummaryCheckpointOptions,
 } from "./table-summary-checkpoint.ts";
-
 import { CommitSpans, IndexReadSpans, NO_TRACER, type Tracer } from "./tracing.ts";
 import { decodeDoc, Tx } from "./tx.ts";
+import { type TableOutcome, tableValidationOutcome } from "./validator-subset.ts";
 import {
   DEFAULT_VECTOR_LIMIT,
   MAX_VECTOR_FILTER_CONDITIONS,
@@ -2137,16 +2138,10 @@ export class Engine {
       }
     }
     // Tables: the outcome of the schema walk bunvex will do (STUDY-35), with counts and sizes.
-    const enforced = this.schema.schemaValidation ? this.schema : null;
     const tables: TablePrediction[] = [...next.tables.values()].map((t) => {
       const tablet = tabletOf(t.name);
       const s = tablet === undefined ? { count: 0, size: 0 } : this.tableSummaries.get(tablet);
-      const was = enforced?.tables.get(t.name);
-      const outcome: TableOutcome = !next.schemaValidation
-        ? "notValidated"
-        : was && JSON.stringify(was.document.json) === JSON.stringify(t.document.json)
-          ? "supersetOfEnforced"
-          : "mustWalk";
+      const outcome = this.tableOutcome(next, this.schema, t.name, tablet);
       return { name: t.name, outcome, numDocs: s.count, sizeBytes: s.size };
     });
     return { schemaValidation: next.schemaValidation, tables, indexes };
@@ -2233,6 +2228,28 @@ export class Engine {
   }
 
   /**
+   * A table's validation outcome for a push (STUDY-106 §7.4, Convex's `validation_outcome_for_validator`): the new
+   * validator against the active schema's enforced one (`any` when it does not validate), then against the table's
+   * shape from its summary (none while summaries build; a table that does not exist is empty).
+   */
+  private tableOutcome(next: SchemaDefinition, active: SchemaDefinition, table: string, tablet: TabletId | undefined) {
+    const t = next.tables.get(table);
+    const was = active.schemaValidation ? active.tables.get(table) : undefined;
+    const shape = !this.tableSummaries.ready
+      ? undefined
+      : tablet === undefined
+        ? NEVER
+        : this.tableSummaries.get(tablet).shape;
+    return tableValidationOutcome(
+      next.schemaValidation,
+      t?.document.json as never,
+      was?.document.json as never,
+      shape,
+      (n) => this.catalog.byNumber(n)?.name,
+    );
+  }
+
+  /**
    * Convex's `SchemaWorker`: walk every table whose validator the pushed schema changes (or adds) and check
    * each existing document; the first that does not match fails the schema
    * (`Document with ID "…" in table "…" does not match the schema: …`), else it becomes `validated`. Writes
@@ -2248,8 +2265,9 @@ export class Engine {
       for (const t of schema.tables.values()) {
         const validator = documentValidator(t.name, t.document);
         if (!validator) continue;
-        const before = active.schemaValidation ? active.tables.get(t.name) : undefined;
-        if (before && JSON.stringify(before.document.json) === JSON.stringify(t.document.json)) continue;
+        // Convex's `table_validation_outcomes`: a table whose new validator accepts everything the active one
+        // enforced, or everything its shape holds (an empty table always), is not walked and gets no attempt.
+        if (this.tableOutcome(schema, active, t.name, this.catalog.tables.get(t.name)?.id) !== "mustWalk") continue;
         // A table with no document (or none yet) has nothing to check: Convex's empty shape fits any validator,
         // so it writes no attempt for it (`table_shape_provider`, STUDY-133 §12 M13). Unknown counts are walked.
         if (this.totalDocs(t.name) === 0) continue;
@@ -3497,7 +3515,7 @@ export type IndexPrediction = {
   needsBackfill: boolean;
   numDocs: number;
 } & Record<string, unknown>;
-export type TableOutcome = "notValidated" | "supersetOfEnforced" | "supersetOfShape" | "mustWalk";
+export type { TableOutcome } from "./validator-subset.ts";
 export type TablePrediction = { name: string; outcome: TableOutcome; numDocs: number; sizeBytes: number };
 export type SchemaPrediction = { schemaValidation: boolean; tables: TablePrediction[]; indexes: IndexPrediction[] };
 
