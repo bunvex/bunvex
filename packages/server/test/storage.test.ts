@@ -362,7 +362,19 @@ describe("ctx.storage", () => {
     const id = await r.text();
     expect(((await functions.runQuery("m:doc", { id })) as { contentType: unknown }).contentType).toBe("image/png");
     const served = await fetch(`${server.siteUrl}/file?id=${id}`);
-    expect(served.headers.get("content-type")).toBe("image/png");
+    expect(served.headers.get("content-type")).toBe("image/png"); // A type Bun's MIME table knows keeps the header's form, lower-cased, as Convex's (DV-441).
+    for (const [sent, kept] of [
+      ["text/plain", "text/plain"],
+      ["Application/JSON", "application/json"],
+    ]) {
+      const t = await fetch(`${server.siteUrl}/store`, {
+        method: "POST",
+        headers: { "content-type": sent! },
+        body: "x",
+      });
+      const doc = (await functions.runQuery("m:doc", { id: await t.text() })) as { contentType: unknown };
+      expect(doc.contentType).toBe(kept);
+    }
   });
 });
 

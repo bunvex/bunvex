@@ -14,3 +14,4 @@ The system tables and their documents match Convex's (STUDY-133 PR 8, §12), so 
 - push audit rows carry `udfConfigDiff` and `_creationTime` in index fields;
 - an empty table gets no schema validation attempt;
 - an id's shape is a literal first.
+- functions' `Blob` and `File` (and an HTTP action's `request.blob()`) give the File API's type, so a stored file keeps the type the app gave (`text/plain`, not Bun's `text/plain;charset=utf-8`).
