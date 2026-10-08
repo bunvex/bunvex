@@ -1,6 +1,6 @@
 # STUDY-139 — bunvex as a product, Convex as the oracle
 
-- **Status:** the principle and P1–P7 accepted (owner, 2026-10-08); to be built one PR per group (P1–P3, P4, P5, P6, P7). P1–P3 built (#525); P4 (#526), P5 (#527), P6 (#528) and P7 (#529) in review.
+- **Status:** the principle and P1–P7 accepted (owner, 2026-10-08); the principle revisited the same day (§1.1): stores the Convex binary wrote keep opening in bunvex. P1–P3 built (#525), P4 built (#526) and then superseded by DV-166 (#532), P5 withdrawn (#527 closed), P6 built (#528), P7 in review (#529).
 - **Convex source read:** reference `d8bdde0` (`docs/parity/upstream.md`), npm `convex` 1.46.0.
 - **Related:** [STUDY-133](STUDY-133-persistence-layout-identical.md) (identical layout, cross-open tests),
   [STUDY-23](STUDY-23-sync-protocol-v1.md) P8 (DV-225), [STUDY-67](STUDY-67-http-function-api.md) H12 (DV-315),
@@ -17,6 +17,18 @@
    store, in production.
 3. **Migrating from Convex is export, then import**: an app exports its Convex deployment and imports the ZIP
    into bunvex, which builds every index again. That path is a production path; the cross-open is a test tool.
+
+### 1.1 Revisited (owner, 2026-10-08)
+
+- **Convex compatibility starts at its client 1.46.0.** Older Convex clients are not supported: nothing is built
+  for them. They are not refused either: bunvex sets no deprecation threshold (P2 as built, option B).
+- **bunvex's client announces bunvex's version** (P1). The product is bunvex's client with bunvex's server.
+- **Both ways in from Convex stay supported**: export from Convex then import into bunvex (§3), and **bunvex
+  opening a store the Convex binary wrote** (SQLite, Postgres, MySQL, MongoDB's analogue), as the cross-open tests
+  do. The second is for validating bunvex and finding bugs, not a production recommendation; but it must keep
+  working, so what bunvex needs to read such a store stays (B1 came back as bunvex's own format with DV-166; B2,
+  MySQL's v1 documents, stays: P5 withdrawn).
+- Compatibility with **older bunvex** stores and formats is still not carried (P6).
 
 What follows from it:
 
@@ -70,13 +82,14 @@ DV-221). Gaps for a migration:
 | P1 | The client announces **its own version** (`0.1.0-alpha.0`, from its `package.json`) in the sync URL and the header. Revisits DV-225 | §1.1. It needs P2 and P3, or the server refuses it (0.1.0 ≤ 0.19.1) and never chunks for it (0.1.0 < 1.28.0) | **accepted** (owner, 2026-10-08); built (#525) |
 | P2 | The server no longer refuses clients by Convex's deprecation thresholds (A2); a header that does not parse is still 400 `InvalidClientVersion`. bunvex's own thresholds start empty. Revisits DV-315 | Those thresholds are Convex's old clients; bunvex's clients start at 0.x | **accepted** (owner, 2026-10-08); built (#525) |
 | P3 | The server always sends big transitions in chunks (A3) | Every client bunvex supports (its own, and Convex's 1.46.0 in tests) takes them | **accepted** (owner, 2026-10-08); built (#525) |
-| P4 | Remove the zip reader (B1). A package bunvex cannot read is ignored with a log line, and the next `deploy` replaces it, as the cross-open tests do | Only the cross-open uses it, and it works without | **accepted** (owner, 2026-10-08) |
-| P5 | Remove Convex's MySQL v1 encoding (B2): only v0 is read and written, and `MYSQL_DOCUMENT_ENCODING` goes. Revisits DV-414 | Only a MySQL store the Convex binary wrote has v1; the cross-open tests use SQLite | **accepted** (owner, 2026-10-08) |
-| P6 | Remove C1 and C2 | bunvex is alpha with no deployed stores to carry | **accepted** (owner, 2026-10-08) |
+| P4 | Remove the zip reader (B1). A package bunvex cannot read is ignored with a log line, and the next `deploy` replaces it, as the cross-open tests do | Only the cross-open uses it, and it works without | **accepted** (owner, 2026-10-08); built (#526); superseded: the package is Convex's zip again, bunvex's own format (DV-166, #532) |
+| P5 | Remove Convex's MySQL v1 encoding (B2): only v0 is read and written, and `MYSQL_DOCUMENT_ENCODING` goes. Revisits DV-414 | Only a MySQL store the Convex binary wrote has v1; the cross-open tests use SQLite | ~~accepted~~ **withdrawn** (owner, 2026-10-08, §1.1): opening a MySQL store the Convex binary wrote must keep working; #527 closed, DV-414 stands |
+| P6 | Remove C1 and C2 | bunvex is alpha with no deployed stores to carry | **accepted** (owner, 2026-10-08); built (#528) |
 | P7 | Add the export-from-Convex, import-into-bunvex differential test (§3) | The production migration path, tested against the oracle | **accepted** (owner, 2026-10-08) |
 
 ## 5. The rule, for every study
 
-Added to `CLAUDE.md`: bunvex matches what an app observes on Convex from the reference on; it does not build
-what Convex keeps only for older clients, formats or stores; the Convex client, binary and stores are test
-oracles; migration is export and import.
+Added to `CLAUDE.md` and revised with §1.1: bunvex matches what an app observes on Convex, for Convex's client from
+1.46.0; it does not build what Convex keeps only for older clients, or for older bunvex stores and formats; bunvex's
+client announces bunvex's version; stores the Convex binary wrote keep opening in bunvex (for validation, not a
+production recommendation), and migration is export then import.
