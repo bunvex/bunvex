@@ -124,6 +124,9 @@ function stackAfterMessage(e: Error): string {
 }
 
 function uncaughtLine(name: string | undefined, message: string | undefined): string {
+  // A failed nested call rejects with the callee's display, already `Uncaught <Name>: …`; as Convex's
+  // `format_uncaught_error` since b352fab (crates/isolate/src/helpers.rs), each level does not add another.
+  if (name && message?.startsWith(`Uncaught ${name}: `)) return message;
   if (name && message) return `Uncaught ${name}: ${message}`;
   if (name) return `Uncaught ${name}`;
   if (message) return `Uncaught ${message}`;

@@ -94,9 +94,11 @@ async function setup() {
   return { s, call, limits, rt, running, queued };
 }
 
+// Convex's plurals since b352fab: "queries", not "querys".
+const PLURALS: Record<string, string> = { query: "queries", mutation: "mutations", action: "actions" };
 const tooMany = (n: number, kind: string, knob: string) => ({
   code: "TooManyConcurrentRequests",
-  message: `Too many concurrent requests. Your backend is limited to ${n} concurrent ${kind}s. To raise the limit, set ${knob}.`,
+  message: `Too many concurrent requests. Your backend is limited to ${n} concurrent ${PLURALS[kind]}. To raise the limit, set ${knob}.`,
 });
 
 test("queries: one permit; a cached result and a query inside a mutation need none; the next waits, then 429", async () => {

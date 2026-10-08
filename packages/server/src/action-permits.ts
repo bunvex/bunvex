@@ -11,13 +11,16 @@ import { outsideExecution, type Runtime, realRuntime } from "@bunvex/core";
 
 export type LimitedKind = "query" | "mutation" | "action";
 
+const PLURAL: Record<LimitedKind, string> = { query: "queries", mutation: "mutations", action: "actions" };
+
 export class TooManyConcurrentRequestsError extends Error {
   override name = "TooManyConcurrentRequestsError";
   readonly code = "TooManyConcurrentRequests";
   constructor(limit: number, kind: LimitedKind = "action", knob = "APPLICATION_MAX_CONCURRENT_V8_ACTIONS") {
-    // Convex's message; its last sentence (an upgrade offer) is replaced by how to raise the limit here.
+    // Convex's message (its plurals since b352fab); its last sentence (an upgrade offer) is replaced by how to
+    // raise the limit here.
     super(
-      `Too many concurrent requests. Your backend is limited to ${limit} concurrent ${kind}s. To raise the limit, set ${knob}.`,
+      `Too many concurrent requests. Your backend is limited to ${limit} concurrent ${PLURAL[kind]}. To raise the limit, set ${knob}.`,
     );
   }
 }
