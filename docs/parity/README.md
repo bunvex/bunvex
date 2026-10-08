@@ -43,7 +43,9 @@ then grow outwards.** Each item becomes one or more PRs, each with its study.
 except the dashboard on a real deployment (item 12) and built-in auth (item 13). In phase 4, search, vector search,
 log streaming, metrics and streaming export are done; components and Node's `externalPackages` remain.
 
-### Phase 0 — correctness bugs in what already exists — done
+### Phase 0 — correctness bugs in what already exists
+
+**Done.** Every bug below is fixed.
 
 Found by the retroactive studies (STUDY-05 … STUDY-11). They are not divergences to decide: bunvex is
 wrong.
@@ -67,7 +69,9 @@ wrong.
 | B15 | **Fixed in #107 and #112** (call timeouts; transient flush and read retries, as Convex; conformance K20/K21). No timeouts on database calls, no retry of transient flush errors, no retry of reads: a hung connection stalls the process, a network blip kills it. Match Convex (owner, 2026-10-01; DV-104–DV-106) | STUDY-25 L3–L5 |
 | B16 | **Fixed in #114.** No stored layout version and no `read_only` flag: a foreign or future store fails obscurely. Match Convex (owner, 2026-10-01; DV-107, DV-108) | STUDY-25 L6/L7 |
 
-### Phase 1 — the core behaves like Convex — done
+### Phase 1 — the core behaves like Convex
+
+**Done.**
 
 1. **Values:** `@bunvex/values` with every `v.*` validator, `args`/`returns` checking, Int64/bigint,
    bytes, Convex's cross-type value order and the `$integer`/`$bytes`/`$float` JSON encoding — done (#24, #25,
@@ -86,7 +90,9 @@ wrong.
 7. **Schema:** `defineSchema`/`defineTable`, document validation, `schemaValidation`, staged indexes, and
    tables created on first insert — done (#29, #33, STUDY-29, STUDY-106).
 
-### Phase 2 — sync protocol and clients — done
+### Phase 2 — sync protocol and clients
+
+**Done.**
 
 Protocol v1:
 
