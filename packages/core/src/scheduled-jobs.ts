@@ -11,7 +11,7 @@
 // - Apps read jobs through the virtual table `_scheduled_functions` (virtual-tables.ts): `virtualJob` builds
 //   Convex's public document `{_id, _creationTime, name, args, scheduledTime, completedTime?, state: {kind, …}}`,
 //   joining the arguments in.
-import { fromJsonValue, type JSONValue, rawValueSize, toJsonValue, type Value } from "@bunvex/values";
+import { fromJsonValue, type JSONValue, jsonText, rawValueSize, toJsonValue, type Value } from "@bunvex/values";
 import { SCHEDULED_JOB_ARGS_TABLE, SCHEDULED_JOBS_TABLE } from "./catalog.ts";
 import type { Doc } from "./schema.ts";
 import type { Tx } from "./tx.ts";
@@ -137,7 +137,7 @@ export function parseJob(d: ScheduledJobDoc): JobDoc {
 
 /** Convex's `args_to_bytes`: the arguments array's JSON, as bytes. */
 export const argsToBytes = (args: Value[]): ArrayBuffer =>
-  new TextEncoder().encode(JSON.stringify(toJsonValue(args as Value))).buffer as ArrayBuffer;
+  new TextEncoder().encode(jsonText(toJsonValue(args as Value))).buffer as ArrayBuffer;
 /** Convex's `args_from_bytes`. */
 export const argsFromBytes = (bytes: ArrayBuffer): Value[] =>
   fromJsonValue(JSON.parse(new TextDecoder().decode(bytes)) as JSONValue) as Value[];

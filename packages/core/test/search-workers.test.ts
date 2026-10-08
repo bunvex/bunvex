@@ -4,8 +4,8 @@
 import { expect, test } from "bun:test";
 import { v } from "@bunvex/values";
 import { readSearchIndexStates } from "../src/engine.ts";
-import { internalIdOf } from "../src/internal-id.ts";
 import { defineSchema, defineTable, Engine, type SearchSegmentStore } from "../src/index.ts";
+import { internalIdOf } from "../src/internal-id.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { tsGlobal } from "../src/persistence-globals.ts";
 

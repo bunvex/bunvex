@@ -124,6 +124,9 @@ test("a spec survives its row: every schedule, an absent minute as null", () => 
     expect(cronSpecOf(row)).toEqual(spec);
     expect(argsOfBytes(row.udfArgs as ArrayBuffer)).toEqual(spec.udfArgs);
   }
+  // The bytes as Convex's serde_json writes them: a float64 `1` as `1.0` (STUDY-133 §12 M8).
+  const iRow = cronSpecRow(cronSpecs(c, (_i, n) => n).get("i")!);
+  expect(new TextDecoder().decode(iRow.udfArgs as ArrayBuffer)).toBe('[{"a":[1.0,"x"]}]');
   const hourly = cronSpecRow(cronSpecs(c, (_i, n) => n).get("h")!).cronSchedule;
   expect(hourly).toEqual({ type: "hourly", minuteUTC: null });
   expect(cronSpecRow(cronSpecs(c, (_i, n) => n).get("i")!).cronSchedule).toEqual({ type: "interval", seconds: 120n });

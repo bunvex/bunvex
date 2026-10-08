@@ -38,7 +38,7 @@ import {
   TableSummariesUnavailableError,
   type Tx,
 } from "@bunvex/core";
-import { type GenericValidator, type Value, v } from "@bunvex/values";
+import { type GenericValidator, jsonText, toJsonValue, type Value, v } from "@bunvex/values";
 import type { DeploymentOp } from "./admin-keys.ts";
 import { auditActor, auditEvents } from "./audit-log.ts";
 import { readCanonicalUrls } from "./canonical-urls.ts";
@@ -52,7 +52,8 @@ const maximumBytesRead = 5000000;
 
 const ns = (ms: number) => BigInt(Math.round(ms * 1_000_000));
 /** Convex keeps arguments as the bytes of their JSON array. */
-const argsBytes = (args: Value[]) => new TextEncoder().encode(stringifyValue(args as Value)).buffer as ArrayBuffer;
+const argsBytes = (args: Value[]) =>
+  new TextEncoder().encode(jsonText(toJsonValue(args as Value))).buffer as ArrayBuffer;
 const canonical = (udfPath: string) => {
   const i = udfPath.lastIndexOf(":");
   const [m, f] = i === -1 ? [udfPath, "default"] : [udfPath.slice(0, i), udfPath.slice(i + 1)];
