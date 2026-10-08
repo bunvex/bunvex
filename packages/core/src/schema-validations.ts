@@ -221,6 +221,43 @@ export async function markStagedValidationFailed(db: Tx, schemaId: string, table
   await sys(db, () => db.patch(SCHEMA_VALIDATIONS_TABLE, row._id, { state: { state: "failed", error } }));
 }
 
+/**
+ * The staged rows of `schemaId` still to walk (Convex's `staged_schema_validations`): pending, with the current hash
+ * of the table's staged validator, in table-name order.
+ */
+export async function pendingStagedValidations(
+  db: Tx,
+  schemaId: string,
+  staged: Map<string, StagedValidator>,
+): Promise<{ id: string; tableName: string }[]> {
+  if (staged.size === 0) return [];
+  return (await attemptsOf(db, schemaId))
+    .filter((a) => a.state.state === "pending" && a.validatorHash === staged.get(a.tableName)?.hash)
+    .map((a) => ({ id: a._id, tableName: a.tableName }))
+    .sort((a, b) => (a.tableName < b.tableName ? -1 : a.tableName > b.tableName ? 1 : 0));
+}
+
+/** Convex's `StartWalk`: a pending row's counters start over at 0 of `totalDocs`. False when it is not pending. */
+export async function startStagedWalk(db: Tx, id: string, totalDocs: number | null): Promise<boolean> {
+  if (!(await pendingAttempt(db, id))) return false;
+  const progress = await progressOf(db, id);
+  if (!progress) throw new Error("Validation attempt is missing its progress");
+  await sys(db, () =>
+    db.patch(SCHEMA_VALIDATION_PROGRESS_TABLE, progress._id, {
+      numDocsValidated: 0n,
+      totalDocs: totalDocs === null ? null : BigInt(totalDocs),
+    }),
+  );
+  return true;
+}
+
+/** Convex's `MarkFailed` from a walk: a pending row fails with `error`. False when it is not pending any more. */
+export async function markWalkFailed(db: Tx, id: string, error: string): Promise<boolean> {
+  if (!(await pendingAttempt(db, id))) return false;
+  await sys(db, () => db.patch(SCHEMA_VALIDATIONS_TABLE, id, { state: { state: "failed", error } }));
+  return true;
+}
+
 /** Convex's `delete_enforced_validations_for_schema`, at activation: the enforced walk's rows go, staged ones stay. */
 export async function deleteEnforcedValidationsForSchema(db: Tx, schemaId: string): Promise<void> {
   for (const a of await attemptsOf(db, schemaId)) if (a.validatorHash === undefined) await deleteAttempt(db, a._id);

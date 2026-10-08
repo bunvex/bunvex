@@ -165,11 +165,14 @@ import {
   initializeStagedValidators,
   markStagedValidationFailed,
   markValidationValid,
+  markWalkFailed,
+  pendingStagedValidations,
   progressThreshold,
   recordValidationProgress,
   retryFailedStagedValidators,
   type StagedCarryOver,
   stagedValidationsWithProgress,
+  startStagedWalk,
   startTableValidation,
 } from "./schema-validations.ts";
 import { filterKey, indexedDoc, indexedDocBytes, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
@@ -461,6 +464,8 @@ export class Engine {
       searchCompaction?: Partial<SearchCompactionConfig>;
       /** The search index workers' pacing (default: Convex's knobs from the environment). */
       searchWorkers?: Partial<SearchWorkerOptions>;
+      /** `false`: staged validators are not walked in the background (tests that look at the rows a push makes). */
+      stagedWalk?: boolean;
       /** Awaited between a compaction's build and its commit (tests interleave flushes there). */
       beforeSearchCompactionCommit?: () => Promise<void>;
       /** The background index backfill's knobs (Convex's INDEX_BACKFILL_*; STUDY-29). */
@@ -571,7 +576,10 @@ export class Engine {
     await this.loadInstanceSecret();
     await this.loadInstanceName();
     await this.loadDatabaseGlobals();
-    if (this.opts.storedSchema) await this.resumePendingSchema();
+    if (this.opts.storedSchema) {
+      await this.resumePendingSchema();
+      this.kickStagedWalk();
+    }
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
     if (backfilling) this.startIndexWorker();
     // Tables left being deleted by an earlier run (STUDY-42).
@@ -671,6 +679,7 @@ export class Engine {
 
   private async closeOnce() {
     this.closed = true;
+    await this.stagedWalk?.catch(() => {});
     await this.deleting?.catch(() => {});
     await this.indexWorker?.stop();
     await this.retention?.stop();
@@ -970,6 +979,9 @@ export class Engine {
   private pendingValidators: Map<string, GenericValidator> | null = null;
   /** The background walk of a pending schema's existing documents (STUDY-35 PR 5). */
   private validation: Promise<unknown> | null = null;
+  /** The background walk of staged validators (STUDY-106 §7.3), and whether it must run again once done. */
+  private stagedWalk: Promise<void> | null = null;
+  private stagedWalkAgain = false;
 
   /** A commit's search part (STUDY-45 PR 3): its searches to check, its versions and their read-set keys. */
   private searchCommit(tx: Tx, own: ((ts: bigint) => void) | undefined) {
@@ -2179,6 +2191,11 @@ export class Engine {
     await this.summariesBuild;
   }
 
+  /** Wait until the staged walk is done (tests). */
+  async stagedWalkIdle() {
+    while (this.stagedWalk) await this.stagedWalk;
+  }
+
   /** Wait until every search index is built (tests). */
   async searchReady() {
     while (this.searchBackfills.size) await Promise.all([...this.searchBackfills]);
@@ -2275,6 +2292,140 @@ export class Engine {
       shape,
       (n) => this.catalog.byNumber(n)?.name,
     );
+  }
+
+  /** Run the staged walk (again, if it is running: a push may have added rows). */
+  private kickStagedWalk() {
+    if (this.opts.stagedWalk === false) return;
+    if (this.stagedWalk) {
+      this.stagedWalkAgain = true;
+      return;
+    }
+    this.stagedWalk = (async () => {
+      do {
+        this.stagedWalkAgain = false;
+        // After the pending schema's walk: a blocked push always goes first (Convex's `SchemaWorker::run`).
+        await this.validation?.catch(() => {});
+        if (this.closed) return;
+        await this.walkStagedValidators();
+      } while (this.stagedWalkAgain && !this.closed);
+    })()
+      .catch((err) => {
+        if (!this.closed)
+          console.error(`bunvex: staged validation failed: ${err instanceof Error ? err.message : err}`);
+      })
+      .finally(() => {
+        this.stagedWalk = null;
+      });
+  }
+
+  /**
+   * Convex's staged walk (e049178, STUDY-106 §7.3): the active, then the validated, then the pending schema's
+   * staged rows still pending, table by table in name order. A table that does not exist, or whose staged validator
+   * accepts everything the schema enforces or the table's shape holds, is valid without a walk; any other is walked
+   * (its counters reset, flushed every 5 % or 500 documents) and becomes valid, or failed at the first document that
+   * does not match (`Document with ID "…" in table "…" does not match the schema: …`). A row that stops being pending
+   * (a write failed it, a push replaced it) stops its walk. Tables fail on their own; the schema is never touched.
+   */
+  private async walkStagedValidators() {
+    const schemas = await this.query((db) =>
+      db.asSystem(async () => {
+        const rows = await db.query(SCHEMAS_TABLE).collect();
+        const out: { id: string; schema: SchemaDefinition; json: SchemaJson }[] = [];
+        for (const state of ["active", "validated", "pending"] as const) {
+          const row = rows.find((r) => schemaStateOf(r) === state);
+          if (!row) continue;
+          const json = JSON.parse(row.schema as string) as SchemaJson;
+          out.push({ id: row._id as string, schema: schemaFromJson(json), json });
+        }
+        return out;
+      }),
+    );
+    for (const { id: schemaId, schema, json } of schemas) {
+      const staged = stagedValidatorsOf(json);
+      if (staged.size === 0) continue;
+      const todo = await this.query((db) => db.asSystem(() => pendingStagedValidations(db, schemaId, staged)));
+      for (const { id, tableName } of todo) {
+        if (this.closed) return;
+        const t = schema.tables.get(tableName);
+        const v = staged.get(tableName);
+        if (!t?.stagedDocument || !v) continue;
+        const valid = () =>
+          this.runMutation((db) => markValidationValid(db, id), true, "_system/schema_worker_staged_valid");
+        const tablet = this.catalog.tables.get(tableName)?.id;
+        // Never written: nothing to check.
+        if (tablet === undefined) {
+          await valid();
+          continue;
+        }
+        const enforced = schema.schemaValidation ? t.document.json : undefined;
+        const shape = this.tableSummaries.ready ? this.tableSummaries.get(tablet).shape : undefined;
+        const outcome = tableValidationOutcome(
+          true,
+          v.json,
+          enforced as never,
+          shape,
+          (n) => this.catalog.byNumber(n)?.name,
+        );
+        if (outcome !== "mustWalk") {
+          await valid();
+          continue;
+        }
+        const validator = documentValidator(tableName, t.stagedDocument);
+        if (!validator) {
+          await valid();
+          continue;
+        }
+        await this.walkStagedTable(id, tableName, validator);
+      }
+    }
+  }
+
+  /** One staged table's walk (Convex's `walk_table`): reset, documents by id, progress, then valid or failed. */
+  private async walkStagedTable(id: string, tableName: string, validator: GenericValidator) {
+    const started = await this.runMutation(
+      (db) => startStagedWalk(db, id, this.totalDocs(tableName)),
+      true,
+      "_system/schema_worker_staged_start",
+    );
+    if (!started) return;
+    const threshold = progressThreshold(this.totalDocs(tableName));
+    let unflushed = 0;
+    const flush = async () => {
+      const count = unflushed;
+      unflushed = 0;
+      return this.runMutation(
+        (db) => recordValidationProgress(db, id, count, this.totalDocs(tableName)),
+        true,
+        "_system/schema_validation_progress_updated",
+      );
+    };
+    let cursor: string | null = null;
+    for (;;) {
+      if (this.closed || !this.catalog.tables.has(tableName)) return;
+      const page = await this.query(async (db) => db.query(tableName).paginate({ numItems: 256, cursor }));
+      for (const doc of page.page) {
+        const msg = checkValue(validator, doc as unknown as Value, (n) => this.catalog.publicNameOf(n));
+        if (msg) {
+          await this.runMutation(
+            (db) =>
+              markWalkFailed(
+                db,
+                id,
+                `Document with ID "${doc._id as string}" in table "${tableName}" does not match the schema: ${msg}`,
+              ),
+            true,
+            "_system/schema_worker_staged_failed",
+          );
+          return;
+        }
+        if (++unflushed % threshold === 0 && !(await flush())) return;
+      }
+      if (page.isDone) break;
+      cursor = page.continueCursor;
+    }
+    if (unflushed > 0 && !(await flush())) return;
+    await this.runMutation((db) => markValidationValid(db, id), true, "_system/schema_validation_progress_finished");
   }
 
   /**
@@ -2482,6 +2633,7 @@ export class Engine {
       this.startValidation(r.schemaId, schema, active);
     }
     this.refreshStagedChecks();
+    if (staged.size) this.kickStagedWalk();
     if (r.after.indexes.some((i) => i.state === "backfilling")) this.startIndexWorker();
     return { schemaId: r.schemaId, addedIndexes: r.addedIndexes };
   }

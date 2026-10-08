@@ -281,6 +281,18 @@ stores `New document in table "t" does not match the schema: Value does not matc
 2.0\nValidator: v.string()`, which bunvex stores byte for byte (`staged-validations.test.ts`). 20 000 inserts cost
 the same with and without a staged validator (1.0–1.2 s either way, in noise).
 
+**PR 4, built.** The engine's staged walk (`kickStagedWalk`, `walkStagedValidators`) runs after a push that has
+staged validators and at a start, once the pending schema's own walk is done, and again if kicked meanwhile. It takes
+the active, then the validated, then the pending schema's staged rows still pending with the current hash, tables in
+name order: a table not in the catalog, or whose staged validator accepts everything the schema enforces or the
+table's shape holds (`tableValidationOutcome`), becomes valid without a walk; any other is walked (`StartWalk`
+resets its counters, pages of the table, progress every `min(500, ceil(5%))`, then valid), and the first document that
+does not match fails it with `Document with ID "…" in table "…" does not match the schema: …`. Each update applies
+only to a pending row, so a write that failed it, or a push that replaced it, stops the walk. Checked on Convex's
+binary (02fe59b) with the same four tables (walked to 30/30, failed at its bad document with the same text, proven by
+the shape with counters 0 and null, empty): bunvex gives the same rows. 50 000 documents are walked in 1.5 s, the push
+itself returning in 30 ms. `stagedWalk: false` turns the walk off (tests that look at the rows a push makes).
+
 Found on the way, decided as DV-444 (owner, 2026-10-08: bunvex's dry run keeps writing nothing): Convex's dry run commits (the first pass above), so a `deploy --dry-run`
 on Convex writes a pending schema, overwriting an in-progress push, and creates the pushed tables; bunvex's dry run
 writes nothing. `convex codegen` against a deployment runs the same dry-run push.
