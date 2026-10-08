@@ -334,8 +334,14 @@ export type Savepoint = {
   docsWritten: number;
   bytesWritten: number;
   pendingViolation: { table: string; error: string } | null;
+  stagedViolations: Map<string, StagedViolation>;
   commitTs: Map<string, Path[]>;
 };
+
+/** A schema's staged validators, by table, that writes are checked against (STUDY-106 §7.2). */
+export type StagedCheck = { schemaId: string; validators: Map<string, GenericValidator> };
+/** A write that a schema's staged validator refuses: the table's staged validation is to be failed with `error`. */
+export type StagedViolation = { schemaId: string; table: string; error: string };
 
 /** A field's place in a document: object keys and array positions (STUDY-53). */
 type Path = (string | number)[];
@@ -1575,6 +1581,13 @@ export class Tx {
   pendingValidators: Map<string, GenericValidator> | null = null;
   /** The first write this transaction made that the pending schema refuses: its table and message. */
   pendingViolation: { table: string; error: string } | null = null;
+  /**
+   * The staged validators of the active and the in-progress schema (Convex's `check_write_against_staged`): a
+   * write one refuses still succeeds, and fails that table's staged validation in this transaction.
+   */
+  stagedChecks: StagedCheck[] | null = null;
+  /** The first violation of each (schema, table) this transaction made, applied before it commits. */
+  stagedViolations = new Map<string, StagedViolation>();
 
   /**
    * The table a number names for the schema's `v.id` checks; an import's, which checks its documents
@@ -1610,6 +1623,23 @@ export class Tx {
           error: `Failed to insert or update a document in table "${t.name}" because it does not match the schema: ${msg}`,
         };
     }
+    if (next && this.stagedChecks && !t.name.startsWith("_"))
+      for (const c of this.stagedChecks) {
+        const sv = c.validators.get(t.name);
+        const key = `${c.schemaId}\u0000${t.name}`;
+        if (!sv || this.stagedViolations.has(key)) continue;
+        const msg = checkValue(
+          sv,
+          next as unknown as Value,
+          this.schemaTables ?? ((n) => this.catalog.publicNameOf(n)),
+        );
+        if (msg)
+          this.stagedViolations.set(key, {
+            schemaId: c.schemaId,
+            table: t.name,
+            error: `New document in table "${t.name}" does not match the schema: ${msg}`,
+          });
+      }
     const prev = this.writes.get(id);
     // The version this transaction currently sees (its own last write, or the snapshot's).
     const current = prev ? prev.next : old;
@@ -1762,6 +1792,7 @@ export class Tx {
       docsWritten: this.docsWritten,
       bytesWritten: this.bytesWritten,
       pendingViolation: this.pendingViolation,
+      stagedViolations: new Map(this.stagedViolations),
       commitTs: new Map(this.commitTs),
     };
   }
@@ -1775,6 +1806,7 @@ export class Tx {
     this.docsWritten = sp.docsWritten;
     this.bytesWritten = sp.bytesWritten;
     this.pendingViolation = sp.pendingViolation;
+    this.stagedViolations = sp.stagedViolations;
     this.commitTs = sp.commitTs;
   }
 

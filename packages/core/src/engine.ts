@@ -163,10 +163,10 @@ import {
   deleteEnforcedValidationsForSchema,
   deleteValidationsForSchema,
   initializeStagedValidators,
+  markStagedValidationFailed,
   markValidationValid,
   progressThreshold,
   recordValidationProgress,
-  resetSchemaValidations,
   retryFailedStagedValidators,
   type StagedCarryOver,
   stagedValidationsWithProgress,
@@ -214,7 +214,7 @@ import {
   type SummaryCheckpointOptions,
 } from "./table-summary-checkpoint.ts";
 import { CommitSpans, IndexReadSpans, NO_TRACER, type Tracer } from "./tracing.ts";
-import { decodeDoc, Tx } from "./tx.ts";
+import { decodeDoc, type StagedCheck, Tx } from "./tx.ts";
 import { type TableOutcome, tableValidationOutcome } from "./validator-subset.ts";
 import {
   DEFAULT_VECTOR_LIMIT,
@@ -340,6 +340,10 @@ export class Engine {
   instanceName = "";
   /** Document validators of the declared tables (empty when `schemaValidation` is off). */
   private docValidators = new Map<string, GenericValidator>();
+  /** The active schema's `_schemas` id (a stored schema), for its staged validations. */
+  private activeSchemaId: string | null = null;
+  /** The staged validators writes are checked against: the active schema's, then the in-progress one's. */
+  private stagedChecks: StagedCheck[] | null = null;
   /** Query results by function, arguments and (when read) identity: an LRU bounded by bytes (STUDY-08 D8). */
   readonly cache: QueryCache;
   /** Bumped when the catalog changes under the cache: a run begun before is not stored. */
@@ -546,6 +550,7 @@ export class Engine {
       const active = (await readSystemRows(this.persistence, SCHEMAS_TABLE)).find((r) => schemaStateOf(r) === "active");
       if (active) {
         this.schema = schemaFromJson(JSON.parse(active.schema as string) as SchemaJson);
+        this.activeSchemaId = active._id as string;
         this.installValidators(this.schema);
       }
     }
@@ -911,6 +916,22 @@ export class Engine {
 
   private installValidators(schema: SchemaDefinition) {
     this.docValidators = validatorsOf(schema);
+  }
+
+  /**
+   * The staged validators every write is checked against (Convex's `enforce_with_table_mapping`, 900fe2c): the
+   * active schema's, and the in-progress (pending or validated) one's, whose staged validation runs from its push.
+   */
+  private refreshStagedChecks() {
+    const checks: StagedCheck[] = [];
+    const add = (schemaId: string, schema: SchemaDefinition) => {
+      const validators = stagedDocumentValidatorsOf(schema);
+      if (validators.size) checks.push({ schemaId, validators });
+    };
+    if (this.activeSchemaId) add(this.activeSchemaId, this.schema);
+    const p = this.pendingPush;
+    if (p && p.id !== this.activeSchemaId) add(p.id, p.schema);
+    this.stagedChecks = checks.length ? checks : null;
   }
 
   /**
@@ -2200,16 +2221,15 @@ export class Engine {
   }
 
   /**
-   * At a start, as Convex's `reset_for_compatibility` then its `SchemaWorker` (STUDY-127): every validation
-   * attempt is deleted; a schema still `pending` is checked again from the beginning with new attempts, and
-   * writes are checked against a `pending` or `validated` schema meanwhile, as before the restart.
+   * At a start, as Convex's `SchemaWorker` since 900fe2c (STUDY-127, STUDY-106 §7.1): the validations are kept (a
+   * `valid` staged one stays true, every write since being checked); a schema still `pending` is walked again from
+   * the beginning, each table's attempt replacing its old one, and writes are checked against a `pending` or
+   * `validated` schema and the staged validators meanwhile, as before the restart.
    */
   private async resumePendingSchema() {
     const row = await this.runMutation(
       async (db) => {
         const rows = await db.query(SCHEMAS_TABLE).collect();
-        const active = rows.find((r) => schemaStateOf(r) === "active");
-        await resetSchemaValidations(db, active ? (active._id as string) : null);
         return (
           rows.find((r) => {
             const s = schemaStateOf(r);
@@ -2224,6 +2244,7 @@ export class Engine {
     const schema = schemaFromJson(JSON.parse(row.schema as string) as SchemaJson);
     this.pendingPush = { id: row._id as string, schema };
     this.pendingValidators = validatorsOf(schema);
+    this.refreshStagedChecks();
     if (schemaStateOf(row) === "pending") this.startValidation(row._id as string, schema, this.schema);
   }
 
@@ -2460,6 +2481,7 @@ export class Engine {
       this.pendingValidators = validatorsOf(schema);
       this.startValidation(r.schemaId, schema, active);
     }
+    this.refreshStagedChecks();
     if (r.after.indexes.some((i) => i.state === "backfilling")) this.startIndexWorker();
     return { schemaId: r.schemaId, addedIndexes: r.addedIndexes };
   }
@@ -2567,6 +2589,7 @@ export class Engine {
         db.onCommitVisible = (ts) => {
           this.installIndexChanges({ enable: ids(f.enable), disable: ids(f.disable), drop: ids(f.drop) }, ts);
           this.schema = pending.schema;
+          this.activeSchemaId = schemaId;
           this.installValidators(pending.schema);
           this.reconcileSearch();
           this.reconcileVector();
@@ -2574,6 +2597,7 @@ export class Engine {
             this.pendingPush = null;
             this.pendingValidators = null;
           }
+          this.refreshStagedChecks();
         };
         return {
           value,
@@ -2941,6 +2965,7 @@ export class Engine {
     if (kind === "mutation") {
       tx.docValidators = this.docValidators;
       tx.pendingValidators = this.pendingValidators;
+      tx.stagedChecks = this.stagedChecks;
     }
     if (this.tracerOf.on) this.indexSpansOf(tx);
     const observed: Observed = { time: false };
@@ -2948,6 +2973,8 @@ export class Engine {
     const unpin = this.tableSummaries.pin(snapshot);
     try {
       const value = settled(observed, await runDeterministic(kind, now, () => body(tx), observed));
+      // A write a staged validator refused fails its validation in this same transaction (900fe2c).
+      for (const v of tx.stagedViolations.values()) await markStagedValidationFailed(tx, v.schemaId, v.table, v.error);
       return { tx, value, observed, now };
     } finally {
       tx.indexSpans?.finish();
@@ -3508,6 +3535,17 @@ export async function readSearchIndexStates(persistence: Persistence): Promise<{
 }
 
 /** Schema enforcement (STUDY-14): each declared table's validator, with the system fields added. */
+/** Each table's staged validator as a document validator; checked whether or not the schema validates. */
+function stagedDocumentValidatorsOf(schema: SchemaDefinition): Map<string, GenericValidator> {
+  const out = new Map<string, GenericValidator>();
+  for (const t of schema.tables.values()) {
+    if (t.stagedDocument === undefined) continue;
+    const dv = documentValidator(t.name, t.stagedDocument);
+    if (dv) out.set(t.name, dv);
+  }
+  return out;
+}
+
 function validatorsOf(schema: SchemaDefinition): Map<string, GenericValidator> {
   const out = new Map<string, GenericValidator>();
   if (schema.schemaValidation)
