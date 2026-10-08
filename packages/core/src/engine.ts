@@ -2234,6 +2234,9 @@ export class Engine {
         if (!validator) continue;
         const before = active.schemaValidation ? active.tables.get(t.name) : undefined;
         if (before && JSON.stringify(before.document.json) === JSON.stringify(t.document.json)) continue;
+        // A table with no document (or none yet) has nothing to check: Convex's empty shape fits any validator,
+        // so it writes no attempt for it (`table_shape_provider`, STUDY-133 §12 M13). Unknown counts are walked.
+        if (this.totalDocs(t.name) === 0) continue;
         walk.push({ name: t.name, validator });
       }
     if (!stillPending()) return;
