@@ -258,6 +258,24 @@ export async function markWalkFailed(db: Tx, id: string, error: string): Promise
   return true;
 }
 
+/**
+ * Convex's `valid_staged_validators`: the staged validators of `schemaId` its validation proved (`valid`, the hash
+ * still the table's), by table.
+ */
+export async function validStagedValidators(
+  db: Tx,
+  schemaId: string,
+  staged: Map<string, StagedValidator>,
+): Promise<Map<string, StagedValidator["json"]>> {
+  const out = new Map<string, StagedValidator["json"]>();
+  if (staged.size === 0) return out;
+  for (const a of await attemptsOf(db, schemaId)) {
+    const v = staged.get(a.tableName);
+    if (a.state.state === "valid" && v && a.validatorHash === v.hash) out.set(a.tableName, v.json);
+  }
+  return out;
+}
+
 /** Convex's `delete_enforced_validations_for_schema`, at activation: the enforced walk's rows go, staged ones stay. */
 export async function deleteEnforcedValidationsForSchema(db: Tx, schemaId: string): Promise<void> {
   for (const a of await attemptsOf(db, schemaId)) if (a.validatorHash === undefined) await deleteAttempt(db, a._id);

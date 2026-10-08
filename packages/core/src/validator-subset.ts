@@ -130,12 +130,19 @@ export function withoutSystemFields(v: V): V {
   return v;
 }
 
-export type TableOutcome = "notValidated" | "supersetOfEnforced" | "supersetOfShape" | "mustWalk";
+export type TableOutcome =
+  | "notValidated"
+  | "supersetOfEnforced"
+  | "supersetOfStagedValidated"
+  | "supersetOfShape"
+  | "mustWalk";
 
 /**
  * Convex's `validation_outcome_for_validator`, in its order: no validation; the new validator accepts everything the
  * active one enforced (`any` when the active schema does not validate or has no such table); it accepts everything
- * the table's shape holds (skipped without a shape: table summaries not built); else the table must be walked.
+ * the active schema's staged validator for the table accepts, one its validation proved (`valid`, kept true by every
+ * write being checked: 7236c10); it accepts everything the table's shape holds (skipped without a shape: table
+ * summaries not built); else the table must be walked.
  */
 export function tableValidationOutcome(
   schemaValidation: boolean,
@@ -143,10 +150,12 @@ export function tableValidationOutcome(
   enforced: V | undefined,
   shape: Shape | undefined,
   tableName: (tableNumber: number) => string | undefined,
+  validStaged?: V,
 ): TableOutcome {
   if (!schemaValidation) return "notValidated";
   const n = documentValidator(next);
   if (isSubset(documentValidator(enforced), n)) return "supersetOfEnforced";
+  if (validStaged !== undefined && isSubset(documentValidator(validStaged), n)) return "supersetOfStagedValidated";
   if (shape !== undefined && isSubset(withoutSystemFields(validatorFromShape(shape, tableName)), n))
     return "supersetOfShape";
   return "mustWalk";
