@@ -12,6 +12,9 @@ deliberate, documented differences only. Read [ARCHITECTURE.md](ARCHITECTURE.md)
   - Client and function API: `npm-packages/convex`.
 - Which Convex commit bunvex follows, and how new Convex commits are triaged (daily) and taken in (weekly), is in
   [docs/parity/upstream.md](docs/parity/upstream.md) (STUDY-138).
+- bunvex is its own product (versioned from 0.x); Convex is the oracle (STUDY-139). Match what an app observes on
+  Convex from the reference on, but do not build what Convex keeps only for older clients, formats or stores.
+  Convex's client, binary and stores are used in tests only; migrating from Convex is export, then import.
 - Before implementing any feature Convex has, write or update a study in `docs/study/STUDY-NN-<topic>.md`
   (see [docs/study/README.md](docs/study/README.md)). It covers:
   - how Convex does it, citing files;
