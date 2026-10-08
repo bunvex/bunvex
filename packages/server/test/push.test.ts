@@ -12,7 +12,7 @@ import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
 import type { ModuleSource } from "../src/code-version.ts";
 import { Functions } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
-import { indexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
+import { convexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
 import { startIssuer } from "./issuer.ts";
 
 const SECRET = "ab".repeat(32);
@@ -1140,7 +1140,7 @@ export const list = query({
     }[];
     const byPath = new Map(rows.map((row) => [row.path, row]));
     expect([...byPath.keys()].sort()).toEqual(["_deps/AB12CD34.js", "auth.config.js", "fns.js", "schema.js"]);
-    const convex = new Map(indexRows("_modules").map((row) => [row.path as string, row]));
+    const convex = new Map(convexRows("_modules").map((row) => [row.path as string, row]));
     // A module of functions (each with its int64 position), a dependency chunk (no analysis), the schema; the auth
     // config is a module like the schema (Convex analyzes both to nothing).
     expect(shapeDiff(byPath.get("fns.js"), convex.get("fns.js"))).toEqual([]);
@@ -1156,7 +1156,7 @@ export const list = query({
     const [pkg] = (await d.engine.query((db) => db.asSystem(() => db.query(SOURCE_PACKAGES_TABLE).collect()))).map(
       stored,
     ) as Record<string, unknown>[];
-    expect(shapeDiff(pkg, indexRows("_source_packages")[0])).toEqual([]);
+    expect(shapeDiff(pkg, convexRows("_source_packages")[0])).toEqual([]);
     const sizes = (await d.engine.query((db) => db.asSystem(() => db.query(SOURCE_PACKAGES_TABLE).first())))!
       .packageSize as { zippedSizeBytes: bigint; unzippedSizeBytes: bigint };
     expect(sizes.zippedSizeBytes).toBeGreaterThan(0n);

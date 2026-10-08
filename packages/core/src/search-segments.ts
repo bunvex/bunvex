@@ -303,7 +303,13 @@ export function indexRow(s: IndexSegmentsState): SearchIndexRow {
       dimensions: BigInt(def.dimensions),
       vectorField: def.vectorField,
       filterFields,
-      onDiskState: { state: "backfilling", segments: [], table_scan_cursor: null, last_segment_ts: null, staged: s.staged },
+      onDiskState: {
+        state: "backfilling",
+        segments: [],
+        table_scan_cursor: null,
+        last_segment_ts: null,
+        staged: s.staged,
+      },
     },
   };
 }
@@ -312,7 +318,9 @@ export function indexRow(s: IndexSegmentsState): SearchIndexRow {
 const isOwnRow = (row: Record<string, unknown>) => {
   const o = (row.config as { onDiskState?: Record<string, unknown> } | undefined)?.onDiskState;
   if (!o || o.state !== "backfilling") return false;
-  return o.segments === undefined || (Array.isArray(o.segments) && o.segments.length === 0 && o.table_scan_cursor === null);
+  return (
+    o.segments === undefined || (Array.isArray(o.segments) && o.segments.length === 0 && o.table_scan_cursor === null)
+  );
 };
 
 /** The global's JSON: bigints and bytes tagged, so a state reads back as it was. */
@@ -568,7 +576,10 @@ export class SearchSegmentsState {
    * else is no state, and the index is built from its table. Every row is rewritten in Convex's shape by the next
    * `update` (`rewriteRows`).
    */
-  load(rows: Record<string, unknown>[], saved: Map<string, { rowId: string; state: IndexSegmentsState }> | null = null) {
+  load(
+    rows: Record<string, unknown>[],
+    saved: Map<string, { rowId: string; state: IndexSegmentsState }> | null = null,
+  ) {
     for (const r of rows) {
       if (!isSearchIndexRow(r)) continue;
       const kind = (r.config as { type: string }).type === "search" ? "text" : "vector";

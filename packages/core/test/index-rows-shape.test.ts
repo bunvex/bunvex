@@ -8,7 +8,7 @@ import { v } from "@bunvex/values";
 import { INDEX_BACKFILLS_TABLE, INDEX_TABLE, indexMeta } from "../src/catalog.ts";
 import { defineSchema, defineTable, Engine, type SearchSegmentStore } from "../src/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { indexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
+import { convexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
 
 const schema = defineSchema({
   things: defineTable(v.any())
@@ -55,7 +55,7 @@ test("a new table's index goes through Convex's states, each revision in Convex'
   const p = await MemoryPersistence.open(null, { durable: false });
   const e = await new Engine(schema, p, { searchStorage: blobs() }).init();
   await e.searchReady();
-  const convex = indexRows("_index");
+  const convex = convexRows("_index");
   const convexOf = (d: string) => convex.filter((r) => r.descriptor === d);
 
   const byS = await history(p, e, "by_s_n");
@@ -96,7 +96,7 @@ test("_index_backfills rows of a new table: the database index's with its cursor
     indexRows.find((r) => r.descriptor === name && r.table_id === e.catalog.table("things").id)!._id;
   const db = rows.find((r) => r.indexId === idOf("by_s_n"));
   const search = rows.find((r) => r.indexId === idOf("search_s"));
-  const [convexSearch, convexDb] = indexRows("_index_backfills");
+  const [convexSearch, convexDb] = convexRows("_index_backfills");
   expect(shapeDiff(stored(db), convexDb)).toEqual([]);
   // The table summaries are still being built when the engine starts: the search index's total is unknown
   // (null, as Convex's while its summaries bootstrap); a push's has it (below).
@@ -149,11 +149,11 @@ test("a push's index on a table with documents: the rows, its backfill's count, 
   const backfills = await system<Row[]>(e, INDEX_BACKFILLS_TABLE);
   const progress = backfills.find((r) => r.indexId === meta[0]!._id)!;
   expect(progress.totalDocs).toBe(30n);
-  expect(shapeDiff(stored(progress), indexRows("_index_backfills")[1])).toEqual([]);
+  expect(shapeDiff(stored(progress), convexRows("_index_backfills")[1])).toEqual([]);
   const searchId = (await system<Row[]>(e, INDEX_TABLE)).find((r) => r.descriptor === "search_s")!._id;
   const searchProgress = backfills.find((r) => r.indexId === searchId)!;
   expect([searchProgress.totalDocs, searchProgress.numDocsIndexed]).toEqual([30n, 30n]);
-  expect(shapeDiff(stored(searchProgress), indexRows("_index_backfills")[0])).toEqual([]);
+  expect(shapeDiff(stored(searchProgress), convexRows("_index_backfills")[0])).toEqual([]);
   await e.close();
   // A restart reads the rows back into the same catalog, with nothing left to backfill.
   e = await new Engine(plain, p, { storedSchema: true }).init();

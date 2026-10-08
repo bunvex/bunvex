@@ -10,9 +10,9 @@ import { defineSchema, defineTable, Engine, type SearchSegmentStore } from "../s
 import type { TabletId } from "../src/persistence/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import {
-  indexRow,
   type IndexRowWrite,
   type IndexSegmentsState,
+  indexRow,
   readSavedStates,
   SEGMENTS_GLOBAL,
   type SearchIndexRow,
