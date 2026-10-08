@@ -28,9 +28,10 @@ The `exports` map is the public API: `components/*`, `lib/*`, `styles.css`, `the
 - **Tokens** (`src/styles/globals.css`): OKLCH colours for `:root` and `.dark`, every text / background
   pair at WCAG AA or better (checked by `test/tokens.test.ts`). `ThemeProvider` / `useTheme` handle
   light, dark and system.
-- **Components**: button, badge, status badge, card, checkbox, input, textarea, select, tabs, popover,
-  dropdown menu (with submenus that survive a fast pointer), alert dialog, tooltip, separator, skeleton,
-  copy button, JSON view, day input, sparkline, line chart, resize handle, theme toggle — most from
+- **Components**: button, badge, status badge, card, checkbox, radio group, choice radios, choice select,
+  input, textarea, select, file picker, tabs, popover, dropdown menu (with submenus that survive a fast
+  pointer), dialog, alert dialog, tooltip, separator, skeleton, copy button, JSON view, data table, day
+  input, sparkline, line chart, heatmap, map, resize handle, theme toggle — most from
   shadcn/ui (`components.json`), adjusted for bunvex.
 - **`CodeEditor`**: Monaco, bundled (no CDN) and loaded on demand, with a language for JavaScript
   literals; a plain field with the same keys stands in until it loads and in tests (UI-01 §12.5.7).

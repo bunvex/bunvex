@@ -36,12 +36,16 @@ either way: its data stays.
 
 ```sh
 bun run test:examples             # from the repository's root
+bun run test:examples:browser     # the front ends in Chromium
 ```
 
 Each test deploys its example to a fresh backend (this repository's, run by Bun) with `bunvex deploy`, as a
 self-hosted user would; checks the committed `_generated/` is what codegen writes; runs the scenario through the
 public client; builds the front end; and checks the client bundle holds nothing of the server. External services
 (OpenAI, Giphy, Clerk) are replaced by local stand-ins. CI runs them in their own job.
+
+`test:examples:browser` (`examples/_browser/`) serves each example's front end against a fresh deployment and
+drives it in Chromium; any page error or console error fails the test.
 
 ## The examples
 
