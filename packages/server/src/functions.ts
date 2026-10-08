@@ -1265,9 +1265,11 @@ export class Functions {
     // Arguments a client sent with a lone surrogate do not parse into Convex's values (STUDY-135; nested
     // and scheduled calls are refused before, where their text is sent).
     if (valueHasLoneSurrogate(a)) throw new FunctionPathError("Invalid arguments provided");
-    const { size, nesting } = measured;
+    const { size, nesting, tooBig } = measured;
     if (nesting > MAX_VALUE_NESTING)
       throw new FunctionPathError(`Invalid arguments for ${this.pathOf(f)}: ${TOO_NESTED_MESSAGE}`);
+    // Convex's `parse_udf_args`: an array over 8192 elements or an object over 1024 fields (DV-439).
+    if (tooBig !== undefined) throw new FunctionPathError(`Invalid arguments for ${this.pathOf(f)}: ${tooBig}`);
     if (size > this.maxArgsSize)
       throw new FunctionPathError(
         `Arguments for ${this.pathOf(f)} are too large (actual: ${formatBytes(size)}, limit: ${formatBytes(this.maxArgsSize)})`,
@@ -1643,6 +1645,7 @@ export class Functions {
     const measured = measureArgs(args);
     if (measured.nesting > MAX_VALUE_NESTING + 1)
       throw new Error(`Invalid argument \`args\` for \`runUdf\`: ${TOO_NESTED_MESSAGE}`);
+    if (measured.tooBig !== undefined) throw new Error(`Invalid argument \`args\` for \`runUdf\`: ${measured.tooBig}`);
     const name = registryKey(await functionNameOf(ref, db, this.engine));
     // A `_system/` function, as Convex's (checked against its local backend): not found to anyone but an admin
     // or the system; for them it runs, in this transaction.
@@ -1779,6 +1782,14 @@ export class Functions {
       throw ValidatorError.args(
         `Expected to receive an object as the function's argument. Instead received: ${displayValue((a ?? null) as Value)}`,
       );
+    // As Convex's `op_validate_args` (4991db1): an array over 8192 elements or an object over 1024 fields is a
+    // user error before the validator, thrown inside the function ("Uncaught Error: Invalid arguments: …").
+    const { tooBig } = measureRawValue([a as Value], Number.POSITIVE_INFINITY);
+    if (tooBig !== undefined) {
+      const e = new Error(`Invalid arguments: ${tooBig}`);
+      e.stack = `Error: ${e.message}`; // raised by the runtime, not app code: no frames, as Convex's
+      throw e;
+    }
     const msg = checkValue(v.object(validators), a as Value, this.tableOf);
     if (msg) throw ValidatorError.args(msg);
     return a as never;
