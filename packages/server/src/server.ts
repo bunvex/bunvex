@@ -1841,7 +1841,7 @@ export function createServer(opts: ServerOptions) {
     const pkg = await writePackage(modulesStore, modules);
     let unused: SourcePackage[];
     try {
-      unused = await engine.mutation((db) => writeCodeRows(db, pkg, version), "push");
+      unused = await engine.mutation((db) => writeCodeRows(db, pkg, version), "_system/push");
     } catch (e) {
       await modulesStore.delete(pkg.storageKey).catch(() => {});
       throw e;

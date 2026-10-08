@@ -10,6 +10,7 @@ import {
   OCC_MAX_RETRIES,
   OccError,
   occBackoffMs,
+  writerDescription,
 } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
@@ -29,7 +30,7 @@ test("Convex's budget: 4 retries, 100 ms doubling up to 2 s, full jitter", () =>
  * A mutation on `id` that loses every race: each execution reads the counter, then waits while another
  * mutation (`m:other`) commits a write to it. Returns how many times it ran and what it threw.
  */
-async function alwaysLoses(engine: Engine, id: string, source: string) {
+async function alwaysLoses(engine: Engine, id: string, source: string, writer = "m:other") {
   let runs = 0;
   const box: { wake: (() => void) | null } = { wake: null };
   let stop = false;
@@ -41,7 +42,7 @@ async function alwaysLoses(engine: Engine, id: string, source: string) {
         continue;
       }
       box.wake = null;
-      await engine.mutation(async (db) => db.patch("counters", id, { n: Math.random() }), "m:other");
+      await engine.mutation(async (db) => db.patch("counters", id, { n: Math.random() }), writer);
       w();
     }
   })();
@@ -92,6 +93,38 @@ test("the same mutation on both sides is 'Another call to this mutation'; an unn
   expect((anon.error as OccError).message).toEndWith(
     'retry. A call to "m:other" changed the document with ID ' + `"${id}".`,
   );
+});
+
+test("a writer of bunvex's own is described by what was done, as Convex's (DV-435)", async () => {
+  const engine = await new Engine(schema, await MemoryPersistence.open(null, { durable: false }), {
+    maxRetries: 0,
+  }).init();
+  const id = await engine.mutation((db) => db.insert("counters", { n: 0 }));
+  const dashboard = await alwaysLoses(engine, id, "m:bump", "_system/frontend/patchDocumentsFields");
+  expect((dashboard.error as OccError).message).toEndWith(
+    `retry. An edit in the dashboard changed the document with ID "${id}".`,
+  );
+  // The log stream's occ info still names the writer.
+  expect((dashboard.error as OccError).info.writeSource).toBe("_system/frontend/patchDocumentsFields");
+  expect(
+    [
+      "m:other",
+      "_system/frontend/x",
+      "_system/fivetran-import",
+      "_system/airbyte-x",
+      "_system/snapshot_import",
+      "_system/cron_push",
+      "_system/scheduler",
+    ].map(writerDescription),
+  ).toEqual([
+    'A call to "m:other"',
+    "An edit in the dashboard",
+    "A Fivetran sync",
+    "An Airbyte sync",
+    "A data import",
+    "A system operation",
+    "A system operation",
+  ]);
 });
 
 test("maxRetries is honoured, and the default backoff really waits (100 ms scale)", async () => {
