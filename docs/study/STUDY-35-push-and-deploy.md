@@ -249,7 +249,7 @@ and `/api/get_config_hashes`, with the `Deploy` operation, the same request and 
 
 - **Startup.** A deployable server loads the latest committed version from the store: `_modules`, then the
   package blob, through the content-addressed cache.
-- **Storage.** The package is one blob in the deployment's file-storage backend (P3), recorded in
+- **Storage.** The package is one blob, Convex's zip, in the deployment's file-storage backend (P3), recorded in
   `_source_packages`.
 - **Limits** are Convex's: 4096 modules, 90 MB zipped / 230 MB unzipped, 4 s import, and the index limits.
 
@@ -281,7 +281,7 @@ and embedding. A server is either embedded or deployable.
 |---|---|---|---|
 | P1 | Functions run in the server's process, **one `vm` context per code version** (not a fresh V8 context per request): not a security boundary; hot swap with no restart (ARCH-01 decision 2); a real sandbox (Workers, a process) left for later (decision 3) | per-version contexts free superseded code (re-importing leaks ~6 MB per push of a 0.9 MB bundle), give each version its own deterministic globals and control what a module can reach, at ~0.4 µs per call; a Worker would cost ~13 µs per database call and move `Tx` behind messages | **accepted** (owner, 2026-10-02) |
 | P2 | Module-level state lives as long as its code version: a counter at module scope keeps counting across requests (Convex: a fresh context per request; its `experimental_reuseContext` keeps it) | evaluating every module per request would cost a full import (milliseconds for a real bundle) on every call; apps cannot rely on module state on Convex either | **accepted** (owner, 2026-10-02) |
-| P3 | A pushed package is stored as one gzip-compressed JSON blob (modules, source maps, metadata) in the file-storage backend, not a zip | internal; Bun writes gzip natively; the `_source_packages` / `_modules` rows are Convex's | **accepted** (owner, 2026-10-02) |
+| P3 | A pushed package is stored as one gzip-compressed JSON blob (modules, source maps, metadata) in the file-storage backend, not a zip | internal; Bun writes gzip natively; the `_source_packages` / `_modules` rows are Convex's | **accepted** (owner, 2026-10-02); **revisited: match** (owner, 2026-10-08): the package is Convex's zip (`zipInMemory`, read with the snapshot `ZipReader`), equal in speed or faster (1 MB: 8 / 5 ms to write / read, gzip 7 / 4; 30 MB: 28 / 26 ms, gzip 95 / 58) and about 10% larger (per-file deflate) |
 | P4 | Embedded servers stay: `createServer({ functions, http, crons, auth })` without a push, beside deployable servers | tests and embedding need no CLI; a server is one or the other | **accepted** (owner, 2026-10-02) |
 | P5 | Code written for Convex is not pushed as is: apps import `bunvex/*` (`bunvex/server`, `bunvex/values`); bunvex's bundler does not alias `convex/*`, and the server does not implement Convex's syscall interface, so `npx convex deploy` cannot target bunvex | rule 5 (no "convex" in shipped names); a syscall layer is a second runtime to keep. Migration changes the import lines | **accepted** (owner, 2026-10-02) |
 | P6 | `"use node"` modules run in the same process (no separate Node runtime): they get Node and Bun builtins, and Convex's rules for them (actions only; not in `http`, `crons`, `schema`, `auth.config`) are enforced at analysis | Bun implements Node's APIs; a second runtime is not needed | **accepted** (owner, 2026-10-02) |

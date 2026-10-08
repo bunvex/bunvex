@@ -1,6 +1,6 @@
 // Where deployed code lives (STUDY-35), as Convex keeps it:
-//   `_source_packages` — one row per pushed package, pointing at its blob in the modules store (Convex: a zip
-//     in module storage; here one gzip-compressed JSON blob, DV-166);
+//   `_source_packages` — one row per pushed package, pointing at its blob in the modules store: Convex's zip
+//     (crates/model/src/source_packages/upload_download.rs; DV-166);
 //   `_modules` — one row per module: `{ path, sourcePackageId, environment, sha256, analyzeResult }`;
 //   `_udf_config` — the import phase's seed and time (Convex's `UdfConfig`), so a version imports the same way
 //     every time it is loaded.
@@ -18,6 +18,8 @@ import { type AnalyzedModule, CodeVersion, type ModuleSource, moduleHash, module
 import { cronSpecOf, cronSpecsRow, msOfNs, nsOfMs } from "./cron-rows.ts";
 import { SERVER_VERSION } from "./server-version.ts";
 import type { SourcePosition } from "./source-position.ts";
+import { bytesSource, entryBytes, ZipReader } from "./zip-reader.ts";
+import { zipInMemory } from "./zip-writer.ts";
 
 /** Convex's unzipped package limit (crates/model/src/source_packages/types.rs). */
 export const MAX_UNZIPPED_PACKAGE_BYTES = 230 * 1024 * 1024;
@@ -47,34 +49,93 @@ export type UdfServerVersionDiff = { previous_version: string; next_version: str
 /** The schema's module, stored with the functions as Convex's (`AppDefinitionConfig::all_modules`). */
 export const SCHEMA_MODULE = "schema.js";
 
-/** Store a push's modules as one blob; the package's row (its key, hash and sizes). */
+/** A package's `metadata.json` (Convex's `MetadataJson`). */
+type PackageMetadata = {
+  modulePaths: string[];
+  moduleEnvironments: [string, "isolate" | "node"][] | null;
+  externalDepsStorageKey: string | null;
+};
+
+/**
+ * Store a push's modules as Convex's package (`write_package`): a zip with each module's source at
+ * `modules/<path>`, its source map at `modules/<path>.map`, by path, then `metadata.json`. The package's row
+ * (its key, hash and sizes; the unzipped size counts the sources, the maps and the metadata, as Convex's).
+ */
 export async function writePackage(store: BlobStore, modules: ModuleSource[]): Promise<SourcePackageFields> {
-  const json = JSON.stringify({ modules });
-  if (json.length > MAX_UNZIPPED_PACKAGE_BYTES)
+  const enc = new TextEncoder();
+  const entries: { name: string; data: Uint8Array }[] = [];
+  const metadata: PackageMetadata = { modulePaths: [], moduleEnvironments: [], externalDepsStorageKey: null };
+  let unzipped = 0;
+  for (const m of [...modules].sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0))) {
+    const source = enc.encode(m.source);
+    entries.push({ name: `modules/${m.path}`, data: source });
+    metadata.modulePaths.push(m.path);
+    metadata.moduleEnvironments!.push([m.path, m.environment]);
+    unzipped += source.length;
+    if (m.sourceMap !== undefined) {
+      const map = enc.encode(m.sourceMap);
+      entries.push({ name: `modules/${m.path}.map`, data: map });
+      metadata.modulePaths.push(`${m.path}.map`);
+      unzipped += map.length;
+    }
+  }
+  const metadataJson = enc.encode(JSON.stringify(metadata));
+  entries.push({ name: "metadata.json", data: metadataJson });
+  unzipped += metadataJson.length;
+  if (unzipped > MAX_UNZIPPED_PACKAGE_BYTES)
     throw new Error(
-      `Total module size exceeded the unzipped maximum (${json.length} > ${MAX_UNZIPPED_PACKAGE_BYTES} bytes)`,
+      `Total module size exceeded the unzipped maximum (${unzipped} > ${MAX_UNZIPPED_PACKAGE_BYTES} bytes)`,
     );
-  const bytes = new TextEncoder().encode(json);
-  const written = await store.put(Bun.gzipSync(bytes));
+  const written = await store.put(zipInMemory(entries));
   return {
     storageKey: written.key,
     sha256: written.sha256.slice().buffer,
     externalPackageId: null,
-    packageSize: { zippedSizeBytes: BigInt(written.size), unzippedSizeBytes: BigInt(bytes.length) },
+    packageSize: { zippedSizeBytes: BigInt(written.size), unzippedSizeBytes: BigInt(unzipped) },
     nodeVersion: null,
   };
 }
 
+/**
+ * A package's modules (Convex's `download_package`): every `modules/<path>.js` with its `.map`, each module's
+ * environment from `metadata.json`, whose paths must be the archive's.
+ */
 export async function readPackage(store: BlobStore, storageKey: string): Promise<ModuleSource[]> {
   const stream = await store.get(storageKey);
   if (!stream) throw new Error(`the code package ${storageKey} is missing from the modules store`);
-  const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
-  return (JSON.parse(new TextDecoder().decode(Bun.gunzipSync(bytes))) as { modules: ModuleSource[] }).modules;
+  const archive = new Uint8Array(await new Response(stream).arrayBuffer());
+  const zip = await ZipReader.open(bytesSource(archive));
+  const dec = new TextDecoder();
+  const sources = new Map<string, string>();
+  const maps = new Map<string, string>();
+  let metadata: PackageMetadata | null = null;
+  for (const entry of zip.entries) {
+    const text = dec.decode(entryBytes(archive, entry));
+    if (entry.name === "metadata.json") {
+      metadata = JSON.parse(text) as PackageMetadata;
+      continue;
+    }
+    if (!entry.name.startsWith("modules/")) throw new Error(`a package entry outside modules/: ${entry.name}`);
+    const path = entry.name.slice("modules/".length);
+    if (path.endsWith(".js")) sources.set(path, text);
+    else if (path.endsWith(".js.map")) maps.set(path.slice(0, -".map".length), text);
+    else throw new Error(`a package entry that is not a module: ${entry.name}`);
+  }
+  if (!metadata) throw new Error("the package has no metadata.json");
+  const found = [...sources.keys(), ...[...maps.keys()].map((p) => `${p}.map`)].sort();
+  if (JSON.stringify([...metadata.modulePaths].sort()) !== JSON.stringify(found))
+    throw new Error("the package's metadata.json paths are not its modules");
+  const environments = new Map(metadata.moduleEnvironments ?? []);
+  return [...sources].map(([path, source]) => {
+    const environment = environments.get(path) ?? (path.startsWith("actions/") ? "node" : "isolate");
+    const map = maps.get(path);
+    return { path, source, ...(map === undefined ? {} : { sourceMap: map }), environment };
+  });
 }
 
 /**
- * The deployed package's modules, or null when bunvex cannot read it (another binary's package, such as the
- * zip Convex writes, or a damaged blob): it is ignored with a log line, as if nothing were deployed, and the
+ * The deployed package's modules, or null when bunvex cannot read it (a damaged blob, or a package in
+ * another format, such as the gzip JSON earlier bunvex versions wrote): it is ignored with a log line, as if nothing were deployed, and the
  * next deploy replaces it (STUDY-139 P4).
  */
 export async function readablePackage(

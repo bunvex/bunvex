@@ -8,10 +8,11 @@ import { defineSchema, defineTable, Engine, MODULES_TABLE, SOURCE_PACKAGES_TABLE
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { LocalBlobStore, MemoryBlobStore } from "@bunvex/file-storage";
 import { v } from "@bunvex/values";
-import { readPackage, storedModules, udfConfig } from "../src/code-store.ts";
+import { readablePackage, readPackage, storedModules, udfConfig, writePackage } from "../src/code-store.ts";
 import { InvalidModulesError, type ModuleSource } from "../src/code-version.ts";
 import { Functions } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
+import { zipInMemory } from "../src/zip-writer.ts";
 
 const stops: (() => unknown)[] = [];
 const dirs: string[] = [];
@@ -223,5 +224,107 @@ describe("deployed code in the store", () => {
       })
     ).json()) as { errorMessage?: string };
     expect(r.errorMessage).toContain("Could not find public function");
+  });
+});
+
+describe("the package is Convex's zip (DV-166, crates/model/src/source_packages/upload_download.rs)", () => {
+  const enc = (t: string) => new TextEncoder().encode(t);
+
+  test("modules/<path> and modules/<path>.map by path, then metadata.json; Convex's unzipped size", async () => {
+    const store = new MemoryBlobStore();
+    const map = '{"version":3}';
+    const modules: ModuleSource[] = [
+      mod("z.js", "export const z = 1;"),
+      { ...mod("a.js", "export const a = 1;"), sourceMap: map },
+      { path: "actions/n.js", source: "export const n = 1;", environment: "node" },
+    ];
+    const pkg = await writePackage(store, modules);
+    const bytes = new Uint8Array(await new Response((await store.get(pkg.storageKey))!).arrayBuffer());
+    // Info-ZIP reads it as any zip tool would.
+    const dir = mkdtempSync(join(tmpdir(), "bunvex-pkg-"));
+    dirs.push(dir);
+    const file = join(dir, "pkg.zip");
+    await Bun.write(file, bytes);
+    const names = Bun.spawnSync(["unzip", "-Z1", file]).stdout.toString().trim().split("\n");
+    expect(names).toEqual([
+      "modules/a.js",
+      "modules/a.js.map",
+      "modules/actions/n.js",
+      "modules/z.js",
+      "metadata.json",
+    ]);
+    const metadata = Bun.spawnSync(["unzip", "-p", file, "metadata.json"]).stdout.toString();
+    expect(JSON.parse(metadata)).toEqual({
+      modulePaths: ["a.js", "a.js.map", "actions/n.js", "z.js"],
+      moduleEnvironments: [
+        ["a.js", "isolate"],
+        ["actions/n.js", "node"],
+        ["z.js", "isolate"],
+      ],
+      externalDepsStorageKey: null,
+    });
+    expect(Bun.spawnSync(["unzip", "-p", file, "modules/a.js.map"]).stdout.toString()).toBe(map);
+    expect(pkg.packageSize).toEqual({
+      zippedSizeBytes: BigInt(bytes.length),
+      unzippedSizeBytes: BigInt(3 * "export const a = 1;".length + map.length + metadata.length),
+    });
+    // Read back: every module, with its map and environment.
+    const back = new Map((await readPackage(store, pkg.storageKey)).map((m) => [m.path, m]));
+    expect([...back.keys()].sort()).toEqual(["a.js", "actions/n.js", "z.js"]);
+    for (const m of modules) expect(back.get(m.path)).toEqual(m);
+  });
+
+  test("a package as Convex's backend writes it reads, its environments from metadata.json or, without them, the path", async () => {
+    const store = new MemoryBlobStore();
+    const convexPackage = (moduleEnvironments: [string, string][] | null) =>
+      zipInMemory([
+        { name: "modules/actions/n.js", data: enc("export const n = 1;") },
+        { name: "modules/fns.js", data: enc("export const a = 1;") },
+        { name: "modules/fns.js.map", data: enc('{"version":3}') },
+        {
+          name: "metadata.json",
+          data: enc(
+            JSON.stringify({
+              modulePaths: ["actions/n.js", "fns.js", "fns.js.map"],
+              moduleEnvironments,
+              externalDepsStorageKey: null,
+            }),
+          ),
+        },
+      ]);
+    for (const envs of [
+      [
+        ["actions/n.js", "node"],
+        ["fns.js", "isolate"],
+      ] as [string, string][],
+      null,
+    ]) {
+      const { key } = await store.put(convexPackage(envs));
+      const modules = (await readPackage(store, key)).sort((x, y) => x.path.localeCompare(y.path));
+      expect(modules).toEqual([
+        { path: "actions/n.js", source: "export const n = 1;", environment: "node" },
+        { path: "fns.js", source: "export const a = 1;", sourceMap: '{"version":3}', environment: "isolate" },
+      ]);
+    }
+  });
+
+  test("a package bunvex does not read is ignored with a log line: the gzip JSON of earlier versions, a mismatched metadata.json", async () => {
+    const store = new MemoryBlobStore();
+    const gzip = await store.put(Bun.gzipSync(enc(JSON.stringify({ modules: [mod("a.js", "export const a = 1;")] }))));
+    const mismatched = await store.put(
+      zipInMemory([
+        { name: "modules/a.js", data: enc("export const a = 1;") },
+        {
+          name: "metadata.json",
+          data: enc(JSON.stringify({ modulePaths: ["b.js"], moduleEnvironments: null, externalDepsStorageKey: null })),
+        },
+      ]),
+    );
+    const warnings: string[] = [];
+    for (const key of [gzip.key, mismatched.key])
+      expect(await readablePackage(store, key, (m) => warnings.push(m))).toBeNull();
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toContain(`the deployed code package ${gzip.key} cannot be read`);
+    expect(warnings[1]).toContain("metadata.json paths are not its modules");
   });
 });
