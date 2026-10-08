@@ -33,14 +33,9 @@ const globals = (file: string) => {
     db.close();
   }
 };
-const dropGlobals = (file: string) => {
+const dropGlobals = (file: string, keys: string[] = Object.values(BOOTSTRAP_GLOBALS)) => {
   const db = new Database(file);
-  db.run(
-    `delete from persistence_globals where key in (${Object.values(BOOTSTRAP_GLOBALS)
-      .map(() => "?")
-      .join()})`,
-    [...Object.values(BOOTSTRAP_GLOBALS)],
-  );
+  db.run(`delete from persistence_globals where key in (${keys.map(() => "?").join()})`, keys);
   db.close();
 };
 
@@ -57,6 +52,22 @@ test("rows at ts 0 without their globals: the next start completes the same glob
   const e = await new Engine(defineSchema({ items: defineTable({ n: v.number() }) }), p).init();
   await e.mutation((db) => db.insert("items", { n: 1 }));
   expect(((await e.query((db) => db.query("items").collect())) as unknown[]).length).toBe(1);
+  await e.close();
+  expect(globals(file)).toEqual(want);
+});
+
+test("interrupted between two globals (the first ones set, not the last): the next start completes them (K17)", async () => {
+  const file = path();
+  let p = new SqlitePersistence(file, { durable: false });
+  await bootstrapStore(p);
+  p.close();
+  const want = globals(file);
+  // The globals are written in this order; the first start lost the lease before the last one.
+  dropGlobals(file, [BOOTSTRAP_GLOBALS.indexById]);
+  expect(Object.keys(globals(file)).length).toBe(3);
+  p = new SqlitePersistence(file, { durable: false });
+  const e = await new Engine(defineSchema({ items: defineTable({ n: v.number() }) }), p).init();
+  await e.mutation((db) => db.insert("items", { n: 1 }));
   await e.close();
   expect(globals(file)).toEqual(want);
 });
