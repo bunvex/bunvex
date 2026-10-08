@@ -106,6 +106,46 @@ describe("deployed code in the store", () => {
     expect(await d.moduleStorage.get(first.storageKey)).toBeNull();
   });
 
+  test("a deploy leaves the root component's rows as Convex's push does, once (STUDY-133 §12 M2)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bunvex-code-"));
+    dirs.push(dir);
+    const d = await deployable(dir);
+    stops.push(() => d.s.shutdown());
+    const rows = () =>
+      d.engine.query((db) =>
+        db.asSystem(async () => ({
+          definitions: await (db as any).query("_component_definitions").collect(),
+          components: await (db as any).query("_components").collect(),
+        })),
+      ) as Promise<{ definitions: Record<string, unknown>[]; components: Record<string, unknown>[] }>;
+    expect(await rows()).toEqual({ definitions: [], components: [] }); // none before a push, as Convex
+    await d.s.deployCode(app(1));
+    await d.s.deployCode(app(2));
+    const { definitions, components } = await rows();
+    expect(definitions).toEqual([
+      expect.objectContaining({
+        path: "",
+        definitionType: { type: "app" },
+        childComponents: [],
+        httpMounts: {},
+        httpPrefix: null,
+        exports: { type: "branch", branch: [] },
+        envVars: null,
+      }),
+    ]);
+    expect(components).toEqual([
+      expect.objectContaining({
+        definitionId: definitions[0]!._id,
+        parent: null,
+        name: null,
+        args: null,
+        env: null,
+        state: "active",
+        httpPrefix: null,
+      }),
+    ]);
+  });
+
   test("a deploy that fails to load changes nothing and leaves no package behind", async () => {
     const dir = mkdtempSync(join(tmpdir(), "bunvex-code-"));
     dirs.push(dir);

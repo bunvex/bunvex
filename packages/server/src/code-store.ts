@@ -232,6 +232,37 @@ export async function peekUdfConfig(engine: Engine): Promise<UdfConfig> {
 }
 
 /**
+ * The root component's rows, as a push leaves them in Convex (STUDY-133 §12 M2): the app's definition in
+ * `_component_definitions` and its instance in `_components` (Convex's `SerializedComponentDefinitionMetadata`
+ * and `SerializedComponentMetadata` for `ComponentType::App`). bunvex has no other component (DV-55), so they are
+ * written once and never change.
+ */
+async function ensureRootComponent(db: Tx) {
+  const definitions = (await db.query("_component_definitions").collect()) as Record<string, unknown>[];
+  let root = definitions.find((d) => d.path === "")?._id as string | undefined;
+  root ??= await db.insert("_component_definitions", {
+    path: "",
+    definitionType: { type: "app" },
+    childComponents: [],
+    httpMounts: {},
+    httpPrefix: null,
+    exports: { type: "branch", branch: [] },
+    envVars: null,
+  });
+  const components = (await db.query("_components").collect()) as Record<string, unknown>[];
+  if (!components.some((c) => c.parent === null))
+    await db.insert("_components", {
+      definitionId: root,
+      parent: null,
+      name: null,
+      args: null,
+      env: null,
+      state: "active",
+      httpPrefix: null,
+    });
+}
+
+/**
  * In the push's transaction (Convex's `ModuleModel.apply` / `SourcePackageModel.put`): the package row, and
  * the module rows replaced by the version's. Returns the packages no module points at any more.
  */
@@ -264,6 +295,7 @@ export async function writeCodeRows(
       byPath.delete(path);
     }
     for (const gone of byPath.values()) await db.delete(MODULES_TABLE, gone._id);
+    await ensureRootComponent(db);
     const unused: SourcePackage[] = [];
     for (const p of (await db.query(SOURCE_PACKAGES_TABLE).collect()) as unknown as SourcePackage[])
       if (p._id !== sourcePackageId) {
