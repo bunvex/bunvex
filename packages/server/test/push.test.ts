@@ -598,6 +598,56 @@ describe("deploy2 over HTTP", () => {
     expect((await d.call("query", "messages:list")).status).toBe("success");
   });
 
+  test("a staged validator on a table whose enforced change needs a walk: Convex's 400, dry run and evaluate_push too (STUDY-106 §7.4)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    await d.push([messages(1)], schema);
+    // `author` narrowed (a walk) while `.staged()` proposes a validator for the same table.
+    const both = mod(
+      "schema.js",
+      schema.source.replace(
+        'defineTable({ author: v.string(), body: v.string() }).index("by_author", ["author"])',
+        'defineTable({ author: v.literal("ada"), body: v.string() }).index("by_author", ["author"]).staged({ author: v.string(), body: v.string() })',
+      ),
+    );
+    const body = (dryRun: boolean) => ({
+      dryRun,
+      functions: "bunvex",
+      appDefinition: {
+        definition: null,
+        dependencies: [],
+        schema: both,
+        changedModules: [messages(1)],
+        unchangedModuleHashes: [],
+        udfServerVersion: "1.46.0",
+      },
+      componentDefinitions: [],
+      nodeDependencies: [],
+    });
+    const MESSAGE =
+      "Hit an error while pushing:\nCannot stage validators on tables whose enforced validator change needs their documents walked: messages. Put the whole change in the staged validator instead, so the table is walked once, in the background.";
+    for (const [path, dryRun] of [
+      ["/api/deploy2/start_push", false],
+      ["/api/deploy2/start_push", true],
+      ["/api/deploy2/evaluate_push", false],
+    ] as const) {
+      const r = await d.post(path, body(dryRun));
+      expect([r.status, r.body.code, r.body.message]).toEqual([
+        400,
+        "StagedSchemaWithEnforcedValidatorChanges",
+        MESSAGE,
+      ]);
+    }
+    // Nothing was pushed: no pending schema, the old code and schema serve.
+    const states = (
+      (await d.engine.query((db) => db.asSystem(() => db.query("_schemas").collect()))) as unknown as {
+        state: { state: string };
+      }[]
+    ).map((r) => r.state.state);
+    expect(states).toEqual(["active"]);
+    expect((await d.call("mutation", "messages:send", { author: "bob", body: "hi" })).status).toBe("success");
+  });
+
   test("an index on a field the schema does not have: Convex's SchemaDefinitionError, nothing pushed (STUDY-100)", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());

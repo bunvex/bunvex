@@ -224,8 +224,10 @@ walk. Tables fail independently; the schema's state is never touched; staged wal
   validators on tables whose enforced validator change needs their documents walked: {tables}. Put the whole change in
   the staged validator instead, so the table is walked once, in the background." (tables sorted, `, `-joined). The
   check treats a table that does not exist as empty and uses no real shapes; a new table with an index already exists
-  when it runs on a real push (index preparation creates it), so it is refused there but not in a dry run.
-  `evaluate_schema` does not predict it.
+  when it runs (adding the index created it), so it is refused. Checked against Convex's binary (d8bdde0): refused on a
+  real push and in a dry run alike, since a dry run runs the schema change twice, first committed without the index
+  preparation (`skip_index_diff`), then read-only with it, which refuses (`deploy_config.rs` `start_push`,
+  `handle_schema_change_read_only`); `evaluate_push` is that read-only pass. `evaluate_schema` does not predict it.
 - The table outcome, in order: `notValidated` (no `schemaValidation`), `supersetOfEnforced` (the new validator accepts
   everything the active one did, by `Validator::is_subset`, `validator.rs:324`), **`supersetOfStagedValidated`** (it
   accepts everything a `valid` staged validator of the active schema accepts), `supersetOfShape`, `mustWalk`.
@@ -257,3 +259,18 @@ widenings Convex skips), no `supersetOfStagedValidated`, and it deletes every va
 Found on the way, separate from DV-438: a write that fails a pending schema stores `Failed to insert or update …`
 where Convex stores `New document in table "<t>" does not match the schema: …`; and a push deletes the old active
 `_schemas` row where Convex marks it `overwritten`.
+
+**PR 2, built.** `schema-validations.ts` has Convex's `insert_validation` (one row per `(schema, table)`),
+`initialize_staged_validators` with `can_reuse_for` (7236c10's: a valid row when the new validator `is_subset`s, a
+pending one for the same hash, never a failed one; a valid one first, then the most progress),
+`retry_failed_staged_validators`, `staged_validations_with_progress` and `delete_enforced_validations_for_schema`;
+`startSchemaPush` follows `submit_pending` (the active schema's rows, then an overwritten in-progress schema's, carried
+into the new one), `commitSchemaPush` keeps the staged rows and deletes the old active schema's, and the startup reset
+is 2ada334's (every row deleted, the active schema's staged ones restarted as `pending` with no counters). The
+`validatorHash` is the sha256 of the text `schemaJsonText` writes for the validator, equal to Convex's on its binary
+(two hashes in `staged-validations.test.ts`, one with a float literal). The 400 is raised by `start_push` (dry run too)
+and `evaluate_push`, before anything is written.
+
+Found on the way (not built, for the owner): Convex's dry run commits (the first pass above), so a `deploy --dry-run`
+on Convex writes a pending schema, overwriting an in-progress push, and creates the pushed tables; bunvex's dry run
+writes nothing. `convex codegen` against a deployment runs the same dry-run push.
