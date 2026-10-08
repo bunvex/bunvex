@@ -81,6 +81,16 @@ export const DEPLOYMENT_AUDIT_LOG_TABLE = "_deployment_audit_log";
 export const LOG_SINKS_TABLE = "_log_sinks";
 /** Usage limits (STUDY-61), as Convex's `_usage_limits`: `{metric, window, limitType, limit, enabled}`. */
 export const USAGE_LIMITS_TABLE = "_usage_limits";
+/**
+ * Convex's system tables bunvex keeps empty (STUDY-133 §12 M1): Convex creates them on every start, so a
+ * store has them on both sides; their documents are its cloud's.
+ */
+export const EMPTY_CONVEX_SYSTEM_TABLES = [
+  "_external_deps_packages",
+  "_audit_log_config",
+  "_aws_lambda_versions",
+  "_backend_info",
+] as const;
 /** Data sync progress (STUDY-69), as Convex's `_data_sync_progress`: one row per sync, its state. */
 export const DATA_SYNC_PROGRESS_TABLE = "_data_sync_progress";
 /** Function handles (STUDY-50), as Convex's `_function_handles`: `{component, path, deletedTs}`. */
@@ -123,12 +133,14 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _tables: 513,
   _index: 514,
   _exports: 516,
+  _backend_info: 517,
   _udf_config: 518,
   _auth: 519,
   _db: 520,
   _modules: 521,
   _source_packages: 524,
   _environment_variables: 525,
+  _aws_lambda_versions: 526,
   _deployment_audit_log: 527,
   _session_requests: 529,
   _cron_jobs: 531,
@@ -141,10 +153,12 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _function_handles: 545,
   _canonical_urls: 546,
   _backend_state: 536,
+  _external_deps_packages: 537,
   _cron_next_run: 547,
   _data_sync_progress: 553,
   _usage_limits: 552,
   _scheduled_job_args: 550,
+  _audit_log_config: 551,
   _index_backfills: 548,
   _index_worker_metadata: 542,
   _next_persistence_index_id: 554,
@@ -196,6 +210,10 @@ export const SYSTEM_TABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   _component_definitions: "The deployment's component definitions (only the root app's).",
   _auth: "The deployed auth providers, one document per provider.",
   _db: "The database globals: the data version and the storage type pinned at the first start.",
+  _backend_info: "The cloud deployment's plan and limits (empty here; Convex's cloud fills it).",
+  _aws_lambda_versions: "Convex cloud's Node.js action runtime versions (empty here).",
+  _external_deps_packages: "Packages installed for Node.js actions' external dependencies (empty here).",
+  _audit_log_config: "The cloud audit log's settings (empty here).",
   _instance: "The deployment's own settings, such as the generated instance secret.",
 };
 

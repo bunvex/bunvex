@@ -39,6 +39,7 @@ import {
   DATABASE_GLOBALS_TABLE,
   DEPLOYMENT_AUDIT_LOG_TABLE,
   databaseIndexRows,
+  EMPTY_CONVEX_SYSTEM_TABLES,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
   FILE_STORAGE_TABLE,
@@ -820,6 +821,8 @@ export class Engine {
         indexes: { by_selector: ["metric", "window", "limitType", "_creationTime"] },
         document: v.any(),
       },
+      // Convex's, kept empty: Convex creates them on every start (STUDY-133 §12 M1).
+      ...EMPTY_CONVEX_SYSTEM_TABLES.map((name) => ({ name, indexes: {}, document: v.any() })),
     ];
     return [...systemTables, ...schema.tables.values()];
   }
