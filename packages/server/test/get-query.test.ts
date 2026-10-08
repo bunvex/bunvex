@@ -80,7 +80,8 @@ test("a path that does not parse is 400 BadBunvexFunctionIdentifier, as POST, be
   );
   expect((await get(`path=${encodeURIComponent("../m:ok")}&args=${args({})}`)).body).toEqual({
     code: "BadBunvexFunctionIdentifier",
-    message: "../m:ok is not a valid path to a bunvex function. Invalid module path '../m': Invalid path component ParentDir.",
+    message:
+      "../m:ok is not a valid path to a bunvex function. Invalid module path '../m': Invalid path component ParentDir.",
   });
   // a path that parses but names nothing is the function's error, as before
   const missing = await get(`path=m:nothing&args=${args({})}`);

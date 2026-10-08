@@ -81,7 +81,10 @@ async function setup() {
   return { engine, functions, post, call, site: s.siteUrl!, port: s.server.port };
 }
 
-const REFUSED = (_op: string) => ({ code: "SystemIdentityRequired", message: "You don't have permission to perform this operation." });
+const REFUSED = (_op: string) => ({
+  code: "SystemIdentityRequired",
+  message: "You don't have permission to perform this operation.",
+});
 
 /** A query's or mutation's refusal, as Convex answers it: the function's error, not a 403. */
 const REFUSED_RUN = (_op: string) =>
