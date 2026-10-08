@@ -128,3 +128,28 @@ export class ZipReader {
       throw new InvalidZipError(`${entry.name}: checksum mismatch`);
   }
 }
+
+/** A reader's source over bytes in memory. */
+export const bytesSource = (b: Uint8Array): RangeSource => ({
+  size: b.length,
+  read: async (start: number, end: number) => b.subarray(start, end + 1),
+  stream: async (start: number, end: number) =>
+    new Blob([b.subarray(start, end + 1) as Uint8Array<ArrayBuffer>]).stream(),
+});
+
+/** An entry's bytes from an archive in memory (`bytesSource`), without streams; a CRC or size mismatch throws. */
+export function entryBytes(archive: Uint8Array, entry: ZipEntry): Uint8Array {
+  const head = Buffer.from(archive.buffer, archive.byteOffset + entry.offset, 30);
+  if (head.readUInt32LE(0) !== 0x04034b50) throw new InvalidZipError(`bad local header for ${entry.name}`);
+  const start = entry.offset + 30 + head.readUInt16LE(26) + head.readUInt16LE(28);
+  const raw = archive.subarray(start, start + entry.csize);
+  let out: Uint8Array;
+  try {
+    out = entry.method === 8 ? Bun.inflateSync(raw as Uint8Array<ArrayBuffer>) : raw;
+  } catch (e) {
+    throw new InvalidZipError(`${entry.name}: ${(e as Error).message}`);
+  }
+  if (out.length !== entry.usize || Bun.hash.crc32(out) >>> 0 !== entry.crc >>> 0)
+    throw new InvalidZipError(`${entry.name}: checksum mismatch`);
+  return out;
+}
