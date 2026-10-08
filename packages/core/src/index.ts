@@ -193,6 +193,7 @@ export {
   readSystemRows,
   SchemaEnforcementError,
   SchemaPushError,
+  StagedSchemaError,
   stringifyValue,
   type TxBody,
 } from "./engine.ts";

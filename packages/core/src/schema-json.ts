@@ -15,6 +15,7 @@ import {
   stagedDocumentJson,
   documentJson as validDocumentJson,
 } from "./schema.ts";
+import { type StagedValidator, validatorHash } from "./schema-validations.ts";
 
 export type IndexJson = { indexDescriptor: string; fields: string[] };
 /** A search index, as Convex's schema JSON (`filterFields` sorted, as Convex serializes its set). */
@@ -202,6 +203,21 @@ function text(v: unknown): string {
 
 /** The schema's text as `_schemas` stores it (and the audit log's `schemaDiff` shows it): Convex's, byte for byte. */
 export const schemaJsonText = (s: SchemaDefinition): string => text(schemaToJson(s));
+
+/**
+ * Each table's staged validator (STUDY-106 §7.1): its JSON and `validatorHash`, the sha256 of the text Convex
+ * serializes for it (`DocumentSchema::content_hash`). Of a pushed schema's JSON or a stored row's.
+ */
+export function stagedValidatorsOf(j: SchemaJson): Map<string, StagedValidator> {
+  const out = new Map<string, StagedValidator>();
+  for (const t of j.tables)
+    if (t.stagedDocumentType != null)
+      out.set(t.tableName, {
+        json: t.stagedDocumentType as StagedValidator["json"],
+        hash: validatorHash(text(t.stagedDocumentType)),
+      });
+  return out;
+}
 
 export function schemaFromJson(j: SchemaJson): SchemaDefinition {
   const tables = new Map<string, DeclaredTable>();

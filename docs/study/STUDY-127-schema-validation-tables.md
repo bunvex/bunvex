@@ -1,6 +1,6 @@
 # STUDY-127 — `_schema_validations` and `_schema_validation_progress`
 
-- **Status:** implemented at 4577b9031; **revisited 2026-10-08 (§7)** for staged rows (DV-438, to be built)
+- **Status:** implemented at 4577b9031; **revisited 2026-10-08 (§7)** for staged rows (DV-438; the rows built in its PR 2)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05; origin/main 7236c10, 2026-10-08 (§7)
 - **Related:** [STUDY-35](STUDY-35-push-and-deploy.md) (push, the schema walk), [STUDY-12](STUDY-12-dashboard.md)
   (§14.7, the dashboard's validation progress), [STUDY-52](STUDY-52-shape-inference.md) (the walk's shape
@@ -82,9 +82,9 @@ Now (`@bunvex/core` `schema-validations.ts`, `engine.ts`):
   start with new attempts. Writes are checked against a `pending` or `validated` schema, as before the restart.
 - `_system/frontend/getSchemas:schemaValidationProgress` is Convex's (`componentId` accepted and ignored).
 
-Which tables are walked is unchanged: bunvex walks a table whose validator changed (or that validation now
-covers), without Convex's shape shortcut (STUDY-52). `validatorHash` is never written: bunvex has no staged
-validators yet (#423 adds `.staged()`; its attempts would follow Convex's `reset_for_compatibility` rule).
+Which tables are walked is Convex's since DV-438 PR 1: only a `mustWalk` table (`is_subset` and the shape shortcut,
+STUDY-106 §7.4). `validatorHash` is written for staged validators' rows
+since DV-438 PR 2 (STUDY-106 §7.5), whose start follows Convex's `reset_for_compatibility` rule.
 
 After a restart the push that started the schema cannot be finished: bunvex keeps a push's state in memory
 (STUDY-35), where Convex's CLI sends it back. The schema still gets validated, and the next push overwrites it.

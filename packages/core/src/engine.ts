@@ -157,13 +157,19 @@ import {
   schemaKey,
   schemaStateOf,
   schemaToJson,
+  stagedValidatorsOf,
 } from "./schema-json.ts";
 import {
+  deleteEnforcedValidationsForSchema,
   deleteValidationsForSchema,
+  initializeStagedValidators,
   markValidationValid,
   progressThreshold,
   recordValidationProgress,
   resetSchemaValidations,
+  retryFailedStagedValidators,
+  type StagedCarryOver,
+  stagedValidationsWithProgress,
   startTableValidation,
 } from "./schema-validations.ts";
 import { filterKey, indexedDoc, indexedDocBytes, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
@@ -2201,8 +2207,9 @@ export class Engine {
   private async resumePendingSchema() {
     const row = await this.runMutation(
       async (db) => {
-        await resetSchemaValidations(db);
         const rows = await db.query(SCHEMAS_TABLE).collect();
+        const active = rows.find((r) => schemaStateOf(r) === "active");
+        await resetSchemaValidations(db, active ? (active._id as string) : null);
         return (
           rows.find((r) => {
             const s = schemaStateOf(r);
@@ -2343,6 +2350,35 @@ export class Engine {
   }
 
   /**
+   * Convex's guardrail in `submit_pending` (STUDY-106 §7.4): a table's enforced walk and its staged validation share
+   * one row, so a schema that stages a validator on a table whose enforced change needs a walk is refused, its
+   * tables in name order. As Convex's, no shape is used and a table that does not exist is empty, but a new table
+   * that declares an index exists already: Convex adds the push's indexes first, creating their tables (a dry run
+   * and `evaluate_push` too, in their read-only pass; checked against Convex's binary).
+   */
+  stagedValidatorConflicts(schema: SchemaDefinition): StagedSchemaError | null {
+    const tables: string[] = [];
+    for (const t of [...schema.tables.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      if (t.stagedDocument === undefined) continue;
+      const declaresIndex =
+        Object.keys(t.indexes).length > 0 ||
+        Object.keys(t.searchIndexes ?? {}).length > 0 ||
+        Object.keys(t.vectorIndexes ?? {}).length > 0;
+      const exists = this.catalog.tables.has(t.name) || declaresIndex;
+      const was = this.schema.schemaValidation ? this.schema.tables.get(t.name) : undefined;
+      const outcome = tableValidationOutcome(
+        schema.schemaValidation,
+        t.document.json as never,
+        was?.document.json as never,
+        exists ? undefined : NEVER,
+        (n) => this.catalog.byNumber(n)?.name,
+      );
+      if (outcome === "mustWalk") tables.push(t.name);
+    }
+    return tables.length ? new StagedSchemaError(tables) : null;
+  }
+
+  /**
    * A push's schema change, first half (Convex's `start_push` → `handle_schema_change_in_start_push`):
    * create missing tables, add new and changed indexes as `backfilling` (the worker builds them), drop
    * pending ones no longer declared, and record the schema as `pending` — an earlier pending one becomes
@@ -2350,17 +2386,24 @@ export class Engine {
    * `commitSchemaPush`. Returns the schema's id and the indexes it added.
    */
   async startSchemaPush(schema: SchemaDefinition): Promise<{ schemaId: string; addedIndexes: string[] }> {
+    const conflict = this.stagedValidatorConflicts(schema);
+    if (conflict) throw conflict;
     const declared = this.declaredTables(schema);
+    const json = schemaToJson(schema);
+    const staged = stagedValidatorsOf(json);
     const r = await this.runMutation(
       async (db) => {
         const current = await readCatalog(db);
         const changes = planCatalog(declared, current.tables, current.indexes, true, current.nextIndexId);
         const written = await writeCatalogChanges(db, changes, this.createdLowerBound(db));
         // Convex's `submit_pending`: a schema equal to the active one is the active one (an unfinished push is
-        // overwritten); one equal to the pending or validated one is that one; else a new pending schema.
-        const key = schemaKey(schemaToJson(schema));
+        // overwritten); one equal to the pending or validated one is that one; else a new pending schema. A push
+        // of an unchanged schema retries its failed staged validations; a new schema's staged validations take
+        // over what the outgoing schemas' proved (STUDY-106 §7.1).
+        const key = schemaKey(json);
         const rows = await db.query(SCHEMAS_TABLE).collect();
-        const same = (row: Record<string, unknown>) => schemaKey(JSON.parse(row.schema as string)) === key;
+        const rowJson = (row: Record<string, unknown>) => JSON.parse(row.schema as string) as SchemaJson;
+        const same = (row: Record<string, unknown>) => schemaKey(rowJson(row)) === key;
         const active = rows.find((row) => schemaStateOf(row) === "active");
         const unfinished = rows.filter((row) => {
           const s = schemaStateOf(row);
@@ -2369,16 +2412,28 @@ export class Engine {
         let schemaId: string;
         let state = "pending" as "active" | "pending" | "validated";
         const reused = active && same(active) ? active : unfinished.find(same);
+        const carryOver: StagedCarryOver[] = [];
+        if (staged.size && active && !reused)
+          carryOver.push(
+            ...(await stagedValidationsWithProgress(db, active._id as string, stagedValidatorsOf(rowJson(active)))),
+          );
         for (const row of unfinished)
           if (row !== reused) {
+            if (staged.size && !reused)
+              carryOver.push(
+                ...(await stagedValidationsWithProgress(db, row._id as string, stagedValidatorsOf(rowJson(row)))),
+              );
             await db.patch(SCHEMAS_TABLE, row._id as string, { state: { state: "overwritten" } });
             await deleteValidationsForSchema(db, row._id as string);
           }
         if (reused) {
           schemaId = reused._id as string;
           state = schemaStateOf(reused) as typeof state;
-        } else
+          await retryFailedStagedValidators(db, schemaId, staged);
+        } else {
           schemaId = await db.insert(SCHEMAS_TABLE, { state: { state: "pending" }, schema: schemaJsonText(schema) });
+          await initializeStagedValidators(db, schemaId, staged, carryOver);
+        }
         const addedIndexes = changes.insertIndexes
           .filter((i) => !(i.name in SYSTEM_INDEXES))
           .map((i) => `${i.table}.${i.name}`);
@@ -2498,9 +2553,13 @@ export class Engine {
         // Already active (a push of the same schema): Convex's `mark_active` does nothing.
         if (state !== "active") {
           for (const old of await db.query(SCHEMAS_TABLE).collect())
-            if (schemaStateOf(old) === "active") await db.delete(SCHEMAS_TABLE, old._id as string);
+            if (schemaStateOf(old) === "active") {
+              await deleteValidationsForSchema(db, old._id as string);
+              await db.delete(SCHEMAS_TABLE, old._id as string);
+            }
           await db.patch(SCHEMAS_TABLE, schemaId, { state: { state: "active" } });
-          await deleteValidationsForSchema(db, schemaId);
+          // Convex's `mark_active`: the enforced walk's rows go; the staged ones keep running under this schema.
+          await deleteEnforcedValidationsForSchema(db, schemaId);
         }
         const value = await body(db);
         const ids = (l: IndexMeta[]) => l.map((i) => i.indexId);
@@ -3479,6 +3538,20 @@ export class SchemaPushError extends Error {
   ) {
     super(message);
     this.name = "SchemaPushError";
+  }
+}
+
+/**
+ * Convex's `StagedSchemaWithEnforcedValidatorChanges` (400, STUDY-106 §7.4): the schema stages validators on tables
+ * whose enforced validator change needs their documents walked.
+ */
+export class StagedSchemaError extends Error {
+  readonly code = "StagedSchemaWithEnforcedValidatorChanges";
+  constructor(readonly tables: string[]) {
+    super(
+      `Cannot stage validators on tables whose enforced validator change needs their documents walked: ${tables.join(", ")}. Put the whole change in the staged validator instead, so the table is walked once, in the background.`,
+    );
+    this.name = "StagedSchemaError";
   }
 }
 
