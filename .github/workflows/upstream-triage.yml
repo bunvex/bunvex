@@ -1,0 +1,65 @@
+name: Convex upstream triage
+
+# The daily triage of Convex's new commits (STUDY-138, docs/parity/upstream.md):
+# - Convex's repository is cloned without file contents, and its commits after the reference commit are sorted
+#   by scripts/upstream-triage.ts.
+# - One issue holds the digest, rewritten each day. Each urgent commit (a fix, revert or security change in the
+#   engine, the runtime or the client package) gets its own issue, once, to be studied before the weekly bump.
+# - A pull request that changes this file or the script only prints the digest.
+on:
+  schedule:
+    - cron: "47 6 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/upstream-triage.yml
+      - scripts/upstream-triage.ts
+      - docs/parity/upstream.md
+
+concurrency:
+  group: upstream-triage-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  triage:
+    name: triage · Convex's new commits
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - name: Convex's repository (history and paths, no file contents)
+        run: git clone --filter=blob:none --no-checkout --single-branch https://github.com/get-convex/convex-backend.git ../convex-backend
+      - name: Sort the commits after the reference
+        run: |
+          bun scripts/upstream-triage.ts --repo ../convex-backend > digest.md
+          bun scripts/upstream-triage.ts --repo ../convex-backend --json > triage.json
+          cat digest.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Update the digest issue; open one issue per new urgent commit
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Convex upstream: commits since the reference"
+          existing=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then gh issue edit "$existing" --body-file digest.md
+          else gh issue create --title "$title" --body-file digest.md; fi
+          jq -c '.commits[] | select(.kind == "urgent")' triage.json | while read -r c; do
+            sha=$(jq -r '.sha' <<<"$c"); short=${sha:0:7}; subject=$(jq -r '.subject' <<<"$c")
+            # Once per commit, closed issues included: a triaged commit is not filed again.
+            if [ -n "$(gh issue list --state all --search "\"Convex upstream (urgent): $short\" in:title" --json number --jq '.[0].number')" ]; then continue; fi
+            { echo "Convex commit [\`$short\`](https://github.com/get-convex/convex-backend/commit/$sha) ($(jq -r '.date' <<<"$c")): $subject"
+              echo
+              echo "Areas: $(jq -r '.areas | join(", ")' <<<"$c"). Files:"
+              echo; jq -r '.files[] | "- `" + . + "`"' <<<"$c"
+              echo
+              echo "Study it (STUDY-138): does bunvex have the bug, or the behaviour it changes? If yes, fix it on its own PR, with a test and a sabotage check; if not, say why and close. The weekly bump lists it either way."
+            } > urgent.md
+            gh issue create --title "Convex upstream (urgent): $short $subject" --body-file urgent.md
+          done
