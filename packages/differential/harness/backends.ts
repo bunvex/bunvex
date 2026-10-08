@@ -93,6 +93,28 @@ async function waitUntilUp(url: string, name: string, l: Launched, what: string)
 export type StartOptions = {
   /** The ports to try (tests): `freePorts` by default. */
   pickPorts?: () => [number, number];
+  /**
+   * A store kept across backends (the cross-open tests, STUDY-133 Q11): its directory (`store.sqlite3` and
+   * `storage/` in it), the instance's name and secret. It outlives `stop`, so the other binary can open it.
+   */
+  store?: { dir: string; name: string; secret: string };
+  /** The app to deploy: a directory of function files written for Convex (`app/` by default). */
+  app?: string;
+};
+
+/** A store a backend can be started on, then the other one (the cross-open tests). */
+export function newStore(): { dir: string; name: string; secret: string } {
+  return {
+    dir: mkdtempSync(join(tmpdir(), "cross-open-")),
+    name: `cross-open-${randomBytes(4).toString("hex")}`,
+    secret: randomBytes(32).toString("hex"),
+  };
+}
+
+/** Where a backend keeps its data: the kept store, or a fresh directory for this attempt. */
+const storeFiles = (state: string, opts: StartOptions, file: string) => {
+  const dir = opts.store?.dir ?? mkdtempSync(join(state, "attempt-"));
+  return { db: join(dir, opts.store ? "store.sqlite3" : file), storage: join(dir, "storage") };
 };
 
 /**
@@ -107,7 +129,7 @@ async function startOnFreePorts(
   let last: unknown;
   for (let attempt = 0; attempt < 5; attempt++) {
     const ports = (opts.pickPorts ?? freePorts)();
-    const name = `differential-${randomBytes(4).toString("hex")}`;
+    const name = opts.store?.name ?? `differential-${randomBytes(4).toString("hex")}`;
     const url = `http://127.0.0.1:${ports[0]}`;
     const launched = start(ports, name);
     try {
@@ -143,13 +165,13 @@ function caller(url: string): Backend["call"] {
 }
 
 /** The app in a fresh project directory for one backend: `dir` is `convex` or `bunvex`, imports rewritten. */
-function project(state: string, dir: "convex" | "bunvex"): string {
+function project(state: string, dir: "convex" | "bunvex", app = APP): string {
   const proj = join(state, "project");
   const functions = join(proj, dir);
   mkdirSync(functions, { recursive: true });
-  for (const name of readdirSync(APP)) {
+  for (const name of readdirSync(app)) {
     if (!name.endsWith(".ts")) continue;
-    let source = readFileSync(join(APP, name), "utf8");
+    let source = readFileSync(join(app, name), "utf8");
     if (dir === "bunvex")
       source = source
         .replaceAll('"convex/server"', '"bunvex/server"')
@@ -176,7 +198,7 @@ export async function startConvex(opts: StartOptions = {}): Promise<Backend> {
       `no Convex backend at ${ORACLE_BIN}: run scripts/download-convex-backend.sh or set CONVEX_BACKEND_BIN`,
     );
   const state = mkdtempSync(join(tmpdir(), "differential-convex-"));
-  const secret = randomBytes(32).toString("hex");
+  const secret = opts.store?.secret ?? randomBytes(32).toString("hex");
   let proc: ReturnType<typeof Bun.spawn> | null = null;
   const stop = async () => {
     proc?.kill("SIGTERM");
@@ -185,12 +207,12 @@ export async function startConvex(opts: StartOptions = {}): Promise<Backend> {
   };
   try {
     const up = await startOnFreePorts("Convex's backend", opts, ([port, sitePort], name) => {
-      // Each attempt on a store of its own: a failed one leaves nothing for the next.
-      const dir = mkdtempSync(join(state, "attempt-"));
+      // Each attempt on a store of its own (a failed one leaves nothing for the next), unless one is kept.
+      const files = storeFiles(state, opts, "convex.sqlite3");
       return launch(
         [
           ORACLE_BIN,
-          join(dir, "convex.sqlite3"),
+          files.db,
           "--instance-name",
           name,
           "--instance-secret",
@@ -200,7 +222,7 @@ export async function startConvex(opts: StartOptions = {}): Promise<Backend> {
           "--site-proxy-port",
           String(sitePort),
           "--local-storage",
-          join(dir, "storage"),
+          files.storage,
           "--disable-beacon",
         ],
         state,
@@ -211,7 +233,7 @@ export async function startConvex(opts: StartOptions = {}): Promise<Backend> {
     const adminKey = (
       await run([ORACLE_BIN, "keygen", "admin-key", "--instance-name", up.name, "--instance-secret", secret], state)
     ).trim();
-    const proj = project(state, "convex");
+    const proj = project(state, "convex", opts.app);
     await run([join(proj, "node_modules/.bin/convex"), "deploy", "--yes", "--typecheck=disable"], proj, {
       CONVEX_SELF_HOSTED_URL: up.url,
       CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey,
@@ -226,7 +248,7 @@ export async function startConvex(opts: StartOptions = {}): Promise<Backend> {
 /** bunvex's local backend, with the app deployed by bunvex's CLI. */
 export async function startBunvex(opts: StartOptions = {}): Promise<Backend> {
   const state = mkdtempSync(join(tmpdir(), "differential-bunvex-"));
-  const secret = randomBytes(32).toString("hex");
+  const secret = opts.store?.secret ?? randomBytes(32).toString("hex");
   let proc: ReturnType<typeof Bun.spawn> | null = null;
   const stop = async () => {
     proc?.kill("SIGTERM");
@@ -235,8 +257,8 @@ export async function startBunvex(opts: StartOptions = {}): Promise<Backend> {
   };
   try {
     const up = await startOnFreePorts("bunvex's backend", opts, ([port, sitePort], name) => {
-      // Each attempt on a store of its own: a failed one leaves nothing for the next.
-      const dir = mkdtempSync(join(state, "attempt-"));
+      // Each attempt on a store of its own (a failed one leaves nothing for the next), unless one is kept.
+      const files = storeFiles(state, opts, "backend.sqlite3");
       return launch(
         [
           process.execPath,
@@ -250,8 +272,8 @@ export async function startBunvex(opts: StartOptions = {}): Promise<Backend> {
           "--instance-secret",
           secret,
           "--local-storage",
-          join(dir, "storage"),
-          join(dir, "backend.sqlite3"),
+          files.storage,
+          files.db,
         ],
         state,
       );
@@ -272,7 +294,7 @@ export async function startBunvex(opts: StartOptions = {}): Promise<Backend> {
         state,
       )
     ).trim();
-    const proj = project(state, "bunvex");
+    const proj = project(state, "bunvex", opts.app);
     const envFile = join(state, "deployment.env");
     writeFileSync(envFile, `BUNVEX_SELF_HOSTED_URL=${up.url}\nBUNVEX_SELF_HOSTED_ADMIN_KEY=${adminKey}\n`);
     await run([process.execPath, BUNVEX_CLI, "deploy", "--typecheck=disable", "--env-file", envFile], proj);

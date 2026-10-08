@@ -29,6 +29,9 @@ backend is always started with `--disable-beacon`.
   rank, request ids and stacks, a page's cursors) and the wording rewrites a decided divergence allows
   (DV-04).
 - `test/fixed.test.ts`: fixed programs, one per shape a bug has taken or could take.
+- `test/cross-open.test.ts` (STUDY-133 PR 9): a store each binary wrote, opened by the other (same SQLite file
+  and storage, the app of `cross-open-app/` redeployed by its CLI), read back by every kind of index, written,
+  and read back by the first. Local only: the nightly does not run it.
 - `test/generated.test.ts`: `DIFF_RUNS` generated programs (25 by default), both backends started once and
   reset before each program. `DIFF_SEED` replays a run. A difference is shrunk, written to
   `.cache/failures/last.json` (the program and the differences, ready to become a fixed program) and fails

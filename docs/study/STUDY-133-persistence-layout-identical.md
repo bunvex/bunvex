@@ -2,7 +2,7 @@
 
 - **Status:** accepted (owner, 2026-10-05): the goal, the design and Q1–Q11 decided (§8a); the PR series
   of §7 is being built.
-- **Built so far:** PRs 1–8, 10 and 11 (§11, §12). PR 8 measured the gap first (§12); what is left is §12.2.
+- **Built so far:** PRs 1–11 (§11, §12): the series is complete. PR 8 measured the gap first (§12); PR 9 is §12.3.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend; the binary
   `precompiled-2026-09-28-5c7cb5b/convex-local-backend` for the probes in §1.12.
 - **bunvex code read:** `main` at `64f396f7`.
@@ -989,7 +989,7 @@ bug fixed on its own.
 
 ### 12.2 Still open
 
-- **M5, M6:** PR 9, with the cross-open tests (Q11).
+- **M5, M6:** built in PR 9, with the cross-open tests (Q11): §12.3.
 - **M8b (DV-440, owner, 2026-10-08: keep `2`):** Convex writes a float64 integer in a document's JSON as
   `2.0`; bunvex writes `2`. Each binary reads the other's form (a `2` reads back as float64; an int64 has its
   own `$integer` encoding), so nothing fails. Matching would cost a text encoder in place of `JSON.stringify`
@@ -1006,3 +1006,39 @@ bug fixed on its own.
 - **M15 (fixed on its own, #515):** `bunvex-local-backend` closed the engine twice on SIGINT/SIGTERM (the
   server's shutdown, then its own stop); the second close flushed and fast-forwarded the search indexes after
   the first had released the SQLite lock. `Engine.close()` now runs once; a second call waits for the first.
+
+### 12.3 As built in PR 9
+
+**The Convex binary's reads, studied first** (`crates/database/src/database.rs`, `search_index_workers/`,
+`common/src/bootstrap_model/index/`):
+- At load Convex parses the newest revision of every `_index` document and fails the whole load on a parse
+  error. Its deserializer takes an `i64` / `u64` only from an Int64: the text snapshot's `version` and `ts`, the
+  segment counters and a vector index's `dimensions` written as JSON numbers fail it (M5). Older revisions are not
+  read at load. When Convex later updates a row it re-parses the revision before, so the row bunvex wrote last
+  must parse too.
+- A row `Snapshotted` with segments Convex's search storage does not have makes every query on that index fail,
+  with no rebuild (`ArchiveFetcher::fetch`). A `Backfilling` row is built by Convex's backfill flusher, then kept
+  `Backfilled` until the next push enables it (`IndexModel::enable_index` from `commit_indexes_for_schema`):
+  after a cross-open the redeploy of §6.4 does it.
+
+**So, as Q5 decided (DV-415):**
+- bunvex writes each search and vector row in Convex's shape, always `backfilling` (Convex's empty
+  `Backfilling { staged }`; for a vector index no segment and no cursor), every integer an Int64
+  (`convexRow`).
+- bunvex's own state — the segments, the ts they are current at, a backfill's cursor, staged — is in the
+  bunvex-only global `search_index_segments`: by index, the full state as Convex's serialized form, with the id
+  of the `_index` row it belongs to. It is written after the blobs and the rows, so it names only what exists.
+- A start uses a saved state only when its row is still the one bunvex wrote (same id, `backfilling` with no
+  segment): a row Convex built since, or a recreated index, is built again from its table. A store from before
+  the global keeps its rows' states once, then its rows are rewritten.
+- A flush writes the global instead of committing a row; an index current at the newest commit has nothing to
+  fast-forward.
+- bunvex's dashboard and CLI read the indexes' state from the engine, not from the rows, so they are unchanged.
+
+**Cross-open tests** (`packages/differential/test/cross-open.test.ts`, local only, Q11): a store written by each
+binary is opened by the other on the same SQLite file and storage directory, the app redeployed with that
+binary's CLI; every note reads back by the table, a database index, text search and vector search (rebuilt from
+the table), a write follows, and the first binary reads it back. Skipped, with a note naming
+`CONVEX_BACKEND_BIN`, without the binary; the nightly does not run it. With the search code before PR 9, Convex
+exits at start on bunvex's store.
+
