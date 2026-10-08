@@ -995,9 +995,12 @@ bug fixed on its own.
   own `$integer` encoding), so nothing fails. Matching would cost a text encoder in place of `JSON.stringify`
   for every written document: measured about 3–5 µs a document against 0.6–0.9 µs, about 7 % fewer inserts per
   second on the memory store and 13 % fewer on SQLite.
-- **M11:** its own PR. Convex caps the document retention window by the persisted index cursor, deletes up to
-  `min − 1` and leaves `confirmed_deleted_ts` there; bunvex's globals follow its own windows. Changing them
-  touches every retention test, so it is not mixed into PR 8.
+- **M11 (built in its own PR):** as Convex's, a pass prunes the versions below its window (`[cursor, min)`) and
+  a caught-up cursor is `min − 1`; the document window never passes the index cursor last recorded
+  (`candidate_min_snapshot_ts`), so it and its global move only after the index deleter has checkpointed.
+  Until then bunvex pruned through the window (`(cursor, min]`), left the cursor at `min` and capped the
+  document window at the index window: no failure was seen, but the index deleter could lose the versions it
+  derives keys from if it fell behind the document window.
 - **M14 (DV-441, owner, 2026-10-08: match; built in PR 8):** Bun's `Blob` swaps a type its MIME table knows
   for the table's form (`text/plain` → `text/plain;charset=utf-8`). Functions now get a `Blob` and `File`
   with the File API's type, as Convex's runtime (`udf-runtime/src/09_file.ts`); an HTTP action's

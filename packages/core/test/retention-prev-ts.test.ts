@@ -66,6 +66,9 @@ const all = (e: Engine) =>
       .collect(),
   }));
 
+/** A commit after the others, so the window passes every version before it (a pass prunes below the window). */
+const later = (e: Engine) => e.mutation((d) => d.insert("items", { n: -100 }));
+
 describe("retention by prev_ts", () => {
   test("a moved key's replaced entry and tombstone are pruned; an unchanged key keeps its live entry", async () => {
     const { e, db } = await open(indexed);
@@ -82,6 +85,7 @@ describe("retention by prev_ts", () => {
     const k2 = indexKey(ix, a2);
     expect(indexRows(db, ix.id, k1).length).toBe(2); // the entry and its tombstone
     expect(indexRows(db, ix.id, k2).length).toBe(2); // two versions of one key
+    await later(e);
     const before = await all(e);
     const r = e.retention!;
     await r.advance();
@@ -112,6 +116,7 @@ describe("retention by prev_ts", () => {
     // The backfill wrote the entry at the document's own ts, below the index's creation.
     expect(indexRows(db, ix.id, k1)).toEqual([{ ts: docRows(db, id)[0]!.ts, deleted: 0 }]);
     await e.mutation((d) => d.patch(id, { n: 3 }));
+    await later(e);
     const before = await all(e);
     await e.retention!.advance();
     await e.retention!.deleteIndexes();
@@ -129,8 +134,12 @@ describe("retention by prev_ts", () => {
     expect(docRows(db, a).length).toBe(3);
     expect(docRows(db, c).length).toBe(2);
     const live = docRows(db, a)[2]!;
-    await e.retention!.advance();
-    await e.retention!.deleteDocuments();
+    await later(e);
+    const r = e.retention!;
+    await r.advance();
+    await r.deleteIndexes();
+    await r.advance(); // the document window follows the recorded index cursor
+    await r.deleteDocuments();
     expect(docRows(db, a)).toEqual([live]);
     expect(docRows(db, c)).toEqual([]);
     expect(((await e.query((d) => d.get(a))) as Doc).n).toBe(3);
@@ -141,11 +150,14 @@ describe("retention by prev_ts", () => {
     const a = (await e.mutation((d) => d.insert("items", { n: 1 }))) as string;
     await e.mutation((d) => d.patch(a, { n: 2 }));
     await e.mutation((d) => d.patch(a, { n: 3 }));
+    await later(e);
     const r = e.retention!;
     await r.advance();
-    await r.deleteDocuments(); // the predecessors go first
+    // A document window ahead of the index cursor (a store another version wrote): the predecessors go first.
+    r.minDocumentTs = r.minIndexTs;
+    await r.deleteDocuments();
     await r.deleteIndexes();
-    expect(r.indexCursor).toBe(r.minIndexTs);
+    expect(r.indexCursor).toBe(r.minIndexTs - 1n);
     expect(r.stats.errors).toBe(0);
     expect(((await e.query((d) => d.get(a))) as Doc).n).toBe(3);
   });

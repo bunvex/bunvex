@@ -198,13 +198,16 @@ started in the lease holder like `IndexWorker`, and stopped on `close()` and whe
 
 - `minIndexTs = visibleTs − INDEX_RETENTION_DELAY` and `minDocumentTs = visibleTs − DOCUMENT_RETENTION_DELAY`
   (timestamps are wall-clock µs, STUDY-06 D9).
-- They advance every 30 s with jitter, only forward, with `minDocumentTs ≤ minIndexTs`.
+- They advance every 30 s with jitter, only forward. `minDocumentTs` never passes the index cursor last
+  recorded (`confirmed_deleted_ts`), as Convex's `candidate_min_snapshot_ts`, so the index deleter still finds
+  the versions it derives keys from (STUDY-133 §12 M11; until then it was capped at `minIndexTs`).
 - `visibleTs` stands in for Convex's `max_repeatable_ts`. A snapshot is always `visibleTs` when it
   begins, so a read can only fall below the window when its transaction runs longer than the delay, as
   in Convex.
 - Each new bound is written to a persistence global first, then used.
 
-**Index retention** reads the ts-ordered index log in `(cursor, minIndexTs]`, which every driver already
+**Index retention** reads the log in `(cursor, minIndexTs − 1]`, Convex's `[cursor, min_snapshot_ts)`; caught
+up, its cursor is `minIndexTs − 1`, as Convex's (STUDY-133 §12 M11). It originally read the ts-ordered index log, which every driver already
 has (R1). For each row `(index, key, ts)`:
 
 - a live row deletes `(index, key)` rows with ts `≤ ts − 1`, because it supersedes them;
@@ -214,7 +217,7 @@ This removes the same rows as Convex's walk over revision pairs. No document nee
 index definition needs to be known, so dropped indexes and backfill commits (DV-127, normal commits at
 their own ts) are covered by the same scan.
 
-**Document retention** does the same over a new ts index on `documents`, in `(cursor, minDocumentTs]`
+**Document retention** does the same over a new ts index on `documents`, in `(cursor, minDocumentTs − 1]`
 (R2):
 
 - a live version deletes the older versions of its `(table, id)`;

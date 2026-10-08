@@ -32,8 +32,10 @@ test("the retention globals: an int64 of nanoseconds, as Convex's", async () => 
   const { e, p } = await open();
   await e.mutation((db) => db.insert("t", { a: 1 }));
   await e.mutation((db) => db.insert("t", { a: 2 }));
+  await e.mutation((db) => db.insert("t", { a: 3 })); // a pass prunes below the window
   await e.retention!.advance();
   await e.retention!.deleteIndexes();
+  await e.retention!.advance(); // the document window follows the recorded index cursor (STUDY-133 §12 M11)
   await e.retention!.deleteDocuments();
   const convex = convexGlobals();
   for (const key of Object.values(RETENTION_GLOBALS)) {
