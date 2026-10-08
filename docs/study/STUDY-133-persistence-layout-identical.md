@@ -980,7 +980,7 @@ bug fixed on its own.
 | M2 | A push leaves the root component's `_component_definitions` row (`path: ""`, `definitionType: {type: "app"}`) and its `_components` row (`parent: null`, `state: "active"`), written once | `code-store.ts` (`ensureRootComponent`) |
 | M3 | The summary checkpoint has an entry for every table: size 0 and shape `Never` for an empty one | `table-summaries.ts`, `table-summary-checkpoint.ts` |
 | M4 | An id that is an identifier is a `StringLiteral` first, as Convex's `StringLiteralShape::shape_of`; literals of one table become `Id` when the union contracts (`id_candidates`). Merging a document's shape costs about 0.2 µs more (2.4 → 2.6 µs, 200k documents) | `shapes.ts` |
-| M7 | `_index_worker_metadata.index_id` is the index's `InternalId`; rows in the old form are still read | `search-segments.ts` |
+| M7 | `_index_worker_metadata.index_id` is the index's `InternalId`. Rows in the old form (the document id) were read too until STUDY-139 P6 removed it | `search-segments.ts` |
 | M8 | The argument bytes of jobs and crons are serde_json's text (`3.0`, `1e+21`) through `jsonText`. Documents' JSON is unchanged: see M8b in §12.2 | `json-text.ts`, `cron-rows.ts`, `scheduled-jobs.ts`, `system-functions.ts` |
 | M10 | A zip package (a store Convex deployed to) was read by a central-directory reader (DV-166). Removed by STUDY-139 P4: a package bunvex cannot read is ignored with a log line, `get_config_hashes` declares no module, and the next deploy replaces it | `code-store.ts` (`readablePackage`) |
 | M12 | A push's audit row carries `udfConfigDiff` (`{previous_version, next_version}`, `"Unspecified version"` before the first) when the push writes `_udf_config`; database index fields end with `_creationTime`, as Convex's CLI prints them | `code-store.ts`, `push.ts`, `push-audit.ts` |
@@ -1033,7 +1033,7 @@ bug fixed on its own.
   of the `_index` row it belongs to. It is written after the blobs and the rows, so it names only what exists.
 - A start uses a saved state only when its row is still the one bunvex wrote (same id, `backfilling` with no
   segment): a row Convex built since, or a recreated index, is built again from its table. A store from before
-  the global keeps its rows' states once, then its rows are rewritten.
+  the global kept its rows' states once; STUDY-139 P6 removed that migration, so its indexes are built again.
 - A flush writes the global instead of committing a row; an index current at the newest commit has nothing to
   fast-forward.
 - bunvex's dashboard and CLI read the indexes' state from the engine, not from the rows, so they are unchanged.

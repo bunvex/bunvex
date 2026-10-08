@@ -78,11 +78,14 @@ const globalsOf = (p: Persistence) => p;
  */
 export async function bootstrapStore(p: Persistence): Promise<void> {
   const store = globalsOf(p);
-  if ((await store.getGlobal(BOOTSTRAP_GLOBALS.tablesById)) !== null) return;
+  // Bootstrapped once all four globals are set: they are written one by one, so a start that took the lease
+  // between two of them sees only some (K17).
+  const set = await Promise.all(Object.values(BOOTSTRAP_GLOBALS).map((k) => store.getGlobal(k)));
+  if (set.every((g) => g !== null)) return;
   // Convex bootstraps a store that is new; one with rows but without its globals cannot be read. One whose only
-  // rows are the bootstrap's (ts 0) is a bootstrap interrupted between its rows and its globals: with the newest
-  // process winning the lease (DV-413), a second start can take the store from a first one right there. Its
-  // globals are completed from those rows, under our lease.
+  // rows are the bootstrap's (ts 0) is a bootstrap interrupted between its rows and its globals (some or all of
+  // them): with the newest process winning the lease (DV-413), a second start can take the store from a first one
+  // right there. Its globals are completed from those rows, under our lease.
   if (hasRetention(store) && (await store.readDocumentLog(-1n, (1n << 63n) - 1n, 1)).length) {
     if ((await store.readDocumentLog(0n, (1n << 63n) - 1n, 1)).length || !(await completeBootstrap(store)))
       throw new CatalogError("missing _tables.by_id global");
