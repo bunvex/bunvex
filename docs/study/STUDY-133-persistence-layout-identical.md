@@ -2,7 +2,7 @@
 
 - **Status:** accepted (owner, 2026-10-05): the goal, the design and Q1–Q11 decided (§8a); the PR series
   of §7 is being built.
-- **Built so far:** PR 1 (ns `bigint` timestamps), PR 2 (identity), PR 3 (the interface, with PR 11).
+- **Built so far:** PRs 1–7, 10 and 11 (§11). PR 8 measured first; what is left is §12.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend; the binary
   `precompiled-2026-09-28-5c7cb5b/convex-local-backend` for the probes in §1.12.
 - **bunvex code read:** `main` at `64f396f7`.
@@ -908,3 +908,66 @@ The probe scripts (`inject.py`, `cx.sh`, `shapes.py`, the ts bench) are in the s
   the second start takes the lease between the first one's rows and its globals. The next start now completes
   the globals from those rows (`completeBootstrap`); a store with any later commit is still refused, as Convex's.
   This goes beyond Convex, which would refuse such a store too (an owner question in the PR).
+
+## 12. The gap measured before PR 8 (2026-10-08)
+
+PR 8 opened by measuring rather than by building §4.3. Much of §4.3 was built by later PRs, so this section
+replaces it as the list of what is left.
+
+**Setup**
+- bunvex `main` at `d0fea5f1` and the Convex binary `precompiled-2026-10-07-d8bdde0`, on SQLite, with Convex's
+  CLI 1.46.0.
+- Four stores: a fresh Convex store, a fresh bunvex store, and each of the two after deploying the same app.
+- The app has:
+  - two tables, one with a database index and a search index;
+  - a scheduled function still pending and one already run;
+  - an interval cron and a daily cron;
+  - a stored file and an environment variable.
+- Each pair was dumped (schema, globals, `_tables`, `_index`, every document with its value types), diffed, and
+  cross-opened both ways.
+- The scripts were run locally and are not in the repository. PR 9 turns the cross-open into tests (Q11).
+
+**Already identical**
+- The SQL schema.
+- The 37 bootstrap rows at ts 0.
+- The four bootstrap globals, `max_repeatable_ts`, and the retention globals' encoding.
+- `table_summary_v2`'s format.
+- `_tables` and database `_index` rows.
+- These system tables, with the same fields and types: `_db`, `_backend_state`, `_scheduled_jobs` and
+  `_scheduled_job_args`, `_file_storage`, the cron tables, `_schemas`, `_source_packages`, `_udf_config`,
+  `_modules.analyzeResult`, `_index_backfills`, `_environment_variables` and `_function_handles`.
+- The virtual-name tables are gone (`_storage`, `_scheduled_functions`, `_storage_deletions`).
+
+**What is left** (B = blocks a cross-open; Q10 keeps `_instance`, and DV-411/DV-412 keep WAL, the lock and
+`read_only`)
+
+| # | Difference | Who fails | PR |
+|---|---|---|---|
+| M1 | Four system tables bunvex does not create: `_audit_log_config`, `_aws_lambda_versions`, `_backend_info`, `_external_deps_packages` (Convex creates them on open, so `_next_persistence_index_id` differs) | none | 8 |
+| M2 | No root `_component_definitions` / `_components` rows after a push | none yet (B for components later) | 8 |
+| M3 (B) | `table_summary_v2` has entries only for tables with documents; Convex has one for every table (empty: size 0, shape `Never`) | Convex: "Table counts update failed: Updating non-existent table" on its next push; also after a bunvex start rewrote a Convex store's summary | 8 |
+| M4 | A one-document table's `_id` shape: Convex `StringLiteral`, bunvex `Id` | none (Convex parses both) | 8 |
+| M5 (B) | Search `_index` rows: `onDiskState.version` and the segment counters are JSON numbers where Convex reads i64/u64, in every stored version | Convex refuses to load the store | 9 |
+| M6 (B) | Search `_index` rows point at bunvex segments (`state: "snapshotted"`), which Convex cannot read; Q5's `backfilling` with the segments in a bunvex global is not built | Convex's search queries fail (500) | 9 |
+| M7 (B) | `_index_worker_metadata.index_id` is the 32-character developer id; Convex wants the 22-character `InternalId` | Convex writes its own row beside an orphan | 8 |
+| M8 | JSON args stored as bytes (`_cron_jobs`, `_cron_job_logs`, `_scheduled_job_args`, `cronSpecs`): Convex writes a float64 integer as `3.0`, bunvex as `3` | Convex's first push sees both crons as changed | 8 |
+| M9 | `_udf_config.serverVersion` is the pushing CLI's version (`0.1.0-alpha.0` for bunvex's CLI) | Convex refuses calls until it redeploys (§6.4 says redeploy anyway) | none: as Convex (the pushing CLI's version) |
+| M10 (B) | bunvex reads a code package as gzip; Convex's is a zip | bunvex logs "could not load the deployed code" and `bunvex deploy` fails, so §6.4's redeploy does not work | 8 |
+| M11 | Retention globals written from the first start, with `confirmed_deleted_ts` = `min_snapshot_ts`; Convex writes them only when retention advances, with `confirmed_deleted_ts` = `min_snapshot_ts` − 1 | none seen | 8 |
+| M12 | `_deployment_audit_log` push rows: `udfConfigDiff: null` (Convex `{next_version, previous_version}`); `indexDiff` index fields without `_creationTime` | none (apps read it in the dashboard) | 8 |
+| M13 | A push writes and deletes `_schema_validations` / `_schema_validation_progress` rows that Convex never writes for it | none (same final state) | 8 |
+| M14 | `_file_storage.contentType` of `new Blob([…], {type: "text/plain"})` is `text/plain;charset=utf-8` (Bun's Blob) | apps can see it; not layout | owner question (DV, outside PR 8) |
+| M15 | On stop after writes, the committer still flushes after SIGTERM released the SQLite lock: `LeaseLostError: another process holds this SQLite store` | bunvex: a bug | own fix |
+
+**Cross-open as measured**
+- **A fresh bunvex store opened by Convex** starts and serves, but keeps M3.
+- **A deployed bunvex store opened by Convex** fails to load (M5).
+  - With M5 patched: calls are refused until a redeploy (M9). That redeploy fails (M3).
+  - With M3 patched too: the push and every read and write work, except search (M6).
+- **A fresh Convex store opened by bunvex** works. Afterwards Convex fails its next push (M3, from bunvex's
+  rewritten summary).
+- **A deployed Convex store opened by bunvex** cannot be redeployed (M10). With the package replaced, every
+  read, write, file and search works.
+
+**PR 8 is therefore** M1–M4, M7, M8 and M10–M13. M5 and M6 belong to PR 9. M14 is an owner question. M15 is a
+bug fixed on its own.
