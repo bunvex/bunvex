@@ -1,7 +1,7 @@
 {
   "name": "@bunvex/persistence-conformance",
   "version": "0.0.0",
-  "description": "The PERSIST-01 conformance suite (K1\u2013K7) every bunvex persistence driver must pass \u2014 including third-party ones.",
+  "description": "The PERSIST-01 conformance suite every bunvex persistence driver must pass \u2014 including third-party ones.",
   "license": "Apache-2.0",
   "type": "module",
   "exports": {

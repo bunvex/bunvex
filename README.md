@@ -11,9 +11,11 @@ A [Convex](https://convex.dev)-style reactive backend written in TypeScript for 
   versioned store: **memory + log**, **SQLite** (built in), **Postgres**, **MySQL**, **MongoDB**. Each
   driver must pass a public conformance suite, so you can write your own.
 
-> **Status: pre-alpha.** The engine, the persistence drivers, the HTTP API and WebSocket subscriptions
-> work and are benchmarked; the client SDK, validation, auth, the scheduler and the CLI are still to come.
-> See [ARCHITECTURE.md](ARCHITECTURE.md) for what exists and what is planned. Not for production yet.
+> **Status: pre-alpha.** The engine, the persistence drivers, the server (HTTP API, WebSocket sync,
+> validation, auth, the scheduler and crons, file storage, HTTP actions), the client SDK with its React and
+> Next.js bindings, and the CLI work; the hot paths are benchmarked. Components, built-in authentication and
+> the dashboard on a real deployment are still to come. See [ARCHITECTURE.md](ARCHITECTURE.md) and
+> [docs/parity/](docs/parity/README.md) for what exists and what is planned. Not for production yet.
 
 ## Numbers
 
@@ -34,15 +36,26 @@ the row compares them with that off (Convex's `raw` profile, measured 29 Sep).
 
 | path | what |
 |---|---|
+| `packages/values` | validators, ids, value types (`@bunvex/values`) |
 | `packages/core` | the engine (`@bunvex/core`), including the memory and SQLite drivers |
+| `packages/search` | full-text and vector search: tokenizer, BM25, segments (`@bunvex/search`) |
 | `packages/persistence` | Postgres, MySQL and MongoDB drivers (`@bunvex/persistence/*`) |
 | `packages/persistence-conformance` | the PERSIST-01 suite every driver must pass |
-| `packages/server` | function runtime, HTTP API, WebSocket sync (`@bunvex/server`) |
+| `packages/server` | function runtime, HTTP API, WebSocket sync, scheduler, storage (`@bunvex/server`) |
 | `packages/protocol` | wire messages |
+| `packages/auth`, `packages/file-storage` | JWT / OIDC verification for `ctx.auth`; the bytes behind `ctx.storage` (local disk, S3) |
+| `packages/client` | the sync client: WebSocket, optimistic updates, pagination, HTTP client (`@bunvex/client`) |
+| `packages/react`, `nextjs`, `react-clerk`, `react-auth0`, `react-query` | React bindings, Next.js server rendering, Clerk and Auth0 providers, TanStack Query |
+| `packages/cli` | the `bunvex` command line: dev, deploy, codegen, run, env, import/export, logs, mcp (`@bunvex/cli`) |
 | `packages/bunvex` | the package an app installs (`bunvex/server`, …) |
+| `packages/ui`, `packages/dashboard`, `apps/dashboard` | the design system and the dashboard (on mock data for now) |
+| `packages/testing`, `sync-e2e`, `jepsen`, `differential` | test helpers and test suites (not published) |
 | `apps/site` | [bunvex.dev](https://bunvex.dev), the website (landing now, user docs later) |
+| `examples/` | one-feature example apps ([examples/README.md](examples/README.md)) |
+| `docker/` | the self-hosted image and compose file ([docker/README.md](docker/README.md)) |
 | `bench/` | benchmarks, the conformance runner, the convex-bench adapter |
 | `docs/specs/` | design records |
+| `docs/study/`, `docs/parity/`, `docs/bench/` | studies of Convex, the parity inventory, benchmark reports |
 
 The full map, with status and dependency rules, is [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -50,7 +63,7 @@ The full map, with status and dependency rules, is [ARCHITECTURE.md](ARCHITECTUR
 
 ```sh
 bun install
-bun run check          # lint, typecheck, dependency rules, tests
+bun run check          # lint, typecheck, dependency rules, tests, dashboard and site builds
 bun run conformance    # PERSIST-01 on memory + SQLite (+ PG_URL / MYSQL_URL / MONGO_URL when set;
                        #   MongoDB must be a replica set — a single-node one is enough;
                        #   DO_NOT_REQUIRE_SSL=1 for a local Postgres/MySQL without verifiable TLS)
@@ -63,8 +76,8 @@ PERSISTENCE=sqlite bun bench/server.ts   # a server with the benchmark functions
 | Variable | Meaning |
 |---|---|
 | `PERSISTENCE` | `memory` (default), `sqlite`, `postgres`, `mysql` or `mongodb` |
-| `PERSISTENCE_URL` | the URL for `postgres`, `mysql` and `mongodb`; it names the database |
-| `POSTGRES_URL`, `MYSQL_URL`, `DATABASE_URL` | Convex's names, accepted too: without `PERSISTENCE`, the first one set selects Postgres, MySQL or (deprecated) Postgres. bunvex's names win when both are set. Unlike Convex, the URL must name the database |
+| `PERSISTENCE_URL` | the URL for `postgres`, `mysql` and `mongodb`. For Postgres and MySQL, a URL without a database connects to the instance name's (`-` replaced by `_`), as Convex; a URL that names one keeps it |
+| `POSTGRES_URL`, `MYSQL_URL`, `DATABASE_URL` | Convex's names, accepted too: without `PERSISTENCE`, the first one set selects Postgres, MySQL or (deprecated) Postgres. bunvex's names win when both are set. Unlike Convex, a URL that names a database is accepted and kept |
 | `DO_NOT_REQUIRE_SSL` | any non-empty value: connect to Postgres/MySQL without requiring TLS. By default, as Convex, the connection must be encrypted and the server's certificate verified (chain and host name); a Postgres connection must also be read-write (never a standby) |
 | `PG_CA_FILE`, `MYSQL_CA_FILE` | a PEM file with the CA that signed the server's certificate, trusted besides the built-in roots |
 
