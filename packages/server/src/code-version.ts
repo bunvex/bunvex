@@ -152,6 +152,29 @@ export const moduleHash = (m: ModuleSource) =>
     .update(m.sourceMap ?? "")
     .digest("hex");
 
+/** The legacy RegExp statics Convex's runtime deletes (DV-436). */
+const REGEXP_STATICS = [
+  "$&",
+  "$'",
+  "$+",
+  "$1",
+  "$2",
+  "$3",
+  "$4",
+  "$5",
+  "$6",
+  "$7",
+  "$8",
+  "$9",
+  "$_",
+  "$`",
+  "input",
+  "lastMatch",
+  "lastParen",
+  "leftContext",
+  "rightContext",
+];
+
 /** The globals of a context, besides its own JS intrinsics: the web platform Convex's runtime offers. */
 function contextGlobals(node: boolean, env: Record<string, string>, onMissingEnv?: (name: string) => void) {
   const g = globalThis as Record<string, unknown>;
@@ -257,6 +280,9 @@ export class CodeVersion {
       // The replaced Date goes back in as the context's global.
       vm.runInContext("(D) => { globalThis.Date = D; }", c)(g.Date);
     }
+    // Convex's runtime deletes the deprecated RegExp statics (`RegExp.$1`, `lastMatch`, …), which hold the last
+    // match's input across calls (udf-runtime `setupMisc`, 644e25f; DV-436). Its Node executor is not known to.
+    vm.runInContext(`for (const name of ${JSON.stringify(REGEXP_STATICS)}) delete RegExp[name];`, contexts.isolate);
 
     const modules = new Map<string, Loaded>();
     for (const m of sources) {
