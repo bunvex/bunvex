@@ -11,7 +11,14 @@
 // encoded when written and decoded when read, here. As in Convex, the schema and the auth config are modules too.
 // The modules store is its own use case (`modules`), apart from user files, whose orphan sweep would
 // otherwise delete packages (F3).
-import { type Engine, MODULES_TABLE, SOURCE_PACKAGES_TABLE, type Tx, UDF_CONFIG_TABLE } from "@bunvex/core";
+import {
+  type Engine,
+  formatBytes,
+  MODULES_TABLE,
+  SOURCE_PACKAGES_TABLE,
+  type Tx,
+  UDF_CONFIG_TABLE,
+} from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
 import type { Value } from "@bunvex/values";
 import { type AnalyzedModule, CodeVersion, type ModuleSource, moduleHash, moduleName } from "./code-version.ts";
@@ -21,8 +28,23 @@ import type { SourcePosition } from "./source-position.ts";
 import { bytesSource, entryBytes, ZipReader } from "./zip-reader.ts";
 import { zipInMemory } from "./zip-writer.ts";
 
-/** Convex's unzipped package limit (crates/model/src/source_packages/types.rs). */
-export const MAX_UNZIPPED_PACKAGE_BYTES = 230 * 1024 * 1024;
+/** Convex's package limits (crates/model/src/source_packages/types.rs): 230 000 000 bytes unzipped, and the
+ *  `MAX_ZIPPED_PACKAGES_SIZE` knob zipped (90 000 000 by default). A package at a limit or over it is refused. */
+export const MAX_UNZIPPED_PACKAGE_BYTES = 230_000_000;
+export const MAX_ZIPPED_PACKAGE_BYTES = 90_000_000;
+
+/** A package over a limit: Convex's 400 `ModulesTooLarge` (`PackageSize::verify_size`). */
+export class ModulesTooLargeError extends Error {
+  readonly code = "ModulesTooLarge";
+}
+
+/** The zipped limit: the `MAX_ZIPPED_PACKAGES_SIZE` knob, a byte count, else Convex's default. */
+function zippedLimit(raw = process.env.MAX_ZIPPED_PACKAGES_SIZE): number {
+  if (raw === undefined || raw === "") return MAX_ZIPPED_PACKAGE_BYTES;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`MAX_ZIPPED_PACKAGES_SIZE: not a non-negative integer: ${raw}`);
+  return n;
+}
 
 /** A package as `_source_packages` stores it (Convex's `SerializedSourcePackage`). */
 export type SourcePackageFields = {
@@ -57,11 +79,15 @@ type PackageMetadata = {
 };
 
 /**
- * Store a push's modules as Convex's package (`write_package`): a zip with each module's source at
- * `modules/<path>`, its source map at `modules/<path>.map`, by path, then `metadata.json`. The package's row
- * (its key, hash and sizes; the unzipped size counts the sources, the maps and the metadata, as Convex's).
+ * A push's modules as Convex's package (`write_package`): a zip with each module's source at `modules/<path>`,
+ * its source map at `modules/<path>.map`, by path, then `metadata.json`; the unzipped size counts the sources, the
+ * maps and the metadata, as Convex's. Over a limit it throws Convex's `ModulesTooLarge` (`verify_size`), which
+ * `start_push` meets first, before anything is analyzed (Convex uploads and checks the package there).
  */
-export async function writePackage(store: BlobStore, modules: ModuleSource[]): Promise<SourcePackageFields> {
+export function buildPackage(
+  modules: ModuleSource[],
+  limits: { zipped: number; unzipped: number } = { zipped: zippedLimit(), unzipped: MAX_UNZIPPED_PACKAGE_BYTES },
+): { zip: Uint8Array; unzipped: number } {
   const enc = new TextEncoder();
   const entries: { name: string; data: Uint8Array }[] = [];
   const metadata: PackageMetadata = { modulePaths: [], moduleEnvironments: [], externalDepsStorageKey: null };
@@ -82,11 +108,27 @@ export async function writePackage(store: BlobStore, modules: ModuleSource[]): P
   const metadataJson = enc.encode(JSON.stringify(metadata));
   entries.push({ name: "metadata.json", data: metadataJson });
   unzipped += metadataJson.length;
-  if (unzipped > MAX_UNZIPPED_PACKAGE_BYTES)
-    throw new Error(
-      `Total module size exceeded the unzipped maximum (${unzipped} > ${MAX_UNZIPPED_PACKAGE_BYTES} bytes)`,
+  // Convex's order: the zipped size, then the unzipped one; sizes in binary units (humansize's BINARY).
+  const zip = zipInMemory(entries);
+  if (zip.length >= limits.zipped)
+    throw new ModulesTooLargeError(
+      `Total module size exceeded the zipped maximum (${formatBytes(zip.length)} > maximum size ${formatBytes(limits.zipped)})`,
     );
-  const written = await store.put(zipInMemory(entries));
+  if (unzipped >= limits.unzipped)
+    throw new ModulesTooLargeError(
+      `Total module size exceeded the unzipped maximum (${formatBytes(unzipped)} > maximum size ${formatBytes(limits.unzipped)})`,
+    );
+  return { zip, unzipped };
+}
+
+/** Store a push's modules as Convex's package (`buildPackage`); the package's row (its key, hash and sizes). */
+export async function writePackage(
+  store: BlobStore,
+  modules: ModuleSource[],
+  limits?: { zipped: number; unzipped: number },
+): Promise<SourcePackageFields> {
+  const { zip, unzipped } = buildPackage(modules, limits);
+  const written = await store.put(zip);
   return {
     storageKey: written.key,
     sha256: written.sha256.slice().buffer,
