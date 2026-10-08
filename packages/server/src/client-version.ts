@@ -4,9 +4,11 @@
 // - the client header (`Bunvex-Client: <client>-<semver>`), else the version in the sync URL
 //   (`/api/<semver>/sync`, an npm client's), else an unknown client, which is never refused;
 // - a header that does not parse is 400 `InvalidClientVersion`; so is a sync URL version that is not semver;
-// - a client at or below its type's `unsupported` threshold (an npm, CLI or actions client at 0.19.1 or older,
-//   or with a version that is not semver) is 400 `ClientVersionUnsupported` with the deprecation headers;
+// - a client at or below its type's `unsupported` threshold (or with a version that is not semver) is 400
+//   `ClientVersionUnsupported` with the deprecation headers;
 // - at or below `upgradeRequired`, the request runs and its answer carries the deprecation headers.
+// The thresholds are bunvex's own and none is set yet: Convex's (npm 0.19.1, python, rust) are for its older
+// clients, which bunvex does not carry (STUDY-139 P2, DV-442). bunvex's client announces its own 0.x version.
 // Convex's headers are `x-convex-deprecation-*`; bunvex's are `x-bunvex-deprecation-*` (rule 5, DV-315).
 
 /** The header bunvex's clients send their version in (Convex's `Convex-Client`). */
@@ -140,32 +142,14 @@ type Thresholds = {
   upgradeRequired: readonly [number, number, number];
   unsupported: readonly [number, number, number];
 };
-// Convex's deprecation.json.
-const NPM: Thresholds = { upgradeRequired: [0, 19, 1], unsupported: [0, 19, 1] };
-const PYTHON: Thresholds = { upgradeRequired: [0, 2, 0], unsupported: [0, 0, 2] };
-const RUST: Thresholds = { upgradeRequired: [0, 0, 1], unsupported: [0, 0, 1] };
-
 /**
- * The client types that have thresholds, by the name a header gives (lower case), with the name Convex
- * prints and how to upgrade. Every other name (Convex's `CreateConvex`, `Dashboard`, `Swift`, … and
- * unrecognised ones) has none, so it is never refused. Convex also reads `python-convex` as python; rule 5
- * keeps that name out of bunvex (a header naming it is an unknown client).
+ * The client types with thresholds, by the name a header gives (lower case), with the name to print and how to
+ * upgrade, e.g. `npm: { name: "npm", thresholds: { upgradeRequired: [0, 2, 0], unsupported: [0, 1, 0] }, upgrade:
+ * "Update your npm package with \`npm update\`." }`. None yet: bunvex's clients start at 0.x and Convex's
+ * thresholds are for its older clients (STUDY-139 P2, DV-442). A type with none is never refused.
  */
-const TYPES: Record<string, { name: string; thresholds: Thresholds; upgrade: string }> = {
-  npm: { name: "npm", thresholds: NPM, upgrade: "Update your npm package with `npm update`." },
-  "npm-cli": { name: "npm-cli", thresholds: NPM, upgrade: "Update your npm package with `npm update`." },
-  actions: { name: "actions", thresholds: NPM, upgrade: "Update your npm package with `npm update`." },
-  python: {
-    name: "python",
-    thresholds: PYTHON,
-    upgrade: "Update your python package with `pip install --upgrade`.",
-  },
-  rust: {
-    name: "rust",
-    thresholds: RUST,
-    upgrade: "Update your rust crate with `cargo update` or by updating `Cargo.toml`.",
-  },
-};
+export type ClientTypes = Record<string, { name: string; thresholds: Thresholds; upgrade: string }>;
+const TYPES: ClientTypes = {};
 
 /** What the check decides for a request: nothing to do (null), a refusal, or headers for the answer. */
 export type ClientVersionVerdict =
@@ -177,8 +161,8 @@ const deprecation = (state: string, message: string) =>
   new Headers({ [DEPRECATION_STATE_HEADER]: state, [DEPRECATION_MESSAGE_HEADER]: message });
 
 /** The state of a client, as Convex's `ClientVersion::current_state`. */
-function stateOf(client: string, version: Semver | string, display: string): ClientVersionVerdict {
-  const type = TYPES[client];
+function stateOf(client: string, version: Semver | string, display: string, types: ClientTypes): ClientVersionVerdict {
+  const type = types[client];
   if (type === undefined) return null;
   const below = (t: readonly [number, number, number]) => typeof version === "string" || atOrBelow(version, t);
   if (below(type.thresholds.unsupported)) {
@@ -196,7 +180,7 @@ function stateOf(client: string, version: Semver | string, display: string): Cli
 }
 
 /** A header's verdict (Convex's `ClientVersion::from_str`: the longest semver from the right). */
-function headerVerdict(header: string): ClientVersionVerdict {
+function headerVerdict(header: string, types: ClientTypes): ClientVersionVerdict {
   const parts = header.split("-");
   if (parts.length < 2) {
     const message =
@@ -208,10 +192,10 @@ function headerVerdict(header: string): ClientVersionVerdict {
     const text = parts.slice(n).join("-");
     const version = parseSemver(text);
     if (typeof version !== "string")
-      return stateOf(parts.slice(0, n).join("-").toLowerCase(), version, display(version));
+      return stateOf(parts.slice(0, n).join("-").toLowerCase(), version, display(version), types);
   }
   const rest = parts.slice(1).join("-");
-  return stateOf(parts[0]!.toLowerCase(), rest, rest);
+  return stateOf(parts[0]!.toLowerCase(), rest, rest, types);
 }
 
 const display = (v: Semver) =>
@@ -239,7 +223,7 @@ function percentDecoded(segment: string): string | null {
 }
 
 /** The sync URL's version (Convex's `ClientVersion::from_path_param`: an npm client), when no header. */
-function pathVerdict(segment: string): ClientVersionVerdict {
+function pathVerdict(segment: string, types: ClientTypes): ClientVersionVerdict {
   const text = percentDecoded(segment);
   if (text === null) return null; // Convex's path extractor fails, and the client is unknown
   const version = parseSemver(text);
@@ -250,7 +234,7 @@ function pathVerdict(segment: string): ClientVersionVerdict {
       message: `Failed to parse client version: ${version}`,
       headers: new Headers(),
     };
-  return stateOf("npm", version, display(version));
+  return stateOf("npm", version, display(version), types);
 }
 
 // A header Convex reads at all: `HeaderValue::to_str` takes visible ASCII, spaces and tabs only; any other
@@ -273,12 +257,18 @@ function remember(key: string, compute: () => ClientVersionVerdict): ClientVersi
 }
 
 /** The verdict for a request: its client header, else (for the sync socket) the version in its URL. */
-export function clientVersionVerdict(header: string | null, pathname: string): ClientVersionVerdict {
-  if (header !== null && VISIBLE.test(header)) return remember(`h${header}`, () => headerVerdict(header));
+export function clientVersionVerdict(
+  header: string | null,
+  pathname: string,
+  /** The thresholds (tests pass their own; the cache is for bunvex's). */
+  types: ClientTypes = TYPES,
+): ClientVersionVerdict {
+  const cached = (key: string, f: () => ClientVersionVerdict) => (types === TYPES ? remember(key, f) : f());
+  if (header !== null && VISIBLE.test(header)) return cached(`h${header}`, () => headerVerdict(header, types));
   const m = SYNC.exec(pathname);
   if (m === null) return null;
   const segment = m[1]!;
-  return remember(`p${segment}`, () => pathVerdict(segment));
+  return cached(`p${segment}`, () => pathVerdict(segment, types));
 }
 
 /** A request URL's path, without parsing the whole URL (this runs on every request). */
@@ -290,8 +280,8 @@ function pathOf(url: string): string {
 }
 
 /** The verdict for a request (see `clientVersionVerdict`). */
-export const requestVerdict = (req: Request): ClientVersionVerdict =>
-  clientVersionVerdict(req.headers.get(CLIENT_HEADER), pathOf(req.url));
+export const requestVerdict = (req: Request, types: ClientTypes = TYPES): ClientVersionVerdict =>
+  clientVersionVerdict(req.headers.get(CLIENT_HEADER), pathOf(req.url), types);
 
 function withHeaders(res: Response, headers: Headers): Response {
   try {
@@ -316,9 +306,11 @@ function withHeaders(res: Response, headers: Headers): Response {
  */
 export function clientVersionCheck<S, R extends Response | undefined>(
   fetch: (req: Request, srv: S) => R | Promise<R>,
+  /** The thresholds (tests pass their own). */
+  types: ClientTypes = TYPES,
 ): (req: Request, srv: S) => Promise<R> {
   return async (req, srv) => {
-    const verdict = requestVerdict(req);
+    const verdict = requestVerdict(req, types);
     if (verdict === null) return fetch(req, srv);
     if (verdict.status === 400) {
       const headers = new Headers(verdict.headers);

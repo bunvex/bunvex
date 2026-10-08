@@ -152,7 +152,6 @@ import {
   SyncHub,
   SyncSession,
   splayOptions,
-  supportsTransitionChunks,
   type WsHeartbeatOptions,
 } from "./sync.ts";
 import { cancelAllScheduledJobs, cancelScheduledJob } from "./system-functions.ts";
@@ -1298,7 +1297,6 @@ export function createServer(opts: ServerOptions) {
       const url = new URL(req.url);
       if (/^\/api\/[^/]+\/sync$/.test(url.pathname)) {
         const data: WsData = { session: new SyncSession(sync) };
-        data.session.transitionChunks = supportsTransitionChunks(req.headers.get("bunvex-client"), url.pathname);
         data.session.peer = {
           ip: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || peer(req),
           userAgent: req.headers.get("user-agent"),
@@ -1841,7 +1839,7 @@ export function createServer(opts: ServerOptions) {
     const pkg = await writePackage(modulesStore, modules);
     let unused: SourcePackage[];
     try {
-      unused = await engine.mutation((db) => writeCodeRows(db, pkg, version), "push");
+      unused = await engine.mutation((db) => writeCodeRows(db, pkg, version), "_system/push");
     } catch (e) {
       await modulesStore.delete(pkg.storageKey).catch(() => {});
       throw e;
