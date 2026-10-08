@@ -103,7 +103,7 @@ export function unzip(bytes: Uint8Array): Map<string, Uint8Array> {
     const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
     const data = bytes.subarray(start, start + compressed);
     if (method === 0) out.set(name, data);
-    else if (method === 8) out.set(name, Bun.inflateSync(data));
+    else if (method === 8) out.set(name, Bun.inflateSync(data as Uint8Array<ArrayBuffer>));
     else throw new Error(`zip entry ${name}: compression method ${method} is not supported`);
     at += 46 + nameLength + extraLength + commentLength;
   }
