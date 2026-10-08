@@ -4,6 +4,7 @@
 import { expect, test } from "bun:test";
 import { v } from "@bunvex/values";
 import { readSearchIndexStates } from "../src/engine.ts";
+import { internalIdOf } from "../src/internal-id.ts";
 import { defineSchema, defineTable, Engine, type SearchSegmentStore } from "../src/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { tsGlobal } from "../src/persistence-globals.ts";
@@ -96,6 +97,20 @@ test("an idle index is fast-forwarded; a start replays nothing older and retenti
   expect(e2.searchStats.fastForwards).toBe(2);
   const second = await forwarded(e2);
   expect(second.text_search).toBeGreaterThan(first.text_search!);
+  // Keyed by the `_index` row's internal id, as Convex's `InternalId` string (STUDY-133 §12 M7), and the rows
+  // a start loaded are patched, not duplicated.
+  const rows = (await e2.query((db) =>
+    db.asSystem(async () => ({
+      workers: await (db as any).query("_index_worker_metadata").collect(),
+      indexes: await (db as any).query("_index").collect(),
+    })),
+  )) as { workers: { index_id: string }[]; indexes: { _id: string }[] };
+  expect(rows.workers).toHaveLength(2);
+  const internal = new Set(rows.indexes.map((r) => internalIdOf(r._id)));
+  for (const w of rows.workers) {
+    expect(w.index_id).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    expect(internal.has(w.index_id)).toBe(true);
+  }
   await crash(e2);
 
   // Retention past the segments' ts but not the fast-forward's: the segments are used, nothing replayed.
