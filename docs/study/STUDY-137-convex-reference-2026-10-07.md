@@ -162,8 +162,8 @@ Not divergences:
 - Each change in §3 has its test, and each test fails with the change removed, except the aad76a4
   regression test: bunvex's count was already right.
 - **Differential (STUDY-122) against `precompiled-2026-10-07-d8bdde0`:** the 18 fixed programs and 1500
-  generated ones (`DIFF_RUNS=1500`) agree with zero differences. Program #504, which disagreed with the
-  previous oracle, agrees.
+  generated ones (`DIFF_SEED=7 DIFF_RUNS=1500`) agree with zero differences. #504's program, which disagreed
+  with the previous oracle, is pinned as a bunvex regression test in #511.
 
 ## 6. Open questions
 
