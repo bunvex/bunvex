@@ -266,7 +266,9 @@ export async function completeRun(db: Tx, job: CronJob, now: number, o: NextOpts
     nextTs = computeNextTs(job.cronSpec.cronSchedule, nextTs, now, o);
   }
   if (skipped > 0) {
-    console.error(`Skipping ${skipped} run(s) of job ${job.id} because multiple scheduled runs are in the past`);
+    console.error(
+      `Skipping ${skipped} run(s) of cron job '${job.name}' because multiple scheduled runs are in the past`,
+    );
     await insertLog(
       db,
       job,

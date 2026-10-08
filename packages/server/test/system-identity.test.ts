@@ -1,6 +1,6 @@
 // `_system/` functions only for an admin or the system acting as itself, as Convex's
 // `application_function_runner` (`path.is_system() && !(identity.is_admin() || identity.is_system())` →
-// `unauthorized_error`, `SystemIdentityRequired`, "Operation <op> not permitted") and `ModuleModel::get_metadata`
+// `unauthorized_error`, `SystemIdentityRequired`, "You don't have permission to perform this operation.", before b352fab "Operation <op> not permitted") and `ModuleModel::get_metadata`
 // (the same for reading a `_system/` module: `/api/run`, scheduling). Every expectation here was checked against
 // Convex's local backend (precompiled-2026-09-28): the HTTP API (a query's or mutation's refusal is its error,
 // an action's a 403), `/api/run` and `/api/function`, an action's calls (never resolved), a query's or
@@ -81,11 +81,11 @@ async function setup() {
   return { engine, functions, post, call, site: s.siteUrl!, port: s.server.port };
 }
 
-const REFUSED = (op: string) => ({ code: "SystemIdentityRequired", message: `Operation ${op} not permitted` });
+const REFUSED = (_op: string) => ({ code: "SystemIdentityRequired", message: "You don't have permission to perform this operation." });
 
 /** A query's or mutation's refusal, as Convex answers it: the function's error, not a 403. */
-const REFUSED_RUN = (op: string) =>
-  expect.stringMatching(new RegExp(`Server Error\\nOperation ${op} not permitted\\n$`));
+const REFUSED_RUN = (_op: string) =>
+  expect.stringMatching(/Server Error\nYou don't have permission to perform this operation\.\n$/);
 
 test("HTTP API: nobody and an admin acting as a user are refused before any lookup; an admin and the system run it", async () => {
   const t = await setup();
@@ -163,11 +163,11 @@ test("the scheduler: scheduling a system function is refused (get_module); for a
   const t = await setup();
   expect((await t.call("mutation", "m:schedule")).body.value).toEqual({
     ok: false,
-    error: "Operation get_module not permitted",
+    error: "You don't have permission to perform this operation.",
   });
   expect((await t.call("action", "m:scheduleFromAction")).body.value).toEqual({
     ok: false,
-    error: "Operation get_module not permitted",
+    error: "You don't have permission to perform this operation.",
   });
   expect((await t.call("mutation", "m:schedule", {}, `Bunvex ${KEY}`)).body.value).toEqual({
     ok: false,
@@ -198,5 +198,5 @@ test("sync: a subscription to a system query without an admin fails with the ref
   const tr = await c.transition(0);
   const m = tr.modifications[0] as any;
   expect(m.type).toBe("QueryFailed");
-  expect(m.errorMessage).toContain("Operation query not permitted");
+  expect(m.errorMessage).toContain("You don't have permission to perform this operation.");
 });

@@ -307,7 +307,7 @@ export class VRecord<
     if (value === undefined) throwUndefinedValidator("v.record()", "value");
     if (key.isOptional === "optional") throw new Error("Record validator cannot have optional keys");
     if (value.isOptional === "optional") throw new Error("Record validator cannot have optional values");
-    if (!key.isValidator || !value.isValidator) throw new Error("Key and value of v.record() but be validators");
+    if (!key.isValidator || !value.isValidator) throw new Error("Key and value of v.record() must be validators");
   }
   get json(): ValidatorJSON {
     return { type: "record", keys: this.key.json, values: { fieldType: this.value.json, optional: false } };

@@ -96,7 +96,7 @@ const NOT_FOUND = (p: string) => ({
 /** The error a sync client sees for a missing function (with its request id). */
 /** A `_system/` query refused to a session that is not an admin's (Convex's `SystemIdentityRequired`). */
 const refusedLine = expect.stringMatching(
-  /^error: \[Request ID: [0-9a-f]{16}\] Server Error\nOperation query not permitted\n$/,
+  /^error: \[Request ID: [0-9a-f]{16}\] Server Error\nYou don't have permission to perform this operation\.\n$/,
 );
 const notFoundLine = (p: string) =>
   expect.stringMatching(
@@ -197,11 +197,11 @@ describe("HTTP: who reaches what", () => {
     expect((await call("query", "m:whoami", {}, `Bunvex ${SYSTEM}:${user}`)).status).toBe(500);
   });
 
-  test("_system/* functions: refused without a key (Operation … not permitted); an admin calls them with its operations", async () => {
+  test("_system/* functions: refused without a key (SystemIdentityRequired); an admin calls them with its operations", async () => {
     const { call } = await setup();
     const anon = await call("query", "_system/frontend/listCronJobs");
     expect([anon.status, anon.body.status]).toEqual([200, "error"]);
-    expect(anon.body.errorMessage).toEndWith("Server Error\nOperation query not permitted\n");
+    expect(anon.body.errorMessage).toEndWith("Server Error\nYou don't have permission to perform this operation.\n");
     expect((await call("query", "_system/frontend/listCronJobs", {}, `Bunvex ${KEY}`)).body).toMatchObject({
       status: "success",
       value: [],
@@ -218,7 +218,7 @@ describe("HTTP: who reaches what", () => {
     const ok = await call("mutation", "_system/frontend/fileStorageV2:generateUploadUrl", {}, `Bunvex ${KEY}`);
     expect(ok.body.value).toMatch(/\/api\/storage\/upload\?token=/);
     expect((await call("mutation", "_system/frontend/fileStorageV2:generateUploadUrl")).body.errorMessage).toEndWith(
-      "Server Error\nOperation mutation not permitted\n",
+      "Server Error\nYou don't have permission to perform this operation.\n",
     );
   });
 
