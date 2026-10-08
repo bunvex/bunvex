@@ -64,7 +64,25 @@ async function churn(e: Engine) {
   for (const id of ids.slice(0, 10)) await e.mutation((db) => db.delete(id));
   // Created and deleted in one transaction: a tombstone with nothing before it.
   await e.mutation(async (db) => db.delete(await db.insert("items", { n: -1 })));
+  await later(e);
   return ids;
+}
+
+/**
+ * A commit after the others: a pass prunes the versions below its window (Convex's `[cursor, min_snapshot_ts)`),
+ * so a window at this commit passes every version before it.
+ */
+const later = (e: Engine) => e.mutation((db) => db.insert("items", { n: 100_000 }));
+
+/**
+ * A full round, in Convex's order: the windows move, the index deleter records its cursor, and the document
+ * window follows that cursor (`candidate_min_snapshot_ts`) before the document deleter runs.
+ */
+async function prune(r: Retention) {
+  await r.advance();
+  await r.deleteIndexes();
+  await r.advance();
+  await r.deleteDocuments();
 }
 
 const answers = (e: Engine) =>
@@ -86,10 +104,10 @@ describe("retention", () => {
     expect(g0.oldDocs).toBeGreaterThan(0);
     expect(g0.deadIdx).toBeGreaterThan(0);
     const r = e.retention!;
-    await r.advance();
+    await prune(r);
     expect(r.minIndexTs).toBe(e.committer.visibleTs);
-    await r.deleteIndexes();
-    await r.deleteDocuments();
+    expect(r.indexCursor).toBe(r.minIndexTs - 1n); // caught up: the window − 1, as Convex's
+    expect(r.minDocumentTs).toBe(r.indexCursor);
     expect(garbage(db)).toEqual({ oldDocs: 0, deadDocs: 0, oldIdx: 0, deadIdx: 0 });
     expect(await answers(e)).toEqual(before);
     expect(r.stats.indexRowsDeleted).toBeGreaterThan(0);
@@ -97,9 +115,8 @@ describe("retention", () => {
     // Writing on after pruning works, and a second round prunes what it superseded.
     const [id] = (await answers(e)).all.map((d) => d._id as string);
     await e.mutation((db) => db.patch(id, { n: 9999 }));
-    await r.advance();
-    await r.deleteIndexes();
-    await r.deleteDocuments();
+    await later(e);
+    await prune(r);
     expect(garbage(db)).toEqual({ oldDocs: 0, deadDocs: 0, oldIdx: 0, deadIdx: 0 });
     expect((await e.query((db) => db.get(id)))?.n).toBe(9999);
   });
@@ -108,9 +125,7 @@ describe("retention", () => {
     const { e, db } = await open(":memory:", { ...manual, indexDelayMs: 3_600_000, documentDelayMs: 3_600_000 });
     await churn(e);
     const g0 = garbage(db);
-    await e.retention!.advance();
-    await e.retention!.deleteIndexes();
-    await e.retention!.deleteDocuments();
+    await prune(e.retention!);
     expect(garbage(db)).toEqual(g0);
     expect(e.retention!.minIndexTs).toBe(e.committer.visibleTs - 3_600_000_000_000n);
   });
@@ -168,9 +183,8 @@ describe("retention", () => {
     const read = e.query((db) => db.get(id));
     await inRead;
     await e.mutation((db) => db.patch(id, { n: 777 }));
-    await e.retention!.advance();
-    await e.retention!.deleteIndexes();
-    await e.retention!.deleteDocuments();
+    await later(e);
+    await prune(e.retention!);
     release();
     expect(
       await read.then(
@@ -180,13 +194,17 @@ describe("retention", () => {
     ).toBeInstanceOf(OutOfRetentionError);
   });
 
-  test("the windows only move forward, the document window never above the index window", async () => {
+  test("the windows only move forward; the document window never passes the recorded index cursor", async () => {
     const { e } = await open(":memory:", { ...manual, indexDelayMs: 1000, documentDelayMs: 0 });
     await churn(e);
     const r = e.retention!;
     await r.advance();
     expect(r.minIndexTs).toBe(e.committer.visibleTs - 1_000_000_000n);
-    expect(r.minDocumentTs).toBe(r.minIndexTs);
+    // No index cursor recorded yet: the document window stays (Convex's `candidate_min_snapshot_ts`).
+    expect(r.minDocumentTs).toBe(0n);
+    await r.deleteIndexes();
+    await r.advance();
+    expect(r.minDocumentTs).toBe(r.minIndexTs - 1n);
     const was = r.minIndexTs;
     r.opts.indexDelayMs = 10_000_000; // a longer delay never moves a window back
     await r.advance();
@@ -206,6 +224,8 @@ describe("retention", () => {
     expect(r.minIndexTs).toBe(was);
     p.setGlobal = set;
     await r.advance();
+    await r.deleteIndexes();
+    await r.advance();
     expect(p.getGlobal(RETENTION_GLOBALS.minIndexTs)).toEqual(tsGlobal(r.minIndexTs));
     expect(p.getGlobal(RETENTION_GLOBALS.minDocumentTs)).toEqual(tsGlobal(r.minDocumentTs));
   });
@@ -214,16 +234,14 @@ describe("retention", () => {
     const path = join(tmp(), "db.sqlite");
     const a = await open(path);
     await churn(a.e);
-    await a.e.retention!.advance();
-    await a.e.retention!.deleteIndexes();
-    await a.e.retention!.deleteDocuments();
+    await prune(a.e.retention!);
     const saved = {
       minIndexTs: a.e.retention!.minIndexTs,
       minDocumentTs: a.e.retention!.minDocumentTs,
       indexCursor: a.e.retention!.indexCursor,
       documentCursor: a.e.retention!.documentCursor,
     };
-    expect(saved.indexCursor).toBe(saved.minIndexTs);
+    expect(saved.indexCursor).toBe(saved.minIndexTs - 1n);
     await a.e.close();
     engines.splice(engines.indexOf(a.e), 1);
     // A long delay on reopen: the recorded windows hold, they are not recomputed lower.
@@ -245,6 +263,7 @@ describe("retention", () => {
         documentDelayMs: 40,
         advanceEveryMs: 5,
         documentEveryMs: 5,
+        checkpointEveryMs: 5, // the document window follows the recorded index cursor
         documentRatePerSec: 1e9,
       },
     }).init();
@@ -296,6 +315,9 @@ describe("retention", () => {
     for (let i = 0; i < 100; i++) ids.push((await e.mutation((db) => db.insert("items", { n: i }))) as string);
     for (const id of ids) await e.mutation((db) => db.patch(id, { n: -1 }));
     for (const id of ids) await e.mutation((db) => db.patch(id, { n: -2 }));
+    await later(e);
+    await e.retention!.advance();
+    await e.retention!.deleteIndexes();
     await e.retention!.advance();
     const t0 = performance.now();
     await e.retention!.deleteDocuments();
@@ -314,7 +336,7 @@ describe("retention", () => {
     expect(await r.deleteIndexes()).toBe(true);
     expect(r.indexCursor).toBeLessThan(r.minIndexTs);
     while (await r.deleteIndexes());
-    expect(r.indexCursor).toBe(r.minIndexTs);
+    expect(r.indexCursor).toBe(r.minIndexTs - 1n);
   });
 
   test("Convex's defaults, and the delays from the environment in seconds", () => {

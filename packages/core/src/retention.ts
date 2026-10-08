@@ -3,7 +3,8 @@
 // Two windows, as Convex's. The index window `minIndexTs` trails the newest commit by INDEX_RETENTION_DELAY
 // (4 min): every snapshot at or above it reads index rows intact, and a read below it fails with
 // `OutOfRetentionError` (the transaction checks before and after each read). The document window
-// `minDocumentTs` trails by DOCUMENT_RETENTION_DELAY (14 days, DV-157), never above the index window.
+// `minDocumentTs` trails by DOCUMENT_RETENTION_DELAY (14 days, DV-157), never past the index deleter's recorded
+// cursor (Convex's `candidate_min_snapshot_ts`).
 //
 // Both advance every 30 s (with jitter), only forward, and each new bound is written to a persistence global
 // before it is used (Convex's `min_snapshot_ts` / `document_min_snapshot_ts`), so a restart never reads
@@ -81,9 +82,17 @@ export class Retention {
   /** The index window: snapshots below it fail. Starts at what the store recorded. */
   minIndexTs = 0n;
   minDocumentTs = 0n;
-  /** Everything at or below these has been pruned. */
+  /**
+   * Everything at or below these has been pruned. Caught up, a cursor is its window − 1, as Convex's (a pass
+   * prunes the versions below the window, `[cursor, min_snapshot_ts)`, STUDY-133 §12 M11).
+   */
   indexCursor = 0n;
   documentCursor = 0n;
+  /**
+   * The index cursor last recorded (`confirmed_deleted_ts`): the document window never passes it (Convex's
+   * `candidate_min_snapshot_ts`), so the index deleter still finds the versions it derives keys from.
+   */
+  private indexConfirmed = 0n;
   readonly stats = { indexRowsDeleted: 0, documentRowsDeleted: 0, advances: 0, errors: 0 };
   private stopped = false;
   /** Sleeps in progress: their timer, and how to end them early (on stop). */
@@ -121,6 +130,7 @@ export class Retention {
     this.minIndexTs = await num(RETENTION_GLOBALS.minIndexTs);
     this.minDocumentTs = minTs(await num(RETENTION_GLOBALS.minDocumentTs), this.minIndexTs);
     this.indexCursor = minTs(await num(RETENTION_GLOBALS.indexCursor), this.minIndexTs);
+    this.indexConfirmed = this.indexCursor;
     this.documentCursor = minTs(await num(RETENTION_GLOBALS.documentCursor), this.minDocumentTs);
     if (!this.opts.background) return;
     this.loop(
@@ -217,7 +227,7 @@ export class Retention {
 
   /**
    * Convex's `go_advance_min_snapshot`: each window trails the newest commit by its delay; it only moves
-   * forward, the document window never above the index window, and the store records it first.
+   * forward, the document window never past the recorded index cursor, and the store records it first.
    */
   async advance(): Promise<boolean> {
     const top = this.committer.visibleTs;
@@ -228,7 +238,7 @@ export class Retention {
       this.stats.advances++;
       this.wake.index?.();
     }
-    const doc = minTs(top - msToNs(this.opts.documentDelayMs), this.minIndexTs);
+    const doc = minTs(top - msToNs(this.opts.documentDelayMs), this.indexConfirmed);
     if (doc > this.minDocumentTs) {
       await this.store.setGlobal(RETENTION_GLOBALS.minDocumentTs, tsGlobal(doc));
       this.minDocumentTs = doc;
@@ -255,7 +265,7 @@ export class Retention {
   }
 
   private async indexPass(): Promise<boolean> {
-    const upTo = this.minIndexTs;
+    const upTo = this.minIndexTs - 1n;
     let done = 0;
     while (this.indexCursor < upTo && done < this.opts.maxPerPass && !this.stopped) {
       const rows = await this.store.readDocumentLog(this.indexCursor, upTo, LOG_PAGE);
@@ -311,7 +321,7 @@ export class Retention {
   }
 
   private async documentPass(): Promise<boolean> {
-    const upTo = this.minDocumentTs;
+    const upTo = this.minDocumentTs - 1n;
     let scanned = 0;
     while (this.documentCursor < upTo && scanned < this.opts.maxPerPass && !this.stopped) {
       const rows = await this.store.readDocumentLog(this.documentCursor, upTo, LOG_PAGE);
@@ -350,5 +360,6 @@ export class Retention {
       tsGlobal(which === "index" ? this.indexCursor : this.documentCursor),
     );
     this.lastCheckpoint[which] = now;
+    if (which === "index") this.indexConfirmed = this.indexCursor;
   }
 }
