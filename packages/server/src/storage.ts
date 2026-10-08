@@ -23,6 +23,7 @@ import {
 import type { BlobStore } from "@bunvex/file-storage";
 import { decodeId, type GenericId } from "@bunvex/values";
 import { readCanonicalUrls } from "./canonical-urls.ts";
+import { SpecBlob } from "./web-blob.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Convex's STORE_FILE_AUTHORIZATION_VALIDITY. */
@@ -292,7 +293,7 @@ export class FileStorage {
         if (!stream) return null;
         const bytes = await new Response(stream).arrayBuffer();
         meter?.({ read: bytes.byteLength });
-        return new Blob([bytes], row.contentType ? { type: row.contentType } : {});
+        return new SpecBlob([bytes], row.contentType ? { type: row.contentType } : {});
       },
       // The new file's id, typed as Convex's `Id<"_storage">`: it passes to a `v.id("_storage")` argument as is.
       store: async (blob: Blob, opts?: { sha256?: string }): Promise<GenericId<"_storage">> => {

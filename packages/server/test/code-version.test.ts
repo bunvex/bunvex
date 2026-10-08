@@ -295,6 +295,38 @@ describe("running a code version", () => {
     expect((await call("query", "edge:bytesArg", { b: { $bytes: "AQID" } })).value).toBe(3);
   });
 
+  test("Blob and File have the File API's type, so a stored file keeps the type the app gave (DV-441)", async () => {
+    const { functions, call } = await server();
+    const version = await load([
+      mod(
+        "files.js",
+        `import { action, query } from "@bunvex/server";
+         export const types = query(async () => {
+           const b = new Blob(["x"], { type: "Text/Plain" });
+           return [b.type, new Blob(["x"], { type: "application/javascript" }).type, new Blob(["x"], { type: "a/\u00e9" }).type,
+             b.slice(0, 1).type, b.slice(0, 1, "Image/PNG").type, new File(["x"], "a.json", { type: "application/json" }).type,
+             new File(["x"], "f") instanceof Blob, new Response("x").body instanceof ReadableStream];
+         });
+         export const store = action(async ({ storage }) => {
+           const id = await storage.store(new Blob(["hello"], { type: "text/plain" }));
+           return [(await storage.getMetadata(id)).contentType, (await storage.get(id)).type];
+         });`,
+      ),
+    ]);
+    functions.install(version.functions, version.moduleHashes);
+    expect((await call("query", "files:types")).value).toEqual([
+      "text/plain",
+      "application/javascript",
+      "",
+      "",
+      "image/png",
+      "application/json",
+      true,
+      true,
+    ]);
+    expect((await call("action", "files:store")).value).toEqual(["text/plain", "text/plain"]);
+  });
+
   test("installing a version: every function at once; internal ones stay internal", async () => {
     const { functions, call } = await server();
     const version = await load(APP_V1);

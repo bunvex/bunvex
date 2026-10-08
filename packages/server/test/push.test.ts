@@ -230,9 +230,12 @@ describe("deploy2 over HTTP", () => {
     expect(c.component_path).toBeNull();
     expect(c.component_diff.diffType).toEqual({ type: "create" });
     expect(c.component_diff.moduleDiff).toEqual({ added: ["messages.js", "schema.js"], removed: [] });
+    // Fields as `_index` holds them, `_creationTime` last (STUDY-133 §12 M12).
     expect(c.component_diff.indexDiff.added_indexes).toEqual([
-      { name: "messages.by_author", type: "database", fields: ["author"], staged: false },
+      { name: "messages.by_author", type: "database", fields: ["author", "_creationTime"], staged: false },
     ]);
+    // The server version the first push set (Convex's `UdfServerVersionDiff`).
+    expect(c.component_diff.udfConfigDiff).toEqual({ previous_version: "Unspecified version", next_version: "1.46.0" });
     expect(c.component_diff.schemaDiff.previous_schema).toBeNull();
     expect(JSON.parse(c.component_diff.schemaDiff.next_schema).tables[0].tableName).toBe("messages");
     expect(first!.metadata.message).toBeNull();
@@ -255,8 +258,9 @@ describe("deploy2 over HTTP", () => {
       "messages.by_body",
     ]);
     expect(c2.indexDiff.removed_indexes).toEqual([
-      { name: "messages.by_author", type: "database", fields: ["author"], staged: false },
+      { name: "messages.by_author", type: "database", fields: ["author", "_creationTime"], staged: false },
     ]);
+    expect(c2.udfConfigDiff).toBeNull(); // the same version
     expect(second.metadata.message).toBe("ship it");
     // The same push again: nothing in the diffs, no schema change.
     await d.push([messages(2), mod("other.js", "export const x = 1;")], schema2);
@@ -290,7 +294,9 @@ describe("deploy2 over HTTP", () => {
     expect(r.start.body.analysis[""].schema.tables[0].tableName).toBe("messages");
     // Convex's `SerializedIndexDiff`: each index a named `DeveloperIndexConfig`.
     expect(r.start.body.schemaChange.indexDiffs[""]).toEqual({
-      added_indexes: [{ name: "messages.by_author", type: "database", fields: ["author"], staged: false }],
+      added_indexes: [
+        { name: "messages.by_author", type: "database", fields: ["author", "_creationTime"], staged: false },
+      ],
       removed_indexes: [],
       enabled_indexes: [],
       disabled_indexes: [],

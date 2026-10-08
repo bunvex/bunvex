@@ -11,6 +11,7 @@ import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { describeUncaught, newRequestId } from "./errors.ts";
 import type { Functions } from "./functions.ts";
 import { type HttpRouter, ROUTABLE_HTTP_METHODS, type RoutableMethod } from "./router.ts";
+import { SpecBlob } from "./web-blob.ts";
 
 export { HTTP_ACTION_RESPONSE_LIMIT } from "./http-body.ts";
 /** Convex's HTTP_SERVER_TIMEOUT_DURATION: no response head by then answers 408. */
@@ -41,15 +42,15 @@ function requestUrl(req: Request, pathAndQuery: string): string {
 /**
  * `request.blob()` typed by the request's Content-Type, as the Fetch standard's `blob()` (and Convex's runtime)
  * gives it. Bun's server-side requests return a Blob with an empty type, so `ctx.storage.store(await
- * request.blob())` would lose the file's content type.
+ * request.blob())` would lose the file's content type; for a type its MIME table knows, Bun's own Blob gives
+ * that table's form (`text/plain;charset=utf-8`).
  */
 function typedBlob(request: Request): void {
   const blob = request.blob.bind(request);
   Object.defineProperty(request, "blob", {
     value: async () => {
-      const b = await blob();
-      const type = request.headers.get("content-type");
-      return b.type !== "" || type === null ? b : new Blob([b], { type });
+      // The header lower-cased (Convex's `Blob.fromStream`), not Bun's MIME table's form (DV-441).
+      return new SpecBlob([await blob()], { type: request.headers.get("content-type") ?? "" });
     },
   });
 }

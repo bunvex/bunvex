@@ -38,6 +38,7 @@ import {
   readPackage,
   type SourcePackage,
   storedModules,
+  type UdfServerVersionDiff,
   udfConfig,
   writeCodeRows,
   writePackage,
@@ -136,6 +137,8 @@ type Pending = {
   schema: SchemaDefinition;
   auth: unknown[] | null;
   schemaId: string;
+  /** The server version change the push made (Convex's `udfConfigDiff`). */
+  udfConfigDiff: UdfServerVersionDiff | null;
 };
 
 const AUTH_CONFIG = AUTH_CONFIG_MODULE;
@@ -329,6 +332,7 @@ export class PushService {
       schema,
       auth,
       schemaId,
+      udfConfigDiff: config.diff,
     });
     return this.response(version, schema, auth, analysis, { schemaId, indexDiff });
   }
@@ -445,6 +449,7 @@ export class PushService {
               moduleDiff,
               cronDiff: crons,
               indexDiff,
+              udfConfigDiff: p.udfConfigDiff,
               schemaDiff:
                 previousSchema === nextSchema ? null : { previous_schema: previousSchema, next_schema: nextSchema },
               message,
@@ -468,7 +473,13 @@ export class PushService {
     await this.deps.install(p.version, auth, p.authModule);
     this.deps.cronExecutor.refresh();
     for (const old of committed.value.unused) await this.deps.modulesStore.delete(old.storageKey).catch(() => {});
-    return this.diff(moduleDiff, indexDiffJson(indexDiff), committed.value.crons, committed.value.authDiff);
+    return this.diff(
+      moduleDiff,
+      indexDiffJson(indexDiff),
+      committed.value.crons,
+      committed.value.authDiff,
+      p.udfConfigDiff,
+    );
   }
 
   private diff(
@@ -476,6 +487,7 @@ export class PushService {
     indexDiff: ReturnType<typeof indexDiffJson>,
     crons: CronDiff,
     authDiff: { added: string[]; removed: string[] } = { added: [], removed: [] },
+    udfConfigDiff: UdfServerVersionDiff | null = null,
   ) {
     return {
       authDiff,
@@ -484,7 +496,7 @@ export class PushService {
         "": {
           diffType: { type: "modify" },
           moduleDiff: Array.isArray(moduleDiff) ? { added: [], removed: [] } : moduleDiff,
-          udfConfigDiff: null,
+          udfConfigDiff,
           cronDiff: crons,
           indexDiff,
           schemaDiff: null,

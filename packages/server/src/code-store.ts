@@ -1,6 +1,6 @@
 // Where deployed code lives (STUDY-35), as Convex keeps it:
 //   `_source_packages` — one row per pushed package, pointing at its blob in the modules store (Convex: a zip
-//     in module storage; here one gzip-compressed JSON blob, DV-166);
+//     in module storage; here one gzip-compressed JSON blob, DV-166; Convex's zip is read too);
 //   `_modules` — one row per module: `{ path, sourcePackageId, environment, sha256, analyzeResult }`;
 //   `_udf_config` — the import phase's seed and time (Convex's `UdfConfig`), so a version imports the same way
 //     every time it is loaded.
@@ -41,6 +41,8 @@ export type ModuleRow = {
   analyzeResult: AnalyzedModule | null;
 };
 export type UdfConfig = { serverVersion: string; seed: Uint32Array; timestamp: number };
+/** Convex's `UdfServerVersionDiff`: what a push changed the server version from, and to. */
+export type UdfServerVersionDiff = { previous_version: string; next_version: string };
 
 /** The schema's module, stored with the functions as Convex's (`AppDefinitionConfig::all_modules`). */
 export const SCHEMA_MODULE = "schema.js";
@@ -67,7 +69,73 @@ export async function readPackage(store: BlobStore, storageKey: string): Promise
   const stream = await store.get(storageKey);
   if (!stream) throw new Error(`the code package ${storageKey} is missing from the modules store`);
   const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  // A store Convex deployed to holds Convex's zip (STUDY-133 §12 M10): read it too, so a push over it can
+  // take its unchanged modules. bunvex still writes its own package (DV-166).
+  if (isZip(bytes)) return readZipPackage(bytes);
   return (JSON.parse(new TextDecoder().decode(Bun.gunzipSync(bytes))) as { modules: ModuleSource[] }).modules;
+}
+
+const isZip = (b: Uint8Array) => b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04;
+
+/** A zip archive's entries, by name, from its central directory (stored or deflated entries). */
+export function unzip(bytes: Uint8Array): Map<string, Uint8Array> {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // The end of central directory record: its signature within the last 64 KiB + 22 bytes (the comment's room).
+  let eocd = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65_557); i--)
+    if (view.getUint32(i, true) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  if (eocd < 0) throw new Error("not a zip archive: no end of central directory");
+  const count = view.getUint16(eocd + 10, true);
+  let at = view.getUint32(eocd + 16, true);
+  const out = new Map<string, Uint8Array>();
+  const decoder = new TextDecoder();
+  for (let n = 0; n < count; n++) {
+    if (view.getUint32(at, true) !== 0x02014b50) throw new Error("a zip central directory entry is corrupt");
+    const method = view.getUint16(at + 10, true);
+    const compressed = view.getUint32(at + 20, true);
+    const nameLength = view.getUint16(at + 28, true);
+    const extraLength = view.getUint16(at + 30, true);
+    const commentLength = view.getUint16(at + 32, true);
+    const local = view.getUint32(at + 42, true);
+    const name = decoder.decode(bytes.subarray(at + 46, at + 46 + nameLength));
+    // The data follows the local header, whose name and extra field lengths may differ from the central one's.
+    const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
+    const data = bytes.subarray(start, start + compressed);
+    if (method === 0) out.set(name, data);
+    else if (method === 8) out.set(name, Bun.inflateSync(data as Uint8Array<ArrayBuffer>));
+    else throw new Error(`zip entry ${name}: compression method ${method} is not supported`);
+    at += 46 + nameLength + extraLength + commentLength;
+  }
+  return out;
+}
+
+/**
+ * Convex's code package (crates/model/src/source_packages/upload_download.rs): `modules/<path>` and
+ * `modules/<path>.map` entries, and a `metadata.json` with each module's environment.
+ */
+function readZipPackage(bytes: Uint8Array): ModuleSource[] {
+  const entries = unzip(bytes);
+  const text = (b: Uint8Array) => new TextDecoder().decode(b);
+  const metadata = entries.get("metadata.json");
+  if (!metadata) throw new Error("the code package has no metadata.json");
+  const meta = JSON.parse(text(metadata)) as { moduleEnvironments?: [string, "isolate" | "node"][] | null };
+  const environments = new Map(meta.moduleEnvironments ?? []);
+  const out: ModuleSource[] = [];
+  for (const [name, data] of entries) {
+    if (!name.startsWith("modules/") || !name.endsWith(".js")) continue;
+    const path = name.slice("modules/".length);
+    const map = entries.get(`${name}.map`);
+    out.push({
+      path,
+      source: text(data),
+      ...(map ? { sourceMap: text(map) } : {}),
+      environment: environments.get(path) ?? (path.startsWith("actions/") ? "node" : "isolate"),
+    });
+  }
+  return out;
 }
 
 type PositionRow = { path: string; start_lineno: bigint; start_col: bigint } | null;
@@ -115,7 +183,10 @@ const base64ToHex = (b64: string) => Buffer.from(b64, "base64").toString("hex");
  * time an int64 of nanoseconds. `serverVersion` is what a push sends (`udfServerVersion`: the CLI's package
  * version, as Convex's); without one, the stored row is used as it is, or made with this server's version.
  */
-export async function udfConfig(engine: Engine, serverVersion?: string): Promise<UdfConfig> {
+export async function udfConfig(
+  engine: Engine,
+  serverVersion?: string,
+): Promise<UdfConfig & { diff: UdfServerVersionDiff | null }> {
   // Drawn outside the transaction: randomness is refused inside one (determinism).
   const fresh = crypto.getRandomValues(new Uint32Array(8));
   return engine.mutation((db) =>
@@ -126,8 +197,14 @@ export async function udfConfig(engine: Engine, serverVersion?: string): Promise
           serverVersion: row.serverVersion as string,
           seed: new Uint32Array(row.importPhaseRngSeed as ArrayBuffer),
           timestamp: msOfNs(row.importPhaseUnixTimestamp as bigint),
+          diff: null,
         };
       const version = serverVersion ?? SERVER_VERSION;
+      // As Convex's `UdfConfigModel::set`: a diff when the version changed, or with no row before.
+      const diff = {
+        previous_version: row ? (row.serverVersion as string) : "Unspecified version",
+        next_version: version,
+      };
       const seed = fresh;
       const timestamp = Date.now();
       const fields = {
@@ -137,9 +214,9 @@ export async function udfConfig(engine: Engine, serverVersion?: string): Promise
       };
       if (row) await db.replace(UDF_CONFIG_TABLE, row._id as string, fields);
       else await db.insert(UDF_CONFIG_TABLE, fields);
-      return { serverVersion: version, seed, timestamp };
+      return { serverVersion: version, seed, timestamp, diff };
     }),
-  ) as Promise<UdfConfig>;
+  ) as Promise<UdfConfig & { diff: UdfServerVersionDiff | null }>;
 }
 
 /**
@@ -163,6 +240,37 @@ export async function peekUdfConfig(engine: Engine): Promise<UdfConfig> {
       timestamp: msOfNs(row.importPhaseUnixTimestamp as bigint),
     };
   return { serverVersion: SERVER_VERSION, seed: fresh, timestamp: now };
+}
+
+/**
+ * The root component's rows, as a push leaves them in Convex (STUDY-133 §12 M2): the app's definition in
+ * `_component_definitions` and its instance in `_components` (Convex's `SerializedComponentDefinitionMetadata`
+ * and `SerializedComponentMetadata` for `ComponentType::App`). bunvex has no other component (DV-55), so they are
+ * written once and never change.
+ */
+async function ensureRootComponent(db: Tx) {
+  const definitions = (await db.query("_component_definitions").collect()) as Record<string, unknown>[];
+  let root = definitions.find((d) => d.path === "")?._id as string | undefined;
+  root ??= await db.insert("_component_definitions", {
+    path: "",
+    definitionType: { type: "app" },
+    childComponents: [],
+    httpMounts: {},
+    httpPrefix: null,
+    exports: { type: "branch", branch: [] },
+    envVars: null,
+  });
+  const components = (await db.query("_components").collect()) as Record<string, unknown>[];
+  if (!components.some((c) => c.parent === null))
+    await db.insert("_components", {
+      definitionId: root,
+      parent: null,
+      name: null,
+      args: null,
+      env: null,
+      state: "active",
+      httpPrefix: null,
+    });
 }
 
 /**
@@ -198,6 +306,7 @@ export async function writeCodeRows(
       byPath.delete(path);
     }
     for (const gone of byPath.values()) await db.delete(MODULES_TABLE, gone._id);
+    await ensureRootComponent(db);
     const unused: SourcePackage[] = [];
     for (const p of (await db.query(SOURCE_PACKAGES_TABLE).collect()) as unknown as SourcePackage[])
       if (p._id !== sourcePackageId) {

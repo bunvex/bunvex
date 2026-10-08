@@ -1,6 +1,7 @@
 // The stored encodings behind the virtual system tables (STUDY-125), against the official `convex` package as
 // the oracle: a `_scheduled_job_args` document's `args` are Convex's `args_to_bytes` — the UTF-8 of the
-// arguments array's JSON, `convexToJson`'s encoding — and read back as `jsonToConvex` reads them; a
+// arguments array's JSON, `convexToJson`'s encoding (as serde_json prints it: `2.0` for an integral float,
+// STUDY-133 §12 M8, so the oracle compares the parsed JSON) — and read back as `jsonToConvex` reads them; a
 // `_storage` document's `sha256` is the digest's standard base64, as Convex's v2 virtual table gives it.
 import { expect, test } from "bun:test";
 import { argsFromBytes, argsToBytes, virtualFile } from "@bunvex/core";
@@ -18,9 +19,10 @@ const SAMPLES: Value[][] = [
 const decode = (b: ArrayBuffer) => new TextDecoder().decode(b);
 
 test("args bytes are the JSON of convexToJson(args), and decode as jsonToConvex does", () => {
+  expect(decode(argsToBytes([{ n: 2 }]))).toBe('[{"n":2.0}]');
   for (const args of SAMPLES) {
     const bytes = argsToBytes(args);
-    expect(decode(bytes)).toBe(JSON.stringify(convexToJson(args as ConvexValue)));
+    expect(JSON.parse(decode(bytes))).toEqual(convexToJson(args as ConvexValue));
     expect(argsFromBytes(bytes)).toEqual(jsonToConvex(JSON.parse(decode(bytes))) as Value[]);
   }
 });
@@ -49,7 +51,7 @@ test("property: any arguments object round-trips the same as Convex's encoding",
     fc.property(fc.dictionary(key, value, { maxKeys: 4 }), (obj) => {
       const args = [obj as Value];
       const bytes = argsToBytes(args);
-      expect(decode(bytes)).toBe(JSON.stringify(convexToJson(args as ConvexValue)));
+      expect(JSON.parse(decode(bytes))).toEqual(convexToJson(args as ConvexValue));
       expect(argsFromBytes(bytes)).toEqual(jsonToConvex(JSON.parse(decode(bytes))) as Value[]);
     }),
     { numRuns: 300 },

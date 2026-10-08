@@ -13,7 +13,8 @@ function indexesOf(schema: SchemaDefinition): Map<string, IndexEntry> {
     const staged = (names?: string[]) => new Set(names ?? []);
     const db = staged(t.staged);
     for (const [n, fields] of Object.entries(t.indexes)) {
-      const spec = { type: "database", fields: [...fields] };
+      // As `_index` holds them (Convex's `IndexedFields`): a user index ends with `_creationTime`.
+      const spec = { type: "database", fields: t.name.startsWith("_") ? [...fields] : [...fields, "_creationTime"] };
       out.set(`${t.name}.${n}`, {
         key: JSON.stringify(spec),
         config: { name: `${t.name}.${n}`, ...spec, staged: db.has(n) },

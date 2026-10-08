@@ -26,6 +26,7 @@ import { type FunctionDef, isFunctionDef, NODE_FUNCTIONS } from "./functions.ts"
 import { checkRouter, HttpRouter } from "./router.ts";
 import { byPosition, SourceMapTokens, type SourcePosition } from "./source-position.ts";
 import { moduleUrl, registerModules } from "./stack-map.ts";
+import { SpecBlob, SpecFile } from "./web-blob.ts";
 
 const FRAME_MAPS = Symbol("bunvex.frameMaps");
 
@@ -189,6 +190,9 @@ function contextGlobals(node: boolean, env: Record<string, string>, onMissingEnv
   ];
   const out: Record<string, unknown> = {};
   for (const k of web) out[k] = g[k];
+  // The File API's `type`, not Bun's MIME table's (DV-441).
+  out.Blob = SpecBlob;
+  out.File = SpecFile;
   // The deployment's variables (STUDY-37): the execution's, else the load's.
   out.process = { env: isolateProcessEnv({ ...env }, onMissingEnv) };
   if (node) {

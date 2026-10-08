@@ -3,7 +3,7 @@
 // the argument array as bytes (`SerializedCronSpec.udf_args`), every time an int64 of nanoseconds
 // (`SerializedCronNextRun`, `CronJobLog.ts`), an in-progress state's ids snake_case (`CronJobState`). The rest of
 // the server keeps its own in-memory forms (numbers, milliseconds, the argument array); these convert at the row.
-import { fromJsonValue, toJsonValue, type Value } from "@bunvex/values";
+import { fromJsonValue, jsonText, toJsonValue, type Value } from "@bunvex/values";
 import type { CronSchedule, CronSpec } from "./cron.ts";
 
 /** A millisecond time as a row's int64 of nanoseconds (Convex's `Timestamp`). */
@@ -22,7 +22,7 @@ const decoder = new TextDecoder();
 
 /** The arguments as Convex's `SerializedArgs`: the JSON text of the argument array, as bytes. */
 export const argsBytes = (args: Value[]): ArrayBuffer =>
-  encoder.encode(JSON.stringify(toJsonValue(args as Value))).buffer as ArrayBuffer;
+  encoder.encode(jsonText(toJsonValue(args as Value))).buffer as ArrayBuffer;
 export const argsOfBytes = (bytes: ArrayBuffer): Value[] => fromJsonValue(JSON.parse(decoder.decode(bytes))) as Value[];
 
 const int = (n: number) => BigInt(n);
