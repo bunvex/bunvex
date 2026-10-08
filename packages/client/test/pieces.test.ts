@@ -186,7 +186,7 @@ describe("BaseBunvexClient over a fake socket", () => {
     const c = make();
     c.subscribe("m:q", {});
     const ws = FakeSocket.last;
-    expect(ws.url).toBe("ws://example.test/api/1.46.0/sync");
+    expect(ws.url).toBe(`ws://example.test/api/${VERSION}/sync`);
     ws.open();
     expect(ws.sent.map((m) => m.type)).toEqual(["Connect", "ModifyQuerySet"]);
     expect(ws.sent[0]).toMatchObject({
@@ -227,7 +227,7 @@ describe("BaseBunvexClient over a fake socket", () => {
   });
 });
 
-test("the client announces the Convex client version it follows, new enough for transition chunks (DV-225)", () => {
-  // A server sends `TransitionChunk`s to npm clients from 1.28.0 (Convex's MIN_NPM_VERSION_FOR_TRANSITION_CHUNKS).
-  expect(Bun.semver.order(VERSION, "1.28.0")).toBeGreaterThanOrEqual(0);
+test("the client announces its own package's version (STUDY-139 P1, DV-442)", async () => {
+  const pkg = (await Bun.file(new URL("../package.json", import.meta.url)).json()) as { version: string };
+  expect(VERSION).toBe(pkg.version);
 });

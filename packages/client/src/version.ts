@@ -1,6 +1,8 @@
 /**
- * The client version, in the sync URL (`/api/<version>/sync`) and the `Bunvex-Client` header, as Convex's
- * client puts its npm version there: the version of Convex's client this one follows (DV-225), so a server
- * gates features (transition chunks, prefix search) as it would for that client.
+ * The client's version, in the sync URL (`/api/<version>/sync`) and the `Bunvex-Client` header: its own
+ * package's (`0.1.0-alpha.0` today), as Convex's client announces its npm version. bunvex is its own product; a
+ * bunvex server does not gate features on Convex's client versions (STUDY-139 P1, DV-442).
  */
-export const VERSION = "1.46.0";
+import pkg from "../package.json" with { type: "json" };
+
+export const VERSION: string = pkg.version;
