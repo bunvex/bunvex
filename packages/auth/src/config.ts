@@ -71,7 +71,7 @@ export function parseAuthConfig(config: unknown): AuthInfo[] {
     if (!("applicationID" in p) && (p.issuer === "https://api.workos.com/" || p.issuer === "https://api.workos.com"))
       throw badRequest(
         "InsecureConfiguration",
-        `This auth configuration appears potentially insecure: Provider at index ${index} has an issuer that is shared among many applications, so must to specify an ApplicationID to check against an \`aud\` field of a JWT.`,
+        `This auth configuration appears potentially insecure: Provider at index ${index} has an issuer that is shared among many applications, so must specify an ApplicationID to check against an \`aud\` field of a JWT.`,
       );
   });
   return providers.map((p, index): AuthInfo => {

@@ -183,18 +183,22 @@ export function actionWarnings(o: {
 }
 
 /**
- * An HTTP action's warnings once its response is sent (or its handler failed): the response's size, its
- * pending operations, its duration.
+ * An HTTP action's warnings once its response is sent (or its handler failed): the response's size (none once
+ * it went over the limit, which already logged an error, as Convex since 82e5c50), its pending operations,
+ * its duration.
  */
 export function httpActionWarnings(o: {
   sentBytes: number;
+  /** The body went over the limit. */
+  tooLarge?: boolean;
   limitBytes: number;
   pending: Map<string, number>;
   elapsedMs: number;
 }) {
-  approaching(o.sentBytes, o.limitBytes, "HttpResponseTooLarge", "Large response returned from an HTTP action", {
-    unit: " bytes",
-  });
+  if (!o.tooLarge)
+    approaching(o.sentBytes, o.limitBytes, "HttpResponseTooLarge", "Large response returned from an HTTP action", {
+      unit: " bytes",
+    });
   unawaitedWarning(o.pending);
   approachingDuration(o.elapsedMs, V8_ACTION_USER_TIMEOUT_MS);
 }

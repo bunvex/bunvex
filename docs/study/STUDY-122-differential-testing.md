@@ -12,9 +12,10 @@
   returned the new document in place of two committed ones, bunvex the committed ones (correct). Convex fixed it
   upstream on 5 Oct (get-convex/convex-backend#59211, its issue #585: pending writes past a snapshot page merged
   into it), after the pinned release (`precompiled-2026-09-26-27ef234`). bunvex keeps it right with
-  `packages/core/test/own-writes-paging.test.ts`. A newer oracle (`precompiled-2026-10-06-82e5c50` or later) has
-  the fix, but also Convex's `b352fab` (2 Oct), which stops stacking `Uncaught Error:` prefixes on nested
-  errors, a change bunvex (#492) would have to follow first: two fixed programs differ on it.
+  `packages/core/test/own-writes-paging.test.ts`.
+- **Oracle:** the release `precompiled-2026-10-07-d8bdde0` since STUDY-137, which has that fix. bunvex first
+  followed Convex's `b352fab` (2 Oct, no more stacked `Uncaught Error:` prefixes on nested errors), on which two
+  fixed programs differed.
 - **Convex source read:**
   - `main` of get-convex/convex-backend (`4577b9031`).
   - The last commits that still had tests: `bea52bde0` (Rust) and `c358201e1` (TypeScript), read locally,

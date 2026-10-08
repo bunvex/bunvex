@@ -23,9 +23,9 @@ test("Convex's reasons", () => {
   expect(functionPathError("dir/m:ok")).toBeNull();
   expect(functionPathError("_system/frontend/x:y")).toBeNull();
   expect(functionPathError("m:ok:x")).toBe(
-    "Path component m:ok.js can only contain alphanumeric characters, underscores, or periods.",
+    "Invalid module path 'm:ok': Path component m:ok.js can only contain alphanumeric characters, underscores, or periods.",
   );
-  expect(functionPathError("")).toBe("Module path  doesn't have a filename.");
+  expect(functionPathError("")).toBe("Invalid module path '': Module path doesn't have a filename.");
   expect(functionPathError("m:o-k")).toBe(
     "Identifier o-k has invalid character '-': Identifiers can only contain alphanumeric characters or underscores",
   );
@@ -34,15 +34,24 @@ test("Convex's reasons", () => {
     "Invalid first character '1' in 1x: Identifiers must start with an alphabetic character or underscore",
   );
   expect(functionPathError("m:__")).toBe("Identifier __ cannot have exclusively underscores");
-  expect(functionPathError("m.ts:ok")).toBe("Module path (m.ts) has an extension that isn't 'js'.");
-  expect(functionPathError("/m:ok")).toBe("Module paths must be relative (/m is absolute).");
-  expect(functionPathError("a/../m:ok")).toBe("Invalid path component ParentDir in a/../m.");
-  expect(functionPathError("./m:ok")).toBe("Invalid path component CurDir in ./m.");
-  expect(functionPathError("m.:ok")).toBe("Module path (m.) has an extension that isn't 'js'.");
+  expect(functionPathError("m.ts:ok")).toBe(
+    "Invalid module path 'm.ts': Module path has an extension that isn't 'js'.",
+  );
+  expect(functionPathError("/m:ok")).toBe("Invalid module path '/m': Module paths must be relative.");
+  expect(functionPathError("a/../m:ok")).toBe("Invalid module path 'a/../m': Invalid path component ParentDir.");
+  expect(functionPathError("./m:ok")).toBe("Invalid module path './m': Invalid path component CurDir.");
+  expect(functionPathError("m.:ok")).toBe("Invalid module path 'm.': Module path has an extension that isn't 'js'.");
   expect(functionPathError("m/:ok")).toBeNull();
+  // Since Convex 8ecf38b, a too-long component's prefix is whole characters within 64 UTF-8 bytes.
+  expect(functionPathError(`${"é".repeat(40)}:ok`)).toBe(
+    `Invalid module path '${"é".repeat(40)}': Path component is too long (83 > maximum 64): ${"é".repeat(32)}...`,
+  );
+  expect(functionPathError(`a${"é".repeat(40)}:ok`)).toBe(
+    `Invalid module path 'a${"é".repeat(40)}': Path component is too long (84 > maximum 64): a${"é".repeat(31)}...`,
+  );
   expect(functionPathError("a/./m:ok")).toBeNull();
   expect(functionPathError("a b:ok")).toBe(
-    "Path component a b.js can only contain alphanumeric characters, underscores, or periods.",
+    "Invalid module path 'a b': Path component a b.js can only contain alphanumeric characters, underscores, or periods.",
   );
 });
 
@@ -68,7 +77,7 @@ test("over HTTP: 400 BadBunvexFunctionIdentifier before the call; /api/function 
     body: {
       code: "BadBunvexFunctionIdentifier",
       message:
-        "m:ok:x is not a valid path to a bunvex function. Path component m:ok.js can only contain alphanumeric characters, underscores, or periods.",
+        "m:ok:x is not a valid path to a bunvex function. Invalid module path 'm:ok': Path component m:ok.js can only contain alphanumeric characters, underscores, or periods.",
     },
   };
   for (const route of ["query", "mutation", "action"]) expect(await post(route, "m:ok:x")).toEqual(bad);

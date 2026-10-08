@@ -18,7 +18,7 @@
 // Layout and read-only flag (PERSIST-01 C10, STUDY-25 L7): no layout record (DV-418): the open checks that the
 // tables it finds have Convex's columns, before writing anything, and refuses a read-only store.
 // Retention (PERSIST-01 C12–C14, STUDY-33): the document log reads `documents` by its key's leading `ts`;
-// prunes are Convex's v5 deletes, OR'd `ts <= X` clauses per key in chunks of 128 (MYSQL_CHUNK_SIZE), each key
+// prunes are Convex's v5 deletes, OR'd `ts <= X` clauses per key in chunks of 128 (MYSQL_SMART_CHUNK_MAX_SIZE), each key
 // at its highest ts only; globals are `persistence_globals` rows. Each prune or global write first reads the
 // lease row without locking it (a locking read would hold up the next flush) and is refused unless it carries
 // our ts. A takeover in between can let one batch through, which deletes only versions superseded below a

@@ -38,6 +38,22 @@ async function setup() {
       await db.insert("items", {});
       return count(db.query("items"));
     }),
+    churnThenFail: mutation(async ({ db }) => {
+      await db.insert("items", {});
+      await db.insert("items", {});
+      const first = await db.query("items").first();
+      if (first) await db.delete(first._id);
+      throw new Error("rolled back");
+    }),
+    /** Counts around a nested mutation that writes, then fails and is caught. */
+    nestedRollback: mutation(async ({ db, runMutation }) => {
+      await db.insert("items", {});
+      const before = await count(db.query("items"));
+      try {
+        await runMutation("m:churnThenFail" as never, {} as never);
+      } catch {}
+      return [before, await count(db.query("items"))];
+    }),
   });
   const s = createServer({ engine, functions, port: 0 });
   stops.push(() => s.stop());
@@ -55,6 +71,13 @@ test("from an app's query and mutation, with the mutation's own insert", async (
   expect(await functions.runQuery("m:count", {})).toBe(0);
   expect(await functions.runMutation("m:addAndCount", {})).toBe(1);
   await functions.runMutation("m:add", { table: "items" });
+  expect(await functions.runQuery("m:count", {})).toBe(2);
+});
+
+test("a nested mutation rolled back takes its inserts and deletes out of the caller's count (Convex aad76a4)", async () => {
+  const { functions } = await setup();
+  await functions.runMutation("m:add", { table: "items" });
+  expect(await functions.runMutation("m:nestedRollback", {})).toEqual([2, 2]);
   expect(await functions.runQuery("m:count", {})).toBe(2);
 });
 

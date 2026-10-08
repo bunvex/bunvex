@@ -1,6 +1,7 @@
 // Convex's log stream API (crates/local_backend/src/log_sinks.rs, STUDY-59): under `/api/v1/`,
 // `list_log_streams` and `get_log_stream/{id}` (ViewIntegrations); `create_log_stream`,
-// `update_log_stream/{id}`, `delete_log_stream/{id}` and `rotate_webhook_secret/{id}` (WriteIntegrations), each
+// `update_log_stream/{id}`, `delete_log_stream/{id}` and `rotate_webhook_secret/{id}` (WriteIntegrations; an
+// S3 export's create and update also ViewData, since Convex 4933aa2), each
 // change with its audit event. Every sink type's arguments are checked as Convex's; bunvex runs webhook,
 // local and S3 export sinks (DV-303).
 
@@ -439,6 +440,8 @@ export async function logStreamRoute(
       functions.requireOperation(caller, "WriteIntegrations");
       const b = await body();
       const type = b.logStreamType;
+      // An S3 export copies the deployment's data out: it also needs ViewData (Convex 4933aa2).
+      if (type === "s3Export") functions.requireOperation(caller, "ViewData");
       if (typeof type === "string" && API_TYPES.includes(type as SinkType)) {
         const existing = await engine.query((db) => sinkOfType(db, type as SinkType));
         if (existing)
@@ -468,6 +471,7 @@ export async function logStreamRoute(
       const b = await body();
       await engine.mutation(async (db) => {
         const row = await mustGetSink(db, sinkId);
+        if (row.config.type === "s3Export") functions.requireOperation(caller, "ViewData");
         const config = updatedConfig(row.config, b);
         await patchSink(db, row._id, { config });
         await audit(db, auditEvents.updateIntegration(sinkId, row.config.type));

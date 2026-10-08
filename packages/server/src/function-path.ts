@@ -14,10 +14,22 @@ const rustChar = (c: string) => {
 
 const isAsciiAlnum = (c: string) => /^[A-Za-z0-9]$/.test(c);
 
+/** The whole characters of `s` within its first `max` UTF-8 bytes. */
+function utf8Prefix(s: string, max: number): string {
+  let bytes = 0;
+  let out = "";
+  for (const c of s) {
+    bytes += Buffer.byteLength(c);
+    if (bytes > max) break;
+    out += c;
+  }
+  return out;
+}
+
 function checkPathComponent(s: string): string | null {
   const len = Buffer.byteLength(s);
   if (len > MAX_IDENTIFIER_LEN)
-    return `Path component is too long (${len} > maximum ${MAX_IDENTIFIER_LEN}): ${s.slice(0, MAX_IDENTIFIER_LEN)}...`;
+    return `Path component is too long (${len} > maximum ${MAX_IDENTIFIER_LEN}): ${utf8Prefix(s, MAX_IDENTIFIER_LEN)}...`;
   if (![...s].every((c) => isAsciiAlnum(c) || c === "_" || c === "."))
     return `Path component ${s} can only contain alphanumeric characters, underscores, or periods.`;
   if (![...s].some(isAsciiAlnum)) return `Path component ${s} must have at least one alphanumeric character.`;
@@ -66,16 +78,24 @@ function extension(name: string): string | null {
   return i <= 0 ? null : name.slice(i + 1);
 }
 
+/**
+ * Convex's `InvalidModulePathError` (since 8ecf38b): every reason starts with `Invalid module path '<p>': `.
+ */
 function checkModulePath(p: string): string | null {
+  const why = moduleReason(p);
+  return why === null ? null : `Invalid module path '${p}': ${why}`;
+}
+
+function moduleReason(p: string): string | null {
   const name = fileName(p);
-  if (name === null) return `Module path ${p} doesn't have a filename.`;
+  if (name === null) return "Module path doesn't have a filename.";
   const ext = extension(name);
-  if (ext !== null && ext !== "js") return `Module path (${p}) has an extension that isn't 'js'.`;
+  if (ext !== null && ext !== "js") return "Module path has an extension that isn't 'js'.";
   const comps = components(p);
   for (const c of comps) {
-    if (c === "/") return `Module paths must be relative (${p} is absolute).`;
-    if (c === ".") return `Invalid path component CurDir in ${p}.`;
-    if (c === "..") return `Invalid path component ParentDir in ${p}.`;
+    if (c === "/") return "Module paths must be relative.";
+    if (c === ".") return "Invalid path component CurDir.";
+    if (c === "..") return "Invalid path component ParentDir.";
   }
   // Canonicalized: `.js` added to a file name without an extension; every component checked.
   const canonical = ext === null ? [...comps.slice(0, -1), `${name}.js`] : comps;
@@ -88,17 +108,11 @@ function checkModulePath(p: string): string | null {
 
 /**
  * Convex's 400 for a module path that does not parse (`parse_module_path`, `BadConvexModuleIdentifier`), with
- * bunvex's code (DV-312) and words.
+ * bunvex's code (DV-312): since 8ecf38b, the module path's error alone.
  */
 export function badModulePath(path: string): { status: 400; code: string; message: string } | null {
   const why = checkModulePath(path);
-  return why === null
-    ? null
-    : {
-        status: 400,
-        code: "BadBunvexModuleIdentifier",
-        message: `${path} is not a valid path to a bunvex module. ${why}`,
-      };
+  return why === null ? null : { status: 400, code: "BadBunvexModuleIdentifier", message: why };
 }
 
 /** Why a function path does not parse (`module[:function]`), or null when it does. */

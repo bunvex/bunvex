@@ -2240,9 +2240,10 @@ export class Functions {
     let running: Running | null = null;
     let body: ReturnType<typeof meteredBody> | null = null;
     // Convex's HTTP action warnings (STUDY-76), when its response is sent or its handler failed.
-    const warnings = (sentBytes: number) =>
+    const warnings = (sentBytes: number, tooLarge = false) =>
       httpActionWarnings({
         sentBytes,
+        tooLarge,
         limitBytes: HTTP_ACTION_RESPONSE_LIMIT,
         pending: running?.pendingOps ?? new Map(),
         elapsedMs: performance.now() - t0,
@@ -2278,7 +2279,7 @@ export class Functions {
               warnings(0);
               return response;
             }
-            // The body, sent as Convex's streamer does (20 MiB at most); the run is logged once it is.
+            // The body, sent as Convex's streamer does (100 MiB at most); the run is logged once it is.
             body = meteredBody(response.body, request.signal);
             return new Response(body.stream, { status: response.status, statusText: response.statusText, headers });
           } catch (e) {
@@ -2299,12 +2300,12 @@ export class Functions {
       undefined,
       () =>
         body &&
-        body.sent.then(({ bytes, errors, disconnected }) => () => {
+        body.sent.then(({ bytes, errors, tooLarge, disconnected }) => () => {
           for (const e of errors) logSystemLine("ERROR", e, "error:httpAction");
           // The client left mid-body: Convex stops the run there and ends its lines with an INFO line (no
           // more lines or response parts will come); its run is still logged with the head's status.
           if (disconnected) logSystemLine("INFO", "Client disconnected", "info:httpActionClientDisconnect");
-          else warnings(bytes);
+          else warnings(bytes, tooLarge);
         }),
     );
   }

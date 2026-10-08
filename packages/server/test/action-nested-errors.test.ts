@@ -7,6 +7,7 @@ import { expect, test } from "bun:test";
 import { defineSchema, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { BunvexError } from "@bunvex/values";
+import { describeUncaught } from "../src/errors.ts";
 import { action, Functions, internalAction, internalMutation, internalQuery } from "../src/functions.ts";
 
 async function setup() {
@@ -64,5 +65,33 @@ test("an action catches its callee's uncaught message, and a BunvexError's data"
     [true, { code: 7 }],
     [false, null],
   ]);
+  await engine.close();
+});
+
+// Uncaught in turn, the callee's error is not prefixed again: Convex's `format_uncaught_error` keeps a message that
+// already starts with `Uncaught <Name>: ` since b352fab (2 Oct 2026); before, each level added one more.
+test("an uncaught nested failure reads `Uncaught Error:` once, however deep", async () => {
+  const engine = await new Engine(defineSchema({}), await MemoryPersistence.open(null, { durable: false })).init();
+  const fns = new Functions(engine).register("m", {
+    failM: internalMutation(async () => {
+      throw new Error("mutation boom");
+    }),
+    failData: internalMutation(async () => {
+      throw new BunvexError({ code: 7 });
+    }),
+    inner: internalAction(async ({ runMutation }) => runMutation("m:failM" as never, {} as never)),
+    outer: action(async ({ runAction }) => runAction("m:inner" as never, {} as never)),
+    data: action(async ({ runMutation }) => runMutation("m:failData" as never, {} as never)),
+  });
+  const first = async (path: string) => {
+    try {
+      await fns.runAction(path, {});
+    } catch (e) {
+      return describeUncaught(e).message.split("\n")[0];
+    }
+    throw new Error(`${path} did not fail`);
+  };
+  expect(await first("m:outer")).toBe("Uncaught Error: mutation boom");
+  expect(await first("m:data")).toBe('Uncaught BunvexError: {"code":7}');
   await engine.close();
 });

@@ -1,7 +1,7 @@
 # Convex parity
 
 bunvex is a rewrite of Convex for Bun: an app should work the same on both. This directory lists **everything
-Convex has**, read from its source (get-convex/convex-backend @ `4577b9031`), and where bunvex stands on each
+Convex has**, read from its source (get-convex/convex-backend @ `4577b9031`, brought up to the release `precompiled-2026-10-07-d8bdde0` by [STUDY-137](../study/STUDY-137-convex-reference-2026-10-07.md)), and where bunvex stands on each
 item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |

@@ -163,7 +163,7 @@ describe("_system/frontend schedules", () => {
       "ArgumentValidationError",
     );
     expect(await functions.runQuery("_system/frontend/listCronJobs", {}).catch((e: Error) => e.message)).toBe(
-      "Operation query not permitted",
+      "You don't have permission to perform this operation.",
     );
   });
 

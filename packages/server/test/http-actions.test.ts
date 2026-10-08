@@ -98,7 +98,7 @@ async function setup(
       return new Response(
         new ReadableStream({
           pull(c) {
-            if (i++ === 21) return c.close();
+            if (i++ === 101) return c.close();
             c.enqueue(mib);
           },
         }),
@@ -276,10 +276,10 @@ describe("requests and responses", () => {
     expect(chunks.join("")).toBe("chunk0;chunk1;chunk2;");
   });
 
-  test("a response is cut once it would pass 20 MiB", async () => {
+  test("a response is cut once it would pass 100 MiB", async () => {
     const { site } = await setup();
     const body = await (await fetch(`${site}/big`)).arrayBuffer();
-    expect(body.byteLength).toBe(20 << 20);
+    expect(body.byteLength).toBe(100 << 20);
   });
 
   test("an error before the head: Convex's 500 JSON, with data; redacted without the trace", async () => {

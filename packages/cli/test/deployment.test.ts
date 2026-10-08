@@ -127,6 +127,7 @@ describe("bunvex deployment usage-limits", () => {
     await set("--metric", "functionCalls", "--window", "month", "--type", "disable", "--limit", "1000000");
     await set("--metric", "dataEgressGb", "--window", "day", "--type", "warning", "--limit", "4");
     await set("--metric", "actionComputeIsolateGbHours", "--window", "day", "--type", "warning", "--limit", "1");
+    await set("--metric", "aiGatewayCostDollars", "--window", "month", "--type", "disable", "--limit", "25");
     const r = await run("usage-limits", "list");
     expect(r.code).toBe(0);
     expect(r.err).toEqual([PENDING]);
@@ -140,6 +141,7 @@ describe("bunvex deployment usage-limits", () => {
         "│ Function calls │ day    │ disable │   2M calls │   1.5K calls (0%) │ no     │ no        │",
         "│ Action compute │ day    │ warning │ 1 GB-hours │   0 GB-hours (0%) │ yes    │ no        │",
         "│ Data egress    │ day    │ warning │       4 GB │        3 GB (75%) │ yes    │ no        │",
+        "│ AI Gateway     │ month  │ disable │ 25 dollars │    0 dollars (0%) │ yes    │ no        │",
         "└────────────────┴────────┴─────────┴────────────┴───────────────────┴────────┴───────────┘",
       ].join("\n"),
     );
@@ -200,7 +202,7 @@ describe("bunvex deployment usage-limits", () => {
     expect(await err(...SET, "--metric", "actionComputeConvexGbHours", "--window", "day", "--type", "disable")).toEqual(
       [
         1,
-        "error: option '--metric <metric>' argument 'actionComputeConvexGbHours' is invalid. Allowed choices are functionCalls, queryMutationComputeGbHours, actionComputeIsolateGbHours, actionComputeNodeJsGbHours, actionComputeCpuGbHours, databaseIoGb, searchQueryGb, dataEgressGb.",
+        "error: option '--metric <metric>' argument 'actionComputeConvexGbHours' is invalid. Allowed choices are functionCalls, queryMutationComputeGbHours, actionComputeIsolateGbHours, actionComputeNodeJsGbHours, actionComputeCpuGbHours, databaseIoGb, searchQueryGb, dataEgressGb, aiGatewayCostDollars.",
       ],
     );
     expect(await err(...SET, ...FN_DAY_DISABLE.slice(0, 4), "--type", "stop")).toEqual([
@@ -269,7 +271,7 @@ describe("bunvex deployment usage", () => {
         "│ Database I/O             │ 1.235M GB  │ 1.235M GB  │",
         "│ Search queries           │ 0 Query-GB │ 0 Query-GB │",
         "│ Data egress              │ 0 GB       │ 0 GB       │",
-        "│ aiGatewayCostDollars     │ 0 dollars  │ 0 dollars  │",
+        "│ AI Gateway               │ 0 dollars  │ 0 dollars  │",
         "└──────────────────────────┴────────────┴────────────┘",
       ].join("\n"),
     );

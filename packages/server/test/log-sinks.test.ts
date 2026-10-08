@@ -11,6 +11,7 @@ import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { v } from "@bunvex/values";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
 import { Functions, mutation } from "../src/functions.ts";
+import { logStreamRoute } from "../src/log-sinks-routes.ts";
 import { createServer } from "../src/server.ts";
 
 const SECRET = "7c".repeat(32);
@@ -261,6 +262,61 @@ test("the API's checks and errors", async () => {
   expect((await t.req(`get_log_stream/${id}`)).status).toBe(404);
   await until(async () => (await t.req("list_log_streams")).body.length === 1, "the row to go");
   expect((await t.audit()).map(([a]) => a)).toEqual(["create_integration", "create_integration", "delete_integration"]);
+});
+
+test("an S3 export's create and update also need ViewData (Convex 4933aa2)", async () => {
+  const engine = await new Engine(
+    defineSchema({ items: defineTable(v.any()) }),
+    await MemoryPersistence.open(null, { durable: false }),
+    { instanceName: NAME, instanceSecret: SECRET },
+  ).init();
+  const functions = new Functions(engine);
+  const admin = (allowedOps: string[]) =>
+    ({
+      identity: null,
+      key: "",
+      admin: { kind: "admin", memberId: 1, readOnly: false, allowedOps, issuedS: 0 },
+    }) as never;
+  // No key bunvex issues has WriteIntegrations without ViewData; Convex's scoped tokens do.
+  const integrationsOnly = admin(["WriteIntegrations"]);
+  const route = (path: string, id: string | undefined, body: object, caller: never) =>
+    logStreamRoute(
+      { engine, functions, wake: () => {} },
+      path,
+      id,
+      new Request("http://x/", { method: "POST", body: JSON.stringify(body) }),
+      caller,
+    ).catch((e) => e);
+  const s3 = {
+    logStreamType: "s3Export",
+    bucket: "my-bucket",
+    region: "us-east-1",
+    accessKeyId: "a",
+    secretAccessKey: "s",
+    period: "daily",
+  };
+  const refused = await route("create_log_stream", undefined, s3, integrationsOnly);
+  expect([refused.code, refused.message]).toEqual([
+    "OperationNotPermitted",
+    "You do not have permission to perform this operation (deployment:data:view).",
+  ]);
+  const made = await route("create_log_stream", undefined, s3, admin([]));
+  const { id } = (await made.json()) as { id: string };
+  const update = await route(
+    "update_log_stream",
+    id,
+    { logStreamType: "s3Export", period: "hourly" },
+    integrationsOnly,
+  );
+  expect(update.code).toBe("OperationNotPermitted");
+  // Another type needs only WriteIntegrations.
+  const hook = await route(
+    "create_log_stream",
+    undefined,
+    { logStreamType: "webhook", url: "https://example.com/h", format: "json" },
+    integrationsOnly,
+  );
+  expect(hook.status).toBe(200);
 });
 
 test("the local sink: every event as a V2 line, exceptions too, kept across a restart without verifying", async () => {

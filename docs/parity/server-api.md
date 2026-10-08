@@ -2,7 +2,7 @@
 
 Scope: everything an app can call or rely on from inside its functions: `ctx.db`, the query builder, function builders and contexts, validators and value types, schema, auth/storage/scheduler/crons/HTTP, components, errors, and the documented limits.
 
-- **Convex reference:** `convex-backend` @ `4577b9031`. JS paths are relative to `npm-packages/convex/src/` and Rust paths to `crates/`.
+- **Convex reference:** `convex-backend` @ `4577b9031`, brought up to the release `precompiled-2026-10-07-d8bdde0` by [STUDY-137](../study/STUDY-137-convex-reference-2026-10-07.md). JS paths are relative to `npm-packages/convex/src/` and Rust paths to `crates/`.
 - **bunvex reference:** first written against `main` @ `f60e934`; every row not done was rechecked against the code at `main` @ `52141c8` (2026-10-03, after #245).
 - **Status:** **done** means it matches Convex's behaviour; **partial** means it exists but differs (the note says how); **missing** means it isn't there.
 

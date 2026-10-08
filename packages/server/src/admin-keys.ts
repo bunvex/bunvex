@@ -324,13 +324,14 @@ export class OperationNotPermittedError extends Error {
 /**
  * A `_system/` function asked for by anyone but an admin or the system acting as itself (Convex's
  * `unauthorized_error` in crates/database/src/database.rs, raised by `application_function_runner` and
- * `ModuleModel::get_metadata`): 403 `SystemIdentityRequired`, "Operation <op> not permitted".
+ * `ModuleModel::get_metadata`): 403 `SystemIdentityRequired`, "You don't have permission to perform this
+ * operation." (Convex's wording since b352fab; before, "Operation <op> not permitted").
  */
 export class SystemIdentityRequiredError extends Error {
   readonly status = 403;
   readonly code = "SystemIdentityRequired";
   constructor(readonly op: "query" | "mutation" | "action" | "get_module") {
-    super(`Operation ${op} not permitted`);
+    super("You don't have permission to perform this operation.");
     this.name = "SystemIdentityRequiredError";
   }
 }

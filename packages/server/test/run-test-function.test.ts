@@ -213,7 +213,7 @@ export default query({ handler: async () => n });`)
     });
     expect((await d.tester(wrapped("return 1;"), { path: "../t.js" })).body).toEqual({
       code: "BadBunvexModuleIdentifier",
-      message: "../t.js is not a valid path to a bunvex module. Invalid path component ParentDir in ../t.js.",
+      message: "Invalid module path '../t.js': Invalid path component ParentDir.",
     });
   });
 

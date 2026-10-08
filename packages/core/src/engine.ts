@@ -216,7 +216,7 @@ import {
   VectorIndexes,
   vectorEntry,
 } from "./vector-indexes.ts";
-import { TooManyWritesError, WriteThroughputLimiter, type WriteThroughputOptions } from "./write-throughput.ts";
+import { WriteThroughputLimiter, type WriteThroughputOptions } from "./write-throughput.ts";
 
 /** A shuffled copy of `xs` (the compactor picks among candidates at random, as Convex's). */
 function shuffled<T>(xs: T[]): T[] {
@@ -3164,9 +3164,9 @@ export class Engine {
     for (let failures = 0; ; ) {
       // Each attempt of a mutation first checks the write throughput limit (STUDY-78), as Convex's
       // `run_mutation_no_udf_log`; refused, it is retried within the OCC budget and backoff, then fails.
-      if (throttled && !this.writeThroughput.allowsNow()) {
-        if (failures >= maxRetries)
-          throw new TooManyWritesError(this.writeThroughput.maxBytesPerSecond, this.writeThroughput.windowMs);
+      const limit = throttled ? this.writeThroughput.exceededNow() : null;
+      if (limit) {
+        if (failures >= maxRetries) throw this.writeThroughput.error(limit);
         const sleep = occBackoffMs(failures, initialMs, maxMs);
         failures++;
         this.stats.writeThroughputRetries++;
@@ -3273,7 +3273,10 @@ export function transactionStart(snapshot: bigint, clockMs: number, last: number
   return t > last ? t : nextUp(last);
 }
 
-/** MAX_BYTES_WRITTEN_PER_SECOND (bytes) and WRITE_THROUGHPUT_WINDOW (ms), as Convex's knobs, else defaults. */
+/**
+ * MAX_BYTES_WRITTEN_PER_SECOND (bytes), MAX_ROWS_WRITTEN_PER_SECOND (rows, 0 for none) and
+ * WRITE_THROUGHPUT_WINDOW (ms), as Convex's knobs, else defaults.
+ */
 function writeThroughputFromEnv(): WriteThroughputOptions {
   const knob = (name: string) => {
     const raw = process.env[name];
@@ -3283,9 +3286,11 @@ function writeThroughputFromEnv(): WriteThroughputOptions {
     return n;
   };
   const maxBytesPerSecond = knob("MAX_BYTES_WRITTEN_PER_SECOND");
+  const maxRowsPerSecond = knob("MAX_ROWS_WRITTEN_PER_SECOND");
   const windowMs = knob("WRITE_THROUGHPUT_WINDOW");
   return {
     ...(maxBytesPerSecond === undefined ? {} : { maxBytesPerSecond }),
+    ...(maxRowsPerSecond === undefined ? {} : { maxRowsPerSecond }),
     ...(windowMs === undefined ? {} : { windowMs }),
   };
 }

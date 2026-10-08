@@ -138,7 +138,7 @@ test("refused without an admin key, without ViewData, and from function code", a
     const anon = await t.call("query", path, path.endsWith("s") ? {} : page("_tables"), null);
     // A client that is not an admin is refused before the function is looked up, as Convex's runner (#471).
     expect(anon.status).toBe("error");
-    expect(anon.errorMessage).toContain("Operation query not permitted");
+    expect(anon.errorMessage).toContain("You don't have permission to perform this operation.");
   }
   // a read-only key may view data
   expect((await t.call("query", "_system/debug/systemTables", {}, READ_ONLY)).status).toBe("success");

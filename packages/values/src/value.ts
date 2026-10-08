@@ -102,7 +102,8 @@ const quote = (s: string) =>
 
 /**
  * A value in an error message, as Convex's `stringifyValueForError` prints it (npm-packages/convex/src/values/
- * value.ts): its JSON, with `undefined` as `"undefined"` and a bigint as `"5n"`, cut at
+ * value.ts): its JSON, with `undefined` as `"undefined"`, a bigint as `"5n"`, a function as `"[Function]"` and
+ * a symbol as its description (`"Symbol(s)"`), cut at
  * MAX_VALUE_FOR_ERROR_LEN characters with `[...truncated]`.
  *
  * Unlike `JSON.stringify`, it opens only plain data: arrays, plain objects and their fields. A class instance,
@@ -121,14 +122,17 @@ export function stringifyValueForError(value: unknown): string {
     length += s.length;
   };
   const full = () => length > MAX_VALUE_FOR_ERROR_LEN;
-  // `JSON.stringify`'s rules for a member: undefined is "undefined"; a function or a symbol is left out of an
-  // object, null in an array, and the whole output is `undefined` at the top.
-  const skipped = (v: unknown) => typeof v === "function" || typeof v === "symbol";
   // A scalar's text, or what an object prints as when it is not opened; null for an array or a plain object.
+  // Undefined is "undefined"; since Convex aab5a04 a function is "[Function]" and a symbol its description,
+  // wherever they are (`JSON.stringify` alone dropped them from objects and made them null in arrays).
   const closed = (v: unknown): string | null => {
     if (v === undefined) return '"undefined"';
     if (v === null) return "null";
     switch (typeof v) {
+      case "function":
+        return '"[Function]"';
+      case "symbol":
+        return quote(String(v));
       case "bigint":
         return `"${v.toString()}n"`;
       case "number":
@@ -161,11 +165,8 @@ export function stringifyValueForError(value: unknown): string {
         close: "}",
         first: true,
         next: () => {
-          for (let r = keys.next(); !r.done; r = keys.next()) {
-            const e = (o as Record<string, unknown>)[r.value];
-            if (!skipped(e)) return { key: r.value, value: e };
-          }
-          return null;
+          const r = keys.next();
+          return r.done ? null : { key: r.value, value: (o as Record<string, unknown>)[r.value] };
         },
       });
     }
@@ -176,7 +177,6 @@ export function stringifyValueForError(value: unknown): string {
     if (text !== null) emit(text);
     else open(v as object);
   };
-  if (skipped(value)) return "undefined";
   write(value);
   while (stack.length && !full()) {
     const top = stack[stack.length - 1]!;
@@ -190,9 +190,7 @@ export function stringifyValueForError(value: unknown): string {
     if (!top.first) emit(",");
     top.first = false;
     if (member.key !== undefined) emit(`${quote(member.key)}:`);
-    // an array keeps a function or a symbol's place as null; an object's were skipped by `next`
-    if (skipped(member.value)) emit("null");
-    else write(member.value);
+    write(member.value);
   }
   const s = out.join("");
   if (s.length <= MAX_VALUE_FOR_ERROR_LEN) return s;
@@ -237,7 +235,7 @@ function toJson(value: unknown, original: unknown, context: string): JSONValue {
   if (value instanceof Map) throw new Error(unsupported(context, "Map", [...value], original));
   if (!isSimpleObject(value)) {
     // An object prints as `Name {…}` (stringifyValueForError); a function or a symbol as its kind's name and
-    // `undefined`, as Convex's message does.
+    // `"[Function]"` or its description, as Convex's message does since aab5a04.
     const name = typeof value === "object" ? "" : className(value);
     throw new Error(unsupported(context, name ? `${name} ` : "", value, original));
   }
