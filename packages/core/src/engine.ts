@@ -1977,6 +1977,11 @@ export class Engine {
         p,
         this.tableSummaries,
         this.opts.summaryCheckpoints || undefined,
+        () => [
+          ...this.catalog.tables.values(),
+          ...this.catalog.hidden.values(),
+          ...this.catalog.deleting.values(),
+        ].map((t) => t.id),
       );
       this.summaryCheckpointer.start();
     }

@@ -238,3 +238,26 @@ test("shapes round-trip through the checkpoint's JSON", () => {
   for (const x of [shapeOf(docs[0] as never), s, tableShape([...docs, { a: "s" }, 3n] as never)])
     expect(shapeFromJson(JSON.parse(JSON.stringify(shapeToJson(x))))).toEqual(x);
 });
+
+test("a checkpoint has an entry for every table, an empty one's with size 0 and shape Never (STUDY-133 §12 M3)", async () => {
+  const p = await MemoryPersistence.open(null, { durable: false });
+  const e = await open(p);
+  await e.mutation((db) => db.insert("t", { a: 1 }));
+  await e.summaryCheckpointer!.tick(true);
+  const saved = (await p.getGlobal(TABLE_SUMMARY_GLOBAL)) as { tables: Record<string, any> };
+  const tablets = [...e.catalog.tables.values()].map((t) => t.id);
+  // Every table, system and bootstrap tables included, as Convex's: it cannot count a write to a table its
+  // loaded checkpoint has no entry for.
+  for (const id of tablets) expect(Object.keys(saved.tables)).toContain(id);
+  expect(saved.tables[e.catalog.tables.get("u")!.id]).toEqual({
+    totalSize: "AAAAAAAAAAA=",
+    inferredTypeWithOptionalFields: { numValues: 0, variant: { kind: "Never" } },
+  });
+  expect(saved.tables[e.catalog.tables.get("t")!.id].inferredTypeWithOptionalFields.numValues).toBe(1);
+  await e.close();
+  // Restored, the empty entries change nothing.
+  const e2 = await open(p);
+  expect(e2.summariesRestored).toBe(true);
+  expect(e2.tableSummaries.get(e2.catalog.tables.get("u")!.id).count).toBe(0);
+  await e2.close();
+});

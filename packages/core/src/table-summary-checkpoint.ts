@@ -123,6 +123,8 @@ export class SummaryCheckpointer {
     private store: Store,
     private summaries: TableSummaries,
     opts: SummaryCheckpointOptions = {},
+    /** Every table that exists now, empty ones included: each gets an entry, as Convex's checkpoint. */
+    private tablets: () => Iterable<TabletId> = () => [],
   ) {
     this.o = {
       intervalMs: opts.intervalMs ?? 10_000,
@@ -168,7 +170,7 @@ export class SummaryCheckpointer {
       if (fresh < this.o.minCommits && !(fresh > 0 && age >= this.o.maxStalenessMs) && age < this.maxAge) return;
     }
     try {
-      await this.store.setGlobal(TABLE_SUMMARY_GLOBAL, this.summaries.checkpoint());
+      await this.store.setGlobal(TABLE_SUMMARY_GLOBAL, this.summaries.checkpoint(this.tablets()));
       this.last = { at: now, commits };
       this.maxAge = this.jittered();
       this.stats.written++;
