@@ -24,10 +24,12 @@ const tmp = () => {
   dirs.push(d);
   return join(d, "db.sqlite");
 };
-const open = async (path: string) => {
+// The staged walk off unless asked for: most tests look at the rows a push and its writes make.
+const open = async (path: string, stagedWalk = false) => {
   const e = await new Engine(defineSchema({}), new SqlitePersistence(path, { durable: true }), {
     storedSchema: true,
     indexBackfill: { chunkRate: null },
+    stagedWalk,
   }).init();
   engines.push(e);
   return e;
@@ -320,6 +322,87 @@ describe("writes checked against staged validators, as Convex's (900fe2c, STUDY-
     await e.mutation((db) => db.insert("t", { a: "x" } as never));
     const again = Object.fromEntries((await rows(e)).map((r) => [r.schemaId === p.schemaId ? "pending" : "active", r]));
     expect(again.active!.state.state).toBe("failed");
+  });
+});
+
+describe("the staged walk in the background, as Convex's (e049178, STUDY-106 §7.3)", () => {
+  // The case seen on Convex's binary (02fe59b): a table walked to valid, one failed at its bad document, one the
+  // shape proves (valid, no walk), one empty.
+  const before = defineSchema({ t: defineTable(v.any()), u: defineTable(v.any()), w: defineTable(v.any()) });
+  const after = defineSchema({
+    t: defineTable(v.any()).staged({ a: v.union(v.literal(0), v.literal(1)) }),
+    u: defineTable(v.any()).staged({ a: v.number(), s: v.string() }),
+    w: defineTable(v.any()).staged({ a: v.number() }),
+    n: defineTable(v.any()).staged({ q: v.string() }),
+  });
+  const fill = async (e: Engine) => {
+    let bad = "";
+    await e.mutation(async (db) => {
+      for (let i = 0; i < 30; i++) await db.insert("t", { a: i % 2 });
+      for (let i = 0; i < 29; i++) await db.insert("u", { a: i, s: "x" });
+      bad = await db.insert("u", { a: "bad", s: "x" });
+      for (let i = 0; i < 30; i++) await db.insert("w", { a: i });
+    });
+    await e.summariesReady();
+    return bad;
+  };
+  const byTable = async (e: Engine) => Object.fromEntries((await rows(e)).map((r) => [r.tableName, r]));
+
+  test("walked to valid, failed at the first bad document, proven by the shape, empty: as on Convex's binary", async () => {
+    const e = await open(tmp(), true);
+    await push(e, before);
+    const bad = await fill(e);
+    await push(e, after);
+    await e.stagedWalkIdle();
+    const r = await byTable(e);
+    expect(r.t).toMatchObject({ state: { state: "valid" }, numDocsValidated: 30n, totalDocs: 30n });
+    expect(r.u!.state).toEqual({
+      state: "failed",
+      error: `Document with ID "${bad}" in table "u" does not match the schema: Value does not match validator.\nPath: .a\nValue: "bad"\nValidator: v.float64()`,
+    });
+    expect(r.w).toMatchObject({ state: { state: "valid" }, numDocsValidated: 0n, totalDocs: null });
+    expect(r.n).toMatchObject({ state: { state: "valid" }, numDocsValidated: 0n, totalDocs: null });
+    // The schema itself is never touched.
+    expect((await e.schemaPushStatus((await rows(e))[0]!.schemaId)).type).toBe("complete");
+  });
+
+  test("rows left pending are walked after a restart; a pushed schema still in progress has its rows walked too", async () => {
+    const path = tmp();
+    const a = await open(path);
+    await push(a, before);
+    await fill(a);
+    await push(a, after);
+    expect(Object.values(await byTable(a)).map((r) => r.state.state)).toEqual([
+      "pending",
+      "pending",
+      "pending",
+      "pending",
+    ]);
+    await a.close();
+    engines.splice(engines.indexOf(a), 1);
+    const b = await open(path, true);
+    await b.stagedWalkIdle();
+    expect(Object.fromEntries(Object.entries(await byTable(b)).map(([t, r]) => [t, r.state.state]))).toEqual({
+      t: "valid",
+      u: "failed",
+      w: "valid",
+      n: "valid",
+    });
+    // In progress (held back by an index building): its own rows are walked while it waits. `u` failed under the
+    // active schema, so nothing is carried over: only the walk can make the corrected validator's row valid.
+    await b.mutation(async (db) => {
+      for (let i = 0; i < 2000; i++) await db.insert("u", { a: i, s: "x" });
+    });
+    const p = await b.startSchemaPush(
+      defineSchema({
+        u: defineTable(v.any())
+          .staged({ a: v.union(v.number(), v.string()), s: v.string() })
+          .index("by_a", ["a"]),
+      }),
+    );
+    expect((await b.schemaPushStatus(p.schemaId)).type).toBe("inProgress");
+    await b.stagedWalkIdle();
+    expect((await rows(b)).find((r) => r.schemaId === p.schemaId)?.state).toEqual({ state: "valid" });
   });
 });
 
