@@ -1,72 +1,21 @@
-// MySQL's document encodings (STUDY-133 Q4, DV-414): v1 documents the Convex binary wrote decode, and bunvex's
-// own v1 and v0 round-trip; the LZ4 block codec reads what it writes for any input.
+// MySQL's document encoding (STUDY-139 P5, DV-443): the JSON text (Convex's v0), `null` for a deleted version.
+// Convex's v1 (an LZ4 block over the sort key) is neither read nor written: such a document is refused with a
+// message that says the store came from another binary.
 import { expect, test } from "bun:test";
-import { compress, decompress } from "../src/lz4.ts";
-import { documentEncodingFromEnv } from "../src/mysql.ts";
-import { decodeDocument, encodeV0, encodeV1 } from "../src/mysql-documents.ts";
+import { decodeDocument, encodeDocument } from "../src/mysql-documents.ts";
 
-const CONVEX_V1 = (await Bun.file(`${import.meta.dir}/fixtures/mysql-v1-documents.json`).json()) as {
-  hex: string;
-  json: string;
-}[];
-
-test("v1 documents the Convex binary wrote decode", () => {
-  for (const d of CONVEX_V1) {
-    const bytes = new Uint8Array(Buffer.from(d.hex, "hex"));
-    expect(bytes[0]).toBe(1);
-    const json = decodeDocument(bytes)!;
-    expect(json).toBe(d.json);
-    const doc = JSON.parse(json);
-    expect(typeof doc._id).toBe("string");
-    expect(typeof doc._creationTime).toBe("number");
+test("a document round-trips as its JSON text; a deleted version is `null`", () => {
+  for (const json of ['{"_id":"x","_creationTime":1,"a":{"$integer":"AQAAAAAAAAA="}}', "{}", '{"s":"é\\u0000"}']) {
+    expect(Buffer.from(encodeDocument(json)).toString()).toBe(json);
+    expect(decodeDocument(encodeDocument(json))).toBe(json);
   }
+  expect(Buffer.from(encodeDocument(null)).toString()).toBe("null");
+  expect(decodeDocument(encodeDocument(null))).toBeNull();
 });
 
-test("bunvex's v1 and v0 round-trip, and a deleted version is empty (v1) or `null` (v0)", () => {
-  for (const d of CONVEX_V1) {
-    expect(decodeDocument(encodeV1(d.json))).toBe(d.json);
-    expect(decodeDocument(encodeV0(d.json))).toBe(d.json);
-  }
-  expect(encodeV1(null).length).toBe(0);
-  expect(decodeDocument(new Uint8Array(0))).toBeNull();
-  expect(Buffer.from(encodeV0(null)).toString()).toBe("null");
-  expect(decodeDocument(encodeV0(null))).toBeNull();
-});
-
-test("the LZ4 block codec round-trips with a dictionary, compressible or not", () => {
-  const dict = new TextEncoder().encode("dictionary words _id _creationTime");
-  const inputs = [
-    new Uint8Array(0),
-    new Uint8Array(5).fill(7),
-    new TextEncoder().encode("_id _creationTime dictionary words, ".repeat(200)),
-    crypto.getRandomValues(new Uint8Array(70_000)),
-    new Uint8Array(70_000).fill(1),
-  ];
-  for (const input of inputs) {
-    const block = compress(input, dict);
-    expect(Buffer.from(decompress(block, input.length, dict))).toEqual(Buffer.from(input));
-  }
-  // A block that does not decode to the declared size is refused.
-  const block = compress(inputs[2]!, dict);
-  let err: unknown = null;
-  try {
-    decompress(block, inputs[2]!.length + 1, dict);
-  } catch (e) {
-    err = e;
-  }
-  expect(err).not.toBeNull();
-});
-
-test("MYSQL_DOCUMENT_ENCODING: unset or empty is 0 (bunvex's default, DV-414), 0 and 1 as given, else refused", () => {
-  expect(documentEncodingFromEnv(undefined)).toBe(0);
-  expect(documentEncodingFromEnv("")).toBe(0);
-  expect(documentEncodingFromEnv("0")).toBe(0);
-  expect(documentEncodingFromEnv("1")).toBe(1);
-  let err: unknown = null;
-  try {
-    documentEncodingFromEnv("2");
-  } catch (e) {
-    err = e;
-  }
-  expect(String(err)).toContain("Unknown encoding version 2");
+test("a v1 document (the Convex binary's default) is refused, naming the way out", () => {
+  // v1's header: 0x01, the sort key's length (u32), then the LZ4 block; a deleted v1 version is empty.
+  for (const bytes of [new Uint8Array([0x01, 0, 0, 0, 3, 0x30, 0x15, 0]), new Uint8Array(0)])
+    expect(() => decodeDocument(bytes)).toThrow("export its data and import it");
+  expect(() => decodeDocument(new Uint8Array([0x02]))).toThrow("unknown document encoding (first byte 2)");
 });

@@ -27,9 +27,9 @@ Two logical collections, Convex's shape:
   as 22-character base64url strings. `id` is the document's **internal id** (the same 22-character form; the
   developer id `_id` is the engine's, `internalIdOf` maps it), never the developer id. A driver in Convex's
   layout stores ids as their 16 bytes (SQLite `BLOB`, Postgres `BYTEA`, MySQL `BINARY(16)`; STUDY-133 PRs 4–6).
-  `json` is a document, a JSON object in Convex's internal form. A store may give it back re-serialized: MySQL
-  with Convex's v1 encoding (`MYSQL_DOCUMENT_ENCODING=1`: the document's sort key in an LZ4 block, DV-414) gives
-  its fields back in sorted order and its numbers as JSON writes them. The value is the same; the text need not be. `prev_ts` is the ts of the
+  `json` is a document, a JSON object in Convex's internal form. A store may give it back re-serialized; the
+  value is the same, the text need not be. (MySQL stores the JSON text: Convex's v1 encoding, a sort key in an
+  LZ4 block, is not carried, STUDY-139 P5, DV-443.) `prev_ts` is the ts of the
   version this one replaces, null for a new document: the committer sets it (Convex's `committer.rs`), the store
   keeps it as written and returns it in the document log (C12). Every version of every document, never updated
   in place.

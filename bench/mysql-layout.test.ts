@@ -1,5 +1,5 @@
-// MySQL in Convex's v5 layout (STUDY-133 PR 6, §1.7): the schema, the bytes of every column, the v1 and v0
-// document encodings, the key split and Convex's lease. Runs only when MYSQL_URL is set (an EMPTY scratch
+// MySQL in Convex's v5 layout (STUDY-133 PR 6, §1.7): the schema, the bytes of every column, the documents as
+// their JSON text (Convex's v0; its v1 is not read, STUDY-139 P5, DV-443), the key split and Convex's lease. Runs only when MYSQL_URL is set (an EMPTY scratch
 // database: its tables are dropped), e.g.
 //   docker exec s133-my mysql -uroot -pbunvex -e "create database bunvex_t"
 //   MYSQL_URL=mysql://root:bunvex@127.0.0.1:53306/bunvex_t DO_NOT_REQUIRE_SSL=1 bun test bench/mysql-layout.test.ts
@@ -45,8 +45,7 @@ describe.if(!!MYSQL_URL)("MySQL in Convex's v5 layout (MYSQL_URL)", () => {
     const { create: _, ...rest } = await Bun.file(FIXTURE).json();
     return rest;
   };
-  // v1 unless a test says otherwise: these tests check v1's bytes (the default, v0, has its own test).
-  const open = (documentEncoding: 0 | 1 = 1) => MysqlPersistence.open(MYSQL_URL!, 4, { ...tls(), documentEncoding });
+  const open = () => MysqlPersistence.open(MYSQL_URL!, 4, tls());
   const engines: Engine[] = [];
   beforeEach(async () => {
     admin ??= await mysql.createConnection(MYSQL_URL!);
@@ -65,7 +64,7 @@ describe.if(!!MYSQL_URL)("MySQL in Convex's v5 layout (MYSQL_URL)", () => {
     expect(JSON.parse(JSON.stringify(await schemaOf()))).toEqual(await reference());
   });
 
-  test("ids are 16 bytes, documents are v1, a delete is empty, key_sha256 hashes the whole key", async () => {
+  test("ids are 16 bytes, documents are their JSON text, a delete is `null`, key_sha256 hashes the whole key", async () => {
     const schema = defineSchema({ items: defineTable({ s: v.string(), n: v.number() }).index("by_s", ["s"]) });
     const e = await new Engine(schema, await open()).init();
     engines.push(e);
@@ -84,7 +83,7 @@ describe.if(!!MYSQL_URL)("MySQL in Convex's v5 layout (MYSQL_URL)", () => {
     for (const d of docs) {
       expect(d.id.length).toBe(16);
       expect(internalIdString(d.table_id)).toBe(table.id);
-      if (!d.deleted) expect(d.json_value[0]).toBe(0x01); // v1
+      if (!d.deleted) expect(d.json_value[0]).toBe(0x7b); // the JSON text
     }
     const live = docs.filter((d) => !d.deleted).map((d) => ({ d, doc: JSON.parse(decodeDocument(d.json_value)!) }));
     const aId = internalIdString(live.find((x) => x.doc._id === a)!.d.id);
@@ -92,7 +91,7 @@ describe.if(!!MYSQL_URL)("MySQL in Convex's v5 layout (MYSQL_URL)", () => {
     const patched = live.find((x) => internalIdString(x.d.id) === aId && x.d.prev_ts !== null)!;
     expect(patched.doc).toMatchObject({ _id: a, s: "a", n: 3 });
     const deleted = docs.find((d) => internalIdString(d.id) === bId && d.deleted)!;
-    expect(deleted.json_value.length).toBe(0);
+    expect(Buffer.from(deleted.json_value).toString()).toBe("null");
     const rows = await q(
       `select key_prefix, key_suffix, key_sha256, deleted, table_id, document_id from indexes where index_id = ?`,
       [Buffer.from(byS.id, "base64url")],
@@ -121,39 +120,6 @@ describe.if(!!MYSQL_URL)("MySQL in Convex's v5 layout (MYSQL_URL)", () => {
       ).length,
     ).toBe(0);
     expect((await e.query((db) => db.query("items").withIndex("by_s").collect())).map((d) => d.n)).toEqual([3]);
-  });
-
-  test("by default (no MYSQL_DOCUMENT_ENCODING) documents are written as v0, the JSON text (DV-414)", async () => {
-    const saved = process.env.MYSQL_DOCUMENT_ENCODING;
-    delete process.env.MYSQL_DOCUMENT_ENCODING;
-    try {
-      const schema = defineSchema({ items: defineTable({ n: v.number() }) });
-      const e = await new Engine(schema, await MysqlPersistence.open(MYSQL_URL!, 4, tls())).init();
-      engines.push(e);
-      await e.mutation((db) => db.insert("items", { n: 7 }));
-      const rows = await q("select json_value from documents");
-      expect(rows.length).toBeGreaterThan(0);
-      expect(rows.every((r) => [0x7b, 0x6e].includes(Buffer.from(r.json_value)[0]!))).toBe(true);
-    } finally {
-      if (saved !== undefined) process.env.MYSQL_DOCUMENT_ENCODING = saved;
-    }
-  });
-
-  test("v0 documents (JSON text, `null` when deleted) read back, mixed with v1", async () => {
-    const schema = defineSchema({ items: defineTable({ n: v.number() }).index("by_n", ["n"]) });
-    let e = await new Engine(schema, await open(0)).init();
-    const a = (await e.mutation((db) => db.insert("items", { n: 1 }))) as string;
-    const b = (await e.mutation((db) => db.insert("items", { n: 2 }))) as string;
-    await e.mutation((db) => db.delete(b));
-    await e.close();
-    const v0 = await q(`select json_value, deleted from documents where json_value like '{%' or json_value = 'null'`);
-    expect(v0.some((r) => Buffer.from(r.json_value).toString() === "null" && r.deleted)).toBe(true);
-    e = await new Engine(schema, await open(1)).init();
-    engines.push(e);
-    await e.mutation((db) => db.patch(a, { n: 5 }));
-    await e.mutation((db) => db.insert("items", { n: 6 }));
-    expect((await e.query((db) => db.query("items").withIndex("by_n").collect())).map((d) => d.n)).toEqual([5, 6]);
-    expect(((await e.query((db) => db.get(a))) as unknown as { n: number }).n).toBe(5);
   });
 
   test("a store made from the reference statements (Convex's DDL, no rows) opens and works", async () => {

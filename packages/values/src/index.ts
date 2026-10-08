@@ -17,7 +17,7 @@ export { BunvexError, isBunvexError } from "./errors.ts";
 export { formatExportFloat, fromExportJson, toExportJson } from "./export-json.ts";
 export { type DecodedId, decodeId, encodeId, IdDecodeError, idTableNumber } from "./id.ts";
 export { jsonText } from "./json-text.ts";
-export { keyBytesLength, keyToValues, sortKeyToJsonText, sortKeyToValue, valuesToKey } from "./sorting.ts";
+export { keyBytesLength, keyToValues, sortKeyToValue, valuesToKey } from "./sorting.ts";
 export {
   hasLoneSurrogate,
   jsonSurrogateError,

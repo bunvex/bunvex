@@ -2,10 +2,9 @@
 // `read_only` and `persistence_globals`, created with Convex's own statements, so a store either system wrote
 // opens in the other. Ids, tablets and index ids are BINARY(16); index keys are split as Convex's: `key_prefix`
 // (the first 2500 bytes, which fit InnoDB's 3072-byte key limit), `key_suffix` (the rest) and `key_sha256` (the
-// SHA-256 of the whole key), so a key of any length fits (split.ts). A document version is stored as v0 (its JSON) by
-// default, or in Convex's v1 encoding (its sort key in an LZ4 block, mysql-documents.ts) with
-// MYSQL_DOCUMENT_ENCODING=1 (DV-414); both are read. The native
-// driver `mysql2` is an optional peer.
+// SHA-256 of the whole key), so a key of any length fits (split.ts). A document version is stored as its JSON text
+// (Convex's v0; its v1 is neither read nor written, mysql-documents.ts, DV-443). The native driver `mysql2` is an
+// optional peer.
 //
 // Single writer (PERSIST-01 C7), as Convex's lease (DV-413, reversing DV-14 here): one `leases` row whose `ts`
 // is its holder's start, in wall-clock nanoseconds. A start takes it at once if its ts is newer (the newest
@@ -79,25 +78,12 @@ import {
   withTimeout,
 } from "@bunvex/core/persistence";
 import type * as mysqlDriver from "mysql2/promise";
-import { decodeDocument, encodeV0, encodeV1 } from "./mysql-documents.ts";
+import { decodeDocument, encodeDocument } from "./mysql-documents.ts";
 
 export { decodeDocument } from "./mysql-documents.ts";
 
 import { loadPeer } from "./peer.ts";
 import { explainTlsError, mysqlTls, type TlsOptions } from "./tls.ts";
-
-/**
- * The encoding new document versions are written in, Convex's `MYSQL_DOCUMENT_ENCODING` knob: 0 (v0, the JSON
- * text) or 1 (v1, LZ4 over the sort key). Both are always read. **Decided divergence (owner, 2026-10-07, DV-414):**
- * bunvex's default is 0, Convex's 1. In Rust a sort key decodes as fast as JSON; here it replaces the native
- * `JSON.parse` with a TypeScript decoder, slower even optimized, and v1 saves only storage. Convex reads v0, so
- * stores still cross-open both ways; setting the knob to 1 gives Convex's behaviour.
- */
-export function documentEncodingFromEnv(raw = process.env.MYSQL_DOCUMENT_ENCODING): 0 | 1 {
-  if (raw === undefined || raw === "") return 0;
-  if (raw === "0" || raw === "1") return Number(raw) as 0 | 1;
-  throw new Error(`Unknown encoding version ${raw}: MYSQL_DOCUMENT_ENCODING is 0 (JSON) or 1 (LZ4)`);
-}
 
 // id, ts, table_id, json_value, deleted, prev_ts — Convex's column order.
 type DocRow = [Buffer, bigint, Buffer, Buffer, boolean, bigint | null];
@@ -114,8 +100,7 @@ type Conn = mysqlDriver.PoolConnection;
 const bin = (id: string) => Buffer.from(internalIdBytes(id));
 /** A BINARY(16) id read back: its internal id string. */
 const idOf = (b: Uint8Array) => internalIdString(b);
-const encodeDoc = (json: string | null, encoding: 0 | 1) =>
-  Buffer.from(encoding === 1 ? encodeV1(json) : encodeV0(json));
+const encodeDoc = (json: string | null) => Buffer.from(encodeDocument(json));
 const docOf = (b: Uint8Array) => decodeDocument(b);
 
 /** Destroy a connection: out of the pool, and its socket closed at once (a frozen server never answers a
@@ -257,8 +242,6 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
     private pool: mysqlDriver.Pool,
     /** The client-side timeout of one round trip (STUDY-25 L3). */
     private timeoutMs: number,
-    /** The encoding new document versions are written in (`documentEncodingFromEnv`). */
-    readonly documentEncoding: 0 | 1,
   ) {}
 
   /**
@@ -269,16 +252,8 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
    * `timeoutMs` (default 19 000, Convex's `MYSQL_TIMEOUT_SECONDS`): how long one round trip to the database
    * (a statement, BEGIN, COMMIT, getting a connection) may take before the call fails with
    * `DatabaseTimeoutError` and its connection is destroyed (STUDY-25 L3). 0 disables it.
-   *
-   * `documentEncoding`: the encoding new document versions are written in; by default `MYSQL_DOCUMENT_ENCODING`,
-   * else 0 (DV-414).
    */
-  static async open(
-    url: string,
-    pool = 16,
-    opts: OpenOptions & TlsOptions & { timeoutMs?: number; documentEncoding?: 0 | 1 } = {},
-  ) {
-    const documentEncoding = opts.documentEncoding ?? documentEncodingFromEnv();
+  static async open(url: string, pool = 16, opts: OpenOptions & TlsOptions & { timeoutMs?: number } = {}) {
     const mysql = await loadPeer<typeof mysqlDriver>("mysql2/promise", "mysql2");
     const { uri, ssl } = mysqlTls(url, opts);
     const timeoutMs = opts.timeoutMs ?? 19_000;
@@ -292,7 +267,7 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
       bigNumberStrings: true,
       ...(timeoutMs > 0 && timeoutMs < Infinity ? { connectTimeout: timeoutMs } : {}),
     });
-    const store = new MysqlPersistence(p, timeoutMs, documentEncoding);
+    const store = new MysqlPersistence(p, timeoutMs);
     try {
       await store.bootstrap(opts);
     } catch (e) {
@@ -489,15 +464,7 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
 
   apply(ts: bigint, docs: DocWrite[], idx: IndexWrite[]) {
     this.top = ts;
-    for (const d of docs)
-      this.docs.push([
-        bin(d.id),
-        ts,
-        bin(d.table),
-        encodeDoc(d.json, this.documentEncoding),
-        d.json === null,
-        d.prevTs,
-      ]);
+    for (const d of docs) this.docs.push([bin(d.id), ts, bin(d.table), encodeDoc(d.json), d.json === null, d.prevTs]);
     for (const e of idx) this.idx.push(indexRow(e, ts));
   }
 
