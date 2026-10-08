@@ -1,5 +1,7 @@
 # bunvex
 
+> **Experimental — changes constantly, not for production. For real projects, use [Convex](https://convex.dev).** See [the warning below](#status).
+
 A [Convex](https://convex.dev)-style reactive backend written in TypeScript for [Bun](https://bun.sh), with
 **its own database engine** on top of a pluggable persistence layer.
 
@@ -11,11 +13,23 @@ A [Convex](https://convex.dev)-style reactive backend written in TypeScript for 
   versioned store: **memory + log**, **SQLite** (built in), **Postgres**, **MySQL**, **MongoDB**. Each
   driver must pass a public conformance suite, so you can write your own.
 
-> **Status: pre-alpha.** The engine, the persistence drivers, the server (HTTP API, WebSocket sync,
-> validation, auth, the scheduler and crons, file storage, HTTP actions), the client SDK with its React and
-> Next.js bindings, and the CLI work; the hot paths are benchmarked. Components, built-in authentication and
-> the dashboard on a real deployment are still to come. See [ARCHITECTURE.md](ARCHITECTURE.md) and
-> [docs/parity/](docs/parity/README.md) for what exists and what is planned. Not for production yet.
+## Status
+
+> [!WARNING]
+> **bunvex is an experimental project. Do not use it for anything that matters.**
+>
+> - It changes all the time: APIs, storage formats, wire protocol and behaviour can break between any two
+>   commits, with no migration path and no deprecation period.
+> - It is not supported, not audited and not run in production by anyone. Data loss and security bugs are
+>   possible.
+> - **For a real or professional project, use [Convex](https://convex.dev)**: the original, maintained,
+>   supported product that bunvex studies and imitates.
+
+**Status: pre-alpha.** The engine, the persistence drivers, the server (HTTP API, WebSocket sync,
+validation, auth, the scheduler and crons, file storage, HTTP actions), the client SDK with its React and
+Next.js bindings, and the CLI work; the hot paths are benchmarked. Components, built-in authentication and
+the dashboard on a real deployment are still to come. See [ARCHITECTURE.md](ARCHITECTURE.md) and
+[docs/parity/](docs/parity/README.md) for what exists and what is planned.
 
 ## Numbers
 
