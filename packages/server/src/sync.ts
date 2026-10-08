@@ -972,13 +972,12 @@ export class SyncSession {
   }
 
   /** Whether this client takes `TransitionChunk`s: set by the server from the client's version (DV-10). */
-  transitionChunks = false;
 
   private sendTransition(json: string) {
     if (this.closed || !this.ws) return;
     // A transition's size is its whole message's, before it is chunked (Convex measures it in the worker).
     this.hub.deps.metrics?.transitionMessageSize.observe(Buffer.byteLength(json));
-    const frames = transitionFrames(json, this.transitionChunks);
+    const frames = transitionFrames(json);
     for (let i = 0; i < frames.length; i++) this.write(frames[i]!, i === frames.length - 1);
   }
 
@@ -1781,31 +1780,13 @@ function wireSize(frame: string): number {
 
 /** Convex's MAX_MESSAGE_SIZE: a larger transition goes as chunks of this many bytes (DV-10). */
 export const MAX_TRANSITION_MESSAGE_BYTES = 5_000_000;
-/** Convex's MIN_NPM_VERSION_FOR_TRANSITION_CHUNKS: older clients get every transition whole. */
-export const MIN_CLIENT_VERSION_FOR_TRANSITION_CHUNKS = "1.28.0";
-
 /**
- * Whether a sync client takes `TransitionChunk`s (Convex's `new_sync_worker_config`): an npm client — its
- * version in the client header (`npm-<version>`), else in the URL (`/api/<version>/sync`) — at least 1.28.0.
+ * A transition's frames (Convex's `maybe_split_transition`): itself, or — over MAX_TRANSITION_MESSAGE_BYTES — its
+ * JSON cut into chunks of at most that many bytes on UTF-8 character boundaries, numbered from 0, sharing an id
+ * (the JSON's length in bytes, as Convex's). Every client bunvex supports takes chunks: Convex sends them only
+ * from npm 1.28.0, a gate for its older clients bunvex does not carry (STUDY-139 P3, DV-442).
  */
-export function supportsTransitionChunks(clientHeader: string | null, path: string): boolean {
-  let version: string | undefined;
-  if (clientHeader !== null) {
-    const m = /^npm-(.+)$/.exec(clientHeader);
-    if (!m) return false;
-    version = m[1];
-  } else version = /^\/api\/([^/]+)\/sync$/.exec(path)?.[1];
-  if (!version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) return false;
-  return Bun.semver.order(version, MIN_CLIENT_VERSION_FOR_TRANSITION_CHUNKS) >= 0;
-}
-
-/**
- * A transition's frames (Convex's `maybe_split_transition`): itself, or — over MAX_TRANSITION_MESSAGE_BYTES
- * for a client that takes them — its JSON cut into chunks of at most that many bytes on UTF-8 character
- * boundaries, numbered from 0, sharing an id (the JSON's length in bytes, as Convex's).
- */
-export function transitionFrames(json: string, chunks: boolean): string[] {
-  if (!chunks) return [json];
+export function transitionFrames(json: string): string[] {
   const bytes = Buffer.from(json);
   if (bytes.length <= MAX_TRANSITION_MESSAGE_BYTES) return [json];
   const parts: string[] = [];

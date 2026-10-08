@@ -1,13 +1,13 @@
-// Transitions over 5 MB as `TransitionChunk`s (DV-10), as Convex's `maybe_split_transition`: only for npm
-// clients from 1.28.0 (the client header, else the version in the sync URL), cut on UTF-8 boundaries,
-// numbered from 0, the JSON's byte length as their id; smaller transitions and older clients get them whole.
+// Transitions over 5 MB as `TransitionChunk`s (DV-10), as Convex's `maybe_split_transition`: cut on UTF-8
+// boundaries, numbered from 0, the JSON's byte length as their id; smaller transitions whole. Every client gets
+// them: Convex's gate for its npm clients before 1.28.0 is not carried (STUDY-139 P3, DV-442).
 import { afterEach, expect, test } from "bun:test";
 import { defineSchema, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import type { v1 } from "@bunvex/protocol";
 import { Functions, query } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
-import { MAX_TRANSITION_MESSAGE_BYTES, supportsTransitionChunks, transitionFrames } from "../src/sync.ts";
+import { MAX_TRANSITION_MESSAGE_BYTES, transitionFrames } from "../src/sync.ts";
 import { add, v1Client } from "./v1-client.ts";
 
 const stops: (() => unknown)[] = [];
@@ -15,22 +15,11 @@ afterEach(async () => {
   for (const s of stops.splice(0).reverse()) await s();
 });
 
-test("which clients take chunks: npm from 1.28.0, by the header, else the URL", () => {
-  expect(supportsTransitionChunks(null, "/api/1.28.0/sync")).toBe(true);
-  expect(supportsTransitionChunks(null, "/api/1.46.0/sync")).toBe(true);
-  expect(supportsTransitionChunks(null, "/api/1.27.9/sync")).toBe(false);
-  expect(supportsTransitionChunks(null, "/api/1.28.0-alpha.1/sync")).toBe(false);
-  expect(supportsTransitionChunks(null, "/api/0.0.0/sync")).toBe(false);
-  expect(supportsTransitionChunks(null, "/api/latest/sync")).toBe(false);
-  expect(supportsTransitionChunks("npm-1.30.0", "/api/0.0.0/sync")).toBe(true);
-  expect(supportsTransitionChunks("python-1.30.0", "/api/1.46.0/sync")).toBe(false);
-});
-
 test("the chunks: at most 5 MB each, on character boundaries, numbered, joined back to the transition", () => {
   // Three-byte characters, so a byte cut would land inside one.
   const json = JSON.stringify({ type: "Transition", value: "€".repeat(4_000_000) });
   const bytes = Buffer.byteLength(json);
-  const frames = transitionFrames(json, true).map((f) => JSON.parse(f) as Record<string, unknown>);
+  const frames = transitionFrames(json).map((f) => JSON.parse(f) as Record<string, unknown>);
   expect(frames.length).toBe(Math.ceil(bytes / MAX_TRANSITION_MESSAGE_BYTES));
   for (const [i, f] of frames.entries()) {
     expect(f).toMatchObject({
@@ -43,9 +32,8 @@ test("the chunks: at most 5 MB each, on character boundaries, numbered, joined b
     expect((f.chunk as string).includes("�")).toBe(false);
   }
   expect(frames.map((f) => f.chunk).join("")).toBe(json);
-  // Small, or a client without chunks: whole.
-  expect(transitionFrames('{"type":"Transition"}', true)).toEqual(['{"type":"Transition"}']);
-  expect(transitionFrames(json, false)).toEqual([json]);
+  // Small: whole.
+  expect(transitionFrames('{"type":"Transition"}')).toEqual(['{"type":"Transition"}']);
 });
 
 async function serve() {
@@ -58,7 +46,7 @@ async function serve() {
   return server.port;
 }
 
-test("end to end: a big result reaches a 1.28 client in chunks, an older one whole", async () => {
+test("end to end: a big result reaches every client in chunks, whatever version it announces", async () => {
   const port = await serve();
   const modern = await v1Client(`ws://127.0.0.1:${port}/api/1.46.0/sync`);
   stops.push(() => modern.ws.close());
@@ -74,9 +62,11 @@ test("end to end: a big result reaches a 1.28 client in chunks, an older one who
   };
   expect(joined.type).toBe("Transition");
   expect(joined.modifications[0]!.value.length).toBe(6_000_000);
-  const old = await v1Client(`ws://127.0.0.1:${port}/api/1.27.0/sync`);
-  stops.push(() => old.ws.close());
-  old.modify([add(0, "m:big")]);
-  await old.transition(0);
-  expect(old.got.some((m) => m.type === "TransitionChunk")).toBe(false);
+  // bunvex's own client (0.x) and an old version alike.
+  for (const version of ["0.1.0-alpha.0", "1.27.0"]) {
+    const other = await v1Client(`ws://127.0.0.1:${port}/api/${version}/sync`);
+    stops.push(() => other.ws.close());
+    other.modify([add(0, "m:big")]);
+    await other.until(() => other.got.find((m) => m.type === "TransitionChunk"));
+  }
 });
