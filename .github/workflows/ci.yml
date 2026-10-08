@@ -245,11 +245,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # bunvex needs MongoDB as a replica set (a flush is a transaction; PERSIST-01 C7). A service container
-      # takes no command arguments, so the single-node replica set is started here.
+      # takes no command arguments, so the single-node replica set is started here. The container sometimes
+      # exits right after it starts: it is started again (3 tries), and its log is printed when it stops.
       - name: MongoDB 8, single-node replica set
         run: |
-          docker run -d --name mongo -p 27017:27017 mongo:8 --replSet rs0 --bind_ip_all
-          for i in $(seq 1 60); do docker exec mongo mongosh --quiet --eval 'db.runCommand({ping:1}).ok' && break; sleep 2; done
+          up=false
+          for attempt in 1 2 3; do
+            docker rm -f mongo >/dev/null 2>&1 || true
+            docker run -d --name mongo -p 27017:27017 mongo:8 --replSet rs0 --bind_ip_all
+            for i in $(seq 1 30); do
+              if docker exec mongo mongosh --quiet --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1; then up=true; break; fi
+              if [ "$(docker inspect -f '{{.State.Running}}' mongo)" != true ]; then break; fi
+              sleep 2
+            done
+            if [ "$up" = true ]; then break; fi
+            echo "::warning::MongoDB did not come up (attempt $attempt); its log:"
+            docker logs mongo 2>&1 | tail -n 50
+          done
+          if [ "$up" != true ]; then echo "MongoDB never came up"; exit 1; fi
           docker exec mongo mongosh --quiet --eval 'rs.initiate({_id: "rs0", members: [{_id: 0, host: "127.0.0.1:27017"}]})'
           for i in $(seq 1 60); do docker exec mongo mongosh --quiet --eval 'db.hello().isWritablePrimary' | grep -q true && break; sleep 1; done
       - uses: actions/checkout@v4
