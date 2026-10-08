@@ -109,8 +109,17 @@ export const send = mutation({
 
 /** README.md "Status" and docs/parity/README.md "Roadmap". */
 export const STATUS = {
-  works: ["The database engine", "Five persistence drivers", "The HTTP API", "WebSocket subscriptions"],
-  next: ["The client SDK", "Validation", "Auth", "The scheduler", "The CLI"],
+  works: [
+    "The database engine",
+    "Five persistence drivers",
+    "The HTTP API and WebSocket sync",
+    "Validation and auth",
+    "The scheduler and crons",
+    "File storage and HTTP actions",
+    "The client SDK, React and Next.js",
+    "The CLI",
+  ],
+  next: ["Components", "Built-in authentication", "The dashboard on a real deployment"],
   phases: [
     { name: "Phase 0", summary: "correctness bugs in what already exists" },
     { name: "Phase 1", summary: "the core behaves like Convex" },
