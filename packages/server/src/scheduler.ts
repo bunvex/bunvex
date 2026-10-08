@@ -143,8 +143,10 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
     // As Convex's `validate_schedule_args`: the positional args, `[args]`, are parsed as a value, so they nest
     // at most 63 levels (STUDY-109); they travel as plain values, so a commit timestamp placeholder cannot
     // (STUDY-53).
-    if (measureRawValue([args]).nesting > MAX_VALUE_NESTING)
-      throw new Error(`Invalid arguments for ${name}: ${TOO_NESTED_MESSAGE}`);
+    const measured = measureRawValue([args]);
+    if (measured.nesting > MAX_VALUE_NESTING) throw new Error(`Invalid arguments for ${name}: ${TOO_NESTED_MESSAGE}`);
+    // An array over 8192 elements or an object over 1024 fields (DV-439).
+    if (measured.tooBig !== undefined) throw new Error(`Invalid arguments for ${name}: ${measured.tooBig}`);
     if (hasCommitTs(args))
       throw new Error(`Invalid arguments for ${name}: Field name $commitTs starts with '$', which is reserved.`);
     return write(async (db) => {

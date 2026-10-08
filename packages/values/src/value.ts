@@ -424,16 +424,24 @@ export function rawValueSize(v: Value | undefined): number {
 export function measureRawValue(
   v: Value | undefined,
   maxNesting = MAX_VALUE_NESTING,
-): { size: number; nesting: number } {
+): { size: number; nesting: number; tooBig?: string } {
   deepest = 0;
   depthCap = maxNesting + 1;
+  tooBig = undefined;
   try {
     const size = sizeOf(v, false, 1);
-    return { size, nesting: deepest };
+    return tooBig === undefined ? { size, nesting: deepest } : { size, nesting: deepest, tooBig };
   } finally {
     depthCap = Number.POSITIVE_INFINITY;
   }
 }
+
+/**
+ * The first array longer than 8192 or object with more than 1024 fields `sizeOf` met, as Convex's message
+ * (`check_array_len`, `check_field_count` in crates/value): recorded once a container's children are walked, as
+ * Convex builds a value from the inside out and stops at the first error.
+ */
+let tooBig: string | undefined;
 
 /** The deepest array or object `sizeOf` reached, and the depth it does not go below (`measureRawValue`). */
 let deepest = 0;
@@ -463,6 +471,8 @@ function sizeOf(v: Value | undefined, strict: boolean, depth: number): number {
     if (depth > deepest && deeper(depth)) return 2;
     let n = 2;
     for (let i = 0; i < v.length; i++) n += sizeOf(v[i], strict, depth + 1);
+    if (v.length > MAX_ARRAY_LEN && tooBig === undefined)
+      tooBig = `Array length is too long (${v.length} > maximum length ${MAX_ARRAY_LEN})`;
     return n;
   }
   if (Object.getPrototypeOf(v) !== Object.prototype) {
@@ -473,10 +483,16 @@ function sizeOf(v: Value | undefined, strict: boolean, depth: number): number {
   if (depth > deepest && deeper(depth)) return 2;
   const o = v as { [k: string]: Value | undefined };
   let n = 2;
+  let fields = 0;
   for (const k of Object.keys(o)) {
     const e = o[k];
-    if (e !== undefined) n += utf8len(k) + 1 + sizeOf(e, strict, depth + 1);
+    if (e !== undefined) {
+      n += utf8len(k) + 1 + sizeOf(e, strict, depth + 1);
+      fields++;
+    }
   }
+  if (fields > MAX_OBJECT_FIELDS && tooBig === undefined)
+    tooBig = `Object has too many fields (${fields} > maximum number ${MAX_OBJECT_FIELDS})`;
   return n;
 }
 
