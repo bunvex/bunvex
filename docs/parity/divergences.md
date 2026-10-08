@@ -422,7 +422,7 @@ classed as bugs by their study; they are listed here because they change what op
 |---|---|---|---|
 | DV-55 | No namespaces (components). (`Backfilled` and staged indexes are built: STUDY-29, #115) | has them | [STUDY-04 D4](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
 | DV-429 | No `_modules` row for the app definition module (`convex.config.js`): bunvex's CLI pushes `definition: null` | stores the app definition the CLI pushes | [STUDY-134 S9](../study/STUDY-134-system-row-shapes.md#4-divergences); waits on components |
-| DV-438 | No `_schema_validations` rows for staged validators; no 400 `StagedSchemaWithEnforcedValidatorChanges` | Both since 2ada334 | owner, 2026-10-08: match (Match in a follow-up, after STUDY-106/127 are updated). [STUDY-137 R4](../study/STUDY-137-convex-reference-2026-10-07.md#4-divergences) |
+| DV-438 | Staged validators are stored but not validated: no `_schema_validations` rows for them, no write checks, no background walk, no 400 `StagedSchemaWithEnforcedValidatorChanges`, no `supersetOfStagedValidated` (and `supersetOfEnforced` is JSON equality, not `is_subset`); every validation row is deleted at a start | 2ada334, 900fe2c, e049178, 7236c10: all of it; no startup reset | owner, 2026-10-08: match the whole feature (STUDY-106 §7.5 order), keeping bunvex's startup reset until writes are checked. [STUDY-106 §7](../study/STUDY-106-staged-validator.md#7-revisit-at-7236c10-2026-10-08-staged-validators-are-validated-dv-438) |
 
 ## Pending owner decisions
 

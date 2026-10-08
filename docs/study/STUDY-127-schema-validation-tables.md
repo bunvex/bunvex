@@ -1,7 +1,7 @@
 # STUDY-127 — `_schema_validations` and `_schema_validation_progress`
 
-- **Status:** implemented
-- **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
+- **Status:** implemented at 4577b9031; **revisited 2026-10-08 (§7)** for staged rows (DV-438, to be built)
+- **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05; origin/main 7236c10, 2026-10-08 (§7)
 - **Related:** [STUDY-35](STUDY-35-push-and-deploy.md) (push, the schema walk), [STUDY-12](STUDY-12-dashboard.md)
   (§14.7, the dashboard's validation progress), [STUDY-52](STUDY-52-shape-inference.md) (the walk's shape
   shortcut, not built)
@@ -131,4 +131,29 @@ Measurement: `bench-walk` (a push validating 20 000 documents, SQLite, median of
 
 ## 6. Open questions
 
-None.
+None at 4577b9031; see §7.
+
+## 7. Revisit at 7236c10 (2026-10-08)
+
+What changed in Convex (details in [STUDY-106 §7](STUDY-106-staged-validator.md#7-revisit-at-7236c10-2026-10-08-staged-validators-are-validated-dv-438)):
+
+- **Two kinds of row in one table**, told apart by `validatorHash`: an enforced walk's row has no such field (it is
+  absent, not `null`); a staged row carries the staged validator's content hash. Still one row per
+  `(schemaId, tableName)` (`insert_validation` refuses a second), which is why the push refuses staging on a table
+  whose enforced change needs a walk.
+- **Every row has one progress document** (`{validationId, numDocsValidated, totalDocs}`), staged rows included,
+  carried over with their counters. The legacy progress shape keyed by `schemaId` is gone (migration 133, 0623ef4,
+  already in bunvex's reference): §1's "a legacy shape … is still read" is stale.
+- **State changes**: the worker's `update_attempt` (`StartWalk` resets progress to 0 with the table's count,
+  `RecordProgress`, `MarkValid`, `MarkFailed`) applies only to a `pending` row and answers whether it did, which is
+  how a walk notices it was canceled; `mark_failed` (writes, table deletion) moves `pending` or `valid` to `failed`
+  and keeps the first error; `start_table_validation(schema, table, hash, total)` replaces a row with a fresh
+  `pending` one.
+- **Lifetimes**: staged rows are created at push, kept through activation (only enforced rows are deleted), deleted
+  with their schema (failed, overwritten). **No startup reset any more** (900fe2c): §1's "After a restart …
+  `reset_for_compatibility`" and §3's "`validatorHash` is never written … would follow Convex's
+  `reset_for_compatibility` rule" are stale. bunvex still deletes every attempt at a start, a short divergence the
+  owner chose to keep until writes are checked against staged validators (DV-438).
+- **Read by**: the dashboard's `getSchemas` `schemaValidationProgress` sums **all** rows of the pending schema, staged
+  ones included (no hash filter); `schemaValidationProgressByTable` (2246557, in bunvex's reference) gives them per
+  table — bunvex has no such query yet, a gap of its own.
