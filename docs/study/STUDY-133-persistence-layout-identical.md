@@ -2,7 +2,7 @@
 
 - **Status:** accepted (owner, 2026-10-05): the goal, the design and Q1–Q11 decided (§8a); the PR series
   of §7 is being built.
-- **Built so far:** PRs 1–7, 10 and 11 (§11). PR 8 measured first; what is left is §12.
+- **Built so far:** PRs 1–8, 10 and 11 (§11, §12). PR 8 measured the gap first (§12); what is left is §12.2.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend; the binary
   `precompiled-2026-09-28-5c7cb5b/convex-local-backend` for the probes in §1.12.
 - **bunvex code read:** `main` at `64f396f7`.
@@ -971,3 +971,33 @@ replaces it as the list of what is left.
 
 **PR 8 is therefore** M1–M4, M7, M8 and M10–M13. M5 and M6 belong to PR 9. M14 is an owner question. M15 is a
 bug fixed on its own.
+
+### 12.1 As built in PR 8
+
+| # | What changed | Where |
+|---|---|---|
+| M1 | The four tables are created on open, empty, with their numbers (517, 526, 537, 551) and no index but `by_id` / `by_creation_time` | `catalog.ts`, `engine.ts` |
+| M2 | A push leaves the root component's `_component_definitions` row (`path: ""`, `definitionType: {type: "app"}`) and its `_components` row (`parent: null`, `state: "active"`), written once | `code-store.ts` (`ensureRootComponent`) |
+| M3 | The summary checkpoint has an entry for every table: size 0 and shape `Never` for an empty one | `table-summaries.ts`, `table-summary-checkpoint.ts` |
+| M4 | An id that is an identifier is a `StringLiteral` first, as Convex's `StringLiteralShape::shape_of`; literals of one table become `Id` when the union contracts (`id_candidates`). Merging a document's shape costs about 0.2 µs more (2.4 → 2.6 µs, 200k documents) | `shapes.ts` |
+| M7 | `_index_worker_metadata.index_id` is the index's `InternalId`; rows in the old form are still read | `search-segments.ts` |
+| M8 | The argument bytes of jobs and crons are serde_json's text (`3.0`, `1e+21`) through `jsonText`. Documents' JSON is unchanged: see M8b in §12.2 | `json-text.ts`, `cron-rows.ts`, `scheduled-jobs.ts`, `system-functions.ts` |
+| M10 | A zip package (a store Convex deployed to) is read: a central-directory reader for stored and deflated entries (DV-166) | `code-store.ts` (`unzip`) |
+| M12 | A push's audit row carries `udfConfigDiff` (`{previous_version, next_version}`, `"Unspecified version"` before the first) when the push writes `_udf_config`; database index fields end with `_creationTime`, as Convex's CLI prints them | `code-store.ts`, `push.ts`, `push-audit.ts` |
+| M13 | A table with no document gets no validation attempt: Convex's empty shape fits any validator, so it writes none | `engine.ts` (`validateExisting`) |
+
+### 12.2 Still open
+
+- **M5, M6:** PR 9, with the cross-open tests (Q11).
+- **M8b (owner question, DV-440):** Convex writes a float64 integer in a document's JSON as `2.0`; bunvex
+  writes `2`. Both read the other's documents (a `2` reads back as float64 when the field is not an int64,
+  which has its own `$integer` encoding), so nothing fails. Matching costs a text encoder in place of
+  `JSON.stringify` for every written document: measured about 3–5 µs a document against 0.6–0.9 µs, which is
+  about 7 % fewer inserts per second on the memory store and 13 % fewer on SQLite. Recommendation: keep `2`.
+- **M11:** its own PR. Convex caps the document retention window by the persisted index cursor, deletes up to
+  `min − 1` and leaves `confirmed_deleted_ts` there; bunvex's globals follow its own windows. Changing them
+  touches every retention test, so it is not mixed into PR 8.
+- **M14 (owner question, DV-441):** a stored `Blob` with `type: "text/plain"` gets the content type
+  `text/plain;charset=utf-8` (Bun's `Blob` adds the charset). Convex keeps the type as given. Recommendation:
+  match (store the type the app gave).
+- **M15:** a bug fixed on its own: the committer may still flush after SIGTERM released the SQLite lock.

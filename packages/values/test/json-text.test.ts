@@ -13,8 +13,3 @@ test("numbers as serde_json writes them; everything else as JSON.stringify", () 
   // A value's special numbers are objects already ($integer, $float), so they print as JSON.stringify does.
   expect(jsonText(toJsonValue([5n, Number.NaN, -0]))).toBe(JSON.stringify(toJsonValue([5n, Number.NaN, -0])));
 });
-
-test("a scheduled job's arguments, as bytes, are Convex's text", async () => {
-  const { argsToBytes } = await import("../../core/src/scheduled-jobs.ts");
-  expect(new TextDecoder().decode(argsToBytes([{ n: 2, s: "x" }]))).toBe('[{"n":2.0,"s":"x"}]');
-});

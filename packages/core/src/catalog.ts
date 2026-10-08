@@ -85,7 +85,7 @@ export const USAGE_LIMITS_TABLE = "_usage_limits";
  * Convex's system tables bunvex keeps empty (STUDY-133 §12 M1): Convex creates them on every start, so a
  * store has them on both sides; their documents are its cloud's.
  */
-export const EMPTY_CONVEX_SYSTEM_TABLES = [
+export const EMPTY_CLOUD_SYSTEM_TABLES = [
   "_external_deps_packages",
   "_audit_log_config",
   "_aws_lambda_versions",
@@ -210,8 +210,8 @@ export const SYSTEM_TABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   _component_definitions: "The deployment's component definitions (only the root app's).",
   _auth: "The deployed auth providers, one document per provider.",
   _db: "The database globals: the data version and the storage type pinned at the first start.",
-  _backend_info: "The cloud deployment's plan and limits (empty here; Convex's cloud fills it).",
-  _aws_lambda_versions: "Convex cloud's Node.js action runtime versions (empty here).",
+  _backend_info: "The cloud deployment's plan and limits (empty here; the cloud fills it).",
+  _aws_lambda_versions: "The cloud's Node.js action runtime versions (empty here).",
   _external_deps_packages: "Packages installed for Node.js actions' external dependencies (empty here).",
   _audit_log_config: "The cloud audit log's settings (empty here).",
   _instance: "The deployment's own settings, such as the generated instance secret.",
