@@ -703,9 +703,11 @@ export class Committer {
     const batch = accepted.slice(from, to);
     this.visibleTs = batch[batch.length - 1][1].ts;
     const entries = batch.map(([, e]) => e);
-    // Published: its bytes count against the write throughput limit (Convex's `SnapshotManager::push`).
+    // Published: its bytes and rows count against the write throughput limit (Convex's `SnapshotManager::push`).
     const wt = this.writeThroughput;
-    if (wt) for (const [p, e] of batch) wt.record(e.ts, p.bytes ?? commitWriteBytes(p.docs, p.idx));
+    if (wt)
+      for (const [p, e] of batch)
+        wt.record(e.ts, p.bytes ?? commitWriteBytes(p.docs, p.idx), p.docs.length + p.idx.length);
     // A hook or listener that throws is a bug of bunvex, not a persistence failure: the batch is durable and
     // visible, so its commits are answered as committed, but the committer stops (fail-stop) and says which.
     let i = -1; // -1: the commits' `onVisible` hooks, else the listener at i

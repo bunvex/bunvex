@@ -1,5 +1,5 @@
-// The write throughput limit (STUDY-78), as Convex's MAX_BYTES_WRITTEN_PER_SECOND (4 MiB per 1 s): every
-// commit counts; an app's mutation checks it before each attempt, is retried within the OCC budget, then
+// The write throughput limit (STUDY-78), as Convex's MAX_BYTES_WRITTEN_PER_SECOND (4 MiB per 1 s) and, since
+// 75d250e, MAX_ROWS_WRITTEN_PER_SECOND (off by default): every commit counts; an app's mutation checks it before each attempt, is retried within the OCC budget, then
 // fails with `TooManyWrites` (HTTP 429, sync close 1013); scheduled mutations and crons wait; imports wait.
 import { afterEach, describe, expect, test } from "bun:test";
 import {
@@ -7,7 +7,6 @@ import {
   defineTable,
   Engine,
   formatByteCount,
-  formatWindow,
   TooManyWritesError,
   WriteThroughputLimiter,
 } from "@bunvex/core";
@@ -72,16 +71,36 @@ describe("the limiter (Convex's write_throughput_limiter tests)", () => {
     expect(l.allows(1000n)).toBe(false);
   });
 
-  test("Convex's defaults and message", () => {
-    const l = new WriteThroughputLimiter();
-    expect([l.maxBytesPerSecond, l.windowMs]).toEqual([4 * 1024 * 1024, 1000]);
-    expect(new TooManyWritesError(4 * 1024 * 1024, 1000).message).toBe(
-      "Too many writes per second. Your deployment is limited to 4 MiB bytes written per 1 second. Reduce your write rate or set MAX_BYTES_WRITTEN_PER_SECOND to raise the limit.",
-    );
-    expect(new TooManyWritesError(1, 1).code).toBe("TooManyWrites");
+  test("rows: off by default, else checked after the bytes (Convex 75d250e)", () => {
+    const off = new WriteThroughputLimiter({ maxBytesPerSecond: 1000, windowMs: 1000 });
+    off.record(0n, 1, 1_000_000);
+    expect(off.exceeded(1000n)).toBe(null);
+    const l = new WriteThroughputLimiter({ maxBytesPerSecond: 1000, maxRowsPerSecond: 10, windowMs: 1000 });
+    l.record(0n, 1, 10);
+    expect(l.exceeded(1000n)).toBe(null); // exactly the limit
+    l.record(2000n, 1, 1);
+    expect(l.exceeded(3000n)).toBe("rows");
+    l.record(4000n, 1000, 0);
+    expect(l.exceeded(5000n)).toBe("bytes"); // both over: the bytes are named
+    expect(l.exceeded(W + 4001n)).toBe(null); // both leave with the window
+    const half = new WriteThroughputLimiter({ maxRowsPerSecond: 10, windowMs: 500 });
+    half.record(0n, 0, 6);
+    expect(half.exceeded(1000n)).toBe("rows");
   });
 
-  test("Convex's format_bytes and format_duration", () => {
+  test("Convex's defaults and messages, per second whatever the window", () => {
+    const l = new WriteThroughputLimiter();
+    expect([l.maxBytesPerSecond, l.maxRowsPerSecond, l.windowMs]).toEqual([4 * 1024 * 1024, 0, 1000]);
+    expect(new WriteThroughputLimiter({ windowMs: 500 }).error("bytes").message).toBe(
+      "Too many writes per second. Your deployment is limited to 4 MiB bytes written per second. Reduce your write rate or set MAX_BYTES_WRITTEN_PER_SECOND to raise the limit.",
+    );
+    expect(new WriteThroughputLimiter({ maxRowsPerSecond: 2000 }).error("rows").message).toBe(
+      "Too many writes per second. Your deployment is limited to 2000 document and index rows written per second. Reduce your write rate, remove unused indexes, or set MAX_ROWS_WRITTEN_PER_SECOND to raise the limit.",
+    );
+    expect(new TooManyWritesError("rows", 1).code).toBe("TooManyWrites");
+  });
+
+  test("Convex's format_bytes", () => {
     expect([0, 1000, 1024, 1534, 4_718_592, 8_388_608, 2 ** 30, 1e9].map(formatByteCount)).toEqual([
       "0 bytes",
       "1 KB",
@@ -92,14 +111,6 @@ describe("the limiter (Convex's write_throughput_limiter tests)", () => {
       "1 GiB",
       "1 GB",
     ]);
-    expect([0, 500, 1000, 1500, 2000, 60_000].map(formatWindow)).toEqual([
-      "0ms",
-      "500ms",
-      "1 second",
-      "1.5 seconds",
-      "2 seconds",
-      "60 seconds",
-    ]);
   });
 });
 
@@ -107,13 +118,22 @@ const SECRET = "57".repeat(32);
 const NAME = "write-throughput-test";
 const KEY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET) });
 
-async function setup(o: { maxBytesPerSecond: number; windowMs: number; backoffMs?: [number, number] }) {
+async function setup(o: {
+  maxBytesPerSecond: number;
+  maxRowsPerSecond?: number;
+  windowMs: number;
+  backoffMs?: [number, number];
+}) {
   const [initial, max] = o.backoffMs ?? [1, 2];
   const engine = await new Engine(
     defineSchema({ items: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
     {
-      writeThroughput: { maxBytesPerSecond: o.maxBytesPerSecond, windowMs: o.windowMs },
+      writeThroughput: {
+        maxBytesPerSecond: o.maxBytesPerSecond,
+        maxRowsPerSecond: o.maxRowsPerSecond,
+        windowMs: o.windowMs,
+      },
       occInitialBackoffMs: initial,
       occMaxBackoffMs: max,
       instanceName: NAME,
@@ -122,6 +142,9 @@ async function setup(o: { maxBytesPerSecond: number; windowMs: number; backoffMs
   ).init();
   const functions = new Functions(engine).register("m", {
     write: mutation(async ({ db }, { bytes }: { bytes: number }) => db.insert("items", { s: "x".repeat(bytes) })),
+    many: mutation(async ({ db }, { n }: { n: number }) => {
+      for (let i = 0; i < n; i++) await db.insert("items", { i });
+    }),
     count: query(async ({ db }) => (await db.query("items").collect()).length),
     later: mutation(({ scheduler }) => scheduler.runAfter(50, "m:write" as never, { bytes: 10 } as never)),
     job: query(async ({ db }, { id }: { id: string }) => db.system.get(id as never)),
@@ -139,11 +162,23 @@ describe("mutations", () => {
     const e = (await functions.runMutation("m:write", { bytes: 1 }).catch((x) => x)) as TooManyWritesError;
     expect(e).toBeInstanceOf(TooManyWritesError);
     expect(e.message).toBe(
-      "Too many writes per second. Your deployment is limited to 100 KB bytes written per 1 second. Reduce your write rate or set MAX_BYTES_WRITTEN_PER_SECOND to raise the limit.",
+      "Too many writes per second. Your deployment is limited to 100 KB bytes written per second. Reduce your write rate or set MAX_BYTES_WRITTEN_PER_SECOND to raise the limit.",
     );
     expect(engine.stats.writeThroughputRetries).toBe(4);
     await fill(10); // not gated
     expect(await functions.runQuery("m:count", {})).toBe(2);
+  });
+
+  test("the rows limit counts every commit's document and index rows (Convex 75d250e)", async () => {
+    const { engine, functions } = await setup({ maxBytesPerSecond: 1e12, maxRowsPerSecond: 1000, windowMs: 1000 });
+    // 400 documents, each with its rows in the by-id and by-creation-time indexes: over 1000 rows.
+    await functions.runMutation("m:many", { n: 400 });
+    const e = (await functions.runMutation("m:write", { bytes: 1 }).catch((x) => x)) as TooManyWritesError;
+    expect(e).toBeInstanceOf(TooManyWritesError);
+    expect(e.message).toBe(
+      "Too many writes per second. Your deployment is limited to 1000 document and index rows written per second. Reduce your write rate, remove unused indexes, or set MAX_ROWS_WRITTEN_PER_SECOND to raise the limit.",
+    );
+    expect(engine.stats.writeThroughputRetries).toBe(4);
   });
 
   test("a refused attempt is retried with backoff and succeeds once the window has passed", async () => {

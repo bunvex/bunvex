@@ -422,10 +422,11 @@ export {
 } from "./virtual-tables.ts";
 export {
   formatByteCount,
-  formatWindow,
   MAX_BYTES_WRITTEN_PER_SECOND,
+  MAX_ROWS_WRITTEN_PER_SECOND,
   TooManyWritesError,
   WRITE_THROUGHPUT_WINDOW_MS,
+  type WriteThroughputLimit,
   WriteThroughputLimiter,
   type WriteThroughputOptions,
 } from "./write-throughput.ts";

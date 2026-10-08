@@ -2,7 +2,9 @@
 // (crates/database/src/write_throughput_limiter.rs, snapshot_manager.rs): every commit's bytes are recorded at
 // its timestamp once it is published, whoever wrote it; before a mutation (or an import step) starts, the
 // bytes committed within the last window are compared with `MAX_BYTES_WRITTEN_PER_SECOND` (4 MiB) × the
-// window (`WRITE_THROUGHPUT_WINDOW`, 1 s). The check does not count the transaction about to run: one large
+// window (`WRITE_THROUGHPUT_WINDOW`, 1 s). Since Convex 75d250e each commit also records its rows (document
+// writes plus index writes), checked against `MAX_ROWS_WRITTEN_PER_SECOND` × the window after the bytes; 0,
+// the default, turns the rows limit off. The check does not count the transaction about to run: one large
 // commit can take the window over the limit, and then the next writers wait.
 
 import { wallClockNs } from "./determinism.ts";
@@ -11,10 +13,14 @@ import { wallClockNs } from "./determinism.ts";
 export const MAX_BYTES_WRITTEN_PER_SECOND = 4 * 1024 * 1024;
 /** Convex's `WRITE_THROUGHPUT_WINDOW` default: 1 s. */
 export const WRITE_THROUGHPUT_WINDOW_MS = 1000;
+/** Convex's `MAX_ROWS_WRITTEN_PER_SECOND` default: 0, no rows limit. */
+export const MAX_ROWS_WRITTEN_PER_SECOND = 0;
 
 export type WriteThroughputOptions = {
   /** Bytes a second (default 4 MiB); `0` refuses every gated write once anything was written. */
   maxBytesPerSecond?: number;
+  /** Document and index rows a second (default 0: no rows limit). */
+  maxRowsPerSecond?: number;
   /** The window, in ms (default 1000). */
   windowMs?: number;
 };
@@ -40,92 +46,121 @@ export function formatByteCount(n: number): string {
   return `${n} bytes`;
 }
 
-/** A duration as Convex's `format_duration` writes it: `1 second`, `2 seconds`, `1.5 seconds`, `500ms`. */
-export function formatWindow(ms: number): string {
-  if (ms === 0) return "0ms";
-  if (ms >= 1000) {
-    if (ms % 1000 === 0) return ms === 1000 ? "1 second" : `${ms / 1000} seconds`;
-    if ((ms * 10) % 1000 === 0) return `${Math.floor(ms / 1000)}.${Math.floor((ms * 10) / 1000) % 10} seconds`;
-  }
-  return `${ms}ms`;
-}
+/** Which limit the writes in the window went over (Convex's `WriteThroughputLimit`). */
+export type WriteThroughputLimit = "bytes" | "rows";
 
 /**
  * Convex's `ErrorMetadata::rate_limited("TooManyWrites", …)`: HTTP 429, and a sync session closes with "try
- * again". Its last sentence (an upgrade offer) is replaced by how to raise the limit here, as for
- * `TooManyConcurrentRequests` (STUDY-68).
+ * again". Both messages name the per-second limit (since Convex 75d250e, whatever the window). Their upgrade
+ * offer is replaced by how to raise the limit here, as for `TooManyConcurrentRequests` (STUDY-68).
  */
 export class TooManyWritesError extends Error {
   override name = "TooManyWritesError";
   readonly code = "TooManyWrites";
-  constructor(maxBytesPerSecond: number, windowMs: number) {
+  constructor(limit: WriteThroughputLimit, maxPerSecond: number) {
     super(
-      `Too many writes per second. Your deployment is limited to ${formatByteCount(maxBytesPerSecond)} bytes written per ${formatWindow(windowMs)}. Reduce your write rate or set MAX_BYTES_WRITTEN_PER_SECOND to raise the limit.`,
+      limit === "bytes"
+        ? `Too many writes per second. Your deployment is limited to ${formatByteCount(maxPerSecond)} bytes written per second. Reduce your write rate or set MAX_BYTES_WRITTEN_PER_SECOND to raise the limit.`
+        : `Too many writes per second. Your deployment is limited to ${maxPerSecond} document and index rows written per second. Reduce your write rate, remove unused indexes, or set MAX_ROWS_WRITTEN_PER_SECOND to raise the limit.`,
     );
   }
 }
 
 /**
- * The sliding window of committed bytes. `record` keeps the commits of the last window (dropping older ones
- * only then, as Convex's); `check` compares the bytes committed within the window before `now`, re-summing
- * only when the running total is over the limit, so an idle deployment's stale total never blocks it.
+ * The sliding window of committed bytes and rows. `record` keeps the commits of the last window (dropping
+ * older ones only then, as Convex's); `exceeded` compares what was committed within the window before `now`,
+ * re-summing only when a running total is over its limit, so an idle deployment's stale totals never block it.
  */
 export class WriteThroughputLimiter {
   readonly maxBytesPerSecond: number;
+  readonly maxRowsPerSecond: number;
   readonly windowMs: number;
   private readonly maxInWindow: number;
+  /** Infinity when there is no rows limit. */
+  private readonly maxRowsInWindow: number;
   private readonly windowNs: bigint;
-  /** Commit timestamps (ns) and their bytes, oldest first, from `head`. */
+  /** Commit timestamps (ns), their bytes and rows, oldest first, from `head`. */
   private ts: bigint[] = [];
   private bytes: number[] = [];
+  private rows: number[] = [];
   private head = 0;
   private total = 0;
+  private totalRows = 0;
   /** For tests and metrics: checks refused. */
   refused = 0;
 
   constructor(o: WriteThroughputOptions = {}) {
     this.maxBytesPerSecond = o.maxBytesPerSecond ?? MAX_BYTES_WRITTEN_PER_SECOND;
+    this.maxRowsPerSecond = o.maxRowsPerSecond ?? MAX_ROWS_WRITTEN_PER_SECOND;
     this.windowMs = o.windowMs ?? WRITE_THROUGHPUT_WINDOW_MS;
     this.maxInWindow = (this.maxBytesPerSecond * this.windowMs) / 1000;
+    this.maxRowsInWindow = this.maxRowsPerSecond > 0 ? (this.maxRowsPerSecond * this.windowMs) / 1000 : Infinity;
     this.windowNs = BigInt(Math.round(this.windowMs * 1_000_000));
   }
 
-  /** The bytes of a commit published at `ts`. */
-  record(ts: bigint, bytes: number) {
+  /** The bytes and rows (document writes plus index writes) of a commit published at `ts`. */
+  record(ts: bigint, bytes: number, rows = 0) {
     while (this.head < this.ts.length && ts - this.ts[this.head]! > this.windowNs) {
       this.total -= this.bytes[this.head]!;
+      this.totalRows -= this.rows[this.head]!;
       this.head++;
     }
     if (this.head > 1024 && this.head * 2 > this.ts.length) {
       this.ts = this.ts.slice(this.head);
       this.bytes = this.bytes.slice(this.head);
+      this.rows = this.rows.slice(this.head);
       this.head = 0;
     }
     this.ts.push(ts);
     this.bytes.push(bytes);
+    this.rows.push(rows);
     this.total += bytes;
+    this.totalRows += rows;
   }
 
-  /** Whether a writer may start at `now`: the bytes committed within the window are at most the limit. */
-  allows(now: bigint): boolean {
-    if (this.total <= this.maxInWindow) return true;
+  /**
+   * The limit the commits within the window before `now` went over, bytes checked first as Convex's
+   * `exceeded_limit`, or null when a writer may start.
+   */
+  exceeded(now: bigint): WriteThroughputLimit | null {
+    if (this.total <= this.maxInWindow && this.totalRows <= this.maxRowsInWindow) return null;
     let inWindow = 0;
+    let rowsInWindow = 0;
     for (let i = this.head; i < this.ts.length; i++) {
       const t = this.ts[i]!;
-      if (now < t || now - t <= this.windowNs) inWindow += this.bytes[i]!;
+      if (now < t || now - t <= this.windowNs) {
+        inWindow += this.bytes[i]!;
+        rowsInWindow += this.rows[i]!;
+      }
     }
-    if (inWindow <= this.maxInWindow) return true;
-    this.refused++;
-    return false;
+    const limit = inWindow > this.maxInWindow ? "bytes" : rowsInWindow > this.maxRowsInWindow ? "rows" : null;
+    if (limit) this.refused++;
+    return limit;
   }
 
-  /** Whether a writer may start now (the wall clock commit timestamps follow). */
+  /** The limit refused now (the wall clock commit timestamps follow), or null. */
+  exceededNow(): WriteThroughputLimit | null {
+    return this.exceeded(wallClockNs());
+  }
+
+  /** Whether a writer may start at `now`. */
+  allows(now: bigint): boolean {
+    return this.exceeded(now) === null;
+  }
+
+  /** Whether a writer may start now. */
   allowsNow(): boolean {
-    return this.allows(wallClockNs());
+    return this.exceededNow() === null;
+  }
+
+  /** The error for a refused writer. */
+  error(limit: WriteThroughputLimit): TooManyWritesError {
+    return new TooManyWritesError(limit, limit === "bytes" ? this.maxBytesPerSecond : this.maxRowsPerSecond);
   }
 
   /** Throw `TooManyWritesError` unless a writer may start at `now`. */
   check(now: bigint) {
-    if (!this.allows(now)) throw new TooManyWritesError(this.maxBytesPerSecond, this.windowMs);
+    const limit = this.exceeded(now);
+    if (limit) throw this.error(limit);
   }
 }
