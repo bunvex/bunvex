@@ -46,7 +46,13 @@ const push = async (e: Engine, s: SchemaDefinition) => {
   await e.commitSchemaPush(p.schemaId, async () => {});
   return p.schemaId;
 };
-type Row = { _id: string; schemaId: string; tableName: string; validatorHash?: string; state: { state: string } };
+type Row = {
+  _id: string;
+  schemaId: string;
+  tableName: string;
+  validatorHash?: string;
+  state: { state: string; error?: string };
+};
 type Progress = { validationId: string; numDocsValidated: bigint; totalDocs: bigint | null };
 const rows = async (e: Engine) => {
   const [vs, ps] = (await e.query((db) =>
@@ -201,7 +207,7 @@ describe("staged rows, as Convex's (STUDY-106 §7.1)", () => {
     ]);
   });
 
-  test("at a start, the active schema's staged rows start over as pending; a pending schema's go (2ada334)", async () => {
+  test("a start keeps every row, a valid one included (900fe2c: every write since is checked)", async () => {
     const path = tmp();
     const a = await open(path);
     const active = await push(a, withStaged({ a: v.union(v.number(), v.string()) } as never));
@@ -217,19 +223,103 @@ describe("staged rows, as Convex's (STUDY-106 §7.1)", () => {
       for (let i = 0; i < 2000; i++) await db.insert("t", { a: i });
     });
     const p = await a.startSchemaPush(pending);
-    expect((await rows(a)).filter((r) => r.schemaId === p.schemaId)).toHaveLength(2);
+    const before = await rows(a);
+    expect(before.filter((r) => r.schemaId === p.schemaId)).toHaveLength(2);
     await a.close();
     engines.splice(engines.indexOf(a), 1);
     const b = await open(path);
-    expect(await rows(b)).toEqual([
-      expect.objectContaining({
-        schemaId: active,
-        tableName: "t",
-        state: { state: "pending" },
-        numDocsValidated: 0n,
-        totalDocs: null,
-      }),
+    const after = await rows(b);
+    expect(after.find((r) => r.schemaId === active)).toMatchObject({
+      state: { state: "valid" },
+      numDocsValidated: 9n,
+      totalDocs: 9n,
+    });
+    expect(after.filter((r) => r.schemaId === p.schemaId).map((r) => [r.tableName, r.state.state])).toEqual([
+      ["t", "valid"],
+      ["u", "pending"],
     ]);
+  });
+});
+
+describe("writes checked against staged validators, as Convex's (900fe2c, STUDY-106 §7.2)", () => {
+  // The enforced validator lets `b` be anything; the staged one wants a string.
+  const open_ = { a: v.number(), b: v.optional(v.any()) };
+  const staged = defineSchema({ t: defineTable(open_).staged({ a: v.number(), b: v.string() }) });
+  const failure = 'New document in table "t" does not match the schema: ';
+
+  test("a write the staged validator refuses succeeds and fails the table's validation in its transaction; a conforming one changes nothing", async () => {
+    const e = await open(tmp());
+    await push(e, staged);
+    await e.mutation((db) => db.insert("t", { a: 1, b: "ok" } as never));
+    expect((await rows(e))[0]!.state).toEqual({ state: "pending" });
+    const id = await e.mutation((db) => db.insert("t", { a: 2, b: 2 } as never));
+    expect(await e.query((db) => db.get("t", id))).toMatchObject({ a: 2, b: 2 });
+    // Convex's text, byte for byte (seen on its binary, a4ad353), and the table's hash with it.
+    const [row] = await rows(e);
+    expect(row!.state).toEqual({
+      state: "failed",
+      error: `${failure}Value does not match validator.\nPath: .b\nValue: 2.0\nValidator: v.string()`,
+    });
+    expect(row!.validatorHash).toBe("b4becbe27226cbdb5a87feb08b36c3e01f39027fa80d0749c5338f3d5cf08e13");
+    // The enforced validator still refuses what it refuses.
+    await expect(e.mutation((db) => db.insert("t", { a: "x" } as never))).rejects.toThrow(
+      'Failed to insert or update a document in table "t" because it does not match the schema',
+    );
+  });
+
+  test("a valid row fails too; a failed row keeps its first error; a replace is checked as an insert", async () => {
+    const e = await open(tmp());
+    await push(e, staged);
+    const id = await e.mutation((db) => db.insert("t", { a: 1, b: "ok" } as never));
+    await setRow(e, (await rows(e))[0]!._id, { state: "valid" }, 1n, 1n);
+    await e.mutation((db) => db.replace("t", id, { a: 3 }));
+    const first = (await rows(e))[0]!.state as { state: string; error: string };
+    expect(first.state).toBe("failed");
+    await e.mutation((db) => db.insert("t", { a: 4, b: 5 } as never));
+    expect((await rows(e))[0]!.state).toEqual(first);
+  });
+
+  test("a mutation that fails, or a nested one rolled back, leaves the validation as it was", async () => {
+    const e = await open(tmp());
+    await push(e, staged);
+    await expect(
+      e.mutation(async (db) => {
+        await db.insert("t", { a: 1 });
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    await e.mutation(async (db) => {
+      const sp = db.begin();
+      await db.insert("t", { a: 1 });
+      db.rollback(sp);
+    });
+    expect((await rows(e))[0]!.state).toEqual({ state: "pending" });
+  });
+
+  test("the in-progress schema's staged validators are checked too, each schema's row on its own; schemaValidation does not matter", async () => {
+    const e = await open(tmp());
+    await push(e, defineSchema({ t: defineTable(open_).staged(open_) }, { schemaValidation: false }));
+    await e.mutation(async (db) => {
+      for (let i = 0; i < 2000; i++) await db.insert("t", { a: i });
+    });
+    // Pending behind an index still building; its staged validator wants `b`.
+    const p = await e.startSchemaPush(
+      defineSchema(
+        {
+          t: defineTable(open_)
+            .staged({ a: v.number(), b: v.optional(v.string()) })
+            .index("by_a", ["a"]),
+        },
+        { schemaValidation: false },
+      ),
+    );
+    await e.mutation((db) => db.insert("t", { a: 1, b: 2 } as never));
+    const byId = Object.fromEntries((await rows(e)).map((r) => [r.schemaId === p.schemaId ? "pending" : "active", r]));
+    expect(byId.active!.state).toEqual({ state: "pending" });
+    expect(byId.pending!.state.state).toBe("failed");
+    await e.mutation((db) => db.insert("t", { a: "x" } as never));
+    const again = Object.fromEntries((await rows(e)).map((r) => [r.schemaId === p.schemaId ? "pending" : "active", r]));
+    expect(again.active!.state.state).toBe("failed");
   });
 });
 

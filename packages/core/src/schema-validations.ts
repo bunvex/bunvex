@@ -4,9 +4,9 @@
 // progress flush never conflicts with a failure (crates/database/src/bootstrap_model/schema_validations,
 // schema_validation_progress). Two kinds share the table, told apart by `validatorHash`: the enforced walk's (no
 // hash), made while the schema is pending and deleted when it becomes active; and a staged validator's (the
-// validator's hash), made when the schema is pushed and kept while it is in progress or active. Every row of a
-// schema goes when it fails or is overwritten; at a start, until writes are checked against staged validators,
-// every row is deleted and only the active schema's staged ones start again (`reset_for_compatibility`).
+// validator's hash), made when the schema is pushed and kept while it is in progress or active; a write its staged
+// validator refuses fails it in the write's own transaction. Every row of a schema goes when it fails or is
+// overwritten; a start keeps them all (900fe2c: a `valid` staged row stays true, every write being checked).
 import { createHash } from "node:crypto";
 import { SCHEMA_VALIDATION_PROGRESS_TABLE, SCHEMA_VALIDATIONS_TABLE } from "./catalog.ts";
 import type { Tx } from "./tx.ts";
@@ -210,6 +210,17 @@ export async function retryFailedStagedValidators(
   }
 }
 
+/**
+ * Convex's `SchemaValidationModel::mark_failed`, for a write a staged validator refuses (900fe2c): the table's row
+ * of `schemaId` becomes failed with `error`, a pending or a valid one alike; a failed one keeps its first error; a
+ * missing one (the schema failed, or the validation was replaced) is left alone.
+ */
+export async function markStagedValidationFailed(db: Tx, schemaId: string, tableName: string, error: string) {
+  const [row] = await attemptsOf(db, schemaId, tableName);
+  if (!row || row.state.state === "failed") return;
+  await sys(db, () => db.patch(SCHEMA_VALIDATIONS_TABLE, row._id, { state: { state: "failed", error } }));
+}
+
 /** Convex's `delete_enforced_validations_for_schema`, at activation: the enforced walk's rows go, staged ones stay. */
 export async function deleteEnforcedValidationsForSchema(db: Tx, schemaId: string): Promise<void> {
   for (const a of await attemptsOf(db, schemaId)) if (a.validatorHash === undefined) await deleteAttempt(db, a._id);
@@ -253,23 +264,6 @@ export async function markValidationValid(db: Tx, id: string): Promise<boolean> 
 /** Convex's `delete_validations_for_schema`: when the schema becomes active, fails or is overwritten. */
 export async function deleteValidationsForSchema(db: Tx, schemaId: string): Promise<void> {
   for (const a of await attemptsOf(db, schemaId)) await deleteAttempt(db, a._id);
-}
-
-/**
- * At a start, as Convex's `reset_for_compatibility` (2ada334) while writes are not checked against staged
- * validators: every row is deleted; the walk of a pending schema starts over with new ones, and the active
- * schema's staged rows start over as `pending` (a stale `valid` would not be trustworthy).
- */
-export async function resetSchemaValidations(db: Tx, activeSchemaId: string | null): Promise<void> {
-  const rows = (await sys(db, () => db.query(SCHEMA_VALIDATIONS_TABLE).collect())) as unknown as SchemaValidation[];
-  for (const a of rows) await sys(db, () => db.delete(SCHEMA_VALIDATIONS_TABLE, a._id));
-  for (const p of (await sys(db, () =>
-    db.query(SCHEMA_VALIDATION_PROGRESS_TABLE).collect(),
-  )) as unknown as SchemaValidationProgress[])
-    await sys(db, () => db.delete(SCHEMA_VALIDATION_PROGRESS_TABLE, p._id));
-  for (const a of rows)
-    if (a.schemaId === activeSchemaId && a.validatorHash !== undefined)
-      await startTableValidation(db, a.schemaId, a.tableName, null, a.validatorHash);
 }
 
 /**

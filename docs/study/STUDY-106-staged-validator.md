@@ -271,6 +271,16 @@ is 2ada334's (every row deleted, the active schema's staged ones restarted as `p
 (two hashes in `staged-validations.test.ts`, one with a float literal). The 400 is raised by `start_push` (dry run too)
 and `evaluate_push`, before anything is written.
 
-Found on the way (not built, for the owner): Convex's dry run commits (the first pass above), so a `deploy --dry-run`
+**PR 3, built.** A mutation's `Tx` carries the staged validators of the active schema and of the in-progress one
+(`StagedCheck`, refreshed when either changes). Each write to a user table is checked against them after the enforced
+check, whatever `schemaValidation` says; the first violation per (schema, table) is noted, kept or dropped with the
+transaction's savepoints, and applied in the same transaction before it commits (`markStagedValidationFailed`,
+Convex's `mark_failed`: a pending or valid row fails, a failed one keeps its first error, a missing one is left).
+The write succeeds. The startup reset is gone. Checked on Convex's binary (a4ad353): the write succeeds and the row
+stores `New document in table "t" does not match the schema: Value does not match validator.\nPath: .b\nValue:
+2.0\nValidator: v.string()`, which bunvex stores byte for byte (`staged-validations.test.ts`). 20 000 inserts cost
+the same with and without a staged validator (1.0–1.2 s either way, in noise).
+
+Found on the way, decided as DV-444 (owner, 2026-10-08: bunvex's dry run keeps writing nothing): Convex's dry run commits (the first pass above), so a `deploy --dry-run`
 on Convex writes a pending schema, overwriting an in-progress push, and creates the pushed tables; bunvex's dry run
 writes nothing. `convex codegen` against a deployment runs the same dry-run push.
