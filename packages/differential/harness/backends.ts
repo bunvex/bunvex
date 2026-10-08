@@ -31,6 +31,8 @@ export type Backend = {
   url: string;
   /** Call a function of the app over HTTP: its JSON answer, whatever its status. */
   call: (kind: "query" | "mutation" | "action", path: string, args: unknown) => Promise<Answer>;
+  /** Run the backend's own CLI (`convex` or `bunvex`) in the app's project, aimed at this backend: its output. */
+  cli: (args: string[]) => Promise<string>;
   stop: () => Promise<void>;
 };
 
@@ -234,11 +236,13 @@ export async function startConvex(opts: StartOptions = {}): Promise<Backend> {
       await run([ORACLE_BIN, "keygen", "admin-key", "--instance-name", up.name, "--instance-secret", secret], state)
     ).trim();
     const proj = project(state, "convex", opts.app);
-    await run([join(proj, "node_modules/.bin/convex"), "deploy", "--yes", "--typecheck=disable"], proj, {
-      CONVEX_SELF_HOSTED_URL: up.url,
-      CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey,
-    });
-    return { name: "convex", url: up.url, call: caller(up.url), stop };
+    const cli = (args: string[]) =>
+      run([join(proj, "node_modules/.bin/convex"), ...args], proj, {
+        CONVEX_SELF_HOSTED_URL: up.url,
+        CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey,
+      });
+    await cli(["deploy", "--yes", "--typecheck=disable"]);
+    return { name: "convex", url: up.url, call: caller(up.url), cli, stop };
   } catch (e) {
     await stop();
     throw e;
@@ -297,8 +301,9 @@ export async function startBunvex(opts: StartOptions = {}): Promise<Backend> {
     const proj = project(state, "bunvex", opts.app);
     const envFile = join(state, "deployment.env");
     writeFileSync(envFile, `BUNVEX_SELF_HOSTED_URL=${up.url}\nBUNVEX_SELF_HOSTED_ADMIN_KEY=${adminKey}\n`);
-    await run([process.execPath, BUNVEX_CLI, "deploy", "--typecheck=disable", "--env-file", envFile], proj);
-    return { name: "bunvex", url: up.url, call: caller(up.url), stop };
+    const cli = (args: string[]) => run([process.execPath, BUNVEX_CLI, ...args, "--env-file", envFile], proj);
+    await cli(["deploy", "--typecheck=disable"]);
+    return { name: "bunvex", url: up.url, call: caller(up.url), cli, stop };
   } catch (e) {
     await stop();
     throw e;

@@ -1,4 +1,4 @@
-// The cross-open app (STUDY-133 PR 9): a table with a database index, a text search index and a vector index,
+// The cross-open and export/import app (STUDY-133 PR 9, STUDY-139 P7): a table with a database index, a text search index and a vector index,
 // so a store moved between the two binaries exercises each kind.
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";

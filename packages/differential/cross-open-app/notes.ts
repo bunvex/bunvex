@@ -59,3 +59,34 @@ export const nearest = action({
     return body ?? null;
   },
 });
+
+/** Every note whole: its id and creation time with its fields (the export/import test). */
+export const all = query({
+  args: {},
+  handler: async (ctx) => ctx.db.query("notes").collect(),
+});
+
+/** Store a file with this text: its id. */
+export const upload = action({
+  args: { text: v.string() },
+  handler: async (ctx, { text }) => ctx.storage.store(new Blob([text], { type: "text/plain" })),
+});
+
+/** Every stored file's metadata. */
+export const files = query({
+  args: {},
+  handler: async (ctx) =>
+    (await ctx.db.system.query("_storage").collect()).map(({ _id, _creationTime, sha256, size, contentType }) => ({
+      _id,
+      _creationTime,
+      sha256,
+      size,
+      contentType,
+    })),
+});
+
+/** A stored file's text, or null when it is not there. */
+export const fileText = action({
+  args: { id: v.id("_storage") },
+  handler: async (ctx, { id }): Promise<string | null> => (await (await ctx.storage.get(id))?.text()) ?? null,
+});
