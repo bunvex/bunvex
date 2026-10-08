@@ -1,6 +1,6 @@
 # STUDY-139 — bunvex as a product, Convex as the oracle
 
-- **Status:** the principle accepted (owner, 2026-10-08, §1); the items of §4 await the owner.
+- **Status:** the principle and P1–P7 accepted (owner, 2026-10-08); to be built one PR per group (P1–P3, P4, P5, P6, P7).
 - **Convex source read:** reference `d8bdde0` (`docs/parity/upstream.md`), npm `convex` 1.46.0.
 - **Related:** [STUDY-133](STUDY-133-persistence-layout-identical.md) (identical layout, cross-open tests),
   [STUDY-23](STUDY-23-sync-protocol-v1.md) P8 (DV-225), [STUDY-67](STUDY-67-http-function-api.md) H12 (DV-315),
@@ -67,13 +67,13 @@ DV-221). Gaps for a migration:
 
 | # | Proposal | Why | Decision |
 |---|---|---|---|
-| P1 | The client announces **its own version** (`0.1.0-alpha.0`, from its `package.json`) in the sync URL and the header. Revisits DV-225 | §1.1. It needs P2 and P3, or the server refuses it (0.1.0 ≤ 0.19.1) and never chunks for it (0.1.0 < 1.28.0) | pending (owner) |
-| P2 | The server no longer refuses clients by Convex's deprecation thresholds (A2); a header that does not parse is still 400 `InvalidClientVersion`. bunvex's own thresholds start empty. Revisits DV-315 | Those thresholds are Convex's old clients; bunvex's clients start at 0.x | pending (owner) |
-| P3 | The server always sends big transitions in chunks (A3) | Every client bunvex supports (its own, and Convex's 1.46.0 in tests) takes them | pending (owner) |
-| P4 | Remove the zip reader (B1). A package bunvex cannot read is ignored with a log line, and the next `deploy` replaces it, as the cross-open tests do | Only the cross-open uses it, and it works without | pending (owner) |
-| P5 | Remove Convex's MySQL v1 encoding (B2): only v0 is read and written, and `MYSQL_DOCUMENT_ENCODING` goes. Revisits DV-414 | Only a MySQL store the Convex binary wrote has v1; the cross-open tests use SQLite | pending (owner) |
-| P6 | Remove C1 and C2 | bunvex is alpha with no deployed stores to carry | pending (owner) |
-| P7 | Add the export-from-Convex, import-into-bunvex differential test (§3) | The production migration path, tested against the oracle | pending (owner) |
+| P1 | The client announces **its own version** (`0.1.0-alpha.0`, from its `package.json`) in the sync URL and the header. Revisits DV-225 | §1.1. It needs P2 and P3, or the server refuses it (0.1.0 ≤ 0.19.1) and never chunks for it (0.1.0 < 1.28.0) | **accepted** (owner, 2026-10-08) |
+| P2 | The server no longer refuses clients by Convex's deprecation thresholds (A2); a header that does not parse is still 400 `InvalidClientVersion`. bunvex's own thresholds start empty. Revisits DV-315 | Those thresholds are Convex's old clients; bunvex's clients start at 0.x | **accepted** (owner, 2026-10-08) |
+| P3 | The server always sends big transitions in chunks (A3) | Every client bunvex supports (its own, and Convex's 1.46.0 in tests) takes them | **accepted** (owner, 2026-10-08) |
+| P4 | Remove the zip reader (B1). A package bunvex cannot read is ignored with a log line, and the next `deploy` replaces it, as the cross-open tests do | Only the cross-open uses it, and it works without | **accepted** (owner, 2026-10-08) |
+| P5 | Remove Convex's MySQL v1 encoding (B2): only v0 is read and written, and `MYSQL_DOCUMENT_ENCODING` goes. Revisits DV-414 | Only a MySQL store the Convex binary wrote has v1; the cross-open tests use SQLite | **accepted** (owner, 2026-10-08) |
+| P6 | Remove C1 and C2 | bunvex is alpha with no deployed stores to carry | **accepted** (owner, 2026-10-08) |
+| P7 | Add the export-from-Convex, import-into-bunvex differential test (§3) | The production migration path, tested against the oracle | **accepted** (owner, 2026-10-08) |
 
 ## 5. The rule, for every study
 
