@@ -6,7 +6,7 @@ import { v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
-import { convexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
+import { indexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
 
 const schema = defineSchema({ things: defineTable(v.any()).index("by_s", ["s"]) });
 
@@ -18,7 +18,7 @@ test("every _tables row has Convex's shape: number an int64", async () => {
   await e.mutation((db) => db.insert("made", { a: 1 }));
   await e.createHiddenTable("imported", {});
   const rows = (await e.query((db) => db.asSystem(() => db.query("_tables").collect()))) as Record<string, unknown>[];
-  const convex = convexRows("_tables");
+  const convex = indexRows("_tables");
   const byName = new Map(rows.map((r) => [r.name as string, r]));
   for (const name of ["_index_backfills", "_modules", "things", "made", "imported"]) {
     const row = byName.get(name);

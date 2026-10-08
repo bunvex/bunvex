@@ -281,7 +281,7 @@ export const isSearchIndexRow = (row: Record<string, unknown>) => {
  * `onDiskState` `backfilling` (Convex's empty `Backfilling { staged }`, and the vector one with no segment and no
  * cursor), so the Convex binary builds the index itself; `dimensions` an Int64, as Convex's `i64`.
  */
-export function convexRow(s: IndexSegmentsState): SearchIndexRow {
+export function indexRow(s: IndexSegmentsState): SearchIndexRow {
   const filterFields = [...s.def.filterFields].sort();
   if (s.kind === "text")
     return {
@@ -308,7 +308,7 @@ export function convexRow(s: IndexSegmentsState): SearchIndexRow {
   };
 }
 
-/** Whether a row is one `convexRow` wrote (so the state saved for it in the global is still its). */
+/** Whether a row is one `indexRow` wrote (so the state saved for it in the global is still its). */
 const isOwnRow = (row: Record<string, unknown>) => {
   const o = (row.config as { onDiskState?: Record<string, unknown> } | undefined)?.onDiskState;
   if (!o || o.state !== "backfilling") return false;
@@ -357,7 +357,7 @@ export function readSavedStates(value: unknown): Map<string, { rowId: string; st
 
 /**
  * A state as a full row: Convex's `SerializedIndexConfig::Search` / `::Vector` with the segment list. bunvex keeps
- * it in its global (`search_index_segments`), not in `_index` (`convexRow`).
+ * it in its global (`search_index_segments`), not in `_index` (`indexRow`).
  */
 export function stateToRow(s: IndexSegmentsState): SearchIndexRow {
   const filterFields = [...s.def.filterFields].sort();
@@ -671,7 +671,7 @@ export class SearchSegmentsState {
       const inserted: string[] = [];
       const rows = new Map<string, string>();
       for (const [k, v] of this.states) {
-        const row = convexRow(v);
+        const row = indexRow(v);
         const key = rowKey(row);
         rows.set(k, key);
         if (this.stored.get(k) === key) continue;

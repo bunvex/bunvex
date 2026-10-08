@@ -80,7 +80,7 @@ export const stored = (doc: unknown): unknown => toJsonValue(doc as Value);
 type Fixture = { source: string; table: string; rows: Record<string, unknown>[]; note?: string };
 
 /** Convex's rows of one system table, from the fixture of that name. */
-export function convexRows(table: string): Record<string, unknown>[] {
+export function indexRows(table: string): Record<string, unknown>[] {
   return (JSON.parse(readFileSync(join(import.meta.dir, `${table}.json`), "utf8")) as Fixture).rows;
 }
 

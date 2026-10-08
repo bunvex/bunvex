@@ -14,7 +14,7 @@ import { udfConfig } from "../src/code-store.ts";
 import { cronJobs, cronSpecs } from "../src/cron.ts";
 import { applyCrons, completeRun, currentJob, insertLog, setCronState } from "../src/cron-model.ts";
 import { argsOfBytes, cronSpecOf, cronSpecRow, cronSpecsRow, msOfNs, nsOfMs } from "../src/cron-rows.ts";
-import { convexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
+import { indexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
 
 async function withCron() {
   const engine = await new Engine(defineSchema({}), await MemoryPersistence.open(null, { durable: false })).init();
@@ -31,9 +31,9 @@ async function withCron() {
 test("_cron_jobs: Convex's SerializedCronSpec (int64 schedule, the arguments' JSON as bytes)", async () => {
   const { rows } = await withCron();
   const [job] = await rows(CRON_JOBS_TABLE);
-  expect(shapeDiff(stored(job), convexRows("_cron_jobs")[0])).toEqual([]);
+  expect(shapeDiff(stored(job), indexRows("_cron_jobs")[0])).toEqual([]);
   // The very bytes Convex stores for these arguments, and the schedule's values.
-  const convex = convexRows("_cron_jobs")[0]!.cronSpec as Record<string, Record<string, string>>;
+  const convex = indexRows("_cron_jobs")[0]!.cronSpec as Record<string, Record<string, string>>;
   const ours = stored(job) as Record<string, Record<string, unknown>>;
   expect(ours.cronSpec!.udfArgs).toEqual(convex.udfArgs);
   expect(ours.cronSpec!.cronSchedule).toEqual(convex.cronSchedule);
@@ -42,7 +42,7 @@ test("_cron_jobs: Convex's SerializedCronSpec (int64 schedule, the arguments' JS
 test("_cron_next_run: int64 nanoseconds, as Convex's", async () => {
   const { rows } = await withCron();
   const [run] = await rows(CRON_NEXT_RUN_TABLE);
-  expect(shapeDiff(stored(run), convexRows("_cron_next_run")[0])).toEqual([]);
+  expect(shapeDiff(stored(run), indexRows("_cron_next_run")[0])).toEqual([]);
   // Daily at 03:00 UTC: a whole minute, in nanoseconds.
   expect((run!.nextTs as bigint) % 60_000_000_000n).toBe(0n);
   expect(new Date(msOfNs(run!.nextTs as bigint)).getUTCHours()).toBe(3);
@@ -89,7 +89,7 @@ test("_cron_next_run in progress, then completed; _cron_job_logs as Convex's Cro
     name: "daily tick",
     ts: int64(nsOfMs(job.nextTs)),
     udfPath: "fns.js:tick",
-    udfArgs: (convexRows("_cron_jobs")[0]!.cronSpec as Record<string, unknown>).udfArgs,
+    udfArgs: (indexRows("_cron_jobs")[0]!.cronSpec as Record<string, unknown>).udfArgs,
     // Convex's `CronJobResult::Default`: the value's JSON text.
     status: { type: "success", result: { type: "default", value: '{"ok":{"$integer":"AQAAAAAAAAA="}}' } },
     logLines: { logLines: ["[LOG] 'hi'"], isTruncated: false },
@@ -98,12 +98,12 @@ test("_cron_next_run in progress, then completed; _cron_job_logs as Convex's Cro
   expect(canceled!.status).toEqual({ type: "canceled", num_canceled: int64(3n) });
   const next = stored((await rows(CRON_NEXT_RUN_TABLE))[0]) as Record<string, unknown>;
   expect(next.prevTs).toEqual(int64(nsOfMs(job.nextTs)));
-  expect(shapeDiff(next, convexRows("_cron_next_run")[0], ["prevTs"])).toEqual([]);
+  expect(shapeDiff(next, indexRows("_cron_next_run")[0], ["prevTs"])).toEqual([]);
 });
 
 test("_modules.analyzeResult.cronSpecs: Convex's [{identifier, spec}]", async () => {
   const { specs } = await withCron();
-  const convex = convexRows("_modules").find((m) => m.path === "crons.js")!.analyzeResult as Record<string, unknown>;
+  const convex = indexRows("_modules").find((m) => m.path === "crons.js")!.analyzeResult as Record<string, unknown>;
   const ours = stored(cronSpecsRow(Object.fromEntries(specs)));
   expect(shapeDiff({ cronSpecs: ours }, { cronSpecs: convex.cronSpecs })).toEqual([]);
   expect(ours).toEqual(convex.cronSpecs);
@@ -140,7 +140,7 @@ test("_udf_config: the version a push sends, the seed as bytes, the time in int6
     string,
     unknown
   >[];
-  expect(shapeDiff(stored(row), convexRows("_udf_config")[0])).toEqual([]);
+  expect(shapeDiff(stored(row), indexRows("_udf_config")[0])).toEqual([]);
   expect(row!.serverVersion).toBe("1.46.0");
   expect(msOfNs(row!.importPhaseUnixTimestamp as bigint)).toBeGreaterThanOrEqual(before);
   // Read back without a version: the stored one, the same seed and time.

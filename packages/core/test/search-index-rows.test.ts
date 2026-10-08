@@ -10,7 +10,7 @@ import { defineSchema, defineTable, Engine, type SearchSegmentStore } from "../s
 import type { TabletId } from "../src/persistence/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import {
-  convexRow,
+  indexRow,
   type IndexRowWrite,
   type IndexSegmentsState,
   readSavedStates,
@@ -201,7 +201,7 @@ describe("the states a start restores (STUDY-133 PR 9)", () => {
     state.load([withId(stateToRow(text))], null);
     expect(state.get("text", text.tablet, text.name)).toEqual(text);
     await state.rewriteRows();
-    expect(writes).toEqual([[{ _id: "row1", row: convexRow(text) }]]);
+    expect(writes).toEqual([[{ _id: "row1", row: indexRow(text) }]]);
     const saved = readSavedStates(globals.get(SEGMENTS_GLOBAL));
     expect(saved?.get(key)).toEqual({ rowId: "row1", state: text });
     // Nothing changed: nothing written again.
@@ -212,15 +212,15 @@ describe("the states a start restores (STUDY-133 PR 9)", () => {
   test("a saved state is used only with the row bunvex wrote for it", () => {
     const saved = new Map([[key, { rowId: "row1", state: text }]]);
     const own = fresh();
-    own.state.load([withId(convexRow(text))], saved);
+    own.state.load([withId(indexRow(text))], saved);
     expect(own.state.get("text", text.tablet, text.name)).toEqual(text);
     // Convex built it since (its own snapshot): not bunvex's state any more, the index is built again.
     const rebuilt = fresh();
-    rebuilt.state.load([withId({ ...convexRow(text), config: { ...stateToRow(text).config } })], saved);
+    rebuilt.state.load([withId({ ...indexRow(text), config: { ...stateToRow(text).config } })], saved);
     expect(rebuilt.state.get("text", text.tablet, text.name)).toBeUndefined();
     // Another row (the index was dropped and created again): not its state either.
     const other = fresh();
-    other.state.load([{ ...convexRow(text), _id: "row2" } as Record<string, unknown>], saved);
+    other.state.load([{ ...indexRow(text), _id: "row2" } as Record<string, unknown>], saved);
     expect(other.state.get("text", text.tablet, text.name)).toBeUndefined();
   });
 });

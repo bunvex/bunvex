@@ -8,7 +8,7 @@ import { INDEX_BACKFILLS_TABLE, INDEX_TABLE } from "../src/catalog.ts";
 import { Engine, ImportBackfillingError } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
-import { convexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
+import { indexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
 
 type Row = Record<string, unknown>;
 const identity: string[] = [];
@@ -43,7 +43,7 @@ test("a copied index starts Backfilling and is enabled before the table is hande
   expect(hidden.pending).toEqual([]);
   const revs = await history(p, e, hidden.id, "by_n");
   expect(revs.map(state)).toEqual(["Backfilling(false)", "Backfilling(true)", "Backfilled2", "Enabled"]);
-  const convex = convexRows("_index").filter((r) => r.descriptor === "by_s_n");
+  const convex = indexRows("_index").filter((r) => r.descriptor === "by_s_n");
   for (const [i, r] of revs.entries()) expect(shapeDiff(r, convex[i], identity)).toEqual([]);
   // Its backfill's row, as Convex's: the empty table counted.
   const rowId = (await e.query((db) => db.asSystem(() => db.query(INDEX_TABLE).collect()))).find(
@@ -52,7 +52,7 @@ test("a copied index starts Backfilling and is enabled before the table is hande
   const backfill = (await e.query((db) => db.asSystem(() => db.query(INDEX_BACKFILLS_TABLE).collect()))).find(
     (r) => r.indexId === rowId,
   );
-  expect(shapeDiff(stored(backfill), convexRows("_index_backfills")[1])).toEqual([]);
+  expect(shapeDiff(stored(backfill), indexRows("_index_backfills")[1])).toEqual([]);
   expect(backfill!.totalDocs).toBe(0n);
   // The import's writes, then the activation: the copy serves queries.
   await e.mutation((db) => db.asSystem(() => db.importInsert(hidden, { n: 7 })));

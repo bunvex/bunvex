@@ -11,7 +11,7 @@ import { Engine } from "../src/engine.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
 import { defineSchema, defineTable, type SchemaDefinition } from "../src/schema.ts";
 import { schemaFromJson, schemaJsonText, schemaToJson } from "../src/schema-json.ts";
-import { convexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
+import { indexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
 
 const engines: Engine[] = [];
 const dirs: string[] = [];
@@ -69,7 +69,7 @@ describe("an active schema's row", () => {
     const e = await open();
     const id = await push(e, fixtureSchema());
     const [row] = await rows(e);
-    const convex = convexRows("_schemas")[0]!;
+    const convex = indexRows("_schemas")[0]!;
     expect(row!._id).toBe(id);
     expect(shapeDiff(stored(row), convex)).toEqual([]);
     expect(row!.state).toEqual({ state: "active" });

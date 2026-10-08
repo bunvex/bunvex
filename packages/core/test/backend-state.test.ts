@@ -8,7 +8,7 @@ import { BACKEND_STATE_TABLE } from "../src/catalog.ts";
 import { Engine, readSystemRows } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { defineSchema } from "../src/schema.ts";
-import { convexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
+import { indexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -28,7 +28,7 @@ test("the first start writes the running state's document, shaped as Convex's", 
   const rows = await readSystemRows(p, BACKEND_STATE_TABLE);
   expect(rows).toHaveLength(1);
   expect(rows[0]).toMatchObject({ system: "none", usage_limit: "none", user: "none" });
-  expect(shapeDiff(stored(rows[0]), convexRows(BACKEND_STATE_TABLE)[0]!)).toEqual([]);
+  expect(shapeDiff(stored(rows[0]), indexRows(BACKEND_STATE_TABLE)[0]!)).toEqual([]);
   await e.close();
 });
 
