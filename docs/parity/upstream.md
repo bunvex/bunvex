@@ -30,7 +30,9 @@ What it does with them:
 1. Take the latest `precompiled-*` release. The oracle needs its binary, so the reference only moves to a release.
 2. Go through every runtime commit after the reference, by hand. The daily digest is the starting list.
 3. Align what is clear: messages, limits and small fixes. Each comes with a test and a sabotage check.
-4. Record each new difference as a pending divergence for the owner (`divergences.md`).
+4. Record each new difference as a pending divergence for the owner (`divergences.md`). A commit left out because it
+   needs components (DV-55) goes to the list in [STUDY-62 §7.6](../study/STUDY-62-components.md#76-convex-commits-to-take-with-components),
+   so it is not lost when this file's table is cleared: that list is where building components starts.
 5. Move the oracle, run the differential suite, and update this file and the parity references.
 
 **New features** are not part of the weekly bump. Each one gets its own study and the owner's decision, then its

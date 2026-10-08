@@ -271,3 +271,12 @@ components only from packages written for `bunvex/*`). Open.
 
 Dependencies: 1 → 2 → 3 → 4 → 5; 6 after 3; 7 after 4; 8 after 5 and 6; 9 and 10 after 2 and 4.
 
+### 7.6 Convex commits to take with components
+
+Commits the weekly bump (docs/parity/upstream.md) left out because they need components. When components are built,
+each is studied and taken in, or marked out of scope with a reason.
+
+| Commit | Subject | Note |
+|---|---|---|
+| `f9b2d83` | component-scoped custom-role statements | Cloud RBAC; out of scope unless bunvex gets custom roles |
+
