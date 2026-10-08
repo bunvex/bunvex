@@ -448,7 +448,7 @@ export class ScheduledJobExecutor {
         .mutation(async (db) => {
           if (await this.unchanged(db, job))
             await patchJob(db, job._id, { systemErrors: failures, nextTs: wallClock() + delay });
-        }, "scheduled_job_system_error")
+        }, "_system/scheduled_job_system_error")
         .catch(() => {});
       this.stats.systemErrors++;
     }

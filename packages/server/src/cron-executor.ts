@@ -272,7 +272,7 @@ export class CronJobExecutor {
         0,
       );
       await completeRun(db, job, Date.now(), this.o);
-    }, "cron_transient_error");
+    }, "_system/cron_transient_error");
   }
 
   private async runMutation(job: CronJob) {
@@ -330,7 +330,7 @@ export class CronJobExecutor {
           (performance.now() - t0) / 1000,
         );
         await completeRun(db, job, Date.now(), this.o);
-      }, "cron_save_mutation_error");
+      }, "_system/cron_save_mutation_error");
       this.stats.runs++;
       return;
     }
@@ -342,7 +342,7 @@ export class CronJobExecutor {
       if (!(await this.unchanged(db, job))) return null;
       await setCronState(db, job, state);
       return currentJob(db, job.id);
-    }, "cron_in_progress");
+    }, "_system/cron_in_progress");
     if (!started) return;
     const t0 = performance.now();
     const r = await collectLogs(() =>
@@ -360,7 +360,7 @@ export class CronJobExecutor {
           if (!(await this.unchanged(db, started))) return;
           await insertLog(db, started, started.nextTs, status, truncateLogLines(r.logLines), elapsed);
           await completeRun(db, started, Date.now(), this.o);
-        }, "cron_complete_action");
+        }, "_system/cron_complete_action");
         this.stats.runs++;
         return;
       } catch (e) {
