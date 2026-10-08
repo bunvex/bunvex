@@ -495,7 +495,10 @@ export class LogManager {
         }, "_system/log_sink_worker");
       } else if (r.status.type === "active" && running?.id !== r._id) {
         // Active in the table but not running here (a restart): start it again without verifying.
-        await this.engine.mutation((db) => patchSink(db, r._id, { status: { type: "restarting" } }), "_system/log_sink_worker");
+        await this.engine.mutation(
+          (db) => patchSink(db, r._id, { status: { type: "restarting" } }),
+          "_system/log_sink_worker",
+        );
         this.again = true;
       }
     }
