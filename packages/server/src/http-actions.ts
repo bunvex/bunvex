@@ -4,7 +4,7 @@
 // - the `Request` the handler gets: the URL rebuilt from Host / X-Forwarded-Proto / Forwarded, no body for
 //   GET, HEAD and OPTIONS, a `bunvex-request-id` header added when missing (H2), the client's abort signal;
 // - auth from `Authorization` that never rejects up front: a failure is thrown by `getUserIdentity()`;
-// - the answer: the handler's response streamed (HEAD without its body, cut past 20 MiB), or Convex's 404,
+// - the answer: the handler's response streamed (HEAD without its body, cut past 100 MiB), or Convex's 404,
 //   405, 408 (no response head within 300 s) and 500 (`{code, trace?, data?}`) answers.
 import type { Caller } from "@bunvex/core";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
@@ -128,7 +128,7 @@ export function httpActionServer(o: HttpActionOptions) {
       void res.body?.cancel().catch(() => {});
       return new Response(null, init);
     }
-    // Already metered by `runHttpAction` (20 MiB at most, the run logged once it is sent).
+    // Already metered by `runHttpAction` (100 MiB at most, the run logged once it is sent).
     return res;
   };
 }

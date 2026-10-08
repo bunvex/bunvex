@@ -91,11 +91,12 @@
   - No request-id header on the response.
   - **After the head was sent,** an error is only logged and the body ends early.
 - **Limits:**
-  - **Response:** 20 MiB (`HTTP_ACTION_BODY_LIMIT`). Past that, the rest of the body is dropped and
-    `HttpResponseTooLarge: HTTP actions support responses up to 20 MiB` is logged; the status stays.
+  - **Response:** 100 MiB (`HTTP_ACTION_RESPONSE_BODY_LIMIT`, since 82e5c50; 20 MiB before). Past that, the
+    rest of the body is dropped and `HttpResponseTooLarge: HTTP actions support responses up to 100 MiB` is
+    logged once, with no size warning; the status stays (STUDY-137).
   - **Request:** the code enforces no limit (the body stream is read raw; `DefaultBodyLimit` applies only to
-    extractors), and the limits table says "There is no specific limit on request size". The HTTP-actions
-    page says 20 MB. `formData()` is capped at 20 MiB.
+    extractors, and 82e5c50 removed it from the router), and the limits table says "There is no specific limit
+    on request size". The HTTP-actions page said 20 MB until 82e5c50. `formData()` is capped at 20 MiB.
   - **Time:** the server's `TimeoutLayer` (300 s) answers **408**, empty, if no head came by then. The
     action keeps running in the background, up to `V8_ACTION_USER_TIMEOUT` (1800 s):
     `Function execution timed out (maximum duration: 1800s)`.

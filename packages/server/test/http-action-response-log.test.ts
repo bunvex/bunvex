@@ -1,7 +1,7 @@
 // An HTTP action's run is logged once its response is sent (STUDY-76, DV-323), as Convex's: its duration
-// covers the body, its lines end with the response-size warning, and a chunk past 20 MiB is dropped with an
-// `error:httpAction` line (later chunks that fit still go). A HEAD request or a client that goes away still
-// gets the run logged.
+// covers the body, its lines end with the response-size warning, and past 100 MiB (Convex since 82e5c50) the
+// rest of the body is dropped with one `error:httpAction` line and no size warning. A HEAD request or a client
+// that goes away still gets the run logged.
 import { afterEach, expect, test } from "bun:test";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
@@ -41,7 +41,7 @@ async function setup() {
   const route = (path: string, body: () => ReadableStream<Uint8Array> | string) =>
     http.route({ path, method: "GET", handler: httpAction(async () => new Response(body())) });
   route("/slow", () => chunks([10, 10, 10], 60));
-  route("/big", () => chunks([15 * MiB, 10 * MiB, MiB]));
+  route("/big", () => chunks([60 * MiB, 50 * MiB, MiB, 30 * MiB]));
   route("/broken", () => chunks([5], 0, true));
   route("/small", () => "ok");
   // A body that never ends (an event stream).
@@ -96,7 +96,7 @@ test("the run is logged once its body is sent: its time covers the body", async 
   expect(c.executionTime).toBeGreaterThanOrEqual(0.15);
 });
 
-test("past 80 % of 20 MiB: the warning in the run's lines", async () => {
+test("past 80 % of 100 MiB: the warning in the run's lines", async () => {
   process.env.FUNCTION_LIMIT_WARNING_RATIO = "0.00000001";
   const t = await setup();
   await (await fetch(`${t.site}/small`)).text();
@@ -105,12 +105,17 @@ test("past 80 % of 20 MiB: the warning in the run's lines", async () => {
   expect(t.consoleEvents.map((e) => e.system_code)).toContain("warning:HttpResponseTooLarge");
 });
 
-test("a chunk past 20 MiB is dropped with Convex's error line; a later one that fits still goes", async () => {
+test("past 100 MiB the rest of the body is dropped, with one error line and no size warning", async () => {
+  process.env.FUNCTION_LIMIT_WARNING_RATIO = "0.00000001"; // the warning would show for any body
   const t = await setup();
   const r = await fetch(`${t.site}/big`);
-  expect((await r.arrayBuffer()).byteLength).toBe(16 * MiB);
+  // 60 MiB fit; the 50 MiB chunk would cross the limit, and the 1 MiB and 30 MiB after it that would fit are
+  // dropped too.
+  expect((await r.arrayBuffer()).byteLength).toBe(60 * MiB);
   const c = await t.logged("/big");
-  expect(JSON.stringify(c.logLines)).toContain("HttpResponseTooLarge: HTTP actions support responses up to 20 MiB");
+  const lines = JSON.stringify(c.logLines);
+  expect(lines.split("HttpResponseTooLarge: HTTP actions support responses up to 100 MiB").length).toBe(2);
+  expect(lines).not.toContain("Large response returned from an HTTP action");
   const line = t.consoleEvents.find((e) => e.message.startsWith("HttpResponseTooLarge"))!;
   expect(line).toMatchObject({ log_level: "ERROR", system_code: "error:httpAction" });
 });
