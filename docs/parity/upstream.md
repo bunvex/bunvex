@@ -47,4 +47,7 @@ Commits after the reference that the last bump did not cover:
 | `f9b2d83` | component-scoped custom-role statements | Components (DV-55) |
 | `900fe2c` | database: check writes against staged validators, recording into validation progress | Staged validators (DV-438) |
 | `e748f4c` | Fix FormData non-string values and set() with repeated names | Web API, Bun's (DV-164) |
-| `a4ad353` | docs: Update function bundle size limits | Docs only |
+| `a4ad353` | docs: Update function bundle size limits | Docs only (its limits taken in #539) |
+| `e049178` | schema worker: validate staged validators in the background | Staged validators (DV-438) |
+| `7236c10` | staged validated validators replace the walk at promotion; table deletion invalidates references | Staged validators (DV-438); in no release yet |
+| `02fe59b` | docs: AI Gateway model list | Docs only |
