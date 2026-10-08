@@ -229,9 +229,15 @@ describe("deterministic execution", () => {
       await tick();
       return { a, b: performance.now(), date: Date.now() };
     });
+    const outsideAfter = performance.now();
     expect(seen.b - seen.a).toBeGreaterThanOrEqual(9); // two 5 ms ticks elapsed
     expect(seen.a).toBeGreaterThanOrEqual(Math.floor(outsideBefore * 10) / 10);
-    expect(Math.abs(performance.timeOrigin + seen.a - seen.date)).toBeLessThan(1.1);
+    // On performance's own origin, `a` is the frozen Date.now() (its floor, to 0.1 ms) plus the time from the
+    // execution's start to the body's first read, which a slow run (coverage) stretches past a millisecond:
+    // bounded by the time the whole call took, not by a fixed 1.1 ms.
+    const offset = performance.timeOrigin + seen.a - seen.date;
+    expect(offset).toBeGreaterThanOrEqual(-0.1);
+    expect(offset).toBeLessThan(1.1 + (outsideAfter - outsideBefore));
     expect(Math.abs(seen.b * 10 - Math.round(seen.b * 10))).toBeLessThan(1e-6);
   });
 });
