@@ -50,6 +50,7 @@ export const auditEvents = {
     moduleDiff: { added: string[]; removed: string[] };
     cronDiff: { added: string[]; updated: string[]; deleted: string[] };
     indexDiff: Record<"added_indexes" | "removed_indexes" | "enabled_indexes" | "disabled_indexes", Value[]>;
+    udfConfigDiff?: { previous_version: string; next_version: string } | null;
     schemaDiff: { previous_schema: string | null; next_schema: string | null } | null;
     message: string | null;
   }) =>
@@ -61,7 +62,7 @@ export const auditEvents = {
           component_diff: {
             diffType: { type: o.create ? "create" : "modify" },
             moduleDiff: o.moduleDiff,
-            udfConfigDiff: null,
+            udfConfigDiff: o.udfConfigDiff ?? null,
             cronDiff: o.cronDiff,
             indexDiff: o.indexDiff,
             schemaDiff: o.schemaDiff,

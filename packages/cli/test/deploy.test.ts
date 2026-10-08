@@ -141,7 +141,7 @@ describe("bunvex deploy", () => {
     const r = io(app);
     expect(await main(["deploy"], r.it)).toBe(0);
     expect(r.out).toEqual([`✔ Deployed functions to ${d.url}`]);
-    expect(r.err).toContain("✔ Added table indexes:\n  [+] messages.by_author   author");
+    expect(r.err).toContain("✔ Added table indexes:\n  [+] messages.by_author   author, _creationTime");
     expect(r.err).toContain("  [+] cron tick");
     expect((await d.call("mutation", "messages:send", { author: "ada", body: "hi" })).status).toBe("success");
     expect((await d.call("query", "messages:list")).value).toEqual(["HI"]);
@@ -237,19 +237,19 @@ export default defineSchema({ notes: defineTable({ a: v.string(), b: v.string(),
       '.index("by_a", ["a"]).index("by_ab", { fields: ["a", "b"], staged: true }).searchIndex("search_t", { searchField: "t", filterFields: ["a"] })',
     );
     expect(await deploy("--dry-run")).toEqual([
-      "✔ Would add table indexes:\n  [+] notes.by_a   a\n  [+] notes.search_t (text)   t, filter on a",
-      "✔ Would add staged table indexes:\n  [+] notes.by_ab   a, b  (staged)",
+      "✔ Would add table indexes:\n  [+] notes.by_a   a, _creationTime\n  [+] notes.search_t (text)   t, filter on a",
+      "✔ Would add staged table indexes:\n  [+] notes.by_ab   a, b, _creationTime  (staged)",
     ]);
     expect(await deploy()).toEqual([
-      "✔ Added table indexes:\n  [+] notes.by_a   a\n  [+] notes.search_t (text)   t, filter on a",
-      "✔ Added staged table indexes:\n  [+] notes.by_ab   a, b  (staged)",
+      "✔ Added table indexes:\n  [+] notes.by_a   a, _creationTime\n  [+] notes.search_t (text)   t, filter on a",
+      "✔ Added staged table indexes:\n  [+] notes.by_ab   a, b, _creationTime  (staged)",
     ]);
     // by_ab enabled, by_a staged again, search_t deleted.
     withSchema('.index("by_a", { fields: ["a"], staged: true }).index("by_ab", ["a", "b"])');
     expect(await deploy()).toEqual([
       "✔ Deleted table indexes:\n  [-] notes.search_t (text)   t, filter on a",
-      "✔ These indexes are now enabled:\n  [*] notes.by_ab   a, b",
-      "✔ These indexes are now staged:\n  [*] notes.by_a   a  (staged)",
+      "✔ These indexes are now enabled:\n  [*] notes.by_ab   a, b, _creationTime",
+      "✔ These indexes are now staged:\n  [*] notes.by_a   a, _creationTime  (staged)",
     ]);
     expect(await deploy()).toEqual([]);
   });

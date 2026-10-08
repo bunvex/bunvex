@@ -41,6 +41,8 @@ export type ModuleRow = {
   analyzeResult: AnalyzedModule | null;
 };
 export type UdfConfig = { serverVersion: string; seed: Uint32Array; timestamp: number };
+/** Convex's `UdfServerVersionDiff`: what a push changed the server version from, and to. */
+export type UdfServerVersionDiff = { previous_version: string; next_version: string };
 
 /** The schema's module, stored with the functions as Convex's (`AppDefinitionConfig::all_modules`). */
 export const SCHEMA_MODULE = "schema.js";
@@ -181,7 +183,10 @@ const base64ToHex = (b64: string) => Buffer.from(b64, "base64").toString("hex");
  * time an int64 of nanoseconds. `serverVersion` is what a push sends (`udfServerVersion`: the CLI's package
  * version, as Convex's); without one, the stored row is used as it is, or made with this server's version.
  */
-export async function udfConfig(engine: Engine, serverVersion?: string): Promise<UdfConfig> {
+export async function udfConfig(
+  engine: Engine,
+  serverVersion?: string,
+): Promise<UdfConfig & { diff: UdfServerVersionDiff | null }> {
   // Drawn outside the transaction: randomness is refused inside one (determinism).
   const fresh = crypto.getRandomValues(new Uint32Array(8));
   return engine.mutation((db) =>
@@ -192,8 +197,14 @@ export async function udfConfig(engine: Engine, serverVersion?: string): Promise
           serverVersion: row.serverVersion as string,
           seed: new Uint32Array(row.importPhaseRngSeed as ArrayBuffer),
           timestamp: msOfNs(row.importPhaseUnixTimestamp as bigint),
+          diff: null,
         };
       const version = serverVersion ?? SERVER_VERSION;
+      // As Convex's `UdfConfigModel::set`: a diff when the version changed, or with no row before.
+      const diff = {
+        previous_version: row ? (row.serverVersion as string) : "Unspecified version",
+        next_version: version,
+      };
       const seed = fresh;
       const timestamp = Date.now();
       const fields = {
@@ -203,9 +214,9 @@ export async function udfConfig(engine: Engine, serverVersion?: string): Promise
       };
       if (row) await db.replace(UDF_CONFIG_TABLE, row._id as string, fields);
       else await db.insert(UDF_CONFIG_TABLE, fields);
-      return { serverVersion: version, seed, timestamp };
+      return { serverVersion: version, seed, timestamp, diff };
     }),
-  ) as Promise<UdfConfig>;
+  ) as Promise<UdfConfig & { diff: UdfServerVersionDiff | null }>;
 }
 
 /**
