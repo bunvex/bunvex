@@ -27,6 +27,7 @@ export const USAGE_LIMIT_METRICS = [
   "databaseIoGb",
   "searchQueryGb",
   "dataEgressGb",
+  "aiGatewayCostDollars",
 ] as const;
 export const DEPLOYMENT_USAGE = `Usage: bunvex deployment <command> [options]
 
@@ -59,8 +60,9 @@ const METRIC_LABELS: Record<string, string> = {
   databaseIoGb: "Database I/O",
   searchQueryGb: "Search queries",
   dataEgressGb: "Data egress",
+  aiGatewayCostDollars: "AI Gateway",
 };
-/** A metric's label; one this CLI does not know (as `aiGatewayCostDollars`) shows its name, as Convex's. */
+/** A metric's label; one this CLI does not know shows its name, as Convex's. */
 const metricLabel = (metric: string) => METRIC_LABELS[metric] ?? metric;
 
 // Convex's order: metrics as listed (unknown ones last, in their order), month before day, warning before disable.
