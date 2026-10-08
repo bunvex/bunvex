@@ -3,10 +3,11 @@
 import { expect, test } from "bun:test";
 import { v } from "@bunvex/values";
 import { IndexStagedError } from "../src/catalog.ts";
-import { Engine } from "../src/engine.ts";
+import { Engine, readSearchIndexStates } from "../src/engine.ts";
 import type { SearchSegmentStore } from "../src/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
+import { stateToRow } from "../src/search-segments.ts";
 
 function blobs(): SearchSegmentStore {
   const map = new Map<string, Uint8Array>();
@@ -60,13 +61,10 @@ const search = (e: Engine) =>
   );
 
 /** The search rows' `onDiskState`, by index name. */
+/** bunvex's state of each index (the `search_index_segments` global), as Convex's `onDiskState`, by name. */
 async function states(e: Engine) {
-  const rows = (await e.query((db) =>
-    db.asSystem(() =>
-      (db as unknown as { query(t: string): { collect(): Promise<unknown[]> } }).query("_index").collect(),
-    ),
-  )) as { descriptor: string; config?: { onDiskState: Record<string, unknown> } }[];
-  return Object.fromEntries(rows.filter((r) => r.config).map((r) => [r.descriptor, r.config!.onDiskState]));
+  const { indexes } = await readSearchIndexStates(e.persistence);
+  return Object.fromEntries(indexes.map((s) => [s.name, stateToRow(s).config.onDiskState as Record<string, unknown>]));
 }
 
 test("a staged index is built and kept Backfilled { staged }; un-staging it enables it at once", async () => {

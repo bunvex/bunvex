@@ -84,22 +84,27 @@ test("an idle index is fast-forwarded; a start replays nothing older and retenti
   // While the indexes hold the write in memory, they are not idle.
   await e1.searchWorkersTick();
   expect(e1.searchStats.fastForwards).toBe(0);
-  await e1.close(); // flushed, then fast-forwarded
+  await e1.close(); // flushed: each state is current at the newest commit (bunvex's state is a global, no commit)
 
   const e2 = await open(p, store);
-  const first = await forwarded(e2);
-  expect(Object.keys(first).sort()).toEqual(["text_search", "vector_search"]);
+  expect(await forwarded(e2)).toEqual({}); // nothing newer to fast-forward to
   const rowsTs = (await readSearchIndexStates(p)).indexes.map((s) => s.ts).reduce((a, b) => (b > a ? b : a));
-  expect(first.text_search).toBeGreaterThan(rowsTs);
+  expect(rowsTs).toBeLessThanOrEqual(e2.committer.visibleTs);
   // Writes to another table move the clock on; the idle indexes follow it.
   for (let i = 0; i < 3; i++) await e2.mutation((db) => db.insert("logs", { i }));
   await e2.searchWorkersTick();
   expect(e2.searchStats.fastForwards).toBe(2);
   const second = await forwarded(e2);
-  expect(second.text_search).toBeGreaterThan(first.text_search!);
+  expect(Object.keys(second).sort()).toEqual(["text_search", "vector_search"]);
+  expect(second.text_search).toBeGreaterThan(rowsTs);
+  await crash(e2);
+
   // Keyed by the `_index` row's internal id, as Convex's `InternalId` string (STUDY-133 §12 M7), and the rows
   // a start loaded are patched, not duplicated.
-  const rows = (await e2.query((db) =>
+  const again = await open(p, store);
+  await again.mutation((db) => db.insert("logs", { i: 3 }));
+  await again.searchWorkersTick();
+  const rows = (await again.query((db) =>
     db.asSystem(async () => ({
       workers: await (db as any).query("_index_worker_metadata").collect(),
       indexes: await (db as any).query("_index").collect(),
@@ -111,7 +116,7 @@ test("an idle index is fast-forwarded; a start replays nothing older and retenti
     expect(w.index_id).toMatch(/^[A-Za-z0-9_-]{22}$/);
     expect(internal.has(w.index_id)).toBe(true);
   }
-  await crash(e2);
+  await crash(again);
 
   // Retention past the segments' ts but not the fast-forward's: the segments are used, nothing replayed.
   await p.setGlobal("document_min_snapshot_ts", tsGlobal(second.text_search!));
