@@ -419,6 +419,14 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
+| ID | Divergence | Convex | Observable | Recommendation | Source |
+|---|---|---|---|---|---|
+| DV-435 | An OCC conflict caused by a system writer reads `A call to "<label>"` | Since b352fab, a description: "An edit in the Convex dashboard", "A Fivetran sync", "An Airbyte sync", "A data import", "A Convex system operation" | yes (error text) | Convex's structure in bunvex's words ("An edit in the dashboard", "A system operation"; no "convex" in shipped strings) | [STUDY-137 R1](../study/STUDY-137-convex-reference-2026-10-07.md#4-divergences) |
+| DV-436 | `RegExp.$1`, `lastMatch`, `input` and the other legacy statics work in functions (Bun's JSC has them) | Removed from the isolate (644e25f) | yes | Match: delete them from each version's isolate context | [STUDY-137 R2](../study/STUDY-137-convex-reference-2026-10-07.md#4-divergences) |
+| DV-437 | `ctx.storage.store()` in a mutation throws "not supported in queries and mutations yet" | Since fb75332 the syscall writes the `_file_storage` row and stages the bytes (`TooManyFilesWritten`, `FilesWrittenTooLarge`); nothing uploads them yet at this tag | yes | Keep until the upload lands upstream, then match | [STUDY-137 R3](../study/STUDY-137-convex-reference-2026-10-07.md#4-divergences) |
+| DV-438 | No `_schema_validations` rows for staged validators; no 400 `StagedSchemaWithEnforcedValidatorChanges` | Both since 2ada334 | yes (a push refused); no (dashboard) for the rows | Match in a follow-up, after STUDY-106/127 are updated | [STUDY-137 R4](../study/STUDY-137-convex-reference-2026-10-07.md#4-divergences) |
+| DV-439 | Function arguments are not checked against the value limits (array length 8192, field count) before the call | `InvalidArguments` (user functions: "Invalid arguments for <path>: …"; system functions since 4991db1) | yes | Match in a follow-up | [STUDY-137 R5](../study/STUDY-137-convex-reference-2026-10-07.md#4-divergences) |
+
 DV-366 (STUDY-110 L3) was decided by the owner (2026-10-05, #426: do not match the site proxy's limit of 4) and is in [Decided divergences](#decided-divergences).
 DV-400 (STUDY-125 V1) was accepted (owner, 2026-10-05) and is in [Decided divergences](#decided-divergences).
 DV-401 (STUDY-125 V2) was decided to match Convex (owner, 2026-10-05), then built (STUDY-125 §7): it is in [Resolved to match Convex](#resolved-to-match-convex).

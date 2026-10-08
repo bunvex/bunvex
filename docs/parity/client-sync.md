@@ -1,6 +1,6 @@
 ## Parity inventory: clients, sync protocol and reactivity
 
-Compared against Convex `convex-backend` @ `4577b9031` and bunvex's current tree
+Compared against Convex `convex-backend` @ `4577b9031`, brought up to the release `precompiled-2026-10-07-d8bdde0` by [STUDY-137](../study/STUDY-137-convex-reference-2026-10-07.md) and bunvex's current tree
 (`packages/protocol/src/index.ts`, `packages/server/src/server.ts`, `packages/server/src/functions.ts`,
 `packages/core/src/subscriptions.ts`, `packages/core/src/engine.ts`, `packages/core/src/committer.ts`;
 `packages/client` and `packages/react` are empty stubs, `packages/auth` is an empty stub).
