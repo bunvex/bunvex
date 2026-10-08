@@ -1,5 +1,3 @@
-import { TooltipProvider } from "@bunvex/ui/components/tooltip";
-import { ThemeProvider, themeScript } from "@bunvex/ui/theme";
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import appCss from "../app.css?url";
 import { SITE } from "../content.ts";
@@ -9,6 +7,7 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { name: "theme-color", content: "#111015" },
       { title: SITE.title },
       { name: "description", content: SITE.description },
       { property: "og:type", content: "website" },
@@ -28,19 +27,15 @@ export const Route = createRootRoute({
   component: () => <Outlet />,
 });
 
+// The site is dark only (SITE-01 §4), so the theme is fixed in the markup: no script, nothing stored.
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className="dark">
       <head>
-        {/* apply the stored theme before first paint (no flash of the wrong theme) */}
-        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: a constant script from @bunvex/ui */}
-        <script dangerouslySetInnerHTML={{ __html: themeScript() }} />
         <HeadContent />
       </head>
-      <body className="min-h-dvh bg-background text-foreground antialiased">
-        <ThemeProvider>
-          <TooltipProvider>{children}</TooltipProvider>
-        </ThemeProvider>
+      <body className="min-h-dvh bg-page font-sans text-ink antialiased">
+        {children}
         <Scripts />
       </body>
     </html>

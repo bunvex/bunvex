@@ -1,4 +1,77 @@
-/* The site's stylesheet: the bunvex design system (tokens, themes, Tailwind) plus the classes of this app. */
+/* The site's stylesheet: the bunvex design system (Tailwind, components) under the site's own dark palette
+   (SITE-01 §4, v2: dark only, a warm near-black with honey and violet). The fonts are bundled, not fetched
+   from a font service. */
+@import "@fontsource-variable/bricolage-grotesque";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
 @import "@bunvex/ui/styles.css";
 
 @source "./**/*.{ts,tsx}";
+
+@theme {
+  --color-page: #111015;
+  --color-band: #16151b;
+  --color-surface: #1c1b22;
+  --color-line: #2c2a33;
+  --color-ink: #f3ede2;
+  --color-soft: #b3ada2;
+  --color-dim: #918b82;
+  --color-honey: #f4c06a;
+  --color-honey-ink: #1a1305;
+  --color-violet: #ad9bff;
+  --color-good: #7fd6a4;
+  --color-bad: #ff8f80;
+  --font-display: "Bricolage Grotesque Variable", "Avenir Next", system-ui, sans-serif;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* The design system's dark tokens, retuned to the site's palette so its components match. */
+html.dark {
+  --background: #111015;
+  --foreground: #f3ede2;
+  --card: #1c1b22;
+  --card-foreground: #f3ede2;
+  --muted: #1c1b22;
+  --muted-foreground: #b3ada2;
+  --primary: #f4c06a;
+  --primary-foreground: #1a1305;
+  --border: #2c2a33;
+  --ring: #f4c06a;
+}
+
+@layer components {
+  /* syntax colours of the code samples */
+  .tok-k {
+    color: var(--color-violet);
+  }
+  .tok-s {
+    color: var(--color-good);
+  }
+  .tok-f {
+    color: var(--color-honey);
+  }
+  .tok-c {
+    color: var(--color-dim);
+  }
+}
+
+@keyframes site-grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+@keyframes site-pop {
+  from {
+    transform: translateY(6px);
+    opacity: 0;
+  }
+}
+@keyframes site-blink {
+  50% {
+    opacity: 0;
+  }
+}

@@ -1,10 +1,11 @@
-import { Benchmarks } from "./benchmarks.tsx";
-import { CodeSample } from "./code-sample.tsx";
+import { Benchmarks, Proof } from "./benchmarks.tsx";
+import { Databases, Features } from "./features.tsx";
+import { Files } from "./files.tsx";
 import { Hero } from "./hero.tsx";
-import { HowItWorks } from "./how-it-works.tsx";
+import { Migrate } from "./migrate.tsx";
 import { SiteFooter } from "./site-footer.tsx";
 import { SiteHeader } from "./site-header.tsx";
-import { Status } from "./status.tsx";
+import { FinalCta, Status } from "./status.tsx";
 
 /** The whole landing page. No router dependency, so tests render it directly. */
 export function Landing() {
@@ -13,10 +14,15 @@ export function Landing() {
       <SiteHeader />
       <main>
         <Hero />
+        <Proof />
+        <div className="h-18" />
         <Benchmarks />
-        <HowItWorks />
-        <CodeSample />
+        <Files />
+        <Features />
+        <Databases />
+        <Migrate />
         <Status />
+        <FinalCta />
       </main>
       <SiteFooter />
     </>

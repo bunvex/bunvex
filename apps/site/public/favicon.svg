@@ -1,1 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><title>bunvex</title><rect width="32" height="32" fill="#171717"/><text x="16" y="23" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="20" font-weight="700" fill="#fafafa" text-anchor="middle">b</text></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><title>bunvex</title><rect width="32" height="32" rx="7" fill="#111015"/><rect x="11" y="11" width="13" height="13" rx="3" fill="#ad9bff"/><rect x="7" y="7" width="13" height="13" rx="3" fill="#f4c06a"/></svg>
