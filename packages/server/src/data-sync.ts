@@ -580,7 +580,7 @@ export async function recordProgress(engine: Engine, page: DataSyncPage, caller:
         [{ action: "create_data_sync", metadata: { sync_id: syncId } }],
         auditActor(caller),
       );
-    }, "data_sync_progress");
+    }, "_system/data_sync_progress");
     return;
   }
   const changedKind = existing.state.type !== state.type;
@@ -590,7 +590,7 @@ export async function recordProgress(engine: Engine, page: DataSyncPage, caller:
     .mutation(
       (db) =>
         db.asSystem(() => db.patch(DATA_SYNC_PROGRESS_TABLE, existing._id, { lastUpdatedMs: now, state } as never)),
-      "data_sync_progress",
+      "_system/data_sync_progress",
     )
     .catch((e) => console.error("data sync: recording progress failed", e));
 }

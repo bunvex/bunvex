@@ -1694,7 +1694,11 @@ export class Engine {
           totalDocs = this.tableSummaries.count(e.tablet);
         } catch {}
       const patch = { numDocsIndexed: BigInt(total), ...(totalDocs === null ? {} : { totalDocs: BigInt(totalDocs) }) };
-      await this.runMutation((db) => db.patch(INDEX_BACKFILLS_TABLE, id, patch), true, "search_backfill_progress");
+      await this.runMutation(
+        (db) => db.patch(INDEX_BACKFILLS_TABLE, id, patch),
+        true,
+        "_system/search_backfill_progress",
+      );
     };
   }
 
@@ -3150,7 +3154,11 @@ export class Engine {
 
   /** Delete one chunk of session requests created before `cutoffMs` (retention); how many it deleted. */
   deleteSessionRequests(cutoffMs: number, limit = SESSION_CLEANUP_CHUNK): Promise<number> {
-    return this.runMutation((db) => deleteSessionRequestsBefore(db, cutoffMs, limit), true, "session_requests_cleanup");
+    return this.runMutation(
+      (db) => deleteSessionRequestsBefore(db, cutoffMs, limit),
+      true,
+      "_system/session_requests_cleanup",
+    );
   }
 
   private runMutation<T>(
@@ -3268,7 +3276,7 @@ export class Engine {
     // Convex names the document only when it knows which mutation changed it.
     let changedBy = "";
     if (writeSource !== undefined && documentId !== undefined) {
-      const who = writeSource === source ? "Another call to this mutation" : `A call to "${writeSource}"`;
+      const who = writeSource === source ? "Another call to this mutation" : writerDescription(writeSource);
       changedBy = ` ${who} changed the document with ID "${documentId}".`;
     }
     const where = table === undefined ? "some table" : `the "${table}" table`;
@@ -3277,6 +3285,21 @@ export class Engine {
       { table, documentId, writeSource, writeTs: conflict.writeTs, retries },
     );
   }
+}
+
+/**
+ * Who changed a document an OCC conflict names (Convex's `occ_write_source_string`, b352fab; DV-435): a call to
+ * the app's function by its path; bunvex's own writers (every source under `_system/`, which no app function
+ * can use) by what was done, as Convex's `convex_writer_description` in bunvex's words.
+ */
+export function writerDescription(source: string): string {
+  if (!source.startsWith("_system/")) return `A call to "${source}"`;
+  const label = source.slice("_system/".length);
+  if (label.startsWith("frontend/")) return "An edit in the dashboard";
+  if (label.includes("fivetran")) return "A Fivetran sync";
+  if (label.includes("airbyte")) return "An Airbyte sync";
+  if (label.startsWith("snapshot_import")) return "A data import";
+  return "A system operation";
 }
 
 /**

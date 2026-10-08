@@ -457,7 +457,7 @@ export class ScheduledJobExecutor {
   private async finish(job: JobDoc, state: JobDoc["state"]) {
     await this.engine.mutation(async (db) => {
       if (await this.unchanged(db, job)) await completeJob(db, job._id, state, Date.now());
-    }, "scheduled_job");
+    }, "_system/scheduled_job");
     if (state.kind === "failed") this.stats.failed++;
   }
 
@@ -518,7 +518,7 @@ export class ScheduledJobExecutor {
       if (!(await this.unchanged(db, job))) return null;
       await patchJob(db, job._id, { state: { kind: "inProgress", requestId, executionId } });
       return getJob(db, job._id);
-    }, "scheduled_job");
+    }, "_system/scheduled_job");
     if (!started) return;
     let state: JobDoc["state"];
     try {
@@ -534,7 +534,7 @@ export class ScheduledJobExecutor {
     // Recorded until it sticks; a job canceled meanwhile stays canceled (`completeJob` is a no-op then).
     for (let n = 1; ; n++) {
       try {
-        await this.engine.mutation((db) => completeJob(db, job._id, state, Date.now()), "scheduled_job");
+        await this.engine.mutation((db) => completeJob(db, job._id, state, Date.now()), "_system/scheduled_job");
         break;
       } catch (e) {
         if (e instanceof CommitterStoppedError) return;
@@ -552,7 +552,7 @@ export class ScheduledJobExecutor {
       let next = 60_000;
       try {
         const before = wallClock() - this.o.retentionSeconds * 1000;
-        const n = await this.engine.mutation((db) => deleteCompletedJobs(db, before, 100), "scheduled_job_gc");
+        const n = await this.engine.mutation((db) => deleteCompletedJobs(db, before, 100), "_system/scheduled_job_gc");
         if (n === 100) next = 1000; // more to delete
       } catch (e) {
         if (e instanceof CommitterStoppedError) return;

@@ -377,7 +377,7 @@ export class LogManager {
         for (const r of await rows(db))
           if (r.config.type === "local") await db.asSystem(() => db.delete(LOG_SINKS_TABLE, r._id));
         await addOrUpdateSink(db, { type: "local", path: localSinkPath });
-      }, "log_sink_worker");
+      }, "_system/log_sink_worker");
     }
     const table = () => this.engine.catalog.tables.get(LOG_SINKS_TABLE)?.byId.id;
     const audit = () => this.engine.catalog.tables.get(DEPLOYMENT_AUDIT_LOG_TABLE)?.byId.id;
@@ -486,16 +486,16 @@ export class LogManager {
         }
         await this.engine.mutation(async (db) => {
           await db.asSystem(() => db.delete(LOG_SINKS_TABLE, r._id));
-        }, "log_sink_worker");
+        }, "_system/log_sink_worker");
       } else if (r.status.type === "pending" || r.status.type === "restarting") {
         const status = await this.startSink(r, r.status.type === "pending");
         await this.engine.mutation(async (db) => {
           const now = (await db.asSystem(() => db.get(LOG_SINKS_TABLE, r._id))) as unknown as SinkRow | null;
           if (now && now.status.type === r.status.type) await patchSink(db, r._id, { status });
-        }, "log_sink_worker");
+        }, "_system/log_sink_worker");
       } else if (r.status.type === "active" && running?.id !== r._id) {
         // Active in the table but not running here (a restart): start it again without verifying.
-        await this.engine.mutation((db) => patchSink(db, r._id, { status: { type: "restarting" } }), "log_sink_worker");
+        await this.engine.mutation((db) => patchSink(db, r._id, { status: { type: "restarting" } }), "_system/log_sink_worker");
         this.again = true;
       }
     }
