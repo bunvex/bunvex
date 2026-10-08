@@ -113,7 +113,7 @@ export class CronJobExecutor {
   private async register(): Promise<CronDiff | undefined> {
     for (let failures = 1; !this.stopped; failures++) {
       try {
-        return await this.engine.mutation((db) => applyCrons(db, this.specs, Date.now(), this.o), "cron_push");
+        return await this.engine.mutation((db) => applyCrons(db, this.specs, Date.now(), this.o), "_system/cron_push");
       } catch (e) {
         if (e instanceof CommitterStoppedError || this.stopped) return undefined;
         const delay = backoff(failures, this.o.errorInitialBackoffMs, this.o.errorMaxBackoffMs);
@@ -152,7 +152,7 @@ export class CronJobExecutor {
   /** A new code version's crons (STUDY-35): the same diff as at start, against what is stored. */
   async push(specs: Map<string, CronSpec>) {
     this.specs = specs;
-    const diff = await this.engine.mutation((db) => applyCrons(db, specs, Date.now(), this.o), "cron_push");
+    const diff = await this.engine.mutation((db) => applyCrons(db, specs, Date.now(), this.o), "_system/cron_push");
     this.poke();
     return diff;
   }
