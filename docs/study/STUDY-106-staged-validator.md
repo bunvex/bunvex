@@ -271,6 +271,6 @@ is 2ada334's (every row deleted, the active schema's staged ones restarted as `p
 (two hashes in `staged-validations.test.ts`, one with a float literal). The 400 is raised by `start_push` (dry run too)
 and `evaluate_push`, before anything is written.
 
-Found on the way (not built, for the owner): Convex's dry run commits (the first pass above), so a `deploy --dry-run`
+Found on the way, decided as DV-444 (owner, 2026-10-08: bunvex's dry run keeps writing nothing): Convex's dry run commits (the first pass above), so a `deploy --dry-run`
 on Convex writes a pending schema, overwriting an in-progress push, and creates the pushed tables; bunvex's dry run
 writes nothing. `convex codegen` against a deployment runs the same dry-run push.
