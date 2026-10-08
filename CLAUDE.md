@@ -10,6 +10,8 @@ deliberate, documented differences only. Read [ARCHITECTURE.md](ARCHITECTURE.md)
   github.com/get-convex/convex-backend.
   - Backend: `crates/` (database, isolate, application, value, …).
   - Client and function API: `npm-packages/convex`.
+- Which Convex commit bunvex follows, and how new Convex commits are triaged (daily) and taken in (weekly), is in
+  [docs/parity/upstream.md](docs/parity/upstream.md) (STUDY-138).
 - Before implementing any feature Convex has, write or update a study in `docs/study/STUDY-NN-<topic>.md`
   (see [docs/study/README.md](docs/study/README.md)). It covers:
   - how Convex does it, citing files;
