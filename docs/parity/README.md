@@ -39,7 +39,11 @@ are not counted: 1 in server-api.md, 1 in client-sync.md, 2 in platform.md.
 The order follows one principle: **first make what exists correct, then make the core behave like Convex,
 then grow outwards.** Each item becomes one or more PRs, each with its study.
 
-### Phase 0 — correctness bugs in what already exists
+**Where it stands (checked against the parity rows on 2026-10-08):** phases 0, 1 and 2 are done. Phase 3 is done
+except the dashboard on a real deployment (item 12) and built-in auth (item 13). In phase 4, search, vector search,
+log streaming, metrics and streaming export are done; components and Node's `externalPackages` remain.
+
+### Phase 0 — correctness bugs in what already exists — done
 
 Found by the retroactive studies (STUDY-05 … STUDY-11). They are not divergences to decide: bunvex is
 wrong.
@@ -63,36 +67,39 @@ wrong.
 | B15 | **Fixed in #107 and #112** (call timeouts; transient flush and read retries, as Convex; conformance K20/K21). No timeouts on database calls, no retry of transient flush errors, no retry of reads: a hung connection stalls the process, a network blip kills it. Match Convex (owner, 2026-10-01; DV-104–DV-106) | STUDY-25 L3–L5 |
 | B16 | **Fixed in #114.** No stored layout version and no `read_only` flag: a foreign or future store fails obscurely. Match Convex (owner, 2026-10-01; DV-107, DV-108) | STUDY-25 L6/L7 |
 
-### Phase 1 — the core behaves like Convex
+### Phase 1 — the core behaves like Convex — done
 
 1. **Values:** `@bunvex/values` with every `v.*` validator, `args`/`returns` checking, Int64/bigint,
-   bytes, Convex's cross-type value order and the `$integer`/`$bytes`/`$float` JSON encoding.
+   bytes, Convex's cross-type value order and the `$integer`/`$bytes`/`$float` JSON encoding — done (#24, #25,
+   #21, STUDY-18).
 2. **Index keys:** the implicit `_creationTime` before `_id` in every user index, `undefined`, and nested
-   field paths.
+   field paths — done (#10, #21, STUDY-05).
 3. **Documents:** field-name rules, system fields refused in writes, `replace`, `NonexistentDocument`, and
-   the size, nesting, array and field-count limits.
+   the size, nesting, array and field-count limits — done (#21, #35).
 4. **Queries:** `filter` and its builder, `unique`, `paginate` (cursors, `endCursor`, `maximumRowsRead`),
-   async iteration, the transaction read/write limits, and a read-set narrowed to what `take` read (done
-   in #134, DV-57).
-5. **Transactions:** Convex's OCC retry budget and error (done in STUDY-21), the 1 s execution limit, and
-   `db.vars.commitTs`.
-6. **Function results:** `ConvexError` data, error redaction, status codes, `logLines` (done in STUDY-20,
-   as `BunvexError`; cached query lines and subscription lines remain).
+   async iteration, the transaction read/write limits, and a read-set narrowed to what `take` read — done
+   (#37, #40, #42, #134, DV-57).
+5. **Transactions:** Convex's OCC retry budget and error, the 1 s execution limit, and `db.vars.commitTs` —
+   done (STUDY-21, STUDY-41, STUDY-53).
+6. **Function results:** `ConvexError` data, error redaction, status codes, `logLines` — done (STUDY-20, as
+   `BunvexError`; cached query lines DV-74, subscription lines DV-75).
 7. **Schema:** `defineSchema`/`defineTable`, document validation, `schemaValidation`, staged indexes, and
-   tables created on first insert.
+   tables created on first insert — done (#29, #33, STUDY-29, STUDY-106).
 
-### Phase 2 — sync protocol and clients
+### Phase 2 — sync protocol and clients — done
 
 Protocol v1:
 
-- all queries advance together (Transition with state versions) — server side done (STUDY-23 step 2);
-- read-your-writes (the mutation commit ts) — server side done (STUDY-23 step 2);
-- mutation ordering per connection (done in STUDY-22);
-- idempotency (session and request ids);
-- reconnect and resend, auth messages.
+- all queries advance together (Transition with state versions) — done (STUDY-23);
+- read-your-writes (the mutation commit ts) — done (STUDY-23, STUDY-26);
+- mutation ordering per connection — done (STUDY-22);
+- idempotency (session and request ids) — done (STUDY-23);
+- reconnect and resend, auth messages — done (STUDY-26, STUDY-27).
 
 Then `@bunvex/client` (base client, reconnect, backoff, optimistic updates, reactive pagination) and
-`@bunvex/react` (`ConvexProvider`, `useQuery`, `useMutation`, `usePaginatedQuery`, auth helpers).
+`@bunvex/react` (`ConvexProvider`, `useQuery`, `useMutation`, `usePaginatedQuery`, auth helpers) — done
+(STUDY-26, STUDY-27), with `@bunvex/nextjs` (STUDY-46), `@bunvex/react-clerk` / `@bunvex/react-auth0`
+(STUDY-54) and `@bunvex/react-query` (STUDY-55).
 
 ### Phase 3 — platform
 
@@ -104,20 +111,21 @@ In this order:
 4. file storage (STUDY-32; it uses HTTP actions for uploads and downloads; built-in auth, STUDY-28, needs them
    too — swapped with HTTP actions by the owner, 2026-10-01) — done;
 5. retention and garbage collection of old versions (STUDY-33) — done;
-6. admin keys (STUDY-34);
+6. admin keys (STUDY-34) — done;
 7. pushing and deploying functions (STUDY-35): module loading, hot swap in `vm` contexts, the pushed code
    kept in the store, the deploy2 protocol, `bunvex deploy` — done;
 8. codegen (`_generated/api`, `server`, `dataModel`; ARCH-01 open decision 1, decided: generate like Convex;
-   STUDY-36);
+   STUDY-36) — done, with Convex's flags (STUDY-116);
 9. the CLI, part 1: `start`, `deploy`, `dev`, `run`, `admin-key`, and environment variables (`process.env`,
-   `env set|get|list|remove`);
+   `env set|get|list|remove`) — built (STUDY-37); `dev`, `deploy` and `run` are partial (platform §12);
 10. the Docker image and docker-compose (credentials bootstrap), so a self-hosted app can be brought up as
-    with Convex;
+    with Convex — done (STUDY-38, STUDY-40);
 11. `ctx.runQuery` / `ctx.runMutation` inside queries and mutations, and the 1 s user execution limit
     (STUDY-41) — done, with N2, N3 and N6 built in #213;
 12. the dashboard on a real deployment (its HTTP data source, with the UI session, and the `_system/*`
-    functions it reads), then live logs;
-13. built-in auth (STUDY-28) phases;
+    functions it reads), then live logs — open: every screen is built on the mock and the server's admin API
+    exists; the data source that calls it does not;
+13. built-in auth (STUDY-28) phases — open (AD-01 accepted, spike done);
 14. import/export in Convex's snapshot format, so data can move between Convex and bunvex (STUDY-42) —
     done; shape inference, cloud backups and the upgrade path remain (platform §18).
 
@@ -126,12 +134,13 @@ containers up, deploy functions, see them work) before the remaining platform it
 
 ### Phase 4 — the rest
 
-- full-text search (STUDY-45: 6 done, 3 partial, 1 missing, platform §6) and vector search (STUDY-51: 5 done,
-  1 partial, §7);
-- components (1 of 7, §11);
-- Node actions;
-- log streaming (STUDY-47, STUDY-59, STUDY-70) and metrics (7 done, 2 partial, 2 missing, §20);
-- streaming export;
+- full-text search (STUDY-45, STUDY-111: all 10 rows done, platform §6) and vector search (STUDY-51: all 6
+  done, §7) — done;
+- components (1 of 7, §11; DV-55, plan in STUDY-62) — open;
+- Node actions: `"use node"` runs in Bun (DV-87) — done; `node.externalPackages` — open;
+- log streaming (STUDY-47, STUDY-59, STUDY-70) and metrics (§20: 14 done; the one missing row, insights, is
+  cloud-only) — done;
+- streaming export (STUDY-60, STUDY-69) — done;
 - the dashboard's connection to a real deployment. Every screen is built on the mock (UI-01 §0, platform §21);
   the server's admin API and the admin-key sign-in exist; a data source that calls the server does not.
 
