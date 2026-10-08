@@ -91,6 +91,8 @@ async function setup() {
   return { api, engine, scheduler: s.scheduler, ran, inAction, release, post, run, jobs, events };
 }
 
+const SOON_MS = 4000;
+
 test("every job goes at once: pending, in progress and done; none runs later; the scheduler keeps working", async () => {
   const t = await setup();
   // One done, one in progress, 2000 waiting (two mutations' worth, one of them due soon).
@@ -98,7 +100,10 @@ test("every job goes at once: pending, in progress and done; none runs later; th
   await until(async () => (await t.jobs()).some((j) => j.state.kind === "success"), "the first job");
   expect((await t.run("m:scheduleSlow", {})).status).toBe(200);
   await t.inAction;
-  expect((await t.run("m:many", { n: 1000, delay: 400, tag: "soon" })).status).toBe(200);
+  // "Soon" must not come before the delete below, however slow the machine: scheduling 1000 more jobs and
+  // deleting the table took over 400 ms on a loaded runner, and the soon jobs ran first.
+  const soonAt = Date.now() + SOON_MS;
+  expect((await t.run("m:many", { n: 1000, delay: SOON_MS, tag: "soon" })).status).toBe(200);
   expect((await t.run("m:many", { n: 1000, delay: 3_600_000, tag: "later" })).status).toBe(200);
   expect((await t.jobs()).length).toBe(2002);
 
@@ -108,7 +113,7 @@ test("every job goes at once: pending, in progress and done; none runs later; th
   // The running action finishes and finds its job gone: nothing is recorded, nothing fails.
   t.release();
   await until(() => t.ran.includes("slow:end"), "the action to end");
-  await Bun.sleep(600); // past the "soon" jobs' time
+  await Bun.sleep(Math.max(0, soonAt + 200 - Date.now())); // past the "soon" jobs' time
   expect(await t.jobs()).toEqual([]);
   expect(t.ran).toEqual(["done", "slow:start", "slow:end"]);
   expect(t.scheduler.stats.systemErrors).toBe(0);
@@ -119,7 +124,7 @@ test("every job goes at once: pending, in progress and done; none runs later; th
   await until(async () => (await t.jobs())[0]?.state.kind === "success", "a job scheduled after the deletion");
   expect(t.ran.at(-1)).toBe("after");
   expect((await t.jobs()).length).toBe(1);
-});
+}, 20_000);
 
 test("a mutation job running meanwhile writes nothing: its retry finds the job gone", async () => {
   const t = await setup();
