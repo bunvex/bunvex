@@ -645,8 +645,18 @@ export class Engine {
 
   /** Stop writing and hand the store over: let the last group land, release the lease, close the store. */
   private closed = false;
+  private closing: Promise<void> | null = null;
 
-  async close() {
+  /**
+   * Once: a second call (the server's shutdown closes the engine, and so may its owner) waits for the first
+   * instead of flushing the search indexes again after the lease is gone (STUDY-133 §12 M15).
+   */
+  close(): Promise<void> {
+    this.closing ??= this.closeOnce();
+    return this.closing;
+  }
+
+  private async closeOnce() {
     this.closed = true;
     await this.deleting?.catch(() => {});
     await this.indexWorker?.stop();
