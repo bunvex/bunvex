@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:f
 import { join } from "node:path";
 import type { StoredSegment } from "@bunvex/search";
 import { encodeId } from "@bunvex/values";
-import { internalIdBytes } from "./internal-id.ts";
+import { internalIdBytes, internalIdOf } from "./internal-id.ts";
 import type { DocLogRow, Persistence, RetentionStore, TabletId } from "./persistence/index.ts";
 import { readTsGlobal } from "./persistence-globals.ts";
 import type { Doc, SearchIndexDef, VectorIndexDef } from "./schema.ts";
@@ -483,9 +483,16 @@ export class SearchSegmentsState {
     }
   }
 
-  /** The fast-forward ts of the `_index_worker_metadata` rows, by their `_index` row's id. */
+  /**
+   * The fast-forward ts of the `_index_worker_metadata` rows, by their `_index` row's internal id (Convex's
+   * `InternalId` string; a row from before STUDY-133 §12 M7 holds the document id, read too).
+   */
   loadForwarded(rows: Record<string, unknown>[]) {
-    const keyOf = new Map([...this.ids].map(([k, id]) => [id, k]));
+    const keyOf = new Map<string, string>();
+    for (const [k, id] of this.ids) {
+      keyOf.set(id, k);
+      keyOf.set(internalIdOf(id), k);
+    }
     for (const r of rows) {
       const k = keyOf.get(r.index_id as string);
       const meta = r.index_metadata as { metadata?: { fast_forward_ts?: bigint } } | undefined;
@@ -515,7 +522,8 @@ export class SearchSegmentsState {
       if (!indexId || !s) continue;
       writes.push({
         ...(this.forwarded.get(k)?._id ? { _id: this.forwarded.get(k)!._id } : {}),
-        index_id: indexId,
+        // Convex's `InternalId` string of the `_index` row, not its document id (Convex refuses a longer one).
+        index_id: internalIdOf(indexId),
         metadata_type: s.kind === "text" ? "text_search" : "vector_search",
       });
     }
@@ -523,7 +531,7 @@ export class SearchSegmentsState {
       writes,
       done: (ids: (string | undefined)[]) => {
         writes.forEach((w, i) => {
-          const k = keys.find((x) => this.ids.get(x) === w.index_id)!;
+          const k = keys.find((x) => this.ids.has(x) && internalIdOf(this.ids.get(x)!) === w.index_id)!;
           this.forwarded.set(k, { ts, _id: w._id ?? ids[i] });
         });
       },

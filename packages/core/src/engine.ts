@@ -39,6 +39,7 @@ import {
   DATABASE_GLOBALS_TABLE,
   DEPLOYMENT_AUDIT_LOG_TABLE,
   databaseIndexRows,
+  EMPTY_CLOUD_SYSTEM_TABLES,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
   FILE_STORAGE_TABLE,
@@ -830,6 +831,8 @@ export class Engine {
         indexes: { by_selector: ["metric", "window", "limitType", "_creationTime"] },
         document: v.any(),
       },
+      // Convex's, kept empty: Convex creates them on every start (STUDY-133 §12 M1).
+      ...EMPTY_CLOUD_SYSTEM_TABLES.map((name) => ({ name, indexes: {}, document: v.any() })),
     ];
     return [...systemTables, ...schema.tables.values()];
   }
@@ -1987,6 +1990,10 @@ export class Engine {
         p,
         this.tableSummaries,
         this.opts.summaryCheckpoints || undefined,
+        () =>
+          [...this.catalog.tables.values(), ...this.catalog.hidden.values(), ...this.catalog.deleting.values()].map(
+            (t) => t.id,
+          ),
       );
       this.summaryCheckpointer.start();
     }
@@ -2237,6 +2244,9 @@ export class Engine {
         if (!validator) continue;
         const before = active.schemaValidation ? active.tables.get(t.name) : undefined;
         if (before && JSON.stringify(before.document.json) === JSON.stringify(t.document.json)) continue;
+        // A table with no document (or none yet) has nothing to check: Convex's empty shape fits any validator,
+        // so it writes no attempt for it (`table_shape_provider`, STUDY-133 §12 M13). Unknown counts are walked.
+        if (this.totalDocs(t.name) === 0) continue;
         walk.push({ name: t.name, validator });
       }
     if (!stillPending()) return;

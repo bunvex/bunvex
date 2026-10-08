@@ -98,7 +98,7 @@ test("a private system table: readable through the debug query only", async () =
   const hidden = await t.call("query", "_system/cli/tableData", { ...page("_index"), order: "asc" });
   expect(hidden.status).toBe("success");
   expect(hidden.value.page).toEqual([]);
-  const r = await t.call("query", "_system/debug/systemTable", page("_index"));
+  const r = await t.call("query", "_system/debug/systemTable", page("_index", 500));
   expect(r.status).toBe("success");
   const docs = r.value.page as { table_id?: string; descriptor?: string; name?: string }[];
   expect(docs.length).toBeGreaterThan(0);

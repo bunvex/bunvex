@@ -106,6 +106,46 @@ describe("deployed code in the store", () => {
     expect(await d.moduleStorage.get(first.storageKey)).toBeNull();
   });
 
+  test("a deploy leaves the root component's rows as Convex's push does, once (STUDY-133 §12 M2)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bunvex-code-"));
+    dirs.push(dir);
+    const d = await deployable(dir);
+    stops.push(() => d.s.shutdown());
+    const rows = () =>
+      d.engine.query((db) =>
+        db.asSystem(async () => ({
+          definitions: await (db as any).query("_component_definitions").collect(),
+          components: await (db as any).query("_components").collect(),
+        })),
+      ) as Promise<{ definitions: Record<string, unknown>[]; components: Record<string, unknown>[] }>;
+    expect(await rows()).toEqual({ definitions: [], components: [] }); // none before a push, as Convex
+    await d.s.deployCode(app(1));
+    await d.s.deployCode(app(2));
+    const { definitions, components } = await rows();
+    expect(definitions).toEqual([
+      expect.objectContaining({
+        path: "",
+        definitionType: { type: "app" },
+        childComponents: [],
+        httpMounts: {},
+        httpPrefix: null,
+        exports: { type: "branch", branch: [] },
+        envVars: null,
+      }),
+    ]);
+    expect(components).toEqual([
+      expect.objectContaining({
+        definitionId: definitions[0]!._id,
+        parent: null,
+        name: null,
+        args: null,
+        env: null,
+        state: "active",
+        httpPrefix: null,
+      }),
+    ]);
+  });
+
   test("a deploy that fails to load changes nothing and leaves no package behind", async () => {
     const dir = mkdtempSync(join(tmpdir(), "bunvex-code-"));
     dirs.push(dir);
@@ -184,4 +224,72 @@ describe("deployed code in the store", () => {
     ).json()) as { errorMessage?: string };
     expect(r.errorMessage).toContain("Could not find public function");
   });
+});
+
+/** A zip archive as Convex's packager writes one: each entry deflated, with a local header and a central one. */
+function zip(entries: [string, string][]): Uint8Array {
+  const enc = new TextEncoder();
+  const locals: Uint8Array[] = [];
+  const centrals: Uint8Array[] = [];
+  let offset = 0;
+  for (const [name, text] of entries) {
+    const n = enc.encode(name);
+    const raw = enc.encode(text);
+    const data = Bun.deflateSync(raw);
+    const local = new Uint8Array(30 + n.length + data.length);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(8, 8, true);
+    lv.setUint32(18, data.length, true);
+    lv.setUint32(22, raw.length, true);
+    lv.setUint16(26, n.length, true);
+    local.set(n, 30);
+    local.set(data, 30 + n.length);
+    const central = new Uint8Array(46 + n.length);
+    const cv = new DataView(central.buffer);
+    cv.setUint32(0, 0x02014b50, true);
+    cv.setUint16(10, 8, true);
+    cv.setUint32(20, data.length, true);
+    cv.setUint32(24, raw.length, true);
+    cv.setUint16(28, n.length, true);
+    cv.setUint32(42, offset, true);
+    central.set(n, 46);
+    locals.push(local);
+    centrals.push(central);
+    offset += local.length;
+  }
+  const dirSize = centrals.reduce((s, c) => s + c.length, 0);
+  const end = new Uint8Array(22);
+  const ev = new DataView(end.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, entries.length, true);
+  ev.setUint16(10, entries.length, true);
+  ev.setUint32(12, dirSize, true);
+  ev.setUint32(16, offset, true);
+  return new Uint8Array(Buffer.concat([...locals, ...centrals, end]));
+}
+
+test("a package Convex deployed (a zip) is read: its modules, source maps and environments (STUDY-133 §12 M10)", async () => {
+  const store = new MemoryBlobStore();
+  const metadata = {
+    modulePaths: ["fns.js", "fns.js.map", "actions/node.js"],
+    moduleEnvironments: [
+      ["fns.js", "isolate"],
+      ["actions/node.js", "node"],
+    ],
+    externalDepsStorageKey: null,
+  };
+  const { key } = await store.put(
+    zip([
+      ["modules/fns.js", "export const a = 1;"],
+      ["modules/fns.js.map", '{"version":3}'],
+      ["modules/actions/node.js", "export const b = 2;"],
+      ["metadata.json", JSON.stringify(metadata)],
+    ]),
+  );
+  const modules = await readPackage(store, key);
+  expect(modules.sort((x, y) => x.path.localeCompare(y.path))).toEqual([
+    { path: "actions/node.js", source: "export const b = 2;", environment: "node" },
+    { path: "fns.js", source: "export const a = 1;", sourceMap: '{"version":3}', environment: "isolate" },
+  ]);
 });

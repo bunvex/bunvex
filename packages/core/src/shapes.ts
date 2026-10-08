@@ -61,11 +61,11 @@ const scalar = (kind: string): Shape => ({ n: 1, v: { kind } as Variant });
 
 /** A string's shape (Convex's `StringLiteralShape::shape_of`): an id, a literal, a field name, a string. */
 function stringShape(s: string): Shape {
-  // An id is an `Id` at once (Convex makes it a literal first and promotes literals of one table to `Id`
-  // when contracting; the dashboard's form is the same, and this saves decoding it at every merge).
+  // In Convex's order: an id that is an identifier is a literal first (a one-document table's `_id` stays
+  // one, STUDY-133 §12 M4); literals of one table become `Id` when they meet (`id_candidates`).
+  if (isIdentifier(s)) return { n: 1, v: { kind: "StringLiteral", literal: s } };
   const table = idTableNumber(s);
   if (table !== null) return { n: 1, v: { kind: "Id", table } };
-  if (isIdentifier(s)) return { n: 1, v: { kind: "StringLiteral", literal: s } };
   return scalar(isFieldName(s) ? "FieldName" : "String");
 }
 

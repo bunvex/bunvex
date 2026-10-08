@@ -265,11 +265,17 @@ export class TableSummaries {
     this.pendingShapes = [];
   }
 
-  /** A checkpoint of the summaries as they are now (their shapes folded in). */
-  checkpoint(): SummaryCheckpoint {
+  /**
+   * A checkpoint of the summaries as they are now (their shapes folded in). As Convex's, it has an entry for
+   * every table that exists (`tablets`), an empty table's with size 0 and shape `Never`: Convex fails to count
+   * a write to a table its loaded checkpoint has no entry for ("Updating non-existent table", STUDY-133 §12 M3).
+   */
+  checkpoint(tablets: Iterable<TabletId> = []): SummaryCheckpoint {
     if (!this.ready) throw new TableSummariesUnavailableError();
     this.fold();
     const tables: SummaryCheckpoint["tables"] = {};
+    for (const tablet of tablets)
+      tables[tablet] = { totalSize: jsonInteger(0n), inferredTypeWithOptionalFields: shapeToJson(NEVER) };
     for (const [tablet, t] of this.tables)
       tables[tablet] = {
         totalSize: jsonInteger(BigInt(t.size)),

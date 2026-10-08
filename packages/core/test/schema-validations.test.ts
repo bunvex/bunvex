@@ -121,6 +121,27 @@ describe("schema validation attempts and progress, as Convex's (STUDY-127)", () 
     expect(await rows(f, "_schema_validation_progress")).toHaveLength(1);
   });
 
+  test("a table with no document has no attempt, as Convex's (STUDY-133 §12 M13)", async () => {
+    const e = await withItems(tmp(), 20);
+    // `gone` exists but is empty again; `fresh` does not exist at all.
+    const p1 = await e.startSchemaPush(defineSchema({ items: defineTable(v.any()), gone: defineTable(v.any()) }));
+    await until(async () => (await e.schemaPushStatus(p1.schemaId)).type === "complete");
+    await e.commitSchemaPush(p1.schemaId, async () => {});
+    const id = await e.mutation((db) => db.insert("gone", { x: 1 }));
+    await e.mutation((db) => db.delete(id));
+    await e.summariesReady();
+    const p = await e.startSchemaPush(
+      defineSchema({
+        items: defineTable({ n: v.number() }),
+        gone: defineTable({ x: v.string() }),
+        fresh: defineTable({ y: v.string() }),
+      }),
+    );
+    await until(async () => (await schemaState(e, p.schemaId)) === "validated");
+    expect((await rows(e, "_schema_validations")).map((r) => r.tableName)).toEqual(["items"]);
+    expect(await rows(e, "_schema_validation_progress")).toHaveLength(1);
+  });
+
   test("after a restart a pending schema is walked again from the start, with new attempts", async () => {
     const path = tmp();
     const a = await withItems(path, 3000);

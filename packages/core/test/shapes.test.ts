@@ -2,7 +2,7 @@
 // contraction in Convex's order, counts, and the dashboard's reduced form.
 import { expect, test } from "bun:test";
 import { encodeId } from "@bunvex/values";
-import { isSubtype, reduceShape, type Shape, shapeOf, tableShape } from "../src/shapes.ts";
+import { isIdentifier, isSubtype, reduceShape, type Shape, shapeOf, tableShape } from "../src/shapes.ts";
 
 const names = (n: number) => (n === 10001 ? "users" : undefined);
 const reduce = (docs: unknown[]) => reduceShape(tableShape(docs as never), names);
@@ -78,6 +78,20 @@ test("ids of a known table are Id; an empty table is Never; records mark literal
     keyShape: { type: "String" },
     valueShape: { optional: false, shape: { type: "Int64" } },
   });
+});
+
+test("an id is a literal first, as Convex's; literals of one table become Id past the union's limit (STUDY-133 §12 M4)", () => {
+  const ids: string[] = [];
+  for (let i = 0; ids.length < 17; i++) {
+    const id = encodeId(10001, new Uint8Array(16).fill(i));
+    if (isIdentifier(id)) ids.push(id);
+  }
+  expect(shapeOf(ids[0]!).v).toEqual({ kind: "StringLiteral", literal: ids[0] });
+  const two = tableShape(ids.slice(0, 2));
+  expect(two.v.kind === "Union" && two.v.variants.map(kind)).toEqual(["StringLiteral", "StringLiteral"]);
+  expect(tableShape(ids)).toEqual({ n: 17, v: { kind: "Id", table: 10001 } });
+  // The dashboard reads them as the table's id either way.
+  expect(reduce(ids.slice(0, 2))).toEqual({ type: "Id", tableName: "users" });
 });
 
 test("subtyping: literals in field names in strings; objects with optional fields", () => {

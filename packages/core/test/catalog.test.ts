@@ -38,12 +38,14 @@ describe("catalog (_tables / _index)", () => {
           _tables: 513,
           _index: 514,
           _exports: 516,
+          _backend_info: 517,
           _udf_config: 518,
           _auth: 519,
           _db: 520,
           _modules: 521,
           _source_packages: 524,
           _environment_variables: 525,
+          _aws_lambda_versions: 526,
           _deployment_audit_log: 527,
           _canonical_urls: 546,
           _session_requests: 529,
@@ -52,6 +54,9 @@ describe("catalog (_tables / _index)", () => {
           _cron_job_logs: 533,
           _log_sinks: 535,
           _backend_state: 536,
+          // Convex's, kept empty (STUDY-133 §12 M1).
+          _external_deps_packages: 537,
+          _audit_log_config: 551,
           // Convex's physical tables behind the virtual `_scheduled_functions` and `_storage` (STUDY-125).
           _scheduled_jobs: 539,
           _file_storage: 540,
@@ -179,10 +184,10 @@ test("fixed system numbers: a table created before keeps its number; a system ta
   const before = [{ _id: "x", name: "_file_storage", number: 522, tablet: "t30", state: "active" as const }];
   expect(planCatalog([{ name: "_file_storage", indexes: {}, document: anyDoc }], before, []).insertTables).toEqual([]);
   // A new system table without a fixed number: the first free one that no system table reserves — with
-  // 515 taken, not 516 (`_exports`'s) but 517.
+  // 515 taken, not 516 to 521 (`_exports`', `_backend_info`'s, …) but 522.
   const with515 = [{ _id: "z", name: "_old", number: 515, tablet: "t32", state: "active" as const }];
   const planned = planCatalog([{ name: "_new_system", indexes: {}, document: anyDoc }], with515, []).insertTables;
-  expect(planned.map((t) => t.number)).toEqual([517]);
+  expect(planned.map((t) => t.number)).toEqual([522]);
   // A fixed number already taken (an import moved a table there): the next free unreserved one.
   const taken = [{ _id: "y", name: "_other", number: 540, tablet: "t31", state: "active" as const }];
   expect(
