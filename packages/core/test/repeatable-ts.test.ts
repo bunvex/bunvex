@@ -112,10 +112,10 @@ describe("max_repeatable_ts", () => {
     const e = await open(join(dir(), "db.sqlite3"), { repeatableTs: { commitDelayMs: 20, idleMs: 60_000 } });
     // The first bump after the open (the commit delay) lands; then a commit brings the next one forward.
     await until(() => e.committer.repeatableBumps >= 1);
-    const bumps = e.committer.repeatableBumps;
     const { ts } = await e.mutationWithTs((db) => db.insert("items", { n: 1 }));
-    await until(() => e.committer.repeatableBumps > bumps);
-    expect((await e.persistence.getGlobal(MAX_REPEATABLE_TS_GLOBAL)) as bigint).toBeGreaterThanOrEqual(ts);
+    // A bump already being written may land below the commit; the follow-up one covers it (c04e2f7), long before
+    // the idle minute.
+    await until(() => (e.persistence.getGlobal(MAX_REPEATABLE_TS_GLOBAL) as unknown as bigint) >= ts);
   });
 
   test("a commit published while a bump is written gets its own bump after the commit delay (Convex c04e2f7)", async () => {
@@ -144,11 +144,15 @@ describe("max_repeatable_ts", () => {
   test("an idle bump takes the next commit ts and makes it visible", async () => {
     const e = await open(join(dir(), "db.sqlite3"), { repeatableTs: { commitDelayMs: 10, idleMs: 10 } });
     const applied = e.committer.appliedTs;
-    await until(() => e.committer.repeatableBumps >= 2);
-    const g = (await e.persistence.getGlobal(MAX_REPEATABLE_TS_GLOBAL)) as bigint;
-    expect(g).toBeGreaterThan(applied);
+    // A bump while the start's own commits are still in flight writes the last visible ts, not a new one:
+    // wait for the first idle bump, however busy the machine is.
+    let g = 0n;
+    await until(() => {
+      g = e.persistence.getGlobal(MAX_REPEATABLE_TS_GLOBAL) as unknown as bigint;
+      return typeof g === "bigint" && g > applied;
+    });
     expect(e.committer.appliedTs).toBeGreaterThanOrEqual(g);
-    expect(e.committer.visibleTs).toBeGreaterThanOrEqual(g);
+    await until(() => e.committer.visibleTs >= g); // visible once its write has returned
     // A commit afterwards is above it.
     const { ts } = await e.mutationWithTs((db) => db.insert("items", { n: 1 }));
     expect(ts).toBeGreaterThan(g);
