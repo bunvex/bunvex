@@ -98,7 +98,11 @@ describe("an unsupported value in a function's result, write or arguments", () =
         "Expected to receive an object as the function's argument. Instead received: Vault {…}",
       ],
       ["query", "m:filterLiteral", "Vault {…} (type object)"],
-      ["action", "m:actionCtx", "is not a supported value type"],
+      [
+        "action",
+        "m:actionCtx",
+        'Function "[Function]" is not a supported value type (present at path .ctx.auth.getUserIdentity',
+      ],
     ];
     for (const [kind, path, expected] of cases) {
       const r = await call(kind, path);
@@ -107,7 +111,8 @@ describe("an unsupported value in a function's result, write or arguments", () =
       const line = r.errorMessage.split("\n    at ")[0];
       expect(line).toContain(expected);
       expect(line).not.toMatch(INTERNALS);
-      expect(line.length).toBeLessThan(600);
+      // An action's ctx prints its methods as "[Function]" (Convex aab5a04): about 700 characters.
+      expect(line.length).toBeLessThan(1000);
     }
     // nothing the failed mutations tried to write committed
     expect((await engine.query((db) => db.query("items").collect())).length).toBe(1);

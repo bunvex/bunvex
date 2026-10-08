@@ -9,10 +9,20 @@ import { runs, value } from "./arbitraries.ts";
 
 const LIMIT = 16384;
 
-/** Convex's algorithm, as the reference for plain data: `JSON.stringify` with its replacer, then the cut. */
+/** Convex's algorithm (since aab5a04), as the reference for plain data: `JSON.stringify` with its replacer, then the cut. */
 function reference(v: unknown): string {
   const s = String(
-    JSON.stringify(v, (_k, x) => (x === undefined ? "undefined" : typeof x === "bigint" ? `${x.toString()}n` : x)),
+    JSON.stringify(v, (_k, x) =>
+      x === undefined
+        ? "undefined"
+        : typeof x === "function"
+          ? "[Function]"
+          : typeof x === "symbol"
+            ? String(x)
+            : typeof x === "bigint"
+              ? `${x.toString()}n`
+              : x,
+    ),
   );
   if (s.length <= LIMIT) return s;
   let at = LIMIT - "[...truncated]".length;
@@ -50,6 +60,9 @@ describe("stringifyValueForError", () => {
     const samples: unknown[] = [
       undefined,
       null,
+      () => 1,
+      Symbol("top"),
+      Symbol(),
       [1, undefined, () => 1, Symbol("s"), Number.NaN, -0, Number.POSITIVE_INFINITY, 5n],
       { a: undefined, f: () => 1, s: Symbol("s"), n: 1n, nested: { "": [{}] }, 2: "int key first" },
       Object.assign(Object.create(null), { z: 1, a: "\u0000 \ud800" }),
@@ -161,7 +174,10 @@ describe("the unsupported-value message", () => {
       "Set[1,Vault {…}] is not a supported value type.",
     );
     expect(messageOf(() => toJsonValue({ f: async () => 1 } as never))).toBe(
-      "AsyncFunction undefined is not a supported value type (present at path .f in original object {}).",
+      'AsyncFunction "[Function]" is not a supported value type (present at path .f in original object {"f":"[Function]"}).',
+    );
+    expect(messageOf(() => toJsonValue([Symbol("s")] as never))).toBe(
+      'Symbol "Symbol(s)" is not a supported value type (present at path [0] in original object ["Symbol(s)"]).',
     );
   });
 
