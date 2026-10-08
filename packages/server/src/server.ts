@@ -72,6 +72,7 @@ import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
 import { activeSync, cursorFromDeltas, DATA_SYNC_ROUTE, dataSync, listActiveSyncs } from "./data-sync.ts";
 import { DEBUG_ROUTE, debugRoute } from "./debug-routes.ts";
+import { tooDeepToStringify } from "./deep-values.ts";
 import {
   clientError,
   FunctionPathError,
@@ -342,6 +343,8 @@ const fromWire = (args: unknown, path: string) => {
   try {
     // `null` is an argument (a validated function refuses it); nothing at all is `{}`.
     const one = Array.isArray(args) ? args[0] : args;
+    // Past the nesting limit many times over: refused before a stringify that would overflow the stack (slowly).
+    if (tooDeepToStringify(one)) throw new RangeError("Maximum call stack size exceeded");
     return parseValue(JSON.stringify(one === undefined ? {} : one));
   } catch (e) {
     // Convex's `parse_udf_args`: the backend's message, under the function's canonical path (STUDY-53). Too

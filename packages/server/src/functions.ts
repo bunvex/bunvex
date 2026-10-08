@@ -129,6 +129,7 @@ import {
 import type { AppMetrics } from "./app-metrics.ts";
 import { type AnyArgs, exportedValidator, type FunctionDef, NODE_FUNCTIONS, type ValidatorExport } from "./builders.ts";
 import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
+import { tooDeepToStringify } from "./deep-values.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
 import { describeUncaught, FunctionPathError, isSystemError, newRequestId, ValidatorError } from "./errors.ts";
 import { canonicalPath, functionAddress, functionNameOf, inHandleScope } from "./function-handles.ts";
@@ -692,6 +693,7 @@ export class Functions {
   }
 
   private cacheKey(name: string, args: unknown): string | undefined {
+    if (tooDeepToStringify(args)) return undefined;
     try {
       return cacheKeyOf(this.moduleHashes.get(Functions.moduleOf(name)) ?? "", name, args);
     } catch (e) {

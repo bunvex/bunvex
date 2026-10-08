@@ -40,6 +40,7 @@ import type { ServerWebSocket } from "bun";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { BadAdminKeyError } from "./admin-keys.ts";
 import { closeFrame, isDeterministicUserError, type SyncFailure } from "./close-frame.ts";
+import { tooDeepToStringify } from "./deep-values.ts";
 import {
   FunctionPathError,
   INTERNAL_SERVER_ERROR_MESSAGE,
@@ -276,8 +277,12 @@ export type SyncMetrics = {
   transitionMessageSize: Observer;
 };
 
+/** Keys for arguments too deep to stringify, each its own. */
+let tooDeepKeys = 0;
+
 /** Arguments' bytes as the client sent them (its JSON), as Convex's `args.get().len()`. */
 const argsBytes = (args: v1.JSONValue[]) => {
+  if (tooDeepToStringify(args)) return jsonBytes(args);
   try {
     return Buffer.byteLength(JSON.stringify(args));
   } catch (e) {
@@ -1588,7 +1593,8 @@ export class SyncSession {
     try {
       return stringifyValue(this.hub.deps.fromWire(args, "") as never);
     } catch {
-      return JSON.stringify(args); // invalid: the run reports it
+      // Invalid: the run reports it. Too deep to stringify: a key of its own (it shares no execution).
+      return tooDeepToStringify(args) ? `\0too-deep:${++tooDeepKeys}` : JSON.stringify(args);
     }
   }
 
