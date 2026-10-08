@@ -35,7 +35,7 @@ import { auditEvents } from "./audit-log.ts";
 import { putAuthInfo } from "./auth-info.ts";
 import {
   AUTH_CONFIG_MODULE,
-  readPackage,
+  readablePackage,
   type SourcePackage,
   storedModules,
   type UdfServerVersionDiff,
@@ -204,12 +204,20 @@ export class PushService {
   private pending = new Map<string, Pending>();
   constructor(private deps: PushDeps) {}
 
-  /** Convex's `get_config_hashes`: what is deployed, by path. */
+  /**
+   * Convex's `get_config_hashes`: what is deployed, by path. None when the package cannot be read (STUDY-139
+   * P4): the client then sends every module, and the push replaces it.
+   */
   async configHashes() {
     const stored = await storedModules(this.deps.engine);
+    const readable = stored !== null && (await readablePackage(this.deps.modulesStore, stored.pkg.storageKey)) !== null;
     return {
       config: { functions: "", authInfo: [] },
-      moduleHashes: (stored?.rows ?? []).map((r) => ({ path: r.path, hash: r.sha256, environment: r.environment })),
+      moduleHashes: (readable ? stored.rows : []).map((r) => ({
+        path: r.path,
+        hash: r.sha256,
+        environment: r.environment,
+      })),
       nodeVersion: null,
     };
   }
@@ -220,7 +228,7 @@ export class PushService {
     const unchanged = req.appDefinition?.unchangedModuleHashes ?? [];
     if (!unchanged.length) return changed;
     const stored = await storedModules(this.deps.engine);
-    const sources = stored ? await readPackage(this.deps.modulesStore, stored.pkg.storageKey) : [];
+    const sources = (stored && (await readablePackage(this.deps.modulesStore, stored.pkg.storageKey))) ?? [];
     const rows = new Map((stored?.rows ?? []).map((r) => [r.path, r]));
     const byPath = new Map(sources.map((m) => [m.path, m]));
     const out = [...changed];

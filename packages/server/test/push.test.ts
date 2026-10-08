@@ -378,6 +378,43 @@ describe("deploy2 over HTTP", () => {
     expect((await d.call("query", "m:q")).status).toBe("error");
   }, 60_000);
 
+  test("a package bunvex cannot read (Convex's zip) is ignored with a log; the next deploy replaces it (STUDY-139 P4)", async () => {
+    const dir = tmp();
+    const store = new MemoryBlobStore();
+    const first = await deployment(dir, { store });
+    await first.push([messages(1)], schema);
+    const pkg = (await first.engine.query((db) =>
+      db.asSystem(() => db.query(SOURCE_PACKAGES_TABLE).first()),
+    )) as unknown as { storageKey: string };
+    await first.s.shutdown();
+    // Another binary's package under the same key: a zip, which bunvex does not read.
+    (store as unknown as { blobs: Map<string, Uint8Array> }).blobs.set(
+      pkg.storageKey,
+      new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x14, 0, 0, 0, 8, 0]),
+    );
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    let d: Awaited<ReturnType<typeof deployment>>;
+    try {
+      d = await deployment(dir, { store });
+      stops.push(() => d.s.shutdown());
+      await d.s.codeReady; // resolves: the server runs, with no code
+      expect(warn.mock.calls.map((c) => String(c[0])).join("\n")).toContain(
+        `the deployed code package ${pkg.storageKey} cannot be read`,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+    expect((await d.call("query", "messages:list")).status).toBe("error");
+    // Nothing is declared deployed, so the client sends every module and the push replaces the package.
+    expect((await d.post("/api/get_config_hashes", {})).body.moduleHashes).toEqual([]);
+    const r = await d.push([messages(2)], schema);
+    expect(r.changedModules.map((m) => m.path).sort()).toEqual(["messages.js"]);
+    expect(r.finish!.status).toBe(200);
+    await d.call("mutation", "messages:send", { author: "ada", body: "yo" });
+    expect((await d.call("query", "messages:list")).value).toEqual(["yo v2"]);
+    expect(await store.get(pkg.storageKey)).toBeNull();
+  });
+
   test("a second push sends only what changed; a wrong hash is a 409", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());
