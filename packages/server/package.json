@@ -1,6 +1,6 @@
 {
   "name": "@bunvex/server",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "The bunvex server: function runtime, HTTP API, WebSocket sync, configuration.",
   "license": "Apache-2.0",
   "type": "module",
@@ -21,7 +21,7 @@
     "object-inspect": "^1.13.4"
   },
   "peerDependencies": {
-    "@bunvex/persistence": "workspace:*"
+    "@bunvex/persistence": "workspace:^"
   },
   "peerDependenciesMeta": {
     "@bunvex/persistence": {

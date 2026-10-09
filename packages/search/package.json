@@ -1,6 +1,6 @@
 {
   "name": "@bunvex/search",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "Full-text search: the tokenizer, the in-memory inverted index and BM25 ranking, as Convex's.",
   "license": "Apache-2.0",
   "type": "module",

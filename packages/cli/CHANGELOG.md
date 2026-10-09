@@ -1,0 +1,178 @@
+# @bunvex/cli
+
+## 0.1.0-alpha.1
+
+### Minor Changes
+
+- 2fab302: The push's bundler stubs `import "server-only"` to an empty module (installed or not), so shared Next.js code guarded by it deploys, and turns `import m from "./x.wasm"` into a `WebAssembly.Module` of the file's bytes, as Convex's bundler does (STUDY-83).
+- 4fb5d5e: Matches Convex at `precompiled-2026-10-07-d8bdde0` (STUDY-137):
+
+  - A failed nested call reads `Uncaught Error:` once, however deep.
+  - Messages: the concurrency limit names the kind in the plural; a `_system/` function refused without an admin reads "You don't have permission to perform this operation."; a skipped cron run names the job; an auth config typo fixed.
+  - Write throughput can be limited by rows: each commit's document and index rows, `MAX_ROWS_WRITTEN_PER_SECOND` (off by default). Both `TooManyWrites` messages say "per second". `formatWindow` is no longer exported from `@bunvex/core`.
+  - HTTP action responses go up to 100 MiB. Past that, the rest of the body is dropped with one error line and no size warning.
+  - Module path errors read `Invalid module path '<p>': <reason>`.
+  - A function or a symbol in an unsupported-value error prints as `"[Function]"` or its description.
+  - Creating or updating an S3 export also needs ViewData.
+  - `bunvex deployment usage-limits` accepts `--metric aiGatewayCostDollars` ("AI Gateway").
+  - A commit published while `max_repeatable_ts` is being written gets its own bump after the commit delay.
+
+- d0f70a0: `bunvex deploy --cmd <command>` runs a build command first, in a shell from the project, with the deployment's canonical URLs in the variables the framework reads (`VITE_BUNVEX_URL` / `VITE_BUNVEX_SITE_URL`, …; `--cmd-url-env-var-name` for the first); a failing command stops the deploy, and a dry run only says what it would run, as Convex's `deploy --cmd` (STUDY-81).
+- 313cbbc: `bunvex mcp start`: a Model Context Protocol server for AI tools, as Convex's `npx convex mcp start`, over stdio with the official MCP SDK. Tools: `status`, `data`, `tables`, `functionSpec`, `run`, `envList`, `envGet`, `envSet`, `envRemove`, `runOneoffQuery`, `logs`. A self-hosted deployment is production for its guards (`--cautiously-allow-production-pii`, `--dangerously-enable-production-deployments`). The server gains `_system/frontend/getSchemas` (STUDY-121).
+- 66a1bc5: `bunvex run --inline-query '<js>'` evaluates a readonly query on the deployment, as Convex's: an expression is returned, statements are kept, a module whose default export is a query is sent as is (its builders from `bunvex:/_system/repl/wrappers.js`). The server gains Convex's function tester, `POST /api/run_test_function`: the module analyzed alone, its default query run once, uncached, logged with the `Tester` caller (STUDY-119).
+- f4b35bf: System tables can be browsed (STUDY-131 AD-24, a bunvex addition). The system queries `_system/debug/systemTables` and `_system/debug/systemTable` list every system table the catalog has, private ones included, with a one-line description each, and page through one's documents as stored. They are read-only, need an admin key with ViewData, and function code cannot call them. `bunvex data --system` lists the tables, and `bunvex data --system <table>` prints one's documents. `SYSTEM_TABLE_DESCRIPTIONS` sits next to `SYSTEM_TABLE_NUMBERS` in `@bunvex/core`.
+
+### Patch Changes
+
+- c501d15: The push analysis gives each function and HTTP route its source position (`pos: { path, start_lineno, start_col }`), read from the module's source map as Convex reads it, and lists them in source order; HTTP routes take Convex's `{ route: { path, method }, pos }` shape. The CLI's source maps now match the pushed modules: the `// @bun` line dropped from each module is dropped from its map too (every mapping was one line off).
+- d4f737d: `bunvex.json` is checked with Convex's messages. A file that is not an object prints "Expected `bunvex.json` to contain an object" (a `null` file used to throw a `TypeError`). A field of the wrong type names its path, e.g. "`functions` in `bunvex.json`: Expected string, received number". JSON that does not parse prints `Parsing "bunvex.json" failed` and the parse error.
+- 5d0a395: Value formats and the isolate compute metric carry bunvex's names (DV-307, DV-308). `format` (HTTP function API and streaming export) accepts `json` or `clean_json`, `encoded_json` and `export_json`; Convex's `convex_encoded_json`, `convex_clean_json` and `convex_json` are now a 400 `BadFormat`. `BunvexHttpClient` and the CLI ask for `encoded_json`, so a client and a server from before this change do not mix. The usage-limit metric `actionComputeConvexGbHours` is now `actionComputeIsolateGbHours`.
+- f1e7c3a: `typecheck`, `mcp` and `deployment` print argument errors as Convex's CLI does: `error: …` on stderr, commander's messages and "Did you mean …?" suggestions, and exit code 1 (it was 2).
+- 1b534b0: `.env`, `.env.local` and `bunvex env set --from-file` / stdin are read as dotenv reads them, as Convex's CLI does: multi-line quoted values, `\n` expanded in double quotes, an unquoted `#` starting a comment, backtick quotes, `.` and `-` in names, `KEY: value`. What `bunvex env list` prints now reads back unchanged; before, a multi-line value (a PEM key) was cut to its first line with a stray quote.
+- a609425: The CLI prints argument errors as Convex's does (commander's format): `error: <message>`, with "Did you mean …?" suggestions and, for the commands where Convex does, a blank line and the command's help; the exit code is 1 (it was 2). `bunvex` and `bunvex env` with no subcommand print the help on stderr and exit 1. As in Convex, `import` with several mode flags and `dev --run` with `--start` are no longer refused (`--append` and `--run` win), and `--tail-logs` alone means `pause-on-deploy`. A failed typecheck in `deploy`, `dev` and `codegen` prints "✖ TypeScript typecheck via `tsc` failed." and the `--typecheck=disable` hint on stderr, then the compiler's errors on stdout.
+- 6965462: `bunvex codegen` takes Convex's other flags. `--dry-run` writes nothing and prints `Command would write file: <path>` for each file that would change (and `Command would delete …` for stale entries); the hidden `--debug` prints `# <absolute path>` and every file's contents; the hidden `--commonjs`, or `generateCommonJSApi: true` in `bunvex.json`, also writes `_generated/api_cjs.cjs` and `api_cjs.d.cts` for apps that `require()` the api. `--url` and `--admin-key` are accepted and ignored (codegen needs no deployment); `--component-dir` and `--live-component-sources` are refused until bunvex has components.
+- 8e13e53: The CLI chooses its deployment as Convex's does.
+  - `--env-file` is the only source when given. The environment used to win over it, so `--env-file prod.env` in a shell with `BUNVEX_SELF_HOSTED_URL` set acted on the shell's deployment.
+  - A missing env file is an error ("env file does not exist"), as is one that names no deployment.
+  - `--url` counts only together with `--admin-key`.
+  - A variable set but empty is unset; `.env.local` and `.env` do not fill it.
+  - `BUNVEX_DEPLOYMENT` and the self-hosted variables may not be set together.
+- b4e70f9: `bunvex dev` waits on the table a schema validation failed on, as Convex's: once that table changes (a fixed document), it pushes again with no file change. The failure prints Convex's `✖ Schema validation failed.` and the error. The server gains Convex's `_system/cli/queryTable` (STUDY-120).
+- 7f9adac: `bunvex dev` writes `.env.local` and `.gitignore` as Convex's CLI does. Each variable it adds comes after a blank line, and an unchanged file is not rewritten. A variable already set, even as `export NAME=…`, is updated in place or left alone, never written twice. `.env.local` is added to `.gitignore` unless a line already covers it: `.env.local`, `.env.*`, `.env*`, `.env*.local` or any line ending in `.local`. It is added after a line break.
+- eab403b: When `bunvex dev` cannot find the latest local backend version, it says why, as Convex's CLI does: "<host> returned <status>: <body>", "Invalid response missing version field" or "Failed to fetch latest backend version". Before, every case read "could not find the latest bunvex local backend (is GitHub reachable?)". With a version already downloaded, it prints the reason, then "Failed to get latest version from GitHub, using downloaded version <version>". A version found is looked up once per process.
+- 4d6aa4e: A push answers its index changes as Convex's: `start_push`'s `schemaChange.indexDiffs` (a dry run's too) and `finish_push`'s `indexDiff` list each added, removed, enabled and re-staged index with its definition, not just its name. `bunvex deploy` prints them as Convex's CLI does: "Added table indexes:", "Added staged table indexes:", "Deleted table indexes:", "These indexes are now enabled:", "These indexes are now staged:", or "Would …" on a dry run, each index as `table.index   fields`.
+- e46ace6: Cron and `_udf_config` rows as Convex stores them (STUDY-134): `_cron_jobs.cronSpec` with int64 schedule numbers
+  (an absent `minuteUTC` null) and the arguments as the bytes of their JSON, `_cron_next_run.nextTs` / `prevTs` and
+  `_cron_job_logs.ts` as int64 nanoseconds, an in-progress state's `request_id` / `execution_id`, a logged result's
+  value as its JSON text, `_modules.analyzeResult.cronSpecs` as `[{identifier, spec}]`, and
+  `_udf_config.importPhaseUnixTimestamp` as int64 nanoseconds. `bunvex deploy` sends its package version as
+  `udfServerVersion`, stored as `_udf_config.serverVersion`.
+- 0cf08f1: `bunvex typecheck [--typescript-compiler tsc|tsgo]` typechecks the functions as Convex's `typecheck` does, with Convex's messages. `tsgo` comes from `@typescript/native-preview`. The compiler comes from the flag, else `typescriptCompiler` in `bunvex.json`, else `tsc`; `deploy`, `dev` and `codegen` use it too. The compiler now runs with `--noEmit --pretty true`, so type errors print as colored `file:line:column` diagnostics. A TypeScript older than 4.8.4 gets Convex's warning.
+- bb430c0: `bunvex deployment usage [--json]` and `bunvex deployment usage-limits list [--json] | set | remove`, as Convex's `npx convex deployment usage` / `usage-limits`: the current day's and month's usage per metric, and the deployment's usage limits (created or updated by metric, window and type) in Convex's tables, with its messages.
+- Updated dependencies [419640e]
+- Updated dependencies [866197d]
+- Updated dependencies [c501d15]
+- Updated dependencies [9e4de66]
+- Updated dependencies [659e400]
+- Updated dependencies [b4a51b3]
+- Updated dependencies [f55e37c]
+- Updated dependencies [8518f1b]
+- Updated dependencies [5d0a395]
+- Updated dependencies [de1140c]
+- Updated dependencies [1b56759]
+- Updated dependencies [a365529]
+- Updated dependencies [4fb5d5e]
+- Updated dependencies [f2fe91b]
+- Updated dependencies [4894096]
+- Updated dependencies [3bbb247]
+- Updated dependencies [09edbb5]
+- Updated dependencies [ab11407]
+- Updated dependencies [a7d2e6c]
+- Updated dependencies [618386b]
+- Updated dependencies [ef876d1]
+- Updated dependencies [b4e70f9]
+- Updated dependencies [f280986]
+- Updated dependencies [bcf7066]
+- Updated dependencies [dff094d]
+- Updated dependencies [eacb804]
+- Updated dependencies [6c0f49b]
+- Updated dependencies [a703235]
+- Updated dependencies [f2e3c4b]
+- Updated dependencies [25c9dc9]
+- Updated dependencies [da1ea24]
+- Updated dependencies [0c2945f]
+- Updated dependencies [4189cdd]
+- Updated dependencies [a990ad0]
+- Updated dependencies [b799cdb]
+- Updated dependencies [f1cf707]
+- Updated dependencies [c95bac7]
+- Updated dependencies [fe9c7e6]
+- Updated dependencies [92007b0]
+- Updated dependencies [1a4930f]
+- Updated dependencies [c6f5fd8]
+- Updated dependencies [899b394]
+- Updated dependencies [1d0ef4d]
+- Updated dependencies [039d52d]
+- Updated dependencies [313cbbc]
+- Updated dependencies [e0e3f06]
+- Updated dependencies [dcdbd13]
+- Updated dependencies [1bdc51e]
+- Updated dependencies [2983a19]
+- Updated dependencies [d67c23e]
+- Updated dependencies [a293cd6]
+- Updated dependencies [749ad53]
+- Updated dependencies [275e274]
+- Updated dependencies [5e704cb]
+- Updated dependencies [8d72c7e]
+- Updated dependencies [83aab58]
+- Updated dependencies [40a120c]
+- Updated dependencies [a3e3923]
+- Updated dependencies [cc06646]
+- Updated dependencies [9702a35]
+- Updated dependencies [0fbd9b6]
+- Updated dependencies [96c97c6]
+- Updated dependencies [4d6aa4e]
+- Updated dependencies [1936703]
+- Updated dependencies [4495763]
+- Updated dependencies [dfdbb9b]
+- Updated dependencies [b769816]
+- Updated dependencies [6d45f93]
+- Updated dependencies [0e6004b]
+- Updated dependencies [3751b64]
+- Updated dependencies [66a1bc5]
+- Updated dependencies [d635000]
+- Updated dependencies [6368cbe]
+- Updated dependencies [1f5849b]
+- Updated dependencies [e8d876e]
+- Updated dependencies [4798f6d]
+- Updated dependencies [9e453ce]
+- Updated dependencies [20c1b83]
+- Updated dependencies [2f5dc44]
+- Updated dependencies [90cef9b]
+- Updated dependencies [4a23a44]
+- Updated dependencies [382f4b9]
+- Updated dependencies [a19b158]
+- Updated dependencies [4ac2aa2]
+- Updated dependencies [587a148]
+- Updated dependencies [81c7621]
+- Updated dependencies [f3c1a64]
+- Updated dependencies [2b760fe]
+- Updated dependencies [9ebaaed]
+- Updated dependencies [6ee62d3]
+- Updated dependencies [1749e82]
+- Updated dependencies [c515f8d]
+- Updated dependencies [88c9ac8]
+- Updated dependencies [0295b08]
+- Updated dependencies [3509dc9]
+- Updated dependencies [ec3c770]
+- Updated dependencies [b3940ff]
+- Updated dependencies [e46ace6]
+- Updated dependencies [7747b60]
+- Updated dependencies [841b66c]
+- Updated dependencies [03f5b8a]
+- Updated dependencies [3e2bcf3]
+- Updated dependencies [416b14b]
+- Updated dependencies [509eaaa]
+- Updated dependencies [b408ccd]
+- Updated dependencies [f4b35bf]
+- Updated dependencies [975b496]
+- Updated dependencies [8bcf6de]
+- Updated dependencies [6142d0a]
+- Updated dependencies [e5851ce]
+- Updated dependencies [1c2e062]
+- Updated dependencies [f166aa2]
+- Updated dependencies [3cc30f0]
+- Updated dependencies [1401f94]
+- Updated dependencies [a177c47]
+- Updated dependencies [dc97491]
+- Updated dependencies [e572862]
+- Updated dependencies [f857400]
+- Updated dependencies [95a77e9]
+- Updated dependencies [4411174]
+- Updated dependencies [6e57741]
+- Updated dependencies [144d575]
+  - @bunvex/core@0.1.0-alpha.1
+  - @bunvex/server@0.1.0-alpha.1
+  - @bunvex/values@0.1.0-alpha.1
+  - @bunvex/client@0.1.0-alpha.1
+  - @bunvex/protocol@0.1.0-alpha.1
