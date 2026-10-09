@@ -304,6 +304,18 @@ referenced by the staged validator for {r} but was deleted or replaced; redeploy
 Convex's binary (076c52c, the first release with 7236c10): a promotion makes no enforced row for the proven table, and
 deleting the referenced table stores the same text. With PR 5, DV-438 is built.
 
+**PR 6, built (5b65aedb3, after the triage of 2026-10-09).** `evaluate_schema` reports, per table of the pushed
+schema, its staged validation under the active or an in-progress schema, the further along one (`staged`: `{state:
+"pending", numDocsValidated, totalDocs}`, `{state: "valid"}` or `{state: "failed", error}`), and
+`canSkipAfterStagedValidation`: the active schema's staged validator is still pending and the pushed enforced validator
+accepts everything it does (with `schemaValidation`). `discardedStagedValidators` lists, per (table, hash), the
+furthest pending or valid staged validation of the active, pending and validated schemas that the push neither carries
+over (`can_reuse_for`) nor promotes (`supersetOfStagedValidated`), with `replaced` when the pushed schema stages another
+validator for the table; failed ones are left out. The dashboard's `getSchemas:stagedSchemaValidationProgress` lists the
+active schema's staged rows. Checked on Convex's binary (076c52c), its responses captured between its CLI and its
+backend: for a promotion with a dropped staged validator, and a narrowed with a widened one, bunvex answers the same
+fields and values (sizes aside). Convex's CLI does not read the new fields yet (its consumer is unreleased).
+
 Found on the way, decided as DV-444 (owner, 2026-10-08: bunvex's dry run keeps writing nothing): Convex's dry run commits (the first pass above), so a `deploy --dry-run`
 on Convex writes a pending schema, overwriting an in-progress push, and creates the pushed tables; bunvex's dry run
 writes nothing. `convex codegen` against a deployment runs the same dry-run push.
