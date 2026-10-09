@@ -291,6 +291,7 @@ export class PushService {
           schemaValidation: schemaModule ? p.schemaValidation : false,
           tables: p.tables,
           indexes: p.indexes,
+          discardedStagedValidators: p.discardedStagedValidators,
         },
       },
       newComponentDefinitions: [],

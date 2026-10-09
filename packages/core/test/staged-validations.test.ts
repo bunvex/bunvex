@@ -12,6 +12,7 @@ import { Engine, StagedSchemaError } from "../src/engine.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
 import { defineSchema, defineTable, type SchemaDefinition } from "../src/schema.ts";
 import { schemaToJson, stagedValidatorsOf } from "../src/schema-json.ts";
+import { stagedSchemaValidationProgress } from "../src/schema-validations.ts";
 
 const engines: Engine[] = [];
 const dirs: string[] = [];
@@ -468,6 +469,139 @@ describe("a proven staged validator, as Convex's (7236c10, STUDY-106 §7.4)", ()
         "Table u is referenced by the staged validator for t but was deleted or replaced; redeploy to revalidate t.",
     });
     expect(r.w).toEqual({ state: "valid" });
+  });
+});
+
+describe("evaluate_schema's staged prediction, as Convex's (5b65aedb3)", () => {
+  const lits = () => v.union(v.literal(0), v.literal(1));
+  const base = async () => {
+    const e = await open(tmp());
+    await push(e, defineSchema({ t: defineTable(v.any()), u: defineTable(v.any()) }));
+    await e.mutation(async (db) => {
+      for (let i = 0; i < 10; i++) await db.insert("t", { a: i % 2 });
+    });
+    await e.summariesReady();
+    await push(
+      e,
+      defineSchema({
+        t: defineTable(v.any()).staged({ a: lits() }),
+        u: defineTable(v.any()).staged({ b: v.string() }),
+      }),
+    );
+    return e;
+  };
+  const rowOf = async (e: Engine, table: string) => (await rows(e)).find((r) => r.tableName === table)!;
+
+  test("a staged validation still running: its state, and whether its finishing would spare the push the walk", async () => {
+    const e = await base();
+    const p = await e.evaluateSchema(
+      defineSchema({ t: defineTable({ a: lits() }), u: defineTable({ b: v.number() }) }),
+    );
+    expect(p.tables).toEqual([
+      {
+        name: "t",
+        outcome: "mustWalk",
+        numDocs: 10,
+        sizeBytes: expect.any(Number),
+        staged: { state: "pending", numDocsValidated: 0, totalDocs: null },
+        canSkipAfterStagedValidation: true,
+      },
+      {
+        name: "u",
+        outcome: "supersetOfShape",
+        numDocs: 0,
+        sizeBytes: 0,
+        staged: { state: "pending", numDocsValidated: 0, totalDocs: null },
+        canSkipAfterStagedValidation: false,
+      },
+    ]);
+    // Neither is staged any more: both pending validations are thrown away.
+    expect(p.discardedStagedValidators).toEqual([
+      { tableName: "t", state: { state: "pending", numDocsValidated: 0, totalDocs: null }, replaced: false },
+      { tableName: "u", state: { state: "pending", numDocsValidated: 0, totalDocs: null }, replaced: false },
+    ]);
+  });
+
+  test("discarded or kept: a valid one widened or promoted is kept, narrowed or dropped is discarded; a failed one is never listed", async () => {
+    const e = await base();
+    await setRow(e, (await rowOf(e, "t"))._id, { state: "valid" }, 10n, 10n);
+    await setRow(e, (await rowOf(e, "u"))._id, { state: "failed", error: "no" }, 0n, 0n);
+    const discarded = async (s: SchemaDefinition) => (await e.evaluateSchema(s)).discardedStagedValidators;
+    // Widened: carried over. Promoted: kept as the enforced validator.
+    expect(await discarded(defineSchema({ t: defineTable(v.any()).staged({ a: v.number() }) }))).toEqual([]);
+    const promoted = await e.evaluateSchema(defineSchema({ t: defineTable({ a: lits() }) }));
+    expect(promoted.tables[0]).toMatchObject({ outcome: "supersetOfStagedValidated", staged: { state: "valid" } });
+    expect(promoted.discardedStagedValidators).toEqual([]);
+    // Narrowed: replaced. Dropped: gone.
+    expect(await discarded(defineSchema({ t: defineTable(v.any()).staged({ a: v.literal(0) }) }))).toEqual([
+      { tableName: "t", state: { state: "valid" }, replaced: true },
+    ]);
+    expect(await discarded(defineSchema({ t: defineTable(v.any()) }))).toEqual([
+      { tableName: "t", state: { state: "valid" }, replaced: false },
+    ]);
+  });
+
+  test("the responses seen on Convex's binary (076c52c), field for field", async () => {
+    const e = await open(tmp(), true);
+    await push(e, defineSchema({ t: defineTable(v.any()), u: defineTable(v.any()) }));
+    await e.mutation(async (db) => {
+      for (let i = 0; i < 10; i++) await db.insert("t", { a: i % 2 });
+    });
+    await e.summariesReady();
+    await push(
+      e,
+      defineSchema({
+        t: defineTable(v.any()).staged({ a: lits() }),
+        u: defineTable(v.any()).staged({ b: v.string() }),
+      }),
+    );
+    await e.stagedWalkIdle();
+    const sized = (o: object) => ({ ...o, sizeBytes: expect.any(Number) });
+    const promoteAndDrop = await e.evaluateSchema(
+      defineSchema({ t: defineTable({ a: lits() }), u: defineTable(v.any()) }),
+    );
+    expect(promoteAndDrop.tables as unknown[]).toEqual([
+      sized({
+        name: "t",
+        outcome: "supersetOfStagedValidated",
+        numDocs: 10,
+        staged: { state: "valid" },
+        canSkipAfterStagedValidation: false,
+      }),
+      sized({
+        name: "u",
+        outcome: "supersetOfEnforced",
+        numDocs: 0,
+        staged: { state: "valid" },
+        canSkipAfterStagedValidation: false,
+      }),
+    ]);
+    expect(promoteAndDrop.discardedStagedValidators).toEqual([
+      { tableName: "u", state: { state: "valid" }, replaced: false },
+    ]);
+    const narrowAndWiden = await e.evaluateSchema(
+      defineSchema({
+        t: defineTable(v.any()).staged({ a: v.literal(0) }),
+        u: defineTable(v.any()).staged({ b: v.union(v.string(), v.number()) }),
+      }),
+    );
+    expect(narrowAndWiden.tables.map((t) => [t.name, t.outcome, t.staged])).toEqual([
+      ["t", "supersetOfEnforced", { state: "valid" }],
+      ["u", "supersetOfEnforced", { state: "valid" }],
+    ]);
+    expect(narrowAndWiden.discardedStagedValidators).toEqual([
+      { tableName: "t", state: { state: "valid" }, replaced: true },
+    ]);
+  });
+
+  test("getSchemas:stagedSchemaValidationProgress lists the active schema's staged validations", async () => {
+    const e = await base();
+    await setRow(e, (await rowOf(e, "t"))._id, { state: "valid" }, 10n, 10n);
+    const active = (await rows(e))[0]!.schemaId;
+    expect(await e.query((db) => db.asSystem(() => stagedSchemaValidationProgress(db, active)))).toEqual([
+      { tableName: "t", state: { state: "valid" }, numDocsValidated: 10, totalDocs: 10 },
+      { tableName: "u", state: { state: "pending" }, numDocsValidated: 0, totalDocs: null },
+    ]);
   });
 });
 

@@ -154,7 +154,7 @@ export async function stagedValidationsWithProgress(
  * Convex's `can_reuse_for`: a pending row only for the same validator; a valid one when the new validator accepts
  * everything the old one did (`is_subset`); never a failed one.
  */
-function canReuseFor(c: StagedCarryOver, next: StagedValidator) {
+export function canReuseFor(c: StagedCarryOver, next: StagedValidator) {
   if (c.state.state === "pending") return c.hash === next.hash;
   if (c.state.state === "valid") return isSubset(c.validator, next.json);
   return false;
@@ -343,6 +343,29 @@ export async function schemaValidationProgress(
     else total += Number(p.totalDocs);
   }
   return { numDocsValidated: done, totalDocs: known ? total || null : null };
+}
+
+/**
+ * The dashboard's `getSchemas:stagedSchemaValidationProgress` (5b65aedb3): the active schema's staged validations,
+ * each table's state and counters, by table name (`localeCompare`, as Convex's).
+ */
+export async function stagedSchemaValidationProgress(
+  db: Tx,
+  activeSchemaId: string | null,
+): Promise<{ tableName: string; state: ValidationState; numDocsValidated: number; totalDocs: number | null }[]> {
+  if (activeSchemaId === null) return [];
+  const out = [];
+  for (const a of await attemptsOf(db, activeSchemaId)) {
+    if (a.validatorHash === undefined) continue;
+    const p = await progressOf(db, a._id);
+    out.push({
+      tableName: a.tableName,
+      state: a.state,
+      numDocsValidated: Number(p?.numDocsValidated ?? 0n),
+      totalDocs: p?.totalDocs === null || p?.totalDocs === undefined ? null : Number(p.totalDocs),
+    });
+  }
+  return out.sort((a, b) => a.tableName.localeCompare(b.tableName));
 }
 
 /** Convex's flush interval: every 5 % of the table or 500 documents, whichever is fewer (at least 1). */

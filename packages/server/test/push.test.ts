@@ -194,7 +194,13 @@ describe("deploy2 over HTTP", () => {
       "numDocs",
     ]);
     expect(p.tables).toEqual([
-      { name: "messages", outcome: "supersetOfEnforced", numDocs: 1, sizeBytes: expect.any(Number) },
+      {
+        name: "messages",
+        outcome: "supersetOfEnforced",
+        numDocs: 1,
+        sizeBytes: expect.any(Number),
+        canSkipAfterStagedValidation: false,
+      },
     ]);
     expect(p.tables[0].sizeBytes).toBeGreaterThan(0);
     // The same schema is identical; no schema drops every index.

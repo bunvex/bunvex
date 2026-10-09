@@ -162,6 +162,7 @@ import {
   stagedValidatorsOf,
 } from "./schema-json.ts";
 import {
+  canReuseFor,
   deleteEnforcedValidationsForSchema,
   deleteValidationsForSchema,
   initializeStagedValidators,
@@ -173,6 +174,7 @@ import {
   recordValidationProgress,
   retryFailedStagedValidators,
   type StagedCarryOver,
+  type StagedValidator,
   stagedValidationsWithProgress,
   startStagedWalk,
   startTableValidation,
@@ -221,7 +223,12 @@ import {
 } from "./table-summary-checkpoint.ts";
 import { CommitSpans, IndexReadSpans, NO_TRACER, type Tracer } from "./tracing.ts";
 import { decodeDoc, type StagedCheck, Tx } from "./tx.ts";
-import { type TableOutcome, tableValidationOutcome } from "./validator-subset.ts";
+import {
+  isSubset,
+  documentValidator as subsetDocument,
+  type TableOutcome,
+  tableValidationOutcome,
+} from "./validator-subset.ts";
 import {
   DEFAULT_VECTOR_LIMIT,
   MAX_VECTOR_FILTER_CONDITIONS,
@@ -2181,13 +2188,93 @@ export class Engine {
     }
     // Tables: the outcome of the schema walk bunvex will do (STUDY-35), with counts and sizes.
     const validStaged = await this.activeValidStaged();
+    // Convex's staged prediction (5b65aedb3): each table's staged validation, whether finishing the active schema's
+    // would spare the walk, and which pending or valid staged validations the push throws away.
+    const { items, activeStaged } = await this.query((db) =>
+      db.asSystem(async () => {
+        const rows = await db.query(SCHEMAS_TABLE).collect();
+        const items: { active: boolean; c: StagedCarryOver }[] = [];
+        let activeStaged = new Map<string, StagedValidator>();
+        for (const state of ["active", "pending", "validated"] as const) {
+          const row = rows.find((r) => schemaStateOf(r) === state);
+          if (!row) continue;
+          const staged = stagedValidatorsOf(JSON.parse(row.schema as string) as SchemaJson);
+          if (state === "active") activeStaged = staged;
+          for (const c of await stagedValidationsWithProgress(db, row._id as string, staged))
+            items.push({ active: state === "active", c });
+        }
+        return { items, activeStaged };
+      }),
+    );
+    const nextStaged = stagedValidatorsOf(schemaToJson(next));
+    const stateOf = (c: StagedCarryOver): StagedValidatorState =>
+      c.state.state === "pending"
+        ? {
+            state: "pending",
+            numDocsValidated: Number(c.numDocsValidated),
+            totalDocs: c.totalDocs === null ? null : Number(c.totalDocs),
+          }
+        : c.state.state === "valid"
+          ? { state: "valid" }
+          : { state: "failed", error: c.state.error };
+    /** Convex's `most_advanced`: per key, a valid validation first, then the most documents checked. */
+    const mostAdvanced = (key: (c: StagedCarryOver) => string | null) => {
+      const out = new Map<string, StagedCarryOver>();
+      const rank = (c: StagedCarryOver) => [c.state.state === "valid" ? 1 : 0, c.numDocsValidated] as const;
+      for (const { c } of items) {
+        const k = key(c);
+        if (k === null) continue;
+        const was = out.get(k);
+        const [a, b] = rank(c);
+        if (!was || a > rank(was)[0] || (a === rank(was)[0] && b > rank(was)[1])) out.set(k, c);
+      }
+      return out;
+    };
+    const stagedStates = mostAdvanced((c) => c.tableName);
+    const stillValidating = new Map(
+      items.filter((i) => i.active && i.c.state.state === "pending").map((i) => [i.c.tableName, i.c.validator]),
+    );
     const tables: TablePrediction[] = [...next.tables.values()].map((t) => {
       const tablet = tabletOf(t.name);
       const s = tablet === undefined ? { count: 0, size: 0 } : this.tableSummaries.get(tablet);
       const outcome = this.tableOutcome(next, this.schema, t.name, tablet, validStaged);
-      return { name: t.name, outcome, numDocs: s.count, sizeBytes: s.size };
+      const staged = stagedStates.get(t.name);
+      const pendingStaged = stillValidating.get(t.name);
+      return {
+        name: t.name,
+        outcome,
+        numDocs: s.count,
+        sizeBytes: s.size,
+        ...(staged ? { staged: stateOf(staged) } : {}),
+        canSkipAfterStagedValidation:
+          next.schemaValidation &&
+          pendingStaged !== undefined &&
+          isSubset(subsetDocument(pendingStaged), subsetDocument(t.document.json as never)),
+      };
     });
-    return { schemaValidation: next.schemaValidation, tables, indexes };
+    // Kept: what the push carries over (`can_reuse_for`), and the active schema's staged validators it promotes.
+    const key = (table: string, hash: string) => `${table}\u0000${hash}`;
+    const retained = new Set<string>();
+    for (const { c } of items) {
+      const v = nextStaged.get(c.tableName);
+      if (v && canReuseFor(c, v)) retained.add(key(c.tableName, c.hash));
+    }
+    for (const t of tables) {
+      const v = activeStaged.get(t.name);
+      if (t.outcome === "supersetOfStagedValidated" && v) retained.add(key(t.name, v.hash));
+    }
+    const discardedStagedValidators: DiscardedStagedValidator[] = [];
+    const byValidator = mostAdvanced((c) => (c.state.state === "failed" ? null : key(c.tableName, c.hash)));
+    for (const k of [...byValidator.keys()].sort()) {
+      if (retained.has(k)) continue;
+      const c = byValidator.get(k)!;
+      discardedStagedValidators.push({
+        tableName: c.tableName,
+        state: stateOf(c),
+        replaced: nextStaged.has(c.tableName),
+      });
+    }
+    return { schemaValidation: next.schemaValidation, tables, indexes, discardedStagedValidators };
   }
 
   /** Wait until the table summaries are built (tests, and callers that need them at once). */
@@ -3835,8 +3922,29 @@ export type IndexPrediction = {
   numDocs: number;
 } & Record<string, unknown>;
 export type { TableOutcome } from "./validator-subset.ts";
-export type TablePrediction = { name: string; outcome: TableOutcome; numDocs: number; sizeBytes: number };
-export type SchemaPrediction = { schemaValidation: boolean; tables: TablePrediction[]; indexes: IndexPrediction[] };
+/** How far a staged validator's validation has got (Convex's `StagedValidatorState`). */
+export type StagedValidatorState =
+  | { state: "pending"; numDocsValidated: number; totalDocs: number | null }
+  | { state: "valid" }
+  | { state: "failed"; error: string };
+export type TablePrediction = {
+  name: string;
+  outcome: TableOutcome;
+  numDocs: number;
+  sizeBytes: number;
+  /** The table's staged validation, under the active or an in-progress schema, whichever is further along. */
+  staged?: StagedValidatorState;
+  /** The active schema's staged validator is still validating, and once valid it would spare this push the walk. */
+  canSkipAfterStagedValidation: boolean;
+};
+/** A staged validation, pending or valid, that the push throws away; `replaced` when it stages another validator. */
+export type DiscardedStagedValidator = { tableName: string; state: StagedValidatorState; replaced: boolean };
+export type SchemaPrediction = {
+  schemaValidation: boolean;
+  tables: TablePrediction[];
+  indexes: IndexPrediction[];
+  discardedStagedValidators: DiscardedStagedValidator[];
+};
 
 // Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
 opaqueToInspect(Engine);

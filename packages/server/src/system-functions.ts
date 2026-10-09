@@ -34,6 +34,7 @@ import {
   SYSTEM_TABLE_DESCRIPTIONS,
   schemaStateOf,
   schemaValidationProgress,
+  stagedSchemaValidationProgress,
   stringifyValue,
   TableSummariesUnavailableError,
   type Tx,
@@ -429,6 +430,15 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
       db.asSystem(async () => {
         const rows = (await db.query(SCHEMAS_TABLE).collect()) as unknown as { _id: string; state: string }[];
         return schemaValidationProgress(db, rows.find((r) => schemaStateOf(r) === "pending")?._id ?? null);
+      }),
+  },
+  // The active schema's staged validations (5b65aedb3, STUDY-106 §7), as Convex's.
+  "_system/frontend/getSchemas:stagedSchemaValidationProgress": {
+    args: { componentId },
+    handler: async (db) =>
+      db.asSystem(async () => {
+        const rows = (await db.query(SCHEMAS_TABLE).collect()) as unknown as { _id: string; state: string }[];
+        return stagedSchemaValidationProgress(db, rows.find((r) => schemaStateOf(r) === "active")?._id ?? null);
       }),
   },
   "_system/frontend/tableSize": {

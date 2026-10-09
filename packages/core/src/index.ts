@@ -347,6 +347,7 @@ export {
   type SchemaValidation,
   type SchemaValidationProgress,
   schemaValidationProgress,
+  stagedSchemaValidationProgress,
   type ValidationState,
 } from "./schema-validations.ts";
 export type { SearchSegmentStore } from "./search-segments.ts";
