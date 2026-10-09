@@ -1,6 +1,6 @@
 {
   "name": "@bunvex/values",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "Validators (v.string(), v.id()…), table-tagged ids and value types shared by client and server.",
   "license": "Apache-2.0",
   "type": "module",

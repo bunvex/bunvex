@@ -1,6 +1,6 @@
 {
   "name": "@bunvex/core",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "The bunvex engine: MVCC, the committer, optimistic transactions, the query cache, subscriptions, and the Persistence contract with its zero-dependency drivers (memory, SQLite).",
   "license": "Apache-2.0",
   "type": "module",

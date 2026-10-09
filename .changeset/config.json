@@ -7,12 +7,21 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
+  "___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH": {
+    "onlyUpdatePeerDependentsWhenOutOfRange": true
+  },
   "ignore": [
     "@bunvex/bench",
     "@bunvex/dashboard",
+    "@bunvex/dashboard-app",
+    "@bunvex/differential",
+    "@bunvex/jepsen",
     "@bunvex/persistence-conformance",
+    "@bunvex/site",
     "@bunvex/sync-e2e",
     "@bunvex/testing",
-    "@bunvex/ui"
+    "@bunvex/ui",
+    "bunvex-example-*",
+    "bunvex-examples-*"
   ]
 }

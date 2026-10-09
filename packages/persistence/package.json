@@ -1,6 +1,6 @@
 {
   "name": "@bunvex/persistence",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "External persistence drivers for the bunvex engine: Postgres, MySQL and MongoDB. Install only the native driver you use.",
   "license": "Apache-2.0",
   "type": "module",

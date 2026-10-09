@@ -1,6 +1,6 @@
 {
   "name": "@bunvex/react-clerk",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "BunvexProviderWithClerk: the React client authenticated with Clerk.",
   "license": "Apache-2.0",
   "type": "module",
