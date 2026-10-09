@@ -10,6 +10,7 @@ import {
   hasCommitTs,
   resolveCommitTs,
   toJsonValue,
+  type ValidatorJSON,
   type Value,
   v,
 } from "@bunvex/values";
@@ -73,6 +74,7 @@ import {
   SESSION_REQUESTS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
   SOURCE_PACKAGES_TABLE,
+  SYSTEM_TO_VIRTUAL_TABLE,
   TABLES_TABLE,
   type TableMeta,
   tableMeta,
@@ -174,6 +176,7 @@ import {
   stagedValidationsWithProgress,
   startStagedWalk,
   startTableValidation,
+  validStagedValidators,
 } from "./schema-validations.ts";
 import { filterKey, indexedDoc, indexedDocBytes, type SearchIndexEntry, SearchIndexes } from "./search-indexes.ts";
 import {
@@ -2177,10 +2180,11 @@ export class Engine {
       }
     }
     // Tables: the outcome of the schema walk bunvex will do (STUDY-35), with counts and sizes.
+    const validStaged = await this.activeValidStaged();
     const tables: TablePrediction[] = [...next.tables.values()].map((t) => {
       const tablet = tabletOf(t.name);
       const s = tablet === undefined ? { count: 0, size: 0 } : this.tableSummaries.get(tablet);
-      const outcome = this.tableOutcome(next, this.schema, t.name, tablet);
+      const outcome = this.tableOutcome(next, this.schema, t.name, tablet, validStaged);
       return { name: t.name, outcome, numDocs: s.count, sizeBytes: s.size };
     });
     return { schemaValidation: next.schemaValidation, tables, indexes };
@@ -2277,7 +2281,13 @@ export class Engine {
    * validator against the active schema's enforced one (`any` when it does not validate), then against the table's
    * shape from its summary (none while summaries build; a table that does not exist is empty).
    */
-  private tableOutcome(next: SchemaDefinition, active: SchemaDefinition, table: string, tablet: TabletId | undefined) {
+  private tableOutcome(
+    next: SchemaDefinition,
+    active: SchemaDefinition,
+    table: string,
+    tablet: TabletId | undefined,
+    validStaged?: Map<string, unknown>,
+  ) {
     const t = next.tables.get(table);
     const was = active.schemaValidation ? active.tables.get(table) : undefined;
     const shape = !this.tableSummaries.ready
@@ -2291,7 +2301,43 @@ export class Engine {
       was?.document.json as never,
       shape,
       (n) => this.catalog.byNumber(n)?.name,
+      validStaged?.get(table) as never,
     );
+  }
+
+  /**
+   * Convex's `active_schema_with_valid_staged_validators`: the active schema's staged validators its validation
+   * proved, by table (a `supersetOfStagedValidated` proof, 7236c10).
+   */
+  private async activeValidStaged(): Promise<Map<string, unknown>> {
+    return this.query((db) =>
+      db.asSystem(async () => {
+        const row = (await db.query(SCHEMAS_TABLE).collect()).find((r) => schemaStateOf(r) === "active");
+        if (!row) return new Map();
+        const staged = stagedValidatorsOf(JSON.parse(row.schema as string) as SchemaJson);
+        return validStagedValidators(db, row._id as string, staged);
+      }),
+    ) as Promise<Map<string, unknown>>;
+  }
+
+  /**
+   * Convex's `invalidate_table_references` (7236c10), when an active table is deleted or replaced: every staged
+   * validation, of the active, validated and pending schema, whose validator points to it with `v.id` fails.
+   */
+  private async invalidateTableReferences(db: Tx, name: string) {
+    for (const row of await db.query(SCHEMAS_TABLE).collect()) {
+      const state = schemaStateOf(row);
+      if (state !== "active" && state !== "validated" && state !== "pending") continue;
+      const staged = stagedValidatorsOf(JSON.parse(row.schema as string) as SchemaJson);
+      for (const [table, v] of staged)
+        if (referencedTables(v.json as unknown as ValidatorJSON).has(name))
+          await markStagedValidationFailed(
+            db,
+            row._id as string,
+            table,
+            `Table ${name} is referenced by the staged validator for ${table} but was deleted or replaced; redeploy to revalidate ${table}.`,
+          );
+    }
   }
 
   /** Run the staged walk (again, if it is running: a push may have added rows). */
@@ -2440,13 +2486,16 @@ export class Engine {
   private async validateExisting(schemaId: string, schema: SchemaDefinition, active: SchemaDefinition) {
     const stillPending = () => this.pendingPush?.id === schemaId;
     const walk: { name: string; validator: GenericValidator }[] = [];
+    const validStaged = schema.schemaValidation ? await this.activeValidStaged() : undefined;
     if (schema.schemaValidation)
       for (const t of schema.tables.values()) {
         const validator = documentValidator(t.name, t.document);
         if (!validator) continue;
         // Convex's `table_validation_outcomes`: a table whose new validator accepts everything the active one
         // enforced, or everything its shape holds (an empty table always), is not walked and gets no attempt.
-        if (this.tableOutcome(schema, active, t.name, this.catalog.tables.get(t.name)?.id) !== "mustWalk") continue;
+        // A staged validator the active schema proved stands in for the walk too (`supersetOfStagedValidated`).
+        if (this.tableOutcome(schema, active, t.name, this.catalog.tables.get(t.name)?.id, validStaged) !== "mustWalk")
+          continue;
         // A table with no document (or none yet) has nothing to check: Convex's empty shape fits any validator,
         // so it writes no attempt for it (`table_shape_provider`, STUDY-133 §12 M13). Unknown counts are walked.
         if (this.totalDocs(t.name) === 0) continue;
@@ -2528,8 +2577,11 @@ export class Engine {
    * that declares an index exists already: Convex adds the push's indexes first, creating their tables (a dry run
    * and `evaluate_push` too, in their read-only pass; checked against Convex's binary).
    */
-  stagedValidatorConflicts(schema: SchemaDefinition): StagedSchemaError | null {
+  async stagedValidatorConflicts(schema: SchemaDefinition): Promise<StagedSchemaError | null> {
     const tables: string[] = [];
+    // Only read when there is a staged validator (Convex's `has_staged_validators` guard).
+    const hasStaged = [...schema.tables.values()].some((t) => t.stagedDocument !== undefined);
+    const validStaged = hasStaged ? await this.activeValidStaged() : new Map<string, unknown>();
     for (const t of [...schema.tables.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
       if (t.stagedDocument === undefined) continue;
       const declaresIndex =
@@ -2544,6 +2596,7 @@ export class Engine {
         was?.document.json as never,
         exists ? undefined : NEVER,
         (n) => this.catalog.byNumber(n)?.name,
+        validStaged.get(t.name) as never,
       );
       if (outcome === "mustWalk") tables.push(t.name);
     }
@@ -2558,7 +2611,7 @@ export class Engine {
    * `commitSchemaPush`. Returns the schema's id and the indexes it added.
    */
   async startSchemaPush(schema: SchemaDefinition): Promise<{ schemaId: string; addedIndexes: string[] }> {
-    const conflict = this.stagedValidatorConflicts(schema);
+    const conflict = await this.stagedValidatorConflicts(schema);
     if (conflict) throw conflict;
     const declared = this.declaredTables(schema);
     const json = schemaToJson(schema);
@@ -2891,6 +2944,9 @@ export class Engine {
         for (const tablet of toDelete) {
           const t = tables.find((x) => x.tablet === tablet)!;
           await db.patch(TABLES_TABLE, t._id, { state: "deleting" });
+          // A `v.id` a staged validator holds no longer points where its validation checked (7236c10).
+          if (this.opts.storedSchema)
+            await this.invalidateTableReferences(db, SYSTEM_TO_VIRTUAL_TABLE[t.name] ?? t.name);
         }
         if (body) await body(db);
         const deleteList = [...toDelete];

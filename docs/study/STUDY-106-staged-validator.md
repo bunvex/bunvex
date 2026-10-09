@@ -293,6 +293,17 @@ binary (02fe59b) with the same four tables (walked to 30/30, failed at its bad d
 the shape with counters 0 and null, empty): bunvex gives the same rows. 50 000 documents are walked in 1.5 s, the push
 itself returning in 30 ms. `stagedWalk: false` turns the walk off (tests that look at the rows a push makes).
 
+**PR 5, built.** `tableValidationOutcome` takes the active schema's proven staged validator for the table (its row
+`valid` with the current hash: `validStagedValidators`, Convex's `valid_staged_validators`) and answers
+`supersetOfStagedValidated` when the new validator accepts everything it does, after `supersetOfEnforced` and before
+`supersetOfShape`. `evaluateSchema`, the enforced walk and the 400's check use it; the staged walk does not (Convex
+passes none there). `activateTables`, the one way an active table is deleted or replaced (`deleteTables`, an import's
+replacement, `replaceWithEmptyTables`), fails in the same transaction every staged validation of the active, validated
+and pending schema whose validator points to the table (its virtual name for a system table) with `v.id`: "Table {t} is
+referenced by the staged validator for {r} but was deleted or replaced; redeploy to revalidate {r}." Checked on
+Convex's binary (076c52c, the first release with 7236c10): a promotion makes no enforced row for the proven table, and
+deleting the referenced table stores the same text. With PR 5, DV-438 is built.
+
 Found on the way, decided as DV-444 (owner, 2026-10-08: bunvex's dry run keeps writing nothing): Convex's dry run commits (the first pass above), so a `deploy --dry-run`
 on Convex writes a pending schema, overwriting an in-progress push, and creates the pushed tables; bunvex's dry run
 writes nothing. `convex codegen` against a deployment runs the same dry-run push.

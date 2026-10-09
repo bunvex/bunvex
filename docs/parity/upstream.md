@@ -49,5 +49,5 @@ Commits after the reference that the last bump did not cover:
 | `e748f4c` | Fix FormData non-string values and set() with repeated names | Web API, Bun's (DV-164) |
 | `a4ad353` | docs: Update function bundle size limits | Docs only (its limits taken in #539) |
 | `e049178` | schema worker: validate staged validators in the background | Staged validators (DV-438) |
-| `7236c10` | staged validated validators replace the walk at promotion; table deletion invalidates references | Staged validators (DV-438); in no release yet |
+| `7236c10` | staged validated validators replace the walk at promotion; table deletion invalidates references | Staged validators (DV-438); first in `precompiled-2026-10-08-076c52c` |
 | `02fe59b` | docs: AI Gateway model list | Docs only |

@@ -406,6 +406,71 @@ describe("the staged walk in the background, as Convex's (e049178, STUDY-106 §7
   });
 });
 
+describe("a proven staged validator, as Convex's (7236c10, STUDY-106 §7.4)", () => {
+  const lits = () => v.union(v.literal(0), v.literal(1));
+  /** `t` with 50 documents `{a: 0 | 1}` and a staged validator the walk proves. */
+  const proven = async (walk = true) => {
+    const e = await open(tmp(), walk);
+    await push(e, defineSchema({ t: defineTable(v.any()) }));
+    await e.mutation(async (db) => {
+      for (let i = 0; i < 50; i++) await db.insert("t", { a: i % 2 });
+    });
+    await e.summariesReady();
+    await push(e, defineSchema({ t: defineTable(v.any()).staged({ a: lits() }) }));
+    await e.stagedWalkIdle();
+    return e;
+  };
+
+  test("promoting it to the enforced validator needs no walk: supersetOfStagedValidated, predicted and done", async () => {
+    const e = await proven();
+    expect((await rows(e))[0]!.state).toEqual({ state: "valid" });
+    const promoted = defineSchema({ t: defineTable({ a: lits() }) });
+    expect((await e.evaluateSchema(promoted)).tables).toEqual([
+      expect.objectContaining({ name: "t", outcome: "supersetOfStagedValidated" }),
+    ]);
+    const p = await e.startSchemaPush(promoted);
+    await until(async () => (await e.schemaPushStatus(p.schemaId)).type === "complete");
+    // No enforced walk: no row without a validatorHash was ever made for the new schema.
+    expect((await rows(e)).filter((r) => r.schemaId === p.schemaId)).toEqual([]);
+    await e.commitSchemaPush(p.schemaId, async () => {});
+    // Promoted: it is the enforced validator now.
+    expect((await e.evaluateSchema(defineSchema({ t: defineTable({ a: v.number() }) }))).tables[0]!.outcome).toBe(
+      "supersetOfEnforced",
+    );
+  });
+
+  test("only a valid row proves anything; a promotion it proves passes the guardrail with the staged validator kept", async () => {
+    const e = await proven(false);
+    expect((await rows(e))[0]!.state).toEqual({ state: "pending" });
+    const promoted = defineSchema({ t: defineTable({ a: lits() }) });
+    expect((await e.evaluateSchema(promoted)).tables[0]!.outcome).toBe("mustWalk");
+    const keepStaged = defineSchema({ t: defineTable({ a: lits() }).staged({ a: v.literal(0) }) });
+    expect(await e.stagedValidatorConflicts(keepStaged)).toBeInstanceOf(StagedSchemaError);
+    await setRow(e, (await rows(e))[0]!._id, { state: "valid" }, 50n, 50n);
+    expect((await e.evaluateSchema(promoted)).tables[0]!.outcome).toBe("supersetOfStagedValidated");
+    expect(await e.stagedValidatorConflicts(keepStaged)).toBeNull();
+  });
+
+  test("deleting or replacing a table a staged validator points to fails its validation, in every schema", async () => {
+    const e = await open(tmp());
+    await push(e, defineSchema({ t: defineTable(v.any()), u: defineTable(v.any()), w: defineTable(v.any()) }));
+    const s = defineSchema({
+      t: defineTable(v.any()).staged({ ref: v.optional(v.id("u")) }),
+      w: defineTable(v.any()).staged({ x: v.optional(v.string()) }),
+    });
+    const id = await push(e, s);
+    for (const r of await rows(e)) await setRow(e, r._id, { state: "valid" }, 0n, 0n);
+    await e.deleteTable("u");
+    const r = Object.fromEntries((await rows(e)).filter((x) => x.schemaId === id).map((x) => [x.tableName, x.state]));
+    expect(r.t).toEqual({
+      state: "failed",
+      error:
+        "Table u is referenced by the staged validator for t but was deleted or replaced; redeploy to revalidate t.",
+    });
+    expect(r.w).toEqual({ state: "valid" });
+  });
+});
+
 describe("the guardrail: StagedSchemaWithEnforcedValidatorChanges (STUDY-106 §7.4)", () => {
   const message = (tables: string) =>
     `Cannot stage validators on tables whose enforced validator change needs their documents walked: ${tables}. Put the whole change in the staged validator instead, so the table is walked once, in the background.`;
@@ -417,7 +482,7 @@ describe("the guardrail: StagedSchemaWithEnforcedValidatorChanges (STUDY-106 §7
       t: defineTable({ a: v.literal(1) }).staged({ a: v.number() }),
       s: defineTable({ a: v.literal(2) }).staged({ a: v.number() }),
     });
-    const err = e.stagedValidatorConflicts(s);
+    const err = await e.stagedValidatorConflicts(s);
     expect(err).toBeInstanceOf(StagedSchemaError);
     expect(err!.code).toBe("StagedSchemaWithEnforcedValidatorChanges");
     expect(err!.message).toBe(message("s, t"));
@@ -429,7 +494,7 @@ describe("the guardrail: StagedSchemaWithEnforcedValidatorChanges (STUDY-106 §7
     const e = await open(tmp());
     await push(e, defineSchema({ t: defineTable(enforced) }));
     expect(
-      e.stagedValidatorConflicts(
+      await e.stagedValidatorConflicts(
         defineSchema({
           t: defineTable({ a: v.union(v.number(), v.string()) }).staged({ a: v.string() }),
           fresh: defineTable({ x: v.string() }).staged({ x: v.string() }),
@@ -442,7 +507,7 @@ describe("the guardrail: StagedSchemaWithEnforcedValidatorChanges (STUDY-106 §7
       { t: defineTable({ a: v.literal(1) }).staged({ a: v.number() }) },
       { schemaValidation: false },
     );
-    expect(e.stagedValidatorConflicts(loose)).toBeNull();
+    expect(await e.stagedValidatorConflicts(loose)).toBeNull();
   });
 
   test("a new table that declares an index counts as existing, as Convex's (its index creates it first)", async () => {
@@ -451,6 +516,8 @@ describe("the guardrail: StagedSchemaWithEnforcedValidatorChanges (STUDY-106 §7
       defineTable({ x: v.string() }).index("by_x", ["x"]),
       defineTable({ x: v.string() }).searchIndex("s", { searchField: "x" }),
     ])
-      expect(e.stagedValidatorConflicts(defineSchema({ u: t.staged({ x: v.string() }) }))?.message).toBe(message("u"));
+      expect((await e.stagedValidatorConflicts(defineSchema({ u: t.staged({ x: v.string() }) })))?.message).toBe(
+        message("u"),
+      );
   });
 });

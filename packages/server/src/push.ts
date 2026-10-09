@@ -332,7 +332,7 @@ export class PushService {
     // As Convex's `start_push`: what the push does to the indexes, against the active schema (dry run too).
     const indexDiff = indexDiffJson(indexAuditDiff(this.deps.engine.schema, schema));
     // Convex's `StagedSchemaWithEnforcedValidatorChanges` (STUDY-106 §7.4), dry run too.
-    const staged = this.deps.engine.stagedValidatorConflicts(schema);
+    const staged = await this.deps.engine.stagedValidatorConflicts(schema);
     if (staged) throw new PushError(staged.code, staged.message);
     if (req.dryRun) return this.response(version, schema, auth, analysis, { schemaId: null, indexDiff });
     let schemaId: string;
