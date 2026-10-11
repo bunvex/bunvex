@@ -99,6 +99,7 @@ time only.
 | `server/functions.ts` | the budgets of user functions and of system functions (STUDY-76's warnings) | the real clock | `engine.runtime` |
 | `server/action-permits.ts` | the permit wait's timeout (`TooManyConcurrentRequests`) | `setTimeout` | the limiter's runtime (`functionLimitsFromEnv(env, action, runtime)`, `new ActionPermits(max, waitMs, runtime)`); `Functions` passes `engine.runtime` |
 | `server/functions.ts` | an execution's start and end (the function log's `executionTime`, its timestamps), which bound its user time (PR 4) | `wallClock()` | `engine.runtime.now()` (the same `Date.now()` in production) |
+| `server/sync.ts` | the WS heartbeat (STUDY-104): its check interval, and each session's last frame received, sent and pinged (PR 5) | `setInterval`, `performance.now()` | `engine.runtime` (`SyncHub.clock`); the process's clock still called directly, as `UserTimer` does (through `realRuntime`'s bound function it cost ~45 ns more a frame) |
 
 **The cost.** The budget is checked at every store call (§1.1: twice, plus a pause), so its clock is on the
 hottest path a function has. Calling the clock through the timer's field, with no other change, cost
@@ -129,6 +130,8 @@ Each flaky test was run alone, 8–50 times, under load: a parallel `bun test --
 | `usage-user-time` "a query's store time is not user time" | **real time.** A query that did nothing but await a 60 ms store read counted its own overhead on the real clock: 31.6 ms in the coverage job, over a 30 ms bound. A 35 ms stall after a store call fails it every time | yes | the store waits `rt.sleep(60)`, the functions "work" with `rt.blockFor(40)`, and the execution's start and end read `engine.runtime` too (its user time is capped at its wall time): the times are asserted exactly | 4 |
 | `retention-prev-ts` "the document pass deletes … a delete's tombstone", `retention` "prunes every superseded version" | **assumed sparse timestamps.** One commit after the others was taken to move the document window past every version before it. The index cursor stops one below the window, and the document window follows it exclusively (as Convex's), so a version one nanosecond below the last commit waits for the next round. Commit timestamps are consecutive when the clock has not moved past the last one (`Date.now()` ahead of `performance.now()` pins `wallClockNs` to the whole millisecond, as in the failure: the tombstone at `…799000000`). A clock that stands still makes them fail every time | yes (the clock's resolution) | two commits after the others; the tests run on consecutive timestamps, and a new test pins the exclusive bound. Not a retention bug: Convex's `candidate_min_snapshot_ts` and `expired_documents` bound it the same way | 4 |
 | `jepsen/linearizability` "a large history … checked fast" | **real work, near the 5 s test timeout.** The step count was already asserted (not wall time), but the search built its memo key by a loop over all 2 000 operations at every step (~211 000 steps, twice): 0.8 s alone, over 5 s in the coverage job | no | the key is the bitset itself, one native `String.fromCharCode` over 16 operations a code unit: the same steps, 5× faster (387 → ~70 ms a search) | 4 |
+
+| `ws-heartbeat` "a client that never answers is pinged, then closed" | **two clocks.** The server times a session's silence from its creation, at the upgrade; the test started its clock once the client had read the upgrade's answer, so the close came "early" by the handshake's latency (183 ms against ≥ 195 in the merge queue, 88 ms under load here). A client 30 ms slow to read the answer fails it every time. The keep-alive cases slept real time, safe only while no stall outlasted the timeout | yes | the heartbeat runs on `engine.runtime`; the tests drive it with a `TestRuntime`: still open at exactly 200 ms of silence, closed at the next check (225 ms), 8 pings; each keep-alive frame is heard by the server before the time moves on. sync-e2e's own case starts its clock before connecting, a sound lower bound | 5 |
 
 None of them was fixed by a longer timeout.
 
@@ -205,7 +208,8 @@ The races of PR 3, forced on purpose:
 
 Still on the process's clock, by module, roughly in the order their tests would gain:
 
-- **The sync hub** (`server/src/sync.ts`): the heartbeat, the client-clock skew, the splay of reruns.
+- **The sync hub** (`server/src/sync.ts`): the client-clock skew, the splay of reruns (the WS heartbeat is
+  on the runtime since PR 5).
   Convex's own heartbeat test (§1.2) is the model.
 - **The scheduler and crons** (`server/src/scheduler.ts`, `cron-executor.ts`): their tests poll with sleeps
   for the job to run.
