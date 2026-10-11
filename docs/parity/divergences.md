@@ -429,7 +429,10 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-None as of 2026-10-08.
+| ID | Divergence | Convex | Observable | Recommendation | Source |
+|---|---|---|---|---|---|
+| DV-445 | Reads do not ask for or validate checksums (no `x-amz-checksum-mode: ENABLED`), and the AWS SDK's `AWS_REQUEST_CHECKSUM_CALCULATION` / `AWS_RESPONSE_CHECKSUM_VALIDATION` are not read (each part always carries its CRC32, as the default `when_supported`) | the SDK's defaults: GetObject asks for the checksum and validates a full-object one; the two variables (or profile keys) can turn either off | operational (only a corrupted transfer of an object stored whole by another writer would differ: Convex's and bunvex's objects are multipart, whose part-level checksum the SDK skips, and ranged reads carry none) | accept | [STUDY-140 §4](../study/STUDY-140-s3-sse-and-checksums.md#4-divergences) |
+| DV-446 | S3 parts of a fixed size (8 MiB by default), and no trailing empty part | 5 MiB doubling up to `STORAGE_MAX_INTERMEDIATE_PART_SIZE` (200 MiB); the remaining buffer, even empty, is the last part | operational (largest object about 78 GiB instead of about 2 TiB; 64 MiB of a large upload in memory instead of up to 1.6 GiB) | accept | [STUDY-140 §4](../study/STUDY-140-s3-sse-and-checksums.md#4-divergences) |
 
 DV-442 and DV-443 (STUDY-139 P1–P3, P5) were accepted by the owner (2026-10-08) and are in [Decided divergences](#decided-divergences): DV-442 is built (#525), DV-443 was withdrawn (STUDY-139 §1.1); P4, P6 and P7 are not divergences.
 
