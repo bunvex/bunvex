@@ -528,6 +528,12 @@ setFetchMeter(() => {
   };
 });
 
+/** A redirected request's body, sent again (307, 308): metered as its own request, as Convex's (STUDY-142). */
+function resentEgress(bytes: number) {
+  const r = meteredAction();
+  if (r && r.environment === "isolate") r.io.networkEgressBytes += bytes;
+}
+
 /** Count an operation of `r` as pending until the returned function is called (Convex's dangling tasks). */
 function pendingOp(r: Running, name: string): () => void {
   r.pendingOps.set(name, (r.pendingOps.get(name) ?? 0) + 1);
@@ -1022,7 +1028,7 @@ export class Functions {
   /** The usage meter (STUDY-61); set by `createServer`. */
   usageMeter: UsageMeter | null = null;
   /** An isolate action's `fetch`: through the operator's proxy when there is one (STUDY-80 §3.2). */
-  private isolateSender = isolateFetch(proxiedFetch(directFetch, null));
+  private isolateSender = isolateFetch(proxiedFetch(directFetch, null), resentEgress);
   private proxy: HttpProxy | null = null;
   /** The proxy an isolate action's `fetch` goes through (Convex's `--convex-http-proxy`); null for none. */
   get httpProxy(): HttpProxy | null {
@@ -1030,7 +1036,7 @@ export class Functions {
   }
   set httpProxy(p: HttpProxy | null) {
     this.proxy = p;
-    this.isolateSender = isolateFetch(proxiedFetch(directFetch, p));
+    this.isolateSender = isolateFetch(proxiedFetch(directFetch, p), resentEgress);
   }
 
   /** A run's usage into the meter (STUDY-61, STUDY-71); `tracked`: whether the call counts (not `_system/`). */

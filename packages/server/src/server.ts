@@ -32,6 +32,7 @@ import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
 import { decodeId, TOO_NESTED_MESSAGE, type Value } from "@bunvex/values";
 import type { Server } from "bun";
+import { withDefaultUserAgent } from "./action-fetch.ts";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { type AddressScreen, addressScreen, startAddressScreen } from "./address-screen.ts";
 import {
@@ -475,7 +476,7 @@ export function createServer(opts: ServerOptions) {
   const makeVerifier = (infos: AuthInfo[]) =>
     new TokenVerifier(infos, {
       redactErrors: redact,
-      fetch: proxiedFetch(opts.authFetch ?? directFetch, httpProxy),
+      fetch: proxiedFetch(withDefaultUserAgent(opts.authFetch ?? directFetch), httpProxy),
     });
   /** The auth config's verifier; a push replaces it with its auth.config's (STUDY-35). */
   let verifier = makeVerifier(opts.auth === undefined ? [] : parseAuthConfig(opts.auth));

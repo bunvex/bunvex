@@ -38,6 +38,19 @@ const BUN_ONLY_OPTIONS = [
 /** Convex's default `User-Agent` (`common/src/http/fetch.rs`, `Convex/1.0`), in bunvex's words (rule 5, DV-456). */
 export const FETCH_USER_AGENT = "Bunvex/1.0";
 
+/**
+ * `send` with bunvex's default `User-Agent` when the request has none: OIDC discovery and JWKS requests, which
+ * Convex sends with the same client as an action's `fetch` (`build_proxied_reqwest_client`, STUDY-142).
+ */
+export function withDefaultUserAgent(send: typeof fetch): typeof fetch {
+  return ((input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    if (headers.has("user-agent")) return send(input, init);
+    headers.set("user-agent", FETCH_USER_AGENT);
+    return send(input, { ...init, headers });
+  }) as typeof fetch;
+}
+
 /** The URL a `fetch` call names, or null when it does not parse (the request itself then reports it). */
 function urlOf(input: Parameters<typeof fetch>[0]): URL | null {
   try {
@@ -221,9 +234,14 @@ const sameOrigin = (a: URL, b: URL) => a.origin === b.origin && a.port === b.por
 
 /**
  * An isolate action's `fetch` (HTTP actions too): `http:` and `https:` only, with the web's options, redirects
- * followed one request at a time as Convex's runtime follows them, and its errors.
+ * followed one request at a time as Convex's runtime follows them, and its errors. `resent` hears the body bytes of
+ * each redirected request that went out (a 307 or 308 sends the body again): Convex meters every request, hop by hop
+ * (`track_fetch_egress`), where the first one is metered around this `fetch`.
  */
-export function isolateFetch(send: typeof fetch = directFetch): typeof fetch {
+export function isolateFetch(
+  send: typeof fetch = directFetch,
+  resent: (bytes: number) => void = () => {},
+): typeof fetch {
   /** One request, never redirected by Bun: its response, or Convex's error. */
   const once = async (request: Request): Promise<Response> => {
     let r: Response;
@@ -271,7 +289,9 @@ export function isolateFetch(send: typeof fetch = directFetch): typeof fetch {
       options.headers = headers;
       await response.body?.cancel().catch(() => {});
       request = new Request(next.href, options);
+      const bytes = request.body ? (await request.clone().arrayBuffer()).byteLength : 0;
       response = await once(request);
+      if (bytes > 0) resent(bytes);
       (response as Answering)[REDIRECTED] = true;
     }
     throw new TypeError("fetch too many redirects");

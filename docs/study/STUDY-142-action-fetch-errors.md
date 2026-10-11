@@ -1,6 +1,6 @@
 # STUDY-142 — A failed `fetch` in an action, redirects and the default `User-Agent`
 
-- **Status:** implemented (draft PR); DV-456 decided (rule 5); Q1 (DV-457) and Q2 (DV-458) pending (owner).
+- **Status:** implemented; DV-456 decided (rule 5); DV-457 accepted and DV-458 the spec's behaviour kept (owner, 2026-10-11).
 - **Convex source read:** the reference `d8bdde0` (`precompiled-2026-10-07-d8bdde0`, `docs/parity/upstream.md`):
   `npm-packages/udf-runtime/src/26_fetch.ts`, `23_response.ts` and `06_streams.ts` read at that commit on
   GitHub (the local clone, `4577b90`, has an older `fetchWithoutRedirect` without credentials or body
@@ -134,8 +134,8 @@ Node's `fetch`, as Convex's Node executor):
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | DV-456 | Default `User-Agent: Bunvex/1.0` | Rule 5 (as DV-304's sinks) | decided (rule 5) |
-| Q1 / DV-457 | TLS and malformed-response causes keep reqwest's frame with Bun's words: `… client error (Connect): self signed certificate` where Convex says rustls's (`invalid peer certificate: UnknownIssuer` on Linux, macOS's verifier text on a Mac); `… : Malformed_HTTP_Response` for hyper's `invalid HTTP version parsed` (or header, status…); a TLS handshake against a plain HTTP port through the screen is "Connection refused" (Bun's code) | Não dá pra fazer exactly: Bun verifies with BoringSSL and reports one code for every malformed answer; rustls's and the platform verifier's words are not available | pending (owner) |
-| Q2 / DV-458 | A signal already aborted when `fetch` is called rejects with Convex's `AbortError`; Convex sends the request anyway and answers | Convex's runtime only watches the signal for a later abort (a bug, by the fetch spec) | pending (owner) |
+| Q1 / DV-457 | TLS and malformed-response causes keep reqwest's frame with Bun's words: `… client error (Connect): self signed certificate` where Convex says rustls's (`invalid peer certificate: UnknownIssuer` on Linux, macOS's verifier text on a Mac); `… : Malformed_HTTP_Response` for hyper's `invalid HTTP version parsed` (or header, status…); a TLS handshake against a plain HTTP port through the screen is "Connection refused" (Bun's code) | Não dá pra fazer exactly: Bun verifies with BoringSSL and reports one code for every malformed answer; rustls's and the platform verifier's words are not available | owner, 2026-10-11: accepted (A) |
+| Q2 / DV-458 | A signal already aborted when `fetch` is called rejects with Convex's `AbortError`; Convex sends the request anyway and answers | Convex's runtime only watches the signal for a later abort (a bug, by the fetch spec) | owner, 2026-10-11: keep the spec's behaviour (B); to be reported upstream |
 
 ### Q1 — causes bunvex cannot word as Convex (DV-457)
 
@@ -154,7 +154,7 @@ Node's `fetch`, as Convex's Node executor):
   the oracle here is the macOS binary.
 - **App impact:** low. An app that matches on a certificate or protocol error's text (rare; such failures are
   operational) sees different words in the same frame.
-- **Recommendation:** A — accept: reqwest's frame, Bun's words. (B: map the common certificate codes to
+- **Decision (owner, 2026-10-11):** A — accept: reqwest's frame, Bun's words. (B was: map the common certificate codes to
   webpki's Linux names, as Convex's cloud and Docker image run on Linux; unverified against a Linux oracle.)
 
 ### Q2 — a signal aborted before the call (DV-458)
@@ -167,7 +167,7 @@ Node's `fetch`, as Convex's Node executor):
 - **Why:** "Ainda não fizemos" — bunvex could skip an aborted signal on purpose; it reads as a Convex bug.
 - **App impact:** very low: an app that aborts before fetching expects the spec's rejection; on Convex it gets
   a response.
-- **Recommendation:** B — keep the spec's behaviour (and report it upstream); A would be to match Convex.
+- **Decision (owner, 2026-10-11):** B — keep the spec's behaviour; to be reported upstream. (A was to match Convex.)
 
 ## 5. Tests
 
@@ -218,9 +218,20 @@ version that wrapped every body in a new `ReadableStream` cost ~10 µs per call:
 
 ## 6. Open questions
 
-- Q1, Q2 above.
-- Egress for a redirect that sends its body again (307/308) is counted once; Convex counts each hop's
-  request (`track_fetch_egress` per fetch op). A usage difference only (no app sees it), older than this
-  study (Bun followed redirects itself); left for a follow-up with the metering.
-- OIDC discovery and JWKS requests still go out with Bun's `User-Agent`; Convex's OIDC client is built by the
-  same `build_proxied_reqwest_client` (`Convex/1.0`). Not an action's `fetch`; left as a gap in the parity row.
+None. Q1 and Q2 were decided (§4). The two gaps the first version left were closed at the owner's request
+(2026-10-11, §7).
+
+## 7. Follow-up: per-hop egress and OIDC's `User-Agent`
+
+- **Egress per hop:** Convex meters every fetch op's request body (`track_fetch_egress`), so a 307 or 308 that
+  sends the body again is metered again, and a redirect that turns into a `GET` is not. bunvex's first request
+  is metered around `fetch` (`core/src/determinism.ts`). Each later hop that goes out with a body is now
+  reported by `isolateFetch` (its `resent` callback) and added to the action's `networkEgressBytes`
+  (`functions.ts`, `resentEgress`). A hop that fails is not charged, as Convex charges 0 for a failed op.
+  Test: `usage-egress-storage.test.ts` (307, 308, 302 after a `POST`, 303 after a `PUT`).
+- **OIDC's `User-Agent`:** Convex's OIDC discovery and JWKS client is built by the same
+  `build_proxied_reqwest_client` (`Convex/1.0`). bunvex's verifier fetch now sends `Bunvex/1.0` when the
+  request has none (`withDefaultUserAgent`, `server.ts`), as DV-456. Test: `http-proxy.test.ts`.
+- **Sabotage:**
+  - S10, a resent body not metered: 1 failing test;
+  - S11, OIDC without the `User-Agent`: 1 failing test.
