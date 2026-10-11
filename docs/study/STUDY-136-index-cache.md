@@ -324,13 +324,51 @@ What the numbers say:
 **Caveats.**
 
 - **In process.** No HTTP, no WebSocket and no function isolation; the bench's functions are plain
-  closures. An end-to-end run adds the same fixed cost to both sides, so ratios will be smaller.
+  closures. An end-to-end run adds the same fixed cost to both sides, so ratios are smaller: §3.5 measures it.
 - **The store is local.** Its round trip is a fraction of a millisecond. A store across a network (RDS, a
   managed Postgres) makes each saved call worth more.
 - **The workload is skewed.** Zipf(1), with a hot set of about 8 MB that fits the cache. Convex reports a
   75% hit rate in production.
 - **The query cache is weak here on purpose.** Its keys are per user, so the index cache gets the
   repeated reads. When the query cache hits, the index cache is never reached.
+
+### 3.5 End to end
+
+`bench/index-cache-e2e.ts` measures the same chat, the way an app runs:
+
+- **The backend.** The real `bunvex-local-backend` (run by Bun) over Postgres 17 on the same machine.
+- **The functions.** The app in `bench/index-cache-e2e/`, pushed with `bunvex deploy`, so they run as
+  deployed modules.
+- **The load.** 4 load processes × 16 clients calling `/api/query` and `/api/mutation` through the public
+  `BunvexHttpClient`. The load processes share the machine with the backend, which takes CPU from both sides
+  alike.
+- **The phases.** Each phase starts the backend afresh with `INDEX_CACHE_SIZE=0` or the default, over the
+  same data, after a warm-up phase.
+- **The store's load** is Postgres's own count of transactions (`pg_stat_database`).
+
+Measured 2026-10-11; each cell is the mean of two 20 s phases. The raw runs are in
+[INDEX-CACHE-E2E-2026-10-11](../bench/INDEX-CACHE-E2E-2026-10-11.md).
+
+| Run | ops/s | query p50 (ms) | mutation p50 (ms) | Postgres transactions / op | index-cache hit rate |
+|---|---|---|---|---|---|
+| 10% writes | 2 720 → **5 895 (2.2×)** | 13.4 → **0.61** | 111 → 97 | 3.74 → **0.24** (−94%) | 94.5% |
+| 50% writes | 1 943 → **3 185 (1.6×)** | 2.7 → 0.8 | 62 → **38** | 4.35 → **0.63** (−86%) | 90% |
+
+What it says:
+
+- **The gain holds end to end, at about half the in-process ratio.** That ratio was 4.1× and 2.2×. HTTP,
+  function isolation and the load processes add the same cost to both sides.
+- **The store's work drops by 86–94%.** With the cache off, Postgres runs 8 300–10 300 transactions/s;
+  with it on, 1 400–2 000, while the backend serves 1.6–2.2× the requests. That is the effect the talk
+  reports (80% less load on the database).
+- **A query that hits answers in about half a millisecond**, against a round trip per read before.
+- **Mutations gain too.** At 10% writes their latency is dominated by the commit's flush to Postgres, so the
+  gain is small (111 → 97 ms). At 50% writes it is 62 → 38 ms, because their reads no longer queue behind
+  other reads on the connection pool.
+
+One finding unrelated to the cache: in one phase, right after a restart, 35 calls failed with "Could not find
+public function". The backend answers function calls before it has loaded the deployed code. That is a
+startup bug of its own, fixed in its own PR.
 
 ## 4. Decisions
 

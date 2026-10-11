@@ -234,11 +234,14 @@ describe("HTTP: who reaches what", () => {
     });
     const deploy = {
       code: "BadDeployKey",
-      message: `The provided deploy key was invalid for deployment '${NAME}'. Double check that the environment this key was generated for matches the desired deployment.`,
+      message: `The provided deploy key was invalid for this deployment. Double check that the environment this key was generated for matches the desired deployment.`,
     };
     expect(await get("/api/check_admin_key")).toEqual({ status: 403, body: deploy });
     expect(await get("/api/check_admin_key", `Bunvex ${SYSTEM}`)).toEqual({ status: 403, body: deploy });
     expect((await get("/api/check_admin_key", `Bunvex ${OTHER}`)).status).toBe(401);
+    // An operation's check (Convex's `require_operation`) words it the same: "this deployment".
+    expect(await get("/api/v1/list_environment_variables")).toEqual({ status: 403, body: deploy });
+    expect(await get("/api/v1/get_canonical_urls")).toEqual({ status: 403, body: deploy });
   });
 
   test("POST /api/cancel_job and /api/cancel_all_jobs need WriteData", async () => {
