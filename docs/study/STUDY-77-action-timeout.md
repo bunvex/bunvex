@@ -44,7 +44,8 @@
   - a child action (cancelled).
   - Mutations the action committed before stay committed: each is its own transaction.
 - After a timeout Convex logs `N unawaited operation(s): [...]` for the tasks still pending
-  (`action/mod.rs:1283-1315`, run at `:740`). bunvex has no such warning for any action yet (§4, A3).
+  (`action/mod.rs:1283-1315`, run at `:740`). bunvex has had the warning since STUDY-76; STUDY-143 matched
+  what it lists to Convex's, a timeout included (§4, A3).
 
 **Node actions** (`npm-packages/node-executor/src/executor.ts:423-472`):
 
@@ -128,7 +129,7 @@ fetch pays about 2–4 µs more, for the combined signal.
 |---|---|---|---|
 | A1 | The cut-off handler's JS keeps running until it ends: it can no longer reach the database, the scheduler, storage or the network, but it can still use the CPU and its own memory. A synchronous loop is not interrupted. | One Bun process cannot terminate running JS. This is the same gap as STUDY-41 N5 (accepted, owner 2026-10-02) and DV-02. | follows N5 (accepted) |
 | A2 | No separate 300 s system budget for actions | It only bounds an isolate's initialization and module loading, which bunvex does not have (code is loaded once per version, STUDY-35) | not observable |
-| A3 | No `N unawaited operations` warning, after a timeout or at the end of any action | A missing feature of its own (dangling promises), not part of the timeout; recorded as a gap in server-api | gap |
+| A3 | No `N unawaited operations` warning, after a timeout or at the end of any action | A missing feature of its own (dangling promises), not part of the timeout; recorded as a gap in server-api | resolved: built by STUDY-76, matched to Convex by [STUDY-143](STUDY-143-unawaited-operations.md) |
 | A4 | An HTTP action's streamed body is not cut at the timeout once its head is sent | bunvex's limit covers the handler, which returns at the head. Convex appends the error to the stream. A body still streaming 1800 s after the request is rare. | gap |
 
 ## 5. Tests

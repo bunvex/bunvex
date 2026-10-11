@@ -7,6 +7,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { type Engine, FUNCTION_HANDLES_TABLE, type Tx } from "@bunvex/core";
 import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
+import { trackedOperation } from "./pending-ops.ts";
 
 export const FUNCTION_HANDLE_PREFIX = "function://";
 
@@ -117,9 +118,16 @@ export async function functionNameOf(ref: unknown, db: Tx | null, engine: Engine
 
 /**
  * Convex's `createFunctionHandle(functionReference)`: the handle of a function of this deployment, which
- * can be stored and passed around, and called later by `ctx.runQuery` & co. or the scheduler.
+ * can be stored and passed around, and called later by `ctx.runQuery` & co. or the scheduler. In an action, pending
+ * as `createFunctionHandle` until it settles (Convex's syscall, STUDY-143).
  */
-export async function createFunctionHandle<Type extends "query" | "mutation" | "action", Args, Return>(
+export function createFunctionHandle<Type extends "query" | "mutation" | "action", Args, Return>(
+  functionReference: unknown,
+): Promise<FunctionHandle<Type, Args, Return>> {
+  return trackedOperation("createFunctionHandle", () => handleFor<Type, Args, Return>(functionReference));
+}
+
+async function handleFor<Type extends "query" | "mutation" | "action", Args, Return>(
   functionReference: unknown,
 ): Promise<FunctionHandle<Type, Args, Return>> {
   const s = scope.getStore();
