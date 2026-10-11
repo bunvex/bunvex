@@ -53,7 +53,15 @@ async function deployment(dir: string, o: { deployable?: boolean; store?: Memory
     const r = await fetch(`${api}${path}`, {
       method: "POST",
       headers: { "content-type": "application/json", ...(key ? { authorization: `Bunvex ${key}` } : {}) },
-      body: JSON.stringify(body),
+      // The key in the body, as Convex's push routes take it (and bunvex's CLI sends it); the header is not read.
+      // A start's fields Convex requires are filled in as the CLI sends them, unless the test gives them.
+      body: JSON.stringify({
+        ...(key ? { adminKey: key } : {}),
+        ...(/\/(start_push|evaluate_push|evaluate_schema)$/.test(path)
+          ? { functions: "bunvex", componentDefinitions: [], nodeDependencies: [] }
+          : {}),
+        ...body,
+      }),
     });
     return { status: r.status, body: (await r.json()) as Record<string, any> };
   };
@@ -708,14 +716,40 @@ describe("deploy2 over HTTP", () => {
   test("the Deploy operation: no key, a read-only key, an embedded server", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());
-    expect((await d.post("/api/get_config_hashes", {}, null)).body.code).toBe("BadDeployKey");
+    // No `adminKey` in the body: Convex's body error, whatever the header holds (it is not read).
+    expect(await d.post("/api/get_config_hashes", {}, null)).toEqual({
+      status: 400,
+      body: {
+        code: "BadJsonBody",
+        message:
+          "Failed to deserialize the JSON body into the target type: missing field `adminKey` at line 1 column 2",
+      },
+    });
+    const headerOnly = await fetch(`${d.api}/api/get_config_hashes`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bunvex ${KEY}` },
+      body: "{}",
+    });
+    expect([headerOnly.status, ((await headerOnly.json()) as { code: string }).code]).toEqual([400, "BadJsonBody"]);
+    // A bad key in the body is refused even with a good one in the header.
+    const badBody = await fetch(`${d.api}/api/get_config_hashes`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bunvex ${KEY}` },
+      body: JSON.stringify({ adminKey: "garbage" }),
+    });
+    expect([badBody.status, ((await badBody.json()) as { code: string }).code]).toEqual([401, "BadAdminKey"]);
     const ro = await d.post("/api/get_config_hashes", {}, READ_ONLY);
     expect([ro.status, ro.body.message]).toEqual([
       403,
       "You do not have permission to perform this operation (deployment:deploy).",
     ]);
-    // The admin key in the body, as Convex's CLI also sends it.
-    expect((await d.post("/api/get_config_hashes", { adminKey: KEY }, null)).status).toBe(200);
+    // The admin key in the body, as Convex's CLI sends it, with any header.
+    const bodyKey = await fetch(`${d.api}/api/get_config_hashes`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Nonsense header" },
+      body: JSON.stringify({ adminKey: KEY }),
+    });
+    expect(bodyKey.status).toBe(200);
     const e = await deployment(tmp(), { deployable: false });
     stops.push(() => e.s.shutdown());
     expect((await e.post("/api/get_config_hashes", {})).body.code).toBe("NotDeployable");
@@ -753,16 +787,17 @@ describe("deploy2 over HTTP", () => {
     expect((await d.post("/api/deploy2/wait_for_schema", { schemaChange: a.body.schemaChange })).body).toEqual({
       type: "raceDetected",
     });
-    const fa = await d.post("/api/deploy2/finish_push", { startPush: a.body });
+    const fa = await d.post("/api/deploy2/finish_push", { startPush: a.body, dryRun: false });
     expect([fa.status, fa.body.code, fa.body.message]).toEqual([
       400,
       "RaceDetected",
       "Schema was overwritten by another push.",
     ]);
-    expect((await d.post("/api/deploy2/finish_push", { startPush: b.body })).status).toBe(200);
+    expect((await d.post("/api/deploy2/finish_push", { startPush: b.body, dryRun: false })).status).toBe(200);
     // A finish for a push this server never started (or lost on a restart) is refused the same way.
     const unknown = await d.post("/api/deploy2/finish_push", {
       startPush: { schemaChange: { schemaIds: { "": "nope" } } },
+      dryRun: false,
     });
     expect([unknown.status, unknown.body.code]).toEqual([400, "RaceDetected"]);
   });

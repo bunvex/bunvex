@@ -108,6 +108,7 @@ import type { ImportFormat } from "./import-parse.ts";
 import { ImportError, type ImportOptions, ImportRequestError, ImportService, MODE_ARGS } from "./imports.ts";
 import {
   BadJsonBody,
+  type BodyShape,
   QUERY_BATCH,
   RUN_TEST_FUNCTION,
   readJsonBody,
@@ -395,6 +396,56 @@ const STREAM_ROUTE = /^\/api\/(?:app_metrics\/)?stream_(function_logs|udf_execut
 /** Convex's metric routes (STUDY-58), `/api/app_metrics/<route>`. */
 const METRICS_ROUTE = /^\/api\/app_metrics\/([a-z_]+)$/;
 /** Convex's pause routes (STUDY-63). */
+/**
+ * Each push route's request struct (Convex's deploy_config.rs, deploy_config2.rs, application/src/deploy_config.rs
+ * `StartPushRequest`): its name and top-level fields, for serde's body errors. Nested values are checked by the
+ * push itself.
+ */
+const PUSH_REQUESTS: Record<string, BodyShape> = {
+  get_config_hashes: { name: "GetConfigRequest", fields: [["adminKey", "string"]] },
+  ...Object.fromEntries(
+    ["start_push", "evaluate_push", "evaluate_schema"].map((step) => [
+      step,
+      {
+        name: "StartPushRequest",
+        fields: [
+          ["adminKey", "string"],
+          ["functions", "string"],
+          ["appDefinition", "value"],
+          ["componentDefinitions", "value"],
+          ["nodeDependencies", "value"],
+          ["nodeVersion", "optString"],
+          ["dryRun", "optValue"],
+          ["forCodegen", "optValue"],
+        ],
+      } satisfies BodyShape,
+    ]),
+  ),
+  wait_for_schema: {
+    name: "WaitForSchemaRequest",
+    fields: [
+      ["adminKey", "string"],
+      ["schemaChange", "value"],
+      ["timeoutMs", "optValue"],
+    ],
+  },
+  finish_push: {
+    name: "FinishPushRequest",
+    fields: [
+      ["adminKey", "string"],
+      ["startPush", "value"],
+      ["dryRun", "value"],
+      ["message", "optString"],
+    ],
+  },
+  report_push_completed: {
+    name: "ReportPushCompletedRequest",
+    fields: [
+      ["adminKey", "string"],
+      ["spans", "value"],
+    ],
+  },
+};
 const PAUSE_ROUTE = /^\/api\/v1\/(pause|unpause)_deployment$/;
 
 export function createServer(opts: ServerOptions) {
@@ -954,20 +1005,29 @@ export function createServer(opts: ServerOptions) {
    * `stream_udf_execution` (Completions with their lines). A long poll: entries after `cursor` as soon as
    * there are any, or none and the same cursor after 60 s.
    */
-  const streamLogs = async (url: URL, req: Request, parts: boolean): Promise<Response> => {
+  /**
+   * The log streams. As Convex's handlers: the query string is read first (its extractor: `cursor`, and
+   * `clientRequestCounter` when given), then ViewLogs is checked (`authorize`, Convex's `function_log`).
+   */
+  const streamLogs = async (url: URL, req: Request, parts: boolean, authorize: () => void): Promise<Response> => {
     const q = url.searchParams;
     const raw = q.get("cursor");
     const cursor = raw === null ? Number.NaN : Number(raw);
-    if (raw === null) return requestError(400, "BadQueryArgs", "missing field `cursor`");
-    if (!Number.isFinite(cursor)) return requestError(400, "BadQueryArgs", "cursor: invalid float literal");
-    let requestId: string | null = null;
+    if (raw === null)
+      return requestError(400, "BadQueryArgs", "Failed to deserialize query string: missing field `cursor`");
+    if (!Number.isFinite(cursor))
+      return requestError(400, "BadQueryArgs", "Failed to deserialize query string: cursor: invalid float literal");
     const session = q.get("sessionId");
     const counter = q.get("clientRequestCounter");
-    if (parts && session !== null && counter !== null) {
-      if (!/^\d+$/.test(counter) || Number(counter) > 0xffffffff)
-        return requestError(400, "BadQueryArgs", "clientRequestCounter: invalid digit found in string");
-      requestId = wsRequestId(session, Number(counter));
-    }
+    if (parts && counter !== null && (!/^\d+$/.test(counter) || Number(counter) > 0xffffffff))
+      return requestError(
+        400,
+        "BadQueryArgs",
+        "Failed to deserialize query string: clientRequestCounter: invalid digit found in string",
+      );
+    authorize();
+    let requestId: string | null = null;
+    if (parts && session !== null && counter !== null) requestId = wsRequestId(session, Number(counter));
     const { parts: found, newCursor } = await functionLog.after(cursor, LONG_POLL_MS, req.signal);
     const client = req.headers.get("bunvex-client");
     const structured = parts && wantsStructuredLines(client);
@@ -1056,11 +1116,17 @@ export function createServer(opts: ServerOptions) {
       }
     const metricsRoute = METRICS_ROUTE.exec(url.pathname);
     if (metricsRoute && APP_METRICS_ROUTES.has(metricsRoute[1]!) && req.method === "GET") {
-      functions.requireOperation(caller, "ViewMetrics");
       try {
-        return json(appMetricsRoute(appMetrics, metricsRoute[1]!, url.searchParams));
+        // ViewMetrics is checked inside, after the arguments, where Convex's handler calls `metrics_log`.
+        return json(
+          appMetricsRoute(appMetrics, metricsRoute[1]!, url.searchParams, () =>
+            functions.requireOperation(caller, "ViewMetrics"),
+          ),
+        );
       } catch (e) {
         if (e instanceof MetricsRequestError) return requestError(400, e.code, e.message);
+        const denied = accessError(e);
+        if (denied) return denied;
         // Convex's untyped errors (a bad window, metric or path): an internal error.
         return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
       }
@@ -1135,8 +1201,7 @@ export function createServer(opts: ServerOptions) {
     }
     const stream = STREAM_ROUTE.exec(url.pathname);
     if (stream && req.method === "GET") {
-      functions.requireOperation(caller, "ViewLogs");
-      return streamLogs(url, req, stream[1] === "function_logs");
+      return streamLogs(url, req, stream[1] === "function_logs", () => functions.requireOperation(caller, "ViewLogs"));
     }
     // Convex's `/api/shapes2?component=` (ViewData): each user table's inferred shape (STUDY-52).
     if (url.pathname === "/api/shapes2" && req.method === "GET") {
@@ -2095,30 +2160,27 @@ export function createServer(opts: ServerOptions) {
     }
   };
   pushRoute = async (url: URL, req: Request): Promise<Response> => {
+    // As Convex's push routes (deploy_config.rs, deploy_config2.rs): the JSON body first, its `adminKey`
+    // required, and the caller is that key (`must_be_admin_from_key`). The `Authorization` header is not read.
+    const step = url.pathname.replace(/^\/api\/(deploy2\/)?/, "");
     let body: Record<string, unknown>;
+    let caller: Caller;
     try {
-      body = (JSON.parse((await new Response(capped(req).body).text()) || "{}") ?? {}) as Record<string, unknown>;
+      const shape = PUSH_REQUESTS[step];
+      if (!shape) return requestError(404, "NotFound", `no route for ${url.pathname}`);
+      body = await readJsonBody(req, () => new Response(capped(req).body).text(), shape);
+      caller = withRequest(adminCaller(body.adminKey as string, false), req);
     } catch (e) {
-      return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
-    }
-    // The admin key in the header, or (as Convex's CLI also sends it) in the body.
-    let caller = await callerOfRequest(req);
-    if (caller instanceof Response) return caller;
-    if (!(caller as AdminCaller).admin && typeof body.adminKey === "string") {
-      try {
-        caller = withRequest(adminCaller(body.adminKey, false), req);
-      } catch (e) {
-        const r = accessError(e);
-        if (r) return r;
-        throw e;
-      }
+      if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
+      const r = accessError(e);
+      if (r) return r;
+      throw e;
     }
     try {
       functions.requireOperation(caller, "Deploy");
       if (!opts.deployable)
         return requestError(400, "NotDeployable", "This deployment's functions are not deployed by pushes.");
       await codeReady;
-      const step = url.pathname.replace(/^\/api\/(deploy2\/)?/, "");
       if (step === "get_config_hashes") return json(await push.configHashes());
       if (step === "start_push") return json(await push.startPush(body));
       if (step === "evaluate_push") return json(await push.startPush({ ...body, dryRun: true }));

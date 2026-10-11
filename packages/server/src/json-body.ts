@@ -24,13 +24,15 @@ export function isJsonContentType(header: string | null): boolean {
 }
 
 /**
- * A field of a body struct: a string, an optional string, any JSON value, a list of strings (`Vec<String>`), a
- * map of strings (`BTreeMap<String, String>`), a list of structs, or a struct.
+ * A field of a body struct: a string, an optional string, any JSON value, any or no value (an `Option` or a
+ * `#[serde(default)]` field, its type not checked here), a list of strings (`Vec<String>`), a map of strings
+ * (`BTreeMap<String, String>`), a list of structs, or a struct.
  */
 export type FieldKind =
   | "string"
   | "optString"
   | "value"
+  | "optValue"
   | "strings"
   | "stringMap"
   | { seqOf: BodyShape }
@@ -266,7 +268,8 @@ class Reader {
       if (field) seen.add(key);
     }
     for (const [name, kind] of shape.fields)
-      if (!seen.has(name) && kind !== "optString") throw this.error("data", `missing field \`${name}\``);
+      if (!seen.has(name) && kind !== "optString" && kind !== "optValue")
+        throw this.error("data", `missing field \`${name}\``);
   }
 
   private structFromSeq(shape: BodyShape) {
@@ -286,7 +289,10 @@ class Reader {
       }
       if (b === 0x5d) {
         this.i++;
-        throw this.error("data", `invalid length ${k}, expected struct ${shape.name} with ${n} elements`);
+        throw this.error(
+          "data",
+          `invalid length ${k}, expected struct ${shape.name} with ${n} element${n === 1 ? "" : "s"}`,
+        );
       }
       this.path.push(`[${k}]`);
       this.field(shape.fields[k]![1]);
@@ -301,7 +307,7 @@ class Reader {
   private field(kind: FieldKind) {
     const b = this.peek();
     if (b === undefined) throw this.error("syntax", "EOF while parsing a value");
-    if (kind === "value") return this.value(0);
+    if (kind === "value" || kind === "optValue") return this.value(0);
     if (kind === "stringMap") return this.stringMap();
     if (typeof kind === "object" && "struct" in kind) return this.struct(kind.struct);
     if (typeof kind === "object" || kind === "strings") {
