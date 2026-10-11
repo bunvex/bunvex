@@ -31,6 +31,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 
 | ID | bunvex | Convex | Observable | Why | Decided | Source |
 |---|---|---|---|---|---|---|
+| DV-456 | An action's `fetch` (and an HTTP action's) sends `User-Agent: Bunvex/1.0` when the app sets none | `Convex/1.0` (`build_proxied_reqwest_client`) | yes, to the server the action calls | Rule 5 (no "convex" in shipped strings), as DV-304's sinks | rule 5 (owner, 2026-10-11: the batch's rule-5 renames use bunvex's words) | [STUDY-142 §4](../study/STUDY-142-action-fetch-errors.md#4-divergences) |
 | DV-447 | Streaming import is served as Convex's HTTP routes only; no Fivetran destination program | `crates/fivetran_destination`, a gRPC partner connector hosted by Fivetran (its listing hidden; Convex's docs: streaming import through Fivetran is not supported) | no | Fivetran would have to host it; out of scope | owner, 2026-10-11 | [STUDY-141 Q1](../study/STUDY-141-streaming-import.md#4-divergences) |
 | DV-448 | `/api/streaming_import/*` takes only `Authorization: Bunvex <key>` (DV-97): Airbyte's published `destination-convex`, which sends `Convex <key>`, gets 400 `InvalidAdminKey` and needs a one-line fork (its `_get_auth_headers`) | `Convex <key>` | yes (connectors) | Rule 5 without exceptions (DV-312; STUDY-69's precedent for connectors) | owner, 2026-10-11 | [STUDY-141 Q2](../study/STUDY-141-streaming-import.md#4-divergences) |
 | DV-449 | `FivetranMissingUpdatedRow` reads "…a row that doesn’t exist in the destination." (built with the Fivetran routes, STUDY-141 PR 4) | "…in the Convex destination." | yes (message text) | Rule 5 | owner, 2026-10-11 (as recommended) | [STUDY-141 Q3](../study/STUDY-141-streaming-import.md#4-divergences) |
@@ -436,7 +437,10 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-None as of 2026-10-11.
+| ID | bunvex | Convex | Observable | Why | Recommendation | Source |
+|---|---|---|---|---|---|---|
+| DV-457 | A failed action `fetch` whose cause is a certificate, TLS or malformed answer keeps reqwest's frame with Bun's words (`… client error (Connect): self signed certificate`, `…: Malformed_HTTP_Response`) | rustls's / the platform verifier's words (`invalid peer certificate: UnknownIssuer`), hyper's parse error (`invalid HTTP version parsed`) | yes (the message text of those causes) | Bun verifies with BoringSSL and reports one code for every malformed answer; the other causes match | A: accept (B: map common certificate codes to webpki's Linux names) | [STUDY-142 Q1](../study/STUDY-142-action-fetch-errors.md#q1--causes-bunvex-cannot-word-as-convex-dv-457) |
+| DV-458 | `fetch` with a signal already aborted rejects with Convex's `AbortError` | sends the request and answers (only a later abort is watched) | yes | The fetch spec; Convex's behaviour reads as a bug | B: keep the spec's (A: match Convex) | [STUDY-142 Q2](../study/STUDY-142-action-fetch-errors.md#q2--a-signal-aborted-before-the-call-dv-458) |
 
 DV-445 and DV-446 (STUDY-140) were decided by the owner (2026-10-11): DV-445 is in [Decided divergences](#decided-divergences); DV-446 was resolved to match Convex and is in [Resolved to match Convex](#resolved-to-match-convex).
 

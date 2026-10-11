@@ -1022,7 +1022,7 @@ export class Functions {
   /** The usage meter (STUDY-61); set by `createServer`. */
   usageMeter: UsageMeter | null = null;
   /** An isolate action's `fetch`: through the operator's proxy when there is one (STUDY-80 §3.2). */
-  private isolateSender = isolateFetch(proxiedFetch(directFetch, null, true));
+  private isolateSender = isolateFetch(proxiedFetch(directFetch, null));
   private proxy: HttpProxy | null = null;
   /** The proxy an isolate action's `fetch` goes through (Convex's `--convex-http-proxy`); null for none. */
   get httpProxy(): HttpProxy | null {
@@ -1030,7 +1030,7 @@ export class Functions {
   }
   set httpProxy(p: HttpProxy | null) {
     this.proxy = p;
-    this.isolateSender = isolateFetch(proxiedFetch(directFetch, p, true));
+    this.isolateSender = isolateFetch(proxiedFetch(directFetch, p));
   }
 
   /** A run's usage into the meter (STUDY-61, STUDY-71); `tracked`: whether the call counts (not `_system/`). */

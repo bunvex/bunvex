@@ -13,7 +13,27 @@ export type HttpProxy = {
   url: string;
   /** Who is asking: the instance name, sent as `Proxy-Authorization`. */
   clientId: string;
+  /**
+   * bunvex's own screen (`address-screen.ts`) only: the secret its failure answers carry, so a target it could
+   * not reach fails as it would without the screen (`screenFailure`), not as a `502` response.
+   */
+  failureToken?: string;
 };
+
+/** The header of the screen's failure answer: `<failureToken> <the socket's error code>`. */
+export const SCREEN_FAILURE_HEADER = "bunvex-screen-failure";
+
+/**
+ * A target the screen could not reach, failing as Bun's `fetch` does without a proxy: a `TypeError` with the
+ * socket's error code (`ConnectionRefused` as Bun names it, else the system's: `ETIMEDOUT`, `EHOSTUNREACH`, …).
+ */
+export function screenFailure(code: string): TypeError {
+  const refused = code === "ECONNREFUSED";
+  const e = new TypeError(
+    refused ? "Unable to connect. Is the computer able to access the url?" : `${code}: the target is unreachable`,
+  );
+  return Object.assign(e, { code: refused ? "ConnectionRefused" : code });
+}
 
 /** A request a 407 refused: the message is Convex's (its clients'), naming the request's URL. */
 export class RefusedRequest extends Error {
@@ -37,37 +57,35 @@ function hrefOf(input: Parameters<typeof fetch>[0]): string | null {
 /**
  * `send` through `proxy` (when there is one) for `http:` / `https:` URLs, and a 407 answered as Convex's
  * clients answer it: `Request to <url> forbidden`, or — the proxy refusing an `https:` target's `CONNECT`,
- * which `reqwest` reports as a tunnel error — that error's message.
+ * which `reqwest` reports as a tunnel error — that error's message. The URL named is the request's: an
+ * action's `fetch` follows redirects itself, one request per hop (`action-fetch.ts`), where OIDC's client
+ * follows them inside `reqwest` and names the first.
  *
- * The URL named is the request's; with `hop`, the redirect's that was refused — an action's `fetch` follows
- * redirects in JS, one request per hop (`udf-runtime/src/26_fetch.ts`), where OIDC's client follows them
- * inside `reqwest` and names the first.
+ * With bunvex's screen (`failureToken`), its answer for a target it could not reach is that failure.
  */
-export function proxiedFetch(send: typeof fetch, proxy: HttpProxy | null, hop = false): typeof fetch {
+export function proxiedFetch(send: typeof fetch, proxy: HttpProxy | null): typeof fetch {
   const via = proxy ? { url: proxy.url, headers: { "Proxy-Authorization": proxy.clientId } } : null;
+  const token = proxy?.failureToken;
   return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const href = hrefOf(input);
     const web = href?.startsWith("http:") || href?.startsWith("https:");
     const r = await send(input, via && web ? ({ ...init, proxy: via } as RequestInit) : init);
+    if (token && r.status === 502) {
+      const [from, code] = (r.headers.get(SCREEN_FAILURE_HEADER) ?? "").split(" ");
+      if (from === token && code) {
+        await r.body?.cancel().catch(() => {});
+        throw screenFailure(code);
+      }
+    }
     if (r.status !== 407 || !href) return r;
     await r.body?.cancel().catch(() => {});
-    const url = hop && r.url ? r.url : href;
     throw new RefusedRequest(
-      via && url.startsWith("https:")
-        ? `error sending request for url (${url}): client error (Connect): tunnel error: proxy authorization required`
-        : `Request to ${url} forbidden`,
-      url,
+      via && href.startsWith("https:")
+        ? `error sending request for url (${href}): client error (Connect): tunnel error: proxy authorization required`
+        : `Request to ${href} forbidden`,
+      href,
     );
   }) as typeof fetch;
-}
-
-/**
- * The refusal as an action sees it: a `TypeError` whose URL has no query string or fragment, as Convex's
- * `fetch` (`udf-runtime/src/26_fetch.ts`) rethrows it — the query is where a token would be.
- */
-export function refusedInAction(e: RefusedRequest): TypeError {
-  const u = new URL(e.url);
-  return new TypeError(e.message.replaceAll(e.url, `${u.origin}${u.pathname}`));
 }
 
 /** The proxy from `httpProxy` or `BUNVEX_HTTP_PROXY`, checked (http or https); null for none. Throws when invalid. */

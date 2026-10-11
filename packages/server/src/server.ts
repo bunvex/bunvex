@@ -429,7 +429,13 @@ export function createServer(opts: ServerOptions) {
   const screen = addressScreen(opts.denyAddresses ?? process.env.BUNVEX_DENY_ADDRESSES);
   const builtinScreen = !proxyUrl && screen !== "none" ? startAddressScreen(screen) : null;
   const screenUrl = proxyUrl ?? builtinScreen?.url;
-  const httpProxy: HttpProxy | null = screenUrl ? { url: screenUrl, clientId: engine.instanceName } : null;
+  const httpProxy: HttpProxy | null = screenUrl
+    ? {
+        url: screenUrl,
+        clientId: engine.instanceName,
+        ...(builtinScreen && { failureToken: builtinScreen.failureToken }),
+      }
+    : null;
   functions.httpProxy = httpProxy;
   // Log streams (STUDY-59): the manager follows `_log_sinks` once the engine is up.
   const logManager = new LogManager(engine, { ...defaultLogSinkOptions(), httpProxy, ...opts.logSinks });

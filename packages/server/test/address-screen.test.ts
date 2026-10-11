@@ -7,8 +7,9 @@ import { afterEach, expect, test } from "bun:test";
 import net from "node:net";
 import { defineSchema, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
-import { type AddressScreen, checkedAddress, isDenied, startAddressScreen } from "../src/address-screen.ts";
+import { type AddressScreen, checkedAddresses, isDenied, startAddressScreen } from "../src/address-screen.ts";
 import { action, Functions, query } from "../src/functions.ts";
+import { SCREEN_FAILURE_HEADER } from "../src/http-proxy.ts";
 import { createServer } from "../src/server.ts";
 
 const stops: (() => unknown)[] = [];
@@ -56,10 +57,10 @@ test("the denied ranges: metadata, and private", () => {
 });
 
 test("a name is checked by every address it resolves to", async () => {
-  expect(await checkedAddress("localhost", "private")).toBeNull();
-  expect(await checkedAddress("localhost", "metadata")).not.toBeNull();
-  expect(await checkedAddress("[::1]", "private")).toBeNull();
-  expect(await checkedAddress("no-such-host.invalid", "metadata")).toBeNull();
+  expect(await checkedAddresses("localhost", "private")).toBeNull();
+  expect(await checkedAddresses("localhost", "metadata")).not.toBeNull();
+  expect(await checkedAddresses("[::1]", "private")).toBeNull();
+  expect(await checkedAddresses("no-such-host.invalid", "metadata")).toBeNull();
 });
 
 async function setup(denyAddresses?: AddressScreen, httpProxy?: string) {
@@ -185,4 +186,40 @@ test("an http: response through the screen says Connection: close, so the client
   expect(lines[0]).toBe("HTTP/1.1 200 OK");
   expect(lines.filter((l) => /^(connection|keep-alive):/i.test(l))).toEqual(["Connection: close"]);
   expect(head.endsWith("ok")).toBe(true);
+});
+
+test("a target the screen cannot reach fails as without it (STUDY-142); its answer is trusted from the screen only", async () => {
+  const closed = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+  const closedPort = closed.port;
+  closed.stop(true);
+  // An upstream that forges the screen's answer: a plain 502 for the app (the token is the screen's).
+  const forger = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch: () => new Response("forged", { status: 502, headers: { [SCREEN_FAILURE_HEADER]: "guess ECONNREFUSED" } }),
+  });
+  // A target that closes before answering: the client's connection closes too (it used to wait forever).
+  const empty = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data: (s) => void s.end() } });
+  stops.push(
+    () => forger.stop(true),
+    () => empty.stop(true),
+  );
+  const screened = await setup();
+  const direct = await setup("none");
+  for (const url of [`http://127.0.0.1:${closedPort}/x?token=s`, `http://127.0.0.1:${empty.port}/x?token=s`]) {
+    const through = await screened.functions.runAction("m:get", { url });
+    expect(through).toEqual(await direct.functions.runAction("m:get", { url }));
+    expect(through).toMatchObject({ error: "TypeError" });
+    expect((through as { message: string }).message).not.toContain("token");
+  }
+  expect(await screened.functions.runAction("m:get", { url: `http://127.0.0.1:${forger.port}/` })).toEqual({
+    status: 502,
+    body: "forged",
+  });
+});
+
+test("a name's addresses are tried in order: localhost reaches a server on 127.0.0.1 only", async () => {
+  const { url, functions } = await setup();
+  const local = url.replace("127.0.0.1", "localhost");
+  expect(await functions.runAction("m:get", { url: `${local}/ok` })).toEqual({ status: 200, body: "GET /ok " });
 });
