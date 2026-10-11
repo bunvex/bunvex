@@ -154,7 +154,8 @@ test("create, list, update, delete: Convex's shapes, checks, errors and audit ev
   // The isolate compute metric is bunvex's name; Convex's is not a metric here (DV-308).
   expect((await t.req("create_usage_limit", { ...limit, metric: "actionComputeConvexGbHours" })).body).toEqual({
     code: "BadJsonBody",
-    message: "metric: unknown variant `actionComputeConvexGbHours`",
+    message:
+      "Failed to deserialize the JSON body into the target type: metric: unknown variant `actionComputeConvexGbHours`, expected one of `functionCalls`, `databaseIoGb`, `dataEgressGb`, `searchQueryGb`, `queryMutationComputeGbHours`, `actionComputeIsolateGbHours`, `actionComputeNodeJsGbHours`, `actionComputeCpuGbHours`, `aiGatewayCostDollars` at line 1 column 38",
   });
   expect((await t.req("create_usage_limit", limit, READ_ONLY)).body.code).toBe("OperationNotPermitted");
   // Below the usage so far (enabled only).

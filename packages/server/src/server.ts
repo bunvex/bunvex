@@ -92,7 +92,7 @@ import {
   wantsStructuredLines,
   wsRequestId,
 } from "./function-log.ts";
-import { badFunctionPath } from "./function-path.ts";
+import { badFunctionPath, checkIdentifier as identifierError } from "./function-path.ts";
 import {
   type AdminCaller,
   adminCallerOf,
@@ -108,6 +108,8 @@ import type { ImportFormat } from "./import-parse.ts";
 import { ImportError, type ImportOptions, ImportRequestError, ImportService, MODE_ARGS } from "./imports.ts";
 import {
   BadJsonBody,
+  type BodyShape,
+  checkJsonBody,
   QUERY_BATCH,
   RUN_TEST_FUNCTION,
   readJsonBody,
@@ -130,6 +132,7 @@ import {
   withInstance,
 } from "./otlp.ts";
 import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
+import { QueryArgsError, type QueryField, queryArgs } from "./query-args.ts";
 import { RequestLimit, requestLimitFromEnv, withRequestLimit } from "./request-limit.ts";
 import { withRequestTracing } from "./request-tracing.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
@@ -141,6 +144,7 @@ import { FileStorage, StorageError } from "./storage.ts";
 import {
   documentDeltas,
   jsonSchemas,
+  jsonSchemasArgs,
   listSnapshot,
   STREAMING_EXPORT_ROUTE,
   StreamingExportError,
@@ -394,7 +398,141 @@ const linesField = (field: string, lines: string[], redact: boolean) =>
 const STREAM_ROUTE = /^\/api\/(?:app_metrics\/)?stream_(function_logs|udf_execution)$/;
 /** Convex's metric routes (STUDY-58), `/api/app_metrics/<route>`. */
 const METRICS_ROUTE = /^\/api\/app_metrics\/([a-z_]+)$/;
+/**
+ * The request structs of the admin routes that write data (Convex's scheduling.rs and dashboard.rs), for their
+ * bodies' serde errors.
+ */
+const WRITE_DATA_BODIES: Record<string, BodyShape> = {
+  "/api/cancel_job": {
+    name: "CancelJobRequest",
+    fields: [
+      ["id", "string"],
+      ["componentId", "optString"],
+    ],
+  },
+  "/api/cancel_all_jobs": {
+    name: "CancelAllJobsRequest",
+    fields: [
+      ["componentId", "optString"],
+      ["componentPath", "optString"],
+      ["udfPath", "optString"],
+      ["startNextTs", { option: { int: "u64" } }],
+      ["endNextTs", { option: { int: "u64" } }],
+    ],
+  },
+  "/api/delete_scheduled_functions_table": {
+    name: "DeleteScheduledFunctionsTableRequest",
+    fields: [["componentId", "optString"]],
+  },
+  "/api/delete_tables": {
+    name: "DeleteTableArgs",
+    fields: [
+      ["tableNames", { list: "string" }],
+      ["componentId", "optString"],
+    ],
+  },
+};
+/** Convex's `UpdateEnvVarsRequest` (environment_variables.rs): `changes` of `{name, value?}`. */
+const UPDATE_ENV_VARS: BodyShape = {
+  name: "UpdateEnvVarsRequest",
+  fields: [
+    [
+      "changes",
+      {
+        seqOf: {
+          name: "UpdateEnvVarRequest",
+          fields: [
+            ["name", "string"],
+            ["value", "optString"],
+          ],
+        },
+      },
+    ],
+  ],
+};
+/** Convex's `ImportFormatArg` and `ImportMode` variants (snapshot_import.rs, snapshot_imports/types.rs). */
+const IMPORT_FORMATS = ["csv", "jsonLines", "jsonArray", "zip"] as const;
+const IMPORT_MODES = ["append", "replace", "replaceAll", "requireEmpty"] as const;
+/** Convex's `ImportQueryArgs`: the one-shot import's query string, and `finish_upload`'s `import`. */
+const IMPORT_QUERY_ARGS: QueryField[] = [
+  ["tableName", "string", true],
+  ["componentPath", "string", true],
+  ["format", { variants: IMPORT_FORMATS }],
+  ["mode", { variants: IMPORT_MODES }, true],
+];
+/** Convex's `ImportFinishUploadArgs`. */
+const IMPORT_FINISH_UPLOAD_ARGS: BodyShape = {
+  name: "ImportFinishUploadArgs",
+  fields: [
+    [
+      "import",
+      {
+        struct: {
+          name: "ImportQueryArgs",
+          fields: [
+            ["tableName", "optString"],
+            ["componentPath", "optString"],
+            ["format", { variants: IMPORT_FORMATS }],
+            ["mode", { default: { variants: IMPORT_MODES } }],
+          ],
+        },
+      },
+    ],
+    ["uploadToken", "string"],
+    ["partTokens", { list: "string" }],
+  ],
+};
 /** Convex's pause routes (STUDY-63). */
+/**
+ * Each push route's request struct (Convex's deploy_config.rs, deploy_config2.rs, application/src/deploy_config.rs
+ * `StartPushRequest`): its name and top-level fields, for serde's body errors. Nested values are checked by the
+ * push itself.
+ */
+const PUSH_REQUESTS: Record<string, BodyShape> = {
+  get_config_hashes: { name: "GetConfigRequest", fields: [["adminKey", "string"]] },
+  ...Object.fromEntries(
+    ["start_push", "evaluate_push", "evaluate_schema"].map((step) => [
+      step,
+      {
+        name: "StartPushRequest",
+        fields: [
+          ["adminKey", "string"],
+          ["functions", "string"],
+          ["appDefinition", "value"],
+          ["componentDefinitions", "value"],
+          ["nodeDependencies", "value"],
+          ["nodeVersion", "optString"],
+          ["dryRun", "optValue"],
+          ["forCodegen", "optValue"],
+        ],
+      } satisfies BodyShape,
+    ]),
+  ),
+  wait_for_schema: {
+    name: "WaitForSchemaRequest",
+    fields: [
+      ["adminKey", "string"],
+      ["schemaChange", "value"],
+      ["timeoutMs", "optValue"],
+    ],
+  },
+  finish_push: {
+    name: "FinishPushRequest",
+    fields: [
+      ["adminKey", "string"],
+      ["startPush", "value"],
+      ["dryRun", "value"],
+      ["message", "optString"],
+    ],
+  },
+  report_push_completed: {
+    name: "ReportPushCompletedRequest",
+    fields: [
+      ["adminKey", "string"],
+      ["spans", "value"],
+    ],
+  },
+};
 const PAUSE_ROUTE = /^\/api\/v1\/(pause|unpause)_deployment$/;
 
 export function createServer(opts: ServerOptions) {
@@ -912,36 +1050,49 @@ export function createServer(opts: ServerOptions) {
    * `from` is older than it.
    */
   const listAuditLogEvents = async (url: URL, caller: Caller): Promise<Response> => {
+    // As Convex's handler: the query string (its extractor), ViewAuditLog, the limit, the cursor, then the
+    // retention window.
+    let a: Record<string, string | boolean | undefined>;
+    try {
+      a = queryArgs(url.searchParams, [
+        ["from", { int: "u64" }],
+        ["limit", { int: "usize" }, true],
+        ["cursor", "string", true],
+      ]);
+    } catch (e) {
+      if (e instanceof QueryArgsError) return requestError(e.status, e.code, e.message);
+      throw e;
+    }
     functions.requireOperation(caller, "ViewAuditLog");
-    const q = url.searchParams;
-    const fromRaw = q.get("from");
-    if (fromRaw === null) return requestError(400, "BadQueryArgs", "missing field `from`");
-    if (!/^\d+$/.test(fromRaw)) return requestError(400, "BadQueryArgs", "from: invalid digit found in string");
-    const from = Number(fromRaw);
-    const limitRaw = q.get("limit");
-    if (limitRaw !== null && !/^\d+$/.test(limitRaw))
-      return requestError(400, "BadQueryArgs", "limit: invalid digit found in string");
-    const limit = limitRaw === null ? DEFAULT_AUDIT_LOG_LIMIT : Number(limitRaw);
+    const from = Number(a.from);
+    const limit = a.limit === undefined ? DEFAULT_AUDIT_LOG_LIMIT : Number(a.limit);
     if (limit === 0 || limit > MAX_AUDIT_LOG_LIMIT)
       return requestError(
         400,
         "LimitOutOfRange",
         `The limit for audit logs must be between 1 and ${MAX_AUDIT_LOG_LIMIT}`,
       );
+    const cursor = (a.cursor as string | undefined) ?? null;
+    // The page is read before the window is checked: a cursor that does not parse is refused first, as Convex
+    // decrypts it before reading its retention (the read changes nothing).
+    let page: { page: unknown[]; continueCursor: string; isDone: boolean };
+    try {
+      page = await engine.query((db) =>
+        db.asSystem(() =>
+          db
+            .query(DEPLOYMENT_AUDIT_LOG_TABLE)
+            .withIndex("by_creation_time", (r) => r.gte("_creationTime", from))
+            .paginate({ numItems: limit, cursor }),
+        ),
+      );
+    } catch {
+      return requestError(400, "InvalidCursor", "Failed to parse cursor");
+    }
     const days = functions.auditLogRetentionDays;
     if (days === null)
       return requestError(403, "AuditLogsDisabled", "Audit logs are not available on this deployment.");
     if (days !== -1 && from < Date.now() - days * 24 * 60 * 60 * 1000)
       return requestError(403, "AuditLogsTooOld", `Audit logs are only available for the last ${days} days.`);
-    const cursor = q.get("cursor");
-    const page = await engine.query((db) =>
-      db.asSystem(() =>
-        db
-          .query(DEPLOYMENT_AUDIT_LOG_TABLE)
-          .withIndex("by_creation_time", (r) => r.gte("_creationTime", from))
-          .paginate({ numItems: limit, cursor }),
-      ),
-    );
     return json({
       items: page.page.map((d) => auditEventJson(d as Record<string, Value>)),
       pagination: page.isDone ? { hasMore: false } : { hasMore: true, nextCursor: page.continueCursor },
@@ -954,20 +1105,29 @@ export function createServer(opts: ServerOptions) {
    * `stream_udf_execution` (Completions with their lines). A long poll: entries after `cursor` as soon as
    * there are any, or none and the same cursor after 60 s.
    */
-  const streamLogs = async (url: URL, req: Request, parts: boolean): Promise<Response> => {
+  /**
+   * The log streams. As Convex's handlers: the query string is read first (its extractor: `cursor`, and
+   * `clientRequestCounter` when given), then ViewLogs is checked (`authorize`, Convex's `function_log`).
+   */
+  const streamLogs = async (url: URL, req: Request, parts: boolean, authorize: () => void): Promise<Response> => {
     const q = url.searchParams;
     const raw = q.get("cursor");
     const cursor = raw === null ? Number.NaN : Number(raw);
-    if (raw === null) return requestError(400, "BadQueryArgs", "missing field `cursor`");
-    if (!Number.isFinite(cursor)) return requestError(400, "BadQueryArgs", "cursor: invalid float literal");
-    let requestId: string | null = null;
+    if (raw === null)
+      return requestError(400, "BadQueryArgs", "Failed to deserialize query string: missing field `cursor`");
+    if (!Number.isFinite(cursor))
+      return requestError(400, "BadQueryArgs", "Failed to deserialize query string: cursor: invalid float literal");
     const session = q.get("sessionId");
     const counter = q.get("clientRequestCounter");
-    if (parts && session !== null && counter !== null) {
-      if (!/^\d+$/.test(counter) || Number(counter) > 0xffffffff)
-        return requestError(400, "BadQueryArgs", "clientRequestCounter: invalid digit found in string");
-      requestId = wsRequestId(session, Number(counter));
-    }
+    if (parts && counter !== null && (!/^\d+$/.test(counter) || Number(counter) > 0xffffffff))
+      return requestError(
+        400,
+        "BadQueryArgs",
+        "Failed to deserialize query string: clientRequestCounter: invalid digit found in string",
+      );
+    authorize();
+    let requestId: string | null = null;
+    if (parts && session !== null && counter !== null) requestId = wsRequestId(session, Number(counter));
     const { parts: found, newCursor } = await functionLog.after(cursor, LONG_POLL_MS, req.signal);
     const client = req.headers.get("bunvex-client");
     const structured = parts && wantsStructuredLines(client);
@@ -1013,7 +1173,7 @@ export function createServer(opts: ServerOptions) {
     const admin = (caller as AdminCaller).admin;
     // Convex's `check_admin_key`: an admin or acting user (not the system) gets its operations.
     if (url.pathname === "/api/check_admin_key") {
-      if (!admin || admin.kind !== "admin") throw new BadDeployKeyError(engine.instanceName);
+      if (!admin || admin.kind !== "admin") throw new BadDeployKeyError();
       return json({ success: true, allowedOps: admin.allowedOps, isReadOnly: admin.readOnly });
     }
     // `/stats` (bunvex's counters) needs ViewMetrics (DV-162).
@@ -1056,11 +1216,17 @@ export function createServer(opts: ServerOptions) {
       }
     const metricsRoute = METRICS_ROUTE.exec(url.pathname);
     if (metricsRoute && APP_METRICS_ROUTES.has(metricsRoute[1]!) && req.method === "GET") {
-      functions.requireOperation(caller, "ViewMetrics");
       try {
-        return json(appMetricsRoute(appMetrics, metricsRoute[1]!, url.searchParams));
+        // ViewMetrics is checked inside, after the arguments, where Convex's handler calls `metrics_log`.
+        return json(
+          appMetricsRoute(appMetrics, metricsRoute[1]!, url.searchParams, () =>
+            functions.requireOperation(caller, "ViewMetrics"),
+          ),
+        );
       } catch (e) {
         if (e instanceof MetricsRequestError) return requestError(400, e.code, e.message);
+        const denied = accessError(e);
+        if (denied) return denied;
         // Convex's untyped errors (a bad window, metric or path): an internal error.
         return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
       }
@@ -1074,20 +1240,22 @@ export function createServer(opts: ServerOptions) {
         (kind === "list_active_syncs" && id === undefined && req.method === "GET") ||
         (fromDeltas !== undefined && req.method === "POST");
       if (ok) {
-        // Convex's order: the streaming export entitlement (always on here), then `ViewData` (STUDY-69).
-        functions.requireOperation(caller, "ViewData");
+        // Convex's order: the query string or body (its extractor), the streaming export entitlement (always on
+        // here), then `ViewData` (STUDY-69): `authorize` runs once the arguments are read.
+        const authorize = () => functions.requireOperation(caller, "ViewData");
         try {
           const text =
             fromDeltas !== undefined
-              ? await cursorFromDeltas(engine, req)
+              ? await cursorFromDeltas(engine, req, authorize)
               : kind === "list_active_syncs"
-                ? await listActiveSyncs(engine, url.searchParams)
+                ? await listActiveSyncs(engine, url.searchParams, authorize)
                 : id !== undefined
-                  ? await activeSync(engine, decodeURIComponent(id))
-                  : await dataSync(engine, req, caller);
+                  ? (authorize(), await activeSync(engine, decodeURIComponent(id)))
+                  : await dataSync(engine, req, caller, authorize);
           return jsonText(text);
         } catch (e) {
           if (e instanceof StreamingExportError) return requestError(e.status, e.code, e.message);
+          if (e instanceof QueryArgsError || e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
           throw e;
         }
       }
@@ -1116,13 +1284,21 @@ export function createServer(opts: ServerOptions) {
       const getOnly =
         route === "json_schemas" || route === "get_table_column_names" || route === "test_streaming_export_connection";
       if (req.method === "GET" || (!getOnly && req.method === "POST")) {
-        // Convex's order: the streaming export entitlement (always on here), then `ViewData`.
+        // Convex's order: the query string or body (its extractor), the streaming export entitlement (always on
+        // here), then `ViewData`.
+        let args: Record<string, unknown> = {};
+        try {
+          if (route === "json_schemas") jsonSchemasArgs(url.searchParams);
+          if (route === "list_snapshot" || route === "document_deltas") args = await streamingArgs(req, url);
+        } catch (e) {
+          if (e instanceof QueryArgsError || e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
+          throw e;
+        }
         functions.requireOperation(caller, "ViewData");
         try {
           if (route === "test_streaming_export_connection") return json(null);
           if (route === "json_schemas") return json(await jsonSchemas({ engine }, url.searchParams));
           if (route === "get_table_column_names") return json(await tableColumnNames({ engine }));
-          const args = await streamingArgs(req, url);
           const text =
             route === "list_snapshot" ? await listSnapshot({ engine }, args) : await documentDeltas({ engine }, args);
           return new Response(text, { headers: { "content-type": "application/json" } });
@@ -1135,8 +1311,7 @@ export function createServer(opts: ServerOptions) {
     }
     const stream = STREAM_ROUTE.exec(url.pathname);
     if (stream && req.method === "GET") {
-      functions.requireOperation(caller, "ViewLogs");
-      return streamLogs(url, req, stream[1] === "function_logs");
+      return streamLogs(url, req, stream[1] === "function_logs", () => functions.requireOperation(caller, "ViewLogs"));
     }
     // Convex's `/api/shapes2?component=` (ViewData): each user table's inferred shape (STUDY-52).
     if (url.pathname === "/api/shapes2" && req.method === "GET") {
@@ -1163,19 +1338,21 @@ export function createServer(opts: ServerOptions) {
       }
     const pause = PAUSE_ROUTE.exec(url.pathname);
     if (pause && req.method === "POST") return pauseRoute(pause[1] === "unpause", caller);
-    if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
+    const shape = WRITE_DATA_BODIES[url.pathname];
+    if (req.method !== "POST" || !shape) return requestError(404, "NotFound", `no route for ${url.pathname}`);
+    // Convex's extractors: the JSON body (its request struct) before the operation's check.
     let body: Record<string, unknown>;
     try {
-      body = JSON.parse(await new Response(capped(req).body).text()) ?? {};
+      body = await readJsonBody(req, () => new Response(capped(req).body).text(), shape);
     } catch (e) {
-      return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
+      if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
+      throw e;
     }
     functions.requireOperation(caller, "WriteData");
     // Convex's `/api/cancel_job {id, componentId?}` and `/api/cancel_all_jobs {udfPath?, startNextTs?,
     // endNextTs?, componentId?, componentPath?}` (scheduling.rs): 200 with no body.
     if (url.pathname === "/api/cancel_job") {
-      if (typeof body.id !== "string") return requestError(400, "BadJsonBody", "missing field `id`");
-      await cancelScheduledJob(engine, body.id, auditActor(caller));
+      await cancelScheduledJob(engine, body.id as string, auditActor(caller));
       return new Response(null, { status: 200 });
     }
     if (url.pathname === "/api/cancel_all_jobs") {
@@ -1204,8 +1381,6 @@ export function createServer(opts: ServerOptions) {
     }
     // Convex's `/api/delete_tables {tableNames, componentId}` (dashboard.rs): the tables deleted in one commit.
     if (url.pathname === "/api/delete_tables") {
-      if (!Array.isArray(body.tableNames) || !body.tableNames.every((t) => typeof t === "string"))
-        return requestError(400, "BadJsonBody", "missing field `tableNames`");
       if (body.componentId !== undefined && body.componentId !== null && body.componentId !== "")
         return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
       const names = body.tableNames as string[];
@@ -1742,11 +1917,16 @@ export function createServer(opts: ServerOptions) {
         return json({ token: await exportService.token(parts[1]!) });
       }
       if (parts[0] === "set_expiration" && parts.length === 2) {
+        // Convex's `SetExportExpirationRequest`, read before the operation's check (its extractor); the
+        // nanoseconds read as written (past 2^53).
+        const text = await new Response(capped(req).body).text();
+        checkJsonBody(req, text, {
+          name: "SetExportExpirationRequest",
+          fields: [["expirationTsNs", { int: "u64" }]],
+        });
+        const ns = /"expirationTsNs"\s*:\s*(\d+)/.exec(text)?.[1] ?? "0";
         functions.requireOperation(caller, "DeleteBackups");
-        const body = JSON.parse((await new Response(capped(req).body).text()) || "{}") as { expirationTsNs?: unknown };
-        if (typeof body.expirationTsNs !== "number" && typeof body.expirationTsNs !== "string")
-          return requestError(400, "BadJsonBody", "missing field `expirationTsNs`");
-        await exportService.setExpiration(parts[1]!, BigInt(body.expirationTsNs), auditActor(caller));
+        await exportService.setExpiration(parts[1]!, BigInt(ns), auditActor(caller));
         return new Response(null, { status: 200 });
       }
       if (parts[0] === "cancel" && parts.length === 2) {
@@ -1758,6 +1938,7 @@ export function createServer(opts: ServerOptions) {
       return requestError(404, "NotFound", `no route for ${url.pathname}`);
     } catch (e) {
       if (e instanceof ExportError) return requestError(e.status, e.code, e.message);
+      if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
       const denied = accessError(e);
       if (denied) return denied;
       throw e;
@@ -1775,10 +1956,12 @@ export function createServer(opts: ServerOptions) {
     ? new ImportService(engine, importStore, blobs ?? null, opts.importOptions ?? {})
     : null;
   importService?.startWorker();
-  /** Convex's `parse_format_arg`. */
-  const importFormat = (format: string | null, table: string | null): ImportFormat => {
-    if (table !== null && !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(table))
-      throw new ImportRequestError(400, "ImportInvalidName", `invalid table name ${table}: not a valid table name`);
+  /** Convex's `parse_format_arg`: the format (already a known variant) with its table name. */
+  const importFormat = (format: string, table: string | null): ImportFormat => {
+    // Convex's `TableName` parse: `check_valid_identifier`'s reason.
+    const invalid = table === null ? null : identifierError(table);
+    if (invalid !== null)
+      throw new ImportRequestError(400, "ImportInvalidName", `invalid table name ${table}: ${invalid}`);
     const needs = (what: string) => {
       if (table === null) throw new ImportRequestError(400, "InvalidName", `${what} import requires table name`);
       return table;
@@ -1791,80 +1974,78 @@ export function createServer(opts: ServerOptions) {
         return { format: "csv", table: needs("CSV") };
       case "jsonArray":
         return { format: "json_array", table: needs("JSON") };
-      case "jsonLines":
-        return { format: "jsonl", table: needs("JSONL") };
       default:
-        throw new ImportRequestError(
-          400,
-          "BadQueryArgs",
-          `unknown variant \`${format}\`, expected one of \`csv\`, \`jsonLines\`, \`jsonArray\`, \`zip\``,
-        );
+        return { format: "jsonl", table: needs("JSONL") };
     }
   };
-  const importArgs = (a: { format?: unknown; tableName?: unknown; mode?: unknown; componentPath?: unknown }) => {
+  /** Convex's `ImportQueryArgs` once read: its format with its table, its mode, and no components here. */
+  const importArgs = (a: {
+    format: string;
+    tableName?: string | null;
+    mode?: string;
+    componentPath?: string | null;
+  }) => {
+    const format = importFormat(a.format, a.tableName ?? null);
     if (a.componentPath !== undefined && a.componentPath !== null && a.componentPath !== "")
       throw new ImportRequestError(
         400,
         "ComponentsNotSupported",
         "bunvex does not have components yet: import into the app's own tables.",
       );
-    const mode = MODE_ARGS[(a.mode as string | undefined) ?? "requireEmpty"];
-    if (!mode)
-      throw new ImportRequestError(
-        400,
-        "BadQueryArgs",
-        `unknown variant \`${String(a.mode)}\`, expected one of \`append\`, \`replace\`, \`replaceAll\`, \`requireEmpty\``,
-      );
-    const table = typeof a.tableName === "string" ? a.tableName : null;
-    return { format: importFormat(typeof a.format === "string" ? a.format : null, table), mode };
+    return { format, mode: MODE_ARGS[a.mode ?? "requireEmpty"]! };
   };
   importRoute = async (url: URL, req: Request): Promise<Response> => {
     if (!importService) return requestError(404, "NotFound", "Snapshot imports are not configured on this server.");
     try {
       const caller = await callerOfRequest(req);
       if (caller instanceof Response) return caller;
-      functions.requireOperation(caller, "ImportBackups");
-      const q = url.searchParams;
-      const body = async () => JSON.parse((await req.text()) || "{}") as Record<string, unknown>;
+      // As Convex's handlers: the query string or the body (their extractors) before the operation's check.
+      const requireImport = () => functions.requireOperation(caller, "ImportBackups");
+      const body = <T>(shape: BodyShape) => readJsonBody<T>(req, () => req.text(), shape);
       switch (url.pathname) {
         case "/api/import": {
-          const { format, mode } = importArgs({
-            format: q.get("format"),
-            tableName: q.get("tableName") ?? undefined,
-            mode: q.get("mode") ?? undefined,
-            componentPath: q.get("componentPath") ?? undefined,
-          });
+          const a = queryArgs(url.searchParams, IMPORT_QUERY_ARGS) as Parameters<typeof importArgs>[0];
+          requireImport();
+          const { format, mode } = importArgs(a);
           const upload = await importService.upload(req.body ?? new Uint8Array());
           return json({ numWritten: await importService.importNow(format, mode, upload) });
         }
         case "/api/import/start_upload":
+          requireImport();
           return json({ uploadToken: importService.startUpload() });
         case "/api/import/upload_part": {
-          const token = q.get("uploadToken");
-          if (!token || !q.get("partNumber"))
-            throw new ImportRequestError(400, "BadQueryArgs", "missing field `uploadToken` or `partNumber`");
-          return json(await importService.uploadPart(token, new Uint8Array(await req.arrayBuffer())));
+          const a = queryArgs(url.searchParams, [
+            ["uploadToken", "string"],
+            ["partNumber", { int: "u16" }],
+          ]);
+          requireImport();
+          return json(await importService.uploadPart(a.uploadToken as string, new Uint8Array(await req.arrayBuffer())));
         }
         case "/api/import/finish_upload": {
-          const b = await body();
-          const { format, mode } = importArgs((b.import ?? {}) as Record<string, unknown>);
-          if (typeof b.uploadToken !== "string" || !Array.isArray(b.partTokens))
-            throw new ImportRequestError(400, "BadJsonBody", "missing field `uploadToken` or `partTokens`");
-          const upload = await importService.finishUpload(b.uploadToken, b.partTokens as string[]);
+          const b = await body<{ import: Parameters<typeof importArgs>[0]; uploadToken: string; partTokens: string[] }>(
+            IMPORT_FINISH_UPLOAD_ARGS,
+          );
+          const { format, mode } = importArgs(b.import);
+          requireImport();
+          const upload = await importService.finishUpload(b.uploadToken, b.partTokens);
           return json({ importId: await importService.start(format, mode, upload) });
         }
         case "/api/perform_import":
         case "/api/cancel_import": {
-          const { importId } = await body();
-          let valid = typeof importId === "string";
+          const { importId } = await body<{ importId: string }>({
+            name: url.pathname === "/api/perform_import" ? "PerformImportArgs" : "CancelImportArgs",
+            fields: [["importId", "string"]],
+          });
+          let valid = true;
           try {
-            if (valid) decodeId(importId as string);
+            decodeId(importId);
           } catch {
             valid = false;
           }
-          if (!valid) throw new ImportRequestError(400, "InvalidImport", `invalid import id ${String(importId)}`);
-          if (url.pathname === "/api/perform_import") await importService.perform(importId as string);
-          else await importService.cancel(importId as string);
+          if (!valid) throw new ImportRequestError(400, "InvalidImport", `invalid import id ${importId}`);
+          requireImport();
+          if (url.pathname === "/api/perform_import") await importService.perform(importId);
+          else await importService.cancel(importId);
           return new Response(null, { status: 200 });
         }
       }
@@ -1872,7 +2053,7 @@ export function createServer(opts: ServerOptions) {
     } catch (e) {
       if (e instanceof ImportRequestError) return requestError(e.status, e.code, e.message);
       if (e instanceof ImportError) return requestError(400, e.code, e.message);
-      if (e instanceof SyntaxError) return requestError(400, "BadJsonBody", e.message);
+      if (e instanceof BadJsonBody || e instanceof QueryArgsError) return requestError(e.status, e.code, e.message);
       const denied = accessError(e);
       if (denied) return denied;
       throw e;
@@ -1957,7 +2138,7 @@ export function createServer(opts: ServerOptions) {
   canonicalRoute = async (url, req, caller) => {
     if (url.pathname.endsWith("/get_canonical_urls")) {
       if (req.method !== "GET") return requestError(404, "NotFound", `no route for ${url.pathname}`);
-      if (!(caller as AdminCaller).admin) throw new BadDeployKeyError(engine.instanceName);
+      if (!(caller as AdminCaller).admin) throw new BadDeployKeyError();
       const c = await engine.query((db) => readCanonicalUrls(db));
       return json({
         bunvexCloudUrl: c.cloud ?? builtinEnv.BUNVEX_CLOUD_URL,
@@ -1965,22 +2146,23 @@ export function createServer(opts: ServerOptions) {
       });
     }
     if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
-    functions.requireOperation(caller, "WriteEnvironmentVariables");
-    let body: { requestDestination?: unknown; url?: unknown };
+    // Convex's `UpdateCanonicalUrlRequest`, read before the operation's check (its extractor); the
+    // destinations are bunvex's (DV-278).
+    let body: { requestDestination: RequestDestination; url?: string | null };
     try {
-      body = JSON.parse(await new Response(capped(req).body).text()) ?? {};
+      body = await readJsonBody(req, () => new Response(capped(req).body).text(), {
+        name: "UpdateCanonicalUrlRequest",
+        fields: [
+          ["requestDestination", { variants: REQUEST_DESTINATIONS }],
+          ["url", "optString"],
+        ],
+      });
     } catch (e) {
-      return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
+      if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
+      throw e;
     }
-    const destination = body.requestDestination as RequestDestination;
-    if (!REQUEST_DESTINATIONS.includes(destination))
-      return requestError(
-        400,
-        "BadJsonBody",
-        `invalid JSON body: unknown variant \`${String(destination)}\`, expected \`bunvexCloud\` or \`bunvexSite\``,
-      );
-    if (body.url !== undefined && body.url !== null && typeof body.url !== "string")
-      return requestError(400, "BadJsonBody", "invalid JSON body: invalid type for `url`: expected a string");
+    functions.requireOperation(caller, "WriteEnvironmentVariables");
+    const destination = body.requestDestination;
     const next = (body.url as string | null | undefined) ?? null;
     try {
       let providers: unknown[] | null = null;
@@ -2024,20 +2206,20 @@ export function createServer(opts: ServerOptions) {
       return json({ environmentVariables: Object.fromEntries(vars.map((v) => [v.name, v.value])) });
     }
     if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
-    functions.requireOperation(caller, "WriteEnvironmentVariables");
+    // Convex's `UpdateEnvVarsRequest`, read before the operation's check (its extractor).
     let changes: EnvVarChange[];
     try {
-      const body = JSON.parse(await new Response(capped(req).body).text()) as { changes?: unknown };
-      if (!Array.isArray(body?.changes)) return requestError(400, "BadJsonBody", "missing field `changes`");
-      changes = body.changes.map((c: { name?: unknown; value?: unknown }) => {
-        if (typeof c?.name !== "string") throw new Error("missing field `name`");
-        if (c.value !== undefined && c.value !== null && typeof c.value !== "string")
-          throw new Error("invalid type for `value`: expected a string or null");
-        return { name: c.name, value: (c.value as string | null | undefined) ?? null };
-      });
+      const body = await readJsonBody<{ changes: { name: string; value?: string | null }[] }>(
+        req,
+        () => new Response(capped(req).body).text(),
+        UPDATE_ENV_VARS,
+      );
+      changes = body.changes.map((c) => ({ name: c.name, value: c.value ?? null }));
     } catch (e) {
-      return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
+      if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
+      throw e;
     }
+    functions.requireOperation(caller, "WriteEnvironmentVariables");
     try {
       // Convex re-evaluates the deployed auth config in the update's transaction. Evaluating code cannot run
       // inside one here (its import phase draws randomness), so it is evaluated first with the variables the
@@ -2095,30 +2277,27 @@ export function createServer(opts: ServerOptions) {
     }
   };
   pushRoute = async (url: URL, req: Request): Promise<Response> => {
+    // As Convex's push routes (deploy_config.rs, deploy_config2.rs): the JSON body first, its `adminKey`
+    // required, and the caller is that key (`must_be_admin_from_key`). The `Authorization` header is not read.
+    const step = url.pathname.replace(/^\/api\/(deploy2\/)?/, "");
     let body: Record<string, unknown>;
+    let caller: Caller;
     try {
-      body = (JSON.parse((await new Response(capped(req).body).text()) || "{}") ?? {}) as Record<string, unknown>;
+      const shape = PUSH_REQUESTS[step];
+      if (!shape) return requestError(404, "NotFound", `no route for ${url.pathname}`);
+      body = await readJsonBody(req, () => new Response(capped(req).body).text(), shape);
+      caller = withRequest(adminCaller(body.adminKey as string, false), req);
     } catch (e) {
-      return requestError(400, "BadJsonBody", `invalid JSON body: ${(e as Error).message}`);
-    }
-    // The admin key in the header, or (as Convex's CLI also sends it) in the body.
-    let caller = await callerOfRequest(req);
-    if (caller instanceof Response) return caller;
-    if (!(caller as AdminCaller).admin && typeof body.adminKey === "string") {
-      try {
-        caller = withRequest(adminCaller(body.adminKey, false), req);
-      } catch (e) {
-        const r = accessError(e);
-        if (r) return r;
-        throw e;
-      }
+      if (e instanceof BadJsonBody) return requestError(e.status, e.code, e.message);
+      const r = accessError(e);
+      if (r) return r;
+      throw e;
     }
     try {
       functions.requireOperation(caller, "Deploy");
       if (!opts.deployable)
         return requestError(400, "NotDeployable", "This deployment's functions are not deployed by pushes.");
       await codeReady;
-      const step = url.pathname.replace(/^\/api\/(deploy2\/)?/, "");
       if (step === "get_config_hashes") return json(await push.configHashes());
       if (step === "start_push") return json(await push.startPush(body));
       if (step === "evaluate_push") return json(await push.startPush({ ...body, dryRun: true }));
@@ -2132,8 +2311,12 @@ export function createServer(opts: ServerOptions) {
         return requestError(
           e.status,
           e.code,
-          // As Convex: a race and a message refused before the push are not "while pushing".
-          e.code === "RaceDetected" || e.code === "PushMessageTooLong"
+          // As Convex: a race, and a message or request refused before the push (`into_project_config`, the body's
+          // extractor), are not "while pushing".
+          e.code === "RaceDetected" ||
+            e.code === "PushMessageTooLong" ||
+            e.code === "InvalidConfig" ||
+            e.code === "BadJsonBody"
             ? e.message
             : `Hit an error while pushing:\n${e.message}`,
         );

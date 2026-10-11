@@ -63,7 +63,14 @@ The functions directory is bunvex/, or "functions" in bunvex.json.`;
 
 export type ProjectConfig = {
   functions?: string;
+  /**
+   * Convex's `node`: `nodeVersion` goes with the push (STUDY-145). `externalPackages` is not built yet (a track of
+   * its own), so it is neither checked nor read.
+   */
+  node?: { nodeVersion?: string };
   codegen?: { fileType?: "ts" | "js/dts" };
+  /** Convex's `bundler.includeSourcesContent`: the pushed source maps keep the sources (default: they do not). */
+  bundler?: { includeSourcesContent?: boolean };
   /** Convex's `typescriptCompiler`: the typecheck's compiler (STUDY-117). */
   typescriptCompiler?: TypescriptCompiler;
   /** Convex's `generateCommonJSApi`: codegen also writes the CommonJS api (STUDY-116). */
@@ -96,12 +103,23 @@ export function readProjectConfig(cwd: string): ProjectConfig {
   if (typeof config !== "object" || config === null || Array.isArray(config))
     throw new Error("Expected `bunvex.json` to contain an object");
   const issue = (path: string, message: string) => new Error(`\`${path}\` in \`bunvex.json\`: ${message}`);
-  const { functions, codegen, typescriptCompiler, generateCommonJSApi } = config as Record<string, unknown>;
+  const { functions, node, codegen, bundler, generateCommonJSApi, typescriptCompiler } = config as Record<
+    string,
+    unknown
+  >;
+  const isObject = (v: unknown) => typeof v === "object" && v !== null && !Array.isArray(v);
+  // In the order of Convex's schema (`functions`, `node`, `codegen`, `bundler`, `generateCommonJSApi`,
+  // `typescriptCompiler`): zod's first issue is the first failing key in that order.
   if (functions !== undefined && typeof functions !== "string")
     throw issue("functions", `Expected string, received ${receivedType(functions)}`);
+  if (node !== undefined) {
+    if (!isObject(node)) throw issue("node", `Expected object, received ${receivedType(node)}`);
+    const { nodeVersion } = node as Record<string, unknown>;
+    if (nodeVersion !== undefined && typeof nodeVersion !== "string")
+      throw issue("node.nodeVersion", `Expected string, received ${receivedType(nodeVersion)}`);
+  }
   if (codegen !== undefined) {
-    if (typeof codegen !== "object" || codegen === null || Array.isArray(codegen))
-      throw issue("codegen", `Expected object, received ${receivedType(codegen)}`);
+    if (!isObject(codegen)) throw issue("codegen", `Expected object, received ${receivedType(codegen)}`);
     const { fileType } = codegen as Record<string, unknown>;
     if (fileType !== undefined && fileType !== "ts" && fileType !== "js/dts")
       throw issue(
@@ -111,6 +129,14 @@ export function readProjectConfig(cwd: string): ProjectConfig {
           : `Expected 'ts' | 'js/dts', received ${receivedType(fileType)}`,
       );
   }
+  if (bundler !== undefined) {
+    if (!isObject(bundler)) throw issue("bundler", `Expected object, received ${receivedType(bundler)}`);
+    const { includeSourcesContent } = bundler as Record<string, unknown>;
+    if (includeSourcesContent !== undefined && typeof includeSourcesContent !== "boolean")
+      throw issue("bundler.includeSourcesContent", `Expected boolean, received ${receivedType(includeSourcesContent)}`);
+  }
+  if (generateCommonJSApi !== undefined && typeof generateCommonJSApi !== "boolean")
+    throw issue("generateCommonJSApi", `Expected boolean, received ${receivedType(generateCommonJSApi)}`);
   if (typescriptCompiler !== undefined && typescriptCompiler !== "tsc" && typescriptCompiler !== "tsgo")
     throw issue(
       "typescriptCompiler",
@@ -118,8 +144,6 @@ export function readProjectConfig(cwd: string): ProjectConfig {
         ? `Invalid enum value. Expected 'tsc' | 'tsgo', received '${typescriptCompiler}'`
         : `Expected 'tsc' | 'tsgo', received ${receivedType(typescriptCompiler)}`,
     );
-  if (generateCommonJSApi !== undefined && typeof generateCommonJSApi !== "boolean")
-    throw issue("generateCommonJSApi", `Expected boolean, received ${receivedType(generateCommonJSApi)}`);
   // Convex's refinement, checked once the fields are valid.
   if (generateCommonJSApi === true && (codegen as ProjectConfig["codegen"])?.fileType === "ts")
     throw issue(
@@ -400,12 +424,16 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
   let bundled: Awaited<ReturnType<typeof bundleFunctions>>;
   let dir: string;
   let codegen: CodegenConfig;
+  let project: ProjectConfig;
   try {
+    project = readProjectConfig(io.cwd);
     dir = functionsDir(io.cwd);
     codegen = codegenConfig(io.cwd);
     // Convex's initial codegen: what modules importing `_generated/` need to bundle.
     if (flags.codegen && existsSync(dir)) runCodegen(dir, codegen, { initial: true });
-    bundled = await bundleFunctions(dir, io.cwd);
+    bundled = await bundleFunctions(dir, io.cwd, {
+      includeSourcesContent: project.bundler?.includeSourcesContent ?? false,
+    });
   } catch (e) {
     io.err(`bunvex deploy: ${e instanceof BundleError ? e.message : (e as Error).message}`);
     return { code: 1 };
@@ -444,7 +472,8 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     const { changedModules, unchangedModuleHashes } = partitionModules(bundled.modules, hashes);
     const request = {
       dryRun: flags.dryRun,
-      functions: "bunvex",
+      // As Convex's: the directory as configured, and `node.nodeVersion` when set (the deployment checks it).
+      functions: project.functions ?? "bunvex/",
       appDefinition: {
         definition: null,
         dependencies: [],
@@ -455,6 +484,7 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
       },
       componentDefinitions: [],
       nodeDependencies: [],
+      ...(project.node?.nodeVersion === undefined ? {} : { nodeVersion: project.node.nodeVersion }),
     };
     // Convex's checks before the push, on one `evaluate_schema` (skipped against a deployment without it).
     const deletion = flags.largeIndexDeletionCheck ?? "no verification";

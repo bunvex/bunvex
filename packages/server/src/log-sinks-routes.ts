@@ -9,6 +9,7 @@ import type { Caller } from "@bunvex/core";
 import { type Engine, insertAuditLogEvents, type Tx } from "@bunvex/core";
 import { auditActor, auditEvents } from "./audit-log.ts";
 import type { Functions } from "./functions.ts";
+import { BadJsonBody, checkJsonBody } from "./json-body.ts";
 import { type LogTopic, SUBSCRIBABLE_TOPICS } from "./log-events.ts";
 import {
   addOrUpdateSink,
@@ -50,7 +51,19 @@ const API_TYPES: readonly SinkType[] = [
 ];
 
 const bad = (code: string, message: string) => new LogSinkError(400, code, message);
-const badBody = (message: string) => bad("BadJsonBody", message);
+/** serde's error for a variant's own field (its content buffered, so no position), as axum words it. */
+const badBody = (message: string) =>
+  bad("BadJsonBody", `Failed to deserialize the JSON body into the target type: ${message}`);
+
+/** How serde names a value it did not expect (`invalid type: <this>, expected …`). */
+function unexpected(v: unknown): string {
+  if (v === null) return "unit value";
+  if (typeof v === "string") return `string ${JSON.stringify(v)}`;
+  if (typeof v === "boolean") return `boolean \`${v}\``;
+  if (typeof v === "number") return Number.isInteger(v) ? `integer \`${v}\`` : `floating point \`${v}\``;
+  if (Array.isArray(v)) return "sequence";
+  return "map";
+}
 
 type Body = Record<string, unknown>;
 
@@ -65,7 +78,7 @@ function str(b: Body, k: string, optional = false) {
     throw badBody(`missing field \`${k}\``);
   }
   if (v === null && optional) return null;
-  if (typeof v !== "string") throw badBody(`${k}: invalid type: expected a string`);
+  if (typeof v !== "string") throw badBody(`invalid type: ${unexpected(v)}, expected a string`);
   return v;
 }
 
@@ -73,7 +86,7 @@ function topicsArg(b: Body): LogTopic[] | null | undefined {
   const v = b.topics;
   if (v === undefined || v === null) return v as undefined | null;
   if (!Array.isArray(v) || !v.every((t) => typeof t === "string"))
-    throw badBody("topics: invalid type: expected a sequence");
+    throw badBody(`invalid type: ${unexpected(v)}, expected a sequence`);
   return v as LogTopic[];
 }
 
@@ -106,11 +119,12 @@ function checkWebhookUrl(url: string) {
 }
 
 function checkFormat(f: string) {
-  if (f !== "json" && f !== "jsonl") throw badBody(`format: unknown variant \`${f}\`, expected \`json\` or \`jsonl\``);
+  if (f !== "json" && f !== "jsonl") throw badBody(`unknown variant \`${f}\`, expected \`json\` or \`jsonl\``);
 }
 
 function checkSite(s: string) {
-  if (!DATADOG_SITES.includes(s)) throw badBody(`siteLocation: unknown variant \`${s}\``);
+  if (!DATADOG_SITES.includes(s))
+    throw badBody(`unknown variant \`${s}\`, expected one of ${DATADOG_SITES.map((x) => `\`${x}\``).join(", ")}`);
 }
 
 function checkIngestUrl(u: string | null | undefined) {
@@ -121,9 +135,13 @@ function checkIngestUrl(u: string | null | undefined) {
     );
 }
 
-function checkAttributes(a: unknown): { key: string; value: string }[] {
+function attributesArg(a: unknown): { key: string; value: string }[] {
   if (!Array.isArray(a) || !a.every((x) => x && typeof x.key === "string" && typeof x.value === "string"))
-    throw badBody("attributes: invalid type: expected a sequence of {key, value}");
+    throw badBody(`invalid type: ${unexpected(a)}, expected a sequence`);
+  return a;
+}
+
+function checkAttributes(a: { key: string; value: string }[]) {
   if (a.length > AXIOM_MAX_ATTRIBUTES) throw new Error("Exceeded max number of Axiom attributes.");
   return a;
 }
@@ -146,10 +164,10 @@ function checkBucket(b: string) {
     throw bad("InvalidS3Bucket", `\`${b}\` is not a valid S3 bucket name`);
 }
 
-function stringRecord(v: unknown, k: string): Record<string, string> | null | undefined {
+function stringRecord(v: unknown): Record<string, string> | null | undefined {
   if (v === undefined || v === null) return v as undefined | null;
   if (typeof v !== "object" || Array.isArray(v) || !Object.values(v).every((x) => typeof x === "string"))
-    throw badBody(`${k}: invalid type: expected a map`);
+    throw badBody(`invalid type: ${unexpected(v)}, expected a map`);
   return v as Record<string, string>;
 }
 
@@ -176,42 +194,42 @@ function createConfig(b: Body): SinkConfig {
       checkSite(siteLocation);
       const ddApiKey = str(b, "ddApiKey");
       if (!Array.isArray(b.ddTags) || !b.ddTags.every((t) => typeof t === "string"))
-        throw badBody(b.ddTags === undefined ? "missing field `ddTags`" : "ddTags: invalid type: expected a sequence");
+        throw badBody(
+          b.ddTags === undefined
+            ? "missing field `ddTags`"
+            : `invalid type: ${unexpected(b.ddTags)}, expected a sequence`,
+        );
+      const service = str(b, "service", true);
       const topics = topicsArg(b);
       checkTopics(topics);
-      return clean({
-        type,
-        siteLocation,
-        ddApiKey,
-        ddTags: b.ddTags,
-        version: "2",
-        service: str(b, "service", true),
-        topics,
-      });
+      return clean({ type, siteLocation, ddApiKey, ddTags: b.ddTags, version: "2", service, topics });
     }
     case "axiom": {
       const apiKey = str(b, "apiKey");
       const datasetName = str(b, "datasetName");
       if (b.attributes === undefined) throw badBody("missing field `attributes`");
-      const attributes = checkAttributes(b.attributes);
+      const attributes = attributesArg(b.attributes);
       const ingestUrl = str(b, "ingestUrl", true);
       const topics = topicsArg(b);
+      checkAttributes(attributes);
       checkIngestUrl(ingestUrl);
       checkTopics(topics);
       return clean({ type, apiKey, datasetName, attributes, version: "2", ingestUrl, topics });
     }
     case "sentry": {
       const dsn = str(b, "dsn");
+      const tags = stringRecord(b.tags);
       checkDsn(dsn);
-      return clean({ type, dsn, tags: stringRecord(b.tags, "tags"), version: "2" });
+      return clean({ type, dsn, tags, version: "2" });
     }
     case "postHogLogs": {
       const apiKey = str(b, "apiKey");
       const host = str(b, "host", true);
+      const serviceName = str(b, "serviceName", true);
       const topics = topicsArg(b);
       checkHost(host);
       checkTopics(topics);
-      return clean({ type, apiKey, host, serviceName: str(b, "serviceName", true), topics });
+      return clean({ type, apiKey, host, serviceName, topics });
     }
     case "postHogErrorTracking": {
       const apiKey = str(b, "apiKey");
@@ -222,16 +240,18 @@ function createConfig(b: Body): SinkConfig {
     case "s3Export": {
       const bucket = str(b, "bucket");
       const region = str(b, "region");
+      const prefix = str(b, "prefix", true);
       const accessKeyId = str(b, "accessKeyId");
       const secretAccessKey = str(b, "secretAccessKey");
       const period = str(b, "period");
-      if (!["continuous", "hourly", "daily"].includes(period)) throw badBody(`period: unknown variant \`${period}\``);
+      if (!["continuous", "hourly", "daily"].includes(period))
+        throw badBody(`unknown variant \`${period}\`, expected one of \`continuous\`, \`hourly\`, \`daily\``);
       checkBucket(bucket);
       return clean({
         type,
         bucket,
         region,
-        prefix: str(b, "prefix", true),
+        prefix,
         accessKeyId,
         secretAccessKey,
         selection: b.selection ?? null,
@@ -294,7 +314,7 @@ function updatedConfig(old: SinkConfig, b: Body): SinkConfig {
     case "axiom": {
       set("apiKey", keep("apiKey"));
       set("datasetName", keep("datasetName"));
-      if (b.attributes !== undefined) set("attributes", checkAttributes(b.attributes));
+      if (b.attributes !== undefined) set("attributes", checkAttributes(attributesArg(b.attributes)));
       set("ingestUrl", str(b, "ingestUrl", true));
       set("topics", topicsArg(b));
       checkIngestUrl(next.ingestUrl as string | undefined);
@@ -303,7 +323,7 @@ function updatedConfig(old: SinkConfig, b: Body): SinkConfig {
     }
     case "sentry": {
       set("dsn", keep("dsn"));
-      set("tags", stringRecord(b.tags, "tags"));
+      set("tags", stringRecord(b.tags));
       checkDsn(next.dsn as string);
       break;
     }
@@ -407,15 +427,22 @@ export async function logStreamRoute(
     if (id === undefined) throw new LogSinkError(404, "NotFound", `no route for /api/v1/${route}`);
     return decodeURIComponent(id);
   };
-  const body = async (): Promise<Body> => {
-    let b: unknown;
+  /**
+   * The body, as Convex's extractor reads `CreateLogStreamArgs` / `UpdateLogStreamArgs` (internally tagged by
+   * `logStreamType`): its content type, its JSON and its tag, before the route's operation is checked. The
+   * variant's own fields are checked after (`createConfig`, `updatedConfig`).
+   */
+  const body = async (name: string): Promise<Body> => {
+    const text = await req.text();
     try {
-      b = await req.json();
+      checkJsonBody(req, text, { name, fields: [], tagged: { tag: "logStreamType", variants: API_TYPES } });
     } catch (e) {
-      throw badBody(`Failed to parse the request body as JSON: ${(e as Error).message}`);
+      if (e instanceof BadJsonBody) throw bad(e.code, e.message);
+      throw e;
     }
-    if (b === null || typeof b !== "object" || Array.isArray(b)) throw badBody("invalid type: expected an object");
-    return b as Body;
+    const b = JSON.parse(text) as unknown;
+    // A sequence names its variant first (serde's tagged form); the route reads a map.
+    return (Array.isArray(b) ? { logStreamType: b[0] } : b) as Body;
   };
   const audit = (db: Tx, event: ReturnType<typeof auditEvents.createIntegration>) =>
     insertAuditLogEvents(db, [event], auditActor(caller));
@@ -437,8 +464,15 @@ export async function logStreamRoute(
     }
     case "create_log_stream": {
       if (req.method !== "POST") break;
+      const b = await body("CreateLogStreamArgs");
+      // The variant's fields as serde reads them (its errors before the operation's check); Convex's own checks of
+      // their values come after it.
+      try {
+        createConfig(b);
+      } catch (e) {
+        if (e instanceof LogSinkError && e.code === "BadJsonBody") throw e;
+      }
       functions.requireOperation(caller, "WriteIntegrations");
-      const b = await body();
       const type = b.logStreamType;
       // An S3 export copies the deployment's data out: it also needs ViewData (Convex 4933aa2).
       if (type === "s3Export") functions.requireOperation(caller, "ViewData");
@@ -466,9 +500,10 @@ export async function logStreamRoute(
     }
     case "update_log_stream": {
       if (req.method !== "POST") break;
-      functions.requireOperation(caller, "WriteIntegrations");
+      // Convex's extractors: the path's id and the body, then the operation.
       const sinkId = needId();
-      const b = await body();
+      const b = await body("UpdateLogStreamArgs");
+      functions.requireOperation(caller, "WriteIntegrations");
       await engine.mutation(async (db) => {
         const row = await mustGetSink(db, sinkId);
         if (row.config.type === "s3Export") functions.requireOperation(caller, "ViewData");

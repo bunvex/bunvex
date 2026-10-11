@@ -24,21 +24,69 @@ export function isJsonContentType(header: string | null): boolean {
 }
 
 /**
- * A field of a body struct: a string, an optional string, any JSON value, a list of strings (`Vec<String>`), a
- * map of strings (`BTreeMap<String, String>`), a list of structs, or a struct.
+ * A field of a body struct, as its Rust type deserializes:
+ * - `string`, `optString` (`Option<String>`), `value` (any JSON value), `optValue` (any or no value, an `Option`
+ *   or `#[serde(default)]` field whose type is not checked here), `strings` (`Vec<String>`), `stringMap`
+ *   (`BTreeMap<String, String>`), a list of structs, a struct;
+ * - `{ int }`: an integer type (`u64`, `u16`, `usize`, `i64`), with serde's range checks;
+ * - `{ bool }`: a `bool`;
+ * - `{ option }`: `Option<T>` (null or absent is `None`);
+ * - `{ list }`: `Vec<T>`;
+ * - `{ variants }`: a unit-only enum, from its (renamed) variant names;
+ * - `{ default }`: a `#[serde(default)]` field (absent is allowed);
+ * - `{ object }`: a nested struct whose contents are checked elsewhere (`expected struct <name>` otherwise).
  */
 export type FieldKind =
   | "string"
   | "optString"
   | "value"
+  | "optValue"
   | "strings"
   | "stringMap"
   | { seqOf: BodyShape }
-  | { struct: BodyShape };
-/** A body struct: its Rust name (it is in serde's messages) and its fields in declaration order. */
-export type BodyShape = { name: string; fields: [string, FieldKind][] };
+  | { struct: BodyShape }
+  | { int: IntType }
+  | { bool: true }
+  | { option: FieldKind }
+  | { list: FieldKind }
+  | { variants: readonly string[] }
+  | { default: FieldKind }
+  | { object: string };
+type IntType = "u64" | "u16" | "usize" | "i64";
+/**
+ * A body struct: its Rust name (it is in serde's messages) and its fields in declaration order. `flatten`: the
+ * struct has a `#[serde(flatten)]` field, so serde reads it as a map only (no positional, array form).
+ */
+export type BodyShape = {
+  name: string;
+  fields: [string, FieldKind][];
+  flatten?: boolean;
+  /**
+   * An internally tagged enum (`#[serde(tag = "...")]`): its tag field and variant names. Only the tag is
+   * checked here (the variant's own fields are checked by the route).
+   */
+  tagged?: { tag: string; variants: readonly string[] };
+  /**
+   * The function call routes' hot path: a body `JSON.parse` takes and whose shape fits is accepted without the
+   * byte reader (a field given twice is then taken, where serde refuses it). Every other body is read as serde
+   * reads it, duplicate fields included.
+   */
+  fast?: boolean;
+};
+
+const INT_RANGE: Record<IntType, [bigint, bigint]> = {
+  u64: [0n, 2n ** 64n - 1n],
+  usize: [0n, 2n ** 64n - 1n],
+  u16: [0n, 65535n],
+  i64: [-(2n ** 63n), 2n ** 63n - 1n],
+};
+
+/** Whether a field may be absent from the body (serde's `Option` and `#[serde(default)]`). */
+const optional = (kind: FieldKind) =>
+  kind === "optString" || kind === "optValue" || (typeof kind === "object" && ("option" in kind || "default" in kind));
 
 export const UDF_POST: BodyShape = {
+  fast: true,
   name: "UdfPostRequest",
   fields: [
     ["path", "string"],
@@ -47,6 +95,7 @@ export const UDF_POST: BodyShape = {
   ],
 };
 export const UDF_POST_WITH_TS: BodyShape = {
+  fast: true,
   name: "UdfPostWithTsRequest",
   fields: [
     ["path", "string"],
@@ -56,6 +105,7 @@ export const UDF_POST_WITH_TS: BodyShape = {
   ],
 };
 export const UDF_POST_WITH_COMPONENT: BodyShape = {
+  fast: true,
   name: "UdfPostRequestWithComponent",
   fields: [
     ["componentPath", "optString"],
@@ -67,6 +117,7 @@ export const UDF_POST_WITH_COMPONENT: BodyShape = {
 
 /** Convex's `RunTestFunctionArgs` (local_backend/src/dashboard.rs), its bundle a `ModuleJson`. */
 export const RUN_TEST_FUNCTION: BodyShape = {
+  fast: true,
   name: "RunTestFunctionArgs",
   fields: [
     ["adminKey", "string"],
@@ -90,9 +141,14 @@ export const RUN_TEST_FUNCTION: BodyShape = {
   ],
 };
 
-export const QUERY_BATCH: BodyShape = { name: "QueryBatchArgs", fields: [["queries", { seqOf: UDF_POST }]] };
+export const QUERY_BATCH: BodyShape = {
+  name: "QueryBatchArgs",
+  fast: true,
+  fields: [["queries", { seqOf: UDF_POST }]],
+};
 
 export const UDF_POST_ARGS_ONLY: BodyShape = {
+  fast: true,
   name: "UdfPostRequestArgsOnly",
   fields: [
     ["args", "value"],
@@ -106,6 +162,15 @@ export async function readJsonBody<T>(req: Request, text: () => Promise<string>,
   return parseJsonBody<T>(await text(), shape);
 }
 
+/**
+ * Check a body as Convex's extractor would (its content type, then `shape`), for a route that parses the body
+ * itself afterwards (to keep integers past 2^53 exact, say). Throws `BadJsonBody`.
+ */
+export function checkJsonBody(req: Request, text: string, shape: BodyShape): void {
+  if (!isJsonContentType(req.headers.get("content-type"))) throw new BadJsonBody(CONTENT_TYPE_ERROR);
+  parseJsonBody(text, shape);
+}
+
 export function parseJsonBody<T>(text: string, shape: BodyShape): T {
   let parsed: unknown;
   try {
@@ -113,35 +178,50 @@ export function parseJsonBody<T>(text: string, shape: BodyShape): T {
   } catch {
     parsed = undefined;
   }
-  if (parsed !== undefined && fits(parsed, shape)) return parsed as T;
+  if (parsed !== undefined && fits(parsed, shape) && shape.fast) return parsed as T;
   // Read it again as serde_json does: its error, or — a struct written as an array, `[path, args, …]`,
   // which serde takes too — the fields by position.
   new Reader(text, shape).body();
+  // Valid after all (an integer past 2^53, which `fits` leaves to the reader): the object as parsed.
+  if (!Array.isArray(parsed)) return parsed as T;
   return Object.fromEntries(shape.fields.map(([name], k) => [name, (parsed as unknown[])[k]])) as T;
 }
 
 function fits(v: unknown, shape: BodyShape): boolean {
   if (v === null || typeof v !== "object" || Array.isArray(v)) return false;
+  if (shape.tagged) return shape.tagged.variants.includes((v as Record<string, unknown>)[shape.tagged.tag] as string);
   const o = v as Record<string, unknown>;
-  for (const [name, kind] of shape.fields) {
-    const x = o[name];
-    if (kind === "string" && typeof x !== "string") return false;
-    if (kind === "optString" && x !== undefined && x !== null && typeof x !== "string") return false;
-    if (kind === "value" && x === undefined) return false;
-    if (kind === "strings" && (!Array.isArray(x) || !x.every((e) => typeof e === "string"))) return false;
-    if (
-      kind === "stringMap" &&
-      (x === null ||
-        typeof x !== "object" ||
-        Array.isArray(x) ||
-        !Object.values(x as object).every((e) => typeof e === "string"))
-    )
-      return false;
-    if (typeof kind === "object" && "struct" in kind && !fits(x, kind.struct)) return false;
-    if (typeof kind === "object" && "seqOf" in kind && (!Array.isArray(x) || !x.every((e) => fits(e, kind.seqOf))))
-      return false;
-  }
+  for (const [name, kind] of shape.fields) if (!fitsField(o[name], kind)) return false;
   return true;
+}
+
+/** Whether a field's parsed value is what its kind takes (undefined: absent). */
+function fitsField(x: unknown, kind: FieldKind): boolean {
+  if (kind === "string") return typeof x === "string";
+  if (kind === "optString") return x === undefined || x === null || typeof x === "string";
+  if (kind === "value") return x !== undefined;
+  if (kind === "optValue") return true;
+  if (kind === "strings") return Array.isArray(x) && x.every((e) => typeof e === "string");
+  if (kind === "stringMap")
+    return (
+      x !== null &&
+      typeof x === "object" &&
+      !Array.isArray(x) &&
+      Object.values(x as object).every((e) => typeof e === "string")
+    );
+  if ("struct" in kind) return fits(x, kind.struct);
+  if ("seqOf" in kind) return Array.isArray(x) && x.every((e) => fits(e, kind.seqOf));
+  if ("int" in kind) {
+    if (typeof x !== "number" || !Number.isInteger(x)) return false;
+    const [lo, hi] = INT_RANGE[kind.int];
+    return BigInt(x) >= lo && BigInt(x) <= hi && Number.isSafeInteger(x);
+  }
+  if ("bool" in kind) return typeof x === "boolean";
+  if ("option" in kind) return x === undefined || x === null || fitsField(x, kind.option);
+  if ("default" in kind) return x === undefined || fitsField(x, kind.default);
+  if ("list" in kind) return Array.isArray(x) && x.every((e) => fitsField(e, kind.list));
+  if ("variants" in kind) return typeof x === "string" && kind.variants.includes(x);
+  return x !== null && typeof x === "object" && !Array.isArray(x); // { object }
 }
 
 // ---------------------------------------------------------------- serde_json's reader, for the messages
@@ -225,8 +305,9 @@ class Reader {
   private struct(shape: BodyShape) {
     const b = this.peek();
     if (b === undefined) throw this.error("syntax", "EOF while parsing a value");
+    if (shape.tagged) return this.taggedEnum(shape.name, shape.tagged);
     if (b === 0x7b) return this.structFromMap(shape);
-    if (b === 0x5b) return this.structFromSeq(shape);
+    if (b === 0x5b && !shape.flatten) return this.structFromSeq(shape);
     throw this.invalidType(`struct ${shape.name}`);
   }
 
@@ -266,7 +347,7 @@ class Reader {
       if (field) seen.add(key);
     }
     for (const [name, kind] of shape.fields)
-      if (!seen.has(name) && kind !== "optString") throw this.error("data", `missing field \`${name}\``);
+      if (!seen.has(name) && !optional(kind)) throw this.error("data", `missing field \`${name}\``);
   }
 
   private structFromSeq(shape: BodyShape) {
@@ -286,7 +367,12 @@ class Reader {
       }
       if (b === 0x5d) {
         this.i++;
-        throw this.error("data", `invalid length ${k}, expected struct ${shape.name} with ${n} elements`);
+        // A `#[serde(default)]` field (and those after it) may be left out of the array.
+        if (shape.fields.slice(k).every(([, kind]) => typeof kind === "object" && "default" in kind)) return;
+        throw this.error(
+          "data",
+          `invalid length ${k}, expected struct ${shape.name} with ${n} element${n === 1 ? "" : "s"}`,
+        );
       }
       this.path.push(`[${k}]`);
       this.field(shape.fields[k]![1]);
@@ -301,10 +387,27 @@ class Reader {
   private field(kind: FieldKind) {
     const b = this.peek();
     if (b === undefined) throw this.error("syntax", "EOF while parsing a value");
-    if (kind === "value") return this.value(0);
-    if (kind === "stringMap") return this.stringMap();
-    if (typeof kind === "object" && "struct" in kind) return this.struct(kind.struct);
-    if (typeof kind === "object" || kind === "strings") {
+    if (kind === "value" || kind === "optValue") return void this.value(0);
+    if (kind === "stringMap") return void this.stringMap();
+    if (kind === "strings") return void this.field({ list: "string" });
+    if (typeof kind === "object" && "struct" in kind) return void this.struct(kind.struct);
+    if (typeof kind === "object" && "default" in kind) return void this.field(kind.default);
+    if (typeof kind === "object" && "option" in kind) {
+      if (b === 0x6e) return void this.ident("null");
+      return void this.field(kind.option);
+    }
+    if (typeof kind === "object" && "int" in kind) return void this.int(kind.int);
+    if (typeof kind === "object" && "bool" in kind) {
+      if (b === 0x74) return void this.ident("true");
+      if (b === 0x66) return void this.ident("false");
+      throw this.invalidType("a boolean");
+    }
+    if (typeof kind === "object" && "variants" in kind) return void this.variant(kind.variants);
+    if (typeof kind === "object" && "object" in kind) {
+      if (b === 0x7b || b === 0x5b) return void this.value(0);
+      throw this.invalidType(`struct ${kind.object}`);
+    }
+    if (typeof kind === "object") {
       if (b !== 0x5b) throw this.invalidType("a sequence");
       this.i++;
       for (let k = 0; ; k++) {
@@ -324,7 +427,7 @@ class Reader {
           if (c === 0x5d) throw this.peekError("syntax", "trailing comma");
         }
         this.path.push(`[${k}]`);
-        if (kind === "strings") this.field("string");
+        if ("list" in kind) this.field(kind.list);
         else this.struct(kind.seqOf);
         this.path.pop();
       }
@@ -338,6 +441,106 @@ class Reader {
       return;
     }
     throw this.invalidType("a string");
+  }
+
+  /**
+   * An internally tagged enum, as serde reads one (its content buffered): a map with the tag naming a variant,
+   * or a sequence whose first element does. Anything else is `invalid type`.
+   */
+  private taggedEnum(name: string, t: { tag: string; variants: readonly string[] }) {
+    const b = this.peek()!;
+    if (b === 0x5b) {
+      this.i++;
+      this.ws();
+      if (this.peek() === 0x5d) {
+        this.i++;
+        throw this.error("data", `missing field \`${t.tag}\``);
+      }
+      this.path.push(t.tag);
+      this.variant(t.variants);
+      this.path.pop();
+      // The variant's fields by position follow; the route checks them.
+      for (;;) {
+        this.ws();
+        const c = this.peek();
+        if (c === undefined) throw this.error("syntax", "EOF while parsing a list");
+        if (c === 0x5d) {
+          this.i++;
+          return;
+        }
+        if (c !== 0x2c) throw this.peekError("syntax", "expected `,` or `]`");
+        this.i++;
+        this.ws();
+        this.value(0);
+      }
+    }
+    if (b !== 0x7b) throw this.invalidType(`internally tagged enum ${name}`);
+    this.i++;
+    let tagged = false;
+    for (let k = 0; ; k++) {
+      this.ws();
+      let c = this.peek();
+      if (c === undefined) throw this.error("syntax", "EOF while parsing an object");
+      if (c === 0x7d) {
+        this.i++;
+        break;
+      }
+      if (k > 0) {
+        if (c !== 0x2c) throw this.peekError("syntax", "expected `,` or `}`");
+        this.i++;
+        this.ws();
+        c = this.peek();
+        if (c === undefined) throw this.error("syntax", "EOF while parsing an object");
+        if (c === 0x7d) throw this.peekError("syntax", "trailing comma");
+      }
+      if (this.peek() !== 0x22) throw this.peekError("syntax", "key must be a string");
+      const key = this.string();
+      this.ws();
+      if (this.peek() === undefined) throw this.error("syntax", "EOF while parsing an object");
+      if (this.peek() !== 0x3a) throw this.peekError("syntax", "expected `:`");
+      this.i++;
+      this.ws();
+      this.path.push(key);
+      if (key === t.tag && !tagged) {
+        if (this.peek() !== 0x22) throw this.invalidType("variant identifier");
+        this.variant(t.variants);
+        tagged = true;
+      } else if (key === t.tag) throw this.error("data", `duplicate field \`${t.tag}\``);
+      else this.value(0);
+      this.path.pop();
+    }
+    if (!tagged) throw this.error("data", `missing field \`${t.tag}\``);
+  }
+
+  /** An integer field: serde's `invalid type` for anything else, `invalid value` outside the type's range. */
+  private int(type: IntType) {
+    const b = this.peek()!;
+    if (b !== 0x2d && !isDigit(b)) throw this.invalidType(type);
+    const what = this.number();
+    if (what.startsWith("floating point")) throw this.error("data", `invalid type: ${what}, expected ${type}`);
+    const n = BigInt(what.slice("integer `".length, -1));
+    const [lo, hi] = INT_RANGE[type];
+    if (n < lo || n > hi) throw this.error("data", `invalid value: ${what}, expected ${type}`);
+  }
+
+  /**
+   * A unit-only enum (serde_json's `deserialize_enum`): a string naming a variant; serde's "unknown variant"
+   * after the string, else "expected value" where the value starts.
+   */
+  private variant(variants: readonly string[]) {
+    if (this.peek() !== 0x22) throw this.peekError("syntax", "expected value");
+    const name = this.string();
+    if (variants.includes(name)) return;
+    const quoted = variants.map((v) => `\`${v}\``);
+    const expected =
+      quoted.length === 0
+        ? "there are no variants"
+        : quoted.length === 1
+          ? quoted[0]
+          : quoted.length === 2
+            ? `${quoted[0]} or ${quoted[1]}`
+            : `one of ${quoted.join(", ")}`;
+    throw this.error("data", `unknown variant \`${name}\`, expected ${expected}`);
   }
 
   /** A `BTreeMap<String, String>`: an object whose values are strings (serde_path_to_error names the key). */
