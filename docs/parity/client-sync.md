@@ -257,7 +257,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | Max function result 16 MiB | `crates/common/src/knobs.rs` (`FUNCTION_MAX_RESULT_SIZE`) | done (STUDY-64 §1.7) | Queries, mutations (nothing written) and actions, at any nesting depth (a nested failure is catchable); checked before the returns validator, as Convex; Convex's message; knob `FUNCTION_MAX_RESULT_SIZE`. `_system` functions' 24 MiB not applied (bunvex's own system functions); no 80 % warning yet. |
 | Per-transaction read limits (32 000 rows, 16 MiB, 4096 read-set intervals) that drive the pagination `maximumRowsRead/BytesRead` split logic | `crates/common/src/knobs.rs` | done (#12; STUDY-71) | Engine area; listed because the client reacts to it. |
 | Pending ops per socket (1000); WS mutation timeout (60 s) | `crates/sync/src/worker.rs` | done (STUDY-64 §1.1) | 1000 pending mutations and 1000 in-flight actions per connection (1013 with Convex's codes); the 60 s mutation timeout closes with 1011. |
-| Arg-size metrics per ModifyQuerySet/Mutation/Action | `crates/sync/src/worker.rs` | missing | Observability only. |
+| Arg-size metrics per ModifyQuerySet/Mutation/Action | `crates/sync/src/worker.rs` | done (STUDY-114, #432) | `/metrics` histograms `bunvex_sync_query_modification_args_bytes`, `bunvex_sync_mutation_args_bytes` and `bunvex_sync_action_args_bytes` (`packages/server/src/server-metrics.ts`), named as Convex's `sync_*_args_bytes` under bunvex's prefix (DV-377). |
 
 ### 17. Client configuration (independent of the CLI)
 
