@@ -32,10 +32,22 @@ afterEach(async () => {
 
 async function open(schema: SchemaDefinition, path = ":memory:") {
   const p = new SqlitePersistence(path, { durable: false });
-  const e = await new Engine(schema, p, { retention: manual }).init();
+  // No `max_repeatable_ts` bump (5 s after a commit) during a test: it would take a timestamp and move the
+  // newest one, which the windows trail, between two steps of a slow run.
+  const repeatableTs = { commitDelayMs: 3_600_000, idleMs: 3_600_000 };
+  const e = await new Engine(schema, p, { retention: manual, repeatableTs }).init();
   engines.push(e);
   return { e, db: (p as unknown as { db: import("bun:sqlite").Database }).db };
 }
+
+/**
+ * Commit timestamps from a clock that stands still: each one is the last plus one, as when the wall clock has
+ * not moved past the last commit (within one millisecond, when `Date.now()` runs ahead of
+ * `performance.now()`: `wallClockNs` then returns the whole millisecond, and the committer adds one).
+ */
+const consecutiveTimestamps = (e: Engine) => {
+  (e.committer as unknown as { clockNs: () => bigint }).clockNs = () => 0n;
+};
 
 type Row = { ts: bigint; deleted: number };
 const indexRows = (db: import("bun:sqlite").Database, index: string, key: Uint8Array) =>
@@ -66,8 +78,20 @@ const all = (e: Engine) =>
       .collect(),
   }));
 
-/** A commit after the others, so the window passes every version before it (a pass prunes below the window). */
-const later = (e: Engine) => e.mutation((d) => d.insert("items", { n: -100 }));
+/** One commit after the others. */
+const commit = (e: Engine) => e.mutation((d) => d.insert("items", { n: -100 }));
+
+/**
+ * Two commits after the others, so a full round passes every version before them, however close their
+ * timestamps. A pass prunes below its window (Convex's `[cursor, min_snapshot_ts)`): the index window at the
+ * last commit passes every version before it, and its cursor stops one below it; the document window follows
+ * that cursor (`candidate_min_snapshot_ts`), so it passes the versions below the cursor. With one commit, a
+ * version one nanosecond before it would sit at the cursor and wait for the next round.
+ */
+const later = async (e: Engine) => {
+  await commit(e);
+  await commit(e);
+};
 
 describe("retention by prev_ts", () => {
   test("a moved key's replaced entry and tombstone are pruned; an unchanged key keeps its live entry", async () => {
@@ -126,6 +150,7 @@ describe("retention by prev_ts", () => {
 
   test("the document pass deletes replaced versions and a delete's tombstone, and keeps the live version", async () => {
     const { e, db } = await open(indexed);
+    consecutiveTimestamps(e); // the closest timestamps can be: the delete of `c` right below the later commits
     const a = (await e.mutation((d) => d.insert("items", { n: 1 }))) as string;
     await e.mutation((d) => d.patch(a, { n: 2 }));
     await e.mutation((d) => d.patch(a, { n: 3 }));
@@ -143,6 +168,31 @@ describe("retention by prev_ts", () => {
     expect(docRows(db, a)).toEqual([live]);
     expect(docRows(db, c)).toEqual([]);
     expect(((await e.query((d) => d.get(a))) as Doc).n).toBe(3);
+  });
+
+  test("a delete right below the index window's commit waits at the cursor for the next round, as Convex's", async () => {
+    const { e, db } = await open(indexed);
+    consecutiveTimestamps(e);
+    const c = (await e.mutation((d) => d.insert("items", { n: 9 }))) as string;
+    await e.mutation((d) => d.delete(c));
+    const [, del] = docRows(db, c);
+    await commit(e); // at the delete's ts + 1
+    const r = e.retention!;
+    const round = async () => {
+      await r.advance();
+      await r.deleteIndexes();
+      await r.advance();
+      await r.deleteDocuments();
+    };
+    await round();
+    // The index cursor stops at the window − 1, the delete's ts; the document window is that cursor, and a pass
+    // prunes below its window (Convex's `expired_documents` reads `cursor..min_document_snapshot_ts`).
+    expect(r.indexCursor).toBe(del!.ts);
+    expect(r.minDocumentTs).toBe(del!.ts);
+    expect(docRows(db, c).length).toBe(2);
+    await commit(e);
+    await round();
+    expect(docRows(db, c)).toEqual([]);
   });
 
   test("a version whose predecessor was already pruned is skipped, without an error", async () => {

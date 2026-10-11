@@ -48,11 +48,12 @@ async function setup() {
   });
   stops.push(() => s.shutdown());
   const api = `http://127.0.0.1:${s.server.port}`;
-  const post = (path: string, body: object = {}, key: string | null = KEY) =>
+  /** A POST; a string body is sent as written (an integer past 2^53, exact). */
+  const post = (path: string, body: object | string = {}, key: string | null = KEY) =>
     fetch(`${api}${path}`, {
       method: "POST",
       headers: { "content-type": "application/json", ...(key ? { authorization: `Bunvex ${key}` } : {}) },
-      body: JSON.stringify(body),
+      body: typeof body === "string" ? body : JSON.stringify(body),
     });
   const latest = async () =>
     (
@@ -217,19 +218,17 @@ describe("snapshot export", () => {
     const now = BigInt(Date.now()) * 1_000_000n;
     const day = 86_400_000_000_000n;
     expect(
-      await (await t.post(`/api/export/set_expiration/${done._id}`, { expirationTsNs: String(now - day) })).json(),
+      await (await t.post(`/api/export/set_expiration/${done._id}`, `{"expirationTsNs":${now - day}}`)).json(),
     ).toMatchObject({
       message: "Snapshot expiration in past.",
     });
     expect(
-      await (
-        await t.post(`/api/export/set_expiration/${done._id}`, { expirationTsNs: String(now + 62n * day) })
-      ).json(),
+      await (await t.post(`/api/export/set_expiration/${done._id}`, `{"expirationTsNs":${now + 62n * day}}`)).json(),
     ).toMatchObject({
       message: expect.stringMatching(/^Snapshot expiration is 6[12] days in the future\. Must be <= 60$/),
     });
     expect(
-      (await t.post(`/api/export/set_expiration/${done._id}`, { expirationTsNs: String(now + 30n * day) })).status,
+      (await t.post(`/api/export/set_expiration/${done._id}`, `{"expirationTsNs":${now + 30n * day}}`)).status,
     ).toBe(200);
   });
 });

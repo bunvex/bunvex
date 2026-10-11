@@ -52,8 +52,13 @@ brotli.
 
 ### 1.2 The deploy2 protocol
 
-Every step is `POST`, with `Authorization: Convex <adminKey>` and the `Deploy` operation
-(`local_backend/deploy_config2.rs:307-480`).
+Every step is `POST`, with the `Deploy` operation (`local_backend/deploy_config2.rs:307-480`). Corrected
+2026-10-11: the admin key is the body's `adminKey` (`must_be_admin_from_key`), not a header. Each route reads
+its JSON body first (its request struct: `GetConfigRequest`, `StartPushRequest`, `WaitForSchemaRequest`,
+`FinishPushRequest`, `ReportPushCompletedRequest`, `adminKey` first), so a body without the key is 400
+`BadJsonBody` "missing field `adminKey`", and the `Authorization` header is not read at all. bunvex does the
+same (checked against Convex's binary, `packages/differential/test/args-before-auth.test.ts`); its CLI sends
+the key in the body.
 
 **1. `start_push`** (`application/deploy_config.rs:197`). The request is
 `{ adminKey, dryRun, functions, appDefinition: { schema, changedModules, unchangedModuleHashes, udfServerVersion, … }, componentDefinitions, nodeDependencies }`.
