@@ -106,9 +106,18 @@ with `AuthError { authUpdateAttempted: false }`.
 | Case | Status | Code | Message |
 |---|---|---|---|
 | A key that does not decrypt, or is for another instance | 401 | `BadAdminKey` | "The provided admin key was invalid for this instance" |
-| No key (or a user) where an admin is required | 403 | `BadDeployKey` | "The provided deploy key was invalid for deployment '{name}'. Double check that the environment this key was generated for matches the desired deployment." |
+| No key (or a user) where an admin is required | 403 | `BadDeployKey` | "The provided deploy key was invalid for this deployment. Double check that the environment this key was generated for matches the desired deployment." (see the note below) |
 | An admin without the operation | 403 | `OperationNotPermitted` | "You do not have permission to perform this operation ({action})." |
 | An unreadable header | 400 | `InvalidHeaderFailure` | "Malformed Authorization header." |
+
+Note (2026-10-11, corrected): `bad_admin_key_error(instance_name)` has two wordings, and this table first gave the
+wrong one. The callers pass `identity.instance_name()` (`roles/src/eval.rs` `require_operation`,
+`local_backend/src/admin.rs` `must_be_admin`, `dashboard.rs` `check_admin_key`). That is `Some` only for a
+`DeploymentAdmin` (`keybroker/src/broker.rs` `instance_name`), and an admin never reaches the error. So the
+routes say "invalid for this deployment". The variant naming the deployment ("invalid for deployment '{name}'")
+comes only from `must_be_admin_from_key` when an access token is refused as forbidden; bunvex has no access tokens.
+`packages/differential/test/bad-deploy-key.test.ts` checks every admin route without a key, a user's token, and a
+non-admin key in a push or function-tester body against Convex's binary.
 
 ### 1.3 What an admin may do
 
