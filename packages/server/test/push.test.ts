@@ -1043,7 +1043,7 @@ describe("environment variables (STUDY-37)", () => {
     expect(await list()).toEqual({ status: 200, body: { environmentVariables: {} } });
     const ok = await fetch(`${d.api}/api/update_environment_variables`, {
       method: "POST",
-      headers: { authorization: `Bunvex ${KEY}` },
+      headers: { authorization: `Bunvex ${KEY}`, "content-type": "application/json" },
       body: JSON.stringify({
         changes: [
           { name: "B", value: "2" },

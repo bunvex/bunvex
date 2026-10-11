@@ -19,6 +19,8 @@ import {
   UnionBuilder,
 } from "@bunvex/core";
 import { compareUtf8, encodeId, formatExportFloat, fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
+import { type BodyShape, checkJsonBody } from "./json-body.ts";
+import { intError, QueryArgsError, queryArgs } from "./query-args.ts";
 
 /** Convex's knobs. */
 export const SNAPSHOT_LIST_LIMIT = 1024;
@@ -117,18 +119,32 @@ export type Selection = Record<string, Tables | Inclusion> & { _other: Inclusion
 const normInclusion = (v: unknown): Inclusion | null =>
   v === "included" || v === "incl" ? "included" : v === "excluded" || v === "excl" ? "excluded" : null;
 
-/** Convex's `SelectionArg`: an exact `selection`, a `tableName` (in a `component`), a `component`, or everything. */
+/**
+ * Convex's `SelectionArg`, an untagged enum: the first of an exact `selection`, a `tableName` (in a
+ * `component`), a `component`, or everything that the arguments make; arguments that make none of the first
+ * three select everything (`Everything {}` takes any object). A table name that is not one is an untyped error
+ * where the table is looked up (a 500).
+ */
 export function selectionOf(args: Record<string, unknown>): Selection {
-  if (args.selection !== undefined) return checkSelection(args.selection);
-  const table = (args.tableName ?? args.table_name) as string | undefined;
-  const component = (args.component as string | undefined) ?? "";
-  if (table !== undefined)
-    return { _other: "excluded", [component]: { _other: "excluded", [table]: { _other: "included" } } } as Selection;
-  if (args.component !== undefined) return { _other: "excluded", [component]: { _other: "included" } } as Selection;
+  if (args.selection !== undefined)
+    try {
+      return checkSelection(args.selection);
+    } catch (e) {
+      if (!(e instanceof StreamingExportError)) throw e;
+    }
+  const table = args.tableName ?? args.table_name;
+  const component = args.component;
+  if (typeof table === "string" && (component === undefined || component === null || typeof component === "string")) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(table) || /^_+$/.test(table))
+      throw new Error(`Invalid table name ${table}`);
+    const c = (component as string | null | undefined) ?? "";
+    return { _other: "excluded", [c]: { _other: "excluded", [table]: { _other: "included" } } } as Selection;
+  }
+  if (typeof component === "string") return { _other: "excluded", [component]: { _other: "included" } } as Selection;
   return { _other: "included" };
 }
 
-function checkSelection(raw: unknown): Selection {
+export function checkSelection(raw: unknown): Selection {
   const fail = (m: string) => {
     throw bad("BadJsonBody", `selection: ${m}`);
   };
@@ -192,6 +208,8 @@ export async function listSnapshot(deps: Deps, args: Record<string, unknown>): P
   if (args.snapshot === undefined || args.snapshot === null) snapshotNs = now;
   else {
     snapshotNs = BigInt(args.snapshot as string);
+    // Convex turns a negative `i64` into its timestamp type with an untyped error (a 500).
+    if (snapshotNs < 0n) throw new Error(`Invalid timestamp ${snapshotNs}`);
     if (snapshotNs > now) throw bad("SnapshotTooNew", `Snapshot value ${snapshotNs} is in the future.`);
     if (now - snapshotNs > LIST_SNAPSHOT_MAX_AGE_NS) throw tooOld(snapshotNs);
   }
@@ -413,15 +431,18 @@ function shapeSchema(s: DashboardShape, f: Format): unknown {
 }
 
 /** `json_schemas`: each active user table's JSON Schema, from its inferred shape. */
+/** Convex's `JsonSchemaArgs`, as its query extractor reads it. Throws `QueryArgsError`. */
+export function jsonSchemasArgs(q: URLSearchParams) {
+  const a = queryArgs(q, [
+    ["deltaSchema", "bool", true],
+    ["format", "string", true],
+    ["byComponent", "bool", true],
+  ]);
+  return { delta: a.deltaSchema === true, byComponent: a.byComponent === true };
+}
+
 export async function jsonSchemas(deps: Deps, q: URLSearchParams): Promise<unknown> {
-  const bool = (k: string) => {
-    const v = q.get(k);
-    if (v === null) return false;
-    if (v !== "true" && v !== "false") throw bad("BadQueryArgs", `${k}: provided string was not \`true\` or \`false\``);
-    return v === "true";
-  };
-  const delta = bool("deltaSchema");
-  const byComponent = bool("byComponent");
+  const { delta, byComponent } = jsonSchemasArgs(q);
   const f = parseFormat(q.get("format"));
   const out: Record<string, unknown> = {};
   for (const { name, shape } of await shapes(deps.engine)) {
@@ -458,19 +479,49 @@ export async function tableColumnNames(deps: Deps): Promise<unknown> {
   return { byComponent: { "": tables } };
 }
 
-/** A request's arguments: the query string (GET) or the JSON body (POST), `snapshot` and `cursor` kept exact. */
+/**
+ * Convex's `ListSnapshotArgs` and `DocumentDeltasArgs` (`SelectionArg` flattened into them, so read as a map
+ * only): what their JSON body is checked against.
+ */
+const STREAMING_BODIES: Record<string, BodyShape> = {
+  list_snapshot: {
+    name: "ListSnapshotArgs",
+    flatten: true,
+    fields: [
+      ["snapshot", { option: { int: "i64" } }],
+      ["cursor", "optString"],
+      ["format", "optString"],
+    ],
+  },
+  document_deltas: {
+    name: "DocumentDeltasArgs",
+    flatten: true,
+    fields: [
+      ["cursor", { option: { int: "i64" } }],
+      ["format", "optString"],
+    ],
+  },
+};
+
+/**
+ * A request's arguments, as Convex's extractors read them: the query string (GET) or the JSON body (POST),
+ * `snapshot` and `cursor` kept exact. Throws `QueryArgsError` or `BadJsonBody`.
+ */
 export async function streamingArgs(req: Request, url: URL): Promise<Record<string, unknown>> {
-  const intArg = (k: string, v: string) => {
-    if (!/^-?\d+$/.test(v)) throw bad("BadQueryArgs", `${k}: invalid digit found in string`);
-    return v;
-  };
+  const route = url.pathname.endsWith("document_deltas") ? "document_deltas" : "list_snapshot";
   if (req.method === "GET") {
     const out: Record<string, unknown> = {};
-    for (const [k, v] of url.searchParams)
-      out[k] = k === "snapshot" || (k === "cursor" && url.pathname.endsWith("document_deltas")) ? intArg(k, v) : v;
+    for (const [k, v] of url.searchParams) {
+      if (k === "snapshot" || (k === "cursor" && route === "document_deltas")) {
+        const e = intError(v, "i64");
+        if (e !== null) throw new QueryArgsError(`${k}: ${e}`);
+      }
+      out[k] = v;
+    }
     return out;
   }
   const text = await req.text();
+  checkJsonBody(req, text, STREAMING_BODIES[route]!);
   // Nanosecond timestamps exceed 2^53: read them as written.
   const exact = text.replace(/"(snapshot|cursor)"\s*:\s*(-?\d+)/g, '"$1":"$2"');
   let body: unknown;

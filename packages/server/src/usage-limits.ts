@@ -16,6 +16,7 @@ import {
 import { decodeId } from "@bunvex/values";
 import { auditActor } from "./audit-log.ts";
 import type { Functions } from "./functions.ts";
+import { BadJsonBody, type BodyShape, readJsonBody } from "./json-body.ts";
 
 // ---------------------------------------------------------------- metrics
 
@@ -36,6 +37,21 @@ export const USAGE_METRICS = {
 } as const;
 export type UsageMetric = keyof typeof USAGE_METRICS;
 const METRICS = Object.keys(USAGE_METRICS).sort() as UsageMetric[];
+/**
+ * The metrics in Convex's declaration order (`UsageLimitMetric`), as serde lists them in an "unknown variant"
+ * error; Convex's `actionComputeConvexGbHours` is bunvex's `actionComputeIsolateGbHours` (DV-308).
+ */
+const METRIC_VARIANTS: readonly UsageMetric[] = [
+  "functionCalls",
+  "databaseIoGb",
+  "dataEgressGb",
+  "searchQueryGb",
+  "queryMutationComputeGbHours",
+  "actionComputeIsolateGbHours",
+  "actionComputeNodeJsGbHours",
+  "actionComputeCpuGbHours",
+  "aiGatewayCostDollars",
+] as UsageMetric[];
 const WINDOWS = ["day", "month"] as const;
 const LIMIT_TYPES = ["warning", "disable"] as const;
 type Window = (typeof WINDOWS)[number];
@@ -192,25 +208,28 @@ async function mustGet(db: Tx, id: string): Promise<Row> {
   return row;
 }
 
-/** A request body's config: every field required, as Convex's `UsageLimitConfigRequest`. */
-function configArg(b: unknown): UsageLimitConfig {
-  const body = (b ?? {}) as Record<string, unknown>;
-  for (const k of ["metric", "window", "limitType", "limit", "enabled"])
-    if (body[k] === undefined) throw bad("BadJsonBody", `missing field \`${k}\``);
-  const variant = (k: string, allowed: readonly string[]) => {
-    const v = body[k];
-    if (typeof v !== "string" || !allowed.includes(v))
-      throw bad("BadJsonBody", `${k}: unknown variant \`${String(v)}\``);
-    return v;
+/** Convex's `UsageLimitConfigRequest` (usage_limits.rs), as its extractor reads it. */
+const USAGE_LIMIT_CONFIG: BodyShape = {
+  name: "UsageLimitConfigRequest",
+  fields: [
+    ["metric", { variants: METRIC_VARIANTS }],
+    ["window", { variants: WINDOWS }],
+    ["limitType", { variants: LIMIT_TYPES }],
+    ["limit", { int: "u64" }],
+    ["enabled", { bool: true }],
+  ],
+};
+
+/** A request body's config, read by `readJsonBody` already; Convex's check that the limit is positive. */
+function configArg(b: Record<string, unknown>): UsageLimitConfig {
+  if (Number(b.limit) === 0) throw bad("InvalidUsageLimit", "Usage limits must have a positive limit.");
+  return {
+    metric: b.metric as UsageMetric,
+    window: b.window as Window,
+    limitType: b.limitType as LimitType,
+    limit: BigInt(b.limit as number),
+    enabled: b.enabled as boolean,
   };
-  const metric = variant("metric", METRICS) as UsageMetric;
-  const window = variant("window", WINDOWS) as Window;
-  const limitType = variant("limitType", LIMIT_TYPES) as LimitType;
-  if (typeof body.limit !== "number" || !Number.isInteger(body.limit) || body.limit < 0)
-    throw bad("BadJsonBody", "limit: invalid value, expected u64");
-  if (typeof body.enabled !== "boolean") throw bad("BadJsonBody", "enabled: invalid type, expected a boolean");
-  if (body.limit === 0) throw bad("InvalidUsageLimit", "Usage limits must have a positive limit.");
-  return { metric, window, limitType, limit: BigInt(body.limit), enabled: body.enabled };
 }
 
 const sameSelector = (a: UsageLimitConfig, b: UsageLimitConfig) =>
@@ -231,11 +250,13 @@ export async function usageLimitRoute(
   const { engine, functions, meter } = deps;
   const audit = (db: Tx, action: string, metadata: Record<string, unknown>) =>
     insertAuditLogEvents(db, [{ action, metadata: metadata as never }], auditActor(caller));
+  /** The body as Convex's extractor reads it, before the operation's check. */
   const body = async () => {
     try {
-      return (await req.json()) as unknown;
+      return await readJsonBody<Record<string, unknown>>(req, () => req.text(), USAGE_LIMIT_CONFIG);
     } catch (e) {
-      throw bad("BadJsonBody", (e as Error).message);
+      if (e instanceof BadJsonBody) throw bad(e.code, e.message);
+      throw e;
     }
   };
   const checkAboveCurrent = (c: UsageLimitConfig) => {
@@ -270,9 +291,11 @@ export async function usageLimitRoute(
     return Response.json({ usageLimits: all.map(responseOf) });
   }
   if (req.method !== "POST") return null;
-  functions.requireOperation(caller, "WriteUsageLimits");
+  if (route === "delete_usage_limit") functions.requireOperation(caller, "WriteUsageLimits");
   if (route === "create_usage_limit") {
-    const c = configArg(await body());
+    const b = await body();
+    functions.requireOperation(caller, "WriteUsageLimits");
+    const c = configArg(b);
     checkAboveCurrent(c);
     const row = await engine.mutation(async (db) => {
       if ((await rows(db)).some((r) => sameSelector(configOf(r), c)))
@@ -288,7 +311,9 @@ export async function usageLimitRoute(
   }
   if (route === "update_usage_limit") {
     const limitId = needId();
-    const c = configArg(await body());
+    const b = await body();
+    functions.requireOperation(caller, "WriteUsageLimits");
+    const c = configArg(b);
     const row = await engine.mutation(async (db) => {
       const old = await mustGet(db, limitId);
       if ((await rows(db)).some((r) => r._id !== old._id && sameSelector(configOf(r), c)))
