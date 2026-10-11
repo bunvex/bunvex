@@ -217,15 +217,30 @@ test("the routes' errors and access", async () => {
   });
   expect(await t.get("function_call_count_top_k", { k: "x" })).toEqual({
     status: 400,
-    body: { code: "BadQueryArgs", message: "k: invalid digit found in string" },
+    body: { code: "BadQueryArgs", message: "Failed to deserialize query string: k: invalid digit found in string" },
   });
   expect((await t.get("udf_rate", { udfPath: "m:add" })).body).toEqual({
     code: "BadQueryArgs",
-    message: "missing field `metric`",
+    message: "Failed to deserialize query string: missing field `metric`",
   });
   expect((await t.get("udf_rate", { udfPath: "m:add", metric: "nope" })).status).toBe(500);
   expect((await t.get("udf_rate", { udfPath: "m:add", metric: "errors", window: "{}" })).status).toBe(500);
   expect((await t.get("scheduled_job_lag", {}, null)).status).toBe(403);
+  // The arguments come before ViewMetrics, as in Convex's handlers (`metrics_log` is called after them).
+  expect((await t.get("udf_rate", { udfPath: "m:add" }, null)).body.code).toBe("BadQueryArgs");
+  expect((await t.get("function_call_count_top_k", { k: "26" }, null)).body.code).toBe("InvalidTopKParameter");
+  expect((await t.get("scheduled_job_lag", { window: "{}" }, null)).status).toBe(500);
+  // A path that does not parse is Convex's untyped error, before the key too.
+  expect((await t.get("cache_hit_percentage", { udfPath: "bad::" }, null)).status).toBe(500);
+  // A `udf_rate` metric is parsed after it.
+  expect((await t.get("udf_rate", { udfPath: "m:add", metric: "nope" }, null)).status).toBe(403);
+  // The log streams too: their query string before ViewLogs (Convex's `function_log`).
+  const logs = await fetch(`${t.api}/api/app_metrics/stream_function_logs?cursor=x`);
+  expect([logs.status, await logs.json()]).toEqual([
+    400,
+    { code: "BadQueryArgs", message: "Failed to deserialize query string: cursor: invalid float literal" },
+  ]);
+  expect((await fetch(`${t.api}/api/app_metrics/stream_udf_execution?cursor=0`)).status).toBe(403);
 });
 
 test("subscription invalidations, by mutation and table", async () => {

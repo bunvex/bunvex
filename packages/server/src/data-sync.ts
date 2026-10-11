@@ -4,6 +4,7 @@
 // page), catching up along the document log when that timestamp is more than 30 s behind (a ts page), then
 // follows the log. The cursor is Convex's: a `DataSyncCursor` protobuf sealed with AES-128-GCM-SIV under the
 // deployment's "data sync cursor" key, in hex. Progress is kept in `_data_sync_progress`.
+
 import { randomBytes } from "node:crypto";
 import {
   aes128GcmSivOpen,
@@ -24,12 +25,14 @@ import {
 } from "@bunvex/core";
 import { decodeId, encodeId, fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
 import { auditActor } from "./audit-log.ts";
+import { type BodyShape, checkJsonBody } from "./json-body.ts";
+import { queryArgs } from "./query-args.ts";
 import {
   type Columns,
+  checkSelection,
   pickColumns,
   type Selection,
   StreamingExportError,
-  selectionOf,
   streamedTables,
   tableSelection,
   writeValue,
@@ -617,13 +620,18 @@ export async function activeSync(engine: Engine, syncId: string): Promise<string
 }
 
 /** `list_active_syncs`: newest first, while active; paginated with an ordinary (sealed) query cursor. */
-export async function listActiveSyncs(engine: Engine, q: URLSearchParams): Promise<string> {
-  const raw = q.get("limit");
-  let limit = 50;
-  if (raw !== null) {
-    if (!/^\d+$/.test(raw)) throw bad("BadQueryArgs", "limit: invalid digit found in string");
-    limit = Number(raw);
-  }
+export async function listActiveSyncs(
+  engine: Engine,
+  q: URLSearchParams,
+  authorize: () => void = () => {},
+): Promise<string> {
+  // Convex's `ListActiveSyncsArgs`, read by its extractor before the operation's check.
+  const a = queryArgs(q, [
+    ["limit", { int: "usize" }, true],
+    ["cursor", "string", true],
+  ]);
+  authorize();
+  const limit = a.limit === undefined ? 50 : Number(a.limit);
   if (limit < 1 || limit > 100)
     throw bad("LimitOutOfRange", "The limit for listing active syncs must be between 1 and 100");
   const cursor = q.get("cursor");
@@ -649,12 +657,37 @@ export async function listActiveSyncs(engine: Engine, q: URLSearchParams): Promi
 
 // ---------------------------------------------------------------- the routes
 
+/** Convex's `DataSyncArgs` (common/src/types/streaming_export/mod.rs). */
+const DATA_SYNC_ARGS: BodyShape = {
+  name: "DataSyncArgs",
+  fields: [
+    ["cursor", "optString"],
+    ["selection", { default: { object: "Selection" } }],
+  ],
+};
+/** Convex's `DataSyncCursorFromDeltasArgs`. */
+const CURSOR_FROM_DELTAS_ARGS: BodyShape = {
+  name: "DataSyncCursorFromDeltasArgs",
+  fields: [
+    ["cursor", { int: "i64" }],
+    ["selection", { default: { object: "Selection" } }],
+  ],
+};
+
 export const DATA_SYNC_ROUTE =
   /^\/api\/(?:v1\/data\/(sync|list_active_syncs)(?:\/([^/]+))?|(data_sync_cursor_from_deltas))$/;
 
 /** `POST /api/v1/data/sync` `{cursor?, selection?}`: one page. */
-export async function dataSync(engine: Engine, req: Request, caller: Caller): Promise<string> {
-  const body = await jsonBody(req);
+export async function dataSync(
+  engine: Engine,
+  req: Request,
+  caller: Caller,
+  authorize: () => void = () => {},
+): Promise<string> {
+  const text = await req.text();
+  checkJsonBody(req, text, DATA_SYNC_ARGS);
+  authorize();
+  const body = JSON.parse(text) as Record<string, unknown>;
   const prefix = clientPrefix(req);
   const selection = selectionArg(body.selection);
   const input =
@@ -678,15 +711,16 @@ export async function dataSync(engine: Engine, req: Request, caller: Caller): Pr
 }
 
 /** `POST /api/data_sync_cursor_from_deltas` `{cursor: ns, selection?}`: a sync that continues a document_deltas one. */
-export async function cursorFromDeltas(engine: Engine, req: Request): Promise<string> {
+export async function cursorFromDeltas(
+  engine: Engine,
+  req: Request,
+  authorize: () => void = () => {},
+): Promise<string> {
   const text = await req.text();
+  checkJsonBody(req, text, CURSOR_FROM_DELTAS_ARGS);
+  authorize();
   const exact = text.replace(/"cursor"\s*:\s*(-?\d+)/g, '"cursor":"$1"');
-  let body: Record<string, unknown>;
-  try {
-    body = JSON.parse(exact) as Record<string, unknown>;
-  } catch (e) {
-    throw bad("BadJsonBody", (e as Error).message);
-  }
+  const body = JSON.parse(exact) as Record<string, unknown>;
   const prefix = clientPrefix(req);
   const raw = body.cursor;
   if (typeof raw !== "string" || !/^\d+$/.test(raw))
@@ -706,18 +740,7 @@ export async function cursorFromDeltas(engine: Engine, req: Request): Promise<st
   return `{"cursor":${JSON.stringify(sealCursor(engine, cursor))}}`;
 }
 
-async function jsonBody(req: Request): Promise<Record<string, unknown>> {
-  let b: unknown;
-  try {
-    const text = await req.text();
-    b = text.trim() === "" ? {} : JSON.parse(text);
-  } catch (e) {
-    throw bad("BadJsonBody", (e as Error).message);
-  }
-  if (b === null || typeof b !== "object" || Array.isArray(b)) throw bad("BadJsonBody", "expected an object");
-  return b as Record<string, unknown>;
-}
-
 function selectionArg(raw: unknown): Selection {
-  return raw === undefined ? { _other: "included" } : selectionOf({ selection: raw });
+  // A data sync's `selection` is a `Selection` (not the streaming export's untagged `SelectionArg`): checked.
+  return raw === undefined ? { _other: "included" } : checkSelection(raw);
 }

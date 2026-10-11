@@ -122,7 +122,11 @@ themselves see nothing.
   job left waiting for capacity, else the next job.
 - **Concurrency**: see DV-302.
 - **The routes** are `GET /api/app_metrics/<route>` with `ViewMetrics`, with Convex's arguments, answers
-  and errors (`app-metrics-routes.ts`).
+  and errors (`app-metrics-routes.ts`). As Convex's handlers, ViewMetrics is checked where they call
+  `metrics_log`: after the query string (the extractor's errors carry its "Failed to deserialize query
+  string: " prefix) and after each route's own parsing of the window, `k` and the path; `udf_rate`'s metric
+  is parsed after it. The log streams read their query string before ViewLogs. Checked against Convex's
+  binary (`packages/differential/test/args-before-auth.test.ts`, 2026-10-11).
 - **Cost**, measured in process (30 000 calls × 3 rounds, through the function log):
   - recording costs about +1.3 µs per query (≈ 11 µs) and +1 µs per mutation (≈ 24 µs);
   - the transaction's per-table counts are within the noise.
