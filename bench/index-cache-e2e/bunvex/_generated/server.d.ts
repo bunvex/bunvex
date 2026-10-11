@@ -10,14 +10,14 @@
 
 import type {
   ActionBuilder,
+  GenericActionCtx,
+  GenericDatabaseReader,
+  GenericDatabaseWriter,
+  GenericMutationCtx,
+  GenericQueryCtx,
   HttpActionBuilder,
   MutationBuilder,
   QueryBuilder,
-  GenericActionCtx,
-  GenericMutationCtx,
-  GenericQueryCtx,
-  GenericDatabaseReader,
-  GenericDatabaseWriter,
   SystemTableNames,
   TableNamesInDataModel,
 } from "bunvex/server";

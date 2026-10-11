@@ -8,13 +8,8 @@
  * @module
  */
 
+import type { ApiFromModules, FilterApi, FunctionReference } from "bunvex/server";
 import type * as chat from "../chat.js";
-
-import type {
-  ApiFromModules,
-  FilterApi,
-  FunctionReference,
-} from "bunvex/server";
 
 declare const fullApi: ApiFromModules<{
   chat: typeof chat;
@@ -28,10 +23,7 @@ declare const fullApi: ApiFromModules<{
  * const myFunctionReference = api.myModule.myFunction;
  * ```
  */
-export declare const api: FilterApi<
-  typeof fullApi,
-  FunctionReference<any, "public">
->;
+export declare const api: FilterApi<typeof fullApi, FunctionReference<any, "public">>;
 
 /**
  * A utility for referencing bunvex functions in your app's internal API.
@@ -41,9 +33,6 @@ export declare const api: FilterApi<
  * const myFunctionReference = internal.myModule.myFunction;
  * ```
  */
-export declare const internal: FilterApi<
-  typeof fullApi,
-  FunctionReference<any, "internal">
->;
+export declare const internal: FilterApi<typeof fullApi, FunctionReference<any, "internal">>;
 
 export declare const components: {};
