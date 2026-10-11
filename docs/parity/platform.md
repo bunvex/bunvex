@@ -302,7 +302,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | Shape inference / generated schema | `crates/shape_inference` | partial (STUDY-52) | Convex's counted lattice (disjoint unions of ≤ 16, the contraction order, 64-field objects) in `@bunvex/core` `shapes.ts`. Kept per commit with Convex's removal rules (PR 2). Not yet: the schema-walk shortcut. `/api/json_schemas` since STUDY-60. |
 | Preserving `_id` and `_creationTime` on import | `snapshot_import` | done (STUDY-42) | An `_id` of the table's number kept (else Convex's `ImportConflict`), a float `_creationTime` kept; table numbers from `_tables`, the first `_id` or the existing table, with Convex's conflict checks; duplicate ids in a batch refused. |
 | Periodic cloud backups and restore | `dashboard/…/Backups.tsx` | missing | Cloud-only; self-hosted uses export/import. Can be skipped. |
-| Upgrade path via export and `import --replace-all` | `self-hosted/advanced/upgrading.md` | partial (STUDY-42) | `bunvex export` and `bunvex import --replace-all` work, and `dev` asks before upgrading its local backend; no upgrade guide yet. |
+| Upgrade path via export and `import --replace-all` | `self-hosted/advanced/upgrading.md` | done (STUDY-42) | `bunvex export` and `bunvex import --replace-all` work, and `dev` asks before upgrading its local backend. The guide is [docs/upgrading.md](../upgrading.md): Convex's option 2 (export, then import), the `_db.version` rule (no in-place migrations, DV-56), and moving between Convex and bunvex (export and import; the cross-open of STUDY-133 for validation). |
 
 ### 19. Streaming export / import (Fivetran, Airbyte)
 

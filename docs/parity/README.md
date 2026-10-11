@@ -155,7 +155,8 @@ containers up, deploy functions, see them work) before the remaining platform it
 Checked against main on 2026-10-04, after #370–#395. Since the first ranking, these were built: the action
 timeout (#371), searches while indexes rebuild (#375), `server-only` and wasm bundling (#376),
 `deploy --cmd` (#378), the `log` export (#380), the write-throughput limit (#374), the SSRF proxy
-(#377–#381), identical database indexes refused (STUDY-66). Decided divergences and cloud-only items are not
+(#377–#381), identical database indexes refused (STUDY-66), the sync arguments-size metrics
+(`bunvex_sync_*_args_bytes`, #432), the upgrade guide ([docs/upgrading.md](../upgrading.md)). Decided divergences and cloud-only items are not
 gaps.
 
 **High: an app that uses it does not run**
@@ -173,15 +174,12 @@ gaps.
 
 **Low: rare, ops-only, or a missing nicety**
 
-- Client:
-  - arguments-size metrics.
 - Operations:
   - the `clear_tables` audit event, which comes with streaming import (missing). The other audit events
     bunvex does not record are not gaps: `build_indexes`, `change_deployment_state`,
     `change_system_stop_state` and `replace_environment_variable` are not emitted by Convex's open-source
     backend; `push_config` (legacy push) and `delete_component` (components) do not apply;
-  - `AWS_S3_DISABLE_SSE/CHECKSUMS`;
-  - an upgrade guide.
+  - `AWS_S3_DISABLE_SSE/CHECKSUMS`.
 - The dashboard on a real deployment:
   - the largest single piece of work, but not something an app hits;
   - the server side of every screen exists;

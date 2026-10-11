@@ -67,6 +67,13 @@ proxy such as [Smokescreen](https://github.com/stripe/smokescreen), which refuse
 loopback and private networks, `none` nothing, as Convex — DV-325;
 [STUDY-80](../docs/study/STUDY-80-outbound-requests.md)).
 
+## Upgrade it
+
+Export first (`bunvex export --path ./backups --include-file-storage`), then rebuild or pull the new image and
+`docker compose up -d`: the volume keeps the database, files, pushed code and credentials. A release that cannot
+read the store refuses it untouched; then move the data by export and import.
+[docs/upgrading.md](../docs/upgrading.md) has the steps, and how to move between Convex and bunvex.
+
 ## Without Docker: the executable
 
 Each release on GitHub has `bunvex-local-backend-<target>.zip` for macOS (arm64, x64), Linux (arm64, x64) and
