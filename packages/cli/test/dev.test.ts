@@ -110,6 +110,24 @@ describe("bunvex dev", () => {
     expect(await dev(app, d.url, "--once").done).toBe(1);
   });
 
+  test("the version check's notice (AD-29) is printed beside the first push", async () => {
+    const d = await deployment();
+    const app = tmp();
+    write(app, { "bunvex/hello.ts": hello("hi") });
+    const err: string[] = [];
+    const notice =
+      "A newer version of bunvex is available: 9.9.9 (this is 0.1.0). Run `bunvex update` to see how to upgrade.";
+    const it: Io = {
+      env: { BUNVEX_SELF_HOSTED_URL: d.url, BUNVEX_SELF_HOSTED_ADMIN_KEY: KEY },
+      cwd: app,
+      out: () => {},
+      err: (l) => err.push(l),
+      versionCheck: async () => notice,
+    };
+    expect(await devCommand(["--typecheck=disable", "--once"], it)).toBe(0);
+    expect(err.filter((l) => l === notice).length).toBe(1);
+  });
+
   test("watching: a change is pushed again; _generated/ writes do not loop", async () => {
     const d = await deployment();
     const app = tmp();

@@ -1,3 +1,6 @@
+import { openInBrowser } from "./browser.ts";
+import { checkForNewerVersion } from "./version-check.ts";
+
 /** Where a command reads its environment and input and writes its output (tests pass their own). */
 export type Io = {
   env: Record<string, string | undefined>;
@@ -13,6 +16,10 @@ export type Io = {
   columns?: number;
   /** Ask the user on the terminal; null when there is none. */
   prompt?: (question: string) => string | null;
+  /** Open a URL in the default browser (`docs`, `dashboard`); rejects when no browser can be started. */
+  open?: (url: string) => Promise<void>;
+  /** The version check `dev` and `deploy` run beside their work (AD-29): a notice, or null; never rejects. */
+  versionCheck?: () => Promise<string | null>;
 };
 
 export const processIo = (): Io => ({
@@ -24,4 +31,6 @@ export const processIo = (): Io => ({
   columns: process.stdout.isTTY ? process.stdout.columns : undefined,
   stdin: async () => (process.stdin.isTTY ? null : await Bun.stdin.text()),
   prompt: (q) => (process.stdin.isTTY ? globalThis.prompt(q) : null),
+  open: openInBrowser,
+  versionCheck: () => checkForNewerVersion(process.env),
 });
