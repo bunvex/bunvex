@@ -68,6 +68,7 @@ wrong.
 | B14 | **Fixed in #11.** One socket subscribing twice to the same key leaks a reference count | client-sync.md |
 | B15 | **Fixed in #107 and #112** (call timeouts; transient flush and read retries, as Convex; conformance K20/K21). No timeouts on database calls, no retry of transient flush errors, no retry of reads: a hung connection stalls the process, a network blip kills it. Match Convex (owner, 2026-10-01; DV-104–DV-106) | STUDY-25 L3–L5 |
 | B16 | **Fixed in #114.** No stored layout version and no `read_only` flag: a foreign or future store fails obscurely. Match Convex (owner, 2026-10-01; DV-107, DV-108) | STUDY-25 L6/L7 |
+| B17 | **Fixed (this PR).** A deployable server served before its deployed code was loaded: right after a start, an HTTP call, a sync query or an HTTP action got "Could not find public function", a scheduled job due meanwhile was failed for good, and a due cron logged a missing function. Calls now wait for the code; the scheduler and crons start once it is loaded (Convex serves once its application is built, and loads modules on demand) | STUDY-136 §3.5 (found by its benchmark) |
 
 ### Phase 1 — the core behaves like Convex
 
