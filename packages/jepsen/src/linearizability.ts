@@ -89,16 +89,15 @@ export function isLinearizable<S>(ops: readonly Op[], model: Model<S>): boolean 
     if (e.next) e.next.prev = e;
   };
 
-  const done = new Uint8Array(ops.length);
-  const doneKey = () => {
-    let s = "";
-    for (let i = 0; i < done.length; i += 8) {
-      let b = 0;
-      for (let j = 0; j < 8 && i + j < done.length; j++) b |= done[i + j]! << j;
-      s += String.fromCharCode(b);
-    }
-    return s;
+  // The set of linearized operations as a bitset, 16 to a UTF-16 code unit: its memo key is one native
+  // `String.fromCharCode` over it, exact (no hash to collide), instead of a loop over every operation.
+  const done = new Uint16Array(Math.ceil(ops.length / 16));
+  const mark = (i: number, on: boolean) => {
+    if (on) done[i >>> 4]! |= 1 << (i & 15);
+    else done[i >>> 4]! &= ~(1 << (i & 15));
   };
+  // (One call takes ~1M code units, 16M operations: far past what the search could explore anyway.)
+  const doneKey = () => String.fromCharCode.apply(null, done as unknown as number[]);
   const seen = new Set<string>();
   // the search, as an explicit stack: each frame remembers what it undoes and which states it has left to try
   type Frame = { entry: Entry; before: S; rest: S[] };
@@ -112,7 +111,7 @@ export function isLinearizable<S>(ops: readonly Op[], model: Model<S>): boolean 
       let advanced = false;
       while (options.length) {
         const next = options.shift()!;
-        done[entry.index] = 1;
+        mark(entry.index, true);
         const k = `${doneKey()}|${model.key(next)}`;
         if (!seen.has(k)) {
           seen.add(k);
@@ -123,7 +122,7 @@ export function isLinearizable<S>(ops: readonly Op[], model: Model<S>): boolean 
           advanced = true;
           break;
         }
-        done[entry.index] = 0;
+        mark(entry.index, false);
       }
       if (!advanced) entry = entry.next;
     } else {
@@ -132,12 +131,12 @@ export function isLinearizable<S>(ops: readonly Op[], model: Model<S>): boolean 
         const top = stack.pop();
         if (!top) return false;
         state = top.before;
-        done[top.entry.index] = 0;
+        mark(top.entry.index, false);
         unlift(top.entry);
         // another state for the same operation, if its specification allowed several
         const next = top.rest.shift();
         if (next !== undefined) {
-          done[top.entry.index] = 1;
+          mark(top.entry.index, true);
           const k = `${doneKey()}|${model.key(next)}`;
           if (!seen.has(k)) {
             seen.add(k);
@@ -147,7 +146,7 @@ export function isLinearizable<S>(ops: readonly Op[], model: Model<S>): boolean 
             entry = head.next;
             break;
           }
-          done[top.entry.index] = 0;
+          mark(top.entry.index, false);
         }
         entry = top.entry.next;
         break;
