@@ -8,7 +8,7 @@ item. It is the project's to-do list at the scale of the whole product.
 |---|---|--:|--:|--:|
 | Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 233 | 3 | 10 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 161 | 2 | 2 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 213 | 28 | 22 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 216 | 26 | 21 |
 
 Beyond Convex, [additions.md](additions.md) lists 28 additions: 25 built (11 of them dashboard screens on the
 mock, 3 more with their dashboard part on the mock), 2 accepted, 1 deferred, none proposed (2026-10-08).
@@ -68,6 +68,7 @@ wrong.
 | B14 | **Fixed in #11.** One socket subscribing twice to the same key leaks a reference count | client-sync.md |
 | B15 | **Fixed in #107 and #112** (call timeouts; transient flush and read retries, as Convex; conformance K20/K21). No timeouts on database calls, no retry of transient flush errors, no retry of reads: a hung connection stalls the process, a network blip kills it. Match Convex (owner, 2026-10-01; DV-104–DV-106) | STUDY-25 L3–L5 |
 | B16 | **Fixed in #114.** No stored layout version and no `read_only` flag: a foreign or future store fails obscurely. Match Convex (owner, 2026-10-01; DV-107, DV-108) | STUDY-25 L6/L7 |
+| B17 | **Fixed (this PR).** A deployable server served before its deployed code was loaded: right after a start, an HTTP call, a sync query or an HTTP action got "Could not find public function", a scheduled job due meanwhile was failed for good, and a due cron logged a missing function. Calls now wait for the code; the scheduler and crons start once it is loaded (Convex serves once its application is built, and loads modules on demand) | STUDY-136 §3.5 (found by its benchmark) |
 
 ### Phase 1 — the core behaves like Convex
 
@@ -175,11 +176,11 @@ gaps.
 **Low: rare, ops-only, or a missing nicety**
 
 - Operations:
-  - the `clear_tables` audit event, which comes with streaming import (missing). The other audit events
-    bunvex does not record are not gaps: `build_indexes`, `change_deployment_state`,
+  - streaming import past `clear_tables` (built with its audit event, STUDY-141 PR 1): Airbyte records,
+    Fivetran operations and primary-key indexes (PRs 2–4, future work by the owner's choice, 2026-10-11). The
+    audit events bunvex does not record are not gaps: `build_indexes`, `change_deployment_state`,
     `change_system_stop_state` and `replace_environment_variable` are not emitted by Convex's open-source
-    backend; `push_config` (legacy push) and `delete_component` (components) do not apply;
-  - `AWS_S3_DISABLE_SSE/CHECKSUMS`.
+    backend; `push_config` (legacy push) and `delete_component` (components) do not apply.
 - The dashboard on a real deployment:
   - the largest single piece of work, but not something an app hits;
   - the server side of every screen exists;
