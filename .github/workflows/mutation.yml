@@ -1,0 +1,69 @@
+name: Mutation testing
+
+# Mutation testing of the engine's critical files (TEST-01 §7, the owner's call: Stryker, the core, scheduled).
+# Weekly, incremental: the previous run's results are restored, so only the mutants of changed code (or of
+# changed tests) run again. The score per file is the job summary; the HTML report is the run's artifact. It
+# gates nothing yet: surviving mutants are triaged into tests, or marked equivalent in the source.
+# A pull request that changes this file or the configuration runs it on one small file.
+on:
+  schedule:
+    - cron: "13 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      mutate:
+        description: Files to mutate (a glob or a path; empty for every file in stryker.config.mjs)
+        default: ""
+  pull_request:
+    paths:
+      - .github/workflows/mutation.yml
+      - stryker.config.mjs
+      - scripts/mutation-summary.ts
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    name: mutation · engine
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    env:
+      MUTATE: ${{ github.event_name == 'pull_request' && 'packages/core/src/keyenc.ts' || inputs.mutate || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: The previous run's results
+        uses: actions/cache/restore@v4
+        with:
+          path: reports/mutation/incremental.json
+          key: mutation-incremental-${{ github.run_id }}
+          restore-keys: mutation-incremental-
+      - name: Mutants
+        run: |
+          if [ -n "$MUTATE" ]; then bun run mutation --mutate "$MUTATE"; else bun run mutation; fi
+      - name: Score per file
+        if: always()
+        run: |
+          if [ -f reports/mutation/mutation.json ]; then
+            bun scripts/mutation-summary.ts >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Keep the results for the next run
+        if: always() && github.event_name != 'pull_request' && env.MUTATE == ''
+        uses: actions/cache/save@v4
+        with:
+          path: reports/mutation/incremental.json
+          key: mutation-incremental-${{ github.run_id }}
+      - name: Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: reports/mutation/
+          if-no-files-found: ignore
