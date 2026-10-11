@@ -5,6 +5,8 @@
 > the index-range fix they found (#256, DV-310), the coverage gaps (#259) and the coverage floors (§4).
 >
 > **v1.1, 3 Oct 2026.** The root run isolates test files (§1, `--isolate`).
+>
+> **v1.2, 11 Oct 2026.** Mutation testing of the engine's critical files, weekly (§7).
 
 ## 1. Layers
 
@@ -16,7 +18,7 @@
 | Conformance | PERSIST-01's K1–K29, the same suite on every driver | `@bunvex/persistence-conformance` | memory and SQLite in `bun test`; Postgres, MySQL and MongoDB in their CI jobs |
 | End to end | a real server and clients over HTTP and WebSocket, compared with an oracle client | `packages/sync-e2e`, the dashboard in Chromium (`bun run e2e`) | `bun test`; the `e2e` CI job |
 | Linearizability | concurrent histories with faults injected, checked for linearizability | track 2's harness (its own spec) | its own job |
-| Mutation | mutate the source, the suite must fail: measures what the tests actually pin | later | — |
+| Mutation | mutate the source, the suite must fail: measures what the tests actually pin | Stryker on the engine's critical files (§7) | weekly, `mutation.yml`; `bun run mutation` |
 
 Property tests scale with `BUNVEX_PROPERTY_MULTIPLIER` (an integer, default 1): every `runs(n)` becomes
 `n × multiplier`, as Convex's `CONVEX_PROPTEST_MULTIPLIER`. Use it for a long local soak
@@ -185,9 +187,47 @@ version itself, and mutating the result changed what was stored.
     of a nested object mutated afterwards, `ctx.runQuery` results, and scheduled functions' arguments.
 - **Why it is needed.** This is one class of bugs Convex's architecture rules out and bunvex must rule out by
   hand. Others: global state shared between executions, determinism, the order of async work, error types,
-  limits applied on every path. §7 lists the work that looks for them.
+  limits applied on every path. §8 lists the work that looks for them.
 
-## 7. Later
+## 7. Mutation testing
+
+Coverage says a line ran; it does not say a test would notice the line being wrong. Mutation testing does.
+Stryker (`@stryker-mutator/core`) changes the source one small edit at a time: an operator, a condition, a
+boundary, a block emptied. The tests must then fail. A change no test notices is a **surviving mutant**.
+
+- **Scope:** the engine's critical files in `core` and `values`, a subset of the coverage floors' list (§4),
+  listed in `stryker.config.mjs`. The server, client and protocol files can join later.
+- **Runner:** `@hughescr/stryker-bun-runner` (Apache-2.0, a devDependency).
+  - For each mutant it runs only the tests that cover it (Stryker's `perTest` coverage).
+  - That keeps a run in hours rather than days: `values/src/sorting.ts`, 623 mutants, takes 1 min 40 s on four
+    workers.
+  - The run happens in Stryker's sandbox, never in place: in place, restoring the files dropped the
+    executable bit of the `bin/` scripts.
+- **When:** weekly, in `.github/workflows/mutation.yml`, one job per file, in parallel.
+  - A file's first run is long: `core/src/keyenc.ts`'s 137 mutants take 3 min 30 s, and `tx.ts` is 20 times
+    longer. One job per file keeps each under GitHub's 6-hour limit.
+  - Each job is incremental: its previous results are restored from the Actions cache, so only the mutants of
+    changed code or changed tests run again.
+  - The score is each job's summary (`scripts/mutation-summary.ts`); the HTML report is its artifact.
+  - `bun run mutation --mutate <file>` runs one file locally.
+  - A pull request that changes the setup runs it on `core/src/keyenc.ts`.
+- **What it gates:** nothing yet. The thresholds only colour the report (high 90 %, low 75 %).
+  - Each surviving mutant is triaged.
+  - **A missing test:** write it. It goes in a PR of its own per file, with the mutant named in the test's
+    comment.
+  - **An equivalent mutant:** a change that cannot alter behaviour, such as a fast path that falls back to the
+    general one. Mark it in the source with `// Stryker disable next-line <mutator>: <why>`.
+  - Once a file is triaged, its score can become a floor, as the coverage floors are.
+- **First readings:**
+  - `values/src/sorting.ts`: 89.4 % (557 detected, 62 survived, 4 without coverage).
+  - `core/src/keyenc.ts`: 91.2 % (125 detected, 9 survived, 3 without coverage).
+  - In `sorting.ts`, most survivors are equivalent: the ASCII fast paths and the short-string decoder.
+  - The rest are untested refusals of malformed keys ("trailing bytes after the value", an unknown type tag),
+    and in `keyenc.ts` the bounds' descriptions for the inspector.
+- **The source must be one the instrumenter reads:** it cannot mutate an update of a non-null expression
+  (`a[i]!--`). `keyenc.ts` writes it as an assignment.
+
+## 8. Later
 
 - **Differential testing against Convex's own backend.** Generated sequences of operations (writes, indexed
   queries, pagination, nested calls, errors, limits) run on Convex's local backend and on bunvex. The

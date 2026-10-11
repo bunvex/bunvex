@@ -44,7 +44,7 @@ test("events in words", () => {
   );
   expect(e("unpause_deployment", {})).toBe("Resumed the deployment");
   expect(e("delete_documents", { table: "tasks", count: 1 })).toBe("Deleted 1 document from tasks");
-  expect(e("clear_tables", { tables: ["messages"], count: 3 })).toBe("Cleared messages (3 documents)");
+  expect(e("clear_tables", {})).toBe("Cleared tables");
   expect(e("delete_environment_variable", { variable_name: "LOG_LEVEL" })).toBe(
     "Deleted environment variable LOG_LEVEL",
   );

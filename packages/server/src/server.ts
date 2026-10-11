@@ -147,6 +147,7 @@ import {
   streamingArgs,
   tableColumnNames,
 } from "./streaming-export.ts";
+import { STREAMING_IMPORT_ROUTE, StreamingImportError, streamingImportRoute } from "./streaming-import.ts";
 import {
   MAX_PENDING_MUTATIONS,
   type SplayOptions,
@@ -164,7 +165,8 @@ import { defaultFormat, type Format, parseFormat, reformat } from "./value-forma
 export { MAX_PENDING_MUTATIONS };
 
 /** A socket's state: its sync session. */
-type WsData = { session: SyncSession };
+/** A socket's session; `waiting`: its messages queued, in order, while the deployed code loads. */
+type WsData = { session: SyncSession; waiting?: Promise<void> };
 
 export type ServerOptions = {
   engine: Engine;
@@ -792,8 +794,19 @@ export function createServer(opts: ServerOptions) {
       return adminCallerOf(admin, actingAs);
     },
   });
+  /**
+   * Whether the functions are there to call. A deployable server reads its deployed code from the store at
+   * start (`codeReady`, below); until then its function calls, sync messages and HTTP actions wait, and its
+   * scheduled jobs and crons do not run. Convex starts serving once its application is built, and loads
+   * modules from the store on demand, so no call ever finds the code missing; here a call made meanwhile was
+   * answered "Could not find public function", and a job due meanwhile was failed for good.
+   */
+  let codeLoaded = !opts.deployable;
+  const loaded = Promise.withResolvers<void>();
+  if (codeLoaded) loaded.resolve();
   const scheduler = new ScheduledJobExecutor(engine, functions, { ...schedulerOptionsFromEnv(), ...opts.scheduler });
-  scheduler.start();
+  if (codeLoaded) scheduler.start();
+  else void loaded.promise.then(() => scheduler.start());
   serverMetrics.start({
     engine,
     syncSessions: () => sync.sessions.size,
@@ -809,7 +822,9 @@ export function createServer(opts: ServerOptions) {
     ...(splay === undefined || splay === "" ? {} : { cronSplaySeconds: Number(splay) }),
   });
   /** Resolves once the crons are registered (the diff with what was stored). */
-  const cronsReady = cronExecutor.start(!opts.deployable);
+  const cronsReady = codeLoaded
+    ? cronExecutor.start(!opts.deployable)
+    : loaded.promise.then(() => cronExecutor.start(!opts.deployable));
   const stopCleanup = startSessionCleanup(
     engine,
     opts.sessionRequestRetentionMs === undefined ? sessionRetentionFromEnv() : opts.sessionRequestRetentionMs,
@@ -1077,6 +1092,24 @@ export function createServer(opts: ServerOptions) {
         }
       }
     }
+    // Streaming import (STUDY-141): `clear_tables`, `get_schema`, `replace_tables`, with ImportBackups.
+    const streamingImport = STREAMING_IMPORT_ROUTE.exec(url.pathname);
+    if (streamingImport) {
+      try {
+        // A route not built (yet) is axum's 404, with no body.
+        return (
+          (await streamingImportRoute({ engine, functions }, streamingImport[1]!, req, caller)) ??
+          new Response(null, { status: 404 })
+        );
+      } catch (e) {
+        if (e instanceof StreamingImportError || e instanceof BadJsonBody)
+          return requestError(e.status, e.code, e.message);
+        // Convex's untyped error for a name it cannot make valid: an internal error.
+        if (e instanceof Error && e.message === "Failed to create a valid identifier.")
+          return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+        throw e;
+      }
+    }
     const streaming = STREAMING_EXPORT_ROUTE.exec(url.pathname);
     if (streaming) {
       const route = streaming[1]!;
@@ -1279,7 +1312,14 @@ export function createServer(opts: ServerOptions) {
         ws.data.session.open(ws);
       },
       message(ws, raw) {
-        ws.data.session.message(String(raw));
+        const text = String(raw);
+        const data = ws.data;
+        // While the deployed code loads (and until what was queued then has run), in order.
+        if (data.waiting || !codeLoaded)
+          data.waiting = (data.waiting ?? loaded.promise)
+            .then(() => data.session.message(text))
+            .catch((e) => console.error("bunvex: a sync message failed", e));
+        else data.session.message(text);
       },
       // Any frame from the client shows it is alive, as Convex's `last_received` (STUDY-104); Bun answers a
       // client's ping with a pong by itself.
@@ -1290,7 +1330,9 @@ export function createServer(opts: ServerOptions) {
         ws.data.session.heard();
       },
       close(ws) {
-        ws.data.session.close();
+        const data = ws.data;
+        if (data.waiting) void data.waiting.then(() => data.session.close());
+        else data.session.close();
       },
       drain(ws) {
         ws.data.session.drained();
@@ -1321,6 +1363,8 @@ export function createServer(opts: ServerOptions) {
       if (openApiDoc) return openApiResponse(openApiDoc, req);
       if (url.pathname.startsWith("/api/v1/") && !isPlatformPath(url.pathname))
         return requestError(404, "NotFound", `no route for ${url.pathname}`);
+      // Everything past the meta routes may call functions: not before the deployed code is loaded.
+      if (!codeLoaded) await loaded.promise;
       // HTTP actions under /http (Convex's nest): the prefix is stripped; long requests are not cut by Bun's
       // idle timeout (the 408 at 300 s is the HTTP action's own).
       if (url.pathname.startsWith("/api/storage/") && files) {
@@ -1370,6 +1414,7 @@ export function createServer(opts: ServerOptions) {
         LOG_STREAM_ROUTE.test(url.pathname) ||
         DEBUG_ROUTE.test(url.pathname) ||
         STREAMING_EXPORT_ROUTE.test(url.pathname) ||
+        STREAMING_IMPORT_ROUTE.test(url.pathname) ||
         DATA_SYNC_ROUTE.test(url.pathname) ||
         url.pathname === "/api/shapes2" ||
         PAUSE_ROUTE.test(url.pathname) ||
@@ -1602,6 +1647,7 @@ export function createServer(opts: ServerOptions) {
                     if (url.pathname === "/version") return versionRoute(req);
                     if (url.pathname === "/metrics") return metricsRoute(req);
                     srv.timeout(req, 0);
+                    if (!codeLoaded) return loaded.promise.then(() => serveHttpAction(req, url.pathname, url.search));
                     return serveHttpAction(req, url.pathname, url.search);
                   },
                 } as Bun.Serve.Options<undefined, never>,
@@ -1869,6 +1915,13 @@ export function createServer(opts: ServerOptions) {
   codeReady.catch((e) =>
     console.error(`bunvex: could not load the deployed code: ${e instanceof Error ? e.message : e}`),
   );
+  // Loaded, or failed to load (logged above): either way, serve what there is.
+  void codeReady
+    .catch(() => {})
+    .then(() => {
+      codeLoaded = true;
+      loaded.resolve();
+    });
 
   const installCodeVersion = async (version: CodeVersion, o: { crons?: boolean; auth?: AuthInfo[] } = {}) => {
     const changed = functions.install(version.functions, version.moduleHashes);
