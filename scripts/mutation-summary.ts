@@ -2,6 +2,8 @@
 // the mutants the tests noticed (killed or timed out), those they did not (survived, or no test reaches them),
 // and the score. Printed to stdout; the weekly workflow writes it to the job summary.
 //   bun scripts/mutation-summary.ts [reports/mutation/mutation.json]
+export {};
+
 type Mutant = { status: string };
 type Report = { files: Record<string, { mutants: Mutant[] }> };
 

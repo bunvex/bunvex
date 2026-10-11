@@ -203,10 +203,12 @@ boundary, a block emptied. The tests must then fail. A change no test notices is
     workers.
   - The run happens in Stryker's sandbox, never in place: in place, restoring the files dropped the
     executable bit of the `bin/` scripts.
-- **When:** weekly, in `.github/workflows/mutation.yml`.
-  - It is incremental: the previous run's results are restored from the Actions cache, so only the mutants of
+- **When:** weekly, in `.github/workflows/mutation.yml`, one job per file, in parallel.
+  - A file's first run is long: `core/src/keyenc.ts`'s 137 mutants take 3 min 30 s, and `tx.ts` is 20 times
+    longer. One job per file keeps each under GitHub's 6-hour limit.
+  - Each job is incremental: its previous results are restored from the Actions cache, so only the mutants of
     changed code or changed tests run again.
-  - The score per file is the job summary (`scripts/mutation-summary.ts`); the HTML report is the artifact.
+  - The score is each job's summary (`scripts/mutation-summary.ts`); the HTML report is its artifact.
   - `bun run mutation --mutate <file>` runs one file locally.
   - A pull request that changes the setup runs it on `core/src/keyenc.ts`.
 - **What it gates:** nothing yet. The thresholds only colour the report (high 90 %, low 75 %).
@@ -216,10 +218,14 @@ boundary, a block emptied. The tests must then fail. A change no test notices is
   - **An equivalent mutant:** a change that cannot alter behaviour, such as a fast path that falls back to the
     general one. Mark it in the source with `// Stryker disable next-line <mutator>: <why>`.
   - Once a file is triaged, its score can become a floor, as the coverage floors are.
-- **First reading:** `values/src/sorting.ts`, 89.4 % (557 detected, 62 survived, 4 without coverage).
-  - Most survivors are equivalent: the ASCII fast paths and the short-string decoder.
-  - The rest are untested refusals of malformed keys ("trailing bytes after the value", an unknown type
-    tag).
+- **First readings:**
+  - `values/src/sorting.ts`: 89.4 % (557 detected, 62 survived, 4 without coverage).
+  - `core/src/keyenc.ts`: 91.2 % (125 detected, 9 survived, 3 without coverage).
+  - In `sorting.ts`, most survivors are equivalent: the ASCII fast paths and the short-string decoder.
+  - The rest are untested refusals of malformed keys ("trailing bytes after the value", an unknown type tag),
+    and in `keyenc.ts` the bounds' descriptions for the inspector.
+- **The source must be one the instrumenter reads:** it cannot mutate an update of a non-null expression
+  (`a[i]!--`). `keyenc.ts` writes it as an assignment.
 
 ## 8. Later
 

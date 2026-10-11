@@ -1,17 +1,17 @@
 name: Mutation testing
 
 # Mutation testing of the engine's critical files (TEST-01 §7, the owner's call: Stryker, the core, scheduled).
-# Weekly, incremental: the previous run's results are restored, so only the mutants of changed code (or of
-# changed tests) run again. The score per file is the job summary; the HTML report is the run's artifact. It
-# gates nothing yet: surviving mutants are triaged into tests, or marked equivalent in the source.
-# A pull request that changes this file or the configuration runs it on one small file.
+# Weekly, one job per file (stryker.config.mjs's `mutate`), in parallel, each incremental: its previous results
+# are restored, so only the mutants of changed code or changed tests run again. The score is each job's
+# summary; the HTML report is its artifact. It gates nothing yet: surviving mutants are triaged into tests, or
+# marked equivalent in the source. A pull request that changes the setup runs it on one small file.
 on:
   schedule:
     - cron: "13 4 * * 0"
   workflow_dispatch:
     inputs:
-      mutate:
-        description: Files to mutate (a glob or a path; empty for every file in stryker.config.mjs)
+      file:
+        description: One file to mutate (empty for every file in stryker.config.mjs)
         default: ""
   pull_request:
     paths:
@@ -27,43 +27,69 @@ permissions:
   contents: read
 
 jobs:
+  files:
+    name: mutation · files
+    runs-on: ubuntu-latest
+    outputs:
+      files: ${{ steps.list.outputs.files }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - id: list
+        env:
+          ONE: ${{ github.event_name == 'pull_request' && 'packages/core/src/keyenc.ts' || inputs.file || '' }}
+        run: |
+          if [ -n "$ONE" ]; then files=$(jq -cn --arg f "$ONE" '[$f]')
+          else files=$(bun -e 'const c = (await import("./stryker.config.mjs")).default; console.log(JSON.stringify(c.mutate))'); fi
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+
   mutation:
-    name: mutation · engine
+    name: mutation · ${{ matrix.file }}
+    needs: files
     runs-on: ubuntu-latest
     timeout-minutes: 340
-    env:
-      MUTATE: ${{ github.event_name == 'pull_request' && 'packages/core/src/keyenc.ts' || inputs.mutate || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        file: ${{ fromJSON(needs.files.outputs.files) }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
-      - name: The previous run's results
+      - id: slug
+        env:
+          FILE: ${{ matrix.file }}
+        run: echo "slug=$(echo "$FILE" | tr '/.' '--')" >> "$GITHUB_OUTPUT"
+      - name: The previous run's results for this file
         uses: actions/cache/restore@v4
         with:
           path: reports/mutation/incremental.json
-          key: mutation-incremental-${{ github.run_id }}
-          restore-keys: mutation-incremental-
+          key: mutation-${{ steps.slug.outputs.slug }}-${{ github.run_id }}
+          restore-keys: mutation-${{ steps.slug.outputs.slug }}-
       - name: Mutants
-        run: |
-          if [ -n "$MUTATE" ]; then bun run mutation --mutate "$MUTATE"; else bun run mutation; fi
-      - name: Score per file
+        env:
+          FILE: ${{ matrix.file }}
+        run: bun run mutation --mutate "$FILE"
+      - name: Score
         if: always()
         run: |
           if [ -f reports/mutation/mutation.json ]; then
             bun scripts/mutation-summary.ts >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Keep the results for the next run
-        if: always() && github.event_name != 'pull_request' && env.MUTATE == ''
+        if: always() && github.event_name != 'pull_request'
         uses: actions/cache/save@v4
         with:
           path: reports/mutation/incremental.json
-          key: mutation-incremental-${{ github.run_id }}
+          key: mutation-${{ steps.slug.outputs.slug }}-${{ github.run_id }}
       - name: Report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mutation-report
+          name: mutation-report-${{ steps.slug.outputs.slug }}
           path: reports/mutation/
           if-no-files-found: ignore
