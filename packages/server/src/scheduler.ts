@@ -254,6 +254,8 @@ export class ScheduledJobExecutor {
   }
 
   start() {
+    // Started late (a deployable server starts it once its code is loaded) after a stop: nothing to run.
+    if (this.stopped) return;
     // Woken by commits that touch the queue (a job scheduled, canceled or rescheduled): no polling.
     let jobs = this.engine.catalog.table(SCHEDULED_JOBS_TABLE);
     let byNextTs = jobs.indexes.get(SCHEDULED_BY_NEXT_TS)!.id;

@@ -58,8 +58,9 @@ export function describeEvent(e: AuditEvent): string {
       return `Edited ${n(m.count, "document")} in ${str(m.table)}`;
     case "delete_documents":
       return `Deleted ${n(m.count, "document")} from ${str(m.table)}`;
+    // Convex's event carries no metadata (STUDY-141), and its dashboard says "cleared tables".
     case "clear_tables":
-      return `Cleared ${Array.isArray(m.tables) ? m.tables.join(", ") : "tables"}${typeof m.count === "number" ? ` (${n(m.count, "document")})` : ""}`;
+      return "Cleared tables";
     case "create_table":
       return `Created table ${str(m.table)}`;
     case "generate_upload_url":

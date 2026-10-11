@@ -29,7 +29,8 @@ A [Convex](https://convex.dev)-style reactive backend written in TypeScript for 
 validation, auth, the scheduler and crons, file storage, HTTP actions), the client SDK with its React and
 Next.js bindings, and the CLI work; the hot paths are benchmarked. Components, built-in authentication and
 the dashboard on a real deployment are still to come. See [ARCHITECTURE.md](ARCHITECTURE.md) and
-[docs/parity/](docs/parity/README.md) for what exists and what is planned.
+[docs/parity/](docs/parity/README.md) for what exists and what is planned. Moving to a new release, or between
+Convex and bunvex: [docs/upgrading.md](docs/upgrading.md).
 
 ## Numbers
 
