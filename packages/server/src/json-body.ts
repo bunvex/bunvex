@@ -23,8 +23,18 @@ export function isJsonContentType(header: string | null): boolean {
   return m !== null && (m[1] === "json" || m[1]!.endsWith("+json"));
 }
 
-/** A field of a body struct: a string, an optional string, any JSON value, a list of structs, or a struct. */
-export type FieldKind = "string" | "optString" | "value" | { seqOf: BodyShape } | { struct: BodyShape };
+/**
+ * A field of a body struct: a string, an optional string, any JSON value, a list of strings (`Vec<String>`), a
+ * map of strings (`BTreeMap<String, String>`), a list of structs, or a struct.
+ */
+export type FieldKind =
+  | "string"
+  | "optString"
+  | "value"
+  | "strings"
+  | "stringMap"
+  | { seqOf: BodyShape }
+  | { struct: BodyShape };
 /** A body struct: its Rust name (it is in serde's messages) and its fields in declaration order. */
 export type BodyShape = { name: string; fields: [string, FieldKind][] };
 
@@ -118,6 +128,15 @@ function fits(v: unknown, shape: BodyShape): boolean {
     if (kind === "string" && typeof x !== "string") return false;
     if (kind === "optString" && x !== undefined && x !== null && typeof x !== "string") return false;
     if (kind === "value" && x === undefined) return false;
+    if (kind === "strings" && (!Array.isArray(x) || !x.every((e) => typeof e === "string"))) return false;
+    if (
+      kind === "stringMap" &&
+      (x === null ||
+        typeof x !== "object" ||
+        Array.isArray(x) ||
+        !Object.values(x as object).every((e) => typeof e === "string"))
+    )
+      return false;
     if (typeof kind === "object" && "struct" in kind && !fits(x, kind.struct)) return false;
     if (typeof kind === "object" && "seqOf" in kind && (!Array.isArray(x) || !x.every((e) => fits(e, kind.seqOf))))
       return false;
@@ -283,8 +302,9 @@ class Reader {
     const b = this.peek();
     if (b === undefined) throw this.error("syntax", "EOF while parsing a value");
     if (kind === "value") return this.value(0);
+    if (kind === "stringMap") return this.stringMap();
     if (typeof kind === "object" && "struct" in kind) return this.struct(kind.struct);
-    if (typeof kind === "object") {
+    if (typeof kind === "object" || kind === "strings") {
       if (b !== 0x5b) throw this.invalidType("a sequence");
       this.i++;
       for (let k = 0; ; k++) {
@@ -304,7 +324,8 @@ class Reader {
           if (c === 0x5d) throw this.peekError("syntax", "trailing comma");
         }
         this.path.push(`[${k}]`);
-        this.struct(kind.seqOf);
+        if (kind === "strings") this.field("string");
+        else this.struct(kind.seqOf);
         this.path.pop();
       }
     }
@@ -317,6 +338,39 @@ class Reader {
       return;
     }
     throw this.invalidType("a string");
+  }
+
+  /** A `BTreeMap<String, String>`: an object whose values are strings (serde_path_to_error names the key). */
+  private stringMap() {
+    if (this.peek() !== 0x7b) throw this.invalidType("a map");
+    this.i++;
+    for (let k = 0; ; k++) {
+      this.ws();
+      let c = this.peek();
+      if (c === undefined) throw this.error("syntax", "EOF while parsing an object");
+      if (c === 0x7d) {
+        this.i++;
+        return;
+      }
+      if (k > 0) {
+        if (c !== 0x2c) throw this.peekError("syntax", "expected `,` or `}`");
+        this.i++;
+        this.ws();
+        c = this.peek();
+        if (c === undefined) throw this.error("syntax", "EOF while parsing an object");
+        if (c === 0x7d) throw this.peekError("syntax", "trailing comma");
+      }
+      if (this.peek() !== 0x22) throw this.peekError("syntax", "key must be a string");
+      const key = this.string();
+      this.ws();
+      if (this.peek() === undefined) throw this.error("syntax", "EOF while parsing an object");
+      if (this.peek() !== 0x3a) throw this.peekError("syntax", "expected `:`");
+      this.i++;
+      this.ws();
+      this.path.push(key);
+      this.field("string");
+      this.path.pop();
+    }
   }
 
   /** serde_json's `peek_invalid_type`: a scalar is read first (the error stands after it), `[` and `{` not. */

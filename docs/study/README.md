@@ -168,6 +168,7 @@ to a spec.
 | [STUDY-140](STUDY-140-s3-sse-and-checksums.md) | S3 server-side encryption and checksums: `AWS_S3_DISABLE_SSE` and `AWS_S3_DISABLE_CHECKSUMS` as Convex's (SSE-S3 and CRC32 part checksums by default, exactly `true` turns each off), every write a signed multipart upload, what the AWS SDK adds on its own | implemented; DV-445 accepted, DV-446 resolved to match Convex (owner, 2026-10-11) |
 | [STUDY-139](STUDY-139-product-and-oracle.md) | bunvex as a product, Convex as the oracle: compatibility from the reference on, no paths for older Convex clients, formats or stores; migration by export and import; what to remove (P1–P7) | accepted (owner, 2026-10-08): the principle and P1–P7 |
 | [STUDY-130](STUDY-130-storage-deletions.md) | Deleting a file's blob: Convex never does (no queue, no sweep); bunvex's `_storage_deletions` and sweeps dropped to match (DV-150 withdrawn) | implemented (owner, 2026-10-05: A; DV-407) |
+| [STUDY-141](STUDY-141-streaming-import.md) | Streaming import (`/api/streaming_import/*`): `clear_tables` and its `clear_tables` audit event, Airbyte records, Fivetran operations, hidden primary-key indexes (system indexes on user tables); who calls them; a four-PR plan | decided (owner, 2026-10-11): Q1–Q5 as recommended (DV-447–DV-451); PR 1 implemented (`clear_tables`, `get_schema`, `replace_tables`); PRs 2–4 future work |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

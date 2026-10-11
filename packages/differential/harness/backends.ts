@@ -34,6 +34,8 @@ export type Backend = {
   /** Run the backend's own CLI (`convex` or `bunvex`) in the app's project, aimed at this backend: its output. */
   cli: (args: string[]) => Promise<string>;
   stop: () => Promise<void>;
+  /** An admin key of the deployment (the admin API's tests, e.g. streaming import). */
+  adminKey: string;
 };
 
 async function run(cmd: string[], cwd: string, env: Record<string, string> = {}): Promise<string> {
@@ -242,7 +244,7 @@ export async function startConvex(opts: StartOptions = {}): Promise<Backend> {
         CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey,
       });
     await cli(["deploy", "--yes", "--typecheck=disable"]);
-    return { name: "convex", url: up.url, call: caller(up.url), cli, stop };
+    return { name: "convex", url: up.url, call: caller(up.url), cli, stop, adminKey };
   } catch (e) {
     await stop();
     throw e;
@@ -303,7 +305,7 @@ export async function startBunvex(opts: StartOptions = {}): Promise<Backend> {
     writeFileSync(envFile, `BUNVEX_SELF_HOSTED_URL=${up.url}\nBUNVEX_SELF_HOSTED_ADMIN_KEY=${adminKey}\n`);
     const cli = (args: string[]) => run([process.execPath, BUNVEX_CLI, ...args, "--env-file", envFile], proj);
     await cli(["deploy", "--typecheck=disable"]);
-    return { name: "bunvex", url: up.url, call: caller(up.url), cli, stop };
+    return { name: "bunvex", url: up.url, call: caller(up.url), cli, stop, adminKey };
   } catch (e) {
     await stop();
     throw e;
