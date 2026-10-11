@@ -834,7 +834,7 @@ export class Functions {
       udfType === "HttpAction" ? name : strippedPath(name),
       parent ? "Action" : udfType === "HttpAction" ? "HttpEndpoint" : ((caller as SourcedCaller)?.source ?? "HttpApi"),
       identityTypeOf(caller),
-      wallClock(),
+      this.engine.runtime.now(),
       udfType === "Action" && this.isNodeAction(name) ? "node" : "isolate",
     );
     r.tokenIdentifier = ((caller?.identity as { tokenIdentifier?: unknown } | null)?.tokenIdentifier as string) ?? null;
@@ -1066,7 +1066,7 @@ export class Functions {
   }
 
   private completion(r: Running, lines: LogLine[], o: Outcome, willRetry: boolean): Completion {
-    const end = wallClock();
+    const end = this.engine.runtime.now();
     const e = o.error;
     // A mutation's writes count once it committed (Convex meters them in `track_commit`).
     const used = (r.tx as Tx | null)?.io(r.udfType === "Mutation" && e === undefined);
@@ -1162,7 +1162,7 @@ export class Functions {
    */
   requireOperation(caller: Caller | undefined, op: DeploymentOp) {
     const admin = adminOf(caller);
-    if (!admin) throw new BadDeployKeyError(this.engine.instanceName || undefined);
+    if (!admin) throw new BadDeployKeyError();
     if (!allows(admin, op)) throw new OperationNotPermittedError(op);
   }
 

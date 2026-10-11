@@ -39,7 +39,10 @@ const manual: RetentionOptions = {
 
 async function open(path = ":memory:", retention: RetentionOptions = manual) {
   const p = new SqlitePersistence(path, { durable: false });
-  const e = await new Engine(schema, p, { retention }).init();
+  // No `max_repeatable_ts` bump (5 s after a commit) during a test: it would take a timestamp and move the
+  // newest one, which the windows trail, between two steps of a slow run.
+  const repeatableTs = { commitDelayMs: 3_600_000, idleMs: 3_600_000 };
+  const e = await new Engine(schema, p, { retention, repeatableTs }).init();
   engines.push(e);
   return { e, p, db: (p as unknown as { db: import("bun:sqlite").Database }).db };
 }
@@ -69,10 +72,23 @@ async function churn(e: Engine) {
 }
 
 /**
- * A commit after the others: a pass prunes the versions below its window (Convex's `[cursor, min_snapshot_ts)`),
- * so a window at this commit passes every version before it.
+ * Two commits after the others, so a full round passes every version before them, however close their
+ * timestamps. A pass prunes the versions below its window (Convex's `[cursor, min_snapshot_ts)`): the index
+ * window at the last commit passes every version before it, and its cursor stops one below it; the document
+ * window follows that cursor, so it passes the versions below the cursor. With one commit, a version one
+ * nanosecond before it would sit at the cursor and wait for the next round (retention-prev-ts.test.ts).
  */
-const later = (e: Engine) => e.mutation((db) => db.insert("items", { n: 100_000 }));
+const later = async (e: Engine) => {
+  for (let i = 0; i < 2; i++) await e.mutation((db) => db.insert("items", { n: 100_000 }));
+};
+
+/**
+ * Commit timestamps from a clock that stands still: each one is the last plus one, the closest they can be (as
+ * when the wall clock has not moved past the last commit).
+ */
+const consecutiveTimestamps = (e: Engine) => {
+  (e.committer as unknown as { clockNs: () => bigint }).clockNs = () => 0n;
+};
 
 /**
  * A full round, in Convex's order: the windows move, the index deleter records its cursor, and the document
@@ -98,6 +114,7 @@ const answers = (e: Engine) =>
 describe("retention", () => {
   test("prunes every superseded version and tombstone below the window; answers at it are unchanged", async () => {
     const { e, db } = await open();
+    consecutiveTimestamps(e);
     await churn(e);
     const before = await answers(e);
     const g0 = garbage(db);

@@ -165,7 +165,14 @@ test("WriteData required (a read-only key gets 403), a component refused, no key
   expect((await t.jobs()).length).toBe(2);
   expect((await t.events()).some((e) => e.action === "delete_scheduled_jobs_table")).toBe(false);
   // No admin key at all: refused before anything runs.
-  const anonymous = await fetch(`${t.api}/api/delete_scheduled_functions_table`, { method: "POST", body: "{}" });
+  const anonymous = await fetch(`${t.api}/api/delete_scheduled_functions_table`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
   expect([401, 403]).toContain(anonymous.status);
+  // The body is read first, as Convex's extractor: without its content type, that is the error.
+  const untyped = await fetch(`${t.api}/api/delete_scheduled_functions_table`, { method: "POST", body: "{}" });
+  expect([untyped.status, ((await untyped.json()) as { code: string }).code]).toEqual([400, "BadJsonBody"]);
   expect((await t.jobs()).length).toBe(2);
 });

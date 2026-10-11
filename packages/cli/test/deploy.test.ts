@@ -155,8 +155,9 @@ describe("bunvex deploy", () => {
     const hashes = (await (
       await fetch(`${d.url}/api/get_config_hashes`, {
         method: "POST",
-        headers: { authorization: `Bunvex ${KEY}` },
-        body: "{}",
+        // The key in the body: the push routes take it there only, as Convex's.
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ adminKey: KEY }),
       })
     ).json()) as { moduleHashes: { path: string }[] };
     const paths = hashes.moduleHashes.map((h) => h.path).filter((p) => !p.startsWith("_deps/"));
