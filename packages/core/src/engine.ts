@@ -3122,12 +3122,22 @@ export class Engine {
   /**
    * Replace tables with empty ones in one commit (Convex's `TableModel::replace_with_empty_table`): each gets a
    * new table of the same name, number and indexes, and the old one is deleted in the background. System
-   * tables too (the scheduler's, STUDY-113). `body` runs in the replacing transaction.
+   * tables too (the scheduler's, STUDY-113). `body` runs in the replacing transaction. With `createMissing`, a
+   * name with no table gets a new empty one (Convex's `clear_tables`, STUDY-141: "This will create … tables if
+   * they don't exist"); otherwise it is an error.
    */
-  async replaceWithEmptyTables(names: string[], body?: (db: Tx) => Promise<void>) {
+  async replaceWithEmptyTables(
+    names: string[],
+    body?: (db: Tx) => Promise<void>,
+    opts: { createMissing?: boolean } = {},
+  ) {
     const tablets: TabletId[] = [];
     try {
       for (const name of names) {
+        if (opts.createMissing && !this.catalog.tables.has(name)) {
+          tablets.push((await this.createHiddenTable(name)).id);
+          continue;
+        }
         const { number } = this.catalog.table(name);
         tablets.push((await this.createHiddenTable(name, { number, copyIndexesOf: name })).id);
       }

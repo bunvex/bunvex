@@ -52,6 +52,7 @@ Set these in the shell or in a `.env` file next to `docker-compose.yml`:
 | `PERSISTENCE`, `PERSISTENCE_URL` | Or name the driver: `sqlite`, `postgres`, `mysql`, `mongodb`. |
 | `DO_NOT_REQUIRE_SSL` | Allow an unencrypted database connection (a local database). |
 | `S3_STORAGE_FILES_BUCKET`, `S3_STORAGE_MODULES_BUCKET`, `S3_STORAGE_EXPORTS_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `S3_ENDPOINT_URL`, `AWS_S3_FORCE_PATH_STYLE` | Keep files, pushed code and exports in S3 (each use case whose bucket is set). |
+| `AWS_S3_DISABLE_SSE`, `AWS_S3_DISABLE_CHECKSUMS` | `true` for an S3-compatible store that refuses them: uploads ask for server-side encryption (`AES256`) and CRC32 part checksums by default, as Convex's. Only the exact value `true` turns one on. |
 | `INSTANCE_NAME`, `INSTANCE_SECRET` | The instance's name and secret (32 bytes, hex). By default, generated on the first start and kept in the volume. |
 | `REDACT_LOGS_TO_CLIENT` | Keep functions' log lines and errors' details from clients. |
 | `DOCUMENT_RETENTION_DELAY` | How long old document versions are kept, in seconds (default here: 2 days). |
@@ -66,6 +67,13 @@ proxy such as [Smokescreen](https://github.com/stripe/smokescreen), which refuse
 (`--deny-addresses`: `metadata` by default refuses link-local and cloud metadata addresses, `private` also
 loopback and private networks, `none` nothing, as Convex — DV-325;
 [STUDY-80](../docs/study/STUDY-80-outbound-requests.md)).
+
+## Upgrade it
+
+Export first (`bunvex export --path ./backups --include-file-storage`), then rebuild or pull the new image and
+`docker compose up -d`: the volume keeps the database, files, pushed code and credentials. A release that cannot
+read the store refuses it untouched; then move the data by export and import.
+[docs/upgrading.md](../docs/upgrading.md) has the steps, and how to move between Convex and bunvex.
 
 ## Without Docker: the executable
 
