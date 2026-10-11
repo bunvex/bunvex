@@ -336,15 +336,18 @@ export class SystemIdentityRequiredError extends Error {
   }
 }
 
-/** No admin where one is required (Convex's `bad_admin_key_error`): 403 `BadDeployKey`. */
+/**
+ * No admin where one is required (Convex's `bad_admin_key_error`): 403 `BadDeployKey`. Convex passes the
+ * identity's instance name, which only a `DeploymentAdmin` has, and an admin is never refused this way: the
+ * message always says "this deployment" (checked on Convex's binary, packages/differential). Its other variant,
+ * naming the deployment, comes only from access tokens, which bunvex does not have.
+ */
 export class BadDeployKeyError extends Error {
   readonly status = 403;
   readonly code = "BadDeployKey";
-  constructor(instanceName?: string) {
+  constructor() {
     super(
-      instanceName === undefined
-        ? "The provided deploy key was invalid for this deployment. Double check that the environment this key was generated for matches the desired deployment."
-        : `The provided deploy key was invalid for deployment '${instanceName}'. Double check that the environment this key was generated for matches the desired deployment.`,
+      "The provided deploy key was invalid for this deployment. Double check that the environment this key was generated for matches the desired deployment.",
     );
     this.name = "BadDeployKeyError";
   }

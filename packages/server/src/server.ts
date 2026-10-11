@@ -1073,7 +1073,7 @@ export function createServer(opts: ServerOptions) {
     const admin = (caller as AdminCaller).admin;
     // Convex's `check_admin_key`: an admin or acting user (not the system) gets its operations.
     if (url.pathname === "/api/check_admin_key") {
-      if (!admin || admin.kind !== "admin") throw new BadDeployKeyError(engine.instanceName);
+      if (!admin || admin.kind !== "admin") throw new BadDeployKeyError();
       return json({ success: true, allowedOps: admin.allowedOps, isReadOnly: admin.readOnly });
     }
     // `/stats` (bunvex's counters) needs ViewMetrics (DV-162).
@@ -2022,7 +2022,7 @@ export function createServer(opts: ServerOptions) {
   canonicalRoute = async (url, req, caller) => {
     if (url.pathname.endsWith("/get_canonical_urls")) {
       if (req.method !== "GET") return requestError(404, "NotFound", `no route for ${url.pathname}`);
-      if (!(caller as AdminCaller).admin) throw new BadDeployKeyError(engine.instanceName);
+      if (!(caller as AdminCaller).admin) throw new BadDeployKeyError();
       const c = await engine.query((db) => readCanonicalUrls(db));
       return json({
         bunvexCloudUrl: c.cloud ?? builtinEnv.BUNVEX_CLOUD_URL,
