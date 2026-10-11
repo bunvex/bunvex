@@ -127,7 +127,32 @@ type StartPushRequest = {
     udfServerVersion?: string;
   };
   componentDefinitions?: unknown[];
+  /** bunvex.json's `node.nodeVersion` (STUDY-145). */
+  nodeVersion?: string | null;
 };
+
+/**
+ * Convex's `StartPushRequest::into_project_config` (crates/application/src/deploy_config.rs) on `nodeVersion`, the
+ * first thing `start_push`, `evaluate_push` and `evaluate_schema` check: Convex's `NodeVersion` takes "20", "22"
+ * and "24"; "18" is refused as no longer supported; any other string is not a version. Both are 400
+ * `InvalidConfig`. The version is only stored (`_source_packages.nodeVersion`): a self-hosted Convex runs its Node
+ * actions on the Node it finds, and bunvex runs them in Bun (DV-87).
+ */
+export function parseNodeVersion(raw: unknown): string | null {
+  if (raw === undefined || raw === null) return null;
+  // Convex's body extractor refuses it before anything runs (serde's wording, abridged; the CLI never sends one).
+  if (typeof raw !== "string")
+    throw new PushError(
+      "BadJsonBody",
+      "Failed to deserialize the JSON body into the target type: nodeVersion: invalid type, expected a string",
+    );
+  if (raw === "20" || raw === "22" || raw === "24") return raw;
+  // Convex's message ends with a link to its docs (DV-04).
+  if (raw === "18")
+    throw new PushError("InvalidConfig", "Node 18 is no longer supported. Upgrade to a newer Node version.");
+  throw new PushError("InvalidConfig", `Invalid node version: ${raw}`);
+}
+
 type Pending = {
   version: CodeVersion;
   modules: ModuleSource[];
@@ -141,6 +166,8 @@ type Pending = {
   schemaId: string;
   /** The server version change the push made (Convex's `udfConfigDiff`). */
   udfConfigDiff: UdfServerVersionDiff | null;
+  /** The push's `nodeVersion`, stored with its package. */
+  nodeVersion: string | null;
 };
 
 const AUTH_CONFIG = AUTH_CONFIG_MODULE;
@@ -220,7 +247,8 @@ export class PushService {
         hash: r.sha256,
         environment: r.environment,
       })),
-      nodeVersion: null,
+      // As Convex's: the latest package's, whether or not it can be read.
+      nodeVersion: stored?.pkg.nodeVersion ?? null,
     };
   }
 
@@ -274,6 +302,7 @@ export class PushService {
    * pushing it would do to the indexes and the tables — the CLI's large-index and slow-validation checks.
    */
   async evaluateSchema(req: StartPushRequest) {
+    parseNodeVersion(req.nodeVersion);
     if (req.componentDefinitions?.length)
       throw new PushError("ComponentsNotSupported", "Components are not supported by this deployment yet");
     let schema = emptySchema;
@@ -299,6 +328,7 @@ export class PushService {
   }
 
   async startPush(req: StartPushRequest) {
+    const nodeVersion = parseNodeVersion(req.nodeVersion);
     if (req.componentDefinitions?.length)
       throw new PushError("ComponentsNotSupported", "Components are not supported by this deployment yet");
     const all = await this.resolveModules(req);
@@ -354,6 +384,7 @@ export class PushService {
       auth,
       schemaId,
       udfConfigDiff: config.diff,
+      nodeVersion,
     });
     return this.response(version, schema, auth, analysis, { schemaId, indexDiff });
   }
@@ -448,9 +479,17 @@ export class PushService {
     const indexDiff = indexAuditDiff(activeSchema, p.schema);
     // The providers the push stores in `_auth` (none without an auth.config, as Convex's `app_auth`).
     const auth = p.auth === null ? [] : parseAuthConfig({ providers: p.auth } as never);
-    const pkg = await writePackage(this.deps.modulesStore, [...p.modules, ...other]).catch((e) => {
-      throw e instanceof ModulesTooLargeError ? new PushError(e.code, e.message, 400) : e;
-    });
+    // Convex's `node_version_diff`: the latest package's version before and after, when they differ.
+    const previousNodeVersion = stored?.pkg.nodeVersion ?? null;
+    const nodeVersionDiff =
+      previousNodeVersion === p.nodeVersion
+        ? null
+        : { previous_version: previousNodeVersion, next_version: p.nodeVersion };
+    const pkg = await writePackage(this.deps.modulesStore, [...p.modules, ...other], undefined, p.nodeVersion).catch(
+      (e) => {
+        throw e instanceof ModulesTooLargeError ? new PushError(e.code, e.message, 400) : e;
+      },
+    );
     let committed: Awaited<ReturnType<Engine["commitSchemaPush"]>> & {
       value: { unused: SourcePackage[]; crons: CronDiff; authDiff: { added: string[]; removed: string[] } };
     };
@@ -476,6 +515,7 @@ export class PushService {
               schemaDiff:
                 previousSchema === nextSchema ? null : { previous_schema: previousSchema, next_schema: nextSchema },
               message,
+              nodeVersionDiff,
             }),
           ],
           actor,
