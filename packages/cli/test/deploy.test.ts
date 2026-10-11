@@ -254,6 +254,26 @@ export default defineSchema({ notes: defineTable({ a: v.string(), b: v.string(),
     expect(await deploy()).toEqual([]);
   });
 
+  test("the version check (AD-29): its notice after the push; one still running does not hold the command", async () => {
+    const d = await deployment();
+    const app = tmp();
+    write(app, APP);
+    const flags = ["deploy", "--url", d.url, "--admin-key", KEY, "--typecheck=disable"];
+    const notice =
+      "A newer version of bunvex is available: 9.9.9 (this is 0.1.0). Run `bunvex update` to see how to upgrade.";
+    const told = io(app);
+    told.it.versionCheck = async () => notice;
+    expect(await main(flags, told.it)).toBe(0);
+    expect(told.err.at(-1)).toBe(notice);
+    expect(told.out).toEqual([`✔ Deployed functions to ${d.url}`]);
+    const hanging = io(app);
+    hanging.it.versionCheck = () => new Promise(() => {});
+    const start = performance.now();
+    expect(await main(flags, hanging.it)).toBe(0);
+    expect(performance.now() - start).toBeLessThan(5000);
+    expect(hanging.err.join("\n")).not.toContain("newer version");
+  });
+
   test("a second deploy changes one module; flags and bunvex.json's functions directory", async () => {
     const d = await deployment();
     const app = tmp();

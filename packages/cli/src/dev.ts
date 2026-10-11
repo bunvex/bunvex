@@ -39,6 +39,7 @@ import {
 import { COLORS, LogManager, type LogMode, NO_COLORS, watchLogs } from "./logs.ts";
 import { runCommand } from "./run.ts";
 import { resolveTarget, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
+import { startVersionCheck } from "./version-check.ts";
 
 export const DEV_USAGE = `Usage: bunvex dev [options]
 
@@ -340,6 +341,10 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
       );
     }
     io.err(`Developing against deployment: ${target.url}`);
+    // The version check (AD-29) beside the first push, as Convex's version message; its notice when it comes.
+    void startVersionCheck(io).then((notice) => {
+      if (notice && !stop.signal.aborted) io.err(notice);
+    });
     // Convex's `watchLogs` to stderr, beside the pushes; a deployment that refuses it is reported once.
     const logManager = new LogManager(flags.tailLogs);
     if (flags.tailLogs !== "disable") {

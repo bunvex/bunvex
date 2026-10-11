@@ -1,6 +1,6 @@
 # STUDY-146 — `bunvex network-test`, `docs`, `update` and `dashboard`
 
-- **Status:** implemented; DV-461 decided (rule 5); one question for the owner (§6)
+- **Status:** implemented; DV-461 decided (rule 5); Q1 decided by the owner (2026-10-11): the version check, AD-29, built (§7)
 - **Convex source read:** commit `4577b903` of get-convex/convex-backend (`npm-packages/convex/src/cli/`)
 - **Related:** [STUDY-35](STUDY-35-push-and-deploy.md) and [STUDY-40](STUDY-40-local-backend-and-local-deployments.md)
   (choosing the deployment), [STUDY-112](STUDY-112-health-routes.md) (`/echo`, `/version`, `/instance_name`),
@@ -125,8 +125,9 @@ they open or print, and the requests `network-test` sends (`/instance_name`, a W
 
 ## 4b. Additions (beyond Convex)
 
-None built. A registry check in `update` was asked for (§6). Convex's `update` has none, so it would be an
-addition.
+| # | Addition | Why | Decision |
+|---|---|---|---|
+| AD-29 | The version check: `dev` and `deploy` ask the npm registry for the latest `bunvex` (at most once a day) and print one line when this CLI is older. It is off in CI or by variable (§7). `update` stays as Convex's | The npm-registry analogue of the message Convex's `dev` and `deploy` get from Convex's version service, which bunvex does not have | owner, 2026-10-11 (Q1): built |
 
 ## 5. Tests
 
@@ -169,7 +170,10 @@ The HTTPS path (the port-80 checks) needs a TLS deployment on port 443 and is no
 
 ## 6. Open questions
 
-**Q1 — `bunvex update` and the npm registry.** The request for this work asked that `update` check the npm
+None. Q1 below was decided by the owner on 2026-10-11: build the version check as an addition (AD-29, §7), and
+keep `update` as Convex's.
+
+**Q1 — `bunvex update` and the npm registry (decided).** The request for this work asked that `update` check the npm
 registry for a newer `bunvex`, "as Convex's does for `convex`".
 
 - **Convex:** `npx convex update` only prints the changelog link and `npm install convex@latest`. It checks
@@ -183,3 +187,61 @@ registry for a newer `bunvex`, "as Convex's does for `convex`".
   shaped like Convex's real one. That would be a quiet check of `https://registry.npmjs.org/bunvex/latest`
   during `dev` and `deploy`, printing a line when a newer version exists. It would also need a way to turn it
   off for offline and CI use.
+
+## 7. AD-29: the version check (built)
+
+**What Convex does.** `dev` and `deploy` run `checkVersionAndAiFilesStaleness` (`lib/updates.ts`) beside the push
+(`dev.ts:299`, `deploy.ts:453`), only for cloud deployments. It does `GET https://version.convex.dev/v1/version`
+(`lib/versionApi.ts`) with no timeout of its own and no cache, so it asks on every run. When the service returns a
+`message`, it is printed, and any failure is ignored. The only variable it reads is `CONVEX_VERSION_API_ORIGIN`,
+which points it at another service. It has no switch to turn it off and does not skip CI. A self-hosted deployment
+never gets it.
+
+**What bunvex does** (`packages/cli/src/version-check.ts`):
+
+- **When it runs:**
+  - `deploy` starts the check once its deployment is known and runs it beside the push. When the command ends it
+    prints the notice if the check has answered, or answers within 200 ms; otherwise it exits without it.
+  - `dev` starts it beside the first push and prints the notice whenever the answer comes.
+- **What it asks:** `GET <origin>/bunvex/latest`. The origin is `BUNVEX_VERSION_API_ORIGIN` (the bunvex-named
+  analogue of `CONVEX_VERSION_API_ORIGIN`; a mirror or a test registry), else `https://registry.npmjs.org`. It gives
+  up after 1.5 s. A version newer than this CLI's, by semver with prereleases ordered, prints one line on stderr:
+  "A newer version of bunvex is available: <latest> (this is <installed>). Run \`bunvex update\` to see how to
+  upgrade.".
+- **The cache:** the answer is kept for 24 h in `<cache>/version-check.json`, the cache directory local
+  deployments use (`~/.cache/bunvex`, `%LOCALAPPDATA%\bunvex`). A failure is not cached, so the next run asks again.
+- **Turning it off:**
+  - Convex has no variable for this.
+  - bunvex skips the check when `CI` is set (the variable Convex's CLI uses to detect CI elsewhere, e.g.
+    `lib/envvars.ts`), when `BUNVEX_DISABLE_VERSION_CHECK` is set, or when `NO_UPDATE_NOTIFIER` is set (npm's
+    convention).
+- **Failures:** any of them is silent. That includes offline, a timeout, an answer other than 200, an answer that
+  is not a version, and a cache that cannot be read or written.
+- **Tests:** the check comes from `Io.versionCheck`, which only the real process provides, so tests never reach
+  the registry.
+
+**Differences from Convex's check:** it also runs for self-hosted and local deployments, has a timeout and a cache,
+and is off in CI or by variable. All of these follow the owner's decision.
+
+**Tests:**
+- `packages/cli/test/version-check.test.ts` runs against a registry in the process. It covers:
+  - the notice and semver order;
+  - one request a day, with the cache kept until 24 h;
+  - the three ways to turn it off, with no request made;
+  - a 404, an answer that is not JSON, a version that is not a version, and a slow registry: each gives null in
+    under 1 s and is not cached;
+  - a closed port, and a broken cache file.
+- `deploy.test.ts`: the notice is the last line after a deploy, and a check that never answers does not hold the
+  command.
+- `dev.test.ts`: the notice is printed once beside the first push.
+
+**Sabotage** (each restored, `git diff` clean after):
+
+| Break | Failed |
+|---|---|
+| never turned off | "off in CI…" |
+| the cache ignored | "once a day" |
+| the registry asked without a timeout | "every failure is silent, quick…" |
+| `deploy` does not print the notice | the deploy test |
+| `deploy` waits for the check without the 200 ms limit | the deploy test (it hangs) |
+| `dev` does not print the notice | the dev test |

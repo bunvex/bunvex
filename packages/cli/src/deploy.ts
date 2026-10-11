@@ -34,6 +34,7 @@ import type { Io } from "./io.ts";
 import { acquireTarget, urlVariables } from "./local-deployment.ts";
 import { NO_DEPLOYMENT, TARGET_OPTIONS, type Target, type TargetFlags, takeTargetFlags } from "./target.ts";
 import { VERSION } from "./version.ts";
+import { printVersionNotice, startVersionCheck } from "./version-check.ts";
 
 export { parseEnvFile } from "./target.ts";
 
@@ -262,6 +263,8 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
     io.err(`bunvex deploy: ${NO_DEPLOYMENT}`);
     return 1;
   }
+  // The version check (AD-29) runs beside the push, as Convex's version message does.
+  const versionCheck = startVersionCheck(io);
   try {
     // Convex's step 1: the build command first, with the deployment's URLs in the environment (STUDY-81).
     if (flags.cmd !== undefined && !(await runCommand(acquired.target, flags.cmd, flags, io))) return 1;
@@ -286,6 +289,7 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
     ).code;
   } finally {
     await acquired.release();
+    await printVersionNotice(versionCheck, io);
   }
 }
 

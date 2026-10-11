@@ -10,8 +10,8 @@ item. It is the project's to-do list at the scale of the whole product.
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 161 | 2 | 2 |
 | Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 217 | 26 | 20 |
 
-Beyond Convex, [additions.md](additions.md) lists 28 additions: 25 built (11 of them dashboard screens on the
-mock, 3 more with their dashboard part on the mock), 2 accepted, 1 deferred, none proposed (2026-10-08).
+Beyond Convex, [additions.md](additions.md) lists 29 additions: 26 built (11 of them dashboard screens on the
+mock, 3 more with their dashboard part on the mock), 2 accepted, 1 deferred, none proposed (2026-10-11, with AD-29).
 
 These counts were recounted on 2026-10-08 (with #503, the index cache) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
