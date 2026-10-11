@@ -272,7 +272,7 @@ export const PARITY = {
   areas: [
     { name: "Function and database API", done: 233, partial: 3, missing: 10 },
     { name: "Clients, sync protocol, React", done: 161, partial: 2, missing: 2 },
-    { name: "Platform: auth, storage, scheduler, CLI…", done: 216, partial: 26, missing: 21 },
+    { name: "Platform: auth, storage, scheduler, CLI…", done: 217, partial: 26, missing: 20 },
   ],
   link: blob("docs/parity/README.md"),
 } as const;
