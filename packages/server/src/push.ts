@@ -73,13 +73,24 @@ const invalidSchemaExport = () =>
  * schema.rs): none, `null` or `undefined` is `MissingSchemaExportError`; anything that is not a schema (made by
  * `defineSchema`) is `InvalidSchemaExport`. Convex's messages without its docs link (DV-356).
  */
+/** A schema module's default export as `defineSchema` makes it: its tables a record of table definitions. */
+function isSchema(value: unknown): value is SchemaDefinition {
+  const tables = (value as SchemaDefinition | null)?.tables;
+  return (
+    typeof tables === "object" &&
+    tables !== null &&
+    !(tables instanceof Map) &&
+    typeof (value as SchemaDefinition).schemaValidation === "boolean"
+  );
+}
+
 function schemaExport(value: unknown): SchemaDefinition {
   if (value === undefined || value === null)
     throw new PushError(
       "MissingSchemaExportError",
       "Hit an error while evaluating your schema:\nSchema file missing default export.",
     );
-  if (!((value as SchemaDefinition).tables instanceof Map)) throw invalidSchemaExport();
+  if (!isSchema(value)) throw invalidSchemaExport();
   return value as SchemaDefinition;
 }
 
@@ -144,7 +155,7 @@ type Pending = {
 };
 
 const AUTH_CONFIG = AUTH_CONFIG_MODULE;
-const emptySchema: SchemaDefinition = { tables: new Map(), schemaValidation: false };
+const emptySchema: SchemaDefinition = { tables: {}, schemaValidation: false };
 
 export type PushDeps = {
   engine: Engine;
