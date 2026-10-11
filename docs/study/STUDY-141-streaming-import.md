@@ -1,6 +1,7 @@
 # STUDY-141 — Streaming import (`/api/streaming_import/*`) and the `clear_tables` audit event
 
-- **Status:** draft, decision pending (owner): Q1–Q5 (DV-447–DV-451) and the PR plan (§7). Nothing is built.
+- **Status:** decided (owner, 2026-10-11): Q1–Q5 as recommended (DV-447, DV-448, DV-449, DV-451 decided; DV-450
+  matched to Convex). Scope: PR 1 only for now (§7); PRs 2–4 stay here as future work.
 - **Convex source read:** `4577b9031` of get-convex/convex-backend (the local clone). The reference is `d8bdde0`
   (`docs/parity/upstream.md`); STUDY-137's classification of `4577b90..d8bdde0` touches none of the files below
   except the OCC writer descriptions ("A Fivetran sync", "An Airbyte sync"), which bunvex already has (DV-435).
@@ -335,13 +336,14 @@ no "convex" and stay as they are.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| Q1 (DV-447) | bunvex ships the HTTP routes only, no Fivetran destination program (Convex's `fivetran_destination` gRPC server). | **Not built yet, and recommended not to be.** The program runs on Fivetran's infrastructure as a partner connector; a bunvex port would be a separate app (gRPC, CSV, AES-CBC, zstd/gzip, its own schema suggestions) that Fivetran would have to host. Convex itself says streaming import through Fivetran "is not supported" and hides the listing. **App impact:** none on apps; the routes stay callable by anything that speaks them. **Recommendation:** HTTP routes only. | pending (owner) |
-| Q2 (DV-448) | The published connectors authenticate with `Authorization: Convex <key>`; bunvex answers that 400 `InvalidAdminKey`, as it does everywhere (DV-97). | **Rule 5.** Option A: keep DV-97 — Airbyte's `destination-convex` cannot reach bunvex unmodified; a user needs a fork that sends `Bunvex <key>` (the precedent of STUDY-69 for data sync, DV-312: a connector written for Convex must send bunvex's names). Option B: accept the `Convex ` scheme on `/api/streaming_import/*` only — a rule-5 exception, which DV-312 removed. **App impact:** with A, no off-the-shelf connector works; the routes serve custom clients and forks. **Recommendation:** A, for consistency with DV-97/DV-312, accepting that the Airbyte connector needs a one-line fork. | pending (owner) |
-| Q3 (DV-449) | `FivetranMissingUpdatedRow` reads "…a row that doesn’t exist in the destination." (Convex: "…in the Convex destination."). Code, status (404) and the rest of the text kept. | **Rule 5.** **App impact:** only the message text. **Recommendation:** reword so. | pending (owner) |
-| Q4 (DV-450, only if B) | Names that need slugifying and contain non-ASCII characters. Option A: transliterate exactly as `unidecode` 0.3.0 (a new dependency with the same table, or a generated data file), checked character by character against the oracle. Option B: no transliteration — a non-ASCII character is a separator (`"Café"` → `source_caf`, Convex `source_cafe`). | **Not built yet** (A) / a choice of cost (B). **App impact:** table and field names of imported data with non-ASCII names (B gives other names than Convex). **Recommendation:** A if an npm package matches the crate's table on the oracle, else a generated table in `@bunvex/server`. | pending (owner) |
-| Q5 (DV-451) | `GET /api/streaming_import/primary_key_indexes_ready` carries its `{tables}` in a JSON body; Bun's server drops the body of a GET (measured: Bun 1.4.2, `Content-Length` body, handler reads `""`). Proposal: with no body, answer for **every** `_by_airbyte_primary_key` index (ready when none is backfilling); with a body (should Bun ever pass one), Convex's behaviour. | **Cannot be done** with `Bun.serve`. **App impact:** the connector polls until every primary-key index is ready instead of its tables' — the same answer unless other tables are backfilling one; no `MissingIndex` for a table without the index (it answers `true` once the others are ready). **Recommendation:** the proposal. | pending (owner) |
+| Q1 (DV-447) | bunvex ships the HTTP routes only, no Fivetran destination program (Convex's `fivetran_destination` gRPC server). | **Not built yet, and recommended not to be.** The program runs on Fivetran's infrastructure as a partner connector; a bunvex port would be a separate app (gRPC, CSV, AES-CBC, zstd/gzip, its own schema suggestions) that Fivetran would have to host. Convex itself says streaming import through Fivetran "is not supported" and hides the listing. **App impact:** none on apps; the routes stay callable by anything that speaks them. **Recommendation:** HTTP routes only. | **decided** (owner, 2026-10-11): HTTP routes only |
+| Q2 (DV-448) | The published connectors authenticate with `Authorization: Convex <key>`; bunvex answers that 400 `InvalidAdminKey`, as it does everywhere (DV-97). | **Rule 5.** Option A: keep DV-97 — Airbyte's `destination-convex` cannot reach bunvex unmodified; a user needs a fork that sends `Bunvex <key>` (the precedent of STUDY-69 for data sync, DV-312: a connector written for Convex must send bunvex's names). Option B: accept the `Convex ` scheme on `/api/streaming_import/*` only — a rule-5 exception, which DV-312 removed. **App impact:** with A, no off-the-shelf connector works; the routes serve custom clients and forks. **Recommendation:** A, for consistency with DV-97/DV-312, accepting that the Airbyte connector needs a one-line fork. | **decided** (owner, 2026-10-11): A, only `Bunvex <key>`; the published Airbyte connector needs a one-line fork (its `_get_auth_headers`) |
+| Q3 (DV-449) | `FivetranMissingUpdatedRow` reads "…a row that doesn’t exist in the destination." (Convex: "…in the Convex destination."). Code, status (404) and the rest of the text kept. | **Rule 5.** **App impact:** only the message text. **Recommendation:** reword so. | **decided** (owner, 2026-10-11): reworded, as recommended (built with PR 4) |
+| Q4 (DV-450, only if B) | Names that need slugifying and contain non-ASCII characters. Option A: transliterate exactly as `unidecode` 0.3.0 (a new dependency with the same table, or a generated data file), checked character by character against the oracle. Option B: no transliteration — a non-ASCII character is a separator (`"Café"` → `source_caf`, Convex `source_cafe`). | **Not built yet** (A) / a choice of cost (B). **App impact:** table and field names of imported data with non-ASCII names (B gives other names than Convex). **Recommendation:** A if an npm package matches the crate's table on the oracle, else a generated table in `@bunvex/server`. | **decided** (owner, 2026-10-11): A, match Convex's transliteration exactly, verified against Convex's binary (no divergence) |
+| Q5 (DV-451) | `GET /api/streaming_import/primary_key_indexes_ready` carries its `{tables}` in a JSON body; Bun's server drops the body of a GET (measured: Bun 1.4.2, `Content-Length` body, handler reads `""`). Proposal: with no body, answer for **every** `_by_airbyte_primary_key` index (ready when none is backfilling); with a body (should Bun ever pass one), Convex's behaviour. | **Cannot be done** with `Bun.serve`. **App impact:** the connector polls until every primary-key index is ready instead of its tables' — the same answer unless other tables are backfilling one; no `MissingIndex` for a table without the index (it answers `true` once the others are ready). **Recommendation:** the proposal. | **decided** (owner, 2026-10-11): as recommended (built with PR 2) |
 
-Record each in [docs/parity/divergences.md](../parity/divergences.md) (pending until decided).
+Recorded in [docs/parity/divergences.md](../parity/divergences.md): DV-447, DV-448, DV-449 and DV-451 as decided
+divergences, DV-450 as resolved to match Convex.
 
 Not divergences (matched as Convex, noted because they look odd): `replace_tables` always 400 and unauthenticated;
 `clear_tables` creating missing tables; Append inserting CDC-deleted records; keys of `add_primary_key_indexes` not
@@ -379,7 +381,7 @@ None proposed.
 
 ## 6. Open questions
 
-Q1–Q5 above. Everything else is decided by "match Convex".
+None: Q1–Q5 were decided by the owner (2026-10-11). Everything else is decided by "match Convex".
 
 ## 7. Plan
 
@@ -388,11 +390,11 @@ Sizes: S < 300 lines, M 300–900, L > 900 (code and tests).
 | PR | Content | Size | Needs |
 |---|---|---|---|
 | 0 | This study (draft). | docs | — |
-| 1 | `/api/streaming_import/*` mounted with `ImportBackups`; `validIdentifier`; `clear_tables` (hidden tables + one activation + the `clear_tables` event), `get_schema`, `replace_tables`; the dashboard's History text; parity rows. **Delivers the owner's ask.** | M (~500) | Q2, Q4 |
+| 1 (**build now**) | `/api/streaming_import/*` mounted with `ImportBackups`; `validIdentifier`; `clear_tables` (hidden tables + one activation + the `clear_tables` event), `get_schema`, `replace_tables`; the dashboard's History text; parity rows. **Delivers the owner's ask.** | M (~500) | Q2, Q4 |
 | 2 | System indexes on user tables in `@bunvex/core` (push leaves `_…` indexes alone, hidden from index lists, not counted; `addSystemIndexes`, `indexesReady`); `_fivetran*` names in `schema.ts`; `add_primary_key_indexes`, `primary_key_indexes_ready`. | L (~900–1100) | Q5 |
 | 3 | `import_airbyte_records`: records, streams, CDC, append/dedup, paging at the limits, 20 MiB body limit, `_system/…airbyte…` write sources. | M (~600) | PR 2 |
 | 4 | Fivetran routes: `apply_fivetran_operations`, `fivetran_truncate_table`, `fivetran_create_table`. | M–L (~800) | PR 2, Q3 |
 
-PR 1 needs nothing from PRs 2–4: a table's existing indexes are copied by `createHiddenTable` already, and the
+The owner scoped the work to PR 1 (2026-10-11); PRs 2–4 are future work. PR 1 needs nothing from PRs 2–4: a table's existing indexes are copied by `createHiddenTable` already, and the
 hidden primary-key indexes only exist after PR 2. Not planned: a Fivetran destination program (Q1), a fork of the
 Airbyte connector (Q2 A leaves that to users).

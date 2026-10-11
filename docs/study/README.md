@@ -167,7 +167,7 @@ to a spec.
 | [STUDY-138](STUDY-138-following-convex.md) | Following Convex: a daily triage of its new commits (digest issue, an issue per urgent fix) and a weekly reference bump; the state in `docs/parity/upstream.md` | accepted (owner, 2026-10-08); built |
 | [STUDY-139](STUDY-139-product-and-oracle.md) | bunvex as a product, Convex as the oracle: compatibility from the reference on, no paths for older Convex clients, formats or stores; migration by export and import; what to remove (P1–P7) | accepted (owner, 2026-10-08): the principle and P1–P7 |
 | [STUDY-130](STUDY-130-storage-deletions.md) | Deleting a file's blob: Convex never does (no queue, no sweep); bunvex's `_storage_deletions` and sweeps dropped to match (DV-150 withdrawn) | implemented (owner, 2026-10-05: A; DV-407) |
-| [STUDY-141](STUDY-141-streaming-import.md) | Streaming import (`/api/streaming_import/*`): `clear_tables` and its `clear_tables` audit event, Airbyte records, Fivetran operations, hidden primary-key indexes (system indexes on user tables); who calls them; a four-PR plan | draft; Q1–Q5 pending (owner; DV-447–DV-451) |
+| [STUDY-141](STUDY-141-streaming-import.md) | Streaming import (`/api/streaming_import/*`): `clear_tables` and its `clear_tables` audit event, Airbyte records, Fivetran operations, hidden primary-key indexes (system indexes on user tables); who calls them; a four-PR plan | decided (owner, 2026-10-11): Q1–Q5 as recommended (DV-447–DV-451); PR 1 only for now |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 
