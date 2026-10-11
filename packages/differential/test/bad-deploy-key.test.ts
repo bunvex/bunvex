@@ -69,7 +69,9 @@ describe.skipIf(!ready)("BadDeployKey on Convex and on bunvex", () => {
       const c = await raw(convex, method, path, body);
       // A route bunvex does not have (Convex's 404) is not this test's business.
       if (c.status === 404) continue;
-      const b = await raw(bunvex, method, path, body);
+      // The body names Convex's request destination; bunvex's is its own word (DV-312). Bodies are parsed
+      // before the key is checked (#562), so each backend gets the name it knows, and both refuse on the key.
+      const b = await raw(bunvex, method, path, body?.replace('"convexCloud"', '"bunvexCloud"'));
       if ((c.body as { code?: string }).code === "BadDeployKey") refused++;
       expect({ method, path, ...b }).toEqual({ method, path, ...c });
     }
