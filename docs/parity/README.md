@@ -176,9 +176,9 @@ gaps.
 - Client:
   - arguments-size metrics.
 - Operations:
-  - the `clear_tables` audit event, which comes with streaming import (missing; studied in
-    [STUDY-141](../study/STUDY-141-streaming-import.md), decided by the owner 2026-10-11; its PR 1 brings it). The other audit events
-    bunvex does not record are not gaps: `build_indexes`, `change_deployment_state`,
+  - streaming import past `clear_tables` (built with its audit event, STUDY-141 PR 1): Airbyte records,
+    Fivetran operations and primary-key indexes (PRs 2–4, future work by the owner's choice, 2026-10-11). The
+    audit events bunvex does not record are not gaps: `build_indexes`, `change_deployment_state`,
     `change_system_stop_state` and `replace_environment_variable` are not emitted by Convex's open-source
     backend; `push_config` (legacy push) and `delete_component` (components) do not apply;
   - `AWS_S3_DISABLE_SSE/CHECKSUMS`;

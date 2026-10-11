@@ -1,7 +1,7 @@
 # STUDY-141 — Streaming import (`/api/streaming_import/*`) and the `clear_tables` audit event
 
 - **Status:** decided (owner, 2026-10-11): Q1–Q5 as recommended (DV-447, DV-448, DV-449, DV-451 decided; DV-450
-  matched to Convex). Scope: PR 1 only for now (§7); PRs 2–4 stay here as future work.
+  matched to Convex). Scope: PR 1 only for now (§7); PRs 2–4 stay here as future work. PR 1 built (§8).
 - **Convex source read:** `4577b9031` of get-convex/convex-backend (the local clone). The reference is `d8bdde0`
   (`docs/parity/upstream.md`); STUDY-137's classification of `4577b90..d8bdde0` touches none of the files below
   except the OCC writer descriptions ("A Fivetran sync", "An Airbyte sync"), which bunvex already has (DV-435).
@@ -398,3 +398,68 @@ Sizes: S < 300 lines, M 300–900, L > 900 (code and tests).
 The owner scoped the work to PR 1 (2026-10-11); PRs 2–4 are future work. PR 1 needs nothing from PRs 2–4: a table's existing indexes are copied by `createHiddenTable` already, and the
 hidden primary-key indexes only exist after PR 2. Not planned: a Fivetran destination program (Q1), a fork of the
 Airbyte connector (Q2 A leaves that to users).
+
+## 8. PR 1, built
+
+What PR 1 adds:
+
+- **Routes.** `packages/server/src/streaming-import.ts` serves `/api/streaming_import/clear_tables` (PUT),
+  `get_schema` (GET, and HEAD as axum answers it) and `replace_tables` (POST), from the admin routes of
+  `server.ts`, behaving as Convex's extractors and router do:
+  - the caller is identified first;
+  - then the JSON body is read (2 MiB, axum's default, else 400 `BadJsonBody` "Failed to buffer the request
+    body: length limit exceeded"; serde's messages for the new `Vec<String>` and `BTreeMap<String, String>`
+    fields in `json-body.ts`);
+  - then ImportBackups is checked;
+  - a wrong method is 405 with `allow`;
+  - a route not built (the Airbyte, Fivetran and primary-key routes) is axum's 404 with no body.
+- **Names.** `validTableName` and `slugify` are Convex's `ValidIdentifier` and the `slugify` crate. Two details:
+  - A name that cannot be made valid is the same untyped 500.
+  - The transliteration is `unidecode` 0.3.0's table (DV-450). `scripts/generate-unidecode-table.ts` reduces it
+    from the crate's `data.rs` (checksum in the script; BSD-3-Clause, reproduced in the file and in NOTICE) to
+    what a slug keeps, into `packages/server/src/unidecode-table.ts` (244 KB, split on first use).
+- **`clear_tables`.**
+  - It uses `Engine.replaceWithEmptyTables(names, body, {createMissing})`. The new option makes a missing table
+    a new empty one, as Convex's `create_empty_table` without a number.
+  - Its body checks that the schema did not change (`ImportSchemaChanged`) and inserts `clear_tables` (`{}`)
+    with the caller's actor.
+  - A name given twice is a `TableConflict` when the table exists (Convex's message, `bunvex import`) and one
+    new table when it does not (both as observed on Convex's binary).
+- **Dashboard.** History reads "Cleared tables", as Convex's event has no metadata. The mock records `{}`.
+
+Tests:
+
+- `packages/differential/test/streaming-import.test.ts` runs the same requests on Convex's
+  `precompiled-2026-10-07-d8bdde0` binary and on bunvex. It compares status, `allow` and body for:
+  - 24 argument, method, auth and route cases;
+  - the body limit at 2 MiB and 2 MiB + 1;
+  - `get_schema` with a pushed schema;
+  - a clear: empty tables, an index still readable, the table number kept (an old id still names the table), new
+    documents accepted;
+  - 23 name cases: system names, punctuation, scripts, ligatures, digits, emoji past U+FFFF, U+FFFE/U+FFFF,
+    empty, underscores only, 57/58/64/65 characters, a leading digit, names given twice;
+  - every 16th code point of the Basic Multilingual Plane (every 8th passed too, `STREAMING_IMPORT_BMP_STEP=8`,
+    about 4 000 tables), compared through the tables both backends made.
+
+  Convex's local backend refuses to list its audit log (403 `AuditLogsDisabled`), so the event is checked in
+  `packages/server/test/streaming-import.test.ts` (one event, `{}`, the key's member, the user agent; none when
+  the clear fails), along with ImportBackups, the body order, the limit, `replace_tables`, the 405/404, and the
+  crate's own slug examples.
+- `packages/dashboard/test/history.test.tsx`: the History text.
+
+Sabotage. Each of these was applied alone; each made the server test fail, and `git diff` was empty after each was
+restored:
+- the audit insert dropped (3 tests);
+- the tables activated one by one (2);
+- missing tables not created (2);
+- ImportBackups checked before the body (1);
+- the limit raised to 8 MiB (1);
+- a name twice allowed (1);
+- no transliteration (3);
+- system names kept (2).
+
+Measurements: none needed (off the function path; `replaceWithEmptyTables` is unchanged for its existing caller).
+
+Found on the way, outside this PR: on every admin route, Convex's binary words `BadDeployKey` (no key where an admin
+is required) as "invalid for this deployment". bunvex names the deployment ("invalid for deployment '<name>'", as
+STUDY-34 recorded). The differential test rewrites that one message. Whether to match it is a separate question.

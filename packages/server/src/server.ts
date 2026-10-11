@@ -147,6 +147,7 @@ import {
   streamingArgs,
   tableColumnNames,
 } from "./streaming-export.ts";
+import { STREAMING_IMPORT_ROUTE, StreamingImportError, streamingImportRoute } from "./streaming-import.ts";
 import {
   MAX_PENDING_MUTATIONS,
   type SplayOptions,
@@ -1077,6 +1078,24 @@ export function createServer(opts: ServerOptions) {
         }
       }
     }
+    // Streaming import (STUDY-141): `clear_tables`, `get_schema`, `replace_tables`, with ImportBackups.
+    const streamingImport = STREAMING_IMPORT_ROUTE.exec(url.pathname);
+    if (streamingImport) {
+      try {
+        // A route not built (yet) is axum's 404, with no body.
+        return (
+          (await streamingImportRoute({ engine, functions }, streamingImport[1]!, req, caller)) ??
+          new Response(null, { status: 404 })
+        );
+      } catch (e) {
+        if (e instanceof StreamingImportError || e instanceof BadJsonBody)
+          return requestError(e.status, e.code, e.message);
+        // Convex's untyped error for a name it cannot make valid: an internal error.
+        if (e instanceof Error && e.message === "Failed to create a valid identifier.")
+          return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+        throw e;
+      }
+    }
     const streaming = STREAMING_EXPORT_ROUTE.exec(url.pathname);
     if (streaming) {
       const route = streaming[1]!;
@@ -1370,6 +1389,7 @@ export function createServer(opts: ServerOptions) {
         LOG_STREAM_ROUTE.test(url.pathname) ||
         DEBUG_ROUTE.test(url.pathname) ||
         STREAMING_EXPORT_ROUTE.test(url.pathname) ||
+        STREAMING_IMPORT_ROUTE.test(url.pathname) ||
         DATA_SYNC_ROUTE.test(url.pathname) ||
         url.pathname === "/api/shapes2" ||
         PAUSE_ROUTE.test(url.pathname) ||
