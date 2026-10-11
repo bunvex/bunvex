@@ -77,7 +77,9 @@ export function describeBound(key: Uint8Array, lo: boolean): KeyBound {
   }
   // `prefixEnd`: the values' last byte raised by one (trailing 0xFF bytes dropped).
   const down = Uint8Array.from(key);
-  down[down.length - 1]!--;
+  // An assignment, not `!--`: Stryker's instrumenter cannot mutate an update of a non-null expression.
+  const last = down.length - 1;
+  down[last] = (down[last] as number) - 1;
   const vals = whole(down);
   if (vals) return { kind: "key", values: vals, after: true };
   return { kind: "raw", hex: hex(key) };

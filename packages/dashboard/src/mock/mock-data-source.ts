@@ -728,7 +728,7 @@ export class MockDataSource implements DashboardDataSource {
       const deleted = t.documents.length;
       t.documents = [];
       this.changed(table);
-      this.record("clear_tables", { tables: [table], count: deleted });
+      this.record("clear_tables", {});
       return { deleted };
     });
   }

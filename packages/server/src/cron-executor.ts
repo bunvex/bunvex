@@ -98,6 +98,8 @@ export class CronJobExecutor {
    * the crons run once it succeeds — a store fault at startup never takes the process down.
    */
   start(apply = true): Promise<CronDiff | undefined> {
+    // Started late (a deployable server starts it once its code is loaded) after a stop: nothing to run.
+    if (this.stopped) return Promise.resolve(undefined);
     const byNextTs = this.engine.catalog.table("_cron_next_run").indexes.get("by_next_ts")!.id;
     // And by a pause or unpause (STUDY-63), as Convex's executors subscribe to `_backend_state`.
     const backendState = this.engine.catalog.table(BACKEND_STATE_TABLE).byId.id;

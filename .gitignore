@@ -10,8 +10,10 @@ dist/
 .tanstack/
 *.tsbuildinfo
 
-# tests: `bun test --coverage`, Playwright
+# tests: `bun test --coverage`, Playwright, Stryker (`bun run mutation`)
 coverage/
+reports/
+.stryker-tmp/
 test-results/
 playwright-report/
 

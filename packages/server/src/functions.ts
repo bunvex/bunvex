@@ -1162,7 +1162,7 @@ export class Functions {
    */
   requireOperation(caller: Caller | undefined, op: DeploymentOp) {
     const admin = adminOf(caller);
-    if (!admin) throw new BadDeployKeyError(this.engine.instanceName || undefined);
+    if (!admin) throw new BadDeployKeyError();
     if (!allows(admin, op)) throw new OperationNotPermittedError(op);
   }
 
