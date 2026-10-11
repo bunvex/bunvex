@@ -4,6 +4,7 @@
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import { describeBlobStoreConformance } from "../src/conformance.ts";
 import { S3BlobStore, type S3Options, s3OptionsFromEnv } from "../src/index.ts";
+import { PartSizer } from "../src/s3.ts";
 import { signRequest } from "../src/sigv4.ts";
 
 type Recorded = { method: string; path: string; query: URLSearchParams; headers: Headers; body: string };
@@ -212,7 +213,7 @@ test("with checksums on, a part answered without its checksum fails the write an
 
 test("a body over several parts: each part's checksum, the parts in order in the completion", async () => {
   const chunks = ["aaaa", "bbbb", "cc"];
-  const w = await store({ partSize: 4 }).put(
+  const w = await store({ minPartSize: 4, maxPartSize: 4 }).put(
     new ReadableStream<Uint8Array>({
       start(c) {
         for (const s of chunks) c.enqueue(new TextEncoder().encode(s));
@@ -251,6 +252,87 @@ test("a completion answered 200 with an error document fails the write", async (
   expect(ops().at(-1)).toBe("DELETE upload");
 });
 
+/** The part sizes PartSizer cuts from chunks of the given sizes, the last (possibly empty) part included. */
+const cut = (min: number, max: number, chunks: number[]) => {
+  const sizer = new PartSizer(min, max);
+  const parts: number[] = [];
+  for (const n of chunks) {
+    const ready = sizer.push(new Uint8Array(n));
+    if (ready) parts.push(ready.byteLength);
+  }
+  parts.push(sizer.finish().byteLength);
+  return parts;
+};
+
+test("part sizes as Convex's BufferedUpload: from the minimum, doubling up to the maximum", () => {
+  // 100 one-byte chunks: 5, 10, 20, then the maximum, and the rest as the last part.
+  expect(cut(5, 20, Array(100).fill(1))).toEqual([5, 10, 20, 20, 20, 20, 5]);
+  // The target doubles each time a part ships, never past the maximum.
+  expect(cut(5, 1000, Array(100).fill(1))).toEqual([5, 10, 20, 40, 25]);
+  // A chunk at or above the target with nothing buffered ships as it is (up to the maximum).
+  expect(cut(5, 20, [7, 3, 9])).toEqual([7, 12, 0]);
+  // A buffer past the maximum ships its first `max` bytes and keeps the rest.
+  expect(cut(5, 8, [20, 1])).toEqual([8, 8, 5]);
+  // A body that ends exactly on a part still ends with an empty part; an empty body is one empty part.
+  expect(cut(5, 20, [5])).toEqual([5, 0]);
+  expect(cut(5, 20, [])).toEqual([0]);
+});
+
+test("the defaults: 5 MiB parts doubling to 200 MiB (STORAGE_MAX_INTERMEDIATE_PART_SIZE, capped at 5 GiB)", async () => {
+  const mib = 1 << 20;
+  expect(cut(5 * mib, 200 * mib, Array(700).fill(mib))).toEqual([5, 10, 20, 40, 80, 160, 200, 185].map((n) => n * mib));
+  const max = (v: string | undefined) =>
+    s3OptionsFromEnv({ S3_STORAGE_FILES_BUCKET: "b", STORAGE_MAX_INTERMEDIATE_PART_SIZE: v })?.maxPartSize;
+  expect(max(undefined)).toBe(200 * mib);
+  expect(max("10485760")).toBe(10 * mib);
+  expect(max(String(6 * 1024 * mib))).toBe(5 * 1024 * mib);
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    expect([max("ten"), max("-1"), max("1.5")]).toEqual([200 * mib, 200 * mib, 200 * mib]);
+  } finally {
+    console.warn = warn;
+  }
+  // Through a store: the parts it sends follow the same sequence.
+  const parts = async (body: Uint8Array[]) => {
+    log.length = 0;
+    await store({ minPartSize: 2, maxPartSize: 4 }).put(
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          for (const b of body) c.enqueue(b);
+          c.close();
+        },
+      }),
+    );
+    return partsOf().map((p) => p.body.length);
+  };
+  expect(await parts([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1].map(() => new Uint8Array(1)))).toEqual([2, 4, 4, 3]);
+  expect(await parts([new Uint8Array(2)])).toEqual([2, 0]);
+  // One part per chunk at most, as Convex's: a single chunk past the maximum leaves a larger last part.
+  log.length = 0;
+  await store({ minPartSize: 2, maxPartSize: 4 }).put(new Uint8Array(13));
+  expect(partsOf().map((p) => p.body.length)).toEqual([4, 9]);
+});
+
+test("S3's part numbers: the 10 000th part is never written, as Convex's next_part_number", async () => {
+  const s = store({ minPartSize: 1, maxPartSize: 1 });
+  const ones = (n: number) =>
+    new ReadableStream<Uint8Array>({
+      start(c) {
+        for (let i = 0; i < n; i++) c.enqueue(new Uint8Array([1]));
+        c.close();
+      },
+    });
+  // 9 998 one-byte parts and the empty last one: part 9 999, the last that can be written.
+  await s.put(ones(9998));
+  expect(partsOf().length).toBe(9999);
+  log.length = 0;
+  const err = await s.put(ones(9999)).catch((e: Error) => e.message);
+  expect(err).toBe("Object part number cannot exceed 10,000 or be 0.");
+  expect(partsOf().length).toBe(9999);
+  expect(ops().at(-1)).toBe("DELETE upload");
+}, 60_000);
+
 test("the flags are read as Convex reads them: exactly `true`, anything else is off", () => {
   const opts = (v: string | undefined) =>
     s3OptionsFromEnv({ S3_STORAGE_FILES_BUCKET: "b", AWS_S3_DISABLE_SSE: v, AWS_S3_DISABLE_CHECKSUMS: v });
@@ -282,7 +364,7 @@ test("SigV4: AWS's own GetObject example signs to its published signature", () =
   );
 });
 
-describeBlobStoreConformance("s3 (fake)", () => store({ prefix: `c-${crypto.randomUUID()}/`, partSize: 1 << 20 }), {
+describeBlobStoreConformance("s3 (fake)", () => store({ prefix: `c-${crypto.randomUUID()}/`, minPartSize: 1 << 20 }), {
   large: true,
 });
 describeBlobStoreConformance("s3 (fake, SSE and checksums disabled)", () =>

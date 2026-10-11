@@ -40,7 +40,6 @@ if (bucket)
         disableSse: process.env.AWS_S3_DISABLE_SSE === "true",
         disableChecksums: process.env.AWS_S3_DISABLE_CHECKSUMS === "true",
         prefix: `test-${crypto.randomUUID()}/`,
-        partSize: 5 << 20,
       }),
     { large: true },
   );
@@ -63,4 +62,34 @@ if (bucket)
     const head = await fetch(new S3Client(opts).presign(prefix + w.key, { method: "HEAD" }), { method: "HEAD" });
     expect(head.status).toBe(200);
     expect(head.headers.get("x-amz-server-side-encryption")).toBe(disableSse ? null : "AES256");
+  });
+
+// Against a real store: a body that ends exactly on a part ends with Convex's empty last part (STUDY-140), which
+// the store must accept.
+if (bucket)
+  test("s3: a body of exactly one 5 MiB part, then the empty last part", async () => {
+    const store = new S3BlobStore({
+      bucket,
+      region: process.env.AWS_REGION ?? "us-east-1",
+      endpoint: process.env.S3_ENDPOINT_URL,
+      forcePathStyle: process.env.AWS_S3_FORCE_PATH_STYLE === "true",
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+      disableSse: process.env.AWS_S3_DISABLE_SSE === "true",
+      disableChecksums: process.env.AWS_S3_DISABLE_CHECKSUMS === "true",
+      prefix: `test-${crypto.randomUUID()}/`,
+    });
+    const bytes = new Uint8Array(5 << 20).map((_, i) => i % 253);
+    const w = await store.put(
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(bytes);
+          c.close();
+        },
+      }),
+    );
+    expect(w.size).toBe(5 << 20);
+    const back = new Uint8Array(await new Response(await store.get(w.key)).arrayBuffer());
+    expect(back.length).toBe(bytes.length);
+    expect(Buffer.compare(back, bytes)).toBe(0);
   });

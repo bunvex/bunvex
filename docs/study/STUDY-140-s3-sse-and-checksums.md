@@ -1,6 +1,6 @@
 # STUDY-140 — S3 server-side encryption and checksums (`AWS_S3_DISABLE_SSE`, `AWS_S3_DISABLE_CHECKSUMS`)
 
-- **Status:** implemented; DV-445 and DV-446 pending (owner)
+- **Status:** implemented; DV-445 accepted, DV-446 resolved to match Convex, small uploads kept multipart (owner, 2026-10-11)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend (the reference, [upstream.md](../parity/upstream.md));
   the AWS SDK at Convex's `Cargo.lock` versions: `aws-sdk-s3` 1.143.0, `aws-config` 1.6.2, `aws-smithy-types` 1.6.3,
   `aws-smithy-checksums` 0.65.0
@@ -25,10 +25,26 @@ services" (`self-hosted/CHANGELOG.md:29`).
 `S3Storage` (`crates/aws_s3/src/storage.rs`) writes only through multipart uploads: `start_upload` (file uploads,
 exports, modules, search segments), `start_client_driven_upload`, and `put_object` (`:548-553`), which opens an
 upload, writes the bytes as one part and completes it. There is no `PutObject` call on the write path (the presigned
-upload URL, `:404-420`, signs a `PutObject` with neither SSE nor checksums: `TODO(CX-4921)`). Parts start at 5 MiB and
-double up to `STORAGE_MAX_INTERMEDIATE_PART_SIZE` (200 MiB; `crates/storage/src/lib.rs` `BufferedUpload`, `:380-410`);
-`complete` always writes the remaining buffer, even empty, as the last part (`:474-482`). Up to
-`MAXIMUM_PARALLEL_UPLOADS` = 8 parts upload at once (`crates/storage/src/lib.rs:95`, `try_write_parallel`).
+upload URL, `:404-420`, signs a `PutObject` with neither SSE nor checksums: `TODO(CX-4921)`). Every caller writes
+through `start_upload` (`file_storage/src/core.rs:393`, `exports/src/lib.rs:193`, `search/src/disk_index.rs:274, 326`,
+`model/src/source_packages/upload_download.rs:147`, `application/src/lib.rs:2606`), which wraps the upload in a
+`BufferedUpload` (`crates/storage/src/lib.rs:343-482`) with a minimum part of 5 MiB (`MIN_S3_INTERMEDIATE_PART_SIZE`)
+and a maximum of `min(5 GiB, STORAGE_MAX_INTERMEDIATE_PART_SIZE)` (`storage.rs:286-297`; the knob is 200 MiB by
+default, `common/src/knobs.rs:1895`, read by `env_config`, which keeps the default on a value that does not parse).
+For each chunk of the body (`_update_buffer_and_get_next`, `:377-410`):
+
+- with nothing buffered, a chunk between the target and the maximum is shipped as it is (no copy);
+- otherwise it is appended to the buffer; once the buffer reaches the target, the target doubles (capped at the
+  maximum) and the buffer ships, or only its first `max` bytes when it is past the maximum, the rest staying buffered.
+  At most one part ships per chunk.
+
+The target starts at the minimum, so parts go 5, 10, 20, 40, 80, 160, 200, 200, … MiB. `complete` writes whatever is
+left, **even nothing**, as the last part (`:474-482`): a body that ends on a part boundary ends with an empty part.
+Part numbers start at 1, and `next_part_number` (`storage.rs:702-706`) fails with "Object part number cannot exceed
+10,000 or be 0." when the number after the one it hands out is past 10 000, so 9 999 parts at most: about 1.9 TiB
+(the first six parts are 315 MiB, the rest up to 200 MiB). Up to `MAXIMUM_PARALLEL_UPLOADS` = 8 parts upload at once
+(`crates/storage/src/lib.rs:95`, `try_write_parallel`, fed by a channel of 4), so a large upload can hold about
+8 × 200 MiB of parts in memory.
 
 ### 1.3 What the flags change
 
@@ -91,11 +107,12 @@ listings stay on Bun's `S3Client`. The region, endpoint and credentials are reso
 - `s3OptionsFromEnv` reads `AWS_S3_DISABLE_SSE` and `AWS_S3_DISABLE_CHECKSUMS` as Convex: exactly `true` is on
   (`disableSse`, `disableChecksums` in `S3Options`).
 - `put` is a multipart upload, as Convex's, whatever the size (before, Bun's writer sent one `PutObject` below a
-  part): CreateMultipartUpload with §1.3's headers; parts of `partSize` (default 8 MiB), up to 8 in flight while the
-  body streams; each with `x-amz-checksum-crc32`, plus `x-amz-sdk-checksum-algorithm: CRC32` when checksums are on, in
+  part): CreateMultipartUpload with §1.3's headers; parts cut by `PartSizer` exactly as §1.2 (5 MiB doubling up to
+  `STORAGE_MAX_INTERMEDIATE_PART_SIZE`, 200 MiB by default and capped at 5 GiB, read as Convex's `env_config`; the
+  remaining buffer, even empty, as the last part; 9 999 parts at most with Convex's message), up to 8 in flight while
+  the body streams (`minPartSize` / `maxPartSize` in `S3Options`); each with `x-amz-checksum-crc32`, plus `x-amz-sdk-checksum-algorithm: CRC32` when checksums are on, in
   which case the response's `x-amz-checksum-crc32` is required (`Object part missing hash! Expected crc32`, Convex's
-  message); CompleteMultipartUpload with each part's `ChecksumCRC32` when checksums are on. An empty body is one empty
-  part. A completion answered 200 with an error document fails the write, as the SDK does. On any failure the upload
+  message); CompleteMultipartUpload with each part's `ChecksumCRC32` when checksums are on. An empty body is one empty part. A completion answered 200 with an error document fails the write, as the SDK does. On any failure the upload
   is aborted, so nothing is left.
 - Each request is retried up to 3 attempts on a network error, a 5xx or a 429 (the SDK's standard mode, which
   Convex's client uses), with a jittered backoff.
@@ -105,8 +122,8 @@ listings stay on Bun's `S3Client`. The region, endpoint and credentials are reso
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| DV-445 | Reads do not ask for or validate checksums (no `x-amz-checksum-mode: ENABLED` on GetObject), and the SDK's `AWS_REQUEST_CHECKSUM_CALCULATION` / `AWS_RESPONSE_CHECKSUM_VALIDATION` (and their profile keys) are not read: each part always carries its CRC32, as the default `when_supported` | Reads go through Bun's `S3Client`, which has neither. Objects Convex or bunvex write are multipart, so S3 answers a part-level checksum the SDK skips, and ranged reads carry none: validation could only catch a corrupted transfer of an object some other writer stored whole. `when_required` would only drop the default part CRC32 under `AWS_S3_DISABLE_CHECKSUMS` | pending (owner); recommendation: accept |
-| DV-446 | Part sizes: a fixed `partSize` (8 MiB by default), not Convex's 5 MiB doubling up to 200 MiB (`STORAGE_MAX_INTERMEDIATE_PART_SIZE`); a body that is an exact multiple of the part size ends without Convex's extra empty part | Older than this study (STUDY-32 used Bun's writer). Not observable outside the bucket; with 8 parts in flight, Convex's growing parts hold up to 1.6 GiB of a large upload in memory, bunvex's 64 MiB. S3's 10 000-part cap bounds a bunvex object at about 78 GiB (Convex: about 2 TiB) | pending (owner); recommendation: accept |
+| DV-445 | Reads do not ask for or validate checksums (no `x-amz-checksum-mode: ENABLED` on GetObject), and the SDK's `AWS_REQUEST_CHECKSUM_CALCULATION` / `AWS_RESPONSE_CHECKSUM_VALIDATION` (and their profile keys) are not read: each part always carries its CRC32, as the default `when_supported` | Reads go through Bun's `S3Client`, which has neither. Objects Convex or bunvex write are multipart, so S3 answers a part-level checksum the SDK skips, and ranged reads carry none: validation could only catch a corrupted transfer of an object some other writer stored whole. `when_required` would only drop the default part CRC32 under `AWS_S3_DISABLE_CHECKSUMS` | **decided** (owner, 2026-10-11): accept |
+| DV-446 | Part sizes were a fixed `partSize` (8 MiB by default), not Convex's 5 MiB doubling up to 200 MiB; no trailing empty part | Older than this study (STUDY-32 used Bun's writer) | **resolved to match Convex** (owner, 2026-10-11): built as §1.2 (`PartSizer`); memory as Convex's (8 parts in flight, no queue beyond them) |
 
 ## 5. Tests
 
@@ -118,11 +135,15 @@ listings stay on Bun's `S3Client`. The region, endpoint and credentials are reso
   message and aborts the upload. Several parts in order; an empty body is one empty part; a completion answered 200
   with an error fails. The flags are parsed as Convex: only `true`. The signer reproduces AWS's published signature.
   The conformance suite runs against the fake, with the defaults and with both flags.
+- Part sizes (DV-446): `PartSizer` against §1.2 (doubling and its cap, a chunk shipped as it is, the overflow past the
+  maximum kept, one part per chunk, the empty last part, an empty body); the defaults (5 → 200 MiB) and the knob
+  (parsed as `env_config`, capped at 5 GiB); the parts a store sends; and the part number limit through a store
+  (9 998 one-byte parts and the empty last one succeed, one more byte fails with Convex's message and aborts).
 - `packages/file-storage/test/blob-stores.test.ts` (CI, against RustFS 1.0.0, now started with an SSE-S3 master key):
   the conformance suite with Convex's defaults, then again with both flags `true`; and a HEAD of a written object
   answers `x-amz-server-side-encryption: AES256`, or nothing with `AWS_S3_DISABLE_SSE`. Run locally against the
   RustFS binary: without the master key the defaults are refused with the 400 of §1.5 and both flags pass; with it,
-  all three runs pass.
+  all three runs pass. A body of exactly one 5 MiB part, then the empty last part, round-trips through RustFS.
 
 **Sabotage** (each applied to `s3.ts`, the request tests run, restored; `git diff` clean after):
 
@@ -139,6 +160,15 @@ listings stay on Bun's `S3Client`. The region, endpoint and credentials are reso
 | S9 the CRC32 little-endian | defaults; checksums disabled; several parts |
 | S10 no `x-amz-sdk-checksum-algorithm` on parts | defaults; SSE disabled |
 | S11 no part for an empty body | empty body |
+| P1 the target never doubles | part sizes; defaults |
+| P2 the target doubles past the maximum | several parts; part sizes; defaults; part numbers |
+| P4 no split past the maximum | part sizes; defaults |
+| P5 no empty last part | defaults (store sequence); part sizes via the store |
+| P6 the 10 000th part written | part numbers |
+| P7 the knob not capped at 5 GiB | defaults |
+
+P3 (no shipping a chunk as it is) changes nothing observable: with an empty buffer, the buffered path ships the same
+bytes; the fast path only saves a copy, as Convex's comment says. It is kept for that.
 
 **Measurement** (local RustFS 1.0.0 on this Mac, `put` of a stream, two rounds each, the old writer against the new):
 
@@ -152,10 +182,9 @@ is slow at multipart: its CreateMultipartUpload takes 12–18 ms and a 1 KiB Upl
 `PutObject` (measured with bare signed requests). That is Convex's cost too, since it writes every object this way;
 on AWS S3 it is two more round trips.
 
-## 6. Open questions
+## 6. Decisions (owner, 2026-10-11)
 
-- DV-445 and DV-446 (above).
-- A single `PutObject` (with the same SSE and checksum headers) for a body under one part would keep small uploads at
-  one request, as bunvex did before. It diverges from Convex only in the bucket (a full-object instead of a
-  part-level checksum, a different ETag form). Recommendation: keep Convex's multipart unless small-upload latency
-  matters on a deployment.
+- DV-445: accepted (§4).
+- DV-446: match Convex (§1.2, built).
+- Small uploads stay multipart, as Convex's: a single `PutObject` for a body under one part (one request instead of
+  three) was proposed and **declined**; bunvex keeps Convex's cost (§5's measurement).

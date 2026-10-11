@@ -21,8 +21,10 @@ export type S3Options = {
   sessionToken?: string;
   /** Prepended to every key (the deployment's `<instance>-<uuid>/`); may be read from the database first. */
   prefix?: string | (() => Promise<string>);
-  /** Multipart part size in bytes (Convex: parts of 5 MiB and more). Default 8 MiB. */
-  partSize?: number;
+  /** The first part's target size in bytes, doubling up to `maxPartSize` (Convex's: 5 MiB, S3's minimum). */
+  minPartSize?: number;
+  /** The largest intermediate part (Convex's `STORAGE_MAX_INTERMEDIATE_PART_SIZE`, 200 MiB; S3 allows 5 GiB). */
+  maxPartSize?: number;
   /** No `x-amz-server-side-encryption: AES256` on uploads (Convex's AWS_S3_DISABLE_SSE), for stores without SSE-S3. */
   disableSse?: boolean;
   /**
@@ -34,6 +36,86 @@ export type S3Options = {
 
 /** Convex parses these flags as Rust's `bool`: exactly `true` or `false`; anything else is the default (off). */
 const flag = (v: string | undefined) => v === "true";
+
+const MIB = 1 << 20;
+/** S3's minimum part size, where Convex's parts start (`MIN_S3_INTERMEDIATE_PART_SIZE`, crates/aws_s3). */
+export const MIN_PART_SIZE = 5 * MIB;
+/** S3's maximum part size (`MAX_S3_INTERMEDIATE_PART_SIZE`). */
+export const MAX_S3_PART_SIZE = 5 * 1024 * MIB;
+/** Convex's `STORAGE_MAX_INTERMEDIATE_PART_SIZE` knob default (crates/common/src/knobs.rs). */
+export const DEFAULT_MAX_PART_SIZE = 200 * MIB;
+/** S3's part numbers run from 1 to 10 000 (Convex's `PartNumber`). */
+const MAX_PART_NUMBER = 10_000;
+
+/**
+ * `STORAGE_MAX_INTERMEDIATE_PART_SIZE` as Convex's `env_config` reads a `usize` knob (an invalid value warns and
+ * keeps the default), capped by S3's maximum part size as Convex's `start_upload` caps it.
+ */
+function maxPartSizeFromEnv(v: string | undefined): number {
+  let n = DEFAULT_MAX_PART_SIZE;
+  if (v !== undefined) {
+    if (/^\+?\d+$/.test(v) && Number(v) <= Number.MAX_SAFE_INTEGER) n = Number(v);
+    else
+      console.warn(
+        `bunvex: invalid value ${v} for STORAGE_MAX_INTERMEDIATE_PART_SIZE, falling back to ${DEFAULT_MAX_PART_SIZE}`,
+      );
+  }
+  return Math.min(MAX_S3_PART_SIZE, n);
+}
+
+/**
+ * How Convex's `BufferedUpload` (crates/storage/src/lib.rs) cuts a stream into parts. The target starts at the
+ * minimum and doubles, up to the maximum, each time a part is shipped. A chunk that arrives with nothing
+ * buffered and is between the target and the maximum is shipped as it is; otherwise chunks are buffered until
+ * they reach the target, and a buffer past the maximum ships its first `max` bytes and keeps the rest. Whatever
+ * is left at the end, even nothing, is the last part.
+ */
+export class PartSizer {
+  private target: number;
+  private buffered: Uint8Array[] = [];
+  private bufferedBytes = 0;
+
+  constructor(
+    min: number,
+    private readonly max: number,
+  ) {
+    this.target = min;
+  }
+
+  /** Take a chunk of the body; the next part when one is ready. */
+  push(data: Uint8Array): Uint8Array | null {
+    if (this.bufferedBytes === 0 && data.byteLength >= this.target && data.byteLength <= this.max) {
+      this.grow();
+      return data;
+    }
+    this.buffered.push(data);
+    this.bufferedBytes += data.byteLength;
+    if (this.bufferedBytes < this.target) return null;
+    this.grow();
+    const all = Buffer.concat(this.buffered, this.bufferedBytes);
+    if (all.byteLength > this.max) {
+      const rest = all.slice(this.max);
+      this.buffered = [rest];
+      this.bufferedBytes = rest.byteLength;
+      return all.subarray(0, this.max);
+    }
+    this.buffered = [];
+    this.bufferedBytes = 0;
+    return all;
+  }
+
+  /** The last part: what is left, possibly empty. */
+  finish(): Uint8Array {
+    const all = Buffer.concat(this.buffered, this.bufferedBytes);
+    this.buffered = [];
+    this.bufferedBytes = 0;
+    return all;
+  }
+
+  private grow() {
+    this.target = Math.min(this.target * 2, this.max);
+  }
+}
 
 /**
  * The S3 settings from Convex's variables, or null when the use case's bucket is not configured: one bucket
@@ -55,6 +137,7 @@ export function s3OptionsFromEnv(
     sessionToken: env.AWS_SESSION_TOKEN,
     disableSse: flag(env.AWS_S3_DISABLE_SSE),
     disableChecksums: flag(env.AWS_S3_DISABLE_CHECKSUMS),
+    maxPartSize: maxPartSizeFromEnv(env.STORAGE_MAX_INTERMEDIATE_PART_SIZE),
   };
 }
 
@@ -83,7 +166,8 @@ const ATTEMPTS = 3; // the AWS SDK's standard retry mode, which Convex's client 
 export class S3BlobStore implements BlobStore {
   private readonly client: S3Client;
   private readonly prefixOf: () => Promise<string>;
-  private readonly partSize: number;
+  private readonly minPartSize: number;
+  private readonly maxPartSize: number;
   private readonly bucket: string;
   private readonly region: string;
   private readonly endpoint: string | undefined;
@@ -121,36 +205,38 @@ export class S3BlobStore implements BlobStore {
       if (resolved === null) resolved = typeof p === "string" ? Promise.resolve(p) : p();
       return resolved;
     };
-    this.partSize = o.partSize ?? 8 << 20;
+    this.minPartSize = o.minPartSize ?? MIN_PART_SIZE;
+    this.maxPartSize = o.maxPartSize ?? DEFAULT_MAX_PART_SIZE;
   }
 
   async put(body: ReadableStream<Uint8Array> | Blob | Uint8Array): Promise<Written> {
     const key = crypto.randomUUID();
     const objectKey = (await this.prefixOf()) + key;
     const uploadId = await this.createMultipartUpload(objectKey);
-    // Up to MAX_PARTS_IN_FLIGHT parts upload at once while the body keeps streaming, as Convex's
-    // `try_write_parallel` (MAXIMUM_PARALLEL_UPLOADS); the completion lists them by part number.
+    // Parts cut as Convex's `BufferedUpload` cuts them (PartSizer); up to MAX_PARTS_IN_FLIGHT of them upload at
+    // once while the body keeps streaming, as Convex's `try_write_parallel` (MAXIMUM_PARALLEL_UPLOADS); the
+    // completion lists them by part number.
+    const sizer = new PartSizer(this.minPartSize, this.maxPartSize);
     const inFlight: Promise<Part>[] = [];
     let settled = 0;
-    let buffered: Uint8Array[] = [];
-    let bufferedBytes = 0;
-    const flush = async () => {
-      const data = Buffer.concat(buffered, bufferedBytes);
-      buffered = [];
-      bufferedBytes = 0;
-      const part = this.uploadPart(objectKey, uploadId, inFlight.length + 1, data);
+    const ship = async (data: Uint8Array) => {
+      const partNumber = inFlight.length + 1;
+      // Convex's `next_part_number` fails when the number after this one is past S3's 10 000, so the
+      // 10 000th part is never written.
+      if (partNumber + 1 > MAX_PART_NUMBER) throw new Error("Object part number cannot exceed 10,000 or be 0.");
+      const part = this.uploadPart(objectKey, uploadId, partNumber, data);
       part.catch(() => {}); // awaited below; never an unhandled rejection meanwhile
       inFlight.push(part);
       if (inFlight.length - settled >= MAX_PARTS_IN_FLIGHT) await inFlight[settled++];
     };
     try {
       const { size, sha256 } = await pumpHashing(body, async (chunk) => {
-        buffered.push(chunk);
-        bufferedBytes += chunk.byteLength;
-        if (bufferedBytes >= this.partSize) await flush();
+        const ready = sizer.push(chunk);
+        if (ready) await ship(ready);
       });
-      // S3 refuses a multipart upload with no parts, so an empty body is one empty part, as Convex's.
-      if (bufferedBytes > 0 || inFlight.length === 0) await flush();
+      // As Convex's `BufferedUpload::complete`: what is left is the last part, even when it is empty (which also
+      // gives an empty body the one part S3 needs).
+      await ship(sizer.finish());
       const parts = await Promise.all(inFlight);
       await this.completeMultipartUpload(objectKey, uploadId, parts);
       return { key, size, sha256 };
