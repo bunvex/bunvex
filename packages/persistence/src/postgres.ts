@@ -299,7 +299,7 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
   static async open(
     url: string,
     pool = 16,
-    opts: { idleInTransactionMs?: number; timeoutMs?: number } & OpenOptions & TlsOptions = {},
+    opts: { idleInTransactionMs?: number; timeoutMs?: number; idleMs?: number } & OpenOptions & TlsOptions = {},
   ) {
     const postgres = await loadPeer<typeof postgresDriver>("postgres", "postgres");
     const conn = `bunvex-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}`;
@@ -316,6 +316,9 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
         // with the planner settings below that query took ~0.75 s per connection (measured), stalling every
         // connection the pool opened under load.
         fetch_types: false,
+        // A connection idle that long is closed (Convex's POSTGRES_INACTIVE_CONNECTION_LIFETIME_SECS, 90 s; the
+        // server passes it): postgres.js counts whole seconds.
+        ...(opts.idleMs ? { idle_timeout: Math.max(1, Math.round(opts.idleMs / 1000)) } : {}),
         ssl: ssl as postgresDriver.Options<{}>["ssl"],
         target_session_attrs,
         // A connection that cannot be opened within the timeout fails too (postgres.js counts whole seconds).

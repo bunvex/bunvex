@@ -2,7 +2,11 @@
 //   PERSISTENCE=memory|sqlite            ship with @bunvex/core
 //   PERSISTENCE=postgres|mysql|mongodb   from @bunvex/persistence (plus the driver's native package)
 //   PERSISTENCE_URL=…                    for the external ones
-//   DATA=./.data  DURABLE=1  POOL=16
+//   DATA=./.data  DURABLE=1
+//   POSTGRES_MAX_CONNECTIONS=128  MYSQL_MAX_CONNECTIONS=128   each pool's size (Convex's names and defaults;
+//                                        POOL, bunvex's older name, applies when they are not set; MongoDB: POOL=16)
+//   POSTGRES_INACTIVE_CONNECTION_LIFETIME_SECS=90  MYSQL_INACTIVE_CONNECTION_LIFETIME_SECS=90
+//                                        an idle connection is closed after it (STUDY-147 §3.7)
 //   POSTGRES_TIMEOUT_SECONDS=30  MYSQL_TIMEOUT_SECONDS=19  MONGODB_TIMEOUT_SECONDS=30
 //                                        the client-side timeout of one database call (STUDY-25 L3); the
 //                                        first two are Convex's names and defaults
@@ -18,7 +22,7 @@
 // set to any non-empty value (`0` and `false` too, as the shell's `${VAR:+…}` reads it). PG_CA_FILE and
 // MYSQL_CA_FILE add a trusted CA. MongoDB has no Convex counterpart: its URL decides (`tls=true`).
 import { mkdirSync } from "node:fs";
-import { bundledModule, DEFAULT_INSTANCE_NAME, type Persistence, secondsKnob } from "@bunvex/core";
+import { bundledModule, DEFAULT_INSTANCE_NAME, knob, type Persistence, secondsKnob } from "@bunvex/core";
 
 export type PersistenceConfig = {
   kind: string;
@@ -28,6 +32,8 @@ export type PersistenceConfig = {
   dataDir?: string;
   durable?: boolean;
   pool?: number;
+  /** Postgres and MySQL: an idle connection is closed after it (default: kept). */
+  idleMs?: number;
   /** Postgres and MySQL: require an encrypted, verified connection (default true; DO_NOT_REQUIRE_SSL). */
   requireSsl?: boolean;
   /** Postgres and MySQL: a PEM file of extra trusted CA certificates (PG_CA_FILE, MYSQL_CA_FILE). */
@@ -43,6 +49,12 @@ const TIMEOUT_ENV: Record<string, [string, number]> = {
   postgres: ["POSTGRES_TIMEOUT_SECONDS", 30],
   mysql: ["MYSQL_TIMEOUT_SECONDS", 19],
   mongodb: ["MONGODB_TIMEOUT_SECONDS", 30],
+};
+
+/** Each pool's size and idle lifetime (seconds), Convex's knobs and defaults (STUDY-147 §3.7; DV-112 reversed). */
+const POOL_ENV: Record<string, { size: [string, number]; idle: [string, number] }> = {
+  postgres: { size: ["POSTGRES_MAX_CONNECTIONS", 128], idle: ["POSTGRES_INACTIVE_CONNECTION_LIFETIME_SECS", 90] },
+  mysql: { size: ["MYSQL_MAX_CONNECTIONS", 128], idle: ["MYSQL_INACTIVE_CONNECTION_LIFETIME_SECS", 90] },
 };
 
 type Env = Record<string, string | undefined>;
@@ -91,12 +103,21 @@ export function persistenceConfigFromEnv(
     urlFrom,
     dataDir: env.DATA ?? "./.data",
     durable: env.DURABLE !== "0",
-    pool: Number(env.POOL ?? 16),
+    pool: poolSize(kind, env),
+    ...(POOL_ENV[kind] ? { idleMs: secondsKnob(...POOL_ENV[kind].idle, env) } : {}),
     requireSsl: !set(env, "DO_NOT_REQUIRE_SSL"),
     caFile,
     ...(timeout === undefined ? {} : { timeoutMs: timeout }),
     ...(set(env, "INSTANCE_NAME") ? { instanceName: env.INSTANCE_NAME } : {}),
   };
+}
+
+/** A pool's size: Convex's knob when set, else `POOL` (bunvex's), else Convex's default (MongoDB: 16). */
+function poolSize(kind: string, env: Env): number {
+  const knobOf = POOL_ENV[kind]?.size;
+  if (knobOf && env[knobOf[0]] !== undefined) return knob(knobOf[0], knobOf[1], "positive", env);
+  const fallback = knobOf?.[1] ?? 16;
+  return env.POOL === undefined ? fallback : knob("POOL", fallback, "positive", env);
 }
 
 /** The URL with `database` as its path (Convex's `set_path`): after the authority, before a query or fragment. */
@@ -148,11 +169,11 @@ export async function openPersistence(c: PersistenceConfig): Promise<Persistence
     }
     case "postgres": {
       const { PostgresPersistence } = await external<Driver<"PostgresPersistence">>("postgres");
-      return PostgresPersistence.open(needDatabase(), c.pool, { ...tls, timeoutMs: c.timeoutMs });
+      return PostgresPersistence.open(needDatabase(), c.pool, { ...tls, timeoutMs: c.timeoutMs, idleMs: c.idleMs });
     }
     case "mysql": {
       const { MysqlPersistence } = await external<Driver<"MysqlPersistence">>("mysql");
-      return MysqlPersistence.open(needDatabase(), c.pool, { ...tls, timeoutMs: c.timeoutMs });
+      return MysqlPersistence.open(needDatabase(), c.pool, { ...tls, timeoutMs: c.timeoutMs, idleMs: c.idleMs });
     }
     case "mongodb": {
       const { MongoPersistence } = await external<Driver<"MongoPersistence">>("mongodb");
