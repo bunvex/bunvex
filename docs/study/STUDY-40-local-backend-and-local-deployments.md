@@ -1,6 +1,7 @@
 # STUDY-40 — The local backend executable, local deployments in `bunvex dev`, and the npm package
 
-- **Status:** accepted: all as recommended (owner, 2026-10-02)
+- **Status:** accepted: all as recommended (owner, 2026-10-02); L7 settled (owner, 2026-10-12): `@bunvex/*` is
+  permanent, npm will not allow `bunvex` (§3, "Decided: `@bunvex/*` for good")
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`convex` 1.46.0)
 - **Related:**
   - [STUDY-39](STUDY-39-standalone-binary.md): the executable and its release. The owner answered B1 on 2026-10-02: the backend alone, `bunvex-local-backend-<target>.zip`, as Convex. On B4: make `bunvex dev` work as Convex's now that there is an executable.
@@ -133,6 +134,14 @@ Until npm answers, two ways in, with one documented at a time:
 - **`bunvex`**, once allowed: the umbrella that re-exports the `@bunvex/*` packages, as today in the repository. Apps may move from one to the other at any time.
 - **One copy of each module:** every package is released at the same version (a changesets "fixed" group), and `bunvex` depends on exact versions. An app then never holds two copies of `@bunvex/server` or `@bunvex/react`. Two copies would not recognize each other's functions (the registry's `WeakSet`) or React provider.
 - **Codegen:** it imports from whichever the app depends on (`bunvex` when its `package.json` has it, else `@bunvex/*`).
+
+**Decided: `@bunvex/*` for good** (owner, 2026-10-12). npm's support confirmed that the unscoped name `bunvex`
+will not be available. The scoped `@bunvex/*` packages are the permanent way to install bunvex, not a stopgap:
+- `packages/bunvex` stays a private workspace package (`"private": true`) that re-exports them for the
+  repository's own examples and tests; it is never published.
+- The docs tell apps to install and upgrade the `@bunvex/*` packages (`bun add @bunvex/server @bunvex/values`,
+  `bun add -d @bunvex/cli`), never `bunvex`.
+- Codegen already writes `@bunvex/*` imports when the app's `package.json` depends on `@bunvex/*`.
 - **A preview first:** `0.1.0-alpha.*`, published from the TypeScript sources, which Bun runs from `node_modules`. It is enough to try the whole flow in a new directory with Bun. It needs `allowImportingTsExtensions`, which `codegen --init` writes (STUDY-36 G5), and frameworks such as Next.js need to transpile the dependencies.
 - **The built package** (JS and `.d.ts`) remains the roadmap item.
 
@@ -146,7 +155,7 @@ Until npm answers, two ways in, with one documented at a time:
 | L4 | The latest executable comes from GitHub's releases API (the newest `precompiled-*` marked latest). Convex asks a version service | there is no version service | accepted (owner, 2026-10-02) |
 | L5 | `BUNVEX_LOCAL_BACKEND_BINARY` uses a given executable instead of downloading one | tests, offline work, and running this repository's own build | accepted (owner, 2026-10-02) |
 | L6 | No local dashboard until item 12 | as STUDY-38 K3 | accepted (owner, 2026-10-02) |
-| L7 | Reserve `bunvex` on npm now with a placeholder `0.0.1`; publish the real package later as its own item. The CLI runs on Bun (`bunx bunvex`); Convex's runs on Node (`npx convex`) | the server inside the CLI is a Bun program | accepted (owner, 2026-10-02) |
+| L7 | Reserve `bunvex` on npm now with a placeholder `0.0.1`; publish the real package later as its own item. The CLI runs on Bun (`bunx bunvex`); Convex's runs on Node (`npx convex`) | the server inside the CLI is a Bun program | accepted (owner, 2026-10-02); superseded 2026-10-12: npm will not allow `bunvex`, so apps install `@bunvex/*` for good |
 | L8 | `bunvex dev` keeps the local backend's output in `.bunvex/local/default/backend.log` (appended, a marked line per run, started over past 10 MiB); an early exit's error shows the log's end, and an internal push failure points to it. Convex discards the output (`stdio: "ignore"`, `lib/localDeployment/run.ts:176`) and sends the backend's errors to its Sentry | found when a local push failed once with "Your request couldn't be completed" and nothing could say why; bunvex has no Sentry | accepted (owner, 2026-10-04): DV-340 |
 
 **Open (owner, 2026-10-04): error reporting of our own.** Convex sends its local backend's errors to its Sentry

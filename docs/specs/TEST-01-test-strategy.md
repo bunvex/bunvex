@@ -229,7 +229,7 @@ boundary, a block emptied. The tests must then fail. A change no test notices is
   | `core/src/persistence/memory.ts` | 597 | 69.2 % (92.0 %) | 28 min |
   | `core/src/persistence/split.ts` | 107 | 73.8 % (100 %) | 2 min |
   | `core/src/read-set-index.ts` | 138 | 76.1 % (97.5 %) | 1 min |
-  | `core/src/tx.ts` | 2 038 | 78.6 % | 112 min |
+  | `core/src/tx.ts` | 2 038 | 78.6 % (97.4 %) | 112 min |
   | `core/src/committer.ts` | 651 | 79.1 % (96.7 %) | 54 min |
   | `core/src/schema-json.ts` | 303 | 81.5 % (100 %) | 8 min |
   | `values/src/value.ts` | 718 | 81.9 % (99.7 %) | 5 min |
@@ -267,6 +267,18 @@ boundary, a block emptied. The tests must then fail. A change no test notices is
     write throughput limiter) left commits unanswered (fixed in its own PR).
   - Bun's `expect(…).rejects` runs the event loop: commits a test means to be one group are all made before
     the first such `expect`, and their refusals caught when made.
+  - The triage of `tx.ts` (2 038 mutants, in four line ranges run side by side) found no bug. Its metering
+    (`io()`, `biggestWrites()`) was tested only from the server, so it scored as uncovered; `core` tests it now.
+    A private method nothing called (`tableDef`) was removed.
+  - A `Tx` built directly (`new Tx(catalog, persistence, ts, writable, …)`) reaches what the engine always
+    sets: no search or vector indexes, no cursor codec, the default identity.
+  - `collect()` and `take()` go through `runQuery`; `for await` takes `stream()`, a separate path (descending
+    pages, own writes merged at the range's end). Both are tested.
+  - Under load a full run can report a kill by an unrelated test, and static mutants flip between runs: a
+    surprising kill or survival is confirmed by applying the mutant by hand.
+  - A directive can name several mutators (`ConditionalExpression,OptionalChaining`), so a line marks only its
+    equivalent ones and keeps its killed ones counted. It fits on one line: the next physical line is the one it
+    governs.
 - **The source must be one the instrumenter reads:** it cannot mutate an update of a non-null expression
   (`a[i]!--`). `keyenc.ts` writes it as an assignment.
 

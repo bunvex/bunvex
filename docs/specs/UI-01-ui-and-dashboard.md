@@ -421,6 +421,10 @@ Optional methods, detected with `typeof source.x === "function"`, so older sourc
 
 ### 5.7 The self-hosted HTTP implementation (proposed split)
 
+> **Superseded by §34** (STUDY-149 Q7, 12 Oct 2026): the server source is `@bunvex/dashboard-source`, over
+> `@bunvex/client`, not `@bunvex/dashboard/http` over `@bunvex/protocol`; `dashboard` keeps depending on `ui`
+> alone.
+
 The server session defines the admin endpoints and their messages (in `@bunvex/protocol`, next to the
 client messages; protected by the admin key). A `createHttpDataSource({ url, adminKey })` then lives in
 `@bunvex/dashboard/http` and implements this contract over them — which would add
@@ -428,6 +432,9 @@ client messages; protected by the admin key). A `createHttpDataSource({ url, adm
 then `@bunvex/dashboard` depends on `@bunvex/ui` only.
 
 ## 6. Dependency rules
+
+> **Amended by §34** (12 Oct 2026): `dashboard-source ──► client, dashboard`, and `apps/dashboard` may import
+> `dashboard-source`; the "later: protocol" note below is withdrawn.
 
 Added to ARCHITECTURE.md and to `scripts/check-deps.ts`:
 
@@ -2279,4 +2286,47 @@ to be registered. The real handshake and `@bunvex/client` come with a later serv
   `org`, `platform` and `appVersion` — the last two what the client said when it connected. The mock's
   checkout test sends iOS and Android builds from 2.3.0 to express; the who-gets-what preview starts with a
   platform and an app version.
+
+## 34. Amendment — the server source, `@bunvex/dashboard-source` (STUDY-149 Q7; 12 Oct 2026)
+
+The owner confirmed STUDY-149's layout (Q7, 12 Oct 2026). It replaces §5.7's proposed split and amends §6.
+
+### 34.1 Why a package of its own, over the client
+
+§5.7 expected admin endpoints defined in `@bunvex/protocol` and an HTTP source in `@bunvex/dashboard/http`.
+Studying Convex's dashboard showed otherwise (STUDY-149 §1.1): it reads a deployment through **system
+functions over the sync protocol**, signed in with the admin key (`setAdminAuth`), plus a set of admin HTTP
+routes (metrics, the log stream, deletes and cancels). The sync client already speaks that protocol, so the
+source depends on `@bunvex/client`, not on raw protocol messages. Keeping it out of `@bunvex/dashboard` keeps
+the screens free of any bunvex dependency (§6): a cloud control plane brings its own source.
+
+### 34.2 What the package is
+
+- `@bunvex/dashboard-source` (`packages/dashboard-source`), private like `@bunvex/dashboard` (changesets
+  ignore it): `createServerDataSource({ url, adminKey, fetch?, webSocketConstructor? })` returns the
+  contract plus `watchConnection(onStatus)` (Convex's watcher: polled every 2.5 s, disconnected after two
+  observations in a row), `close()` and `[Symbol.dispose]`.
+- One `BaseBunvexClient`, admin-authenticated before anything subscribes; system queries are subscriptions
+  (a one-shot read subscribes until the first result, as Convex's `client.query`), writes go as
+  `mutationInternal` / `actionInternal`.
+- HTTP requests carry `Authorization: Bunvex <key>` (DV-97) and `Bunvex-Client: dashboard-<version>`; a
+  401 or 403 is `unauthorized`, 404 `not_found`, another 4xx `invalid_request`, a 5xx or a network error
+  `unavailable`.
+- `createAdminKeyVerifier()` (also at `@bunvex/dashboard-source/credentials`, which does not pull the sync
+  client): `GET /api/check_admin_key`, 3 tries 500 ms apart, a 404 allowing every operation, as Convex's
+  `checkDeploymentInfo`. The operations' mapping (`SERVER_OPS`, `capabilitiesOf`) moved there from
+  `apps/dashboard`, which re-exports it.
+- It is built in steps (STUDY-149's PR plan). Methods whose server side does not exist yet answer
+  `unavailable`; `describeDataSourceContract` takes `only: ContractArea[]` so the live suite runs the areas
+  built so far and lists the others as skipped.
+
+### 34.3 Dependency rules
+
+```
+dashboard-source ──► client, dashboard
+apps/dashboard   ──► dashboard, dashboard-source, ui
+sync-e2e (tests) ──► …, dashboard, dashboard-source   (the contract suite on a live server)
+```
+
+`dashboard` itself stays on `ui` alone.
 

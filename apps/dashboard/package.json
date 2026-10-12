@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@bunvex/dashboard": "workspace:*",
+    "@bunvex/dashboard-source": "workspace:*",
     "@bunvex/ui": "workspace:*",
     "@tanstack/react-router": "^1.170.40",
     "lucide-react": "^1.48.0",

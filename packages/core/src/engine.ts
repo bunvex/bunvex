@@ -708,6 +708,7 @@ export class Engine {
 
   private async closeOnce() {
     this.closed = true;
+    this.untilClosed.reject(new Error("the engine closed"));
     await this.stagedWalk?.catch(() => {});
     await this.deleting?.catch(() => {});
     await this.indexWorker?.stop();
@@ -989,6 +990,7 @@ export class Engine {
    * Whether there were any.
    */
   private async backfillNewTables(created: TabletId[], indexes: IndexMeta[], atStart = false): Promise<boolean> {
+    if (!this.backfillEnabled) return false;
     const fresh = indexes.filter((i) => i.state === "backfilling" && created.includes(i.tablet));
     if (!fresh.length) return false;
     this.indexWorker ??= new IndexWorker(this.workerHost(), this.opts.indexBackfill);
@@ -998,7 +1000,20 @@ export class Engine {
     return true;
   }
 
+  /** `INDEX_BACKFILL_ENABLE`: off, no database index is backfilled, so none leaves `backfilling` (Convex's). */
+  private get backfillEnabled(): boolean {
+    return this.opts.indexBackfill?.enabled ?? INDEX_BACKFILL_DEFAULTS.enabled;
+  }
+
+  /** Never settles while the engine is open; rejects once it closes (what waits on a backfill that never runs). */
+  private readonly untilClosed = (() => {
+    const w = Promise.withResolvers<never>();
+    w.promise.catch(() => {});
+    return w;
+  })();
+
   private startIndexWorker() {
+    if (!this.backfillEnabled) return;
     this.indexWorker ??= new IndexWorker(this.workerHost(), this.opts.indexBackfill);
     this.indexWorker.start();
   }
@@ -3001,6 +3016,8 @@ export class Engine {
       (i) => i.tablet === meta.tablet && i.state === "backfilling",
     );
     if (backfilling.length) {
+      // Convex's `backfill_and_enable_indexes_on_table` waits for a backfill that, switched off, never comes.
+      if (!this.backfillEnabled) await this.untilClosed.promise;
       this.indexWorker ??= new IndexWorker(this.workerHost(), this.opts.indexBackfill);
       await this.indexWorker.backfillNow(backfilling, true);
     }

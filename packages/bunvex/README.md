@@ -1,7 +1,9 @@
 # bunvex
 
-The package an app installs: bunvex/server, bunvex/values, bunvex/browser, bunvex/react, bunvex/nextjs,
-bunvex/react-clerk, bunvex/react-auth0, and the bunvex CLI.
+An internal workspace aggregate: bunvex/server, bunvex/values, bunvex/browser, bunvex/react, bunvex/nextjs,
+bunvex/react-clerk, bunvex/react-auth0, and the bunvex CLI, for this repository's examples and tests. It is private
+and never published: npm will not allow the name `bunvex` (owner, 2026-10-12; STUDY-40 L7), so apps install the
+scoped `@bunvex/*` packages (`bun add @bunvex/server @bunvex/values`, `bun add -d @bunvex/cli`).
 
 **Status:** every subpath of Convex's package is wired: `bunvex/server`, `bunvex/values`, `bunvex/browser`
 (`@bunvex/client`), `bunvex/react`, `bunvex/nextjs`, `bunvex/react-clerk` and `bunvex/react-auth0` re-export their

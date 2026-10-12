@@ -37,3 +37,39 @@ export function chunkRows<T>(
   if (cur.length) out.push(cur);
   return out;
 }
+
+/** Convex's `MYSQL_MAX_FILL_CHUNK_ROWS`: rows per INSERT, past which MySQL may scan and lock a whole table. */
+export const MYSQL_MAX_FILL_CHUNK_ROWS = knob("MYSQL_MAX_FILL_CHUNK_ROWS", 1024, "positive");
+/** Convex's `MYSQL_SMART_CHUNK_MAX_SIZE`: the largest `smartChunks` chunk, in rows. */
+export const MYSQL_SMART_CHUNK_MAX_SIZE = knob("MYSQL_SMART_CHUNK_MAX_SIZE", 128, "positive");
+/** Convex's `MYSQL_MAX_DYNAMIC_SMART_CHUNK_SIZE`: up to it, any chunk length; past it, powers of two. */
+export const MYSQL_MAX_DYNAMIC_SMART_CHUNK_SIZE = knob("MYSQL_MAX_DYNAMIC_SMART_CHUNK_SIZE", 8, "positive");
+
+/**
+ * Convex's `smart_chunks` (crates/mysql/src/chunks.rs): as many rows as fit `maxBytes`, up to `maxSize`, then the
+ * length rounded down to one of few: any up to `maxDynamic`, else a power of two (`maxSize` at most). So a
+ * statement has one of a dozen shapes, and the server can reuse its plans (STUDY-147 §3.6).
+ */
+export function smartChunks<T>(
+  rows: readonly T[],
+  size: (row: T) => number = () => 0,
+  maxSize = MYSQL_SMART_CHUNK_MAX_SIZE,
+  maxDynamic = MYSQL_MAX_DYNAMIC_SMART_CHUNK_SIZE,
+  maxBytes = MYSQL_MAX_CHUNK_BYTES,
+): T[][] {
+  const out: T[][] = [];
+  let at = 0;
+  while (at < rows.length) {
+    let len = 0;
+    let bytes = 0;
+    for (let i = at; i < rows.length; i++) {
+      bytes += size(rows[i]!);
+      if (len > maxSize || (len > 0 && bytes > maxBytes)) break;
+      len++;
+    }
+    const n = len <= maxDynamic ? len : len >= maxSize ? maxSize : 2 ** Math.floor(Math.log2(len));
+    out.push(rows.slice(at, at + n));
+    at += n;
+  }
+  return out;
+}

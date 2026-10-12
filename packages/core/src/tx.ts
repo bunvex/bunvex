@@ -165,6 +165,7 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
     else lower = bound;
   }
   // A bound on a field an equality already fixes: Convex's "inequality" error, naming the equality's value.
+  // Stryker disable next-line ConditionalExpression: with no inequality, `eqs.has(null)` is false anyway
   if (ineqField !== null && eqs.has(ineqField))
     throw new Error(
       `Already defined inequality bound in index range. Can't add ${quoted(ineqField)} == ${displayValue(eqs.get(ineqField) as Value)}.`,
@@ -185,6 +186,7 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
   });
   const keyValue = (_f: string, v: KeyValue): KeyValue => v;
   const prefixVals = eqFields.map((f) => keyValue(f, eqs.get(f)!));
+  // Stryker disable next-line ConditionalExpression: with no prefix nor bound the general path builds FULL's own bounds
   if (prefixVals.length === 0 && !lower && !upper) return FULL;
   const prefix = encodeKey(prefixVals);
   let lo = prefixVals.length ? prefix : FULL.lo;
@@ -215,6 +217,7 @@ export function formatBytes(n: number): string {
     x /= 1024;
     i++;
   }
+  // Stryker disable next-line ConditionalExpression: below 1 KiB the count is a whole number of bytes, which toFixed(2) keeps
   return `${i === 0 ? x : Number(x.toFixed(2))} ${units[i]}`;
 }
 
@@ -422,6 +425,7 @@ export class Tx {
   readonly unsettled: ScanReads[] = [];
   /** The read-set: the intervals of every read so far, as the committer and the invalidation index see them. */
   get reads(): Interval[] {
+    // Stryker disable next-line ConditionalExpression: with none unsettled the loop does nothing and the length stays 0
     if (this.unsettled.length) {
       for (const s of this.unsettled) s.settle();
       this.unsettled.length = 0;
@@ -485,11 +489,14 @@ export class Tx {
     for (const [id, { table, next, measured }] of this.writes) {
       if (!next || table.name.startsWith("_")) continue;
       // Measured when it was written (the write limits' check), else now.
+      // Stryker disable next-line LogicalOperator,OptionalChaining: a user table's write is always measured (stage), to the same size
       const size = measured?.size ?? rawValueSize(next as unknown as Value);
+      // Stryker disable next-line LogicalOperator,OptionalChaining: a user table's write is always measured (stage), to the same nesting
       const nesting = measured?.nesting ?? valueNesting(next as unknown as Value);
       if (!maxSize || size > maxSize[1]) maxSize = [id, size];
       if (!maxNesting || nesting > maxNesting[1]) maxNesting = [id, nesting];
     }
+    // Stryker disable next-line LogicalOperator: both are set by the same write, or neither
     return maxSize && maxNesting ? { maxSize, maxNesting } : null;
   }
   /** The bytes this transaction's text searches were charged (STUDY-71). */
@@ -624,6 +631,7 @@ export class Tx {
 
   /** Whether a write holds a commit timestamp to resolve at commit. */
   get hasCommitTs() {
+    // Stryker disable next-line ConditionalExpression,EqualityOperator: true with none only makes the commit resolve nothing and rebuild the same writes
     return this.commitTs.size > 0;
   }
 
@@ -639,6 +647,7 @@ export class Tx {
     for (const [id, paths] of this.commitTs) {
       const w = this.writes.get(id);
       // The rewritten version's keys may change (an index on the commit timestamp): computed again at commit.
+      // Stryker disable next-line ConditionalExpression,OptionalChaining,ObjectLiteral: a placeholder's id has a write with a next version and keys (a delete drops its placeholders); the old keys are a cache, computed again when missing
       if (w?.next) this.writes.set(id, { ...w, next: setAt(w.next, paths, ns), keys: { old: w.keys?.old } });
     }
     this.commitTs.clear();
@@ -657,12 +666,6 @@ export class Tx {
   }
   /** Days since the Unix epoch at the transaction's start: the last two bytes of every id it creates. */
   private readonly day: number;
-
-  private tableDef(name: string) {
-    const t = this.findTable(name);
-    if (!t) throw new Error(`unknown table ${name}`);
-    return t;
-  }
 
   /** Whether the catalog this transaction runs on has table `name` (system code: a table it may write). */
   hasTable(name: string): boolean {
@@ -842,6 +845,7 @@ export class Tx {
 
   private recordIndexMeta(ix: IndexDef) {
     // Built once per index: this is on the path of every indexed query.
+    // Stryker disable next-line ConditionalExpression: building it again gives the same interval (it is a cache)
     if (!ix.metaRead) {
       const k = encodeKey([ix.metaId!]);
       ix.metaRead = { index: this.catalog.table(INDEX_TABLE).byId.id, lo: k, hi: prefixEnd(k) };
@@ -920,9 +924,11 @@ export class Tx {
     const table = this.tableOfIdArg(tableOrId, "db.get");
     // A virtual table's id (`_storage`'s) names a system table apps reach through `db.system` only (Convex's
     // `system_table_guard`).
+    // Stryker disable next-line ConditionalExpression: with a table, its public name is never a virtual table's an app may not read
     const name = table === undefined ? this.publicTableName(decodeId(tableOrId).tableNumber) : undefined;
     if (name !== undefined && !this.systemAccess && VIRTUAL_TO_SYSTEM_TABLE[name] !== undefined)
       throw new Error("System tables can only be accessed with db.system.");
+    // Stryker disable next-line StringLiteral: the method names a mismatched table, impossible here (the id gave the table)
     return table === undefined ? null : this.handOut(await this.read(table, tableOrId, "db.get"));
   }
 
@@ -946,6 +952,7 @@ export class Tx {
     if (typeof table !== "string") throw new Error("Invalid argument `table` for `db.normalizeId`");
     if (table.startsWith("_") && !this.systemAccess) return null;
     const t = this.catalog.tables.get(table) ?? this.createdTables.get(table)?.def;
+    // Stryker disable next-line ConditionalExpression,LogicalOperator: t.number of no table and decodeId of a non-string throw in the try below, which gives the same null
     if (!t || typeof idString !== "string") return null;
     try {
       return decodeId(idString).tableNumber === t.number ? idString : null;
@@ -1044,6 +1051,7 @@ export class Tx {
       t: undefined,
       ix: undefined,
       range: FULL,
+      // Stryker disable next-line BooleanLiteral: this query reads no rows, so its direction is never used
       desc: false,
       orderSet: false,
       ops: [],
@@ -1091,6 +1099,7 @@ export class Tx {
     } else {
       let decoded: { tableNumber: number } | null = null;
       try {
+        // Stryker disable next-line ConditionalExpression: decodeId throws on a non-string too, and the catch gives the same null
         decoded = typeof _id === "string" ? decodeId(_id) : null;
       } catch {
         decoded = null;
@@ -1137,6 +1146,7 @@ export class Tx {
       }
       return;
     }
+    // Stryker disable next-line LogicalOperator: a query has both a table and an index, or neither (`ix: t && defaultIndex(t)`)
     if (!st.t || !st.ix) return;
     const reads = new ScanReads(this, st);
     for await (const d of this.stream(st)) {
@@ -1159,6 +1169,7 @@ export class Tx {
       return out;
     } catch (e) {
       // A reference whose document retention pruned during the read is a snapshot too old, not a corrupt store.
+      // Stryker disable next-line OptionalChaining: unreached (storeCall already made a dangling reference a PersistenceReadError)
       if (e instanceof DanglingReferenceError) this.retention?.check(this.snapshot);
       throw e;
     }
@@ -1200,6 +1211,7 @@ export class Tx {
       }
     });
     this.countRowsRead(t.name, rows.length);
+    // Stryker disable next-line ArrayDeclaration: every slot is assigned below; the preset length only sizes it
     const out: Doc[] = new Array(rows.length);
     for (let i = 0; i < rows.length; i++) {
       const doc = decodeDoc(rows[i]!.json);
@@ -1216,6 +1228,7 @@ export class Tx {
     this.pending.get(ix.id)?.forRange(lo, hi, false, (k, val) => {
       pend.push([k, val]);
     });
+    // Stryker disable next-line ConditionalExpression: merging no pending writes gives the store's page as is (a shortcut)
     if (pend.length === 0) return this.snapshotRange(st, lo, hi, limit); // the common case: nothing written here
     return this.mergePending(
       ix,
@@ -1249,6 +1262,7 @@ export class Tx {
         lo = new Uint8Array(last.length + 1);
         lo.set(last);
       }
+      // Stryker disable next-line MethodExpression: the batch size; a stopped scan prefetches more rows, the results are the same
       n = Math.min(n * 2, 1024);
     }
   }
@@ -1271,7 +1285,9 @@ export class Tx {
     this.paginated = true;
     const pipe = new Pipeline(st.ops);
     const fp = queryFingerprint({
+      // Stryker disable next-line LogicalOperator,StringLiteral: the index id is unique across tables, so it names the table already
       tablet: st.t?.id ?? "",
+      // Stryker disable next-line StringLiteral: only a query with no index, encoded and decoded with the same constant
       index: st.ix?.id ?? "",
       // A search's cursor belongs to its index and filters.
       lo: st.search
@@ -1317,6 +1333,7 @@ export class Tx {
       const pos: CursorPosition = end ?? (exhausted ? "end" : { after: last! });
       return done(page, pos, status, null);
     }
+    // Stryker disable next-line LogicalOperator: a query has an index exactly when its table exists
     if (!st.t || !st.ix) return done([], "end", null, null);
     if (start === "end") {
       try {
@@ -1453,6 +1470,7 @@ export class Tx {
    * limit (`take(n)`, Convex's last operator); else `n` stops the scan early (a `collect()`'s read limit, not
    * an operator of the query).
    */
+  // Stryker disable next-line BooleanLiteral: collect() passes no `take`, and a take of its cap stops where the cap does
   async runQuery(st: QState, n: number, take = false): Promise<Doc[]> {
     const pipe = take ? new Pipeline(st.ops, n) : new Pipeline(st.ops);
     const cap = take ? Number.POSITIVE_INFINITY : n;
@@ -1560,10 +1578,12 @@ export class Tx {
           `Document is too nested (nested ${nesting} levels deep > maximum nesting ${MAX_DOCUMENT_NESTING})`,
         );
       const size = rawValueSize(v);
+      // Stryker disable next-line CallExpression: a cache; sizeOfVersion measures the same version when it is missing
       rememberStagedSize(next, size);
       if (size > MAX_USER_SIZE)
         throw new Error(`Value is too large (${formatBytes(size)} > maximum size ${formatBytes(MAX_USER_SIZE)})`);
       this.bytesWritten += size;
+      // Stryker disable next-line ObjectLiteral: without it, sizeOfVersion and biggestWrites measure the same version again
       measured = { size, nesting };
     }
     this.docsWritten++;
@@ -1604,6 +1624,7 @@ export class Tx {
     engineOwned(old);
     engineOwned(next);
     if (t.name === INDEX_TABLE) {
+      // Stryker disable next-line OptionalChaining: a write has a version before or after it, never neither
       const tablet = ((next ?? old) as { table_id?: TabletId } | null)?.table_id;
       if (tablet !== undefined) this.indexedTables.add(tablet);
     }
@@ -1648,12 +1669,15 @@ export class Tx {
     // The version this transaction currently sees (its own last write, or the snapshot's).
     const current = prev ? prev.next : old;
     // The keys of the first version (the snapshot's) are those of `current` at the first write; kept since.
+    // Stryker disable next-line OptionalChaining: every staged write keeps its keys
     const oldKeys = prev ? prev.keys?.old : new Map<IndexId, Uint8Array | null>();
     const nextKeys = new Map<IndexId, Uint8Array | null>();
     for (const ix of maintainedIndexes(t)) {
       const curKey = current ? indexKey(ix, current) : null;
       const newKey = next ? indexKey(ix, next) : null;
+      // Stryker disable next-line CallExpression: a cache; `writtenKey` computes a missing key the same
       if (!prev) oldKeys!.set(ix.id, curKey);
+      // Stryker disable next-line CallExpression: a cache; `writtenKey` computes a missing key the same
       nextKeys.set(ix.id, newKey);
       let tree = this.pending.get(ix.id);
       if (!tree) {
@@ -1661,13 +1685,16 @@ export class Tx {
         this.pending.set(ix.id, tree);
       }
       if (curKey && (!newKey || compareKeys(curKey, newKey) !== 0)) tree.set(curKey, null);
+      // Stryker disable next-line LogicalOperator: a key exists exactly when the version does
       if (newKey && next) tree.set(newKey, next);
     }
     this.writes.set(id, {
       table: t,
       old: prev ? prev.old : old,
       next,
+      // Stryker disable next-line ObjectLiteral: a cache; the limit warnings and the I/O measure the version the same
       ...(measured ? { measured } : {}),
+      // Stryker disable next-line ObjectLiteral: a cache; `writtenKey` computes a missing key the same
       keys: { ...(oldKeys ? { old: oldKeys } : {}), next: nextKeys },
     });
   }
@@ -1851,6 +1878,7 @@ export class Tx {
   private versionTs = new Map<string, bigint>();
   private prevTsOf(id: string): bigint {
     const ts = this.versionTs.get(id);
+    // Stryker disable next-line StringLiteral,CallExpression: unreachable, every write of an existing document read it first
     if (ts === undefined) throw new Error(`internal error: no version ts for ${id}, which this transaction replaces`);
     return ts;
   }
@@ -1998,6 +2026,7 @@ export class Tx {
     for (const h of hits) {
       const key = searchKey(h);
       if (after && compareKeys(key, after) <= 0) continue;
+      // Stryker disable next-line StringLiteral: a hit's id is valid, so the method never reaches a message
       const doc = await this.read(st.t!.name, h.id, "withSearchIndex");
       if (doc) yield { doc, key };
     }
@@ -2051,6 +2080,7 @@ class ScanReads {
   /** The scan reached `doc` (in its order). */
   reached(doc: Doc) {
     if (!this.iv) this.open();
+    // Stryker disable next-line LogicalOperator: a second entry in `unsettled` only settles it again, a no-op
     if (this.last === null && this.vals === null) this.tx.unsettled.push(this);
     this.last = doc;
     this.vals = null;
@@ -2137,6 +2167,7 @@ function copyFields(fields: Record<string, unknown>, method: string, maxNesting:
   } catch (e) {
     // An array's or an object's size is checked where Convex's syscall parses the value (Rust), under its
     // `with_argument_error`; the other checks are its JS side's, with no prefix.
+    // Stryker disable next-line Regex: no other message of `copyValue` contains these words
     if (e instanceof Error && /^(Array length is too long|Object has too many fields) /.test(e.message))
       throw new Error(`Invalid argument \`value\` for \`db.${method}\`: ${e.message}`);
     throw e;
@@ -2159,6 +2190,7 @@ function validateWritten(
   const nesting = valueNesting(doc as Value);
   if (nesting > MAX_DOCUMENT_NESTING)
     violations.push(`Document is too nested (nested ${nesting} levels deep > maximum nesting ${MAX_DOCUMENT_NESTING})`);
+  // Stryker disable next-line MethodExpression: the copied fields are sorted already, and `_id` and `_creationTime` are never listed
   for (const k of Object.keys(doc).sort())
     if (k.startsWith("_") && k !== "_id" && k !== "_creationTime") violations.push(underscoreField(k));
   if (violations.length)
@@ -2185,6 +2217,7 @@ function checkSystemFields(
   id: string,
   creationTime: number,
 ) {
+  // Stryker disable next-line CallExpression: an import passes no written value (`fields` is `{}`)
   checkSystemFieldValues(fields, id, creationTime);
   for (const k of Object.keys(doc))
     if (k.startsWith("_") && k !== "_id" && k !== "_creationTime") throw new Error(underscoreField(k));
@@ -2215,6 +2248,7 @@ function writtenKey(
 ): Uint8Array | null {
   const doc = w[which];
   if (!doc) return null;
+  // Stryker disable next-line OptionalChaining: every staged write keeps its keys
   const known = w.keys?.[which];
   if (known?.has(ix.id)) return known.get(ix.id)!;
   return indexKey(ix, doc);
@@ -2321,6 +2355,7 @@ function refuseLoneSurrogatesInQuery(table: string, st: QState, take: number | n
             order,
           }
         : { type: "FullTableScan", tableName: table, order };
+    // Stryker disable next-line ConditionalExpression,EqualityOperator,ArrayDeclaration,ObjectLiteral: `take`'s limit is the text's last operator, after every value that can hold a lone surrogate
     const ops: QueryOp[] = take === null ? st.ops : [...st.ops, { limit: take }];
     const operators = ops.map((op) => ("filter" in op ? { filter: expressionJson(op.filter) } : { limit: op.limit }));
     return JSON.stringify({ query: { source, operators } });
@@ -2357,6 +2392,7 @@ class QueryImpl implements TxQueryChained {
     } catch (e) {
       return Promise.reject(e);
     }
+    // Stryker disable next-line BooleanLiteral: `take(n)` as a limit or as the cap stops at the same `n` documents
     return take === null ? this.tx.runQuery(this.st, this.tx.collectLimit()) : this.tx.runQuery(this.st, take, true);
   }
 

@@ -47,6 +47,11 @@ export type ContractOptions = DeploymentContractOptions &
     extensions?: readonly ContractExtensionPart[];
     writes?: { table: string; clear?: boolean };
     /**
+     * Runs only these areas; the tests of the others are registered as skipped. For a source built in steps
+     * (STUDY-149: the server source offers an area once the server functions under it exist). Default: all.
+     */
+    only?: readonly ContractArea[];
+    /**
      * Enables the runFunction tests with this function: a query that is safe to run (and its arguments),
      * which returns without throwing.
      */
@@ -57,6 +62,27 @@ export type ContractOptions = DeploymentContractOptions &
       misfitArgs?: Record<string, Value>;
     };
   };
+
+/** The areas of the suite, for `ContractOptions.only`: the core's sections, then each part. */
+export type ContractArea =
+  | "deployment"
+  | "tables"
+  | "documents"
+  | "functions"
+  | "logs"
+  | "run"
+  | "deploymentFeatures"
+  | "state"
+  | "metrics"
+  | "topology"
+  | "subscriptions"
+  | "systemTables"
+  | "clients"
+  | "auth"
+  | "authAdmin"
+  | "snapshot"
+  | "extensions"
+  | "writes";
 
 async function expectError(p: Promise<unknown>, code: DataSourceErrorCode, clause?: string) {
   const e = await p.then(
@@ -112,7 +138,10 @@ export function describeDataSourceContract(
 ) {
   const watchTimeoutMs = opts.watchTimeoutMs ?? 5000;
   const timeoutMs = opts.timeoutMs ?? 30_000;
-  const test = (name: string, fn: () => Promise<void>) => bunTest(name, fn, timeoutMs);
+  /** The area of the tests being registered (registration is synchronous; the parts register when called). */
+  let area: ContractArea = "deployment";
+  const test = (name: string, fn: () => Promise<void>) =>
+    !opts.only || opts.only.includes(area) ? bunTest(name, fn, timeoutMs) : bunTest.skip(name, fn);
 
   /** The table with the most documents, all its documents, and its indexes. */
   async function fixture() {
@@ -141,6 +170,7 @@ export function describeDataSourceContract(
     });
 
     // -------------------------------------------------------------- tables and schema
+    area = "tables";
     test("tables list their system indexes first, and say whether the schema declares them", async () => {
       const src = await make();
       const tables = await src.listTables();
@@ -166,6 +196,7 @@ export function describeDataSourceContract(
     });
 
     // -------------------------------------------------------------- pagination
+    area = "documents";
     test("pages walk every document once, newest first by default, and end with isDone", async () => {
       const { src, table, docs } = await fixture();
       const ids = docs.map((d) => d._id);
@@ -357,6 +388,7 @@ export function describeDataSourceContract(
       expect(await src.tableOfId("0000000000000000000000000000zzzz")).toBeNull();
     });
 
+    area = "functions";
     test("functions have a module:name path and a kind", async () => {
       for (const f of await (await make()).listFunctions()) {
         expect(f.path).toMatch(/^[^:]+:[^:]+$/);
@@ -368,6 +400,7 @@ export function describeDataSourceContract(
       }
     });
 
+    area = "logs";
     test("log lines name their execution consistently: a caller is another execution of the same request", async () => {
       const src = await make();
       const page = (await src.listLogs({ numItems: 200, cursor: null })).page;
@@ -422,6 +455,7 @@ export function describeDataSourceContract(
       }
     });
 
+    area = "tables";
     test("an aborted call rejects with the signal's AbortError", async () => {
       const src = await make();
       const ac = new AbortController();
@@ -431,6 +465,7 @@ export function describeDataSourceContract(
     });
 
     // -------------------------------------------------------------- watchers
+    area = "deployment";
     test("watchStats delivers asynchronously and stops after unsubscribe", async () => {
       const src = await make();
       let calls = 0;
@@ -452,6 +487,7 @@ export function describeDataSourceContract(
       expect(calls).toBe(before);
     });
 
+    area = "documents";
     test("watchLogs and watchTable never deliver synchronously nor after unsubscribe", async () => {
       const { src, table } = await fixture();
       let calls = 0;
@@ -491,6 +527,7 @@ export function describeDataSourceContract(
     });
 
     // -------------------------------------------------------------- running functions (opt-in)
+    area = "run";
     const run = opts.run;
     if (run) {
       const runner = async () => {
@@ -571,21 +608,33 @@ export function describeDataSourceContract(
     }
 
     // -------------------------------------------------------------- the deployment's other features (§14)
+    area = "deploymentFeatures";
     describeDeploymentContract({ make, test, watchTimeoutMs, opts });
+    area = "state";
     describeDeploymentStateContract({ make, test, opts });
+    area = "metrics";
     describeMetricsContract({ make, test });
+    area = "topology";
     describeTopologyContract({ make, test, watchTimeoutMs });
+    area = "subscriptions";
     describeSubscriptionsContract({ make, test, watchTimeoutMs });
+    area = "systemTables";
     describeSystemTablesContract({ make, test });
+    area = "clients";
     describeClientsContract({ make, test, writes: !!opts.writes });
+    area = "auth";
     describeAuthContract({ make, test });
+    area = "authAdmin";
     describeAuthAdminContract({ make, test });
+    area = "snapshot";
     describeSnapshotContract({ make, test, opts });
+    area = "extensions";
     // each extension's part (UI-01 §26); a part tests only what the source offers
     for (const part of opts.extensions ?? contractParts)
       part.describe({ make, test, watchTimeoutMs, writes: !!opts.writes });
 
     // -------------------------------------------------------------- writes (opt-in)
+    area = "writes";
     const writes = opts.writes;
     if (!writes) return;
     const { table } = writes;

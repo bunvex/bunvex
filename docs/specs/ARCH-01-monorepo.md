@@ -78,14 +78,16 @@ driver's driver"), `db` (suggests bunvex is a database client and hides that the
 
 A missing native peer fails at import with a message that names the package to install. Third parties
 publish their own `bunvex-persistence-<name>` against the published contract and prove it with
-`@bunvex/persistence-conformance`.
+`@bunvex/persistence-conformance`, run from a clone of this repo (the suite itself is not published to npm).
 
 **D4 — files**: the `ctx.storage` API lives in `@bunvex/server` (metadata is a system table that goes
 through the engine); the bytes go to `@bunvex/file-storage` backends (`/local`, `/s3`), configured with
 `FILE_STORAGE=`.
 
 **D5 — the umbrella package `bunvex`** re-exports `bunvex/server`, `bunvex/values`, `bunvex/browser`,
-`bunvex/react`, `bunvex/nextjs` and ships the CLI as its `bin`. It contains no logic.
+`bunvex/react`, `bunvex/nextjs` and ships the CLI as its `bin`. It contains no logic. *Update (owner,
+2026-10-12):* npm will not allow the name `bunvex`, so it stays a private workspace package and apps install the
+scoped `@bunvex/*` packages for good (STUDY-40 L7).
 
 **D6 — dependency rules, enforced in CI** (a check that fails the build on a forbidden import):
 
