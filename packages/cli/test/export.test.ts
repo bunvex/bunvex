@@ -54,7 +54,16 @@ test("bunvex export: into a directory, to a new file; an existing file is refuse
   expect(existsSync(join(dir, "backups", `snapshot_${NAME}_${ts}.zip`))).toBe(true);
   const toFile = await run("--path", "mine.zip");
   expect(toFile.code).toBe(0);
-  expect(Bun.spawnSync(["unzip", "-Z1", join(dir, "mine.zip")]).stdout.toString()).toContain("items/documents.jsonl");
+  // Async, stdout read alongside `exited`: on a loaded CI runner a `Bun.spawnSync` of `unzip` once sat until the
+  // test timeout killed its child ("killed 1 dangling process"), though the child had exited.
+  const unzip = Bun.spawn(["unzip", "-Z1", join(dir, "mine.zip")], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "inherit",
+  });
+  const [unzipped, listing] = await Promise.all([unzip.exited, new Response(unzip.stdout).text()]);
+  expect(unzipped).toBe(0);
+  expect(listing).toContain("items/documents.jsonl");
   writeFileSync(join(dir, "taken.zip"), "");
   expect(await run("--path", "taken.zip")).toEqual({ code: 1, err: ["Error: Path taken.zip already exists."] });
   const missing = await run();

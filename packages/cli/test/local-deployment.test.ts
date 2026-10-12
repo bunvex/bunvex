@@ -38,6 +38,16 @@ const tmp = () => {
   return d;
 };
 /** A stand-in for the released executable: the same program, run by Bun. */
+/**
+ * `zip -q -j <args>`, run to its end. Async: on a loaded CI runner a `Bun.spawnSync` of this kind once sat until
+ * the test timeout killed its child ("killed 1 dangling process"), though the child had exited.
+ */
+async function zip(...args: string[]) {
+  const code = await Bun.spawn(["zip", "-q", "-j", ...args], { stdin: "ignore", stdout: "ignore", stderr: "inherit" })
+    .exited;
+  if (code !== 0) throw new Error(`zip ${args.join(" ")} exited ${code}`);
+}
+
 function shim(dir: string, version = "test-1") {
   const p = join(dir, EXE);
   writeFileSync(
@@ -196,7 +206,7 @@ describe("the executable: download, cache, upgrade", () => {
       mkdirSync(d);
       shim(d, v);
       const z = join(work, `${v}.zip`);
-      Bun.spawnSync(["zip", "-q", "-j", z, join(d, EXE)]);
+      await zip(z, join(d, EXE));
       zips[v] = new Uint8Array(readFileSync(z));
     }
     let latest = "precompiled-2026-10-01-aaaaaaa";
@@ -277,11 +287,11 @@ describe("the executable: download, cache, upgrade", () => {
     forgetLatestVersion();
   });
 
-  test("unzip: deflated and stored entries", () => {
+  test("unzip: deflated and stored entries", async () => {
     const d = tmp();
     writeFileSync(join(d, "f.txt"), "hello ".repeat(200));
     for (const level of ["-6", "-0"]) {
-      Bun.spawnSync(["zip", "-q", "-j", level, join(d, `z${level}.zip`), join(d, "f.txt")]);
+      await zip(level, join(d, `z${level}.zip`), join(d, "f.txt"));
       const out = unzipOne(new Uint8Array(readFileSync(join(d, `z${level}.zip`))), "f.txt");
       expect(new TextDecoder().decode(out)).toBe("hello ".repeat(200));
     }

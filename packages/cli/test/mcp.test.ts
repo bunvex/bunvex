@@ -79,6 +79,22 @@ beforeAll(async () => {
   });
 });
 
+/**
+ * `bunvex mcp start` with arguments it refuses: its exit code and its stderr, trimmed. Async, the pipes read
+ * alongside `exited`: on a loaded CI runner a `Bun.spawnSync` here once sat until the test timeout killed its
+ * child ("killed 2 dangling processes"), though the child had exited.
+ */
+async function startFails(...args: string[]) {
+  const p = Bun.spawn(["bun", BIN, "mcp", "start", ...args], {
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "pipe",
+    env: { PATH: process.env.PATH ?? "" },
+  });
+  const [code, err] = await Promise.all([p.exited, new Response(p.stderr).text()]);
+  return { code, err: err.trim() };
+}
+
 /** The server as a process, and a client speaking newline-delimited JSON-RPC to it. */
 async function mcp(...args: string[]) {
   const p = Bun.spawn(["bun", BIN, "mcp", "start", ...args], {
@@ -370,11 +386,9 @@ export default query({ handler: async (ctx) => { console.log("n"); return (await
       isError: true,
       value: { error: "Tool data not found" },
     });
-    const bad = Bun.spawnSync(["bun", BIN, "mcp", "start", "--disable-tools", "nope"], {
-      env: { PATH: process.env.PATH ?? "" },
-    });
-    expect(bad.exitCode).toBe(1);
-    expect(bad.stderr.toString().trim()).toBe(
+    const bad = await startFails("--disable-tools", "nope");
+    expect(bad.code).toBe(1);
+    expect(bad.err).toBe(
       "Failed to start MCP server: Error: Disabled tool nope not found (valid tools: data, envGet, envList, envRemove, envSet, functionSpec, logs, run, runOneoffQuery, status, tables)",
     );
   });
@@ -383,19 +397,17 @@ export default query({ handler: async (ctx) => { console.log("n"); return (await
     const c = await mcp();
     expect(await c.call("status")).toEqual({ isError: true, value: { error: "No arguments provided" } });
     expect((await c.call("tables", { deploymentSelector: "garbage" })).isError).toBe(true);
-    const conflict = Bun.spawnSync(
-      ["bun", BIN, "mcp", "start", "--disable-production-deployments", "--dangerously-enable-production-deployments"],
-      { env: { PATH: process.env.PATH ?? "" } },
+    const conflict = await startFails(
+      "--disable-production-deployments",
+      "--dangerously-enable-production-deployments",
     );
     // Argument errors as Convex's commander prints them (STUDY-124), with no help after them.
-    expect(conflict.exitCode).toBe(1);
-    expect(conflict.stderr.toString().trim()).toBe(
+    expect(conflict.code).toBe(1);
+    expect(conflict.err).toBe(
       "error: option '--disable-production-deployments' cannot be used with option '--dangerously-enable-production-deployments'",
     );
-    const unknown = Bun.spawnSync(["bun", BIN, "mcp", "start", "--project-dri", "x"], {
-      env: { PATH: process.env.PATH ?? "" },
-    });
-    expect([unknown.exitCode, unknown.stderr.toString().trim()]).toEqual([
+    const unknown = await startFails("--project-dri", "x");
+    expect([unknown.code, unknown.err]).toEqual([
       1,
       "error: unknown option '--project-dri'\n(Did you mean --project-dir?)",
     ]);
