@@ -41,15 +41,21 @@ export type RetentionOptions = {
   indexChunk?: number;
   /** DOCUMENT_RETENTION_DELETE_CHUNK. Default 256. */
   documentChunk?: number;
-  /** RETENTION_DELETE_BATCH (index entries) and DOCUMENT_RETENTION_MAX_SCANNED_DOCUMENTS per pass. 10 000. */
-  maxPerPass?: number;
+  /** RETENTION_DELETE_BATCH: index entries an index pass deletes before it ends (the next follows). 10 000. */
+  indexMaxPerPass?: number;
+  /** DOCUMENT_RETENTION_MAX_SCANNED_DOCUMENTS: document versions a document pass reads before it ends. 10 000. */
+  documentMaxScanned?: number;
   /** DOCUMENT_RETENTION_RATE_LIMIT: document versions deleted per second. Default 256. */
   documentRatePerSec?: number;
   /** DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS: how often the document deleter runs. Default 60 s. */
   documentEveryMs?: number;
   /** RETENTION_CHECKPOINT_PERIOD_SECS: how often a cursor is persisted. Default 300 s. */
   checkpointEveryMs?: number;
-  /** MAX_RETENTION_DELAY_SECONDS: the longest backoff after an error. Default 60 s (from 50 ms). */
+  /**
+   * RETENTION_DELETE_FREQUENCY (Convex's `MAX_RETENTION_DELAY_SECONDS`): the longest backoff after an error of
+   * the window advance and the index deleter. Default 60 s (from 50 ms). The document deleter's is
+   * `documentEveryMs`, as Convex's.
+   */
   maxBackoffMs?: number;
   /** Run the three loops (default). Tests that drive `advance` and the passes themselves turn it off. */
   background?: boolean;
@@ -107,11 +113,12 @@ export class Retention {
       advanceEveryMs: opts.advanceEveryMs ?? 30_000,
       indexChunk: opts.indexChunk ?? knob("INDEX_RETENTION_DELETE_CHUNK", 512),
       documentChunk: opts.documentChunk ?? knob("DOCUMENT_RETENTION_DELETE_CHUNK", 256, "positive"),
-      maxPerPass: opts.maxPerPass ?? 10_000,
+      indexMaxPerPass: opts.indexMaxPerPass ?? knob("RETENTION_DELETE_BATCH", 10_000),
+      documentMaxScanned: opts.documentMaxScanned ?? knob("DOCUMENT_RETENTION_MAX_SCANNED_DOCUMENTS", 10_000),
       documentRatePerSec: opts.documentRatePerSec ?? knob("DOCUMENT_RETENTION_RATE_LIMIT", 256, "positive"),
       documentEveryMs: opts.documentEveryMs ?? knob("DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS", 60, "float") * 1000,
       checkpointEveryMs: opts.checkpointEveryMs ?? secondsKnob("RETENTION_CHECKPOINT_PERIOD_SECS", 300),
-      maxBackoffMs: opts.maxBackoffMs ?? 60_000,
+      maxBackoffMs: opts.maxBackoffMs ?? secondsKnob("RETENTION_DELETE_FREQUENCY", 60),
       background: opts.background ?? true,
     };
   }
@@ -168,7 +175,8 @@ export class Retention {
 
   /**
    * A loop: run `pass`, then wait `every()` (or, with null, until the window moves past the cursor). After a
-   * failure, back off from 50 ms doubling up to `maxBackoffMs`. A lost lease or a stopped committer ends it.
+   * failure, back off from 50 ms doubling up to `maxBackoffMs` (the document deleter: up to `documentEveryMs`, as
+   * Convex's). A lost lease or a stopped committer ends it.
    */
   private loop(name: "advance" | "index" | "document", every: (() => number) | null, pass: () => Promise<boolean>) {
     let backoff = 50;
@@ -183,7 +191,7 @@ export class Retention {
           this.stats.errors++;
           console.error(`retention (${name}): ${e instanceof Error ? e.message : e}`);
           await this.sleep(backoff);
-          backoff = Math.min(backoff * 2, this.opts.maxBackoffMs);
+          backoff = Math.min(backoff * 2, name === "document" ? this.opts.documentEveryMs : this.opts.maxBackoffMs);
           continue;
         }
         if (more) continue; // a pass stopped at its cap: the next one follows at once
@@ -260,7 +268,7 @@ export class Retention {
   private async indexPass(): Promise<boolean> {
     const upTo = this.minIndexTs - 1n;
     let done = 0;
-    while (this.indexCursor < upTo && done < this.opts.maxPerPass && !this.stopped) {
+    while (this.indexCursor < upTo && done < this.opts.indexMaxPerPass && !this.stopped) {
       const rows = await this.store.readDocumentLog(this.indexCursor, upTo, LOG_PAGE);
       if (!rows.length) {
         this.indexCursor = upTo;
@@ -316,7 +324,7 @@ export class Retention {
   private async documentPass(): Promise<boolean> {
     const upTo = this.minDocumentTs - 1n;
     let scanned = 0;
-    while (this.documentCursor < upTo && scanned < this.opts.maxPerPass && !this.stopped) {
+    while (this.documentCursor < upTo && scanned < this.opts.documentMaxScanned && !this.stopped) {
       const rows = await this.store.readDocumentLog(this.documentCursor, upTo, LOG_PAGE);
       if (!rows.length) {
         this.documentCursor = upTo;

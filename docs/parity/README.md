@@ -8,14 +8,14 @@ item. It is the project's to-do list at the scale of the whole product.
 |---|---|--:|--:|--:|
 | Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 236 | 3 | 7 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 162 | 2 | 1 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 221 | 24 | 18 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 222 | 24 | 13 |
 
 Beyond Convex, [additions.md](additions.md) lists 29 additions: 26 built (11 of them dashboard screens on the
 mock, 3 more with their dashboard part on the mock), 2 accepted, 1 deferred, none proposed (2026-10-11, with AD-29).
 
-These counts were recounted on 2026-10-08 (with #503, the index cache) from each row's status column: a row counts as done,
+These counts were recounted on 2026-10-12 (the docs audit: cloud-only and decided no-build rows re-marked *n/a*) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
-are not counted: 1 in server-api.md, 1 in client-sync.md, 2 in platform.md.
+are not counted: 1 in server-api.md, 1 in client-sync.md, 6 in platform.md.
 
 ## How to use it
 
@@ -39,9 +39,9 @@ are not counted: 1 in server-api.md, 1 in client-sync.md, 2 in platform.md.
 The order follows one principle: **first make what exists correct, then make the core behave like Convex,
 then grow outwards.** Each item becomes one or more PRs, each with its study.
 
-**Where it stands (checked against the parity rows on 2026-10-08):** phases 0, 1 and 2 are done. Phase 3 is done
+**Where it stands (checked against the parity rows on 2026-10-12):** phases 0, 1 and 2 are done. Phase 3 is done
 except the dashboard on a real deployment (item 12) and built-in auth (item 13). In phase 4, search, vector search,
-log streaming, metrics and streaming export are done; components and Node's `externalPackages` remain.
+log streaming, metrics, streaming export and Node's `externalPackages` are done; components remain.
 
 ### Phase 0 — correctness bugs in what already exists
 
@@ -135,7 +135,7 @@ In this order:
     logs and function metrics);
 13. built-in auth (STUDY-28) phases — open (AD-01 accepted, spike done);
 14. import/export in Convex's snapshot format, so data can move between Convex and bunvex (STUDY-42) —
-    done; shape inference, cloud backups and the upgrade path remain (platform §18).
+    done; shape inference and the upgrade path remain (platform §18; cloud backups are cloud-only, *n/a*).
 
 Items 7–12 were ordered by the owner on 2026-10-01 to reach a self-hosted example app end to end (bring the
 containers up, deploy functions, see them work) before the remaining platform items.
@@ -147,8 +147,8 @@ containers up, deploy functions, see them work) before the remaining platform it
 - components (1 of 7, §11; DV-55, plan in STUDY-62) — open;
 - Node actions: `"use node"` runs in Bun (DV-87) — done; `node.externalPackages` — done (STUDY-148; DV-470–DV-473
   decided by the owner, 2026-10-12);
-- log streaming (STUDY-47, STUDY-59, STUDY-70) and metrics (§20: 14 done; the one missing row, insights, is
-  cloud-only) — done;
+- log streaming (STUDY-47, STUDY-59, STUDY-70) and metrics (§20: 14 done; insights is cloud-only, *n/a*) —
+  done;
 - streaming export (STUDY-60, STUDY-69) — done;
 - the dashboard's connection to a real deployment. Every screen is built on the mock (UI-01 §0, platform §21);
   the server source (`@bunvex/dashboard-source`, STUDY-149) reads the deployment, schema, state, logs and
