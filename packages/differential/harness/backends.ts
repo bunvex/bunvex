@@ -104,6 +104,8 @@ export type StartOptions = {
   store?: { dir: string; name: string; secret: string };
   /** The app to deploy: a directory of function files written for Convex (`app/` by default). */
   app?: string;
+  /** Environment variables for the backend's process (a knob such as `V8_ACTION_USER_TIMEOUT_SECS`). */
+  env?: Record<string, string>;
 };
 
 /** A store a backend can be started on, then the other one (the cross-open tests). */
@@ -230,7 +232,7 @@ export async function startConvex(opts: StartOptions = {}): Promise<Backend> {
           "--disable-beacon",
         ],
         state,
-        { RUST_LOG: "warn" },
+        { RUST_LOG: "warn", ...opts.env },
       );
     });
     proc = up.launched.proc;
@@ -282,6 +284,7 @@ export async function startBunvex(opts: StartOptions = {}): Promise<Backend> {
           files.db,
         ],
         state,
+        opts.env,
       );
     });
     proc = up.launched.proc;
