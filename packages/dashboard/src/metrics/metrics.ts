@@ -9,6 +9,11 @@ import { type DashboardDataSource, type MetricsWindow, REST, type TopKSeries } f
 
 export const HOUR = 3_600_000;
 export const REFRESH_MS = 60_000;
+/**
+ * How often Convex's Health screen asks again (`dashboard-common/src/lib/appMetrics.ts`): the top functions,
+ * the concurrency and the invalidations every 8 s; the scheduler lag every minute (`REFRESH_MS`).
+ */
+export const HEALTH_REFRESH_MS = 8_000;
 
 /** The last hour, in minutes, ending at the current minute's end. */
 export function lastHour(now = Date.now()): MetricsWindow {
@@ -33,18 +38,19 @@ export const NO_METRICS = {
   denied: "This credential may not view metrics.",
 } as const;
 
-/** A metrics query: refetched every minute over a fresh window, only when allowed. */
+/** A metrics query: refetched every `refreshMs` (a minute) over a fresh window, only when allowed. */
 export function useMetric<T>(
   key: readonly unknown[],
   enabled: boolean,
   fetch: (w: MetricsWindow, signal: AbortSignal) => Promise<T>,
+  refreshMs = REFRESH_MS,
 ) {
   const scope = useQueryScope();
   return useQuery({
     queryKey: [...dashboardKeys.all(scope.scope), "metrics", ...key],
     queryFn: ({ signal }) => fetch(lastHour(), signal),
     enabled,
-    refetchInterval: REFRESH_MS,
+    refetchInterval: refreshMs,
   });
 }
 

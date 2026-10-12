@@ -7,7 +7,7 @@ import { v } from "@bunvex/values";
 import { cronJobs, cronSpecs } from "../src/cron.ts";
 import { CronJobExecutor } from "../src/cron-executor.ts";
 import { Functions, internalMutation, mutation } from "../src/functions.ts";
-import { cancelAllScheduledJobs, cancelScheduledJob } from "../src/system-functions.ts";
+import { cancelAllScheduledJobs, cancelScheduledJob, InvalidIdError } from "../src/system-functions.ts";
 
 const stops: (() => unknown)[] = [];
 afterEach(async () => {
@@ -89,15 +89,18 @@ describe("_system/frontend schedules", () => {
     expect(typeof d.nextTs).toBe("bigint");
     const job = (await engine.query((db) => getJob(db, sooner)))!;
     expect(d.originalScheduledTs).toBe(msToNs(job.scheduledTime));
-    // One function's, by either spelling.
-    for (const udfPath of ["m:a", "m.js:a"]) {
+    // One function's, by its canonical path exactly, as Convex's (a display path matches nothing there).
+    for (const [udfPath, ids] of [
+      ["m.js:a", [later]],
+      ["m:a", []],
+    ] as const) {
       const mine = (await sys("_system/frontend/paginatedScheduledJobs", {
         paginationOpts: { numItems: 10, cursor: null },
         udfPath,
       })) as {
         page: { _id: string }[];
       };
-      expect(mine.page.map((x) => x._id)).toEqual([later]);
+      expect(mine.page.map((x) => x._id)).toEqual([...ids]);
     }
   });
 
@@ -173,7 +176,10 @@ describe("_system/frontend schedules", () => {
     await cancelScheduledJob(engine, id);
     expect((await engine.query((db) => getJob(db, id)))?.state.kind).toBe("canceled");
     await cancelScheduledJob(engine, id); // no-op
-    expect(await cancelScheduledJob(engine, "not-an-id").catch((e: Error) => e.message)).toContain("Invalid ID");
+    // Convex's `invalid_id_error`: the route answers it as a 400 InvalidId
+    const bad = await cancelScheduledJob(engine, "not-an-id").catch((e: unknown) => e);
+    expect(bad).toBeInstanceOf(InvalidIdError);
+    expect((bad as InvalidIdError).message).toBe("Invalid ID for table _scheduled_jobs");
   });
 
   test("cancel all: in batches of 1000, every job or one function's, within a nextTs range", async () => {

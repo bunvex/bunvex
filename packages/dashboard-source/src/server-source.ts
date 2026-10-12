@@ -1,8 +1,9 @@
 // `createServerDataSource`: the `DashboardDataSource` contract over a bunvex deployment, as Convex's dashboard
 // reads one (STUDY-149 §3.3): the admin key on one sync connection (system queries subscribed, writes as
 // WebSocket requests) and on the admin HTTP routes (metrics, the log stream). Built in steps (STUDY-149's PR
-// plan); this is the first: the deployment, its capabilities and counters, the schema, the deployment state,
-// the logs and the function metrics. The rest of the contract's required methods answer `unavailable` until
+// plan): the deployment, its capabilities and counters, the schema, the deployment state, the logs and the
+// function metrics (PR 1); the schedules, the files, the audit log and Health's concurrency and invalidations
+// (PR 5, `deployment.ts`). The rest of the contract's required methods answer `unavailable` until
 // the server functions under them exist (PRs 2–5).
 import {
   type CallOptions,
@@ -26,6 +27,7 @@ import {
 } from "@bunvex/dashboard/data-source";
 import { AdminHttp, type FetchFn } from "./admin-http.ts";
 import { capabilitiesOf } from "./credentials.ts";
+import { deploymentReads } from "./deployment.ts";
 import { LogStream, type LogStreamOptions } from "./logs.ts";
 import { Metrics } from "./metrics.ts";
 import { AdminSync, type ConnectionStatus, watchConnection } from "./sync.ts";
@@ -100,6 +102,7 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
   const sync = new AdminSync(opts);
   const logs = new LogStream(http, opts.logs);
   const metrics = new Metrics(http);
+  const deployment = deploymentReads(sync, http);
   const statsIntervalMs = opts.statsIntervalMs ?? 2000;
 
   const getStats = async (o?: CallOptions): Promise<DeploymentStats> => {
@@ -120,6 +123,7 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
 
   const close = async () => {
     logs.close();
+    deployment.close();
     await sync.close();
   };
 
@@ -206,6 +210,25 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     topFunctions: (measure: TopKMeasure, w: MetricsWindow, k: number, o?: CallOptions) =>
       metrics.topFunctions(measure, w, k, o?.signal),
     scheduledJobLag: (w: MetricsWindow, o?: CallOptions) => metrics.scheduledJobLag(w, o?.signal),
+    functionConcurrency: (w: MetricsWindow, o?: CallOptions) => metrics.functionConcurrency(w, o?.signal),
+    subscriptionInvalidations: (w: MetricsWindow, k: number, o?: CallOptions & { function?: string }) =>
+      metrics.subscriptionInvalidations(w, k, o?.function, o?.signal),
+
+    // ---------------------------------------------------------------- schedules, files, the audit log (PR 5)
+    listScheduledFunctions: deployment.listScheduledFunctions,
+    watchScheduledFunctions: deployment.watchScheduledFunctions,
+    cancelScheduledFunction: deployment.cancelScheduledFunction,
+    cancelAllScheduledFunctions: deployment.cancelAllScheduledFunctions,
+    listCronJobs: deployment.listCronJobs,
+    listCronRuns: deployment.listCronRuns,
+    listFiles: deployment.listFiles,
+    countFiles: deployment.countFiles,
+    getFile: deployment.getFile,
+    uploadFile: deployment.uploadFile,
+    deleteFiles: deployment.deleteFiles,
+    watchFiles: deployment.watchFiles,
+    listAuditEvents: deployment.listAuditEvents,
+    watchAuditEvents: deployment.watchAuditEvents,
 
     // ---------------------------------------------------------------- not yet (STUDY-149 PRs 2 and 4)
     listTables: (o) => rejectNotYet("The table list", o),

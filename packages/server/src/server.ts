@@ -171,7 +171,7 @@ import {
   splayOptions,
   type WsHeartbeatOptions,
 } from "./sync.ts";
-import { cancelAllScheduledJobs, cancelScheduledJob } from "./system-functions.ts";
+import { cancelAllScheduledJobs, cancelScheduledJob, InvalidIdError } from "./system-functions.ts";
 import { standaloneQuery, type TestBundle, TestFunctionError } from "./test-function.ts";
 import { UsageGauges } from "./usage-gauges.ts";
 import { USAGE_LIMIT_ROUTE, UsageLimitError, UsageLimitWorker, UsageMeter, usageLimitRoute } from "./usage-limits.ts";
@@ -1375,7 +1375,12 @@ export function createServer(opts: ServerOptions) {
     // Convex's `/api/cancel_job {id, componentId?}` and `/api/cancel_all_jobs {udfPath?, startNextTs?,
     // endNextTs?, componentId?, componentPath?}` (scheduling.rs): 200 with no body.
     if (url.pathname === "/api/cancel_job") {
-      await cancelScheduledJob(engine, body.id as string, auditActor(caller));
+      try {
+        await cancelScheduledJob(engine, body.id as string, auditActor(caller));
+      } catch (e) {
+        if (e instanceof InvalidIdError) return requestError(400, e.code, e.message);
+        throw e;
+      }
       return new Response(null, { status: 200 });
     }
     if (url.pathname === "/api/cancel_all_jobs") {

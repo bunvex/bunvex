@@ -25,6 +25,7 @@ import {
   LOG_SINKS_TABLE,
   type PaginationOptions,
   readBackendState,
+  SCHEDULED_FUNCTIONS_TABLE,
   SCHEDULED_JOB_ARGS_TABLE,
   SCHEDULED_JOBS_TABLE,
   SCHEMAS_TABLE,
@@ -321,7 +322,8 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
               .paginate(opts)
           : db
               .query(SCHEDULED_JOBS_TABLE)
-              .withIndex("by_udf_path_and_next_event_ts", (q) => q.eq("udfPath", canonical(udfPath)).gt("nextTs", null))
+              // the path as given, as Convex's: its dashboard sends canonical identifiers (`module.js:name`)
+              .withIndex("by_udf_path_and_next_event_ts", (q) => q.eq("udfPath", udfPath).gt("nextTs", null))
               .order("asc")
               .paginate(opts),
       );
@@ -523,10 +525,16 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
       return { ...page, page: page.page.map((d, i) => withUrl(origin, d, rows[i]!)) };
     },
   },
+  // Convex's system `queryGeneric` masks `db.system` (`maskPublicSystem`, system-udfs secretSystemTables.ts): `get`
+  // reads only an id of `_storage` or `_scheduled_functions`, and answers null for anything else, a malformed id
+  // or a user table's included. A scheduled function's id then fails at its URL, as Convex's `storage.getUrl`.
   "_system/frontend/fileStorageV2:getFile": {
     args: { storageId: v.string(), componentId },
     handler: async (db, { storageId }: { storageId: string }, { files }) => {
       const fs = files ?? noFiles();
+      const visible =
+        db.system.normalizeId(STORAGE_TABLE, storageId) ?? db.system.normalizeId(SCHEDULED_FUNCTIONS_TABLE, storageId);
+      if (visible === null) return null;
       const d = await db.system.get(storageId);
       if (!d) return null;
       const row = await fs.resolve(db, d._id, "storage.getUrl");
@@ -570,11 +578,22 @@ export const SYSTEM_MUTATIONS: Record<string, SystemMutation> = {
 /** Convex's MAX_JOBS_CANCEL_BATCH: `cancel_all_jobs` cancels this many per transaction, until a batch is short. */
 export const MAX_JOBS_CANCEL_BATCH = knob("MAX_JOBS_CANCEL_BATCH", 1000);
 
-/** Convex's `POST /api/cancel_job` (admin, WriteData): cancel one job; a finished or unknown one is a no-op. */
+/** Convex's `invalid_id_error` (local_backend/src/parse.rs): the route's 400 `InvalidId`. */
+export class InvalidIdError extends Error {
+  readonly code = "InvalidId";
+  constructor(table: string) {
+    super(`Invalid ID for table ${table}`);
+  }
+}
+
+/**
+ * Convex's `POST /api/cancel_job` (admin, WriteData): cancel one job; a finished or unknown one is a no-op. An id
+ * that is not one of `_scheduled_jobs` is Convex's `InvalidId` (`parse_document_id`).
+ */
 export async function cancelScheduledJob(engine: Engine, id: string, actor: AuditLogActor = SYSTEM_ACTOR) {
   await engine.mutation(async (db) => {
     const jobId = db.asSystemSync(() => db.normalizeId(SCHEDULED_JOBS_TABLE, id));
-    if (!jobId) throw new Error(`Invalid ID "${id}" for table _scheduled_jobs`);
+    if (!jobId) throw new InvalidIdError(SCHEDULED_JOBS_TABLE);
     const job = await getJob(db, jobId);
     await cancelJob(db, jobId, Date.now());
     // As Convex, in the cancel's transaction, whether the job was still pending or not.
