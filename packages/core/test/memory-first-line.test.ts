@@ -41,3 +41,21 @@ test("a short first line without a terminator that is not JSON is still refused"
   await expect(MemoryPersistence.open(path, { durable: false })).rejects.toBeInstanceOf(LayoutError);
   expect(readFileSync(path, "utf8")).toBe("hello");
 });
+
+test("a log without its header (an older bunvex's, STUDY-139 P8) is refused and left untouched", async () => {
+  const commit = `${JSON.stringify({ ts: "1", docs: [["t", "a", '"x"', null]], idx: [] })}\n`;
+  for (const text of [
+    commit,
+    `${commit}${HEADER}`,
+    `{"ts":"1","docs":[["t","a","${"x".repeat(5000)}",null]],"idx":[]}\n`,
+  ]) {
+    const path = logPath();
+    writeFileSync(path, text);
+    const e = await MemoryPersistence.open(path, { durable: false }).catch((x) => x);
+    expect(e).toBeInstanceOf(LayoutError);
+    expect(e.message).toBe(
+      `the memory store's log ${path} is not a bunvex store: its first line is not a layout header`,
+    );
+    expect(readFileSync(path, "utf8")).toBe(text);
+  }
+});

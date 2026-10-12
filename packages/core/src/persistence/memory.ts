@@ -3,8 +3,9 @@
 // rebuilt by replaying the log. Ships with @bunvex/core (its only dependency is sorted-btree).
 //
 // Layout and read-only flag (PERSIST-01 C10, STUDY-25 L6/L7): the log's first record is a header,
-// `{"layout":N}`, written when the log is created (a log written before C10 gets it appended on its next
-// open, under the lock). The read-only flag is a file next to the log, `<log>.read-only`.
+// `{"layout":N}`, written when the log is created, under the lock. A log without it is not one this bunvex
+// opens (older bunvex logs are not carried, STUDY-139 P8). The read-only flag is a file next to the log,
+// `<log>.read-only`.
 //
 // Retention (PERSIST-01 C12–C14, STUDY-33): pruning drops old versions from RAM; the log file is not
 // compacted (DV-156), so a reopen replays them and retention prunes them again. A global is a log record,
@@ -54,9 +55,8 @@ const SYNC_LOG = process.env.BUNVEX_SYNC_LOG === "1";
 type Version<T> = { seq: number; v: T };
 
 /** What the first line of a log says about it (PERSIST-01 C10). `complete`: the line has its terminator. */
-function firstRecord(line: string, complete: boolean, store: string): "header" | "commit" | "torn" {
-  const foreign = () =>
-    new LayoutError(`${store} is not a bunvex store: its first line is neither a layout header nor a commit record`);
+function firstRecord(line: string, complete: boolean, store: string): "header" | "torn" {
+  const foreign = () => new LayoutError(`${store} is not a bunvex store: its first line is not a layout header`);
   if (!complete) {
     if (line.startsWith("{")) return "torn"; // a crash during the very first write: replay cuts it off
     throw foreign();
@@ -72,8 +72,6 @@ function firstRecord(line: string, complete: boolean, store: string): "header" |
     checkLayoutVersion(r.layout, store);
     return "header";
   }
-  if (r && typeof r === "object" && typeof r.ts === "string" && Array.isArray(r.docs) && Array.isArray(r.idx))
-    return "commit"; // a log written before C10: the same layout, version 1
   throw foreign();
 }
 
@@ -181,10 +179,9 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       if (n === 0) return;
       const head = buf.subarray(0, n).toString("utf8");
       const nl = head.indexOf("\n");
-      if (nl !== -1) firstRecord(head.slice(0, nl), true, this.store);
-      // No terminator in what was read: a first write torn by a crash (replay cuts it off), a first line longer
-      // than 4 KB (a commit record: a header is a few bytes), or not ours. Never a complete line.
-      else if (!head.startsWith(`{"ts":`)) firstRecord(head, false, this.store);
+      // No terminator in what was read: a first write torn by a crash (replay cuts it off), or not ours (a
+      // header is a few bytes). Never a complete line.
+      firstRecord(nl === -1 ? head : head.slice(0, nl), nl !== -1, this.store);
     } finally {
       closeSync(fd);
     }
@@ -204,7 +201,8 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     try {
       const stamped = await this.replay(this.logPath!);
       this.fh = await open(this.logPath!, "a");
-      // PERSIST-01 C10 under the lock: a new log starts with its header; one written before C10 gets it now.
+      // PERSIST-01 C10 under the lock: a new log (or one whose torn first write replay cut off) starts with its
+      // header.
       if (!stamped) {
         await this.fh.write(`${JSON.stringify({ layout: LAYOUT_VERSION })}\n`);
         if (this.durable) await this.fh.datasync();
@@ -267,7 +265,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
         break; // torn inside the line
       }
       if (rec.layout !== undefined) {
-        // The header (first line), or the one appended to a log written before C10.
+        // The header (the first line; checked again for one anywhere else).
         checkLayoutVersion(rec.layout, this.store);
         stamped = true;
         good += enc.encode(line).length + 1;

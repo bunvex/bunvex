@@ -1,6 +1,6 @@
 # STUDY-139 — bunvex as a product, Convex as the oracle
 
-- **Status:** the principle and P1–P7 accepted (owner, 2026-10-08); the principle revisited the same day (§1.1): stores the Convex binary wrote keep opening in bunvex. P1–P3 built (#525), P4 built (#526) and then superseded by DV-166 (#532), P5 withdrawn (#527 closed), P6 built (#528), P7 built (#529).
+- **Status:** the principle and P1–P7 accepted (owner, 2026-10-08); the principle revisited the same day (§1.1): stores the Convex binary wrote keep opening in bunvex. P1–P3 built (#525), P4 built (#526) and then superseded by DV-166 (#532), P5 withdrawn (#527 closed), P6 built (#528), P7 built (#529). P8 accepted (owner, 2026-10-11).
 - **Convex source read:** reference `d8bdde0` (`docs/parity/upstream.md`), npm `convex` 1.46.0.
 - **Related:** [STUDY-133](STUDY-133-persistence-layout-identical.md) (identical layout, cross-open tests),
   [STUDY-23](STUDY-23-sync-protocol-v1.md) P8 (DV-225), [STUDY-67](STUDY-67-http-function-api.md) H12 (DV-315),
@@ -86,6 +86,7 @@ DV-221). Gaps for a migration:
 | P5 | Remove Convex's MySQL v1 encoding (B2): only v0 is read and written, and `MYSQL_DOCUMENT_ENCODING` goes. Revisits DV-414 | Only a MySQL store the Convex binary wrote has v1; the cross-open tests use SQLite | ~~accepted~~ **withdrawn** (owner, 2026-10-08, §1.1): opening a MySQL store the Convex binary wrote must keep working; #527 closed, DV-414 stands |
 | P6 | Remove C1 and C2 | bunvex is alpha with no deployed stores to carry | **accepted** (owner, 2026-10-08); built (#528) |
 | P7 | Add the export-from-Convex, import-into-bunvex differential test (§3) | The production migration path, tested against the oracle | **accepted** (owner, 2026-10-08); built (#529) |
+| P8 | The memory driver refuses a log without its layout header (a log written before PERSIST-01 C10) instead of replaying it and appending the header; K22 expects the refusal. `checkUnversionedTables`, the same path for tables and used by no driver since STUDY-133, goes too | A path for older bunvex stores, as P6; found by the mutation-testing triage (TEST-01 §7) | **accepted** (owner, 2026-10-11) |
 
 ## 5. The rule, for every study
 
