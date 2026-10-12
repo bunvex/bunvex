@@ -173,8 +173,9 @@ test("MAX_ECHO_BYTES, Convex's knob: unset or empty is 128 MiB; a bad value is r
   expect(maxEchoBytesFromEnv({})).toBe(MAX_ECHO_BYTES);
   expect(maxEchoBytesFromEnv({ MAX_ECHO_BYTES: "" })).toBe(MAX_ECHO_BYTES);
   expect(maxEchoBytesFromEnv({ MAX_ECHO_BYTES: "1000" })).toBe(1000);
-  expect(() => maxEchoBytesFromEnv({ MAX_ECHO_BYTES: "-1" })).toThrow("MAX_ECHO_BYTES: not a non-negative integer: -1");
-  expect(() => maxEchoBytesFromEnv({ MAX_ECHO_BYTES: "1.5" })).toThrow("MAX_ECHO_BYTES");
+  // Not a byte count: logged, and the default, as Convex's `env_config` (STUDY-147).
+  expect(maxEchoBytesFromEnv({ MAX_ECHO_BYTES: "-1" })).toBe(MAX_ECHO_BYTES);
+  expect(maxEchoBytesFromEnv({ MAX_ECHO_BYTES: "1.5" })).toBe(MAX_ECHO_BYTES);
 });
 
 test("/echo with a configured limit of 1000 bytes: 1000 echo, 1001 is a 413, a longer chunked body is cut off", async () => {

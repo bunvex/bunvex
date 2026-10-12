@@ -83,6 +83,7 @@ import { decodeDocument, encodeV0, encodeV1 } from "./mysql-documents.ts";
 
 export { decodeDocument } from "./mysql-documents.ts";
 
+import { type KnobEnv, knob } from "@bunvex/core";
 import { loadPeer } from "./peer.ts";
 import { explainTlsError, mysqlTls, type TlsOptions } from "./tls.ts";
 
@@ -93,10 +94,10 @@ import { explainTlsError, mysqlTls, type TlsOptions } from "./tls.ts";
  * `JSON.parse` with a TypeScript decoder, slower even optimized, and v1 saves only storage. Convex reads v0, so
  * stores still cross-open both ways; setting the knob to 1 gives Convex's behaviour.
  */
-export function documentEncodingFromEnv(raw = process.env.MYSQL_DOCUMENT_ENCODING): 0 | 1 {
-  if (raw === undefined || raw === "") return 0;
-  if (raw === "0" || raw === "1") return Number(raw) as 0 | 1;
-  throw new Error(`Unknown encoding version ${raw}: MYSQL_DOCUMENT_ENCODING is 0 (JSON) or 1 (LZ4)`);
+export function documentEncodingFromEnv(env: KnobEnv = process.env): 0 | 1 {
+  const v = knob("MYSQL_DOCUMENT_ENCODING", 0, "uint", env);
+  if (v === 0 || v === 1) return v;
+  throw new Error(`Unknown encoding version ${v}: MYSQL_DOCUMENT_ENCODING is 0 (JSON) or 1 (LZ4)`);
 }
 
 // id, ts, table_id, json_value, deleted, prev_ts — Convex's column order.

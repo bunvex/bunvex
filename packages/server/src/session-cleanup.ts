@@ -4,24 +4,22 @@
 // second, then wait again. A client that could still resend such an old request is long gone.
 import {
   type Engine,
+  knob,
   SESSION_CLEANUP_CHUNK,
   SESSION_CLEANUP_ROWS_PER_SECOND,
   SESSION_REQUEST_RETENTION_MS,
+  secondsKnob,
 } from "@bunvex/core";
 
 /** Convex's SYSTEM_TABLE_CLEANUP_FREQUENCY: runs start at a random point of each such period. */
-export const SESSION_CLEANUP_FREQUENCY_MS = 30 * 60 * 1000;
+export const SESSION_CLEANUP_FREQUENCY_MS = secondsKnob("SYSTEM_TABLE_CLEANUP_FREQUENCY_SECONDS", 30 * 60);
 
 /**
  * The retention window from the environment: `MAX_SESSION_CLEANUP_DURATION_HOURS` as in Convex (0 keeps
  * records forever), else two weeks.
  */
 export function sessionRetentionFromEnv(env = process.env): number | null {
-  const h = env.MAX_SESSION_CLEANUP_DURATION_HOURS;
-  if (h === undefined || h === "") return SESSION_REQUEST_RETENTION_MS;
-  const hours = Number(h);
-  if (!Number.isFinite(hours) || hours < 0)
-    throw new Error(`MAX_SESSION_CLEANUP_DURATION_HOURS: not a number of hours: ${h}`);
+  const hours = knob("MAX_SESSION_CLEANUP_DURATION_HOURS", SESSION_REQUEST_RETENTION_MS / 3_600_000, "uint", env);
   return hours === 0 ? null : hours * 60 * 60 * 1000;
 }
 

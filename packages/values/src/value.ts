@@ -48,6 +48,7 @@ export function validateObjectField(k: string) {
   if (k.length > MAX_FIELD_NAME_LEN)
     throw new Error(`Field name ${k} exceeds maximum field name length ${MAX_FIELD_NAME_LEN}.`);
   if (k.startsWith("$")) throw new Error(`Field name ${k} starts with a '$', which is reserved.`);
+  // Stryker disable next-line EqualityOperator: reading one past the end gives NaN, which no test refuses.
   for (let i = 0; i < k.length; i++) {
     const c = k.charCodeAt(i);
     if (c < 32 || c >= 127)
@@ -67,8 +68,10 @@ export function isBytes(v: unknown): v is ArrayBuffer {
 
 /** A plain object: `{}` / `Object.create(null)` / an object literal, not a class instance (of any realm). */
 export function isSimpleObject(v: unknown): v is Record<string, unknown> {
+  // Stryker disable next-line ConditionalExpression: a primitive's or a function's prototype is never Object's or named "Object".
   if (typeof v !== "object" || v === null) return false;
   const proto = Object.getPrototypeOf(v);
+  // Stryker disable next-line ConditionalExpression,OptionalChaining: this realm's Object.prototype is named "Object" too; null is caught first.
   return proto === null || proto === Object.prototype || proto?.constructor?.name === "Object";
 }
 
@@ -76,14 +79,18 @@ export function isSimpleObject(v: unknown): v is Record<string, unknown> {
  * The name an error gives a value that is not plain data: its class's (`Point`, `Map`), or "" when it has
  * none. It reads the prototype, not the value's own fields, and never throws.
  */
+// Stryker disable BlockStatement: an empty catch returns undefined, as falsy as "" to every caller.
 function className(value: unknown): string {
   try {
+    // Stryker disable next-line OptionalChaining: a throw here is caught, and gives "" as a missing name does.
     const name = Object.getPrototypeOf(value)?.constructor?.name;
+    // Stryker disable next-line ConditionalExpression: a missing name is falsy either way.
     return typeof name === "string" ? name : "";
   } catch {
     return "";
   }
 }
+// Stryker restore BlockStatement
 
 /** A value an error message names but does not open (anything but plain data): `Point {…}`. */
 export const opaque = (value: unknown) => {
@@ -93,11 +100,13 @@ export const opaque = (value: unknown) => {
 
 /** An object's own enumerable string keys, in `JSON.stringify`'s order, one at a time. */
 function* ownKeys(o: object): Generator<string> {
+  // Stryker disable next-line ConditionalExpression: only plain objects are opened; their prototype has no enumerable keys.
   for (const k in o) if (Object.hasOwn(o, k)) yield k;
 }
 
 // Escaping only lengthens a string, so a prefix two past the limit decides the cut.
 const quote = (s: string) =>
+  // Stryker disable next-line all: a shortcut; the whole text is cut at the limit at the end.
   JSON.stringify(s.length > MAX_VALUE_FOR_ERROR_LEN ? s.slice(0, MAX_VALUE_FOR_ERROR_LEN + 2) : s);
 
 /**
@@ -136,6 +145,7 @@ export function stringifyValueForError(value: unknown): string {
       case "bigint":
         return `"${v.toString()}n"`;
       case "number":
+      // Stryker disable next-line ConditionalExpression: a boolean falls to the string case, whose JSON is the same.
       case "boolean":
         return JSON.stringify(v);
       case "string":
@@ -197,6 +207,7 @@ export function stringifyValueForError(value: unknown): string {
   const rest = "[...truncated]";
   let at = MAX_VALUE_FOR_ERROR_LEN - rest.length;
   const cp = s.codePointAt(at - 1);
+  // Stryker disable next-line ConditionalExpression: `at - 1` is always inside the text, so `cp` is never undefined.
   if (cp !== undefined && cp > 0xffff) at -= 1;
   return s.substring(0, at) + rest;
 }
@@ -240,6 +251,7 @@ function toJson(value: unknown, original: unknown, context: string): JSONValue {
     throw new Error(unsupported(context, name ? `${name} ` : "", value, original));
   }
   const out: Record<string, JSONValue> = {};
+  // Stryker disable next-line ConditionalExpression,EqualityOperator: keys are unique, and the sort reads only the sign.
   for (const [k, v] of Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
     if (v === undefined) continue;
     validateObjectField(k);
@@ -286,6 +298,7 @@ function fromJson(value: JSONValue, depth: number): Value {
     }
     if (k === "$bytes" && typeof v === "string") {
       const bytes = unb64(v);
+      // Stryker disable next-line MethodExpression: fromBase64 returns a view of its whole own buffer.
       return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     }
   }
@@ -334,6 +347,7 @@ export function compareValues(a: Value | undefined, b: Value | undefined): numbe
   if (ra !== rb) return ra - rb;
   switch (ra) {
     case 0:
+    // Stryker disable next-line ConditionalExpression: null against null falls to the bigint case, which also gives 0.
     case 1:
       return 0;
     case 2:
@@ -343,6 +357,7 @@ export function compareValues(a: Value | undefined, b: Value | undefined): numbe
       const y = floatKey(b as number);
       return x < y ? -1 : x > y ? 1 : 0;
     }
+    // Stryker disable next-line ConditionalExpression: true and false fall to the string case, which orders "true" after "false" too.
     case 4:
       return Number(a) - Number(b);
     case 5:
@@ -352,6 +367,7 @@ export function compareValues(a: Value | undefined, b: Value | undefined): numbe
     case 7: {
       const x = a as Value[];
       const y = b as Value[];
+      // Stryker disable next-line EqualityOperator,MethodExpression: past the shorter one, undefined is lowest, as the length difference says.
       for (let i = 0; i < Math.min(x.length, y.length); i++) {
         const c = compareValues(x[i], y[i]);
         if (c !== 0) return c;
@@ -359,7 +375,9 @@ export function compareValues(a: Value | undefined, b: Value | undefined): numbe
       return x.length - y.length;
     }
     default: {
+      // Stryker disable next-line ConditionalExpression,EqualityOperator: keys are unique, and the sort reads only the sign.
       const x = Object.entries(a as Record<string, Value>).sort(([k1], [k2]) => (k1 < k2 ? -1 : k1 > k2 ? 1 : 0));
+      // Stryker disable next-line ConditionalExpression,EqualityOperator: keys are unique, and the sort reads only the sign.
       const y = Object.entries(b as Record<string, Value>).sort(([k1], [k2]) => (k1 < k2 ? -1 : k1 > k2 ? 1 : 0));
       for (let i = 0; i < Math.min(x.length, y.length); i++) {
         const c = compareBytes(utf8.encode(x[i][0]), utf8.encode(y[i][0])) || compareValues(x[i][1], y[i][1]);
@@ -371,8 +389,10 @@ export function compareValues(a: Value | undefined, b: Value | undefined): numbe
 }
 
 function copy(value: unknown, original: unknown, context: string, depth: number, max: number): Value {
+  // Stryker disable next-line ConditionalExpression,StringLiteral: a shortcut; toJson below returns these as they are.
   if (value === null || typeof value === "number" || typeof value === "boolean" || typeof value === "string")
     return value;
+  // Stryker disable next-line ConditionalExpression: undefined reaches toJson below anyway, with the same message.
   if (typeof value === "bigint" || value === undefined) return toJson(value, original, context) && (value as Value);
   if (isBytes(value)) return value.slice(0);
   if (Array.isArray(value)) {
@@ -462,6 +482,7 @@ function sizeOf(v: Value | undefined, strict: boolean, depth: number): number {
       return 0;
     case "object":
       break;
+    // Stryker disable next-line ConditionalExpression: what falls through is counted 2 or refused with the same message below.
     default:
       if (strict) throw new Error(`Unsupported value type: ${typeof v}`);
       return 2;
@@ -470,11 +491,13 @@ function sizeOf(v: Value | undefined, strict: boolean, depth: number): number {
   if (Array.isArray(v)) {
     if (depth > deepest && deeper(depth)) return 2;
     let n = 2;
+    // Stryker disable next-line EqualityOperator: one past the end is undefined, whose size is 0.
     for (let i = 0; i < v.length; i++) n += sizeOf(v[i], strict, depth + 1);
     if (v.length > MAX_ARRAY_LEN && tooBig === undefined)
       tooBig = `Array length is too long (${v.length} > maximum length ${MAX_ARRAY_LEN})`;
     return n;
   }
+  // Stryker disable next-line ConditionalExpression: a plain object passes every check inside.
   if (Object.getPrototypeOf(v) !== Object.prototype) {
     if (isBytes(v)) return v.byteLength + 2;
     if (isCommitTsPlaceholder(v)) return 9;
@@ -520,8 +543,10 @@ export function getDocumentSize(value: Record<string, Value>, options?: { custom
 
 /** How deeply arrays and objects nest: a scalar is 0, `[1]` is 1, `{a: [1]}` is 2. */
 export function valueNesting(v: Value): number {
+  // Stryker disable next-line ConditionalExpression: an array as an object (its values) nests the same.
   if (Array.isArray(v)) return 1 + v.reduce<number>((m, e) => Math.max(m, valueNesting(e)), 0);
   if (v !== null && typeof v === "object" && !isBytes(v))
+    // Stryker disable next-line ConditionalExpression: undefined nests 0 either way.
     return 1 + Object.values(v).reduce<number>((m, e) => Math.max(m, e === undefined ? 0 : valueNesting(e)), 0);
   return 0;
 }

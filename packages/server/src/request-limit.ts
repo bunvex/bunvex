@@ -11,6 +11,7 @@
 // Exempt: a WebSocket upgrade (Convex's answers 101 at once and runs the socket apart, so it holds no permit
 // once upgraded; bunvex does not make the handshake wait either, DV-365) and `/version` (Convex's meta route,
 // merged outside the layers).
+import { knob } from "@bunvex/core";
 
 export const MAX_CONCURRENT_REQUESTS = 128;
 
@@ -85,12 +86,7 @@ export class RequestLimit {
 
 /** The limit from `HTTP_SERVER_MAX_CONCURRENT_REQUESTS` (Convex's knob), else 128. */
 export function requestLimitFromEnv(env: Record<string, string | undefined> = process.env): RequestLimit {
-  const v = env.HTTP_SERVER_MAX_CONCURRENT_REQUESTS;
-  if (v === undefined || v === "") return new RequestLimit(MAX_CONCURRENT_REQUESTS);
-  const n = Number(v);
-  if (!Number.isInteger(n) || n < 1)
-    throw new Error(`HTTP_SERVER_MAX_CONCURRENT_REQUESTS: not a positive integer: ${v}`);
-  return new RequestLimit(n);
+  return new RequestLimit(knob("HTTP_SERVER_MAX_CONCURRENT_REQUESTS", MAX_CONCURRENT_REQUESTS, "uint", env));
 }
 
 /** Whether a request is exempt: a WebSocket upgrade, or `/version`. */

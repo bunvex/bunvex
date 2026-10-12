@@ -376,10 +376,9 @@ describe("retention", () => {
       const r2 = new Retention({} as never, {} as never);
       expect(r2.opts.indexDelayMs).toBe(60_000);
       expect(r2.opts.documentDelayMs).toBe(172_800_000);
+      // Not a number of seconds: logged, and the default, as Convex's `env_config` (STUDY-147).
       process.env.INDEX_RETENTION_DELAY = "soon";
-      expect(() => new Retention({} as never, {} as never)).toThrow(
-        "INDEX_RETENTION_DELAY must be a number of seconds",
-      );
+      expect(new Retention({} as never, {} as never).opts.indexDelayMs).toBe(240_000);
     } finally {
       delete process.env.INDEX_RETENTION_DELAY;
       delete process.env.DOCUMENT_RETENTION_DELAY;

@@ -14,6 +14,7 @@ import {
   type EnvVarChange,
   IndexesUnavailableError,
   insertAuditLogEvents,
+  knob,
   NO_TRACER,
   OccError,
   orderEnvVarChanges,
@@ -588,7 +589,7 @@ export function createServer(opts: ServerOptions) {
   // The Prometheus metrics (STUDY-114): served at `/metrics` unless DISABLE_METRICS_ENDPOINT is `true`.
   const serverMetrics = new ServerMetrics();
   functions.serverMetrics = serverMetrics;
-  const metricsDisabled = opts.disableMetricsEndpoint ?? metricsEndpointDisabled(process.env.DISABLE_METRICS_ENDPOINT);
+  const metricsDisabled = opts.disableMetricsEndpoint ?? metricsEndpointDisabled();
   // Each limiter reports its running and queued functions (Convex's `Limiter::report_metrics`), from start.
   for (const [limiter, env, kind] of [
     [functions.limits.query, "isolate", "Query"],
@@ -962,9 +963,8 @@ export function createServer(opts: ServerOptions) {
     schedulerStats: scheduler.stats,
   });
   const specs = opts.crons ? cronSpecs(opts.crons, (id, name) => functions.cronTarget(id, name)) : new Map();
-  const splay = process.env.CRON_SPLAY_SECONDS;
   const cronExecutor = new CronJobExecutor(engine, functions, specs, {
-    ...(splay === undefined || splay === "" ? {} : { cronSplaySeconds: Number(splay) }),
+    cronSplaySeconds: knob("CRON_SPLAY_SECONDS", 60),
   });
   /** Resolves once the crons are registered (the diff with what was stored). */
   const cronsReady = codeLoaded

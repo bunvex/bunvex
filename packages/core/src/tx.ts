@@ -54,6 +54,7 @@ import { readNextIndexId } from "./index-ids.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { internalIdOf } from "./internal-id.ts";
 import { afterValues, compareKeys, encodeKey, type KeyValue, prefixEnd } from "./keyenc.ts";
+import { knob } from "./knobs.ts";
 import {
   DanglingReferenceError,
   type DocWrite,
@@ -202,8 +203,8 @@ export function compileRange(ix: IndexDef, exprs: RangeExpr[]): Range {
 /** Convex's document and write limits (crates/common/src/document.rs, knobs.rs). */
 export const MAX_USER_SIZE = 1 << 20; // 1 MiB, the size of the whole document (system fields included)
 export const MAX_DOCUMENT_NESTING = 16;
-export const TRANSACTION_MAX_NUM_USER_WRITES = 16_000;
-export const TRANSACTION_MAX_USER_WRITE_SIZE_BYTES = 1 << 24; // 16 MiB
+export const TRANSACTION_MAX_NUM_USER_WRITES = knob("TRANSACTION_MAX_NUM_USER_WRITES", 16_000);
+export const TRANSACTION_MAX_USER_WRITE_SIZE_BYTES = knob("TRANSACTION_MAX_USER_WRITE_SIZE_BYTES", 1 << 24); // 16 MiB
 
 /** A byte count as binary units, as the limit messages print it: "16 MiB", "1.05 MiB", "512 B". */
 export function formatBytes(n: number): string {
@@ -218,12 +219,15 @@ export function formatBytes(n: number): string {
 }
 
 /** Convex's per-transaction read limits (crates/common/src/knobs.rs). System transactions are exempt. */
-export const TRANSACTION_MAX_READ_SIZE_ROWS = 32_000;
-export const TRANSACTION_MAX_READ_SIZE_BYTES = 1 << 24; // 16 MiB
-export const TRANSACTION_MAX_READ_SET_INTERVALS = 4096;
+export const TRANSACTION_MAX_READ_SIZE_ROWS = knob("TRANSACTION_MAX_READ_SIZE_ROWS", 32_000);
+export const TRANSACTION_MAX_READ_SIZE_BYTES = knob("TRANSACTION_MAX_READ_SIZE_BYTES", 1 << 24); // 16 MiB
+export const TRANSACTION_MAX_READ_SET_INTERVALS = knob("TRANSACTION_MAX_READ_SET_INTERVALS", 4096);
 /** Convex's TRANSACTION_MAX_NUM_SCHEDULED and TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES. */
-export const TRANSACTION_MAX_NUM_SCHEDULED = 1000;
-export const TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES = 1 << 24;
+export const TRANSACTION_MAX_NUM_SCHEDULED = knob("TRANSACTION_MAX_NUM_SCHEDULED", 1000);
+export const TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES = knob(
+  "TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES",
+  1 << 24,
+);
 export const OVER_LIMIT_HELP =
   "Consider using smaller limits in your queries, paginating your queries, or using indexed queries with a selective index range expressions.";
 

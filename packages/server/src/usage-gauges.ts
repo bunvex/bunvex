@@ -3,7 +3,7 @@
 // one and a half of it, the deployment's storage totals go to the log streams as a `current_storage_usage`
 // event, once the table summaries are built. Its usage events go nowhere in Convex's open-source backend;
 // the file storage total it keeps limits exports that include storage (1 TiB).
-import { type Engine, FILE_STORAGE_TABLE, isReservedIndex, SYSTEM_TO_VIRTUAL_TABLE } from "@bunvex/core";
+import { type Engine, FILE_STORAGE_TABLE, isReservedIndex, SYSTEM_TO_VIRTUAL_TABLE, secondsKnob } from "@bunvex/core";
 import type { LogEvent, StorageUsage } from "./log-events.ts";
 
 /** The deployment's storage, as Convex's `get_gauge_metrics` and `compute_totals` sum it. */
@@ -76,7 +76,7 @@ export class UsageGauges {
     private send: (events: LogEvent[]) => void,
     opts: UsageGaugeOptions = {},
   ) {
-    this.periodMs = opts.periodMs ?? Number(process.env.USAGE_TRACKING_PERIOD_SECS ?? 3600) * 1000;
+    this.periodMs = opts.periodMs ?? secondsKnob("USAGE_TRACKING_PERIOD_SECS", 3600);
     this.random = opts.random ?? Math.random;
   }
 

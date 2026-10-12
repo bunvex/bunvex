@@ -6,10 +6,11 @@
 // Convex's arithmetic is kept: counters and gauges add up in f32; a window is in nanoseconds, its buckets
 // `floor(width / n)` wide; a sample is placed by the start of its store bucket; histograms are
 // HdrHistogram's (1 ms – 15 min, 2 significant figures, 8-bit counts that saturate), merged as its `add`.
+import { knob, secondsKnob } from "@bunvex/core";
 
 /** Convex's knobs (`UDF_METRICS_*`): bucket width, number of buckets kept, the histograms' range. */
-export const BUCKET_WIDTH_MS = Number(process.env.UDF_METRICS_BUCKET_WIDTH_SECS ?? 60) * 1000;
-export const MAX_BUCKETS = Number(process.env.UDF_METRICS_MAX_BUCKETS ?? 60);
+export const BUCKET_WIDTH_MS = secondsKnob("UDF_METRICS_BUCKET_WIDTH_SECS", 60);
+export const MAX_BUCKETS = knob("UDF_METRICS_MAX_BUCKETS", 60);
 const MAX_DURATION_MS = 15 * 60 * 1000;
 
 const f32 = Math.fround;

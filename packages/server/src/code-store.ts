@@ -14,6 +14,8 @@
 import {
   type Engine,
   formatBytes,
+  type KnobEnv,
+  knob,
   MODULES_TABLE,
   SOURCE_PACKAGES_TABLE,
   type Tx,
@@ -39,11 +41,8 @@ export class ModulesTooLargeError extends Error {
 }
 
 /** The zipped limit: the `MAX_ZIPPED_PACKAGES_SIZE` knob, a byte count, else Convex's default. */
-function zippedLimit(raw = process.env.MAX_ZIPPED_PACKAGES_SIZE): number {
-  if (raw === undefined || raw === "") return MAX_ZIPPED_PACKAGE_BYTES;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < 0) throw new Error(`MAX_ZIPPED_PACKAGES_SIZE: not a non-negative integer: ${raw}`);
-  return n;
+function zippedLimit(env: KnobEnv = process.env): number {
+  return knob("MAX_ZIPPED_PACKAGES_SIZE", MAX_ZIPPED_PACKAGE_BYTES, "uint", env);
 }
 
 /** A package as `_source_packages` stores it (Convex's `SerializedSourcePackage`). */

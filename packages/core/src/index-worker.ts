@@ -27,6 +27,7 @@ import {
 import type { Committer } from "./committer.ts";
 import { internalIdOf } from "./internal-id.ts";
 import { compareKeys, encodeKey, prefixEnd } from "./keyenc.ts";
+import { knob, secondsKnob } from "./knobs.ts";
 import type { IndexEntryAt, IndexId, Persistence, TabletId } from "./persistence/index.ts";
 import { type Doc, type IndexDef, indexKey, SYSTEM_INDEXES, type TableDef } from "./schema.ts";
 import { decodeDoc, type Tx } from "./tx.ts";
@@ -39,13 +40,13 @@ import { decodeDoc, type Tx } from "./tx.ts";
  * INDEX_WORKERS_MAX_BACKOFF = 30 s after a failure.
  */
 export const INDEX_BACKFILL_DEFAULTS = {
-  chunkSize: 1024,
-  chunkRate: 16 as number | null,
-  readSize: 500,
-  progressIntervalMs: 1000,
-  concurrency: 8,
-  initialBackoffMs: 500,
-  maxBackoffMs: 30_000,
+  chunkSize: knob("INDEX_BACKFILL_CHUNK_SIZE", 1024, "positive"),
+  chunkRate: knob("INDEX_BACKFILL_CHUNK_RATE", 16, "positive") as number | null,
+  readSize: knob("INDEX_BACKFILL_READ_SIZE", 500),
+  progressIntervalMs: secondsKnob("INDEX_BACKFILL_PROGRESS_INTERVAL_SECONDS", 1),
+  concurrency: knob("INDEX_BACKFILL_CONCURRENCY", 8),
+  initialBackoffMs: knob("INDEX_WORKERS_INITIAL_BACKOFF", 500),
+  maxBackoffMs: knob("INDEX_WORKERS_MAX_BACKOFF", 30_000),
 };
 /** `chunkRate: null` removes the rate limit (Convex's `IndexRateLimit::Unlimited`). */
 export type IndexBackfillOptions = Partial<typeof INDEX_BACKFILL_DEFAULTS>;

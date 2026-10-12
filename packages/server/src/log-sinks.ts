@@ -6,7 +6,7 @@
 
 import { createHmac, randomUUID } from "node:crypto";
 import { appendFile, open } from "node:fs/promises";
-import { DEPLOYMENT_AUDIT_LOG_TABLE, directFetch, type Engine, LOG_SINKS_TABLE, type Tx } from "@bunvex/core";
+import { DEPLOYMENT_AUDIT_LOG_TABLE, directFetch, type Engine, knob, LOG_SINKS_TABLE, type Tx } from "@bunvex/core";
 import { decodeId, toJsonValue, type Value } from "@bunvex/values";
 import { type HttpProxy, proxiedFetch } from "./http-proxy.ts";
 import { eventJsonV2, type LogEvent, type LogTopic } from "./log-events.ts";
@@ -161,8 +161,8 @@ export type LogSinkOptions = {
 };
 
 export const defaultLogSinkOptions = (): LogSinkOptions => ({
-  aggregationMs: Number(process.env.LOG_MANAGER_AGGREGATION_INTERVAL ?? 5000),
-  bufferSize: Number(process.env.LOG_MANAGER_EVENT_RECV_BUFFER_SIZE ?? 4096),
+  aggregationMs: knob("LOG_MANAGER_AGGREGATION_INTERVAL", 5000),
+  bufferSize: knob("LOG_MANAGER_EVENT_RECV_BUFFER_SIZE", 4096),
   webhookBackoffMs: [1000, 60_000],
   localBackoffMs: [1000, 10_000],
   startupTimeoutMs: 15_000,

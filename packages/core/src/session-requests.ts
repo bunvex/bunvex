@@ -14,14 +14,15 @@
 
 import { type CommitTsPlaceholder, commitTsPlaceholder, resolveCommitTsJson } from "@bunvex/values";
 import { SESSION_REQUESTS_TABLE } from "./catalog.ts";
+import { knob } from "./knobs.ts";
 import type { Tx } from "./tx.ts";
 
 export const SESSION_REQUESTS_INDEX = "by_session_id_and_request_id";
 /** Convex's MAX_SESSION_CLEANUP_DURATION default: records live two weeks. */
 export const SESSION_REQUEST_RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 /** Rows deleted per transaction, and per second (Convex's SYSTEM_TABLE_CLEANUP_CHUNK_SIZE / _ROWS_PER_SECOND). */
-export const SESSION_CLEANUP_CHUNK = 64;
-export const SESSION_CLEANUP_ROWS_PER_SECOND = 256;
+export const SESSION_CLEANUP_CHUNK = knob("SYSTEM_TABLE_CLEANUP_CHUNK_SIZE", 64);
+export const SESSION_CLEANUP_ROWS_PER_SECOND = knob("SYSTEM_TABLE_CLEANUP_ROWS_PER_SECOND", 256, "positive");
 
 /** One mutation of a sync session. */
 export type SessionRequestId = { sessionId: string; requestId: number };

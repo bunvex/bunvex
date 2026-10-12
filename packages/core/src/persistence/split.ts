@@ -79,7 +79,6 @@ export function splitPages(src: SplitSource, desc: boolean): (p: PageRequest) =>
       hiInclusive: hi.length > MAX_KEY_PREFIX_LEN && !(desc && consumed.has(hex(hiP))),
       n,
     };
-    if (desc && consumed.has(hex(hiP))) bounds.hiInclusive = false;
     const raw = await src.page(bounds);
     const rows: IndexRow[] = [];
     for (let i = 0; i < raw.length; i++) {
@@ -92,18 +91,23 @@ export function splitPages(src: SplitSource, desc: boolean): (p: PageRequest) =>
       // rest of this page's rows with the same prefix.
       const p = r.prefix;
       const tag = hex(p);
+      // Stryker disable next-line ConditionalExpression: skipping them here only saves the `consumed` check below.
       while (i + 1 < raw.length && compareKeys(raw[i + 1].prefix, p) === 0) i++;
+      // Unreachable across pages (the bounds above exclude a group read) and within one (the loop above); kept as
+      // the guard that makes a re-read impossible.
+      // Stryker disable next-line ConditionalExpression: see above.
       if (consumed.has(tag)) continue;
       consumed.add(tag);
       const group = (await src.group(p)).map((g) => ({ key: fullKey(g), ts: g.ts, deleted: g.deleted, id: g.id }));
       group.sort(
-        (a, b) =>
-          (desc ? compareKeys(b.key, a.key) : compareKeys(a.key, b.key)) || (b.ts > a.ts ? 1 : b.ts < a.ts ? -1 : 0),
+        // Two versions of one key never share a ts; the difference's sign survives Number().
+        (a, b) => (desc ? compareKeys(b.key, a.key) : compareKeys(a.key, b.key)) || Number(b.ts - a.ts),
       );
       for (const g of group) rows.push({ key: g.key, ts: g.ts, deleted: g.deleted, id: g.id });
     }
     // Prefix bounds are exact when both bounds fit in a prefix (a key compares to a short bound as its
     // prefix does). Longer bounds are coarse: apply the exact ones.
+    // Stryker disable next-line ConditionalExpression,EqualityOperator: the filter is right for exact bounds too.
     const exact = lo.length <= MAX_KEY_PREFIX_LEN && hi.length <= MAX_KEY_PREFIX_LEN;
     const inRange = exact ? rows : rows.filter((r) => compareKeys(r.key, lo) >= 0 && compareKeys(r.key, hi) < 0);
     return { rows: inRange, exhausted: raw.length < n };

@@ -7,6 +7,7 @@
 // - the answer: the handler's response streamed (HEAD without its body, cut past 100 MiB), or Convex's 404,
 //   405, 408 (no response head within 300 s) and 500 (`{code, trace?, data?}`) answers.
 import type { Caller } from "@bunvex/core";
+import { secondsKnob } from "@bunvex/core";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { describeUncaught, newRequestId } from "./errors.ts";
 import type { Functions } from "./functions.ts";
@@ -15,7 +16,7 @@ import { SpecBlob } from "./web-blob.ts";
 
 export { HTTP_ACTION_RESPONSE_LIMIT } from "./http-body.ts";
 /** Convex's HTTP_SERVER_TIMEOUT_DURATION: no response head by then answers 408. */
-export const HTTP_ACTION_HEAD_TIMEOUT_MS = 300_000;
+export const HTTP_ACTION_HEAD_TIMEOUT_MS = secondsKnob("HTTP_SERVER_TIMEOUT_SECONDS", 300);
 export const REQUEST_ID_HEADER = "bunvex-request-id";
 
 export type HttpActionOptions = {

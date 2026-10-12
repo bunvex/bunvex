@@ -9,6 +9,7 @@ import {
   insertAuditLogEvents,
   readBackendState,
   SYSTEM_ACTOR,
+  secondsKnob,
   setUsageLimitStopState,
   type Tx,
   USAGE_LIMITS_TABLE,
@@ -362,7 +363,7 @@ export class UsageLimitWorker {
   constructor(
     private readonly engine: Engine,
     private readonly meter: UsageMeter,
-    private readonly intervalMs = Number(process.env.USAGE_LIMIT_EVALUATE_INTERVAL_SECS ?? 10) * 1000,
+    private readonly intervalMs = secondsKnob("USAGE_LIMIT_EVALUATE_INTERVAL_SECS", 10),
     private readonly now: () => number = Date.now,
   ) {}
 

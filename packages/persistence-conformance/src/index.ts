@@ -68,8 +68,8 @@ export type DriverModule = {
   open(fresh: boolean, opts?: OpenOptions): Promise<Persistence>;
   /** K22 (PERSIST-01 C10): the layout version recorded in the store, read raw, or null if none. */
   layoutVersion?(): Promise<unknown>;
-  /** K22: record `v` raw (a future or unknown version), or remove the record (null: a store written
-   *  before C10). The store's data stays. */
+  /** K22: record `v` raw (a future or unknown version), or remove the record (null: an older bunvex's store,
+   *  which is refused, STUDY-139 P8). The store's data stays. */
   setLayoutVersion?(v: unknown): Promise<void>;
   /** K22, drivers in the reference layout (STUDY-133: Convex's DDL, no version record): replace the store
    *  with an empty one created from the reference system's own DDL (a fixture, not the driver's statements). */
@@ -1061,9 +1061,9 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     }
   };
 
-  // K22 — PERSIST-01 C10, the layout version: a new store records it; a store written before C10 (no record,
-  // bunvex's tables) opens and gets it; a future or unknown version, or a store bunvex did not write, is
-  // refused with LayoutError, and the refused store is left as it was.
+  // K22 — PERSIST-01 C10, the layout version: a new store records it; a store with data and no record (an
+  // older bunvex's, STUDY-139 P8), a future or unknown version, or a store bunvex did not write, is refused
+  // with LayoutError, and the refused store is left as it was.
   async function k22() {
     const items = async (e: Engine) => (await e.query(allOfTenant("k22"))).length;
     const e1 = await newEngine(await mod.open(true));
@@ -1079,16 +1079,11 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     );
 
     await mod.setLayoutVersion!(null);
-    const e3 = await mod
-      .open(false)
-      .then((st) => newEngine(st))
-      .catch((err: Error) => err);
-    const legacyItems = e3 instanceof Error ? -1 : await items(e3);
-    if (!(e3 instanceof Error)) await e3.close();
-    const stamped = await mod.layoutVersion!();
+    const e3 = await refusal(() => mod.open(false));
+    const unstamped = await mod.layoutVersion!();
     check(
-      legacyItems === 5 && stamped === LAYOUT_VERSION,
-      `K22 a store without a version record (written before C10) opens with its data (${e3 instanceof Error ? e3.message : `${legacyItems}/5 items`}) and gets version ${JSON.stringify(stamped)}`,
+      e3 instanceof LayoutError && unstamped === null,
+      `K22 a store with data and no version record (an older bunvex's) is refused with LayoutError (${e3 ? `${e3.name}: ${e3.message}` : "opened"}) and left without one (${JSON.stringify(unstamped)})`,
     );
 
     let bad = 0;

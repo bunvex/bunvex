@@ -1,0 +1,54 @@
+// Prints, as JSON, what each knob wired to the environment (STUDY-147) came to in this process: run by
+// knobs-env.test.ts with every knob set, so a constant still hard-coded shows its default.
+import * as committer from "../../src/committer.ts";
+import * as engine from "../../src/engine.ts";
+import * as envVars from "../../src/environment-variables.ts";
+import * as indexWorker from "../../src/index-worker.ts";
+import * as chunks from "../../src/persistence/chunks.ts";
+import {
+  searchCompactionFromEnv,
+  searchSegmentLimitsFromEnv,
+  searchWorkersFromEnv,
+} from "../../src/search-segments.ts";
+import * as sessions from "../../src/session-requests.ts";
+import * as tx from "../../src/tx.ts";
+
+const values: Record<string, unknown> = {
+  WRITE_LOG_MIN_RETENTION_SECS: Number(committer.WRITE_LOG_MIN_RETENTION_NS / 1_000_000_000n),
+  WRITE_LOG_MAX_RETENTION_SECS: Number(committer.WRITE_LOG_MAX_RETENTION_NS / 1_000_000_000n),
+  MAX_TRANSACTION_WINDOW_SECONDS: Number(committer.MAX_TRANSACTION_WINDOW_NS / 1_000_000_000n),
+  TRANSACTION_MAX_NUM_USER_WRITES: tx.TRANSACTION_MAX_NUM_USER_WRITES,
+  TRANSACTION_MAX_USER_WRITE_SIZE_BYTES: tx.TRANSACTION_MAX_USER_WRITE_SIZE_BYTES,
+  TRANSACTION_MAX_READ_SIZE_ROWS: tx.TRANSACTION_MAX_READ_SIZE_ROWS,
+  TRANSACTION_MAX_READ_SIZE_BYTES: tx.TRANSACTION_MAX_READ_SIZE_BYTES,
+  TRANSACTION_MAX_READ_SET_INTERVALS: tx.TRANSACTION_MAX_READ_SET_INTERVALS,
+  TRANSACTION_MAX_NUM_SCHEDULED: tx.TRANSACTION_MAX_NUM_SCHEDULED,
+  TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES: tx.TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES,
+  UDF_EXECUTOR_OCC_MAX_RETRIES: engine.OCC_MAX_RETRIES,
+  UDF_EXECUTOR_OCC_INITIAL_BACKOFF_MS: engine.OCC_INITIAL_BACKOFF_MS,
+  UDF_EXECUTOR_OCC_MAX_BACKOFF_MS: engine.OCC_MAX_BACKOFF_MS,
+  WRITE_LOG_SOFT_MAX_SIZE_BYTES: committer.WRITE_LOG_SOFT_MAX_SIZE_BYTES,
+  INITIAL_PERSISTENCE_WRITES_BACKOFF_MS: committer.WRITE_RETRY_INITIAL_BACKOFF_MS,
+  MAX_PERSISTENCE_WRITES_BACKOFF_MS: committer.WRITE_RETRY_MAX_BACKOFF_MS,
+  MAX_REPEATABLE_TIMESTAMP_COMMIT_DELAY: committer.MAX_REPEATABLE_TS_COMMIT_DELAY_MS / 1000,
+  MAX_REPEATABLE_TIMESTAMP_IDLE_FREQUENCY: committer.MAX_REPEATABLE_TS_IDLE_MS / 1000,
+  COMMITTER_MAX_WRITE_BATCH_DOCUMENTS: committer.WRITE_BATCH_MAX_DOCUMENTS,
+  COMMITTER_MAX_WRITE_BATCH_BYTES: committer.WRITE_BATCH_MAX_BYTES,
+  INDEX_BACKFILL_CHUNK_SIZE: indexWorker.INDEX_BACKFILL_DEFAULTS.chunkSize,
+  INDEX_BACKFILL_CHUNK_RATE: indexWorker.INDEX_BACKFILL_DEFAULTS.chunkRate,
+  INDEX_BACKFILL_READ_SIZE: indexWorker.INDEX_BACKFILL_DEFAULTS.readSize,
+  INDEX_BACKFILL_PROGRESS_INTERVAL_SECONDS: indexWorker.INDEX_BACKFILL_DEFAULTS.progressIntervalMs / 1000,
+  INDEX_BACKFILL_CONCURRENCY: indexWorker.INDEX_BACKFILL_DEFAULTS.concurrency,
+  INDEX_WORKERS_INITIAL_BACKOFF: indexWorker.INDEX_BACKFILL_DEFAULTS.initialBackoffMs,
+  INDEX_WORKERS_MAX_BACKOFF: indexWorker.INDEX_BACKFILL_DEFAULTS.maxBackoffMs,
+  SYSTEM_TABLE_CLEANUP_CHUNK_SIZE: sessions.SESSION_CLEANUP_CHUNK,
+  SYSTEM_TABLE_CLEANUP_ROWS_PER_SECOND: sessions.SESSION_CLEANUP_ROWS_PER_SECOND,
+  ENV_VAR_LIMIT: envVars.ENV_VAR_LIMIT,
+  ENV_VAR_TOTAL_SIZE_LIMIT: envVars.ENV_VAR_TOTAL_SIZE_LIMIT,
+  MYSQL_MAX_CHUNK_BYTES: chunks.MYSQL_MAX_CHUNK_BYTES,
+  DATABASE_WORKERS_POLL_INTERVAL: searchWorkersFromEnv().pollIntervalMs / 1000,
+  SEARCH_INDEX_SIZE_SOFT_LIMIT: searchSegmentLimitsFromEnv().textSoftLimitBytes,
+  MIN_COMPACTION_SEGMENTS: searchCompactionFromEnv().minSegments,
+  MAX_SEGMENT_DELETED_PERCENTAGE: searchCompactionFromEnv().maxDeletedFraction,
+};
+console.log(JSON.stringify(values));
