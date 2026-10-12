@@ -228,7 +228,15 @@ export { fromJsonValue, sortKeyToJsonText, sortKeyToValue, toJsonValue, valuesTo
 export { wallClockNs } from "../determinism.ts";
 export { opaqueToInspect } from "../inspect.ts";
 export { bytesToHex, internalIdBytes, internalIdHex, internalIdString } from "../internal-id.ts";
-export { chunkRows, MYSQL_MAX_CHUNK_BYTES, POSTGRES_ROWS_PER_STATEMENT } from "./chunks.ts";
+export {
+  chunkRows,
+  MYSQL_MAX_CHUNK_BYTES,
+  MYSQL_MAX_DYNAMIC_SMART_CHUNK_SIZE,
+  MYSQL_MAX_FILL_CHUNK_ROWS,
+  MYSQL_SMART_CHUNK_MAX_SIZE,
+  POSTGRES_ROWS_PER_STATEMENT,
+  smartChunks,
+} from "./chunks.ts";
 export { decodeGlobal, encodeGlobal } from "./global-json.ts";
 export {
   checkLayoutVersion,
@@ -241,7 +249,7 @@ export {
   type ReadOnlyFlag,
 } from "./layout.ts";
 
-export { retryOnce, UnsureCommitError } from "./retry.ts";
+export { retryN, retryOnce, UnsureCommitError } from "./retry.ts";
 export { type IndexRow, type LiveEntry, type Page, type PageRequest, scanLatest, scanLatestSync } from "./scan.ts";
 export {
   keySha256,

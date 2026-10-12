@@ -19,6 +19,27 @@ export class UnsureCommitError extends Error {
 }
 
 /**
+ * `retryOnce` up to `retries` times (Convex's `MYSQL_MAX_QUERY_RETRIES`, `handle_errors_with_retries` in
+ * crates/mysql/src/connection.rs): each failure `retryable` accepts runs `fn` again at once (on a fresh
+ * connection, after `beforeRetry`); the last one, or any other, is thrown.
+ */
+export async function retryN<T>(
+  fn: () => Promise<T>,
+  retryable: (e: unknown) => boolean,
+  retries: number,
+  beforeRetry?: (e: unknown) => void,
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (attempt >= retries || !retryable(e)) throw e;
+      beforeRetry?.(e);
+    }
+  }
+}
+
+/**
  * Run a read (or an idempotent init step) and, if it fails with an error `retryable` accepts, run it once more
  * after `beforeRetry` (which gets the driver a fresh connection), as Convex's `with_retry`
  * (`crates/postgres/src/connection.rs`) and `MYSQL_MAX_QUERY_RETRIES = 1`. Never for a statement inside a
