@@ -6,10 +6,10 @@ import { DATA_SYNC_LIMITS } from "../../src/data-sync.ts";
 import * as exportsModule from "../../src/exports.ts";
 import * as functionLog from "../../src/function-log.ts";
 import * as functions from "../../src/functions.ts";
-import * as httpActions from "../../src/http-actions.ts";
 import * as imports from "../../src/imports.ts";
 import * as warnings from "../../src/limit-warnings.ts";
 import { defaultLogSinkOptions } from "../../src/log-sinks.ts";
+import * as requestTimeout from "../../src/request-timeout.ts";
 import { schedulerOptionsFromEnv } from "../../src/scheduler.ts";
 import * as sessionCleanup from "../../src/session-cleanup.ts";
 import * as streamingExport from "../../src/streaming-export.ts";
@@ -26,7 +26,7 @@ const values: Record<string, unknown> = {
   MAX_EXPIRED_SNAPSHOT_AGE_DAYS: Number(exportsModule.MAX_EXPIRED_SNAPSHOT_AGE_NS / (86_400n * 1_000_000_000n)),
   MAX_UDF_EXECUTION: functionLog.MAX_UDF_EXECUTION,
   MAX_REACTOR_CALL_DEPTH: functions.MAX_NESTED_CALL_DEPTH,
-  HTTP_SERVER_TIMEOUT_SECONDS: httpActions.HTTP_ACTION_HEAD_TIMEOUT_MS / 1000,
+  HTTP_SERVER_TIMEOUT_SECONDS: requestTimeout.REQUEST_TIMEOUT_MS / 1000,
   MAX_IMPORT_AGE_SECONDS: imports.MAX_IMPORT_AGE_MS / 1000,
   V8_ACTION_USER_TIMEOUT_SECS: warnings.V8_ACTION_USER_TIMEOUT_MS / 1000,
   LOG_MANAGER_AGGREGATION_INTERVAL: sink.aggregationMs,

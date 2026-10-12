@@ -5,9 +5,9 @@
 //   GET, HEAD and OPTIONS, a `bunvex-request-id` header added when missing (H2), the client's abort signal;
 // - auth from `Authorization` that never rejects up front: a failure is thrown by `getUserIdentity()`;
 // - the answer: the handler's response streamed (HEAD without its body, cut past 100 MiB), or Convex's 404,
-//   405, 408 (no response head within 300 s) and 500 (`{code, trace?, data?}`) answers.
+//   405 and 500 (`{code, trace?, data?}`) answers; the 408 past 300 s is the server's, for every route
+//   (`request-timeout.ts`).
 import type { Caller } from "@bunvex/core";
-import { secondsKnob } from "@bunvex/core";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { describeUncaught, newRequestId } from "./errors.ts";
 import type { Functions } from "./functions.ts";
@@ -15,8 +15,6 @@ import { type HttpRouter, ROUTABLE_HTTP_METHODS, type RoutableMethod } from "./r
 import { SpecBlob } from "./web-blob.ts";
 
 export { HTTP_ACTION_RESPONSE_LIMIT } from "./http-body.ts";
-/** Convex's HTTP_SERVER_TIMEOUT_DURATION: no response head by then answers 408. */
-export const HTTP_ACTION_HEAD_TIMEOUT_MS = secondsKnob("HTTP_SERVER_TIMEOUT_SECONDS", 300);
 export const REQUEST_ID_HEADER = "bunvex-request-id";
 
 export type HttpActionOptions = {
@@ -25,7 +23,6 @@ export type HttpActionOptions = {
   /** The caller from `Authorization`, or the error its verification gave. */
   identify: (req: Request) => Promise<{ caller: Caller; error: Error | null }>;
   redact: boolean;
-  headTimeoutMs?: number;
 };
 
 const text = (status: number, body: string) =>
@@ -57,8 +54,6 @@ function typedBlob(request: Request): void {
 }
 
 export function httpActionServer(o: HttpActionOptions) {
-  const headTimeoutMs = o.headTimeoutMs ?? HTTP_ACTION_HEAD_TIMEOUT_MS;
-
   /** Convex's 500 for an error before the response head: a fresh request id, the message, maybe data. */
   const errorResponse = (e: unknown) => {
     const u = describeUncaught(e);
@@ -95,22 +90,12 @@ export function httpActionServer(o: HttpActionOptions) {
     typedBlob(request);
 
     const { caller, error } = await o.identify(req);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => resolve("timeout"), headTimeoutMs);
-    });
-    // The handler keeps running after a 408, as Convex's does.
-    const run = o.functions.runHttpAction(handler._handler, request, caller, error, routePath).then(
+    // No response head within the server's request timeout answers 408 (`request-timeout.ts`); the handler
+    // keeps running then, as Convex's does.
+    const outcome = await o.functions.runHttpAction(handler._handler, request, caller, error, routePath).then(
       (r) => ({ ok: true as const, r }),
       (e: unknown) => ({ ok: false as const, e }),
     );
-    const outcome = await Promise.race([run, timedOut]);
-    clearTimeout(timer);
-    if (outcome === "timeout") {
-      // Its response, when it comes, is never sent: let its run be logged then.
-      void run.then((o) => (o.ok && o.r instanceof Response ? o.r.body?.cancel() : undefined)).catch(() => {});
-      return new Response(null, { status: 408 });
-    }
     if (!outcome.ok) {
       if (outcome.e instanceof TooManyConcurrentRequestsError)
         return new Response(JSON.stringify({ code: outcome.e.code, message: outcome.e.message }), {

@@ -37,6 +37,10 @@ backend is always started with `--disable-beacon`.
 - `test/unawaited-operations.test.ts` (STUDY-143): the unawaited-operations warning of the actions and HTTP
   actions of `unawaited-app/` on both, a timeout included (`env` sets `V8_ACTION_USER_TIMEOUT_SECS` on both).
   Local only.
+- `test/external-packages.test.ts` (STUDY-148): `node.externalPackages` with `"*"` (the app of `external-app/`, its
+  Node module pushed by `later/ext.ts`), installed by each deployment from a registry the test serves: a failed
+  install's 400, `start_push`'s id and its reuse, the actions' answers; the decided differences (a packaged binary's
+  mode, the server's own variables) asserted on each side. Local only, and only with `npm` on the machine.
 - `test/generated.test.ts`: `DIFF_RUNS` generated programs (25 by default), both backends started once and
   reset before each program. `DIFF_SEED` replays a run. A difference is shrunk, written to
   `.cache/failures/last.json` (the program and the differences, ready to become a fixed program) and fails
