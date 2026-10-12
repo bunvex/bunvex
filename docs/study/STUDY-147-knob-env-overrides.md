@@ -2,7 +2,7 @@
 
 - **Status:** PR 1 implemented (the shared reader, every knob whose mechanism exists); PR 3a implemented (five
   defaults matched, §3.2); PR 3b implemented (`HTTP_SERVER_TIMEOUT_SECONDS` on every route, §3.3); PR 2 in parts (one PR each, §3.4):
-  retention implemented, the rest planned
+  retention and the index backfill switch implemented, the rest planned
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend (`crates/common/src/knobs.rs`,
   `crates/cmd_util/src/env.rs`, `self-hosted/advanced/knobs.md`)
 - **Related:** [platform.md](../parity/platform.md) "Knob env overrides"; STUDY-25 (store timeouts), STUDY-33
@@ -84,7 +84,7 @@ unknown encoding.
 Every knob of `knobs.rs` at `d8bdde0`, plus those outside it, is in one of five groups. The full table, with
 each knob's default and where bunvex keeps it, was checked file by file; it is summarized here.
 
-**Read from the environment (131 after PR 1, 139 after PR 3a, 142 after PR 2's retention part).** Everything bunvex has a mechanism for, under Convex's name and
+**Read from the environment (131 after PR 1, 139 after PR 3a, 142 after PR 2's retention part, 143 after its backfill switch).** Everything bunvex has a mechanism for, under Convex's name and
 default unless a decided divergence says otherwise:
 
 | Area | Knobs |
@@ -103,8 +103,8 @@ default unless a decided divergence says otherwise:
 | Logs and metrics | `LOG_MANAGER_EVENT_RECV_BUFFER_SIZE`, `LOG_MANAGER_AGGREGATION_INTERVAL`, `AXIOM_MAX_ATTRIBUTES`, `AUDIT_LOG_MAX_LINES`, `AUDIT_LOG_MAX_LINE_SIZE_BYTES`, `AUDIT_LOG_MAX_TOTAL_SIZE_BYTES`, `AUDIT_LOG_MAX_HEAP_SIZE_BYTES`, `MAX_UDF_EXECUTION`, `UDF_METRICS_BUCKET_WIDTH_SECS`, `UDF_METRICS_MAX_BUCKETS`, `USAGE_LIMIT_EVALUATE_INTERVAL_SECS`, `USAGE_TRACKING_PERIOD_SECS`, `DISABLE_METRICS_ENDPOINT`, `MAX_ECHO_BYTES` (DV-375) |
 | Stores | `POSTGRES_TIMEOUT_SECONDS`, `MYSQL_TIMEOUT_SECONDS`, `MONGODB_TIMEOUT_SECONDS` (bunvex's driver), `MYSQL_DOCUMENT_ENCODING` (DV-414), `MYSQL_MAX_CHUNK_BYTES` |
 
-**Read after PR 2 (the mechanism changes first).** The retention knobs (done, §3.4);
-`INDEX_BACKFILL_ENABLE` needs a switch on the three places an index worker starts; `MYSQL_MAX_QUERY_RETRIES` is
+**Read after PR 2 (the mechanism changes first).** The retention knobs (done, §3.4); `INDEX_BACKFILL_ENABLE`
+(done, §3.5); `MYSQL_MAX_QUERY_RETRIES` is
 a fixed single retry shared with Postgres; the three `UDF_METRICS_*` histogram knobs need the histogram layout
 computed from them; `UDF_404_ON_BAD_PATH` needs the 404 answer; `MYSQL_SMART_CHUNK_MAX_SIZE` (was
 `MYSQL_CHUNK_SIZE`) and `MYSQL_MAX_FILL_CHUNK_ROWS` to map onto bunvex's MySQL chunking;
@@ -232,6 +232,21 @@ The caps are checked where they were (before each page of the log, so a pass may
 each deleted chunk as Convex's: where a pass stops differs by at most a page, which no app sees. With the
 defaults nothing changes.
 
+### 3.5 PR 2, `INDEX_BACKFILL_ENABLE`
+
+**Convex** (`crates/common/src/knobs.rs`, read once in `crates/application/src/lib.rs` `Application::new`): `true` by
+default; `false` ("likely only disabled if index backfill is breaking an instance") does not spawn the database
+`IndexWorker`. The text and vector workers, the fast-forward worker and the schema worker still start. A new
+database index then stays `Backfilling`: a query on it fails with `IndexBackfillingError`, `wait_for_schema`
+answers in progress at each deadline so a push adding one never completes (a new table's too, backfilled by the
+same worker), and an import of a table with indexes waits in `backfill_and_enable_indexes_on_table`.
+
+**bunvex now** (owner, 2026-10-12: as Convex). `INDEX_BACKFILL_DEFAULTS.enabled` reads the knob; off, the three
+places a database index backfill starts do nothing: the background worker (`startIndexWorker`), the immediate
+backfill of a new table's indexes (`backfillNewTables`, so a push creating a table with indexes waits too, as
+Convex's) and an import's hidden table (`createHiddenTable` waits, until the engine closes). Text and vector
+indexes still build. Switched back on, the next start backfills from the `_index_backfills` checkpoints.
+
 ## 4. Divergences
 
 None new. The reader matches `env_config`; the knobs whose defaults or scope differ are already decided:
@@ -261,6 +276,9 @@ DV-375 (`MAX_ECHO_BYTES` enforced), DV-414 (`MYSQL_DOCUMENT_ENCODING` default 0)
   oldest). Sabotage: each change reverted fails its test.
 - PR 2, retention: `retention` (the index cap and the document cap apart, each stopping its own pass; the
   three knobs from the environment). Sabotage: either pass checking the other's cap fails a test.
+- PR 2, backfill switch: `index-backfill-switch` (off, a push adding indexes on an existing and a new table stays
+  in progress; on again, the next start completes it; the knob read as a bool). Sabotage: the worker and the
+  new-table backfill left ungated fails it. The import path's wait is not tested on its own.
 - PR 3b: `request-timeout` (an `/api/action` call past the timeout answers 408 with no body and the action
   finishes; a body streamed past it is not cut; a slow upload answers 408; a WebSocket stays open), and
   `request-limit` (the wait for a permit does not count). Sabotage: the API port unwrapped fails the first;
