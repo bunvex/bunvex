@@ -61,7 +61,11 @@ async function setup() {
       ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) }),
     });
     const text = await r.text();
-    return { status: r.status, text, body: text ? JSON.parse(text) : null };
+    // A value's `ts` (nanoseconds, ~1.8e18) read exactly: as a float it is only exact to 256 ns, and commits a
+    // nanosecond apart (the clock standing still: `last + 1`) would read as one ts.
+    const exactTs = (k: string, v: unknown, ctx?: { source?: string }) =>
+      k === "ts" && typeof v === "number" && ctx?.source ? BigInt(ctx.source) : v;
+    return { status: r.status, text, body: text ? JSON.parse(text, exactTs as never) : null };
   };
   const sync = (body: object = {}, headers?: Record<string, string>) => req("v1/data/sync", body, headers);
   return { engine, call, req, sync };

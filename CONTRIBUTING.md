@@ -46,8 +46,11 @@ persistence contract or the package layout starts with a spec (or an amendment t
 
 ## Persistence drivers
 
-A new driver implements the `Persistence` interface from `@bunvex/core/persistence` and must pass
-`@bunvex/persistence-conformance` (see [PERSIST-01](docs/specs/PERSIST-01-contract.md)). Third-party
+A new driver implements the `Persistence` interface from `@bunvex/core/persistence` and must pass the
+PERSIST-01 conformance suite, `packages/persistence-conformance` (see
+[PERSIST-01](docs/specs/PERSIST-01-contract.md)). The suite is not published to npm: a driver author runs it
+from a clone of this repo, pointing `runConformance` from `@bunvex/persistence-conformance` (a workspace
+package) at the driver's module, the way `bench/conformance.ts` does for the first-party drivers. Third-party
 drivers are welcome as their own packages (`bunvex-persistence-<name>`).
 
 Postgres and MySQL connections require TLS and a verifiable certificate by default, as Convex (STUDY-25
