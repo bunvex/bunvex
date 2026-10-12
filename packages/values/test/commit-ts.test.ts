@@ -5,7 +5,9 @@ import { expect, test } from "bun:test";
 import {
   CommitTsPlaceholder,
   commitTsPlaceholder,
+  hasCommitTs,
   isCommitTsPlaceholder,
+  MAX_COMMIT_TS,
   resolveCommitTs,
   resolveCommitTsJson,
 } from "../src/commit-ts.ts";
@@ -19,6 +21,10 @@ test("before the commit, the placeholder refuses numeric and JSON use", () => {
   expect(() => Number(p)).toThrow(UNRESOLVED);
   expect(() => commitTsPlaceholder.valueOf()).toThrow(UNRESOLVED);
   expect(() => JSON.stringify({ t: commitTsPlaceholder })).toThrow(UNRESOLVED);
+});
+
+test("until the commit it stands for the largest int64, after every real timestamp", () => {
+  expect(MAX_COMMIT_TS).toBe(9223372036854775807n);
 });
 
 test("it prints, is tagged, and is told apart from look-alikes", () => {
@@ -50,6 +56,30 @@ test("resolveCommitTs replaces every placeholder and copies only what changed", 
   // Class instances are not walked: only plain objects and arrays are values.
   const m = new Map([["k", commitTsPlaceholder]]);
   expect(resolveCommitTs(m, 7n)).toBe(m);
+  const instance = new (class {
+    at = commitTsPlaceholder;
+  })();
+  expect(resolveCommitTs(instance, 7n)).toBe(instance);
+  expect(instance.at).toBe(commitTsPlaceholder);
+});
+
+test("hasCommitTs finds a placeholder at any depth of plain objects and arrays, and nowhere else", () => {
+  expect(hasCommitTs(commitTsPlaceholder)).toBe(true);
+  expect(hasCommitTs([1, [2, commitTsPlaceholder]])).toBe(true);
+  expect(hasCommitTs({ a: 1, b: { c: [commitTsPlaceholder] } })).toBe(true);
+  expect(hasCommitTs({ a: 1, b: commitTsPlaceholder })).toBe(true); // one field of several
+  expect(hasCommitTs([commitTsPlaceholder, 1])).toBe(true); // one item of several
+  for (const x of [null, undefined, 5, 5n, "s", true, [], {}, [1, "x"], { a: { b: null } }, new ArrayBuffer(8)])
+    expect(hasCommitTs(x)).toBe(false);
+  // Class instances and other objects are not values: not walked.
+  expect(hasCommitTs(new Map([["k", commitTsPlaceholder]]))).toBe(false);
+  expect(
+    hasCommitTs(
+      new (class {
+        at = commitTsPlaceholder;
+      })(),
+    ),
+  ).toBe(false);
 });
 
 test("resolveCommitTsJson writes the int64 tokens, little-endian base64", () => {

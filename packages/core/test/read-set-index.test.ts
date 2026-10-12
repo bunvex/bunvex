@@ -143,3 +143,77 @@ describe("ReadSetIndex (STUDY-08 D9)", () => {
     expect([index.size, index.intervalCount, index.indexCount]).toEqual([0, 0, 0]);
   });
 });
+
+// The tree's shape is not observable through `matching` — a wrong order, a stale `maxHi` or an unbalanced treap
+// still finds every owner, only slower — so mutation testing (TEST-01 §7) found its rules untested. These check
+// them on the tree itself, after every change: the order by (lo, seq), the heap by priority, and each node's
+// `maxHi` exactly the largest `hi` below it (too large only prunes less; it must not drift either way).
+describe("the interval tree's invariants", () => {
+  type Node = {
+    lo: Uint8Array;
+    hi: Uint8Array;
+    seq: number;
+    prio: number;
+    maxHi: Uint8Array;
+    left: Node | null;
+    right: Node | null;
+  };
+  const cmp = (a: Uint8Array, b: Uint8Array) => Buffer.compare(a, b);
+  /** Checks one tree; returns its nodes in order. */
+  function check(t: Node | null): Node[] {
+    if (!t) return [];
+    const left = check(t.left);
+    const right = check(t.right);
+    for (const c of [t.left, t.right]) if (c) expect(t.prio >= c.prio).toBe(true);
+    let max = t.hi;
+    for (const n of [...left, ...right]) if (cmp(n.hi, max) > 0) max = n.hi;
+    expect(cmp(t.maxHi, max)).toBe(0);
+    const nodes = [...left, t, ...right];
+    for (let i = 1; i < nodes.length; i++) {
+      const a = nodes[i - 1]!;
+      const b = nodes[i]!;
+      const c = cmp(a.lo, b.lo);
+      expect(c < 0 || (c === 0 && a.seq < b.seq)).toBe(true);
+    }
+    return nodes;
+  }
+  const depth = (t: Node | null): number => (t ? 1 + Math.max(depth(t.left), depth(t.right)) : 0);
+  const trees = (x: ReadSetIndex<number>) => (x as unknown as { trees: Map<string, Node> }).trees;
+
+  test("ordered by (lo, seq), heap-ordered by priority, maxHi exact, after every set and delete", () => {
+    const r = rng(7);
+    const x = new ReadSetIndex<number>();
+    const key = () => Uint8Array.from({ length: 1 + Math.floor(r() * 2) }, () => Math.floor(r() * 4));
+    for (let step = 0; step < 400; step++) {
+      const owner = Math.floor(r() * 40);
+      if (r() < 0.3) x.delete(owner);
+      else
+        x.set(
+          owner,
+          Array.from({ length: 1 + Math.floor(r() * 3) }, () => {
+            const lo = key(); // many equal `lo`s: the tie-break by seq matters
+            return { index: `i${Math.floor(r() * 2)}`, lo, hi: Uint8Array.from([...lo, 1 + Math.floor(r() * 3)]) };
+          }),
+        );
+      let count = 0;
+      for (const t of trees(x).values()) count += check(t).length;
+      expect(count).toBe(x.intervalCount);
+    }
+  });
+
+  test("balanced: 4096 intervals in increasing order make a tree of logarithmic depth", () => {
+    const x = new ReadSetIndex<number>();
+    for (let o = 0; o < 4096; o++)
+      x.set(o, [{ index: "i", lo: Uint8Array.from([o >> 8, o & 255]), hi: Uint8Array.from([o >> 8, o & 255, 0]) }]);
+    expect(depth(trees(x).get("i")!)).toBeLessThan(40); // a list would be 4096 deep; log2 is 12
+  });
+
+  test("an empty interval (lo ≥ hi) is not registered; has() says who is", () => {
+    const x = new ReadSetIndex<number>();
+    x.set(1, [
+      { index: "i", lo: Uint8Array.from([1]), hi: Uint8Array.from([1]) },
+      { index: "i", lo: Uint8Array.from([2]), hi: Uint8Array.from([1]) },
+    ]);
+    expect([x.has(1), x.has(2), x.intervalCount, x.indexCount]).toEqual([true, false, 0, 0]);
+  });
+});
