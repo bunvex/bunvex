@@ -1,8 +1,8 @@
 # STUDY-148 — `node.externalPackages`: packages installed by the deployment for Node actions
 
-- **Status:** decision pending (owner): Q1–Q4 (DV-470–DV-473); Q5–Q7 confirm that bunvex matches Convex. PR 1 (the
-  `bunvex.json` check) implemented; PR 2 (`require` in `"use node"` modules) and PR 3 (the feature, a draft)
-  open.
+- **Status:** decided (owner, 2026-10-12): Q1–Q4 as recommended (DV-470–DV-473); Q5–Q7 match Convex and stand as
+  designed. PR 1 (the `bunvex.json` check) implemented; PR 2 (`require` in `"use node"` modules) and PR 3 (the
+  feature) open.
 - **Convex source read:** the reference `d8bdde0` (`precompiled-2026-10-07-d8bdde0`, `docs/parity/upstream.md`),
   lines below at that commit (`bundler/external.ts`, `crates/model/src/external_packages/*`,
   `npm-packages/node-executor/src/{build_deps,source_package}.ts` are unchanged since the local clone's `4577b90`;
@@ -206,12 +206,12 @@ No wire or stored name contains "convex": `nodeDependencies`, `externalDepsId`, 
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| Q1 / DV-470 | The deployment installs with `bun install`, not `npm install`; a failure says `Command failed: bun install` with Bun's output | bunvex's server has Bun, not necessarily Node and npm (DV-87) | **owner** (recommended: A, Bun) |
-| Q2 / DV-471 | Every dependency's install scripts run (`bun pm trust --all`), not only those of Bun's default trusted list | to match npm, which runs them all | **owner** (recommended: A, run them all) |
-| Q3 / DV-472 | External packages live in the server's realm; while a Node action runs they read the deployment's variables first, then the server's | the packages load with Bun's own loader, as builtins (DV-169); Convex's packages see only the action's `process.env` | **owner** (recommended: C) |
-| Q4 / DV-473 | Extracted packages keep their Unix modes and symlinks: a package can spawn its own binary | Convex's AdmZip drops modes (`EACCES`) | **owner** (recommended: A, keep them) |
+| Q1 / DV-470 | The deployment installs with `bun install`, not `npm install`; a failure says `Command failed: bun install` with Bun's output | bunvex's server has Bun, not necessarily Node and npm (DV-87) | owner, 2026-10-12: A (Bun) |
+| Q2 / DV-471 | Every dependency's install scripts run (`bun pm trust --all`), not only those of Bun's default trusted list | to match npm, which runs them all | owner, 2026-10-12: A (run them all) |
+| Q3 / DV-472 | External packages live in the server's realm; while a Node action runs they read the deployment's variables first, then the server's | the packages load with Bun's own loader, as builtins (DV-169); Convex's packages see only the action's `process.env` | owner, 2026-10-12: C (the deployment's variables first) |
+| Q4 / DV-473 | Extracted packages keep their Unix modes and symlinks: a package can spawn its own binary | Convex's AdmZip drops modes (`EACCES`) | owner, 2026-10-12: A (keep them) |
 | — | "bunvex.json" in messages; no docs link in "No package.json found." | DV-170, DV-04 | covered |
-| — | `"*"` never installs `bunvex`, `bunvex/*`, `@bunvex/*` | they are linked to the server (DV-168, DV-169) as Convex always bundles `convex` | Q5 (confirm) |
+| — | `"*"` never installs `bunvex`, `bunvex/*`, `@bunvex/*` | they are linked to the server (DV-168, DV-169) as Convex always bundles `convex` | Q5: matches Convex, stands (owner, 2026-10-12) |
 
 ### Q1 — the installer (DV-470)
 
@@ -229,6 +229,7 @@ No wire or stored name contains "convex": `nodeDependencies`, `externalDepsId`, 
 - **Options:** A, `bun install` (built in the draft); B, `npm install` (requires npm on the server; Node actions still
   run in Bun); C, `npm` when found, else Bun.
 - **Recommendation:** A.
+- **Decision (owner, 2026-10-12):** A — `bun install`, the server's own Bun; no npm on the server.
 
 ### Q2 — install scripts (DV-471)
 
@@ -242,6 +243,7 @@ No wire or stored name contains "convex": `nodeDependencies`, `externalDepsId`, 
   install without it and fail at import.
 - **Options:** A, run them all (built); B, Bun's default list only.
 - **Recommendation:** A.
+- **Decision (owner, 2026-10-12):** A — every dependency's install scripts run (`bun pm trust --all`), as npm runs them.
 
 ### Q3 — what `process.env` the packages see (DV-472)
 
@@ -264,6 +266,8 @@ No wire or stored name contains "convex": `nodeDependencies`, `externalDepsId`, 
   `vm` is not a boundary, DV-164); with B, any server code that reads `process.env` during an action would see the
   sanitized view.
 - **Recommendation:** C.
+- **Decision (owner, 2026-10-12):** C — while an action runs (or a package is imported), packages read the deployment's
+  variables first, then the server's own.
 
 ### Q4 — file modes after extraction (DV-473)
 
@@ -277,6 +281,7 @@ No wire or stored name contains "convex": `nodeDependencies`, `externalDepsId`, 
 - **App impact:** only more works.
 - **Options:** A, keep the modes (built); B, drop them as Convex.
 - **Recommendation:** A.
+- **Decision (owner, 2026-10-12):** A — extracted packages keep their Unix modes and symlinks.
 
 ### Q5 — `"*"` (same as Convex, to confirm)
 
@@ -286,6 +291,7 @@ No wire or stored name contains "convex": `nodeDependencies`, `externalDepsId`, 
 - **bunvex:** the same, with `bunvex`, `bunvex/*` and `@bunvex/*` excluded: they are never bundled nor installed but
   linked to the server's modules (DV-168, DV-169).
 - **Same?** Yes, mapped. **App impact:** none. **Recommendation:** confirm.
+- **Decision (owner, 2026-10-12):** matches Convex; stands as designed.
 
 ### Q6 — network at push time (same as Convex, to confirm)
 
@@ -294,6 +300,7 @@ No wire or stored name contains "convex": `nodeDependencies`, `externalDepsId`, 
   `NPM_CONFIG_REGISTRY` at a mirror, or not use `externalPackages`.
 - **Same?** Yes. (An alternative would be an addition: the CLI installs and uploads `node_modules` itself.)
 - **Recommendation:** confirm; no addition.
+- **Decision (owner, 2026-10-12):** matches Convex; stands as designed (no addition).
 
 ### Q7 — where the install lives (same as Convex, to confirm)
 
@@ -302,6 +309,7 @@ No wire or stored name contains "convex": `nodeDependencies`, `externalDepsId`, 
 - **bunvex:** the same row and blob; unzipped (or moved, right after the install) per process into a temporary
   directory removed at exit. Nothing is installed into the app's or the server's own `node_modules`.
 - **Same?** Yes. **Recommendation:** confirm.
+- **Decision (owner, 2026-10-12):** matches Convex; stands as designed.
 
 ## 4b. Additions (beyond Convex)
 
@@ -327,4 +335,4 @@ None.
 
 ## 6. Open questions
 
-Q1–Q7 above.
+None: Q1–Q7 decided (owner, 2026-10-12).
