@@ -232,7 +232,7 @@ boundary, a block emptied. The tests must then fail. A change no test notices is
   | `core/src/tx.ts` | 2 038 | 78.6 % | 112 min |
   | `core/src/committer.ts` | 651 | 79.1 % | 54 min |
   | `core/src/schema-json.ts` | 303 | 81.5 % | 8 min |
-  | `values/src/value.ts` | 718 | 81.9 % | 5 min |
+  | `values/src/value.ts` | 718 | 81.9 % (99.7 %) | 5 min |
   | `values/src/sorting.ts` | 623 | 89.6 % | 5 min |
   | `core/src/keyenc.ts` | 137 | 92.7 % | 6 min |
   | `core/src/system-reader.ts` | 83 | 92.8 % | 2 min |
