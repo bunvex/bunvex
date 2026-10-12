@@ -281,6 +281,16 @@ export type TxBody<T> = (db: Tx) => Promise<T> | T;
 export const OCC_MAX_RETRIES = knob("UDF_EXECUTOR_OCC_MAX_RETRIES", 4);
 export const OCC_INITIAL_BACKOFF_MS = knob("UDF_EXECUTOR_OCC_INITIAL_BACKOFF_MS", 100);
 export const OCC_MAX_BACKOFF_MS = knob("UDF_EXECUTOR_OCC_MAX_BACKOFF_MS", 2000);
+/**
+ * A push's `finish_push` retries more (Convex's FINISH_PUSH_MAX_OCC_FAILURES = 8): it reads the `_index` rows
+ * the push wrote, which the index backfills keep writing (STUDY-147).
+ */
+export const FINISH_PUSH_MAX_OCC_FAILURES = knob("FINISH_PUSH_MAX_OCC_FAILURES", 8);
+/**
+ * Documents a page while a text or vector index is built (Convex's VECTOR_INDEX_WORKER_PAGE_SIZE = 128, which
+ * its search flusher uses for both kinds; STUDY-147).
+ */
+export const SEARCH_BACKFILL_PAGE_SIZE = knob("VECTOR_INDEX_WORKER_PAGE_SIZE", 128, "positive");
 
 /** The sleep before retry number `failures + 1`: full jitter over the capped exponential. */
 export const occBackoffMs = (failures: number, initialMs: number, maxMs: number, random = Math.random) =>
@@ -1619,7 +1629,7 @@ export class Engine {
               db
                 .queryDef(t)
                 .withIndex("by_id", (q) => (from === null ? q : q.gt("_id", from)))
-                .take(1000),
+                .take(SEARCH_BACKFILL_PAGE_SIZE),
             ),
           undefined,
           undefined,
@@ -1638,7 +1648,7 @@ export class Engine {
         }
         this.searchStats.backfilled += k;
         read += k;
-        if (k === page.length && page.length < 1000) {
+        if (k === page.length && page.length < SEARCH_BACKFILL_PAGE_SIZE) {
           end = true;
           break;
         }
@@ -1903,7 +1913,7 @@ export class Engine {
             db
               .queryDef(t)
               .withIndex("by_id", (q) => (last === null ? q : q.gt("_id", last)))
-              .take(1000),
+              .take(SEARCH_BACKFILL_PAGE_SIZE),
           ),
         undefined,
         undefined,
@@ -1911,7 +1921,7 @@ export class Engine {
         at,
       )) as Doc[];
       for (const d of page) this.vectorIndexes.backfill(e, d);
-      if (page.length < 1000) break;
+      if (page.length < SEARCH_BACKFILL_PAGE_SIZE) break;
       last = page[page.length - 1]!._id as string;
       await new Promise((r) => setImmediate(r));
     }
@@ -2012,7 +2022,7 @@ export class Engine {
             db
               .queryDef(t)
               .withIndex("by_id", (q) => (last === null ? q : q.gt("_id", last)))
-              .take(1000),
+              .take(SEARCH_BACKFILL_PAGE_SIZE),
           ),
         undefined,
         undefined,
@@ -2020,7 +2030,7 @@ export class Engine {
         at,
       )) as Doc[];
       for (const d of page) this.searchIndexes.backfill(e, d);
-      if (page.length < 1000) break;
+      if (page.length < SEARCH_BACKFILL_PAGE_SIZE) break;
       last = page[page.length - 1]!._id as string;
       // A background job: let the server's own work run between pages.
       await new Promise((r) => setImmediate(r));
@@ -2908,6 +2918,10 @@ export class Engine {
       },
       true,
       "_system/finish_push",
+      false,
+      ANONYMOUS,
+      false,
+      FINISH_PUSH_MAX_OCC_FAILURES,
     );
     return r;
   }
@@ -3589,6 +3603,7 @@ export class Engine {
     withTs?: false,
     caller?: Caller,
     throttled?: boolean,
+    maxRetries?: number,
   ): Promise<T>;
   private runMutation<T>(
     body: TxBody<T>,
@@ -3597,6 +3612,7 @@ export class Engine {
     withTs: true,
     caller?: Caller,
     throttled?: boolean,
+    maxRetries?: number,
   ): Promise<{ value: T; ts: bigint }>;
   // `withTs` rather than a wrapper, so the common path costs no extra promise.
   private async runMutation<T>(
@@ -3606,8 +3622,9 @@ export class Engine {
     withTs = false,
     caller: Caller = ANONYMOUS,
     throttled = false,
+    retries?: number,
   ): Promise<unknown> {
-    const maxRetries = this.opts.maxRetries ?? OCC_MAX_RETRIES;
+    const maxRetries = retries ?? this.opts.maxRetries ?? OCC_MAX_RETRIES;
     const initialMs = this.opts.occInitialBackoffMs ?? OCC_INITIAL_BACKOFF_MS;
     const maxMs = this.opts.occMaxBackoffMs ?? OCC_MAX_BACKOFF_MS;
     for (let failures = 0; ; ) {

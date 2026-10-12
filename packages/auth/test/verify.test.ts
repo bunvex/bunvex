@@ -98,6 +98,25 @@ describe("OIDC providers", () => {
     await v.verify(await i.sign());
     expect(i.hits).toEqual({ discovery: 2, jwks: 2 });
   });
+
+  test("the cache is bounded in bytes, as Convex's HTTP_CACHE_SIZE (STUDY-147): the oldest response goes first", async () => {
+    const i = await issuer({ cacheControl: "max-age=600" });
+    const config = parseAuthConfig({ providers: [{ domain: i.url, applicationID: "app" }] });
+    const whole = new TokenVerifier(config);
+    await whole.verify(await i.sign());
+    const both = whole.cachedBytes;
+    expect(both).toBeGreaterThan(0);
+    // Room for either response, not both: each one stored evicts the other, so every token fetches both again.
+    const one = new TokenVerifier(config, { cacheMaxBytes: both - 1 });
+    i.hits.discovery = i.hits.jwks = 0;
+    for (let n = 0; n < 3; n++) await one.verify(await i.sign());
+    expect(i.hits).toEqual({ discovery: 3, jwks: 3 });
+    expect(one.cachedBytes).toBeLessThanOrEqual(both - 1);
+    // A response heavier than the bound is not kept.
+    const none = new TokenVerifier(config, { cacheMaxBytes: 1 });
+    await none.verify(await i.sign());
+    expect(none.cachedBytes).toBe(0);
+  });
 });
 
 describe("custom JWT providers", () => {

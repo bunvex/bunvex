@@ -8,7 +8,7 @@ item. It is the project's to-do list at the scale of the whole product.
 |---|---|--:|--:|--:|
 | Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 236 | 3 | 7 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 162 | 2 | 1 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 218 | 26 | 19 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 218 | 27 | 18 |
 
 Beyond Convex, [additions.md](additions.md) lists 29 additions: 26 built (11 of them dashboard screens on the
 mock, 3 more with their dashboard part on the mock), 2 accepted, 1 deferred, none proposed (2026-10-11, with AD-29).
@@ -144,7 +144,8 @@ containers up, deploy functions, see them work) before the remaining platform it
 - full-text search (STUDY-45, STUDY-111: all 10 rows done, platform §6) and vector search (STUDY-51: all 6
   done, §7) — done;
 - components (1 of 7, §11; DV-55, plan in STUDY-62) — open;
-- Node actions: `"use node"` runs in Bun (DV-87) — done; `node.externalPackages` — open;
+- Node actions: `"use node"` runs in Bun (DV-87) — done; `node.externalPackages` — checked in `bunvex.json`, installing them
+  open (STUDY-148; designed and decided, DV-470–DV-473);
 - log streaming (STUDY-47, STUDY-59, STUDY-70) and metrics (§20: 14 done; the one missing row, insights, is
   cloud-only) — done;
 - streaming export (STUDY-60, STUDY-69) — done;
@@ -171,7 +172,9 @@ gaps.
 
 2. **Auth helpers:** no Convex Auth (`@convex-dev/auth`, itself a component) or WorkOS AuthKit equivalent;
    Clerk and Auth0 exist (platform §1).
-3. **`node.externalPackages`:** Node actions with native or unbundleable dependencies (platform §9, §13).
+3. **`node.externalPackages`:** Node actions with native or unbundleable dependencies (platform §9, §13). The
+   setting is checked; the install on the deployment is designed in STUDY-148 and decided (owner, 2026-10-12;
+   DV-470–DV-473), built in its own PR.
 
 **Low: rare, ops-only, or a missing nicety**
 

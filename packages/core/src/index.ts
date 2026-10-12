@@ -178,6 +178,7 @@ export {
   type CallRequest,
   DEFAULT_INSTANCE_NAME,
   Engine,
+  FINISH_PUSH_MAX_OCC_FAILURES,
   ImportBackfillingError,
   INDEX_BACKFILL_DEFAULTS,
   type IndexBackfillOptions,

@@ -167,6 +167,50 @@ describe("loading and analysis", () => {
     );
   });
 
+  test('`require` in "use node" modules: Bun\'s bundle reads `import.meta.require`; builtins resolve, nothing else (STUDY-148)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bunvex-app-"));
+    dirs.push(dir);
+    // A CommonJS helper that requires builtins, bundled into the "use node" module, and a `require` of the
+    // module's own: both become `__require = import.meta.require` calls in Bun's bundle.
+    writeFileSync(join(dir, "helper.cjs"), `exports.eol = () => require("os").EOL; exports.sep = require("path").sep;`);
+    writeFileSync(
+      join(dir, "n.ts"),
+      `"use node";
+      import { action } from "@bunvex/server";
+      const helper = require("./helper.cjs");
+      export const builtins = action(async () => [helper.eol(), helper.sep, require("node:crypto").createHash("sha1").update("a").digest("hex")]);
+      export const missing = action(async (_, { name }: { name: string }) => { try { require(name); return "loaded"; } catch (e) { return String(e); } });`,
+    );
+    const out = await Bun.build({
+      entrypoints: [join(dir, "n.ts")],
+      root: dir,
+      format: "esm",
+      target: "bun",
+      external: ["@bunvex/*"],
+    });
+    expect(out.success).toBe(true);
+    const source = await out.outputs[0]!.text();
+    expect(source).toContain("import.meta.require");
+    const version = await load([mod("n.js", source, "node")]);
+    const { functions, call } = await server();
+    functions.install(version.functions, version.moduleHashes);
+    expect((await call("action", "n:builtins")).value).toEqual(["\n", "/", "86f7e437faa5a7fce15d1ddcb9eaeaea377667b8"]);
+    // A name known only at run time (a literal Bun cannot resolve becomes a throw in the bundle).
+    expect((await call("action", "n:missing", { name: "left-pad" })).value).toMatch(
+      /Cannot find module 'left-pad'\nRequire stack:\n- .*\/modules\/n\.js$/,
+    );
+    expect((await call("action", "n:missing", { name: "node:fs" })).value).toBe("loaded");
+    // The isolate has no `require`, as Convex's.
+    const iso = await load([
+      mod(
+        "i.js",
+        `import { query } from "@bunvex/server"; export const r = query(async () => typeof import.meta.require);`,
+      ),
+    ]);
+    functions.install(iso.functions, iso.moduleHashes);
+    expect((await call("query", "i:r")).value).toBe("undefined");
+  });
+
   test("the import phase: deterministic Math.random and Date.now, no fetch, timers or randomness, a time limit", async () => {
     const src = `export const r = Math.random(); export const t = Date.now(); export const p = performance.now(); export const d = new Date().getTime();`;
     const a = await load([mod("m.js", src)]);
