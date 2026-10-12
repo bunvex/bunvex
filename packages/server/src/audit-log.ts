@@ -55,6 +55,8 @@ export const auditEvents = {
     udfConfigDiff?: { previous_version: string; next_version: string } | null;
     schemaDiff: { previous_schema: string | null; next_schema: string | null } | null;
     message: string | null;
+    /** Convex's `SerializedNodeVersionDiff` (STUDY-145): null when the push keeps the Node version. */
+    nodeVersionDiff?: { previous_version: string | null; next_version: string | null } | null;
   }) =>
     event("push_config_with_components", {
       auth_diff: o.authDiff,
@@ -72,7 +74,7 @@ export const auditEvents = {
         },
       ],
       message: o.message,
-      node_version_diff: null,
+      node_version_diff: o.nodeVersionDiff ?? null,
     }),
   deleteFiles: (storageIds: string[]) => event("delete_files", { ...ROOT, storage_ids: storageIds }),
   generateUploadUrl: () => event("generate_upload_url", { ...ROOT }),

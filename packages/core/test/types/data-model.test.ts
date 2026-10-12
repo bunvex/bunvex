@@ -11,7 +11,7 @@ import type {
   WithOptionalSystemFields,
   WithoutSystemFields,
 } from "../../src/data-model.ts";
-import { defineSchema, defineTable } from "../../src/schema.ts";
+import { declaredTables, defineSchema, defineTable } from "../../src/schema.ts";
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const check = <T extends true>(_: T) => {};
@@ -85,9 +85,23 @@ check<Equal<DocumentByName<Staged, "notes">, { _id: GenericId<"notes">; _creatio
 check<Equal<NamedIndex<Staged["drafts"], "by_author">, ["author", "_creationTime"]>>(true);
 // @ts-expect-error a staged validator is an object's: a string validator is refused
 defineTable({ a: v.string() }).staged(v.string());
-// The runtime is unchanged: the same declared tables.
-test("the schema's runtime shape is unchanged by its types", () => {
-  expect([...schema.tables.keys()]).toEqual(["users", "messages", "events", "loose"]);
-  expect(schema.tables.get("messages")!.indexes).toEqual({ by_author: ["author"], by_author_body: ["author", "body"] });
-  expect(schema.tables.get("messages")!.staged).toEqual(["by_author_body"]);
+// `schema.tables` is Convex's record of table definitions (STUDY-144): each table's validator, typed.
+check<
+  Equal<
+    (typeof schema.tables)["users"]["validator"]["type"],
+    DocumentByName<DataModel, "users"> extends infer D ? Omit<D, "_id" | "_creationTime"> : never
+  >
+>(true);
+// @ts-expect-error a table the schema does not have
+schema.tables.nope;
+// The engine's tables are unchanged: the same declared tables.
+test("the schema's tables are its definitions; the engine's declared tables are unchanged", () => {
+  expect(Object.keys(schema.tables)).toEqual(["users", "messages", "events", "loose"]);
+  expect(schema.tables.messages.validator).toBe(schema.tables.messages.document as never);
+  expect([...declaredTables(schema).keys()]).toEqual(["users", "messages", "events", "loose"]);
+  expect(declaredTables(schema).get("messages")!.indexes).toEqual({
+    by_author: ["author"],
+    by_author_body: ["author", "body"],
+  });
+  expect(declaredTables(schema).get("messages")!.staged).toEqual(["by_author_body"]);
 });

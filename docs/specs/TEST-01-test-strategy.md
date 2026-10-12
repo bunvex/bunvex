@@ -218,9 +218,31 @@ boundary, a block emptied. The tests must then fail. A change no test notices is
   - **An equivalent mutant:** a change that cannot alter behaviour, such as a fast path that falls back to the
     general one. Mark it in the source with `// Stryker disable next-line <mutator>: <why>`.
   - Once a file is triaged, its score can become a floor, as the coverage floors are.
-- **First readings:**
-  - `values/src/sorting.ts`: 89.4 % (557 detected, 62 survived, 4 without coverage).
-  - `core/src/keyenc.ts`: 91.2 % (125 detected, 9 survived, 3 without coverage).
+- **The first full run** (2026-10-11, all 14 files, 5 908 mutants): 78.2 %.
+
+  | File | Mutants | Score | Time |
+  |---|--:|--:|--:|
+  | `core/src/query-cache.ts` | 137 | 43.8 % (100 % after its triage) | 2 min |
+  | `core/src/persistence/scan.ts` | 52 | 65.4 % | 2 min |
+  | `core/src/persistence/sqlite.ts` | 235 | 66.0 % | 8 min |
+  | `values/src/commit-ts.ts` | 89 | 68.5 % | 2 min |
+  | `core/src/persistence/memory.ts` | 597 | 69.2 % | 28 min |
+  | `core/src/persistence/split.ts` | 107 | 73.8 % | 2 min |
+  | `core/src/read-set-index.ts` | 138 | 76.1 % | 1 min |
+  | `core/src/tx.ts` | 2 038 | 78.6 % | 112 min |
+  | `core/src/committer.ts` | 651 | 79.1 % | 54 min |
+  | `core/src/schema-json.ts` | 303 | 81.5 % | 8 min |
+  | `values/src/value.ts` | 718 | 81.9 % | 5 min |
+  | `values/src/sorting.ts` | 623 | 89.6 % | 5 min |
+  | `core/src/keyenc.ts` | 137 | 92.7 % | 6 min |
+  | `core/src/system-reader.ts` | 83 | 92.8 % | 2 min |
+
+- **Only `core`'s and `values`' tests run.**
+  - A file mostly tested from another package scores low: the query cache through the server's sync tests,
+    the drivers through the conformance suite.
+  - The server's tests cannot join. The runner times them per test through Bun's inspector, which does not work
+    with `--isolate`, and without it a cron test fails.
+  - So the triage of such a file adds direct tests in `core`, which is also where the store's rules belong.
   - In `sorting.ts`, most survivors are equivalent: the ASCII fast paths and the short-string decoder.
   - The rest are untested refusals of malformed keys ("trailing bytes after the value", an unknown type tag),
     and in `keyenc.ts` the bounds' descriptions for the inspector.

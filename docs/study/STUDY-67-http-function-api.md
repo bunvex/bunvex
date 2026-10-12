@@ -248,3 +248,44 @@ the site server's. Verdicts are cached per distinct header in a bounded map.
 **Cost.** 80 ns per request without a header, 120–130 ns with one (cached); an uncached parse costs about
 1.1 µs. HTTP query throughput (32 requests in flight, memory store) is unchanged within noise: about
 20.3k req/s with and without the check.
+
+## 8. The admin routes' query strings and bodies (2026-10-11)
+
+H4's reader (`json-body.ts`) now serves every admin route that takes a JSON body, and `query-args.ts` reads
+query strings as Convex's `Query` extractor does. Both are checked against Convex's binary in
+`packages/differential/test/parse-errors.test.ts`.
+
+Bodies:
+- The reader knows more of serde's types: integers with their ranges (`u64`, `u16`, `usize`, `i64`), booleans,
+  `Option`, `Vec`, unit enums, `#[serde(default)]`, nested structs, flattened structs (map only) and internally
+  tagged enums.
+- The function routes keep `JSON.parse`'s fast path (`fast`).
+- Every other body is read byte by byte, so a field given twice is serde's `duplicate field`.
+
+Query strings: serde_urlencoded's messages behind "Failed to deserialize query string: ", including Rust's
+integer parse errors and `duplicate field`.
+
+Order: as Convex's extractors, the query string or body is read before the route's operation check. So a bad
+argument without a key is the 400, not `BadDeployKey`.
+
+The routes covered:
+- `cancel_job`, `cancel_all_jobs`, `delete_tables`, `delete_scheduled_functions_table`;
+- `update_canonical_url`, `update_environment_variables` (both paths);
+- `export/set_expiration` (its nanoseconds read exactly);
+- `import` (query), `import/upload_part` (query), `import/finish_upload`, `perform_import`, `cancel_import`;
+- `create_log_stream`, `update_log_stream`: the tag first, then each variant's fields as serde gives them
+  (no path, no position, since the variant's content is buffered), before Convex's own checks of their values;
+- `create_usage_limit`, `update_usage_limit`: the metrics listed in Convex's declaration order;
+- `v1/list_audit_log_events`: its cursor refused as Convex refuses it, 400 `InvalidCursor` "Failed to parse
+  cursor";
+- `list_snapshot`, `document_deltas`: GET and POST; `SelectionArg` is an untagged enum, so arguments that make
+  no selection select everything, and a table name that is not one is an internal error;
+- `json_schemas`;
+- `v1/data/sync`, `data_sync_cursor_from_deltas`, `v1/list_active_syncs`.
+
+Covered by #559: the app metrics and push routes.
+
+Not matched:
+- a log stream body written as an array: serde's per-variant struct length message;
+- the inside of a data sync's `selection`: serde's messages for `Selection`'s own fields;
+- `shapes2`'s `component`: bunvex has no components.

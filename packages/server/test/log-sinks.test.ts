@@ -217,7 +217,10 @@ test("the API's checks and errors", async () => {
     message: "Log stream topic `exception` cannot be subscribed to",
   });
   expect((await create({ url: hook.url, format: "json", topics: ["custom_audit"] })).status).toBe(403);
-  expect((await create({ url: hook.url })).body).toEqual({ code: "BadJsonBody", message: "missing field `format`" });
+  expect((await create({ url: hook.url })).body).toEqual({
+    code: "BadJsonBody",
+    message: "Failed to deserialize the JSON body into the target type: missing field `format`",
+  });
   expect((await create({ url: hook.url, format: "json" }, READ_ONLY)).body.code).toBe("OperationNotPermitted");
   const { id } = (await create({ url: hook.url, format: "json" })).body;
   expect(await create({ url: hook.url, format: "json" })).toEqual({
@@ -284,7 +287,11 @@ test("an S3 export's create and update also need ViewData (Convex 4933aa2)", asy
       { engine, functions, wake: () => {} },
       path,
       id,
-      new Request("http://x/", { method: "POST", body: JSON.stringify(body) }),
+      new Request("http://x/", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
       caller,
     ).catch((e) => e);
   const s3 = {

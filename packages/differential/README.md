@@ -34,6 +34,9 @@ backend is always started with `--disable-beacon`.
   and read back by the first. Local only: the nightly does not run it.
 - `test/action-fetch.test.ts` (STUDY-142): an action's `fetch` (the app of `fetch-app/`) to local targets on
   both: how a request fails, redirects, the 407 refusal, aborts, the default `User-Agent`. Local only.
+- `test/unawaited-operations.test.ts` (STUDY-143): the unawaited-operations warning of the actions and HTTP
+  actions of `unawaited-app/` on both, a timeout included (`env` sets `V8_ACTION_USER_TIMEOUT_SECS` on both).
+  Local only.
 - `test/generated.test.ts`: `DIFF_RUNS` generated programs (25 by default), both backends started once and
   reset before each program. `DIFF_SEED` replays a run. A difference is shrunk, written to
   `.cache/failures/last.json` (the program and the differences, ready to become a fixed program) and fails
