@@ -12,13 +12,13 @@
 // process wins); the previous holder fails its next write with `LeaseLostError`. Every flush ends with Convex's
 // `lease_precond`, a `FOR SHARE` read of the row carrying our ts, before COMMIT: a takeover waits for that
 // transaction and then sees its rows. A flush is a write batch of whole commits (bounded by the committer:
-// DV-62) in one transaction, its rows sent in INSERTs of at most 10 MiB, as Convex's `fill_chunks`
-// (MYSQL_MAX_CHUNK_BYTES), to stay under `max_allowed_packet` on a large commit.
+// DV-62) in one transaction, its rows sent in INSERTs of at most 10 MiB and 1024 rows, as Convex's `fill_chunks`
+// (MYSQL_MAX_CHUNK_BYTES, MYSQL_MAX_FILL_CHUNK_ROWS), to stay under `max_allowed_packet` on a large commit.
 //
 // Layout and read-only flag (PERSIST-01 C10, STUDY-25 L7): no layout record (DV-418): the open checks that the
 // tables it finds have Convex's columns, before writing anything, and refuses a read-only store.
 // Retention (PERSIST-01 C12–C14, STUDY-33): the document log reads `documents` by its key's leading `ts`;
-// prunes are Convex's v5 deletes, OR'd `ts <= X` clauses per key in chunks of 128 (MYSQL_SMART_CHUNK_MAX_SIZE), each key
+// prunes are Convex's v5 deletes, OR'd `ts <= X` clauses per key in Convex's smart chunks (up to MYSQL_SMART_CHUNK_MAX_SIZE = 128), each key
 // at its highest ts only; globals are `persistence_globals` rows. Each prune or global write first reads the
 // lease row without locking it (a locking read would hold up the next flush) and is refused unless it carries
 // our ts. A takeover in between can let one batch through, which deletes only versions superseded below a
@@ -61,6 +61,7 @@ import {
   LeaseLostError,
   MAX_KEY_PREFIX_LEN,
   MYSQL_MAX_CHUNK_BYTES,
+  MYSQL_MAX_FILL_CHUNK_ROWS,
   type OpenOptions,
   opaqueToInspect,
   type Persistence,
@@ -68,9 +69,10 @@ import {
   type ReadOnlyFlag,
   type RetentionStore,
   renewTimeoutMs,
-  retryOnce,
+  retryN,
   type SplitRow,
   scanLatest,
+  smartChunks,
   splitKey,
   splitPages,
   type TabletId,
@@ -106,6 +108,8 @@ type DocRow = [Buffer, bigint, Buffer, Buffer, boolean, bigint | null];
 type IdxRow = [Buffer, bigint, Buffer, Buffer | null, Buffer, boolean, Buffer | null, Buffer | null];
 /** A row's bytes in the INSERT's SQL text, bounded above: a buffer is sent as X'hex' (2 per byte), plus the
  *  numbers, quotes and separators. */
+/** Convex's `MYSQL_MAX_QUERY_RETRIES`: a read's retries after an operational error (STUDY-147 §3.6). */
+const MYSQL_MAX_QUERY_RETRIES = knob("MYSQL_MAX_QUERY_RETRIES", 1);
 const docRowBytes = (r: DocRow) => 96 + 2 * (r[0].length + r[2].length + r[3].length);
 const idxRowBytes = (r: IdxRow) =>
   128 + 2 * (r[0].length + r[2].length + (r[3]?.length ?? 0) + r[4].length + (r[6]?.length ?? 0) + 16);
@@ -341,12 +345,12 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
   }
 
   /**
-   * A read (or an idempotent bootstrap step): one call, run once more on another connection after an
-   * operational error (STUDY-25 L5; Convex's MYSQL_MAX_QUERY_RETRIES = 1). Not after a timeout: Convex returns
-   * that one to the caller.
+   * A read (or an idempotent bootstrap step): one call, run again on another connection after an operational
+   * error, up to MYSQL_MAX_QUERY_RETRIES times (1; STUDY-25 L5, STUDY-147 §3.6). Not after a timeout: Convex
+   * returns that one to the caller.
    */
   private read<T>(fn: (c: Conn, progress: () => void) => Promise<T>): Promise<T> {
-    return retryOnce(() => this.call(fn), operational);
+    return retryN(() => this.call(fn), operational, MYSQL_MAX_QUERY_RETRIES);
   }
 
   /** As Convex's `is_transient_db_error`: a timeout or an operational error (STUDY-25 L4). */
@@ -558,11 +562,11 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
         progress();
         // `values ?` with a nested array expands to a multi-row insert. Filled up to 10 MiB of SQL each, as
         // Convex's `fill_chunks`, to stay under max_allowed_packet whatever the commit's size (DV-62).
-        for (const chunk of chunkRows(docs, Infinity, MYSQL_MAX_CHUNK_BYTES, docRowBytes)) {
+        for (const chunk of chunkRows(docs, MYSQL_MAX_FILL_CHUNK_ROWS, MYSQL_MAX_CHUNK_BYTES, docRowBytes)) {
           await c.query(`insert into documents (id, ts, table_id, json_value, deleted, prev_ts) values ?`, [chunk]);
           progress();
         }
-        for (const chunk of chunkRows(idx, Infinity, MYSQL_MAX_CHUNK_BYTES, idxRowBytes)) {
+        for (const chunk of chunkRows(idx, MYSQL_MAX_FILL_CHUNK_ROWS, MYSQL_MAX_CHUNK_BYTES, idxRowBytes)) {
           await c.query(
             `insert into indexes (index_id, ts, key_prefix, key_suffix, key_sha256, deleted, table_id, document_id)
              values ?`,
@@ -738,8 +742,7 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
   async getVersions(table: TabletId, ids: string[], ts: bigint) {
     const found = new Map<string, { json: string | null; ts: bigint }>();
     const unique = [...new Set(ids)];
-    for (let i = 0; i < unique.length; i += VERSIONS_CHUNK) {
-      const chunk = unique.slice(i, i + VERSIONS_CHUNK);
+    for (const chunk of smartChunks(unique)) {
       const [rows] = (await this.read((c) =>
         c.execute(
           `select id, ts, json_value, deleted from (
@@ -793,7 +796,7 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
     if (!entries.length) return;
     await this.assertLease();
     const rows: IdxRow[] = entries.map((e) => indexRow(e, e.ts));
-    for (const chunk of chunkRows(rows, Infinity, MYSQL_MAX_CHUNK_BYTES, idxRowBytes))
+    for (const chunk of chunkRows(rows, MYSQL_MAX_FILL_CHUNK_ROWS, MYSQL_MAX_CHUNK_BYTES, idxRowBytes))
       await this.read((c) =>
         c.query(
           `insert into indexes (index_id, ts, key_prefix, key_suffix, key_sha256, deleted, table_id, document_id)
@@ -843,9 +846,9 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
 
   private async deleteChunks<T>(rows: T[], table: string, clause: string, params: (r: T) => unknown[]) {
     let n = 0;
-    for (let i = 0; i < rows.length; i += 128) {
-      const chunk = rows.slice(i, i + 128);
-      const [r] = (await this.read((c) =>
+    for (const chunk of smartChunks(rows)) {
+      // A write: not retried, as Convex's `handle_errors` (its retries are for reads only).
+      const [r] = (await this.call((c) =>
         c.query(`delete from ${table} where ${chunk.map(() => clause).join(" or ")}`, chunk.flatMap(params)),
       )) as any;
       n += Number(r.affectedRows);
@@ -937,6 +940,3 @@ function versionsInOrder(ids: string[], found: Map<string, { json: string | null
     return v && v.json !== null ? { json: v.json, ts: v.ts } : null;
   });
 }
-
-/** Ids per `getVersions` statement: one round trip each, within every store's parameter limits. */
-const VERSIONS_CHUNK = 1000;

@@ -1,7 +1,8 @@
 # STUDY-147 — Knob environment overrides
 
 - **Status:** PR 1 implemented (the shared reader, every knob whose mechanism exists); PR 3a implemented (five
-  defaults matched, §3.2); PR 3b implemented (`HTTP_SERVER_TIMEOUT_SECONDS` on every route, §3.3); PR 2 planned
+  defaults matched, §3.2); PR 3b implemented (`HTTP_SERVER_TIMEOUT_SECONDS` on every route, §3.3); PR 2 in parts (one PR each, §3.4):
+  retention, the index backfill switch and MySQL's retries and chunks implemented, the rest planned
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend (`crates/common/src/knobs.rs`,
   `crates/cmd_util/src/env.rs`, `self-hosted/advanced/knobs.md`)
 - **Related:** [platform.md](../parity/platform.md) "Knob env overrides"; STUDY-25 (store timeouts), STUDY-33
@@ -83,7 +84,7 @@ unknown encoding.
 Every knob of `knobs.rs` at `d8bdde0`, plus those outside it, is in one of five groups. The full table, with
 each knob's default and where bunvex keeps it, was checked file by file; it is summarized here.
 
-**Read from the environment (131 after PR 1, 139 after PR 3a).** Everything bunvex has a mechanism for, under Convex's name and
+**Read from the environment (131 after PR 1, 139 after PR 3a, 142 after PR 2's retention part, 143 after its backfill switch, 147 after its MySQL part).** Everything bunvex has a mechanism for, under Convex's name and
 default unless a decided divergence says otherwise:
 
 | Area | Knobs |
@@ -93,7 +94,7 @@ default unless a decided divergence says otherwise:
 | Concurrency | `APPLICATION_MAX_CONCURRENT_QUERIES`, `_MUTATIONS`, `_V8_ACTIONS`, `_NODE_ACTIONS`, `APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT`, `APPLICATION_FUNCTION_RUNNER_ACTION_SEMAPHORE_TIMEOUT`, `HTTP_SERVER_MAX_CONCURRENT_REQUESTS` (DV-364), `HTTP_SERVER_TIMEOUT_SECONDS` (HTTP actions only until PR 3), `MAX_BYTES_WRITTEN_PER_SECOND`, `MAX_ROWS_WRITTEN_PER_SECOND`, `WRITE_THROUGHPUT_WINDOW` |
 | Committer and write log | `COMMITTER_MAX_WRITE_BATCH_DOCUMENTS`, `COMMITTER_MAX_WRITE_BATCH_BYTES`, `INITIAL_PERSISTENCE_WRITES_BACKOFF_MS`, `MAX_PERSISTENCE_WRITES_BACKOFF_MS`, `MAX_REPEATABLE_TIMESTAMP_COMMIT_DELAY`, `MAX_REPEATABLE_TIMESTAMP_IDLE_FREQUENCY`, `WRITE_LOG_MIN_RETENTION_SECS`, `WRITE_LOG_MAX_RETENTION_SECS`, `WRITE_LOG_SOFT_MAX_SIZE_BYTES` |
 | Caches | `INDEX_CACHE_SIZE`, `INDEX_CACHE_VERIFY_PERCENT` (DV-433) |
-| Retention and cleanup | `INDEX_RETENTION_DELAY`, `DOCUMENT_RETENTION_DELAY`, `INDEX_RETENTION_DELETE_CHUNK`, `DOCUMENT_RETENTION_DELETE_CHUNK`, `DOCUMENT_RETENTION_RATE_LIMIT`, `DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS`, `RETENTION_CHECKPOINT_PERIOD_SECS`, `MAX_SESSION_CLEANUP_DURATION_HOURS`, `SYSTEM_TABLE_CLEANUP_FREQUENCY_SECONDS`, `SYSTEM_TABLE_CLEANUP_CHUNK_SIZE`, `SYSTEM_TABLE_CLEANUP_ROWS_PER_SECOND`, `TABLE_SUMMARY_MAX_CHECKPOINT_AGE`, `TABLE_SUMMARY_MAX_AGE_WITH_WRITES`, `TABLE_SUMMARY_AGE_JITTER_SECONDS` |
+| Retention and cleanup | `INDEX_RETENTION_DELAY`, `DOCUMENT_RETENTION_DELAY`, `INDEX_RETENTION_DELETE_CHUNK`, `DOCUMENT_RETENTION_DELETE_CHUNK`, `DOCUMENT_RETENTION_RATE_LIMIT`, `DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS`, `RETENTION_CHECKPOINT_PERIOD_SECS`, `RETENTION_DELETE_BATCH`, `DOCUMENT_RETENTION_MAX_SCANNED_DOCUMENTS`, `RETENTION_DELETE_FREQUENCY`, `MAX_SESSION_CLEANUP_DURATION_HOURS`, `SYSTEM_TABLE_CLEANUP_FREQUENCY_SECONDS`, `SYSTEM_TABLE_CLEANUP_CHUNK_SIZE`, `SYSTEM_TABLE_CLEANUP_ROWS_PER_SECOND`, `TABLE_SUMMARY_MAX_CHECKPOINT_AGE`, `TABLE_SUMMARY_MAX_AGE_WITH_WRITES`, `TABLE_SUMMARY_AGE_JITTER_SECONDS` |
 | Index backfill | `INDEX_BACKFILL_CHUNK_SIZE`, `INDEX_BACKFILL_CHUNK_RATE`, `INDEX_BACKFILL_READ_SIZE`, `INDEX_BACKFILL_PROGRESS_INTERVAL_SECONDS`, `INDEX_BACKFILL_CONCURRENCY`, `INDEX_WORKERS_INITIAL_BACKOFF`, `INDEX_WORKERS_MAX_BACKOFF` |
 | Search | `SEARCH_INDEX_SIZE_SOFT_LIMIT`, `SEARCH_INDEX_SIZE_HARD_LIMIT`, `VECTOR_INDEX_SIZE_SOFT_LIMIT`, `VECTOR_INDEX_SIZE_HARD_LIMIT`, `SEGMENT_MAX_SIZE_BYTES`, `MIN_COMPACTION_SEGMENTS`, `MAX_COMPACTION_SEGMENTS`, `MAX_SEGMENT_DELETED_PERCENTAGE`, `DATABASE_WORKERS_POLL_INTERVAL`, `DATABASE_WORKERS_MIN_COMMITS`, `SEARCH_WORKERS_MAX_CHECKPOINT_AGE`, `SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY` |
 | Scheduler and crons | `SCHEDULED_JOB_EXECUTION_PARALLELISM`, `SCHEDULED_JOB_RETENTION`, `SCHEDULER_OCC_INITIAL_BACKOFF_MS`, `SCHEDULER_OCC_MAX_BACKOFF_MS`, `SCHEDULED_JOB_INITIAL_BACKOFF_MS`, `SCHEDULED_JOB_MAX_BACKOFF_SECS`, `MAX_JOBS_CANCEL_BATCH`, `CRON_SPLAY_SECONDS` |
@@ -102,14 +103,9 @@ default unless a decided divergence says otherwise:
 | Logs and metrics | `LOG_MANAGER_EVENT_RECV_BUFFER_SIZE`, `LOG_MANAGER_AGGREGATION_INTERVAL`, `AXIOM_MAX_ATTRIBUTES`, `AUDIT_LOG_MAX_LINES`, `AUDIT_LOG_MAX_LINE_SIZE_BYTES`, `AUDIT_LOG_MAX_TOTAL_SIZE_BYTES`, `AUDIT_LOG_MAX_HEAP_SIZE_BYTES`, `MAX_UDF_EXECUTION`, `UDF_METRICS_BUCKET_WIDTH_SECS`, `UDF_METRICS_MAX_BUCKETS`, `USAGE_LIMIT_EVALUATE_INTERVAL_SECS`, `USAGE_TRACKING_PERIOD_SECS`, `DISABLE_METRICS_ENDPOINT`, `MAX_ECHO_BYTES` (DV-375) |
 | Stores | `POSTGRES_TIMEOUT_SECONDS`, `MYSQL_TIMEOUT_SECONDS`, `MONGODB_TIMEOUT_SECONDS` (bunvex's driver), `MYSQL_DOCUMENT_ENCODING` (DV-414), `MYSQL_MAX_CHUNK_BYTES` |
 
-**Read after PR 2 (the mechanism changes first).** `RETENTION_DELETE_BATCH` and
-`DOCUMENT_RETENTION_MAX_SCANNED_DOCUMENTS` share one retention option today, to be split;
-`RETENTION_DELETE_FREQUENCY` is only the error backoff's cap here (Convex also waits it at start);
-`INDEX_BACKFILL_ENABLE` needs a switch on the three places an index worker starts; `MYSQL_MAX_QUERY_RETRIES` is
-a fixed single retry shared with Postgres; the three `UDF_METRICS_*` histogram knobs need the histogram layout
-computed from them; `UDF_404_ON_BAD_PATH` needs the 404 answer; `MYSQL_SMART_CHUNK_MAX_SIZE` (was
-`MYSQL_CHUNK_SIZE`) and `MYSQL_MAX_FILL_CHUNK_ROWS` to map onto bunvex's MySQL chunking;
-`POSTGRES_MAX_CONNECTIONS`, `MYSQL_MAX_CONNECTIONS` and the two `*_INACTIVE_CONNECTION_LIFETIME_SECS` beside
+**Read after PR 2 (the mechanism changes first).** The retention knobs (done, §3.4); `INDEX_BACKFILL_ENABLE`
+(done, §3.5); the MySQL knobs (done, §3.6); the three `UDF_METRICS_*` histogram knobs need the histogram layout
+computed from them; `UDF_404_ON_BAD_PATH` needs the 404 answer; `POSTGRES_MAX_CONNECTIONS`, `MYSQL_MAX_CONNECTIONS` and the two `*_INACTIVE_CONNECTION_LIFETIME_SECS` beside
 `POOL` (DV-112: bunvex's 16, "settings to add").
 
 **Defaults to match Convex's, PR 3** (owner, 2026-10-11: match). Each reads its knob once it behaves as
@@ -213,6 +209,64 @@ never sent and its body is cancelled. Uploads slower than the timeout answer 408
 2026-10-12: match, the knob raises it). The HTTP actions' own timer is gone; `createServer`'s
 `httpActionHeadTimeoutMs` option became `requestTimeoutMs`.
 
+### 3.4 PR 2, retention: the delete caps and the backoff
+
+**Convex** (`crates/common/src/knobs.rs`, `crates/database/src/retention.rs`,
+`crates/common/src/persistence/row_index_retention.rs`): `RETENTION_DELETE_BATCH` (10 000) ends an index pass once
+it has handled that many expired index entries (`row_index_retention.rs`); `DOCUMENT_RETENTION_MAX_SCANNED_DOCUMENTS`
+(10 000) ends a document pass once it has scanned that many expired versions (`retention.rs`); in both, the next
+pass follows at once. `RETENTION_DELETE_FREQUENCY` (Rust's `MAX_RETENTION_DELAY_SECONDS`, 60 s; its comment also
+names a start delay that no code applies) caps the backoff after an error of the index deleter; the document
+deleter's backoff is capped at `DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS` instead.
+
+**bunvex before.** One option, `maxPerPass`, capped both passes, and none of the three was read from the
+environment; one 60 s cap applied to every loop's backoff.
+
+**bunvex now.** `indexMaxPerPass` (`RETENTION_DELETE_BATCH`) and `documentMaxScanned`
+(`DOCUMENT_RETENTION_MAX_SCANNED_DOCUMENTS`) are apart; `maxBackoffMs` is `RETENTION_DELETE_FREQUENCY` for the
+window advance and the index deleter, and the document deleter backs off up to `documentEveryMs`, as Convex's.
+The caps are checked where they were (before each page of the log, so a pass may go one page past), not after
+each deleted chunk as Convex's: where a pass stops differs by at most a page, which no app sees. With the
+defaults nothing changes.
+
+### 3.5 PR 2, `INDEX_BACKFILL_ENABLE`
+
+**Convex** (`crates/common/src/knobs.rs`, read once in `crates/application/src/lib.rs` `Application::new`): `true` by
+default; `false` ("likely only disabled if index backfill is breaking an instance") does not spawn the database
+`IndexWorker`. The text and vector workers, the fast-forward worker and the schema worker still start. A new
+database index then stays `Backfilling`: a query on it fails with `IndexBackfillingError`, `wait_for_schema`
+answers in progress at each deadline so a push adding one never completes (a new table's too, backfilled by the
+same worker), and an import of a table with indexes waits in `backfill_and_enable_indexes_on_table`.
+
+**bunvex now** (owner, 2026-10-12: as Convex). `INDEX_BACKFILL_DEFAULTS.enabled` reads the knob; off, the three
+places a database index backfill starts do nothing: the background worker (`startIndexWorker`), the immediate
+backfill of a new table's indexes (`backfillNewTables`, so a push creating a table with indexes waits too, as
+Convex's) and an import's hidden table (`createHiddenTable` waits, until the engine closes). Text and vector
+indexes still build. Switched back on, the next start backfills from the `_index_backfills` checkpoints.
+
+### 3.6 PR 2, MySQL: query retries and statement chunks
+
+**Convex** (`crates/mysql/src/connection.rs`, `chunks.rs`, `knobs.rs`):
+- `MYSQL_MAX_QUERY_RETRIES` (1): a read (`query_optional`, `query_collect`) that fails with an operational error
+  runs again at once on a fresh connection, up to that many times; a timeout is never retried, nor is a write.
+- `MYSQL_MAX_FILL_CHUNK_ROWS` (1024): `fill_chunks` puts at most that many rows in one INSERT besides the 10 MiB
+  of `MYSQL_MAX_CHUNK_BYTES` (past about 2 200 OR'd keys MySQL may scan and lock a whole table).
+- `MYSQL_SMART_CHUNK_MAX_SIZE` (128, was `MYSQL_CHUNK_SIZE`) and `MYSQL_MAX_DYNAMIC_SMART_CHUNK_SIZE` (8):
+  `smart_chunks` takes as many rows as fit the bytes, up to the maximum, and rounds the length down to any value up
+  to 8 or a power of two, so a statement has one of about a dozen shapes and its plan is reused. Used for
+  multi-key lookups and deletes.
+
+**bunvex before.** A single fixed retry (`retryOnce`, shared with Postgres and MongoDB), and the prunes' DELETEs
+went through it too; INSERTs bounded by bytes only; lookups of 1000 ids and deletes of 128 rows a statement, as
+literals.
+
+**bunvex now.** MySQL's reads retry up to `MYSQL_MAX_QUERY_RETRIES` (`retryN`), with no backoff, as Convex's;
+Postgres and MongoDB keep their single retry (Convex has no knob for them). The prunes' DELETEs are not retried
+(writes, as Convex's `handle_errors`). INSERTs are filled up to `MYSQL_MAX_FILL_CHUNK_ROWS` rows as well as the
+bytes. `getVersions` and the prunes use `smartChunks` (`packages/core/src/persistence/chunks.ts`), Convex's
+algorithm with its two knobs. Nothing stored changes: only how many statements carry the same rows (a lookup of
+1000 ids is now 10 statements rather than 1).
+
 ## 4. Divergences
 
 None new. The reader matches `env_config`; the knobs whose defaults or scope differ are already decided:
@@ -240,6 +294,14 @@ DV-375 (`MAX_ECHO_BYTES` enforced), DV-414 (`MYSQL_DOCUMENT_ENCODING` default 0)
   pages of 128 by each index, with segments or in memory), `scheduler` (the collector wakes when the oldest
   job expires; batches `gcDelayMs` apart; the defaults), `auth/verify` (the cache's bound, eviction of the
   oldest). Sabotage: each change reverted fails its test.
+- PR 2, retention: `retention` (the index cap and the document cap apart, each stopping its own pass; the
+  three knobs from the environment). Sabotage: either pass checking the other's cap fails a test.
+- PR 2, backfill switch: `index-backfill-switch` (off, a push adding indexes on an existing and a new table stays
+  in progress; on again, the next start completes it; the knob read as a bool). Sabotage: the worker and the
+  new-table backfill left ungated fails it. The import path's wait is not tested on its own.
+- PR 2, MySQL: `write-batch` (`smartChunks`: Convex's lengths, the byte bound, every row once; `retryN`: up to
+  `retries` more runs, an error it does not retry thrown at once), the knobs in `knobs-env`. The driver's use of
+  them runs in the MySQL conformance suite (CI).
 - PR 3b: `request-timeout` (an `/api/action` call past the timeout answers 408 with no body and the action
   finishes; a body streamed past it is not cut; a slow upload answers 408; a WebSocket stays open), and
   `request-limit` (the wait for a permit does not count). Sabotage: the API port unwrapped fails the first;
