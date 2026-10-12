@@ -150,6 +150,14 @@ export function nextConnectionStatus(
   return "connected";
 }
 
+/** Runs `tick` every `ms` until the returned stop is called (tests pass their own, to drive the ticks). */
+export type Every = (tick: () => void, ms: number) => () => void;
+
+const everyInterval: Every = (tick, ms) => {
+  const timer = setInterval(tick, ms);
+  return () => clearInterval(timer);
+};
+
 /**
  * Polls `state()` every `intervalMs` and reports each status change to `onStatus` (never synchronously).
  * Returns the stop.
@@ -159,10 +167,11 @@ export function watchConnection(
   onStatus: (s: ConnectionStatus) => void,
   intervalMs = CONNECTION_CHECK_MS,
   clock: () => number = Date.now,
+  every: Every = everyInterval,
 ): () => void {
   let previous: Observed | null = null;
   let last: ConnectionStatus | null = null;
-  const timer = setInterval(() => {
+  return every(() => {
     const now = { connected: state().isWebSocketConnected, at: clock() };
     const status = nextConnectionStatus(now, previous, intervalMs);
     previous = now;
@@ -171,5 +180,4 @@ export function watchConnection(
       onStatus(status);
     }
   }, intervalMs);
-  return () => clearInterval(timer);
 }

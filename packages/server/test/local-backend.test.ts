@@ -224,15 +224,24 @@ describe("bunvex-local-backend", () => {
     };
 
     test("each driver's timeout and CA file, whatever the environment's PERSISTENCE", () => {
-      expect(localBackendDatabaseEnv("postgres", ENV)).toEqual({ caFile: "/pg.pem", timeoutMs: 4000 });
-      expect(localBackendDatabaseEnv("mysql", ENV)).toEqual({ caFile: "/my.pem", timeoutMs: 3000 });
-      expect(localBackendDatabaseEnv("mongodb", ENV)).toEqual({ timeoutMs: 7000 });
+      expect(localBackendDatabaseEnv("postgres", ENV)).toMatchObject({ caFile: "/pg.pem", timeoutMs: 4000 });
+      expect(localBackendDatabaseEnv("mysql", ENV)).toMatchObject({ caFile: "/my.pem", timeoutMs: 3000 });
+      expect(localBackendDatabaseEnv("mongodb", ENV)).toMatchObject({ timeoutMs: 7000 });
+    });
+
+    test("each driver's pool and idle lifetime (STUDY-147 §3.7): Convex's knobs, else POOL, else 128 and 90 s", () => {
+      expect(localBackendDatabaseEnv("postgres", {})).toEqual({ pool: 128, idleMs: 90_000 });
+      expect(
+        localBackendDatabaseEnv("mysql", { MYSQL_MAX_CONNECTIONS: "20", MYSQL_INACTIVE_CONNECTION_LIFETIME_SECS: "5" }),
+      ).toEqual({ pool: 20, idleMs: 5000 });
+      expect(localBackendDatabaseEnv("postgres", { POOL: "8" })).toEqual({ pool: 8, idleMs: 90_000 });
+      expect(localBackendDatabaseEnv("mongodb", {})).toEqual({ pool: 16 });
     });
 
     test("unset (or another driver's), the drivers' defaults", () => {
       const env = { POSTGRES_URL: "postgres://other/db", MYSQL_TIMEOUT_SECONDS: "3", PG_CA_FILE: "" };
-      expect(localBackendDatabaseEnv("postgres", env)).toEqual({});
-      expect(localBackendDatabaseEnv("postgres", {})).toEqual({});
+      expect(localBackendDatabaseEnv("postgres", env)).toEqual({ pool: 128, idleMs: 90_000 });
+      expect(localBackendDatabaseEnv("postgres", {})).toEqual({ pool: 128, idleMs: 90_000 });
     });
 
     test("POSTGRES_TIMEOUT_SECONDS bounds the start against a database that never answers", async () => {

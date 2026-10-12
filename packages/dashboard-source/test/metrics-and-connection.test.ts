@@ -116,22 +116,57 @@ describe("the connection watcher", () => {
     expect(nextConnectionStatus(at(true, 5000), at(false, 2500))).toBe("connected");
   });
 
-  test("reports each change once, never synchronously, until stopped", async () => {
+  test("reports each change once, never synchronously, until stopped", () => {
+    // The ticks and the clock are the test's, so a loaded machine cannot make an observation stale.
     let connected = true;
+    let now = 0;
+    let tick: (() => void) | null = null;
+    let stopped = false;
     const seen: string[] = [];
     const stop = watchConnection(
       () => ({ isWebSocketConnected: connected }) as ReturnType<Parameters<typeof watchConnection>[0]>,
       (s) => seen.push(s),
+      2500,
+      () => now,
+      (fn, ms) => {
+        expect(ms).toBe(2500);
+        tick = fn;
+        return () => {
+          stopped = true;
+        };
+      },
+    );
+    const step = (ms = 2500) => {
+      now += ms;
+      tick!();
+    };
+    expect(seen).toEqual([]);
+    step(); // nothing observed before: unknown
+    step(); // up: connected
+    step(); // still up: no change reported
+    connected = false;
+    step(); // down once after up: unknown
+    step(); // down twice in a row: disconnected
+    step(); // still down: no change reported
+    step(6000); // stale (a backgrounded tab): unknown
+    stop();
+    expect(stopped).toBe(true);
+    expect(seen).toEqual(["unknown", "connected", "unknown", "disconnected", "unknown"]);
+  });
+
+  test("by default, on a real interval: the first report comes later, and none after the stop", async () => {
+    const seen: string[] = [];
+    const stop = watchConnection(
+      () => ({ isWebSocketConnected: true }) as ReturnType<Parameters<typeof watchConnection>[0]>,
+      (s) => seen.push(s),
       5,
     );
     expect(seen).toEqual([]);
-    await Bun.sleep(30);
-    connected = false;
-    await Bun.sleep(30);
+    for (let i = 0; i < 200 && seen.length === 0; i++) await Bun.sleep(5);
     stop();
-    const stopped = seen.length;
-    await Bun.sleep(20);
-    expect(seen.length).toBe(stopped);
-    expect(seen).toEqual(["unknown", "connected", "unknown", "disconnected"]);
+    const after = seen.length;
+    await Bun.sleep(30);
+    expect(after).toBeGreaterThan(0);
+    expect(seen.length).toBe(after);
   });
 });
