@@ -101,9 +101,12 @@ const COLUMNS = {
 const idBytesCache = new Map<string, Uint8Array>();
 function cachedBytes(id: string): Uint8Array {
   let b = idBytesCache.get(id);
+  // Stryker disable next-line ConditionalExpression: a cache: recomputing the bytes gives the same bytes.
   if (b === undefined) {
     b = internalIdBytes(id);
+    // Stryker disable next-line all: a cache's bound only limits its memory.
     if (idBytesCache.size > 4096) idBytesCache.clear();
+    // Stryker disable next-line CallExpression: a cache: not keeping the bytes only recomputes them.
     idBytesCache.set(id, b);
   }
   return b;
@@ -144,6 +147,7 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     try {
       this.checkStore(opts);
     } catch (e) {
+      // Stryker disable next-line CallExpression: a refused handle's connection; left open it only leaks.
       this.db.close();
       this.lock?.release();
       throw e;
@@ -270,11 +274,13 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   /** PERSIST-01 C17: Convex's `INSERT OR REPLACE` of index rows at their own ts. */
   writeIndexEntries(entries: IndexEntryAt[]) {
     this.assertWriter();
+    // Stryker disable next-line ConditionalExpression: a transaction of no writes writes nothing.
     if (!entries.length) return;
     const write = () => {
       for (const e of entries) this.writeEntry(this.putIdx, e, e.ts);
     };
     // Inside a group being applied, the rows join its transaction; else they are one of their own.
+    // Stryker disable next-line ConditionalExpression: outside a group, writing row by row differs only across a crash.
     if (this.inTx) write();
     else this.db.transaction(write)();
   }
@@ -290,6 +296,7 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   /** PERSIST-01 C12. Rows of a group applied but not yet flushed are visible to this connection only; the
    *  bound leaves them out. */
   readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): DocLogRow[] {
+    // Stryker disable next-line EqualityOperator: a limit of 0 reads no row either way.
     if (limit <= 0) return [];
     const hi = this.inTx ? minTs(upToTs, this.durableTs ?? 0n) : upToTs;
     return (
@@ -359,6 +366,7 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
           ts: r.ts as bigint,
           deleted: !!r.deleted,
           id:
+            // Stryker disable next-line ConditionalExpression: a row with no document id is a tombstone, already skipped as deleted.
             r.document_id === null
               ? null
               : { id: r.document_id as Uint8Array, json: r.json_value as string | null, docDeleted: r.doc_deleted },
@@ -371,6 +379,7 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     // Convex's errors: no document at the entry's ts ("Dangling index reference"), or a deleted one.
     return entries.map((e): IndexedDoc => {
       const id = idString(e.id.id);
+      // Stryker disable next-line ConditionalExpression: null !== 0n holds too; the first test only says why.
       if (e.id.docDeleted === null || e.id.docDeleted !== 0n)
         throw new DanglingReferenceError(index, id, e.ts, e.id.docDeleted !== null);
       return { id, ts: e.ts, json: e.id.json! };
@@ -413,6 +422,7 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   }
 }
 
+// Stryker disable next-line EqualityOperator: at equality both are the same ts.
 const minTs = (a: bigint, b: bigint) => (a < b ? a : b);
 
 // Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).

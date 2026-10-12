@@ -223,12 +223,12 @@ boundary, a block emptied. The tests must then fail. A change no test notices is
   | File | Mutants | Score | Time |
   |---|--:|--:|--:|
   | `core/src/query-cache.ts` | 137 | 43.8 % (100 % after its triage) | 2 min |
-  | `core/src/persistence/scan.ts` | 52 | 65.4 % | 2 min |
-  | `core/src/persistence/sqlite.ts` | 235 | 66.0 % | 8 min |
-  | `values/src/commit-ts.ts` | 89 | 68.5 % | 2 min |
-  | `core/src/persistence/memory.ts` | 597 | 69.2 % | 28 min |
-  | `core/src/persistence/split.ts` | 107 | 73.8 % | 2 min |
-  | `core/src/read-set-index.ts` | 138 | 76.1 % | 1 min |
+  | `core/src/persistence/scan.ts` | 52 | 65.4 % (100 % after its triage) | 2 min |
+  | `core/src/persistence/sqlite.ts` | 235 | 66.0 % (99.5 %) | 8 min |
+  | `values/src/commit-ts.ts` | 89 | 68.5 % (100 %) | 2 min |
+  | `core/src/persistence/memory.ts` | 597 | 69.2 % (92.0 %) | 28 min |
+  | `core/src/persistence/split.ts` | 107 | 73.8 % (100 %) | 2 min |
+  | `core/src/read-set-index.ts` | 138 | 76.1 % (97.5 %) | 1 min |
   | `core/src/tx.ts` | 2 038 | 78.6 % | 112 min |
   | `core/src/committer.ts` | 651 | 79.1 % | 54 min |
   | `core/src/schema-json.ts` | 303 | 81.5 % (100 %) | 8 min |
@@ -246,6 +246,13 @@ boundary, a block emptied. The tests must then fail. A change no test notices is
   - In `sorting.ts`, most survivors are equivalent: the ASCII fast paths and the short-string decoder.
   - The rest are untested refusals of malformed keys ("trailing bytes after the value", an unknown type tag),
     and in `keyenc.ts` the bounds' descriptions for the inspector.
+- **What the triage taught:**
+  - A property test can miss a whole path: the scan's random keys rarely repeat, so its paging was never
+    reached. Direct tests script it.
+  - The bun runner loads a module once, so a module-level constant's mutant (a static mutant) survives even when
+    a test pins the value. It is marked, naming the test that pins it.
+  - After tests change, the incremental file can keep a mutant's old result; a triage measures with `--force`.
+  - The triage of `memory.ts` found a bug: a log whose first write was torn did not open (fixed in its own PR).
 - **The source must be one the instrumenter reads:** it cannot mutate an update of a non-null expression
   (`a[i]!--`). `keyenc.ts` writes it as an assignment.
 
