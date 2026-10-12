@@ -1,8 +1,8 @@
 # STUDY-148 — `node.externalPackages`: packages installed by the deployment for Node actions
 
 - **Status:** decided (owner, 2026-10-12): Q1–Q4 as recommended (DV-470–DV-473); Q5–Q7 match Convex and stand as
-  designed. PR 1 (the `bunvex.json` check) implemented; PR 2 (`require` in `"use node"` modules) and PR 3 (the
-  feature) open.
+  designed. PR 1 (the `bunvex.json` check, #587), PR 2 (`require` in `"use node"` modules, #588), the import-time
+  variables fix found on the way (#589) and PR 3 (the feature, #590) implemented.
 - **Convex source read:** the reference `d8bdde0` (`precompiled-2026-10-07-d8bdde0`, `docs/parity/upstream.md`),
   lines below at that commit (`bundler/external.ts`, `crates/model/src/external_packages/*`,
   `npm-packages/node-executor/src/{build_deps,source_package}.ts` are unchanged since the local clone's `4577b90`;
@@ -159,8 +159,9 @@ the cache then reaches the public registry). Irrelevant to apps; the oracle test
 - PR 3: `packages/cli/src/external.ts` is §1.2 written for Bun: the candidates from the project's `package.json` with
   Convex's rules and messages ("bunvex.json" for "convex.json", DV-170; the "No package.json found." line without
   Convex's docs link, DV-04); a Bun plugin (`bunvex-node-externals`) between `server-only` and `.wasm` in the
-  `"use node"` build only, returning `external: true` for imports of a candidate that resolve to the project's
-  top-level copy; the versions and peer/optional dependencies read from the installed `package.json` files.
+  `"use node"` build only (and only when there are candidates), returning `external: true` for imports of a
+  candidate that resolve to the project's top-level copy (real paths compared: Bun gives an importer's real
+  directory); the versions and peer/optional dependencies read from the installed `package.json` files.
   `bunvex`, `bunvex/*` and `@bunvex/*` are never candidates: they are linked to the server's own modules (DV-168,
   DV-169), bunvex's equivalent of "always bundle convex" (Q5). `bunvex deploy` and `dev` send
   `nodeDependencies: [{name, version}]`.
@@ -175,17 +176,20 @@ the cache then reaches the public registry). Irrelevant to apps; the oracle test
      with the deps, `bun install` run with the server's own Bun (`process.execPath`, `BUN_BE_BUN=1` for a compiled
      server) and the server's environment (so `NPM_CONFIG_REGISTRY`, `.npmrc` and `bunfig.toml` apply, as npm's
      settings do on Convex), then `bun pm trust --all` so every dependency's install scripts run, as npm runs them
-     (Q1, Q2). A failure is Convex's 400 `InvalidExternalModules` with `Command failed: bun install` and Bun's output.
+     (Q1, Q2; with nothing left to trust it says "0 scripts ran" and exits 1, which is not a failure). A failure is
+     Convex's 400 `InvalidExternalModules` with `Command failed: bun install` and Bun's output.
   4. `node_modules` zipped as Convex's archive: `node_modules/…` entries, directories included, Unix modes kept; put in
      the modules store (its own key); the row inserted in its own commit with Convex's fields and int64 sizes.
   5. The size check adds the deps' sizes to the package's (`ModulesTooLarge`).
 - The installed `node_modules` is moved into the process's deps directory (`<tmpdir>/bunvex-node-<random>/<storage
   key>/node_modules`, created on first use, removed at exit), as the Node executor's per-process directory.
 - The version is loaded with that directory: a `"use node"` module's bare import that is not a builtin or a server
-  module resolves from it (Bun's resolver, as from a module next to that `node_modules`) and is imported in the
-  server's realm, as builtins are (DV-169); `import.meta.require` (Bun's bundle turns `require` into it) is a
-  `createRequire` from the module's place in that directory (PR 2 adds `require` for builtins, which is broken today:
-  Bun's bundle reads `import.meta.require`, which the server's `vm` modules do not have).
+  module resolves from it (Bun's resolver, as from a module next to that `node_modules`) and is loaded in the
+  server's realm, as builtins are (DV-169), by Bun's `require`, which takes CommonJS and ES modules alike and, unlike
+  a dynamic `import()` (measured), runs the package's top level in the caller's async context, so the deployment's
+  variables are in scope at its import (Q3); a CommonJS package's namespace is its exports plus `default`, as
+  `import` gives it; a package with top-level await is imported instead. `import.meta.require` (Bun's bundle turns
+  `require` into it; PR 2) is a `createRequire` from `<that directory>/modules/<module path>`.
 - `finish_push` stores `externalPackageId` and `externalDepsStorageKey` with the package; `start_push` answers
   `externalDepsId`.
 - At start, a deployable server loading a version whose package has an `externalPackageId` downloads the deps blob,
@@ -193,8 +197,12 @@ the cache then reaches the public registry). Irrelevant to apps; the oracle test
   directory, modes and symlinks included.
 - Rows and blobs are never deleted (as Convex). `_external_deps_packages` stops being one of the "empty cloud tables"
   (`EMPTY_CLOUD_SYSTEM_TABLES`) in `@bunvex/core` and gets its own constant; its number stays 537.
-- Packages see the deployment's variables (Q3): while a Node action runs, the server's `process.env` reads the
-  execution's deployment variables first.
+- Packages see the deployment's variables (Q3, option C): once a version with packages loads, the server's
+  `process.env` is a proxy that, while an action runs (the `AsyncLocalStorage` scope bunvex already keeps) or a
+  package is imported, reads that execution's deployment variables first, then the server's own; outside, the
+  server's own only.
+- The push's modules are loaded with the deployment's variables, as Convex's analysis is (#589: before, the version a
+  push installed read none at import).
 
 ### 3.3 Rule 5
 
@@ -226,7 +234,7 @@ No wire or stored name contains "convex": `nodeDependencies`, `externalDepsId`, 
   the host, which it otherwise never does (DV-87 runs Node actions in Bun). "Ainda não fizemos" an npm option either.
 - **App impact:** low. Packages install and load the same; only an install failure's text, and in rare trees a
   transitive version, differ.
-- **Options:** A, `bun install` (built in the draft); B, `npm install` (requires npm on the server; Node actions still
+- **Options:** A, `bun install` (built); B, `npm install` (requires npm on the server; Node actions still
   run in Bun); C, `npm` when found, else Bun.
 - **Recommendation:** A.
 - **Decision (owner, 2026-10-12):** A — `bun install`, the server's own Bun; no npm on the server.
@@ -236,7 +244,7 @@ No wire or stored name contains "convex": `nodeDependencies`, `externalDepsId`, 
 - **Convex:** npm runs every dependency's `preinstall` / `install` / `postinstall` (unless the deployment's npm config
   says `ignore-scripts`; checked: with scripts on, `tiny-bin`'s `postinstall` ran during the push).
 - **bunvex:** Bun runs only the scripts of packages in its default trusted list (the popular native packages) or the
-  project's `trustedDependencies`; the draft then runs `bun pm trust --all`, which runs the rest.
+  project's `trustedDependencies`; bunvex then runs `bun pm trust --all`, which runs the rest.
 - **Same?** Yes with A (the scripts run, after the install instead of during it); no with B.
 - **Why:** Bun's default is a security choice; npm's default is what Convex's apps get.
 - **App impact:** with B, a native package outside Bun's list that builds or downloads its binary in a script would
@@ -258,7 +266,7 @@ No wire or stored name contains "convex": `nodeDependencies`, `externalDepsId`, 
   - B, while a Node action runs (Bun's `AsyncLocalStorage` scope bunvex already keeps), the server's `process.env` is
     exactly the action's view (Convex's), the server's own variables hidden from everything running in that scope,
     bunvex's own code included;
-  - C, the same scope, but the deployment's variables read first and the server's after (built in the draft);
+  - C, the same scope, but the deployment's variables read first and the server's after (built);
   - D, nothing: packages see the server's variables.
 - **Why:** "Não dá pra fazer" cheaply: a package's module is evaluated once by Bun's loader in the server's realm.
 - **App impact:** with D, an SDK under `"*"` that reads its key from `process.env` finds nothing; with C, packages also
@@ -319,19 +327,71 @@ None.
 
 - PR 1: `packages/cli/test/codegen.test.ts` "bunvex.json checks": the messages of §1.1, each from the 1.46.0 CLI on the
   same file (oracle run once), the key order, and that a valid list (with `"*"`) is read.
-- PR 3 (`packages/cli/test/external-packages.test.ts`): a registry served by the test (`Bun.serve`, packuments and
-  tarballs made on the spot), so nothing reaches the network:
-  - the CLI's rules: which imports stay external (list, `"*"`, subpath, `require`, an isolate file, `file:` versions,
-    undeclared, `devDependencies`), the versions sent, peer/optional dependencies, the messages;
-  - end to end: a `"use node"` action reads a file next to its package through `__dirname` (unbundleable), `require`s
-    it, spawns its 0755 script; a package's `postinstall` ran; the rows (`_external_deps_packages`,
-    `externalPackageId`, `metadata.json`), the cache (a second push makes no registry request and reuses the row), a
-    restart re-extracts and serves; a missing version is the 400 `InvalidExternalModules`; the size limit counts the
-    deps; packages see the deployment's variables (Q3 C).
-- PR 3, differential (`packages/differential/test/external-packages.test.ts`, local only: the oracle's Node executor
-  needs `node` and `npm`): the same app and registry on both backends, `npm_config_registry` / `NPM_CONFIG_REGISTRY`
-  pointing at it; the actions' answers compared, the failure's frame compared (Q1's text rewritten), the
-  executable-bit difference (Q4) asserted on each side.
+- PR 3, `packages/cli/test/external-packages.test.ts`, with a registry served by the test (`npm-registry.ts`:
+  packuments and `tar`-made tarballs, every request recorded) and a Bun install cache of its own, so nothing reaches
+  the network:
+  - the CLI's rules (each case as the 1.46.0 CLI's `--write-push-request` gave it): only `"use node"` imports of listed
+    packages, at their installed versions (a range in `package.json`); an isolate import bundled; `"*"` over all four
+    dependency kinds, `bunvex` and `file:` versions excluded, undeclared packages bundled, a subpath and a `require`
+    kept as written; peer and optional dependencies that are candidates, transitively; a nested copy bundled;
+    Convex's three messages;
+  - end to end with `bunvex deploy` and an in-process deployment: an action reads the file beside its package through
+    an import and through `require`; a package's `postinstall` ran and its 0755 script runs (DV-471, DV-473);
+    `_external_deps_packages` has Convex's fields and types, its blob's size and sha256; `_source_packages.externalPackageId`
+    and `metadata.json`'s `externalDepsStorageKey`; another server on the same data loads them; a dry run installs and
+    records them, the push then reuses them without a registry request, as does a push that changes only a module;
+    another version is a new row; no import leaves `externalPackageId` null; a version the registry lacks is the
+    400 `InvalidExternalModules` with nothing deployed; the deps count in `MAX_ZIPPED_PACKAGES_SIZE`; a CommonJS and an
+    ES module package read the deployment's variables at import and when called, and the server's own (DV-472), while
+    the action's `process.env` does not.
+- PR 3, `packages/server/test/external-deps.test.ts`: the cache (the newest match, any order, a subset or another
+  version no match, the 11th row out of reach); extraction (files, modes, a symlink that runs, the same directory
+  again; a wrong sha256, an entry outside `node_modules/`, a `..` entry refused, a failure not remembered); the push's
+  `nodeDependencies` (`BadJsonBody`).
+- PR 3, `packages/differential/test/external-packages.test.ts` (local only; needs the oracle and `npm`): the app of
+  `external-app/` on both backends with the same registry. Equal: a missing version's 400 `InvalidExternalModules`
+  up to the installer's command (each asked the test's registry: npm's `ETARGET`, Bun's "No version matching"); a dry
+  `start_push` answers a 32-character id, the same for the same packages in another order, null for none; the action
+  reading the file beside its package by import and `require`; the install script ran on both. Asserted different,
+  as decided by the owner: the packaged script is 0666 and `EACCES` on Convex, 0755 and runs on bunvex
+  (DV-473); a package reads the server's own variable on bunvex only (DV-472). Convex's executor loses the backend's
+  `npm_config_*` variables once it has run Node code, so both start with an app without Node modules and every
+  install comes before the Node module's push.
+
+**Sabotage** (PR 3; each restored, `git diff` clean after; a script applies each and runs the CLI and server tests):
+
+| Break | Failed |
+|---|---|
+| the plugin never marks a package external | 4 CLI tests (the rules, end to end, the variables) |
+| `"*"` ignored | 4 CLI tests |
+| `file:` versions not excluded | the `"*"` test |
+| peer and optional dependencies not followed | the peer test |
+| any resolved copy taken, not only the top-level one | the peer test (the nested copy) |
+| no cache: always install | the reuse test |
+| the cache compares packages in order | the cache unit test |
+| the cache looks at every row | the cache unit test |
+| `bun pm trust --all` not run | the first end-to-end test (`postinstall`) |
+| modes not restored on extraction | the extraction test |
+| the zip writer drops modes | the extraction test |
+| sha256 not checked | the refusal test |
+| entries outside `node_modules/` accepted | the refusal test |
+| `externalPackageId` not stored | 2 end-to-end tests |
+| `metadata.json` without `externalDepsStorageKey` | the first end-to-end test |
+| the deps not counted in the size limit | the size test |
+| no variables scope for packages | the variables test |
+| packages loaded with `import()` (no variables at import) | the variables test |
+| a start ignores the packages | the first end-to-end test (the second server) |
+| a failed install answered as `InvalidModules` | the failure test |
+
+**Measurements** (no benchmark run; micro-measurements, this machine):
+
+- The CLI's plugin runs only when the list has candidates. A `"use node"` build of `fast-check` and `typescript` (with
+  an installed, unimported candidate, so the plugin sees every import): median 231 ms with it, 216 ms without (minimum
+  211 and 209 ms): within noise.
+- The server's `process.env` once the proxy is installed (only after a version with packages loads): a read costs 6.2
+  ns outside an execution and 10.1 ns inside one, 2.0 ns without the proxy (2 000 000 reads, third run).
+- A push without packages runs one more check (an empty list); one with packages, one query of at most 10 rows on a
+  cache hit, an install on a miss (as Convex).
 
 ## 6. Open questions
 

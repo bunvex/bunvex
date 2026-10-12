@@ -21,7 +21,7 @@ import vm from "node:vm";
 import { installDeterminismIn, knob, runImportPhase, secondsKnob } from "@bunvex/core";
 import { exportedValidator, type ValidatorExport } from "./builders.ts";
 import { type CronSpec, Crons, cronSpecs } from "./cron.ts";
-import { currentAllEnv, isolateProcessEnv, nodeProcessEnv } from "./env-scope.ts";
+import { currentAllEnv, isolateProcessEnv, nodeProcessEnv, withPackageEnv } from "./env-scope.ts";
 import { describeUncaught, isError } from "./errors.ts";
 import { type FunctionDef, isFunctionDef, NODE_FUNCTIONS } from "./functions.ts";
 import { checkRouter, HttpRouter } from "./router.ts";
@@ -118,6 +118,11 @@ export type LoadOptions = {
   /** Called when the import reads a variable that is not set (the auth config: Convex throws then). */
   onMissingEnv?: (name: string) => void;
   importTimeoutMs?: number;
+  /**
+   * The directory whose `node_modules` holds the push's external packages (STUDY-148): `"use node"` modules
+   * import and `require` them from there, as Convex's modules sit next to that `node_modules`.
+   */
+  nodeModules?: string;
 };
 
 /** The module a function tester's query imports `query` and `internalQuery` from. */
@@ -146,12 +151,32 @@ const BUILTINS = new Set([
 /**
  * Where `"use node"` modules sit for `require` (Convex's executor sets `require` to `createRequire(<module path>)`,
  * the module's file in its source package directory, `npm-packages/node-executor/src/executor.ts`): Bun's bundle
- * turns `require(…)` of anything it leaves external (a builtin) into `import.meta.require(…)`, so each Node module's
- * `import.meta.require` is a `require` from `<root>/modules/<path>`. Nothing is written there; with no packages
- * beside it, only builtins resolve (STUDY-148).
+ * turns `require(…)` of anything it leaves external (a builtin, an external package) into
+ * `import.meta.require(…)`, so each Node module's `import.meta.require` is a `require` from
+ * `<root>/modules/<path>`, `<root>` the directory of the push's `node_modules` (STUDY-148). Nothing is written
+ * under `modules/`; with no packages, only builtins resolve.
  */
-const NODE_MODULES_ROOT = join(tmpdir(), "bunvex-node");
-const nodeRequire = (path: string) => createRequire(join(NODE_MODULES_ROOT, "modules", path));
+const NO_PACKAGES_ROOT = join(tmpdir(), "bunvex-node");
+const nodeRequire = (root: string, path: string) => createRequire(join(root, "modules", path));
+
+/**
+ * An external package's namespace (STUDY-148), imported by Bun's loader with the deployment's variables in scope
+ * (DV-472). Bun's `require` takes CommonJS and ES modules alike and evaluates them in the caller's async context,
+ * which a dynamic `import()` does not; a CommonJS module's namespace is its exports and a `default` of them, as
+ * `import` gives it. A module with top-level await cannot be required: it is imported.
+ */
+async function importPackage(path: string, env: Record<string, string>): Promise<Record<string, unknown>> {
+  let loaded: unknown;
+  try {
+    loaded = withPackageEnv(env, () => createRequire(path)(path));
+  } catch (e) {
+    if ((e as { code?: string }).code !== "ERR_REQUIRE_ASYNC_MODULE") throw e;
+    return (await import(path)) as Record<string, unknown>;
+  }
+  if (Object.prototype.toString.call(loaded) === "[object Module]") return loaded as Record<string, unknown>;
+  const exports = (typeof loaded === "object" || typeof loaded === "function") && loaded !== null ? loaded : {};
+  return { ...(exports as Record<string, unknown>), default: loaded };
+}
 
 /** A module's name as the registry keys it: its path without `.js` (`dir/file.js` → `dir/file`). */
 export const moduleName = (path: string) => path.replace(/\.js$/, "");
@@ -307,7 +332,7 @@ export class CodeVersion {
           ...(m.environment === "node"
             ? {
                 initializeImportMeta: (meta: { require?: NodeJS.Require }) => {
-                  meta.require = nodeRequire(m.path);
+                  meta.require = nodeRequire(opts.nodeModules ?? NO_PACKAGES_ROOT, m.path);
                 },
               }
             : {}),
@@ -320,11 +345,16 @@ export class CodeVersion {
 
     // The server's modules, once per context.
     const synthetic = new Map<string, vm.SyntheticModule>();
-    const serverModule = async (spec: string, context: vm.Context, key: string) => {
+    const serverModule = async (
+      spec: string,
+      context: vm.Context,
+      key: string,
+      load: () => Promise<Record<string, unknown>> = async () =>
+        spec in SERVER_MODULES ? await SERVER_MODULES[spec]!() : ((await import(spec)) as Record<string, unknown>),
+    ) => {
       let s = synthetic.get(key);
       if (!s) {
-        const ns =
-          spec in SERVER_MODULES ? await SERVER_MODULES[spec]!() : ((await import(spec)) as Record<string, unknown>);
+        const ns = await load();
         const names = Object.keys(ns);
         s = new vm.SyntheticModule(
           names,
@@ -353,6 +383,18 @@ export class CodeVersion {
         return target.module;
       }
       if (BUILTINS.has(spec) && env === "node") return serverModule(spec, contexts.node, `node:${spec}`);
+      // An external package (STUDY-148): resolved from the push's `node_modules` and imported by Bun's own loader,
+      // in the server's realm as builtins are (DV-169), while the deployment's variables are in scope (DV-472).
+      if (env === "node" && opts.nodeModules) {
+        let resolved: string | null = null;
+        try {
+          resolved = Bun.resolveSync(spec, join(opts.nodeModules, "modules"));
+        } catch {}
+        if (resolved !== null) {
+          const path = resolved;
+          return serverModule(path, contexts.node, `node:${path}`, () => importPackage(path, opts.env ?? {}));
+        }
+      }
       throw new InvalidModulesError(
         BUILTINS.has(spec)
           ? `Failed to analyze ${from}: "${spec}" is only available in "use node" files`

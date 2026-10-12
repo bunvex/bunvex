@@ -64,8 +64,8 @@ The functions directory is bunvex/, or "functions" in bunvex.json.`;
 export type ProjectConfig = {
   functions?: string;
   /**
-   * Convex's `node`: `nodeVersion` goes with the push (STUDY-145). `externalPackages` is checked as Convex's
-   * (STUDY-148); the deployment does not install them yet, so they are bundled.
+   * Convex's `node`: `nodeVersion` goes with the push (STUDY-145); `externalPackages` are left as imports in the
+   * `"use node"` bundle and installed by the deployment (STUDY-148).
    */
   node?: { externalPackages?: string[]; nodeVersion?: string };
   codegen?: { fileType?: "ts" | "js/dts" };
@@ -442,6 +442,7 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     if (flags.codegen && existsSync(dir)) runCodegen(dir, codegen, { initial: true });
     bundled = await bundleFunctions(dir, io.cwd, {
       includeSourcesContent: project.bundler?.includeSourcesContent ?? false,
+      externalPackages: project.node?.externalPackages ?? [],
     });
   } catch (e) {
     io.err(`bunvex deploy: ${e instanceof BundleError ? e.message : (e as Error).message}`);
@@ -492,7 +493,8 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
         udfServerVersion: VERSION,
       },
       componentDefinitions: [],
-      nodeDependencies: [],
+      // The packages the deployment installs for the "use node" modules (STUDY-148).
+      nodeDependencies: bundled.nodeDependencies,
       ...(project.node?.nodeVersion === undefined ? {} : { nodeVersion: project.node.nodeVersion }),
     };
     // Convex's checks before the push, on one `evaluate_schema` (skipped against a deployment without it).

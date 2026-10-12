@@ -70,3 +70,44 @@ const allScope = new AsyncLocalStorage<Record<string, string>>();
 export const withAllEnv = <T>(vars: Record<string, string>, read: EnvReader, fn: () => T): T =>
   allScope.run(vars, () => scope.run(read, fn));
 export const currentAllEnv = () => allScope.getStore() ?? null;
+
+let packageEnvInstalled = false;
+/**
+ * External packages (STUDY-148) run in the server's realm, where `process.env` is the server's own. As Convex's
+ * packages read the action's variables, the server's `process.env` reads, while an action (or a package's import) is
+ * in scope, that execution's deployment variables first, then the server's own (DV-472, option C). Installed once,
+ * by the first code version with external packages; outside an execution nothing changes.
+ */
+function installPackageEnv() {
+  if (packageEnvInstalled) return;
+  packageEnvInstalled = true;
+  const real = process.env;
+  const own = (p: string | symbol): string | undefined => {
+    const vars = allScope.getStore();
+    return typeof p === "string" && vars && Object.hasOwn(vars, p) ? vars[p] : undefined;
+  };
+  process.env = new Proxy(real, {
+    get: (t, p) => own(p) ?? Reflect.get(t, p),
+    has: (t, p) => own(p) !== undefined || Reflect.has(t, p),
+    ownKeys: (t) => {
+      const vars = allScope.getStore();
+      const keys = Reflect.ownKeys(t);
+      return vars ? [...new Set([...Object.keys(vars), ...keys])] : keys;
+    },
+    getOwnPropertyDescriptor: (t, p) => {
+      const value = own(p);
+      return value !== undefined
+        ? { value, writable: true, enumerable: true, configurable: true }
+        : Reflect.getOwnPropertyDescriptor(t, p);
+    },
+  });
+}
+
+/** Run `fn` (an external package's import) with the deployment's variables `vars` in the server's `process.env`. */
+export const withPackageEnv = <T>(vars: Record<string, string>, fn: () => T): T => {
+  installPackageEnv();
+  return allScope.run(vars, fn);
+};
+
+/** Whether the server's `process.env` reads the executions' variables (the first external package installed it). */
+export const packageEnvInstalledYet = () => packageEnvInstalled;

@@ -2,7 +2,8 @@
 // crates/application/src/deploy_config.rs), over what the engine and the code store do:
 //
 //   POST /api/get_config_hashes             the deployed modules' hashes, so a push sends only what changed
-//   POST /api/deploy2/start_push            resolve the modules, load and analyze them (InvalidModules),
+//   POST /api/deploy2/start_push            install the external packages (InvalidExternalModules, STUDY-148),
+//                                           resolve the modules, load and analyze them (InvalidModules),
 //                                           evaluate the schema (InvalidSchema) and auth.config, start the
 //                                           schema change; answer the analysis and the schemaChange
 //   POST /api/deploy2/wait_for_schema       long-poll the schema change (inProgress / complete / failed /
@@ -37,6 +38,7 @@ import {
   AUTH_CONFIG_MODULE,
   buildPackage,
   ModulesTooLargeError,
+  type PackageExternalDeps,
   readablePackage,
   type SourcePackage,
   storedModules,
@@ -54,6 +56,14 @@ import {
 } from "./code-version.ts";
 import type { CronJobExecutor } from "./cron-executor.ts";
 import { describeUncaught } from "./errors.ts";
+import {
+  buildExternalDeps,
+  cachedExternalDeps,
+  ExternalDepsError,
+  type ExternalDepsPackage,
+  externalDepsPath,
+  type NodeDependency,
+} from "./external-deps.ts";
 import { indexAuditDiff, indexDiffJson } from "./push-audit.ts";
 
 /** A push that cannot go on, as Convex's `ErrorMetadata` (400 unless said otherwise). */
@@ -140,7 +150,32 @@ type StartPushRequest = {
   componentDefinitions?: unknown[];
   /** bunvex.json's `node.nodeVersion` (STUDY-145). */
   nodeVersion?: string | null;
+  /** The packages to install for the `"use node"` modules (STUDY-148): `[{name, version}]`. */
+  nodeDependencies?: unknown;
 };
+
+/**
+ * The push's `nodeDependencies` (Convex's `Vec<NodeDependencyJson>`): `{name, version}` strings. Anything else is
+ * the body extractor's 400 (serde's wording, abridged; the CLI never sends one).
+ */
+export function parseNodeDependencies(raw: unknown): NodeDependency[] {
+  if (raw === undefined || (Array.isArray(raw) && raw.length === 0)) return [];
+  const ok =
+    Array.isArray(raw) &&
+    raw.every(
+      (d) =>
+        typeof d === "object" &&
+        d !== null &&
+        typeof (d as NodeDependency).name === "string" &&
+        typeof (d as NodeDependency).version === "string",
+    );
+  if (!ok)
+    throw new PushError(
+      "BadJsonBody",
+      "Failed to deserialize the JSON body into the target type: nodeDependencies: invalid type, expected a sequence of {name, version} strings",
+    );
+  return (raw as NodeDependency[]).map(({ name, version }) => ({ name, version }));
+}
 
 /**
  * Convex's `StartPushRequest::into_project_config` (crates/application/src/deploy_config.rs) on `nodeVersion`, the
@@ -179,6 +214,8 @@ type Pending = {
   udfConfigDiff: UdfServerVersionDiff | null;
   /** The push's `nodeVersion`, stored with its package. */
   nodeVersion: string | null;
+  /** The push's external packages, recorded with its package (STUDY-148). */
+  external: PackageExternalDeps | null;
 };
 
 const AUTH_CONFIG = AUTH_CONFIG_MODULE;
@@ -192,6 +229,8 @@ export type PushDeps = {
   install: (version: CodeVersion, auth: AuthInfo[], authModule: ModuleSource | null) => Promise<unknown>;
   /** The deployment's variables and the built-ins, as `auth.config` sees them (STUDY-37). */
   deploymentEnv: () => Promise<Record<string, string>>;
+  /** The environment the external packages' install runs with (the server's own by default; STUDY-148). */
+  installEnv?: Record<string, string | undefined>;
 };
 
 /** The variables, canonically, to tell whether they changed during a push. */
@@ -338,14 +377,41 @@ export class PushService {
     };
   }
 
+  /**
+   * Convex's `build_external_node_deps` (STUDY-148): the newest matching `_external_deps_packages` row, else an
+   * install, recorded; the packages ready in this process either way. A failed install is a 400
+   * `InvalidExternalModules`.
+   */
+  private async externalDeps(deps: NodeDependency[]): Promise<{ row: ExternalDepsPackage; dir: string }> {
+    let row = await cachedExternalDeps(this.deps.engine, deps);
+    try {
+      row ??= await buildExternalDeps(this.deps.engine, this.deps.modulesStore, deps, this.deps.installEnv);
+    } catch (e) {
+      if (e instanceof ExternalDepsError)
+        throw new PushError(e.code, `Loading the pushed modules encountered the following error:\n${e.message}`);
+      throw e;
+    }
+    return { row, dir: await externalDepsPath(this.deps.modulesStore, row) };
+  }
+
   async startPush(req: StartPushRequest) {
     const nodeVersion = parseNodeVersion(req.nodeVersion);
+    const nodeDependencies = parseNodeDependencies(req.nodeDependencies);
     if (req.componentDefinitions?.length)
       throw new PushError("ComponentsNotSupported", "Components are not supported by this deployment yet");
+    // Convex's `upload_packages` installs them first, on a dry run too.
+    const installed = nodeDependencies.length ? await this.externalDeps(nodeDependencies) : null;
+    const external: PackageExternalDeps | null = installed && {
+      id: installed.row._id,
+      storageKey: installed.row.storageKey,
+      zipped: Number(installed.row.packageSize.zippedSizeBytes),
+      unzipped: Number(installed.row.packageSize.unzippedSizeBytes),
+    };
     const all = await this.resolveModules(req);
-    // Convex's `start_push` uploads and size-checks the package first (`upload_packages`, `verify_size`).
+    // Convex's `start_push` uploads and size-checks the package first (`upload_packages`, `verify_size`), the
+    // external packages counted in.
     try {
-      buildPackage(req.appDefinition?.schema ? [...all, req.appDefinition.schema] : all);
+      buildPackage(req.appDefinition?.schema ? [...all, req.appDefinition.schema] : all, undefined, external);
     } catch (e) {
       if (e instanceof ModulesTooLargeError) throw new PushError(e.code, e.message);
       throw e;
@@ -358,7 +424,12 @@ export class PushService {
     const env = await this.deps.deploymentEnv();
     let version: CodeVersion;
     try {
-      version = await CodeVersion.load(modules, { seed: config.seed, timestamp: config.timestamp, env });
+      version = await CodeVersion.load(modules, {
+        seed: config.seed,
+        timestamp: config.timestamp,
+        env,
+        ...(installed ? { nodeModules: installed.dir } : {}),
+      });
     } catch (e) {
       if (e instanceof InvalidModulesError) throw new PushError("InvalidModules", e.message);
       if (e instanceof FunctionExportError) throw new PushError(e.code, e.message);
@@ -378,7 +449,9 @@ export class PushService {
     // Convex's `StagedSchemaWithEnforcedValidatorChanges` (STUDY-106 §7.4), dry run too.
     const staged = await this.deps.engine.stagedValidatorConflicts(schema);
     if (staged) throw new PushError(staged.code, staged.message);
-    if (req.dryRun) return this.response(version, schema, auth, analysis, { schemaId: null, indexDiff });
+    const externalDepsId = external?.id ?? null;
+    if (req.dryRun)
+      return this.response(version, schema, auth, analysis, { schemaId: null, indexDiff, externalDepsId });
     let schemaId: string;
     try {
       ({ schemaId } = await this.deps.engine.startSchemaPush(schema));
@@ -398,8 +471,9 @@ export class PushService {
       schemaId,
       udfConfigDiff: config.diff,
       nodeVersion,
+      external,
     });
-    return this.response(version, schema, auth, analysis, { schemaId, indexDiff });
+    return this.response(version, schema, auth, analysis, { schemaId, indexDiff, externalDepsId });
   }
 
   private response(
@@ -407,11 +481,11 @@ export class PushService {
     schema: SchemaDefinition,
     auth: unknown[] | null,
     analysis: Record<string, AnalyzedModule>,
-    change: { schemaId: string | null; indexDiff: ReturnType<typeof indexDiffJson> },
+    change: { schemaId: string | null; indexDiff: ReturnType<typeof indexDiffJson>; externalDepsId: string | null },
   ) {
     return {
       environmentVariables: {},
-      externalDepsId: null,
+      externalDepsId: change.externalDepsId,
       componentDefinitionPackages: {},
       appAuth: auth ?? [],
       analysis: {
@@ -498,11 +572,15 @@ export class PushService {
       previousNodeVersion === p.nodeVersion
         ? null
         : { previous_version: previousNodeVersion, next_version: p.nodeVersion };
-    const pkg = await writePackage(this.deps.modulesStore, [...p.modules, ...other], undefined, p.nodeVersion).catch(
-      (e) => {
-        throw e instanceof ModulesTooLargeError ? new PushError(e.code, e.message, 400) : e;
-      },
-    );
+    const pkg = await writePackage(
+      this.deps.modulesStore,
+      [...p.modules, ...other],
+      undefined,
+      p.nodeVersion,
+      p.external,
+    ).catch((e) => {
+      throw e instanceof ModulesTooLargeError ? new PushError(e.code, e.message, 400) : e;
+    });
     let committed: Awaited<ReturnType<Engine["commitSchemaPush"]>> & {
       value: { unused: SourcePackage[]; crons: CronDiff; authDiff: { added: string[]; removed: string[] } };
     };
