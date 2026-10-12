@@ -234,7 +234,7 @@ boundary, a block emptied. The tests must then fail. A change no test notices is
   | `core/src/schema-json.ts` | 303 | 81.5 % (100 %) | 8 min |
   | `values/src/value.ts` | 718 | 81.9 % (99.7 %) | 5 min |
   | `values/src/sorting.ts` | 623 | 89.6 % (100 %) | 5 min |
-  | `core/src/keyenc.ts` | 137 | 92.7 % | 6 min |
+  | `core/src/keyenc.ts` | 137 | 92.7 % (100 %) | 6 min |
   | `core/src/system-reader.ts` | 83 | 92.8 % | 2 min |
 
 - **Only `core`'s and `values`' tests run.**
