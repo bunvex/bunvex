@@ -31,9 +31,60 @@ export type VerifierOptions = {
   now?: () => number;
   /** Omit details from errors (the server's `redactLogsToClient`): the provider list. */
   redactErrors?: boolean;
+  /** The cache's bound, in bytes: its URLs' and bodies' lengths (Convex's `HTTP_CACHE_SIZE`, 16 MiB). */
+  cacheMaxBytes?: number;
 };
 
-type CacheEntry = { body: unknown; expires: number; fetchedAt: number };
+/** Convex's `HTTP_CACHE_SIZE` default: the discovery and JWKS responses kept, at most 16 MiB (STUDY-147). */
+export const HTTP_CACHE_MAX_BYTES = 16 << 20;
+
+type CacheEntry = { body: unknown; expires: number; fetchedAt: number; bytes: number };
+
+const utf8 = new TextEncoder();
+
+/**
+ * Responses by URL, weighed as Convex's cache weighs them (the URL's length plus the body's) and kept under
+ * `maxBytes`: the least recently used go first, and a response heavier than the bound is not kept.
+ */
+class ResponseCache {
+  private entries = new Map<string, CacheEntry>();
+  private bytes = 0;
+  constructor(private readonly maxBytes: number) {}
+
+  get(url: string): CacheEntry | undefined {
+    const e = this.entries.get(url);
+    if (e) {
+      this.entries.delete(url);
+      this.entries.set(url, e);
+    }
+    return e;
+  }
+
+  set(url: string, entry: Omit<CacheEntry, "bytes">, bodyBytes: number) {
+    this.delete(url);
+    const bytes = url.length + bodyBytes;
+    if (bytes > this.maxBytes) return;
+    this.entries.set(url, { ...entry, bytes });
+    this.bytes += bytes;
+    for (const [k, e] of this.entries) {
+      if (this.bytes <= this.maxBytes) break;
+      this.entries.delete(k);
+      this.bytes -= e.bytes;
+    }
+  }
+
+  delete(url: string) {
+    const e = this.entries.get(url);
+    if (!e) return;
+    this.entries.delete(url);
+    this.bytes -= e.bytes;
+  }
+
+  /** The bytes kept (tests). */
+  get size() {
+    return this.bytes;
+  }
+}
 
 /** Seconds a response may be reused for, by its `Cache-Control` (or the usual 10%-of-age heuristic). */
 function freshness(r: Response, now: number): number {
@@ -59,7 +110,7 @@ function matches(info: AuthInfo, auds: string[], issuer: string): boolean {
 }
 
 export class TokenVerifier {
-  private cache = new Map<string, CacheEntry>();
+  private readonly cache: ResponseCache;
   private inflight = new Map<string, Promise<unknown>>();
   private readonly fetchFn: typeof fetch;
   private readonly now: () => number;
@@ -70,6 +121,12 @@ export class TokenVerifier {
   ) {
     this.fetchFn = opts.fetch ?? fetch;
     this.now = opts.now ?? Date.now;
+    this.cache = new ResponseCache(opts.cacheMaxBytes ?? HTTP_CACHE_MAX_BYTES);
+  }
+
+  /** The bytes the response cache holds (tests). */
+  get cachedBytes(): number {
+    return this.cache.size;
   }
 
   /** A token's identity, or an `AuthenticationError` saying what to check. */
@@ -116,9 +173,10 @@ export class TokenVerifier {
     const p = (async () => {
       const r = await this.fetchFn(url, { headers: { accept: "application/json" } });
       await check(r);
-      const body = await r.json();
+      const text = await r.text();
+      const body = JSON.parse(text);
       const ttl = freshness(r, now);
-      if (ttl > 0) this.cache.set(url, { body, expires: now + ttl * 1000, fetchedAt: now });
+      if (ttl > 0) this.cache.set(url, { body, expires: now + ttl * 1000, fetchedAt: now }, utf8.encode(text).length);
       else this.cache.delete(url);
       return body;
     })();

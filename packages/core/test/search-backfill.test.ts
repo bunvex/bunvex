@@ -204,3 +204,21 @@ test("an empty table's index is ready at once, with no segments", async () => {
   expect((await answers(e)).text.hello).toHaveLength(1);
   await e.close();
 });
+
+test("the table is read 128 documents a page, text and vector alike (Convex's VECTOR_INDEX_WORKER_PAGE_SIZE)", async () => {
+  // 300 notes: pages of 128, 128 and 44, for each of the two indexes, with segments or in memory.
+  for (const searchStorage of [blobs(), undefined]) {
+    const { p } = await seeded(300);
+    let pages = 0;
+    const e = new Engine(indexed, p, {
+      searchStorage,
+      beforeSearchBackfillPage: async () => {
+        pages++;
+      },
+    });
+    await e.init();
+    await e.searchReady();
+    await e.close();
+    expect([searchStorage ? "segments" : "memory", pages]).toEqual([searchStorage ? "segments" : "memory", 6]);
+  }
+});

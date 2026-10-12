@@ -203,6 +203,14 @@ export type SchedulerOptions = {
   occMaxBackoffMs?: number;
   errorInitialBackoffMs?: number;
   errorMaxBackoffMs?: number;
+  /**
+   * The garbage collector of completed jobs: jobs deleted a transaction (100), the wait after a batch (1 s),
+   * and its backoff on an error (1 s → 30 s), Convex's `SCHEDULED_JOB_GARBAGE_COLLECTION_*`.
+   */
+  gcBatchSize?: number;
+  gcDelayMs?: number;
+  gcInitialBackoffMs?: number;
+  gcMaxBackoffMs?: number;
 };
 
 export function schedulerOptionsFromEnv(env: KnobEnv = process.env): Required<SchedulerOptions> {
@@ -213,8 +221,14 @@ export function schedulerOptionsFromEnv(env: KnobEnv = process.env): Required<Sc
     occMaxBackoffMs: knob("SCHEDULER_OCC_MAX_BACKOFF_MS", 60_000, "uint", env),
     errorInitialBackoffMs: knob("SCHEDULED_JOB_INITIAL_BACKOFF_MS", 500, "uint", env),
     errorMaxBackoffMs: secondsKnob("SCHEDULED_JOB_MAX_BACKOFF_SECS", 2 * 3600, env),
+    gcBatchSize: knob("SCHEDULED_JOB_GARBAGE_COLLECTION_BATCH_SIZE", 100, "positive", env),
+    gcDelayMs: secondsKnob("SCHEDULED_JOB_GARBAGE_COLLECTION_DELAY", 1, env),
+    gcInitialBackoffMs: knob("SCHEDULED_JOB_GARBAGE_COLLECTION_INITIAL_BACKOFF_MS", 1000, "uint", env),
+    gcMaxBackoffMs: secondsKnob("SCHEDULED_JOB_GARBAGE_COLLECTION_MAX_BACKOFF_SECS", 30, env),
   };
 }
+
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /** Convex's backoff: `initial · 2^(n-1)`, capped, with full jitter. */
 const backoff = (failures: number, initialMs: number, maxMs: number) =>
@@ -253,6 +267,10 @@ export class ScheduledJobExecutor {
       occMaxBackoffMs: options.occMaxBackoffMs ?? 60_000,
       errorInitialBackoffMs: options.errorInitialBackoffMs ?? 500,
       errorMaxBackoffMs: options.errorMaxBackoffMs ?? 2 * 3600 * 1000,
+      gcBatchSize: options.gcBatchSize ?? 100,
+      gcDelayMs: options.gcDelayMs ?? 1000,
+      gcInitialBackoffMs: options.gcInitialBackoffMs ?? 1000,
+      gcMaxBackoffMs: options.gcMaxBackoffMs ?? 30_000,
     };
   }
 
@@ -552,20 +570,38 @@ export class ScheduledJobExecutor {
     else this.stats.failed++;
   }
 
-  /** Delete jobs completed before the retention window, in batches of 100, then wait. */
-  private scheduleGc(delayMs: number) {
+  /**
+   * Delete the jobs completed before the retention window, a batch a transaction, as Convex's
+   * `ScheduledJobGarbageCollector`: after a batch, the next one `gcDelayMs` later; with none to delete, when the
+   * oldest completed job leaves the window. With none completed, Convex waits for one to be: here a window from
+   * now (at least `gcDelayMs`), as no job completing meanwhile leaves it sooner. After an error, a backoff that a
+   * success resets.
+   */
+  private scheduleGc(delayMs: number, failures = 0) {
     if (this.stopped) return;
     this.gcTimer = setTimeout(async () => {
-      let next = 60_000;
+      const retentionMs = this.o.retentionSeconds * 1000;
+      let next: number;
       try {
-        const before = wallClock() - this.o.retentionSeconds * 1000;
-        const n = await this.engine.mutation((db) => deleteCompletedJobs(db, before, 100), "_system/scheduled_job_gc");
-        if (n === 100) next = 1000; // more to delete
+        const now = wallClock();
+        const { deleted, nextCompleted } = await this.engine.mutation(
+          (db) => deleteCompletedJobs(db, now - retentionMs, this.o.gcBatchSize),
+          "_system/scheduled_job_gc",
+        );
+        next =
+          deleted > 0
+            ? this.o.gcDelayMs
+            : nextCompleted === null
+              ? Math.max(retentionMs, this.o.gcDelayMs)
+              : Math.max(1, nextCompleted + retentionMs - wallClock());
+        failures = 0;
       } catch (e) {
         if (e instanceof CommitterStoppedError) return;
-        next = 30_000;
+        failures++;
+        next = backoff(failures, this.o.gcInitialBackoffMs, this.o.gcMaxBackoffMs);
       }
-      this.scheduleGc(next);
+      // A timer longer than 2^31 - 1 ms fires at once: a far wait is taken in steps.
+      this.scheduleGc(Math.min(next, MAX_TIMER_MS), failures);
     }, delayMs);
   }
 }

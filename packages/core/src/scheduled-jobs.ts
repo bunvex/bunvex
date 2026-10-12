@@ -288,8 +288,15 @@ export async function deleteJob(db: Tx, job: Pick<ScheduledJobDoc, "_id" | "args
   });
 }
 
-/** Delete up to `limit` jobs completed before `before` (ms), with their arguments; the number deleted. */
-export async function deleteCompletedJobs(db: Tx, before: number, limit: number): Promise<number> {
+/**
+ * Delete up to `limit` jobs completed before `before` (ms), with their arguments: the number deleted and, when
+ * none was, when the oldest job left completed (ms; null: none is), as Convex's garbage collector finds it.
+ */
+export async function deleteCompletedJobs(
+  db: Tx,
+  before: number,
+  limit: number,
+): Promise<{ deleted: number; nextCompleted: number | null }> {
   const old = (await db.asSystem(() =>
     db
       .query(SCHEDULED_JOBS_TABLE)
@@ -297,5 +304,12 @@ export async function deleteCompletedJobs(db: Tx, before: number, limit: number)
       .take(limit),
   )) as unknown as ScheduledJobDoc[];
   for (const d of old) await deleteJob(db, d);
-  return old.length;
+  if (old.length > 0) return { deleted: old.length, nextCompleted: null };
+  const next = (await db.asSystem(() =>
+    db
+      .query(SCHEDULED_JOBS_TABLE)
+      .withIndex(SCHEDULED_BY_COMPLETED_TS, (q) => q.gt("completedTs", null))
+      .first(),
+  )) as unknown as ScheduledJobDoc | null;
+  return { deleted: 0, nextCompleted: next?.completedTs != null ? nsToMs(next.completedTs) : null };
 }
