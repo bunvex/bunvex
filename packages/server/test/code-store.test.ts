@@ -253,7 +253,15 @@ describe("the package is Convex's zip (DV-166, crates/model/src/source_packages/
     dirs.push(dir);
     const file = join(dir, "pkg.zip");
     await Bun.write(file, bytes);
-    const names = Bun.spawnSync(["unzip", "-Z1", file]).stdout.toString().trim().split("\n");
+    // Async, stdout read alongside `exited`: on a loaded CI runner other tests' `Bun.spawnSync` once sat until
+    // the test timeout killed a child that had done its work ("killed 1 dangling process").
+    const unzip = async (...args: string[]) => {
+      const p = Bun.spawn(["unzip", ...args], { stdin: "ignore", stdout: "pipe", stderr: "inherit" });
+      const [code, out] = await Promise.all([p.exited, new Response(p.stdout).text()]);
+      if (code !== 0) throw new Error(`unzip ${args.join(" ")} exited ${code}`);
+      return out;
+    };
+    const names = (await unzip("-Z1", file)).trim().split("\n");
     expect(names).toEqual([
       "modules/a.js",
       "modules/a.js.map",
@@ -261,7 +269,7 @@ describe("the package is Convex's zip (DV-166, crates/model/src/source_packages/
       "modules/z.js",
       "metadata.json",
     ]);
-    const metadata = Bun.spawnSync(["unzip", "-p", file, "metadata.json"]).stdout.toString();
+    const metadata = await unzip("-p", file, "metadata.json");
     expect(JSON.parse(metadata)).toEqual({
       modulePaths: ["a.js", "a.js.map", "actions/n.js", "z.js"],
       moduleEnvironments: [
@@ -271,7 +279,7 @@ describe("the package is Convex's zip (DV-166, crates/model/src/source_packages/
       ],
       externalDepsStorageKey: null,
     });
-    expect(Bun.spawnSync(["unzip", "-p", file, "modules/a.js.map"]).stdout.toString()).toBe(map);
+    expect(await unzip("-p", file, "modules/a.js.map")).toBe(map);
     expect(pkg.packageSize).toEqual({
       zippedSizeBytes: BigInt(bytes.length),
       unzippedSizeBytes: BigInt(3 * "export const a = 1;".length + map.length + metadata.length),

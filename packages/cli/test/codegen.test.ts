@@ -39,6 +39,16 @@ const io = (cwd: string) => {
   const err: string[] = [];
   return { out, err, it: { env: {}, cwd, out: (l: string) => out.push(l), err: (l: string) => err.push(l) } };
 };
+/**
+ * A command run to its end in `cwd`: its exit code, stdout and stderr. Async, the pipes read alongside
+ * `exited`: on a loaded CI runner a `Bun.spawnSync` here once sat until the test timeout killed its child
+ * ("killed 1 dangling process"), though the child had done its work.
+ */
+const run = async (cmd: string[], cwd: string) => {
+  const p = Bun.spawn(cmd, { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [code, out, err] = await Promise.all([p.exited, new Response(p.stdout).text(), new Response(p.stderr).text()]);
+  return { code, out, err };
+};
 const SERVER = ["bunvex", "server"].join("/");
 const VALUES = ["bunvex", "values"].join("/");
 
@@ -240,8 +250,9 @@ const service = ts.createLanguageService(host);
 const at = (needle) => (service.getCompletionsAtPosition(file, text.indexOf(needle) + needle.length, {})?.entries ?? []).map((e) => e.name).filter(Boolean).sort();
 console.log(JSON.stringify({ plain: at('plainV.id("'), generated: at('\\nv.id("') }));`,
     });
-    const probe = Bun.spawnSync(["bun", "complete.mjs"], { cwd: app });
-    const completions = JSON.parse(probe.stdout.toString()) as { plain: string[]; generated: string[] };
+    const probe = await run(["bun", "complete.mjs"], app);
+    expect(probe.code).toBe(0);
+    const completions = JSON.parse(probe.out) as { plain: string[]; generated: string[] };
     expect(completions.plain).toEqual(["_scheduled_functions", "_storage"]);
     expect(completions.generated).toEqual(["_scheduled_functions", "_storage", "messages"]);
     write(app, { "bunvex/typo.ts": `import { v } from "./_generated/server";\nexport const bad = v.id("mesages");` });
@@ -394,7 +405,7 @@ describe("bunvex codegen --dry-run, --debug, --commonjs and the other flags (STU
     const gen = join(app, "bunvex/_generated");
     expect(readFileSync(join(gen, "api_cjs.d.cts"), "utf8")).toBe(readFileSync(join(gen, "api.d.ts"), "utf8"));
     expect(readFileSync(join(gen, "api_cjs.cjs"), "utf8")).toContain(`require(${JSON.stringify(SERVER)})`);
-    const probe = Bun.spawnSync(
+    const probe = await run(
       [
         "bun",
         "-e",
@@ -402,10 +413,10 @@ describe("bunvex codegen --dry-run, --debug, --commonjs and the other flags (STU
 const { getFunctionName } = require(${JSON.stringify(SERVER)});
 console.log(JSON.stringify([getFunctionName(api.messages.list), getFunctionName(internal.a.b)]));`,
       ],
-      { cwd: app },
+      app,
     );
-    expect(probe.stderr.toString()).toBe("");
-    expect(JSON.parse(probe.stdout.toString())).toEqual(["messages:list", "a:b"]);
+    expect(probe.err).toBe("");
+    expect(JSON.parse(probe.out)).toEqual(["messages:list", "a:b"]);
     // Without the flag, a run removes them again; bunvex.json's generateCommonJSApi writes them, in both passes.
     expect(await main(["codegen", "--typecheck", "disable"], io(app).it)).toBe(0);
     expect(existsSync(join(gen, "api_cjs.cjs"))).toBe(false);
