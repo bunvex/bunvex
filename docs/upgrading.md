@@ -40,12 +40,13 @@ Run your app's packages and the server at the **same release**: the server does 
 version (it has no version thresholds, STUDY-139 P2), but nothing tests one release's client against another's
 server.
 
-**The npm packages.** Upgrade `bunvex` (the package your app imports: `bunvex/server`, `bunvex/react`, …) and every
-`@bunvex/*` package you depend on directly to the new version, then push the functions again, so the new CLI
+**The npm packages.** Upgrade every `@bunvex/*` package your app depends on (`@bunvex/server`, `@bunvex/values`,
+`@bunvex/react`, `@bunvex/cli`, …) together to the new version, then push the functions again, so the new CLI
 regenerates `_generated/` and bundles them:
 
 ```sh
-bun add bunvex@<version>
+bun add @bunvex/server@<version> @bunvex/values@<version>   # and every other @bunvex/* dependency
+bun add -d @bunvex/cli@<version>
 bunx bunvex deploy
 ```
 
@@ -135,8 +136,9 @@ Moving an app **from Convex to bunvex** is an export from Convex and an import i
 `bunvex import --replace-all` into bunvex with the same app deployed, and every document, index read and file must
 come back.
 
-1. Change the app: import `bunvex/server`, `bunvex/react`, … instead of `convex/server`, `convex/react`, …; run
-   `bunx bunvex` instead of `npx convex`. bunvex looks for the functions in `bunvex/` (keep `convex/` with
+1. Change the app: install the `@bunvex/*` packages in place of `convex` (`bun add @bunvex/server @bunvex/values`,
+   `@bunvex/react` and the others you use; `bun add -d @bunvex/cli`), import `@bunvex/server`, `@bunvex/react`, …
+   instead of `convex/server`, `convex/react`, …; run `bunx bunvex` instead of `npx convex`. bunvex looks for the functions in `bunvex/` (keep `convex/` with
    `{ "functions": "convex" }` in `bunvex.json`), and for `BUNVEX_SELF_HOSTED_URL` / `BUNVEX_SELF_HOSTED_ADMIN_KEY`.
 2. `npx convex export --path ./backups --include-file-storage` on the Convex deployment, and save its variables
    (`npx convex env list`).
