@@ -1,6 +1,7 @@
 # STUDY-146 — `bunvex network-test`, `docs`, `update` and `dashboard`
 
-- **Status:** implemented; DV-461 decided (rule 5); Q1 decided by the owner (2026-10-11): the version check, AD-29, built (§7)
+- **Status:** implemented; DV-461 decided (rule 5); Q1 decided by the owner (2026-10-11): the version check, AD-29, built (§7);
+  the package names moved to `@bunvex/*` (2026-10-12, §8)
 - **Convex source read:** commit `4577b903` of get-convex/convex-backend (`npm-packages/convex/src/cli/`)
 - **Related:** [STUDY-35](STUDY-35-push-and-deploy.md) and [STUDY-40](STUDY-40-local-backend-and-local-deployments.md)
   (choosing the deployment), [STUDY-112](STUDY-112-health-routes.md) (`/echo`, `/version`, `/instance_name`),
@@ -101,7 +102,7 @@ they open or print, and the requests `network-test` sends (`/instance_name`, a W
 - **`docs`:** opens bunvex's site (DV-461) through `Io.open`. That is the platform's opener (`open`,
   `xdg-open`, `cmd /c start`), as the `open` package's default, and tests pass their own. A failure to open is
   `bunvex docs: <error>` with exit 1, since bunvex's commands report errors rather than crash.
-- **`update`:** Convex's three lines, with bunvex's changelog and package (DV-461).
+- **`update`:** Convex's three lines, with bunvex's changelog and upgrade command (DV-461, §8).
 - **`dashboard` / `dash`:**
   - A self-hosted deployment gets Convex's message, with exit 0.
   - A local deployment gets Convex's warning for a missing local dashboard. bunvex has none (DV-202), so that is
@@ -117,7 +118,7 @@ they open or print, and the requests `network-test` sends (`/instance_name`, a W
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| N1 | `docs` opens `https://bunvex.dev/?utm_source=bunvex-cli`, bunvex's site (it is to hold the user docs; the landing for now). `update` points at `packages/bunvex/CHANGELOG.md` on GitHub and `npm install bunvex@latest`. The messages say "bunvex" | Rule 5: Convex's URLs, package and name | DV-461 (decided, rule 5) |
+| N1 | `docs` opens `https://bunvex.dev/?utm_source=bunvex-cli`, bunvex's site (it is to hold the user docs; the landing for now). `update` points at `packages/server/CHANGELOG.md` on GitHub and `bun update --latest '@bunvex/*'` (§8). The messages say "bunvex" | Rule 5: Convex's URLs, package and name | DV-461 (decided, rule 5) |
 | — | `dashboard` on a local deployment always warns | DV-202 (no local dashboard) | covered by DV-202 |
 | — | `network-test` starts a stopped local deployment | bunvex's one-off commands do (STUDY-40) | existing behaviour |
 | — | The WebSocket check's query is `_system/cli/deploymentUrl:cloudUrl` | DV-226 | covered |
@@ -127,7 +128,7 @@ they open or print, and the requests `network-test` sends (`/instance_name`, a W
 
 | # | Addition | Why | Decision |
 |---|---|---|---|
-| AD-29 | The version check: `dev` and `deploy` ask the npm registry for the latest `bunvex` (at most once a day) and print one line when this CLI is older. It is off in CI or by variable (§7). `update` stays as Convex's | The npm-registry analogue of the message Convex's `dev` and `deploy` get from Convex's version service, which bunvex does not have | owner, 2026-10-11 (Q1): built |
+| AD-29 | The version check: `dev` and `deploy` ask the npm registry for the latest `@bunvex/cli` (at most once a day) and print one line when this CLI is older. It is off in CI or by variable (§7). `update` stays as Convex's | The npm-registry analogue of the message Convex's `dev` and `deploy` get from Convex's version service, which bunvex does not have | owner, 2026-10-11 (Q1): built |
 
 ## 5. Tests
 
@@ -203,7 +204,7 @@ never gets it.
   - `deploy` starts the check once its deployment is known and runs it beside the push. When the command ends it
     prints the notice if the check has answered, or answers within 200 ms; otherwise it exits without it.
   - `dev` starts it beside the first push and prints the notice whenever the answer comes.
-- **What it asks:** `GET <origin>/bunvex/latest`. The origin is `BUNVEX_VERSION_API_ORIGIN` (the bunvex-named
+- **What it asks:** `GET <origin>/@bunvex%2Fcli/latest` (§8; it was `bunvex/latest` until 2026-10-12). The origin is `BUNVEX_VERSION_API_ORIGIN` (the bunvex-named
   analogue of `CONVEX_VERSION_API_ORIGIN`; a mirror or a test registry), else `https://registry.npmjs.org`. It gives
   up after 1.5 s. A version newer than this CLI's, by semver with prereleases ordered, prints one line on stderr:
   "A newer version of bunvex is available: <latest> (this is <installed>). Run \`bunvex update\` to see how to
@@ -245,3 +246,58 @@ and is off in CI or by variable. All of these follow the owner's decision.
 | `deploy` does not print the notice | the deploy test |
 | `deploy` waits for the check without the 200 ms limit | the deploy test (it hangs) |
 | `dev` does not print the notice | the dev test |
+
+## 8. The package names: `@bunvex/*` (2026-10-12)
+
+The owner decided on 2026-10-12 that npm will never release the unscoped name `bunvex`: the `@bunvex/*` packages are
+how an app installs bunvex for good, and `packages/bunvex` is a private aggregate for this repository
+([STUDY-40](STUDY-40-local-backend-and-local-deployments.md) L7). Two of this study's commands still named
+`bunvex` on npm:
+
+- **The version check asked for a package that does not exist.** `GET https://registry.npmjs.org/bunvex/latest` is a
+  404, so the check always failed silently and never printed. It now asks for `@bunvex/cli`, the package that holds
+  the CLI, at `<origin>/@bunvex%2Fcli/latest`. A scoped name's `/` is escaped, as npm's own client asks for it
+  (npm-package-arg's `escapedName`). Checked against the registry on 2026-10-12: `/@bunvex%2fcli/latest`,
+  `/@bunvex%2Fcli/latest` and `/@bunvex/cli/latest` all answer 200 with `"version": "0.1.0-alpha.1"`;
+  `/bunvex/latest` answers 404. Every `@bunvex/*` package is released at one version (changesets' `fixed` group),
+  so the CLI's version stands for all of them. Everything else is as §7: the timeout, the cache, the switches.
+- **`update` printed an install of that package.** Convex's `update.ts` prints `npm install convex@latest`, which
+  upgrades the one package an app on Convex installs. An app on bunvex installs several `@bunvex/*` packages
+  (`@bunvex/server` and `@bunvex/values`, `@bunvex/cli` as a dev dependency, `@bunvex/react` and others as it
+  needs), and they must move together ([docs/upgrading.md](../upgrading.md); two releases mixed means two copies
+  of a module). The same one line, for them: `bun update --latest '@bunvex/*'`. It upgrades every `@bunvex/*`
+  dependency of the app to its latest version, keeps each in its field (a dev dependency stays one) and touches
+  nothing else; checked with Bun 1.4.2 on an app with `@bunvex/values` and a dev dependency `@bunvex/protocol`
+  at `0.1.0-alpha.0` (both went to `0.1.0-alpha.1`, `left-pad` untouched). It needs the app installed with Bun
+  (a `bun.lock`), as bunvex's docs install it. The changelog is `packages/server/CHANGELOG.md`, the package every
+  app installs, in place of the private aggregate's. Convex's other two lines are kept.
+- **Codegen** (STUDY-36) imported `bunvex/*` when an app's `package.json` named no `@bunvex/*` dependency, or was
+  missing. It now writes `@bunvex/server` and `@bunvex/values` unless the app depends on the aggregate `bunvex`
+  (this repository's examples), as Convex's templates always import the package its apps install
+  (`codegen_templates/api.ts:87`, `"convex/server"`). The `bunvex` detection stays for the examples, which import
+  `bunvex/*` through the workspace.
+
+No new divergence: DV-461 (rule 5) already covers `update`'s text and URLs, and AD-29 the check.
+
+**Tests:**
+- `version-check.test.ts`: the registry in the process answers only `/@bunvex%2Fcli/latest` (anything else is a
+  404, as npm's answer for `bunvex`), and the path is asserted; `latestPath` escapes a scoped name.
+- `network-test.test.ts`: `update`'s exact lines, spelled out; the changelog it names exists in this repository
+  and its package is not private.
+- `codegen.test.ts`: `@bunvex/*` imports by default (no `package.json`, an empty one, one without bunvex),
+  `bunvex/*` for the aggregate in any dependency field; the golden files and the end-to-end apps (`tsc`, the
+  CommonJS api under `require()`) now install `@bunvex/server` and `@bunvex/values` as an app does.
+- The examples' tests (their committed `_generated/` must equal what the deploy's codegen writes) pass unchanged:
+  `tutorial`, `react-query` (both the aggregate and `@bunvex/react-query`), `http`, `nextjs-app-router`.
+
+**Sabotage** (each restored, `git diff` clean after):
+
+| Break | Failed |
+|---|---|
+| the check asks `/bunvex/latest` again | "asks `<origin>/@bunvex%2Fcli/latest` once a day" |
+| the scoped name not escaped (`/@bunvex/cli/latest`) | "the registry path…", "asks…" |
+| `update` prints `npm install bunvex@latest` | "update prints how to update" |
+| `update` links `packages/bunvex/CHANGELOG.md` | "update prints how to update" |
+| codegen defaults to `bunvex` again | the default test, both end-to-end `tsc` tests |
+| the aggregate `bunvex` not detected | the default test; the `tutorial` example (`Cannot find module '@bunvex/server'`) |
+| `importsOf` defaults to `bunvex/*` | both golden tests, the default test |

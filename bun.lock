@@ -19,6 +19,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@bunvex/dashboard": "workspace:*",
+        "@bunvex/dashboard-source": "workspace:*",
         "@bunvex/ui": "workspace:*",
         "@tanstack/react-router": "^1.170.40",
         "lucide-react": "^1.48.0",
@@ -566,6 +567,14 @@
         "react-dom": "^19.3.0",
       },
     },
+    "packages/dashboard-source": {
+      "name": "@bunvex/dashboard-source",
+      "version": "0.0.0",
+      "dependencies": {
+        "@bunvex/client": "workspace:*",
+        "@bunvex/dashboard": "workspace:*",
+      },
+    },
     "packages/differential": {
       "name": "@bunvex/differential",
       "version": "0.0.0",
@@ -725,7 +734,7 @@
         "jose": "^6.2.12",
       },
       "peerDependencies": {
-        "@bunvex/persistence": "workspace:*",
+        "@bunvex/persistence": "workspace:^",
       },
       "optionalPeers": [
         "@bunvex/persistence",
@@ -737,6 +746,8 @@
       "dependencies": {
         "@bunvex/client": "workspace:*",
         "@bunvex/core": "workspace:*",
+        "@bunvex/dashboard": "workspace:*",
+        "@bunvex/dashboard-source": "workspace:*",
         "@bunvex/nextjs": "workspace:*",
         "@bunvex/protocol": "workspace:*",
         "@bunvex/react": "workspace:*",
@@ -924,6 +935,8 @@
     "@bunvex/dashboard": ["@bunvex/dashboard@workspace:packages/dashboard"],
 
     "@bunvex/dashboard-app": ["@bunvex/dashboard-app@workspace:apps/dashboard"],
+
+    "@bunvex/dashboard-source": ["@bunvex/dashboard-source@workspace:packages/dashboard-source"],
 
     "@bunvex/differential": ["@bunvex/differential@workspace:packages/differential"],
 

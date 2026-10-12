@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   checkForNewerVersion,
+  latestPath,
   VERSION_CHECK_TTL_MS,
   versionCheckDisabled,
   versionNotice,
@@ -19,7 +20,7 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-/** A registry answering `bunvex/latest` with `answer`; the requests it got. */
+/** A registry answering every path with `answer`; the requests it got. */
 function registry(answer: (req: Request) => Response | Promise<Response>) {
   const requests: string[] = [];
   const s = Bun.serve({
@@ -52,13 +53,23 @@ describe("the version check", () => {
     expect(versionNotice("0.3.0", "0.2.0")).toBeNull();
   });
 
-  test("asks `<origin>/bunvex/latest` once a day: the answer is cached", async () => {
-    const r = registry(() => Response.json({ name: "bunvex", version: "0.2.0" }));
+  test("the registry path: a scoped name's slash escaped, as npm's client asks", () => {
+    expect(latestPath("@bunvex/cli")).toBe("/@bunvex%2Fcli/latest");
+    expect(latestPath("left-pad")).toBe("/left-pad/latest");
+  });
+
+  test("asks `<origin>/@bunvex%2Fcli/latest` once a day: the answer is cached", async () => {
+    // Only the CLI's own package answers: npm has no `bunvex` (STUDY-40 L7).
+    const r = registry((req) =>
+      new URL(req.url).pathname === "/@bunvex%2Fcli/latest"
+        ? Response.json({ name: "@bunvex/cli", version: "0.2.0" })
+        : Response.json("Not Found", { status: 404 }),
+    );
     const env = { HOME: home(), BUNVEX_VERSION_API_ORIGIN: `${r.origin}/` };
     let now = 1_000_000;
     const check = () => checkForNewerVersion(env, { installed: "0.1.0", now: () => now });
     expect(await check()).toBe(NOTICE);
-    expect(r.requests).toEqual(["/bunvex/latest"]);
+    expect(r.requests).toEqual(["/@bunvex%2Fcli/latest"]);
     expect(existsSync(join(env.HOME, ".cache", "bunvex", "version-check.json"))).toBe(true);
     now += VERSION_CHECK_TTL_MS - 1;
     expect(await check()).toBe(NOTICE);

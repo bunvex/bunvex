@@ -182,17 +182,20 @@ export function codegenConfig(cwd: string): CodegenConfig {
   return { fileType, packages: packagesOf(cwd), commonjs: config.generateCommonJSApi === true };
 }
 
-/** Which bunvex the app installs (STUDY-40): `bunvex`, else the scoped `@bunvex/*` packages; `bunvex` by default. */
+/**
+ * Where the generated files import from (STUDY-40 L7): the scoped `@bunvex/*` packages, which are how an app installs
+ * bunvex (npm will not allow `bunvex`), as Convex's always import the package its apps install. Only an app that
+ * depends on this repository's private aggregate `bunvex` (its examples and tests) gets `bunvex/*`.
+ */
 function packagesOf(cwd: string): CodegenConfig["packages"] {
   try {
     const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) as Record<string, Record<string, unknown>>;
     const deps = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.peerDependencies };
     if ("bunvex" in deps) return "bunvex";
-    if (Object.keys(deps).some((d) => d.startsWith("@bunvex/"))) return "@bunvex";
   } catch {
     // no package.json
   }
-  return "bunvex";
+  return "@bunvex";
 }
 
 const sha256 = (m: ModuleConfig) =>

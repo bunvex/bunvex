@@ -42,7 +42,7 @@ Commands:
   network-test  run a network test to the deployment
   run         run a function (query, mutation or action) on the deployment
   typecheck   typecheck the functions with the app's TypeScript compiler (tsc or tsgo)
-  update      print instructions for updating the bunvex package
+  update      print instructions for updating the bunvex packages
 
 Run \`bunvex <command> --help\` for a command's options, \`bunvex --version\` for the version.`;
 

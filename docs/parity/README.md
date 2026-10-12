@@ -130,8 +130,9 @@ In this order:
 11. `ctx.runQuery` / `ctx.runMutation` inside queries and mutations, and the 1 s user execution limit
     (STUDY-41) — done, with N2, N3 and N6 built in #213;
 12. the dashboard on a real deployment (its HTTP data source, with the UI session, and the `_system/*`
-    functions it reads), then live logs — open: every screen is built on the mock and the server's admin API
-    exists; the data source that calls it does not;
+    functions it reads), then live logs — open: every screen is built on the mock; the server source,
+    `@bunvex/dashboard-source`, is being built in steps (STUDY-149: PR 1 reads the deployment, schema, state,
+    logs and function metrics);
 13. built-in auth (STUDY-28) phases — open (AD-01 accepted, spike done);
 14. import/export in Convex's snapshot format, so data can move between Convex and bunvex (STUDY-42) —
     done; shape inference and the upgrade path remain (platform §18; cloud backups are cloud-only, *n/a*).
@@ -150,7 +151,9 @@ containers up, deploy functions, see them work) before the remaining platform it
   done;
 - streaming export (STUDY-60, STUDY-69) — done;
 - the dashboard's connection to a real deployment. Every screen is built on the mock (UI-01 §0, platform §21);
-  the server's admin API and the admin-key sign-in exist; a data source that calls the server does not.
+  the server source (`@bunvex/dashboard-source`, STUDY-149) reads the deployment, schema, state, logs and
+  function metrics so far; the tables, documents, functions and other screens, and the app's switch to it,
+  are still to come.
 
 ## Gaps by impact
 
@@ -185,8 +188,10 @@ gaps.
     backend; `push_config` (legacy push) and `delete_component` (components) do not apply.
 - The dashboard on a real deployment:
   - the largest single piece of work, but not something an app hits;
-  - the server side of every screen exists;
-  - what is missing is a data source that calls it;
+  - the server side of most screens exists (STUDY-149 lists the `_system/frontend` functions still to add);
+  - the data source that calls it, `@bunvex/dashboard-source`, has its first part (STUDY-149 PR 1: the
+    deployment, schema, state, logs, function metrics and the `check_admin_key` sign-in); the rest is
+    PRs 2–6;
   - its data mutations (`_system/frontend` `addDocument`, `patchDocumentsFields`, `deleteDocuments`,
     `createTable`, …) bring the `add_documents`, `update_documents`, `delete_documents` and `create_table`
     audit events.

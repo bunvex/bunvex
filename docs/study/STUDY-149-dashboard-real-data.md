@@ -1,6 +1,6 @@
 # STUDY-149 — The dashboard on real data: how Convex's dashboard reads a deployment
 
-- **Status:** decided (owner, 2026-10-12) — research and design only; nothing is built yet. Q1: option B, a
+- **Status:** decided (owner, 2026-10-12); PR 1 built (`@bunvex/dashboard-source`, §5 "PR 1, as built"). Q1: option B, a
   separate service with its own image (DV-475); Q3: rename (DV-474); Q4: Convex's model plus a `Host` check
   (DV-476); Q5: local links only (DV-477, replaces DV-217); Q2, Q6, Q7 confirmed as planned; AD-32 not taken.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/dashboard-common`,
@@ -429,6 +429,80 @@ subscription), DV-97 (`Bunvex` scheme), DV-210 (the key never stored), DV-307 (`
 | 8 | CLI links (DV-477, closes DV-217) and the docs (self-hosting guide, parity rows) | S (~200) |
 
 PRs 2–5 can run in parallel once PR 1 is in; 6 needs 2–4; 7 needs 6.
+
+### PR 1, as built
+
+`packages/dashboard-source` (UI-01 §34):
+
+- `admin-http.ts`: the admin routes with `Bunvex <key>` and `Bunvex-Client: dashboard-0.0.0` (the private
+  package's version), and the error codes of §3.3.
+- `credentials.ts`: `createAdminKeyVerifier`, as `checkDeploymentInfo.ts:17-58` — `Content-Type`,
+  `Authorization` and the client header on a GET; a 2xx gives `allowedOps ?? []` and `isReadOnly ?? false` (not
+  JSON: everything allowed); a 404 allows everything; anything else, a network error included, sleeps 500 ms
+  and tries again, 3 tries in all (so a refused key answers after about 1.5 s, as Convex's). `SERVER_OPS` and
+  `capabilitiesOf` moved here from `apps/dashboard`, which re-exports them.
+- `sync.ts`: one `BaseBunvexClient` with `setAdminAuth` before any subscription; per-query callbacks shared by
+  token, one-shot reads, `mutationInternal` / `actionInternal`; a failure saying "permission" is
+  `unauthorized`. The connection watcher is Convex's rule (`deploymentContext.tsx`
+  `handleConnectionStateChange`): unknown without a fresh previous observation, disconnected at two in a row.
+- `logs.ts`: the long poll of §1.3 and Convex's `processLogs` (each line, then an outcome line carrying the
+  execution; quoted string messages unquoted as `messagesToString`; an HTTP action fails by its status).
+  `listLogs` pages what the loop holds; since the server holds an empty log's first request up to 60 s, an
+  answer within 1 s is the history (listed, not delivered to `watchLogs`), and the log reads as empty until
+  one arrives.
+- `metrics.ts`: `functionRate` (`udf_rate` is per second, so it is multiplied by the bucket's width, as
+  Convex's charts do with their `timeMultiplier`), `cacheHitPercentage`, `latencyPercentiles` (seconds → ms,
+  the order asked), `topFunctions` (display paths), `scheduledJobLag`; a window with no bucket is refused
+  before it is sent (the server's answer would be a 500).
+- `server-source.ts`: `getDeployment` (`/instance_name`, `/version`, the persistence label from `/stats`),
+  `getCapabilities` (`check_admin_key`), `getStats` / `watchStats` (`/stats`, which now also reports
+  `subscriptions`, the field UI-01 §5.2 maps), `getSchema` (`getSchemas` and its validation progress over the
+  socket), `getDeploymentState` (`deploymentState`), pause and resume (the routes; resume skips a running
+  deployment, since the contract's resume is idempotent and Convex's route refuses it). `listTables`,
+  `listDocuments`, `getDocument`, `watchTable` and `listFunctions` answer `unavailable`.
+
+Two items of the PR plan moved: the table sizes are a field of `listTables`, and a table's rates need the
+table mapping to answer `not_found` for an unknown table (the server answers zeros), so both come with PR 2.
+The contract's metrics part picks its functions with `listFunctions`, so it runs from PR 4; until then the
+metrics are checked by tests of their own against the live server.
+
+**Tests.** `packages/dashboard-source/test` (no server): the verifier's request, tries, delay and 404 rule;
+the error codes; the log mapping, the loop's cursor, back-off, reporting, 403 stop (a 401 backs off, as
+Convex's) and history rule; the
+metric units; the watcher's rule; the schema mapping. `packages/sync-e2e/dashboard/server-source.test.ts`: a
+server in the process with a schema and functions pushed over deploy2, then `describeDataSourceContract` with
+`only: ["deployment", "logs", "state"]` (pause toggled), and the verifier (full, read-only and wrong keys, a
+404 server), the deployment's fields, the counters with a live subscription, `watchStats`' interval, the
+schema, the logs' history and live tail, the metrics, and the methods not built yet.
+
+**Sabotage** (each restored after; every one turned a test red):
+
+| Sabotage | Failing tests |
+|---|---|
+| `Bearer` instead of `Bunvex` in `Authorization` | 18 (unit and live) |
+| the verifier tries 2 times | 4 |
+| the 404 rule removed | 2 |
+| no delay between tries | 1 |
+| the log loop does not pass `newCursor` on | 2 |
+| the history delivered to `watchLogs` | 2 |
+| a 403 does not stop the loop | 1 |
+| a 401 (a refused key) stops it too | 1 |
+| failures reported at the first one | 1 |
+| `watchStats`' unsubscribe does nothing | 1 |
+| `udf_rate` left per second | 2 |
+| latencies left in seconds | 2 |
+| quoted messages kept quoted | 5 |
+| `v.any()` shown as a document type | 1 |
+| the contract's `only` ignored | 17 |
+| `/stats` without `subscriptions` | 1 |
+
+**Measurements.** No hot path changes (the server only adds a counter read per `/stats` call). The app's
+entry chunk grows by 521 bytes (the verifier's module, re-exported through `apps/dashboard`); the source itself
+is not in the app's bundle until PR 6.
+
+**PR 2 starts from** `server-source.ts`'s `listTables`, `listDocuments`, `getDocument` and `watchTable` stubs,
+the `"tables"` and `"documents"` areas of the live suite, `AdminSync.watch` / `query` for the new system
+functions (`getTableMapping`, `paginatedTableDocuments`, …), and `Metrics` for `tableRate`.
 
 ## 6. Open questions
 

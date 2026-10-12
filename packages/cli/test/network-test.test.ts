@@ -2,9 +2,9 @@
 // small servers that misbehave. Each expected line is Convex's (npm-packages/convex/src/cli/lib/networkTest.ts,
 // docs.ts, update.ts, dashboard.ts) with bunvex's names.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { defineSchema, Engine } from "@bunvex/core";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { adminKeyCipherKey, createServer, Functions, issueAdminKey } from "@bunvex/server";
@@ -220,9 +220,15 @@ describe("bunvex docs and update", () => {
     const r = io();
     expect(await main(["update"], r.it)).toBe(0);
     expect(r.out).toEqual([]);
+    // npm will not allow `bunvex` (STUDY-40 L7): every `@bunvex/*` package is upgraded, together.
     expect(r.err).toEqual([
-      `To view the bunvex changelog, go to ${CHANGELOG_URL}\nWhen you are ready to upgrade, run the following command:\nnpm install bunvex@latest\n`,
+      "To view the bunvex changelog, go to https://github.com/bunvex/bunvex/blob/main/packages/server/CHANGELOG.md\nWhen you are ready to upgrade, run the following command:\nbun update --latest '@bunvex/*'\n",
     ]);
+    // The changelog it names is one this repository keeps, of a package that is published.
+    const changelog = CHANGELOG_URL.replace("https://github.com/bunvex/bunvex/blob/main/", "");
+    expect(existsSync(join(import.meta.dir, "../../..", changelog))).toBe(true);
+    const pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../..", dirname(changelog), "package.json"), "utf8"));
+    expect(pkg.private).toBeUndefined();
     const bad = io();
     expect(await main(["update", "--check"], bad.it)).toBe(1);
     expect(bad.err).toEqual(["error: unknown option '--check'"]);
