@@ -179,7 +179,7 @@ async function setup(
     redactLogsToClient: opts.redact ?? false,
     auth: { providers: [{ domain: issuer.url, applicationID: "app" }] },
     ...(opts.router === false ? {} : { http }),
-    httpActionHeadTimeoutMs: opts.headTimeoutMs,
+    requestTimeoutMs: opts.headTimeoutMs,
     maxRequestBodySize: opts.maxBody,
   });
   stops.push(server.stop);

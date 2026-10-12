@@ -19,7 +19,7 @@ afterEach(async () => {
 });
 
 /** A server whose `m:slow` action and `/slow` HTTP action wait for their gate; `started` lists who began. */
-async function setup(maxConcurrentRequests: number, httpActionHeadTimeoutMs?: number) {
+async function setup(maxConcurrentRequests: number, requestTimeoutMs?: number) {
   const engine = await new Engine(
     defineSchema({ items: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
@@ -70,7 +70,7 @@ async function setup(maxConcurrentRequests: number, httpActionHeadTimeoutMs?: nu
     port: 0,
     http,
     maxConcurrentRequests,
-    httpActionHeadTimeoutMs,
+    requestTimeoutMs,
     redactLogsToClient: false,
   });
   stops.push(server.stop);
@@ -135,18 +135,19 @@ test("waiting requests go in arrival order", async () => {
   expect(s.started).toEqual(["first", "w1", "w2", "w3", "w4"]);
 });
 
-test("the time waiting for a permit does not count toward the 300 s head timeout (Convex's is inside the limit)", async () => {
-  // A 150 ms head timeout; the request waits 400 ms for its permit, then answers at once.
-  const s = await setup(1, 150);
+test("the time waiting for a permit does not count toward the 300 s request timeout (Convex's is inside the limit)", async () => {
+  // A 300 ms timeout: the site request waits 200 ms for its permit, then its handler takes 200 ms more.
+  const s = await setup(1, 300);
   const a = s.slowAction("busy");
   await s.until(() => s.started.length === 1);
-  const fast = fetch(`${s.site}/fast`);
-  await Bun.sleep(400);
+  const site = s.slowSite("site");
+  await Bun.sleep(200);
   s.open("busy");
-  await a;
-  const r = await fast;
-  expect(r.status).toBe(200);
-  expect(await r.text()).toBe("fast");
+  expect(await a).toBe("busy");
+  await s.until(() => s.started.length === 2);
+  await Bun.sleep(200);
+  s.open("site");
+  expect(await site).toBe("site");
 });
 
 test("the API and the site share one limit", async () => {

@@ -143,6 +143,7 @@ import {
 import { evaluateAuthConfig, PushError, PushService } from "./push.ts";
 import { QueryArgsError, type QueryField, queryArgs } from "./query-args.ts";
 import { RequestLimit, requestLimitFromEnv, withRequestLimit } from "./request-limit.ts";
+import { REQUEST_TIMEOUT_MS, withRequestTimeout } from "./request-timeout.ts";
 import { withRequestTracing } from "./request-tracing.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
 import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
@@ -303,8 +304,11 @@ export type ServerOptions = {
    */
   cloudOrigin?: string;
   siteOrigin?: string;
-  /** No response head from an HTTP action by then answers 408 (Convex: 300 s). For tests. */
-  httpActionHeadTimeoutMs?: number;
+  /**
+   * No response head by then answers 408, on every route (Convex's `HTTP_SERVER_TIMEOUT_SECONDS`, 300 s;
+   * STUDY-147). For tests.
+   */
+  requestTimeoutMs?: number;
   /**
    * Splaying of wide invalidations (STUDY-08 §3.5). Defaults: Convex's knobs from the environment
    * (`SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD`, `SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER`), else
@@ -757,7 +761,6 @@ export function createServer(opts: ServerOptions) {
       return { ...r, caller: withRequest(r.caller, req) };
     },
     redact,
-    headTimeoutMs: opts.httpActionHeadTimeoutMs,
   };
   const serveHttpAction = httpActionServer(httpOptions);
 
@@ -1555,12 +1558,7 @@ export function createServer(opts: ServerOptions) {
         return requestError(404, "NotFound", `no route for ${url.pathname}`);
       // Everything past the meta routes may call functions: not before the deployed code is loaded.
       if (!codeLoaded) await loaded.promise;
-      // HTTP actions under /http (Convex's nest): the prefix is stripped; long requests are not cut by Bun's
-      // idle timeout (the 408 at 300 s is the HTTP action's own).
-      if (url.pathname.startsWith("/api/storage/") && files) {
-        srv.timeout(req, 0);
-        return serveStorage(files, req, url);
-      }
+      if (url.pathname.startsWith("/api/storage/") && files) return serveStorage(files, req, url);
       // Snapshot imports (STUDY-42): an upload streams to the blob store, and a one-shot import runs long.
       if (
         req.method === "POST" &&
@@ -1568,17 +1566,14 @@ export function createServer(opts: ServerOptions) {
           url.pathname.startsWith("/api/import/") ||
           url.pathname === "/api/perform_import" ||
           url.pathname === "/api/cancel_import")
-      ) {
-        srv.timeout(req, 0);
+      )
         return importRoute(url, req);
-      }
       // Every other route keeps the request body cap (H3) that Bun no longer applies on this server.
       const tooLarge = bodyCap(req);
       if (tooLarge) return tooLarge;
-      if (url.pathname === "/http" || url.pathname.startsWith("/http/")) {
-        srv.timeout(req, 0);
+      // HTTP actions under /http (Convex's nest): the prefix is stripped.
+      if (url.pathname === "/http" || url.pathname.startsWith("/http/"))
         return serveHttpAction(capped(req), url.pathname.slice(5) || "/", url.search);
-      }
       // Snapshot exports (STUDY-42).
       if (url.pathname.startsWith("/api/export/")) return exportRoute(url, req);
       // Pushes (STUDY-35): Convex's deploy2 protocol, the Deploy operation.
@@ -1786,8 +1781,14 @@ export function createServer(opts: ServerOptions) {
   // the API and the site, as Convex's site proxy forwards into the backend's service.
   const requestLimit =
     opts.maxConcurrentRequests === undefined ? requestLimitFromEnv() : new RequestLimit(opts.maxConcurrentRequests);
+  const requestTimeoutMs = opts.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
   server = Bun.serve<WsData, never>(
-    withRequestTracing(tracer, withClientVersionCheck(withRequestLimit(withApiCors(apiOptions), requestLimit))),
+    withRequestTracing(
+      tracer,
+      withClientVersionCheck(
+        withRequestLimit(withRequestTimeout(withApiCors(apiOptions), requestTimeoutMs), requestLimit),
+      ),
+    ),
   );
   /**
    * The S3 key prefix of the stores made from the environment, recorded in `_db` by the first one used
@@ -1827,20 +1828,22 @@ export function createServer(opts: ServerOptions) {
             tracer,
             withClientVersionCheck(
               withRequestLimit(
-                {
-                  port: sitePort,
-                  ...(opts.hostname ? { hostname: opts.hostname } : {}),
-                  idleTimeout: 120,
-                  ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
-                  fetch(req, srv) {
-                    const url = new URL(req.url);
-                    if (url.pathname === "/version") return versionRoute(req);
-                    if (url.pathname === "/metrics") return metricsRoute(req);
-                    srv.timeout(req, 0);
-                    if (!codeLoaded) return loaded.promise.then(() => serveHttpAction(req, url.pathname, url.search));
-                    return serveHttpAction(req, url.pathname, url.search);
-                  },
-                } as Bun.Serve.Options<undefined, never>,
+                withRequestTimeout(
+                  {
+                    port: sitePort,
+                    ...(opts.hostname ? { hostname: opts.hostname } : {}),
+                    idleTimeout: 120,
+                    ...(opts.maxRequestBodySize === undefined ? {} : { maxRequestBodySize: opts.maxRequestBodySize }),
+                    fetch(req, srv) {
+                      const url = new URL(req.url);
+                      if (url.pathname === "/version") return versionRoute(req);
+                      if (url.pathname === "/metrics") return metricsRoute(req);
+                      if (!codeLoaded) return loaded.promise.then(() => serveHttpAction(req, url.pathname, url.search));
+                      return serveHttpAction(req, url.pathname, url.search);
+                    },
+                  } as Bun.Serve.Options<undefined, never>,
+                  requestTimeoutMs,
+                ),
                 requestLimit,
               ),
             ),
