@@ -1,5 +1,7 @@
 // Convex's health routes (`crates/local_backend/src/router.rs` `health_check_routes`) and its meta `/version`
 // (`crates/common/src/http/mod.rs` `meta_routes`): no auth, plain text. STUDY-112.
+
+import { knob } from "@bunvex/core";
 import pkg from "../package.json";
 
 /**
@@ -16,11 +18,7 @@ export const MAX_ECHO_BYTES = 128 * 1024 * 1024;
  * 128 MiB. Convex declares it but does not enforce it; bunvex does (DV-375).
  */
 export function maxEchoBytesFromEnv(env = process.env): number {
-  const raw = env.MAX_ECHO_BYTES;
-  if (raw === undefined || raw === "") return MAX_ECHO_BYTES;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < 0) throw new Error(`MAX_ECHO_BYTES: not a non-negative integer: ${raw}`);
-  return n;
+  return knob("MAX_ECHO_BYTES", MAX_ECHO_BYTES, "uint", env);
 }
 
 /** What `GET /` answers: bunvex's own sentence (DV-374). */

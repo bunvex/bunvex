@@ -282,14 +282,14 @@ test("DISABLE_METRICS_ENDPOINT=true answers 404 MetricsDisabled, on both ports",
 });
 
 test("the knob is a bool as Convex's: only `true` disables; another value is ignored", () => {
-  expect(metricsEndpointDisabled(undefined)).toBe(false);
-  expect(metricsEndpointDisabled("false")).toBe(false);
-  expect(metricsEndpointDisabled("true")).toBe(true);
+  expect(metricsEndpointDisabled({})).toBe(false);
+  expect(metricsEndpointDisabled({ DISABLE_METRICS_ENDPOINT: "false" })).toBe(false);
+  expect(metricsEndpointDisabled({ DISABLE_METRICS_ENDPOINT: "true" })).toBe(true);
   const warn = console.warn;
   console.warn = () => {};
   try {
-    expect(metricsEndpointDisabled("1")).toBe(false);
-    expect(metricsEndpointDisabled("")).toBe(false);
+    expect(metricsEndpointDisabled({ DISABLE_METRICS_ENDPOINT: "1" })).toBe(false);
+    expect(metricsEndpointDisabled({ DISABLE_METRICS_ENDPOINT: "" })).toBe(false);
   } finally {
     console.warn = warn;
   }

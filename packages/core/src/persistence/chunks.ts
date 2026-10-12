@@ -4,11 +4,12 @@
 // statements of that transaction, as Convex's drivers do: Postgres at 1 024 rows per statement
 // (crates/postgres/src/lib.rs `INSERTS_PER_STATEMENT`), MySQL by bytes, 10 MiB per INSERT
 // (crates/mysql/src/chunks.rs `fill_chunks`, knob `MYSQL_MAX_CHUNK_BYTES`), under its packet limit.
+import { knob } from "../knobs.ts";
 
 /** Convex's Postgres `INSERTS_PER_STATEMENT`. */
 export const POSTGRES_ROWS_PER_STATEMENT = 1024;
 /** Convex's `MYSQL_MAX_CHUNK_BYTES` (10 MiB, under a 16 MiB `max_allowed_packet`). */
-export const MYSQL_MAX_CHUNK_BYTES = 10 * 1024 * 1024;
+export const MYSQL_MAX_CHUNK_BYTES = knob("MYSQL_MAX_CHUNK_BYTES", 10 * 1024 * 1024);
 
 /**
  * Split `rows` into consecutive chunks of at most `maxRows` rows and, by `size`, at most `maxBytes` bytes. A

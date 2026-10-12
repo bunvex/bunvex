@@ -18,6 +18,7 @@ import {
   internalIdBytes,
   internalIdOf,
   internalIdString,
+  knob,
   OutOfRetentionError,
   type TableDef,
   type TabletId,
@@ -39,12 +40,14 @@ import {
 } from "./streaming-export.ts";
 
 /** Convex's knobs (common/src/knobs.rs). */
+const pageSize = knob("DATA_SYNC_PAGE_SIZE_LIMIT", 16384);
 export const DATA_SYNC_LIMITS = {
-  pageSize: Number(process.env.DATA_SYNC_PAGE_SIZE_LIMIT ?? 16384),
-  pageBytes: Number(process.env.DATA_SYNC_PAGE_BYTES_LIMIT ?? 1 << 26),
-  maxRowsRead: Number(process.env.DATA_SYNC_MAX_ROWS_READ ?? 32768),
-  byIdFreshnessNs: BigInt(Math.round(Number(process.env.DATA_SYNC_BY_ID_FRESHNESS_SECONDS ?? 30) * 1000)) * 1_000_000n,
-  progressWriteIntervalMs: Number(process.env.DATA_SYNC_PROGRESS_WRITE_INTERVAL_MS ?? 5000),
+  pageSize,
+  pageBytes: knob("DATA_SYNC_PAGE_BYTES_LIMIT", 1 << 26),
+  // At least a page, as Convex's `.max(*DATA_SYNC_PAGE_SIZE_LIMIT)`.
+  maxRowsRead: Math.max(knob("DATA_SYNC_MAX_ROWS_READ", 32768), pageSize),
+  byIdFreshnessNs: BigInt(knob("DATA_SYNC_BY_ID_FRESHNESS_SECONDS", 30)) * 1_000_000_000n,
+  progressWriteIntervalMs: knob("DATA_SYNC_PROGRESS_WRITE_INTERVAL_MS", 5000),
 };
 export type DataSyncLimits = typeof DATA_SYNC_LIMITS;
 /** Convex's `DATA_SYNC_ACTIVE_WINDOW`: a sync is active for 3 days after its last page. */

@@ -120,6 +120,7 @@ import { readNextIndexId } from "./index-ids.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
+import { knob } from "./knobs.ts";
 import {
   hasLease,
   hasRetention,
@@ -239,7 +240,13 @@ import {
   VectorIndexes,
   vectorEntry,
 } from "./vector-indexes.ts";
-import { WriteThroughputLimiter, type WriteThroughputOptions } from "./write-throughput.ts";
+import {
+  MAX_BYTES_WRITTEN_PER_SECOND,
+  MAX_ROWS_WRITTEN_PER_SECOND,
+  WRITE_THROUGHPUT_WINDOW_MS,
+  WriteThroughputLimiter,
+  type WriteThroughputOptions,
+} from "./write-throughput.ts";
 
 /** A shuffled copy of `xs` (the compactor picks among candidates at random, as Convex's). */
 function shuffled<T>(xs: T[]): T[] {
@@ -271,9 +278,9 @@ export type TxBody<T> = (db: Tx) => Promise<T> | T;
  * backoff from UDF_EXECUTOR_OCC_INITIAL_BACKOFF = 100 ms up to UDF_EXECUTOR_OCC_MAX_BACKOFF = 2 s
  * (`Backoff::fail` in sync_types/src/backoff.rs: `min(initial * 2^failures, max) * random()`).
  */
-export const OCC_MAX_RETRIES = 4;
-export const OCC_INITIAL_BACKOFF_MS = 100;
-export const OCC_MAX_BACKOFF_MS = 2000;
+export const OCC_MAX_RETRIES = knob("UDF_EXECUTOR_OCC_MAX_RETRIES", 4);
+export const OCC_INITIAL_BACKOFF_MS = knob("UDF_EXECUTOR_OCC_INITIAL_BACKOFF_MS", 100);
+export const OCC_MAX_BACKOFF_MS = knob("UDF_EXECUTOR_OCC_MAX_BACKOFF_MS", 2000);
 
 /** The sleep before retry number `failures + 1`: full jitter over the capped exponential. */
 export const occBackoffMs = (failures: number, initialMs: number, maxMs: number, random = Math.random) =>
@@ -3735,20 +3742,10 @@ export function transactionStart(snapshot: bigint, clockMs: number, last: number
  * WRITE_THROUGHPUT_WINDOW (ms), as Convex's knobs, else defaults.
  */
 function writeThroughputFromEnv(): WriteThroughputOptions {
-  const knob = (name: string) => {
-    const raw = process.env[name];
-    if (raw === undefined || raw === "") return undefined;
-    const n = Number(raw);
-    if (!Number.isFinite(n) || n < 0) throw new Error(`${name}: not a number of at least 0: ${raw}`);
-    return n;
-  };
-  const maxBytesPerSecond = knob("MAX_BYTES_WRITTEN_PER_SECOND");
-  const maxRowsPerSecond = knob("MAX_ROWS_WRITTEN_PER_SECOND");
-  const windowMs = knob("WRITE_THROUGHPUT_WINDOW");
   return {
-    ...(maxBytesPerSecond === undefined ? {} : { maxBytesPerSecond }),
-    ...(maxRowsPerSecond === undefined ? {} : { maxRowsPerSecond }),
-    ...(windowMs === undefined ? {} : { windowMs }),
+    maxBytesPerSecond: knob("MAX_BYTES_WRITTEN_PER_SECOND", MAX_BYTES_WRITTEN_PER_SECOND),
+    maxRowsPerSecond: knob("MAX_ROWS_WRITTEN_PER_SECOND", MAX_ROWS_WRITTEN_PER_SECOND),
+    windowMs: knob("WRITE_THROUGHPUT_WINDOW", WRITE_THROUGHPUT_WINDOW_MS),
   };
 }
 
@@ -3766,24 +3763,18 @@ function indexCacheOf(
   committer: Committer,
 ): IndexCache | null {
   if (opt === false) return null;
-  const sizeEnv = process.env.INDEX_CACHE_SIZE;
-  const size = sizeEnv === undefined || sizeEnv === "" ? undefined : Number(sizeEnv);
-  if (size !== undefined && !(Number.isFinite(size) && size >= 0))
-    throw new Error(`INDEX_CACHE_SIZE must be a number of bytes, not ${JSON.stringify(sizeEnv)}`);
-  const maxBytes = opt?.maxBytes ?? size ?? INDEX_CACHE_MAX_BYTES;
+  const sizeSet = process.env.INDEX_CACHE_SIZE !== undefined;
+  const maxBytes = opt?.maxBytes ?? knob("INDEX_CACHE_SIZE", INDEX_CACHE_MAX_BYTES);
   if (maxBytes === 0) return null;
-  if (opt === undefined && size === undefined && persistence.readsInMemory === true) return null;
-  const verifyEnv = process.env.INDEX_CACHE_VERIFY_PERCENT;
-  const verify = opt?.verifyPercent ?? (verifyEnv === undefined || verifyEnv === "" ? 0 : Number(verifyEnv));
-  if (!(Number.isFinite(verify) && verify >= 0 && verify <= 100))
-    throw new Error(`INDEX_CACHE_VERIFY_PERCENT must be from 0 to 100, not ${JSON.stringify(verifyEnv)}`);
+  if (opt === undefined && !sizeSet && persistence.readsInMemory === true) return null;
+  // Past 100 verifies every hit, as Convex's `random_range(0..100) < percent`.
+  const verify = opt?.verifyPercent ?? Math.min(100, knob("INDEX_CACHE_VERIFY_PERCENT", 0));
   return new IndexCache(committer, maxBytes, verify);
 }
 
 /** UDF_CACHE_MAX_SIZE (bytes), as Convex's knob, else its default. */
 function cacheMaxBytesFromEnv(): number {
-  const n = Number(process.env.UDF_CACHE_MAX_SIZE);
-  return Number.isFinite(n) && n > 0 ? n : QUERY_CACHE_MAX_BYTES;
+  return knob("UDF_CACHE_MAX_SIZE", QUERY_CACHE_MAX_BYTES);
 }
 
 /** A schema refusing to lose a table (Convex's `SchemaEnforcementError`). */

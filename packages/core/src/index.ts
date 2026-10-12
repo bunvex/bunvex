@@ -232,6 +232,7 @@ export {
   keyValueText,
   prefixEnd,
 } from "./keyenc.ts";
+export { boolKnob, type KnobEnv, type KnobKind, knob, secondsKnob } from "./knobs.ts";
 export {
   DanglingReferenceError,
   DatabaseTimeoutError,

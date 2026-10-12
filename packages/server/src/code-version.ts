@@ -17,7 +17,7 @@ import { createHash } from "node:crypto";
 import { builtinModules } from "node:module";
 import { posix } from "node:path";
 import vm from "node:vm";
-import { installDeterminismIn, runImportPhase } from "@bunvex/core";
+import { installDeterminismIn, knob, runImportPhase, secondsKnob } from "@bunvex/core";
 import { exportedValidator, type ValidatorExport } from "./builders.ts";
 import { type CronSpec, Crons, cronSpecs } from "./cron.ts";
 import { currentAllEnv, isolateProcessEnv, nodeProcessEnv } from "./env-scope.ts";
@@ -105,8 +105,8 @@ function uncaughtAtCompile(e: unknown): string {
 }
 
 /** Convex's limits (crates/common/src/knobs.rs). */
-export const MAX_USER_MODULES = 4096;
-export const IMPORT_TIMEOUT_MS = 4000;
+export const MAX_USER_MODULES = knob("MAX_USER_MODULES", 4096);
+export const IMPORT_TIMEOUT_MS = secondsKnob("ISOLATE_ANALYZE_USER_TIMEOUT_SECONDS", 4);
 
 export type LoadOptions = {
   /** The deployment's import-phase seed and time (Convex's `UdfConfig`), so imports are reproducible. */

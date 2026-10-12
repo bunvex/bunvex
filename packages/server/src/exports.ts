@@ -19,7 +19,9 @@ import {
   type FileStorageDoc,
   formatBytes,
   insertAuditLogEvents,
+  knob,
   SYSTEM_ACTOR,
+  secondsKnob,
   type Tx,
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
@@ -33,11 +35,11 @@ const DAY_NS = 86_400_000n * NS_PER_MS;
 export const EXPORT_RETENTION_NS = 14n * DAY_NS;
 const MAX_EXPIRATION_DAYS = 60n;
 /** Convex's MAX_EXPIRED_SNAPSHOT_AGE: an expired export is deleted this long after its expiration. */
-export const MAX_EXPIRED_SNAPSHOT_AGE_NS = 30n * DAY_NS;
+export const MAX_EXPIRED_SNAPSHOT_AGE_NS = BigInt(knob("MAX_EXPIRED_SNAPSHOT_AGE_DAYS", 30)) * DAY_NS;
 /** Convex's MAX_FILE_STORAGE_EXPORT_SIZE_BYTES (1 TiB). */
 export const MAX_FILE_STORAGE_EXPORT_BYTES = 2 ** 40;
-const PAGE_SIZE = 1000;
-const PROGRESS_INTERVAL_MS = 5000;
+const PAGE_SIZE = knob("EXPORT_WORKER_PAGE_SIZE", 1000);
+const PROGRESS_INTERVAL_MS = secondsKnob("EXPORT_PROGRESS_UPDATE_INTERVAL_SECS", 5);
 const DOWNLOAD_TOKEN_TTL_MS = 5 * 60 * 1000;
 const CACHE_CONTROL = "private, max-age=2592000";
 

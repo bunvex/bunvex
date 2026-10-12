@@ -38,10 +38,14 @@ test("the knobs: size, verification, 0 turns it off", () => {
   expect(sqlite().indexCache).toMatchObject({ maxBytes: 1048576, verifyPercent: 25 });
   env("0");
   expect(sqlite().indexCache).toBeNull();
+  // Not a value: logged, and the default, as Convex's `env_config` (STUDY-147).
   env("lots");
-  expect(() => sqlite()).toThrow("INDEX_CACHE_SIZE must be a number of bytes");
+  expect(sqlite().indexCache).toMatchObject({ maxBytes: INDEX_CACHE_MAX_BYTES });
+  env(undefined, "x");
+  expect(sqlite().indexCache).toMatchObject({ verifyPercent: 0 });
+  // Past 100 verifies every hit, as Convex's `random_range(0..100) < percent`.
   env(undefined, "101");
-  expect(() => sqlite()).toThrow("INDEX_CACHE_VERIFY_PERCENT must be from 0 to 100");
+  expect(sqlite().indexCache).toMatchObject({ verifyPercent: 100 });
 });
 
 test("the option wins over the knobs; false turns it off", () => {

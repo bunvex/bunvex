@@ -57,14 +57,17 @@ test("the LZ4 block codec round-trips with a dictionary, compressible or not", (
   expect(err).not.toBeNull();
 });
 
-test("MYSQL_DOCUMENT_ENCODING: unset or empty is 0 (bunvex's default, DV-414), 0 and 1 as given, else refused", () => {
-  expect(documentEncodingFromEnv(undefined)).toBe(0);
-  expect(documentEncodingFromEnv("")).toBe(0);
-  expect(documentEncodingFromEnv("0")).toBe(0);
-  expect(documentEncodingFromEnv("1")).toBe(1);
+test("MYSQL_DOCUMENT_ENCODING: unset is 0 (bunvex's default, DV-414), 0 and 1 as given, not a number the default, else refused", () => {
+  const enc = (v: string | undefined) => documentEncodingFromEnv({ MYSQL_DOCUMENT_ENCODING: v });
+  expect(enc(undefined)).toBe(0);
+  expect(enc("0")).toBe(0);
+  expect(enc("1")).toBe(1);
+  // Not a number: logged, and the default, as Convex's `env_config` (STUDY-147).
+  expect(enc("")).toBe(0);
+  expect(enc("x")).toBe(0);
   let err: unknown = null;
   try {
-    documentEncodingFromEnv("2");
+    enc("2");
   } catch (e) {
     err = e;
   }

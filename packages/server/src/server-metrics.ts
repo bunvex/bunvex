@@ -6,15 +6,13 @@
 // process. Names follow Convex's (a unit suffix; `sync_*_args_bytes` and the like keep Convex's names) under
 // the `bunvex_` prefix, where Convex prefixes its binary's name.
 import type { Engine } from "@bunvex/core";
+import { boolKnob, type KnobEnv } from "@bunvex/core";
 import packageJson from "../package.json" with { type: "json" };
 import { type HistogramFamily, Registry, type Sample } from "./prometheus.ts";
 
 /** Convex's `DISABLE_METRICS_ENDPOINT` knob: a bool knob, so only `true` turns it on; another value is ignored. */
-export function metricsEndpointDisabled(v: string | undefined): boolean {
-  if (v === undefined || v === "false") return false;
-  if (v === "true") return true;
-  console.warn(`bunvex: invalid value ${v} for DISABLE_METRICS_ENDPOINT, falling back to false`);
-  return false;
+export function metricsEndpointDisabled(env: KnobEnv = process.env): boolean {
+  return boolKnob("DISABLE_METRICS_ENDPOINT", false, env);
 }
 
 /** Seconds, from 1 ms to 15 min (a function's duration; an action may run 30 min, past the last bound). */

@@ -15,13 +15,14 @@
 import type { Catalog } from "./catalog.ts";
 import { ENVIRONMENT_VARIABLES_TABLE } from "./catalog.ts";
 import type { Committer } from "./committer.ts";
+import { knob } from "./knobs.ts";
 import type { IndexId } from "./persistence/index.ts";
 import { compileRange, type Tx } from "./tx.ts";
 
 export const ENV_VAR_NAME_MAX_LENGTH = 256;
 export const ENV_VAR_VALUE_MAX_LENGTH = 8 * 1024;
-export const ENV_VAR_LIMIT = 512;
-export const ENV_VAR_TOTAL_SIZE_LIMIT = 512 * 1024;
+export const ENV_VAR_LIMIT = knob("ENV_VAR_LIMIT", 512);
+export const ENV_VAR_TOTAL_SIZE_LIMIT = knob("ENV_VAR_TOTAL_SIZE_LIMIT", 512 * 1024);
 const NAME = /^[a-zA-Z_]+[a-zA-Z0-9_]*$/;
 
 /** A refused change, with Convex's error code. */
