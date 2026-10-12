@@ -61,8 +61,8 @@ the row compares them with that off (Convex's `raw` profile, measured 29 Sep).
 | `packages/auth`, `packages/file-storage` | JWT / OIDC verification for `ctx.auth`; the bytes behind `ctx.storage` (local disk, S3) |
 | `packages/client` | the sync client: WebSocket, optimistic updates, pagination, HTTP client (`@bunvex/client`) |
 | `packages/react`, `nextjs`, `react-clerk`, `react-auth0`, `react-query` | React bindings, Next.js server rendering, Clerk and Auth0 providers, TanStack Query |
-| `packages/cli` | the `bunvex` command line: dev, deploy, codegen, run, env, import/export, logs, mcp (`@bunvex/cli`) |
-| `packages/bunvex` | the package an app installs (`bunvex/server`, …) |
+| `packages/cli` | the `bunvex` command line: admin-key, codegen, dashboard, data, deploy, deployment, dev, docs, env, export, function-spec, import, logs, mcp, network-test, run, typecheck, update (`@bunvex/cli`) |
+| `packages/bunvex` | an internal workspace aggregate re-exporting the `@bunvex/*` packages (private, never published: apps install `@bunvex/*`) |
 | `packages/ui`, `packages/dashboard`, `apps/dashboard` | the design system and the dashboard (on mock data for now) |
 | `packages/testing`, `sync-e2e`, `jepsen`, `differential` | test helpers and test suites (not published) |
 | `apps/site` | [bunvex.dev](https://bunvex.dev), the website (landing now, user docs later) |

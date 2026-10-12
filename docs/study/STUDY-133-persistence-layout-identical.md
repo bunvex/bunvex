@@ -1,7 +1,7 @@
 # STUDY-133 — A persisted layout identical to Convex's (cross-open)
 
 - **Status:** accepted (owner, 2026-10-05): the goal, the design and Q1–Q11 decided (§8a); the PR series
-  of §7 is being built.
+  of §7 is built (PRs 1–11).
 - **Built so far:** PRs 1–11 (§11, §12): the series is complete. PR 8 measured the gap first (§12); PR 9 is §12.3.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend; the binary
   `precompiled-2026-09-28-5c7cb5b/convex-local-backend` for the probes in §1.12.
