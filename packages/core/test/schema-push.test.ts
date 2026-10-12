@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { v } from "@bunvex/values";
 import { SCHEMAS_TABLE } from "../src/catalog.ts";
-import { Engine, SchemaPushError } from "../src/engine.ts";
+import { Engine, OccError, SchemaPushError } from "../src/engine.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
 import { declaredTables, defineSchema, defineTable } from "../src/schema.ts";
 import { schemaFromJson, schemaToJson } from "../src/schema-json.ts";
@@ -380,5 +380,38 @@ describe("a push of a schema already there (Convex's submit_pending, STUDY-35 §
     await e.mutation((db) => db.insert("items", { n: 1 }));
     expect((await byIndex(e, "by_n", "n", 1)).length).toBe(1);
     expect((await rows(e)).find((r) => r.state.state === "active")!._id).toBe(p.schemaId);
+  });
+});
+
+describe("finish_push retries", () => {
+  // Convex's FINISH_PUSH_MAX_OCC_FAILURES (STUDY-147): 8, beyond a function's UDF_EXECUTOR_OCC_MAX_RETRIES (4).
+  const conflicting = async (conflicts: number) => {
+    const e = await new Engine(v1, new SqlitePersistence(tmp(), { durable: true }), {
+      storedSchema: true,
+      indexBackfill: { chunkRate: null },
+      occInitialBackoffMs: 1,
+      occMaxBackoffMs: 1,
+    }).init();
+    engines.push(e);
+    const id = await e.mutation((db) => db.insert("items", { n: 0 }));
+    const p = await e.startSchemaPush(v1);
+    await until(async () => (await e.schemaPushStatus(p.schemaId)).type === "complete");
+    let attempts = 0;
+    const result = await e
+      .commitSchemaPush(p.schemaId, async (db) => {
+        await db.get("items", id);
+        // Another commit changes what this one read, so it conflicts and is run again.
+        if (++attempts <= conflicts) await e.mutation((w) => w.patch("items", id, { n: attempts }));
+      })
+      .then(
+        () => "committed",
+        (err: Error) => (err instanceof OccError ? "OccError" : err.message),
+      );
+    return { result, attempts };
+  };
+
+  test("a push that conflicts 8 times commits on its 9th run; 9 times, it fails", async () => {
+    expect(await conflicting(8)).toEqual({ result: "committed", attempts: 9 });
+    expect(await conflicting(9)).toEqual({ result: "OccError", attempts: 9 });
   });
 });
