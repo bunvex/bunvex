@@ -4,7 +4,7 @@ import { defineSchema, defineTable, Engine, patchJob } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { BunvexError, v } from "@bunvex/values";
 import { action, callerOf, Functions, internalMutation, mutation, query } from "../src/functions.ts";
-import { ScheduledJobExecutor } from "../src/scheduler.ts";
+import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "../src/scheduler.ts";
 
 const stops: (() => Promise<unknown> | unknown)[] = [];
 afterEach(async () => {
@@ -21,7 +21,13 @@ async function until<T>(f: () => Promise<T | undefined | false> | T | undefined 
 }
 
 async function setup(
-  opts: { start?: boolean; parallelism?: number; retentionSeconds?: number; maxBytesPerSecond?: number } = {},
+  opts: {
+    start?: boolean;
+    parallelism?: number;
+    retentionSeconds?: number;
+    maxBytesPerSecond?: number;
+    gc?: Pick<SchedulerOptions, "gcBatchSize" | "gcDelayMs">;
+  } = {},
 ) {
   const engine = await new Engine(
     defineSchema({ items: defineTable(v.any()), counters: defineTable(v.any()) }),
@@ -163,6 +169,7 @@ async function setup(
     occMaxBackoffMs: 5,
     errorInitialBackoffMs: 5,
     errorMaxBackoffMs: 20,
+    ...opts.gc,
   });
   if (opts.start !== false) executor.start();
   stops.push(() => executor.stop());
@@ -461,6 +468,44 @@ describe("the executor", () => {
     const id = (await functions.runMutation("m:schedule", { delay: 0 })) as string;
     await until(async () => (await state(id)) === "success");
     await until(async () => (await setupJob(functions, id)) === null, "garbage collected");
+  });
+
+  // Convex's `ScheduledJobGarbageCollector` (STUDY-147).
+  test("with none expired yet, the collector wakes when the oldest completed job leaves the window", async () => {
+    const { functions, state } = await setup({ retentionSeconds: 1 });
+    const id = (await functions.runMutation("m:schedule", { delay: 0 })) as string;
+    await until(async () => (await state(id)) === "success");
+    const done = Date.now();
+    // Its first run (1 s after the start) finds the job still kept; the next is when it expires, not later.
+    for (let i = 0; i < 100 && (await setupJob(functions, id)) !== null; i++) await Bun.sleep(20);
+    expect(await setupJob(functions, id)).toBeNull();
+    const after = Date.now() - done;
+    expect(after).toBeGreaterThanOrEqual(900);
+    expect(after).toBeLessThan(1800);
+  });
+
+  test("expired jobs go a batch a transaction, the next batch gcDelayMs later", async () => {
+    const { functions, state, engine } = await setup({ retentionSeconds: 0, gc: { gcBatchSize: 2, gcDelayMs: 300 } });
+    const batches: number[] = [];
+    engine.committer.onCommit((entries) => {
+      if (entries.some((e) => e.source === "_system/scheduled_job_gc")) batches.push(Date.now());
+    });
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i++) ids.push((await functions.runMutation("m:schedule", { delay: 0 })) as string);
+    await until(async () => (await Promise.all(ids.map(state))).every((s) => s === "success"));
+    for (let i = 0; i < 150 && batches.length < 3; i++) await Bun.sleep(20);
+    expect(batches.length).toBe(3);
+    expect(batches[1]! - batches[0]!).toBeGreaterThanOrEqual(280);
+    expect(batches[2]! - batches[1]!).toBeGreaterThanOrEqual(280);
+  });
+
+  test("the collector's knobs are Convex's", () => {
+    expect(schedulerOptionsFromEnv({})).toMatchObject({
+      gcBatchSize: 100,
+      gcDelayMs: 1000,
+      gcInitialBackoffMs: 1000,
+      gcMaxBackoffMs: 30_000,
+    });
   });
 });
 

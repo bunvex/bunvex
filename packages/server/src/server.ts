@@ -1,6 +1,13 @@
 // The transports: the HTTP one-shot API (Convex's `/api/{query,mutation,action}` shape) and the sync
 // protocol v1 at `/api/{version}/sync` (sync.ts, STUDY-23). One process: the committer is single by design.
-import { type AuthConfig, AuthenticationError, type AuthInfo, parseAuthConfig, TokenVerifier } from "@bunvex/auth";
+import {
+  type AuthConfig,
+  AuthenticationError,
+  type AuthInfo,
+  HTTP_CACHE_MAX_BYTES,
+  parseAuthConfig,
+  TokenVerifier,
+} from "@bunvex/auth";
 import {
   applyEnvVarChanges,
   BackendIsNotRunningError,
@@ -615,6 +622,7 @@ export function createServer(opts: ServerOptions) {
   const makeVerifier = (infos: AuthInfo[]) =>
     new TokenVerifier(infos, {
       redactErrors: redact,
+      cacheMaxBytes: knob("HTTP_CACHE_SIZE", HTTP_CACHE_MAX_BYTES),
       fetch: proxiedFetch(withDefaultUserAgent(opts.authFetch ?? directFetch), httpProxy),
     });
   /** The auth config's verifier; a push replaces it with its auth.config's (STUDY-35). */
