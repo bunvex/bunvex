@@ -14,8 +14,9 @@
 //
 // This is not a security boundary: `vm` is not one (DV-164; ARCH-01 decision 3 stays open).
 import { createHash } from "node:crypto";
-import { builtinModules } from "node:module";
-import { posix } from "node:path";
+import { builtinModules, createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join, posix } from "node:path";
 import vm from "node:vm";
 import { installDeterminismIn, knob, runImportPhase, secondsKnob } from "@bunvex/core";
 import { exportedValidator, type ValidatorExport } from "./builders.ts";
@@ -141,6 +142,16 @@ const BUILTINS = new Set([
   "bun:sqlite",
   "bun:ffi",
 ]);
+
+/**
+ * Where `"use node"` modules sit for `require` (Convex's executor sets `require` to `createRequire(<module path>)`,
+ * the module's file in its source package directory, `npm-packages/node-executor/src/executor.ts`): Bun's bundle
+ * turns `require(…)` of anything it leaves external (a builtin) into `import.meta.require(…)`, so each Node module's
+ * `import.meta.require` is a `require` from `<root>/modules/<path>`. Nothing is written there; with no packages
+ * beside it, only builtins resolve (STUDY-148).
+ */
+const NODE_MODULES_ROOT = join(tmpdir(), "bunvex-node");
+const nodeRequire = (path: string) => createRequire(join(NODE_MODULES_ROOT, "modules", path));
 
 /** A module's name as the registry keys it: its path without `.js` (`dir/file.js` → `dir/file`). */
 export const moduleName = (path: string) => path.replace(/\.js$/, "");
@@ -293,6 +304,13 @@ export class CodeVersion {
         module = new vm.SourceTextModule(`${m.source}\n//# sourceURL=${moduleUrl(versionId, m.path)}`, {
           context,
           identifier: m.path,
+          ...(m.environment === "node"
+            ? {
+                initializeImportMeta: (meta: { require?: NodeJS.Require }) => {
+                  meta.require = nodeRequire(m.path);
+                },
+              }
+            : {}),
         });
       } catch (e) {
         throw new InvalidModulesError(`Failed to analyze ${m.path}: ${uncaughtAtCompile(e)}`);
