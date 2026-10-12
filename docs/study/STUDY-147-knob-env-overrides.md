@@ -284,6 +284,14 @@ connection is closed after 90 s (postgres.js `idle_timeout`; mysql2 `idleTimeout
 no Convex counterpart and keeps `POOL` (16). Not built: MySQL's 600 s forced lifetime, which mysql2's pool has no
 setting for. The drivers' own `open` keeps 16 as its default when called directly (tests, the conformance suite).
 
+Measured (DV-112 asked for it before a default changed): `bench/server.ts` on Postgres 17 (local container), a load
+of half `listByTenant` queries and half `insertItem` mutations over 100 tenants, 15 s per run, two runs each.
+With 32 clients, 5 718–5 849 operations/s at pool 16 against 5 584–5 747 at pool 128 (p50 5.1–5.4 ms, p99 15–17
+ms both); with 256 clients, 6 885–6 952 against 6 817–6 849 (p50 37–38 ms, p99 72–77 ms both). No difference
+beyond noise: the server never had more than 18 connections open with the pool at 128, as the pool opens them
+only as calls need them. With `POSTGRES_INACTIVE_CONNECTION_LIFETIME_SECS=3`, the 18 connections after a load were
+down to 1 eight seconds later.
+
 ## 4. Divergences
 
 None new. The reader matches `env_config`; the knobs whose defaults or scope differ are already decided:
