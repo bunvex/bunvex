@@ -12,9 +12,18 @@ const DOS_DATE_1980 = (0 << 9) | (1 << 5) | 1; // 1980-01-01
 const UNIX_0644 = (0o100644 << 16) >>> 0;
 
 /** An entry compressed into a temporary file, ready to append (its uncompressed size orders tables). */
-export type PreparedEntry = { name: string; tmp: string; crc: number; csize: number; usize: number };
+/** `mode`: the entry's Unix mode (type and permissions, e.g. `0o100755`); 0644 regular files when absent. */
+export type PreparedEntry = { name: string; tmp: string; crc: number; csize: number; usize: number; mode?: number };
 
-type Central = { name: Buffer; crc: number; csize: number; usize: number; offset: number; utf8: boolean };
+type Central = {
+  name: Buffer;
+  crc: number;
+  csize: number;
+  usize: number;
+  offset: number;
+  utf8: boolean;
+  mode?: number;
+};
 
 export class ZipFileWriter {
   private entries: Central[] = [];
@@ -38,9 +47,9 @@ export class ZipFileWriter {
 
   private prepared = 0;
 
-  /** Add an entry: its bytes, as one buffer or a stream of chunks. */
-  async add(name: string, source: Uint8Array | string | AsyncIterable<Uint8Array>) {
-    await this.append(await this.prepare(name, source));
+  /** Add an entry: its bytes, as one buffer or a stream of chunks; `mode`, its Unix mode (0644 by default). */
+  async add(name: string, source: Uint8Array | string | AsyncIterable<Uint8Array>, mode?: number) {
+    await this.append({ ...(await this.prepare(name, source)), ...(mode === undefined ? {} : { mode }) });
   }
 
   /** Compress an entry into a temporary file, to append later. */
@@ -67,7 +76,7 @@ export class ZipFileWriter {
   }
 
   /** Append a prepared entry: its header, then its compressed bytes. */
-  async append({ name, tmp, crc, csize, usize }: PreparedEntry) {
+  async append({ name, tmp, crc, csize, usize, mode }: PreparedEntry) {
     const nameBytes = Buffer.from(name);
     const utf8 = /[^\x20-\x7e]/.test(name);
     const offset = this.offset;
@@ -75,7 +84,7 @@ export class ZipFileWriter {
     for await (const chunk of createReadStream(tmp)) await this.write(chunk as Buffer);
     await rm(tmp, { force: true });
     this.temps.delete(tmp);
-    this.entries.push({ name: nameBytes, crc, csize, usize, offset, utf8 });
+    this.entries.push({ name: nameBytes, crc, csize, usize, offset, utf8, ...(mode === undefined ? {} : { mode }) });
   }
 
   /** Write the central directory; the archive's size. */
@@ -149,7 +158,7 @@ function centralDirectory(entries: Central[], cdStart: number): Buffer {
     h.writeUInt32LE(big[0] !== null ? MAX32 : e.usize, 24);
     h.writeUInt16LE(e.name.length, 28);
     h.writeUInt16LE(extra.length, 30);
-    h.writeUInt32LE(UNIX_0644, 38);
+    h.writeUInt32LE(e.mode === undefined ? UNIX_0644 : (e.mode << 16) >>> 0, 38);
     h.writeUInt32LE(big[2] !== null ? MAX32 : e.offset, 42);
     parts.push(h, e.name, extra);
   }

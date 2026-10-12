@@ -9,7 +9,16 @@ const MAX32 = 0xffffffff;
 const EOCD_SIZE = 22;
 const MAX_COMMENT = 0xffff;
 
-export type ZipEntry = { name: string; method: number; crc: number; csize: number; usize: number; offset: number };
+/** `mode`: the Unix mode an archive made on Unix records (type and permissions), else 0. */
+export type ZipEntry = {
+  name: string;
+  method: number;
+  crc: number;
+  csize: number;
+  usize: number;
+  offset: number;
+  mode: number;
+};
 
 /** The bytes of `[start, end]` (inclusive), and those of a range as a stream. */
 export type RangeSource = {
@@ -72,6 +81,8 @@ export class ZipReader {
       const nameLen = cd.readUInt16LE(p + 28);
       const extraLen = cd.readUInt16LE(p + 30);
       const commentLen = cd.readUInt16LE(p + 32);
+      const madeOnUnix = cd.readUInt16LE(p + 4) >> 8 === 3;
+      const mode = madeOnUnix ? cd.readUInt32LE(p + 38) >>> 16 : 0;
       let offset = cd.readUInt32LE(p + 42);
       const name = cd.subarray(p + 46, p + 46 + nameLen).toString(flags & 0x0800 ? "utf8" : "latin1");
       // The ZIP64 extra field holds, in order, the values whose 32-bit fields are saturated.
@@ -96,7 +107,7 @@ export class ZipReader {
       p = extraEnd + commentLen;
       if (name.endsWith("/")) continue;
       if (method !== 0 && method !== 8) throw new InvalidZipError(`unsupported compression method ${method}`);
-      entries.push({ name, method, crc, csize, usize, offset });
+      entries.push({ name, method, crc, csize, usize, offset, mode });
     }
     return new ZipReader(src, entries);
   }

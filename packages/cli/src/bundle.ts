@@ -10,12 +10,21 @@
 // - `bunvex`, `bunvex/*` and `@bunvex/*` stay external: the server links them to its own modules;
 // - ESM, code splitting into `_deps/[hash].js` chunks, source maps, `process.env.NODE_ENV` "production";
 // - `schema.ts` and `auth.config.ts` are bundled on their own (`schema.js`, `auth.config.js`);
+// - `node.externalPackages` (STUDY-148): the `"use node"` build leaves the listed packages as imports, and the
+//   push names them and their installed versions for the deployment to install (`external.ts`);
 // - `import "server-only"` (Next.js's guard) is an empty module, and `import m from "./x.wasm"` is a compiled
 //   `WebAssembly.Module` with the file's bytes inlined, as Convex's `serverOnlyPlugin` and `wasmPlugin`
 //   (STUDY-83).
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { BunPlugin } from "bun";
+import {
+  computeExternalPackages,
+  type ExternalPackages,
+  externalPackageVersions,
+  externalPlugin,
+  type NodeDependency,
+} from "./external.ts";
 
 /** A pushed module, as Convex's `ModuleConfig`. */
 export type ModuleConfig = { path: string; source: string; sourceMap?: string; environment: "isolate" | "node" };
@@ -115,6 +124,8 @@ async function build(
   node: boolean,
   project: string,
   includeSourcesContent: boolean,
+  /** The `"use node"` build's external packages, and the names it left external (STUDY-148). */
+  external?: { packages: ExternalPackages; used: Set<string> },
 ): Promise<ModuleConfig[]> {
   if (!entries.length) return [];
   const result = await Bun.build({
@@ -129,7 +140,8 @@ async function build(
     minify: { syntax: true },
     external: EXTERNAL,
     define: { "process.env.NODE_ENV": '"production"' },
-    plugins: PLUGINS,
+    // Convex's order: `server-only`, then the external packages, then `.wasm`.
+    plugins: external?.packages.size ? [serverOnly, externalPlugin(external.packages, external.used), wasm] : PLUGINS,
     naming: { entry: "[dir]/[name].js", chunk: node ? "_deps/node/[hash].js" : "_deps/[hash].js" },
     throw: false,
   });
@@ -214,18 +226,27 @@ function realpathOr(path: string): string {
   }
 }
 
-export type Bundled = { modules: ModuleConfig[]; schema: ModuleConfig | null };
+export type Bundled = {
+  modules: ModuleConfig[];
+  schema: ModuleConfig | null;
+  /** The packages the deployment installs for the `"use node"` modules (the push's `nodeDependencies`). */
+  nodeDependencies: NodeDependency[];
+};
 
 /** The functions directory as a push sends it: its modules (auth.config.js among them) and the schema. */
 /** `project`: the directory the CLI works in (the sources' paths are relative to it, as Convex's). */
 /**
  * `includeSourcesContent`: bunvex.json's `bundler.includeSourcesContent` (STUDY-145). Convex's esbuild leaves the
  * original sources out of the source maps unless it is true; Bun always writes them, so they are dropped here.
+ * `externalPackages`: bunvex.json's `node.externalPackages` (STUDY-148), read from the project's `package.json`.
  */
 export async function bundleFunctions(
   dir: string,
   project = process.cwd(),
-  { includeSourcesContent = false }: { includeSourcesContent?: boolean } = {},
+  {
+    includeSourcesContent = false,
+    externalPackages = [],
+  }: { includeSourcesContent?: boolean; externalPackages?: string[] } = {},
 ): Promise<Bundled> {
   if (!existsSync(dir)) throw new BundleError(`No functions directory at ${dir}.`);
   const entries = entryPoints(dir);
@@ -237,9 +258,12 @@ export async function bundleFunctions(
     if (rel === "http" || rel === "crons")
       throw new BundleError(`${posix(relative(dir, e))} may not use the "use node" directive.`);
   }
+  // Only the `"use node"` build uses the list, as Convex's (an isolate file importing a listed package bundles it);
+  // the project's `package.json` is read whenever the list is not empty, as Convex's `bundle` does.
+  const external = { packages: computeExternalPackages(project, externalPackages), used: new Set<string>() };
   const modules = [
     ...(await build(dir, isolate, false, project, includeSourcesContent)),
-    ...(await build(dir, node, true, project, includeSourcesContent)),
+    ...(await build(dir, node, true, project, includeSourcesContent, external)),
   ];
   const single = async (names: string[], as: string) => {
     const found = names.map((n) => join(dir, n)).filter(existsSync);
@@ -262,5 +286,5 @@ export async function bundleFunctions(
   const schema = await single(["schema.ts", "schema.js"], "schema.js");
   const auth = await single(["auth.config.ts", "auth.config.js"], "auth.config.js");
   if (auth) modules.push(auth);
-  return { modules, schema };
+  return { modules, schema, nodeDependencies: externalPackageVersions(external.packages, external.used) };
 }

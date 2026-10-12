@@ -43,6 +43,7 @@ import {
   EMPTY_CLOUD_SYSTEM_TABLES,
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
+  EXTERNAL_DEPS_PACKAGES_TABLE,
   FILE_STORAGE_TABLE,
   FUNCTION_HANDLES_TABLE,
   finishCatalog,
@@ -882,6 +883,7 @@ export class Engine {
         document: v.any(),
       },
       // Convex's, kept empty: Convex creates them on every start (STUDY-133 §12 M1).
+      { name: EXTERNAL_DEPS_PACKAGES_TABLE, indexes: {}, document: v.any() },
       ...EMPTY_CLOUD_SYSTEM_TABLES.map((name) => ({ name, indexes: {}, document: v.any() })),
     ];
     return [...systemTables, ...declaredTables(schema).values()];

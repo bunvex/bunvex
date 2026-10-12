@@ -5,8 +5,8 @@
 //   `_udf_config` — the import phase's seed and time (Convex's `UdfConfig`), so a version imports the same way
 //     every time it is loaded.
 // The rows have Convex's shapes (STUDY-134, DV-424): crates/model/src/source_packages/types.rs
-// `SerializedSourcePackage` (`sha256` as bytes, `packageSize` as int64 sizes, `externalPackageId` null,
-// `nodeVersion` the push's or null, STUDY-145) and crates/model/src/modules/types.rs `SerializedModuleMetadata` (`sha256` in base64,
+// `SerializedSourcePackage` (`sha256` as bytes, `packageSize` as int64 sizes, `externalPackageId` the push's
+// `_external_deps_packages` row or null, STUDY-148; `nodeVersion` the push's or null, STUDY-145) and crates/model/src/modules/types.rs `SerializedModuleMetadata` (`sha256` in base64,
 // `analyzeResult` as `SerializedAnalyzedModule`, positions as int64). Code in memory keeps its own types: rows are
 // encoded when written and decoded when read, here. As in Convex, the schema and the auth config are modules too.
 // The modules store is its own use case (`modules`), apart from user files, whose orphan sweep would
@@ -25,6 +25,7 @@ import type { BlobStore } from "@bunvex/file-storage";
 import type { Value } from "@bunvex/values";
 import { type AnalyzedModule, CodeVersion, type ModuleSource, moduleHash, moduleName } from "./code-version.ts";
 import { cronSpecOf, cronSpecsRow, msOfNs, nsOfMs } from "./cron-rows.ts";
+import { externalDepsPath, externalDepsRow } from "./external-deps.ts";
 import { SERVER_VERSION } from "./server-version.ts";
 import type { SourcePosition } from "./source-position.ts";
 import { bytesSource, entryBytes, ZipReader } from "./zip-reader.ts";
@@ -49,7 +50,8 @@ function zippedLimit(env: KnobEnv = process.env): number {
 export type SourcePackageFields = {
   storageKey: string;
   sha256: ArrayBuffer;
-  externalPackageId: null;
+  /** The push's `_external_deps_packages` row (STUDY-148), or null. */
+  externalPackageId: string | null;
   packageSize: { zippedSizeBytes: bigint; unzippedSizeBytes: bigint };
   /** The push's `node.nodeVersion` ("20", "22" or "24"), or null (STUDY-145). */
   nodeVersion: string | null;
@@ -78,19 +80,29 @@ type PackageMetadata = {
   externalDepsStorageKey: string | null;
 };
 
+/** A push's external packages (STUDY-148), as its package records them: the row, its blob and its sizes. */
+export type PackageExternalDeps = { id: string; storageKey: string; zipped: number; unzipped: number };
+
 /**
  * A push's modules as Convex's package (`write_package`): a zip with each module's source at `modules/<path>`,
- * its source map at `modules/<path>.map`, by path, then `metadata.json`; the unzipped size counts the sources, the
- * maps and the metadata, as Convex's. Over a limit it throws Convex's `ModulesTooLarge` (`verify_size`), which
- * `start_push` meets first, before anything is analyzed (Convex uploads and checks the package there).
+ * its source map at `modules/<path>.map`, by path, then `metadata.json` (`externalDepsStorageKey` the external
+ * packages' blob, STUDY-148); the unzipped size counts the sources, the maps and the metadata, as Convex's. Over a
+ * limit, the external packages' sizes added (Convex's `upload_packages` checks the total), it throws Convex's
+ * `ModulesTooLarge` (`verify_size`), which `start_push` meets first, before anything is analyzed (Convex uploads
+ * and checks the package there).
  */
 export function buildPackage(
   modules: ModuleSource[],
   limits: { zipped: number; unzipped: number } = { zipped: zippedLimit(), unzipped: MAX_UNZIPPED_PACKAGE_BYTES },
+  external: PackageExternalDeps | null = null,
 ): { zip: Uint8Array; unzipped: number } {
   const enc = new TextEncoder();
   const entries: { name: string; data: Uint8Array }[] = [];
-  const metadata: PackageMetadata = { modulePaths: [], moduleEnvironments: [], externalDepsStorageKey: null };
+  const metadata: PackageMetadata = {
+    modulePaths: [],
+    moduleEnvironments: [],
+    externalDepsStorageKey: external?.storageKey ?? null,
+  };
   let unzipped = 0;
   for (const m of [...modules].sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0))) {
     const source = enc.encode(m.source);
@@ -110,13 +122,15 @@ export function buildPackage(
   unzipped += metadataJson.length;
   // Convex's order: the zipped size, then the unzipped one; sizes in binary units (humansize's BINARY).
   const zip = zipInMemory(entries);
-  if (zip.length >= limits.zipped)
+  const zippedTotal = zip.length + (external?.zipped ?? 0);
+  const unzippedTotal = unzipped + (external?.unzipped ?? 0);
+  if (zippedTotal >= limits.zipped)
     throw new ModulesTooLargeError(
-      `Total module size exceeded the zipped maximum (${formatBytes(zip.length)} > maximum size ${formatBytes(limits.zipped)})`,
+      `Total module size exceeded the zipped maximum (${formatBytes(zippedTotal)} > maximum size ${formatBytes(limits.zipped)})`,
     );
-  if (unzipped >= limits.unzipped)
+  if (unzippedTotal >= limits.unzipped)
     throw new ModulesTooLargeError(
-      `Total module size exceeded the unzipped maximum (${formatBytes(unzipped)} > maximum size ${formatBytes(limits.unzipped)})`,
+      `Total module size exceeded the unzipped maximum (${formatBytes(unzippedTotal)} > maximum size ${formatBytes(limits.unzipped)})`,
     );
   return { zip, unzipped };
 }
@@ -130,13 +144,14 @@ export async function writePackage(
   modules: ModuleSource[],
   limits?: { zipped: number; unzipped: number },
   nodeVersion: string | null = null,
+  external: PackageExternalDeps | null = null,
 ): Promise<SourcePackageFields> {
-  const { zip, unzipped } = buildPackage(modules, limits);
+  const { zip, unzipped } = buildPackage(modules, limits, external);
   const written = await store.put(zip);
   return {
     storageKey: written.key,
     sha256: written.sha256.slice().buffer,
-    externalPackageId: null,
+    externalPackageId: external?.id ?? null,
     packageSize: { zippedSizeBytes: BigInt(written.size), unzippedSizeBytes: BigInt(unzipped) },
     nodeVersion,
   };
@@ -421,9 +436,16 @@ export async function loadLatestCode(
   const sources = await readablePackage(store, stored.pkg.storageKey);
   if (!sources) return null;
   const config = await udfConfig(engine);
+  // The push's external packages (STUDY-148), extracted for this process from the modules store.
+  let nodeModules: string | undefined;
+  if (stored.pkg.externalPackageId) {
+    const row = await externalDepsRow(engine, stored.pkg.externalPackageId);
+    if (!row) throw new Error(`the external packages ${stored.pkg.externalPackageId} of the deployed code are missing`);
+    nodeModules = await externalDepsPath(store, row);
+  }
   const version = await CodeVersion.load(
     sources.filter((m) => m.path !== AUTH_CONFIG_MODULE && m.path !== SCHEMA_MODULE),
-    { seed: config.seed, timestamp: config.timestamp, env },
+    { seed: config.seed, timestamp: config.timestamp, env, ...(nodeModules ? { nodeModules } : {}) },
   );
   return { version, authConfig: sources.find((m) => m.path === AUTH_CONFIG_MODULE) ?? null };
 }

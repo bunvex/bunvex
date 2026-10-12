@@ -106,6 +106,8 @@ export type StartOptions = {
   app?: string;
   /** Environment variables for the backend's process (a knob such as `V8_ACTION_USER_TIMEOUT_SECS`). */
   env?: Record<string, string>;
+  /** Change the project before its CLI deploys it (packages, `package.json`, the config file; STUDY-148). */
+  prepare?: (project: string, dir: "convex" | "bunvex") => void;
 };
 
 /** A store a backend can be started on, then the other one (the cross-open tests). */
@@ -171,7 +173,7 @@ function caller(url: string): Backend["call"] {
 }
 
 /** The app in a fresh project directory for one backend: `dir` is `convex` or `bunvex`, imports rewritten. */
-function project(state: string, dir: "convex" | "bunvex", app = APP): string {
+function project(state: string, dir: "convex" | "bunvex", app = APP, prepare?: StartOptions["prepare"]): string {
   const proj = join(state, "project");
   const functions = join(proj, dir);
   mkdirSync(functions, { recursive: true });
@@ -194,6 +196,7 @@ function project(state: string, dir: "convex" | "bunvex", app = APP): string {
   );
   // The CLI and the packages the app imports: this package's own node_modules.
   symlinkSync(join(PACKAGE, "node_modules"), join(proj, "node_modules"));
+  prepare?.(proj, dir);
   return proj;
 }
 
@@ -239,7 +242,7 @@ export async function startConvex(opts: StartOptions = {}): Promise<Backend> {
     const adminKey = (
       await run([ORACLE_BIN, "keygen", "admin-key", "--instance-name", up.name, "--instance-secret", secret], state)
     ).trim();
-    const proj = project(state, "convex", opts.app);
+    const proj = project(state, "convex", opts.app, opts.prepare);
     const cli = (args: string[]) =>
       run([join(proj, "node_modules/.bin/convex"), ...args], proj, {
         CONVEX_SELF_HOSTED_URL: up.url,
@@ -303,7 +306,7 @@ export async function startBunvex(opts: StartOptions = {}): Promise<Backend> {
         state,
       )
     ).trim();
-    const proj = project(state, "bunvex", opts.app);
+    const proj = project(state, "bunvex", opts.app, opts.prepare);
     const envFile = join(state, "deployment.env");
     writeFileSync(envFile, `BUNVEX_SELF_HOSTED_URL=${up.url}\nBUNVEX_SELF_HOSTED_ADMIN_KEY=${adminKey}\n`);
     const cli = (args: string[]) => run([process.execPath, BUNVEX_CLI, ...args, "--env-file", envFile], proj);

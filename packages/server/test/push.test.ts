@@ -1163,6 +1163,29 @@ describe("environment variables (STUDY-37)", () => {
     expect(keys).not.toContain("HOME");
   });
 
+  test("a module reads the deployment's variables at import, from the push on, as after a restart (Convex's analysis)", async () => {
+    const dir = tmp();
+    const store = new MemoryBlobStore();
+    const d = await deployment(dir, { store });
+    await d.post("/api/update_environment_variables", { changes: [{ name: "AT_IMPORT", value: "set" }] });
+    const atImport = (path: string, environment: "isolate" | "node", builder: string): ModuleSource => ({
+      path,
+      environment,
+      source: `${environment === "node" ? '"use node";\n' : ""}import { ${builder} } from "@bunvex/server";
+        const value = process.env.AT_IMPORT ?? null;
+        export const read = ${builder}(async () => value);`,
+    });
+    await d.push([atImport("iso.js", "isolate", "query"), atImport("nod.js", "node", "action")]);
+    // Checked against Convex's backend: the push's analysis sees the variables, and the version it installs keeps them.
+    expect((await d.call("query", "iso:read")).value).toBe("set");
+    expect((await d.call("action", "nod:read")).value).toBe("set");
+    await d.s.shutdown();
+    const again = await deployment(dir, { store });
+    stops.push(() => again.s.shutdown());
+    await again.s.codeReady;
+    expect((await again.call("query", "iso:read")).value).toBe("set");
+  });
+
   test("canonical URLs (STUDY-49): get, set, unset; process.env and actions see them; audited", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());
