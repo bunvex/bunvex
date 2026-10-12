@@ -255,6 +255,26 @@ export default defineSchema({ notes: defineTable({ a: v.string(), b: v.string(),
     expect(await deploy()).toEqual([]);
   });
 
+  test("the version check (AD-29): its notice after the push; one still running does not hold the command", async () => {
+    const d = await deployment();
+    const app = tmp();
+    write(app, APP);
+    const flags = ["deploy", "--url", d.url, "--admin-key", KEY, "--typecheck=disable"];
+    const notice =
+      "A newer version of bunvex is available: 9.9.9 (this is 0.1.0). Run `bunvex update` to see how to upgrade.";
+    const told = io(app);
+    told.it.versionCheck = async () => notice;
+    expect(await main(flags, told.it)).toBe(0);
+    expect(told.err.at(-1)).toBe(notice);
+    expect(told.out).toEqual([`✔ Deployed functions to ${d.url}`]);
+    const hanging = io(app);
+    hanging.it.versionCheck = () => new Promise(() => {});
+    const start = performance.now();
+    expect(await main(flags, hanging.it)).toBe(0);
+    expect(performance.now() - start).toBeLessThan(5000);
+    expect(hanging.err.join("\n")).not.toContain("newer version");
+  });
+
   test("a second deploy changes one module; flags and bunvex.json's functions directory", async () => {
     const d = await deployment();
     const app = tmp();
@@ -269,6 +289,80 @@ export default defineSchema({ notes: defineTable({ a: v.string(), b: v.string(),
     const dry = io(app);
     expect(await main(["deploy", "--dry-run", ...flags], dry.it)).toBe(0);
     expect(dry.out[0]).toMatch(/^Dry run: \d+ modules, 4 functions; nothing was changed\.$/);
+  });
+
+  test("bunvex.json's node.nodeVersion and bundler.includeSourcesContent reach the deployment (STUDY-145)", async () => {
+    const d = await deployment();
+    const app = tmp();
+    write(app, APP);
+    const flags = ["--url", d.url, "--admin-key", KEY, "--typecheck=disable"];
+    const packages = async () =>
+      (await d.engine.query((db) => db.asSystem(() => db.query("_source_packages").collect()))) as unknown as {
+        nodeVersion: string | null;
+        packageSize: { unzippedSizeBytes: bigint };
+      }[];
+    const nodeDiffs = async () =>
+      (
+        (await d.engine.query((db) => db.asSystem(() => db.query("_deployment_audit_log").collect()))) as unknown as {
+          action: string;
+          metadata: { node_version_diff: unknown };
+        }[]
+      )
+        .filter((e) => e.action === "push_config_with_components")
+        .map((e) => e.metadata.node_version_diff);
+    const configHashes = async () =>
+      (await (
+        await fetch(`${d.url}/api/get_config_hashes`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bunvex ${KEY}` },
+          body: JSON.stringify({ adminKey: KEY }),
+        })
+      ).json()) as { nodeVersion: unknown };
+
+    // No `node.nodeVersion`: none stored, no diff.
+    expect(await main(["deploy", ...flags], io(app).it)).toBe(0);
+    expect((await packages()).map((p) => p.nodeVersion)).toEqual([null]);
+    expect((await configHashes()).nodeVersion).toBeNull();
+    const withoutSources = (await packages())[0]!.packageSize.unzippedSizeBytes;
+
+    // A supported version is stored with the package, answered by get_config_hashes, and diffed in the audit log.
+    write(app, { "bunvex.json": '{"node":{"nodeVersion":"22"}}' });
+    expect(await main(["deploy", ...flags], io(app).it)).toBe(0);
+    expect((await packages()).map((p) => p.nodeVersion)).toEqual(["22"]);
+    expect((await configHashes()).nodeVersion).toBe("22");
+    write(app, { "bunvex.json": '{"node":{"nodeVersion":"24"},"bundler":{"includeSourcesContent":true}}' });
+    expect(await main(["deploy", ...flags], io(app).it)).toBe(0);
+    expect((await packages()).map((p) => p.nodeVersion)).toEqual(["24"]);
+    write(app, { "bunvex.json": "{}" });
+    expect(await main(["deploy", ...flags], io(app).it)).toBe(0);
+    expect(await nodeDiffs()).toEqual([
+      null,
+      { previous_version: null, next_version: "22" },
+      { previous_version: "22", next_version: "24" },
+      { previous_version: "24", next_version: null },
+    ]);
+
+    // `includeSourcesContent` puts the sources back into the stored maps: the package grows by at least them.
+    const sources = Object.entries(APP)
+      .filter(([p]) => /^bunvex\/(messages|lib\/format|http|crons|jobs|files)\.ts$/.test(p))
+      .reduce((n, [, text]) => n + text.length, 0);
+    write(app, { "bunvex.json": '{"bundler":{"includeSourcesContent":true}}' });
+    expect(await main(["deploy", ...flags], io(app).it)).toBe(0);
+    const withSources = (await packages())[0]!.packageSize.unzippedSizeBytes;
+    expect(Number(withSources - withoutSources)).toBeGreaterThanOrEqual(sources);
+
+    // Convex's checks of the version (400 `InvalidConfig`), before anything is pushed.
+    for (const [version, message] of [
+      ["18", "Node 18 is no longer supported. Upgrade to a newer Node version."],
+      ["16", "Invalid node version: 16"],
+      ["20.x", "Invalid node version: 20.x"],
+    ]) {
+      write(app, { "bunvex.json": JSON.stringify({ node: { nodeVersion: version } }) });
+      const refused = io(app);
+      expect(await main(["deploy", ...flags], refused.it)).toBe(1);
+      expect(refused.err.join("\n")).toContain(message);
+    }
+    expect((await packages()).map((p) => p.nodeVersion)).toEqual([null]);
   });
 
   test('errors: no deployment, a module that fails at import, Node APIs without "use node"', async () => {
@@ -328,7 +422,7 @@ export default defineSchema({ notes: defineTable({ a: v.string(), b: v.string(),
       "bunvex/auth.config.ts": `export default { providers: [{ domain: "https://issuer.example", applicationID: "app" }] };`,
       "bunvex/more.ts": `import { query } from ${JSON.stringify(SERVER)}; import { shout } from "./lib/format"; export const q = query(async () => shout("x"));`,
     });
-    const b = await bundleFunctions(join(app, "bunvex"));
+    const b = await bundleFunctions(join(app, "bunvex"), process.cwd(), { includeSourcesContent: true });
     expect(b.schema?.path).toBe("schema.js");
     expect(b.modules.find((m) => m.path === "auth.config.js")?.source).toContain("issuer.example");
     expect(b.modules.find((m) => m.path === "files.js")?.environment).toBe("node");
@@ -349,6 +443,17 @@ export default defineSchema({ notes: defineTable({ a: v.string(), b: v.string(),
       }
     }
     expect(checked).toBeGreaterThan(3);
+    // Convex's default (`bundler.includeSourcesContent` false): the same maps, with no `sourcesContent` key, as
+    // esbuild writes them (STUDY-145).
+    const plain = await bundleFunctions(join(app, "bunvex"), process.cwd());
+    const withMaps = plain.modules.filter((m) => m.sourceMap);
+    expect(withMaps.length).toBe(b.modules.filter((m) => m.sourceMap).length);
+    for (const m of withMaps) {
+      const map = JSON.parse(m.sourceMap!) as Record<string, unknown>;
+      expect(Object.keys(map)).not.toContain("sourcesContent");
+      const full = JSON.parse(b.modules.find((x) => x.path === m.path)!.sourceMap!) as Record<string, unknown>;
+      expect(map).toEqual({ ...full, sourcesContent: undefined });
+    }
   });
 
   test('`import "server-only"` bundles to an empty module, installed or not; a `.wasm` import is a WebAssembly.Module (STUDY-83)', async () => {

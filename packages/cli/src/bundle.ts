@@ -109,7 +109,13 @@ export function usesNode(source: string): boolean {
   return !!directives && /(['"])use node\1/.test(directives[1]!);
 }
 
-async function build(dir: string, entries: string[], node: boolean, project: string): Promise<ModuleConfig[]> {
+async function build(
+  dir: string,
+  entries: string[],
+  node: boolean,
+  project: string,
+  includeSourcesContent: boolean,
+): Promise<ModuleConfig[]> {
   if (!entries.length) return [];
   const result = await Bun.build({
     entrypoints: entries,
@@ -149,7 +155,7 @@ async function build(dir: string, entries: string[], node: boolean, project: str
     const text = await o.text();
     const source = text.replace(/^\/\/ @bun[^\n]*\n/, "");
     if (map && source !== text) map = withoutFirstLine(map);
-    if (map) map = withSourcesFromOut(map, path, project);
+    if (map) map = withSourcesFromOut(map, path, project, includeSourcesContent);
     out.push({ path, source, ...(map ? { sourceMap: map } : {}), environment: node ? "node" : "isolate" });
   }
   return out;
@@ -172,12 +178,19 @@ export function withoutFirstLine(map: string): string {
  * A module's source map with its `sources` named as Convex's bundler names them (esbuild with `outdir: "out"`,
  * run in the project's directory): relative to the module's place under `<project>/out/`, so `messages.js`
  * names its source `../bunvex/messages.ts`. Bun names them from this process's working directory. An error's
- * frames show these paths (STUDY-95).
+ * frames show these paths (STUDY-95). Without `includeSourcesContent` (Convex's default) the map has no
+ * `sourcesContent`, as esbuild's `sourcesContent: false` writes it (STUDY-145).
  */
-export function withSourcesFromOut(map: string, modulePath: string, project: string): string {
+export function withSourcesFromOut(
+  map: string,
+  modulePath: string,
+  project: string,
+  includeSourcesContent = true,
+): string {
   try {
-    const m = JSON.parse(map) as { sources?: unknown };
-    if (!Array.isArray(m.sources)) return map;
+    const m = JSON.parse(map) as { sources?: unknown; sourcesContent?: unknown };
+    if (!includeSourcesContent) delete m.sourcesContent;
+    if (!Array.isArray(m.sources)) return JSON.stringify(m);
     const from = posix(join("out", posix(modulePath).split("/").slice(0, -1).join("/")));
     // Real paths on both sides: a temporary directory under a symlink (macOS's /var) names one path two ways.
     const realProject = realpathOr(project);
@@ -205,7 +218,15 @@ export type Bundled = { modules: ModuleConfig[]; schema: ModuleConfig | null };
 
 /** The functions directory as a push sends it: its modules (auth.config.js among them) and the schema. */
 /** `project`: the directory the CLI works in (the sources' paths are relative to it, as Convex's). */
-export async function bundleFunctions(dir: string, project = process.cwd()): Promise<Bundled> {
+/**
+ * `includeSourcesContent`: bunvex.json's `bundler.includeSourcesContent` (STUDY-145). Convex's esbuild leaves the
+ * original sources out of the source maps unless it is true; Bun always writes them, so they are dropped here.
+ */
+export async function bundleFunctions(
+  dir: string,
+  project = process.cwd(),
+  { includeSourcesContent = false }: { includeSourcesContent?: boolean } = {},
+): Promise<Bundled> {
   if (!existsSync(dir)) throw new BundleError(`No functions directory at ${dir}.`);
   const entries = entryPoints(dir);
   const node: string[] = [];
@@ -216,7 +237,10 @@ export async function bundleFunctions(dir: string, project = process.cwd()): Pro
     if (rel === "http" || rel === "crons")
       throw new BundleError(`${posix(relative(dir, e))} may not use the "use node" directive.`);
   }
-  const modules = [...(await build(dir, isolate, false, project)), ...(await build(dir, node, true, project))];
+  const modules = [
+    ...(await build(dir, isolate, false, project, includeSourcesContent)),
+    ...(await build(dir, node, true, project, includeSourcesContent)),
+  ];
   const single = async (names: string[], as: string) => {
     const found = names.map((n) => join(dir, n)).filter(existsSync);
     if (found.length > 1) throw new BundleError(`Found both ${found.join(" and ")}: keep one.`);

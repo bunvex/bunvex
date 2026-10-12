@@ -18,7 +18,14 @@ afterEach(async () => {
 });
 
 async function setup() {
-  const server = Bun.serve({ port: 0, fetch: async (req) => new Response(`got ${(await req.text()).length}`) });
+  const server = Bun.serve({
+    port: 0,
+    fetch: async (req) => {
+      const status = Number(new URL(req.url).searchParams.get("redirect") ?? 0);
+      if (status) return new Response(null, { status, headers: { location: "/x" } });
+      return new Response(`got ${(await req.text()).length}`);
+    },
+  });
   stops.push(() => server.stop(true));
   const url = `http://127.0.0.1:${server.port}/x`;
   const engine = await new Engine(
@@ -37,6 +44,14 @@ async function setup() {
       await (await fetch(url)).text(); // no body
       // A failed request is not charged.
       await fetch("http://127.0.0.1:1/", { method: "POST", body: "lost" }).catch(() => null);
+      return null;
+    }),
+    // Each hop is a request, metered as Convex meters it (STUDY-142).
+    redirects: action(async () => {
+      await (await fetch(`${url}?redirect=307`, { method: "POST", body: "hello" })).text(); // 5, then 5 again
+      await (await fetch(`${url}?redirect=308`, { method: "POST", body: new Uint8Array(7) })).text(); // 7 + 7
+      await (await fetch(`${url}?redirect=302`, { method: "POST", body: "abc" })).text(); // 3, then a GET
+      await (await fetch(`${url}?redirect=303`, { method: "PUT", body: "four" })).text(); // 4, then a GET
       return null;
     }),
     nodeFetch,
@@ -65,6 +80,12 @@ test("an action's fetch request bodies are its network egress, and dataEgressGb"
   expect(last().networkEgressBytes).toBe(5 + 7 + 3 + 4);
   expect(meter.usage("dataEgressGb", "day")).toBe(19);
   expect(meter.usage("functionCalls", "day")).toBe(1);
+});
+
+test("a redirect that sends the body again (307, 308) is metered again; one that drops it is not", async () => {
+  const { functions, last } = await setup();
+  await functions.runAction("m:redirects", {});
+  expect(last().networkEgressBytes).toBe(5 + 5 + 7 + 7 + 3 + 4);
 });
 
 test("a Node action's fetch is not metered, as Convex self-hosted", async () => {

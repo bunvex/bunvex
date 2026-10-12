@@ -3,7 +3,7 @@
 // and an index kept up to date by commits.
 import { expect, test } from "bun:test";
 import { decodeId, v } from "@bunvex/values";
-import { defineSchema, defineTable, Engine } from "../src/index.ts";
+import { declaredTables, defineSchema, defineTable, Engine } from "../src/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { schemaFromJson, schemaToJson } from "../src/schema-json.ts";
 
@@ -167,8 +167,8 @@ test("vector indexes in the schema JSON: staged apart, filter fields sorted, rou
     ],
   });
   const back = schemaFromJson(json);
-  expect(back.tables.get("docs")!.stagedVector).toEqual(["staged"]);
-  expect(back.tables.get("docs")!.vectorIndexes!.by_embedding!.dimensions).toBe(3);
+  expect(declaredTables(back).get("docs")!.stagedVector).toEqual(["staged"]);
+  expect(declaredTables(back).get("docs")!.vectorIndexes!.by_embedding!.dimensions).toBe(3);
   expect(schemaToJson(back)).toEqual(json);
   // A table without vector indexes has empty lists, as Convex's export writes them.
   expect(schemaToJson(defineSchema({ plain: defineTable({}) })).tables[0]).toMatchObject({
