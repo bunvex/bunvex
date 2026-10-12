@@ -10,4 +10,4 @@ export {
 } from "./config.ts";
 export { AuthenticationError } from "./errors.ts";
 export { identityFromCustomJwt, identityFromOidc, type UserIdentity, type VerifiedIdentity } from "./identity.ts";
-export { TokenVerifier, type VerifierOptions } from "./verify.ts";
+export { HTTP_CACHE_MAX_BYTES, TokenVerifier, type VerifierOptions } from "./verify.ts";
