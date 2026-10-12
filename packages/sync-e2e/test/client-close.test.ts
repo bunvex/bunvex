@@ -118,12 +118,16 @@ const scripts: [string, string][] = [
   ],
 ];
 for (const [name, source] of scripts)
-  test(`${name}: a process whose client connected and closed exits by itself (G-C21)`, () => {
+  test(`${name}: a process whose client connected and closed exits by itself (G-C21)`, async () => {
     const dir = mkdtempSync(join(tmpdir(), "bunvex-close-"));
     cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
     const file = join(dir, `${name.replaceAll(" ", "-")}.ts`);
     writeFileSync(file, source);
-    const p = Bun.spawnSync([process.execPath, file], { timeout: 15_000, stdout: "pipe", stderr: "pipe" });
-    expect(p.stdout.toString()).toContain("closed");
-    expect(p.exitCode).toBe(0);
+    // Async, the pipes read alongside `exited`: on a loaded CI runner other tests' `Bun.spawnSync` once sat until
+    // the test timeout killed a child that had done its work ("killed 1 dangling process"). A child that does not
+    // exit by itself is still killed at 15 s, and its exit code is then not 0.
+    const p = Bun.spawn([process.execPath, file], { timeout: 15_000, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [code, out] = await Promise.all([p.exited, new Response(p.stdout).text(), new Response(p.stderr).text()]);
+    expect(out).toContain("closed");
+    expect(code).toBe(0);
   }, 20_000);

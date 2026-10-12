@@ -2,7 +2,7 @@
 // snapshot, `_storage` with its files, one export at a time, downloads (admin key or token), expiration,
 // cancellation, cleanup, the operations each route needs.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
@@ -78,14 +78,27 @@ async function setup() {
   return { engine, functions, api, post, latest, waitDone, tsOf, download, exportStore };
 }
 
-/** The ZIP's entries in order, and each one's text, via `unzip` (Info-ZIP reads what Convex's tools read). */
+/**
+ * The ZIP's entries in order, and each one's text, via `unzip` (Info-ZIP reads what Convex's tools read).
+ * Two async runs, their output in files: no `Bun.spawnSync`, no stdout pipe. On a loaded CI runner a
+ * `spawnSync` whose child had already exited 0 once sat until the 5 s test timeout killed it ("killed 1
+ * dangling process"), and this test, the zip-reader's and the CLI's spawnSync tests all failed so in one job.
+ */
 async function unzip(bytes: ArrayBuffer) {
   const d = mkdtempSync(join(tmpdir(), "bunvex-export-"));
   dirs.push(d);
   const f = join(d, "x.zip");
+  const list = join(d, "names.txt");
+  const out = join(d, "out");
   await Bun.write(f, bytes);
-  const names = Bun.spawnSync(["unzip", "-Z1", f]).stdout.toString().trim().split("\n");
-  const read = (name: string) => Bun.spawnSync(["unzip", "-p", f, name]).stdout.toString();
+  const run = async (args: string[], stdout: "ignore" | ReturnType<typeof Bun.file>) => {
+    const code = await Bun.spawn(["unzip", ...args], { stdin: "ignore", stdout, stderr: "inherit" }).exited;
+    if (code !== 0) throw new Error(`unzip ${args.join(" ")} exited ${code}`);
+  };
+  await run(["-Z1", f], Bun.file(list));
+  await run(["-q", f, "-d", out], "ignore");
+  const names = (await Bun.file(list).text()).trim().split("\n");
+  const read = (name: string) => readFileSync(join(out, name), "utf8");
   return { names, read };
 }
 

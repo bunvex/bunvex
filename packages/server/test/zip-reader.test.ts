@@ -46,17 +46,26 @@ test("Info-ZIP archives: stored, deflated, forced ZIP64, and streamed with data 
   const d = tmp();
   writeFileSync(join(d, "a.txt"), "hello\n");
   writeFileSync(join(d, "b.txt"), "x".repeat(5000));
-  const zip = (args: string[], stdin?: string) => {
-    const r = Bun.spawnSync(["zip", "-q", ...args], {
+  // Async, the pipes read alongside `exited`: a `Bun.spawnSync` here once sat on a loaded CI runner until the
+  // test timeout killed its child ("killed 1 dangling process"), as exports.test.ts's did.
+  const zip = async (args: string[], stdin?: string) => {
+    const p = Bun.spawn(["zip", "-q", ...args], {
       cwd: d,
-      stdin: stdin === undefined ? undefined : Buffer.from(stdin),
+      stdin: stdin === undefined ? "ignore" : Buffer.from(stdin),
+      stdout: "pipe",
+      stderr: "pipe",
     });
-    if (r.exitCode !== 0) throw new Error(r.stderr.toString());
-    return r.stdout;
+    const [code, out, err] = await Promise.all([
+      p.exited,
+      new Response(p.stdout).arrayBuffer(),
+      new Response(p.stderr).text(),
+    ]);
+    if (code !== 0) throw new Error(err);
+    return out;
   };
-  zip(["plain.zip", "a.txt", "b.txt"]);
-  zip(["-fz", "z64.zip", "a.txt", "b.txt"]);
-  const piped = zip(["-fz", "-", "-"], "from a pipe\n");
+  await zip(["plain.zip", "a.txt", "b.txt"]);
+  await zip(["-fz", "z64.zip", "a.txt", "b.txt"]);
+  const piped = await zip(["-fz", "-", "-"], "from a pipe\n");
   for (const [name, bytes] of [
     ["plain.zip", new Uint8Array(await Bun.file(join(d, "plain.zip")).arrayBuffer())],
     ["z64.zip", new Uint8Array(await Bun.file(join(d, "z64.zip")).arrayBuffer())],
