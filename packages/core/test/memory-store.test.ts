@@ -50,14 +50,14 @@ describe("the log's first line (PERSIST-01 C10)", () => {
     expect(readFileSync(path, "utf8")).toBe(HEADER);
   });
 
-  test("a first line that is not a header or a record is refused before the lock is taken; the file is untouched", async () => {
+  test("a first line that is not a header is refused before the lock is taken; the file is untouched", async () => {
     for (const line of ["hello\n", "5\n", "null\n", '{"x":1}\n', '"layout"\n', "hello"]) {
       const path = logPath();
       writeFileSync(path, line);
       const e = await openLog(path).catch((x) => x);
       expect(e).toBeInstanceOf(LayoutError);
       expect(e.message).toBe(
-        `the memory store's log ${path} is not a bunvex store: its first line is neither a layout header nor a commit record`,
+        `the memory store's log ${path} is not a bunvex store: its first line is not a layout header`,
       );
       expect(readFileSync(path, "utf8")).toBe(line);
       expect(existsSync(`${path}.lock`)).toBe(false);
