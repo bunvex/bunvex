@@ -344,7 +344,7 @@ describe("retention", () => {
   });
 
   test("a pass stops at its cap and the next one continues where it stopped", async () => {
-    const { e } = await open(":memory:", { ...manual, maxPerPass: 20 });
+    const { e } = await open(":memory:", { ...manual, indexMaxPerPass: 20, documentMaxScanned: 1_000_000 });
     // More commits than one page of the document log (256), so a pass can stop between pages.
     await churn(e);
     await churn(e);
@@ -356,6 +356,21 @@ describe("retention", () => {
     expect(r.indexCursor).toBe(r.minIndexTs - 1n);
   });
 
+  test("the document pass has its own cap (DOCUMENT_RETENTION_MAX_SCANNED_DOCUMENTS), apart from the index one", async () => {
+    const { e } = await open(":memory:", { ...manual, indexMaxPerPass: 1_000_000, documentMaxScanned: 20 });
+    await churn(e);
+    await churn(e);
+    const r = e.retention!;
+    await r.advance();
+    // The index pass is not held by the document cap: one pass does it all.
+    expect(await r.deleteIndexes()).toBe(false);
+    await r.advance();
+    expect(await r.deleteDocuments()).toBe(true);
+    expect(r.documentCursor).toBeLessThan(r.minDocumentTs - 1n);
+    while (await r.deleteDocuments());
+    expect(r.documentCursor).toBe(r.minDocumentTs - 1n);
+  });
+
   test("Convex's defaults, and the delays from the environment in seconds", () => {
     const r = new Retention({} as never, {} as never);
     expect(r.opts).toMatchObject({
@@ -364,12 +379,27 @@ describe("retention", () => {
       advanceEveryMs: 30_000,
       indexChunk: 512,
       documentChunk: 256,
-      maxPerPass: 10_000,
+      indexMaxPerPass: 10_000,
+      documentMaxScanned: 10_000,
       documentRatePerSec: 256,
       documentEveryMs: 60_000,
       checkpointEveryMs: 300_000,
       maxBackoffMs: 60_000,
     });
+    process.env.RETENTION_DELETE_BATCH = "11";
+    process.env.DOCUMENT_RETENTION_MAX_SCANNED_DOCUMENTS = "12";
+    process.env.RETENTION_DELETE_FREQUENCY = "13";
+    try {
+      expect(new Retention({} as never, {} as never).opts).toMatchObject({
+        indexMaxPerPass: 11,
+        documentMaxScanned: 12,
+        maxBackoffMs: 13_000,
+      });
+    } finally {
+      delete process.env.RETENTION_DELETE_BATCH;
+      delete process.env.DOCUMENT_RETENTION_MAX_SCANNED_DOCUMENTS;
+      delete process.env.RETENTION_DELETE_FREQUENCY;
+    }
     process.env.INDEX_RETENTION_DELAY = "60";
     process.env.DOCUMENT_RETENTION_DELAY = "172800";
     try {

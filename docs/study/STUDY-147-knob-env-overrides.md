@@ -1,7 +1,8 @@
 # STUDY-147 — Knob environment overrides
 
 - **Status:** PR 1 implemented (the shared reader, every knob whose mechanism exists); PR 3a implemented (five
-  defaults matched, §3.2); PR 3b implemented (`HTTP_SERVER_TIMEOUT_SECONDS` on every route, §3.3); PR 2 planned
+  defaults matched, §3.2); PR 3b implemented (`HTTP_SERVER_TIMEOUT_SECONDS` on every route, §3.3); PR 2 in parts (one PR each, §3.4):
+  retention implemented, the rest planned
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend (`crates/common/src/knobs.rs`,
   `crates/cmd_util/src/env.rs`, `self-hosted/advanced/knobs.md`)
 - **Related:** [platform.md](../parity/platform.md) "Knob env overrides"; STUDY-25 (store timeouts), STUDY-33
@@ -83,7 +84,7 @@ unknown encoding.
 Every knob of `knobs.rs` at `d8bdde0`, plus those outside it, is in one of five groups. The full table, with
 each knob's default and where bunvex keeps it, was checked file by file; it is summarized here.
 
-**Read from the environment (131 after PR 1, 139 after PR 3a).** Everything bunvex has a mechanism for, under Convex's name and
+**Read from the environment (131 after PR 1, 139 after PR 3a, 142 after PR 2's retention part).** Everything bunvex has a mechanism for, under Convex's name and
 default unless a decided divergence says otherwise:
 
 | Area | Knobs |
@@ -93,7 +94,7 @@ default unless a decided divergence says otherwise:
 | Concurrency | `APPLICATION_MAX_CONCURRENT_QUERIES`, `_MUTATIONS`, `_V8_ACTIONS`, `_NODE_ACTIONS`, `APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT`, `APPLICATION_FUNCTION_RUNNER_ACTION_SEMAPHORE_TIMEOUT`, `HTTP_SERVER_MAX_CONCURRENT_REQUESTS` (DV-364), `HTTP_SERVER_TIMEOUT_SECONDS` (HTTP actions only until PR 3), `MAX_BYTES_WRITTEN_PER_SECOND`, `MAX_ROWS_WRITTEN_PER_SECOND`, `WRITE_THROUGHPUT_WINDOW` |
 | Committer and write log | `COMMITTER_MAX_WRITE_BATCH_DOCUMENTS`, `COMMITTER_MAX_WRITE_BATCH_BYTES`, `INITIAL_PERSISTENCE_WRITES_BACKOFF_MS`, `MAX_PERSISTENCE_WRITES_BACKOFF_MS`, `MAX_REPEATABLE_TIMESTAMP_COMMIT_DELAY`, `MAX_REPEATABLE_TIMESTAMP_IDLE_FREQUENCY`, `WRITE_LOG_MIN_RETENTION_SECS`, `WRITE_LOG_MAX_RETENTION_SECS`, `WRITE_LOG_SOFT_MAX_SIZE_BYTES` |
 | Caches | `INDEX_CACHE_SIZE`, `INDEX_CACHE_VERIFY_PERCENT` (DV-433) |
-| Retention and cleanup | `INDEX_RETENTION_DELAY`, `DOCUMENT_RETENTION_DELAY`, `INDEX_RETENTION_DELETE_CHUNK`, `DOCUMENT_RETENTION_DELETE_CHUNK`, `DOCUMENT_RETENTION_RATE_LIMIT`, `DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS`, `RETENTION_CHECKPOINT_PERIOD_SECS`, `MAX_SESSION_CLEANUP_DURATION_HOURS`, `SYSTEM_TABLE_CLEANUP_FREQUENCY_SECONDS`, `SYSTEM_TABLE_CLEANUP_CHUNK_SIZE`, `SYSTEM_TABLE_CLEANUP_ROWS_PER_SECOND`, `TABLE_SUMMARY_MAX_CHECKPOINT_AGE`, `TABLE_SUMMARY_MAX_AGE_WITH_WRITES`, `TABLE_SUMMARY_AGE_JITTER_SECONDS` |
+| Retention and cleanup | `INDEX_RETENTION_DELAY`, `DOCUMENT_RETENTION_DELAY`, `INDEX_RETENTION_DELETE_CHUNK`, `DOCUMENT_RETENTION_DELETE_CHUNK`, `DOCUMENT_RETENTION_RATE_LIMIT`, `DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS`, `RETENTION_CHECKPOINT_PERIOD_SECS`, `RETENTION_DELETE_BATCH`, `DOCUMENT_RETENTION_MAX_SCANNED_DOCUMENTS`, `RETENTION_DELETE_FREQUENCY`, `MAX_SESSION_CLEANUP_DURATION_HOURS`, `SYSTEM_TABLE_CLEANUP_FREQUENCY_SECONDS`, `SYSTEM_TABLE_CLEANUP_CHUNK_SIZE`, `SYSTEM_TABLE_CLEANUP_ROWS_PER_SECOND`, `TABLE_SUMMARY_MAX_CHECKPOINT_AGE`, `TABLE_SUMMARY_MAX_AGE_WITH_WRITES`, `TABLE_SUMMARY_AGE_JITTER_SECONDS` |
 | Index backfill | `INDEX_BACKFILL_CHUNK_SIZE`, `INDEX_BACKFILL_CHUNK_RATE`, `INDEX_BACKFILL_READ_SIZE`, `INDEX_BACKFILL_PROGRESS_INTERVAL_SECONDS`, `INDEX_BACKFILL_CONCURRENCY`, `INDEX_WORKERS_INITIAL_BACKOFF`, `INDEX_WORKERS_MAX_BACKOFF` |
 | Search | `SEARCH_INDEX_SIZE_SOFT_LIMIT`, `SEARCH_INDEX_SIZE_HARD_LIMIT`, `VECTOR_INDEX_SIZE_SOFT_LIMIT`, `VECTOR_INDEX_SIZE_HARD_LIMIT`, `SEGMENT_MAX_SIZE_BYTES`, `MIN_COMPACTION_SEGMENTS`, `MAX_COMPACTION_SEGMENTS`, `MAX_SEGMENT_DELETED_PERCENTAGE`, `DATABASE_WORKERS_POLL_INTERVAL`, `DATABASE_WORKERS_MIN_COMMITS`, `SEARCH_WORKERS_MAX_CHECKPOINT_AGE`, `SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY` |
 | Scheduler and crons | `SCHEDULED_JOB_EXECUTION_PARALLELISM`, `SCHEDULED_JOB_RETENTION`, `SCHEDULER_OCC_INITIAL_BACKOFF_MS`, `SCHEDULER_OCC_MAX_BACKOFF_MS`, `SCHEDULED_JOB_INITIAL_BACKOFF_MS`, `SCHEDULED_JOB_MAX_BACKOFF_SECS`, `MAX_JOBS_CANCEL_BATCH`, `CRON_SPLAY_SECONDS` |
@@ -102,9 +103,7 @@ default unless a decided divergence says otherwise:
 | Logs and metrics | `LOG_MANAGER_EVENT_RECV_BUFFER_SIZE`, `LOG_MANAGER_AGGREGATION_INTERVAL`, `AXIOM_MAX_ATTRIBUTES`, `AUDIT_LOG_MAX_LINES`, `AUDIT_LOG_MAX_LINE_SIZE_BYTES`, `AUDIT_LOG_MAX_TOTAL_SIZE_BYTES`, `AUDIT_LOG_MAX_HEAP_SIZE_BYTES`, `MAX_UDF_EXECUTION`, `UDF_METRICS_BUCKET_WIDTH_SECS`, `UDF_METRICS_MAX_BUCKETS`, `USAGE_LIMIT_EVALUATE_INTERVAL_SECS`, `USAGE_TRACKING_PERIOD_SECS`, `DISABLE_METRICS_ENDPOINT`, `MAX_ECHO_BYTES` (DV-375) |
 | Stores | `POSTGRES_TIMEOUT_SECONDS`, `MYSQL_TIMEOUT_SECONDS`, `MONGODB_TIMEOUT_SECONDS` (bunvex's driver), `MYSQL_DOCUMENT_ENCODING` (DV-414), `MYSQL_MAX_CHUNK_BYTES` |
 
-**Read after PR 2 (the mechanism changes first).** `RETENTION_DELETE_BATCH` and
-`DOCUMENT_RETENTION_MAX_SCANNED_DOCUMENTS` share one retention option today, to be split;
-`RETENTION_DELETE_FREQUENCY` is only the error backoff's cap here (Convex also waits it at start);
+**Read after PR 2 (the mechanism changes first).** The retention knobs (done, §3.4);
 `INDEX_BACKFILL_ENABLE` needs a switch on the three places an index worker starts; `MYSQL_MAX_QUERY_RETRIES` is
 a fixed single retry shared with Postgres; the three `UDF_METRICS_*` histogram knobs need the histogram layout
 computed from them; `UDF_404_ON_BAD_PATH` needs the 404 answer; `MYSQL_SMART_CHUNK_MAX_SIZE` (was
@@ -213,6 +212,26 @@ never sent and its body is cancelled. Uploads slower than the timeout answer 408
 2026-10-12: match, the knob raises it). The HTTP actions' own timer is gone; `createServer`'s
 `httpActionHeadTimeoutMs` option became `requestTimeoutMs`.
 
+### 3.4 PR 2, retention: the delete caps and the backoff
+
+**Convex** (`crates/common/src/knobs.rs`, `crates/database/src/retention.rs`,
+`crates/common/src/persistence/row_index_retention.rs`): `RETENTION_DELETE_BATCH` (10 000) ends an index pass once
+it has handled that many expired index entries (`row_index_retention.rs`); `DOCUMENT_RETENTION_MAX_SCANNED_DOCUMENTS`
+(10 000) ends a document pass once it has scanned that many expired versions (`retention.rs`); in both, the next
+pass follows at once. `RETENTION_DELETE_FREQUENCY` (Rust's `MAX_RETENTION_DELAY_SECONDS`, 60 s; its comment also
+names a start delay that no code applies) caps the backoff after an error of the index deleter; the document
+deleter's backoff is capped at `DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS` instead.
+
+**bunvex before.** One option, `maxPerPass`, capped both passes, and none of the three was read from the
+environment; one 60 s cap applied to every loop's backoff.
+
+**bunvex now.** `indexMaxPerPass` (`RETENTION_DELETE_BATCH`) and `documentMaxScanned`
+(`DOCUMENT_RETENTION_MAX_SCANNED_DOCUMENTS`) are apart; `maxBackoffMs` is `RETENTION_DELETE_FREQUENCY` for the
+window advance and the index deleter, and the document deleter backs off up to `documentEveryMs`, as Convex's.
+The caps are checked where they were (before each page of the log, so a pass may go one page past), not after
+each deleted chunk as Convex's: where a pass stops differs by at most a page, which no app sees. With the
+defaults nothing changes.
+
 ## 4. Divergences
 
 None new. The reader matches `env_config`; the knobs whose defaults or scope differ are already decided:
@@ -240,6 +259,8 @@ DV-375 (`MAX_ECHO_BYTES` enforced), DV-414 (`MYSQL_DOCUMENT_ENCODING` default 0)
   pages of 128 by each index, with segments or in memory), `scheduler` (the collector wakes when the oldest
   job expires; batches `gcDelayMs` apart; the defaults), `auth/verify` (the cache's bound, eviction of the
   oldest). Sabotage: each change reverted fails its test.
+- PR 2, retention: `retention` (the index cap and the document cap apart, each stopping its own pass; the
+  three knobs from the environment). Sabotage: either pass checking the other's cap fails a test.
 - PR 3b: `request-timeout` (an `/api/action` call past the timeout answers 408 with no body and the action
   finishes; a body streamed past it is not cut; a slow upload answers 408; a WebSocket stays open), and
   `request-limit` (the wait for a permit does not count). Sabotage: the API port unwrapped fails the first;
