@@ -64,7 +64,8 @@ bunvex/
 │   │   ├── mongodb                  (optional peer: mongodb)                                  ✅
 │   │   └── tls (internal)           TLS required + verified by default, as Convex (STUDY-25 L8) ✅
 │   │
-│   ├── persistence-conformance/     @bunvex/persistence-conformance   the PERSIST-01 K-suite, published ✅
+│   ├── persistence-conformance/     @bunvex/persistence-conformance   the PERSIST-01 K-suite ✅ (not
+│   │                                published: a driver author runs it from a clone of this repo)
 │   │
 │   ├── protocol/                    @bunvex/protocol                  sync v1 + HTTP messages ✅
 │   │
@@ -149,6 +150,7 @@ bunvex/
 │   │   ├── deployment               usage and usage limits (STUDY-118)                         ✅
 │   │   ├── typecheck                tsc or tsgo on the functions (STUDY-117)                  ✅
 │   │   ├── logs, data               watch function logs, list tables and documents (STUDY-47, STUDY-43) ✅
+│   │   ├── function-spec            every function's args and returns, as JSON (STUDY-37, STUDY-105) ✅
 │   │   ├── import, export           snapshot ZIP, CSV, JSON, JSON Lines (STUDY-42)            ✅
 │   │   ├── mcp                      MCP server for AI tools: the official SDK, zod (STUDY-121) ✅
 │   │   └── network-test, docs, update, dashboard  as Convex's, self-hosted (STUDY-146)  ✅
@@ -158,10 +160,10 @@ bunvex/
 │   ├── sync-e2e/, jepsen/,          tests only, never published: end-to-end sync (STUDY-26),
 │   │   differential/                consistency runs (STUDY-57), against Convex's backend (STUDY-122) ✅
 │   │
-│   └── bunvex/                      bunvex           ← THE ONLY PACKAGE AN APP INSTALLS
+│   └── bunvex/                      bunvex (private)  internal workspace aggregate, never published
 │       └── (re-exports)             bunvex/server · bunvex/values · bunvex/browser ·
 │                                    bunvex/react · bunvex/nextjs · bunvex/react-clerk ·
-│                                    bunvex/react-auth0 · bin: bunvex
+│                                    bunvex/react-auth0 · bin: bunvex (apps install @bunvex/*)
 │       └── bin/local-backend        the bunvex-local-backend executable (STUDY-39, STUDY-40)   ✅
 │
 ├── apps/
@@ -190,18 +192,20 @@ bunvex/
 
 ## How an app sees it
 
-An app installs **one package** and chooses its database by configuration (or by import when embedding):
+An app installs the scoped **`@bunvex/*`** packages it uses (`bun add @bunvex/server @bunvex/values`,
+`bun add -d @bunvex/cli`, plus `@bunvex/react` and friends for a front end) and chooses its database by
+configuration (or by import when embedding):
 
 ```ts
 // bunvex/schema.ts
-import { defineSchema, defineTable } from "bunvex/server";
-import { v } from "bunvex/values";
+import { defineSchema, defineTable } from "@bunvex/server";
+import { v } from "@bunvex/values";
 
 // bunvex/tasks.ts
-import { query, mutation } from "bunvex/server";
+import { query, mutation } from "@bunvex/server";
 
 // the front end
-import { BunvexProvider, useQuery } from "bunvex/react";
+import { BunvexProvider, useQuery } from "@bunvex/react";
 
 // an external database: install its native driver and point at it
 //   bun add postgres
@@ -210,8 +214,10 @@ import { BunvexProvider, useQuery } from "bunvex/react";
 import { PostgresPersistence } from "@bunvex/persistence/postgres";
 ```
 
-The scoped `@bunvex/*` packages exist for whoever needs one piece — a third-party persistence driver,
-tests, embedding the engine. An app never has to know they exist.
+The scoped `@bunvex/*` packages are the permanent way to install bunvex: the unscoped npm name `bunvex` is
+not available (owner decision, 2026-10-12; STUDY-40 L7). `packages/bunvex` stays a private workspace package
+that re-exports them for the repo's own examples and tests, and `bunvex codegen` writes `@bunvex/*` imports
+when the app's `package.json` depends on `@bunvex/*`.
 
 ## Dependency rules
 
