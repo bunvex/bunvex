@@ -353,9 +353,12 @@ export class PushService {
     const authModule = all.find((m) => m.path === AUTH_CONFIG);
     const modules = all.filter((m) => m.path !== AUTH_CONFIG);
     const config = await udfConfig(this.deps.engine, req.appDefinition?.udfServerVersion);
+    // The deployment's variables: what the modules read at import, as Convex's analysis gives them its
+    // environment variables (the version this push installs keeps them, as one loaded at a start does).
+    const env = await this.deps.deploymentEnv();
     let version: CodeVersion;
     try {
-      version = await CodeVersion.load(modules, { seed: config.seed, timestamp: config.timestamp });
+      version = await CodeVersion.load(modules, { seed: config.seed, timestamp: config.timestamp, env });
     } catch (e) {
       if (e instanceof InvalidModulesError) throw new PushError("InvalidModules", e.message);
       if (e instanceof FunctionExportError) throw new PushError(e.code, e.message);
@@ -368,7 +371,6 @@ export class PushService {
       checkIndexReferences(s);
       schema = s;
     }
-    const env = await this.deps.deploymentEnv();
     const auth = authModule ? await evaluateAuthConfig(this.deps.engine, authModule, env) : null;
     const analysis: Record<string, AnalyzedModule> = version.analysis;
     // As Convex's `start_push`: what the push does to the indexes, against the active schema (dry run too).
