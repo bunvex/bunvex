@@ -16,8 +16,10 @@ if (check.ok) {
 }
 ```
 
-**Status (STUDY-149 PR 1):** the deployment, its capabilities and counters, the schema, the deployment state
-(pause and resume), the logs (Convex's long poll on `stream_function_logs`) and the function metrics. The
-tables and documents (PR 2), the writes (PR 3), the functions and runner, environment variables and settings
-(PR 4), schedules, files and history (PR 5) answer `unavailable` until their server side exists. Its tests:
+**Status (STUDY-149 PRs 1 and 5):** the deployment, its capabilities and counters, the schema, the deployment
+state (pause and resume), the logs (Convex's long poll on `stream_function_logs`) and the function metrics (PR 1);
+the schedules, crons, files and audit log, every read a subscription while the screen watches and the busy lists
+auto-paused as Convex's, and Health's concurrency and subscription invalidations (PR 5). The tables and documents
+(PR 2), the writes (PR 3), the functions and runner, environment variables and settings (PR 4) answer
+`unavailable` until their server side exists. Its tests:
 `test/` (no server), and `packages/sync-e2e/dashboard` (the dashboard's contract suite on a live server).

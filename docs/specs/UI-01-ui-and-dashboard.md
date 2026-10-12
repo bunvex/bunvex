@@ -2330,3 +2330,17 @@ sync-e2e (tests) ──► …, dashboard, dashboard-source   (the contract suit
 
 `dashboard` itself stays on `ui` alone.
 
+### 34.4 Live lists, concurrency and invalidations (STUDY-149 PR 5; 12 Oct 2026)
+
+- A busy live list pauses as Convex's `usePausedLiveData`: past 100 updates in 10 s the source stops following
+  the scheduled runs (or the file list) and tells the watcher `{paused: true}` (`LiveChange`, an optional argument
+  of `watchScheduledFunctions` and `watchFiles`). The list is then read once per fetch; what Convex keeps live
+  (the crons, the file count) still signals, with `paused: true`; subscribing again resumes ("Go live"). Keeping
+  the pause across visits, and the banner, are the screen's.
+- Two optional metrics: `functionConcurrency(window)` (running and queued per kind: query, mutation, action,
+  Node action, HTTP action) and `subscriptionInvalidations(window, k, {function?})` (mutation and table pairs, and
+  the rest), Convex's `function_concurrency` and `subscription_invalidations_top_k`; the Health screen polls them,
+  and its top functions, every 8 s, as Convex's (§18.1's minute stays for the scheduler lag).
+- `getFile` of an id that is not a storage id is null on a deployment, as Convex's (STUDY-149 PR 5); a source that
+  can tell may still answer `invalid_request`.
+
