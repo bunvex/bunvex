@@ -66,6 +66,8 @@ export function schemaFailureOf(
   return s?.state === "failed" ? { error: s.error, tableName: s.table_name ?? null } : null;
 }
 
+// Names in one list are unique, and the engine's sort reads only whether the result is negative.
+// Stryker disable next-line ConditionalExpression,EqualityOperator: see above.
 const byName = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const CREATION_TIME = "_creationTime";
 
@@ -123,6 +125,7 @@ export function schemaToJson(s: SchemaDefinition): SchemaJson {
   const tables = [...declaredTables(s).values()].sort((a, b) => byName(a.name, b.name));
   return {
     tables: tables.map((t) => {
+      // Stryker disable next-line ArrayDeclaration: a made-up name in the empty set matches no index.
       const staged = new Set(t.staged ?? []);
       const names = Object.keys(t.indexes).sort(byName);
       const index = (name: string): IndexJson => ({
@@ -146,6 +149,7 @@ export function schemaToJson(s: SchemaDefinition): SchemaJson {
 
 function searchJson(t: DeclaredTable): Pick<TableJson, "searchIndexes" | "stagedSearchIndexes"> {
   const all = t.searchIndexes ?? {};
+  // Stryker disable next-line ArrayDeclaration: a made-up name in the empty set matches no index.
   const staged = new Set(t.stagedSearch ?? []);
   const names = Object.keys(all).sort(byName);
   const one = (name: string): SearchIndexJson => ({
@@ -161,6 +165,7 @@ function searchJson(t: DeclaredTable): Pick<TableJson, "searchIndexes" | "staged
 
 function vectorJson(t: DeclaredTable): Pick<TableJson, "vectorIndexes" | "stagedVectorIndexes"> {
   const all = t.vectorIndexes ?? {};
+  // Stryker disable next-line ArrayDeclaration: a made-up name in the empty set matches no index.
   const staged = new Set(t.stagedVector ?? []);
   const names = Object.keys(all).sort(byName);
   const one = (name: string): VectorIndexJson => ({
@@ -181,6 +186,9 @@ function vectorJson(t: DeclaredTable): Pick<TableJson, "vectorIndexes" | "staged
  * scientific (`1e16`, `1.5e-7`).
  */
 function f64Text(n: number): string {
+  // -0 never reaches here (a literal's value is a Convex value's JSON: `{"$float":…}` for it), and 0 takes the
+  // general path to the same text: a shortcut.
+  // Stryker disable next-line all: see above.
   if (n === 0) return Object.is(n, -0) ? "-0.0" : "0.0";
   const exp = Number(n.toExponential().split("e")[1]);
   if (exp >= -5 && exp <= 15) {
@@ -196,11 +204,11 @@ function text(v: unknown): string {
   if (Array.isArray(v)) return `[${v.map(text).join(",")}]`;
   const o = v as Record<string, unknown>;
   // A float literal: the one float a schema holds.
+  // Stryker disable next-line ConditionalExpression: only a literal has a number as its `value`.
   if (o.type === "literal" && typeof o.value === "number") return `{"type":"literal","value":${f64Text(o.value)}}`;
-  return `{${Object.entries(o)
-    .filter(([, x]) => x !== undefined)
-    .map(([k, x]) => `${JSON.stringify(k)}:${text(x)}`)
-    .join(",")}}`;
+  // Stryker disable next-line all: a schema's JSON holds no undefined (built here, or parsed).
+  const fields = Object.entries(o).filter(([, x]) => x !== undefined);
+  return `{${fields.map(([k, x]) => `${JSON.stringify(k)}:${text(x)}`).join(",")}}`;
 }
 
 /** The schema's text as `_schemas` stores it (and the audit log's `schemaDiff` shows it): Convex's, byte for byte. */
@@ -233,6 +241,7 @@ export function schemaFromJson(j: SchemaJson): SchemaDefinition {
       name: t.tableName,
       indexes,
       document: t.documentType === null ? validatorFromJson({ type: "any" }) : validatorFromJson(t.documentType),
+      // Stryker disable next-line ArrayDeclaration: a made-up staged name matches no index.
       staged: (t.stagedDbIndexes ?? []).map((i) => i.indexDescriptor),
       ...(t.searchIndexes?.length || t.stagedSearchIndexes?.length
         ? {
@@ -242,6 +251,7 @@ export function schemaFromJson(j: SchemaJson): SchemaDefinition {
                 { searchField: i.searchField, filterFields: [...i.filterFields] },
               ]),
             ),
+            // Stryker disable next-line ArrayDeclaration: a made-up staged name matches no index.
             stagedSearch: (t.stagedSearchIndexes ?? []).map((i) => i.indexDescriptor),
           }
         : {}),
@@ -253,6 +263,7 @@ export function schemaFromJson(j: SchemaJson): SchemaDefinition {
                 { vectorField: i.vectorField, dimensions: i.dimensions, filterFields: [...i.filterFields] },
               ]),
             ),
+            // Stryker disable next-line ArrayDeclaration: a made-up staged name matches no index.
             stagedVector: (t.stagedVectorIndexes ?? []).map((i) => i.indexDescriptor),
           }
         : {}),
@@ -269,6 +280,8 @@ export function schemaFromJson(j: SchemaJson): SchemaDefinition {
  */
 export function schemaKey(j: SchemaJson): string {
   const byName = <T>(list: T[] | undefined, name: (x: T) => string) =>
+    // Names in one list are unique, and the engine's sort reads only whether the result is negative.
+    // Stryker disable next-line ConditionalExpression,EqualityOperator: see above.
     [...(list ?? [])].sort((a, b) => (name(a) < name(b) ? -1 : name(a) > name(b) ? 1 : 0));
   const sorted = (x: unknown): unknown =>
     Array.isArray(x)
