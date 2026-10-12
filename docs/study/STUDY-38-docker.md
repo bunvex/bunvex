@@ -99,3 +99,55 @@
 ## 6. Open questions
 
 - Whether to keep Convex's `DATA_DIR` / `TMPDIR` / `SQLITE_DB` variables. bunvex reads `DATA` for the data directory, and the SQLite file is always `bunvex.sqlite` in it.
+
+## 7. The entry script and the executable's environment (2026-10-12)
+
+A docs audit found two gaps between what the image is documented to read and what it reads.
+
+**S3 for search segments and snapshot imports.** `run_backend.sh` passed `--s3-storage` only when the files,
+modules or exports bucket was set. The executable already keeps each use case whose bucket is set in S3 (K4,
+DV-190), search segments (STUDY-111) and snapshot imports included, so a deployment that set only
+`S3_STORAGE_SEARCH_BUCKET` or `S3_STORAGE_SNAPSHOT_IMPORTS_BUCKET` kept everything in the volume, silently.
+Convex's `run_backend.sh` (self-hosted/docker-build/run_backend.sh:34-53, 4577b9031) checks
+`AWS_REGION` and its five buckets (`S3_STORAGE_EXPORTS_BUCKET`, `_SNAPSHOT_IMPORTS_`, `_MODULES_`, `_FILES_`,
+`_SEARCH_`): all six set is `--s3-storage`, any missing is local storage, with a warning naming the missing ones
+when some are set. Convex has no "search bucket ignored" case of its own, since its rule is all or nothing; under
+bunvex's per-use-case rule (DV-190, decided) the gate has to name the same five buckets. It now does: any one of
+them turns S3 on, and the use cases without a bucket stay in the volume. No new divergence: DV-190's row names
+the five.
+
+**The database variables.** Convex's binary reads `POSTGRES_TIMEOUT_SECONDS` (30, crates/postgres/src/connection.rs:108-109)
+and `MYSQL_TIMEOUT_SECONDS` (19, crates/common/src/knobs.rs:1197) as knobs, and `PG_CA_FILE`
+(crates/postgres/src/lib.rs:434) and `MYSQL_CA_FILE` (crates/mysql/src/connection.rs:692-708) in its connection
+code, all from its own environment, so they reach it in the image and when it runs alone. bunvex read them only in
+`persistenceConfigFromEnv`, which an embedded server uses; `startLocalBackend` built its own configuration from the
+flags and never read them, so the executable and the image always used 30 s / 19 s and no extra CA. It now takes
+the call timeout and the CA file from `persistenceConfigFromEnv`, for the driver the flags chose
+(`localBackendDatabaseEnv`); the URL, TLS requirement and instance name still come from the flags, and the pool is 16 as before.
+`MONGODB_TIMEOUT_SECONDS` comes with them (MongoDB has no Convex counterpart). The knob reader itself
+(`secondsKnob`, STUDY-147) and `persistence.ts` are unchanged.
+
+Not changed: the compose file lists neither the timeouts nor the CA files, as Convex's does not (a CA file also
+needs a mount); set them in the service's `environment:`.
+
+**Tests:**
+- `packages/server/test/docker-entry.test.ts` runs `run_backend.sh` with a stand-in executable that prints its
+  arguments: no bucket is `--local-storage`; each of the five buckets alone is `--s3-storage`; an empty variable is
+  unset.
+- `packages/server/test/local-backend.test.ts`: each driver's timeout and CA file from the environment, the URL and
+  TLS from the flags whatever `PERSISTENCE` / `POSTGRES_URL` say; unset is the drivers' defaults; a start against a
+  Postgres that never answers fails with "no answer within 1000 ms" under `POSTGRES_TIMEOUT_SECONDS=1` (about 13 s
+  with the driver's own retries, against 100 s with the default); a missing `PG_CA_FILE` / `MYSQL_CA_FILE` fails the
+  start with "cannot read the CA file …".
+
+**Sabotage** (each restored, `git diff` clean after):
+
+| Break | Failed |
+|---|---|
+| the gate without `S3_STORAGE_SEARCH_BUCKET` | "any one of Convex's five buckets…" |
+| the gate without `S3_STORAGE_SNAPSHOT_IMPORTS_BUCKET` | "any one of Convex's five buckets…" |
+| the timeout not passed | "each driver's timeout…", "POSTGRES_TIMEOUT_SECONDS bounds the start…" |
+| the CA file not passed | "each driver's timeout…", "PG_CA_FILE and MYSQL_CA_FILE reach the driver" |
+| `startLocalBackend` builds its old configuration | "POSTGRES_TIMEOUT_SECONDS bounds the start…", "PG_CA_FILE and MYSQL_CA_FILE…" |
+| the environment's `PERSISTENCE` wins over `--db` | "each driver's timeout…" |
+

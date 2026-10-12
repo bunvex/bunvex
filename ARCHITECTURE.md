@@ -64,7 +64,8 @@ bunvex/
 │   │   ├── mongodb                  (optional peer: mongodb)                                  ✅
 │   │   └── tls (internal)           TLS required + verified by default, as Convex (STUDY-25 L8) ✅
 │   │
-│   ├── persistence-conformance/     @bunvex/persistence-conformance   the PERSIST-01 K-suite, published ✅
+│   ├── persistence-conformance/     @bunvex/persistence-conformance   the PERSIST-01 K-suite ✅ (not
+│   │                                published: a driver author runs it from a clone of this repo)
 │   │
 │   ├── protocol/                    @bunvex/protocol                  sync v1 + HTTP messages ✅
 │   │
@@ -138,6 +139,9 @@ bunvex/
 │   │   ├── settings                 general and pause, environment variables, snapshots          ✅
 │   │   ├── history                  the audit log, in words, filtered, live (STUDY-12 §9)           ✅
 │   │   └── screens                  health: metrics charts + engine counters (review open)        ✅
+│   ├── dashboard-source/            @bunvex/dashboard-source  the DashboardDataSource of a bunvex     🟡
+│   │                                deployment, over @bunvex/client and the admin routes, as Convex's
+│   │                                dashboard reads one; the check_admin_key sign-in (STUDY-149, UI-01 §34)
 │   │
 │   ├── cli/                         @bunvex/cli
 │   │   ├── admin-key                print an admin key (STUDY-34)                             ✅
@@ -149,6 +153,7 @@ bunvex/
 │   │   ├── deployment               usage and usage limits (STUDY-118)                         ✅
 │   │   ├── typecheck                tsc or tsgo on the functions (STUDY-117)                  ✅
 │   │   ├── logs, data               watch function logs, list tables and documents (STUDY-47, STUDY-43) ✅
+│   │   ├── function-spec            every function's args and returns, as JSON (STUDY-37, STUDY-105) ✅
 │   │   ├── import, export           snapshot ZIP, CSV, JSON, JSON Lines (STUDY-42)            ✅
 │   │   ├── mcp                      MCP server for AI tools: the official SDK, zod (STUDY-121) ✅
 │   │   └── network-test, docs, update, dashboard  as Convex's, self-hosted (STUDY-146)  ✅
@@ -158,10 +163,10 @@ bunvex/
 │   ├── sync-e2e/, jepsen/,          tests only, never published: end-to-end sync (STUDY-26),
 │   │   differential/                consistency runs (STUDY-57), against Convex's backend (STUDY-122) ✅
 │   │
-│   └── bunvex/                      bunvex           ← THE ONLY PACKAGE AN APP INSTALLS
+│   └── bunvex/                      bunvex (private)  internal workspace aggregate, never published
 │       └── (re-exports)             bunvex/server · bunvex/values · bunvex/browser ·
 │                                    bunvex/react · bunvex/nextjs · bunvex/react-clerk ·
-│                                    bunvex/react-auth0 · bin: bunvex
+│                                    bunvex/react-auth0 · bin: bunvex (apps install @bunvex/*)
 │       └── bin/local-backend        the bunvex-local-backend executable (STUDY-39, STUDY-40)   ✅
 │
 ├── apps/
@@ -190,18 +195,20 @@ bunvex/
 
 ## How an app sees it
 
-An app installs **one package** and chooses its database by configuration (or by import when embedding):
+An app installs the scoped **`@bunvex/*`** packages it uses (`bun add @bunvex/server @bunvex/values`,
+`bun add -d @bunvex/cli`, plus `@bunvex/react` and friends for a front end) and chooses its database by
+configuration (or by import when embedding):
 
 ```ts
 // bunvex/schema.ts
-import { defineSchema, defineTable } from "bunvex/server";
-import { v } from "bunvex/values";
+import { defineSchema, defineTable } from "@bunvex/server";
+import { v } from "@bunvex/values";
 
 // bunvex/tasks.ts
-import { query, mutation } from "bunvex/server";
+import { query, mutation } from "@bunvex/server";
 
 // the front end
-import { BunvexProvider, useQuery } from "bunvex/react";
+import { BunvexProvider, useQuery } from "@bunvex/react";
 
 // an external database: install its native driver and point at it
 //   bun add postgres
@@ -210,8 +217,10 @@ import { BunvexProvider, useQuery } from "bunvex/react";
 import { PostgresPersistence } from "@bunvex/persistence/postgres";
 ```
 
-The scoped `@bunvex/*` packages exist for whoever needs one piece — a third-party persistence driver,
-tests, embedding the engine. An app never has to know they exist.
+The scoped `@bunvex/*` packages are the permanent way to install bunvex: the unscoped npm name `bunvex` is
+not available (owner decision, 2026-10-12; STUDY-40 L7). `packages/bunvex` stays a private workspace package
+that re-exports them for the repo's own examples and tests, and `bunvex codegen` writes `@bunvex/*` imports
+when the app's `package.json` depends on `@bunvex/*`.
 
 ## Dependency rules
 
@@ -229,11 +238,13 @@ bunvex ──► the packages it re-exports, plus core and persistence for bin/l
 examples/* ──► bunvex, react-query (a user's app, STUDY-90)
 
 tests only, never published:
-  sync-e2e ──► client, react, nextjs, react-clerk, react-auth0, react-query, server, core, protocol, values
+  sync-e2e ──► client, react, nextjs, react-clerk, react-auth0, react-query, server, core, protocol, values,
+              dashboard, dashboard-source (the dashboard's contract suite on a live server, STUDY-149)
   jepsen ──► client, server, core, values (consistency runs)
   differential ──► bunvex (against Convex's backend)
 
-ui ◄── dashboard ◄── apps/dashboard (──► ui)
+ui ◄── dashboard ◄── apps/dashboard (──► ui, dashboard-source)
+dashboard-source ──► client, dashboard
 ui ◄── apps/site
 ```
 
@@ -241,7 +252,8 @@ ui ◄── apps/site
 - The client never pulls the engine: a browser bundle contains only `client`, `protocol` and `values`.
 - `ui` depends on no bunvex package; `dashboard` only on `ui` — never `core` or `server`: its data comes
   through the injected `DashboardDataSource`, so the same screens serve a self-hosted server and a cloud
-  control plane (UI-01). The rules cover `apps/*` too.
+  control plane (UI-01). The source for a bunvex deployment, `dashboard-source`, is browser code too: the
+  client and the contract's types, never the engine (UI-01 §34). The rules cover `apps/*` too.
 - A persistence driver depends only on the `Persistence` interface from `core` and on its native driver.
 - No relative import leaves its package, and every imported package is declared in its `package.json`.
 - No `convex` in shipped code (`packages/*/src`) outside comments: identifiers, strings and messages use

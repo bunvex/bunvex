@@ -3,7 +3,7 @@
 A bunvex deployment in a container, brought up as a Convex self-hosted backend is
 ([STUDY-38](../docs/study/STUDY-38-docker.md)): the image runs `bunvex-local-backend` (the backend executable,
 see below) through the same scripts Convex's image uses. By default it keeps everything (the database, files, pushed
-code and its credentials) in a Docker volume, in SQLite. Point it at Postgres or MySQL when you need to.
+code and its credentials) in a Docker volume, in SQLite. Point it at Postgres, MySQL or MongoDB when you need to.
 
 ## Start it
 
@@ -52,6 +52,7 @@ Set these in the shell or in a `.env` file next to `docker-compose.yml`:
 | `PERSISTENCE`, `PERSISTENCE_URL` | Or name the driver: `sqlite`, `postgres`, `mysql`, `mongodb`. |
 | `DO_NOT_REQUIRE_SSL` | Allow an unencrypted database connection (a local database). |
 | `S3_STORAGE_FILES_BUCKET`, `S3_STORAGE_MODULES_BUCKET`, `S3_STORAGE_EXPORTS_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `S3_ENDPOINT_URL`, `AWS_S3_FORCE_PATH_STYLE` | Keep files, pushed code and exports in S3 (each use case whose bucket is set). |
+| `S3_STORAGE_SEARCH_BUCKET`, `S3_STORAGE_SNAPSHOT_IMPORTS_BUCKET` | The search and vector index segments ([STUDY-111](../docs/study/STUDY-111-search-segments.md)) and uploaded snapshot imports in S3, as Convex's buckets of the same names. Setting any of the five buckets turns S3 on (DV-190); a use case without its bucket stays in the volume (`storage/search`, `storage/snapshot_imports`). |
 | `AWS_S3_DISABLE_SSE`, `AWS_S3_DISABLE_CHECKSUMS` | `true` for an S3-compatible store that refuses them: uploads ask for server-side encryption (`AES256`) and CRC32 part checksums by default, as Convex's. Only the exact value `true` turns one on. |
 | `INSTANCE_NAME`, `INSTANCE_SECRET` | The instance's name and secret (32 bytes, hex). By default, generated on the first start and kept in the volume. |
 | `REDACT_LOGS_TO_CLIENT` | Keep functions' log lines and errors' details from clients. |
@@ -74,6 +75,42 @@ proxy such as [Smokescreen](https://github.com/stripe/smokescreen), which refuse
 (`--deny-addresses`: `metadata` by default refuses link-local and cloud metadata addresses, `private` also
 loopback and private networks, `none` nothing, as Convex — DV-325;
 [STUDY-80](../docs/study/STUDY-80-outbound-requests.md)).
+
+## Observability and tuning
+
+Each variable below is read by the backend in the container; add the ones you set to the service's
+`environment:` in `docker-compose.yml` (compose passes only the variables listed there).
+
+- **Tracing (OpenTelemetry).** Off unless an endpoint is set. `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is the
+  traces URL as is; else `OTEL_EXPORTER_OTLP_ENDPOINT` is the base and `/v1/traces` is appended. Also read:
+  `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, `OTEL_EXPORTER_OTLP_(TRACES_)TIMEOUT`
+  (ms, default 10000), `OTEL_EXPORTER_OTLP_(TRACES_)PROTOCOL` (only `http/json` is spoken), `OTEL_TRACES_SAMPLER`
+  / `OTEL_TRACES_SAMPLER_ARG` (default `parentbased_always_on`), `OTEL_SERVICE_NAME` (default `bunvex`),
+  `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_BSP_MAX_QUEUE_SIZE` (2048), `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` (512),
+  `OTEL_BSP_SCHEDULE_DELAY` (5000 ms), `OTEL_BSP_EXPORT_TIMEOUT` (30000 ms); `OTEL_SDK_DISABLED=true` or an
+  `OTEL_TRACES_EXPORTER` without `otlp` turns it off. A bunvex addition
+  ([STUDY-131](../docs/study/STUDY-131-debugging-and-observability.md) §9, AD-26).
+- **Request timeout.** `HTTP_SERVER_TIMEOUT_SECONDS` (default 300, as Convex's): a request with no response head
+  by then is answered 408, on every route ([STUDY-147](../docs/study/STUDY-147-knob-env-overrides.md) §3.3). It is
+  one of the knobs of **Tuning** above.
+- **Database call timeouts.** `POSTGRES_TIMEOUT_SECONDS` (30), `MYSQL_TIMEOUT_SECONDS` (19) and
+  `MONGODB_TIMEOUT_SECONDS` (30) bound one database call. This image and the executable read them, as Convex's
+  binary does, and so does a server embedding `@bunvex/server` (`persistenceConfigFromEnv`). `PG_CA_FILE` and
+  `MYSQL_CA_FILE` add a CA certificate for the TLS connection.
+- **Outbound requests.** The image takes the flags (`--http-proxy`, `--deny-addresses`, see **Screening
+  outbound requests** above). `BUNVEX_HTTP_PROXY` and `BUNVEX_DENY_ADDRESSES` are their variable forms for a
+  server embedded with `createServer` from `@bunvex/server` (default: no proxy, and `metadata`); the executable
+  does not read them.
+- **The CLI's update check.** `bunvex dev` and `bunvex deploy` ask the npm registry once a day for a newer
+  release; `BUNVEX_DISABLE_VERSION_CHECK` (any value), `NO_UPDATE_NOTIFIER` or `CI` turns it off. It is set
+  where the CLI runs, not in the container.
+- **Metrics.** `DISABLE_METRICS_ENDPOINT=false` serves Prometheus metrics at `/metrics` (see the table above).
+- **Logs.** `bunvex logs` follows the functions' log lines
+  ([STUDY-47](../docs/study/STUDY-47-log-streaming.md)); log streams send them, with audit and other events, to a
+  webhook, Datadog, Axiom, Sentry or PostHog ([STUDY-59](../docs/study/STUDY-59-log-streams.md),
+  [STUDY-70](../docs/study/STUDY-70-provider-sinks.md)).
+- **Streaming export.** The `list_snapshot`, `document_deltas` and `json_schemas` APIs that change-data-capture
+  connectors read ([STUDY-60](../docs/study/STUDY-60-streaming-export.md)).
 
 ## Upgrade it
 

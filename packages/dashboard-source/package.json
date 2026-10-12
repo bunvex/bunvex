@@ -1,0 +1,21 @@
+{
+  "name": "@bunvex/dashboard-source",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The dashboard's data source for a bunvex deployment: the DashboardDataSource contract over the admin key, the sync protocol and the admin HTTP routes.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./credentials": "./src/credentials.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex",
+    "directory": "packages/dashboard-source"
+  },
+  "dependencies": {
+    "@bunvex/client": "workspace:*",
+    "@bunvex/dashboard": "workspace:*"
+  }
+}
