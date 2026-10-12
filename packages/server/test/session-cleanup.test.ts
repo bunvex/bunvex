@@ -54,5 +54,6 @@ test("the window comes from MAX_SESSION_CLEANUP_DURATION_HOURS; 0 keeps records"
   expect(sessionRetentionFromEnv({})).toBe(SESSION_REQUEST_RETENTION_MS);
   expect(sessionRetentionFromEnv({ MAX_SESSION_CLEANUP_DURATION_HOURS: "1" })).toBe(3_600_000);
   expect(sessionRetentionFromEnv({ MAX_SESSION_CLEANUP_DURATION_HOURS: "0" })).toBeNull();
-  expect(() => sessionRetentionFromEnv({ MAX_SESSION_CLEANUP_DURATION_HOURS: "x" })).toThrow("not a number");
+  // Not a number of hours: logged, and the default, as Convex's `env_config` (STUDY-147).
+  expect(sessionRetentionFromEnv({ MAX_SESSION_CLEANUP_DURATION_HOURS: "x" })).toBe(14 * 24 * 3_600_000);
 });

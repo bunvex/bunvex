@@ -20,6 +20,7 @@ import {
   ImportBackfillingError,
   ImportIdError,
   insertAuditLogEvents,
+  knob,
   OccError,
   occBackoffMs,
   primaryVirtualTable,
@@ -29,6 +30,7 @@ import {
   SYSTEM_ACTOR,
   SYSTEM_TO_VIRTUAL_TABLE,
   schemaToJson,
+  secondsKnob,
   type TableDef,
   type Tx,
 } from "@bunvex/core";
@@ -53,7 +55,7 @@ import { ZipReader } from "./zip-reader.ts";
 export { ImportError };
 
 /** Convex's MAX_IMPORT_AGE (7 days). */
-export const MAX_IMPORT_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+export const MAX_IMPORT_AGE_MS = secondsKnob("MAX_IMPORT_AGE_SECONDS", 7 * 24 * 60 * 60);
 /** Half of Convex's transaction limits (TRANSACTION_MAX_USER_WRITE_SIZE_BYTES / NUM_USER_WRITES), per batch. */
 const BATCH_MAX_BYTES = 8 * 1024 * 1024;
 const BATCH_MAX_DOCUMENTS = 8000;

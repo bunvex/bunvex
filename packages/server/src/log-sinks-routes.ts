@@ -6,7 +6,7 @@
 // local and S3 export sinks (DV-303).
 
 import type { Caller } from "@bunvex/core";
-import { type Engine, insertAuditLogEvents, type Tx } from "@bunvex/core";
+import { type Engine, insertAuditLogEvents, knob, type Tx } from "@bunvex/core";
 import { auditActor, auditEvents } from "./audit-log.ts";
 import type { Functions } from "./functions.ts";
 import { BadJsonBody, checkJsonBody } from "./json-body.ts";
@@ -37,7 +37,7 @@ const AXIOM_INGEST_URLS = [
   "https://eu-central-1.aws.edge.axiom.co",
 ];
 const DATADOG_SITES = ["US1", "US3", "US5", "EU", "US1_FED", "AP1"];
-const AXIOM_MAX_ATTRIBUTES = 1024;
+const AXIOM_MAX_ATTRIBUTES = knob("AXIOM_MAX_ATTRIBUTES", 1024);
 
 /** The API's sink types (Convex's `logStreamType`); `local` is not one. */
 const API_TYPES: readonly SinkType[] = [

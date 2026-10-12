@@ -13,6 +13,7 @@ import {
   formatBytes,
   IndexesUnavailableError,
   isQueryObject,
+  knob,
   newUserTimer,
   notRunningMessage,
   OccError,
@@ -23,6 +24,7 @@ import {
   type SessionRequestId,
   type SessionRequestOutcome,
   type Span,
+  secondsKnob,
   setFetchMeter,
   setFetchSender,
   stringifyValue,
@@ -231,17 +233,17 @@ const asActionCaller = <T>(p: Promise<T>): Promise<T> =>
  */
 export const THROTTLED = { throttled: true } as const;
 
-/** A duration knob in seconds from the environment (Convex's `env_config`), in ms; else `fallbackMs`. */
-function secondsKnob(name: string, fallbackMs: number): number {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallbackMs;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) throw new Error(`${name}: not a positive number of seconds: ${raw}`);
-  return n * 1000;
-}
-
 /** Convex's `MAX_REACTOR_CALL_DEPTH`: nested `runQuery` / `runMutation` levels below the top function. */
-export const MAX_NESTED_CALL_DEPTH = 8;
+export const MAX_NESTED_CALL_DEPTH = knob("MAX_REACTOR_CALL_DEPTH", 8);
+
+/**
+ * Convex's file limits of a transaction (`TRANSACTION_MAX_NUM_FILES_WRITTEN` …): reported by
+ * `getTransactionMetrics`, never counted, in Convex as here.
+ */
+const TRANSACTION_MAX_NUM_FILES_WRITTEN = knob("TRANSACTION_MAX_NUM_FILES_WRITTEN", 10);
+const TRANSACTION_MAX_FILE_WRITE_SIZE_BYTES = knob("TRANSACTION_MAX_FILE_WRITE_SIZE_BYTES", 1 << 24);
+const TRANSACTION_MAX_NUM_FILES_READ = knob("TRANSACTION_MAX_NUM_FILES_READ", 10);
+const TRANSACTION_MAX_FILE_READ_SIZE_BYTES = knob("TRANSACTION_MAX_FILE_READ_SIZE_BYTES", 1 << 24);
 
 /** The options of a nested `ctx.runQuery` / `ctx.runMutation` (Convex's `AdvancedRunQueryOptions`). */
 export type NestedOptions = {
@@ -660,15 +662,6 @@ function timed(timer: UserTimer): UserTimer {
 /** Convex's `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE` defaults: 16 MiB. */
 export const FUNCTION_MAX_ARGS_SIZE = 1 << 24;
 export const FUNCTION_MAX_RESULT_SIZE = 1 << 24;
-
-/** A size limit from the environment (a non-negative integer of bytes), else Convex's default. */
-function sizeKnob(name: string, def: number, env: Record<string, string | undefined> = process.env): number {
-  const raw = env[name];
-  if (raw === undefined || raw === "") return def;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < 0) throw new Error(`${name}: not a non-negative integer: ${raw}`);
-  return n;
-}
 
 /** A successful result's size (Convex's `return_bytes`; bunvex counts it as for limits, DV-274). */
 const returned = (value: unknown): Outcome => ({ returnBytes: sizeOfResult(value) });
@@ -1320,8 +1313,8 @@ export class Functions {
    * Convex's `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE` (crates/common/src/knobs.rs, STUDY-64
    * §1.7): 16 MiB each, read from environment variables of the same names.
    */
-  maxArgsSize = sizeKnob("FUNCTION_MAX_ARGS_SIZE", FUNCTION_MAX_ARGS_SIZE);
-  maxResultSize = sizeKnob("FUNCTION_MAX_RESULT_SIZE", FUNCTION_MAX_RESULT_SIZE);
+  maxArgsSize = knob("FUNCTION_MAX_ARGS_SIZE", FUNCTION_MAX_ARGS_SIZE);
+  maxResultSize = knob("FUNCTION_MAX_RESULT_SIZE", FUNCTION_MAX_RESULT_SIZE);
 
   /**
    * Arguments are an object, nested at most 63 levels, no larger than `maxArgsSize`, checked against `args`
@@ -1551,12 +1544,12 @@ export class Functions {
    * (DATABASE_UDF_USER_TIMEOUT_SECONDS) and 15 s awaiting the store (DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS).
    * Each nested call gets its own; the caller's clock is paused during it.
    */
-  userTimeoutMs = Number(process.env.DATABASE_UDF_USER_TIMEOUT_SECONDS ?? 1) * 1000;
-  systemTimeoutMs = Number(process.env.DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS ?? 15) * 1000;
+  userTimeoutMs = secondsKnob("DATABASE_UDF_USER_TIMEOUT_SECONDS", 1);
+  systemTimeoutMs = secondsKnob("DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS", 15);
   private newTimer = () => newUserTimer(this.userTimeoutMs, this.systemTimeoutMs, this.engine.runtime.monotonicNow);
   /** How long an action may run (STUDY-77): Convex's knobs, 1800 s, and 600 s for a `"use node"` one. */
-  actionTimeoutMs = secondsKnob("V8_ACTION_USER_TIMEOUT_SECS", V8_ACTION_USER_TIMEOUT_MS);
-  nodeActionTimeoutMs = secondsKnob("NODE_ACTION_USER_TIMEOUT_SECS", NODE_ACTION_USER_TIMEOUT_MS);
+  actionTimeoutMs = secondsKnob("V8_ACTION_USER_TIMEOUT_SECS", V8_ACTION_USER_TIMEOUT_MS / 1000);
+  nodeActionTimeoutMs = secondsKnob("NODE_ACTION_USER_TIMEOUT_SECS", NODE_ACTION_USER_TIMEOUT_MS / 1000);
 
   /** Run a query's or mutation's handler on `db` at nesting `depth`, with its context. */
   private invoke(f: FunctionDef, db: Tx, args: AnyArgs, depth: number, job?: string): unknown {
@@ -1640,10 +1633,10 @@ export class Functions {
         documentsWritten: metric("documentsWritten"),
         functionsScheduled: metric("functionsScheduled"),
         scheduledFunctionArgsBytes: metric("scheduledFunctionArgsBytes"),
-        filesWritten: unused(10),
-        fileWriteBytes: unused(1 << 24),
-        filesRead: unused(10),
-        fileReadBytes: unused(1 << 24),
+        filesWritten: unused(TRANSACTION_MAX_NUM_FILES_WRITTEN),
+        fileWriteBytes: unused(TRANSACTION_MAX_FILE_WRITE_SIZE_BYTES),
+        filesRead: unused(TRANSACTION_MAX_NUM_FILES_READ),
+        fileReadBytes: unused(TRANSACTION_MAX_FILE_READ_SIZE_BYTES),
       };
     };
     // The snapshot in nanoseconds; reading it makes the result time-dependent, as `Date.now()` does.

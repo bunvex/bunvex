@@ -18,6 +18,7 @@
 import { monotonicNow, outsideExecution, wallClockNs } from "./determinism.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { compareKeys } from "./keyenc.ts";
+import { knob, secondsKnob } from "./knobs.ts";
 import type { DocWrite, IndexId, IndexWrite, Persistence } from "./persistence/index.ts";
 import { type CommitSpans, detached } from "./tracing.ts";
 import { intervalSetsByIndex, WritesByIndex } from "./write-log-index.ts";
@@ -91,9 +92,9 @@ export type Conflict = { writeTs: bigint; index?: IndexId; id?: string | null; s
  * `WRITE_LOG_MAX_RETENTION_SECS`, `WRITE_LOG_SOFT_MAX_SIZE_BYTES`), in nanoseconds and bytes. Timestamps are
  * wall-clock nanoseconds (STUDY-06 D9, STUDY-133 §5.3), so a commit's age is read off its ts, as Convex does.
  */
-export const WRITE_LOG_MIN_RETENTION_NS = 30_000_000_000n;
-export const WRITE_LOG_MAX_RETENTION_NS = 300_000_000_000n;
-export const WRITE_LOG_SOFT_MAX_SIZE_BYTES = 50 * 1024 * 1024;
+export const WRITE_LOG_MIN_RETENTION_NS = BigInt(knob("WRITE_LOG_MIN_RETENTION_SECS", 30)) * 1_000_000_000n;
+export const WRITE_LOG_MAX_RETENTION_NS = BigInt(knob("WRITE_LOG_MAX_RETENTION_SECS", 300)) * 1_000_000_000n;
+export const WRITE_LOG_SOFT_MAX_SIZE_BYTES = knob("WRITE_LOG_SOFT_MAX_SIZE_BYTES", 50 * 1024 * 1024);
 /**
  * NOT in Convex: the default hard byte cap on the write log (DV-128, decided by the owner on 2026-10-01, may
  * be revisited). See `WriteLogRetention.hardMaxBytes`.
@@ -103,7 +104,7 @@ export const WRITE_LOG_HARD_MAX_BYTES = 256 * 1024 * 1024;
  * Convex's `MAX_TRANSACTION_WINDOW` (10 s): how far behind the latest snapshot a transaction may BEGIN
  * (crates/database/src/snapshot_manager.rs `push` / `snapshot`).
  */
-export const MAX_TRANSACTION_WINDOW_NS = 10_000_000_000n;
+export const MAX_TRANSACTION_WINDOW_NS = BigInt(knob("MAX_TRANSACTION_WINDOW_SECONDS", 10)) * 1_000_000_000n;
 
 export type WriteLogRetention = {
   /** Commits younger than this (relative to the latest commit), in ns, are always kept. */
@@ -221,12 +222,12 @@ export class CommitterStoppedError extends Error {
  * Convex's backoff for retrying a failed persistence write (`crates/common/src/knobs.rs`,
  * INITIAL_PERSISTENCE_WRITES_BACKOFF_MS = 100 and MAX_PERSISTENCE_WRITES_BACKOFF_MS = 10 000), full jitter.
  */
-export const WRITE_RETRY_INITIAL_BACKOFF_MS = 100;
-export const WRITE_RETRY_MAX_BACKOFF_MS = 10_000;
+export const WRITE_RETRY_INITIAL_BACKOFF_MS = knob("INITIAL_PERSISTENCE_WRITES_BACKOFF_MS", 100);
+export const WRITE_RETRY_MAX_BACKOFF_MS = knob("MAX_PERSISTENCE_WRITES_BACKOFF_MS", 10_000);
 
 /** Convex's `MAX_REPEATABLE_TIMESTAMP_COMMIT_DELAY` (5 s) and `MAX_REPEATABLE_TIMESTAMP_IDLE_FREQUENCY` (1 h). */
-export const MAX_REPEATABLE_TS_COMMIT_DELAY_MS = 5_000;
-export const MAX_REPEATABLE_TS_IDLE_MS = 3_600_000;
+export const MAX_REPEATABLE_TS_COMMIT_DELAY_MS = secondsKnob("MAX_REPEATABLE_TIMESTAMP_COMMIT_DELAY", 5);
+export const MAX_REPEATABLE_TS_IDLE_MS = secondsKnob("MAX_REPEATABLE_TIMESTAMP_IDLE_FREQUENCY", 3600);
 /** The persistence global Convex keeps `max_repeatable_ts` in (`PersistenceGlobalKey::MaxRepeatableTimestamp`). */
 export const MAX_REPEATABLE_TS_GLOBAL = "max_repeatable_ts";
 
@@ -236,8 +237,8 @@ export const MAX_REPEATABLE_TS_GLOBAL = "max_repeatable_ts";
  * more once it holds this many document versions or this many bytes. A commit is never split, so one commit
  * above the caps is flushed with what preceded it in its batch, on its own after a full one.
  */
-export const WRITE_BATCH_MAX_DOCUMENTS = 64;
-export const WRITE_BATCH_MAX_BYTES = 64 * 1024;
+export const WRITE_BATCH_MAX_DOCUMENTS = knob("COMMITTER_MAX_WRITE_BATCH_DOCUMENTS", 64);
+export const WRITE_BATCH_MAX_BYTES = knob("COMMITTER_MAX_WRITE_BATCH_BYTES", 64 * 1024);
 
 export type WriteBatchLimits = {
   /** Document versions at which a flush takes no more commits (default 64). */

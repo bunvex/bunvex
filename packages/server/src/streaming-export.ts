@@ -11,6 +11,7 @@ import {
   hasRetention,
   internalIdBytes,
   internalIdOf,
+  knob,
   OutOfRetentionError,
   reduceShape,
   shapeOf,
@@ -23,9 +24,9 @@ import { type BodyShape, checkJsonBody } from "./json-body.ts";
 import { intError, QueryArgsError, queryArgs } from "./query-args.ts";
 
 /** Convex's knobs. */
-export const SNAPSHOT_LIST_LIMIT = 1024;
-export const DOCUMENT_DELTAS_LIMIT = 128;
-const LIST_SNAPSHOT_MAX_AGE_NS = 5n * 24n * 3600n * 1_000_000_000n;
+export const SNAPSHOT_LIST_LIMIT = knob("SNAPSHOT_LIST_LIMIT", 1024);
+export const DOCUMENT_DELTAS_LIMIT = knob("DOCUMENT_DELTAS_LIMIT", 128);
+const LIST_SNAPSHOT_MAX_AGE_NS = BigInt(knob("LIST_SNAPSHOT_MAX_AGE_SECS", 5 * 24 * 3600)) * 1_000_000_000n;
 
 export const STREAMING_EXPORT_ROUTE =
   /^\/api\/(list_snapshot|document_deltas|json_schemas|get_table_column_names|test_streaming_export_connection)$/;

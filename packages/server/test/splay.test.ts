@@ -317,9 +317,8 @@ describe("splaying wide invalidations (STUDY-08 §3.5)", () => {
       ),
     ).toMatchObject({ threshold: 10, multiplierMs: 2 });
     expect(splayOptions({ threshold: 3 }, { SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD: "10" }).threshold).toBe(3);
-    expect(() => splayOptions({}, { SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER: "-1" })).toThrow(
-      "SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER",
-    );
+    // Not a count: logged, and the default, as Convex's `env_config` (STUDY-147).
+    expect(splayOptions({}, { SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER: "-1" }).multiplierMs).toBe(5);
     const r = splayOptions().random;
     for (let i = 0; i < 2000; i++) {
       const x = r();

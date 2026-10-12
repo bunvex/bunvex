@@ -27,6 +27,8 @@ import {
   isStopped,
   type JobDoc,
   jobArgs,
+  type KnobEnv,
+  knob,
   nextJobTs,
   OccError,
   patchJob,
@@ -34,6 +36,7 @@ import {
   SCHEDULED_BY_NEXT_TS,
   SCHEDULED_JOBS_TABLE,
   SPAN_KIND,
+  secondsKnob,
   stringifyValue,
   TooManyWritesError,
   type Tx,
@@ -202,15 +205,15 @@ export type SchedulerOptions = {
   errorMaxBackoffMs?: number;
 };
 
-export function schedulerOptionsFromEnv(env = process.env): SchedulerOptions {
-  const num = (k: string) => {
-    const v = env[k];
-    if (v === undefined || v === "") return undefined;
-    const n = Number(v);
-    if (!Number.isFinite(n) || n < 0) throw new Error(`${k}: not a number: ${v}`);
-    return n;
+export function schedulerOptionsFromEnv(env: KnobEnv = process.env): Required<SchedulerOptions> {
+  return {
+    parallelism: knob("SCHEDULED_JOB_EXECUTION_PARALLELISM", 8, "uint", env),
+    retentionSeconds: knob("SCHEDULED_JOB_RETENTION", 7 * 24 * 3600, "uint", env),
+    occInitialBackoffMs: knob("SCHEDULER_OCC_INITIAL_BACKOFF_MS", 100, "uint", env),
+    occMaxBackoffMs: knob("SCHEDULER_OCC_MAX_BACKOFF_MS", 60_000, "uint", env),
+    errorInitialBackoffMs: knob("SCHEDULED_JOB_INITIAL_BACKOFF_MS", 500, "uint", env),
+    errorMaxBackoffMs: secondsKnob("SCHEDULED_JOB_MAX_BACKOFF_SECS", 2 * 3600, env),
   };
-  return { parallelism: num("SCHEDULED_JOB_EXECUTION_PARALLELISM"), retentionSeconds: num("SCHEDULED_JOB_RETENTION") };
 }
 
 /** Convex's backoff: `initial · 2^(n-1)`, capped, with full jitter. */

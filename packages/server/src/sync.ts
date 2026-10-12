@@ -23,6 +23,7 @@ import {
   firstOverlap,
   IndexesUnavailableError,
   type Interval,
+  knob,
   LeaseLostError,
   type LogEntry,
   OccError,
@@ -33,6 +34,7 @@ import {
   realRuntime,
   SPAN_KIND,
   type Span,
+  secondsKnob,
   stringifyValue,
   TooManyWritesError,
 } from "@bunvex/core";
@@ -118,12 +120,12 @@ export type RetryOptions = {
 export function retryOptions(opts: Partial<RetryOptions> = {}, env = process.env): RetryOptions {
   return {
     query: opts.query ?? {
-      initialMs: knob(env, "SYNC_WORKER_QUERY_RETRY_INITIAL_BACKOFF_MS", 500),
-      maxMs: knob(env, "SYNC_WORKER_QUERY_RETRY_MAX_BACKOFF_SECS", 600) * 1000,
+      initialMs: knob("SYNC_WORKER_QUERY_RETRY_INITIAL_BACKOFF_MS", 500, "uint", env),
+      maxMs: knob("SYNC_WORKER_QUERY_RETRY_MAX_BACKOFF_SECS", 600, "uint", env) * 1000,
     },
     update: opts.update ?? {
-      initialMs: knob(env, "SYNC_WORKER_UPDATE_QUERIES_RETRY_INITIAL_BACKOFF_MS", 3000),
-      maxMs: knob(env, "SYNC_WORKER_UPDATE_QUERIES_RETRY_MAX_BACKOFF_SECS", 600) * 1000,
+      initialMs: knob("SYNC_WORKER_UPDATE_QUERIES_RETRY_INITIAL_BACKOFF_MS", 3000, "uint", env),
+      maxMs: knob("SYNC_WORKER_UPDATE_QUERIES_RETRY_MAX_BACKOFF_SECS", 600, "uint", env) * 1000,
     },
     random: opts.random ?? cryptoRandom(),
     sleep:
@@ -194,24 +196,15 @@ function cryptoRandom(): () => number {
   };
 }
 
-/** A knob from the environment, under Convex's name: a non-negative integer, or the default. */
-function knob(env: Record<string, string | undefined>, name: string, def: number): number {
-  const raw = env[name];
-  if (raw === undefined || raw === "") return def;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < 0) throw new Error(`${name}: not a non-negative integer: ${raw}`);
-  return n;
-}
-
 /** The splay settings: `opts` over the environment (Convex's knob names) over Convex's defaults. */
 export function splayOptions(opts: Partial<SplayOptions> = {}, env = process.env): SplayOptions {
   return {
     threshold:
       opts.threshold ??
-      knob(env, "SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD", SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD),
+      knob("SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD", SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD, "uint", env),
     multiplierMs:
       opts.multiplierMs ??
-      knob(env, "SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER", SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER_MS),
+      knob("SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER", SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER_MS, "uint", env),
     random: opts.random ?? cryptoRandom(),
     timers: opts.timers ?? realTimers,
   };
@@ -439,9 +432,8 @@ export class SyncHub {
   constructor(readonly deps: SyncDeps) {
     this.splay = deps.splay ?? splayOptions();
     this.maxSendTransitions =
-      deps.maxSendTransitions ?? knob(process.env, "SYNC_MAX_SEND_TRANSITION_COUNT", SYNC_MAX_SEND_TRANSITION_COUNT);
-    this.unavailableRetryMs =
-      deps.unavailableRetryMs ?? knob(process.env, "SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY", 3) * 1000;
+      deps.maxSendTransitions ?? knob("SYNC_MAX_SEND_TRANSITION_COUNT", SYNC_MAX_SEND_TRANSITION_COUNT);
+    this.unavailableRetryMs = deps.unavailableRetryMs ?? secondsKnob("SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY", 3);
     this.inspector = new SyncInspector(deps.invalidationHistory ?? invalidationHistoryFromEnv());
     deps.engine.committer.onCommit((entries) => this.onCommit(entries), "sync");
     this.retry = retryOptions(deps.retry);

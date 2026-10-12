@@ -196,9 +196,8 @@ test("128 by default; HTTP_SERVER_MAX_CONCURRENT_REQUESTS sets it", () => {
   expect(MAX_CONCURRENT_REQUESTS).toBe(128);
   expect(requestLimitFromEnv({}).max).toBe(128);
   expect(requestLimitFromEnv({ HTTP_SERVER_MAX_CONCURRENT_REQUESTS: "3" }).max).toBe(3);
-  expect(() => requestLimitFromEnv({ HTTP_SERVER_MAX_CONCURRENT_REQUESTS: "0" })).toThrow(
-    "HTTP_SERVER_MAX_CONCURRENT_REQUESTS: not a positive integer: 0",
-  );
+  // Not a count: logged, and the default, as Convex's `env_config` (STUDY-147).
+  expect(requestLimitFromEnv({ HTTP_SERVER_MAX_CONCURRENT_REQUESTS: "x" }).max).toBe(128);
 });
 
 test("RequestLimit: a free permit runs at once, a throw or a rejection releases it", async () => {

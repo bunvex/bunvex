@@ -4,11 +4,11 @@
 //
 // A part is a Completion (one per execution) or a Progress event (lines an action printed as it ran). The
 // newest MAX_UDF_EXECUTION parts are kept, each under a cursor: wall-clock ms, strictly increasing.
-import { wallClock } from "@bunvex/core";
+import { knob, wallClock } from "@bunvex/core";
 import { type LogLine, type LogOwner, prettyLogLine } from "./logs.ts";
 
 /** How many parts the log keeps (Convex's MAX_UDF_EXECUTION). */
-export const MAX_UDF_EXECUTION = 1000;
+export const MAX_UDF_EXECUTION = knob("MAX_UDF_EXECUTION", 1000);
 /** A stream request with nothing new answers empty after this long (Convex's 60 s long poll). */
 export const LONG_POLL_MS = 60_000;
 

@@ -22,6 +22,7 @@
 // It runs only in the process that holds the store's lease (Convex's leader), started by the engine.
 import { type Committer, OutOfRetentionError } from "./committer.ts";
 import { compareKeys } from "./keyenc.ts";
+import { knob, secondsKnob } from "./knobs.ts";
 import type { DocLogRow, DocPrune, IndexPrune, Persistence, RetentionStore, TabletId } from "./persistence/index.ts";
 import { LeaseLostError } from "./persistence/index.ts";
 import { readTsGlobal, tsGlobal } from "./persistence-globals.ts";
@@ -52,14 +53,6 @@ export type RetentionOptions = {
   maxBackoffMs?: number;
   /** Run the three loops (default). Tests that drive `advance` and the passes themselves turn it off. */
   background?: boolean;
-};
-
-const seconds = (name: string) => {
-  const v = process.env[name];
-  if (v === undefined || v === "") return undefined;
-  const n = Number(v);
-  if (!Number.isFinite(n) || n < 0) throw new Error(`${name} must be a number of seconds, got ${JSON.stringify(v)}`);
-  return n * 1000;
 };
 
 /** Convex's global names (crates/common/src/persistence/mod.rs `PersistenceGlobalKey`). */
@@ -109,15 +102,15 @@ export class Retention {
     private indexesOf: (tablet: TabletId) => IndexDef[] = () => [],
   ) {
     this.opts = {
-      indexDelayMs: opts.indexDelayMs ?? seconds("INDEX_RETENTION_DELAY") ?? 240_000,
-      documentDelayMs: opts.documentDelayMs ?? seconds("DOCUMENT_RETENTION_DELAY") ?? 14 * 86_400_000,
+      indexDelayMs: opts.indexDelayMs ?? secondsKnob("INDEX_RETENTION_DELAY", 240),
+      documentDelayMs: opts.documentDelayMs ?? secondsKnob("DOCUMENT_RETENTION_DELAY", 14 * 86_400),
       advanceEveryMs: opts.advanceEveryMs ?? 30_000,
-      indexChunk: opts.indexChunk ?? 512,
-      documentChunk: opts.documentChunk ?? 256,
+      indexChunk: opts.indexChunk ?? knob("INDEX_RETENTION_DELETE_CHUNK", 512),
+      documentChunk: opts.documentChunk ?? knob("DOCUMENT_RETENTION_DELETE_CHUNK", 256, "positive"),
       maxPerPass: opts.maxPerPass ?? 10_000,
-      documentRatePerSec: opts.documentRatePerSec ?? 256,
-      documentEveryMs: opts.documentEveryMs ?? 60_000,
-      checkpointEveryMs: opts.checkpointEveryMs ?? 300_000,
+      documentRatePerSec: opts.documentRatePerSec ?? knob("DOCUMENT_RETENTION_RATE_LIMIT", 256, "positive"),
+      documentEveryMs: opts.documentEveryMs ?? knob("DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS", 60, "float") * 1000,
+      checkpointEveryMs: opts.checkpointEveryMs ?? secondsKnob("RETENTION_CHECKPOINT_PERIOD_SECS", 300),
       maxBackoffMs: opts.maxBackoffMs ?? 60_000,
       background: opts.background ?? true,
     };

@@ -7,6 +7,7 @@
 // to the same counts and sizes. A checkpoint it cannot use — none, unreadable, ahead of the store, or outside
 // document retention — falls back to the scan (DV-318; Convex retries it forever, the summaries unavailable).
 import { outsideExecution } from "./determinism.ts";
+import { knob, secondsKnob } from "./knobs.ts";
 import type { DocLogRow, Persistence, RetentionStore, TabletId } from "./persistence/index.ts";
 import { fromJsonInteger, readTsGlobal } from "./persistence-globals.ts";
 import type { Doc } from "./schema.ts";
@@ -129,9 +130,9 @@ export class SummaryCheckpointer {
     this.o = {
       intervalMs: opts.intervalMs ?? 10_000,
       minCommits: opts.minCommits ?? 500,
-      maxStalenessMs: opts.maxStalenessMs ?? 600_000,
-      maxAgeMs: opts.maxAgeMs ?? 4 * 3600_000,
-      jitterMs: opts.jitterMs ?? 900_000,
+      maxStalenessMs: opts.maxStalenessMs ?? secondsKnob("TABLE_SUMMARY_MAX_AGE_WITH_WRITES", 600),
+      maxAgeMs: opts.maxAgeMs ?? secondsKnob("TABLE_SUMMARY_MAX_CHECKPOINT_AGE", 4 * 3600),
+      jitterMs: opts.jitterMs ?? knob("TABLE_SUMMARY_AGE_JITTER_SECONDS", 900, "float") * 1000,
       random: opts.random ?? Math.random,
     };
     this.maxAge = this.jittered();

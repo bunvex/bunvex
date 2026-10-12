@@ -16,6 +16,7 @@ import { join } from "node:path";
 import type { StoredSegment } from "@bunvex/search";
 import { encodeId } from "@bunvex/values";
 import { internalIdBytes, internalIdOf } from "./internal-id.ts";
+import { knob } from "./knobs.ts";
 import type { DocLogRow, Persistence, RetentionStore, TabletId } from "./persistence/index.ts";
 import { readTsGlobal } from "./persistence-globals.ts";
 import type { Doc, SearchIndexDef, VectorIndexDef } from "./schema.ts";
@@ -28,14 +29,10 @@ import type { Doc, SearchIndexDef, VectorIndexDef } from "./schema.ts";
 export type SearchWorkerOptions = { pollIntervalMs: number; minCommits: number; maxCheckpointAgeMs: number };
 
 export function searchWorkersFromEnv(env: Record<string, string | undefined> = process.env): SearchWorkerOptions {
-  const num = (name: string, fallback: number) => {
-    const n = Number(env[name]);
-    return env[name] !== undefined && Number.isFinite(n) && n >= 0 ? n : fallback;
-  };
   return {
-    pollIntervalMs: num("DATABASE_WORKERS_POLL_INTERVAL", 20) * 1000,
-    minCommits: num("DATABASE_WORKERS_MIN_COMMITS", 500),
-    maxCheckpointAgeMs: num("SEARCH_WORKERS_MAX_CHECKPOINT_AGE", 3600) * 1000,
+    pollIntervalMs: knob("DATABASE_WORKERS_POLL_INTERVAL", 20, "uint", env) * 1000,
+    minCommits: knob("DATABASE_WORKERS_MIN_COMMITS", 500, "uint", env),
+    maxCheckpointAgeMs: knob("SEARCH_WORKERS_MAX_CHECKPOINT_AGE", 3600, "uint", env) * 1000,
   };
 }
 
@@ -66,15 +63,11 @@ export type SearchSegmentLimits = {
 };
 
 export function searchSegmentLimitsFromEnv(env: Record<string, string | undefined> = process.env): SearchSegmentLimits {
-  const bytes = (name: string, fallback: number) => {
-    const n = Number(env[name]);
-    return env[name] !== undefined && Number.isFinite(n) && n >= 0 ? n : fallback;
-  };
   return {
-    textSoftLimitBytes: bytes("SEARCH_INDEX_SIZE_SOFT_LIMIT", 10 * 2 ** 20),
-    vectorSoftLimitBytes: bytes("VECTOR_INDEX_SIZE_SOFT_LIMIT", 30 * 2 ** 20),
-    textHardLimitBytes: bytes("SEARCH_INDEX_SIZE_HARD_LIMIT", 100 * 2 ** 20),
-    vectorHardLimitBytes: bytes("VECTOR_INDEX_SIZE_HARD_LIMIT", 100 * 2 ** 20),
+    textSoftLimitBytes: knob("SEARCH_INDEX_SIZE_SOFT_LIMIT", 10 * 2 ** 20, "uint", env),
+    vectorSoftLimitBytes: knob("VECTOR_INDEX_SIZE_SOFT_LIMIT", 30 * 2 ** 20, "uint", env),
+    textHardLimitBytes: knob("SEARCH_INDEX_SIZE_HARD_LIMIT", 100 * 2 ** 20, "uint", env),
+    vectorHardLimitBytes: knob("VECTOR_INDEX_SIZE_HARD_LIMIT", 100 * 2 ** 20, "uint", env),
   };
 }
 
@@ -94,16 +87,12 @@ export type SearchCompactionConfig = {
 };
 
 export function searchCompactionFromEnv(env: Record<string, string | undefined> = process.env): SearchCompactionConfig {
-  const num = (name: string, fallback: number) => {
-    const n = Number(env[name]);
-    return env[name] !== undefined && Number.isFinite(n) && n >= 0 ? n : fallback;
-  };
   return {
-    smallSegmentBytes: num("VECTOR_INDEX_SIZE_HARD_LIMIT", 100 * 2 ** 20),
-    minSegments: num("MIN_COMPACTION_SEGMENTS", 3),
-    maxSegments: num("MAX_COMPACTION_SEGMENTS", 10),
-    maxSegmentBytes: num("SEGMENT_MAX_SIZE_BYTES", Math.floor((1_100_000 * 2048 * 4) / 3)),
-    maxDeletedFraction: num("MAX_SEGMENT_DELETED_PERCENTAGE", 0.2),
+    smallSegmentBytes: knob("VECTOR_INDEX_SIZE_HARD_LIMIT", 100 * 2 ** 20, "uint", env),
+    minSegments: knob("MIN_COMPACTION_SEGMENTS", 3, "uint", env),
+    maxSegments: knob("MAX_COMPACTION_SEGMENTS", 10, "uint", env),
+    maxSegmentBytes: knob("SEGMENT_MAX_SIZE_BYTES", Math.floor((1_100_000 * 2048 * 4) / 3), "uint", env),
+    maxDeletedFraction: knob("MAX_SEGMENT_DELETED_PERCENTAGE", 0.2, "float", env),
   };
 }
 
