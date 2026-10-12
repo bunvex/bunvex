@@ -76,7 +76,7 @@ describe("schema.doc / schema.id / docValidator", () => {
     expect(await fns.runQuery("m:echo", { doc })).toBe("ada");
     await expect(fns.runQuery("m:echo", { doc: { author: "ada" } })).rejects.toThrow("ArgumentValidationError");
     await expect(fns.runQuery("m:bad", {})).rejects.toThrow("ReturnsValidationError");
-    // Schema helpers do not change what the engine reads from the schema.
-    expect(Object.keys(schema)).toEqual(["tables", "schemaValidation"]);
+    // The helpers are not own fields: the schema's are Convex's (STUDY-144).
+    expect(Object.keys(schema)).toEqual(["tables", "strictTableNameTypes", "schemaValidation"]);
   });
 });

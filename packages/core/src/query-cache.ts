@@ -122,6 +122,7 @@ export class QueryCache {
 
   /** Mark `key` as being computed at `ts`; `settle` hands its outcome to whoever waits. */
   putWaiting(key: string, ts: bigint): { id: number; settle(r: CachedResult | null): void } {
+    // Stryker disable next-line UpdateOperator: decreasing ids are as unique as increasing ones.
     const id = this.nextWaitingId++;
     let settle!: (r: CachedResult | null) => void;
     const result = new Promise<CachedResult | null>((ok) => (settle = ok));
@@ -139,6 +140,8 @@ export class QueryCache {
   /** Drop the result of `key` computed at `originalTs`, if it is still there. */
   removeReady(key: string, originalTs: bigint) {
     const e = this.entries.get(key);
+    // Stryker disable next-line ConditionalExpression: a waiting entry's `result` is a Promise, whose
+    // `originalTs` is never a snapshot, so dropping the `kind` test changes nothing.
     if (e?.kind === "ready" && e.result.originalTs === originalTs) this.delete(key, e);
   }
 
@@ -197,6 +200,8 @@ export class QueryCache {
   private enforceLimit() {
     while (this.bytes > this.maxBytes) {
       const first = this.entries.entries().next();
+      // Stryker disable next-line ConditionalExpression: `bytes` is the sum of the entries, so it is over
+      // the budget only while there is an entry; the guard only stops a loop that cannot happen.
       if (first.done) break;
       this.delete(first.value[0], first.value[1]);
       this.evictions++;

@@ -299,7 +299,7 @@ None.
   `docValidator("messages", schema.tables.messages)` (Convex's own example) does not work on bunvex.
   - `schema.doc("messages")` does, and is what Convex recommends.
   - Making `schema.tables` a record touches the engine's every reader of it. It is recorded as a *missing*
-    row in server-api.md, to build separately.
+    row in server-api.md, to build separately. Built in [STUDY-144](STUDY-144-schema-tables-record.md).
 
 ## 7. Registration guards: calling a function directly, importing functions in a browser
 
