@@ -9,7 +9,13 @@ import { type GenericValidator, v } from "@bunvex/values";
 import { SCHEMAS_TABLE } from "../src/catalog.ts";
 import { Engine } from "../src/engine.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
-import { defineSchema, defineTable, type SchemaDefinition, stagedDocumentError } from "../src/schema.ts";
+import {
+  declaredTables,
+  defineSchema,
+  defineTable,
+  type SchemaDefinition,
+  stagedDocumentError,
+} from "../src/schema.ts";
 import { schemaFromJson, schemaToJson } from "../src/schema-json.ts";
 
 const engines: Engine[] = [];
@@ -122,7 +128,7 @@ describe("the schema JSON", () => {
     expect(table("staged").documentType).toEqual(v.object({ a: v.string() }).json);
     const back = schemaFromJson(JSON.parse(JSON.stringify(j)));
     expect(schemaToJson(back)).toEqual(j);
-    expect(back.tables.get("plain")!.stagedDocument).toBeUndefined();
+    expect(declaredTables(back).get("plain")!.stagedDocument).toBeUndefined();
   });
 });
 
@@ -160,7 +166,7 @@ describe("pushing it", () => {
     await e.close();
     engines.splice(engines.indexOf(e), 1);
     const again = await open(path);
-    expect(again.schema.tables.get("items")!.stagedDocument!.json).toEqual(v.object({ n: v.string() }).json);
+    expect(declaredTables(again.schema).get("items")!.stagedDocument!.json).toEqual(v.object({ n: v.string() }).json);
     await again.mutation((db) => db.insert("items", { n: 3 }));
   });
 });

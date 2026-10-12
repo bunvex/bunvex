@@ -168,7 +168,8 @@ action's fetch to a local server is 58–63 µs as served and unchecked alike. T
 
 - A failed `fetch` in an action is Bun's error, not Convex's `TypeError: fetch to <url> failed: <cause>`
   (`26_fetch.ts`); and its default `User-Agent` is Bun's (`Bun/1.x`), where Convex's is `Convex/1.0`. Both
-  apart from the proxy; listed in the parity rows.
+  apart from the proxy; listed in the parity rows. Built in [STUDY-142](STUDY-142-action-fetch-errors.md),
+  with Convex's redirect loop (each hop one request, so the `hop` flag of `proxiedFetch` is gone).
 - Log sinks follow redirects (Convex's fetch client does not); each hop still goes through the proxy.
 - A `new Request("file:///…")` built in an action does not throw (Convex's constructor does); `fetch` with
   it does (PR 1).

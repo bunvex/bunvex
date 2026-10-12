@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 import { v } from "@bunvex/values";
 import type { DataModelFromSchemaDefinition } from "../src/data-model.ts";
 import type { GenericDatabaseReader } from "../src/database-types.ts";
-import { defineSchema, defineTable } from "../src/schema.ts";
+import { declaredTables, defineSchema, defineTable } from "../src/schema.ts";
 import { schemaFromJson, schemaToJson } from "../src/schema-json.ts";
 
 const messages = () => defineTable({ body: v.string(), channel: v.string(), author: v.string() });
@@ -18,7 +18,7 @@ test("searchIndex: declared, staged, filter fields as a set; the schema JSON rou
       .searchIndex("search_body", { searchField: "body", filterFields: ["channel", "author", "channel"] })
       .searchIndex("search_author", { searchField: "author", staged: true }),
   });
-  const t = schema.tables.get("messages")!;
+  const t = declaredTables(schema).get("messages")!;
   expect(t.searchIndexes).toEqual({
     search_body: { searchField: "body", filterFields: ["channel", "author"] },
     search_author: { searchField: "author", filterFields: [] },

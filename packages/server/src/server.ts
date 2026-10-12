@@ -32,6 +32,7 @@ import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
 import { decodeId, TOO_NESTED_MESSAGE, type Value } from "@bunvex/values";
 import type { Server } from "bun";
+import { withDefaultUserAgent } from "./action-fetch.ts";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { type AddressScreen, addressScreen, startAddressScreen } from "./address-screen.ts";
 import {
@@ -567,7 +568,13 @@ export function createServer(opts: ServerOptions) {
   const screen = addressScreen(opts.denyAddresses ?? process.env.BUNVEX_DENY_ADDRESSES);
   const builtinScreen = !proxyUrl && screen !== "none" ? startAddressScreen(screen) : null;
   const screenUrl = proxyUrl ?? builtinScreen?.url;
-  const httpProxy: HttpProxy | null = screenUrl ? { url: screenUrl, clientId: engine.instanceName } : null;
+  const httpProxy: HttpProxy | null = screenUrl
+    ? {
+        url: screenUrl,
+        clientId: engine.instanceName,
+        ...(builtinScreen && { failureToken: builtinScreen.failureToken }),
+      }
+    : null;
   functions.httpProxy = httpProxy;
   // Log streams (STUDY-59): the manager follows `_log_sinks` once the engine is up.
   const logManager = new LogManager(engine, { ...defaultLogSinkOptions(), httpProxy, ...opts.logSinks });
@@ -607,7 +614,7 @@ export function createServer(opts: ServerOptions) {
   const makeVerifier = (infos: AuthInfo[]) =>
     new TokenVerifier(infos, {
       redactErrors: redact,
-      fetch: proxiedFetch(opts.authFetch ?? directFetch, httpProxy),
+      fetch: proxiedFetch(withDefaultUserAgent(opts.authFetch ?? directFetch), httpProxy),
     });
   /** The auth config's verifier; a push replaces it with its auth.config's (STUDY-35). */
   let verifier = makeVerifier(opts.auth === undefined ? [] : parseAuthConfig(opts.auth));
@@ -2311,8 +2318,12 @@ export function createServer(opts: ServerOptions) {
         return requestError(
           e.status,
           e.code,
-          // As Convex: a race and a message refused before the push are not "while pushing".
-          e.code === "RaceDetected" || e.code === "PushMessageTooLong"
+          // As Convex: a race, and a message or request refused before the push (`into_project_config`, the body's
+          // extractor), are not "while pushing".
+          e.code === "RaceDetected" ||
+            e.code === "PushMessageTooLong" ||
+            e.code === "InvalidConfig" ||
+            e.code === "BadJsonBody"
             ? e.message
             : `Hit an error while pushing:\n${e.message}`,
         );

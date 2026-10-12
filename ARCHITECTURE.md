@@ -150,7 +150,8 @@ bunvex/
 │   │   ├── typecheck                tsc or tsgo on the functions (STUDY-117)                  ✅
 │   │   ├── logs, data               watch function logs, list tables and documents (STUDY-47, STUDY-43) ✅
 │   │   ├── import, export           snapshot ZIP, CSV, JSON, JSON Lines (STUDY-42)            ✅
-│   │   └── mcp                      MCP server for AI tools: the official SDK, zod (STUDY-121) ✅
+│   │   ├── mcp                      MCP server for AI tools: the official SDK, zod (STUDY-121) ✅
+│   │   └── network-test, docs, update, dashboard  as Convex's, self-hosted (STUDY-146)  ✅
 │   │
 │   ├── testing/                     @bunvex/testing  the REAL engine in memory, to test functions M
 │   │

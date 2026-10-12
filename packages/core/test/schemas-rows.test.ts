@@ -9,7 +9,7 @@ import { v } from "@bunvex/values";
 import { SCHEMAS_TABLE } from "../src/catalog.ts";
 import { Engine } from "../src/engine.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
-import { defineSchema, defineTable, type SchemaDefinition } from "../src/schema.ts";
+import { declaredTables, defineSchema, defineTable, type SchemaDefinition } from "../src/schema.ts";
 import { schemaFromJson, schemaJsonText, schemaToJson } from "../src/schema-json.ts";
 import { convexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
 
@@ -86,7 +86,7 @@ describe("an active schema's row", () => {
     expect(states.get(first.schemaId)).toEqual({ state: "overwritten" });
     expect([...states.values()]).toContainEqual({ state: "active" });
     // The engine's schema is the stored one, `_creationTime` suffix and all read back.
-    expect(e.schema.tables.get("things")!.indexes).toEqual({ by_s_n: ["s", "n"] });
+    expect(declaredTables(e.schema).get("things")!.indexes).toEqual({ by_s_n: ["s", "n"] });
   });
 
   test("a failed schema: the error and the table in the state, as Convex's `Failed`", async () => {
