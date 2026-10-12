@@ -12,6 +12,7 @@ import type { IndexRangeBuilder, PaginationOptions, PaginationResult, Tx, TxQuer
 import { VIRTUAL_INDEXES, VIRTUAL_TABLES, type VirtualTable } from "./virtual-tables.ts";
 
 /** The system tables an app reads through `db.system` (the virtual ones); every other one is private. */
+// Stryker disable next-line ArrayDeclaration: a static mutant the bun runner cannot switch; system-reader-edges.test.ts pins it
 export const APP_VISIBLE_SYSTEM_TABLES: readonly string[] = [...VIRTUAL_TABLES.keys()];
 
 function virtualTable(table: string): VirtualTable {

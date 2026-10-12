@@ -477,15 +477,22 @@ export class Committer {
     }
     return new Promise((resolve, reject) => {
       const t = c.trace;
+      // After an internal error the drain refuses its whole group, some of it answered already: a promise
+      // ignores a second answer, and a trace is settled once.
+      let answered = false;
       this.queue.push(
         t
           ? {
               ...c,
               resolve: (ts) => {
+                if (answered) return;
+                answered = true;
                 t.settle(ts);
                 resolve(ts);
               },
               reject: (e) => {
+                if (answered) return;
+                answered = true;
                 t.settle(null, e);
                 reject(e);
               },
@@ -587,8 +594,12 @@ export class Committer {
     try {
       await this.drainGroups();
     } catch (e) {
+      // An internal error (a bug of bunvex): fail-stop, and the commits of the group not answered yet are refused,
+      // as nothing of them was published.
       this.stop(e);
+      for (const p of this.draining) p.reject(this.stopped);
     }
+    this.draining = [];
     this.running = false;
     // A commit queued between drainGroups' last check and this point (a caller whose previous commit just
     // resolved, re-committing in the same microtask chain) found `running` still true and scheduled
@@ -599,10 +610,14 @@ export class Committer {
     }
   }
 
+  /** The group being drained, for `drain` to answer if an internal error interrupts it. */
+  private draining: PendingCommit[] = [];
+
   private async drainGroups() {
     while (this.queue.length) {
       const group = this.queue;
       this.queue = [];
+      this.draining = group;
       // Validate the whole group and assign its timestamps, as Convex validates against its pending writes:
       // a commit is checked against the ones before it in the group although they are not durable yet.
       const accepted: [PendingCommit, LogEntry][] = [];
@@ -710,26 +725,32 @@ export class Committer {
     this.batches++;
     if (this.traced) this.traceWrite(accepted, from, to, writeStart);
     this.commits += to - from;
-    this.onBatch?.(to - from, (performance.now() - flushStart) / 1000);
+    const flushSeconds = (performance.now() - flushStart) / 1000;
     const batch = accepted.slice(from, to);
     this.visibleTs = batch[batch.length - 1][1].ts;
     const entries = batch.map(([, e]) => e);
-    // Published: its bytes and rows count against the write throughput limit (Convex's `SnapshotManager::push`).
     const wt = this.writeThroughput;
-    if (wt)
-      for (const [p, e] of batch) {
-        // Stryker disable next-line LogicalOperator: p.bytes is always set by batchEnd, to commitWriteBytes of the same commit
-        wt.record(e.ts, p.bytes ?? commitWriteBytes(p.docs, p.idx), p.docs.length + p.idx.length);
-      }
     // A hook or listener that throws is a bug of bunvex, not a persistence failure: the batch is durable and
     // visible, so its commits are answered as committed, but the committer stops (fail-stop) and says which.
-    let i = -1; // -1: the commits' `onVisible` hooks, else the listener at i
+    let hook: string | undefined = "write throughput";
     try {
+      // Published: its bytes and rows count against the write throughput limit (Convex's `SnapshotManager::push`).
+      if (wt)
+        for (const [p, e] of batch) {
+          // Stryker disable next-line LogicalOperator: p.bytes is always set by batchEnd, to commitWriteBytes of the same commit
+          wt.record(e.ts, p.bytes ?? commitWriteBytes(p.docs, p.idx), p.docs.length + p.idx.length);
+        }
+      hook = "onBatch";
+      this.onBatch?.(to - from, flushSeconds);
+      hook = "onVisible";
       for (const [p, e] of batch) p.onVisible?.(e.ts);
       const listeners = this.listeners;
-      for (i = 0; i < listeners.length; i++) listeners[i](entries);
+      for (let i = 0; i < listeners.length; i++) {
+        hook = this.listenerNames[i];
+        listeners[i](entries);
+      }
     } catch (e) {
-      this.stop(new CommitListenerError(i < 0 ? "onVisible" : this.listenerNames[i], e));
+      this.stop(new CommitListenerError(hook, e));
       for (const [p, e] of batch) p.resolve(e.ts);
       // Stryker disable next-line CallExpression: stop() above has woken every waiter
       this.wakeVisible();
