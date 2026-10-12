@@ -2,8 +2,8 @@
 
 - **Status:** PR 1 implemented (the shared reader, every knob whose mechanism exists); PR 3a implemented (five
   defaults matched, §3.2); PR 3b implemented (`HTTP_SERVER_TIMEOUT_SECONDS` on every route, §3.3); PR 2 in parts (one PR each, §3.4):
-  retention, the index backfill switch, MySQL's retries and chunks, and the pools implemented; metrics and the
-  404 planned
+  retention, the index backfill switch, MySQL's retries and chunks, the pools, the metrics histograms and the
+  404 implemented
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend (`crates/common/src/knobs.rs`,
   `crates/cmd_util/src/env.rs`, `self-hosted/advanced/knobs.md`)
 - **Related:** [platform.md](../parity/platform.md) "Knob env overrides"; STUDY-25 (store timeouts), STUDY-33
@@ -85,7 +85,7 @@ unknown encoding.
 Every knob of `knobs.rs` at `d8bdde0`, plus those outside it, is in one of five groups. The full table, with
 each knob's default and where bunvex keeps it, was checked file by file; it is summarized here.
 
-**Read from the environment (131 after PR 1, 139 after PR 3a, 142 after PR 2's retention part, 143 after its backfill switch, 147 after its MySQL part, 151 after its pools).** Everything bunvex has a mechanism for, under Convex's name and
+**Read from the environment (131 after PR 1, 139 after PR 3a, 142 after PR 2's retention part, 143 after its backfill switch, 147 after its MySQL part, 151 after its pools, 155 after its metrics and 404).** Everything bunvex has a mechanism for, under Convex's name and
 default unless a decided divergence says otherwise:
 
 | Area | Knobs |
@@ -105,8 +105,7 @@ default unless a decided divergence says otherwise:
 | Stores | `POSTGRES_TIMEOUT_SECONDS`, `MYSQL_TIMEOUT_SECONDS`, `MONGODB_TIMEOUT_SECONDS` (bunvex's driver), `MYSQL_DOCUMENT_ENCODING` (DV-414), `MYSQL_MAX_CHUNK_BYTES` |
 
 **Read after PR 2 (the mechanism changes first).** The retention knobs (done, §3.4); `INDEX_BACKFILL_ENABLE`
-(done, §3.5); the MySQL knobs (done, §3.6); the three `UDF_METRICS_*` histogram knobs need the histogram layout
-computed from them; `UDF_404_ON_BAD_PATH` needs the 404 answer; the pool knobs (done, §3.7).
+(done, §3.5); the MySQL knobs (done, §3.6); the `UDF_METRICS_*` histogram knobs and `UDF_404_ON_BAD_PATH` (done, §3.8); the pool knobs (done, §3.7).
 
 **Defaults to match Convex's, PR 3** (owner, 2026-10-11: match). Each reads its knob once it behaves as
 Convex's. PR 3a did the first five (§3.2); PR 3b `HTTP_SERVER_TIMEOUT_SECONDS` (§3.3).
@@ -292,6 +291,24 @@ beyond noise: the server never had more than 18 connections open with the pool a
 only as calls need them. With `POSTGRES_INACTIVE_CONNECTION_LIFETIME_SECS=3`, the 18 connections after a load were
 down to 1 eight seconds later.
 
+### 3.8 PR 2, the metrics histograms and `UDF_404_ON_BAD_PATH`
+
+**Histograms.** Convex's `MetricStoreConfig` (`crates/application/src/function_log.rs`) builds each latency
+histogram with `Histogram::new_with_bounds(UDF_METRICS_MIN_DURATION_MS, UDF_METRICS_MAX_DURATION_MS,
+UDF_METRICS_SIGNIFICANT_FIGURES)` (1 ms, 15 min, 2) and clamps a sample to `[1, max]` (`crates/udf_metrics`).
+bunvex had that layout written out for the defaults; `histogramLayout` (`packages/server/src/app-metrics.ts`) now
+computes it as HdrHistogram does from the three knobs (sub-buckets from the figures, the unit from the lowest
+value, buckets until the highest), the defaults giving the same 14 × 128 counts. Bounds HdrHistogram refuses (low
+under 1, high under twice low, more than 5 figures) are logged and the defaults used; Convex's store would fail
+each histogram instead, which no app could use either.
+
+**`UDF_404_ON_BAD_PATH`** (`crates/udf/src/validation.rs`; default false, Convex's emergency switch): off, a path
+naming no public function (`missing_or_internal_error`, which also covers the admin-only and never-pushed cases)
+or one of another kind is the function's error, as before. On, both are `ErrorMetadata::not_found`
+(`FunctionPathNotFound`, `FunctionPathWrongType`): the HTTP request answers 404 `{code, message}` (a query batch
+with one such path fails whole), and a sync session closes (1000, the code as reason, no `FatalError`, as
+`NotFound` is not a client error). bunvex now does the same (`FunctionPathNotFoundError`, `Functions.udf404OnBadPath`).
+
 ## 4. Divergences
 
 None new. The reader matches `env_config`; the knobs whose defaults or scope differ are already decided:
@@ -329,6 +346,10 @@ DV-375 (`MAX_ECHO_BYTES` enforced), DV-414 (`MYSQL_DOCUMENT_ENCODING` default 0)
   them runs in the MySQL conformance suite (CI).
 - PR 2, pools: `persistence-config` (the defaults per driver, each driver's knobs winning over `POOL`, `POOL`
   without them, another driver's knob ignored, a bad value the default).
+- PR 2, metrics and 404: `app-metrics` (the default layout is the old one; HdrHistogram's sizes for other bounds,
+  every value inside its equivalent range), `udf-404` (off: the function's error; on: 404 with Convex's codes, a
+  batch failing whole, a sync session closed with the code), the knobs in `knobs-env`. Sabotage: the HTTP 404
+  mapping removed, and the sync close removed, each fail a test.
 - PR 3b: `request-timeout` (an `/api/action` call past the timeout answers 408 with no body and the action
   finishes; a body streamed past it is not cut; a slow upload answers 408; a WebSocket stays open), and
   `request-limit` (the wait for a permit does not count). Sabotage: the API port unwrapped fails the first;
