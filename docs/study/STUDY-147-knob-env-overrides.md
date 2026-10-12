@@ -1,6 +1,7 @@
 # STUDY-147 — Knob environment overrides
 
-- **Status:** PR 1 implemented (the shared reader, every knob whose mechanism exists); PR 2 and PR 3 planned
+- **Status:** PR 1 implemented (the shared reader, every knob whose mechanism exists); PR 3a implemented (five
+  defaults matched, §3.2); PR 3b (`HTTP_SERVER_TIMEOUT_SECONDS` on every route) and PR 2 planned
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend (`crates/common/src/knobs.rs`,
   `crates/cmd_util/src/env.rs`, `self-hosted/advanced/knobs.md`)
 - **Related:** [platform.md](../parity/platform.md) "Knob env overrides"; STUDY-25 (store timeouts), STUDY-33
@@ -82,7 +83,7 @@ unknown encoding.
 Every knob of `knobs.rs` at `d8bdde0`, plus those outside it, is in one of five groups. The full table, with
 each knob's default and where bunvex keeps it, was checked file by file; it is summarized here.
 
-**Read from the environment (131 after PR 1).** Everything bunvex has a mechanism for, under Convex's name and
+**Read from the environment (131 after PR 1, 139 after PR 3a).** Everything bunvex has a mechanism for, under Convex's name and
 default unless a decided divergence says otherwise:
 
 | Area | Knobs |
@@ -112,16 +113,49 @@ computed from them; `UDF_404_ON_BAD_PATH` needs the 404 answer; `MYSQL_SMART_CHU
 `POOL` (DV-112: bunvex's 16, "settings to add").
 
 **Defaults to match Convex's, PR 3** (owner, 2026-10-11: match). Each reads its knob once it behaves as
-Convex's:
+Convex's. PR 3a did the first five (§3.2); `HTTP_SERVER_TIMEOUT_SECONDS` is PR 3b, after a study of which of
+Convex's routes the timeout cuts (long exports, uploads and downloads, the WebSocket after its upgrade).
 
-| Knob | Convex | bunvex today |
+| Knob | Convex | bunvex before PR 3 |
 |---|---|---|
-| `SYSTEM_FUNCTION_MAX_RESULT_SIZE` | 24 MiB for `_system/` functions | 16 MiB, as user functions |
+| `SYSTEM_FUNCTION_MAX_RESULT_SIZE` | 24 MiB for `_system/` functions | no limit on them |
 | `FINISH_PUSH_MAX_OCC_FAILURES` | 8 retries | the general budget, 4 |
-| `VECTOR_INDEX_WORKER_PAGE_SIZE` | 128 documents a page | 1000, shared with text backfill |
-| `SCHEDULED_JOB_GARBAGE_COLLECTION_*` | backoff 1 s → 30 s; batch of 100 halved after an error; 1 s delay | a fixed 30 s retry, the batch kept, 60 s idle wait |
+| `VECTOR_INDEX_WORKER_PAGE_SIZE` | 128 documents a page, text and vector | 1000 |
+| `SCHEDULED_JOB_GARBAGE_COLLECTION_*` | backoff 1 s → 30 s; batch of 100; 1 s after a batch; else until the oldest job expires | a fixed 30 s retry, a 60 s idle wait |
 | `HTTP_CACHE_SIZE` | the JWKS/discovery cache bounded at 16 MiB | unbounded |
 | `HTTP_SERVER_TIMEOUT_SECONDS` | 300 s on every route | HTTP actions only |
+
+### 3.2 PR 3a: what Convex does and what bunvex does now
+
+- **`SYSTEM_FUNCTION_MAX_RESULT_SIZE`** (`crates/isolate/src/helpers.rs` `deserialize_udf_result`): a
+  `_system/` function's result is measured against 24 MiB instead of `FUNCTION_MAX_RESULT_SIZE`, with the same
+  message. bunvex's system functions are its own code (`system-functions.ts`) and were not measured at all; now
+  a system query's or mutation's result over the limit fails with that message
+  (`Function _system/….js:default return value is too large (actual: …, limit: …)`). The 80 % warnings keep
+  `FUNCTION_MAX_RESULT_SIZE`, as Convex's.
+- **`FINISH_PUSH_MAX_OCC_FAILURES`** (`crates/application/src/deploy_config.rs`): `finish_push` retries 8 times,
+  as it contends with the index backfills that write the `_index` rows it reads. bunvex's
+  `commitSchemaPush` now takes that budget instead of `UDF_EXECUTOR_OCC_MAX_RETRIES`, with the same backoff.
+- **`VECTOR_INDEX_WORKER_PAGE_SIZE`** (`crates/search_index_workers/src/search_flusher.rs`
+  `incremental_table_scan_stream`): despite its name, the page of the table scan that builds any search index,
+  text or vector. bunvex's three scans (the paged backfill with segments, and the in-memory text and vector
+  builds) read pages of it. It is read as a non-zero integer: Convex's `usize` takes 0, which there ends the scan
+  at once and leaves the index empty; here 0 keeps the default, as a value that does not parse. Measured:
+  building a text and a 64-dimension vector index over 20 000 documents (memory store, with segments or in
+  memory) takes 420–450 ms with pages of 128 or of 1000, three runs each: no difference to see.
+- **`SCHEDULED_JOB_GARBAGE_COLLECTION_*`** (`crates/application/src/scheduled_jobs/mod.rs`
+  `ScheduledJobGarbageCollector`): batches of `_BATCH_SIZE` (100) a transaction; after a batch it waits
+  `_DELAY` (1 s); with nothing expired it waits until the oldest completed job leaves the retention window, or
+  for a write to the table; on an error, a backoff from `_INITIAL_BACKOFF_MS` (1 s) to `_MAX_BACKOFF_SECS` (30 s)
+  that a success resets. bunvex now does the same, with one difference no app sees: with no completed job at all,
+  Convex waits for one to complete, bunvex waits one retention window (at least `_DELAY`), as no job completing
+  meanwhile can expire sooner. Convex also halves the batch after a `PaginationLimit` error; a system
+  transaction's reads and writes are not limited in bunvex (§3.1, `TRANSACTION_MAX_SYSTEM_*`), nor reached by
+  Convex's batch of 100, so that path is not built.
+- **`HTTP_CACHE_SIZE`** (`crates/http_client/src/lib.rs`): one process-wide moka cache of the auth discovery
+  and JWKS responses, weighed as the URL's length plus the body's, at most 16 MiB. bunvex's cache is the token
+  verifier's (one per auth config), now weighed the same way and bounded at the knob, the least recently used
+  response evicted first; a response heavier than the bound is not kept.
 
 **Kept out, by decision.** `MAX_PUSH_BYTES` (200 MB) and `MAX_BACKEND_PUBLIC_API_REQUEST_SIZE` (16 MiB + 2000 B):
 bunvex has one request body cap, Bun's `maxRequestBodySize` (DV-145).
@@ -172,10 +206,15 @@ DV-375 (`MAX_ECHO_BYTES` enforced), DV-414 (`MYSQL_DOCUMENT_ENCODING` default 0)
   set to a value other than its default reads each one; a process with every knob set to text keeps every
   default, logs the warning and starts. Sabotage: a knob turned back into its literal fails the first; a reader
   that throws on a bad value fails the second.
+- PR 3a: `function-size-limits` (a `_system/` result over its limit, the user limit not applied to it),
+  `schema-push` (a push conflicting 8 times commits, 9 times fails), `search-backfill` (300 documents read in
+  pages of 128 by each index, with segments or in memory), `scheduler` (the collector wakes when the oldest
+  job expires; batches `gcDelayMs` apart; the defaults), `auth/verify` (the cache's bound, eviction of the
+  oldest). Sabotage: each change reverted fails its test.
 - The readers' own tests now expect the default and a warning where they expected an error
   (`request-limit`, `health-routes`, `session-cleanup`, `splay`, `retention`, `index-cache-knobs`,
   `persistence-config`, `prometheus-metrics`, `mysql-documents`).
 
 ## 6. Open questions
 
-None. PR 2 and PR 3 follow the plan in §3.1.
+None. PR 2 and PR 3b follow the plan in §3.1.

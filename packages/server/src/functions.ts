@@ -662,6 +662,8 @@ function timed(timer: UserTimer): UserTimer {
 /** Convex's `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE` defaults: 16 MiB. */
 export const FUNCTION_MAX_ARGS_SIZE = 1 << 24;
 export const FUNCTION_MAX_RESULT_SIZE = 1 << 24;
+/** Convex's `SYSTEM_FUNCTION_MAX_RESULT_SIZE` default: 24 MiB, for the `_system/` functions (STUDY-147). */
+export const SYSTEM_FUNCTION_MAX_RESULT_SIZE = 24 << 20;
 
 /** A successful result's size (Convex's `return_bytes`; bunvex counts it as for limits, DV-274). */
 const returned = (value: unknown): Outcome => ({ returnBytes: sizeOfResult(value) });
@@ -1315,6 +1317,8 @@ export class Functions {
    */
   maxArgsSize = knob("FUNCTION_MAX_ARGS_SIZE", FUNCTION_MAX_ARGS_SIZE);
   maxResultSize = knob("FUNCTION_MAX_RESULT_SIZE", FUNCTION_MAX_RESULT_SIZE);
+  /** The `_system/` functions' (Convex's `deserialize_udf_result`, crates/isolate/src/helpers.rs). */
+  maxSystemResultSize = knob("SYSTEM_FUNCTION_MAX_RESULT_SIZE", SYSTEM_FUNCTION_MAX_RESULT_SIZE);
 
   /**
    * Arguments are an object, nested at most 63 levels, no larger than `maxArgsSize`, checked against `args`
@@ -1374,6 +1378,16 @@ export class Functions {
       const msg = checkValue(f.returns, (value ?? null) as Value, this.tableOf);
       if (msg) throw ValidatorError.returns(msg);
     }
+    return value;
+  }
+
+  /** A `_system/` function's result: no larger than `maxSystemResultSize`, else its error, as a user function's. */
+  private checkSystemResult<T>(name: string, value: T): T {
+    const size = rawValueSize((value ?? null) as Value);
+    if (size > this.maxSystemResultSize)
+      throw new FunctionPathError(
+        `Function ${canonicalPath(name)} return value is too large (actual: ${formatBytes(size)}, limit: ${formatBytes(this.maxSystemResultSize)})`,
+      );
     return value;
   }
 
@@ -1912,7 +1926,10 @@ export class Functions {
         db,
         a,
         timer,
-        () => withUserTimer(timer, () => q!.handler(db, a, { files: this.fileStorage, functions: this, caller })),
+        () =>
+          withUserTimer(timer, async () =>
+            this.checkSystemResult(n, await q!.handler(db, a, { files: this.fileStorage, functions: this, caller })),
+          ),
         this.userTimeoutMs,
       );
     };
@@ -1937,7 +1954,10 @@ export class Functions {
         db,
         a,
         timer,
-        () => withUserTimer(timer, () => m!.handler(db, a, { files: this.fileStorage, functions: this, caller })),
+        () =>
+          withUserTimer(timer, async () =>
+            this.checkSystemResult(n, await m!.handler(db, a, { files: this.fileStorage, functions: this, caller })),
+          ),
         this.userTimeoutMs,
       );
     };

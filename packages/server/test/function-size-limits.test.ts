@@ -2,7 +2,7 @@
 // `FUNCTION_MAX_ARGS_SIZE`: 16 MiB each, a function error with Convex's message, the size checked before the
 // validators, at any nesting depth.
 import { afterEach, expect, test } from "bun:test";
-import { defineSchema, defineTable, Engine } from "@bunvex/core";
+import { defineSchema, defineTable, ENVIRONMENT_VARIABLES_TABLE, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { v } from "@bunvex/values";
 import {
@@ -13,6 +13,7 @@ import {
   internalQuery,
   mutation,
   query,
+  SYSTEM_FUNCTION_MAX_RESULT_SIZE,
 } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
 import { add, syncUrl, v1Client } from "./v1-client.ts";
@@ -65,6 +66,23 @@ const fail = async (p: Promise<unknown>) => {
 test("the defaults are Convex's: 16 MiB each", () => {
   expect(FUNCTION_MAX_RESULT_SIZE).toBe(16 * 1024 * 1024);
   expect(FUNCTION_MAX_ARGS_SIZE).toBe(16 * 1024 * 1024);
+});
+
+test("a _system/ function's result: 24 MiB by default (Convex's SYSTEM_FUNCTION_MAX_RESULT_SIZE), its own error", async () => {
+  expect(SYSTEM_FUNCTION_MAX_RESULT_SIZE).toBe(24 * 1024 * 1024);
+  const { engine, fns } = await setup({ result: 10 });
+  expect(fns.maxSystemResultSize).toBe(SYSTEM_FUNCTION_MAX_RESULT_SIZE);
+  await engine.mutation((db) =>
+    db.asSystem(() => db.insert(ENVIRONMENT_VARIABLES_TABLE, { name: "BIG", value: ofSize(1000) })),
+  );
+  // The user functions' limit does not apply to it.
+  const rows = (await fns.runSystemQuery("_system/cli/queryEnvironmentVariables")) as { value: string }[];
+  expect(rows.map((r) => r.value.length)).toEqual([998]);
+  fns.maxSystemResultSize = 500;
+  const e = await fail(fns.runSystemQuery("_system/cli/queryEnvironmentVariables"));
+  expect(e.message).toMatch(
+    /^Function _system\/cli\/queryEnvironmentVariables\.js:default return value is too large \(actual: 1\.\d+ KiB, limit: 500 B\)$/,
+  );
 });
 
 test("a query returning 16 MiB + 1 byte fails with Convex's message; 16 MiB passes", async () => {
