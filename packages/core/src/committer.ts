@@ -229,6 +229,7 @@ export const WRITE_RETRY_MAX_BACKOFF_MS = knob("MAX_PERSISTENCE_WRITES_BACKOFF_M
 export const MAX_REPEATABLE_TS_COMMIT_DELAY_MS = secondsKnob("MAX_REPEATABLE_TIMESTAMP_COMMIT_DELAY", 5);
 export const MAX_REPEATABLE_TS_IDLE_MS = secondsKnob("MAX_REPEATABLE_TIMESTAMP_IDLE_FREQUENCY", 3600);
 /** The persistence global Convex keeps `max_repeatable_ts` in (`PersistenceGlobalKey::MaxRepeatableTimestamp`). */
+// Stryker disable next-line StringLiteral: a static mutant the bun runner cannot switch; committer-edges.test.ts pins the name
 export const MAX_REPEATABLE_TS_GLOBAL = "max_repeatable_ts";
 
 /**
@@ -305,6 +306,7 @@ type PendingCommit = {
   reject: (e: unknown) => void;
 };
 
+// Stryker disable next-line ArrowFunction: a static mutant the bun runner cannot switch; committer-edges.test.ts checks the default log
 const defaultOnRetry = (e: unknown, failures: number, delayMs: number) =>
   console.error(
     `bunvex: a flush failed with a transient error (attempt ${failures}); retrying in ${Math.round(delayMs)} ms: ${e instanceof Error ? e.message : String(e)}`,
@@ -415,6 +417,7 @@ export class Committer {
     if (to > this.visibleTs) throw new Error(`changedBetween: ${to} is past the visible ts ${this.visibleTs}`);
     if (from >= to) return false;
     if (from < this.purgedTs) return true; // Convex's `refresh_token`: out of retention, re-run
+    // Stryker disable next-line ConditionalExpression: an empty read-set finds no conflict below either
     if (reads.length === 0) return false;
     return this.byIndex.conflict(intervalSetsByIndex(reads), from, to, this.sourceAt) !== null;
   }
@@ -428,6 +431,7 @@ export class Committer {
       if (this.log[mid].ts < ts) lo = mid + 1;
       else hi = mid;
     }
+    // Stryker disable next-line ConditionalExpression,LogicalOperator,EqualityOperator: the ts is always a logged commit's (WritesByIndex holds exactly the log's writes)
     return lo < this.log.length && this.log[lo].ts === ts ? this.log[lo].source : undefined;
   };
 
@@ -456,9 +460,12 @@ export class Committer {
   }
 
   private wakeVisible() {
+    // Stryker disable next-line ConditionalExpression: with no waiters the filters below find none
     if (this.visibleWaiters.length === 0) return;
     const ready = this.visibleWaiters.filter((w) => w.ts <= this.visibleTs || this.stopped);
+    // Stryker disable next-line ConditionalExpression: with none ready the filter below keeps them all
     if (ready.length === 0) return;
+    // Stryker disable next-line MethodExpression,ConditionalExpression,LogicalOperator,EqualityOperator: a waiter left in the list is only resolved again, a no-op
     this.visibleWaiters = this.visibleWaiters.filter((w) => !(w.ts <= this.visibleTs || this.stopped));
     for (const w of ready) w.resolve();
   }
@@ -504,6 +511,7 @@ export class Committer {
    * the commit that started it: the group, and the listeners it calls, belong to no one request.
    */
   private drainSoon() {
+    // Stryker disable next-line ConditionalExpression: detached only leaves the tracer's span; the drain is the same
     if (this.traced) detached(() => setImmediate(() => this.drain()));
     else setImmediate(() => this.drain());
   }
@@ -542,6 +550,7 @@ export class Committer {
     // As Convex's `is_stale`: a snapshot older than the log cannot be validated, whatever it read (this
     // holds with an empty log too: a snapshot from before the store was opened is refused; STUDY-24 S4).
     if (p.snapshot < this.purgedTs) return new OutOfRetentionError(p.snapshot, this.purgedTs);
+    // Stryker disable next-line ConditionalExpression,EqualityOperator: nothing was assigned after such a snapshot: the checks below find nothing
     if (p.snapshot >= this.appliedTs) return null;
     if (p.searchReads?.length) {
       // A search read-set: the versions written into its index since the snapshot, scanned in ts order.
@@ -556,6 +565,7 @@ export class Committer {
                 : { writeTs: entry.ts, id: d.id, source: entry.source };
       }
     }
+    // Stryker disable next-line ConditionalExpression: an empty read-set finds no conflict below either
     if (p.reads.length === 0) return null;
     // As Convex's `commit_has_conflict`: any write in (snapshot, latest] inside the read-set, first among the
     // published commits (`is_stale` on the write log), then among this group's commits applied but not yet
@@ -707,8 +717,10 @@ export class Committer {
     // Published: its bytes and rows count against the write throughput limit (Convex's `SnapshotManager::push`).
     const wt = this.writeThroughput;
     if (wt)
-      for (const [p, e] of batch)
+      for (const [p, e] of batch) {
+        // Stryker disable next-line LogicalOperator: p.bytes is always set by batchEnd, to commitWriteBytes of the same commit
         wt.record(e.ts, p.bytes ?? commitWriteBytes(p.docs, p.idx), p.docs.length + p.idx.length);
+      }
     // A hook or listener that throws is a bug of bunvex, not a persistence failure: the batch is durable and
     // visible, so its commits are answered as committed, but the committer stops (fail-stop) and says which.
     let i = -1; // -1: the commits' `onVisible` hooks, else the listener at i
@@ -719,8 +731,10 @@ export class Committer {
     } catch (e) {
       this.stop(new CommitListenerError(i < 0 ? "onVisible" : this.listenerNames[i], e));
       for (const [p, e] of batch) p.resolve(e.ts);
+      // Stryker disable next-line CallExpression: stop() above has woken every waiter
       this.wakeVisible();
       for (let i = to; i < accepted.length; i++) accepted[i][0].reject(this.stopped);
+      // Stryker disable next-line BooleanLiteral: the next batch finds the committer stopped and refuses the rest the same
       return false;
     }
     for (const [p, e] of batch) p.resolve(e.ts);
@@ -768,6 +782,7 @@ export class Committer {
       this.log[this.logHead++] = undefined as unknown as LogEntry; // release it now
     }
     // Compact once the dropped prefix is the larger part: amortized O(1) per commit.
+    // Stryker disable next-line ConditionalExpression,EqualityOperator,LogicalOperator,ArithmeticOperator,BlockStatement: compacting sooner, later or never keeps the same entries from logHead (only memory differs)
     if (this.logHead > 1024 && this.logHead * 2 > this.log.length) {
       this.log = this.log.slice(this.logHead);
       this.logHead = 0;
@@ -809,6 +824,7 @@ export class Committer {
         await new Promise<void>((resolve) => {
           const timer = setTimeout(done, delay);
           function done() {
+            // Stryker disable next-line CallExpression: the timer resolves an already resolved promise
             clearTimeout(timer);
             resolve();
           }
@@ -853,6 +869,7 @@ export class Committer {
       commitDelayMs,
       idleMs: opts.idleMs ?? MAX_REPEATABLE_TS_IDLE_MS,
       wait: commitDelayMs,
+      // Stryker disable next-line BooleanLiteral: a bump resets followUp before anything reads it
       followUp: false,
       last: performance.now(),
       timer: null,
@@ -863,15 +880,19 @@ export class Committer {
   /** Stop the bumps (a clean shutdown, before the store closes); a bump being written finishes. */
   stopRepeatableBumps() {
     const r = this.repeatable;
+    // Stryker disable next-line ConditionalExpression,OptionalChaining,CallExpression: a bump timer left running finds this.repeatable null and returns
     if (r?.timer) clearTimeout(r.timer);
     this.repeatable = null;
   }
 
   private scheduleBump() {
     const r = this.repeatable;
+    // Stryker disable next-line ConditionalExpression,LogicalOperator: every caller has a current repeatable with a wait set; a stopped committer's bump returns at once
     if (!r || r.wait === null || this.stopped) return;
+    // Stryker disable next-line ConditionalExpression,CallExpression: a timer left running only bumps once more, which writes a valid bound again
     if (r.timer) clearTimeout(r.timer);
     r.timer = setTimeout(() => void this.bumpRepeatable(), Math.max(0, r.last + r.wait - performance.now()));
+    // Stryker disable next-line OptionalChaining: Bun's timers have unref
     r.timer.unref?.();
   }
 
@@ -891,6 +912,7 @@ export class Committer {
     r.wait = null;
     r.followUp = false;
     let ts: bigint;
+    // Stryker disable next-line BooleanLiteral: a bump with commits in flight writes visibleTs, which is never above visibleTs
     let idle = false;
     if (this.running || this.queue.length || this.appliedTs > this.visibleTs) ts = this.visibleTs;
     else {
@@ -933,6 +955,7 @@ export class Committer {
     if (this.stopped) return;
     this.stopped = new CommitterStoppedError(cause, context);
     this.wakeRetry?.();
+    // Stryker disable next-line ConditionalExpression,CallExpression: a bump timer left running finds the committer stopped and returns
     if (this.repeatable?.timer) clearTimeout(this.repeatable.timer);
     const queued = this.queue;
     this.queue = [];

@@ -230,7 +230,7 @@ boundary, a block emptied. The tests must then fail. A change no test notices is
   | `core/src/persistence/split.ts` | 107 | 73.8 % (100 %) | 2 min |
   | `core/src/read-set-index.ts` | 138 | 76.1 % (97.5 %) | 1 min |
   | `core/src/tx.ts` | 2 038 | 78.6 % | 112 min |
-  | `core/src/committer.ts` | 651 | 79.1 % | 54 min |
+  | `core/src/committer.ts` | 651 | 79.1 % (96.7 %) | 54 min |
   | `core/src/schema-json.ts` | 303 | 81.5 % (100 %) | 8 min |
   | `values/src/value.ts` | 718 | 81.9 % (99.7 %) | 5 min |
   | `values/src/sorting.ts` | 623 | 89.6 % (100 %) | 5 min |
@@ -258,7 +258,15 @@ boundary, a block emptied. The tests must then fail. A change no test notices is
     stands before an `else`, attaches to nothing, and a `disable` without its `restore` runs on to the file's
     end. The report's ignored mutants are checked line by line.
   - A directive ignores every mutant of its mutator on its line, killed ones too: the score after a triage
-    counts what is left.
+    counts what is left. A line where equivalent mutants sit beside ones the tests kill keeps no directive;
+    its survivors are listed in the triage's PR instead (in `committer.ts`: the pending-writes check's lower
+    bound, either choice of which is correct; the ties between the clock and the next ts; rescheduling a
+    `max_repeatable_ts` bump at the same deadline; the bump's busy test, any one of whose conditions holds
+    while a commit is in flight).
+  - The triage of `committer.ts` found a bug: an internal error in its drain (a throwing `atTs`, `onBatch` or
+    write throughput limiter) left commits unanswered (fixed in its own PR).
+  - Bun's `expect(…).rejects` runs the event loop: commits a test means to be one group are all made before
+    the first such `expect`, and their refusals caught when made.
 - **The source must be one the instrumenter reads:** it cannot mutate an update of a non-null expression
   (`a[i]!--`). `keyenc.ts` writes it as an assignment.
 
