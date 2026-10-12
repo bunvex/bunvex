@@ -23,7 +23,9 @@ class Writer {
   buf = new Uint8Array(64);
   n = 0;
   private room(k: number) {
+    // Stryker disable next-line EqualityOperator: growing when the bytes just fit only costs memory
     if (this.n + k <= this.buf.length) return;
+    // Stryker disable next-line ArithmeticOperator: Math.max keeps room for n + k; the factor only changes how often it grows
     const next = new Uint8Array(Math.max(this.buf.length * 2, this.n + k));
     next.set(this.buf.subarray(0, this.n));
     this.buf = next;
@@ -52,6 +54,7 @@ class Writer {
     const start = this.n;
     for (let i = 0; i < len; i++) {
       const c = s.charCodeAt(i);
+      // Stryker disable next-line ConditionalExpression,EqualityOperator: the encoder writes the same bytes, only slower
       if (c === 0 || c > 0x7f) {
         this.n = start;
         return this.escaped(utf8.encode(s));
@@ -72,6 +75,7 @@ function writeInt(w: Writer, n: bigint) {
   if (n === 0n) return w.byte(ZERO_INT);
   const width =
     n >= -128n && n <= 127n ? 1 : n >= -32768n && n <= 32767n ? 2 : n >= -(2n ** 31n) && n < 2n ** 31n ? 3 : 4;
+  // Stryker disable next-line EqualityOperator: 0n returned above
   w.byte(n < 0n ? ZERO_INT - width : ZERO_INT + width);
   const bytes = 1 << (width - 1);
   const u = BigInt.asUintN(64, n);
@@ -198,6 +202,7 @@ class Reader {
     // Usually nothing is escaped: the bytes are a view up to the terminator, nothing copied.
     const b = this.b;
     const end = b.indexOf(TERMINATOR, this.i);
+    // Stryker disable next-line ConditionalExpression,EqualityOperator,BlockStatement: the slow path reads the same bytes (and end >= i >= 1 after a tag)
     if (end >= 0 && b[end + 1] !== ESCAPE) {
       const out = b.subarray(this.i, end);
       this.i = end + 1;
@@ -214,6 +219,7 @@ class Reader {
         out.push(x);
         continue;
       }
+      // Stryker disable next-line ConditionalExpression,EqualityOperator: past the end b[i] is undefined, and reading on throws the same RangeError
       if (this.i < this.b.length && this.b[this.i] === ESCAPE) {
         this.i++;
         out.push(TERMINATOR);
@@ -227,6 +233,7 @@ class Reader {
 const utf8Decoder = new TextDecoder();
 /** UTF-8 text; short ASCII (field names, ids, most strings) without a decoder call. */
 function text(b: Uint8Array): string {
+  // Stryker disable ConditionalExpression,EqualityOperator,BlockStatement: the ASCII shortcut; the decoder gives the same text
   if (b.length <= 64) {
     let s = "";
     for (let k = 0; k < b.length; k++) {
@@ -236,6 +243,7 @@ function text(b: Uint8Array): string {
     }
     return s;
   }
+  // Stryker restore ConditionalExpression,EqualityOperator,BlockStatement
   return utf8Decoder.decode(b);
 }
 
@@ -244,9 +252,11 @@ function read(r: Reader): Value | undefined {
   if (tag === UNDEFINED) return undefined;
   if (tag === NULL) return null;
   if (tag >= ZERO_INT - 4 && tag <= ZERO_INT + 4) {
+    // Stryker disable next-line ConditionalExpression: width 0 makes bytes negative, so no byte is read and the value is still 0n
     if (tag === ZERO_INT) return 0n;
     const width = Math.abs(tag - ZERO_INT);
     const bytes = 1 << (width - 1);
+    // Stryker disable next-line ConditionalExpression,EqualityOperator,BlockStatement: the BigInt path reads the same int, only slower
     if (bytes <= 4) {
       // Up to 32 bits: a number, then one BigInt.
       let u = 0;
@@ -262,7 +272,10 @@ function read(r: Reader): Value | undefined {
     const raw = f64bytes;
     for (let k = 0; k < 8; k++) raw[k] = r.next();
     if (raw[0]! & 0x80) raw[0] = raw[0]! & 0x7f;
-    else for (let k = 0; k < 8; k++) raw[k] = ~raw[k]! & 0xff;
+    else {
+      // Stryker disable next-line EqualityOperator: index 8 of an 8-byte typed array is ignored
+      for (let k = 0; k < 8; k++) raw[k] = ~raw[k]! & 0xff;
+    }
     return f64.getFloat64(0);
   }
   if (tag === FALSE) return false;
@@ -272,6 +285,7 @@ function read(r: Reader): Value | undefined {
   if (tag === ARRAY) {
     const out: Value[] = [];
     for (;;) {
+      // Stryker disable next-line ConditionalExpression,EqualityOperator: past the end b[i] is undefined, and reading on throws the same RangeError
       if (r.i < r.b.length && r.b[r.i] === TERMINATOR) {
         r.i++;
         return out;
@@ -283,12 +297,14 @@ function read(r: Reader): Value | undefined {
     const out: Record<string, Value> = {};
     for (;;) {
       // An empty field name is its terminator then the escape; the object's own terminator is a lone 0x00.
+      // Stryker disable next-line ConditionalExpression,EqualityOperator: past the end b[i] is undefined, and reading on throws the same RangeError
       if (r.i < r.b.length && r.b[r.i] === TERMINATOR && r.b[r.i + 1] !== ESCAPE) {
         r.i++;
         return out;
       }
       let name: string;
-      if (r.b[r.i] === TERMINATOR && r.b[r.i + 1] === ESCAPE) {
+      // A 0x00 here is followed by the escape (a lone one returned above): an empty field name.
+      if (r.b[r.i] === TERMINATOR) {
         r.i += 2;
         name = "";
       } else name = text(r.escaped());
@@ -310,6 +326,7 @@ function jsonString(r: Reader): string {
   const b = r.b;
   const start = r.i;
   let s = '"';
+  // Stryker disable ConditionalExpression,EqualityOperator,BlockStatement: the printable-ASCII shortcut; the slow path writes the same JSON text
   for (let i = start; i < b.length; i++) {
     const c = b[i]!;
     if (c === TERMINATOR) {
@@ -320,6 +337,7 @@ function jsonString(r: Reader): string {
     if (c < 0x20 || c > 0x7e || c === 0x22 || c === 0x5c) break;
     s += String.fromCharCode(c);
   }
+  // Stryker restore ConditionalExpression,EqualityOperator,BlockStatement
   r.i = start;
   return JSON.stringify(text(r.escaped()));
 }
@@ -334,6 +352,7 @@ function readJson(r: Reader): string {
     const bytes = tag === ZERO_INT ? 0 : 1 << (Math.abs(tag - ZERO_INT) - 1);
     for (let k = bytes - 1; k >= 0; k--) le8bytes[k] = r.next();
     const fill = tag < ZERO_INT ? 0xff : 0;
+    // Stryker disable next-line EqualityOperator: index 8 of an 8-byte typed array is ignored
     for (let k = bytes; k < 8; k++) le8bytes[k] = fill;
     return tagged("$integer", le8bytes);
   }
@@ -341,7 +360,10 @@ function readJson(r: Reader): string {
     const raw = f64bytes;
     for (let k = 0; k < 8; k++) raw[k] = r.next();
     if (raw[0]! & 0x80) raw[0] = raw[0]! & 0x7f;
-    else for (let k = 0; k < 8; k++) raw[k] = ~raw[k]! & 0xff;
+    else {
+      // Stryker disable next-line EqualityOperator: index 8 of an 8-byte typed array is ignored
+      for (let k = 0; k < 8; k++) raw[k] = ~raw[k]! & 0xff;
+    }
     const x = f64.getFloat64(0);
     if (!(Number.isNaN(x) || !Number.isFinite(x) || Object.is(x, -0))) return JSON.stringify(x);
     le8.setFloat64(0, x, true);
@@ -354,6 +376,7 @@ function readJson(r: Reader): string {
   if (tag === ARRAY) {
     let out = "[";
     for (let first = true; ; first = false) {
+      // Stryker disable next-line ConditionalExpression,EqualityOperator: past the end b[i] is undefined, and reading on throws the same RangeError
       if (r.i < r.b.length && r.b[r.i] === TERMINATOR) {
         r.i++;
         return `${out}]`;
@@ -364,12 +387,14 @@ function readJson(r: Reader): string {
   if (tag === OBJECT) {
     let out = "{";
     for (let first = true; ; first = false) {
+      // Stryker disable next-line ConditionalExpression,EqualityOperator: past the end b[i] is undefined, and reading on throws the same RangeError
       if (r.i < r.b.length && r.b[r.i] === TERMINATOR && r.b[r.i + 1] !== ESCAPE) {
         r.i++;
         return `${out}}`;
       }
       let name: string;
-      if (r.b[r.i] === TERMINATOR && r.b[r.i + 1] === ESCAPE) {
+      // A 0x00 here is followed by the escape (a lone one returned above): an empty field name.
+      if (r.b[r.i] === TERMINATOR) {
         r.i += 2;
         name = '""';
       } else name = jsonString(r);
@@ -399,6 +424,7 @@ export function keyToValues(key: Uint8Array): { values: (Value | undefined)[]; c
   const r = new Reader(key);
   const values: (Value | undefined)[] = [];
   let consumed = 0;
+  // Stryker disable next-line EqualityOperator: reading at the end throws, and the catch stops the loop the same
   while (r.i < key.length) {
     try {
       values.push(read(r));

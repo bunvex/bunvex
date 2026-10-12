@@ -233,7 +233,7 @@ boundary, a block emptied. The tests must then fail. A change no test notices is
   | `core/src/committer.ts` | 651 | 79.1 % | 54 min |
   | `core/src/schema-json.ts` | 303 | 81.5 % (100 %) | 8 min |
   | `values/src/value.ts` | 718 | 81.9 % (99.7 %) | 5 min |
-  | `values/src/sorting.ts` | 623 | 89.6 % | 5 min |
+  | `values/src/sorting.ts` | 623 | 89.6 % (100 %) | 5 min |
   | `core/src/keyenc.ts` | 137 | 92.7 % | 6 min |
   | `core/src/system-reader.ts` | 83 | 92.8 % | 2 min |
 
@@ -243,9 +243,10 @@ boundary, a block emptied. The tests must then fail. A change no test notices is
   - The server's tests cannot join. The runner times them per test through Bun's inspector, which does not work
     with `--isolate`, and without it a cron test fails.
   - So the triage of such a file adds direct tests in `core`, which is also where the store's rules belong.
-  - In `sorting.ts`, most survivors are equivalent: the ASCII fast paths and the short-string decoder.
-  - The rest are untested refusals of malformed keys ("trailing bytes after the value", an unknown type tag),
-    and in `keyenc.ts` the bounds' descriptions for the inspector.
+  - In `sorting.ts`, most survivors were equivalent: the ASCII fast paths and the short-string decoder. The
+    rest were untested: the refusals of malformed keys ("trailing bytes after the value", an unknown type tag),
+    a commit timestamp placeholder and an object field holding `undefined`.
+  - In `keyenc.ts`, the bounds' descriptions for the inspector.
 - **What the triage taught:**
   - A property test can miss a whole path: the scan's random keys rarely repeat, so its paging was never
     reached. Direct tests script it.
@@ -253,6 +254,11 @@ boundary, a block emptied. The tests must then fail. A change no test notices is
     a test pins the value. It is marked, naming the test that pins it.
   - After tests change, the incremental file can keep a mutant's old result; a triage measures with `--force`.
   - The triage of `memory.ts` found a bug: a log whose first write was torn did not open (fixed in its own PR).
+  - A directive is a comment the instrumenter attaches to the next statement. One that ends a block, or
+    stands before an `else`, attaches to nothing, and a `disable` without its `restore` runs on to the file's
+    end. The report's ignored mutants are checked line by line.
+  - A directive ignores every mutant of its mutator on its line, killed ones too: the score after a triage
+    counts what is left.
 - **The source must be one the instrumenter reads:** it cannot mutate an update of a non-null expression
   (`a[i]!--`). `keyenc.ts` writes it as an assignment.
 
