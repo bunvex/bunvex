@@ -1,22 +1,18 @@
 // Signing the dashboard in to a deployment (STUDY-12 §19): a deployment URL and an admin key, checked by a
 // verifier before the screens open — as Convex's self-hosted dashboard does (`checkDeploymentInfo.ts`:
-// `GET /api/check_admin_key` with `Authorization: Convex <key>` → `{ allowedOps, isReadOnly }`). Only the mock
-// verifier exists for now: the dashboard does not talk to a real server yet (the owner's call, 2 Oct 2026).
-import type { Capabilities, Operation } from "@bunvex/dashboard/data-source";
+// `GET /api/check_admin_key` with the key → `{ allowedOps, isReadOnly }`). The real verifier and the mapping
+// of the server's operations live in @bunvex/dashboard-source (STUDY-149); the host signs in with the mock
+// verifier until it switches to the server source (STUDY-149 PR 6).
+import type { AdminKeyVerifier } from "@bunvex/dashboard-source/credentials";
+import { INVALID_CREDENTIALS } from "@bunvex/dashboard-source/credentials";
 
-/** What a sign-in carries. */
-export type AdminCredentials = { deploymentUrl: string; adminKey: string; deploymentName?: string };
-
-/** What the deployment says about a key: which operations it allows (none listed = all), and read-only. */
-export type AdminKeyCheck = { ok: true; allowedOps: string[]; isReadOnly: boolean } | { ok: false; error: string };
-
-/** Checks a key against a deployment. The real one calls `check_admin_key`; for now only the mock exists. */
-export interface AdminKeyVerifier {
-  verify(deploymentUrl: string, adminKey: string): Promise<AdminKeyCheck>;
-}
-
-export const INVALID_CREDENTIALS =
-  "The deployment URL or admin key is invalid. Check that you entered the correct values.";
+export {
+  type AdminCredentials,
+  type AdminKeyCheck,
+  type AdminKeyVerifier,
+  capabilitiesOf,
+  INVALID_CREDENTIALS,
+} from "@bunvex/dashboard-source/credentials";
 
 /**
  * A deployment URL as typed, made canonical (`http(s)://host[:port][/path]`, no trailing slash), or why not.
@@ -37,41 +33,6 @@ export function normalizeDeploymentUrl(input: string): { ok: true; url: string }
     return { ok: false, error: "The URL must start with http:// or https://." };
   if (url.search || url.hash) return { ok: false, error: "The URL can't have a query or a fragment." };
   return { ok: true, url: `${url.origin}${url.pathname.replace(/\/+$/, "")}` };
-}
-
-// The server's operation names (Convex's keybroker `DeploymentOp`) → the dashboard's.
-const SERVER_OPS: Record<string, Operation> = {
-  ViewData: "viewData",
-  WriteData: "writeData",
-  ViewLogs: "viewLogs",
-  ViewMetrics: "viewMetrics",
-  ViewEnvironmentVariables: "viewEnvironmentVariables",
-  WriteEnvironmentVariables: "writeEnvironmentVariables",
-  ViewAuditLog: "viewAuditLog",
-  PauseDeployment: "pauseDeployment",
-  UnpauseDeployment: "resumeDeployment",
-  ActAsUser: "actAsUser",
-  ViewBackups: "viewBackups",
-  CreateBackups: "createBackups",
-  DownloadBackups: "downloadBackups",
-  ImportBackups: "importBackups",
-  // running functions from the dashboard: Convex gates internal functions and test queries
-  RunInternalQueries: "runFunctions",
-  RunInternalMutations: "runFunctions",
-  RunInternalActions: "runFunctions",
-  RunTestQuery: "runFunctions",
-};
-
-/** The dashboard's capabilities for a checked key. An empty `allowedOps` means every operation (Convex). */
-export function capabilitiesOf(
-  check: { allowedOps: string[]; isReadOnly: boolean },
-  all: readonly Operation[],
-): Capabilities {
-  const operations =
-    check.allowedOps.length === 0
-      ? [...all]
-      : [...new Set(check.allowedOps.flatMap((op) => (SERVER_OPS[op] ? [SERVER_OPS[op]] : [])))];
-  return { operations, readOnly: check.isReadOnly };
 }
 
 /**

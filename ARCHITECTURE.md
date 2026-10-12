@@ -138,6 +138,9 @@ bunvex/
 │   │   ├── settings                 general and pause, environment variables, snapshots          ✅
 │   │   ├── history                  the audit log, in words, filtered, live (STUDY-12 §9)           ✅
 │   │   └── screens                  health: metrics charts + engine counters (review open)        ✅
+│   ├── dashboard-source/            @bunvex/dashboard-source  the DashboardDataSource of a bunvex     🟡
+│   │                                deployment, over @bunvex/client and the admin routes, as Convex's
+│   │                                dashboard reads one; the check_admin_key sign-in (STUDY-149, UI-01 §34)
 │   │
 │   ├── cli/                         @bunvex/cli
 │   │   ├── admin-key                print an admin key (STUDY-34)                             ✅
@@ -229,11 +232,13 @@ bunvex ──► the packages it re-exports, plus core and persistence for bin/l
 examples/* ──► bunvex, react-query (a user's app, STUDY-90)
 
 tests only, never published:
-  sync-e2e ──► client, react, nextjs, react-clerk, react-auth0, react-query, server, core, protocol, values
+  sync-e2e ──► client, react, nextjs, react-clerk, react-auth0, react-query, server, core, protocol, values,
+              dashboard, dashboard-source (the dashboard's contract suite on a live server, STUDY-149)
   jepsen ──► client, server, core, values (consistency runs)
   differential ──► bunvex (against Convex's backend)
 
-ui ◄── dashboard ◄── apps/dashboard (──► ui)
+ui ◄── dashboard ◄── apps/dashboard (──► ui, dashboard-source)
+dashboard-source ──► client, dashboard
 ui ◄── apps/site
 ```
 
@@ -241,7 +246,8 @@ ui ◄── apps/site
 - The client never pulls the engine: a browser bundle contains only `client`, `protocol` and `values`.
 - `ui` depends on no bunvex package; `dashboard` only on `ui` — never `core` or `server`: its data comes
   through the injected `DashboardDataSource`, so the same screens serve a self-hosted server and a cloud
-  control plane (UI-01). The rules cover `apps/*` too.
+  control plane (UI-01). The source for a bunvex deployment, `dashboard-source`, is browser code too: the
+  client and the contract's types, never the engine (UI-01 §34). The rules cover `apps/*` too.
 - A persistence driver depends only on the `Persistence` interface from `core` and on its native driver.
 - No relative import leaves its package, and every imported package is declared in its `package.json`.
 - No `convex` in shipped code (`packages/*/src`) outside comments: identifiers, strings and messages use

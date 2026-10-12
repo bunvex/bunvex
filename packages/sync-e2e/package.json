@@ -15,7 +15,9 @@
     "@bunvex/nextjs": "workspace:*",
     "@bunvex/react-clerk": "workspace:*",
     "@bunvex/react-auth0": "workspace:*",
-    "@bunvex/react-query": "workspace:*"
+    "@bunvex/react-query": "workspace:*",
+    "@bunvex/dashboard": "workspace:*",
+    "@bunvex/dashboard-source": "workspace:*"
   },
   "repository": {
     "type": "git",

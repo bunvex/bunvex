@@ -5,8 +5,9 @@ runner), Schedules, Authentication, Logs, History, Subscriptions and Settings �
 is [UI-01 §0](../../docs/specs/UI-01-ui-and-dashboard.md). It never talks to a server itself: a host passes a `DashboardDataSource`, so the same screens serve a self-hosted deployment and a
 cloud control plane. `MockDataSource` serves development and tests.
 
-**Status:** every screen is built on the mock; no data source calls a server yet (the server's admin API
-and the admin-key sign-in exist, a data source that calls them does not) — see [UI-01](../../docs/specs/UI-01-ui-and-dashboard.md) and
+**Status:** every screen is built on the mock. The source for a bunvex deployment is
+[`@bunvex/dashboard-source`](../dashboard-source/README.md), built in steps (STUDY-149); `apps/dashboard` still
+mounts the mock — see [UI-01](../../docs/specs/UI-01-ui-and-dashboard.md) and
 [ARCHITECTURE.md](../../ARCHITECTURE.md).
 
 ## Mounting it
