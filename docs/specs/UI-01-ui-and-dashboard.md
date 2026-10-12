@@ -2323,10 +2323,12 @@ the screens free of any bunvex dependency (§6): a cloud control plane brings it
 ### 34.3 Dependency rules
 
 ```
-dashboard-source ──► client, dashboard
+dashboard-source ──► client, values, dashboard
 apps/dashboard   ──► dashboard, dashboard-source, ui
 sync-e2e (tests) ──► …, dashboard, dashboard-source   (the contract suite on a live server)
 ```
 
-`dashboard` itself stays on `ui` alone.
+`dashboard` itself stays on `ui` alone. `values` joined with STUDY-149 PR 2 (ids and value encodings, as Convex's
+dashboard imports `convex/values`), and `@bunvex/dashboard/filters` is exported for the source to check an
+expression as the screens do.
 

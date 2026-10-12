@@ -9,6 +9,7 @@ import {
   type FunctionMetric,
   type MetricsWindow,
   REST,
+  type TableMetric,
   type Timeseries,
   type TopKMeasure,
   type TopKSeries,
@@ -89,6 +90,13 @@ export class Metrics {
     const window = windowParam(w);
     const json = await this.get<[string, SeriesJson][]>(TOP_K_ROUTES[measure], { window, k: String(k) }, signal);
     return json.map(([name, s]) => ({ function: name === REST ? REST : displayPath(name), series: seriesOf(s, w) }));
+  }
+
+  /** Convex's `table_rate` (`name=` the table), per second like `udf_rate`: a count per bucket here. */
+  async tableRate(table: string, metric: TableMetric, w: MetricsWindow, signal?: AbortSignal) {
+    const window = windowParam(w);
+    const json = await this.get<SeriesJson>("table_rate", { name: table, metric, window }, signal);
+    return seriesOf(json, w, bucketSeconds(w));
   }
 
   async scheduledJobLag(w: MetricsWindow, signal?: AbortSignal) {

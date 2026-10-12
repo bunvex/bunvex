@@ -347,6 +347,24 @@ export const OPENAPI_OPERATIONS: readonly ApiOperation[] = [
   },
   {
     doc: "dashboard",
+    method: "get",
+    path: "/get_indexes",
+    operationId: "get_indexes",
+    summary: "Get database indexes",
+    description: "Every declared index of the user tables: its table, name, fields, backfill state and staging.",
+    params: [
+      {
+        name: "component_id",
+        in: "query",
+        description: "The component's id; bunvex has only the root component.",
+        required: false,
+        schema: STRING,
+      },
+    ],
+    response: {},
+  },
+  {
+    doc: "dashboard",
     method: "post",
     path: "/delete_tables",
     operationId: "delete_tables",
@@ -491,13 +509,6 @@ export const OPENAPI_LEFT_OUT: readonly {
     path: "/deployment_info",
     reason: "not built yet",
     note: 'A self-hosted deployment answers `{kind: "selfHosted"}`; a cloud one, its team and project ids.',
-  },
-  {
-    doc: "dashboard",
-    method: "get",
-    path: "/get_indexes",
-    reason: "not built yet",
-    note: "The dashboard reads indexes through system queries instead.",
   },
   {
     doc: "dashboard",

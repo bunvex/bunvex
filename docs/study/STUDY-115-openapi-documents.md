@@ -78,7 +78,7 @@ HEAD, 405 with `allow: GET,HEAD`, CORS from the existing layer).
   | Route | Document | Reason |
   |---|---|---|
   | `GET /api/v1/deployment_info` | platform | not built yet (a self-hosted Convex answers `{kind: "selfHosted"}`) |
-  | `GET /api/get_indexes` | dashboard | not built yet (the dashboard reads indexes through system queries) |
+  | `GET /api/get_indexes` | dashboard | built and documented since STUDY-149 PR 2 |
   | `POST /api/delete_component` | dashboard | not built yet (bunvex has no components yet, [STUDY-62](STUDY-62-components.md)) |
 
   None is "n/a": each could be built. (`POST /api/delete_scheduled_functions_table` was left out too until
@@ -108,7 +108,7 @@ HEAD, 405 with `allow: GET,HEAD`, CORS from the existing layer).
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| O1 (DV-381) | The documents list only the routes bunvex answers; Convex's `deployment_info`, `get_indexes` and `delete_component` are left out (`delete_scheduled_functions_table` too until STUDY-113 built it) | Not built yet; a document that lists a route the server 404s would mislead a generated client | owner, 2026-10-05 |
+| O1 (DV-381) | The documents list only the routes bunvex answers; Convex's `deployment_info` and `delete_component` are left out (`delete_scheduled_functions_table` and `get_indexes` too until STUDY-113 and STUDY-149 PR 2 built them) | Not built yet; a document that lists a route the server 404s would mislead a generated client | owner, 2026-10-05 |
 | O2 (DV-382) | bunvex's titles, descriptions, server and license; one "Admin Key" scheme, `Authorization: Bunvex <admin_key>`, instead of Convex's four `Convex <token>` schemes | Rule 5, and bunvex's actual auth: admin keys only (no team or OAuth tokens) | owner, 2026-10-05 |
 
 The wire names inside the schemas (DV-278, DV-308) are earlier decisions, not new ones. A third reserved

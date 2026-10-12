@@ -41,6 +41,9 @@ backend is always started with `--disable-beacon`.
   Node module pushed by `later/ext.ts`), installed by each deployment from a registry the test serves: a failed
   install's 400, `start_push`'s id and its reuse, the actions' answers; the decided differences (a packaged binary's
   mode, the server's own variables) asserted on each side. Local only, and only with `npm` on the machine.
+- `test/dashboard-data.test.ts` (STUDY-149 PR 2): the dashboard's Data reads on both, as an admin —
+  `_system/frontend/getTableMapping`, `paginatedTableDocuments` (field, type and index filters, refusals,
+  cursors), `indexes`, `tableSize`, `listById`, `getById` and `GET /api/get_indexes`. Local only.
 - `test/generated.test.ts`: `DIFF_RUNS` generated programs (25 by default), both backends started once and
   reset before each program. `DIFF_SEED` replays a run. A difference is shrunk, written to
   `.cache/failures/last.json` (the program and the differences, ready to become a fixed program) and fails
