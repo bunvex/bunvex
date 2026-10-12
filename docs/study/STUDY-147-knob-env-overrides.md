@@ -1,7 +1,7 @@
 # STUDY-147 — Knob environment overrides
 
 - **Status:** PR 1 implemented (the shared reader, every knob whose mechanism exists); PR 3a implemented (five
-  defaults matched, §3.2); PR 3b (`HTTP_SERVER_TIMEOUT_SECONDS` on every route) and PR 2 planned
+  defaults matched, §3.2); PR 3b implemented (`HTTP_SERVER_TIMEOUT_SECONDS` on every route, §3.3); PR 2 planned
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend (`crates/common/src/knobs.rs`,
   `crates/cmd_util/src/env.rs`, `self-hosted/advanced/knobs.md`)
 - **Related:** [platform.md](../parity/platform.md) "Knob env overrides"; STUDY-25 (store timeouts), STUDY-33
@@ -113,8 +113,7 @@ computed from them; `UDF_404_ON_BAD_PATH` needs the 404 answer; `MYSQL_SMART_CHU
 `POOL` (DV-112: bunvex's 16, "settings to add").
 
 **Defaults to match Convex's, PR 3** (owner, 2026-10-11: match). Each reads its knob once it behaves as
-Convex's. PR 3a did the first five (§3.2); `HTTP_SERVER_TIMEOUT_SECONDS` is PR 3b, after a study of which of
-Convex's routes the timeout cuts (long exports, uploads and downloads, the WebSocket after its upgrade).
+Convex's. PR 3a did the first five (§3.2); PR 3b `HTTP_SERVER_TIMEOUT_SECONDS` (§3.3).
 
 | Knob | Convex | bunvex before PR 3 |
 |---|---|---|
@@ -184,6 +183,36 @@ instance loader, usage webhooks and emails, `LEASE_LOST_COOL_DOWN_SECS` (Nomad).
 2–4), `ADMIN_IDENTITY_EXPIRATION_DELAY_SECS` and `_REVALIDATION_DELAY_SECS`, `SHOW_PII_IN_ERRORS` (error
 reporting, parked), `TRANSACTION_WARN_READ_SET_INTERVALS` (a commit-time log of large read sets).
 
+### 3.3 PR 3b: the request timeout on every route
+
+**Convex.** `ConvexHttpService::new` (`crates/common/src/http/mod.rs`) wraps the whole backend router, the API's
+routes and the site's (its proxy forwards into the same service), in tower's `TimeoutLayer` with
+`HTTP_SERVER_TIMEOUT_DURATION` (300 s), under a `HandleErrorLayer` that answers `408 Request Timeout` with no
+body; `/version` and `/metrics` are merged outside the layers. The layer sits inside the concurrency limit, so
+the wait for a permit does not count. Tower's timeout races the future that yields the response, so:
+
+- the handler's whole time to the response head counts, reading the request's body included: a storage upload,
+  a one-shot import (`do_import` answers once the import is done), an `/api/action` call past 300 s answer 408;
+- what is sent after the head is not timed: a download, an export, an HTTP action's streamed body;
+- a WebSocket upgrade answers 101 at once and its socket runs apart;
+- the handler's future is dropped at the timeout. An HTTP action runs in its isolate apart and keeps running.
+
+**Apps observe** a 408 with an empty body on any route whose answer takes longer than 300 s, the knob changing
+it.
+
+**bunvex before.** Only HTTP actions had the 408, from their own timer, which started after auth. Every other
+route ran under Bun's `idleTimeout` (120 s): a handler still working then had its connection closed with no
+answer at all (an `/api/action` call of 150 s failed where Convex answers it); storage, imports and HTTP
+actions turned the idle timeout off and had no limit.
+
+**bunvex now.** `withRequestTimeout` (`packages/server/src/request-timeout.ts`) wraps both ports' handlers,
+inside the request limit and outside CORS (Convex's 408 carries no CORS headers either): each request but a
+WebSocket upgrade has Bun's idle timeout turned off and its handler raced against `HTTP_SERVER_TIMEOUT_SECONDS`;
+past it, 408 with no body. The handler is left running, as it cannot be dropped; a response it makes later is
+never sent and its body is cancelled. Uploads slower than the timeout answer 408, as Convex's (owner,
+2026-10-12: match, the knob raises it). The HTTP actions' own timer is gone; `createServer`'s
+`httpActionHeadTimeoutMs` option became `requestTimeoutMs`.
+
 ## 4. Divergences
 
 None new. The reader matches `env_config`; the knobs whose defaults or scope differ are already decided:
@@ -211,10 +240,14 @@ DV-375 (`MAX_ECHO_BYTES` enforced), DV-414 (`MYSQL_DOCUMENT_ENCODING` default 0)
   pages of 128 by each index, with segments or in memory), `scheduler` (the collector wakes when the oldest
   job expires; batches `gcDelayMs` apart; the defaults), `auth/verify` (the cache's bound, eviction of the
   oldest). Sabotage: each change reverted fails its test.
+- PR 3b: `request-timeout` (an `/api/action` call past the timeout answers 408 with no body and the action
+  finishes; a body streamed past it is not cut; a slow upload answers 408; a WebSocket stays open), and
+  `request-limit` (the wait for a permit does not count). Sabotage: the API port unwrapped fails the first;
+  the timeout put outside the limit fails the second.
 - The readers' own tests now expect the default and a warning where they expected an error
   (`request-limit`, `health-routes`, `session-cleanup`, `splay`, `retention`, `index-cache-knobs`,
   `persistence-config`, `prometheus-metrics`, `mysql-documents`).
 
 ## 6. Open questions
 
-None. PR 2 and PR 3b follow the plan in §3.1.
+None. PR 2 follows the plan in §3.1.

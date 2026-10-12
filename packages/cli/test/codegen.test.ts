@@ -493,6 +493,36 @@ describe("bunvex.json checks, with Convex's messages (STUDY-65 G-L2)", () => {
       '{"bundler":{"includeSourcesContent":1},"codegen":{"fileType":"x"}}',
       "`codegen.fileType` in `bunvex.json`: Invalid enum value. Expected 'ts' | 'js/dts', received 'x'",
     ],
+    // `node.externalPackages` (STUDY-148), from Convex 1.46's CLI the same way.
+    ['{"node":{"externalPackages":"x"}}', "`node.externalPackages` in `bunvex.json`: Expected array, received string"],
+    ['{"node":{"externalPackages":null}}', "`node.externalPackages` in `bunvex.json`: Expected array, received null"],
+    ['{"node":{"externalPackages":{}}}', "`node.externalPackages` in `bunvex.json`: Expected array, received object"],
+    [
+      '{"node":{"externalPackages":[1]}}',
+      "`node.externalPackages.0` in `bunvex.json`: Expected string, received number",
+    ],
+    [
+      '{"node":{"externalPackages":[null]}}',
+      "`node.externalPackages.0` in `bunvex.json`: Expected string, received null",
+    ],
+    [
+      '{"node":{"externalPackages":[[]]}}',
+      "`node.externalPackages.0` in `bunvex.json`: Expected string, received array",
+    ],
+    [
+      '{"node":{"externalPackages":["a",{}]}}',
+      "`node.externalPackages.1` in `bunvex.json`: Expected string, received object",
+    ],
+    [
+      '{"node":{"externalPackages":["tiny-asset",2]}}',
+      "`node.externalPackages.1` in `bunvex.json`: Expected string, received number",
+    ],
+    // `externalPackages` before `nodeVersion`, and after `functions`.
+    [
+      '{"node":{"nodeVersion":1,"externalPackages":"x"}}',
+      "`node.externalPackages` in `bunvex.json`: Expected array, received string",
+    ],
+    ['{"functions":1,"node":{"externalPackages":1}}', "`functions` in `bunvex.json`: Expected string, received number"],
     [
       '{"typescriptCompiler":"x","generateCommonJSApi":"y"}',
       "`generateCommonJSApi` in `bunvex.json`: Expected boolean, received string",
@@ -523,8 +553,10 @@ describe("bunvex.json checks, with Convex's messages (STUDY-65 G-L2)", () => {
     // Any string passes here, as in Convex's CLI: the deployment checks the version (STUDY-145).
     write(app, { "bunvex.json": '{"node":{"nodeVersion":"16"},"bundler":{"includeSourcesContent":true}}' });
     expect(readProjectConfig(app)).toEqual({ node: { nodeVersion: "16" }, bundler: { includeSourcesContent: true } });
-    // `node.externalPackages` is another track's: not checked yet.
-    write(app, { "bunvex.json": '{"node":{"externalPackages":"x"}}' });
-    expect(() => readProjectConfig(app)).not.toThrow();
+    // `node.externalPackages` (STUDY-148): any list of strings, `"*"` among them.
+    write(app, { "bunvex.json": '{"node":{"externalPackages":["*","sharp","@scope/pkg"],"nodeVersion":"22"}}' });
+    expect(readProjectConfig(app)).toEqual({
+      node: { externalPackages: ["*", "sharp", "@scope/pkg"], nodeVersion: "22" },
+    });
   });
 });

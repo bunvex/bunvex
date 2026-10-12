@@ -82,15 +82,15 @@ export const LOG_SINKS_TABLE = "_log_sinks";
 /** Usage limits (STUDY-61), as Convex's `_usage_limits`: `{metric, window, limitType, limit, enabled}`. */
 export const USAGE_LIMITS_TABLE = "_usage_limits";
 /**
+ * The packages a push installed for Node actions (STUDY-148), as Convex's `_external_deps_packages`:
+ * `{storageKey, sha256, deps: [{package, version}], packageSize}`, the newest ten a cache of installs.
+ */
+export const EXTERNAL_DEPS_PACKAGES_TABLE = "_external_deps_packages";
+/**
  * Convex's system tables bunvex keeps empty (STUDY-133 §12 M1): Convex creates them on every start, so a
  * store has them on both sides; their documents are its cloud's.
  */
-export const EMPTY_CLOUD_SYSTEM_TABLES = [
-  "_external_deps_packages",
-  "_audit_log_config",
-  "_aws_lambda_versions",
-  "_backend_info",
-] as const;
+export const EMPTY_CLOUD_SYSTEM_TABLES = ["_audit_log_config", "_aws_lambda_versions", "_backend_info"] as const;
 /** Data sync progress (STUDY-69), as Convex's `_data_sync_progress`: one row per sync, its state. */
 export const DATA_SYNC_PROGRESS_TABLE = "_data_sync_progress";
 /** Function handles (STUDY-50), as Convex's `_function_handles`: `{component, path, deletedTs}`. */
@@ -212,7 +212,8 @@ export const SYSTEM_TABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   _db: "The database globals: the data version and the storage type pinned at the first start.",
   _backend_info: "The cloud deployment's plan and limits (empty here; the cloud fills it).",
   _aws_lambda_versions: "The cloud's Node.js action runtime versions (empty here).",
-  _external_deps_packages: "Packages installed for Node.js actions' external dependencies (empty here).",
+  _external_deps_packages:
+    "The packages installed for Node.js actions' external dependencies (`node.externalPackages`).",
   _audit_log_config: "The cloud audit log's settings (empty here).",
   _instance: "The deployment's own settings, such as the generated instance secret.",
 };

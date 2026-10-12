@@ -254,7 +254,7 @@ describe("the action timeout", () => {
         return new Response("late");
       }),
     });
-    const server = createServer({ engine, functions, port: 0, http, httpActionHeadTimeoutMs: 5000 });
+    const server = createServer({ engine, functions, port: 0, http, requestTimeoutMs: 5000 });
     stops.push(server.stop);
     const res = await fetch(`${server.siteUrl}/slow`);
     expect(res.status).toBe(500);
