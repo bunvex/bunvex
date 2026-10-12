@@ -5,8 +5,8 @@
 //   `_udf_config` — the import phase's seed and time (Convex's `UdfConfig`), so a version imports the same way
 //     every time it is loaded.
 // The rows have Convex's shapes (STUDY-134, DV-424): crates/model/src/source_packages/types.rs
-// `SerializedSourcePackage` (`sha256` as bytes, `packageSize` as int64 sizes, `externalPackageId` and
-// `nodeVersion` null) and crates/model/src/modules/types.rs `SerializedModuleMetadata` (`sha256` in base64,
+// `SerializedSourcePackage` (`sha256` as bytes, `packageSize` as int64 sizes, `externalPackageId` null,
+// `nodeVersion` the push's or null, STUDY-145) and crates/model/src/modules/types.rs `SerializedModuleMetadata` (`sha256` in base64,
 // `analyzeResult` as `SerializedAnalyzedModule`, positions as int64). Code in memory keeps its own types: rows are
 // encoded when written and decoded when read, here. As in Convex, the schema and the auth config are modules too.
 // The modules store is its own use case (`modules`), apart from user files, whose orphan sweep would
@@ -52,7 +52,8 @@ export type SourcePackageFields = {
   sha256: ArrayBuffer;
   externalPackageId: null;
   packageSize: { zippedSizeBytes: bigint; unzippedSizeBytes: bigint };
-  nodeVersion: null;
+  /** The push's `node.nodeVersion` ("20", "22" or "24"), or null (STUDY-145). */
+  nodeVersion: string | null;
 };
 export type SourcePackage = SourcePackageFields & { _id: string };
 /** A module's row, decoded: its hash in hex (the push's wire form), its analysis with plain numbers. */
@@ -121,11 +122,15 @@ export function buildPackage(
   return { zip, unzipped };
 }
 
-/** Store a push's modules as Convex's package (`buildPackage`); the package's row (its key, hash and sizes). */
+/**
+ * Store a push's modules as Convex's package (`buildPackage`); the package's row (its key, hash and sizes, and the
+ * push's Node version, as Convex's `upload_package`).
+ */
 export async function writePackage(
   store: BlobStore,
   modules: ModuleSource[],
   limits?: { zipped: number; unzipped: number },
+  nodeVersion: string | null = null,
 ): Promise<SourcePackageFields> {
   const { zip, unzipped } = buildPackage(modules, limits);
   const written = await store.put(zip);
@@ -134,7 +139,7 @@ export async function writePackage(
     sha256: written.sha256.slice().buffer,
     externalPackageId: null,
     packageSize: { zippedSizeBytes: BigInt(written.size), unzippedSizeBytes: BigInt(unzipped) },
-    nodeVersion: null,
+    nodeVersion,
   };
 }
 

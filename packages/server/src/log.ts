@@ -13,6 +13,7 @@
 //
 // This module holds what `bunvex/server` exports, with nothing of the runtime (its isomorphic entry, STUDY-91):
 // the running function's lines come from log-audit.ts, which sets `setAuditScope`.
+import { trackedOperation } from "./pending-ops.ts";
 
 const REQUEST_ID = Symbol("var.requestId");
 const IP = Symbol("var.ip");
@@ -112,8 +113,12 @@ export function setAuditScope(s: typeof auditScope) {
   auditScope = s;
 }
 
-/** `log.audit` (Convex's `audit` and its `1.0/auditLog` syscall). */
-export async function audit(body: AuditLogBody): Promise<void> {
+/** `log.audit` (Convex's `audit` and its `1.0/auditLog` syscall: pending as `auditLog` in an action, STUDY-143). */
+export function audit(body: AuditLogBody): Promise<void> {
+  return trackedOperation("auditLog", () => auditLine(body));
+}
+
+async function auditLine(body: AuditLogBody): Promise<void> {
   const json = JSON.stringify(cloneWithSentinels(body));
   const scope = auditScope();
   if (!scope) throw new Error("Audit logging is not yet supported in actions");

@@ -2311,8 +2311,12 @@ export function createServer(opts: ServerOptions) {
         return requestError(
           e.status,
           e.code,
-          // As Convex: a race and a message refused before the push are not "while pushing".
-          e.code === "RaceDetected" || e.code === "PushMessageTooLong"
+          // As Convex: a race, and a message or request refused before the push (`into_project_config`, the body's
+          // extractor), are not "while pushing".
+          e.code === "RaceDetected" ||
+            e.code === "PushMessageTooLong" ||
+            e.code === "InvalidConfig" ||
+            e.code === "BadJsonBody"
             ? e.message
             : `Hit an error while pushing:\n${e.message}`,
         );

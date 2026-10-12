@@ -16,7 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { generatedFiles, importPath, moduleIdentifier, modulePaths, runCodegen } from "../src/codegen.ts";
-import { codegenConfig } from "../src/deploy.ts";
+import { codegenConfig, readProjectConfig } from "../src/deploy.ts";
 import { main } from "../src/index.ts";
 
 const dirs: string[] = [];
@@ -456,6 +456,36 @@ describe("bunvex.json checks, with Convex's messages (STUDY-65 G-L2)", () => {
     ],
     // The first issue, in the schema's order.
     ['{"functions":1,"codegen":{"fileType":"x"}}', "`functions` in `bunvex.json`: Expected string, received number"],
+    // `node` and `bundler` (STUDY-145), from Convex 1.46's CLI the same way.
+    ['{"node":5}', "`node` in `bunvex.json`: Expected object, received number"],
+    ['{"node":null}', "`node` in `bunvex.json`: Expected object, received null"],
+    ['{"node":[]}', "`node` in `bunvex.json`: Expected object, received array"],
+    ['{"node":{"nodeVersion":20}}', "`node.nodeVersion` in `bunvex.json`: Expected string, received number"],
+    ['{"node":{"nodeVersion":null}}', "`node.nodeVersion` in `bunvex.json`: Expected string, received null"],
+    ['{"bundler":5}', "`bundler` in `bunvex.json`: Expected object, received number"],
+    ['{"bundler":null}', "`bundler` in `bunvex.json`: Expected object, received null"],
+    ['{"bundler":[]}', "`bundler` in `bunvex.json`: Expected object, received array"],
+    [
+      '{"bundler":{"includeSourcesContent":"yes"}}',
+      "`bundler.includeSourcesContent` in `bunvex.json`: Expected boolean, received string",
+    ],
+    [
+      '{"bundler":{"includeSourcesContent":null}}',
+      "`bundler.includeSourcesContent` in `bunvex.json`: Expected boolean, received null",
+    ],
+    ['{"functions":1,"node":{"nodeVersion":1}}', "`functions` in `bunvex.json`: Expected string, received number"],
+    [
+      '{"node":{"nodeVersion":1},"codegen":{"fileType":"x"}}',
+      "`node.nodeVersion` in `bunvex.json`: Expected string, received number",
+    ],
+    [
+      '{"bundler":{"includeSourcesContent":1},"codegen":{"fileType":"x"}}',
+      "`codegen.fileType` in `bunvex.json`: Invalid enum value. Expected 'ts' | 'js/dts', received 'x'",
+    ],
+    [
+      '{"typescriptCompiler":"x","generateCommonJSApi":"y"}',
+      "`generateCommonJSApi` in `bunvex.json`: Expected boolean, received string",
+    ],
   ];
   for (const [json, message] of cases)
     test(`${json} → ${message}`, async () => {
@@ -479,5 +509,11 @@ describe("bunvex.json checks, with Convex's messages (STUDY-65 G-L2)", () => {
     const app = tmp();
     write(app, { "bunvex.json": '{"functions":"src/fns","codegen":{"fileType":"ts"},"node":{"externalPackages":[]}}' });
     expect(codegenConfig(app).fileType).toBe("ts");
+    // Any string passes here, as in Convex's CLI: the deployment checks the version (STUDY-145).
+    write(app, { "bunvex.json": '{"node":{"nodeVersion":"16"},"bundler":{"includeSourcesContent":true}}' });
+    expect(readProjectConfig(app)).toEqual({ node: { nodeVersion: "16" }, bundler: { includeSourcesContent: true } });
+    // `node.externalPackages` is another track's: not checked yet.
+    write(app, { "bunvex.json": '{"node":{"externalPackages":"x"}}' });
+    expect(() => readProjectConfig(app)).not.toThrow();
   });
 });
