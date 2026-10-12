@@ -180,44 +180,66 @@ function mappingFailures(body: ReadableStream<Uint8Array>, request: Request): Re
   });
 }
 
-const RESPONSE = Response.prototype;
-const nativeBody = Object.getOwnPropertyDescriptor(RESPONSE, "body")!.get!;
 const READS = ["text", "json", "arrayBuffer", "bytes", "blob", "formData"] as const;
 
+/** A getter or method named `name` on `proto` or the first of its prototypes that has one. */
+function inherited(proto: object | null, name: string): PropertyDescriptor | undefined {
+  for (let p = proto; p !== null; p = Object.getPrototypeOf(p)) {
+    const d = Object.getOwnPropertyDescriptor(p, name);
+    if (d !== undefined) return d;
+  }
+  return undefined;
+}
+
 /**
- * The prototype of an action's response: Bun's own response (its native reads stay fast), whose reads fail as
- * Convex's, and `redirected` as Convex's loop sets it.
+ * The prototype of an action's response: the fetched response's own (Bun's, so its native reads stay fast), whose
+ * reads fail as Convex's, and `redirected` as Convex's loop sets it. Built from the response itself, not the global
+ * `Response`, which another library (a DOM in tests) may have replaced; one per response prototype.
  */
-const ACTION_RESPONSE: object = Object.create(RESPONSE, {
-  redirected: {
-    get(this: Answering) {
-      return this[REDIRECTED] ?? false;
+function actionResponse(proto: object): object {
+  const nativeBody = inherited(proto, "body")?.get;
+  return Object.create(proto, {
+    redirected: {
+      get(this: Answering) {
+        return this[REDIRECTED] ?? false;
+      },
     },
-  },
-  body: {
-    get(this: Answering) {
-      const body = nativeBody.call(this) as ReadableStream<Uint8Array> | null;
-      return body && mappingFailures(body, this[REQUEST]);
+    body: {
+      get(this: Answering) {
+        const body = (nativeBody?.call(this) ?? null) as ReadableStream<Uint8Array> | null;
+        return body && mappingFailures(body, this[REQUEST]);
+      },
     },
-  },
-  ...Object.fromEntries(
-    READS.map((name) => {
-      const read = RESPONSE[name] as (this: Response) => Promise<unknown>;
-      return [
-        name,
-        {
-          value(this: Answering) {
-            return read.call(this).catch((e) => Promise.reject(bodyFailure(this[REQUEST], e)));
-          },
-        },
-      ];
-    }),
-  ),
-});
+    ...Object.fromEntries(
+      READS.flatMap((name) => {
+        const read = inherited(proto, name)?.value as ((this: Response) => Promise<unknown>) | undefined;
+        if (read === undefined) return [];
+        return [
+          [
+            name,
+            {
+              value(this: Answering) {
+                return read.call(this).catch((e) => Promise.reject(bodyFailure(this[REQUEST], e)));
+              },
+            },
+          ],
+        ];
+      }),
+    ),
+  });
+}
+
+const ACTION_RESPONSES = new WeakMap<object, object>();
 
 /** `r` as the response to `request` an action sees. */
 function answering(r: Response, request: Request): Answering {
-  Object.setPrototypeOf(r, ACTION_RESPONSE);
+  const proto = Object.getPrototypeOf(r) as object;
+  let wrapped = ACTION_RESPONSES.get(proto);
+  if (wrapped === undefined) {
+    wrapped = actionResponse(proto);
+    ACTION_RESPONSES.set(proto, wrapped);
+  }
+  Object.setPrototypeOf(r, wrapped);
   const out = r as Answering;
   out[REQUEST] = request;
   return out;

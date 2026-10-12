@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineSchema, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
-import { fetchFailure, requestFailure } from "../src/action-fetch.ts";
+import { fetchFailure, isolateFetch, requestFailure } from "../src/action-fetch.ts";
 import type { FunctionLog } from "../src/function-log.ts";
 import { action, Functions, NODE_FUNCTIONS, query } from "../src/functions.ts";
 import { screenFailure } from "../src/http-proxy.ts";
@@ -214,11 +214,21 @@ async function failures() {
         return (e as Error).constructor.name;
       }
     }),
+    stream: action(async (_ctx, { url }: { url: string }) => {
+      const reader = (await fetch(url)).body!.getReader();
+      try {
+        while (!(await reader.read()).done);
+        return "done";
+      } catch (e) {
+        return `${(e as Error).constructor.name}: ${(e as Error).message}`;
+      }
+    }),
   });
   functions.functionLog = { append: () => {} } as unknown as FunctionLog;
   const get = (url: string, init?: Record<string, unknown>) =>
     functions.runAction("f:get", init ? { url, init } : { url }) as Promise<Record<string, unknown>>;
   const json = (url: string) => functions.runAction("f:json", { url });
+  const stream = (url: string) => functions.runAction("f:stream", { url });
   return {
     base: `http://127.0.0.1:${t.port}`,
     closedPort,
@@ -226,13 +236,14 @@ async function failures() {
     truncatedPort: truncated.port,
     get,
     json,
+    stream,
   };
 }
 
 const DARWIN = process.platform === "darwin";
 
 test("a failed request is reqwest's cause, the query string, fragment and credentials dropped", async () => {
-  const { base, closedPort, emptyPort, truncatedPort, get, json } = await failures();
+  const { base, closedPort, emptyPort, truncatedPort, get, json, stream } = await failures();
   // Not the network's: a body that is no JSON is the parser's error, as in Convex.
   expect(await json(`${base}/missing`)).toBe("SyntaxError");
   expect(await json(`${base}/echo`)).toMatchObject({ method: "GET" });
@@ -252,6 +263,10 @@ test("a failed request is reqwest's cause, the query string, fragment and creden
     name: "TypeError",
     message: `fetch to http://127.0.0.1:${truncatedPort}/x failed: error decoding response body`,
   });
+  // Read from the body's stream, the same failure.
+  expect(await stream(`http://127.0.0.1:${truncatedPort}/x`)).toBe(
+    `TypeError: fetch to http://127.0.0.1:${truncatedPort}/x failed: error decoding response body`,
+  );
 });
 
 test("Convex's causes by code: the system's words for sockets and names, Bun's for the rest", () => {
@@ -359,4 +374,15 @@ test("the host's own fetch, outside any function, is untouched; a query still re
   expect(await (await fetch("data:text/plain,host")).text()).toBe("host");
   expect(await (await fetch("http://localhost/", { unix: sock } as RequestInit)).text()).toBe("unix socket");
   expect(await functions.runQuery("m:inQuery", {})).toContain("fetch()");
+});
+
+test("a response of another Response (a subclass, or a DOM's in tests) keeps its reads, mapped as Convex's", async () => {
+  class Other extends Response {}
+  const send = (async () => new Other("hello", { status: 200 })) as unknown as typeof fetch;
+  const r = await isolateFetch(send)("https://example.com/");
+  expect(r).toBeInstanceOf(Other);
+  expect(r.redirected).toBe(false);
+  expect(await r.text()).toBe("hello");
+  const s = await isolateFetch(send)("https://example.com/");
+  expect(new TextDecoder().decode(await new Response(s.body).arrayBuffer())).toBe("hello");
 });
