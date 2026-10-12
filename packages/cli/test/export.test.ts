@@ -54,8 +54,8 @@ test("bunvex export: into a directory, to a new file; an existing file is refuse
   expect(existsSync(join(dir, "backups", `snapshot_${NAME}_${ts}.zip`))).toBe(true);
   const toFile = await run("--path", "mine.zip");
   expect(toFile.code).toBe(0);
-  // Async, stdout read alongside `exited`: on a loaded CI runner a `Bun.spawnSync` of `unzip` once sat until the
-  // test timeout killed its child ("killed 1 dangling process"), though the child had exited.
+  // Async, stdout read alongside `exited`: on a loaded CI runner other tests' `Bun.spawnSync` once sat until the
+  // test timeout killed a child that had done its work ("killed 1 dangling process").
   const unzip = Bun.spawn(["unzip", "-Z1", join(dir, "mine.zip")], {
     stdin: "ignore",
     stdout: "pipe",

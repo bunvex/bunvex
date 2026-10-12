@@ -39,8 +39,8 @@ const tmp = () => {
 };
 /** A stand-in for the released executable: the same program, run by Bun. */
 /**
- * `zip -q -j <args>`, run to its end. Async: on a loaded CI runner a `Bun.spawnSync` of this kind once sat until
- * the test timeout killed its child ("killed 1 dangling process"), though the child had exited.
+ * `zip -q -j <args>`, run to its end. Async: on a loaded CI runner other tests' `Bun.spawnSync` once sat until
+ * the test timeout killed a child that had done its work ("killed 1 dangling process").
  */
 async function zip(...args: string[]) {
   const code = await Bun.spawn(["zip", "-q", "-j", ...args], { stdin: "ignore", stdout: "ignore", stderr: "inherit" })

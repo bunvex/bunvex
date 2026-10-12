@@ -253,8 +253,8 @@ describe("the package is Convex's zip (DV-166, crates/model/src/source_packages/
     dirs.push(dir);
     const file = join(dir, "pkg.zip");
     await Bun.write(file, bytes);
-    // Async, stdout read alongside `exited`: on a loaded CI runner a `Bun.spawnSync` of `unzip` once sat until
-    // the test timeout killed its child ("killed 1 dangling process"), though the child had exited.
+    // Async, stdout read alongside `exited`: on a loaded CI runner other tests' `Bun.spawnSync` once sat until
+    // the test timeout killed a child that had done its work ("killed 1 dangling process").
     const unzip = async (...args: string[]) => {
       const p = Bun.spawn(["unzip", ...args], { stdin: "ignore", stdout: "pipe", stderr: "inherit" });
       const [code, out] = await Promise.all([p.exited, new Response(p.stdout).text()]);

@@ -123,9 +123,9 @@ for (const [name, source] of scripts)
     cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
     const file = join(dir, `${name.replaceAll(" ", "-")}.ts`);
     writeFileSync(file, source);
-    // Async, the pipes read alongside `exited`: on a loaded CI runner a `Bun.spawnSync` once sat until the test
-    // timeout killed a child that had already exited ("killed 1 dangling process"). A child that does not exit
-    // by itself is still killed at 15 s, and its exit code is then not 0.
+    // Async, the pipes read alongside `exited`: on a loaded CI runner other tests' `Bun.spawnSync` once sat until
+    // the test timeout killed a child that had done its work ("killed 1 dangling process"). A child that does not
+    // exit by itself is still killed at 15 s, and its exit code is then not 0.
     const p = Bun.spawn([process.execPath, file], { timeout: 15_000, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const [code, out] = await Promise.all([p.exited, new Response(p.stdout).text(), new Response(p.stderr).text()]);
     expect(out).toContain("closed");
