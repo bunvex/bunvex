@@ -27,7 +27,7 @@ import {
 import type { Committer } from "./committer.ts";
 import { internalIdOf } from "./internal-id.ts";
 import { compareKeys, encodeKey, prefixEnd } from "./keyenc.ts";
-import { knob, secondsKnob } from "./knobs.ts";
+import { boolKnob, knob, secondsKnob } from "./knobs.ts";
 import type { IndexEntryAt, IndexId, Persistence, TabletId } from "./persistence/index.ts";
 import { type Doc, type IndexDef, indexKey, SYSTEM_INDEXES, type TableDef } from "./schema.ts";
 import { decodeDoc, type Tx } from "./tx.ts";
@@ -37,9 +37,12 @@ import { decodeDoc, type Tx } from "./tx.ts";
  * entries per write, INDEX_BACKFILL_CHUNK_RATE = 16 chunks a second (a limit of 16 384 entries/s),
  * INDEX_BACKFILL_READ_SIZE = 500 documents per table read, INDEX_BACKFILL_PROGRESS_INTERVAL = 1 s,
  * INDEX_BACKFILL_CONCURRENCY = 8 tables at once, INDEX_WORKERS_INITIAL_BACKOFF = 500 ms and
- * INDEX_WORKERS_MAX_BACKOFF = 30 s after a failure.
+ * INDEX_WORKERS_MAX_BACKOFF = 30 s after a failure. INDEX_BACKFILL_ENABLE = true: false (Convex's emergency
+ * switch, "likely only disabled if index backfill is breaking an instance") starts no database index backfill at
+ * all; text and vector indexes still build (STUDY-147 §3.5).
  */
 export const INDEX_BACKFILL_DEFAULTS = {
+  enabled: boolKnob("INDEX_BACKFILL_ENABLE", true),
   chunkSize: knob("INDEX_BACKFILL_CHUNK_SIZE", 1024, "positive"),
   chunkRate: knob("INDEX_BACKFILL_CHUNK_RATE", 16, "positive") as number | null,
   readSize: knob("INDEX_BACKFILL_READ_SIZE", 500),

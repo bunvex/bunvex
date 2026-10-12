@@ -13,7 +13,17 @@ import {
   WRITE_BATCH_MAX_DOCUMENTS,
 } from "../src/committer.ts";
 import { encodeKey } from "../src/keyenc.ts";
-import { chunkRows, type DocWrite, type IndexWrite, type Persistence } from "../src/persistence/index.ts";
+import {
+  chunkRows,
+  type DocWrite,
+  type IndexWrite,
+  MYSQL_MAX_DYNAMIC_SMART_CHUNK_SIZE,
+  MYSQL_MAX_FILL_CHUNK_ROWS,
+  MYSQL_SMART_CHUNK_MAX_SIZE,
+  type Persistence,
+  retryN,
+  smartChunks,
+} from "../src/persistence/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 
 const dirs: string[] = [];
@@ -184,5 +194,65 @@ describe("chunkRows (statement chunking inside one flush)", () => {
   test("by bytes; a row over the limit gets a chunk of its own", () => {
     const size = (n: number) => n;
     expect(chunkRows([3, 3, 3, 9, 1, 1], Infinity, 6, size)).toEqual([[3, 3], [3], [9], [1, 1]]);
+  });
+});
+
+describe("smartChunks (Convex's MySQL `smart_chunks`, STUDY-147 §3.6)", () => {
+  const lengths = (n: number, size?: (r: number) => number, maxBytes?: number) =>
+    smartChunks(
+      Array.from({ length: n }, (_, i) => i),
+      size,
+      128,
+      8,
+      maxBytes,
+    ).map((c) => c.length);
+  test("Convex's defaults", () => {
+    expect([MYSQL_SMART_CHUNK_MAX_SIZE, MYSQL_MAX_DYNAMIC_SMART_CHUNK_SIZE, MYSQL_MAX_FILL_CHUNK_ROWS]).toEqual([
+      128, 8, 1024,
+    ]);
+  });
+  test("any length up to 8, then powers of two up to 128", () => {
+    expect(lengths(0)).toEqual([]);
+    expect(lengths(7)).toEqual([7]);
+    expect(lengths(8)).toEqual([8]);
+    expect(lengths(9)).toEqual([8, 1]);
+    expect(lengths(100)).toEqual([64, 32, 4]);
+    expect(lengths(1000)).toEqual([128, 128, 128, 128, 128, 128, 128, 64, 32, 8]);
+  });
+  test("the bytes bound first; a row over it alone", () => {
+    expect(lengths(20, () => 10, 55)).toEqual([5, 5, 5, 5]);
+    expect(lengths(3, () => 100, 55)).toEqual([1, 1, 1]);
+  });
+  test("every row once, in order", () => {
+    const rows = Array.from({ length: 777 }, (_, i) => i);
+    expect(smartChunks(rows).flat()).toEqual(rows);
+  });
+});
+
+describe("retryN (Convex's MYSQL_MAX_QUERY_RETRIES)", () => {
+  const failing = (failures: number, retryable = true) => {
+    let calls = 0;
+    const fn = async () => {
+      if (calls++ < failures) throw Object.assign(new Error("lost"), { retryable });
+      return "ok";
+    };
+    return { fn, calls: () => calls };
+  };
+  const isRetryable = (e: unknown) => (e as { retryable: boolean }).retryable;
+  test("up to `retries` more runs, at once; then the error", async () => {
+    const two = failing(2);
+    expect(await retryN(two.fn, isRetryable, 2)).toBe("ok");
+    expect(two.calls()).toBe(3);
+    const three = failing(3);
+    expect(await retryN(three.fn, isRetryable, 2).catch((e) => e.message)).toBe("lost");
+    expect(three.calls()).toBe(3);
+    const none = failing(1);
+    expect(await retryN(none.fn, isRetryable, 0).catch((e) => e.message)).toBe("lost");
+    expect(none.calls()).toBe(1);
+  });
+  test("an error it does not retry is thrown at once", async () => {
+    const f = failing(1, false);
+    expect(await retryN(f.fn, isRetryable, 5).catch((e) => e.message)).toBe("lost");
+    expect(f.calls()).toBe(1);
   });
 });

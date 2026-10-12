@@ -363,8 +363,8 @@ Key bunvex facts behind the statuses:
 
 | Status | Count |
 |---|---|
-| done | 233 |
+| done | 236 |
 | partial | 3 |
-| missing | 10 |
+| missing | 7 |
 | n/a (a decided divergence) | 1 |
 | **total** | **247** |
