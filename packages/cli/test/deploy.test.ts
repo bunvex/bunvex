@@ -127,7 +127,8 @@ export const tick = internalMutation(async () => {});`,
   "bunvex/files.ts": `"use node";
 import { action } from ${JSON.stringify(SERVER)};
 import { createHash } from "node:crypto";
-export const digest = action(async (_ctx, { text }: { text: string }) => createHash("sha256").update(text).digest("hex").slice(0, 8));`,
+// \`require\` of a builtin too: Bun's bundle reads it from \`import.meta.require\` (STUDY-148).
+export const digest = action(async (_ctx, { text }: { text: string }) => createHash("sha256").update(text).digest("hex").slice(0, 8) + require("node:path").sep);`,
   "bunvex/messages.test.ts": `throw new Error("tests are not modules");`,
   "bunvex/_generated/api.ts": `export const api = {};`,
 };
@@ -150,7 +151,7 @@ describe("bunvex deploy", () => {
     // The push sent the CLI's version, as Convex's CLI its package's: `_udf_config.serverVersion`.
     const [config] = await d.engine.query((db) => db.asSystem(() => db.query("_udf_config").collect()));
     expect(config!.serverVersion).toBe(VERSION);
-    expect((await d.call("action", "files:digest", { text: "x" })).value).toMatch(/^[0-9a-f]{8}$/);
+    expect((await d.call("action", "files:digest", { text: "x" })).value).toMatch(/^[0-9a-f]{8}\/$/);
     // The test file and _generated were not pushed.
     const hashes = (await (
       await fetch(`${d.url}/api/get_config_hashes`, {
