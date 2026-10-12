@@ -1,7 +1,7 @@
 # STUDY-111 — Persisted search segments
 
 - **Status:** decided by the owner (2026-10-05: "build E now", STUDY-79 §6 option E); PR 1 (the segment
-  formats), PR 2 (the merged query path) PR 3 (the flusher, the start from segments), PR 3b (backpressure), PR 4 (the paged backfill), PR 5 (the compactor), PR 6 (the `_index` rows) and PR 7 (fast-forward, retention, orphans) implemented
+  formats), PR 2 (the merged query path) PR 3 (the flusher, the start from segments), PR 3b (backpressure), PR 4 (the paged backfill), PR 5 (the compactor), PR 6 (the `_index` rows), PR 7 (fast-forward, retention, orphans), PR 8 (staged indexes, kept `Backfilled { staged }`) and PR 9 (segments read from disk, memory-mapped; DV-371 resolved, DV-372 decided) implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
 - **Related:** [STUDY-79](STUDY-79-search-index-bootstrapping.md) §6 (options A–E), [STUDY-96](STUDY-96-search-index-snapshots.md)
   (option D, the clean-shutdown snapshot), [STUDY-45](STUDY-45-text-search.md) S1–S2 (DV-227, DV-228),

@@ -13,6 +13,7 @@
   "ignore": [
     "@bunvex/bench",
     "@bunvex/dashboard",
+    "@bunvex/dashboard-source",
     "@bunvex/dashboard-app",
     "@bunvex/differential",
     "@bunvex/jepsen",

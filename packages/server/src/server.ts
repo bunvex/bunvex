@@ -1208,6 +1208,8 @@ export function createServer(opts: ServerOptions) {
         groups: c.groups,
         conflicts: c.conflicts,
         syncSessions: sync.sessions.size,
+        // The queries subscribed across every session now: the dashboard's `subscriptions` (STUDY-149).
+        subscriptions: sync.subscriptionCount(),
         sync: sync.stats,
         // Spans exported, dropped (queue full) and failed (STUDY-131 AD-26); null when tracing is off.
         tracing: spanExporter?.stats ?? null,

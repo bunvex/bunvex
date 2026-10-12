@@ -7,8 +7,16 @@ import type { Io } from "./io.ts";
 
 /** Convex's `https://docs.convex.dev/?utm_source=convex-cli`: bunvex's site, which is to hold its docs. */
 export const DOCS_URL = "https://bunvex.dev/?utm_source=bunvex-cli";
-/** Convex's `https://news.convex.dev/tag/releases/`: the changelog of the package an app installs. */
-export const CHANGELOG_URL = "https://github.com/bunvex/bunvex/blob/main/packages/bunvex/CHANGELOG.md";
+/**
+ * Convex's `https://news.convex.dev/tag/releases/`: the changelog of `@bunvex/server`, the package every app
+ * installs (the `@bunvex/*` packages share one version, STUDY-40 L7).
+ */
+export const CHANGELOG_URL = "https://github.com/bunvex/bunvex/blob/main/packages/server/CHANGELOG.md";
+/**
+ * Convex's `npm install convex@latest`: every `@bunvex/*` package the app depends on, together and in place
+ * (a dev dependency stays one), so no two releases mix (docs/upgrading.md).
+ */
+export const UPGRADE_COMMAND = "bun update --latest '@bunvex/*'";
 
 export const DOCS_USAGE = `Usage: bunvex docs [options]
 
@@ -19,7 +27,7 @@ Options:
 
 export const UPDATE_USAGE = `Usage: bunvex update [options]
 
-Print instructions for updating the bunvex package`;
+Print instructions for updating the bunvex packages`;
 
 /**
  * A command with no arguments, and `--no-open` when it has the option: whether to open, or the exit code of an
@@ -78,7 +86,7 @@ export async function updateCommand(args: string[], io: Io): Promise<number> {
   if (typeof flags === "number") return flags;
   // Convex's three lines and an empty one. Like Convex's, it asks no registry which version is the latest.
   io.err(
-    `To view the bunvex changelog, go to ${CHANGELOG_URL}\nWhen you are ready to upgrade, run the following command:\nnpm install bunvex@latest\n`,
+    `To view the bunvex changelog, go to ${CHANGELOG_URL}\nWhen you are ready to upgrade, run the following command:\n${UPGRADE_COMMAND}\n`,
   );
   return 0;
 }

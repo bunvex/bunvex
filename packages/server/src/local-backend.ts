@@ -13,6 +13,9 @@
 // - files and pushed code under `--local-storage` (default `bunvex_local_storage`), or S3 (`--s3-storage`,
 //   from the environment's S3 variables, for each use case whose bucket is set: STUDY-38 K4);
 // - `--do-not-require-ssl`, `--redact-logs-to-client`;
+// - the database's variables, which Convex's binary reads from its environment: `POSTGRES_TIMEOUT_SECONDS` /
+//   `MYSQL_TIMEOUT_SECONDS` (its knobs; `MONGODB_TIMEOUT_SECONDS` too) and `PG_CA_FILE` / `MYSQL_CA_FILE` (its
+//   connection code), read as an embedded server reads them (`persistenceConfigFromEnv`);
 // - `--http-proxy <url>` (Convex's `--convex-http-proxy`, STUDY-80): the proxy actions' `fetch`, OIDC
 //   discovery and JWKS, and the log sinks go through; without it, `--deny-addresses` (bunvex's own screen,
 //   STUDY-80 P1, DV-325: `metadata` by default), and Convex's warning at start when that is `none`.
@@ -23,7 +26,7 @@ import { type BlobStore, blobStoreFromEnv, LocalBlobStore, s3OptionsFromEnv } fr
 import { ADDRESS_SCREENS, type AddressScreen, DEFAULT_ADDRESS_SCREEN } from "./address-screen.ts";
 import { adminKeyCipherKey, issueAdminKey } from "./admin-keys.ts";
 import { Functions } from "./functions.ts";
-import { openPersistence } from "./persistence.ts";
+import { openPersistence, type PersistenceConfig, persistenceConfigFromEnv } from "./persistence.ts";
 import { searchSegmentStore } from "./search-storage.ts";
 import { createServer } from "./server.ts";
 
@@ -52,7 +55,7 @@ Options:
       --instance-name <name> default ${DEFAULT_INSTANCE_NAME}; requires --instance-secret
       --instance-secret <hex> required: 32 bytes, hex-encoded (\`openssl rand -hex 32\`)
       --local-storage <dir>  where files and pushed code live (default bunvex_local_storage)
-      --s3-storage           keep them in S3 instead (S3_STORAGE_FILES_BUCKET, S3_STORAGE_MODULES_BUCKET, AWS_*)
+      --s3-storage           keep them in S3 instead (S3_STORAGE_<USE CASE>_BUCKET, AWS_*)
       --do-not-require-ssl   allow an unencrypted database connection
       --redact-logs-to-client  do not send log lines and errors' details to clients
       --http-proxy <url>     send actions' fetch requests through this proxy, to screen them for SSRF
@@ -191,6 +194,21 @@ export function parseLocalBackendFlags(args: string[]): LocalBackendFlags | stri
   return f;
 }
 
+/**
+ * The database variables Convex's binary reads from its environment, for the driver the flags chose (`--db`), whatever
+ * the environment's PERSISTENCE says: the call timeout (POSTGRES_TIMEOUT_SECONDS, MYSQL_TIMEOUT_SECONDS;
+ * MONGODB_TIMEOUT_SECONDS for bunvex's MongoDB) and the CA file (PG_CA_FILE, MYSQL_CA_FILE). Read by
+ * `persistenceConfigFromEnv`, as an embedded server reads them; the URL and the rest come from the flags.
+ */
+export function localBackendDatabaseEnv(
+  db: LocalBackendFlags["db"],
+  env: LocalBackendIo["env"],
+): Pick<PersistenceConfig, "caFile" | "timeoutMs"> {
+  // The URL variables are the entry script's business: only the driver's own variables are taken.
+  const { caFile, timeoutMs } = persistenceConfigFromEnv({ ...env, PERSISTENCE: db }, () => {});
+  return { ...(caFile === undefined ? {} : { caFile }), ...(timeoutMs === undefined ? {} : { timeoutMs }) };
+}
+
 export type RunningLocalBackend = { url: string; siteUrl: string | null; stop: () => Promise<void> };
 
 /** Start the backend (the program waits on it; tests and `bunvex dev` stop it). */
@@ -206,6 +224,7 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
       requireSsl: !f.doNotRequireSsl,
       pool: 16,
       instanceName: f.instanceName,
+      ...localBackendDatabaseEnv(f.db, io.env),
     });
   // The engine is read when a store first writes to S3 (its prefix is an instance setting), after it exists.
   const storage = (useCase: "files" | "modules" | "exports" | "snapshot_imports" | "search") => {

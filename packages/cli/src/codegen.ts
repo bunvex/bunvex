@@ -1,6 +1,7 @@
 // Code generation (STUDY-36): the functions directory's `_generated/` — `api`, `server` and `dataModel` —
 // with the content of Convex's (npm-packages/convex/src/cli/codegen_templates, lib/codegen.ts), importing
-// from `bunvex/server` and `bunvex/values`:
+// from `@bunvex/server` and `@bunvex/values`, the packages an app installs (STUDY-40 L7; `bunvex/server` and
+// `bunvex/values` for an app on this repository's private aggregate `bunvex`, as its examples are):
 //
 // - `api.d.ts` builds `api` / `internal` from the modules' types (`ApiFromModules`, `FilterApi`), one
 //   `import type * as …` per module (the bundler's entry points); `api.js` is `anyApi`;
@@ -22,7 +23,7 @@ import { entryPoints } from "./bundle.ts";
 
 export type CodegenConfig = {
   fileType: "ts" | "js/dts";
-  /** Where the generated files import from: `bunvex/*`, or `@bunvex/*` for an app on the scoped packages (STUDY-40). */
+  /** Where the generated files import from: `@bunvex/*` (the default), or `bunvex/*` for an app on the private aggregate. */
   packages?: "bunvex" | "@bunvex";
   /** Also write the CommonJS api (`api_cjs.cjs`, `api_cjs.d.cts`); ignored with `fileType: "ts"`, as Convex. */
   commonjs?: boolean;
@@ -33,11 +34,11 @@ const posix = (p: string) => p.split(sep).join("/");
 const SERVER = ["bunvex", "server"].join("/");
 const VALUES = ["bunvex", "values"].join("/");
 type Imports = { server: string; values: string };
-/** The quoted specifiers the generated files import. */
+/** The quoted specifiers the generated files import: `@bunvex/*` unless the app is on the aggregate `bunvex`. */
 const importsOf = (packages: CodegenConfig["packages"]): Imports =>
-  packages === "@bunvex"
-    ? { server: JSON.stringify(`@${SERVER}`), values: JSON.stringify(`@${VALUES}`) }
-    : { server: JSON.stringify(SERVER), values: JSON.stringify(VALUES) };
+  packages === "bunvex"
+    ? { server: JSON.stringify(SERVER), values: JSON.stringify(VALUES) }
+    : { server: JSON.stringify(`@${SERVER}`), values: JSON.stringify(`@${VALUES}`) };
 
 function header(description: string) {
   return `/* eslint-disable */

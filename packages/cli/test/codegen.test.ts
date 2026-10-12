@@ -49,8 +49,9 @@ const run = async (cmd: string[], cwd: string) => {
   const [code, out, err] = await Promise.all([p.exited, new Response(p.stdout).text(), new Response(p.stderr).text()]);
   return { code, out, err };
 };
-const SERVER = ["bunvex", "server"].join("/");
-const VALUES = ["bunvex", "values"].join("/");
+// What an app imports: the scoped packages (STUDY-40 L7), the generated files' default.
+const SERVER = ["@bunvex", "server"].join("/");
+const VALUES = ["@bunvex", "values"].join("/");
 
 describe("the generated files", () => {
   const paths = ["messages.ts", "foo/bar-baz.ts", "delete.ts", "api.ts"];
@@ -73,24 +74,34 @@ describe("the generated files", () => {
     expect(dts).toContain(`  messages: typeof messages;`);
     expect(dts).not.toMatch(/convex/i);
   });
-  test("an app on the scoped packages gets @bunvex/* imports (STUDY-40)", () => {
-    const scoped = generatedFiles(["a.ts"], { hasSchema: true, fileType: "js/dts", packages: "@bunvex" });
-    const all = [
-      ...Object.values(scoped.server),
-      ...Object.values(scoped.api),
-      ...Object.values(scoped.dataModel),
-    ].join("\n");
-    expect(all).toContain(`from "@${SERVER}"`);
-    expect(all).toContain(`from "@${VALUES}"`);
-    expect(all).not.toMatch(/from "bunvex\//);
+  test("@bunvex/* imports by default; bunvex/* for an app on the private aggregate `bunvex` (STUDY-40 L7)", () => {
+    const text = (packages?: "bunvex" | "@bunvex") => {
+      const g = generatedFiles(["a.ts"], { hasSchema: true, fileType: "js/dts", packages });
+      return [...Object.values(g.server), ...Object.values(g.api), ...Object.values(g.dataModel)].join("\n");
+    };
+    for (const scoped of [text(), text("@bunvex")]) {
+      expect(scoped).toContain(`from "${SERVER}"`);
+      expect(scoped).toContain(`from "${VALUES}"`);
+      expect(scoped).not.toMatch(/from "bunvex\//);
+    }
+    const aggregate = text("bunvex");
+    expect(aggregate).toContain(`from ${JSON.stringify(SERVER.slice(1))}`);
+    expect(aggregate).toContain(`from ${JSON.stringify(VALUES.slice(1))}`);
+    expect(aggregate).not.toContain(`"${SERVER}"`);
     const dir = tmp();
-    const config = (deps: Record<string, string>) => {
-      writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: deps }));
+    // No package.json: an app on the scoped packages, as every app is.
+    expect(codegenConfig(dir).packages).toBe("@bunvex");
+    const config = (pkg: Record<string, unknown>) => {
+      writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
       return codegenConfig(dir).packages;
     };
-    expect(config({ "@bunvex/server": "0.1.0" })).toBe("@bunvex");
-    expect(config({ bunvex: "0.1.0", "@bunvex/react": "0.1.0" })).toBe("bunvex");
-    expect(config({})).toBe("bunvex");
+    expect(config({ dependencies: { "@bunvex/server": "0.1.0" } })).toBe("@bunvex");
+    expect(config({})).toBe("@bunvex");
+    expect(config({ dependencies: { "left-pad": "1.0.0" } })).toBe("@bunvex");
+    // This repository's examples depend on the aggregate, in any dependency field.
+    expect(config({ dependencies: { bunvex: "workspace:*", "@bunvex/react-query": "workspace:*" } })).toBe("bunvex");
+    expect(config({ devDependencies: { bunvex: "workspace:*" } })).toBe("bunvex");
+    expect(config({ peerDependencies: { bunvex: "*" } })).toBe("bunvex");
   });
 
   test("the modules are the bundler's entry points, in code-unit order", () => {
@@ -139,12 +150,18 @@ describe("runCodegen", () => {
   });
 });
 
-// An app whose `bunvex` and `typescript` packages are the workspace's.
+// An app installed as apps install bunvex: `@bunvex/server` and `@bunvex/values` (the workspace's), and
+// `typescript`.
 function appWithPackages(files: Record<string, string>) {
   const app = tmp();
-  mkdirSync(join(app, "node_modules"));
-  symlinkSync(resolve(import.meta.dir, "../../bunvex"), join(app, "node_modules/bunvex"));
+  mkdirSync(join(app, "node_modules/@bunvex"), { recursive: true });
+  for (const p of ["server", "values"])
+    symlinkSync(resolve(import.meta.dir, "../..", p), join(app, "node_modules/@bunvex", p));
   symlinkSync(resolve(import.meta.dir, "../../../node_modules/typescript"), join(app, "node_modules/typescript"));
+  writeFileSync(
+    join(app, "package.json"),
+    JSON.stringify({ dependencies: { "@bunvex/server": "workspace:*", "@bunvex/values": "workspace:*" } }),
+  );
   write(app, files);
   return app;
 }

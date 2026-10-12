@@ -1,0 +1,9 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  // The dashboard's contract types reach its screens' modules (JSX): a tsconfig of their own, as react/'s.
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx"
+  },
+  "include": [".", "../test/harness.ts"]
+}
