@@ -278,7 +278,7 @@ MySQL by the pool's inactive TTL, minimum 0 kept); MySQL also recycles a connect
 connections for ever, MySQL closed them after mysql2's 60 s.
 
 **bunvex now** (owner, 2026-10-12: Convex's knobs and defaults, DV-112 reversed). The server reads each driver's
-knobs (`persistenceConfigFromEnv`): the pool is 128 unless the knob, else `POOL`, says otherwise; an idle
+knobs (`persistenceConfigFromEnv`; the local backend too, through `localBackendDatabaseEnv`): the pool is 128 unless the knob, else `POOL`, says otherwise; an idle
 connection is closed after 90 s (postgres.js `idle_timeout`; mysql2 `idleTimeout` with `maxIdle: 0`). MongoDB has
 no Convex counterpart and keeps `POOL` (16). Not built: MySQL's 600 s forced lifetime, which mysql2's pool has no
 setting for. The drivers' own `open` keeps 16 as its default when called directly (tests, the conformance suite).

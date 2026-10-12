@@ -197,16 +197,22 @@ export function parseLocalBackendFlags(args: string[]): LocalBackendFlags | stri
 /**
  * The database variables Convex's binary reads from its environment, for the driver the flags chose (`--db`), whatever
  * the environment's PERSISTENCE says: the call timeout (POSTGRES_TIMEOUT_SECONDS, MYSQL_TIMEOUT_SECONDS;
- * MONGODB_TIMEOUT_SECONDS for bunvex's MongoDB) and the CA file (PG_CA_FILE, MYSQL_CA_FILE). Read by
+ * MONGODB_TIMEOUT_SECONDS for bunvex's MongoDB), the CA file (PG_CA_FILE, MYSQL_CA_FILE), and the pool's size and idle
+ * lifetime (POSTGRES_/MYSQL_MAX_CONNECTIONS, *_INACTIVE_CONNECTION_LIFETIME_SECS; STUDY-147 §3.7). Read by
  * `persistenceConfigFromEnv`, as an embedded server reads them; the URL and the rest come from the flags.
  */
 export function localBackendDatabaseEnv(
   db: LocalBackendFlags["db"],
   env: LocalBackendIo["env"],
-): Pick<PersistenceConfig, "caFile" | "timeoutMs"> {
+): Pick<PersistenceConfig, "caFile" | "timeoutMs" | "pool" | "idleMs"> {
   // The URL variables are the entry script's business: only the driver's own variables are taken.
-  const { caFile, timeoutMs } = persistenceConfigFromEnv({ ...env, PERSISTENCE: db }, () => {});
-  return { ...(caFile === undefined ? {} : { caFile }), ...(timeoutMs === undefined ? {} : { timeoutMs }) };
+  const { caFile, timeoutMs, pool, idleMs } = persistenceConfigFromEnv({ ...env, PERSISTENCE: db }, () => {});
+  return {
+    ...(caFile === undefined ? {} : { caFile }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    ...(pool === undefined ? {} : { pool }),
+    ...(idleMs === undefined ? {} : { idleMs }),
+  };
 }
 
 export type RunningLocalBackend = { url: string; siteUrl: string | null; stop: () => Promise<void> };
@@ -222,7 +228,6 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
       kind: f.db,
       url: f.dbSpec,
       requireSsl: !f.doNotRequireSsl,
-      pool: 16,
       instanceName: f.instanceName,
       ...localBackendDatabaseEnv(f.db, io.env),
     });
