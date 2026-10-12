@@ -1,7 +1,8 @@
 # STUDY-149 — The dashboard on real data: how Convex's dashboard reads a deployment
 
-- **Status:** draft (owner questions) — research and design only; nothing is built. Q1–Q7 (§6) wait on the
-  owner; DV-474–DV-477 and AD-32 are reserved for them.
+- **Status:** decided (owner, 2026-10-12) — research and design only; nothing is built yet. Q1: option B, a
+  separate service with its own image (DV-475); Q3: rename (DV-474); Q4: Convex's model plus a `Host` check
+  (DV-476); Q5: local links only (DV-477, replaces DV-217); Q2, Q6, Q7 confirmed as planned; AD-32 not taken.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/dashboard-common`,
   `dashboard-self-hosted`, `dashboard`, `system-udfs/convex/_system/frontend`, `@convex-dev/platform`,
   `convex/src/cli`, `self-hosted/docker`, `crates/local_backend`, `crates/application`)
@@ -351,36 +352,39 @@ Convex's `NEXT_PUBLIC_USE_CURRENT_DEPLOYMENT_API`), and from the allow-listed pa
 with an oracle as STUDY-34 did for the system identity): `getTableMapping`, `paginatedTableDocuments`,
 `listById`, `getById`, `indexes`, the six data mutations (with the `add_documents`, `update_documents`,
 `delete_documents`, `create_table` and `clear_tables` audit events), `modules:listForAllComponents`,
-`modules:argsValidator`, `components:list` (the root only), `getVersion`, the two URL queries (Q3),
+`modules:argsValidator`, `components:list` (the root only), `getVersion`, `cloudUrl` and `siteUrl` (DV-474),
 `listEnvironmentVariables`, `latestExport`, `snapshotImport:list`, and `/api/get_indexes` for the CLI's sake.
 
 **Packaging** (closing DV-189, DV-194, DV-202, DV-217):
 
 - `apps/dashboard` builds a static bundle (Vite already does). A tiny Bun server, `bunvex dashboard serve`
-  (internal; Q1), serves it and, for a local deployment, `GET /api/current_deployment`.
+  (internal), serves it and, for a local deployment, `GET /api/current_deployment` (only for a `Host` of `127.0.0.1` or
+  `localhost`, DV-476).
 - **Docker**: a `dashboard` service on `${DASHBOARD_PORT:-6791}` with `BUNVEX_DEPLOYMENT_URL` defaulting to
-  `http://127.0.0.1:${PORT:-3210}`, after the backend is healthy, no admin key passed — as Convex's (Q1 for the
-  image).
+  `http://127.0.0.1:${PORT:-3210}`, after the backend is healthy, no admin key passed — as Convex's, from its
+  **own image** (`ghcr.io/bunvex/bunvex-dashboard`; Q1 option B, DV-475).
 - **`dashboard.zip`** in every release (`scripts/build-binary.ts`), from the same build with the
   current-deployment flag.
 - **`bunvex dev`** on a local deployment downloads (or finds in the cache) the release's `dashboard.zip` and
   serves it on the first free port from 6790, saved per deployment; **`bunvex dashboard`** opens it after
   checking `/api/current_deployment`, as Convex's. A self-hosted deployment keeps Convex's "not supported"
-  (Q5).
-- **CLI links**: Q5.
+  (Q5, decided).
+- **CLI links**: export and import link to the local dashboard when `dev` serves one, otherwise print none
+  (DV-477, replacing DV-217).
 
-**Security**: Q4.
+**Security**: Convex's model (the key typed in, kept in memory only, DV-210; sent over the WebSocket and in
+`Authorization`; CORS as Convex's), plus the local server's `Host` check (DV-476).
 
 ## 4. Divergences
 
-Proposed; none decided. The owner questions in §6 give each one in full.
+Decided by the owner on 2026-10-12 (§6), recorded in [divergences.md](../parity/divergences.md).
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| DV-474 (Q3) | `_system/frontend/convexCloudUrl` and `convexSiteUrl` exist under bunvex names (`cloudUrl`, `siteUrl`) | rule 5 has no exceptions, wire names included (DV-307/308/312) | pending (owner) |
-| DV-475 (Q1) | the docker `dashboard` service runs bunvex's own image (`bunvex dashboard serve` on a static Vite build), not a Next.js server | bunvex's dashboard is a static app (STUDY-12 D1) | pending (owner) |
-| DV-476 (Q4) | the local dashboard's `/api/current_deployment` answers only a `Host` of `127.0.0.1` / `localhost:<port>` | it hands out the admin key; Convex's Node server answers any `Host` (DNS rebinding) | pending (owner) |
-| DV-477 (Q5) | export / import print a link to the dashboard bunvex is serving locally, or none on self-hosted; never a cloud link | Convex prints `dashboard.convex.dev` even when that is wrong (its FIXME); bunvex has no cloud and rule 5 forbids the link | pending (owner); replaces DV-217 |
+| DV-474 (Q3) | `_system/frontend/convexCloudUrl` and `convexSiteUrl` exist under bunvex names (`cloudUrl`, `siteUrl`) | rule 5 has no exceptions, wire names included (DV-307/308/312) | owner, 2026-10-12: rename |
+| DV-475 (Q1) | the `dashboard` service's own image (6791; locally 6790, as Convex) holds a static Vite build served by Bun, not a Next.js server; topology and image split match Convex | bunvex's dashboard is a static app (STUDY-12 D1) | owner, 2026-10-12: B, its own image |
+| DV-476 (Q4) | the local dashboard's `/api/current_deployment` answers only a `Host` of `127.0.0.1` / `localhost:<port>` | it hands out the admin key; Convex's Node server answers any `Host` (DNS rebinding) | owner, 2026-10-12: add the check |
+| DV-477 (Q5) | export / import print a link to the dashboard bunvex is serving locally, or none on self-hosted; never a cloud link | Convex prints `dashboard.convex.dev` even when that is wrong (its FIXME); bunvex has no cloud and rule 5 forbids the link | owner, 2026-10-12: as proposed; replaces DV-217 |
 
 Already decided and kept: D1 (bunvex's own screens), D3 (`watchTable` as a signal; now fed by a real
 subscription), DV-97 (`Bunvex` scheme), DV-210 (the key never stored), DV-307 (`encoded_json`), DV-319
@@ -390,7 +394,7 @@ subscription), DV-97 (`Bunvex` scheme), DV-210 (the key never stored), DV-307 (`
 
 | # | Addition | Why | Decision |
 |---|---|---|---|
-| AD-32 (Q1 option B) | the backend can also serve the dashboard itself, same-origin, at `/dashboard` (opt-in, e.g. `BUNVEX_SERVE_DASHBOARD=1`) | one container, one port, no CORS; not recommended now | pending (owner) |
+| AD-32 (Q1 option C) | the backend can also serve the dashboard itself, same-origin, at `/dashboard` (opt-in) | one container, one port, no CORS | **not taken** (owner, 2026-10-12: Q1 option B); not recorded in additions.md |
 
 ## 5. Tests
 
@@ -418,20 +422,21 @@ subscription), DV-97 (`Bunvex` scheme), DV-210 (the key never stored), DV-307 (`
 | 1 | `@bunvex/dashboard-source` skeleton: the client wiring, auth, errors, the connection watcher, the real `check_admin_key` verifier, the contract suite on a live server for what exists today (deployment state, schemas, sizes, logs long-poll, metrics); UI-01 amendment and the `check-deps` rule | M (~800 lines) |
 | 2 | Server: data reads — `getTableMapping`, `paginatedTableDocuments` (Convex's filter shape), `listById`, `getById`, `indexes`, `/api/get_indexes`; the source's `listTables`, `listDocuments`, `watchTable` | L (~1 200) |
 | 3 | Server: data writes — the six mutations with their audit events (closes platform:62 and :252); the source's writes | M–L (~900) |
-| 4 | Server: `modules:listForAllComponents`, `modules:argsValidator`, `components:list`, `getVersion`, the URL queries (Q3), `listEnvironmentVariables`, `latestExport`, `snapshotImport:list`; the source's Functions, runner (second client, impersonation), custom query (`runTestQuery` + the runner's editor), env vars, settings | L (~1 100) |
+| 4 | Server: `modules:listForAllComponents`, `modules:argsValidator`, `components:list`, `getVersion`, `cloudUrl` and `siteUrl` (DV-474), `listEnvironmentVariables`, `latestExport`, `snapshotImport:list`; the source's Functions, runner (second client, impersonation), custom query (`runTestQuery` + the runner's editor), env vars, settings | L (~1 100) |
 | 5 | The source for schedules, files (auto-pause), history, Health's concurrency and invalidations (new optional contract methods, platform:342) | M (~600) |
 | 6 | `apps/dashboard` on the real source by default, the mock behind "Use the demo data"; e2e against a live deployment | S–M (~400) |
-| 7 | Packaging: `bunvex dashboard serve`, the docker `dashboard` service, `dashboard.zip` in releases, the local dashboard in `bunvex dev`, `bunvex dashboard` for local; closes DV-189, DV-194, DV-202 | M (~700) |
-| 8 | CLI links (Q5, closes DV-217) and the docs (self-hosting guide, parity rows) | S (~200) |
+| 7 | Packaging: `bunvex dashboard serve`; a **second docker image** (`docker/dashboard.Dockerfile`, published beside the backend's) and the `dashboard` service on 6791 in docker-compose; `dashboard.zip` in releases; the local dashboard in `bunvex dev` (6790, with the `Host` check); `bunvex dashboard` for local; closes DV-189, DV-194, DV-202 | M–L (~900) |
+| 8 | CLI links (DV-477, closes DV-217) and the docs (self-hosting guide, parity rows) | S (~200) |
 
 PRs 2–5 can run in parallel once PR 1 is in; 6 needs 2–4; 7 needs 6.
 
 ## 6. Open questions
 
 Every question below is in the decision format the owner asked for (what Convex does / what bunvex would do /
-same or not / why / app impact / recommendation).
+same or not / why / app impact / recommendation), followed by the owner's decision (2026-10-12).
 
-**Q1 — A separate service, or served by the backend? (DV-475, AD-32)**
+### Q1 — A separate service, or served by the backend? (DV-475, AD-32)
+
 - *Convex*: a separate app. Docker runs `ghcr.io/get-convex/convex-dashboard` (Next.js) on 6791; the CLI serves
   `dashboard.zip` on 6790 for a local deployment; the backend never serves the dashboard.
 - *bunvex (proposed)*: also separate — a static Vite build served by `bunvex dashboard serve`, on the same
@@ -445,8 +450,13 @@ same or not / why / app impact / recommendation).
 - *Recommendation*: a separate service (match Convex), docker option **A** (one image to build, sign and pull;
   the image name is the only difference), and **no** C for now — serving it from the backend makes the admin
   UI reachable wherever the API is, which Convex avoids.
+- **Decision (owner, 2026-10-12): option B** — a separate service with its **own** image, as Convex (a second
+  image on 6791; the local dashboard on 6790). Not A, and no C: AD-32 is not taken. The topology and the image
+  split now match Convex; DV-475 records only what is inside the image (a static Vite build served by Bun, not
+  a Next.js server).
 
-**Q2 — Port Convex's dashboard UI, or keep bunvex's and match the data behaviour?**
+### Q2 — Port Convex's dashboard UI, or keep bunvex's and match the data behaviour?
+
 - *Convex*: its own Next.js dashboard, FSL-1.1-Apache-2.0.
 - *bunvex*: keeps its own screens (STUDY-12 **D1, already decided**) and matches what they read and how fresh
   it is (§3.3).
@@ -456,8 +466,10 @@ same or not / why / app impact / recommendation).
 - *App impact*: none.
 - *Recommendation*: confirm D1 and close STUDY-12 §6.2: the admin API mirrors Convex's function paths and shapes
   (for the oracle tests), **not** so Convex's dashboard can run against bunvex.
+- **Decision (owner, 2026-10-12): confirmed** as planned (D1 kept; STUDY-12 §6.2 closed this way).
 
-**Q3 — Rule 5 and the dashboard's function names (DV-474)**
+### Q3 — Rule 5 and the dashboard's function names (DV-474)
+
 - *Convex*: the dashboard calls `_system/frontend/convexCloudUrl` and `convexSiteUrl`, sends
   `Authorization: Convex <key>`, `Convex-Client: dashboard-0.0.0`, and `format: "convex_encoded_json"` to
   `run_test_function`.
@@ -471,8 +483,10 @@ same or not / why / app impact / recommendation).
 - *App impact*: none (only the dashboard calls them); a script calling `_system/frontend/convexCloudUrl` gets
   "Could not find function".
 - *Recommendation*: rename them as proposed.
+- **Decision (owner, 2026-10-12): rename** to `cloudUrl` and `siteUrl` (DV-474).
 
-**Q4 — The admin key in the browser (DV-476)**
+### Q4 — The admin key in the browser (DV-476)
+
 - *Convex*: the operator pastes the key into the dashboard (another origin); it goes over the WebSocket and in
   an `Authorization` header (in the body for `run_test_function`); the backend's CORS mirrors any origin. The
   local dashboard's Node server hands `{name, url, adminKey}` to any `GET /api/current_deployment` on
@@ -487,8 +501,11 @@ same or not / why / app impact / recommendation).
   being signed in.
 - *Recommendation*: match Convex everywhere else, add the Host check. Same-origin serving (Q1 C) would remove
   CORS from the picture but is not needed for safety: the key, not the origin, is the credential.
+- **Decision (owner, 2026-10-12):** Convex's model plus the `Host` check (`127.0.0.1` / `localhost`) against
+  DNS rebinding (DV-476).
 
-**Q5 — `bunvex dashboard` on self-hosted, and the CLI's dashboard links (DV-477, closes DV-217)**
+### Q5 — `bunvex dashboard` on self-hosted, and the CLI's dashboard links (DV-477, closes DV-217)
+
 - *Convex*: `npx convex dashboard` refuses for self-hosted, opens the local dashboard for an anonymous local
   deployment; export / import print a `https://dashboard.convex.dev/d/<name>/settings/snapshots` link, wrong
   for self-hosted (its own FIXME).
@@ -499,8 +516,11 @@ same or not / why / app impact / recommendation).
 - *App impact*: none (CLI text).
 - *Recommendation*: as proposed. Opening the docker dashboard from `bunvex dashboard` on self-hosted would be an
   addition (it needs the dashboard's URL in the CLI's config); not now.
+- **Decision (owner, 2026-10-12): as proposed** — a link to the local dashboard when `dev` serves one,
+  otherwise none; `bunvex dashboard` refuses on self-hosted, as Convex (DV-477, which replaces DV-217).
 
-**Q6 — Cloud-only screens to skip** (not a divergence: the self-hosted Convex dashboard lacks them too)
+### Q6 — Cloud-only screens to skip
+ (not a divergence: the self-hosted Convex dashboard lacks them too)
 - *Convex self-hosted*: no insights, deployment summary, backups, custom domains, snapshots page, team /
   billing / members / usage; deploy keys are cloud.
 - *bunvex*: skip insights (Big Brain), backups and custom domains (cloud), team / billing. Keep bunvex's
@@ -510,9 +530,12 @@ same or not / why / app impact / recommendation).
 - *Why*: "Não dá pra fazer" for the cloud ones (no cloud).
 - *App impact*: none.
 - *Recommendation*: as proposed.
+- **Decision (owner, 2026-10-12): confirmed** as planned.
 
-**Q7 — Package layout (internal, not a divergence)**
+### Q7 — Package layout (internal, not a divergence)
+
 - *Proposed*: `@bunvex/dashboard-source` depending on `@bunvex/client` and the dashboard's types, instead of
   UI-01 §5.7's `@bunvex/dashboard/http` over `@bunvex/protocol`.
 - *Why*: Convex's admin API is system functions over the sync protocol; the client already speaks it.
 - *Recommendation*: accept; PR 1 amends UI-01 §5.7 and §6.
+- **Decision (owner, 2026-10-12): confirmed** as planned.
