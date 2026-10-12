@@ -9,7 +9,7 @@ import { v } from "@bunvex/values";
 import { SCHEMAS_TABLE } from "../src/catalog.ts";
 import { Engine, SchemaPushError } from "../src/engine.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
-import { defineSchema, defineTable } from "../src/schema.ts";
+import { declaredTables, defineSchema, defineTable } from "../src/schema.ts";
 import { schemaFromJson, schemaToJson } from "../src/schema-json.ts";
 
 const engines: Engine[] = [];
@@ -83,7 +83,7 @@ describe("a push's schema change", () => {
     expect((await byIndex(e, "by_tag", "tag", "t1")).length).toBe(17);
     await expect(byIndex(e, "by_n", "n", 3)).rejects.toThrow();
     await expect(e.mutation((db) => db.insert("items", { n: 1 }))).rejects.toThrow(/tag/);
-    expect(e.schema.tables.get("items")!.indexes).toEqual({ by_tag: ["tag"] });
+    expect(declaredTables(e.schema).get("items")!.indexes).toEqual({ by_tag: ["tag"] });
   });
 
   test("the status while indexes backfill: inProgress with counts", async () => {
@@ -254,7 +254,7 @@ describe("a push's schema change", () => {
     engines.splice(engines.indexOf(a), 1);
     const b = await open(path); // constructed with an empty schema
     expect((await byIndex(b, "by_n", "n", 7)).length).toBe(1);
-    expect([...b.schema.tables.keys()]).toEqual(["items"]);
+    expect([...declaredTables(b.schema).keys()]).toEqual(["items"]);
     await expect(b.mutation((db) => db.insert("items", { n: "not a number" }))).rejects.toThrow();
   });
 
@@ -323,7 +323,7 @@ describe("a push's schema change", () => {
       stagedDocumentType: null,
     });
     expect(j.tables[1]!.documentType).toEqual({ type: "any" });
-    expect(schemaFromJson(j).tables.get("items")!.indexes).toEqual({ by_n: ["n"], staged_one: ["kind"] });
+    expect(declaredTables(schemaFromJson(j)).get("items")!.indexes).toEqual({ by_n: ["n"], staged_one: ["kind"] });
     expect(schemaToJson(schemaFromJson(JSON.parse(JSON.stringify(j))))).toEqual(j);
   });
 });

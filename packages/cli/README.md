@@ -15,7 +15,8 @@ from the latest release, keeps its state in `.bunvex/local/default/`, and writes
 self-hosted deployment instead, set `BUNVEX_SELF_HOSTED_URL` and `BUNVEX_SELF_HOSTED_ADMIN_KEY`.
 
 Commands: `dev`, `deploy`, `codegen`, `run`, `env`, `admin-key`, `data`, `logs`, `export`, `import`,
-`function-spec`, `typecheck`, `deployment`, `mcp`. `bunvex <command> --help` for each.
+`function-spec`, `typecheck`, `deployment`, `mcp`, `network-test`, `docs`, `update`, `dashboard`. `bunvex <command> --help`
+for each.
 
 This is an alpha preview, published from the TypeScript sources: it needs Bun.
 

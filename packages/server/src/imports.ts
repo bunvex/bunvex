@@ -14,6 +14,7 @@
 //   message prefixed "Hit an error while importing:" as Convex's.
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
+  declaredTables,
   type Engine,
   FILE_STORAGE_TABLE,
   ImportBackfillingError,
@@ -718,7 +719,7 @@ export class ImportService {
     for (const t of tables) assignExisting(t.name);
     if (mode === "ReplaceAll") {
       // The schema's tables the import does not have are replaced by empty ones.
-      for (const name of this.engine.schema.tables.keys()) assignExisting(name);
+      for (const name of declaredTables(this.engine.schema).keys()) assignExisting(name);
     } else
       for (const t of catalog.tables.values()) {
         const imported = numberToName.get(t.number);
@@ -842,7 +843,7 @@ export class ImportService {
         );
         // A schema table outside the import that points into it must not see that table's number change
         // (Convex's `ImportSchemaConstraints`).
-        for (const [table, declared] of schema.tables) {
+        for (const [table, declared] of declaredTables(schema)) {
           if (imported.has(table)) continue;
           const holder = this.engine.catalog.tables.get(table);
           if (!holder) continue;

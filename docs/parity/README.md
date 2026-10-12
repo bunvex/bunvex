@@ -6,12 +6,12 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 233 | 3 | 10 |
-| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 161 | 2 | 2 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 216 | 26 | 21 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 235 | 3 | 8 |
+| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 162 | 2 | 1 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 218 | 26 | 19 |
 
-Beyond Convex, [additions.md](additions.md) lists 28 additions: 25 built (11 of them dashboard screens on the
-mock, 3 more with their dashboard part on the mock), 2 accepted, 1 deferred, none proposed (2026-10-08).
+Beyond Convex, [additions.md](additions.md) lists 29 additions: 26 built (11 of them dashboard screens on the
+mock, 3 more with their dashboard part on the mock), 2 accepted, 1 deferred, none proposed (2026-10-11, with AD-29).
 
 These counts were recounted on 2026-10-08 (with #503, the index cache) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
@@ -157,7 +157,7 @@ Checked against main on 2026-10-04, after #370–#395. Since the first ranking, 
 timeout (#371), searches while indexes rebuild (#375), `server-only` and wasm bundling (#376),
 `deploy --cmd` (#378), the `log` export (#380), the write-throughput limit (#374), the SSRF proxy
 (#377–#381), identical database indexes refused (STUDY-66), the sync arguments-size metrics
-(`bunvex_sync_*_args_bytes`, #432), the upgrade guide ([docs/upgrading.md](../upgrading.md)). Decided divergences and cloud-only items are not
+(`bunvex_sync_*_args_bytes`, #432; its client-sync row marked done 2026-10-11), the CLI's `network-test`, `docs`, `update` and `dashboard` (STUDY-146), the remaining `bunvex.json` keys (`node.nodeVersion`, `bundler.includeSourcesContent`, STUDY-145), the upgrade guide ([docs/upgrading.md](../upgrading.md)). Decided divergences and cloud-only items are not
 gaps.
 
 **High: an app that uses it does not run**
