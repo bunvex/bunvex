@@ -7,10 +7,13 @@ const UNRESOLVED =
   "This commit timestamp is unresolved: its value is assigned when the mutation commits. Read the document after the mutation completes to get its value.";
 
 /** The largest int64: the placeholder's value until the commit (Convex's `MAX_COMMIT_TS`). */
+// A static mutant the bun runner cannot switch on (the module is loaded once); commit-ts.test.ts pins the value.
+// Stryker disable next-line ArithmeticOperator: see above.
 export const MAX_COMMIT_TS = (1n << 63n) - 1n;
 
 export class CommitTsPlaceholder {
   // A nominal brand: structurally like no other value.
+  // Stryker disable next-line BooleanLiteral: only the field's presence is checked (`#brand in x`), not its value.
   readonly #brand = true;
   get [Symbol.toStringTag]() {
     return "CommitTsPlaceholder";
@@ -53,6 +56,7 @@ export function resolveCommitTs<T>(x: T, by: bigint): T {
   }
   if (
     x !== null &&
+    // Stryker disable next-line ConditionalExpression: a primitive's prototype is never Object.prototype.
     typeof x === "object" &&
     !(x instanceof ArrayBuffer) &&
     Object.getPrototypeOf(x) === Object.prototype
@@ -72,6 +76,7 @@ export function resolveCommitTs<T>(x: T, by: bigint): T {
 
 /** A value's JSON (the `$integer` form) with each `{"$commitTs":null}` token replaced by `ns`. */
 export function resolveCommitTsJson(json: string, ns: bigint): string {
+  // Stryker disable next-line ConditionalExpression,StringLiteral: a shortcut; replaceAll finds nothing either.
   if (!json.includes('"$commitTs"')) return json;
   const buf = new Uint8Array(8);
   new DataView(buf.buffer).setBigInt64(0, ns, true);

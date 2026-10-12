@@ -194,7 +194,9 @@ if (!PG_URL) console.log("persistence-config: set PG_URL (and DO_NOT_REQUIRE_SSL
 describe("call timeouts (STUDY-25 L3)", () => {
   test("each remote driver reads its call timeout from its own variable, in seconds", () => {
     expect(persistenceConfigFromEnv({ PERSISTENCE: "postgres", POSTGRES_TIMEOUT_SECONDS: "5" }).timeoutMs).toBe(5000);
-    expect(persistenceConfigFromEnv({ PERSISTENCE: "mysql", MYSQL_TIMEOUT_SECONDS: "2.5" }).timeoutMs).toBe(2500);
+    expect(persistenceConfigFromEnv({ PERSISTENCE: "mysql", MYSQL_TIMEOUT_SECONDS: "2" }).timeoutMs).toBe(2000);
+    // Whole seconds, as Convex's `u64` knob: anything else is logged and the driver's default (STUDY-147).
+    expect(persistenceConfigFromEnv({ PERSISTENCE: "mysql", MYSQL_TIMEOUT_SECONDS: "2.5" }).timeoutMs).toBe(19_000);
     expect(persistenceConfigFromEnv({ PERSISTENCE: "mongodb", MONGODB_TIMEOUT_SECONDS: "7" }).timeoutMs).toBe(7000);
     // another driver's variable is ignored; unset leaves the driver's default
     expect(persistenceConfigFromEnv({ PERSISTENCE: "postgres", MYSQL_TIMEOUT_SECONDS: "5" }).timeoutMs).toBeUndefined();

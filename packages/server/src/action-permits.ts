@@ -7,7 +7,7 @@
 // Convex's names: APPLICATION_MAX_CONCURRENT_QUERIES and _MUTATIONS (16), _V8_ACTIONS and _NODE_ACTIONS (64);
 // APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT (ms, 5 000) and _ACTION_SEMAPHORE_TIMEOUT (ms, 10 000).
 
-import { outsideExecution, type Runtime, realRuntime } from "@bunvex/core";
+import { knob, outsideExecution, type Runtime, realRuntime } from "@bunvex/core";
 
 export type LimitedKind = "query" | "mutation" | "action";
 
@@ -103,19 +103,11 @@ export class ActionPermits extends ConcurrencyLimiter {
 
   static fromEnv(env = process.env, runtime: Runtime = realRuntime): ActionPermits {
     return new ActionPermits(
-      knob(env, "APPLICATION_MAX_CONCURRENT_V8_ACTIONS", 64),
-      knob(env, "APPLICATION_FUNCTION_RUNNER_ACTION_SEMAPHORE_TIMEOUT", 10_000),
+      knob("APPLICATION_MAX_CONCURRENT_V8_ACTIONS", 64, "uint", env),
+      knob("APPLICATION_FUNCTION_RUNNER_ACTION_SEMAPHORE_TIMEOUT", 10_000, "uint", env),
       runtime,
     );
   }
-}
-
-function knob(env: NodeJS.ProcessEnv, k: string, d: number): number {
-  const v = env[k];
-  if (v === undefined || v === "") return d;
-  const n = Number(v);
-  if (!Number.isFinite(n) || n < 1) throw new Error(`${k}: not a positive number: ${v}`);
-  return n;
 }
 
 /** Every limiter of a deployment (STUDY-68). */
@@ -133,18 +125,18 @@ export function functionLimitsFromEnv(
   /** Whose timers time the waits out (STUDY-132). */
   runtime: Runtime = realRuntime,
 ) {
-  const wait = knob(env, "APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT", 5000);
-  const actionWait = knob(env, "APPLICATION_FUNCTION_RUNNER_ACTION_SEMAPHORE_TIMEOUT", 10_000);
+  const wait = knob("APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT", 5000, "uint", env);
+  const actionWait = knob("APPLICATION_FUNCTION_RUNNER_ACTION_SEMAPHORE_TIMEOUT", 10_000, "uint", env);
   return {
     query: new ConcurrencyLimiter(
-      knob(env, "APPLICATION_MAX_CONCURRENT_QUERIES", 16),
+      knob("APPLICATION_MAX_CONCURRENT_QUERIES", 16, "uint", env),
       wait,
       "query",
       "APPLICATION_MAX_CONCURRENT_QUERIES",
       runtime,
     ),
     mutation: new ConcurrencyLimiter(
-      knob(env, "APPLICATION_MAX_CONCURRENT_MUTATIONS", 16),
+      knob("APPLICATION_MAX_CONCURRENT_MUTATIONS", 16, "uint", env),
       wait,
       "mutation",
       "APPLICATION_MAX_CONCURRENT_MUTATIONS",
@@ -152,7 +144,7 @@ export function functionLimitsFromEnv(
     ),
     action: action ?? ActionPermits.fromEnv(env, runtime),
     nodeAction: new ConcurrencyLimiter(
-      knob(env, "APPLICATION_MAX_CONCURRENT_NODE_ACTIONS", 64),
+      knob("APPLICATION_MAX_CONCURRENT_NODE_ACTIONS", 64, "uint", env),
       actionWait,
       "action",
       "APPLICATION_MAX_CONCURRENT_NODE_ACTIONS",

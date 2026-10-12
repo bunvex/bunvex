@@ -68,6 +68,7 @@ export class ReadSetIndex<K> {
         lo: r.lo,
         hi: r.hi,
         owner,
+        // Stryker disable next-line UpdateOperator: decreasing numbers order ties as consistently.
         seq: this.nextSeq++,
         prio: this.random(),
         maxHi: r.hi,
@@ -97,9 +98,11 @@ export class ReadSetIndex<K> {
 
   /** Every owner whose read-set contains one of `writes` (`lo <= key < hi` on the same index), once each. */
   matching(writes: Iterable<IndexPoint>, into: Set<K> = new Set()): Set<K> {
+    // Stryker disable next-line ConditionalExpression: a shortcut; with no tree no write finds one.
     if (this.trees.size === 0) return into;
     for (const w of writes) {
       const root = this.trees.get(w.index);
+      // Stryker disable next-line ConditionalExpression: stab of no tree finds nothing.
       if (root) stab(root, w.key, into);
     }
     return into;
@@ -129,13 +132,16 @@ function before<K>(a: Node<K>, b: Node<K>): boolean {
 
 function refresh<K>(n: Node<K>) {
   let m = n.hi;
+  // Stryker disable next-line EqualityOperator: an equal key either way.
   if (n.left && compareKeys(n.left.maxHi, m) > 0) m = n.left.maxHi;
+  // Stryker disable next-line EqualityOperator: an equal key either way.
   if (n.right && compareKeys(n.right.maxHi, m) > 0) m = n.right.maxHi;
   n.maxHi = m;
 }
 
 /** Split `t` into the nodes before `pivot` and the rest. */
 function split<K>(t: Node<K> | null, pivot: Node<K>): [Node<K> | null, Node<K> | null] {
+  // Stryker disable next-line ArrayDeclaration: an undefined child reads as a null one.
   if (!t) return [null, null];
   if (before(t, pivot)) {
     const [a, b] = split(t.right, pivot);
@@ -177,6 +183,7 @@ function insert<K>(t: Node<K> | null, n: Node<K>): Node<K> {
 }
 
 function remove<K>(t: Node<K> | null, n: Node<K>): Node<K> | null {
+  // Stryker disable next-line all: unreachable through the public API (a registered node is always found).
   if (!t) throw new Error("ReadSetIndex: interval not found");
   if (t === n) {
     const j = join(t.left, t.right);
@@ -191,6 +198,7 @@ function remove<K>(t: Node<K> | null, n: Node<K>): Node<K> | null {
 
 /** Add the owner of every interval under `t` that contains `key`. */
 function stab<K>(t: Node<K> | null, key: Uint8Array, out: Set<K>) {
+  // Stryker disable next-line ConditionalExpression,EqualityOperator: the pruning only saves work; the `hi` test below decides.
   while (t && compareKeys(key, t.maxHi) < 0) {
     stab(t.left, key, out);
     // Every node to the right starts at or after `t.lo`: none contains a key below it.

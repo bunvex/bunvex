@@ -5,9 +5,11 @@
 // `warning:<code>`). The messages are Convex's (DV-04: no link to its docs).
 import {
   formatDuration,
+  knob,
   MAX_DOCUMENT_NESTING,
   MAX_USER_SIZE,
   OVER_LIMIT_HELP,
+  secondsKnob,
   TRANSACTION_MAX_NUM_SCHEDULED,
   TRANSACTION_MAX_NUM_USER_WRITES,
   TRANSACTION_MAX_READ_SET_INTERVALS,
@@ -20,10 +22,10 @@ import {
 import { logSystemLine } from "./logs.ts";
 
 /** Convex's `MAX_SCHEDULED_JOB_ARGUMENT_SIZE_BYTES`: one scheduled function's arguments (not yet enforced). */
-const MAX_SCHEDULED_JOB_ARGUMENT_SIZE_BYTES = 4 << 20;
+const MAX_SCHEDULED_JOB_ARGUMENT_SIZE_BYTES = knob("MAX_SCHEDULED_JOB_ARGUMENT_SIZE_BYTES", 4 << 20);
 
 /** Convex's FUNCTION_LIMIT_WARNING_RATIO knob (0.8). */
-const ratio = () => Number(process.env.FUNCTION_LIMIT_WARNING_RATIO ?? 0.8);
+const ratio = () => knob("FUNCTION_LIMIT_WARNING_RATIO", 0.8, "float");
 
 const warn = (code: string, message: string) => logSystemLine("WARN", message, `warning:${code}`);
 
@@ -140,8 +142,8 @@ export function functionWarnings(o: {
   approachingDuration(o.userMs, o.userLimitMs);
 }
 
-/** Convex's `V8_ACTION_USER_TIMEOUT`: what an action's duration warning measures against (1800 s). */
-export const V8_ACTION_USER_TIMEOUT_MS = 1800 * 1000;
+/** Convex's `V8_ACTION_USER_TIMEOUT` knob: what an action's duration warning measures against (1800 s). */
+export const V8_ACTION_USER_TIMEOUT_MS = secondsKnob("V8_ACTION_USER_TIMEOUT_SECS", 1800);
 
 /**
  * Convex's dangling-operation warning: the action's operations still pending when it returned, by name

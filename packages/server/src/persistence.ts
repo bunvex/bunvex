@@ -18,7 +18,7 @@
 // set to any non-empty value (`0` and `false` too, as the shell's `${VAR:+…}` reads it). PG_CA_FILE and
 // MYSQL_CA_FILE add a trusted CA. MongoDB has no Convex counterpart: its URL decides (`tls=true`).
 import { mkdirSync } from "node:fs";
-import { bundledModule, DEFAULT_INSTANCE_NAME, type Persistence } from "@bunvex/core";
+import { bundledModule, DEFAULT_INSTANCE_NAME, type Persistence, secondsKnob } from "@bunvex/core";
 
 export type PersistenceConfig = {
   kind: string;
@@ -38,11 +38,11 @@ export type PersistenceConfig = {
   instanceName?: string;
 };
 
-/** The environment variable that sets each remote driver's call timeout, in seconds. */
-const TIMEOUT_ENV: Record<string, string> = {
-  postgres: "POSTGRES_TIMEOUT_SECONDS",
-  mysql: "MYSQL_TIMEOUT_SECONDS",
-  mongodb: "MONGODB_TIMEOUT_SECONDS",
+/** The knob that sets each remote driver's call timeout, in seconds, and the driver's default. */
+const TIMEOUT_ENV: Record<string, [string, number]> = {
+  postgres: ["POSTGRES_TIMEOUT_SECONDS", 30],
+  mysql: ["MYSQL_TIMEOUT_SECONDS", 19],
+  mongodb: ["MONGODB_TIMEOUT_SECONDS", 30],
 };
 
 type Env = Record<string, string | undefined>;
@@ -81,7 +81,8 @@ export function persistenceConfigFromEnv(
   if (urlFrom === "DATABASE_URL")
     warn("DATABASE_URL is deprecated: use PERSISTENCE=postgres with PERSISTENCE_URL, or POSTGRES_URL");
   kind ??= "memory";
-  const timeout = TIMEOUT_ENV[kind] && env[TIMEOUT_ENV[kind]];
+  const timeoutKnob = TIMEOUT_ENV[kind];
+  const timeout = timeoutKnob && env[timeoutKnob[0]] !== undefined ? secondsKnob(...timeoutKnob, env) : undefined;
   const caFile =
     kind === "postgres" ? set(env, "PG_CA_FILE") : kind === "mysql" ? set(env, "MYSQL_CA_FILE") : undefined;
   return {
@@ -93,7 +94,7 @@ export function persistenceConfigFromEnv(
     pool: Number(env.POOL ?? 16),
     requireSsl: !set(env, "DO_NOT_REQUIRE_SSL"),
     caFile,
-    ...(timeout ? { timeoutMs: Number(timeout) * 1000 } : {}),
+    ...(timeout === undefined ? {} : { timeoutMs: timeout }),
     ...(set(env, "INSTANCE_NAME") ? { instanceName: env.INSTANCE_NAME } : {}),
   };
 }

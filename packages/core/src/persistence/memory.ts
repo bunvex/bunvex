@@ -3,8 +3,9 @@
 // rebuilt by replaying the log. Ships with @bunvex/core (its only dependency is sorted-btree).
 //
 // Layout and read-only flag (PERSIST-01 C10, STUDY-25 L6/L7): the log's first record is a header,
-// `{"layout":N}`, written when the log is created (a log written before C10 gets it appended on its next
-// open, under the lock). The read-only flag is a file next to the log, `<log>.read-only`.
+// `{"layout":N}`, written when the log is created, under the lock. A log without it is not one this bunvex
+// opens (older bunvex logs are not carried, STUDY-139 P8). The read-only flag is a file next to the log,
+// `<log>.read-only`.
 //
 // Retention (PERSIST-01 C12–C14, STUDY-33): pruning drops old versions from RAM; the log file is not
 // compacted (DV-156), so a reopen replays them and retention prunes them again. A global is a log record,
@@ -44,6 +45,7 @@ import {
 import { ProcessLock } from "./lock.ts";
 
 /** Diagnostic switch: write + fdatasync on the JS thread instead of the thread pool. */
+// Stryker disable next-line all: a diagnostic switch; both paths write the same bytes.
 const SYNC_LOG = process.env.BUNVEX_SYNC_LOG === "1";
 
 /**
@@ -54,9 +56,8 @@ const SYNC_LOG = process.env.BUNVEX_SYNC_LOG === "1";
 type Version<T> = { seq: number; v: T };
 
 /** What the first line of a log says about it (PERSIST-01 C10). `complete`: the line has its terminator. */
-function firstRecord(line: string, complete: boolean, store: string): "header" | "commit" | "torn" {
-  const foreign = () =>
-    new LayoutError(`${store} is not a bunvex store: its first line is neither a layout header nor a commit record`);
+function firstRecord(line: string, complete: boolean, store: string): "header" | "torn" {
+  const foreign = () => new LayoutError(`${store} is not a bunvex store: its first line is not a layout header`);
   if (!complete) {
     if (line.startsWith("{")) return "torn"; // a crash during the very first write: replay cuts it off
     throw foreign();
@@ -72,8 +73,6 @@ function firstRecord(line: string, complete: boolean, store: string): "header" |
     checkLayoutVersion(r.layout, store);
     return "header";
   }
-  if (r && typeof r === "object" && typeof r.ts === "string" && Array.isArray(r.docs) && Array.isArray(r.idx))
-    return "commit"; // a log written before C10: the same layout, version 1
   throw foreign();
 }
 
@@ -93,6 +92,7 @@ function firstAbove(xs: { ts: bigint }[], ts: bigint, from = 0) {
 function pruneVersions(vs: Version<unknown>[], seq: number) {
   let n = 0;
   while (n < vs.length && vs[n].seq <= seq) n++;
+  // Stryker disable next-line ConditionalExpression: splicing nothing is a no-op.
   if (n) vs.splice(0, n);
   return n;
 }
@@ -121,6 +121,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   private writing: Promise<void> | null = null;
   private durable: boolean;
 
+  // Stryker disable next-line BlockStatement: `durable` only decides the fdatasyncs, which no test can observe.
   private constructor(opts: { durable: boolean }) {
     this.durable = opts.durable;
   }
@@ -131,6 +132,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   /** The sequence of the last commit at or before `ts` (-1: none). */
   private seqAt(ts: bigint): number {
     const xs = this.tsOf;
+    // Stryker disable next-line all: a shortcut for the newest commit; the search below finds the same one.
     if (xs.length && xs[xs.length - 1] <= ts) return xs.length - 1;
     let lo = 0;
     let hi = xs.length;
@@ -181,9 +183,9 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       if (n === 0) return;
       const head = buf.subarray(0, n).toString("utf8");
       const nl = head.indexOf("\n");
-      if (nl !== -1) firstRecord(head.slice(0, nl), true, this.store);
-      // A first line longer than 4 KB is a commit record (a header is a few bytes) or not ours.
-      else if (!head.startsWith(`{"ts":`)) firstRecord(head, n < buf.length, this.store);
+      // No terminator in what was read: a first write torn by a crash (replay cuts it off), or not ours (a
+      // header is a few bytes). Never a complete line.
+      firstRecord(nl === -1 ? head : head.slice(0, nl), nl !== -1, this.store);
     } finally {
       closeSync(fd);
     }
@@ -192,6 +194,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   /** Convex's `set_read_only`: no lock needed; the next open for writing is refused while it is set. */
   async setReadOnly(readOnly: boolean) {
     if (!this.logPath) return; // nothing outlives this process
+    // Stryker disable next-line StringLiteral: only the flag file's presence counts.
     if (readOnly) writeFileSync(`${this.logPath}.read-only`, "");
     else rmSync(`${this.logPath}.read-only`, { force: true });
   }
@@ -203,9 +206,11 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     try {
       const stamped = await this.replay(this.logPath!);
       this.fh = await open(this.logPath!, "a");
-      // PERSIST-01 C10 under the lock: a new log starts with its header; one written before C10 gets it now.
+      // PERSIST-01 C10 under the lock: a new log (or one whose torn first write replay cut off) starts with its
+      // header.
       if (!stamped) {
         await this.fh.write(`${JSON.stringify({ layout: LAYOUT_VERSION })}\n`);
+        // Stryker disable next-line ConditionalExpression,CallExpression: an fdatasync only matters across a power loss, which no test makes.
         if (this.durable) await this.fh.datasync();
       }
     } catch (e) {
@@ -266,7 +271,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
         break; // torn inside the line
       }
       if (rec.layout !== undefined) {
-        // The header (first line), or the one appended to a log written before C10.
+        // The header (the first line; checked again for one anywhere else).
         checkLayoutVersion(rec.layout, this.store);
         stamped = true;
         good += enc.encode(line).length + 1;
@@ -307,6 +312,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       pos = nl + 1;
     }
     this.durableTs = this.lastTs;
+    // Stryker disable next-line ConditionalExpression,EqualityOperator: truncating a file to its own length is a no-op.
     if (good < enc.encode(text).length) {
       const { truncate } = await import("node:fs/promises");
       await truncate(logPath, good);
@@ -345,6 +351,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   apply(ts: bigint, docs: DocWrite[], idx: IndexWrite[]) {
     this.assertWriter();
     this.applyMemory(ts, docs, idx);
+    // Stryker disable next-line ConditionalExpression: without a log, records kept in `pending` are never written; only memory differs.
     if (this.fh !== null) {
       // The log record: ts (a decimal string: JSON has no 64-bit integers) + the writes. JSON keeps the
       // prototype honest about bytes written; a real engine would use a binary frame with a checksum.
@@ -383,26 +390,32 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   // the event loop keeps serving reads and the next group accumulates.
   async flush() {
     const top = this.lastTs;
+    // Stryker disable next-line ConditionalExpression,LogicalOperator: writing no bytes is a no-op; `pending` fills only with a log.
     if (this.fh === null || this.pending.length === 0) {
       this.durableTs = top;
       return;
     }
     const buf = Buffer.concat(this.pending);
     this.pending = [];
+    // Stryker disable next-line ConditionalExpression,BlockStatement: a diagnostic switch; both paths write the same bytes.
     if (SYNC_LOG) {
       // Diagnostic path (BUNVEX_SYNC_LOG=1): write + fdatasync on the JS thread.
+      // Stryker disable next-line CallExpression: the diagnostic path, never taken in tests.
       writeSync(this.fh.fd, buf);
+      // Stryker disable next-line ConditionalExpression,CallExpression: an fdatasync only matters across a power loss, which no test makes.
       if (this.durable) fdatasyncSync(this.fh.fd);
     } else {
       const fh = this.fh;
       const w = (async () => {
         await fh.write(buf);
+        // Stryker disable next-line ConditionalExpression,CallExpression: an fdatasync only matters across a power loss, which no test makes.
         if (this.durable) await fh.datasync();
       })();
       this.writing = w;
       try {
         await w;
       } finally {
+        // Stryker disable next-line ConditionalExpression: flushes come one at a time (the committer awaits each).
         if (this.writing === w) this.writing = null;
       }
     }
@@ -412,7 +425,9 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   /** PERSIST-01 C12: a binary search for the first commit after `afterTs`, then a walk. */
   readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): DocLogRow[] {
     const out: DocLogRow[] = [];
+    // Stryker disable next-line ConditionalExpression,EqualityOperator: the walk below stops at once for a limit of 0 or less.
     if (limit <= 0) return out;
+    // Stryker disable next-line EqualityOperator: at equality both are the same ts.
     const hi = upToTs < this.durableTs ? upToTs : this.durableTs;
     const cs = this.docCommits;
     for (
@@ -438,6 +453,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       const vs = t?.get(e.key);
       if (!vs) continue;
       n += pruneVersions(vs, this.seqAt(e.ts));
+      // Stryker disable next-line ConditionalExpression,CallExpression: an empty key's versions read as no key; dropping it only frees memory.
       if (!vs.length) t!.delete(e.key);
     }
     return n;
@@ -451,13 +467,16 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       const vs = this.docs.get(k);
       if (!vs) continue;
       n += pruneVersions(vs, this.seqAt(e.ts));
+      // Stryker disable next-line ConditionalExpression,CallExpression: an empty document's versions read as no document; dropping it only frees memory.
       if (!vs.length) this.docs.delete(k);
     }
     this.docCommitsHead = firstAbove(
       this.docCommits,
+      // Stryker disable next-line EqualityOperator: at equality both are the same ts.
       through < this.durableTs ? through : this.durableTs,
       this.docCommitsHead,
     );
+    // Stryker disable next-line all: compacting the document log only frees memory; reads start at its head either way.
     if (this.docCommitsHead > 1024 && this.docCommitsHead * 2 > this.docCommits.length) {
       this.docCommits = this.docCommits.slice(this.docCommitsHead);
       this.docCommitsHead = 0;
@@ -474,12 +493,15 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   /** PERSIST-01 C17: entries at past timestamps, a log record of their own, durable when this returns. */
   async writeIndexEntries(entries: IndexEntryAt[]) {
     this.assertWriter();
+    // Stryker disable next-line ConditionalExpression: an empty record replays as nothing.
     if (!entries.length) return;
     this.entriesAt(entries);
+    // Stryker disable next-line ConditionalExpression: a line appended during a group's write in the thread pool; no test can interleave them.
     while (this.writing) await this.writing.catch(() => {});
     if (this.fh !== null) {
       const rec = entries.map((e) => [e.index, Buffer.from(e.key).toString("base64"), e.table, e.id, String(e.ts)]);
       writeSync(this.fh.fd, `${JSON.stringify({ entries: rec })}\n`);
+      // Stryker disable next-line ConditionalExpression,CallExpression: an fdatasync only matters across a power loss, which no test makes.
       if (this.durable) fdatasyncSync(this.fh.fd);
     }
   }
@@ -488,6 +510,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   private entriesAt(entries: IndexEntryAt[]) {
     for (const e of entries) {
       const seq = this.seqAt(e.ts);
+      // Stryker disable next-line ConditionalExpression: tsOf[-1] is undefined, never a ts; the first test only says why.
       if (seq < 0 || this.tsOf[seq] !== e.ts) throw new Error(`no commit at ${e.ts} for an index entry at it`);
       const t = this.tree(e.index);
       const vs = t.get(e.key);
@@ -507,9 +530,11 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     this.assertWriter();
     this.globals.set(key, encodeGlobal(value));
     // After a group's write in flight, never inside it: records stay whole lines.
+    // Stryker disable next-line ConditionalExpression: a line appended during a group's write in the thread pool; no test can interleave them.
     while (this.writing) await this.writing.catch(() => {});
     if (this.fh !== null) {
       writeSync(this.fh.fd, `${encodeGlobal({ global: key, value })}\n`);
+      // Stryker disable next-line ConditionalExpression,CallExpression: an fdatasync only matters across a power loss, which no test makes.
       if (this.durable) fdatasyncSync(this.fh.fd);
     }
   }
@@ -524,6 +549,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       const id = v.v!;
       const vs = this.docs.get(`${table}:${id}`);
       let doc: Version<string | null> | undefined;
+      // Stryker disable next-line ConditionalExpression: the walk's bound only stops it early (the dangling-reference tests check the match).
       if (vs) for (let i = vs.length - 1; i >= 0 && vs[i].seq >= v.seq; i--) if (vs[i].seq === v.seq) doc = vs[i];
       const at = this.tsOf[v.seq];
       if (!doc || doc.v === null) throw new DanglingReferenceError(index, id, at, !!doc);
@@ -541,6 +567,7 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       t.forRange(lo, hi, false, (_k, vs) => {
         const v = visible(vs, seq);
         if (v && v.v !== null) join(v);
+        // Stryker disable next-line BooleanLiteral: sorted-btree stops on any `break` that is not undefined.
         if (out.length >= limit) return { break: true };
       });
     }

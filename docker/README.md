@@ -58,6 +58,13 @@ Set these in the shell or in a `.env` file next to `docker-compose.yml`:
 | `DOCUMENT_RETENTION_DELAY` | How long old document versions are kept, in seconds (default here: 2 days). |
 | `DISABLE_METRICS_ENDPOINT` | `true` (the default here, as Convex's file) answers `/metrics` with 404; `false` serves the Prometheus metrics there, on both ports, with no auth ([STUDY-114](../docs/study/STUDY-114-prometheus-metrics.md)). |
 
+**Tuning.** Every limit and timing parameter of Convex's
+[`knobs.rs`](https://github.com/get-convex/convex-backend/blob/main/crates/common/src/knobs.rs) that applies to
+bunvex is an environment variable under the same name, with the same default (the list:
+[STUDY-147 §3.1](../docs/study/STUDY-147-knob-env-overrides.md#31-the-knobs-classified)). Add the ones you set
+to the service's `environment:` in `docker-compose.yml`. A value that does not parse is logged and the default
+used; an override is logged at start.
+
 **Screening outbound requests (SSRF).** An action's `fetch` can reach any address the container can,
 including private ones and cloud metadata. As Convex's `--convex-http-proxy`, `--http-proxy <url>` sends
 actions' `fetch`, auth providers' discovery and JWKS, and log streams (but Sentry's) through a screening

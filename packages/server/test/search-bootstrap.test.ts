@@ -27,19 +27,26 @@ const schema = defineSchema({
     .vectorIndex("by_embedding", { vectorField: "embedding", dimensions: 2 }),
 });
 
-/** An engine restarted on a store with data, its search and vector rebuild held until `release()`. */
+/**
+ * An engine restarted on a store with data, its search and vector rebuild held until `release()`.
+ *
+ * The store is not durable (`synchronous = off`): a clean close and reopen keeps every write without an fsync,
+ * and bun:sqlite fsyncs on the JS thread. Durable, the first engine alone commits 18 times (its start, then the
+ * insert), each with an fsync; on a CI runner whose disk was slow, they blocked the thread for seconds and the
+ * test timed out. With Linux's write IOPS capped at 15, its start and insert took ~8.5 s durable, ~0.6 s not.
+ */
 async function restarted() {
   const dir = mkdtempSync(join(tmpdir(), "bunvex-bootstrap-"));
   dirs.push(dir);
   const path = join(dir, "db.sqlite");
-  const first = await new Engine(schema, new SqlitePersistence(path, { durable: true })).init();
+  const first = await new Engine(schema, new SqlitePersistence(path, { durable: false })).init();
   await first.mutation((db) => db.insert("notes", { text: "hello world", embedding: [1, 0] }));
   await first.close();
   let release = () => {};
   const held = new Promise<void>((r) => {
     release = r;
   });
-  const engine = await new Engine(schema, new SqlitePersistence(path, { durable: true }), {
+  const engine = await new Engine(schema, new SqlitePersistence(path, { durable: false }), {
     beforeSearchBackfillPage: () => held,
   }).init();
   stops.push(() => engine.close());

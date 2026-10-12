@@ -13,6 +13,8 @@
 //
 // This module holds what `bunvex/server` exports, with nothing of the runtime (its isomorphic entry, STUDY-91):
 // the running function's lines come from log-audit.ts, which sets `setAuditScope`.
+
+import { knob } from "@bunvex/core/knobs";
 import { trackedOperation } from "./pending-ops.ts";
 
 const REQUEST_ID = Symbol("var.requestId");
@@ -61,10 +63,6 @@ export type AuditLogBody = { [key: string]: AuditLogValue };
 type JsonValue = null | undefined | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
 /** Convex's knobs: AUDIT_LOG_MAX_LINES, _MAX_LINE_SIZE_BYTES, _MAX_TOTAL_SIZE_BYTES, _MAX_HEAP_SIZE_BYTES. */
-const knob = (name: string, fallback: number) => {
-  const n = Number(process.env[name]);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-};
 export const auditLogLimits = () => ({
   maxLines: knob("AUDIT_LOG_MAX_LINES", 500),
   maxLineBytes: knob("AUDIT_LOG_MAX_LINE_SIZE_BYTES", 100_000),

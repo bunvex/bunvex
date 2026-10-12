@@ -21,6 +21,7 @@ import {
   EXPORTS_TABLE,
   getJob,
   insertAuditLogEvents,
+  knob,
   LOG_SINKS_TABLE,
   type PaginationOptions,
   readBackendState,
@@ -567,7 +568,7 @@ export const SYSTEM_MUTATIONS: Record<string, SystemMutation> = {
 };
 
 /** Convex's MAX_JOBS_CANCEL_BATCH: `cancel_all_jobs` cancels this many per transaction, until a batch is short. */
-export const MAX_JOBS_CANCEL_BATCH = 1000;
+export const MAX_JOBS_CANCEL_BATCH = knob("MAX_JOBS_CANCEL_BATCH", 1000);
 
 /** Convex's `POST /api/cancel_job` (admin, WriteData): cancel one job; a finished or unknown one is a no-op. */
 export async function cancelScheduledJob(engine: Engine, id: string, actor: AuditLogActor = SYSTEM_ACTOR) {
