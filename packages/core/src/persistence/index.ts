@@ -233,7 +233,6 @@ export { decodeGlobal, encodeGlobal } from "./global-json.ts";
 export {
   checkLayoutVersion,
   checkStoreTables,
-  checkUnversionedTables,
   decodeLayoutVersion,
   LAYOUT_VERSION,
   LayoutError,

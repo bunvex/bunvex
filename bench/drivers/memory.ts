@@ -15,7 +15,7 @@ export function tearTail(nextTs: bigint) {
   appendFileSync(log, `{"ts":"${nextTs}","docs":[{"table":1,"id":"torn","json":"{\\"a`);
 }
 
-// K22: the layout header is a log record `{"layout":N}` (the first line, or appended to an older log).
+// K22: the layout header is a log record `{"layout":N}`, the first line.
 const lines = () => (existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : []);
 const isHeader = (l: string) => l.startsWith(`{"layout":`);
 export async function layoutVersion() {
