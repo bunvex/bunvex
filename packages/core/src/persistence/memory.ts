@@ -182,8 +182,9 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       const head = buf.subarray(0, n).toString("utf8");
       const nl = head.indexOf("\n");
       if (nl !== -1) firstRecord(head.slice(0, nl), true, this.store);
-      // A first line longer than 4 KB is a commit record (a header is a few bytes) or not ours.
-      else if (!head.startsWith(`{"ts":`)) firstRecord(head, n < buf.length, this.store);
+      // No terminator in what was read: a first write torn by a crash (replay cuts it off), a first line longer
+      // than 4 KB (a commit record: a header is a few bytes), or not ours. Never a complete line.
+      else if (!head.startsWith(`{"ts":`)) firstRecord(head, false, this.store);
     } finally {
       closeSync(fd);
     }
