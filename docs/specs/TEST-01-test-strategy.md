@@ -228,7 +228,7 @@ boundary, a block emptied. The tests must then fail. A change no test notices is
   | `values/src/commit-ts.ts` | 89 | 68.5 % | 2 min |
   | `core/src/persistence/memory.ts` | 597 | 69.2 % | 28 min |
   | `core/src/persistence/split.ts` | 107 | 73.8 % | 2 min |
-  | `core/src/read-set-index.ts` | 138 | 76.1 % | 1 min |
+  | `core/src/read-set-index.ts` | 138 | 76.1 % (97.5 %) | 1 min |
   | `core/src/tx.ts` | 2 038 | 78.6 % | 112 min |
   | `core/src/committer.ts` | 651 | 79.1 % | 54 min |
   | `core/src/schema-json.ts` | 303 | 81.5 % | 8 min |
