@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  // The dashboard's contract types reach its screens' modules (JSX), so this package has its own tsconfig, as
+  // the dashboard's (UI-01 §8).
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx"
+  },
+  "include": ["src", "test"]
+}

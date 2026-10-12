@@ -72,6 +72,21 @@ export class FunctionPathError extends Error {
 }
 
 /**
+ * A function path that names no public function, or one of another kind, with `UDF_404_ON_BAD_PATH` on
+ * (STUDY-147 §3.8): Convex's `ErrorMetadata::not_found` instead of the function's error, so the request fails
+ * (HTTP 404 `{code, message}`, a whole batch with it; a sync session closes with the code).
+ */
+export class FunctionPathNotFoundError extends Error {
+  override name = "FunctionPathNotFoundError";
+  constructor(
+    readonly code: "FunctionPathNotFound" | "FunctionPathWrongType",
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
  * An argument or result that misses its validator: Convex checks both in Rust, around the run
  * (`ArgsValidator::check_args`, `ReturnsValidator::check_output`), so the error is a message alone — no
  * `Uncaught`, no frames — and its message is the `JsError`'s display, newline included, for the client and

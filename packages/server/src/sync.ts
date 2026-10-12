@@ -47,6 +47,7 @@ import { closeFrame, isDeterministicUserError, type SyncFailure } from "./close-
 import { tooDeepToStringify } from "./deep-values.ts";
 import {
   FunctionPathError,
+  FunctionPathNotFoundError,
   INTERNAL_SERVER_ERROR_MESSAGE,
   isSystemError,
   isTryAgainError,
@@ -75,7 +76,10 @@ export const MAX_INFLIGHT_ACTIONS = 1000;
  */
 export const SYNC_WORKER_PROCESS_TIMEOUT_MS = 60_000;
 /** The server sends a `Ping` after this long without sending anything (Convex's HEARTBEAT_INTERVAL). */
-export const HEARTBEAT_INTERVAL_MS = 15_000;
+export /** What ends the session instead of being the function's error: a system error, a bad path with the 404 knob. */
+const failsSession = (e: unknown) => isSystemError(e) || e instanceof FunctionPathNotFoundError;
+
+const HEARTBEAT_INTERVAL_MS = 15_000;
 const HEARTBEAT_CHECK_MS = 1_000;
 /**
  * The WebSocket-level heartbeat (STUDY-104), as Convex's `run_sync_socket` (crates/local_backend/src/subs/mod.rs:
@@ -844,8 +848,8 @@ export class SyncHub {
       };
     // A system error is no result: the connection closes and the client resubscribes (Convex's sync worker
     // fails with it; STUDY-20 D8).
-    if (!r.ok && isSystemError(r.error)) throw r.error;
-    if (r.ok && !r.value.ok && isSystemError(r.value.error)) throw r.value.error;
+    if (!r.ok && failsSession(r.error)) throw r.error;
+    if (r.ok && !r.value.ok && failsSession(r.value.error)) throw r.value.error;
     // A query that cannot start (unknown function, bad arguments) read nothing and fails at the ts.
     const run = r.ok
       ? r.value
@@ -1108,6 +1112,9 @@ export class SyncSession {
     // close, "try again", with its code.
     if (e instanceof TooManyConcurrentRequestsError || e instanceof TooManyWritesError)
       return this.fail({ code: "RateLimited", shortMsg: e.code, msg: e.message });
+    // A bad path with UDF_404_ON_BAD_PATH on (STUDY-147 §3.8): Convex's `NotFound` close, with the code.
+    if (e instanceof FunctionPathNotFoundError)
+      return this.fail({ code: "NotFound", shortMsg: e.code, msg: e.message });
     // A mutation that needed an index still being rebuilt (STUDY-79): "try again", with Convex's code.
     if (e instanceof IndexesUnavailableError)
       return this.fail({ code: "FeatureTemporarilyUnavailable", shortMsg: e.code, msg: e.message });
@@ -1669,7 +1676,7 @@ export class SyncSession {
         // reconnects and resends the mutation.
         if (
           !r.ok &&
-          (isSystemError(r.error) ||
+          (failsSession(r.error) ||
             r.error instanceof TooManyConcurrentRequestsError ||
             r.error instanceof TooManyWritesError)
         )
@@ -1729,7 +1736,7 @@ export class SyncSession {
           functions.runAction(canonicalizeUdfPath(m.udfPath), fromWire(m.args, m.udfPath), caller),
         );
         if (this.closed) return;
-        if (!r.ok && (isSystemError(r.error) || r.error instanceof TooManyConcurrentRequestsError))
+        if (!r.ok && (failsSession(r.error) || r.error instanceof TooManyConcurrentRequestsError))
           return this.internalError(r.error);
         this.send(this.response("ActionResponse", m.requestId, r));
         if (span) this.transitionParent = span;

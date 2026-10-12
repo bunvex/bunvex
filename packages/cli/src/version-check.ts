@@ -1,7 +1,8 @@
 // The version check (AD-29, STUDY-146 §7): a bunvex addition, the npm-registry analogue of the message Convex's
 // `dev` and `deploy` print from Convex's version service (`checkVersionAndAiFilesStaleness`, lib/updates.ts;
-// `getVersion`, lib/versionApi.ts). While `dev` or `deploy` runs, the registry is asked for the latest `bunvex`;
-// when it is newer than this CLI, one line says so. It never blocks the command: it runs beside it, gives up
+// `getVersion`, lib/versionApi.ts). While `dev` or `deploy` runs, the registry is asked for the latest
+// `@bunvex/cli` (every `@bunvex/*` package is released at one version, STUDY-40 L7); when it is newer than this
+// CLI, one line says so. It never blocks the command: it runs beside it, gives up
 // after a short timeout, fails silently, and asks at most once a day (the answer is cached). It is off in CI
 // (`CI` set, as Convex's CLI detects CI), with `BUNVEX_DISABLE_VERSION_CHECK` or npm's `NO_UPDATE_NOTIFIER`.
 // `BUNVEX_VERSION_API_ORIGIN` points it at another registry, as Convex's `CONVEX_VERSION_API_ORIGIN` does its service.
@@ -12,6 +13,13 @@ import { cacheDir } from "./local-deployment.ts";
 import { VERSION } from "./version.ts";
 
 export const DEFAULT_REGISTRY = "https://registry.npmjs.org";
+/** The package asked for: this CLI's own (npm will not allow the name `bunvex`, STUDY-40 L7). */
+export const VERSION_CHECK_PACKAGE = "@bunvex/cli";
+/**
+ * The registry path of a package's `latest` version. A scoped name's `/` is escaped (`@bunvex%2fcli`), as npm's
+ * own client asks for it (npm-package-arg's `escapedName`), which every registry and mirror accepts.
+ */
+export const latestPath = (name: string) => `/${encodeURIComponent(name).replace(/^%40/, "@")}/latest`;
 /** How long the registry may take before the check gives up. */
 export const VERSION_CHECK_TIMEOUT_MS = 1500;
 /** How long an answer is kept before the registry is asked again. */
@@ -37,7 +45,7 @@ export function versionNotice(installed: string, latest: string): string | null 
 }
 
 /**
- * Ask (or remember) the latest `bunvex` and return the notice, if any. Never throws: any failure (offline, a
+ * Ask (or remember) the latest `@bunvex/cli` and return the notice, if any. Never throws: any failure (offline, a
  * timeout, an answer that is not a version, a cache that cannot be read or written) is no notice.
  */
 export async function checkForNewerVersion(
@@ -61,7 +69,7 @@ export async function checkForNewerVersion(
       // no answer yet
     }
     const origin = (env.BUNVEX_VERSION_API_ORIGIN || DEFAULT_REGISTRY).replace(/\/+$/, "");
-    const r = await fetch(`${origin}/bunvex/latest`, {
+    const r = await fetch(`${origin}${latestPath(VERSION_CHECK_PACKAGE)}`, {
       headers: { accept: "application/json" },
       signal: AbortSignal.timeout(o.timeoutMs ?? VERSION_CHECK_TIMEOUT_MS),
     });

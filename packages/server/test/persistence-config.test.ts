@@ -209,6 +209,36 @@ describe("call timeouts (STUDY-25 L3)", () => {
   });
 });
 
+describe("pools (STUDY-147 §3.7, Convex's knobs; DV-112 reversed)", () => {
+  const pool = (env: Record<string, string>) => {
+    const c = persistenceConfigFromEnv(env);
+    return [c.pool, c.idleMs];
+  };
+  test("Convex's defaults: 128 connections, closed after 90 s idle; MongoDB keeps 16, no idle setting", () => {
+    expect(pool({ PERSISTENCE: "postgres" })).toEqual([128, 90_000]);
+    expect(pool({ PERSISTENCE: "mysql" })).toEqual([128, 90_000]);
+    expect(pool({ PERSISTENCE: "mongodb" })).toEqual([16, undefined]);
+  });
+  test("each driver's own knobs, which win over POOL; POOL when they are not set", () => {
+    expect(
+      pool({
+        PERSISTENCE: "postgres",
+        POSTGRES_MAX_CONNECTIONS: "40",
+        POSTGRES_INACTIVE_CONNECTION_LIFETIME_SECS: "5",
+      }),
+    ).toEqual([40, 5000]);
+    expect(
+      pool({ PERSISTENCE: "mysql", MYSQL_MAX_CONNECTIONS: "30", MYSQL_INACTIVE_CONNECTION_LIFETIME_SECS: "6" }),
+    ).toEqual([30, 6000]);
+    expect(pool({ PERSISTENCE: "postgres", POOL: "8", POSTGRES_MAX_CONNECTIONS: "40" })[0]).toBe(40);
+    expect(pool({ PERSISTENCE: "postgres", POOL: "8" })[0]).toBe(8);
+    expect(pool({ PERSISTENCE: "mongodb", POOL: "8" })[0]).toBe(8);
+    // another driver's knob is ignored; a value that does not parse is the default, as `env_config`
+    expect(pool({ PERSISTENCE: "postgres", MYSQL_MAX_CONNECTIONS: "30" })[0]).toBe(128);
+    expect(pool({ PERSISTENCE: "postgres", POSTGRES_MAX_CONNECTIONS: "many" })[0]).toBe(128);
+  });
+});
+
 describe("opening the local drivers", () => {
   const dirs: string[] = [];
   afterAll(() => {

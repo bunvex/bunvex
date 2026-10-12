@@ -4,6 +4,7 @@
 // the engine (@bunvex/core); this layer only decides WHICH body runs and with what context.
 import type { UserIdentity } from "@bunvex/auth";
 import {
+  boolKnob,
   type Caller,
   type CallRequest,
   checkEnvVarName,
@@ -133,7 +134,14 @@ import { type AnyArgs, exportedValidator, type FunctionDef, NODE_FUNCTIONS, type
 import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
 import { tooDeepToStringify } from "./deep-values.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
-import { describeUncaught, FunctionPathError, isSystemError, newRequestId, ValidatorError } from "./errors.ts";
+import {
+  describeUncaught,
+  FunctionPathError,
+  FunctionPathNotFoundError,
+  isSystemError,
+  newRequestId,
+  ValidatorError,
+} from "./errors.ts";
 import { canonicalPath, functionAddress, functionNameOf, inHandleScope } from "./function-handles.ts";
 import {
   type CallerName,
@@ -361,8 +369,7 @@ const INTERNAL_OPS = {
   action: "RunInternalActions",
 } as const satisfies Record<string, DeploymentOp>;
 const isSystemPath = (name: string) => name.startsWith("_system/");
-const notFound = (name: string) =>
-  new FunctionPathError(`Could not find public function for '${name.replace(/:default$/, "")}'.`);
+
 /**
  * A `_system/` function an admin asks for that does not exist, as Convex's module lookup words it (checked
  * against Convex's local backend): no such system module (`Couldn't find system module '"no/such.js"'.`, the
@@ -1235,9 +1242,9 @@ export class Functions {
   private checkAccess(f: FunctionDef | undefined, name: string, kind: FunctionDef["kind"], caller?: Caller) {
     const admin = adminOf(caller);
     if (admin && caller?.identity != null) this.requireOperation(caller, "ActAsUser");
-    if (!f) throw notFound(name);
+    if (!f) throw this.notFound(name);
     if (f.visibility === "internal") {
-      if (!admin) throw notFound(name);
+      if (!admin) throw this.notFound(name);
       this.requireOperation(caller, INTERNAL_OPS[kind]);
     }
   }
@@ -1251,14 +1258,15 @@ export class Functions {
     // client read the same, with the path stripped (no `.js`, no `:default`); a function of another kind
     // names the canonical path (`module.js:name`) and both kinds.
     if (fromClient) this.checkAccess(f, name, kind, caller);
-    else if (!f) throw notFound(name);
-    if (!f) throw notFound(name);
+    else if (!f) throw this.notFound(name);
+    if (!f) throw this.notFound(name);
     if (f.kind !== kind) {
       const i = name.lastIndexOf(":");
       const kindName = (k: string) => k[0].toUpperCase() + k.slice(1);
-      throw new FunctionPathError(
-        `Trying to execute ${name.slice(0, i)}.js${name.slice(i)} as ${kindName(kind)}, but it is defined as ${kindName(f.kind)}.`,
-      );
+      const message = `Trying to execute ${name.slice(0, i)}.js${name.slice(i)} as ${kindName(kind)}, but it is defined as ${kindName(f.kind)}.`;
+      throw this.udf404OnBadPath
+        ? new FunctionPathNotFoundError("FunctionPathWrongType", message)
+        : new FunctionPathError(message);
     }
     return f as Extract<FunctionDef, { kind: K }>;
   }
@@ -1317,6 +1325,19 @@ export class Functions {
    */
   maxArgsSize = knob("FUNCTION_MAX_ARGS_SIZE", FUNCTION_MAX_ARGS_SIZE);
   maxResultSize = knob("FUNCTION_MAX_RESULT_SIZE", FUNCTION_MAX_RESULT_SIZE);
+  /**
+   * Convex's `UDF_404_ON_BAD_PATH` (default false; crates/udf/src/validation.rs): a path naming no public function,
+   * or one of another kind, fails the request (404) instead of being the function's error (STUDY-147 §3.8).
+   */
+  udf404OnBadPath = boolKnob("UDF_404_ON_BAD_PATH", false);
+
+  /** Convex's `missing_or_internal_error`: no such public function. */
+  private notFound(name: string): Error {
+    const message = `Could not find public function for '${name.replace(/:default$/, "")}'.`;
+    return this.udf404OnBadPath
+      ? new FunctionPathNotFoundError("FunctionPathNotFound", message)
+      : new FunctionPathError(message);
+  }
   /** The `_system/` functions' (Convex's `deserialize_udf_result`, crates/isolate/src/helpers.rs). */
   maxSystemResultSize = knob("SYSTEM_FUNCTION_MAX_RESULT_SIZE", SYSTEM_FUNCTION_MAX_RESULT_SIZE);
 
@@ -1727,7 +1748,7 @@ export class Functions {
     if (isSystemPath(name)) {
       // the outcome depends on who calls: the query cache keeps it per caller
       db.readIdentity();
-      if (!db.systemIdentity) throw notFound(name);
+      if (!db.systemIdentity) throw this.notFound(name);
       if (depth >= MAX_NESTED_CALL_DEPTH)
         throw new Error("Cross component call depth limit exceeded. Do you have an infinite loop in your app?");
       const body =
@@ -1909,12 +1930,12 @@ export class Functions {
     if (fromClient) this.systemAccess(n, q, "ViewData", "query", caller);
     else {
       // function code never finds an admin-call-only query (STUDY-131 AD-24), as if it did not exist
-      if (q?.adminCallOnly && !inProcess) throw notFound(n);
+      if (q?.adminCallOnly && !inProcess) throw this.notFound(n);
       // function code (an action's `runQuery`) reaches it only for an admin or the system, as Convex's runner;
       // no caller at all is the server itself, in process
       if (!inProcess && caller !== undefined && !isSystemIdentity(caller))
         throw new SystemIdentityRequiredError("query");
-      if (!q) throw notFound(n);
+      if (!q) throw this.notFound(n);
     }
     const a = this.systemArgs(args, q!.args);
     return (db: Tx) => {
@@ -1942,7 +1963,7 @@ export class Functions {
     else {
       if (!inProcess && caller !== undefined && !isSystemIdentity(caller))
         throw new SystemIdentityRequiredError("mutation");
-      if (!m) throw notFound(n);
+      if (!m) throw this.notFound(n);
     }
     const a = this.systemArgs(args, m!.args);
     return (db: Tx) => {

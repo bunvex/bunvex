@@ -26,8 +26,10 @@ else
   DB_SPEC="$SQLITE_DB"; DB_FLAGS=()
 fi
 
-# Storage: S3 for each use case whose bucket is set (with AWS_REGION), else the volume (STUDY-38 K4).
-if [ -n "$S3_STORAGE_FILES_BUCKET$S3_STORAGE_MODULES_BUCKET$S3_STORAGE_EXPORTS_BUCKET" ]; then
+# Storage: S3 for each use case whose bucket is set (with AWS_REGION), else the volume (STUDY-38 K4, DV-190).
+# The buckets are Convex's five: files, modules, exports, snapshot imports and search (its run_backend.sh turns
+# S3 on only when all five and AWS_REGION are set).
+if [ -n "$S3_STORAGE_FILES_BUCKET$S3_STORAGE_MODULES_BUCKET$S3_STORAGE_EXPORTS_BUCKET$S3_STORAGE_SNAPSHOT_IMPORTS_BUCKET$S3_STORAGE_SEARCH_BUCKET" ]; then
   [ -n "$AWS_REGION" ] || echo "Warning: an S3 bucket is set but AWS_REGION is not." >&2
   STORAGE_FLAGS=(--s3-storage)
 else

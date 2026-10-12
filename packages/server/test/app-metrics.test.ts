@@ -6,7 +6,14 @@ import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { v } from "@bunvex/values";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
-import { AppMetrics, Histogram, MetricStore, MetricsWindow } from "../src/app-metrics.ts";
+import {
+  AppMetrics,
+  HISTOGRAM_BOUNDS,
+  Histogram,
+  histogramLayout,
+  MetricStore,
+  MetricsWindow,
+} from "../src/app-metrics.ts";
 import { action, Functions, mutation, query } from "../src/functions.ts";
 import { httpAction, httpRouter } from "../src/router.ts";
 import { createServer } from "../src/server.ts";
@@ -293,4 +300,35 @@ test("each call's read of the run state counts one `_backend_state` row, from th
   const width = 660;
   const read = t.one((await t.get("table_rate", { name: "_backend_state", metric: "rowsRead" })).body);
   expect(Math.round(read! * width)).toBe(2);
+});
+
+describe("the histogram layout from the UDF_METRICS_* bounds (STUDY-147 §3.8), as HdrHistogram's", () => {
+  test("Convex's defaults: 1 ms to 15 min, 2 figures, the layout bunvex had (14 × 128 counts)", () => {
+    expect(HISTOGRAM_BOUNDS).toEqual({ low: 1, high: 900_000, figures: 2 });
+    const l = histogramLayout(1, 900_000, 2);
+    expect(l.counts).toBe(14 * 128);
+    // Single-unit resolution up to 255, then steps doubling per bucket.
+    for (const v of [1, 200, 255]) expect([l.valueFor(l.indexFor(v)), l.highestEquivalent(v)]).toEqual([v, v]);
+    expect([l.valueFor(l.indexFor(1000)), l.highestEquivalent(1000)]).toEqual([1000, 1003]);
+    expect(l.indexFor(900_000)).toBeLessThan(l.counts);
+  });
+  test("other bounds: the sizes HdrHistogram computes, every value in its own equivalent range", () => {
+    // 3 figures: 2048 sub-buckets (half 1024); 12 buckets reach an hour.
+    expect(histogramLayout(1, 3_600_000, 3).counts).toBe(13 * 1024);
+    // A lowest value of 1000 scales values down by 2^9 (512): 6 buckets, not 15.
+    expect(histogramLayout(1000, 3_600_000, 2).counts).toBe(7 * 128);
+    for (const [low, high, figures] of [
+      [1, 3_600_000, 3],
+      [1000, 3_600_000, 2],
+      [1, 900_000, 1],
+    ] as const) {
+      const l = histogramLayout(low, high, figures);
+      for (let v = low; v <= high; v = Math.ceil(v * 1.37) + 1) {
+        const i = l.indexFor(v);
+        expect(i).toBeLessThan(l.counts);
+        expect(l.valueFor(i)).toBeLessThanOrEqual(v);
+        expect(l.highestEquivalent(v)).toBeGreaterThanOrEqual(v);
+      }
+    }
+  });
 });

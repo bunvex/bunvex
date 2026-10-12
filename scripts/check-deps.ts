@@ -51,6 +51,9 @@ const ALLOWED: Record<string, string[]> = {
     "core",
     "protocol",
     "values",
+    // STUDY-149: the dashboard's server source run through the dashboard's contract suite on a live server
+    "dashboard-source",
+    "dashboard",
   ],
   // Test-only, never published: Jepsen-style consistency runs against a server process (STUDY-57).
   jepsen: ["client", "server", "core", "values"],
@@ -63,7 +66,10 @@ const ALLOWED: Record<string, string[]> = {
   // injected DashboardDataSource, never the engine or the server.
   ui: [],
   dashboard: ["ui"],
-  "apps/dashboard": ["dashboard", "ui"],
+  // STUDY-149 (owner, 2026-10-12, Q7): the dashboard's source for a bunvex deployment, over the sync client and
+  // the contract's types; the dashboard package itself stays on `ui` alone, so the screens serve another host too.
+  "dashboard-source": ["client", "dashboard"],
+  "apps/dashboard": ["dashboard", "dashboard-source", "ui"],
   // SITE-01: the website renders content only; it never talks to a deployment.
   "apps/site": ["ui"],
   // STUDY-90: an example is a user's app: the public packages only (and the shared end-to-end helper).

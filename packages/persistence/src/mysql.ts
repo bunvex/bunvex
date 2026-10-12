@@ -281,7 +281,7 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
   static async open(
     url: string,
     pool = 16,
-    opts: OpenOptions & TlsOptions & { timeoutMs?: number; documentEncoding?: 0 | 1 } = {},
+    opts: OpenOptions & TlsOptions & { timeoutMs?: number; documentEncoding?: 0 | 1; idleMs?: number } = {},
   ) {
     const documentEncoding = opts.documentEncoding ?? documentEncodingFromEnv();
     const mysql = await loadPeer<typeof mysqlDriver>("mysql2/promise", "mysql2");
@@ -291,6 +291,9 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
       uri,
       ...(ssl ? { ssl: ssl as mysqlDriver.SslOptions } : {}),
       connectionLimit: pool,
+      // A connection idle that long is closed (Convex's MYSQL_INACTIVE_CONNECTION_LIFETIME_SECS, 90 s; the server
+      // passes it), down to none kept, as Convex's pool minimum of 0.
+      ...(opts.idleMs ? { idleTimeout: opts.idleMs, maxIdle: 0 } : {}),
       multipleStatements: false,
       // BIGINT columns (timestamps: nanoseconds, above 2^53) come back exact, as decimal strings.
       supportBigNumbers: true,

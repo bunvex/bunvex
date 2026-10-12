@@ -4,7 +4,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { localBackendMain, parseLocalBackendFlags, startLocalBackend } from "../src/local-backend.ts";
+import {
+  localBackendDatabaseEnv,
+  localBackendMain,
+  parseLocalBackendFlags,
+  startLocalBackend,
+} from "../src/local-backend.ts";
 
 const SECRET = "ab".repeat(32);
 const dirs: string[] = [];
@@ -200,5 +205,73 @@ describe("bunvex-local-backend", () => {
     const b = await startLocalBackend(local, io(cwd).it);
     stops.push(b.stop);
     expect(await (await fetch(`${b.url}/instance_name`)).text()).toBe("bunvex-self-hosted");
+  });
+
+  describe("the database's variables, as Convex's binary reads them", () => {
+    const flags = (...args: string[]) => {
+      const f = parseLocalBackendFlags([...args, "--instance-secret", SECRET, "--port", "0", "--site-proxy-port", "0"]);
+      if (typeof f === "string") throw new Error(f);
+      return f;
+    };
+    const ENV = {
+      POSTGRES_TIMEOUT_SECONDS: "4",
+      MYSQL_TIMEOUT_SECONDS: "3",
+      MONGODB_TIMEOUT_SECONDS: "7",
+      PG_CA_FILE: "/pg.pem",
+      MYSQL_CA_FILE: "/my.pem",
+      // The entry script's choice of driver does not change the flags'.
+      PERSISTENCE: "sqlite",
+    };
+
+    test("each driver's timeout and CA file, whatever the environment's PERSISTENCE", () => {
+      expect(localBackendDatabaseEnv("postgres", ENV)).toEqual({ caFile: "/pg.pem", timeoutMs: 4000 });
+      expect(localBackendDatabaseEnv("mysql", ENV)).toEqual({ caFile: "/my.pem", timeoutMs: 3000 });
+      expect(localBackendDatabaseEnv("mongodb", ENV)).toEqual({ timeoutMs: 7000 });
+    });
+
+    test("unset (or another driver's), the drivers' defaults", () => {
+      const env = { POSTGRES_URL: "postgres://other/db", MYSQL_TIMEOUT_SECONDS: "3", PG_CA_FILE: "" };
+      expect(localBackendDatabaseEnv("postgres", env)).toEqual({});
+      expect(localBackendDatabaseEnv("postgres", {})).toEqual({});
+    });
+
+    test("POSTGRES_TIMEOUT_SECONDS bounds the start against a database that never answers", async () => {
+      // A server that accepts the connection and says nothing: without the variable, 30 s.
+      const silent = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+      stops.push(() => silent.stop(true));
+      const cwd = mkdtempSync(join(tmpdir(), "bunvex-lb-"));
+      dirs.push(cwd);
+      const f = flags("--db", "postgres", "--do-not-require-ssl", `postgres://u@127.0.0.1:${silent.port}/db`);
+      const started = performance.now();
+      let err: unknown;
+      try {
+        const b = await startLocalBackend(f, { ...io(cwd).it, env: { POSTGRES_TIMEOUT_SECONDS: "1" } });
+        stops.push(b.stop);
+      } catch (e) {
+        err = e;
+      }
+      // The driver's 1 s bound, its own retries included (about 13 s; 100 s with the default 30 s).
+      expect(String(err)).toContain("no answer within 1000 ms");
+      expect(performance.now() - started).toBeLessThan(60_000);
+    }, 90_000);
+
+    test("PG_CA_FILE and MYSQL_CA_FILE reach the driver", async () => {
+      const cwd = mkdtempSync(join(tmpdir(), "bunvex-lb-"));
+      dirs.push(cwd);
+      for (const [db, url, variable] of [
+        ["postgres", "postgres://u@127.0.0.1:1/db", "PG_CA_FILE"],
+        ["mysql", "mysql://u@127.0.0.1:1/db", "MYSQL_CA_FILE"],
+      ] as const) {
+        const missing = join(cwd, `no-${db}.pem`);
+        let err: unknown;
+        try {
+          const b = await startLocalBackend(flags("--db", db, url), { ...io(cwd).it, env: { [variable]: missing } });
+          stops.push(b.stop);
+        } catch (e) {
+          err = e;
+        }
+        expect(String(err)).toContain(`cannot read the CA file ${missing}`);
+      }
+    });
   });
 });

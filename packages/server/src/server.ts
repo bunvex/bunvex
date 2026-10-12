@@ -85,6 +85,7 @@ import { tooDeepToStringify } from "./deep-values.ts";
 import {
   clientError,
   FunctionPathError,
+  FunctionPathNotFoundError,
   INTERNAL_SERVER_ERROR_MESSAGE,
   isSystemError,
   isTryAgainError,
@@ -819,6 +820,8 @@ export function createServer(opts: ServerOptions) {
     // an action, the same error is just an exception the action may catch.
     if (!r.ok && kind === "mutation" && r.error instanceof OccError)
       return requestError(503, r.error.code, r.error.message);
+    // A bad path with UDF_404_ON_BAD_PATH on (STUDY-147 §3.8): the request's 404, as Convex's `not_found`.
+    if (!r.ok && r.error instanceof FunctionPathNotFoundError) return requestError(404, r.error.code, r.error.message);
     // Audit log lines over Convex's limits (STUDY-82): a bad request, as Convex's `resolve_bodies`.
     if (!r.ok && r.error instanceof AuditLogLimitError) return requestError(400, r.error.code, r.error.message);
     // An index still being rebuilt after a start (STUDY-79): Convex's 503 with the feature's code and message.
@@ -1205,6 +1208,8 @@ export function createServer(opts: ServerOptions) {
         groups: c.groups,
         conflicts: c.conflicts,
         syncSessions: sync.sessions.size,
+        // The queries subscribed across every session now: the dashboard's `subscriptions` (STUDY-149).
+        subscriptions: sync.subscriptionCount(),
         sync: sync.stats,
         // Spans exported, dropped (queue full) and failed (STUDY-131 AD-26); null when tracing is off.
         tracing: spanExporter?.stats ?? null,

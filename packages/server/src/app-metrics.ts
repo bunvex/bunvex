@@ -5,42 +5,70 @@
 //
 // Convex's arithmetic is kept: counters and gauges add up in f32; a window is in nanoseconds, its buckets
 // `floor(width / n)` wide; a sample is placed by the start of its store bucket; histograms are
-// HdrHistogram's (1 ms – 15 min, 2 significant figures, 8-bit counts that saturate), merged as its `add`.
+// HdrHistogram's (by default 1 ms – 15 min, 2 significant figures, 8-bit counts that saturate), merged as its
+// `add`.
 import { knob, secondsKnob } from "@bunvex/core";
 
 /** Convex's knobs (`UDF_METRICS_*`): bucket width, number of buckets kept, the histograms' range. */
 export const BUCKET_WIDTH_MS = secondsKnob("UDF_METRICS_BUCKET_WIDTH_SECS", 60);
 export const MAX_BUCKETS = knob("UDF_METRICS_MAX_BUCKETS", 60);
-const MAX_DURATION_MS = 15 * 60 * 1000;
+
+/**
+ * An HdrHistogram's layout (`Histogram::new_with_bounds(low, high, figures)`), as the Rust crate computes it:
+ * single-unit resolution up to `2 · 10^figures`, so `subCount` sub-buckets (a power of two) of which the upper
+ * half (`half`) repeat per bucket; values scaled down by `unit` (the lowest value's magnitude); as many buckets as
+ * reach `high`, and `(buckets + 1) · half` counts.
+ */
+export function histogramLayout(low: number, high: number, figures: number) {
+  const halfMag = Math.max(Math.ceil(Math.log2(2 * 10 ** figures)), 1) - 1;
+  const half = 2 ** halfMag;
+  const subCount = 2 * half;
+  const unit = Math.floor(Math.log2(low));
+  let buckets = 1;
+  for (let reach = subCount * 2 ** unit; reach <= high; reach *= 2) buckets++;
+  const bucketFor = (v: number) => Math.max(0, Math.floor(Math.log2(v)) - unit - halfMag);
+  const indexFor = (v: number) => {
+    const b = bucketFor(v);
+    return (b + 1) * half + (Math.floor(v / 2 ** (b + unit)) - half);
+  };
+  const valueFor = (index: number) => {
+    let b = Math.floor(index / half) - 1;
+    let sub = (index % half) + half;
+    if (b < 0) {
+      sub -= half;
+      b = 0;
+    }
+    return sub * 2 ** (b + unit);
+  };
+  const highestEquivalent = (v: number) => {
+    const step = 2 ** (bucketFor(v) + unit);
+    return Math.floor(v / step) * step + step - 1;
+  };
+  return { high, counts: (buckets + 1) * half, indexFor, valueFor, highestEquivalent };
+}
+
+/**
+ * The histograms' bounds: `UDF_METRICS_MIN_DURATION_MS` (1), `UDF_METRICS_MAX_DURATION_MS` (15 min) and
+ * `UDF_METRICS_SIGNIFICANT_FIGURES` (2). Bounds HdrHistogram refuses (low under 1, high under twice low, more
+ * than 5 figures) are logged and Convex's defaults used: Convex's store would fail every histogram instead.
+ */
+function boundsFromEnv() {
+  const low = knob("UDF_METRICS_MIN_DURATION_MS", 1);
+  const high = knob("UDF_METRICS_MAX_DURATION_MS", 15 * 60 * 1000);
+  const figures = knob("UDF_METRICS_SIGNIFICANT_FIGURES", 2);
+  if (low >= 1 && high >= 2 * low && figures <= 5) return { low, high, figures };
+  console.warn(
+    `Invalid UDF_METRICS histogram bounds (${low} ms, ${high} ms, ${figures} figures), falling back to 1 ms, 900000 ms, 2.`,
+  );
+  return { low: 1, high: 15 * 60 * 1000, figures: 2 };
+}
+export const HISTOGRAM_BOUNDS = boundsFromEnv();
+const LAYOUT = histogramLayout(HISTOGRAM_BOUNDS.low, HISTOGRAM_BOUNDS.high, HISTOGRAM_BOUNDS.figures);
+const COUNTS = LAYOUT.counts;
+const { indexFor, valueFor, highestEquivalent } = LAYOUT;
+const MAX_DURATION_MS = LAYOUT.high;
 
 const f32 = Math.fround;
-
-// ---------------------------------------------------------------- HdrHistogram (low 1, high 900 000, 2 figures)
-
-// 2 significant figures: single-unit resolution up to 200, so 256 sub-buckets (half 128), unit magnitude 0;
-// 13 buckets reach 900 000; (13 + 1) × 128 counts.
-const HALF_MAG = 7;
-const HALF = 1 << HALF_MAG;
-const COUNTS = 14 * HALF;
-
-const bucketFor = (v: number) => (v < 2 * HALF ? 0 : Math.floor(Math.log2(v)) - HALF_MAG);
-const indexFor = (v: number) => {
-  const b = bucketFor(v);
-  return ((b + 1) << HALF_MAG) + (Math.floor(v / 2 ** b) - HALF);
-};
-const valueFor = (index: number) => {
-  let b = (index >> HALF_MAG) - 1;
-  let sub = (index & (HALF - 1)) + HALF;
-  if (b < 0) {
-    sub -= HALF;
-    b = 0;
-  }
-  return sub * 2 ** b;
-};
-const highestEquivalent = (v: number) => {
-  const b = bucketFor(v);
-  return Math.floor(v / 2 ** b) * 2 ** b + 2 ** b - 1;
-};
 
 export class Histogram {
   /** u8 counts: a count saturates at 255 (Convex's `Histogram<u8>`). */
