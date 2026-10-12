@@ -65,6 +65,6 @@ describe("bunvex/server's isomorphic entry", () => {
     const q = isomorphic.query({ args: {}, handler: async () => 1 });
     expect((q as unknown as { isQuery: boolean }).isQuery).toBe(true);
     const schema = isomorphic.defineSchema({ t: isomorphic.defineTable({}) });
-    expect([...schema.tables.keys()]).toEqual(["t"]);
+    expect(Object.keys(schema.tables)).toEqual(["t"]);
   });
 });

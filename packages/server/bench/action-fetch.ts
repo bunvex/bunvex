@@ -14,8 +14,8 @@ import { proxiedFetch } from "../src/http-proxy.ts";
 import { startScreeningProxy } from "../test/screening-proxy.ts";
 
 const N = Number(process.env.N ?? 20_000);
-const ok = new Response("ok");
-const instant = (async () => ok) as unknown as typeof fetch;
+// A new response each call: the action's fetch wraps its body (STUDY-142), which locks it.
+const instant = (async () => new Response("ok")) as unknown as typeof fetch;
 
 async function perCall(label: string, f: typeof fetch) {
   for (let i = 0; i < 10_000; i++) await f("https://example.com/x?i=1", { method: "POST", body: "x" });
@@ -25,10 +25,10 @@ async function perCall(label: string, f: typeof fetch) {
 }
 await perCall("bare fetch (instant)", instant);
 await perCall("checked fetch (instant)", isolateFetch(instant));
-await perCall("checked + 407 check, no proxy (instant)", isolateFetch(proxiedFetch(instant, null, true)));
+await perCall("checked + 407 check, no proxy (instant)", isolateFetch(proxiedFetch(instant, null)));
 await perCall(
   "checked + proxy init (instant)",
-  isolateFetch(proxiedFetch(instant, { url: "http://127.0.0.1:1", clientId: "bench" }, true)),
+  isolateFetch(proxiedFetch(instant, { url: "http://127.0.0.1:1", clientId: "bench" })),
 );
 
 const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("ok") });

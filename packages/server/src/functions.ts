@@ -160,6 +160,7 @@ import {
   perAttempt,
   withOwner,
 } from "./logs.ts";
+import { setOperationTracker } from "./pending-ops.ts";
 import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearchQuery } from "./registration.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { ServerMetrics } from "./server-metrics.ts";
@@ -528,6 +529,12 @@ setFetchMeter(() => {
   };
 });
 
+/** A redirected request's body, sent again (307, 308): metered as its own request, as Convex's (STUDY-142). */
+function resentEgress(bytes: number) {
+  const r = meteredAction();
+  if (r && r.environment === "isolate") r.io.networkEgressBytes += bytes;
+}
+
 /** Count an operation of `r` as pending until the returned function is called (Convex's dangling tasks). */
 function pendingOp(r: Running, name: string): () => void {
   r.pendingOps.set(name, (r.pendingOps.get(name) ?? 0) + 1);
@@ -539,12 +546,48 @@ function pendingOp(r: Running, name: string): () => void {
   };
 }
 
-/** `fn`'s promise, pending under `name` for the running action until it settles. */
+/**
+ * The event loop's turns, counted lazily: a number that changes once a macrotask has run since it was read.
+ * Convex hands an operation's answer to JS between turns of its loop, never in the turn that started it.
+ */
+let turn = 0;
+let turnEnding = false;
+function currentTurn(): number {
+  if (!turnEnding) {
+    turnEnding = true;
+    setImmediate(() => {
+      turn++;
+      turnEnding = false;
+    });
+  }
+  return turn;
+}
+const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/**
+ * `fn`'s promise, pending under `name` for the running action until it settles. An answer ready in the turn the
+ * operation started (a call that settles within microtasks) is handed over in the next one, as Convex's tasks
+ * are (STUDY-143): until then it is pending, and an action that returns without awaiting it lists it.
+ */
 function tracked<T>(name: string, fn: () => Promise<T>): Promise<T> {
   const r = meteredAction();
   if (!r) return fn();
   const settle = pendingOp(r, name);
-  return fn().finally(settle);
+  const started = currentTurn();
+  const handOver = async () => {
+    if (turn === started) await nextTurn();
+    settle();
+  };
+  return fn().then(
+    async (value) => {
+      await handOver();
+      return value;
+    },
+    async (e: unknown) => {
+      await handOver();
+      throw e;
+    },
+  );
 }
 
 /**
@@ -581,7 +624,30 @@ function trackedCtx(ctx: ActionCtx): ActionCtx {
       get: wrap("storage.get", st.get),
     },
     vectorSearch: wrap("vectorSearch", c.vectorSearch),
+    // `ctx.meta`'s calls are syscalls too (STUDY-143).
+    ...(c.meta && {
+      meta: {
+        ...c.meta,
+        getFunctionMetadata: wrap("getFunctionMetadata", c.meta.getFunctionMetadata),
+        getDeploymentMetadata: wrap("getDeploymentMetadata", c.meta.getDeploymentMetadata),
+        getRequestMetadata: wrap("getRequestMetadata", c.meta.getRequestMetadata),
+      },
+    }),
   } as unknown as ActionCtx;
+}
+
+// `createFunctionHandle` and `log.audit` in an action, pending as `ctx`'s calls are (STUDY-143).
+setOperationTracker(tracked);
+
+/**
+ * An HTTP action's request whose `formData()` is pending as `formData` until it settles when the body is
+ * multipart: Convex parses that one with an operation (`form/parseMultiPart`), any other in JS (STUDY-143).
+ */
+function trackedFormData(request: Request): Request {
+  if (!/^multipart\/form-data\b/i.test(request.headers.get("content-type") ?? "")) return request;
+  const formData = request.formData.bind(request);
+  Object.defineProperty(request, "formData", { value: () => tracked("formData", formData), configurable: true });
+  return request;
 }
 
 /** A query's or mutation's timer, for the log's user execution time (STUDY-71). */
@@ -1022,7 +1088,7 @@ export class Functions {
   /** The usage meter (STUDY-61); set by `createServer`. */
   usageMeter: UsageMeter | null = null;
   /** An isolate action's `fetch`: through the operator's proxy when there is one (STUDY-80 §3.2). */
-  private isolateSender = isolateFetch(proxiedFetch(directFetch, null, true));
+  private isolateSender = isolateFetch(proxiedFetch(directFetch, null), resentEgress);
   private proxy: HttpProxy | null = null;
   /** The proxy an isolate action's `fetch` goes through (Convex's `--convex-http-proxy`); null for none. */
   get httpProxy(): HttpProxy | null {
@@ -1030,7 +1096,7 @@ export class Functions {
   }
   set httpProxy(p: HttpProxy | null) {
     this.proxy = p;
-    this.isolateSender = isolateFetch(proxiedFetch(directFetch, p, true));
+    this.isolateSender = isolateFetch(proxiedFetch(directFetch, p), resentEgress);
   }
 
   /** A run's usage into the meter (STUDY-61, STUDY-71); `tracked`: whether the call counts (not `_system/`). */
@@ -2279,7 +2345,9 @@ export class Functions {
               ms,
               () => actionTimeoutError(ms),
               () =>
-                this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, request))),
+                this.inActionEnv(() =>
+                  inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, trackedFormData(request))),
+                ),
             );
             if (!(response instanceof Response)) {
               warnings(0);

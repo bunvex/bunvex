@@ -1,7 +1,7 @@
 // What a push changed, for its `push_config_with_components` audit-log event (STUDY-48 follow-up, DV-276):
 // the index diff between the active schema and the pushed one, as Convex's `get_full_index_diff` and its
 // `DeveloperIndexConfig` entries, and the auth providers added and removed, each as Convex's JSON string.
-import type { DeclaredTable, SchemaDefinition } from "@bunvex/core";
+import { type DeclaredTable, declaredTables, type SchemaDefinition } from "@bunvex/core";
 import type { Value } from "@bunvex/values";
 
 type IndexEntry = { key: string; config: Record<string, Value> };
@@ -9,7 +9,7 @@ type IndexEntry = { key: string; config: Record<string, Value> };
 /** Every index of a schema (database, search, vector) as Convex's `SerializedNamedDeveloperIndexConfig`. */
 function indexesOf(schema: SchemaDefinition): Map<string, IndexEntry> {
   const out = new Map<string, IndexEntry>();
-  for (const t of schema.tables.values() as Iterable<DeclaredTable>) {
+  for (const t of declaredTables(schema).values() as Iterable<DeclaredTable>) {
     const staged = (names?: string[]) => new Set(names ?? []);
     const db = staged(t.staged);
     for (const [n, fields] of Object.entries(t.indexes)) {

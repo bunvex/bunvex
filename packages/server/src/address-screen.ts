@@ -10,9 +10,13 @@
 //   ranges (Smokescreen's default classes), with IPv4-mapped and NAT64 IPv6 forms checked as IPv4.
 //
 // An `https:` target is a `CONNECT` tunnel (TLS stays end to end; the tunnel is reused). An `http:` one is
-// forwarded once per connection (`Connection: close`), so each request is checked.
+// forwarded once per connection (`Connection: close`), so each request is checked. A target it cannot connect
+// to gets a `502` carrying the socket's error code and a secret (STUDY-142): the action's `fetch` then fails as
+// it would have without the screen ("Connection refused", …), where a real proxy's answer is its own.
+import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import net from "node:net";
+import { SCREEN_FAILURE_HEADER } from "./http-proxy.ts";
 
 export type AddressScreen = "none" | "metadata" | "private";
 
@@ -108,8 +112,8 @@ async function addressesOf(host: string): Promise<string[]> {
   return (await lookup(bare, { all: true, verbatim: true })).map((a) => a.address);
 }
 
-/** The address to connect to, or null when the target is refused (any of its addresses, as Smokescreen). */
-export async function checkedAddress(host: string, screen: AddressScreen): Promise<string | null> {
+/** The addresses to connect to, or null when the target is refused (any of its addresses, as Smokescreen). */
+export async function checkedAddresses(host: string, screen: AddressScreen): Promise<string[] | null> {
   let all: string[];
   try {
     all = await addressesOf(host);
@@ -117,7 +121,26 @@ export async function checkedAddress(host: string, screen: AddressScreen): Promi
     return null; // a name that does not resolve is refused here, as by a proxy
   }
   if (all.length === 0 || all.some((a) => isDenied(a, screen))) return null;
-  return all[0]!;
+  return all;
+}
+
+/**
+ * A connection to the first of `addresses` that takes one, in order, as reqwest tries a name's addresses
+ * (`localhost` is `::1` first, and a server may listen on `127.0.0.1` only); the last failure otherwise.
+ */
+function connectAny(port: number, addresses: string[]): Promise<net.Socket> {
+  return new Promise((resolve, reject) => {
+    const attempt = (i: number) => {
+      const up = net.connect(port, addresses[i]!);
+      const failed = (e: Error) => (i + 1 < addresses.length ? attempt(i + 1) : reject(e));
+      up.once("error", failed);
+      up.once("connect", () => {
+        up.off("error", failed);
+        resolve(up);
+      });
+    };
+    attempt(0);
+  });
 }
 
 const REFUSED = "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
@@ -131,11 +154,15 @@ const HOP_BY_HOP = /\r\n(proxy-authorization|proxy-connection|connection|keep-al
  */
 function closingResponse(up: net.Socket, sock: net.Socket) {
   let head = Buffer.alloc(0);
+  // A target that closes before its head is complete: the client's connection closes too (it would wait).
+  const closedEarly = () => sock.destroy();
+  up.once("end", closedEarly);
   const onData = (chunk: Buffer) => {
     head = Buffer.concat([head, chunk]);
     const end = head.indexOf("\r\n\r\n");
     if (end < 0) return;
     up.off("data", onData);
+    up.off("end", closedEarly);
     const lines = head.subarray(0, end).toString("latin1").replace(HOP_BY_HOP, "");
     sock.write(Buffer.from(`${lines}\r\nConnection: close\r\n\r\n`, "latin1"));
     const body = head.subarray(end + 4);
@@ -147,6 +174,7 @@ function closingResponse(up: net.Socket, sock: net.Socket) {
 
 /** Start the screening proxy (bound at once); its URL goes where `--http-proxy`'s would. */
 export function startAddressScreen(screen: AddressScreen) {
+  const failureToken = randomBytes(16).toString("hex");
   const server = net.createServer((sock) => {
     sock.on("error", () => sock.destroy());
     let buf = Buffer.alloc(0);
@@ -180,27 +208,35 @@ export function startAddressScreen(screen: AddressScreen) {
         port = Number(u.port || 80);
         path = `${u.pathname}${u.search}`;
       }
-      const address = await checkedAddress(host, screen);
-      if (address === null || !Number.isInteger(port)) return sock.end(REFUSED);
-      const up = net.connect(port, address);
+      const addresses = await checkedAddresses(host, screen);
+      if (addresses === null || !Number.isInteger(port)) return sock.end(REFUSED);
+      let up: net.Socket;
+      try {
+        up = await connectAny(port, addresses);
+      } catch (e) {
+        // Not reached: the client hears why (`proxiedFetch` turns it into the failure it would have had
+        // without the screen).
+        const code = (e as NodeJS.ErrnoException).code ?? "ECONNRESET";
+        return sock.end(
+          `HTTP/1.1 502 Bad Gateway\r\n${SCREEN_FAILURE_HEADER}: ${failureToken} ${code}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`,
+        );
+      }
       up.on("error", () => sock.destroy());
-      up.on("connect", () => {
-        if (method === "CONNECT") sock.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-        else {
-          const lines = head.replace(target, path).replace(HOP_BY_HOP, "");
-          up.write(Buffer.from(`${lines}\r\nConnection: close\r\n\r\n`, "latin1"));
-        }
-        if (rest.length > 0) up.write(rest);
-        if (method === "CONNECT") up.pipe(sock);
-        else closingResponse(up, sock);
-        sock.pipe(up);
-        sock.resume();
-      });
+      if (method === "CONNECT") sock.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      else {
+        const lines = head.replace(target, path).replace(HOP_BY_HOP, "");
+        up.write(Buffer.from(`${lines}\r\nConnection: close\r\n\r\n`, "latin1"));
+      }
+      if (rest.length > 0) up.write(rest);
+      if (method === "CONNECT") up.pipe(sock);
+      else closingResponse(up, sock);
+      sock.pipe(up);
+      sock.resume();
     };
     sock.on("data", onData);
   });
   server.listen(0, "127.0.0.1"); // Bun binds a TCP listener synchronously
   server.unref();
   const { port } = server.address() as net.AddressInfo;
-  return { url: `http://127.0.0.1:${port}`, stop: () => server.close() };
+  return { url: `http://127.0.0.1:${port}`, failureToken, stop: () => server.close() };
 }

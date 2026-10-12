@@ -120,7 +120,7 @@ describe("content", () => {
     expect(PARITY.areas.map((a): number[] => [a.done, a.partial, a.missing])).toEqual(
       rows.map((r) => r.slice(2).map(Number)),
     );
-    expect(parityPercent()).toBe(90);
+    expect(parityPercent()).toBe(91);
   });
 
   test("every link to a repository path points at a file or directory that exists", () => {

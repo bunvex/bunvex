@@ -11,7 +11,9 @@
 import { type GenericValidator, type ValidatorJSON, validatorFromJson } from "@bunvex/values";
 import {
   type DeclaredTable,
+  declaredTables,
   type SchemaDefinition,
+  schemaOfDeclared,
   stagedDocumentJson,
   documentJson as validDocumentJson,
 } from "./schema.ts";
@@ -118,7 +120,7 @@ const documentJson = (v: GenericValidator) => documentType(validDocumentJson(v))
 
 /** The schema as Convex's `DatabaseSchemaJson`. Throws Convex's export error for a staged validator that is not an object. */
 export function schemaToJson(s: SchemaDefinition): SchemaJson {
-  const tables = [...s.tables.values()].sort((a, b) => byName(a.name, b.name));
+  const tables = [...declaredTables(s).values()].sort((a, b) => byName(a.name, b.name));
   return {
     tables: tables.map((t) => {
       const staged = new Set(t.staged ?? []);
@@ -257,7 +259,7 @@ export function schemaFromJson(j: SchemaJson): SchemaDefinition {
       ...(t.stagedDocumentType == null ? {} : { stagedDocument: validatorFromJson(t.stagedDocumentType) }),
     });
   }
-  return { tables, schemaValidation: j.schemaValidation };
+  return schemaOfDeclared(tables, j.schemaValidation);
 }
 
 /**

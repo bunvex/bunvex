@@ -144,6 +144,27 @@ test("a 407 from anywhere is the refusal, without a proxy too (Convex checks the
   expect(proxy.seen).toEqual([]);
 });
 
+test("OIDC discovery and JWKS send bunvex's User-Agent, as Convex's client sends its own (STUDY-142, DV-456)", async () => {
+  const issuer = await startIssuer();
+  stops.push(issuer.stop);
+  const agents: (string | null)[] = [];
+  const authFetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    agents.push(new Headers(init?.headers).get("user-agent"));
+    return fetch(input, init);
+  }) as typeof fetch;
+  const { app } = await setup({
+    proxy: false,
+    server: { auth: { providers: [{ domain: issuer.url, applicationID: "app" }] }, authFetch },
+  });
+  const r = await fetch(`http://127.0.0.1:${app.server.port}/api/query`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${await issuer.sign({ sub: "ada" })}` },
+    body: JSON.stringify({ path: "m:whoami", args: {} }),
+  });
+  expect(((await r.json()) as { value: unknown }).value).toBe("ada");
+  expect(agents).toEqual(["Bunvex/1.0", "Bunvex/1.0"]);
+});
+
 test("OIDC discovery and JWKS go through the proxy; refused, the provider fails with Convex's messages", async () => {
   const issuer = await startIssuer();
   stops.push(issuer.stop);

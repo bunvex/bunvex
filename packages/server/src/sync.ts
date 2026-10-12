@@ -29,6 +29,8 @@ import {
   OutOfRetentionError,
   type QueryJournal,
   ReadSetIndex,
+  type RuntimeTimer,
+  realRuntime,
   SPAN_KIND,
   type Span,
   stringifyValue,
@@ -426,8 +428,13 @@ export class SyncHub {
    * Sends each idle session its `Ping`, each session its WS ping, and closes the silent ones; one timer for all
    * sessions, not one re-armed per frame.
    */
-  private heartbeat: ReturnType<typeof setInterval>;
+  private heartbeat: RuntimeTimer;
   readonly wsHeartbeat: WsHeartbeatOptions;
+  /**
+   * The heartbeat's monotonic clock, in ms: the engine's runtime (STUDY-132), so a test moves it. Each session's
+   * last frame sent and received is timed by it too.
+   */
+  readonly clock: () => number;
 
   constructor(readonly deps: SyncDeps) {
     this.splay = deps.splay ?? splayOptions();
@@ -442,14 +449,18 @@ export class SyncHub {
       pingIntervalMs: deps.wsHeartbeat?.pingIntervalMs ?? WS_PING_INTERVAL_MS,
       clientTimeoutMs: deps.wsHeartbeat?.clientTimeoutMs ?? CLIENT_TIMEOUT_MS,
     };
-    this.heartbeat = setInterval(
+    const runtime = deps.engine.runtime;
+    // The process's own clock is called directly: through `realRuntime`'s bound function, a frame sent would
+    // pay ~45 ns more for its timestamp.
+    this.clock = runtime === realRuntime ? () => performance.now() : runtime.monotonicNow;
+    this.heartbeat = runtime.setInterval(
       () => {
-        const now = performance.now();
+        const now = this.clock();
         for (const s of this.sessions) s.heartbeat(now);
       },
       Math.min(HEARTBEAT_CHECK_MS, this.wsHeartbeat.pingIntervalMs),
     );
-    this.heartbeat.unref?.();
+    this.heartbeat.unref();
   }
 
   /**
@@ -463,7 +474,7 @@ export class SyncHub {
   }
 
   stop() {
-    clearInterval(this.heartbeat);
+    this.deps.engine.runtime.clearInterval(this.heartbeat);
     for (const s of this.sessions) s.cancelSplay();
   }
 
@@ -934,10 +945,10 @@ export class SyncSession {
   private pendingMutations = 0;
   private mutationRunning = false;
   private inflightActions = 0;
-  private lastSent = performance.now();
+  private lastSent: number;
   /** When the client last sent a frame of any kind (Convex's `last_received`), and when it was last pinged. */
-  private lastReceived = performance.now();
-  private lastWsPing = performance.now();
+  private lastReceived: number;
+  private lastWsPing: number;
   private ws: Socket | null = null;
   /** The execution keys this session watches (those of its queries), and whether they may have changed. */
   private watching = new Set<string>();
@@ -953,7 +964,9 @@ export class SyncSession {
   /** The pending rerun of queries that found an index unavailable (STUDY-79). */
   private unavailableTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(private hub: SyncHub) {}
+  constructor(private hub: SyncHub) {
+    this.lastSent = this.lastReceived = this.lastWsPing = hub.clock();
+  }
 
   /** Whether the connection is still open (a query run is retried only for an open one). */
   get isOpen(): boolean {
@@ -1024,7 +1037,7 @@ export class SyncSession {
       this.inBuffer.push({ end: this.sentBytes, transition });
       if (transition) this.transitionsInBuffer++;
     }
-    this.lastSent = performance.now();
+    this.lastSent = this.hub.clock();
   }
 
   /**
@@ -1057,7 +1070,7 @@ export class SyncSession {
   }
 
   /** The client sent a frame: a message, a pong or a ping (STUDY-104). */
-  heard(now = performance.now()) {
+  heard(now = this.hub.clock()) {
     this.lastReceived = now;
   }
 

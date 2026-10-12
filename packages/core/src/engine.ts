@@ -143,6 +143,7 @@ import { SCHEDULED_JOBS_INDEXES } from "./scheduled-jobs.ts";
 import {
   type DeclaredTable,
   type Doc,
+  declaredTables,
   documentValidator,
   MAX_VECTOR_DIMENSIONS,
   maintainedIndexes,
@@ -809,7 +810,7 @@ export class Engine {
   }
 
   /** Every table the engine declares: its own system tables, then the schema's. */
-  private declaredTables(schema: SchemaDefinition = this.schema): DeclaredTable[] {
+  private allDeclaredTables(schema: SchemaDefinition = this.schema): DeclaredTable[] {
     const systemTables: DeclaredTable[] = [
       // Convex's bootstrap tables, created with the store (bootstrap.ts), then its application system tables.
       ...BOOTSTRAP_TABLES.map((t) => ({ name: t.name, indexes: t.indexes, document: v.any() })),
@@ -866,7 +867,7 @@ export class Engine {
       // Convex's, kept empty: Convex creates them on every start (STUDY-133 §12 M1).
       ...EMPTY_CLOUD_SYSTEM_TABLES.map((name) => ({ name, indexes: {}, document: v.any() })),
     ];
-    return [...systemTables, ...schema.tables.values()];
+    return [...systemTables, ...declaredTables(schema).values()];
   }
 
   /**
@@ -882,7 +883,7 @@ export class Engine {
     let created: TabletId[] = [];
     let { tables, indexes } = await this.runMutation(async (db) => {
       const current = await readCatalog(db);
-      const changes = planCatalog(this.declaredTables(), current.tables, current.indexes, true, current.nextIndexId);
+      const changes = planCatalog(this.allDeclaredTables(), current.tables, current.indexes, true, current.nextIndexId);
       if (!hasChanges(changes)) return current;
       const written = await writeCatalogChanges(db, changes, this.createdLowerBound(db));
       created = [...written.tables.values()].map((t) => t.tablet);
@@ -912,7 +913,7 @@ export class Engine {
     const finished = await this.runMutation(
       async (db) => {
         const { tables, indexes } = await readCatalog(db);
-        const f = finishCatalog(this.declaredTables(), tables, indexes);
+        const f = finishCatalog(this.allDeclaredTables(), tables, indexes);
         if (!f) return false;
         if (!hasFinishChanges(f)) return true;
         for (const i of f.drop) {
@@ -1025,7 +1026,7 @@ export class Engine {
    */
   private reconcileSearch(bootstrapping = false) {
     const wanted = [];
-    for (const [name, declared] of this.schema.tables) {
+    for (const [name, declared] of declaredTables(this.schema)) {
       const t = this.catalog.tables.get(name);
       if (!t || !declared.searchIndexes) continue;
       const staged = new Set(declared.stagedSearch ?? []);
@@ -1045,7 +1046,7 @@ export class Engine {
   /** Make the vector indexes the active schema's (STUDY-51), as `reconcileSearch` does for search ones. */
   private reconcileVector(bootstrapping = false) {
     const wanted = [];
-    for (const [name, declared] of this.schema.tables) {
+    for (const [name, declared] of declaredTables(this.schema)) {
       const t = this.catalog.tables.get(name);
       if (!t || !declared.vectorIndexes) continue;
       const staged = new Set(declared.stagedVector ?? []);
@@ -1927,7 +1928,7 @@ export class Engine {
     const t = this.catalog.tables.get(table);
     if (!t) return [];
     const name = `${table}.${index}`;
-    const declared = this.schema.tables.get(table);
+    const declared = declaredTables(this.schema).get(table);
     const e = this.vectorIndexes.get(t, index);
     if (!e) {
       if (t.indexes.has(index) || declared?.searchIndexes?.[index])
@@ -2115,11 +2116,11 @@ export class Engine {
     // Database indexes: the stored ones (their `_creationTime` suffix aside) against the declared ones.
     const userFields = (f: string[]) => (f.at(-1) === "_creationTime" ? f.slice(0, -1) : f);
     const tableNames = new Set([
-      ...next.tables.keys(),
+      ...declaredTables(next).keys(),
       ...active.filter((t) => !t.name.startsWith("_")).map((t) => t.name),
     ]);
     for (const table of [...tableNames].sort()) {
-      const declared = next.tables.get(table);
+      const declared = declaredTables(next).get(table);
       const tablet = tabletOf(table);
       const stored = cat.indexes.filter((i) => i.tablet === tablet && !(i.name in SYSTEM_INDEXES));
       const stagedNext = new Set(declared?.staged ?? []);
@@ -2138,7 +2139,7 @@ export class Engine {
         if (!declared?.indexes[st.name])
           push(table, st.name, { type: "database", fields: userFields(st.fields) }, !!st.staged, "dropped", false);
       // Search and vector indexes: the active schema's against the pushed one's.
-      const before = this.schema.tables.get(table);
+      const before = declaredTables(this.schema).get(table);
       const kinds = [
         {
           now: before?.searchIndexes ?? {},
@@ -2234,7 +2235,7 @@ export class Engine {
     const stillValidating = new Map(
       items.filter((i) => i.active && i.c.state.state === "pending").map((i) => [i.c.tableName, i.c.validator]),
     );
-    const tables: TablePrediction[] = [...next.tables.values()].map((t) => {
+    const tables: TablePrediction[] = [...declaredTables(next).values()].map((t) => {
       const tablet = tabletOf(t.name);
       const s = tablet === undefined ? { count: 0, size: 0 } : this.tableSummaries.get(tablet);
       const outcome = this.tableOutcome(next, this.schema, t.name, tablet, validStaged);
@@ -2375,8 +2376,8 @@ export class Engine {
     tablet: TabletId | undefined,
     validStaged?: Map<string, unknown>,
   ) {
-    const t = next.tables.get(table);
-    const was = active.schemaValidation ? active.tables.get(table) : undefined;
+    const t = declaredTables(next).get(table);
+    const was = active.schemaValidation ? declaredTables(active).get(table) : undefined;
     const shape = !this.tableSummaries.ready
       ? undefined
       : tablet === undefined
@@ -2480,7 +2481,7 @@ export class Engine {
       const todo = await this.query((db) => db.asSystem(() => pendingStagedValidations(db, schemaId, staged)));
       for (const { id, tableName } of todo) {
         if (this.closed) return;
-        const t = schema.tables.get(tableName);
+        const t = declaredTables(schema).get(tableName);
         const v = staged.get(tableName);
         if (!t?.stagedDocument || !v) continue;
         const valid = () =>
@@ -2575,7 +2576,7 @@ export class Engine {
     const walk: { name: string; validator: GenericValidator }[] = [];
     const validStaged = schema.schemaValidation ? await this.activeValidStaged() : undefined;
     if (schema.schemaValidation)
-      for (const t of schema.tables.values()) {
+      for (const t of declaredTables(schema).values()) {
         const validator = documentValidator(t.name, t.document);
         if (!validator) continue;
         // Convex's `table_validation_outcomes`: a table whose new validator accepts everything the active one
@@ -2667,16 +2668,18 @@ export class Engine {
   async stagedValidatorConflicts(schema: SchemaDefinition): Promise<StagedSchemaError | null> {
     const tables: string[] = [];
     // Only read when there is a staged validator (Convex's `has_staged_validators` guard).
-    const hasStaged = [...schema.tables.values()].some((t) => t.stagedDocument !== undefined);
+    const hasStaged = [...declaredTables(schema).values()].some((t) => t.stagedDocument !== undefined);
     const validStaged = hasStaged ? await this.activeValidStaged() : new Map<string, unknown>();
-    for (const t of [...schema.tables.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+    for (const t of [...declaredTables(schema).values()].sort((a, b) =>
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+    )) {
       if (t.stagedDocument === undefined) continue;
       const declaresIndex =
         Object.keys(t.indexes).length > 0 ||
         Object.keys(t.searchIndexes ?? {}).length > 0 ||
         Object.keys(t.vectorIndexes ?? {}).length > 0;
       const exists = this.catalog.tables.has(t.name) || declaresIndex;
-      const was = this.schema.schemaValidation ? this.schema.tables.get(t.name) : undefined;
+      const was = this.schema.schemaValidation ? declaredTables(this.schema).get(t.name) : undefined;
       const outcome = tableValidationOutcome(
         schema.schemaValidation,
         t.document.json as never,
@@ -2700,7 +2703,7 @@ export class Engine {
   async startSchemaPush(schema: SchemaDefinition): Promise<{ schemaId: string; addedIndexes: string[] }> {
     const conflict = await this.stagedValidatorConflicts(schema);
     if (conflict) throw conflict;
-    const declared = this.declaredTables(schema);
+    const declared = this.allDeclaredTables(schema);
     const json = schemaToJson(schema);
     const staged = stagedValidatorsOf(json);
     const r = await this.runMutation(
@@ -2841,7 +2844,7 @@ export class Engine {
     const pending = this.pendingPush;
     if (!pending || pending.id !== schemaId)
       throw new SchemaPushError("RaceDetected", "Schema was overwritten by another push.");
-    const declared = this.declaredTables(pending.schema);
+    const declared = this.allDeclaredTables(pending.schema);
     const r = await this.runMutation(
       async (db) => {
         const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
@@ -3790,9 +3793,9 @@ export class SchemaEnforcementError extends Error {
 
 /** Why `schema` refuses the deletion of `table` (Convex's `check_delete_table`), or null. */
 function deletionRefusal(schema: SchemaDefinition, table: string): string | null {
-  if (schema.tables.has(table)) return `Failed to delete table "${table}" because it appears in the schema`;
-  for (const name of [...schema.tables.keys()].sort())
-    if (referencedTables(schema.tables.get(name)!.document.json).has(table))
+  if (declaredTables(schema).has(table)) return `Failed to delete table "${table}" because it appears in the schema`;
+  for (const name of [...declaredTables(schema).keys()].sort())
+    if (referencedTables(declaredTables(schema).get(name)!.document.json).has(table))
       return `Failed to delete table "${table}" because \`v.id("${table}")\` appears in the schema of table "${name}"`;
   return null;
 }
@@ -3843,7 +3846,7 @@ export async function readSearchIndexStates(persistence: Persistence): Promise<{
 /** Each table's staged validator as a document validator; checked whether or not the schema validates. */
 function stagedDocumentValidatorsOf(schema: SchemaDefinition): Map<string, GenericValidator> {
   const out = new Map<string, GenericValidator>();
-  for (const t of schema.tables.values()) {
+  for (const t of declaredTables(schema).values()) {
     if (t.stagedDocument === undefined) continue;
     const dv = documentValidator(t.name, t.stagedDocument);
     if (dv) out.set(t.name, dv);
@@ -3854,7 +3857,7 @@ function stagedDocumentValidatorsOf(schema: SchemaDefinition): Map<string, Gener
 function validatorsOf(schema: SchemaDefinition): Map<string, GenericValidator> {
   const out = new Map<string, GenericValidator>();
   if (schema.schemaValidation)
-    for (const t of schema.tables.values()) {
+    for (const t of declaredTables(schema).values()) {
       const dv = documentValidator(t.name, t.document);
       if (dv) out.set(t.name, dv);
     }

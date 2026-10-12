@@ -595,7 +595,25 @@ async function meteredFetch(
     const [input, init] = args;
     let size = init && "body" in init ? knownBodySize(init.body) : input instanceof Request ? null : 0;
     let res: Response;
-    if (size === null) {
+    if (size === null && init?.body instanceof ReadableStream) {
+      // A stream is counted as it goes out, and stays the request's own (the sender may look at it: an action's
+      // `fetch` refuses to redirect with one, as Convex's).
+      let sent = 0;
+      const counted = init.body.pipeThrough(
+        new TransformStream<Uint8Array | string, Uint8Array | string>({
+          transform(chunk, c) {
+            sent += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.byteLength;
+            c.enqueue(chunk);
+          },
+        }),
+      );
+      res = await send(input, { ...init, body: counted as ReadableStream<Uint8Array> });
+      size = sent;
+    } else if (size === null && init && "body" in init) {
+      // Form data: its encoded size, the request still built from `init`.
+      size = (await new Response(init.body).arrayBuffer()).byteLength;
+      res = await send(...args);
+    } else if (size === null) {
       const req =
         typeof input === "string" || input instanceof URL
           ? new Request(input.toString(), init)
