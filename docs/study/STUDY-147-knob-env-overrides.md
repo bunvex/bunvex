@@ -2,7 +2,7 @@
 
 - **Status:** PR 1 implemented (the shared reader, every knob whose mechanism exists); PR 3a implemented (five
   defaults matched, §3.2); PR 3b implemented (`HTTP_SERVER_TIMEOUT_SECONDS` on every route, §3.3); PR 2 in parts (one PR each, §3.4):
-  retention and the index backfill switch implemented, the rest planned
+  retention, the index backfill switch and MySQL's retries and chunks implemented, the rest planned
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend (`crates/common/src/knobs.rs`,
   `crates/cmd_util/src/env.rs`, `self-hosted/advanced/knobs.md`)
 - **Related:** [platform.md](../parity/platform.md) "Knob env overrides"; STUDY-25 (store timeouts), STUDY-33
@@ -84,7 +84,7 @@ unknown encoding.
 Every knob of `knobs.rs` at `d8bdde0`, plus those outside it, is in one of five groups. The full table, with
 each knob's default and where bunvex keeps it, was checked file by file; it is summarized here.
 
-**Read from the environment (131 after PR 1, 139 after PR 3a, 142 after PR 2's retention part, 143 after its backfill switch).** Everything bunvex has a mechanism for, under Convex's name and
+**Read from the environment (131 after PR 1, 139 after PR 3a, 142 after PR 2's retention part, 143 after its backfill switch, 147 after its MySQL part).** Everything bunvex has a mechanism for, under Convex's name and
 default unless a decided divergence says otherwise:
 
 | Area | Knobs |
@@ -104,11 +104,8 @@ default unless a decided divergence says otherwise:
 | Stores | `POSTGRES_TIMEOUT_SECONDS`, `MYSQL_TIMEOUT_SECONDS`, `MONGODB_TIMEOUT_SECONDS` (bunvex's driver), `MYSQL_DOCUMENT_ENCODING` (DV-414), `MYSQL_MAX_CHUNK_BYTES` |
 
 **Read after PR 2 (the mechanism changes first).** The retention knobs (done, §3.4); `INDEX_BACKFILL_ENABLE`
-(done, §3.5); `MYSQL_MAX_QUERY_RETRIES` is
-a fixed single retry shared with Postgres; the three `UDF_METRICS_*` histogram knobs need the histogram layout
-computed from them; `UDF_404_ON_BAD_PATH` needs the 404 answer; `MYSQL_SMART_CHUNK_MAX_SIZE` (was
-`MYSQL_CHUNK_SIZE`) and `MYSQL_MAX_FILL_CHUNK_ROWS` to map onto bunvex's MySQL chunking;
-`POSTGRES_MAX_CONNECTIONS`, `MYSQL_MAX_CONNECTIONS` and the two `*_INACTIVE_CONNECTION_LIFETIME_SECS` beside
+(done, §3.5); the MySQL knobs (done, §3.6); the three `UDF_METRICS_*` histogram knobs need the histogram layout
+computed from them; `UDF_404_ON_BAD_PATH` needs the 404 answer; `POSTGRES_MAX_CONNECTIONS`, `MYSQL_MAX_CONNECTIONS` and the two `*_INACTIVE_CONNECTION_LIFETIME_SECS` beside
 `POOL` (DV-112: bunvex's 16, "settings to add").
 
 **Defaults to match Convex's, PR 3** (owner, 2026-10-11: match). Each reads its knob once it behaves as
@@ -247,6 +244,29 @@ backfill of a new table's indexes (`backfillNewTables`, so a push creating a tab
 Convex's) and an import's hidden table (`createHiddenTable` waits, until the engine closes). Text and vector
 indexes still build. Switched back on, the next start backfills from the `_index_backfills` checkpoints.
 
+### 3.6 PR 2, MySQL: query retries and statement chunks
+
+**Convex** (`crates/mysql/src/connection.rs`, `chunks.rs`, `knobs.rs`):
+- `MYSQL_MAX_QUERY_RETRIES` (1): a read (`query_optional`, `query_collect`) that fails with an operational error
+  runs again at once on a fresh connection, up to that many times; a timeout is never retried, nor is a write.
+- `MYSQL_MAX_FILL_CHUNK_ROWS` (1024): `fill_chunks` puts at most that many rows in one INSERT besides the 10 MiB
+  of `MYSQL_MAX_CHUNK_BYTES` (past about 2 200 OR'd keys MySQL may scan and lock a whole table).
+- `MYSQL_SMART_CHUNK_MAX_SIZE` (128, was `MYSQL_CHUNK_SIZE`) and `MYSQL_MAX_DYNAMIC_SMART_CHUNK_SIZE` (8):
+  `smart_chunks` takes as many rows as fit the bytes, up to the maximum, and rounds the length down to any value up
+  to 8 or a power of two, so a statement has one of about a dozen shapes and its plan is reused. Used for
+  multi-key lookups and deletes.
+
+**bunvex before.** A single fixed retry (`retryOnce`, shared with Postgres and MongoDB), and the prunes' DELETEs
+went through it too; INSERTs bounded by bytes only; lookups of 1000 ids and deletes of 128 rows a statement, as
+literals.
+
+**bunvex now.** MySQL's reads retry up to `MYSQL_MAX_QUERY_RETRIES` (`retryN`), with no backoff, as Convex's;
+Postgres and MongoDB keep their single retry (Convex has no knob for them). The prunes' DELETEs are not retried
+(writes, as Convex's `handle_errors`). INSERTs are filled up to `MYSQL_MAX_FILL_CHUNK_ROWS` rows as well as the
+bytes. `getVersions` and the prunes use `smartChunks` (`packages/core/src/persistence/chunks.ts`), Convex's
+algorithm with its two knobs. Nothing stored changes: only how many statements carry the same rows (a lookup of
+1000 ids is now 10 statements rather than 1).
+
 ## 4. Divergences
 
 None new. The reader matches `env_config`; the knobs whose defaults or scope differ are already decided:
@@ -279,6 +299,9 @@ DV-375 (`MAX_ECHO_BYTES` enforced), DV-414 (`MYSQL_DOCUMENT_ENCODING` default 0)
 - PR 2, backfill switch: `index-backfill-switch` (off, a push adding indexes on an existing and a new table stays
   in progress; on again, the next start completes it; the knob read as a bool). Sabotage: the worker and the
   new-table backfill left ungated fails it. The import path's wait is not tested on its own.
+- PR 2, MySQL: `write-batch` (`smartChunks`: Convex's lengths, the byte bound, every row once; `retryN`: up to
+  `retries` more runs, an error it does not retry thrown at once), the knobs in `knobs-env`. The driver's use of
+  them runs in the MySQL conformance suite (CI).
 - PR 3b: `request-timeout` (an `/api/action` call past the timeout answers 408 with no body and the action
   finishes; a body streamed past it is not cut; a slow upload answers 408; a WebSocket stays open), and
   `request-limit` (the wait for a permit does not count). Sabotage: the API port unwrapped fails the first;
