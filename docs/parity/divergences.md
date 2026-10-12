@@ -440,7 +440,12 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-None as of 2026-10-11.
+| ID | bunvex | Convex | Observable | Why | Recommended | Source |
+|---|---|---|---|---|---|---|
+| DV-470 | The deployment installs `node.externalPackages` with `bun install` (the server's Bun); a failure is `Command failed: bun install` and Bun's output | `npm install` in the Node executor; `Command failed: npm install` and npm's output | yes (an install failure's text; rarely a transitive version) | bunvex's server has Bun, not necessarily Node and npm (DV-87) | A: Bun | [STUDY-148 Q1](../study/STUDY-148-node-external-packages.md#q1--the-installer-dv-470) |
+| DV-471 | Every dependency's install scripts run (`bun pm trust --all` after the install) | npm runs them during the install | no with A (yes with B: a script outside Bun's trusted list would not run) | to match npm; Bun's default trusts a fixed list only | A: run them all | [STUDY-148 Q2](../study/STUDY-148-node-external-packages.md#q2--install-scripts-dv-471) |
+| DV-472 | External packages run in the server's realm; while a Node action runs, `process.env` reads the deployment's variables first, then the server's | packages run in the action's Node process and see only its `process.env` (the deployment's variables and a few of the process's) | yes (a package can read the server's other variables) | Bun's loader evaluates them in the server's realm, as builtins (DV-169) | C (deployment's first) | [STUDY-148 Q3](../study/STUDY-148-node-external-packages.md#q3--what-processenv-the-packages-see-dv-472) |
+| DV-473 | Extracted external packages keep their Unix modes and symlinks: a package can spawn its own binary | AdmZip writes every file 0666 (`EACCES` on spawn) | yes (only more works) | plain extraction | A: keep them | [STUDY-148 Q4](../study/STUDY-148-node-external-packages.md#q4--file-modes-after-extraction-dv-473) |
 
 DV-457 and DV-458 (STUDY-142 Q1, Q2) were decided by the owner (2026-10-11: DV-457 accepted; DV-458 keeps the spec's behaviour, to be reported upstream) and are in [Decided divergences](#decided-divergences).
 
