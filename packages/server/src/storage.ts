@@ -25,6 +25,8 @@ import { decodeId, type GenericId } from "@bunvex/values";
 import { readCanonicalUrls } from "./canonical-urls.ts";
 import { SpecBlob } from "./web-blob.ts";
 
+/** The end of Convex's message for an id that does not parse, its line break and indentation included. */
+const SHOULD_BE = "Storage ID should be an\n                    Id of '_storage' table, or a UUID string.";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Convex's STORE_FILE_AUTHORIZATION_VALIDITY. */
 export const UPLOAD_TOKEN_VALIDITY_MS = 60 * 60 * 1000;
@@ -142,14 +144,15 @@ export class FileStorage {
 
   /**
    * The row an id names: a `_storage` id, or a legacy UUID; null when there is no such file. The messages are
-   * Convex's, wrapped as ``Invalid argument `storageId` for `<method>`: …``.
+   * Convex's (crates/model/src/file_storage/mod.rs). An id that is neither fails while the syscall parses its
+   * argument (`FileStorageId::from_str`), so it is wrapped as ``Invalid argument `storageId` for `<method>`: …``,
+   * and its text keeps the line break and indentation of Convex's source. Another table's id parses, and is
+   * refused later by the model (`query_for_storage_id`), unwrapped.
    */
   async resolve(db: Tx, id: unknown, method: string): Promise<StorageRow | null> {
-    const arg = (cause: string) => new Error(`Invalid argument \`storageId\` for \`${method}\`: ${cause}`);
-    if (typeof id !== "string")
-      throw arg(
-        `Invalid storage ID: "${String(id)}". Storage ID should be an Id of '_storage' table, or a UUID string.`,
-      );
+    const unparsed = (shown: string) =>
+      new Error(`Invalid argument \`storageId\` for \`${method}\`: Invalid storage ID: "${shown}". ${SHOULD_BE}`);
+    if (typeof id !== "string") throw unparsed(String(id));
     // A `_storage` id is a `_file_storage` one: the virtual table shares its number.
     const docId = db.asSystemSync(() => db.normalizeId(FILE_STORAGE_TABLE, id));
     if (docId) return rowOf(await db.asSystem(() => db.get(FILE_STORAGE_TABLE, docId)));
@@ -158,9 +161,10 @@ export class FileStorage {
       decodeId(id);
       isOtherId = true;
     } catch {}
-    if (isOtherId) throw arg("Invalid storage ID. Storage ID cannot be an ID on any table other than '_storage'.");
+    if (isOtherId)
+      throw new Error("Invalid storage ID. Storage ID cannot be an ID on any table other than '_storage'.");
     if (UUID.test(id)) return this.byUuid(db, id.toLowerCase());
-    throw arg(`Invalid storage ID: "${id}". Storage ID should be an Id of '_storage' table, or a UUID string.`);
+    throw unparsed(id);
   }
 
   async byUuid(db: Tx, uuid: string): Promise<StorageRow | null> {
@@ -204,7 +208,9 @@ export class FileStorage {
    */
   async deleteIn(db: Tx, id: unknown, method = "storage.delete") {
     const row = await this.resolve(db, id, method);
-    if (!row) throw new Error(`storage id ${String(id)} not found`);
+    // Convex shows the parsed id (`FileStorageId`'s `Display`): a legacy UUID lower-cased.
+    if (!row)
+      throw new Error(`storage id ${typeof id === "string" && UUID.test(id) ? id.toLowerCase() : id} not found`);
     await db.asSystem(() => db.delete(FILE_STORAGE_TABLE, row._id));
   }
 

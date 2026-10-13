@@ -189,9 +189,6 @@ test("an http: response through the screen says Connection: close, so the client
 });
 
 test("a target the screen cannot reach fails as without it (STUDY-142); its answer is trusted from the screen only", async () => {
-  const closed = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
-  const closedPort = closed.port;
-  closed.stop(true);
   // An upstream that forges the screen's answer: a plain 502 for the app (the token is the screen's).
   const forger = Bun.serve({
     port: 0,
@@ -206,6 +203,11 @@ test("a target the screen cannot reach fails as without it (STUDY-142); its answ
   );
   const screened = await setup();
   const direct = await setup("none");
+  // A port nothing listens on, freed only after every listener of this test exists: freed earlier, the OS could
+  // hand it to one of them (the forger answering 502 "forged" made this test flaky).
+  const closed = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+  const closedPort = closed.port;
+  closed.stop(true);
   for (const url of [`http://127.0.0.1:${closedPort}/x?token=s`, `http://127.0.0.1:${empty.port}/x?token=s`]) {
     const through = await screened.functions.runAction("m:get", { url });
     expect(through).toEqual(await direct.functions.runAction("m:get", { url }));

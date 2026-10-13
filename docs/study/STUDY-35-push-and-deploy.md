@@ -78,7 +78,11 @@ The server then:
   `Pending` (`model/components/config.rs:313-332`).
 
 The response carries the analysis, the environment variables it read, and the `schemaChange`. The CLI then
-runs codegen from the analysis and typechecks.
+runs codegen from the analysis and typechecks. Each module's analysis is its `SerializedAnalyzedModule`
+(`functions`, `httpRoutes`, `cronSpecs`, `sourceMapped`): the crons as `[{identifier, spec}]` in identifier
+order, each spec's `udfArgs` the bytes of the argument array's JSON text as a JSON array of numbers
+(`serde_bytes`; an int64 argument is `{"$integer": …}` inside), its schedule's numbers plain (checked against
+Convex's binary: a push of crons with int64 arguments answers byte for byte the same).
 
 **2. `wait_for_schema`.** It long-polls `{ schemaChange, timeoutMs }` and answers one of:
 

@@ -43,20 +43,155 @@ const addMessages = (e: Engine, docs: Record<string, unknown>[]) =>
 const DIFFERENT_QUERY = "this cursor is from a different query";
 
 describe("paginate's options", () => {
-  test("no options, a non-number, a size below 1, a zero byte limit: Convex's messages", async () => {
+  /** What a page read with these options throws, as a function sees it: `<name>: <message>`, or "ok". */
+  const outcome = async (e: Engine, opts: unknown) => {
+    const r = await e
+      .query((db) => byN(db).paginate(opts as never))
+      .then(
+        () => "ok",
+        (x: Error) => `${x.name}: ${x.message}`,
+      );
+    return r;
+  };
+
+  test("no options, a non-number, a negative size, a zero byte limit: Convex's messages", async () => {
     const e = await engine(3);
-    await expect(e.query((db) => byN(db).paginate(undefined as never))).rejects.toThrow(
-      "`options.numItems` must be a positive number. Received `undefined`.",
+    expect(await outcome(e, undefined)).toBe("TypeError: Must provide arg 1 `options` to `paginate`");
+    expect(await outcome(e, null)).toBe("Error: `options.numItems` must be a positive number. Received `undefined`.");
+    expect(await outcome(e, { numItems: "5", cursor: null })).toBe(
+      "Error: `options.numItems` must be a positive number. Received `5`.",
     );
-    await expect(e.query((db) => byN(db).paginate({ numItems: "5" as never, cursor: null }))).rejects.toThrow(
-      "`options.numItems` must be a positive number. Received `5`.",
+    expect(await outcome(e, { numItems: -1, cursor: null })).toBe(
+      "Error: `options.numItems` must be a positive number. Received `-1`.",
     );
-    await expect(e.query((db) => byN(db).paginate({ numItems: 0.5, cursor: null }))).rejects.toThrow(
-      "Must request at least 1 document while paginating",
+    expect(await outcome(e, { numItems: 2, cursor: null, maximumBytesRead: 0 })).toBe(
+      "Error: maximumRowsRead and maximumBytesRead must be greater than 0",
     );
-    await expect(e.query((db) => byN(db).paginate({ numItems: 2, cursor: null, maximumBytesRead: 0 }))).rejects.toThrow(
-      "maximumRowsRead and maximumBytesRead must be greater than 0",
-    );
+  });
+
+  // Each case as Convex's local backend answered it (its client's checks, then the `queryPage` syscall's
+  // arguments read by serde, then its own checks), from a query that catches the error.
+  const NAN = Number.NaN;
+  const INF = Number.POSITIVE_INFINITY;
+  const parse = "Error: Failed to parse cursor";
+  const args = (why: string) => `Error: Invalid arguments for \`queryPage\`: ${why}`;
+  const fp = (x: string) => args(`invalid type: floating point \`${x}\`, expected usize`);
+  const cases: [string, Record<string, unknown>, string][] = [
+    ["zero items", { numItems: 0, cursor: null }, "Error: Must request at least 1 document while paginating"],
+    ["negative zero", { numItems: -0, cursor: null }, "Error: Must request at least 1 document while paginating"],
+    ["a fraction below 1", { numItems: 0.5, cursor: null }, fp("0.5")],
+    ["a fraction", { numItems: 2.5, cursor: null }, fp("2.5")],
+    ["a tiny fraction", { numItems: 1e-7, cursor: null }, fp("1e-7")],
+    ["a fraction past the cap", { numItems: 32000.5, cursor: null }, fp("32000.5")],
+    ["NaN", { numItems: NAN, cursor: null }, args("invalid type: null, expected usize")],
+    ["Infinity", { numItems: INF, cursor: null }, args("invalid type: null, expected usize")],
+    [
+      "-Infinity",
+      { numItems: -INF, cursor: null },
+      "Error: `options.numItems` must be a positive number. Received `-Infinity`.",
+    ],
+    ["1e20", { numItems: 1e20, cursor: null }, fp("1e+20")],
+    ["2^64", { numItems: 2 ** 64, cursor: null }, fp("1.8446744073709552e+19")],
+    ["2^63", { numItems: 2 ** 63, cursor: null }, "Error: Requested too many items: 9223372036854776000"],
+    ["the cap", { numItems: 32000, cursor: null }, "ok"],
+    ["past the cap", { numItems: 32001, cursor: null }, "Error: Requested too many items: 32001"],
+    ["fractional rows", { numItems: 1, cursor: null, maximumRowsRead: 0.5 }, fp("0.5")],
+    ["fractional bytes", { numItems: 1, cursor: null, maximumBytesRead: 2.5 }, fp("2.5")],
+    [
+      "negative rows",
+      { numItems: 1, cursor: null, maximumRowsRead: -1 },
+      args("invalid value: integer `-1`, expected usize"),
+    ],
+    ["rows -2^63", { numItems: 1, cursor: null, maximumRowsRead: -(2 ** 63) }, fp("-9.223372036854776e+18")],
+    ["rows 1e-6", { numItems: 1, cursor: null, maximumRowsRead: 1e-6 }, fp("1e-6")],
+    ["rows 1.5e-5", { numItems: 1, cursor: null, maximumRowsRead: 1.5e-5 }, fp("0.000015")],
+    [
+      "rows 123456789012345.6",
+      { numItems: 1, cursor: null, maximumRowsRead: 123456789012345.6 },
+      fp("123456789012345.6"),
+    ],
+    [
+      "string rows",
+      { numItems: 1, cursor: null, maximumRowsRead: "x" },
+      args('invalid type: string "x", expected usize'),
+    ],
+    [
+      "boolean rows",
+      { numItems: 1, cursor: null, maximumRowsRead: true },
+      args("invalid type: boolean `true`, expected usize"),
+    ],
+    ["object rows", { numItems: 1, cursor: null, maximumRowsRead: {} }, args("invalid type: map, expected usize")],
+    ["array rows", { numItems: 1, cursor: null, maximumRowsRead: [1] }, args("invalid type: sequence, expected usize")],
+    ["null rows: no limit", { numItems: 1, cursor: null, maximumRowsRead: null }, "ok"],
+    ["null bytes: no limit", { numItems: 1, cursor: null, maximumBytesRead: null }, "ok"],
+    ["NaN rows: no limit", { numItems: 1, cursor: null, maximumRowsRead: NAN }, "ok"],
+    ["Infinity bytes: no limit", { numItems: 1, cursor: null, maximumBytesRead: INF }, "ok"],
+    [
+      "-0 rows",
+      { numItems: 1, cursor: null, maximumRowsRead: -0 },
+      "Error: maximumRowsRead and maximumBytesRead must be greater than 0",
+    ],
+    ["a BigInt", { numItems: 1, cursor: null, maximumRowsRead: 5n }, "Error: Do not know how to serialize a BigInt"],
+    ["an empty cursor", { numItems: 1, cursor: "" }, parse],
+    ["an empty end cursor", { numItems: 1, cursor: null, endCursor: "" }, parse],
+    ["no cursor", { numItems: 1 }, "ok"],
+    ["a number cursor", { numItems: 1, cursor: 5 }, args("invalid type: integer `5`, expected a string")],
+    ["a negative cursor", { numItems: 1, cursor: -3 }, args("invalid type: integer `-3`, expected a string")],
+    ["a float cursor", { numItems: 1, cursor: 1.5 }, args("invalid type: floating point `1.5`, expected a string")],
+    ["a boolean cursor", { numItems: 1, cursor: true }, args("invalid type: boolean `true`, expected a string")],
+    ["an object cursor", { numItems: 1, cursor: {} }, args("invalid type: map, expected a string")],
+    ["an array cursor", { numItems: 1, cursor: [] }, args("invalid type: sequence, expected a string")],
+    [
+      "a number end cursor",
+      { numItems: 1, cursor: null, endCursor: 5 },
+      args("invalid type: integer `5`, expected a string"),
+    ],
+    // The client writes cursor, endCursor, pageSize, maximumRowsRead, maximumBytesRead: the first misfit wins,
+    // and every misfit comes before the syscall's own checks.
+    ["cursor before size", { numItems: 0.5, cursor: 5 }, args("invalid type: integer `5`, expected a string")],
+    [
+      "end cursor before size",
+      { numItems: 0.5, cursor: null, endCursor: 5 },
+      args("invalid type: integer `5`, expected a string"),
+    ],
+    ["size before rows", { numItems: 2.5, cursor: null, maximumRowsRead: 0.5 }, fp("2.5")],
+    [
+      "rows before bytes",
+      { maximumBytesRead: "b", maximumRowsRead: "r", numItems: 1, cursor: null },
+      args('invalid type: string "r", expected usize'),
+    ],
+    ["a misfit before zero items", { numItems: 0, cursor: null, maximumRowsRead: 0.5 }, fp("0.5")],
+    [
+      "a misfit before a zero limit",
+      { numItems: 1, cursor: null, maximumRowsRead: 0.5, maximumBytesRead: 0 },
+      fp("0.5"),
+    ],
+    ["a misfit before too many", { numItems: 40000, cursor: null, maximumRowsRead: 0.5 }, fp("0.5")],
+    [
+      "zero items before the cursor",
+      { numItems: 0, cursor: "zz" },
+      "Error: Must request at least 1 document while paginating",
+    ],
+    [
+      "a zero limit before the cursor",
+      { numItems: 1, cursor: "zz", maximumRowsRead: 0 },
+      "Error: maximumRowsRead and maximumBytesRead must be greater than 0",
+    ],
+  ];
+  test.each(cases)("%s", async (_name, opts, expected) => {
+    const e = await engine(3);
+    expect(await outcome(e, opts)).toBe(expected);
+  });
+
+  test("a negative size is refused before the query is taken: the query still pages", async () => {
+    const e = await engine(3);
+    const r = await e.query(async (db) => {
+      const q = byN(db);
+      const refused = await q.paginate({ numItems: -1, cursor: null }).catch((x: Error) => x.message);
+      const p = await q.paginate({ numItems: 2, cursor: null });
+      return [refused, ns(p.page)];
+    });
+    expect(r).toEqual(["`options.numItems` must be a positive number. Received `-1`.", [0, 1]]);
   });
 
   test("a table that does not exist: one empty page, done", async () => {

@@ -44,6 +44,12 @@ backend is always started with `--disable-beacon`.
 - `test/dashboard-data.test.ts` (STUDY-149 PR 2): the dashboard's Data reads on both, as an admin —
   `_system/frontend/getTableMapping`, `paginatedTableDocuments` (field, type and index filters, refusals,
   cursors), `indexes`, `tableSize`, `listById`, `getById` and `GET /api/get_indexes`. Local only.
+- `test/storage-ids.test.ts`: a storage id's errors from every storage method in a query, a mutation and an
+  action (the app of `storage-app/`): another table's id, ids that do not parse, UUIDs. Local only.
+- `test/paginate-args.test.ts`: `paginate`'s options (the client's checks, the `queryPage` syscall's serde
+  messages in their field order, its own checks), a query's `limit` that is not a usize and a cursor that does
+  not parse, from the app of `paginate-app/`; then the system functions' own argument errors, with an admin
+  key. Local only.
 - `test/generated.test.ts`: `DIFF_RUNS` generated programs (25 by default), both backends started once and
   reset before each program. `DIFF_SEED` replays a run. A difference is shrunk, written to
   `.cache/failures/last.json` (the program and the differences, ready to become a fixed program) and fails
