@@ -1,8 +1,8 @@
 # STUDY-151 — A batch of small parity items
 
-- **Status:** decided (owner, 2026-10-12); built one PR per item: §1 system table messages (#608), §2 `deploy -y`
+- **Status:** implemented (owner's decisions, 2026-10-12), one PR per item: §1 system table messages (#608), §2 `deploy -y`
   (#609), §3 the HTTP API's methods (#611), §4 `getServiceToken` /
-  `getServiceUrl` (#614), §5 `setDefaultWebSocketConstructor` (this PR), §6 to come
+  `getServiceUrl` (#614), §5 `setDefaultWebSocketConstructor` (#615), §6 `_audit_log_config` *n/a* (this PR)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend
   (`npm-packages/convex/src/server/impl/database_impl.ts`, `crates/isolate/src/environment/udf/async_syscall.rs`,
   `npm-packages/convex/src/cli/deploy.ts`, `cli/lib/command.ts`, `crates/local_backend/src/public_api.rs`,
