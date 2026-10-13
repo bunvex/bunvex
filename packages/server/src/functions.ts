@@ -40,6 +40,7 @@ import {
 import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
 import {
   BunvexError,
+  checkJsonValue,
   checkValue,
   copyValue,
   displayValue,
@@ -199,10 +200,19 @@ const registryKey = (name: string) => {
 const unavailableToAction = (e: unknown) => (e instanceof IndexesUnavailableError ? new Error(e.message) : e);
 
 /**
- * An action's `runQuery` / `runMutation` / `runAction` whose arguments hold a lone surrogate (STUDY-135): the
- * `actions/*` text (`actions_impl.ts`: the function's address, then the arguments) fails in serde.
+ * An action's `runQuery` / `runMutation` / `runAction` arguments, checked at the call as Convex's `syscallArgs`
+ * (`actions_impl.ts`) serializes them in the app's code before the syscall: a value that is not a supported one
+ * throws there, synchronously, the app's frame on its stack (not as the callee's error); then arguments holding
+ * a lone surrogate (STUDY-135): the `actions/*` text (the function's address, then the arguments) fails in serde.
  */
-function refuseLoneSurrogatesInActionCall(ref: unknown, args: unknown) {
+function checkActionCallArgs(ref: unknown, args: unknown) {
+  try {
+    checkJsonValue((args ?? {}) as Value);
+  } catch (e) {
+    // Made again here, so its stack (at most `Error.stackTraceLimit` frames) reaches the app's call, past the
+    // serializer's recursion.
+    throw e instanceof Error && e.constructor === Error ? new Error(e.message) : e;
+  }
   refuseLoneSurrogates(args, () =>
     JSON.stringify({ ...functionAddress(ref), args: toJsonValue((args ?? {}) as Value) }),
   );
@@ -2315,7 +2325,7 @@ export class Functions {
       // Once the action timed out, nothing it calls starts (STUDY-77).
       runQuery: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
-        refuseLoneSurrogatesInActionCall(n, a);
+        checkActionCallArgs(n, a);
         return acrossCall(
           await asActionCaller(
             this.runQuery(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
@@ -2325,7 +2335,7 @@ export class Functions {
       },
       runMutation: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
-        refuseLoneSurrogatesInActionCall(n, a);
+        checkActionCallArgs(n, a);
         return acrossCall(
           await asActionCaller(
             this.runMutation(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
@@ -2335,7 +2345,7 @@ export class Functions {
       },
       runAction: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
-        refuseLoneSurrogatesInActionCall(n, a);
+        checkActionCallArgs(n, a);
         return acrossCall(
           await asActionCaller(
             this.runAction(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), caller, {

@@ -452,7 +452,9 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-None as of 2026-10-12.
+| ID | bunvex | Convex | Observable | Why | Status | Source |
+|---|---|---|---|---|---|---|
+| DV-501 | A value that is not a supported value (returned, written, passed to a nested call) fails with no frame but the app's own call site, where its code made the call (none for a returned value) | the frames of its `convex` library, bundled with the app (`../node_modules/convex/src/values/value.ts` `convexToJson`, `server/impl/database_impl.ts`, `actions_impl.ts`), then the app's call site | yes (the error's frames) | bunvex's library runs in the server, not in the app's bundle: it has no frames of the app's to show; showing the server's would expose its paths. Inventing library-like frames is possible but shows nothing true | pending (owner); recommended: accept | [STUDY-95](../study/STUDY-95-error-stacks.md#4-divergences) |
 
 DV-480 (STUDY-149 PR 5) was decided by the owner (2026-10-12: match Convex), built, and is in [Resolved to match Convex](#resolved-to-match-convex).
 
