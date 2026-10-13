@@ -108,7 +108,7 @@ library is the server's, not the app's bundle: before, the client saw the server
   (../bunvex/values.ts:N:N)`, synchronous (no `async`, not a nested call's error); an action that catches it
   sees the bare message, as Convex's.
 
-What still differs: no frame of the library's — bunvex's has none in the app (DV-501, pending owner decision).
+What still differs: no frame of the library's — bunvex's has none in the app (DV-501, decided by the owner: accept).
 
 Gap, for later: a function reading `error.stack` itself (or logging it as a string) still sees the raw frames,
 `bunvex:/<version>/<module>.js`, where Convex's `prepareStackTrace` maps those too.
