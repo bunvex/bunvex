@@ -915,6 +915,14 @@ export class Tx {
    * Check an id argument as Convex does: it must decode, and if it names a known table that table must be
    * `table`. Returns false when it names no known table (Convex's `db.get` then returns null).
    */
+  /** The table numbered `n`: in the catalog, or created by this transaction (its ids work at once, as Convex's). */
+  private tableByNumber(n: number): TableDef | undefined {
+    const t = this.catalog.byNumber(n);
+    if (t) return t;
+    for (const { def } of this.createdTables.values()) if (def.number === n) return def;
+    return undefined;
+  }
+
   private checkId(table: string, id: string, method: string): boolean {
     let n: number;
     try {
@@ -922,7 +930,7 @@ export class Tx {
     } catch (e) {
       throw new Error(`Invalid argument \`id\` for \`${method}\`: ${(e as Error).message}`);
     }
-    const actual = this.catalog.byNumber(n);
+    const actual = this.tableByNumber(n);
     if (!actual) return false;
     if (actual.name !== table)
       throw new Error(
@@ -955,7 +963,7 @@ export class Tx {
     } catch (e) {
       throw new Error(`Invalid argument \`id\` for \`${method}\`: ${(e as Error).message}`);
     }
-    const name = this.catalog.byNumber(n)?.name;
+    const name = this.tableByNumber(n)?.name;
     if (name?.startsWith("_") && !this.systemAccess) return undefined;
     return name;
   }
