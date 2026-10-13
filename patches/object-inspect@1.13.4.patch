@@ -1,0 +1,34 @@
+diff --git a/index.js b/index.js
+index a4b2d4cd850adb5cda64eb9e5692457a73c0947e..015872339785776e8180d54d900b496458c06f81 100644
+--- a/index.js
++++ b/index.js
+@@ -263,8 +263,9 @@ module.exports = function inspect_(obj, options, depth, seen) {
+     }
+     if (!isDate(obj) && !isRegExp(obj)) {
+         var ys = arrObjKeys(obj, inspect);
+-        var isPlainObject = gPO ? gPO(obj) === Object.prototype : obj instanceof Object || obj.constructor === Object;
+-        var protoTag = obj instanceof Object ? '' : 'null prototype';
++        // bunvex: realm-independent, for objects from a vm context (another realm's Object.prototype).
++        var isPlainObject = gPO ? isObjectPrototype(gPO(obj)) : obj instanceof Object || obj.constructor === Object;
++        var protoTag = (gPO ? inheritsObjectPrototype(obj) : obj instanceof Object) ? '' : 'null prototype';
+         var stringTag = !isPlainObject && toStringTag && Object(obj) === obj && toStringTag in obj ? $slice.call(toStr(obj), 8, -1) : protoTag ? 'Object' : '';
+         var constructorTag = isPlainObject || typeof obj.constructor !== 'function' ? '' : obj.constructor.name ? obj.constructor.name + ' ' : '';
+         var tag = constructorTag + (stringTag || protoTag ? '[' + $join.call($concat.call([], stringTag || [], protoTag || []), ': ') + '] ' : '');
+@@ -327,6 +328,17 @@ function isBigInt(obj) {
+     return false;
+ }
+ 
++// bunvex: some realm's Object.prototype: the root of its chain, and its constructor's prototype, named Object.
++function isObjectPrototype(p) {
++    if (p === null || typeof p !== 'object' || gPO(p) !== null) { return false; }
++    var c = Object.prototype.hasOwnProperty.call(p, 'constructor') ? p.constructor : undefined;
++    return typeof c === 'function' && c.prototype === p && c.name === 'Object';
++}
++function inheritsObjectPrototype(o) {
++    for (var p = gPO(o); p !== null; p = gPO(p)) { if (isObjectPrototype(p)) { return true; } }
++    return false;
++}
++
+ var hasOwn = Object.prototype.hasOwnProperty || function (key) { return key in this; };
+ function has(obj, key) {
+     return hasOwn.call(obj, key);
