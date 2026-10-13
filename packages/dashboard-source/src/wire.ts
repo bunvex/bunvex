@@ -2,26 +2,13 @@
 // as ArrayBuffer); the contract's values are the JSON encoding Convex's `convexToJson` writes (`{$integer}`,
 // `{$bytes}`), and its times are wall-clock milliseconds where the system tables keep nanoseconds.
 import type { Json, Value } from "@bunvex/dashboard/data-source";
+import { type Value as JsValue, toJsonValue } from "@bunvex/values";
 
-const base64 = (bytes: Uint8Array) => {
-  let s = "";
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s);
-};
-
-/** A decoded value in the contract's encoding: int64 as its 8 little-endian bytes, bytes in base64. */
-export function encodeValue(v: unknown): Value {
-  if (typeof v === "bigint") {
-    const bytes = new Uint8Array(8);
-    new DataView(bytes.buffer).setBigInt64(0, v, true);
-    return { $integer: base64(bytes) };
-  }
-  if (v instanceof ArrayBuffer) return { $bytes: base64(new Uint8Array(v)) };
-  if (Array.isArray(v)) return v.map(encodeValue);
-  if (v !== null && typeof v === "object")
-    return Object.fromEntries(Object.entries(v).flatMap(([k, x]) => (x === undefined ? [] : [[k, encodeValue(x)]])));
-  return v as Value;
-}
+/**
+ * A decoded value in the contract's encoding (int64 as its 8 little-endian bytes, bytes in base64): the values
+ * package's `toJsonValue`, as the tables' documents (`tables.ts`).
+ */
+export const encodeValue = (v: unknown): Value => toJsonValue(v as JsValue) as unknown as Value;
 
 /** `encodeValue`, typed as the JSON an audit event's metadata is. */
 export const encodeJson = (v: unknown) => encodeValue(v) as { [key: string]: Json };

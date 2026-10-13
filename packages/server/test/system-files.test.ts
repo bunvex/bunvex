@@ -96,10 +96,13 @@ describe("_system/frontend/fileStorageV2", () => {
 
   test("fileMetadata checks its arguments as Convex's validators", async () => {
     const { query } = await setup();
-    expect(await msg(query("fileMetadata", {}))).toStartWith("ArgumentValidationError:");
+    // Thrown inside the function, as Convex's system functions check their own (a plain `Error`).
+    expect(await msg(query("fileMetadata", {}))).toStartWith("Object is missing the required field `paginationOpts`.");
     expect(
       await msg(query("fileMetadata", { paginationOpts: { numItems: 1, cursor: null }, filters: { order: "up" } })),
-    ).toStartWith("ArgumentValidationError:");
+    ).toBe(
+      'Value does not match validator.\nPath: .filters.order\nValue: "up"\nValidator: v.union(v.literal("asc"), v.literal("desc"))\n',
+    );
   });
 
   test("getFile: the document with its url; null for any id not of _storage; a scheduled function's fails", async () => {
@@ -129,7 +132,9 @@ describe("_system/frontend/fileStorageV2", () => {
     expect(await query("getFile", { storageId: id })).toBeNull();
     expect((await fetch(url)).status).toBe(404);
     expect(await msg(mutate("deleteFile", { storageId: id }))).toContain("not found");
-    expect(await msg(mutate("deleteFile", { storageId: "no-such-file" }))).toStartWith("ArgumentValidationError:");
+    expect(await msg(mutate("deleteFile", { storageId: "no-such-file" }))).toBe(
+      'Value does not match validator.\nPath: .storageId\nValue: "no-such-file"\nValidator: v.id("_storage")\n',
+    );
   });
 
   test("deleteFiles is one transaction: one bad id deletes none", async () => {
@@ -140,8 +145,8 @@ describe("_system/frontend/fileStorageV2", () => {
     await mutate("deleteFile", { storageId: c });
     expect(await msg(mutate("deleteFiles", { storageIds: [a, b, c] }))).toContain("not found");
     expect(await query("numFiles")).toBe(2);
-    expect(await msg(mutate("deleteFiles", { storageIds: [a, "no-such-file"] }))).toStartWith(
-      "ArgumentValidationError:",
+    expect(await msg(mutate("deleteFiles", { storageIds: [a, "no-such-file"] }))).toBe(
+      'Value does not match validator.\nPath: .storageIds[1]\nValue: "no-such-file"\nValidator: v.id("_storage")\n',
     );
     expect(await query("numFiles")).toBe(2);
     await mutate("deleteFiles", { storageIds: [a, b] });

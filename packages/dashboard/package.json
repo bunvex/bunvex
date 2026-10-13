@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./contract": "./src/contract.ts",
     "./data-source": "./src/data-source.ts",
+    "./filters": "./src/filters.ts",
     "./mock": "./src/mock/index.ts"
   },
   "scripts": {

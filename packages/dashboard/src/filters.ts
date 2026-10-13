@@ -124,29 +124,34 @@ export function fieldValue(doc: Document, field: string): Value | undefined {
 
 /** Whether a document passes one (enabled) field filter. */
 export function matchesClause(doc: Document, c: FieldFilter): boolean {
+  // Convex's rules (paginatedTableDocuments, DV-479): an unset field is below every value, so it passes
+  // `lt` / `lte` and `neq`, never `eq` / `gt` / `gte`; `anyOf` of nothing filters nothing.
   const v = fieldValue(doc, c.field);
   const cmp = () => compareValues(v, c.value as Value);
   switch (c.op) {
     case "eq":
-      return v !== undefined && cmp() === 0;
+      return cmp() === 0;
     case "neq":
-      return v === undefined || cmp() !== 0;
+      return cmp() !== 0;
     case "gt":
-      return v !== undefined && cmp() > 0;
+      return cmp() > 0;
     case "gte":
-      return v !== undefined && cmp() >= 0;
+      return cmp() >= 0;
     case "lt":
-      return v !== undefined && cmp() < 0;
+      return cmp() < 0;
     case "lte":
-      return v !== undefined && cmp() <= 0;
-    case "anyOf":
-      return v !== undefined && (c.value as Value[]).some((x) => compareValues(v, x) === 0);
+      return cmp() <= 0;
+    case "anyOf": {
+      const values = c.value as Value[];
+      return values.length === 0 || values.some((x) => compareValues(v, x) === 0);
+    }
     case "noneOf":
-      return v === undefined || !(c.value as Value[]).some((x) => compareValues(v, x) === 0);
+      return !(c.value as Value[]).some((x) => compareValues(v, x) === 0);
+    // As Convex's `applyTypeFilters`: the document's own field by that name, no dotted path.
     case "type":
-      return valueType(v) === c.value;
+      return valueType((doc as Record<string, Value | undefined>)[c.field]) === c.value;
     case "notype":
-      return valueType(v) !== c.value;
+      return valueType((doc as Record<string, Value | undefined>)[c.field]) !== c.value;
   }
 }
 

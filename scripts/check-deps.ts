@@ -68,7 +68,8 @@ const ALLOWED: Record<string, string[]> = {
   dashboard: ["ui"],
   // STUDY-149 (owner, 2026-10-12, Q7): the dashboard's source for a bunvex deployment, over the sync client and
   // the contract's types; the dashboard package itself stays on `ui` alone, so the screens serve another host too.
-  "dashboard-source": ["client", "dashboard"],
+  // `values` (PR 2): ids and value encodings, as Convex's dashboard imports `convex/values`.
+  "dashboard-source": ["client", "values", "dashboard"],
   "apps/dashboard": ["dashboard", "dashboard-source", "ui"],
   // SITE-01: the website renders content only; it never talks to a deployment.
   "apps/site": ["ui"],

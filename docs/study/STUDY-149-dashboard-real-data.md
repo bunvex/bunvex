@@ -504,6 +504,185 @@ is not in the app's bundle until PR 6.
 the `"tables"` and `"documents"` areas of the live suite, `AdminSync.watch` / `query` for the new system
 functions (`getTableMapping`, `paginatedTableDocuments`, …), and `Metrics` for `tableRate`.
 
+### PR 2, as built
+
+The Data screen's reads. In the citations, `fe/` is `npm-packages/system-udfs/convex/_system/frontend/` and
+`sst` is `npm-packages/system-udfs/convex/_system/secretSystemTables.ts`.
+
+**Server** (`packages/server/src/data-system-functions.ts`, spread into `SYSTEM_QUERIES` by one line; admin only,
+ViewData, `componentId` accepted and ignored as the other system functions do, DV-55). Each was compared with
+Convex's local backend binary for the same documents (Tests, below).
+
+- `getTableMapping` (`fe/getTableMapping.ts:9-24`; the op is `crates/isolate/src/ops/database.rs:8-11`, which
+  takes the table mapping dependency, `crates/database/src/transaction.rs:260-263`): every active table's number
+  and name, keeping the user tables and `_scheduled_jobs` and `_file_storage`, the first 1 000 by number. It reads
+  `_tables`, so a subscription to it gets a table a push or a write creates.
+- `paginatedTableDocuments` (`fe/paginatedTableDocuments.ts:40-209`, `fe/lib/filters.ts`): `filters` is base64
+  (standard or URL-safe, padded or not, as js-base64's `decode`) of Convex's `FilterExpression`. As Convex's:
+  - the expression's shape is checked (`FilterExpressionSchema`, `filters.ts:131-174`), then each clause's value
+    (`findErrorsInFilters`, `:258-276`); a value that is not a JSON value answers the page `[{filter: i, error:
+    "Invalid value: …."}]`, `isDone`, cursor `""`;
+  - an index filter is checked against the **active schema's** indexes plus `by_creation_time` and `by_id`
+    (`getAvailableIndexes`, `:577-594`; a staged index is not there), with Convex's messages and `filter: -1`
+    (`validateIndexFilter`, `:397-451`; `validateSearchIndexFilter`, `:462-518`); a search index runs as
+    `withSearchIndex` with its filter fields;
+  - one `_id eq` clause and no index filter is a `db.get` (`paginatedTableDocuments.ts:153-185`);
+  - the field clauses are one `filter` (`applyBuiltinFilters`, `:218-270`), the type clauses are applied to the
+    page read (`applyTypeFilters`, `filters.ts:226-247`), so a page can hold fewer than `numItems`;
+  - Convex's quirks are kept: `anyOf` / `noneOf` compare their elements as sent, not decoded, so an encoded int64
+    or bytes in the list fails with Convex's "Field name $integer starts with a '$', which is reserved."
+    (`:238-256`); `anyOf` of nothing filters nothing; a type clause reads a top-level field only
+    (`doc[filter.field]`, `filters.ts:236`); an unset field is below every value, so `lt` / `lte` match it;
+  - the undefined placeholder is `__BUNVEX_PLACEHOLDER_undefined_…` (`fe/lib/values.ts:3-4` renamed, rule 5:
+    **DV-478**).
+- `indexes` (`fe/indexes.ts:7-190`): the table's `_tables` row (active, root namespace), its `_index` rows but
+  `by_id` and `by_creation_time`, each `{name, staged, fields, backfill: {state[, stats]}}` with the stored
+  fields (`_creationTime` last), a search index's `{searchField, filterFields}`, a vector index's
+  `{vectorField, filterFields, dimensions}`, and a running backfill's `_index_backfills` counts. bunvex stores
+  Convex's `_index` rows (STUDY-134), so the reading is Convex's.
+- `listById` and `getById` (`fe/listById.ts:6-47`, `fe/getById.ts:5-17`): as `queryGeneric`'s masks (`sst:70-91`,
+  `:179-205`), a system table is reached only through its public virtual table (`_file_storage` → `_storage`,
+  `_scheduled_jobs` → `_scheduled_functions`), any other id or table is `null`; `getById("nope")` is `null`.
+- `GET /api/get_indexes?component_id=` (`crates/local_backend/src/dashboard.rs:216-233`, the response
+  `schema.rs:82-185`, `IndexModel::get_application_indexes`, `crates/database/src/bootstrap_model/index.rs:994-1024`):
+  every declared index of the user tables, `{table, name, fields, backfill: {state: "in_progress" | "done"},
+  staged}`, sorted by table and name; ViewData; documented in the dashboard OpenAPI document, so DV-381 now
+  leaves out two routes (`deployment_info`, `delete_component`).
+
+**Source** (`packages/dashboard-source/src/tables.ts`, wired in `server-source.ts`):
+
+- The table mapping stays **subscribed** for the source's life (Convex's sidebar keeps `getTableMapping`
+  subscribed, `dc/lib/useTableMetadata.tsx:26-40`); the table list is its names without `_` (`lib/utils.ts:28`),
+  sorted. An unknown table is `not_found` for `listDocuments`, `getDocument`, `watchTable`, `inferDocumentType`
+  and `tableRate` (the server answers an empty page and zeros for any name).
+- `listTables`: per table `indexes` and `tableSize`, and `getSchemas` for `declared`. The declared indexes are
+  listed by name, with their declared fields (the stored `_creationTime` dropped, as the schema's own); a backfill
+  is `backfilling` with its counts, `backfilled` is not yet queryable; search, vector and staged indexes are not
+  listed (`IndexInfo` has no place for them; Convex's index list shows them — a gap for the contract).
+- `listDocuments`: the contract's expression is checked with the dashboard's own `validateFilter` (exported as
+  `@bunvex/dashboard/filters`), then translated: the enabled index equalities and the range as one
+  `indexRange` clause; the type `int64` is Convex's `bigint`; the clauses otherwise pass as they are, as the
+  contract's rules are now Convex's (below, DV-479). A refused clause is named by the contract clause it came from
+  (`filter: -1` is the index). A cursor the server refuses, or a malformed expression, is `invalid_request`.
+  Documents come with int64 and bytes in their JSON encodings (`toJsonValue`, so `@bunvex/dashboard-source` may
+  now import `@bunvex/values`, as Convex's dashboard imports `convex/values`; `check-deps` and UI-01 §34.3).
+- `getDocument`: `listById` with the table; `tableOfId`: the id's table number in the mapping
+  (`getReferencedTableName`, `dc/lib/utils.ts:61-81`), user tables only (a system table's id is not a page of
+  the Database screen).
+- `inferDocumentType`: the table's `/api/shapes2` shape as a document type, as Convex's `displaySchemaFromShape`
+  (`dc/lib/format.ts:56-150`): system fields dropped at the root, `Never` an empty table (null) or, nested,
+  `v.any()`. One answer serves every call for 2 s (SWR's default deduping, the hook `dc/lib/deploymentApi.ts:48-77`),
+  and the dashboard's query asks again every 60 s while shown (`refetchInterval`, Convex's `refreshInterval:
+  60000`, `:61`; `packages/dashboard/src/data/queries.ts`).
+- `watchTable` (STUDY-12 D3, now over real subscriptions): while a table is watched, its `tableSize` and every
+  page the source served for it stay subscribed — Convex's grid keeps its loaded pages subscribed
+  (`useQueryFilteredTable.ts:36-55`) and the size (`DataContent.tsx:96`). A new result of any of them is one
+  change, coalesced per transition, with the size as `count`. A first page starts a generation; pages of the two
+  latest generations of the latest filter are kept (at most 200), so the pages a refetch asks again keep their
+  subscription; the documents read by id (the open one) are kept too (the newest 50). A write to a document no
+  page or panel holds is not reported, as on Convex.
+- `tableRate`: `/api/app_metrics/table_rate?name=&metric=&window=`, per second like `udf_rate`, so multiplied by
+  the bucket's width (Convex's `timeMultiplier`, `dc/features/data/components/TableMetrics.tsx:21-44`).
+
+**Tests.**
+
+- **Oracle** (`packages/differential/test/dashboard-data.test.ts`): Convex's pinned local backend and bunvex's,
+  the same documents (mixed types, a missing field, int64, bytes, a nested object), every call compared (ids by
+  first appearance, `_creationTime` by rank, cursors opaque; lists in id order sorted, as ids are random):
+  `getTableMapping`, `tableSize`, `indexes` (six argument shapes), `get_indexes` (and without a key), 37 field
+  filters, 19 index filters (search-index misuse, every refusal), refused values, the shape's refusals (both
+  fail), the cursors (next page, another query's, not a cursor, `numItems: 0`), `listById` (system and unknown
+  tables) and `getById`. Three differences of every function, not of these, are rewritten in the test and left
+  to a follow-up (below).
+- **Server** (`packages/server/test/data-system-functions.test.ts`): the mapping's two system tables; staged,
+  search and vector indexes' shapes; the search-index path (filter fields, disabled ones, field filters after,
+  each refusal); the placeholder (Convex's is an ordinary string here); base64 forms.
+- **Source** (`packages/dashboard-source/test/tables.test.ts`): the translation, the index listing, the shapes.
+- **Live** (`packages/sync-e2e/dashboard/server-source.test.ts`): the contract suite's `tables` and `documents`
+  areas now run (with deployment, logs and state; the suite's field filters now include `lt` / `lte` / `gte` on a
+  field some documents lack, an empty `anyOf` and a type clause on a dotted name); plus the table list's sizes,
+  indexes and `declared`; int64 and bytes; the type filter; an unset field and `lt`; `anyOf` of nothing; a type
+  clause on a dotted name; a refused value's clause; `watchTable`
+  (an unloaded document's write not reported, a loaded one's and the open document's reported, an insert's
+  count, nothing after the stop, its subscriptions ended); `tableRate`; `inferDocumentType` and its 2 s sharing;
+  `tableOfId`; the table list live across a push that adds a table.
+
+**Sabotage** (each restored after, `git diff` clean; every one turned a test red):
+
+| Sabotage | Failing test |
+|---|---|
+| `getTableMapping` drops `_scheduled_jobs` and `_file_storage` | oracle; server |
+| `indexes` lists `by_id` and `by_creation_time` | oracle |
+| `get_indexes` says `ready` for `done` | oracle |
+| `anyOf` decodes its elements | oracle |
+| type clauses follow dotted paths | oracle |
+| no `_id` shortcut | oracle |
+| `getById` without the public-system mask | oracle |
+| the placeholder not read as `undefined` | oracle |
+| the source reads the mapping once (not live) | live (a push's new table) |
+| `int64` not mapped to `bigint` | unit; live |
+| a refused clause named by its server position | live |
+| (after DV-479) the contract's `lt` excludes an unset field | dashboard unit; live contract |
+| (after DV-479) the contract's empty `anyOf` matches nothing | dashboard unit; live contract |
+| (after DV-479) the contract's type clause follows dots | dashboard unit; live contract |
+| (after DV-479) the source adds an "is set" clause after `lt` | live; live contract |
+| (after DV-479) the source answers an empty page for an empty `anyOf` | live; live contract |
+| `watchTable` does not subscribe the loaded pages | live |
+| a size change not reported | live |
+| `watchTable`'s stop leaves the size subscribed | live (subscriptions count) |
+| `watchTable` on an unknown table not refused | contract |
+| a cursor error left `unavailable` | contract |
+| shapes fetched on every call | live |
+| the document type keeps `_id` / `_creationTime` | unit; contract; live |
+| declared indexes keep `_creationTime` | unit; live |
+| `tableRate` answers zeros for an unknown table | live |
+| `table_rate` left per second | live |
+
+**Measurements.** No hot path changes: the server adds system functions and one route comparison in the admin
+routes' chain. A watched table costs one subscription for its size plus one per loaded page; a write to it
+re-runs those (the size from the table summaries). The app's bundle grows by 26 bytes (the inferred type's
+refetch interval); the source is not in it until PR 6.
+
+**Found on the way, outside PR 2** (differences of every function, rewritten in the oracle test and left to a
+follow-up that matches Convex):
+
+1. A cursor that does not parse fails with "InvalidCursor: Failed to parse cursor"; Convex's says "Failed to
+   parse cursor" (`crates/keybroker/src/broker.rs:911`; the code is not in the message). Likewise "Key is invalid
+   for instance" and "Missing position field" (`:1312-1326`). Core's `cursor.ts:120-148`.
+2. `paginate({numItems: 0})` fails with "`options.numItems` must be a positive number. Received `0`."; Convex's
+   JavaScript only refuses a negative number (`npm-packages/convex/src/server/impl/query_impl.ts:284-288`) and
+   its backend says "Must request at least 1 document while paginating". Core's `tx.ts` `paginate`.
+3. A system function's argument error is "ArgumentValidationError: …"; Convex's system functions check their
+   arguments in JavaScript ("Uncaught Error: …"). `functions.ts` `systemArgs`.
+
+**DV-479 (owner, 2026-10-12: follow Convex).** The dashboard contract (UI-01 §12.4) was written for the mock
+before Convex's server was studied, and differed from it: an unset field matched only `neq`, `noneOf` and
+`type: unset`, an empty `anyOf` matched nothing, a type clause followed dots. The owner chose Convex's rules and
+set a standing rule: where the contract conflicts with Convex, the contract changes. So `filters.ts` (the mock and
+the contract suite's oracle) now follows Convex's `paginatedTableDocuments` — an unset field below every value
+(it passes `lt` / `lte`), an empty `anyOf` filters nothing, type clauses read the top-level field by its name — and
+the source sends the clauses as they are (its first draft added an "is set" clause after `lt` / `lte` and
+answered an empty page for an empty `anyOf`). The suite run against the live server now checks those rules too.
+Only the wording of a malformed expression's error stays a divergence (DV-479): bunvex's one line, not zod's
+issue list (asked as: Convex / bunvex / same: no, words only / why: reproducing zod's dump brings nothing, only
+a hand-made URL sends one / app impact: none / decided: keep bunvex's words).
+
+**Notes for PR 3** (the data mutations):
+
+- The registry for the writes is `DATA_SYSTEM_QUERIES`' module; add a `DATA_SYSTEM_MUTATIONS` beside it and
+  one spread into `SYSTEM_MUTATIONS`, as here.
+- The writes need no change to `watchTable`: an insert or delete changes the size, a patch or replace changes a
+  loaded page or the open document. The contract's `writes` area expects a write to reach `watchTable`; it
+  will, through those subscriptions.
+- `clearTablePage` loops on a cursor of `paginate` (4 000 per call); `createTable` inserts and deletes a
+  document, so the mapping subscription gets the table.
+- `getById` / `listById` already follow `queryGeneric`'s masks; Convex's mutations use `mutationGeneric`'s
+  equivalents (`sst`).
+
+**Notes for PR 6** (the app on the source): the tables query is refreshed only by a watched table's change
+(D3); Convex's sidebar is live on the mapping — a `watchTables` (or refetching the list on the mapping's change)
+would match it. Search, vector and staged indexes are not in `IndexInfo`. `tableOfId` answers user tables only.
+
 ### PR 5, as built
 
 The Schedules, Files and History screens and Health's concurrency and invalidations, on the server source. Convex's

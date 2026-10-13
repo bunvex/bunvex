@@ -87,12 +87,16 @@ export const documentQuery = ({ source, scope }: QueryScope, table: string, id: 
     queryFn: ({ signal }) => source.getDocument(table, id, { signal }),
   });
 
-/** A table's inferred document type (the "Generated" schema); refreshed when asked again. */
+/** How often a shown table's inferred type is asked again: Convex's dashboard polls `/api/shapes2` every 60 s. */
+export const INFERRED_TYPE_REFRESH_MS = 60_000;
+
+/** A table's inferred document type (the "Generated" schema); refreshed when asked again, and every minute. */
 export const inferredTypeQuery = ({ source, scope }: QueryScope, table: string) =>
   queryOptions({
     queryKey: [...dashboardKeys.all(scope), "inferred", table] as const,
     queryFn: ({ signal }) => source.inferDocumentType?.(table, { signal }) ?? Promise.resolve(null),
     staleTime: 0,
+    refetchInterval: INFERRED_TYPE_REFRESH_MS,
   });
 
 /** The table an id refers to (null: none); for "Go to reference". Ids do not move between tables. */

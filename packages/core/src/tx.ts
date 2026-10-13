@@ -68,6 +68,8 @@ import {
   MAX_QUERY_OPERATORS,
   Pipeline,
   type QueryOp,
+  type QueryPageArgs,
+  queryPageArgs,
   serializeOps,
   TOO_MANY_OPERATORS,
 } from "./query-ops.ts";
@@ -271,6 +273,13 @@ type QState = {
 
 type SearchFilter = { type: "Search"; field: string; value: string } | { type: "Eq"; field: string; value: unknown };
 type SearchSpec = { name: string; filters: SearchFilter[] };
+
+/** Convex's messages for a system table reached outside `db.system` (STUDY-151). */
+const SYSTEM_TABLE_MESSAGES = {
+  insert: "System tables (prefixed with `_`) are read-only.",
+  query: "System tables can only be accessed from db.system.query().",
+  other: "System tables can only be accessed with db.system.",
+} as const;
 
 /** Convex's `SearchQueryScannedTooManyDocumentsError`. */
 const SCANNED_TOO_MANY = `Search query scanned too many documents (fetched ${MAX_CANDIDATE_REVISIONS}). Consider using a smaller limit, paginating the query, or using a filter field to limit the number of documents pulled from the search index.`;
@@ -672,9 +681,13 @@ export class Tx {
     return this.catalog.tables.has(name);
   }
 
-  /** A table visible to this transaction (the catalog, or one it created), or undefined. */
-  private findTable(name: string): TableDef | undefined {
-    if (name.startsWith("_") && !this.systemAccess) throw new Error(`System table ${name} is not accessible here.`);
+  /**
+   * A table visible to this transaction (the catalog, or one it created), or undefined. A system table outside
+   * system code is refused with Convex's message for the operation (`database_impl.ts` for `insert` and `query`,
+   * `system_table_guard` in crates/isolate for the rest).
+   */
+  private findTable(name: string, op: "insert" | "query" | "other" = "other"): TableDef | undefined {
+    if (name.startsWith("_") && !this.systemAccess) throw new Error(SYSTEM_TABLE_MESSAGES[op]);
     const t = this.catalog.tables.get(name);
     if (t) this.dependOn(t);
     return t ?? this.createdTables.get(name)?.def;
@@ -950,7 +963,8 @@ export class Tx {
   /** Convex's `db.normalizeId(table, s)`: `s` as an id of `table`, or null. */
   normalizeId(table: string, idString: string): string | null {
     if (typeof table !== "string") throw new Error("Invalid argument `table` for `db.normalizeId`");
-    if (table.startsWith("_") && !this.systemAccess) return null;
+    if (table.startsWith("_") && !this.systemAccess)
+      throw new Error("System tables can only be accessed from db.system.normalizeId().");
     const t = this.catalog.tables.get(table) ?? this.createdTables.get(table)?.def;
     // Stryker disable next-line ConditionalExpression,LogicalOperator: t.number of no table and decodeId of a non-string throw in the try below, which gives the same null
     if (!t || typeof idString !== "string") return null;
@@ -1000,7 +1014,7 @@ export class Tx {
    * at most once; results by `collect` / `take` / `first` / `unique` / `for await` (STUDY-16).
    */
   query(table: string): TxQuery {
-    const t = this.findTable(table);
+    const t = this.findTable(table, "query");
     if (!t) this.readMissingTable(); // a missing table has no rows; the read depends on _tables
     const st: QState = {
       t,
@@ -1267,13 +1281,13 @@ export class Tx {
     }
   }
 
-  /** `.paginate()` as Convex's `query_page` (crates/isolate/src/environment/udf/async_syscall.rs). */
+  /**
+   * `.paginate()` as Convex's `query_page` (crates/isolate/src/environment/udf/async_syscall.rs), its arguments
+   * read already (`queryPageArgs`): the page's size, then its limits, then its cursors.
+   */
   /** @internal (QueryImpl) */
-  async paginate(table: string, st: QState, opts: PaginationOptions): Promise<PaginationResult> {
-    const n = opts?.numItems;
-    if (typeof n !== "number" || !(n > 0))
-      throw new Error(`\`options.numItems\` must be a positive number. Received \`${n}\`.`);
-    const pageSize = Math.floor(n);
+  async paginate(table: string, st: QState, opts: QueryPageArgs): Promise<PaginationResult> {
+    const pageSize = opts.pageSize;
     if (pageSize === 0) throw new Error("Must request at least 1 document while paginating");
     if (pageSize > TRANSACTION_MAX_READ_SIZE_ROWS) throw new Error(`Requested too many items: ${pageSize}`);
     if (opts.maximumRowsRead === 0 || opts.maximumBytesRead === 0)
@@ -1298,9 +1312,10 @@ export class Tx {
       ops: serializeOps(st.ops),
     });
     const secret = this.cursorCodec();
-    const start = opts.cursor ? decodeCursor(secret, opts.cursor, fp) : null;
+    // An empty cursor is a cursor too, and fails to parse (Convex reads any string sent).
+    const start = opts.cursor !== null ? decodeCursor(secret, opts.cursor, fp) : null;
     const endStr = opts.endCursor ?? this.prevEndCursor;
-    const end = endStr ? decodeCursor(secret, endStr, fp) : null;
+    const end = endStr !== null ? decodeCursor(secret, endStr, fp) : null;
     // As Convex's `read_page_from_query`: a limit of 0 never reads, so without an end cursor the page has no
     // cursor at all, and Convex fails with a system error ("Cursor was None").
     if (pipe.done && !end) {
@@ -1371,8 +1386,8 @@ export class Tx {
     let status: PaginationResult["pageStatus"] = null;
     // As Convex's `IndexRange`: the page's own limits hold without an end cursor only (a pinned page is read to
     // its end), and are checked before the next document is read, which then is not charged.
-    const maxRows = end ? undefined : opts.maximumRowsRead;
-    const maxBytes = end ? undefined : opts.maximumBytesRead;
+    const maxRows = end ? null : opts.maximumRowsRead;
+    const maxBytes = end ? null : opts.maximumBytesRead;
     // Convex records the page's read with its first document (or, with none, at the end of the range); at the
     // read-interval limit, that is where the page fails.
     const readsFull = !this.systemTx && this.readList.length - this.uncountedReads >= this.limits.databaseQueries;
@@ -1387,7 +1402,7 @@ export class Tx {
     const docs = this.stream({ ...st, range: { lo, hi } });
     try {
       for (;;) {
-        if ((maxRows !== undefined && rowsRead >= maxRows) || (maxBytes !== undefined && bytesRead >= maxBytes)) {
+        if ((maxRows !== null && rowsRead >= maxRows) || (maxBytes !== null && bytesRead >= maxBytes)) {
           status = "SplitRequired";
           exhausted = false;
           break;
@@ -1704,9 +1719,12 @@ export class Tx {
     // Validated and copied at the call, as Convex serializes the value: its nesting first, before the table
     // (Convex's `insert` syscall parses `value`, then `table`); an unsupported type throws below, and mutating
     // `fields` afterwards cannot change what is written.
+    // Convex's `insert` refuses a system table first, before it reads the value (`database_impl.ts`).
+    if (typeof table === "string" && table.startsWith("_") && !this.systemAccess)
+      throw new Error(SYSTEM_TABLE_MESSAGES.insert);
     const x = extractCommitTs(fields, this.writtenNesting(), "insert");
     refuseLoneSurrogates(x.value, () => JSON.stringify({ table, value: toJsonValue(x.value as Value) }));
-    const t = this.findTable(table) ?? (await this.createTable(table));
+    const t = this.findTable(table, "insert") ?? (await this.createTable(table));
     // Convex's generator (STUDY-01): 14 random bytes, then the transaction's day number (big-endian). The
     // randomness is the real CSPRNG, drawn outside the deterministic execution.
     const internal = new Uint8Array(16);
@@ -2449,12 +2467,20 @@ class QueryImpl implements TxQueryChained {
   }
 
   paginate(opts: PaginationOptions): Promise<PaginationResult> {
-    if (this.st.closed || this.st.iterated) throw reusedError();
-    this.st.closed = true;
     return (async () => {
+      // As Convex's client (query_impl.ts `paginate`, an async method): the options, `numItems` (only a negative
+      // number or a non-number is refused here), and only then the query is taken.
+      if (opts === undefined) throw new TypeError("Must provide arg 1 `options` to `paginate`");
+      const n = (opts as PaginationOptions | null)?.numItems;
+      if (typeof n !== "number" || n < 0)
+        throw new Error(`\`options.numItems\` must be a positive number. Received \`${n}\`.`);
+      if (this.st.closed || this.st.iterated) throw reusedError();
+      this.st.closed = true;
+      // Then the syscall: the query's JSON, its arguments, the query (`Query::try_from`), the page.
       refuseLoneSurrogatesInQuery(this.table, this.st, null);
+      const args = queryPageArgs(opts);
       checkOps(this.st.ops, "queryPage");
-      return this.tx.paginate(this.table, this.st, opts);
+      return this.tx.paginate(this.table, this.st, args);
     })();
   }
 

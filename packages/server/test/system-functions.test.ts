@@ -150,7 +150,7 @@ describe("_system/frontend schedules", () => {
     // Convex's `v.id("_scheduled_job_args")`: a job's id, or no id at all, is refused.
     for (const bad of [id, "nope"])
       expect(await sys("_system/frontend/scheduler:getArgs", { argsId: bad }).catch((e: Error) => e.message)).toContain(
-        "ArgumentValidationError",
+        "Path: .argsId\n",
       );
     // Deleted with its job: null.
     await engine.mutation(async (db) => {
@@ -162,8 +162,8 @@ describe("_system/frontend schedules", () => {
 
   test("arguments are checked, and clients cannot call system functions", async () => {
     const { sys, functions } = await setup();
-    expect(await sys("_system/frontend/paginatedScheduledJobs", {}).catch((e: Error) => e.message)).toContain(
-      "ArgumentValidationError",
+    expect(await sys("_system/frontend/paginatedScheduledJobs", {}).catch((e: Error) => e.message)).toStartWith(
+      "Object is missing the required field `paginationOpts`.",
     );
     expect(await functions.runQuery("_system/frontend/listCronJobs", {}).catch((e: Error) => e.message)).toBe(
       "You don't have permission to perform this operation.",

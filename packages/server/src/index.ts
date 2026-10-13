@@ -172,3 +172,5 @@ export {
   type SchedulerOptions,
 } from "./scheduler.ts";
 export { createServer, type ServerOptions } from "./server.ts";
+// Hosted services (STUDY-151 §4), as Convex's `getServiceToken` / `getServiceUrl`: unavailable when self-hosted.
+export { getServiceToken, getServiceUrl, type ServiceName } from "./service-tokens.ts";

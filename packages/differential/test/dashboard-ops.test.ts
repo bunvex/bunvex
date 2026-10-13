@@ -31,17 +31,11 @@ async function sys(b: Backend, kind: "query" | "mutation", path: string, args: u
     body: JSON.stringify({ path, args, format: b.name === "convex" ? "convex_encoded_json" : "encoded_json" }),
   });
   const body = (await r.json()) as { status: string; value?: unknown; errorMessage?: string };
-  // the error's request id and stack are each backend's own. bunvex wraps a storage id of another table as an
-  // argument error, where Convex's model raises it bare (file_storage/mod.rs `query_for_storage_id`): reported
-  // apart, as it reaches `ctx.storage` in apps too (STUDY-149 "PR 5, as built").
+  // the error's request id and stack are each backend's own
   const error = body.errorMessage
     ?.replace(/^\[Request ID: \w+\] /, "")
     .replace(/\n {4}at [^\n]*/g, "")
-    .replace(/^(Server Error\n)(?:ArgumentValidationError|Uncaught Error): /, "$1")
-    .replace(
-      "Invalid argument `storageId` for `storage.getUrl`: Invalid storage ID. Storage ID cannot",
-      "Invalid storage ID. Storage ID cannot",
-    );
+    .replace(/^(Server Error\n)Uncaught Error: /, "$1");
   return body.status === "success" ? { value: body.value } : { error };
 }
 

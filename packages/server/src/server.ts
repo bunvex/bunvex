@@ -80,6 +80,7 @@ import { withApiCors } from "./cors.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
 import { activeSync, cursorFromDeltas, DATA_SYNC_ROUTE, dataSync, listActiveSyncs } from "./data-sync.ts";
+import { applicationIndexes } from "./data-system-functions.ts";
 import { DEBUG_ROUTE, debugRoute } from "./debug-routes.ts";
 import { tooDeepToStringify } from "./deep-values.ts";
 import {
@@ -1353,6 +1354,14 @@ export function createServer(opts: ServerOptions) {
         return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
       return json(await tableShapes(engine));
     }
+    // Convex's `/api/get_indexes?component_id=` (ViewData): the user tables' declared indexes (STUDY-149 PR 2).
+    if (url.pathname === "/api/get_indexes" && req.method === "GET") {
+      functions.requireOperation(caller, "ViewData");
+      const component = url.searchParams.get("component_id");
+      if (component !== null && component !== "")
+        return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
+      return json({ indexes: await engine.query((db) => applicationIndexes(db)) });
+    }
     const usage = USAGE_LIMIT_ROUTE.exec(url.pathname);
     if (usage)
       try {
@@ -1621,6 +1630,7 @@ export function createServer(opts: ServerOptions) {
         STREAMING_IMPORT_ROUTE.test(url.pathname) ||
         DATA_SYNC_ROUTE.test(url.pathname) ||
         url.pathname === "/api/shapes2" ||
+        url.pathname === "/api/get_indexes" ||
         PAUSE_ROUTE.test(url.pathname) ||
         USAGE_LIMIT_ROUTE.test(url.pathname) ||
         /^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)
@@ -1637,10 +1647,18 @@ export function createServer(opts: ServerOptions) {
       }
       // The latest ts, for a consistent series of HTTP queries (Convex's `/api/query_ts`): base64 u64, as the
       // sync protocol encodes timestamps.
-      if (url.pathname === "/api/query_ts" && req.method === "POST")
-        return json({ ts: v1.encodeU64(engine.committer.visibleTs) });
-      // `GET /api/query?path=&args=&format=` (STUDY-67 H10, DV-313): `args` is the arguments' JSON.
-      if (url.pathname === "/api/query" && req.method === "GET") return getQuery(url, req);
+      // A POST route: another method is axum's 405 with the one it takes (STUDY-151 §3, checked against Convex's
+      // local backend).
+      if (url.pathname === "/api/query_ts")
+        return req.method === "POST"
+          ? json({ ts: v1.encodeU64(engine.committer.visibleTs) })
+          : new Response(null, { status: 405, headers: { allow: "POST" } });
+      // `GET /api/query?path=&args=&format=` (STUDY-67 H10, DV-313): `args` is the arguments' JSON. HEAD is served
+      // by the GET handler, as axum serves it (Bun sends no body).
+      if (url.pathname === "/api/query" && (req.method === "GET" || req.method === "HEAD")) return getQuery(url, req);
+      // Convex's `/api/query` takes GET and POST: another method's 405 names both (and HEAD).
+      if (url.pathname === "/api/query" && req.method !== "POST")
+        return new Response(null, { status: 405, headers: { allow: "GET,HEAD,POST" } });
       const route = /^\/api\/(query|mutation|action|query_at_ts|query_batch|function|run\/.+)$/.exec(url.pathname);
       if (!route) return requestError(404, "NotFound", `no route for ${url.pathname}`);
       // Convex's routes answer another method 405, with the one they take (STUDY-67 H5).
