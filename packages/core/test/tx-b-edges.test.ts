@@ -29,7 +29,7 @@ const fullRead = (db: Tx, index: string) =>
 
 test("system access ends with asSystem, asSystemSync and the creation of a table", async () => {
   const { e } = await engine();
-  const denied = "System table _tables is not accessible here.";
+  const denied = "System tables can only be accessed from db.system.query().";
   await e.mutation(async (db) => {
     await db.asSystem(async () => db.query(TABLES_TABLE).first());
     expect(() => db.query(TABLES_TABLE)).toThrow(denied);
@@ -191,7 +191,9 @@ test("normalizeId: the table argument must be a string; system tables only with 
   const id = await e.query((db) => db.asSystem(async () => (await db.query(TABLES_TABLE).first())!._id as string));
   await e.query(async (db) => {
     expect(() => db.normalizeId(5 as never, id)).toThrow("Invalid argument `table` for `db.normalizeId`");
-    expect(db.normalizeId(TABLES_TABLE, id)).toBeNull();
+    expect(() => db.normalizeId(TABLES_TABLE, id)).toThrow(
+      "System tables can only be accessed from db.system.normalizeId().",
+    );
     expect(db.asSystemSync(() => db.normalizeId(TABLES_TABLE, id))).toBe(id);
     expect(db.normalizeId("missing", id)).toBeNull();
   });
@@ -380,4 +382,23 @@ test("a transaction is not the system's identity until its runner says so", asyn
   const { e, p } = await engine();
   expect(new Tx(e.catalog, p, 0n, false).systemIdentity).toBe(false);
   expect(await e.query(async (db) => db.systemIdentity)).toBe(false);
+});
+
+test("a system table outside db.system: Convex's message for each operation (STUDY-151)", async () => {
+  const { e } = await engine();
+  const id = await e.query((db) => db.asSystem(async () => (await db.query(TABLES_TABLE).first())!._id as string));
+  const withDbSystem = "System tables can only be accessed with db.system.";
+  await expect(e.mutation((db) => db.insert(TABLES_TABLE, {}))).rejects.toThrow(
+    "System tables (prefixed with `_`) are read-only.",
+  );
+  await expect(e.query((db) => db.query(TABLES_TABLE).first())).rejects.toThrow(
+    "System tables can only be accessed from db.system.query().",
+  );
+  await expect(e.mutation((db) => db.patch(TABLES_TABLE, id, {}))).rejects.toThrow(withDbSystem);
+  await expect(e.mutation((db) => db.replace(TABLES_TABLE, id, {}))).rejects.toThrow(withDbSystem);
+  await expect(e.mutation((db) => db.delete(TABLES_TABLE, id))).rejects.toThrow(withDbSystem);
+  // `db.system` reads only system tables: a user table is refused with Convex's message.
+  await expect(e.query(async (db) => db.system.normalizeId("users", id))).rejects.toThrow(
+    "User tables can only be accessed from db.normalizeId().",
+  );
 });

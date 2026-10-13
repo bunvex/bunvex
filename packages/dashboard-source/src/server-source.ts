@@ -1,9 +1,10 @@
 // `createServerDataSource`: the `DashboardDataSource` contract over a bunvex deployment, as Convex's dashboard
 // reads one (STUDY-149 §3.3): the admin key on one sync connection (system queries subscribed, writes as
 // WebSocket requests) and on the admin HTTP routes (metrics, the log stream). Built in steps (STUDY-149's PR
-// plan); this is the first: the deployment, its capabilities and counters, the schema, the deployment state,
-// the logs and the function metrics. The rest of the contract's required methods answer `unavailable` until
-// the server functions under them exist (PRs 2–5).
+// plan): the deployment, its capabilities and counters, the schema, the deployment state, the logs and the
+// function metrics (PR 1); the tables, their documents, live tables and the table metrics (PR 2, tables.ts).
+// The rest of the contract's required methods answer `unavailable` until the server functions under them
+// exist (PRs 3–5).
 import {
   type CallOptions,
   type Capabilities,
@@ -20,6 +21,7 @@ import {
   OPERATIONS,
   type SchemaInfo,
   type SchemaValidation,
+  type TableMetric,
   type TopKMeasure,
   type Unsubscribe,
   type ValidatorJson,
@@ -29,6 +31,7 @@ import { capabilitiesOf } from "./credentials.ts";
 import { LogStream, type LogStreamOptions } from "./logs.ts";
 import { Metrics } from "./metrics.ts";
 import { AdminSync, type ConnectionStatus, watchConnection } from "./sync.ts";
+import { Tables } from "./tables.ts";
 
 export type ServerDataSourceOptions = {
   /** The deployment's URL, e.g. `http://127.0.0.1:3210`. */
@@ -100,6 +103,7 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
   const sync = new AdminSync(opts);
   const logs = new LogStream(http, opts.logs);
   const metrics = new Metrics(http);
+  const tables = new Tables(sync, http);
   const statsIntervalMs = opts.statsIntervalMs ?? 2000;
 
   const getStats = async (o?: CallOptions): Promise<DeploymentStats> => {
@@ -120,6 +124,7 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
 
   const close = async () => {
     logs.close();
+    tables.close();
     await sync.close();
   };
 
@@ -206,15 +211,22 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     topFunctions: (measure: TopKMeasure, w: MetricsWindow, k: number, o?: CallOptions) =>
       metrics.topFunctions(measure, w, k, o?.signal),
     scheduledJobLag: (w: MetricsWindow, o?: CallOptions) => metrics.scheduledJobLag(w, o?.signal),
-
-    // ---------------------------------------------------------------- not yet (STUDY-149 PRs 2 and 4)
-    listTables: (o) => rejectNotYet("The table list", o),
-    listDocuments: (_q, o) => rejectNotYet("The documents", o),
-    getDocument: (_t, _id, o) => rejectNotYet("A document", o),
-    watchTable(_table, _onChange, onError) {
-      const timer = setTimeout(() => onError(notYet("Watching a table")), 0);
-      return () => clearTimeout(timer);
+    // the server answers zeros for any name; the mapping tells an unknown table
+    async tableRate(table: string, metric: TableMetric, w: MetricsWindow, o?: CallOptions) {
+      if (!(await tables.tableNames(o?.signal)).includes(table))
+        throw new DataSourceError("not_found", `Table "${table}" does not exist.`);
+      return metrics.tableRate(table, metric, w, o?.signal);
     },
+
+    // ---------------------------------------------------------------- tables and documents (PR 2)
+    listTables: (o) => tables.listTables(o),
+    listDocuments: (q, o) => tables.listDocuments(q, o),
+    getDocument: (t, id, o) => tables.getDocument(t, id, o),
+    watchTable: (t, onChange, onError) => tables.watchTable(t, onChange, onError),
+    inferDocumentType: (t, o) => tables.inferDocumentType(t, o),
+    tableOfId: (id, o) => tables.tableOfId(id, o),
+
+    // ---------------------------------------------------------------- not yet (STUDY-149 PR 4)
     listFunctions: (o) => rejectNotYet("The function list", o),
 
     // ---------------------------------------------------------------- the host's

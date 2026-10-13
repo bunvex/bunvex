@@ -29,7 +29,7 @@ async function withOneFile() {
 test("db.system.query of a user table is refused, by name", async () => {
   const { e } = await withOneFile();
   await expect(e.query(async (db) => db.system.query("items").collect())).rejects.toThrow(
-    "System table items is not accessible here.",
+    "User tables can only be accessed from db.query().",
   );
 });
 

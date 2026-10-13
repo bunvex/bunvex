@@ -55,6 +55,7 @@ import {
   type ModuleSource,
 } from "./code-version.ts";
 import type { CronJobExecutor } from "./cron-executor.ts";
+import { cronSpecsJson } from "./cron-rows.ts";
 import { describeUncaught } from "./errors.ts";
 import {
   buildExternalDeps,
@@ -125,6 +126,17 @@ function checkIndexReferences(schema: SchemaDefinition) {
   const error = indexReferenceError(schema);
   if (error) throw new PushError("SchemaDefinitionError", `Hit an error while evaluating your schema:\n${error}`);
 }
+
+/**
+ * A module's analysis as Convex's `start_push` answers it (`SerializedAnalyzedModule`): the crons as
+ * `[{identifier, spec}]` with their arguments as bytes (`cronSpecsJson`), and no source map.
+ */
+const analysisJson = (m: AnalyzedModule) => ({
+  functions: m.functions,
+  httpRoutes: m.httpRoutes,
+  cronSpecs: cronSpecsJson(m.cronSpecs),
+  sourceMapped: null,
+});
 
 export class PushError extends Error {
   constructor(
@@ -492,7 +504,7 @@ export class PushService {
         "": {
           definition: null,
           schema: schema === emptySchema ? null : schemaToJson(schema),
-          functions: analysis,
+          functions: Object.fromEntries(Object.entries(analysis).map(([path, m]) => [path, analysisJson(m)])),
           udfConfig: null,
         },
       },

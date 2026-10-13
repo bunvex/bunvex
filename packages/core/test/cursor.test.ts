@@ -1,7 +1,7 @@
 // Pagination cursors sealed as Convex's keybroker seals them (STUDY-17, DV-73): the InstanceCursor proto under
 // AES-128-GCM-SIV with KBKDF(secret, "cursor"), deterministic, version 7, hex.
 import { expect, test } from "bun:test";
-import { aes128GcmSivOpen } from "../src/aead.ts";
+import { aes128GcmSivOpen, aes128GcmSivSeal } from "../src/aead.ts";
 import { type CursorCodec, decodeCursor, encodeCursor, queryFingerprint } from "../src/cursor.ts";
 import { instanceSecretBytes, kbkdfCtrHmacSha256 } from "../src/kbkdf.ts";
 
@@ -51,14 +51,29 @@ test("round trips; another query, instance or tampering is refused with Convex's
   expect(() => decodeCursor(codec, encodeCursor(codec, after, fp), other)).toThrow(
     "InvalidCursor: Tried to run a query starting from a cursor, but it looks like this cursor is from a different query.",
   );
+  // The keybroker's messages, without their `InvalidCursor` code (crates/keybroker/src/broker.rs; checked against
+  // Convex's binary: a function catches "Failed to parse cursor").
+  const message = (f: () => unknown) => {
+    try {
+      f();
+    } catch (e) {
+      return (e as Error).message;
+    }
+    return "no error";
+  };
   const renamed = { ...codec, instanceName: "tacos" };
-  expect(() => decodeCursor(codec, encodeCursor(renamed, after, fp), fp)).toThrow(
-    'InvalidCursor: Key is invalid for instance "tacos"',
+  expect(message(() => decodeCursor(codec, encodeCursor(renamed, after, fp), fp))).toBe(
+    'Key is invalid for instance "tacos"',
   );
   const c = encodeCursor(codec, after, fp);
   const flipped = `${c.slice(0, 10)}${c[10] === "0" ? "1" : "0"}${c.slice(11)}`;
   for (const bad of [flipped, "zz", "", `08${c.slice(2)}`, c.slice(0, -2)])
-    expect(() => decodeCursor(codec, bad, fp)).toThrow("InvalidCursor: Failed to parse cursor");
+    expect(message(() => decodeCursor(codec, bad, fp))).toBe("Failed to parse cursor");
   const otherSecret = { ...codec, key: kbkdfCtrHmacSha256(instanceSecretBytes(SECRET), "admin key", 16) };
-  expect(() => decodeCursor(otherSecret, c, fp)).toThrow("InvalidCursor: Failed to parse cursor");
+  expect(message(() => decodeCursor(otherSecret, c, fp))).toBe("Failed to parse cursor");
+  // A sealed `InstanceCursor` with no position: the instance name (field 1) and the fingerprint (field 4) only.
+  const name = new TextEncoder().encode(codec.instanceName);
+  const proto = Uint8Array.from([0x0a, name.length, ...name, 0x22, fp.length, ...fp]);
+  const sealed = aes128GcmSivSeal(codec.key, new Uint8Array(12), Uint8Array.of(7), proto);
+  expect(message(() => decodeCursor(codec, `07${hex(sealed)}`, fp))).toBe("Missing position field");
 });
