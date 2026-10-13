@@ -45,30 +45,96 @@ function usizeError(n: unknown): string | null {
   if (typeof n === "bigint") throw new TypeError("Do not know how to serialize a BigInt");
   if (typeof n === "number") {
     if (!Number.isFinite(n)) return "invalid type: null, expected usize";
-    // JSON integers parse as u64 or i64; anything else is a float.
-    if (Number.isInteger(n) && n >= 0 && n < 2 ** 64) return null;
-    if (Number.isInteger(n) && n < 0 && n >= -(2 ** 63)) return `invalid value: integer \`${n}\`, expected usize`;
-    return `invalid type: floating point \`${floatText(n)}\`, expected usize`;
+    if (isU64(n)) return null;
+    if (isNegativeI64(n)) return `invalid value: integer \`${n}\`, expected usize`;
   }
-  if (n === null) return "invalid type: null, expected usize";
-  if (typeof n === "boolean") return `invalid type: boolean \`${n}\`, expected usize`;
-  if (typeof n === "string") return `invalid type: string ${JSON.stringify(n)}, expected usize`;
-  if (Array.isArray(n)) return "invalid type: sequence, expected usize";
-  return "invalid type: map, expected usize";
+  return `invalid type: ${unexpected(n)}, expected usize`;
 }
 
-/** A float as Rust prints one (no exponent), with a decimal point (serde's `WithDecimalPoint`). */
+// A JSON integer parses as a u64 or an i64; anything else (a fraction, an exponent, out of range) as a float.
+// `JSON.stringify` writes an integer below 1e21 with all its digits, so the bounds are the number's own.
+const isU64 = (n: number) => Number.isInteger(n) && n >= 0 && n < 2 ** 64;
+const isNegativeI64 = (n: number) => Number.isInteger(n) && n < 0 && n > -(2 ** 63);
+
+/** How serde_json names a JSON value it did not expect (`invalid type: <this>, expected …`). */
+function unexpected(v: unknown): string {
+  if (v === null) return "null";
+  if (typeof v === "boolean") return `boolean \`${v}\``;
+  if (typeof v === "string") return `string ${JSON.stringify(v)}`;
+  if (typeof v === "number")
+    return isU64(v) || isNegativeI64(v) ? `integer \`${v}\`` : `floating point \`${floatText(v)}\``;
+  if (Array.isArray(v)) return "sequence";
+  return "map";
+}
+
+/**
+ * A float as serde_json words one in an error (its `JsonUnexpected`, formatted by `zmij`): the shortest digits
+ * that round-trip, plain for decimal exponents -5 to 15 (`0.5`, `123456.75`, `.0` when whole), else scientific
+ * with a sign (`1e-7`, `1.8446744073709552e+19`), which is JavaScript's `toExponential()`.
+ */
 function floatText(x: number): string {
-  let s = String(x);
-  const m = /^(-?)(\d)(?:\.(\d+))?e([+-])(\d+)$/.exec(s);
-  if (m) {
-    const [, sign, head, tail = "", dir, exp] = m;
-    const digits = head + tail;
-    const e = Number(exp);
-    s =
-      dir === "+" ? sign + digits + "0".repeat(Math.max(0, e - tail.length)) : `${sign}0.${"0".repeat(e - 1)}${digits}`;
-  }
+  const sci = x.toExponential();
+  const exp = Number(sci.slice(sci.indexOf("e") + 1));
+  if (exp < -5 || exp > 15) return sci;
+  const s = String(x);
   return s.includes(".") ? s : `${s}.0`;
+}
+
+/** `paginate`'s options as the `queryPage` syscall reads them: absent limits are null. */
+export type QueryPageArgs = {
+  cursor: string | null;
+  endCursor: string | null;
+  pageSize: number;
+  maximumRowsRead: number | null;
+  maximumBytesRead: number | null;
+};
+
+/**
+ * `paginate`'s options as Convex's client sends them and its `queryPage` syscall reads them (query_impl.ts
+ * `paginate`, async_syscall.rs `query_page`). The client writes `{query, cursor, endCursor, pageSize,
+ * maximumRowsRead, maximumBytesRead}` with `JSON.stringify` (a BigInt fails it; undefined is left out; `NaN` and
+ * the infinities become null), `endCursor` and `maximumRowsRead` read with `?? null`. The syscall reads the
+ * fields in that order, each an optional string or a `usize` (`pageSize` required), and the first that does not
+ * fit fails with serde's message, as `with_argument_error` words it.
+ */
+export function queryPageArgs(opts: {
+  numItems: number;
+  cursor?: unknown;
+  endCursor?: unknown;
+  maximumRowsRead?: unknown;
+  maximumBytesRead?: unknown;
+}): QueryPageArgs {
+  const sent = {
+    cursor: opts.cursor,
+    endCursor: opts.endCursor ?? null,
+    pageSize: opts.numItems,
+    maximumRowsRead: opts.maximumRowsRead ?? null,
+    maximumBytesRead: opts.maximumBytesRead,
+  };
+  const json = JSON.parse(
+    JSON.stringify(sent, (_k, x) => {
+      // Convex's client rethrows the syscall's failure as an `Error` with its message.
+      if (typeof x === "bigint") throw new Error("Do not know how to serialize a BigInt");
+      return x;
+    }),
+  ) as Record<string, unknown>;
+  const bad = (why: string) => new Error(`Invalid arguments for \`queryPage\`: ${why}`);
+  const string = (v: unknown) => {
+    if (v === undefined || v === null || typeof v === "string") return (v ?? null) as string | null;
+    throw bad(`invalid type: ${unexpected(v)}, expected a string`);
+  };
+  const size = (v: unknown, optional: boolean) => {
+    if (optional && (v === undefined || v === null)) return null;
+    const why = usizeError(v);
+    if (why) throw bad(why);
+    return v as number;
+  };
+  const cursor = string(json.cursor);
+  const endCursor = string(json.endCursor);
+  const pageSize = size(json.pageSize, false) as number;
+  const maximumRowsRead = size(json.maximumRowsRead, true);
+  const maximumBytesRead = size(json.maximumBytesRead, true);
+  return { cursor, endCursor, pageSize, maximumRowsRead, maximumBytesRead };
 }
 
 /**

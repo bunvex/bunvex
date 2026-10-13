@@ -233,6 +233,7 @@ describe("the documents' structure", () => {
       "get_active_sync",
       "check_admin_key",
       "shapes2",
+      "get_indexes",
       "delete_tables",
       "delete_scheduled_functions_table",
       "public_query_get",
@@ -387,6 +388,7 @@ describe("served", () => {
 
     expect((await call("check_admin_key")).success).toBe(true);
     await call("shapes2");
+    expect((await call("get_indexes")).indexes).toBeArray();
     await call("delete_tables", { body: { tableNames: ["doomed"] } });
     await call("delete_scheduled_functions_table", { body: {} });
 

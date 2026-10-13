@@ -274,11 +274,33 @@ export function describeDataSourceContract(
           },
         );
       }
-      if (unsetField)
+      if (sample) exprs.push(one({ field: sample.field, op: "anyOf", value: [] })); // filters nothing (Convex's)
+      if (unsetField) {
+        // an unset field is below every value: it passes lt / lte, never gt / gte (Convex's order)
+        const set = docs.find((d) => fieldValue(d, unsetField) !== undefined)!;
+        const v = fieldValue(set, unsetField)!;
         exprs.push(
           one({ field: unsetField, op: "type", value: "unset" }),
           one({ field: unsetField, op: "notype", value: "unset" }),
+          one({ field: unsetField, op: "lt", value: v }),
+          one({ field: unsetField, op: "lte", value: v }, "asc"),
+          one({ field: unsetField, op: "gte", value: v }),
         );
+      }
+      // a type clause reads the top-level field by its name, not a dotted path (Convex's)
+      const nested = docs
+        .flatMap((d) => Object.entries(d))
+        .find(
+          ([k, x]) =>
+            !k.startsWith("_") &&
+            x !== null &&
+            typeof x === "object" &&
+            !Array.isArray(x) &&
+            !("$integer" in x) &&
+            !("$bytes" in x),
+        );
+      const inner = nested && Object.keys(nested[1] as object)[0];
+      if (nested && inner) exprs.push(one({ field: `${nested[0]}.${inner}`, op: "type", value: "unset" }));
       for (const filter of exprs) {
         const got = await all((cursor) => src.listDocuments({ table, numItems: 6, cursor, filter }));
         expect({ filter, ids: got.map((d) => d._id) }).toEqual({ filter, ids: oracle(docs, filter, byTime) });
