@@ -108,7 +108,8 @@ serde_json prints them, `1.0`), then `schemaValidation`. `v.any()` is `{type: "a
   `{type: "inProgress", request_id, execution_id}` (the variant renamed, not its fields, :480-490).
 - `_cron_job_logs {name, ts: i64, udfPath, udfArgs: bytes, status, logLines, executionTime}` (:773-790); a
   successful run's result is `{type: "default", value: <its JSON text>}` (:869-889, 958-976).
-- `_modules.analyzeResult.cronSpecs`: an array of `{identifier, spec}` (module_versions.rs:186-191), or null.
+- `_modules.analyzeResult.cronSpecs`: an array of `{identifier, spec}` (module_versions.rs:186-191), or null;
+  in identifier order (the `BTreeMap` it comes from).
 - `_udf_config {serverVersion, importPhaseRngSeed: bytes, importPhaseUnixTimestamp: i64}`
   (model/src/udf_config/types.rs:28-35); `serverVersion` is the `udfServerVersion` the CLI pushes (its npm
   package's semver, application/src/deploy_config.rs:418-422), the timestamp in ns; the seed and time are

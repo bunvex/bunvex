@@ -23,11 +23,17 @@
   `ctx.storage.store() is not supported in queries and mutations yet. Please use an action, or ctx.storage.generateUploadUrl() to upload from a client.`
 - **Ids** (`crates/model/src/file_storage/mod.rs` L120-145, L257-291). An id is a `_storage` document id,
   or a **legacy UUID string**, still accepted everywhere.
-  - Otherwise: `Invalid storage ID: "<id>". Storage ID should be an Id of '_storage' table, or a UUID string.`
-  - An id of another table: `Invalid storage ID. Storage ID cannot be an ID on any table other than '_storage'.`
-  - Both are wrapped as ``Invalid argument `storageId` for `storage.getUrl`: …`` (and likewise for
-    `storage.delete` and `storage.getMetadata`; `get` in actions reports `storage.getMetadata`, a Convex
-    quirk).
+  - Otherwise the id does not parse (`FileStorageId::from_str`, L126-143), while the syscall reads its
+    argument, so the message is wrapped: ``Invalid argument `storageId` for `storage.getUrl`: Invalid storage
+    ID: "<id>". Storage ID should be an`` + a line break and 20 spaces + ``Id of '_storage' table, or a UUID
+    string.`` The break and indentation are in Convex's source string, and its binary sends them. The wrapper
+    names the method: `storage.delete` and `storage.getMetadata` alike, and an action's `get` reports
+    `storage.getMetadata`, a Convex quirk.
+  - An id of another table parses (it is a document id). The model refuses it later
+    (`query_for_storage_id`, L257-291) with `Invalid storage ID. Storage ID cannot be an ID on any table
+    other than '_storage'.`, **unwrapped**, from every method (`getUrl`, `getMetadata`, `delete`, an action's
+    `get`). An earlier version of this study said both messages were wrapped. That is corrected here, as
+    Convex's binary answers.
 - **Other messages:**
   - `getUrl` with no argument: ``Must provide arg 1 `storageId` to `getUrl` ``;
   - `store` with a non-Blob: ``store() expects a Blob. If you are trying to store a Request, `await request.blob()` will give you the correct input.``;

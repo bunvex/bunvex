@@ -79,9 +79,9 @@ describe(".paginate(), as Convex (STUDY-17)", () => {
       }
     });
     expect(caught).toEqual({ bunvex: true, data: { isBunvexSystemError: true, paginationError: "InvalidCursor" } });
-    await expect(page(e, `${a.continueCursor}x`, 3)).rejects.toThrow("InvalidCursor: Failed to parse cursor");
+    await expect(page(e, `${a.continueCursor}x`, 3)).rejects.toThrow(/^Failed to parse cursor$/);
     const other = await new Engine(e.schema, e.persistence, { instanceSecret: "s2" }).init();
-    await expect(page(other, a.continueCursor, 3)).rejects.toThrow("Failed to parse cursor");
+    await expect(page(other, a.continueCursor, 3)).rejects.toThrow(/^Failed to parse cursor$/);
   });
 
   test("a cursor is bound to its filters and limits, as Convex's fingerprint (STUDY-17 D3)", async () => {
@@ -114,7 +114,7 @@ describe(".paginate(), as Convex (STUDY-17)", () => {
 
   test("argument errors and one paginated query per function", async () => {
     const e = await engine(3);
-    await expect(page(e, null, 0)).rejects.toThrow("`options.numItems` must be a positive number. Received `0`.");
+    await expect(page(e, null, 0)).rejects.toThrow("Must request at least 1 document while paginating");
     await expect(page(e, null, 40_000)).rejects.toThrow("Requested too many items: 40000");
     await expect(page(e, null, 2, { maximumRowsRead: 0 })).rejects.toThrow(
       "maximumRowsRead and maximumBytesRead must be greater than 0",

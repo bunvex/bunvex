@@ -80,6 +80,7 @@ import { withApiCors } from "./cors.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
 import { activeSync, cursorFromDeltas, DATA_SYNC_ROUTE, dataSync, listActiveSyncs } from "./data-sync.ts";
+import { applicationIndexes } from "./data-system-functions.ts";
 import { DEBUG_ROUTE, debugRoute } from "./debug-routes.ts";
 import { tooDeepToStringify } from "./deep-values.ts";
 import {
@@ -1344,6 +1345,14 @@ export function createServer(opts: ServerOptions) {
         return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
       return json(await tableShapes(engine));
     }
+    // Convex's `/api/get_indexes?component_id=` (ViewData): the user tables' declared indexes (STUDY-149 PR 2).
+    if (url.pathname === "/api/get_indexes" && req.method === "GET") {
+      functions.requireOperation(caller, "ViewData");
+      const component = url.searchParams.get("component_id");
+      if (component !== null && component !== "")
+        return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
+      return json({ indexes: await engine.query((db) => applicationIndexes(db)) });
+    }
     const usage = USAGE_LIMIT_ROUTE.exec(url.pathname);
     if (usage)
       try {
@@ -1607,6 +1616,7 @@ export function createServer(opts: ServerOptions) {
         STREAMING_IMPORT_ROUTE.test(url.pathname) ||
         DATA_SYNC_ROUTE.test(url.pathname) ||
         url.pathname === "/api/shapes2" ||
+        url.pathname === "/api/get_indexes" ||
         PAUSE_ROUTE.test(url.pathname) ||
         USAGE_LIMIT_ROUTE.test(url.pathname) ||
         /^\/api\/(v1\/)?(update|list)_environment_variables$/.test(url.pathname)

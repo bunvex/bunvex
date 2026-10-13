@@ -64,6 +64,34 @@
         }
       }
     },
+    "/get_indexes": {
+      "get": {
+        "summary": "Get database indexes",
+        "description": "Every declared index of the user tables: its table, name, fields, backfill state and staging.",
+        "operationId": "get_indexes",
+        "parameters": [
+          {
+            "name": "component_id",
+            "in": "query",
+            "description": "The component's id; bunvex has only the root component.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/delete_tables": {
       "post": {
         "summary": "Delete database tables",

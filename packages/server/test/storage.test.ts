@@ -239,12 +239,24 @@ describe("ctx.storage", () => {
       await functions.runQuery("m:url", { id }),
     );
     const other = (await functions.runMutation("m:otherId", {})) as string;
-    expect(await msg(functions.runQuery("m:url", { id: other }))).toContain(
-      "Invalid argument `storageId` for `storage.getUrl`: Invalid storage ID. Storage ID cannot be an ID on any table other than '_storage'.",
-    );
-    expect(await msg(functions.runQuery("m:url", { id: "garbage" }))).toContain(
-      `Invalid argument \`storageId\` for \`storage.getUrl\`: Invalid storage ID: "garbage". Storage ID should be an Id of '_storage' table, or a UUID string.`,
-    );
+    // As Convex's local backend answered: another table's id parses, and the model refuses it unwrapped, from
+    // every method; an id that does not parse is wrapped by the syscall, and Convex's text keeps the line break
+    // and indentation of its source. An action's `get` names `storage.getMetadata`, as Convex's.
+    const OTHER = "Invalid storage ID. Storage ID cannot be an ID on any table other than '_storage'.";
+    const garbage = (method: string) =>
+      `Invalid argument \`storageId\` for \`${method}\`: Invalid storage ID: "garbage". Storage ID should be an\n                    Id of '_storage' table, or a UUID string.`;
+    const calls: [string, (id: string) => Promise<unknown>][] = [
+      ["storage.getUrl", (id) => functions.runQuery("m:url", { id })],
+      ["storage.getMetadata", (id) => functions.runQuery("m:meta", { id })],
+      ["storage.delete", (id) => functions.runMutation("m:del", { id })],
+      ["storage.getUrl", (id) => functions.runAction("m:urlFromAction", { id })],
+      ["storage.getMetadata", (id) => functions.runAction("m:getBlob", { id })],
+      ["storage.delete", (id) => functions.runAction("m:delAction", { id })],
+    ];
+    for (const [method, call] of calls) {
+      expect(await msg(call(other))).toBe(OTHER);
+      expect(await msg(call("garbage"))).toBe(garbage(method));
+    }
     expect(await functions.runQuery("m:urlNoArg", {})).toBe("Must provide arg 1 `storageId` to `getUrl`");
     expect(await functions.runQuery("m:url", { id: crypto.randomUUID() })).toBeNull();
   });
@@ -257,6 +269,11 @@ describe("ctx.storage", () => {
     await functions.runMutation("m:del", { id });
     expect(await functions.runQuery("m:url", { id })).toBeNull();
     expect(await msg(functions.runMutation("m:del", { id }))).toContain(`storage id ${id} not found`);
+    // A legacy UUID is shown as Convex parses it: lower case.
+    const upper = crypto.randomUUID().toUpperCase();
+    expect(await msg(functions.runMutation("m:del", { id: upper }))).toBe(
+      `storage id ${upper.toLowerCase()} not found`,
+    );
     // As Convex (STUDY-130): the row is gone, the blob stays — nothing removes it later either.
     const count = async () => {
       let n = 0;
