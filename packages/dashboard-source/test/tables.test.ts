@@ -1,11 +1,12 @@
 // The Data screen's mappings (STUDY-149 PR 2), where no live server is needed: the contract's filter
 // expression in Convex's form, an index's listing, and a table's shape as a document type.
 import { describe, expect, test } from "bun:test";
-import { indexInfoOf, toServerFilter, UNDEFINED_PLACEHOLDER, validatorOfShape } from "../src/tables.ts";
+import type { FieldFilter } from "@bunvex/dashboard/data-source";
+import { indexInfoOf, toServerFilter, validatorOfShape } from "../src/tables.ts";
 
 describe("toServerFilter", () => {
   test("clauses keep their ids, order and enablement; int64 is Convex's bigint type", () => {
-    const { json, origins, matchesNothing } = toServerFilter({
+    const { json, origins } = toServerFilter({
       clauses: [
         { id: "a", field: "k", op: "eq", value: 1, enabled: true },
         { id: "b", field: "k", op: "type", value: "int64", enabled: false },
@@ -22,33 +23,17 @@ describe("toServerFilter", () => {
       order: "desc",
     });
     expect(origins).toEqual(["a", "b", "c"]);
-    expect(matchesNothing).toBe(false);
   });
 
-  test("lt and lte also require the field to be set; the added clause answers for its own", () => {
-    const { json, origins } = toServerFilter({
-      clauses: [
-        { id: "a", field: "k", op: "lt", value: 3, enabled: true },
-        { id: "b", field: "n", op: "lte", value: 1, enabled: false },
-        { id: "c", field: "n", op: "gt", value: 1, enabled: true },
-      ],
-      order: "asc",
-    });
-    expect(json.clauses).toEqual([
+  test("lt, lte and an empty anyOf go as they are: the contract's rules are Convex's (DV-479)", () => {
+    const clauses: FieldFilter[] = [
       { id: "a", field: "k", op: "lt", value: 3, enabled: true },
-      { id: "a:set", field: "k", op: "neq", value: UNDEFINED_PLACEHOLDER, enabled: true },
       { id: "b", field: "n", op: "lte", value: 1, enabled: false },
-      { id: "b:set", field: "n", op: "neq", value: UNDEFINED_PLACEHOLDER, enabled: false },
-      { id: "c", field: "n", op: "gt", value: 1, enabled: true },
-    ]);
-    expect(origins).toEqual(["a", "a", "b", "b", "c"]);
-  });
-
-  test("an enabled anyOf of nothing matches nothing; a disabled one is ignored", () => {
-    const empty = (enabled: boolean) =>
-      toServerFilter({ clauses: [{ id: "a", field: "k", op: "anyOf", value: [], enabled }], order: "asc" });
-    expect(empty(true).matchesNothing).toBe(true);
-    expect(empty(false).matchesNothing).toBe(false);
+      { id: "c", field: "n", op: "anyOf", value: [], enabled: true },
+    ];
+    const { json, origins } = toServerFilter({ clauses, order: "asc" });
+    expect(json.clauses).toEqual(clauses);
+    expect(origins).toEqual(["a", "b", "c"]);
   });
 
   test("an index: its enabled equalities, then the range as one clause", () => {

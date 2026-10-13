@@ -417,16 +417,26 @@ describe("the Data screen (STUDY-149 PR 2)", () => {
     expect(ints.map((d) => d.label)).toEqual(["five"]);
   });
 
-  test("an unset field never passes lt (Convex's order puts it below every value)", async () => {
-    const got = await items(open(), one({ field: "kind", op: "lt", value: "b" }));
-    expect(got.map((d) => d.n)).toEqual([1, 2, 6, 10]);
+  test("an unset field is below every value: it passes lt, not gte (Convex's order, DV-479)", async () => {
+    const src = open();
+    const lt = await items(src, one({ field: "kind", op: "lt", value: "b" }));
+    expect(lt.map((d) => d.n)).toEqual([1, 2, 6, 9, 10]);
+    const gte = await items(src, one({ field: "kind", op: "gte", value: "a" }));
+    expect(gte.some((d) => d.n === 9)).toBe(false);
   });
 
-  test("anyOf nothing matches nothing (Convex's filters nothing)", async () => {
-    expect(await items(open(), one({ field: "kind", op: "anyOf", value: [] }))).toEqual([]);
+  test("anyOf of nothing filters nothing (Convex's, DV-479)", async () => {
+    const src = open();
+    const all = await items(src);
+    expect((await items(src, one({ field: "kind", op: "anyOf", value: [] }))).length).toBe(all.length);
   });
 
-  test("a value the server refuses names its clause, past the clauses the source adds", async () => {
+  test("a type clause reads the top-level field by its name, not a dotted path (Convex's, DV-479)", async () => {
+    const got = await items(open(), one({ field: "meta.edited", op: "type", value: "unset" }));
+    expect(got.some((d) => d.label === "ten")).toBe(true);
+  });
+
+  test("a value the server refuses names its clause", async () => {
     const e = await open()
       .listDocuments({
         table: "items",
@@ -435,6 +445,7 @@ describe("the Data screen (STUDY-149 PR 2)", () => {
         filter: {
           clauses: [
             { id: "x", field: "n", op: "lt", value: 5, enabled: true },
+            { id: "y", field: "n", op: "gt", value: 0, enabled: false },
             { id: "bad", field: "label", op: "eq", value: { $nope: 1 }, enabled: true },
           ],
           order: "asc",

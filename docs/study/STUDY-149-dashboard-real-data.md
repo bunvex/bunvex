@@ -561,9 +561,8 @@ Convex's local backend binary for the same documents (Tests, below).
   listed (`IndexInfo` has no place for them; Convex's index list shows them — a gap for the contract).
 - `listDocuments`: the contract's expression is checked with the dashboard's own `validateFilter` (exported as
   `@bunvex/dashboard/filters`), then translated: the enabled index equalities and the range as one
-  `indexRange` clause; the type `int64` is Convex's `bigint`. Where the contract's rules differ from Convex's
-  server (**DV-479, pending**): `lt` / `lte` get a "field is set" clause (`neq` the placeholder) and an enabled
-  `anyOf` of nothing answers an empty page. A refused clause is named by the contract clause it came from
+  `indexRange` clause; the type `int64` is Convex's `bigint`; the clauses otherwise pass as they are, as the
+  contract's rules are now Convex's (below, DV-479). A refused clause is named by the contract clause it came from
   (`filter: -1` is the index). A cursor the server refuses, or a malformed expression, is `invalid_request`.
   Documents come with int64 and bytes in their JSON encodings (`toJsonValue`, so `@bunvex/dashboard-source` may
   now import `@bunvex/values`, as Convex's dashboard imports `convex/values`; `check-deps` and UI-01 §34.3).
@@ -600,8 +599,10 @@ Convex's local backend binary for the same documents (Tests, below).
   each refusal); the placeholder (Convex's is an ordinary string here); base64 forms.
 - **Source** (`packages/dashboard-source/test/tables.test.ts`): the translation, the index listing, the shapes.
 - **Live** (`packages/sync-e2e/dashboard/server-source.test.ts`): the contract suite's `tables` and `documents`
-  areas now run (with deployment, logs and state); plus the table list's sizes, indexes and `declared`; int64 and
-  bytes; the type filter; `lt` and an unset field; `anyOf` of nothing; a refused value's clause; `watchTable`
+  areas now run (with deployment, logs and state; the suite's field filters now include `lt` / `lte` / `gte` on a
+  field some documents lack, an empty `anyOf` and a type clause on a dotted name); plus the table list's sizes,
+  indexes and `declared`; int64 and bytes; the type filter; an unset field and `lt`; `anyOf` of nothing; a type
+  clause on a dotted name; a refused value's clause; `watchTable`
   (an unloaded document's write not reported, a loaded one's and the open document's reported, an insert's
   count, nothing after the stop, its subscriptions ended); `tableRate`; `inferDocumentType` and its 2 s sharing;
   `tableOfId`; the table list live across a push that adds a table.
@@ -619,10 +620,13 @@ Convex's local backend binary for the same documents (Tests, below).
 | `getById` without the public-system mask | oracle |
 | the placeholder not read as `undefined` | oracle |
 | the source reads the mapping once (not live) | live (a push's new table) |
-| `lt` without the "is set" clause | unit; live |
 | `int64` not mapped to `bigint` | unit; live |
 | a refused clause named by its server position | live |
-| `anyOf` of nothing sent to the server | live |
+| (after DV-479) the contract's `lt` excludes an unset field | dashboard unit; live contract |
+| (after DV-479) the contract's empty `anyOf` matches nothing | dashboard unit; live contract |
+| (after DV-479) the contract's type clause follows dots | dashboard unit; live contract |
+| (after DV-479) the source adds an "is set" clause after `lt` | live; live contract |
+| (after DV-479) the source answers an empty page for an empty `anyOf` | live; live contract |
 | `watchTable` does not subscribe the loaded pages | live |
 | a size change not reported | live |
 | `watchTable`'s stop leaves the size subscribed | live (subscriptions count) |
@@ -651,27 +655,17 @@ follow-up that matches Convex):
 3. A system function's argument error is "ArgumentValidationError: …"; Convex's system functions check their
    arguments in JavaScript ("Uncaught Error: …"). `functions.ts` `systemArgs`.
 
-**Owner question (DV-479, pending)** — in the decision format:
-
-- *Convex*: its dashboard sends its filters to `paginatedTableDocuments`, where Convex's value order applies: an
-  unset field is below every value, so `k < 2` lists the documents without `k`; an `anyOf` with no value
-  filters nothing; a type clause reads only a top-level field. A malformed expression fails with zod's issue
-  list (a JSON dump, ~200 lines for one bad operator).
-- *bunvex*: the server function does exactly that (the oracle checks it). The dashboard's contract (UI-01
-  §12.4, decided for the mock) says otherwise: an unset field matches only `neq`, `noneOf` and `type: unset`;
-  `anyOf` of nothing matches nothing; a type clause follows dots. As built, the source keeps the contract (an
-  "is set" clause after `lt` / `lte`, an empty page for `anyOf` of nothing); a nested type clause still reads the
-  top-level field (the server's form cannot say otherwise). The malformed expression's message is bunvex's own
-  words ("Invalid filters: clauses[0].op is not an operator.").
-- *Same?* The server function: yes, but the shape error's words. The Data screen: no — with `lt` / `lte` on a
-  field some documents lack, and `anyOf` of nothing.
-- *Why*: "Ainda não fizemos" — the contract was written for the mock before Convex's server was studied;
-  nothing prevents either. The zod message: possible to reproduce, but only a hand-made URL can produce it.
-- *App impact*: none (the dashboard only); an operator sees different rows for those two filters.
-- *Recommendation*: (a) move the contract to Convex's rules (an unset field below every value, `anyOf` of nothing
-  filters nothing, type clauses on top-level fields): change `packages/dashboard/src/filters.ts` (the mock and
-  the contract's oracle) and drop the source's two adjustments, so the screen lists what Convex's lists;
-  (b) keep bunvex's words for a malformed expression and record it with DV-479.
+**DV-479 (owner, 2026-10-12: follow Convex).** The dashboard contract (UI-01 §12.4) was written for the mock
+before Convex's server was studied, and differed from it: an unset field matched only `neq`, `noneOf` and
+`type: unset`, an empty `anyOf` matched nothing, a type clause followed dots. The owner chose Convex's rules and
+set a standing rule: where the contract conflicts with Convex, the contract changes. So `filters.ts` (the mock and
+the contract suite's oracle) now follows Convex's `paginatedTableDocuments` — an unset field below every value
+(it passes `lt` / `lte`), an empty `anyOf` filters nothing, type clauses read the top-level field by its name — and
+the source sends the clauses as they are (its first draft added an "is set" clause after `lt` / `lte` and
+answered an empty page for an empty `anyOf`). The suite run against the live server now checks those rules too.
+Only the wording of a malformed expression's error stays a divergence (DV-479): bunvex's one line, not zod's
+issue list (asked as: Convex / bunvex / same: no, words only / why: reproducing zod's dump brings nothing, only
+a hand-made URL sends one / app impact: none / decided: keep bunvex's words).
 
 **Notes for PR 3** (the data mutations):
 

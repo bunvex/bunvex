@@ -30,13 +30,6 @@ const INDEXES = "_system/frontend/indexes";
 const LIST_BY_ID = "_system/frontend/listById";
 const GET_SCHEMAS = "_system/frontend/getSchemas";
 
-/**
- * The server's stand-in for `undefined` in a filter value (Convex's `UNDEFINED_PLACEHOLDER`, bunvex's name by
- * rule 5: DV-478). A comparison with it reads "the field is set" or "unset".
- */
-export const UNDEFINED_PLACEHOLDER =
-  "__BUNVEX_PLACEHOLDER_undefined_I23atX0jcndVbFgXoQZffsih7eAqktCyFjgUuAeNBtfr3ySOljPSPSEOPFgprkdBO3zXNiGEJxmJ5ZFPc5C5qKesG80QRPvlJe8vgSxAt9feLTwxTg4PHfVwUaTEJU67FDwldWmTxp1guMPwxQ2jOuhEryTBf3mQ";
-
 /** How long one `/api/shapes2` answer serves every caller: SWR's default `dedupingInterval`, as Convex's hook. */
 export const SHAPES_DEDUPE_MS = 2000;
 /** The most pages of one table kept live while it is watched (two generations of a scrolled grid). */
@@ -105,35 +98,19 @@ export function indexInfoOf(ix: IndexJson): IndexInfo | null {
 }
 
 /**
- * The contract's expression in Convex's form (`lib/filters.ts` `FilterExpression`), and for each of its
- * clauses the contract clause it came from (the server names a refused clause by its position). The contract's
- * order of values is the server's; where their rules differ, a clause is added: an unset field never passes
- * `lt` / `lte` / `eq` here, where Convex's order puts it below every value.
+ * The contract's expression in Convex's form (`lib/filters.ts` `FilterExpression`): the contract's rules are
+ * Convex's (DV-479), so the clauses pass as they are, the type `int64` named `bigint`. `origins` names each
+ * server clause's contract clause (the server names a refused clause by its position).
  */
-export function toServerFilter(expr: FilterExpression): {
-  json: Record<string, unknown>;
-  origins: string[];
-  matchesNothing: boolean;
-} {
-  const clauses: Record<string, unknown>[] = [];
-  const origins: string[] = [];
-  let matchesNothing = false;
-  const push = (c: Record<string, unknown>, origin: string) => {
-    clauses.push(c);
-    origins.push(origin);
-  };
-  for (const c of expr.clauses as FieldFilter[]) {
-    const base = { id: c.id, field: c.field, enabled: c.enabled };
-    if (c.op === "type" || c.op === "notype") {
-      push({ ...base, op: c.op, value: c.value === "int64" ? "bigint" : c.value }, c.id);
-      continue;
-    }
-    // Convex's `anyOf` of nothing filters nothing; the contract's matches nothing.
-    if (c.op === "anyOf" && c.enabled && (c.value as Value[]).length === 0) matchesNothing = true;
-    push({ ...base, op: c.op, value: c.value }, c.id);
-    if (c.op === "lt" || c.op === "lte")
-      push({ ...base, id: `${c.id}:set`, op: "neq", value: UNDEFINED_PLACEHOLDER }, c.id);
-  }
+export function toServerFilter(expr: FilterExpression): { json: Record<string, unknown>; origins: string[] } {
+  const clauses = (expr.clauses as FieldFilter[]).map((c) => ({
+    id: c.id,
+    field: c.field,
+    enabled: c.enabled,
+    op: c.op,
+    value: (c.op === "type" || c.op === "notype") && c.value === "int64" ? "bigint" : c.value,
+  }));
+  const origins = clauses.map((c) => c.id);
   const json: Record<string, unknown> = { clauses, order: expr.order };
   if (expr.index) {
     // The enabled equalities (a prefix), then the range on the next field.
@@ -152,7 +129,7 @@ export function toServerFilter(expr: FilterExpression): {
         : [];
     json.index = { name: expr.index.name, clauses: [...eq, ...range] };
   }
-  return { json, origins, matchesNothing };
+  return { json, origins };
 }
 
 /** A shape as a document type (Convex's `displaySchemaFromShape`, as a validator): null for an empty table. */
@@ -336,7 +313,6 @@ export class Tables {
           : await this.indexesOf(q.table, signal);
       validateFilter(q.filter, indexes);
       const server = toServerFilter(q.filter);
-      if (server.matchesNothing) return { page: [], isDone: true, continueCursor: "" };
       filters = base64(JSON.stringify(server.json));
       origins = server.origins;
     }
