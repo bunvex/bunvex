@@ -129,7 +129,9 @@ function cases(): Case[] {
   body("POST", "/api/v1/data/sync", ['{"selection":5}', '{"cursor":5}']);
   body("POST", "/api/data_sync_cursor_from_deltas", ['{"cursor":"x"}', '{"cursor":0,"selection":5}']);
   body("POST", "/api/list_snapshot", ['{"snapshot":"x"}', '{"tableName":5}', '{"selection":5}', '{"cursor":5}']);
-  body("POST", "/api/document_deltas", ['{"cursor":"x"}', '{"cursor":0,"tableName":5}', '{"cursor":0,"format":5}']);
+  // No bad `format` with a cursor here: Convex checks it after the read, so whether cursor 0 is still in each
+  // side's document window decides the answer (the server's streaming-export test covers the order).
+  body("POST", "/api/document_deltas", ['{"cursor":"x"}', '{"cursor":0,"tableName":5}']);
   query("/api/v1/list_audit_log_events", [
     "",
     "?from=x",
@@ -142,7 +144,7 @@ function cases(): Case[] {
     "?from=99999999999999999999",
   ]);
   query("/api/list_snapshot", ["?snapshot=x", "?cursor=", "?tableName=", "?format=nope", "?snapshot=-1", "?snapshot="]);
-  query("/api/document_deltas", ["", "?cursor=x", "?cursor=-1", "?cursor=0&format=nope", "?cursor=0&tableName="]);
+  query("/api/document_deltas", ["", "?cursor=x", "?cursor=-1", "?cursor=0&tableName="]);
   query("/api/json_schemas", ["?deltaSchema=x", "?format=nope", "?deltaSchema=true", "?byComponent=1"]);
   query("/api/v1/list_active_syncs", ["?limit=x", "?limit=0", "?limit=-1"]);
   for (const q of ["", "?format=nope", "?format=csv", "?format=zip&mode=nope", "?format=csv&tableName=a-b"])

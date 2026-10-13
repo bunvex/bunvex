@@ -58,6 +58,24 @@ export function parseFormat(s: string | null | undefined): Format {
   throw bad("BadFormat", `format param must be one of [\`json\`]. Got ${s}`);
 }
 
+/**
+ * The `format` argument as Convex's streaming export routes check it: last, after the read
+ * (local_backend/src/streaming_export.rs), so a request also wrong otherwise gets that error. `f` is what the
+ * values are written in meanwhile; `check()` throws the format's error, if any.
+ */
+function lateFormat(s: string | null | undefined): { f: Format; check: () => void } {
+  try {
+    return { f: parseFormat(s), check: () => {} };
+  } catch (e) {
+    return {
+      f: "clean",
+      check: () => {
+        throw e;
+      },
+    };
+  }
+}
+
 const b64 = (bytes: Uint8Array) => Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64");
 const floatBytes = (n: number) => {
   const buf = new Uint8Array(8);
@@ -202,7 +220,7 @@ export function streamedTables(engine: Engine): TableDef[] {
 /** `list_snapshot`: one table's documents at `snapshot`, by id, a page at a time. */
 export async function listSnapshot(deps: Deps, args: Record<string, unknown>): Promise<string> {
   const { engine } = deps;
-  const f = parseFormat(args.format as string | undefined);
+  const { f, check: checkFormat } = lateFormat(args.format as string | undefined);
   const selection = selectionOf(args);
   const now = engine.committer.visibleTs;
   let snapshotNs: bigint;
@@ -230,8 +248,10 @@ export async function listSnapshot(deps: Deps, args: Record<string, unknown>): P
   const tables = streamedTables(engine)
     .map((t) => ({ t, cols: tableSelection(selection, t.name) }))
     .filter((x) => x.cols !== null && (cursor === null || compareInternalIds(x.t.id, cursor.tablet) >= 0));
-  const out = (values: string[], next: string | null) =>
-    `{"values":[${values.join(",")}],"snapshot":${snapshotNs},"cursor":${next === null ? "null" : JSON.stringify(next)},"hasMore":${next !== null}}`;
+  const out = (values: string[], next: string | null) => {
+    checkFormat();
+    return `{"values":[${values.join(",")}],"snapshot":${snapshotNs},"cursor":${next === null ? "null" : JSON.stringify(next)},"hasMore":${next !== null}}`;
+  };
   if (tables.length === 0) return out([], null);
   const { t, cols } = tables[0]!;
   const after = cursor !== null && cursor.tablet === t.id ? cursor.id : null;
@@ -280,7 +300,7 @@ export async function documentDeltas(deps: Deps, args: Record<string, unknown>):
   const { engine } = deps;
   if (args.cursor === undefined || args.cursor === null)
     throw bad("DocumentDeltasCursorRequired", "/api/document_deltas requires a cursor");
-  const f = parseFormat(args.format as string | undefined);
+  const { f, check: checkFormat } = lateFormat(args.format as string | undefined);
   const selection = selectionOf(args);
   const cursorNs = BigInt(args.cursor as string);
   if (cursorNs < 0n) throw new Error("negative cursor");
@@ -330,6 +350,7 @@ export async function documentDeltas(deps: Deps, args: Record<string, unknown>):
       "InvalidWindowToReadDocuments",
       `Trying to synchronize from timestamp ${cursorNs + 1n}, which is older than the database’s retention window. This may happen if you paused your Fivetran or Airbyte connector for a long period of time. Please perform a full sync of the connector. See https://fivetran.com/docs/connectors/troubleshooting/trigger-historical-re-syncs or https://docs.airbyte.com/platform/operator-guides/refreshes`,
     );
+  checkFormat();
   const cursorOut = hasMore ? newCursor! : upper;
   return `{"values":[${values.join(",")}],"cursor":${cursorOut},"hasMore":${hasMore}}`;
 }
