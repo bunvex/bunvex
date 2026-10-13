@@ -82,6 +82,35 @@ export const cronSpecOf = (row: Record<string, unknown>): CronSpec => ({
   cronSchedule: scheduleOf(row.cronSchedule as Record<string, unknown>),
 });
 
-/** A module's cron specs as `analyzeResult.cronSpecs`: Convex's `[{identifier, spec}]`, or null. */
+/**
+ * A module's cron specs as `analyzeResult.cronSpecs`: Convex's `[{identifier, spec}]` in identifier order (its
+ * `BTreeMap`; identifiers are printable ASCII), or null.
+ */
 export const cronSpecsRow = (specs: Record<string, CronSpec> | null): Value =>
-  specs === null ? null : Object.entries(specs).map(([identifier, spec]) => ({ identifier, spec: cronSpecRow(spec) }));
+  specs === null
+    ? null
+    : Object.entries(specs)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([identifier, spec]) => ({ identifier, spec: cronSpecRow(spec) }));
+
+/**
+ * A module's cron specs as Convex's `start_push` answers them (`SerializedNamedCronSpec` through serde_json): the
+ * row's shape, its arguments' bytes a JSON array of numbers (`serde_bytes`) and its schedule's numbers plain.
+ * The arguments stay the bytes of their JSON text, so an int64 among them is `{"$integer": …}` there.
+ */
+export const cronSpecsJson = (specs: Record<string, CronSpec> | null) =>
+  specs === null
+    ? null
+    : (cronSpecsRow(specs) as { identifier: string; spec: Record<string, Value> }[]).map(({ identifier, spec }) => ({
+        identifier,
+        spec: {
+          udfPath: spec.udfPath as string,
+          udfArgs: [...new Uint8Array(spec.udfArgs as ArrayBuffer)],
+          cronSchedule: Object.fromEntries(
+            Object.entries(spec.cronSchedule as Record<string, Value>).map(([k, x]) => [
+              k,
+              typeof x === "bigint" ? Number(x) : x,
+            ]),
+          ),
+        },
+      }));

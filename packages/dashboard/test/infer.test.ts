@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { INFERRED_TYPE_REFRESH_MS, inferredTypeQuery } from "../src/data/queries.ts";
 import type { Document } from "../src/data-source.ts";
 import { encodeInt64 } from "../src/filters.ts";
 import { inferDocumentType } from "../src/mock/infer.ts";
@@ -46,5 +47,13 @@ describe("a document type inferred from documents", () => {
       expect(validateValue(v, own)).toEqual([]);
     }
     expect(inferDocumentType([], noIds)).toBeNull();
+  });
+});
+
+describe("the inferred type's query", () => {
+  test("is asked again every minute while shown, as Convex's dashboard polls /api/shapes2 (STUDY-149)", () => {
+    const q = inferredTypeQuery({ source: {} as never, scope: "s" }, "t");
+    expect(q.refetchInterval).toBe(INFERRED_TYPE_REFRESH_MS);
+    expect(INFERRED_TYPE_REFRESH_MS).toBe(60_000);
   });
 });

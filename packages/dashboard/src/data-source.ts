@@ -180,8 +180,10 @@ export const FIELD_OPS: readonly FieldOp[] = [
 /**
  * A condition on one field, applied to the documents the index range yields. `value` is a Value for the
  * comparisons, an array of Values for `anyOf` / `noneOf`, a ValueType for `type` / `notype`. Comparisons
- * follow the value order (null < int64 < number < boolean < string < bytes < array < object); an unset
- * field only matches `neq`, `noneOf` and `type: "unset"`.
+ * follow Convex's value order (unset < null < int64 < number < boolean < string < bytes < array < object),
+ * so an unset field passes `neq`, `lt`, `lte`, `noneOf` and `type: "unset"`; `anyOf` with no value filters
+ * nothing; `type` / `notype` read the document's top-level field by that name (Convex's
+ * `paginatedTableDocuments`, DV-479).
  */
 export type FieldFilter = {
   /** Stable within the expression; errors name the clause by it. */

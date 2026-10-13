@@ -108,6 +108,13 @@ test("_modules.analyzeResult.cronSpecs: Convex's [{identifier, spec}]", async ()
   expect(shapeDiff({ cronSpecs: ours }, { cronSpecs: convex.cronSpecs })).toEqual([]);
   expect(ours).toEqual(convex.cronSpecs);
   expect(cronSpecsRow(null)).toBeNull();
+  // In identifier order, as Convex's `BTreeMap` (bytes: upper case first), whatever order the module gave.
+  const c = cronJobs();
+  for (const id of ["b", "a", "B"]) c.interval(id, { minutes: 1 }, "m:f");
+  const ids = (cronSpecsRow(Object.fromEntries(cronSpecs(c, (_i, n) => n))) as { identifier: string }[]).map(
+    (x) => x.identifier,
+  );
+  expect(ids).toEqual(["B", "a", "b"]);
 });
 
 test("a spec survives its row: every schedule, an absent minute as null", () => {
