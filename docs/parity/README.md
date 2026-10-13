@@ -132,7 +132,7 @@ In this order:
 12. the dashboard on a real deployment (its HTTP data source, with the UI session, and the `_system/*`
     functions it reads), then live logs — open: every screen is built on the mock; the server source,
     `@bunvex/dashboard-source`, is being built in steps (STUDY-149: PR 1 reads the deployment, schema, state,
-    logs and function metrics);
+    logs and function metrics; PRs 2, 4 and 5 the data, functions, runner, Settings, schedules, files and history);
 13. built-in auth (STUDY-28) phases — open (AD-01 accepted, spike done);
 14. import/export in Convex's snapshot format, so data can move between Convex and bunvex (STUDY-42) —
     done; shape inference and the upgrade path remain (platform §18; cloud backups are cloud-only, *n/a*).
@@ -151,9 +151,9 @@ containers up, deploy functions, see them work) before the remaining platform it
   done;
 - streaming export (STUDY-60, STUDY-69) — done;
 - the dashboard's connection to a real deployment. Every screen is built on the mock (UI-01 §0, platform §21);
-  the server source (`@bunvex/dashboard-source`, STUDY-149) reads the deployment, schema, state, logs and
-  function metrics so far; the tables, documents, functions and other screens, and the app's switch to it,
-  are still to come.
+  the server source (`@bunvex/dashboard-source`, STUDY-149) reads the deployment, schema, state, logs, metrics,
+  tables and documents, functions (and runs them), Settings, schedules, files and history so far; the data writes
+  and the app's switch to it are still to come.
 
 ## Gaps by impact
 
@@ -193,7 +193,9 @@ gaps.
     deployment, schema, state, logs, function metrics and the `check_admin_key` sign-in; PR 2: the Data
     screen's reads, with the server's `getTableMapping`, `paginatedTableDocuments`, `indexes`, `listById`,
     `getById` and `/api/get_indexes`; PR 5: schedules, files, the audit log, Health's concurrency and
-    invalidations); the rest is PRs 3, 4 and 6;
+    invalidations; PR 4: the Functions screen, the runner with its custom test query and Settings, with the
+    server's `modules:*`, `components:list`, `getVersion`, `cloudUrl` / `siteUrl`, `listEnvironmentVariables`,
+    `latestExport` and `snapshotImport:list`); the rest is PRs 3 and 6;
   - its data mutations (`_system/frontend` `addDocument`, `patchDocumentsFields`, `deleteDocuments`,
     `createTable`, …) bring the `add_documents`, `update_documents`, `delete_documents` and `create_table`
     audit events.

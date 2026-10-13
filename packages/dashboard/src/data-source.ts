@@ -267,6 +267,11 @@ export type FunctionInfo = {
   args?: ValidatorJson;
   /** The declared return value validator. Absent: none declared. */
   returns?: ValidatorJson;
+  /**
+   * The line it is declared on in its module's source, when the push reported it (Convex's `lineno`): a module's
+   * functions are listed in this order, as in Convex's Functions screen.
+   */
+  line?: number;
 };
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -517,6 +522,24 @@ export interface DashboardDataSource
     onError: (error: DataSourceError) => void,
     opts?: Pick<RunOptions, "identity">,
   ): Unsubscribe;
+
+  /**
+   * Tells the caller the deployed functions may have changed (a push), as Convex's dashboard keeps its module list
+   * subscribed (`modules:listForAllComponents`). The dashboard then lists them again. Never synchronously.
+   * Optional; without it, the list is read when a screen opens.
+   */
+  watchFunctions?(onChange: () => void, onError: (error: DataSourceError) => void): Unsubscribe;
+
+  /**
+   * Runs a query written in the dashboard once, as Convex's runner runs its "Custom test query"
+   * (`/api/run_test_function`): `code` is a JavaScript module (the screen compiles the TypeScript typed, as Convex's
+   * does) whose default export is a query; `query` and `internalQuery` are in scope, the source imports them. It
+   * runs with no arguments, against the deployment's data, and changes nothing. What it returns or throws comes
+   * back as a run, with the lines it logged; so does a module that does not load (its error), as in Convex's
+   * runner. Rejects only when the call cannot be made (`unauthorized`, `unavailable`). Allowed with
+   * `runFunctions` (Convex's `RunTestQuery`), read-only credentials included. Optional.
+   */
+  runTestQuery?(code: string, opts?: CallOptions): Promise<FunctionRun>;
 
   listLogs(query: LogQuery, opts?: CallOptions): Promise<Page<LogEntry>>;
   /** Live tail: entries created after the call, in id order, matching the filter. Never synchronously. */

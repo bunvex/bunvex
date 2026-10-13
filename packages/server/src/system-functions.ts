@@ -46,6 +46,7 @@ import type { DeploymentOp } from "./admin-keys.ts";
 import { auditActor, auditEvents } from "./audit-log.ts";
 import { readCanonicalUrls } from "./canonical-urls.ts";
 import { DATA_SYSTEM_QUERIES } from "./data-system-functions.ts";
+import { FRONTEND_SYSTEM_QUERIES } from "./frontend-system-functions.ts";
 import type { Functions } from "./functions.ts";
 import { paginationOptsValidator } from "./pagination.ts";
 import type { FileStorage } from "./storage.ts";
@@ -113,6 +114,7 @@ const componentId = v.optional(v.union(v.string(), v.null()));
 
 export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
   ...DATA_SYSTEM_QUERIES, // the Data screen's reads (STUDY-149 PR 2)
+  ...FRONTEND_SYSTEM_QUERIES, // the Functions and Settings screens' reads (STUDY-149 PR 4)
   // The dashboard's integrations page (STUDY-59), as Convex's: every `_log_sinks` row, S3 export's secret
   // key left out.
   "_system/frontend/listConfiguredSinks": {

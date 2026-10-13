@@ -7,7 +7,8 @@
 // Re-exported by `data-source.ts`.
 import type { CallOptions } from "./data-source.ts";
 
-export type SnapshotExportState = "requested" | "in_progress" | "completed" | "failed";
+/** As Convex's `_exports` states: `canceled` is one stopped by `POST /api/export/cancel/{id}`. */
+export type SnapshotExportState = "requested" | "in_progress" | "completed" | "failed" | "canceled";
 
 export type SnapshotExport = {
   id: string;

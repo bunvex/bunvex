@@ -155,9 +155,11 @@ function ExportStatus({ e, onDownload }: { e: SnapshotExport; onDownload?: () =>
   if (e.state === "failed")
     return (
       <p className="text-destructive">
-        The export requested {when(e.requestedAt)} failed: {e.error}
+        The export requested {when(e.requestedAt)} failed{e.error ? `: ${e.error}` : "."}
       </p>
     );
+  if (e.state === "canceled")
+    return <p className="text-muted-foreground">The export requested {when(e.requestedAt)} was canceled.</p>;
   if (e.state !== "completed")
     return (
       <p>

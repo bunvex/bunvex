@@ -1,6 +1,7 @@
 # STUDY-149 — The dashboard on real data: how Convex's dashboard reads a deployment
 
-- **Status:** decided (owner, 2026-10-12); PR 1 built (`@bunvex/dashboard-source`, §5 "PR 1, as built"). Q1: option B, a
+- **Status:** decided (owner, 2026-10-12); PR 1 built (`@bunvex/dashboard-source`, §5 "PR 1, as built"); PR 4
+  built (functions, the runner and Settings, §5 "PR 4, as built"). Q1: option B, a
   separate service with its own image (DV-475); Q3: rename (DV-474); Q4: Convex's model plus a `Host` check
   (DV-476); Q5: local links only (DV-477, replaces DV-217); Q2, Q6, Q7 confirmed as planned; AD-32 not taken.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/dashboard-common`,
@@ -912,6 +913,184 @@ reproduces it without load).
   pairs that caused the most queries to be re-run"; the scheduler's wake-ups are not queries, and counting them
   would need synthetic events that mirror Convex's executor design rather than anything bunvex runs.
 - **Decision (owner, 2026-10-12): match Convex** — built as above; DV-480 is resolved to match Convex.
+
+### PR 4, as built
+
+The Functions screen, the function runner (with its custom test query) and the Settings screens, on the server
+source. Convex's side re-read for it (citations under `dc/` and `fe/` as above; `fr/` is
+`dc/features/functionRunner/`):
+
+- **The module list.** `fe/modules.ts`: `listForAllComponents` answers `[componentId | null, [path, module][]][]`,
+  the root's modules first, then each child component's (it calls itself in each, `currentSystemUdfInComponent`).
+  A module is listed when it has an analysis (`listHandler`), as `{functions, sourcePackageId, cronSpecs?}`; each
+  function is `{name, lineno, udfType, visibility}` (`processFunction`: the line from `pos.start_lineno`, none for
+  0; `visibility` public when absent), and the module's HTTP routes are appended as functions named
+  `<METHOD> <path>` with `udfType: "HttpAction"` (`processHttpRoute`). `sourcePackageId` is there so a push
+  re-renders every subscriber ("By returning sourcePackageId…", `fe/common.ts`). The dashboard keeps it subscribed
+  for its whole life (`dc/lib/functions/useListModules.ts:20-49`, `FunctionsProvider.tsx`), so a push reaches the
+  tree. The tree (`dc/lib/functions/generateFileTree.ts:96-180`) skips a module with no function, puts folders
+  before files by name, and sorts a file's functions by `lineno` (`-1` when absent); the runner offers queries,
+  mutations and actions only (`SUPPORTED_FUNCTION_TYPES`).
+- **Arguments.** `modules:argsValidator({function})` splits the display name at `:` (two parts), reads the
+  `_modules` row at `<path>.js` by `by_path` (`unique`), and answers the function's stored `args` text, Convex's
+  `DEFAULT_ARGS_VALIDATOR` (`{ "type": "any" }`) when it has none, or null (`fe/modules.ts:48-80`). The runner
+  subscribes it for the open function (`fr/components/FunctionTester.tsx:188`). The returns validator is not shown
+  anywhere in Convex's dashboard.
+- **The runner** (`fr/lib/client.ts:14-48`, `FunctionTester.tsx:520-610`, `QueryResult.tsx`): a second
+  `ConvexReactClient` signed in with `setAdminAuth(adminKey, identity)`; a new identity re-authenticates it. A query
+  is `watchQuery` on it: live, its log lines from `localQueryLogs`, a failure as its error text. A mutation or an
+  action is `mutationInternal` / `actionInternal` on its `BaseConvexClient`, the result with its `logLines`; the
+  request's session id and counter filter the log stream for the run's lines. Internal functions need
+  `RunInternal*`, acting as a user `ActAsUser`.
+- **Custom test query** (`fr/components/FunctionEditor.tsx:71-73`, `:165-300`; `fr/lib/client.ts:50-105`): Monaco
+  holds the TypeScript (with the schema's generated types for completion), its TypeScript worker compiles it
+  (`getEmitOutput`), the preamble `import { query, internalQuery } from "convex:/_system/repl/wrappers.js"` is put
+  first, and `POST /api/run_test_function {bundle: {path: "testQuery.js", source}, adminKey, componentId, args: {},
+  format}` runs it, the key in the body and no `Authorization`. 200: `{status: "success", value, logLines}` or
+  `{status: "error", errorMessage, errorData, logLines}`; a 4xx shows the body's `message` as the run's error; a 5xx a
+  generic one. Gated on `RunTestQuery` (read-only keys have it). The default code is a query reading `take(10)` of
+  the table the Data screen shows (`YOUR_TABLE_NAME` otherwise).
+- **Settings.** `listEnvironmentVariables` (`fe/listEnvironmentVariables.ts`, `ViewEnvironmentVariables`): the
+  `_environment_variables` documents by name, subscribed (`DeploymentEnvironmentVariables.tsx:34`); changes go to
+  `POST /api/update_environment_variables {changes}` (`features/settings/lib/api.ts:20-48`), whose 400 names the
+  variable. `latestExport` (`fe/latestExport.ts`, `ViewBackups`): the newest `_exports` row of the `snapshotExport`
+  requestor; `snapshotImport:list` (`fe/snapshotImport.ts`): the 20 newest `_snapshot_imports`. `getVersion`
+  (`noPermissionRequired`): `_udf_config.serverVersion || null`. `components:list`: each `_components` row with its
+  path from its parents (`""` for the root), `args` as an object, `state` (default `active`), `httpPrefix`.
+  `convexCloudUrl` / `convexSiteUrl` (`ViewData`): `CONVEX_CLOUD_URL` / `CONVEX_SITE_URL`.
+
+**Server** (`packages/server/src/frontend-system-functions.ts`, spread into `SYSTEM_QUERIES` by one line):
+`modules:listForAllComponents`, `modules:list`, `modules:argsValidator`, `components:list`, `getVersion`,
+`cloudUrl` and `siteUrl` (DV-474: Convex's `convexCloudUrl` / `convexSiteUrl`; the canonical URL when set, as
+`_system/cli/deploymentUrl:cloudUrl`), `listEnvironmentVariables`, `latestExport`, `snapshotImport:list`; each
+under Convex's permission. They read the rows bunvex stores as Convex's (`_modules` with its
+`SerializedAnalyzedModule`, `_components`, `_udf_config`; STUDY-134), so the code is Convex's reading of them.
+
+**Source** (`packages/dashboard-source`, `functions.ts` and `settings.ts`, wired in `server-source.ts`):
+
+- `listFunctions`: `listForAllComponents`, the root's queries, mutations and actions at `module:name` with their
+  visibility and `line`; the validators come from `_system/cli/modules:apiSpec` in the same call — the contract
+  carries the arguments and returns validators in the list, and one query serves every function where
+  `argsValidator` would take one each and never gives the returns one. `v.any()` (what a function declared without
+  arguments exports) is no validator, as the contract's "none declared".
+- `watchFunctions` (new optional contract method): the module list kept subscribed while watched (`LiveGroup`, PR 5);
+  a push is a new result. The Functions screen and the runner list the functions again on it (`useLiveFunctions`).
+- `runFunction`, `watchFunction`: a runner client per identity (none: the admin), as Convex's second client, signed
+  in with `setAdminAuth(key, identity)`; at most 4 kept, the least recently used idle one closed. A query is
+  subscribed (once for `runFunction`), a mutation or an action is `mutationInternal` / `actionInternal`; the result's
+  log lines (`[LEVEL] message`, Convex's `entryLogLines`) come with it, values in the contract's encoding, the
+  duration measured as Convex's runner measures it (client side). What the function throws is the run's error. Before
+  a run the source checks what the contract asks (`not_found`, `unauthorized` for a credential without
+  `runFunctions`, a read-only one running a mutation or an action, or one without `actAsUser` acting as a user), so a
+  server refusal is never mistaken for the function's own error.
+- `runTestQuery(code)` (new optional contract method): Convex's request, with bunvex's preamble specifier
+  (`bunvex:/_system/repl/wrappers.js`, DV-390) and format (`encoded_json`, DV-307); a 400 is the run's error (a
+  module that does not load), a refused key `unauthorized`, a 5xx `unavailable`.
+- Settings: `listEnvironmentVariables` subscribed while watched, with the new optional
+  `watchEnvironmentVariables`; `updateEnvironmentVariables` posts the batch as it is (the server checks it whole);
+  `listAuthProviders` (the `_auth` documents, a custom JWT's stored algorithm unquoted); the snapshots —
+  `getLatestSnapshotExport` (`latestExport`), `requestSnapshotExport` (`/api/export/request/zip`, then the latest),
+  `downloadSnapshotExport` (`/api/export/zip/{id}` with the key in `Authorization`), `startSnapshotImport` (the CLI's
+  `start_upload`, 8 MiB `upload_part`s, `finish_upload`, then read until the deployment has parsed it; what changes
+  per table from the row's checkpoints), `confirmSnapshotImport` (`/api/perform_import`), `cancelSnapshotImport`
+  (`/api/cancel_import`), `getSnapshotImport` (`_system/cli/queryImport`). An export or an import is read over
+  `/api/query`, fresh: a socket result kept for a query just dropped could be older than the request that started it.
+- `getDeployment`: `url` from `cloudUrl` (the server's URL when the credential cannot read it), `httpActionsUrl` from
+  `siteUrl` when set.
+
+**The contract, moved to Convex** (the owner's standing rule, DV-479): `FunctionInfo.line` (Convex's `lineno`) and
+the tree ordered by it; `SnapshotExportState` gains Convex's `canceled`; the new optional `watchFunctions`,
+`runTestQuery` and `watchEnvironmentVariables`. The contract suite checks `line`, `runTestQuery` (a value with its
+log lines; a throw and a module that does not load are runs) and that an environment variable watcher hears a change.
+Its invalidations test now picks a deployed mutation's pair (an admin route's write, such as an environment
+variable's, is a pair whose source no mutation filter names — the first live run of the metrics area found it).
+
+**The screens** (`packages/dashboard`): the runner's picker starts with "Custom test query" when the source has
+`runTestQuery`: a TypeScript editor (Monaco's TypeScript language, syntax checked; no type checking, since the app's
+types are not in the browser — Convex's editor has its schema's generated types, a gap), Convex's starting code on the
+first table, compiled by Monaco's TypeScript worker (`transpileTypeScript` in `@bunvex/ui`, Convex's
+`getEmitOutput`), run once, its result and logs beside it. The Functions screen and the runner follow a push; the
+environment variables follow changes made elsewhere, but not over edits waiting to be saved (saving reloads them);
+a canceled export says so.
+
+**Found and fixed on the way** (the oracle): an import's `_snapshot_imports.member_id` was always null; Convex's
+records the admin key's member (`identity.member_id()`, 0 for a key issued without one). `start` and the one-shot
+import now take the caller's member (`imports.ts`, `server.ts`; storage parity).
+
+**Found, not fixed here** (each its own concern): a function declared with a `returns` validator has its analyzed
+line two lines before Convex's (`messages:secret`: 37 against 39; the push's `pos`, STUDY-65 M5), masked in the
+oracle; bunvex's `_system/cli/modules:apiSpec` reads the loaded code rather than the `_modules` rows (not reactive,
+validators `JSON.parse`d rather than `jsonToConvex`), which answers the same today.
+
+**Not built here**: HTTP actions in the Functions tree (Convex lists them under `http.js`; the contract's
+`FunctionKind` has no HTTP action — a contract change with the Logs screen's kinds, for PR 6), the custom query's
+type checking and completions, `latestExport:latestCloudExport` and `canExportFileStorage` (cloud backups, cloud only),
+child components (DV-55).
+
+**Tests.**
+
+- **Oracle** (`packages/differential/test/dashboard-functions.test.ts`, the app in `functions-app/` with a nested
+  module, HTTP routes, a cron, an internal query with an int64 `returns`, a function without a validator, a default
+  export): `listForAllComponents` and `modules:list` (by path; Convex's CLI also pushes `convex.config.js`), eleven
+  `argsValidator` names (compared as JSON), `components:list`, `getVersion`, the URLs, `listEnvironmentVariables`
+  before and after a change, `latestExport` before and after an export, `snapshotImport:list` before and after an
+  upload waiting for confirmation (the confirmation's CLI name rewritten, rule 5), the runner over the socket (a query
+  as the admin and acting as a user, an internal query with an int64, a mutation, an action, a misfit) and two custom
+  test queries (a value with its log line, a throw; a module that does not load is a 400 on both).
+- **Server** (`packages/server/test/frontend-system-functions.test.ts`): a module without an analysis, a function
+  without a position, a route on line 0, crons; `argsValidator`'s misses; a child component's path; an empty
+  version; the canonical site URL; the 20 newest imports without bunvex's own fields; each function's permission.
+  `imports.test.ts`: an import's member.
+- **Source** (`packages/dashboard-source/test/functions-settings.test.ts`): the list's mapping, validators, log
+  lines, values and errors, the test query's request and each answer, the export, import and provider documents.
+- **Live** (`packages/sync-e2e/dashboard/server-source-functions.test.ts`): the contract suite's `functions`, `run`
+  (with a misfit), `metrics`, `snapshot` (an export and an import), `auth` and `deploymentFeatures` (environment
+  variables changed) areas; the list's mapping; a push heard by `watchFunctions`; runs of each kind, an int64, a
+  throw, acting as a user (two identities at once), a read-only key; a watched query following its data and
+  stopping; `not_found` and a watched mutation's `invalid_request`; test queries (a read-only key, a write refused, a
+  wrong key); a variable changed by the CLI's route heard; the URLs.
+- **Screens** (`packages/dashboard/test`): the tree's order by line; a push relisting the functions; the custom test
+  query (first in the picker, Convex's starting code, run, its result, axe) and its absence without `runTestQuery`;
+  the variables reloaded on a change but not over edits; a canceled export. `transpileTypeScript` was run in a
+  browser against Monaco's worker (types and a type-only import erased).
+
+**Sabotage** (each restored after, `git diff` clean; every one turned a test red):
+
+| Sabotage | Failing tests |
+|---|---|
+| server: `argsValidator` reads the path without `.js` | server |
+| server: a module without an analysis listed | server |
+| server: HTTP routes not listed | server |
+| server: `listEnvironmentVariables` under `ViewData` | server |
+| server: `getVersion` answers an empty version | server |
+| server: `siteUrl` ignores the canonical URL | server |
+| server: an import's member left null | server; oracle |
+| source: `v.any()` listed as a validator | unit; live |
+| source: the runner does not act as the user | live (2) |
+| source: one runner client for every identity | live (2) |
+| source: the test query's key in `Authorization` | unit |
+| source: a 4xx test query rejects | unit; live (2) |
+| source: `watchFunctions` never follows the list | live |
+| source: the variables' watcher never fires | live (2) |
+| source: an import's add and delete swapped | unit; live |
+| source: export times left in ns | unit |
+| source: a run's `LOG` lines as debug | unit (2); live (2) |
+| source: `getDeployment` ignores `cloudUrl` | live |
+| source: a test query's value dropped | live (2) |
+| screens: the tree ignores lines | dashboard |
+| screens: the Functions screen not live | dashboard |
+| screens: the variables reloaded over edits | dashboard |
+| screens: no custom test query in the picker | dashboard |
+
+**Measurements.** No hot path changes: the server adds system queries (read when the dashboard asks) and passes the
+caller's member to an import. The dashboard's entry chunk grows by 193 bytes; the value editor's Monaco now loads as
+`code-editor-monaco` (574 KB) plus `editor.api` (2.74 MB), 33 KB more than the one 3.28 MB chunk before (the
+TypeScript language's registration). Monaco's TypeScript mode (674 KB) and worker (6.9 MB) load only when a
+TypeScript editor opens (the custom test query), as Convex's. The source is not in the app's bundle until PR 6.
+
+**Notes for PR 6.** Mount the runner's custom test query on the real source (the app's mock has no `runTestQuery`);
+HTTP actions in the tree need a contract kind (`httpAction`) shared with the Logs screen; `watchEnvironmentVariables`
+and `watchFunctions` are already wired in the screens.
 
 ## 6. Open questions
 

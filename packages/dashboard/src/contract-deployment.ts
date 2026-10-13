@@ -257,8 +257,21 @@ export function describeDeploymentContract({ make, test, watchTimeoutMs, opts }:
         throw new Error("environmentVariables.write was enabled but the source cannot change them");
       const name = "BUNVEX_CONTRACT_SUITE";
       const get = async () => (await src.listEnvironmentVariables!()).find((v) => v.name === name)?.value;
+      // a watcher (when offered) hears the change
+      let heard = 0;
+      await get();
+      const off = src.watchEnvironmentVariables?.(
+        () => heard++,
+        () => {},
+      );
       await src.updateEnvironmentVariables([{ name, value: "one" }]);
       expect(await get()).toBe("one");
+      if (off) {
+        const deadline = performance.now() + watchTimeoutMs;
+        while (heard === 0 && performance.now() < deadline) await new Promise((r) => setTimeout(r, 5));
+        off();
+        expect(heard).toBeGreaterThan(0);
+      }
       const names = (await src.listEnvironmentVariables()).map((v) => v.name);
       expect(names).toEqual([...names].sort()); // still by name with a new one
       await expectCode(
