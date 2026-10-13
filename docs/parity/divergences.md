@@ -452,7 +452,10 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-None as of 2026-10-12.
+| ID | bunvex | Convex | Observable | Why | Status | Source |
+|---|---|---|---|---|---|---|
+| DV-503 | Under Bun, the published packages run from their TypeScript sources (a `bun` condition first in `exports`); Node, the bundlers and TypeScript get `dist/` | no Bun branch: Bun loads `dist/esm` | no (file names in stack traces) | The server and the CLI are Bun programs tested only from their sources; Bun on `dist/esm` would need the server's suites run against the build | pending (owner); recommended: accept | [STUDY-160 §4](../study/STUDY-160-client-on-node.md#4-divergences) |
+| DV-504 | `@bunvex/server`'s declarations name Bun's types (`Server`, `ServerWebSocket`): with `skipLibCheck: false` and no `@types/bun`, an app's `tsc` reports two errors in them | its declarations need nothing beyond its own | yes (only with `skipLibCheck` off) | The server's API is Bun's; `skipLibCheck` is on in `codegen --init`'s tsconfig and the frameworks' templates, as in Convex's. Alternative: structural types in the server | pending (owner); recommended: accept | [STUDY-160 §4](../study/STUDY-160-client-on-node.md#4-divergences) |
 
 DV-480 (STUDY-149 PR 5) was decided by the owner (2026-10-12: match Convex), built, and is in [Resolved to match Convex](#resolved-to-match-convex).
 

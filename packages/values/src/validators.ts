@@ -264,30 +264,47 @@ export class VObject<
     return new VObject<Type | undefined, Fields, "optional">("optional", this.fields);
   }
   /** A new object validator without the given fields. */
-  omit<K extends keyof Fields & string>(...names: K[]) {
+  // The return types are written out so that the published `.d.ts` keeps `ObjectType<…>` (STUDY-160): the
+  // declaration emit would inline it into mapped types that do not typecheck on their own.
+  omit<K extends keyof Fields & string>(
+    ...names: K[]
+  ): VObject<ObjectType<Omit<Fields, K>>, Omit<Fields, K>, IsOptional> {
     const f = { ...this.fields };
     for (const n of names) delete f[n];
     return new VObject<ObjectType<Omit<Fields, K>>, Omit<Fields, K>, IsOptional>(this.isOptional, f);
   }
   /** A new object validator with only the given fields. */
-  pick<K extends keyof Fields & string>(...names: K[]) {
+  pick<K extends keyof Fields & string>(
+    ...names: K[]
+  ): VObject<ObjectType<Pick<Fields, K>>, Pick<Fields, K>, IsOptional> {
     const f = {} as Pick<Fields, K>;
     for (const n of names) f[n] = this.fields[n];
     return new VObject<ObjectType<Pick<Fields, K>>, Pick<Fields, K>, IsOptional>(this.isOptional, f);
   }
   /** A new object validator with every field optional. */
-  partial() {
-    const f = Object.fromEntries(Object.entries(this.fields).map(([k, x]) => [k, optionalOf(x)])) as {
-      [K in keyof Fields]: Validator<Infer<Fields[K]> | undefined, "optional">;
-    };
-    return new VObject<ObjectType<typeof f>, typeof f, IsOptional>(this.isOptional, f);
+  partial(): VObject<ObjectType<PartialFields<Fields>>, PartialFields<Fields>, IsOptional> {
+    const f = Object.fromEntries(
+      Object.entries(this.fields).map(([k, x]) => [k, optionalOf(x)]),
+    ) as PartialFields<Fields>;
+    return new VObject<ObjectType<PartialFields<Fields>>, PartialFields<Fields>, IsOptional>(this.isOptional, f);
   }
   /** A new object validator with more fields (the new ones win). */
-  extend<More extends PropertyValidators>(more: More) {
-    const f = { ...this.fields, ...more } as unknown as Expand<Omit<Fields, keyof More> & More>;
-    return new VObject<ObjectType<typeof f>, typeof f, IsOptional>(this.isOptional, f);
+  extend<More extends PropertyValidators>(
+    more: More,
+  ): VObject<ObjectType<Extended<Fields, More>>, Extended<Fields, More>, IsOptional> {
+    const f = { ...this.fields, ...more } as unknown as Extended<Fields, More>;
+    return new VObject<ObjectType<Extended<Fields, More>>, Extended<Fields, More>, IsOptional>(this.isOptional, f);
   }
 }
+
+/** The fields of `partial()`: each one optional. */
+type PartialFields<Fields extends PropertyValidators> = {
+  [K in keyof Fields]: Validator<Infer<Fields[K]> | undefined, "optional">;
+};
+/** The fields of `extend(more)`: the new ones win. */
+type Extended<Fields extends PropertyValidators, More extends PropertyValidators> = Expand<
+  Omit<Fields, keyof More> & More
+>;
 
 export class VRecord<
   Type,
