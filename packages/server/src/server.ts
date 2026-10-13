@@ -1580,7 +1580,8 @@ export function createServer(opts: ServerOptions) {
       // and `/echo` (STUDY-112), with no auth and their own body limit.
       // `/echo` keeps Bun's idle timeout, which the request timeout turns off: its answer starts at once, so the
       // 408 never covers it, and under load Bun can leave an echo cut off past its limit open with nothing more
-      // to send or read (a Bun bug). The idle timeout closes such a connection, as before the request timeout.
+      // to send or read (Bun bug: https://github.com/oven-sh/bun/issues/45149). The idle timeout closes such a
+      // connection, as before the request timeout.
       if (url.pathname === "/echo") srv.timeout(req, idleTimeoutSeconds);
       const health = healthRoute(req, url.pathname, engine.instanceName, maxEchoBytes);
       if (health) return health;
