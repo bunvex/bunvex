@@ -24,6 +24,7 @@ import { type CronSpec, Crons, cronSpecs } from "./cron.ts";
 import { currentAllEnv, isolateProcessEnv, nodeProcessEnv, withPackageEnv } from "./env-scope.ts";
 import { describeUncaught, isError } from "./errors.ts";
 import { type FunctionDef, isFunctionDef, NODE_FUNCTIONS } from "./functions.ts";
+import { nodeProcessExit } from "./node-process-errors.ts";
 import { checkRouter, HttpRouter } from "./router.ts";
 import { byPosition, SourceMapTokens, type SourcePosition } from "./source-position.ts";
 import { moduleUrl, registerModules } from "./stack-map.ts";
@@ -256,7 +257,11 @@ function contextGlobals(node: boolean, env: Record<string, string>, onMissingEnv
   out.process = { env: isolateProcessEnv({ ...env }, onMissingEnv) };
   if (node) {
     for (const k of ["Buffer", "setImmediate", "clearImmediate", "global"]) out[k] = g[k];
-    out.process = Object.assign(Object.create(process), { env: nodeProcessEnv({ ...env }, currentAllEnv) });
+    // `process.exit` fails the running action and never stops the server (platform §9).
+    out.process = Object.assign(Object.create(process), {
+      env: nodeProcessEnv({ ...env }, currentAllEnv),
+      exit: nodeProcessExit,
+    });
   }
   return out;
 }

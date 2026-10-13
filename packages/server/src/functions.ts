@@ -170,6 +170,7 @@ import {
   perAttempt,
   withOwner,
 } from "./logs.ts";
+import { withNodeProcessErrors } from "./node-process-errors.ts";
 import { setOperationTracker } from "./pending-ops.ts";
 import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearchQuery } from "./registration.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
@@ -2237,9 +2238,12 @@ export class Functions {
             try {
               const value = this.checkReturns(
                 f,
-                await withActionTimeout(ms, timeout, () =>
-                  this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a))),
-                ),
+                await withActionTimeout(ms, timeout, () => {
+                  const run = () =>
+                    this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a)));
+                  // A Node action's uncaught callback exception or `process.exit` fails it at once (platform §9).
+                  return node ? withNodeProcessErrors(run) : run();
+                }),
               );
               warn(sizeOfResult(value ?? null));
               return value;
