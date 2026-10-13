@@ -41,6 +41,8 @@ backend is always started with `--disable-beacon`.
   Node module pushed by `later/ext.ts`), installed by each deployment from a registry the test serves: a failed
   install's 400, `start_push`'s id and its reuse, the actions' answers; the decided differences (a packaged binary's
   mode, the server's own variables) asserted on each side. Local only, and only with `npm` on the machine.
+- `test/storage-ids.test.ts`: a storage id's errors from every storage method in a query, a mutation and an
+  action (the app of `storage-app/`): another table's id, ids that do not parse, UUIDs. Local only.
 - `test/generated.test.ts`: `DIFF_RUNS` generated programs (25 by default), both backends started once and
   reset before each program. `DIFF_SEED` replays a run. A difference is shrunk, written to
   `.cache/failures/last.json` (the program and the differences, ready to become a fixed program) and fails
