@@ -1,7 +1,8 @@
 // An error's stack as the app sees it (STUDY-95): a pushed module's frames mapped through its source map, the
 // server's frames dropped, location-less frames kept only between the app's, and stacks with no pushed frame
-// (functions registered in-process) untouched. The log's exception frames come from the same mapping.
+// (functions registered in-process) without the server's own frames only. The log's exception frames come from the same mapping.
 import { expect, test } from "bun:test";
+import { resolve } from "node:path";
 import { stackFrames } from "../src/log-events.ts";
 import { SourceMapTokens } from "../src/source-position.ts";
 import { mapStack, moduleUrl, registerModules } from "../src/stack-map.ts";
@@ -44,9 +45,38 @@ test("no map, or no token: the module's path; an unknown version: the module's p
   expect(mapStack("E\n    at f (bunvex:/v999999/messages.js:2:6)")).toBe("E\n    at f (messages.js:2:6)");
 });
 
-test("a stack with no pushed module's frame is left as it is (functions registered in-process)", () => {
+test("a stack with no pushed module's frame keeps the developer's frames (functions registered in-process)", () => {
   const stack = "Error: x\n    at handler (/app/test/my.test.ts:10:3)\n    at run (/srv/functions.ts:1:1)";
   expect(mapStack(stack)).toBe(stack);
+});
+
+test("with no pushed module's frame, only the server's own frames go: its sources, its packages, node: internals", () => {
+  const packages = resolve(import.meta.dir, "../..");
+  const modules = resolve(packages, "../node_modules");
+  const stack = [
+    "Error: Set {…} is not a supported value type.",
+    `    at toJson (${packages}/values/src/value.ts:251:15)`,
+    "    at map (native:1:11)",
+    `    at inspect (${modules}/.bun/object-inspect@1.13.4/node_modules/object-inspect/index.js:1:1)`,
+    `    at handler (${packages}/server/test/my.test.ts:10:3)`,
+    "    at map (native)",
+    "    at helper (/app/lib/helper.ts:4:2)",
+    `    at runCached (${packages}/core/src/engine.ts:3455:18)`,
+    "    at run (node:async_hooks:144:29)",
+    "    at processTicksAndRejections (native:7:39)",
+  ].join("\n");
+  expect(mapStack(stack)).toBe(
+    [
+      "Error: Set {…} is not a supported value type.",
+      `    at handler (${packages}/server/test/my.test.ts:10:3)`,
+      "    at map (native)",
+      "    at helper (/app/lib/helper.ts:4:2)",
+    ].join("\n"),
+  );
+  // Nothing but the server's: no frame at all.
+  expect(mapStack(`Error: x\n    at toJson (${packages}/values/src/value.ts:1:1)\n    at f (native:7:39)`)).toBe(
+    "Error: x",
+  );
 });
 
 test("the log's exception frames are the mapped ones", () => {
