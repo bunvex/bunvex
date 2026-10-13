@@ -1,7 +1,7 @@
 # STUDY-151 — A batch of small parity items
 
-- **Status:** decided (owner, 2026-10-12); built one PR per item: §1 system table messages (this PR), §2–§6 to
-  come
+- **Status:** decided (owner, 2026-10-12); built one PR per item: §1 system table messages (#608), §2 `deploy -y`
+  (this PR), §3–§6 to come
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend
   (`npm-packages/convex/src/server/impl/database_impl.ts`, `crates/isolate/src/environment/udf/async_syscall.rs`,
   `npm-packages/convex/src/cli/deploy.ts`, `cli/lib/command.ts`, `crates/local_backend/src/public_api.rs`,
@@ -41,8 +41,8 @@ asked when the deployment selected is not the dev deployment named in `CONVEX_DE
 A self-hosted target has no deployment name, so the prompt never shows; the other deploy prompts (large index
 changes) answer to their own flags.
 
-**bunvex.** `bunvex deploy -y` fails with an unknown option. To do: accept `-y` and `--yes`, hidden, doing
-nothing, so a script written for Convex runs. Previews (`--preview-*`) need Convex's preview deploy keys: cloud
+**bunvex before.** `bunvex deploy -y` failed with an unknown option. **Now:** `-y` and `--yes` are accepted,
+hidden, doing nothing, so a script written for Convex runs. Previews (`--preview-*`) need Convex's preview deploy keys: cloud
 only, *n/a*.
 
 ## 3. The HTTP API's methods
@@ -94,3 +94,4 @@ self-hosted Convex (DV-304), the table present and empty. Decided (owner, 2026-1
 - §1: `tx-b-edges` (each operation's message, `db.system.normalizeId` of a user table), with the earlier
   expectations updated (`writes`, `implicit-tables`, `count`, `instance-secret`, `system-reader-edges`,
   `id-forms`, `sync`).
+- §2: `deploy` (a deploy with `-y` and with `--yes` succeeds).

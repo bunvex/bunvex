@@ -252,6 +252,9 @@ function parseFlags(all: string[]): Flags | string {
     else if (name === "--skip-large-indexes-check") f.skipLargeIndexesCheck = true;
     // Its predecessor, hidden as in Convex: it skips the deletion confirmation only.
     else if (name === "--allow-deleting-large-indexes") f.allowDeletingLargeIndexes = true;
+    // Hidden as in Convex, where it skips the prompt before pushing to a cloud deployment other than the dev one:
+    // a self-hosted deployment never asks it, so it does nothing; a script written for Convex runs (STUDY-151 §2).
+    else if (name === "-y" || name === "--yes") continue;
     else if (name === "--message") {
       const v = inline ?? args[++i];
       if (v === undefined) return missingArgument("--message <message>");
