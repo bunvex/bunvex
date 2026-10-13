@@ -173,7 +173,11 @@ describe("writes: replace, nonexistent documents, Convex's limits", () => {
       const id = await e.mutation((db) => db.insert("items", {}));
       await e.mutation((db) => db.delete("items", id));
       // A table name that is not valid, and a document that does not exist: the value speaks first.
-      await expect(e.mutation((db) => db.insert("_nope", { x: deep(64) }))).rejects.toThrow(tooNested("insert"));
+      await expect(e.mutation((db) => db.insert("bad-name", { x: deep(64) }))).rejects.toThrow(tooNested("insert"));
+      // A system table is refused before the value is read, as Convex's `database_impl.ts` (STUDY-151).
+      await expect(e.mutation((db) => db.insert("_nope", { x: deep(64) }))).rejects.toThrow(
+        "System tables (prefixed with `_`) are read-only.",
+      );
       await expect(e.mutation((db) => db.patch("items", id, { x: deep(65) }))).rejects.toThrow(tooNested("patch"));
       await expect(e.mutation((db) => db.replace("items", id, { x: deep(64) }))).rejects.toThrow(tooNested("replace"));
     });

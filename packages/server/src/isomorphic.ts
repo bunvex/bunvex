@@ -31,6 +31,7 @@ export type * from "./index.ts";
 export { AuditLogLimitError, log } from "./log.ts";
 export { paginationOptsValidator, paginationResultValidator } from "./pagination.ts";
 export { HttpRouter, httpAction, httpActionGeneric, httpRouter, ROUTABLE_HTTP_METHODS } from "./router.ts";
+export { getServiceToken, getServiceUrl, type ServiceName } from "./service-tokens.ts";
 
 /**
  * Only a running function can make a handle: outside a backend this throws, as Convex's syscall does (the

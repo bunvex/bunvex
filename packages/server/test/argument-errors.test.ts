@@ -5,6 +5,7 @@ import { afterEach, expect, test } from "bun:test";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { v } from "@bunvex/values";
+import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
 import { action, Functions, query } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
 
@@ -105,4 +106,46 @@ test("a function that calls another sees the same message", async () => {
   expect(await call("action", "m:actRunsBad", {})).toEqual({
     value: 'ArgumentValidationError: Value does not match validator.\nPath: .x\nValue: "s"\nValidator: v.float64()\n\n',
   });
+});
+
+test("a system function checks its own arguments, inside it: `Uncaught Error: <check>`, no frames", async () => {
+  // Convex does not analyze its system modules: each checks its arguments in its handler and throws an `Error`
+  // (system-udfs `withArgsValidated`). The expected messages are what Convex's local backend answered.
+  const SECRET = "ab".repeat(32);
+  const engine = await new Engine(
+    defineSchema({ items: defineTable(v.any()) }),
+    await MemoryPersistence.open(null, { durable: false }),
+    { instanceName: "sysargs", instanceSecret: SECRET },
+  ).init();
+  const s = createServer({
+    engine,
+    functions: new Functions(engine),
+    port: 0,
+    sitePort: null,
+    redactLogsToClient: false,
+  });
+  stops.push(s.stop);
+  const key = issueAdminKey({ instanceName: "sysargs", cipherKey: adminKeyCipherKey(SECRET) });
+  const call = async (path: string, args: unknown) => {
+    const r = await fetch(`http://127.0.0.1:${s.server!.port}/api/query`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bunvex ${key}` },
+      body: JSON.stringify({ path, args, format: "json" }),
+    });
+    return ((await r.json()) as { errorMessage?: string }).errorMessage?.replace(/^\[Request ID: [0-9a-f]+\] /, "");
+  };
+  const uncaught = (check: string) => `Server Error\nUncaught Error: ${check}\n\n`;
+  expect(await call("_system/frontend/listCronJobs", { extra: 1 })).toBe(
+    uncaught(
+      "Object contains extra field `extra` that is not in the validator.\n\nObject: {extra: 1.0}\nValidator: v.object({componentId: v.optional(v.union(v.string(), v.null()))})",
+    ),
+  );
+  expect(await call("_system/frontend/listCronJobs", [1])).toBe(
+    uncaught("Expected to receive an object as the function's argument. Instead received: 1.0"),
+  );
+  expect(await call("_system/frontend/paginatedScheduledJobs", {})).toBe(
+    uncaught(
+      "Object is missing the required field `paginationOpts`. Consider wrapping the field validator in `v.optional(...)` if this is expected.\n\nObject: {}\nValidator: v.object({componentId: v.optional(v.union(v.string(), v.null())), paginationOpts: v.object({cursor: v.union(v.string(), v.null()), endCursor: v.optional(v.union(v.string(), v.null())), id: v.optional(v.float64()), maximumBytesRead: v.optional(v.float64()), maximumRowsRead: v.optional(v.float64()), numItems: v.float64()}), udfPath: v.optional(v.string())})",
+    ),
+  );
 });

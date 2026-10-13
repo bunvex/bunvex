@@ -142,7 +142,7 @@ import {
   newRequestId,
   ValidatorError,
 } from "./errors.ts";
-import { canonicalPath, functionAddress, functionNameOf, inHandleScope } from "./function-handles.ts";
+import { canonicalPath, functionAddress, functionNameOf, inActionScope, inHandleScope } from "./function-handles.ts";
 import {
   type CallerName,
   type Completion,
@@ -174,6 +174,7 @@ import { setOperationTracker } from "./pending-ops.ts";
 import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearchQuery } from "./registration.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { ServerMetrics } from "./server-metrics.ts";
+import { setServiceCallContext } from "./service-tokens.ts";
 import type { FileStorage, StorageMeter } from "./storage.ts";
 import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
 import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB, type UsageMeter } from "./usage-limits.ts";
@@ -524,6 +525,8 @@ const storageMeter: StorageMeter = ({ read, written }) => {
 // options, and an isolate action's through its deployment's proxy (`Functions.httpProxy`).
 const nodeSender = nodeFetch();
 setFetchSender(() => meteredAction()?.send ?? null);
+// `getServiceToken` / `getServiceUrl` are action syscalls (STUDY-151 §4).
+setServiceCallContext(inActionScope);
 
 // Convex meters an isolate action's fetch request bodies; a Node action's egress is its Lambda's network
 // counter, 0 when self-hosted (STUDY-71 U2).
@@ -746,6 +749,13 @@ const VECTOR_FILTER_BUILDER = {
     return { $or: exprs };
   },
 };
+
+/** An error a system function throws from its own code, without the app's frames (`systemArgs`). */
+function systemArgsError(message: string): Error {
+  const e = new Error(message);
+  e.stack = `Error: ${message}`;
+  return e;
+}
 
 export class Functions {
   private fns = new Map<string, FunctionDef>();
@@ -1871,23 +1881,24 @@ export class Functions {
       );
   }
 
-  /** A system function's arguments, checked as Convex's validators. */
+  /**
+   * A system function's arguments, checked as Convex's validators. Convex does not analyze its system modules,
+   * so their arguments are not checked before the run: each function checks its own, inside its handler
+   * (system-udfs `_system/server.ts` `withArgsValidated`, the `validateArgs` op), and throws an `Error` with the
+   * check's display. A client sees `Uncaught Error: <check>`, with no frames (the system modules show none).
+   */
   private systemArgs(args: Record<string, unknown> | unknown, validators: Record<string, GenericValidator>) {
     const a = args === undefined ? {} : args;
     if (!isSimpleObject(a))
-      throw ValidatorError.args(
-        `Expected to receive an object as the function's argument. Instead received: ${displayValue((a ?? null) as Value)}`,
+      throw systemArgsError(
+        `Expected to receive an object as the function's argument. Instead received: ${displayValue((a ?? null) as Value)}\n`,
       );
     // As Convex's `op_validate_args` (4991db1): an array over 8192 elements or an object over 1024 fields is a
-    // user error before the validator, thrown inside the function ("Uncaught Error: Invalid arguments: …").
+    // user error before the validator ("Uncaught Error: Invalid arguments: …").
     const { tooBig } = measureRawValue([a as Value], Number.POSITIVE_INFINITY);
-    if (tooBig !== undefined) {
-      const e = new Error(`Invalid arguments: ${tooBig}`);
-      e.stack = `Error: ${e.message}`; // raised by the runtime, not app code: no frames, as Convex's
-      throw e;
-    }
+    if (tooBig !== undefined) throw systemArgsError(`Invalid arguments: ${tooBig}`);
     const msg = checkValue(v.object(validators), a as Value, this.tableOf);
-    if (msg) throw ValidatorError.args(msg);
+    if (msg) throw systemArgsError(`${msg}\n`);
     return a as never;
   }
 

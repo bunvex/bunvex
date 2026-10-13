@@ -687,6 +687,9 @@ type FilterExpression = { index?: IndexFilter; clauses: FieldFilter[]; order: "a
 
 type DocumentQuery = PageRequest & { table: string; filter?: FilterExpression };  // replaces index/order
 // An invalid expression → DataSourceError("invalid_request", …, { clause?: string /* FieldFilter.id */ })
+// Meaning: Convex's paginatedTableDocuments (amended 12 Oct 2026, STUDY-149 PR 2, DV-479): Convex's value
+// order, an unset field below every value (it passes neq, lt, lte, noneOf); an empty anyOf filters nothing;
+// type / notype read the document's top-level field by that name.
 
 interface DashboardDataSource {
   // … v1 methods, with listDocuments taking the new DocumentQuery …
@@ -747,6 +750,10 @@ type IndexInfo = { name: string; fields: string[]; system: boolean; state: "read
   all-or-nothing writes, `watchTable`, and `liveWritesMs` (the dev app inserts or deletes a task every 3 s).
 - Checked by sabotage: the mock ignoring field clauses, a non-atomic insert, and `neq` excluding unset
   fields each turn a test red.
+- **Amended 12 Oct 2026** (STUDY-149 PR 2; owner: where the contract conflicts with Convex, the contract
+  changes): the filter meaning is Convex's server's. It was first written for the mock with an unset field
+  matching only `neq`, `noneOf` and `type: unset`, an empty `anyOf` matching nothing, and type clauses following
+  dotted paths; `filters.ts`, the mock and the contract suite now follow Convex's `paginatedTableDocuments`.
 - Routes: `/database` (redirects to the first table) and `/database/$table` (a placeholder until slice 6);
   the overview is titled **Health**. The v1 tables screens were removed.
 
@@ -2323,10 +2330,12 @@ the screens free of any bunvex dependency (§6): a cloud control plane brings it
 ### 34.3 Dependency rules
 
 ```
-dashboard-source ──► client, dashboard
+dashboard-source ──► client, values, dashboard
 apps/dashboard   ──► dashboard, dashboard-source, ui
 sync-e2e (tests) ──► …, dashboard, dashboard-source   (the contract suite on a live server)
 ```
 
-`dashboard` itself stays on `ui` alone.
+`dashboard` itself stays on `ui` alone. `values` joined with STUDY-149 PR 2 (ids and value encodings, as Convex's
+dashboard imports `convex/values`), and `@bunvex/dashboard/filters` is exported for the source to check an
+expression as the screens do.
 

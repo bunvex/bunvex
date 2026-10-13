@@ -254,6 +254,9 @@ export default defineSchema({ notes: defineTable({ a: v.string(), b: v.string(),
       "✔ These indexes are now staged:\n  [*] notes.by_a   a, _creationTime  (staged)",
     ]);
     expect(await deploy()).toEqual([]);
+    // Convex's hidden `-y` / `--yes`: accepted; a self-hosted deployment has no prompt for it to skip (STUDY-151 §2).
+    expect(await deploy("-y")).toEqual([]);
+    expect(await deploy("--yes")).toEqual([]);
   });
 
   test("the version check (AD-29): its notice after the push; one still running does not hold the command", async () => {

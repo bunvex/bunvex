@@ -91,6 +91,8 @@ type Scope = { db: Tx | null; engine: Engine };
 const scope = new AsyncLocalStorage<Scope>();
 /** Run a function's handler where `createFunctionHandle` can find it. */
 export const inHandleScope = <T>(s: Scope, fn: () => T): T => scope.run(s, fn);
+/** Whether an action's (or an HTTP action's) handler is running: a scope with no transaction. */
+export const inActionScope = (): boolean => scope.getStore()?.db === null;
 
 /**
  * A function's name, a handle resolved to the path it names: in `db` when given (a query's or

@@ -71,7 +71,7 @@ describe("clauses", () => {
   const c = (op: string, value?: unknown) => ({ id: "c", field: "n", op, value, enabled: true }) as never;
   const has = doc({ n: 5 });
   const unset = doc({});
-  test("comparisons never match an unset field; neq and noneOf do", () => {
+  test("an unset field is below every value (Convex's order): it passes neq, lt, lte and noneOf", () => {
     expect([matchesClause(has, c("eq", 5)), matchesClause(has, c("eq", 6)), matchesClause(unset, c("eq", 5))]).toEqual([
       true,
       false,
@@ -84,12 +84,23 @@ describe("clauses", () => {
       matchesClause(has, c("lt", 5)),
       matchesClause(has, c("lte", 5)),
     ]).toEqual([true, true, false, true]);
-    expect([matchesClause(unset, c("lt", 100)), matchesClause(unset, c("gt", -100))]).toEqual([false, false]);
+    expect([
+      matchesClause(unset, c("lt", 100)),
+      matchesClause(unset, c("lte", null)),
+      matchesClause(unset, c("gt", -100)),
+      matchesClause(unset, c("gte", null)),
+    ]).toEqual([true, true, false, false]);
     expect([
       matchesClause(has, c("anyOf", [1, 5])),
+      matchesClause(unset, c("anyOf", [5])),
       matchesClause(has, c("noneOf", [5])),
       matchesClause(unset, c("noneOf", [5])),
-    ]).toEqual([true, false, true]);
+    ]).toEqual([true, false, false, true]);
+  });
+
+  test("anyOf and noneOf of nothing filter nothing (Convex's)", () => {
+    expect([matchesClause(has, c("anyOf", [])), matchesClause(unset, c("anyOf", []))]).toEqual([true, true]);
+    expect([matchesClause(has, c("noneOf", [])), matchesClause(unset, c("noneOf", []))]).toEqual([true, true]);
   });
 
   test("a comparison across types follows the type order", () => {
@@ -103,6 +114,17 @@ describe("clauses", () => {
       matchesClause(unset, c("type", "unset")),
       matchesClause(unset, c("notype", "unset")),
     ]).toEqual([true, true, false]);
+  });
+
+  test("type and notype read the top-level field by that name, not a dotted path (Convex's)", () => {
+    const nested = doc({ meta: { edited: true } });
+    const t = (op: string, value: string) => ({ id: "c", field: "meta.edited", op, value, enabled: true }) as never;
+    expect([matchesClause(nested, t("type", "boolean")), matchesClause(nested, t("type", "unset"))]).toEqual([
+      false,
+      true,
+    ]);
+    // the comparisons do follow the dots
+    expect(matchesClause(nested, { id: "c", field: "meta.edited", op: "eq", value: true, enabled: true })).toBe(true);
   });
 });
 
