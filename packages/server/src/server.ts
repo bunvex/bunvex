@@ -93,6 +93,7 @@ import {
   newRequestId,
   withRequestId,
 } from "./errors.ts";
+import { EXECUTOR_SOURCES, ExecutorInvalidations } from "./executor-invalidations.ts";
 import { ExportError, ExportService } from "./exports.ts";
 import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import {
@@ -172,7 +173,7 @@ import {
   splayOptions,
   type WsHeartbeatOptions,
 } from "./sync.ts";
-import { cancelAllScheduledJobs, cancelScheduledJob } from "./system-functions.ts";
+import { cancelAllScheduledJobs, cancelScheduledJob, InvalidIdError } from "./system-functions.ts";
 import { standaloneQuery, type TestBundle, TestFunctionError } from "./test-function.ts";
 import { UsageGauges } from "./usage-gauges.ts";
 import { USAGE_LIMIT_ROUTE, UsageLimitError, UsageLimitWorker, UsageMeter, usageLimitRoute } from "./usage-limits.ts";
@@ -599,6 +600,14 @@ export function createServer(opts: ServerOptions) {
   // The app metrics (STUDY-58): what functions, the scheduler and subscriptions record.
   const appMetrics = new AppMetrics();
   functions.appMetrics = appMetrics;
+  // Convex's executors' own subscription invalidations (STUDY-149 PR 5, DV-480).
+  const executorInvalidations = new ExecutorInvalidations(
+    engine,
+    (source, table, n) => appMetrics.recordInvalidations(source, new Map([[table, n]])),
+    (source) => (functions.kindOf(source) === null ? EXECUTOR_SOURCES[source] : canonicalPath(source)),
+  );
+  appMetrics.onScheduledMutationRan = (source) => executorInvalidations.jobRan(source);
+  executorInvalidations.start();
   // The Prometheus metrics (STUDY-114): served at `/metrics` unless DISABLE_METRICS_ENDPOINT is `true`.
   const serverMetrics = new ServerMetrics();
   functions.serverMetrics = serverMetrics;
@@ -1384,7 +1393,12 @@ export function createServer(opts: ServerOptions) {
     // Convex's `/api/cancel_job {id, componentId?}` and `/api/cancel_all_jobs {udfPath?, startNextTs?,
     // endNextTs?, componentId?, componentPath?}` (scheduling.rs): 200 with no body.
     if (url.pathname === "/api/cancel_job") {
-      await cancelScheduledJob(engine, body.id as string, auditActor(caller));
+      try {
+        await cancelScheduledJob(engine, body.id as string, auditActor(caller));
+      } catch (e) {
+        if (e instanceof InvalidIdError) return requestError(400, e.code, e.message);
+        throw e;
+      }
       return new Response(null, { status: 200 });
     }
     if (url.pathname === "/api/cancel_all_jobs") {
@@ -2428,6 +2442,7 @@ export function createServer(opts: ServerOptions) {
       stopCleanup();
       await exportService?.stop();
       await importService?.stop();
+      executorInvalidations.stop();
       await scheduler.stop();
       await cronExecutor.stop();
       sync.stop();
