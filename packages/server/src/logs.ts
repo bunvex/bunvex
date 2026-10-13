@@ -11,6 +11,7 @@
 // Lines are kept structured, as Convex's `LogLineStructured`: clients get them as `[LEVEL] message`
 // strings, the function log (function-log.ts, STUDY-47) as they are.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { inspect as nodeInspect } from "node:util";
 import { wallClock } from "@bunvex/core";
 import { withoutLoneSurrogates } from "@bunvex/values";
 import inspect from "object-inspect";
@@ -43,7 +44,14 @@ export type LogLine = {
  * execution starts its own. `onLine` sees each line as it is logged (an action's lines stream out as
  * they come); `cached` is set when a cached query result answered it; `tx` is the transaction it ran in.
  */
-export type LogOwner = { onLine: ((line: LogLine) => void) | null; cached: boolean; tx: unknown; timer?: unknown };
+export type LogOwner = {
+  onLine: ((line: LogLine) => void) | null;
+  cached: boolean;
+  tx: unknown;
+  timer?: unknown;
+  /** Where it runs: a "use node" action's lines are written as Convex's node executor writes them. */
+  environment?: "isolate" | "node";
+};
 
 /**
  * The lines of one execution. A mutation re-run after a conflict replaces its previous attempt's lines (an
@@ -264,9 +272,19 @@ export const prettyLogLine = (l: LogLine): string =>
 export const formatLogLine = (level: LogLevel, messages: string[]): string =>
   prettyLogLine(makeLogLine(level, messages));
 
-/** Each console argument as Convex renders it (object-inspect, strings quoted, nested objects indented). */
-const render = (args: unknown[]) =>
-  args.map((a) => inspect(a, { maxStringLength: MAX_LOG_LINE_LENGTH, indent: 2, customInspect: true }));
+const inNode = (e: Execution) => e.owner?.environment === "node";
+
+/**
+ * Each console argument as Convex renders it: in V8, object-inspect (strings quoted, nested objects indented);
+ * in a "use node" action, Node's `util.inspect` (npm-packages/node-executor src/executor.ts `consoleMessage`).
+ */
+const render = (e: Execution, args: unknown[]) =>
+  inNode(e)
+    ? args.map((a) => nodeInspect(a, { maxStringLength: MAX_LOG_LINE_LENGTH, customInspect: true }))
+    : args.map((a) => inspect(a, { maxStringLength: MAX_LOG_LINE_LENGTH, indent: 2, customInspect: true }));
+
+/** The console's own text (a timer's line or warning): as is in V8; an argument like any other in Node. */
+const said = (e: Execution, text: string) => (inNode(e) ? render(e, [text]) : [text]);
 
 function emit(execution: Execution, level: LogLevel, messages: string[]) {
   const line = makeLogLine(level, messages);
@@ -291,7 +309,7 @@ export function installLogCapture() {
     const original = c[method].bind(console);
     c[method] = (...args: unknown[]) => {
       const e = current.getStore();
-      if (e) emit(e, level, render(args));
+      if (e) emit(e, level, render(e, args));
       else original(...args);
     };
   }
@@ -302,7 +320,7 @@ export function installLogCapture() {
       // The frames below this wrapper, under the message, as a browser prints them: the app's, mapped to its
       // sources (STUDY-95).
       const frames = mapStack((new Error().stack ?? "").split("\n").slice(2).join("\n"));
-      emit(e, "LOG", [...render(args), `\n${frames}`]);
+      emit(e, "LOG", [...render(e, args), `\n${frames}`]);
     } else originalTrace(...args);
   };
   const label = (l: unknown) => (l === undefined ? "default" : String(l));
@@ -311,7 +329,7 @@ export function installLogCapture() {
     const e = current.getStore();
     if (!e) return originalTime(l as string);
     const name = label(l);
-    if (e.timers.has(name)) emit(e, "WARN", [`Timer '${name}' already exists`]);
+    if (e.timers.has(name)) emit(e, "WARN", said(e, `Timer '${name}' already exists`));
     else e.timers.set(name, wallClock());
   };
   const originalTimeLog = c.timeLog.bind(console);
@@ -320,8 +338,8 @@ export function installLogCapture() {
     if (!e) return originalTimeLog(l as string, ...args);
     const name = label(l);
     const start = e.timers.get(name);
-    if (start === undefined) emit(e, "WARN", [`Timer '${name}' does not exist`]);
-    else emit(e, "INFO", [`${name}: ${wallClock() - start}ms`, ...render(args)]);
+    if (start === undefined) emit(e, "WARN", said(e, `Timer '${name}' does not exist`));
+    else emit(e, "INFO", [...said(e, `${name}: ${wallClock() - start}ms`), ...render(e, args)]);
   };
   const originalTimeEnd = c.timeEnd.bind(console);
   c.timeEnd = (l?: unknown) => {
@@ -329,10 +347,10 @@ export function installLogCapture() {
     if (!e) return originalTimeEnd(l as string);
     const name = label(l);
     const start = e.timers.get(name);
-    if (start === undefined) emit(e, "WARN", [`Timer '${name}' does not exist`]);
+    if (start === undefined) emit(e, "WARN", said(e, `Timer '${name}' does not exist`));
     else {
       e.timers.delete(name);
-      emit(e, "INFO", [`${name}: ${wallClock() - start}ms`]);
+      emit(e, "INFO", said(e, `${name}: ${wallClock() - start}ms`));
     }
   };
 }
