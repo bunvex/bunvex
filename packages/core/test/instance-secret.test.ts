@@ -61,7 +61,7 @@ describe("the instance secret, as Convex's self-hosted image (STUDY-17 D2 → op
   test("app code cannot read _instance", async () => {
     const e = await engine(logPath());
     await expect(e.query((db) => db.query("_instance").collect())).rejects.toThrow(
-      "System table _instance is not accessible",
+      "System tables can only be accessed from db.system.query().",
     );
   });
 });

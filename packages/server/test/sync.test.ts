@@ -394,7 +394,7 @@ describe("sync protocol v1", () => {
       const t = await c.transition(0);
       expect(t.modifications[0]).toMatchObject({ type: "QueryFailed" });
       expect((t.modifications[0] as { errorMessage: string }).errorMessage).toContain(
-        "System table _session_requests is not accessible here.",
+        "System tables can only be accessed from db.system.query().",
       );
     });
   });

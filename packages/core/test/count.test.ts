@@ -124,7 +124,9 @@ test("virtual tables are counted through db.system; db.query refuses them", asyn
     await db.system.query(SCHEDULED_FUNCTIONS_TABLE).count(),
   ]);
   expect(counts).toEqual([3, 0]);
-  await expect(e.query(async (db) => db.query(STORAGE_TABLE).count())).rejects.toThrow("System table _storage");
+  await expect(e.query(async (db) => db.query(STORAGE_TABLE).count())).rejects.toThrow(
+    "System tables can only be accessed from db.system.query().",
+  );
   // Inside a mutation, its own writes count too.
   expect(
     await e.mutation(async (db) => {
@@ -261,5 +263,7 @@ test("db.system.query counts any system table, as Convex's 1.0/count; unknown na
   expect(await e.query((db) => db.system.query("_tables").count())).toBe(r.tables + 1);
   // User tables are still refused through db.system, and system tables through db.query.
   await expect(e.query((db) => db.system.query("t").count())).rejects.toThrow();
-  await expect(e.query((db) => db.query("_tables").count())).rejects.toThrow("System table _tables");
+  await expect(e.query((db) => db.query("_tables").count())).rejects.toThrow(
+    "System tables can only be accessed from db.system.query().",
+  );
 });

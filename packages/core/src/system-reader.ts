@@ -17,7 +17,13 @@ export const APP_VISIBLE_SYSTEM_TABLES: readonly string[] = [...VIRTUAL_TABLES.k
 
 function virtualTable(table: string): VirtualTable {
   const vt = VIRTUAL_TABLES.get(table);
-  if (!vt) throw new Error(`System table ${table} is not accessible here.`);
+  // A user table (Convex's `database_impl.ts`); bunvex's `db.system` reads only the virtual tables otherwise.
+  if (!vt)
+    throw new Error(
+      table.startsWith("_")
+        ? `System table ${table} is not accessible here.`
+        : "User tables can only be accessed from db.query().",
+    );
   return vt;
 }
 
@@ -55,6 +61,8 @@ export class SystemReader {
   /** `db.system.normalizeId(table, id)`: an id of a virtual table is one of its system table's number. */
   normalizeId(table: string, id: string): string | null {
     const vt = VIRTUAL_TABLES.get(table);
+    if (!vt && typeof table === "string" && !table.startsWith("_"))
+      throw new Error("User tables can only be accessed from db.normalizeId().");
     if (!vt) return null;
     return this.tx.asSystemSync(() => this.tx.normalizeId(vt.system, id));
   }

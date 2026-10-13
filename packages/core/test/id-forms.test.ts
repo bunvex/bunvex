@@ -43,8 +43,11 @@ describe("one-argument forms and normalizeId, as Convex", () => {
       other: db.normalizeId("posts", id),
       junk: db.normalizeId("users", "not-an-id"),
       missingTable: db.normalizeId("nope", id),
-      system: db.normalizeId("_tables", id),
     }));
-    expect(r).toEqual({ own: id, other: null, junk: null, missingTable: null, system: null });
+    expect(r).toEqual({ own: id, other: null, junk: null, missingTable: null });
+    // A system table: Convex's error, not null (STUDY-151).
+    await expect(e.query(async (db) => db.normalizeId("_tables", id))).rejects.toThrow(
+      "System tables can only be accessed from db.system.normalizeId().",
+    );
   });
 });
