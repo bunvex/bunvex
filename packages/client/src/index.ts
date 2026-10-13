@@ -59,6 +59,11 @@ export {
 } from "./pagination.ts";
 /** @internal `bunvexQueryOptions`, as Convex's `convexQueryOptions` (DV-348); `QueryOptions` is public. */
 export { bunvexQueryOptions, type QueryOptions } from "./query-options.ts";
-export { BunvexClient, type BunvexClientOptions, type Unsubscribe } from "./simple-client.ts";
+export {
+  BunvexClient,
+  type BunvexClientOptions,
+  setDefaultWebSocketConstructor,
+  type Unsubscribe,
+} from "./simple-client.ts";
 export type { PaginatedQueryToken, QueryToken } from "./udf-path.ts";
 export { VERSION } from "./version.ts";

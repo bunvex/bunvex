@@ -143,7 +143,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | Server: identity version per session; `Authenticate` with the wrong baseVersion is rejected | `crates/sync/src/state.rs` (`modify_identity`) | done (STUDY-23) | |
 | Server: identity change invalidates and reruns all subscriptions of that session | `crates/sync/src/worker.rs` (`identity_changed`) | done (STUDY-27) | Shared executions are keyed by identity only when the run read it (B13, DV-12). |
 | Server: token expiry checked on every operation; soon-to-expire admin tokens revalidated; expired user token → `AuthError{authUpdateAttempted:false}` | `crates/sync/src/state.rs` (`identity`), `crates/sync/src/worker.rs` (`revalidate_identity`) | done (STUDY-27, STUDY-34) | User tokens: checked before every transition, mutation and action. Admin identities do not expire (DV-163). |
-| Admin auth + impersonation (`setAdminAuth(token, fakeUserIdentity)`) | `browser/sync/client.ts`, `react/client.ts` | done (STUDY-26) | `setAdminAuth(key, identity)` on the base client (`Authenticate` Admin with `impersonating`) and on the HTTP client (`Authorization: Bunvex <key>:<base64 identity>`). |
+| Admin auth + impersonation (`setAdminAuth(token, fakeUserIdentity)`) | `browser/sync/client.ts`, `react/client.ts` | done (STUDY-26) | `setAdminAuth(key, identity)` on the base, React and simple clients (`Authenticate` Admin with `impersonating`; the React client keeps both for a connection it creates later) and on the HTTP client (`Authorization: Bunvex <key>:<base64 identity>`). |
 
 ### 8. Optimistic updates
 
@@ -183,7 +183,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | `mutation(name, args, opts)` / `action(name, args)` returning values, throwing `ConvexError` with `.data` when `errorData` is present, otherwise `Error` with a "[CONVEX M(name)] … Called by client" message | `browser/sync/client.ts`, `browser/logging.ts` | done (STUDY-26) | As `BaseBunvexClient` / `BunvexClient` (C1); errors are `BunvexError` with `.data`, `[BUNVEX M(path)] …` (C2). |
 | `ConvexClient` (framework-free): `onUpdate(query, args, cb, onError)` returning a callable Unsubscribe with `getCurrentValue()` / `getQueryLogs()`; one-shot `query()` via subscribe-then-unsubscribe; `mutation`; `action`; `close`; `disabled` option for SSR | `browser/simple_client.ts` | done (STUDY-26) |  |
 | Callbacks for one transition run together after it is applied (no partially applied state visible) | `browser/simple_client.ts`, `react/client.ts` (`transition`) | done (STUDY-26) |  |
-| `webSocketConstructor` injection; `setDefaultWebSocketConstructor` (Node entry uses `ws`) | `browser/sync/client.ts`, `browser/simple_client-node.ts` | partial (STUDY-26) | The option exists; Bun and browsers have a global WebSocket, so no `setDefaultWebSocketConstructor` yet. |
+| `webSocketConstructor` injection; `setDefaultWebSocketConstructor` (Node entry uses `ws`) | `browser/sync/client.ts`, `browser/simple_client-node.ts` | done (STUDY-26, STUDY-151 §5) | The option exists; `setDefaultWebSocketConstructor` (internal, from `@bunvex/client`) with Convex's conditions: used when the options name no constructor and there is no global WebSocket. No Node entry bundling `ws`: Bun and Node 22+ have a global WebSocket (owner, 2026-10-12). |
 
 ### 11. React bindings
 

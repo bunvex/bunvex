@@ -1,8 +1,8 @@
 # STUDY-151 — A batch of small parity items
 
-- **Status:** decided (owner, 2026-10-12); built one PR per item: §1 system table messages (#608), §2 `deploy -y`
+- **Status:** implemented (owner's decisions, 2026-10-12), one PR per item: §1 system table messages (#608), §2 `deploy -y`
   (#609), §3 the HTTP API's methods (#611), §4 `getServiceToken` /
-  `getServiceUrl` (this PR), §5–§6 to come
+  `getServiceUrl` (#614), §5 `setDefaultWebSocketConstructor` (#615), §6 `_audit_log_config` *n/a* (this PR)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend
   (`npm-packages/convex/src/server/impl/database_impl.ts`, `crates/isolate/src/environment/udf/async_syscall.rs`,
   `npm-packages/convex/src/cli/deploy.ts`, `cli/lib/command.ts`, `crates/local_backend/src/public_api.rs`,
@@ -78,8 +78,10 @@ cloud URL cannot be in bunvex's code, and is of no use without a token).
 constructor uses when the options have no `webSocketConstructor` and there is no global `WebSocket`; Convex's
 Node entry calls it with the `ws` package.
 
-**bunvex.** No such function. To do (owner, 2026-10-12): the function with Convex's three conditions, no `ws`
-dependency and no Node entry (Bun and Node 22+ have a global `WebSocket`; older Node passes the constructor).
+**bunvex before.** No such function. **Now** (owner, 2026-10-12): `setDefaultWebSocketConstructor`, internal,
+exported from `@bunvex/client`, with Convex's three conditions in `BunvexClient`'s constructor; no `ws`
+dependency and no Node entry (Bun and Node 22+ have a global `WebSocket`; older Node passes the constructor or
+sets the default).
 
 ## 6. `_audit_log_config`
 
@@ -103,5 +105,6 @@ self-hosted Convex (DV-304), the table present and empty. Decided (owner, 2026-1
   expectations updated (`writes`, `implicit-tables`, `count`, `instance-secret`, `system-reader-edges`,
   `id-forms`, `sync`).
 - §2: `deploy` (a deploy with `-y` and with `--yes` succeeds).
+- §5: `default-websocket` (the default without a global one; the options' and a global one win).
 - §4: `service-tokens` (both in an action, the argument checks, outside an action).
 - §3: `http-request-errors` (`/api/query_ts` among the POST routes' 405s; `/api/query`'s 405 and its HEAD).
