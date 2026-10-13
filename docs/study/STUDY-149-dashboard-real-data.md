@@ -696,6 +696,15 @@ a queue then reads its first future run once, off the commit path, coalesced. `g
 source, each new result of a followed read is fingerprinted: 58 µs for a 50-run page (Bun, M-series), so at
 Convex's pause rate (10 updates/s) under 1 ms/s.
 
+**A fix found in CI** (`sync.ts`, PR 1's `AdminSync.watch`): a read could answer `null`. A subscription that sees
+a local result delivers it on the next tick; when that result was kept from a subscription just dropped, a server
+transition answering the older query set can clear it before the tick, and the read answered `null` (a cron run
+list, under load). Convex's `listCronJobRuns` always returns an array (`collect()`); its dashboard's `useQuery` is
+`undefined` only while loading, never null. So the read now waits for its own result when the local one is gone,
+rather than handling a null. Tests: `test/sync.test.ts` (a result cleared before the tick is not delivered, one
+still held is) and 150 back-to-back cron reads on the live server; with the fix removed both fail (the live loop
+reproduces it without load).
+
 **Found, not fixed here** (each its own concern): a cron job with an int64 argument makes `start_push` answer 500
 (`JSON.stringify` of a BigInt in the push's answer, `server.ts` `pushRoute`); the storage id wording above.
 

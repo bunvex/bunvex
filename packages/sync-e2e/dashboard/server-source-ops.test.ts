@@ -134,6 +134,15 @@ describe("schedules (Convex's paginatedScheduledJobs, scheduler:getArgs, listCro
     expect(await src.listCronRuns!("nightly")).toEqual([]);
   });
 
+  test("back-to-back reads of the same queries answer their results, never a dropped one (CI: a null run list)", async () => {
+    const src = open();
+    for (let i = 0; i < 150; i++) {
+      const jobs = await src.listCronJobs!();
+      expect(jobs.length).toBe(2);
+      for (const j of jobs) expect(Array.isArray(await src.listCronRuns!(j.name))).toBe(true);
+    }
+  });
+
   test("cancelling all of a function's runs counts the ones listed", async () => {
     const src = open();
     await srv.call("mutation", "jobs:schedule", { count: 4, delayMs: 30 * HOUR, fn: "other" });
