@@ -4,7 +4,7 @@ import { infiniteQueryOptions, queryOptions, useQueryClient } from "@tanstack/re
 import { useQueryScope } from "../context.tsx";
 import { useWatch } from "../data/live.ts";
 import { dashboardKeys, type QueryScope } from "../data/queries.ts";
-import type { DataSourceError } from "../data-source.ts";
+import type { DataSourceError, LiveChange } from "../data-source.ts";
 
 export const SCHEDULED_PAGE = 50;
 
@@ -52,7 +52,7 @@ export const cronRunsQuery = ({ source, scope }: QueryScope, name: string) =>
 export function useSchedulesLive(): DataSourceError | undefined {
   const scope = useQueryScope();
   const queryClient = useQueryClient();
-  return useWatch<void>(
+  return useWatch<LiveChange | undefined>(
     (onChange, onError) => scope.source.watchScheduledFunctions?.(onChange, onError) ?? (() => {}),
     () => void queryClient.invalidateQueries({ queryKey: scheduleKeys.all(scope.scope) }),
     [scope.source, scope.scope],

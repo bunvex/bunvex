@@ -3,7 +3,7 @@ import { infiniteQueryOptions, queryOptions, useQueryClient } from "@tanstack/re
 import { useQueryScope } from "../context.tsx";
 import { useWatch } from "../data/live.ts";
 import { dashboardKeys, type QueryScope } from "../data/queries.ts";
-import type { DataSourceError, FileQuery, FileFilter as StatsFilter } from "../data-source.ts";
+import type { DataSourceError, FileQuery, LiveChange, FileFilter as StatsFilter } from "../data-source.ts";
 
 export const FILES_PAGE = 50;
 
@@ -71,7 +71,7 @@ export const fileQuery = ({ source, scope }: QueryScope, id: string) =>
 export function useFilesLive(): DataSourceError | undefined {
   const scope = useQueryScope();
   const queryClient = useQueryClient();
-  return useWatch<void>(
+  return useWatch<LiveChange | undefined>(
     (onChange, onError) => scope.source.watchFiles?.(onChange, onError) ?? (() => {}),
     () => void queryClient.invalidateQueries({ queryKey: fileKeys.all(scope.scope) }),
     [scope.source, scope.scope],

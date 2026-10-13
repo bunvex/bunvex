@@ -268,14 +268,31 @@ export class TokenVerifier {
   }
 
   private async customJwks(uri: string, refresh: boolean): Promise<JSONWebKeySet> {
+    // A body that was read but is not a key set (not JSON, or not a JWKS), from a data: URL or a server.
+    const invalidBody = () =>
+      unauthenticated(
+        "InvalidAuthHeader",
+        `Invalid JWKS response body from '${uri}'. The response is not valid JSON or doesn't match the expected JWKS format.`,
+      );
+    const keySet = (body: unknown) => {
+      if (typeof body !== "object" || body === null || !Array.isArray((body as JSONWebKeySet).keys))
+        throw invalidBody();
+      return body as JSONWebKeySet;
+    };
     if (uri.startsWith("data:")) {
+      let text: string;
       try {
-        return (await (await this.fetchFn(uri)).json()) as JSONWebKeySet;
+        text = await (await this.fetchFn(uri)).text();
       } catch {
         throw unauthenticated(
           "InvalidAuthHeader",
           "Invalid JWKS data URL. Check that the data URL is properly formatted and contains valid base64-encoded JSON.",
         );
+      }
+      try {
+        return keySet(JSON.parse(text));
+      } catch {
+        throw invalidBody();
       }
     }
     try {
@@ -306,17 +323,14 @@ export class TokenVerifier {
       refresh,
     ).catch((e) => {
       if (e instanceof AuthenticationError) throw e;
+      // JSON.parse's error: the body arrived but is not JSON.
+      if (e instanceof SyntaxError) throw invalidBody();
       throw unauthenticated(
         "InvalidAuthHeader",
         `Could not fetch JWKS from URL '${uri}': ${(e as Error).message}. Check that the URL is correct and accessible.`,
       );
     });
-    if (typeof body !== "object" || body === null || !Array.isArray((body as JSONWebKeySet).keys))
-      throw unauthenticated(
-        "InvalidAuthHeader",
-        `Invalid JWKS response body from '${uri}'. The response is not valid JSON or doesn't match the expected JWKS format.`,
-      );
-    return body as JSONWebKeySet;
+    return keySet(body);
   }
 
   private async verifyCustom(token: string, info: Extract<AuthInfo, { kind: "customJwt" }>): Promise<VerifiedIdentity> {
@@ -372,11 +386,13 @@ export class TokenVerifier {
     }
     const now = this.now() / 1000;
     const invalid = (why: string) => unauthenticated("InvalidAuthHeader", `Could not validate token: ${why}`);
-    if (typeof payload.exp === "number" && payload.exp < now - CUSTOM_JWT_LEEWAY_S) throw invalid("Token expired");
-    if (typeof payload.nbf === "number" && payload.nbf > now + CUSTOM_JWT_LEEWAY_S)
-      throw invalid("Token not yet valid");
-    if (typeof payload.iat === "number" && payload.iat > now + CUSTOM_JWT_LEEWAY_S)
-      throw invalid("Token issued in the future");
+    // As Convex's JWT library (get-convex/biscuit `validate_exp`, `validate_nbf`, `validate_iat`, in that order):
+    // the seconds are the difference cut toward zero.
+    if (typeof payload.exp === "number" && payload.exp < now - CUSTOM_JWT_LEEWAY_S)
+      throw invalid(`Token expired ${Math.trunc(now - payload.exp)} seconds ago`);
+    for (const claim of [payload.nbf, payload.iat])
+      if (typeof claim === "number" && claim > now + CUSTOM_JWT_LEEWAY_S)
+        throw invalid(`Token will be valid in ${Math.trunc(claim - now)} seconds`);
     if (typeof payload.sub !== "string") throw unauthenticated("InvalidAuthHeader", "Missing subject");
     if (typeof payload.exp !== "number") throw unauthenticated("InvalidAuthHeader", "Missing expiry");
     return { identity: identityFromCustomJwt(payload), expiresAt: payload.exp };
