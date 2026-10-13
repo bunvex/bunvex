@@ -117,7 +117,9 @@ export function encodeCursor(codec: CursorCodec, pos: CursorPosition, fingerprin
   return Buffer.from(out).toString("hex");
 }
 
-const parseError = () => new Error("InvalidCursor: Failed to parse cursor");
+// The keybroker's errors (crates/keybroker/src/broker.rs `cursor_parse_error`, `proto_to_cursor`): `InvalidCursor`
+// is their code, not part of the message a function sees.
+const parseError = () => new Error("Failed to parse cursor");
 
 /**
  * A cursor of another query (the data under a paginated query changed its shape): an app error with data, as
@@ -141,11 +143,10 @@ export function decodeCursor(codec: CursorCodec, cursor: string, fingerprint: Ui
   const f = proto && fields(proto);
   if (!f) throw parseError();
   const instance = new TextDecoder().decode(f.get(1) ?? new Uint8Array());
-  if (instance !== codec.instanceName)
-    throw new Error(`InvalidCursor: Key is invalid for instance ${JSON.stringify(instance)}`);
+  if (instance !== codec.instanceName) throw new Error(`Key is invalid for instance ${JSON.stringify(instance)}`);
   const after = f.get(2);
   const end = f.get(3);
-  if (after === undefined && end === undefined) throw new Error("InvalidCursor: Missing position field");
+  if (after === undefined && end === undefined) throw new Error("Missing position field");
   if (!Buffer.from(f.get(4) ?? []).equals(Buffer.from(fingerprint))) throw differentQueryError();
   if (after === undefined) return "end";
   const key = fields(after);

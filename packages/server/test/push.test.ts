@@ -936,6 +936,64 @@ describe("deploy2 over HTTP", () => {
     expect(r2.finish!.body.componentDiffs[""].cronDiff).toEqual({ added: [], updated: [], deleted: ["tick"] });
   });
 
+  test("start_push answers the crons as Convex's: by identifier, arguments as bytes (an int64 among them)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const tick = mod(
+      "tick.js",
+      `import { mutation } from "@bunvex/server"; export const run = mutation({ args: {}, handler: async () => {} });`,
+    );
+    const crons = mod(
+      "crons.js",
+      `import { cronJobs } from "@bunvex/server"; const c = cronJobs();
+       c.interval("big", { hours: 1 }, "tick:run", { n: 5n, f: 1.5, s: "x", nested: { m: -3n } });
+       c.interval("plain", { hours: 2 }, "tick:run", { s: "y" });
+       c.hourly("Hourly", { minuteUTC: 7 }, "tick:run", { s: "h" });
+       c.weekly("weekly", { dayOfWeek: "tuesday", hourUTC: 5, minuteUTC: 6 }, "tick:run", { s: "w" });
+       c.cron("expr", "0 * * * *", "tick:run", { s: "z" });
+       export default c;`,
+    );
+    // An int64 argument made the answer fail (a 500): JSON has no BigInt.
+    const r = await d.push([tick, crons]);
+    expect(r.start.status).toBe(200);
+    // What Convex's local backend answered for the same crons (its `SerializedNamedCronSpec`s through serde_json).
+    const bytes = (json: string) => [...new TextEncoder().encode(json)];
+    const spec = (args: string, cronSchedule: Record<string, unknown>) => ({
+      udfPath: "tick.js:run",
+      udfArgs: bytes(args),
+      cronSchedule,
+    });
+    expect(r.start.body.analysis[""].functions["crons.js"]).toEqual({
+      functions: [],
+      httpRoutes: null,
+      cronSpecs: [
+        { identifier: "Hourly", spec: spec('[{"s":"h"}]', { type: "hourly", minuteUTC: 7 }) },
+        {
+          identifier: "big",
+          spec: spec('[{"f":1.5,"n":{"$integer":"BQAAAAAAAAA="},"nested":{"m":{"$integer":"/f////////8="}},"s":"x"}]', {
+            type: "interval",
+            seconds: 3600,
+          }),
+        },
+        { identifier: "expr", spec: spec('[{"s":"z"}]', { type: "cron", cronExpr: "0 * * * *" }) },
+        { identifier: "plain", spec: spec('[{"s":"y"}]', { type: "interval", seconds: 7200 }) },
+        {
+          identifier: "weekly",
+          spec: spec('[{"s":"w"}]', { type: "weekly", dayOfWeek: 2, hourUTC: 5, minuteUTC: 6 }),
+        },
+      ],
+      sourceMapped: null,
+    });
+    expect(r.start.body.analysis[""].functions["tick.js"].sourceMapped).toBeNull();
+    expect(r.finish!.body.componentDiffs[""].cronDiff.added.sort()).toEqual([
+      "Hourly",
+      "big",
+      "expr",
+      "plain",
+      "weekly",
+    ]);
+  });
+
   test("a restart serves the pushed code and schema", async () => {
     const dir = tmp();
     const store = new MemoryBlobStore();
