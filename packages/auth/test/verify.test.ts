@@ -159,8 +159,8 @@ describe("custom JWT providers", () => {
     );
     const now = Math.floor(Date.now() / 1000);
     expect((await v.verify(await i.sign({ exp: now - 3 }))).identity.subject).toBe("user-1"); // within 5 s
-    expect((await failure(v.verify(await i.sign({ exp: now - 30 })))).message).toBe(
-      "Could not validate token: Token expired",
+    expect((await failure(v.verify(await i.sign({ exp: now - 30 })))).message).toMatch(
+      /^Could not validate token: Token expired 3[01] seconds ago$/,
     );
     expect((await failure(v.verify(await i.sign({ exp: undefined })))).message).toBe("Missing expiry");
     const noAud = new TokenVerifier(config(i.url, `${i.url}/jwks.json`, { applicationID: undefined }));
@@ -170,6 +170,26 @@ describe("custom JWT providers", () => {
     expect((await failure(bad.verify(await html.sign()))).message).toBe(
       `Invalid Content-Type 'text/html' when fetching JWKS from '${html.url}/jwks.json'. Expected 'application/json' or 'application/jwk-set+json'.`,
     );
+  });
+
+  // Convex prints its JWT library's validation error: how long ago the token expired, or in how long it becomes
+  // valid (from `nbf`, else `iat`), in whole seconds cut toward zero from a clock with sub-second precision.
+  test("an expired or not yet valid token says by how many seconds, as Convex", async () => {
+    const i = await issuer({ alg: "ES256" });
+    const t = Math.floor(Date.now() / 1000);
+    const v = new TokenVerifier(config(i.url, `${i.url}/jwks.json`), { now: () => t * 1000 + 700 });
+    const message = async (claims: Record<string, unknown>) => (await failure(v.verify(await i.sign(claims)))).message;
+    expect(await message({ exp: t - 10 })).toBe("Could not validate token: Token expired 10 seconds ago");
+    expect(await message({ exp: t - 5 })).toBe("Could not validate token: Token expired 5 seconds ago");
+    expect(await message({ iat: t + 10 })).toBe("Could not validate token: Token will be valid in 9 seconds");
+    expect(await message({ nbf: t + 100 })).toBe("Could not validate token: Token will be valid in 99 seconds");
+    expect(await message({ nbf: t + 100, iat: t + 10 })).toBe(
+      "Could not validate token: Token will be valid in 99 seconds",
+    );
+    expect(await message({ exp: t - 100, nbf: t + 100 })).toBe(
+      "Could not validate token: Token expired 100 seconds ago",
+    );
+    expect((await v.verify(await i.sign({ exp: t - 4, iat: t + 5, nbf: t + 5 }))).identity.subject).toBe("user-1");
   });
 
   // Convex tells a JWKS that cannot be read (a data: URL that does not decode) from one that is read but is not a
