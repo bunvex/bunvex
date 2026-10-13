@@ -88,6 +88,15 @@ async function upload(b: Backend, body: string, type?: string) {
   return ((await r.json()) as { storageId: string }).storageId;
 }
 
+/** The deploy's run of the interval cron is logged (it runs at once, but not at once under load). */
+async function cronRan(b: Backend) {
+  for (let i = 0; i < 400; i++) {
+    if (((await sys(b, "query", "_system/frontend/listCronJobRuns")).value as unknown[]).length > 0) return;
+    await Bun.sleep(50);
+  }
+  throw new Error(`${b.name}: the deploy's cron run never ran`);
+}
+
 const window = () => {
   const end = Date.now() + 60_000;
   const t = (ms: number) => ({ secs_since_epoch: Math.floor(ms / 1000), nanos_since_epoch: 0 });
@@ -98,6 +107,7 @@ describe.skipIf(!ready)("the dashboard's operations reads on Convex and on bunve
   beforeAll(async () => {
     [convex, bunvex] = await Promise.all([startConvex({ app: APP }), startBunvex({ app: APP })]);
     for (const b of [convex, bunvex]) {
+      await cronRan(b);
       await b.call("mutation", "ops:schedule", { count: 3, delayMs: HOUR });
       await b.call("mutation", "ops:schedule", { count: 2, delayMs: 2 * HOUR, fn: "other" });
     }
@@ -235,8 +245,10 @@ describe.skipIf(!ready)("the dashboard's operations reads on Convex and on bunve
     const [c, x] = [await invalidations(convex), await invalidations(bunvex)];
     expect(x.one).toEqual(c.one);
     expect(c.all).toContain("ops.js:send:messages");
-    // the scheduler's and crons' own subscriptions counted too (DV-480, resolved to match Convex)
-    expect(x.all).toEqual(c.all);
+    // the scheduler's and crons' own subscriptions counted too (DV-480, resolved to match Convex); the deploy's cron
+    // run left to the step-by-step test below, as the oracle can miss it under load (see there)
+    const withoutCronRun = (names: string[]) => names.filter((n) => n !== "ops.js:workFn:_cron_next_run");
+    expect(withoutCronRun(x.all)).toEqual(withoutCronRun(c.all));
   });
 });
 /** Every pair of `subscription_invalidations_top_k` with its count over the last ten minutes. */
@@ -245,43 +257,66 @@ async function invalidationCounts(b: Backend) {
   const t = (ms: number) => ({ secs_since_epoch: Math.floor(ms / 1000), nanos_since_epoch: 0 });
   const w = encodeURIComponent(JSON.stringify({ start: t(end - 10 * 60_000), end: t(end), num_buckets: 1 }));
   const r = await route(b, "GET", `/api/app_metrics/subscription_invalidations_top_k?k=25&window=${w}`);
-  return (r.body as [string, [unknown, number | null][]][]).map(([n, s]) => [n, s[0]?.[1]]).sort();
+  return new Map((r.body as [string, [unknown, number | null][]][]).map(([n, s]) => [n, s[0]?.[1] ?? 0]));
 }
+
+/** What a step added to each pair, the pairs it left alone left out. */
+const added = (before: Map<string, number>, after: Map<string, number>) =>
+  [...after]
+    .map(([n, count]) => [n, count - (before.get(n) ?? 0)] as const)
+    .filter(([, d]) => d !== 0)
+    .sort(([a], [b]) => (a < b ? -1 : 1));
 
 /** An int64 in the encoded format, as a bigint. */
 const int64 = (v: { $integer: string }) =>
   new DataView(Uint8Array.from(atob(v.$integer), (ch) => ch.charCodeAt(0)).buffer).getBigInt64(0, true);
 
+// Each step is measured on its own: the counts it adds, from right before it to once it has settled (the runs due
+// soon have run and the counts stopped moving, waited for, not slept), so a step that differs fails alone.
+//
+// Convex's binary can count fewer than it means to, never more: its scheduler and cron executor drop their
+// subscription as soon as a run they started reports back (`select_biased!` on `job_finished_rx` first,
+// application/src/scheduled_jobs/mod.rs:339, cron_jobs/mod.rs:212), and the subscription worker removes a closed
+// subscription before it reads the log further (database/src/subscription.rs:321-346): a run whose report beats
+// the worker to its commit is never counted. Under load the deploy's cron run or a scheduled run went missing so.
+// bunvex counts what an unhurried binary does, so a sequence where the oracle counted less is run again on fresh
+// backends, a few times; bunvex counting less fails at once.
 describe.skipIf(!ready)("Health's invalidations of a scheduling app, step by step (DV-480)", () => {
-  let c: Backend;
-  let x: Backend;
-  beforeAll(async () => {
-    [c, x] = await Promise.all([startConvex({ app: APP }), startBunvex({ app: APP })]);
-  }, 300_000);
-  afterAll(async () => {
-    await Promise.all([c?.stop(), x?.stop()]);
-  });
-
   const first = async (b: Backend) => {
     const p = await sys(b, "query", "_system/frontend/paginatedScheduledJobs", {
       paginationOpts: { numItems: 1, cursor: null },
     });
     return (p.value as { page: { _id: string; nextTs: { $integer: string } }[] }).page[0];
   };
-  /** The runs due by now have run. */
+  /** The runs due within a second have run, then the counts read alike three times running: what they settle at. */
   const settled = async (b: Backend) => {
-    for (let i = 0; i < 200; i++) {
+    const deadline = Date.now() + 20_000;
+    for (;;) {
       const job = await first(b);
-      if (!job || int64(job.nextTs) > BigInt(Date.now()) * 1_000_000n) return;
+      if (!job || int64(job.nextTs) > BigInt(Date.now() + 1000) * 1_000_000n) break;
+      if (Date.now() > deadline) throw new Error(`${b.name}: a run due now never ran`);
       await Bun.sleep(50);
     }
+    let counts = await invalidationCounts(b);
+    for (let alike = 0; alike < 2; ) {
+      if (Date.now() > deadline) throw new Error(`${b.name}: the invalidation counts never settled`);
+      await Bun.sleep(250);
+      const next = await invalidationCounts(b);
+      alike = JSON.stringify([...next]) === JSON.stringify([...counts]) ? alike + 1 : 0;
+      counts = next;
+    }
+    return counts;
   };
   const steps: [string, (b: Backend) => Promise<unknown>][] = [
-    ["the deploy's cron run", async () => {}],
+    // measured from the start
+    ["the deploy's cron run", cronRan],
     ["a run scheduled on an empty queue", (b) => b.call("mutation", "ops:schedule", { count: 1, delayMs: HOUR })],
     [
       "the first future run canceled (outside the executor's read)",
-      async (b) => expect((await route(b, "POST", "/api/cancel_job", { id: (await first(b))!._id })).status).toBe(200),
+      async (b) => {
+        const r = await route(b, "POST", "/api/cancel_job", { id: (await first(b))!._id });
+        if (r.status !== 200) throw new Error(`${b.name}: cancel_job answered ${r.status}`);
+      },
     ],
     [
       "a run scheduled on the empty queue again",
@@ -292,14 +327,43 @@ describe.skipIf(!ready)("Health's invalidations of a scheduling app, step by ste
     ["two nearer runs, which run", (b) => b.call("mutation", "ops:schedule", { count: 2, delayMs: 300 })],
     ["every run canceled", (b) => route(b, "POST", "/api/cancel_all_jobs", {})],
   ];
-  for (const [i, [name, step]] of steps.entries())
-    test(`${i + 1}. ${name}`, async () => {
-      for (const b of [c, x]) {
-        await step(b);
-        await Bun.sleep(400);
-        await settled(b);
-        await Bun.sleep(400);
+  /** Each step's added counts on one backend. */
+  const measure = async (b: Backend) => {
+    const out: ReturnType<typeof added>[] = [];
+    let before = new Map<string, number>();
+    for (const [i, [, step]] of steps.entries()) {
+      if (i > 0) before = await settled(b);
+      await step(b);
+      out.push(added(before, await settled(b)));
+    }
+    return out;
+  };
+  /** The pairs the oracle counted less of than bunvex, by step. */
+  const lost = (c: ReturnType<typeof added>[], x: ReturnType<typeof added>[]) =>
+    x.flatMap((dx, i) =>
+      dx.filter(([n, d]) => d > (c[i]!.find(([m]) => m === n)?.[1] ?? 0)).map(([n]) => `${i + 1}. ${n}`),
+    );
+
+  const ATTEMPTS = 3;
+  let oracle: ReturnType<typeof added>[] = [];
+  let ours: ReturnType<typeof added>[] = [];
+  beforeAll(async () => {
+    for (let attempt = 1; ; attempt++) {
+      const [c, x] = await Promise.all([startConvex({ app: APP }), startBunvex({ app: APP })]);
+      try {
+        oracle = await measure(c);
+        ours = await measure(x);
+      } finally {
+        await Promise.all([c.stop(), x.stop()]);
       }
-      expect(await invalidationCounts(x)).toEqual(await invalidationCounts(c));
+      const less = lost(oracle, ours);
+      if (attempt === ATTEMPTS || less.length === 0) break;
+      console.warn(`dashboard-ops: the oracle counted less of ${less.join(", ")} (attempt ${attempt}); again`);
+    }
+  }, 600_000);
+
+  for (const [i, [name]] of steps.entries())
+    test(`${i + 1}. ${name}`, () => {
+      expect(ours[i]).toEqual(oracle[i]!);
     });
 });
