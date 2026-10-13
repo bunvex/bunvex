@@ -194,7 +194,12 @@ export function describeDeploymentContract({ make, test, watchTimeoutMs, opts }:
     if (first && src.getFile) {
       const got = await src.getFile(first.id);
       expect({ ...got, url: undefined }).toEqual({ ...first, url: undefined });
-      await expectCode(src.getFile("no-such-file"), "invalid_request");
+      // not a storage id: null as Convex's getFile, or invalid_request from a source that can tell
+      const bad = await src.getFile("no-such-file").catch((e: unknown) => e);
+      if (bad !== null) {
+        expect(bad).toBeInstanceOf(DataSourceError);
+        expect((bad as DataSourceError).code).toBe("invalid_request");
+      }
     }
     for (const f of newest) {
       expect(f.size).toBeGreaterThanOrEqual(0);
@@ -217,7 +222,7 @@ export function describeDeploymentContract({ make, test, watchTimeoutMs, opts }:
       const f = await src.getFile(id);
       expect(f).not.toBeNull();
       expect(f!.size).toBe(blob.size);
-      expect(f!.contentType).toBe("text/plain");
+      expect(f!.contentType).toBe(blob.type); // "text/plain", with a charset where the runtime adds one (Bun)
       expect(f!.sha256).toBe(await sha256(blob));
       expect((await src.listFiles({ numItems: 1, cursor: null })).page[0]?.id).toBe(id);
       // All or nothing (Convex's deleteFiles): one bad id and nothing is deleted.

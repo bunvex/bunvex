@@ -119,6 +119,12 @@ test("delete_tables, cancel_scheduled_function, cancel_all_scheduled_functions; 
   const job = (await t.call("mutation", "m:later")).value as string;
   await t.call("mutation", "m:later");
   expect((await t.post("/api/cancel_job", { id: job }, SYSTEM)).status).toBe(200);
+  // An id that is not a scheduled job's: Convex's 400 InvalidId, nothing canceled, no event.
+  const bad = await t.post("/api/cancel_job", { id: "bogus" });
+  expect([bad.status, await bad.json()]).toEqual([
+    400,
+    { code: "InvalidId", message: "Invalid ID for table _scheduled_jobs" },
+  ]);
   expect((await t.post("/api/cancel_all_jobs", {})).status).toBe(200);
   // Nothing left to cancel: no event.
   expect((await t.post("/api/cancel_all_jobs", {})).status).toBe(200);

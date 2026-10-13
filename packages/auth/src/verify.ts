@@ -268,14 +268,31 @@ export class TokenVerifier {
   }
 
   private async customJwks(uri: string, refresh: boolean): Promise<JSONWebKeySet> {
+    // A body that was read but is not a key set (not JSON, or not a JWKS), from a data: URL or a server.
+    const invalidBody = () =>
+      unauthenticated(
+        "InvalidAuthHeader",
+        `Invalid JWKS response body from '${uri}'. The response is not valid JSON or doesn't match the expected JWKS format.`,
+      );
+    const keySet = (body: unknown) => {
+      if (typeof body !== "object" || body === null || !Array.isArray((body as JSONWebKeySet).keys))
+        throw invalidBody();
+      return body as JSONWebKeySet;
+    };
     if (uri.startsWith("data:")) {
+      let text: string;
       try {
-        return (await (await this.fetchFn(uri)).json()) as JSONWebKeySet;
+        text = await (await this.fetchFn(uri)).text();
       } catch {
         throw unauthenticated(
           "InvalidAuthHeader",
           "Invalid JWKS data URL. Check that the data URL is properly formatted and contains valid base64-encoded JSON.",
         );
+      }
+      try {
+        return keySet(JSON.parse(text));
+      } catch {
+        throw invalidBody();
       }
     }
     try {
@@ -306,17 +323,14 @@ export class TokenVerifier {
       refresh,
     ).catch((e) => {
       if (e instanceof AuthenticationError) throw e;
+      // JSON.parse's error: the body arrived but is not JSON.
+      if (e instanceof SyntaxError) throw invalidBody();
       throw unauthenticated(
         "InvalidAuthHeader",
         `Could not fetch JWKS from URL '${uri}': ${(e as Error).message}. Check that the URL is correct and accessible.`,
       );
     });
-    if (typeof body !== "object" || body === null || !Array.isArray((body as JSONWebKeySet).keys))
-      throw unauthenticated(
-        "InvalidAuthHeader",
-        `Invalid JWKS response body from '${uri}'. The response is not valid JSON or doesn't match the expected JWKS format.`,
-      );
-    return body as JSONWebKeySet;
+    return keySet(body);
   }
 
   private async verifyCustom(token: string, info: Extract<AuthInfo, { kind: "customJwt" }>): Promise<VerifiedIdentity> {

@@ -172,6 +172,40 @@ describe("custom JWT providers", () => {
     );
   });
 
+  // Convex tells a JWKS that cannot be read (a data: URL that does not decode) from one that is read but is not a
+  // key set (not JSON, or JSON that is not a JWKS), for a data: URL and an https: one alike (crates/authentication
+  // src/lib.rs `fetch_jwks` and the custom JWT branch of `validate_jwt`).
+  test("a JWKS body that is not JSON or not a key set, from a data: URL or a server", async () => {
+    const i = await issuer({ alg: "ES256" });
+    const token = await i.sign();
+    const body = (uri: string) =>
+      `Invalid JWKS response body from '${uri}'. The response is not valid JSON or doesn't match the expected JWKS format.`;
+    for (const content of ["not json", JSON.stringify({ a: 1 }), "[]"]) {
+      const data = `data:application/json;base64,${Buffer.from(content).toString("base64")}`;
+      expect(await failure(new TokenVerifier(config(i.url, data)).verify(token))).toEqual({
+        status: 401,
+        code: "InvalidAuthHeader",
+        message: body(data),
+      });
+      const server = Bun.serve({
+        port: 0,
+        fetch: () => new Response(content, { headers: { "content-type": "application/json" } }),
+      });
+      stops.push(() => server.stop(true));
+      const url = `http://127.0.0.1:${server.port}/jwks.json`;
+      expect(await failure(new TokenVerifier(config(i.url, url)).verify(token))).toEqual({
+        status: 401,
+        code: "InvalidAuthHeader",
+        message: body(url),
+      });
+    }
+    expect(
+      (await failure(new TokenVerifier(config(i.url, "data:application/json;base64,%%%")).verify(token))).message,
+    ).toBe(
+      "Invalid JWKS data URL. Check that the data URL is properly formatted and contains valid base64-encoded JSON.",
+    );
+  });
+
   test("a token that is not a JWT, or has no issuer", async () => {
     const v = new TokenVerifier([]);
     expect(await failure(v.verify("nope"))).toMatchObject({ status: 401, code: "InvalidAuthHeader" });
