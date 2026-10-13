@@ -8,7 +8,7 @@ import {
   type FunctionReturnType,
   getFunctionName,
 } from "@bunvex/protocol";
-import type { Value } from "@bunvex/values";
+import type { JSONValue, Value } from "@bunvex/values";
 import type { AuthTokenFetcher } from "./authentication-manager.ts";
 import {
   BaseBunvexClient,
@@ -284,11 +284,11 @@ export class BunvexClient {
     return this.client.getCurrentAuthClaims();
   }
 
-  /** @internal */
-  setAdminAuth(token: string) {
+  /** @internal An admin key, optionally acting as `identity` (the user's identity attributes). */
+  setAdminAuth(token: string, identity?: { [field: string]: JSONValue }) {
     if (this.closed) throw new Error("BunvexClient has already been closed.");
     if (this.disabled) return;
-    this.client.setAdminAuth(token);
+    this.client.setAdminAuth(token, identity);
   }
 
   async close(): Promise<void> {

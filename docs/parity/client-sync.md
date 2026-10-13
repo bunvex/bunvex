@@ -143,7 +143,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | Server: identity version per session; `Authenticate` with the wrong baseVersion is rejected | `crates/sync/src/state.rs` (`modify_identity`) | done (STUDY-23) | |
 | Server: identity change invalidates and reruns all subscriptions of that session | `crates/sync/src/worker.rs` (`identity_changed`) | done (STUDY-27) | Shared executions are keyed by identity only when the run read it (B13, DV-12). |
 | Server: token expiry checked on every operation; soon-to-expire admin tokens revalidated; expired user token → `AuthError{authUpdateAttempted:false}` | `crates/sync/src/state.rs` (`identity`), `crates/sync/src/worker.rs` (`revalidate_identity`) | done (STUDY-27, STUDY-34) | User tokens: checked before every transition, mutation and action. Admin identities do not expire (DV-163). |
-| Admin auth + impersonation (`setAdminAuth(token, fakeUserIdentity)`) | `browser/sync/client.ts`, `react/client.ts` | done (STUDY-26) | `setAdminAuth(key, identity)` on the base client (`Authenticate` Admin with `impersonating`) and on the HTTP client (`Authorization: Bunvex <key>:<base64 identity>`). |
+| Admin auth + impersonation (`setAdminAuth(token, fakeUserIdentity)`) | `browser/sync/client.ts`, `react/client.ts` | done (STUDY-26) | `setAdminAuth(key, identity)` on the base, React and simple clients (`Authenticate` Admin with `impersonating`; the React client keeps both for a connection it creates later) and on the HTTP client (`Authorization: Bunvex <key>:<base64 identity>`). |
 
 ### 8. Optimistic updates
 
