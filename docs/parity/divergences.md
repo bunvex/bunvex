@@ -290,6 +290,7 @@ Kept so the history is in one place.
 
 | ID | What differed | Now | Observable | Decided | Source |
 |---|---|---|---|---|---|
+| DV-480 | Health's subscription invalidations counted client subscriptions only, not the ones Convex's scheduler and cron executor wait on | Counted as Convex's: a commit writing the scheduled jobs before the executor's first future run is `<source>:_scheduled_jobs`, a scheduled mutation's run counts twice, a cron run is `<function>:_cron_next_run`; paused, nothing; the executors' system commits under Convex's names (`executor-invalidations.ts`), checked step by step against the binary | no (dashboard) | owner, 2026-10-12: match Convex | [STUDY-149 PR 5](../study/STUDY-149-dashboard-real-data.md#pr-5-as-built) |
 | DV-112 | Pools of 16 connections (`POOL`), idle connections kept (Postgres) or closed after mysql2's 60 s | As Convex: `POSTGRES_MAX_CONNECTIONS` / `MYSQL_MAX_CONNECTIONS` (128) and `*_INACTIVE_CONNECTION_LIFETIME_SECS` (90 s); `POOL` still applies when the knobs are not set (MongoDB: 16). MySQL's 600 s forced lifetime (`MYSQL_MAX_CONNECTION_LIFETIME_SECS`) is not built: mysql2 has no such setting | operational | owner, 2026-10-12: Convex's knobs and defaults (STUDY-147 PR 2); was owner, 2026-10-01: keep 16 | [STUDY-147 §3.7](../study/STUDY-147-knob-env-overrides.md) |
 | DV-446 | S3 parts of a fixed size (8 MiB by default), and no trailing empty part | As Convex's `BufferedUpload`: parts from 5 MiB doubling up to `STORAGE_MAX_INTERMEDIATE_PART_SIZE` (200 MiB, capped at 5 GiB), a chunk's overflow past the maximum kept for the next part, the remaining buffer (even empty) as the last part, at most 9 999 parts (Convex's `next_part_number`), 8 in flight | operational | owner, 2026-10-11 (match) | [STUDY-140 §4](../study/STUDY-140-s3-sse-and-checksums.md#4-divergences) |
 | DV-450 | Proposed (option B): no transliteration of non-ASCII names being slugified | Transliterated exactly as Convex's `unidecode` 0.3.0 (the crate's table, reduced), checked against Convex's binary across the Basic Multilingual Plane; built (STUDY-141 PR 1) | yes (imported table and field names) | owner, 2026-10-11 (match Convex) | [STUDY-141 Q4](../study/STUDY-141-streaming-import.md#4-divergences) |
@@ -448,9 +449,9 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-| ID | bunvex | Convex | Observable | Why | Status | Source |
-|---|---|---|---|---|---|---|
-| DV-480 | Health's subscription invalidations count the subscriptions of clients only (apps and the dashboard) | also the subscriptions its scheduler and cron executor hold on their own tables (`scheduled_jobs/mod.rs` `subscribe_and_wait_for_invalidation`), so a mutation that schedules shows as `<mutation>:_scheduled_jobs` and a cron's run as `<function>:_cron_next_run` | no (dashboard) | bunvex's scheduler and crons are woken by the engine, not by subscriptions: there is nothing to count | pending (owner); recommended: keep | [STUDY-149 PR 5](../study/STUDY-149-dashboard-real-data.md#pr-5-as-built) |
+None as of 2026-10-12.
+
+DV-480 (STUDY-149 PR 5) was decided by the owner (2026-10-12: match Convex), built, and is in [Resolved to match Convex](#resolved-to-match-convex).
 
 DV-470–DV-473 (STUDY-148 Q1–Q4) were decided by the owner (2026-10-12, as recommended) and are in [Decided divergences](#decided-divergences); Q5–Q7 match Convex.
 

@@ -571,6 +571,28 @@ side re-read for it (citations under `dc/` as above; `su/` is `npm-packages/syst
 - Health's top functions now refresh every 8 s (`HEALTH_REFRESH_MS`); the scheduler lag stays at a minute. The
   concurrency and invalidation charts are not drawn yet (the screens are PR 6's).
 
+**The executors' own invalidations (DV-480, owner 2026-10-12: match Convex).** `packages/server/src/
+executor-invalidations.ts` counts, on the committer, what the subscriptions of Convex's scheduler and cron
+executor would count, into the same `subscription_invalidations:` counters as the clients' subscriptions:
+
+- Each executor's read is its queue's `by_next_ts` index from the first pending key up to, but not including, its
+  first run that is not due yet (Convex's `stream_jobs_to_run` stops there; open when there is none). It is read
+  again after every commit that touches the queue or `_backend_state`, and when that run falls due; until then a
+  run that has fallen due is inside.
+- A commit with a write into a read counts one for that executor, under its source and the queue's table
+  (`_scheduled_jobs`, `_cron_next_run`). A scheduled mutation's run counts once more (`jobRan`). Paused, the
+  executors read only `_backend_state`, and nothing counts.
+- Sources: a function by its canonical path; the executors' system commits under Convex's names
+  (`scheduled_job_gc`, `scheduled_job_progress`, `scheduled_job_complete_action`, `scheduled_job_system_error`,
+  `cron_in_progress`, `cron_complete_action`, `cron_save_mutation_error`, `cancel_job`, `cancel_all_jobs`); the
+  scheduler's commits now carry those names (an action's start and end, a job whose function is gone
+  `scheduled_job_bad_udf`, one cut short `scheduled_job_action_error`), and a failed mutation's result is saved
+  under the function's name, as Convex's `WriteSource::mutation`. Other system commits (a push) count nothing.
+- Measured on the binary, step by step (the oracle below): a run scheduled on an empty queue counts 1; one after
+  the first future run 0; cancelling that first future run, or every run, 0; a nearer run 1, and its run 2; a cron
+  run 1. The rule above reproduces each. Why a mutation's run counts twice is not explained by the source read
+  (two subscriptions over the running job, one taken before it fell due, is the likeliest); it is kept as observed.
+
 **The server, matched to Convex's binary where the oracle found it apart** (`packages/server`):
 `/api/cancel_job` with an id not of `_scheduled_jobs` was a 500 (an uncaught error) and is Convex's 400
 `InvalidId`; `fileStorageV2:getFile` threw for a malformed id and refused a user table's ("User tables cannot be
@@ -583,7 +605,7 @@ The contract's `getFile` says null for an id that is not a storage id on a deplo
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| DV-480 | Health's invalidations count client subscriptions only; Convex's also count its scheduler's and cron executor's own | bunvex's scheduler and crons are woken by the committer, not by subscriptions | **pending (owner)**, below |
+| DV-480 | Health's invalidations counted client subscriptions only; Convex's also count its scheduler's and cron executor's own | bunvex's scheduler and crons are woken by the committer, not by subscriptions | owner, 2026-10-12: **match Convex**; built (below), resolved |
 | DV-481 | An event with no member is by `system`, where Convex's dashboard says "Convex" | rule 5 | rule 5 |
 
 Not divergences (the screens are PR 6's): Convex keeps the pause in local storage per deployment, and after an
@@ -605,6 +627,9 @@ Convex's paused scheduled list shows its first page only (`Exhausted`); the cont
   heard after, reads still answer, a new watcher resumes), and Health's concurrency (kinds, buckets, a query
   running), invalidations (an app subscription re-run by `messages:send` on `messages`, overall and for that
   mutation) and their errors. The metrics contract area stays off until PR 4 (its setup lists functions).
+- `packages/server/test/executor-invalidations.test.ts`: the executor's read (an empty queue counts, a later
+  run and the first future run do not, cancels do not), a nearer run and its two counts, a failed run under its
+  function's name, nothing while paused.
 - `packages/dashboard-source/test/live.test.ts` (a fake connection): the window (100 pass, the 101st pauses, the
   window restarts after 10 s), the fingerprint, following and unfollowing, a change between the read and the
   watch, the list and page bookkeeping, pausing (paged lists unfollowed, the rest live, resumed by a new
@@ -620,7 +645,9 @@ Convex's paused scheduled list shows its first page only (`Exhausted`); the cont
   `cancel_all_jobs`, the cancel and file audit events (action, member, metadata), uploads, `fileMetadata` both
   ways, `numFiles`, `getFile` (a file, a malformed id, a scheduled function's id), `deleteFiles` (a bad id, a
   deleted file), `function_concurrency`'s gauges, and `subscription_invalidations_top_k` after a client
-  subscription (Convex's extra pairs are only its scheduler's and crons' tables: DV-480). One wording is
+  subscription (the same pairs on both, the executors' included), and a scheduling app step by step: after
+  each of the deploy's cron run, a run on an empty queue, cancelling it, another, a later one, a nearer one that
+  runs, two that run, and cancelling everything, every `subscription_invalidations_top_k` pair and count is equal. One wording is
   rewritten, not fixed here: bunvex wraps the other-table storage id error as ``Invalid argument `storageId` for
   `storage.getUrl`: …``, where Convex's model raises it bare (`file_storage/mod.rs:257-291`); it reaches
   `ctx.storage.getUrl` in apps too, so it is reported for its own PR (STUDY-32 says both are wrapped).
@@ -651,11 +678,21 @@ Convex's paused scheduled list shows its first page only (`Exhausted`); the cont
 | server: `getFile` not masked | 2 (server, oracle) |
 | server: `cancel_job`'s `InvalidId` left a 500 | 2 (server, oracle) |
 | server: the job filter canonicalizes again | 2 (server, oracle) |
+| DV-480: the first future run inside the read | 8 (server, oracle) |
+| DV-480: the read never moves (always open) | 9 (server, oracle) |
+| DV-480: a scheduled mutation's run counted once | 4 (server, oracle) |
+| DV-480: pause ignored | 1 (server) |
+| DV-480: a failed run saved under a system name | 1 (server) |
+| DV-480: cron runs not counted | 9 (oracle) |
+| DV-480: completed jobs' keys inside the read | 8 (server, oracle) |
 | one mutation's invalidations asked without `udfType` | 0: both servers default it to a query, which names the same function |
 
 The Health intervals (8 s, 60 s) are constants with no test of their own.
 
-**Measurements.** No server hot path changes (`getFile` adds two id checks, `cancel_job` an error branch). In the
+**Measurements.** The committer gains one listener (DV-480): 114 ns per commit for a user commit with six
+index writes, 88 ns for one that schedules a job (Bun, M-series, the reads' refresh stubbed); a commit that touches
+a queue then reads its first future run once, off the commit path, coalesced. `getFile` adds two id checks,
+`cancel_job` an error branch. In the
 source, each new result of a followed read is fingerprinted: 58 µs for a 50-run page (Bun, M-series), so at
 Convex's pause rate (10 updates/s) under 1 ms/s.
 
@@ -675,9 +712,10 @@ Convex's pause rate (10 updates/s) under 1 ms/s.
 - *Why*: "Ainda não fizemos" — the committer could count one invalidation per commit that writes `_scheduled_jobs`
   or `_cron_next_run` (and `_backend_state`, which both executors also watch), as if they subscribed.
 - *App impact*: none (the dashboard only).
-- *Recommendation*: keep bunvex's count (accept DV-480). The chart's tooltip says it shows "the mutation and table
+- *Recommendation (then)*: keep bunvex's count (accept DV-480). The chart's tooltip says it shows "the mutation and table
   pairs that caused the most queries to be re-run"; the scheduler's wake-ups are not queries, and counting them
   would need synthetic events that mirror Convex's executor design rather than anything bunvex runs.
+- **Decision (owner, 2026-10-12): match Convex** — built as above; DV-480 is resolved to match Convex.
 
 ## 6. Open questions
 
