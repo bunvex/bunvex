@@ -23,7 +23,7 @@ import { exportedValidator, type ValidatorExport } from "./builders.ts";
 import { type CronSpec, Crons, cronSpecs } from "./cron.ts";
 import { currentAllEnv, isolateProcessEnv, nodeProcessEnv, withPackageEnv } from "./env-scope.ts";
 import { describeUncaught, isError } from "./errors.ts";
-import { type FunctionDef, isFunctionDef, NODE_FUNCTIONS } from "./functions.ts";
+import { type FunctionDef, installNestedCalls, isFunctionDef, NODE_FUNCTIONS } from "./functions.ts";
 import { checkRouter, HttpRouter } from "./router.ts";
 import { byPosition, SourceMapTokens, type SourcePosition } from "./source-position.ts";
 import { moduleUrl, registerModules } from "./stack-map.ts";
@@ -315,6 +315,7 @@ export class CodeVersion {
       installDeterminismIn(g);
       // The replaced Date goes back in as the context's global.
       vm.runInContext("(D) => { globalThis.Date = D; }", c)(g.Date);
+      installNestedCalls(c);
     }
     // Convex's runtime deletes the deprecated RegExp statics (`RegExp.$1`, `lastMatch`, …), which hold the last
     // match's input across calls (udf-runtime `setupMisc`, 644e25f; DV-436). Its Node executor is not known to.
