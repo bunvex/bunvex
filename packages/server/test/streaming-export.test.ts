@@ -244,6 +244,16 @@ test("errors, access, and exact nanosecond timestamps over POST", async () => {
   expect(expired.body.message).toStartWith(
     "Trying to synchronize from timestamp 1001, which is older than the database’s retention window.",
   );
+  // Convex parses `format` last, after the read (local_backend/src/streaming_export.rs): a request wrong in both
+  // ways gets the other error.
+  expect((await t.get("list_snapshot", { format: "xml", snapshot: future })).body.code).toBe("SnapshotTooNew");
+  expect((await t.get("list_snapshot", { format: "xml", snapshot: old })).body.code).toBe("SnapshotTooOld");
+  expect((await t.get("list_snapshot", { format: "xml", cursor: "nope" })).body.code).toBe("InvalidListSnapshotCursor");
+  (t.engine as { retention: unknown }).retention = { minDocumentTs: t.engine.committer.visibleTs };
+  const both = await t.get("document_deltas", { cursor: "1000", format: "xml" });
+  (t.engine as { retention: unknown }).retention = realRetention;
+  expect(both.body.code).toBe("InvalidWindowToReadDocuments");
+  expect((await t.get("document_deltas", { cursor: "0", format: "xml" })).body.code).toBe("BadFormat");
   // POST keeps a nanosecond snapshot exact (beyond 2^53).
   const snap = /"snapshot":(\d+)/.exec((await t.get("list_snapshot")).text)![1]!;
   const posted = await t.post("list_snapshot", `{"snapshot":${snap},"tableName":"a"}`);

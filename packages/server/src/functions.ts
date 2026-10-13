@@ -2,6 +2,7 @@
 // with validators, as Convex — STUDY-13), the registry that names them ("module:fn"), internal functions,
 // and the calls the transports make. Transactions themselves run in
 // the engine (@bunvex/core); this layer only decides WHICH body runs and with what context.
+import vm from "node:vm";
 import type { UserIdentity } from "@bunvex/auth";
 import {
   boolKnob,
@@ -231,10 +232,41 @@ function toActionCallerError(e: unknown): unknown {
   err.data = e.data;
   return err;
 }
-const asActionCaller = <T>(p: Promise<T>): Promise<T> =>
+/**
+ * The callee's error for the action that called it. Pushed code (its own vm context) gets it from its context's
+ * wrapper (`installNestedCalls`), which converts the `NestedCallFailure` handed to it.
+ */
+const asActionCaller = <T>(p: Promise<T>, inContext: boolean): Promise<T> =>
   p.catch((e) => {
-    throw toActionCallerError(e);
+    throw inContext ? new NestedCallFailure(e) : toActionCallerError(e);
   });
+
+/** A callee's failure on its way to the context's wrapper, which makes the caller's error from it. */
+class NestedCallFailure {
+  constructor(readonly cause: unknown) {}
+}
+const fromNestedCall = (e: unknown) => (e instanceof NestedCallFailure ? toActionCallerError(e.cause) : e);
+
+/** Where a context keeps its wrapper: on its `Function.prototype`, so each of its functions reaches it. */
+const NESTED_CALLS = Symbol("bunvex.nestedCalls");
+type NestedCalls = <F extends (...a: never[]) => Promise<unknown>>(fn: F, convert: (e: unknown) => unknown) => F;
+
+/**
+ * A vm context's wrapper for an action's nested calls: an async function of the context's realm that awaits the
+ * call and makes the caller's error there. Its stack then goes on to the action's own frame, where it awaited the
+ * call (`at async …`), as Convex's error made in `performAsyncSyscall`; `mapStack` drops the server's frames and
+ * this one (its file is not a pushed module's, `bunvex:/…`). JavaScriptCore follows `await`s within one realm
+ * only: an error made in the server's code had server frames alone, which reached the client.
+ */
+export function installNestedCalls(context: object): void {
+  const wrap = vm.runInContext(
+    "(fn, convert) => async function (...a) { try { return await fn(...a); } catch (e) { throw convert(e); } }",
+    context,
+    { filename: "bunvex-runtime:nested-calls.js" },
+  ) as NestedCalls;
+  const fnProto = vm.runInContext("Function.prototype", context) as object;
+  Object.defineProperty(fnProto, NESTED_CALLS, { value: wrap });
+}
 
 /**
  * How a mutation run by the function runner commits (STUDY-78): it checks the write throughput limit first,
@@ -2266,9 +2298,18 @@ export class Functions {
    * as in Convex): `getUserIdentity()` throws it, and the queries and mutations it calls run with no identity.
    * The actions it calls get the error too, as Convex passes them the same identity (STUDY-66 §5).
    */
-  private actionCtx(caller: Caller | undefined, authError: Error | null, job?: string, f?: FunctionDef): ActionCtx {
+  private actionCtx(
+    caller: Caller | undefined,
+    authError: Error | null,
+    job?: string,
+    f?: FunctionDef,
+    handler: unknown = f?.handler,
+  ): ActionCtx {
     const identity = (caller?.identity ?? null) as UserIdentity | null;
-    return trackedCtx({
+    // Pushed code's handler: its context's wrapper for nested calls (`installNestedCalls`).
+    const nestedCalls = (handler as { [NESTED_CALLS]?: NestedCalls } | undefined)?.[NESTED_CALLS];
+    const inContext = nestedCalls !== undefined;
+    const ctx = trackedCtx({
       auth: {
         getUserIdentity: async () => {
           if (authError) throw authError;
@@ -2282,6 +2323,7 @@ export class Functions {
         return acrossCall(
           await asActionCaller(
             this.runQuery(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
+            inContext,
           ),
         );
       },
@@ -2291,6 +2333,7 @@ export class Functions {
         return acrossCall(
           await asActionCaller(
             this.runMutation(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
+            inContext,
           ),
         );
       },
@@ -2303,6 +2346,7 @@ export class Functions {
               internal: true,
               authError,
             }),
+            inContext,
           ),
         );
       },
@@ -2352,6 +2396,13 @@ export class Functions {
       },
       ...(f ? { meta: this.meta(f, null, caller) } : {}),
     } as ActionCtx);
+    if (!nestedCalls) return ctx;
+    return {
+      ...ctx,
+      runQuery: nestedCalls(ctx.runQuery, fromNestedCall),
+      runMutation: nestedCalls(ctx.runMutation, fromNestedCall),
+      runAction: nestedCalls(ctx.runAction, fromNestedCall),
+    };
   }
 
   /** @internal Run an HTTP action's handler with an action's context, holding an action permit. */
@@ -2363,7 +2414,7 @@ export class Functions {
     /** The route matched (its `path` or `pathPrefix`): the app metrics' name for it, as Convex's. */
     routePath?: string,
   ): Promise<unknown> {
-    const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION);
+    const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION, handler);
     let t0 = 0;
     let running: Running | null = null;
     let body: ReturnType<typeof meteredBody> | null = null;

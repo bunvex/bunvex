@@ -5,8 +5,13 @@
 // charts multiply it back by the bucket's width, so it becomes a count per bucket here; latencies come in
 // seconds and leave in milliseconds (Convex's charts convert them the same way).
 import {
+  bucketStarts,
+  CONCURRENCY_KINDS,
+  type ConcurrencyKind,
   DataSourceError,
+  type FunctionConcurrency,
   type FunctionMetric,
+  type InvalidationSeries,
   type MetricsWindow,
   REST,
   type TableMetric,
@@ -35,7 +40,7 @@ export function windowParam(w: MetricsWindow): string {
 }
 
 /** The server's series as the contract's: one bucket per window bucket, at its start, scaled by `scale`. */
-function seriesOf(json: SeriesJson, w: MetricsWindow, scale = 1): Timeseries {
+export function seriesOf(json: SeriesJson, w: MetricsWindow, scale = 1): Timeseries {
   const width = (w.end - w.start) / w.numBuckets;
   return json.map(([, v], i) => ({ time: w.start + i * width, value: v === null ? null : v * scale }));
 }
@@ -48,6 +53,52 @@ const UDF_METRICS: Record<FunctionMetric, string> = {
   cacheHits: "cacheHits",
   cacheMisses: "cacheMisses",
 };
+
+/**
+ * Convex's `mapFunctionTypeToDisplayName` (`appMetrics.ts`): the gauges its Health screen charts, by their
+ * `outstanding_functions:<env>:<udfType>` prefix; any other is left out.
+ */
+const CONCURRENCY_GAUGES: Record<string, ConcurrencyKind> = {
+  "isolate:Query": "query",
+  "isolate:Mutation": "mutation",
+  "isolate:Action": "action",
+  "node:Action": "nodeAction",
+  "isolate:HttpAction": "httpAction",
+};
+
+/** `function_concurrency`'s answer as the contract's: running and queued per kind, kinds in their order. */
+export function concurrencyOf(json: Record<string, SeriesJson>, w: MetricsWindow): FunctionConcurrency {
+  const byKind = new Map<ConcurrencyKind, { running?: Timeseries; queued?: Timeseries }>();
+  for (const [name, series] of Object.entries(json)) {
+    const parts = name.split(":");
+    if (parts.length !== 4 || parts[0] !== "outstanding_functions") continue;
+    const kind = CONCURRENCY_GAUGES[`${parts[1]}:${parts[2]}`];
+    const state = parts[3];
+    if (!kind || (state !== "running" && state !== "queued")) continue;
+    byKind.set(kind, { ...byKind.get(kind), [state]: seriesOf(series, w) });
+  }
+  const empty = (): Timeseries => bucketStarts(w).map((time) => ({ time, value: null }));
+  return CONCURRENCY_KINDS.flatMap((kind) => {
+    const k = byKind.get(kind);
+    return k ? [{ kind, running: k.running ?? empty(), queued: k.queued ?? empty() }] : [];
+  });
+}
+
+/**
+ * `subscription_invalidations_top_k`'s answer as the contract's. Its names are `<mutation>:<table>`, the mutation
+ * by its canonical path, or the table alone when one mutation was asked for; `_rest` is the others.
+ */
+export function invalidationsOf(json: [string, SeriesJson][], w: MetricsWindow, fn?: string): InvalidationSeries {
+  return json.map(([name, s]) => {
+    const series = seriesOf(s, w);
+    if (name === REST) return { function: REST, table: null, series };
+    if (fn !== undefined) return { function: fn, table: name, series };
+    const i = name.lastIndexOf(":");
+    return i === -1
+      ? { function: displayPath(name), table: null, series }
+      : { function: displayPath(name.slice(0, i)), table: name.slice(i + 1), series };
+  });
+}
 
 const TOP_K_ROUTES: Record<TopKMeasure, string> = {
   invocations: "function_call_count_top_k",
@@ -102,5 +153,21 @@ export class Metrics {
   async scheduledJobLag(w: MetricsWindow, signal?: AbortSignal) {
     const window = windowParam(w);
     return seriesOf(await this.get<SeriesJson>("scheduled_job_lag", { window }, signal), w);
+  }
+
+  async functionConcurrency(w: MetricsWindow, signal?: AbortSignal) {
+    const window = windowParam(w);
+    return concurrencyOf(await this.get<Record<string, SeriesJson>>("function_concurrency", { window }, signal), w);
+  }
+
+  /** As Convex's `useSubscriptionInvalidationsTopK`: one mutation's by its path, `udfType` `Mutation`. */
+  async subscriptionInvalidations(w: MetricsWindow, k: number, fn?: string, signal?: AbortSignal) {
+    const params: Record<string, string> = { window: windowParam(w), k: String(k) };
+    if (fn !== undefined) Object.assign(params, { udfPath: fn, udfType: "Mutation" });
+    return invalidationsOf(
+      await this.get<[string, SeriesJson][]>("subscription_invalidations_top_k", params, signal),
+      w,
+      fn,
+    );
   }
 }

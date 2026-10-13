@@ -4,6 +4,7 @@
 import { expect } from "bun:test";
 import {
   bucketStarts,
+  CONCURRENCY_KINDS,
   type DashboardDataSource,
   DataSourceError,
   type MetricsWindow,
@@ -24,6 +25,14 @@ async function setup(src: DashboardDataSource) {
   const window: MetricsWindow = { start: end - 6 * 3_600_000, end, numBuckets: 24 };
   const functions = await src.listFunctions();
   return { window, functions, query: functions.find((f) => f.kind === "query")?.path };
+}
+
+/** The window of `setup`, without the functions (for the metrics no function names). */
+async function windowOf(src: DashboardDataSource): Promise<MetricsWindow | null> {
+  if (!(await src.getCapabilities()).operations.includes("viewMetrics")) return null;
+  const newest = (await src.listLogs({ numItems: 1, cursor: null })).page[0];
+  const end = (newest?.time ?? Date.now()) + 1;
+  return { start: end - 6 * 3_600_000, end, numBuckets: 24 };
 }
 
 /** One bucket per window bucket, at the bucket's start, each a number (≥ 0) or null. */
@@ -103,5 +112,36 @@ export function describeMetricsContract({ make, test }: Ctx) {
       .functionRate(s.functions[0].path, "invocations", { ...s.window, numBuckets: 0 })
       .catch((e: unknown) => e);
     expect(bad instanceof DataSourceError && bad.code === "invalid_request").toBe(true);
+  });
+
+  test("concurrency (when offered): each kind once, in order, running and queued a bucket per window bucket", async () => {
+    const src = await make();
+    const w = src.functionConcurrency ? await windowOf(src) : null;
+    if (!w || !src.functionConcurrency) return;
+    const got = await src.functionConcurrency(w);
+    const kinds = got.map((c) => c.kind);
+    expect(kinds).toEqual(CONCURRENCY_KINDS.filter((k) => kinds.includes(k)));
+    for (const c of got) {
+      expectSeries(c.running, w);
+      expectSeries(c.queued, w);
+    }
+  });
+
+  test("subscription invalidations (when offered): at most k pairs and the rest; one mutation's tables", async () => {
+    const src = await make();
+    const w = src.subscriptionInvalidations ? await windowOf(src) : null;
+    if (!w || !src.subscriptionInvalidations) return;
+    const top = await src.subscriptionInvalidations(w, 3);
+    const named = top.filter((t) => t.function !== REST);
+    expect(named.length).toBeLessThanOrEqual(3);
+    expect(top.filter((t) => t.function === REST).every((t) => t.table === null)).toBe(true);
+    for (const t of top) expectSeries(t.series, w);
+    const totals = named.map((t) => t.series.reduce((n, b) => n + (b.value ?? 0), 0));
+    expect([...totals].sort((a, b) => b - a)).toEqual(totals);
+    const first = named[0];
+    if (!first) return;
+    const mine = await src.subscriptionInvalidations(w, 25, { function: first.function });
+    expect(mine.every((t) => t.function === first.function && t.table !== null)).toBe(true);
+    expect(mine.map((t) => t.table)).toContain(first.table);
   });
 }

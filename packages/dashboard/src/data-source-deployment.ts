@@ -140,13 +140,30 @@ export type AuditEvent = {
 /** Newest first; `from` / `to` bound the time (ms, inclusive); `actions` keeps only those. */
 export type AuditEventQuery = PageRequest & { from?: number; to?: number; actions?: string[] };
 
+// ------------------------------------------------------------------ live lists
+
+/**
+ * What a watcher of a busy live list hears with each change. Convex's dashboard stops following its scheduled
+ * runs and its files past 100 updates in 10 s (`usePausedLiveData`): from then on the list is read once per
+ * fetch, until the user goes live again. `paused: true` says the source has done so; the watcher keeps
+ * hearing about the parts Convex keeps live (the cron jobs, the file count), each with `paused: true`.
+ * Subscribing again resumes the list (Convex's "Go live"). A source that never pauses passes nothing.
+ */
+export type LiveChange = { paused: boolean };
+
 // ------------------------------------------------------------------ the optional methods
 
 export interface DeploymentFeatures {
   // Scheduled functions: read with `viewData`; cancelling needs `writeData` (and not `readOnly`).
   listScheduledFunctions?(query: ScheduledFunctionQuery, opts?: CallOptions): Promise<Page<ScheduledFunction>>;
-  /** Tells the caller the scheduled functions or the cron jobs changed. Never synchronously. */
-  watchScheduledFunctions?(onChange: () => void, onError: (error: DataSourceError) => void): Unsubscribe;
+  /**
+   * Tells the caller the scheduled functions or the cron jobs changed. Never synchronously. A source may pause
+   * the scheduled functions' part when they change too often (`LiveChange`).
+   */
+  watchScheduledFunctions?(
+    onChange: (change?: LiveChange) => void,
+    onError: (error: DataSourceError) => void,
+  ): Unsubscribe;
   /**
    * As Convex's `cancel_job`: a pending or running run becomes canceled (a running action finishes, but
    * what it schedules afterwards is canceled too); one already finished, or unknown, is left as it is.
@@ -166,8 +183,9 @@ export interface DeploymentFeatures {
   /** The files matching `filter` (every file without one), counted in all and per kind; see `FileQuery`. */
   fileStats?(filter?: FileFilter, opts?: CallOptions): Promise<FileStats>;
   /**
-   * `null` when there is no such file; an id that is not a storage id at all is `invalid_request` (Convex's
-   * `getFile` reads `db.system.get`, which refuses an id it cannot decode).
+   * `null` when there is no such file. An id that is not a storage id at all is `null` too on a deployment
+   * (Convex's `getFile` answers null for it, checked against its binary); a source that can tell (the mock) may
+   * answer `invalid_request` instead.
    */
   getFile?(id: string, opts?: CallOptions): Promise<StoredFile | null>;
   /** Stores the contents (the content type is the blob's); returns the new storage id. */
@@ -177,8 +195,11 @@ export interface DeploymentFeatures {
    * `invalid_request`, one with no file is `not_found`, and then nothing is deleted.
    */
   deleteFiles?(ids: string[], opts?: CallOptions): Promise<void>;
-  /** Tells the caller the stored files changed. Never synchronously. */
-  watchFiles?(onChange: () => void, onError: (error: DataSourceError) => void): Unsubscribe;
+  /**
+   * Tells the caller the stored files changed. Never synchronously. A source may pause the file list's part
+   * when it changes too often (`LiveChange`).
+   */
+  watchFiles?(onChange: (change?: LiveChange) => void, onError: (error: DataSourceError) => void): Unsubscribe;
 
   // Environment variables: read with `viewEnvironmentVariables`, changed with `writeEnvironmentVariables`
   // (and not `readOnly`), as Convex's operations.
