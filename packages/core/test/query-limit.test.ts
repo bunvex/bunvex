@@ -138,9 +138,16 @@ describe("limit(n) arguments, checked when the query starts", () => {
     expect(await bad(1.5)).toBe(
       "Invalid argument `query` for `queryStream`: invalid type: floating point `1.5`, expected usize",
     );
-    expect(await bad(1e21)).toBe(
-      "Invalid argument `query` for `queryStream`: invalid type: floating point `1000000000000000000000.0`, expected usize",
-    );
+    // A float as serde_json 1.0.151 words it (zmij), as Convex's binary answers (precompiled-2026-10-07).
+    const float = (text: string) =>
+      `Invalid argument \`query\` for \`queryStream\`: invalid type: floating point \`${text}\`, expected usize`;
+    expect(await bad(1e21)).toBe(float("1e+21"));
+    expect(await bad(1e20)).toBe(float("1e+20"));
+    expect(await bad(2 ** 64)).toBe(float("1.8446744073709552e+19"));
+    expect(await bad(1e-7)).toBe(float("1e-7"));
+    expect(await bad(1e-6)).toBe(float("1e-6"));
+    expect(await bad(123456.75)).toBe(float("123456.75"));
+    expect(await bad(-(2 ** 63))).toBe(float("-9.223372036854776e+18"));
     expect(await bad(Number.NaN)).toBe(
       "Invalid argument `query` for `queryStream`: invalid type: null, expected usize",
     );
