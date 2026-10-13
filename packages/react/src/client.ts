@@ -25,7 +25,7 @@ import {
   type QueryToken,
   type v1,
 } from "@bunvex/client";
-import type { Value } from "@bunvex/values";
+import type { JSONValue, Value } from "@bunvex/values";
 
 /** How long `prewarmQuery` keeps its subscription (Convex's DEFAULT_EXTEND_SUBSCRIPTION_FOR). */
 const DEFAULT_EXTEND_SUBSCRIPTION_FOR = 5_000;
@@ -130,6 +130,7 @@ export class BunvexReactClient {
   private readonly options: BunvexReactClientOptions;
   private closed = false;
   private adminAuth: string | undefined;
+  private adminIdentity: { [field: string]: JSONValue } | undefined;
   private readonly _logger: Logger;
 
   /** @param address - The deployment's URL, e.g. `http://localhost:3210`. */
@@ -167,7 +168,7 @@ export class BunvexReactClient {
     if (this.closed) throw new Error("BunvexReactClient has already been closed.");
     if (this.cachedSync) return this.cachedSync;
     const sync = this.options.baseClient ?? new BaseBunvexClient(this.address, () => {}, this.options);
-    if (this.adminAuth) sync.setAdminAuth(this.adminAuth);
+    if (this.adminAuth) sync.setAdminAuth(this.adminAuth, this.adminIdentity);
     this.cachedSync = sync;
     this.cachedPaginatedQueryClient = new PaginatedQueryClient(sync, (t) => this.handleTransition(t));
     return sync;
@@ -180,11 +181,12 @@ export class BunvexReactClient {
     throw new Error("Should already be instantiated");
   }
 
-  /** @internal An admin key (the dashboard). */
-  setAdminAuth(token: string) {
+  /** @internal An admin key (the dashboard), optionally acting as `identity` (the user's identity attributes). */
+  setAdminAuth(token: string, identity?: { [field: string]: JSONValue }) {
     this.adminAuth = token;
+    this.adminIdentity = identity;
     if (this.closed) throw new Error("BunvexReactClient has already been closed.");
-    if (this.cachedSync) this.sync.setAdminAuth(token);
+    if (this.cachedSync) this.sync.setAdminAuth(token, identity);
   }
 
   /**
