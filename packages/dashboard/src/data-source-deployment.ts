@@ -214,6 +214,9 @@ export interface DeploymentFeatures {
 
   // The audit log: read with `viewAuditLog`. The source records the events; the dashboard only reads them.
   listAuditEvents?(query: AuditEventQuery, opts?: CallOptions): Promise<Page<AuditEvent>>;
-  /** Tells the caller new events were recorded. Never synchronously. */
+  /**
+   * Tells the caller new events were recorded. Never synchronously. A live source may only hear what changes the
+   * pages it has served while watched, as Convex's History page follows its subscribed pages.
+   */
   watchAuditEvents?(onChange: () => void, onError: (error: DataSourceError) => void): Unsubscribe;
 }

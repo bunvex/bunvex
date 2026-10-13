@@ -7,6 +7,8 @@ import { formatCount } from "../screens/stats.ts";
 const n = (v: Json | undefined, one: string, many = `${one}s`) =>
   typeof v === "number" ? `${formatCount(v)} ${v === 1 ? one : many}` : many;
 const str = (v: Json | undefined) => (typeof v === "string" ? v : "");
+/** A list's length (Convex's events carry the ids: `document_ids`, `storage_ids`), else a count. */
+const len = (list: Json | undefined, count?: Json) => (Array.isArray(list) ? list.length : count);
 
 /** The actions the dashboard has words for, in the order a filter lists them. */
 // The action facet's words: short, so they fit the column (UX2-24), under the area they belong to.
@@ -19,6 +21,7 @@ export const ACTION_AREAS: readonly { area: string; actions: Record<string, stri
       delete_documents: "Documents deleted",
       clear_tables: "Tables cleared",
       create_table: "Table created",
+      delete_tables: "Tables deleted",
     },
   },
   { area: "Files", actions: { generate_upload_url: "File uploaded", delete_files: "Files deleted" } },
@@ -53,20 +56,24 @@ export function describeEvent(e: AuditEvent): string {
   const m = e.metadata;
   switch (e.action) {
     case "add_documents":
-      return `Added ${n(m.count, "document")} to ${str(m.table)}`;
+      return `Added ${n(len(m.document_ids), "document")} to ${str(m.table)}`;
     case "update_documents":
-      return `Edited ${n(m.count, "document")} in ${str(m.table)}`;
+      return `Edited ${n(len(m.document_ids), "document")} in ${str(m.table)}`;
     case "delete_documents":
-      return `Deleted ${n(m.count, "document")} from ${str(m.table)}`;
+      return `Deleted ${n(len(m.document_ids), "document")} from ${str(m.table)}`;
     // Convex's event carries no metadata (STUDY-141), and its dashboard says "cleared tables".
     case "clear_tables":
       return "Cleared tables";
     case "create_table":
       return `Created table ${str(m.table)}`;
+    case "delete_tables":
+      return `Deleted ${Array.isArray(m.table_names) && m.table_names.length === 1 ? "table" : "tables"} ${
+        Array.isArray(m.table_names) ? m.table_names.join(", ") : ""
+      }`;
     case "generate_upload_url":
       return "Uploaded a file";
     case "delete_files":
-      return `Deleted ${n(m.count, "file")}`;
+      return `Deleted ${n(len(m.storage_ids, m.count), "file")}`;
     case "create_environment_variable":
       return `Added environment variable ${str(m.variable_name)}`;
     case "update_environment_variable":

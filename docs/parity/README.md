@@ -193,7 +193,6 @@ gaps.
     deployment, schema, state, logs, function metrics and the `check_admin_key` sign-in; PR 2: the Data
     screen's reads, with the server's `getTableMapping`, `paginatedTableDocuments`, `indexes`, `listById`,
     `getById` and `/api/get_indexes`; PR 5: schedules, files, the audit log, Health's concurrency and
-    invalidations); the rest is PRs 3, 4 and 6;
-  - its data mutations (`_system/frontend` `addDocument`, `patchDocumentsFields`, `deleteDocuments`,
-    `createTable`, …) bring the `add_documents`, `update_documents`, `delete_documents` and `create_table`
-    audit events.
+    invalidations; PR 3: the Data screen's writes, with the server's `addDocument`, `patchDocumentsFields`,
+    `replaceDocument`, `deleteDocuments`, `clearTablePage` and `createTable` and their `add_documents`,
+    `update_documents`, `delete_documents` and `create_table` audit events); the rest is PRs 4 and 6.
