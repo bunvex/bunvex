@@ -28,6 +28,33 @@ describe("tables are created on first insert, as Convex (STUDY-14)", () => {
     expect(await e.query((db) => db.query("notes").collect())).toHaveLength(1);
   });
 
+  // Convex's transaction registers the table it creates, so the ids it hands out work at once, by every method.
+  test("the transaction that creates a table reads and writes its ids, one argument or two", async () => {
+    const { e } = await engine();
+    const seen = await e.mutation(async (db) => {
+      const a = await db.insert("fresh", { n: 1 });
+      const b = await db.insert("fresh", { n: 2 });
+      const got = [await db.get(a), await db.get("fresh", a)];
+      await db.patch(a, { n: 10 });
+      await db.patch("fresh", b, { n: 20 });
+      const patched = [(await db.get(a))?.n, (await db.get(b))?.n];
+      await db.replace(a, { n: 100 });
+      await db.replace("fresh", b, { n: 200 });
+      const replaced = [(await db.get(a))?.n, (await db.get(b))?.n];
+      const c = await db.insert("fresh", { n: 3 });
+      const d = await db.insert("fresh", { n: 4 });
+      await db.delete(c);
+      await db.delete("fresh", d);
+      return { got: got.map((x) => x?.n), patched, replaced, gone: [await db.get(c), await db.get(d)], a };
+    });
+    expect(seen).toMatchObject({ got: [1, 1], patched: [10, 20], replaced: [100, 200], gone: [null, null] });
+    expect((await e.query((db) => db.query("fresh").collect())).map((x) => x.n)).toEqual([100, 200]);
+    // Another table's id is still refused by name, in the transaction that created it.
+    await expect(e.mutation(async (db) => db.get("users", await db.insert("other", { n: 1 })))).rejects.toThrow(
+      'expected to be an Id<"users">, got Id<"other"> instead.',
+    );
+  });
+
   test("reading a table that does not exist gives nothing, and re-runs once it is created", async () => {
     const { e } = await engine();
     const q = (db: any) => db.query("later").collect();
