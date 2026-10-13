@@ -92,6 +92,7 @@ import {
   newRequestId,
   withRequestId,
 } from "./errors.ts";
+import { EXECUTOR_SOURCES, ExecutorInvalidations } from "./executor-invalidations.ts";
 import { ExportError, ExportService } from "./exports.ts";
 import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import {
@@ -598,6 +599,14 @@ export function createServer(opts: ServerOptions) {
   // The app metrics (STUDY-58): what functions, the scheduler and subscriptions record.
   const appMetrics = new AppMetrics();
   functions.appMetrics = appMetrics;
+  // Convex's executors' own subscription invalidations (STUDY-149 PR 5, DV-480).
+  const executorInvalidations = new ExecutorInvalidations(
+    engine,
+    (source, table, n) => appMetrics.recordInvalidations(source, new Map([[table, n]])),
+    (source) => (functions.kindOf(source) === null ? EXECUTOR_SOURCES[source] : canonicalPath(source)),
+  );
+  appMetrics.onScheduledMutationRan = (source) => executorInvalidations.jobRan(source);
+  executorInvalidations.start();
   // The Prometheus metrics (STUDY-114): served at `/metrics` unless DISABLE_METRICS_ENDPOINT is `true`.
   const serverMetrics = new ServerMetrics();
   functions.serverMetrics = serverMetrics;
@@ -2415,6 +2424,7 @@ export function createServer(opts: ServerOptions) {
       stopCleanup();
       await exportService?.stop();
       await importService?.stop();
+      executorInvalidations.stop();
       await scheduler.stop();
       await cronExecutor.stop();
       sync.stop();

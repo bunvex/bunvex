@@ -241,10 +241,71 @@ describe.skipIf(!ready)("the dashboard's operations reads on Convex and on bunve
     const [c, x] = [await invalidations(convex), await invalidations(bunvex)];
     expect(x.one).toEqual(c.one);
     expect(c.all).toContain("ops.js:send:messages");
-    expect(x.all).toContain("ops.js:send:messages");
-    // Convex also counts the subscriptions its scheduler and cron executor hold (DV-480)
-    expect(
-      c.all.filter((n) => !x.all.includes(n)).every((n) => /:_(scheduled_jobs|cron_next_run|cron_jobs)$/.test(n)),
-    ).toBe(true);
+    // the scheduler's and crons' own subscriptions counted too (DV-480, resolved to match Convex)
+    expect(x.all).toEqual(c.all);
   });
+});
+/** Every pair of `subscription_invalidations_top_k` with its count over the last ten minutes. */
+async function invalidationCounts(b: Backend) {
+  const end = Date.now() + 60_000;
+  const t = (ms: number) => ({ secs_since_epoch: Math.floor(ms / 1000), nanos_since_epoch: 0 });
+  const w = encodeURIComponent(JSON.stringify({ start: t(end - 10 * 60_000), end: t(end), num_buckets: 1 }));
+  const r = await route(b, "GET", `/api/app_metrics/subscription_invalidations_top_k?k=25&window=${w}`);
+  return (r.body as [string, [unknown, number | null][]][]).map(([n, s]) => [n, s[0]?.[1]]).sort();
+}
+
+/** An int64 in the encoded format, as a bigint. */
+const int64 = (v: { $integer: string }) =>
+  new DataView(Uint8Array.from(atob(v.$integer), (ch) => ch.charCodeAt(0)).buffer).getBigInt64(0, true);
+
+describe.skipIf(!ready)("Health's invalidations of a scheduling app, step by step (DV-480)", () => {
+  let c: Backend;
+  let x: Backend;
+  beforeAll(async () => {
+    [c, x] = await Promise.all([startConvex({ app: APP }), startBunvex({ app: APP })]);
+  }, 300_000);
+  afterAll(async () => {
+    await Promise.all([c?.stop(), x?.stop()]);
+  });
+
+  const first = async (b: Backend) => {
+    const p = await sys(b, "query", "_system/frontend/paginatedScheduledJobs", {
+      paginationOpts: { numItems: 1, cursor: null },
+    });
+    return (p.value as { page: { _id: string; nextTs: { $integer: string } }[] }).page[0];
+  };
+  /** The runs due by now have run. */
+  const settled = async (b: Backend) => {
+    for (let i = 0; i < 200; i++) {
+      const job = await first(b);
+      if (!job || int64(job.nextTs) > BigInt(Date.now()) * 1_000_000n) return;
+      await Bun.sleep(50);
+    }
+  };
+  const steps: [string, (b: Backend) => Promise<unknown>][] = [
+    ["the deploy's cron run", async () => {}],
+    ["a run scheduled on an empty queue", (b) => b.call("mutation", "ops:schedule", { count: 1, delayMs: HOUR })],
+    [
+      "the first future run canceled (outside the executor's read)",
+      async (b) => expect((await route(b, "POST", "/api/cancel_job", { id: (await first(b))!._id })).status).toBe(200),
+    ],
+    [
+      "a run scheduled on the empty queue again",
+      (b) => b.call("mutation", "ops:schedule", { count: 1, delayMs: HOUR }),
+    ],
+    ["a later run (outside)", (b) => b.call("mutation", "ops:schedule", { count: 1, delayMs: 2 * HOUR })],
+    ["a nearer run, which runs", (b) => b.call("mutation", "ops:schedule", { count: 1, delayMs: 300 })],
+    ["two nearer runs, which run", (b) => b.call("mutation", "ops:schedule", { count: 2, delayMs: 300 })],
+    ["every run canceled", (b) => route(b, "POST", "/api/cancel_all_jobs", {})],
+  ];
+  for (const [i, [name, step]] of steps.entries())
+    test(`${i + 1}. ${name}`, async () => {
+      for (const b of [c, x]) {
+        await step(b);
+        await Bun.sleep(400);
+        await settled(b);
+        await Bun.sleep(400);
+      }
+      expect(await invalidationCounts(x)).toEqual(await invalidationCounts(c));
+    });
 });
