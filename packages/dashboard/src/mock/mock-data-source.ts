@@ -40,11 +40,13 @@ import {
   type FileStats,
   type FilterExpression,
   type FunctionClients,
+  type FunctionConcurrency,
   type FunctionInfo,
   type FunctionMetric,
   type FunctionRun,
   type InspectorFilter,
   type InvalidationEvent,
+  type InvalidationSeries,
   type LogEntry,
   type LogFilter,
   type LogQuery,
@@ -1272,6 +1274,20 @@ export class MockDataSource implements DashboardDataSource {
 
   scheduledJobLag(w: MetricsWindow, opts?: CallOptions): Promise<Timeseries> {
     return this.metrics(opts?.signal, w, () => metrics.scheduledJobLag(this.logs, w));
+  }
+
+  functionConcurrency(w: MetricsWindow, opts?: CallOptions): Promise<FunctionConcurrency> {
+    return this.metrics(opts?.signal, w, () => metrics.functionConcurrency(this.logs, w));
+  }
+
+  subscriptionInvalidations(
+    w: MetricsWindow,
+    k: number,
+    opts?: CallOptions & { function?: string },
+  ): Promise<InvalidationSeries> {
+    return this.metrics(opts?.signal, w, () =>
+      metrics.subscriptionInvalidations(this.logs, w, Math.max(1, k), opts?.function),
+    );
   }
 
   // ---------------------------------------------------------------- topology (§22), simulated

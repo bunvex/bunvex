@@ -456,9 +456,13 @@ export class ScheduledJobExecutor {
       if (!Array.isArray(args)) throw new Error(args.error);
       if (job.state.kind === "inProgress") {
         // Picked up in progress, but not running here: an action cut short. Never run it again.
-        await this.finish(job, { kind: "failed", error: "Transient error while executing action" });
+        await this.finish(
+          job,
+          { kind: "failed", error: "Transient error while executing action" },
+          "_system/scheduled_job_action_error",
+        );
       } else if ("error" in target) {
-        await this.finish(job, { kind: "failed", error: target.error });
+        await this.finish(job, { kind: "failed", error: target.error }, "_system/scheduled_job_bad_udf");
       } else if (target.kind === "mutation") {
         await this.runMutation(job, args[0]);
       } else {
@@ -479,10 +483,11 @@ export class ScheduledJobExecutor {
     }
   }
 
-  private async finish(job: JobDoc, state: JobDoc["state"]) {
+  /** Records a job's end; `source` is the commit's write source, as Convex names it (app metrics, OCC). */
+  private async finish(job: JobDoc, state: JobDoc["state"], source: string) {
     await this.engine.mutation(async (db) => {
       if (await this.unchanged(db, job)) await completeJob(db, job._id, state, Date.now());
-    }, "_system/scheduled_job");
+    }, source);
     if (state.kind === "failed") this.stats.failed++;
   }
 
@@ -518,7 +523,11 @@ export class ScheduledJobExecutor {
           undefined,
           args,
         );
-        if (ran) this.stats.succeeded++;
+        if (ran) {
+          this.stats.succeeded++;
+          // Convex's executor holds two subscriptions over a running job (STUDY-149 PR 5, DV-480)
+          this.functions.appMetrics?.onScheduledMutationRan?.(job.name);
+        }
         return;
       } catch (e) {
         // A lost conflict, or the write throughput limit (STUDY-78): the job stays pending and runs again
@@ -530,7 +539,8 @@ export class ScheduledJobExecutor {
         }
         if (isSystemFailure(e)) throw e;
         // The mutation's own error: its writes are gone; record it.
-        await this.finish(job, { kind: "failed", error: describeUncaught(e).message });
+        // saved under the function's name, as Convex's (`WriteSource::mutation`)
+        await this.finish(job, { kind: "failed", error: describeUncaught(e).message }, job.name);
         return;
       }
     }
@@ -543,7 +553,7 @@ export class ScheduledJobExecutor {
       if (!(await this.unchanged(db, job))) return null;
       await patchJob(db, job._id, { state: { kind: "inProgress", requestId, executionId } });
       return getJob(db, job._id);
-    }, "_system/scheduled_job");
+    }, "_system/scheduled_job_progress");
     if (!started) return;
     let state: JobDoc["state"];
     try {
@@ -559,7 +569,10 @@ export class ScheduledJobExecutor {
     // Recorded until it sticks; a job canceled meanwhile stays canceled (`completeJob` is a no-op then).
     for (let n = 1; ; n++) {
       try {
-        await this.engine.mutation((db) => completeJob(db, job._id, state, Date.now()), "_system/scheduled_job");
+        await this.engine.mutation(
+          (db) => completeJob(db, job._id, state, Date.now()),
+          "_system/scheduled_job_complete_action",
+        );
         break;
       } catch (e) {
         if (e instanceof CommitterStoppedError) return;

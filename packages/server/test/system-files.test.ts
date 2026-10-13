@@ -28,6 +28,7 @@ async function setup() {
   ).init();
   const functions = new Functions(engine).register("m", {
     otherId: mutation(async ({ db }) => db.insert("items", {})),
+    later: mutation(async ({ scheduler }) => scheduler.runAfter(60_000, "m:otherId" as never, {})),
   });
   const server = createServer({ engine, functions, port: 0, fileStorage: new MemoryBlobStore() });
   stops.push(server.stop);
@@ -104,18 +105,23 @@ describe("_system/frontend/fileStorageV2", () => {
     );
   });
 
-  test("getFile: the document with its url; a user table's id refused; db.get's error for a malformed id", async () => {
+  test("getFile: the document with its url; null for any id not of _storage; a scheduled function's fails", async () => {
     const { query, store, functions } = await setup();
     const id = await store("hello");
     const f = (await query("getFile", { storageId: id })) as Record<string, unknown>;
     expect(f).toMatchObject({ _id: id, size: 5, contentType: "text/plain" });
     expect(Object.keys(f)[0]).toBe("url");
+    // Convex's system queries mask `db.system.get` (`maskPublicSystem`): null for a user table's id and for a
+    // malformed one, as its binary answers (packages/differential/test/dashboard-ops.test.ts).
     const other = (await functions.runMutation("m:otherId", {})) as string;
-    // As Convex's `db.system.get` (`system_table_guard`, STUDY-125).
-    expect(await msg(query("getFile", { storageId: other }))).toContain(
-      "User tables cannot be accessed with db.system.",
+    expect(await query("getFile", { storageId: other })).toBeNull();
+    expect(await query("getFile", { storageId: "no-such-file" })).toBeNull();
+    expect(await query("getFile", { storageId: "" })).toBeNull();
+    // A scheduled function's id is read, then refused at its URL, as Convex's `storage.getUrl`.
+    const job = (await functions.runMutation("m:later", {})) as string;
+    expect(await msg(query("getFile", { storageId: job }))).toContain(
+      "Invalid storage ID. Storage ID cannot be an ID on any table other than '_storage'.",
     );
-    expect(await msg(query("getFile", { storageId: "no-such-file" }))).toContain("Invalid argument `id`");
   });
 
   test("deleteFile removes the document and the URL stops serving", async () => {

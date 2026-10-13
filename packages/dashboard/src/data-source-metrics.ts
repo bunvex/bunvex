@@ -29,6 +29,32 @@ export const REST = "_rest";
 
 export type TopKMeasure = "invocations" | "failurePercentage" | "cacheHitPercentage";
 
+/**
+ * The kinds of function Convex's Health screen charts concurrency for (`mapFunctionTypeToDisplayName`): its
+ * queries, mutations and actions, its Node actions and HTTP actions.
+ */
+export type ConcurrencyKind = "query" | "mutation" | "action" | "nodeAction" | "httpAction";
+export const CONCURRENCY_KINDS: readonly ConcurrencyKind[] = [
+  "query",
+  "mutation",
+  "action",
+  "nodeAction",
+  "httpAction",
+];
+
+/**
+ * How many functions of each kind ran, and waited for a slot, per bucket: the most at once in the bucket
+ * (Convex's `outstanding_functions` gauges). One entry per kind the source reports, in `CONCURRENCY_KINDS`
+ * order.
+ */
+export type FunctionConcurrency = { kind: ConcurrencyKind; running: Timeseries; queued: Timeseries }[];
+
+/**
+ * The mutation and table pairs whose writes re-ran the most subscribed queries, each with the queries it
+ * invalidated per bucket, plus `REST` (with `table: null`) for all the others together.
+ */
+export type InvalidationSeries = { function: string; table: string | null; series: Timeseries }[];
+
 export interface MetricsFeatures {
   /** A function's count per bucket (Convex's `udf_rate`). */
   functionRate?(fn: string, metric: FunctionMetric, window: MetricsWindow, opts?: CallOptions): Promise<Timeseries>;
@@ -54,6 +80,17 @@ export interface MetricsFeatures {
   tableRate?(table: string, metric: TableMetric, window: MetricsWindow, opts?: CallOptions): Promise<Timeseries>;
   /** How late scheduled runs started, in seconds, per bucket (Convex's `scheduled_job_lag`). */
   scheduledJobLag?(window: MetricsWindow, opts?: CallOptions): Promise<Timeseries>;
+  /** Running and queued functions per kind (Convex's `function_concurrency`, the Health screen's concurrency). */
+  functionConcurrency?(window: MetricsWindow, opts?: CallOptions): Promise<FunctionConcurrency>;
+  /**
+   * The `k` mutation and table pairs that invalidated the most subscriptions over the window, plus `REST`
+   * (Convex's `subscription_invalidations_top_k`). With `function`, that mutation's tables only.
+   */
+  subscriptionInvalidations?(
+    window: MetricsWindow,
+    k: number,
+    opts?: CallOptions & { function?: string },
+  ): Promise<InvalidationSeries>;
 }
 
 /** The start of each bucket of `w`. */

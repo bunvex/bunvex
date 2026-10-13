@@ -683,6 +683,228 @@ a hand-made URL sends one / app impact: none / decided: keep bunvex's words).
 (D3); Convex's sidebar is live on the mapping — a `watchTables` (or refetching the list on the mapping's change)
 would match it. Search, vector and staged indexes are not in `IndexInfo`. `tableOfId` answers user tables only.
 
+### PR 5, as built
+
+The Schedules, Files and History screens and Health's concurrency and invalidations, on the server source. Convex's
+side re-read for it (citations under `dc/` as above; `su/` is `npm-packages/system-udfs/convex/_system/`):
+
+- **Live lists and their auto-pause.** Schedules and Files are `usePaginatedQuery`s (one subscription per loaded
+  page) wrapped in `usePausedLiveData` (`dc/lib/usePausedLiveData.ts`): each change of the results counts in a
+  window that starts at mount and restarts at the first update more than 10 s after it (`:9-11`, `:16-46`); the
+  101st update in a window pauses the list, keeps what it showed and toasts "There are too many updates to show
+  live…" (`:84-94`); while paused the list is skipped (`usePaginatedScheduledJobs.ts:24-31`,
+  `usePaginatedFileMetadata.ts:38-45`) and read with one-shot `client.query` calls on a second admin client
+  (`usePausedLiveData.ts:102-161`); "Go live" toggles it back (`:220-225`). The pause is kept per deployment in
+  local storage (`pauseLiveScheduledJobs`, `pauseLiveFileStorage`). Not paused: the crons (`listCronJobs`,
+  `listCronJobRuns`, `dc/features/schedules/lib/CronsProvider.tsx:37-44`), the file count and the open file
+  (`numFiles`, `getFile`, `FileStorageView.tsx:76-82`), History (`paginatedDeploymentEvents`,
+  `dc/lib/useDeploymentAuditLog.ts:180-197`). Pages: 50 scheduled runs, 20 files.
+- **Schedules.** `paginatedScheduledJobs` matches `udfPath` exactly (`su/frontend/paginatedScheduledJobs.ts:26-31`);
+  the dashboard passes a function's identifier, `module.js:name`. A run's arguments come from
+  `scheduler:getArgs` and are the bytes of a JSON array (`ScheduledFunctionsListItem.tsx:181`, `:200-203`).
+  `/api/cancel_job {id, componentId}` and `/api/cancel_all_jobs {udfPath, componentPath, componentId}` answer 200
+  with no body (`dc/features/schedules/lib/api.tsx:14-23`, `:62-70`); `cancel_all_jobs` canonicalizes its path,
+  `cancel_job` refuses an id that is not a `_scheduled_jobs` one with a 400 `InvalidId`, "Invalid ID for table
+  _scheduled_jobs" (`crates/local_backend/src/scheduling.rs:133-163`, `parse.rs:31-50`).
+- **Files.** `fileStorageV2` reads `_storage` through `queryGeneric`, whose `db.system` is masked
+  (`su/secretSystemTables.ts:70-97`): `get` reads an id of `_storage` or `_scheduled_functions` only and answers
+  null for anything else, a malformed id or a user table's included; `getFile` then builds the URL, so a scheduled
+  function's id fails there with "Invalid storage ID. Storage ID cannot be an ID on any table other than
+  '_storage'." (`crates/model/src/file_storage/mod.rs:257-291`).
+- **History.** Events with an action the dashboard does not know are dropped; a null `member_id` is named
+  "Convex", any other one the team member's name, or "Unknown member" (`useDeploymentAuditLog.ts:20-91`); the
+  self-hosted dashboard has no team, so an admin key's events are "Unknown member".
+- **Health.** `function_concurrency` and `subscription_invalidations_top_k?k=3` over the last hour in 60 buckets,
+  every 8 s, like the top functions (`dc/lib/appMetrics.ts:513-559`, `:801-857`); the scheduler lag every 60 s
+  (`:119-165`). The concurrency gauges `outstanding_functions:<env>:<udfType>:<state>` are charted for isolate
+  queries, mutations, actions and HTTP actions and Node actions only (`mapFunctionTypeToDisplayName`, `:789-799`).
+  The invalidations are named `<mutation>:<table>`, or `<table>` for one mutation, and count every subscription the
+  subscription manager holds (`crates/application/src/function_log.rs:1302-1320`) — including the ones its
+  scheduler and cron executor wait on (`scheduled_jobs/mod.rs:331`, `:1219`; `cron_jobs/mod.rs:211`).
+
+**What was built** (`packages/dashboard-source`, the contract in `packages/dashboard`):
+
+- `live.ts`, `LiveGroup`: a screen's reads, remembered by list (a query and its filter); while someone watches,
+  each one is a subscription and a new result (compared without the page's cursors) is a change. A list's first
+  page drops the list's older pages; at most 8 lists are followed. `UpdateCounter` is Convex's window: past 100
+  updates the paged lists stop being followed and the watchers hear `{paused: true}`; what Convex keeps live goes on
+  being followed, its changes also delivered with `paused: true`; reads go on answering, one-shot. A new
+  `watch` resumes (Convex's "Go live") and starts the count afresh. The contract's `watchScheduledFunctions` and
+  `watchFiles` take an optional `LiveChange` (`{paused}`); the mock passes nothing.
+- `deployment.ts`: `listScheduledFunctions` (`paginatedScheduledJobs` with the canonical path, each run's
+  arguments by `scheduler:getArgs`, times in ms), `cancelScheduledFunction` and `cancelAllScheduledFunctions` (the
+  routes; Convex's route answers no count, so the source counts the runs it lists just before), `listCronJobs`
+  and `listCronRuns` (Convex's documents: int64 fields as numbers, `err` a failure, `canceled` skipped runs);
+  `listFiles`, `countFiles`, `getFile`, `uploadFile` (`generateUploadUrl`, then a POST with the blob's type),
+  `deleteFiles` (Convex's validator message is `invalid_request`, "not found" `not_found`); `listAuditEvents`
+  (`paginatedDeploymentEvents`, `minDate` 0 by default; metadata in the contract's encoding; no member is
+  `system` (DV-481), any member unknown, as Convex's self-hosted "Unknown member"). Every action is kept: the
+  screen words what it knows. `fileStats` is not offered (Convex has no size or kind filter), so `listFiles`
+  ignores `kind` and the sizes, as the contract allows.
+- `metrics.ts`: the new optional contract methods `functionConcurrency` (Convex's gauges per kind, in Convex's
+  kinds; a state with no gauge is all null) and `subscriptionInvalidations(window, k, {function?})` (pairs split
+  at the last colon, display paths; one mutation's asked as Convex's, `udfPath` and `udfType: Mutation`). The mock
+  has both too (from its log: overlapping executions; a mutation re-running up to three queries of its table).
+- `wire.ts`: the client's values (bigint, ArrayBuffer) in the contract's encoding, ns → ms, arguments from their
+  bytes, the canonical path.
+- Health's top functions now refresh every 8 s (`HEALTH_REFRESH_MS`); the scheduler lag stays at a minute. The
+  concurrency and invalidation charts are not drawn yet (the screens are PR 6's).
+
+**The executors' own invalidations (DV-480, owner 2026-10-12: match Convex).** `packages/server/src/
+executor-invalidations.ts` counts, on the committer, what the subscriptions of Convex's scheduler and cron
+executor would count, into the same `subscription_invalidations:` counters as the clients' subscriptions:
+
+- Each executor's read is its queue's `by_next_ts` index from the first pending key up to, but not including, its
+  first run that is not due yet (Convex's `stream_jobs_to_run` stops there; open when there is none). It is read
+  again after every commit that touches the queue or `_backend_state`, and when that run falls due; until then a
+  run that has fallen due is inside.
+- A commit with a write into a read counts one for that executor, under its source and the queue's table
+  (`_scheduled_jobs`, `_cron_next_run`). A scheduled mutation's run counts once more (`jobRan`). Paused, the
+  executors read only `_backend_state`, and nothing counts.
+- Sources: a function by its canonical path; the executors' system commits under Convex's names
+  (`scheduled_job_gc`, `scheduled_job_progress`, `scheduled_job_complete_action`, `scheduled_job_system_error`,
+  `cron_in_progress`, `cron_complete_action`, `cron_save_mutation_error`, `cancel_job`, `cancel_all_jobs`); the
+  scheduler's commits now carry those names (an action's start and end, a job whose function is gone
+  `scheduled_job_bad_udf`, one cut short `scheduled_job_action_error`), and a failed mutation's result is saved
+  under the function's name, as Convex's `WriteSource::mutation`. Other system commits (a push) count nothing.
+- Measured on the binary, step by step (the oracle below): a run scheduled on an empty queue counts 1; one after
+  the first future run 0; cancelling that first future run, or every run, 0; a nearer run 1, and its run 2; a cron
+  run 1. The rule above reproduces each. Why a mutation's run counts twice is not explained by the source read
+  (two subscriptions over the running job, one taken before it fell due, is the likeliest); it is kept as observed.
+
+**The server, matched to Convex's binary where the oracle found it apart** (`packages/server`):
+`/api/cancel_job` with an id not of `_scheduled_jobs` was a 500 (an uncaught error) and is Convex's 400
+`InvalidId`; `fileStorageV2:getFile` threw for a malformed id and refused a user table's ("User tables cannot be
+accessed with db.system.") and now masks as Convex's `queryGeneric` (null, and a scheduled function's id fails at
+its URL); `paginatedScheduledJobs` canonicalized its `udfPath` ("by either spelling") and now matches it exactly.
+The contract's `getFile` says null for an id that is not a storage id on a deployment; the mock's
+`invalid_request` stays allowed, so the Files screen's "is not a storage ID" message only shows on the mock (PR 6).
+
+**Divergences.**
+
+| # | Divergence | Why | Decision |
+|---|---|---|---|
+| DV-480 | Health's invalidations counted client subscriptions only; Convex's also count its scheduler's and cron executor's own | bunvex's scheduler and crons are woken by the committer, not by subscriptions | owner, 2026-10-12: **match Convex**; built (below), resolved |
+| DV-481 | An event with no member is by `system`, where Convex's dashboard says "Convex" | rule 5 | rule 5 |
+
+Not divergences (the screens are PR 6's): Convex keeps the pause in local storage per deployment, and after an
+auto-pause and "Go live" it never pauses that view again until it is mounted again; here a new `watch` resumes and
+counts afresh, and keeping the pause is the screen's. While the schedules are paused, a cron's change still
+signals the watcher (Convex re-renders only the crons; the screen may refetch only them on `paused: true`).
+Convex's paused scheduled list shows its first page only (`Exhausted`); the contract's pages stay readable.
+
+**Tests.**
+
+- `packages/sync-e2e/dashboard/server-source-ops.test.ts` (a server in the process, an app with two scheduled
+  functions, two crons and files; `live-server.ts` the shared helper): the contract suite's `deploymentFeatures`
+  area against the live server with cancelling and uploading enabled (`only: ["deploymentFeatures"]`; the
+  history opt-in needs PR 3's writes), then a run's mapping (display path, arguments with an int64, times), the
+  filter, the crons and their first run, cancel-all's count, a file's metadata and URL, the audit log (the
+  dashboard's own writes, the push, the authors), the watchers (a new nearest run is heard and an unrelated write
+  is not; a change on a later loaded page is heard; uploads reach `watchFiles` and `watchAuditEvents`; nothing
+  after the last watcher leaves), the auto-pause on 100+ quick schedules (paused at the 101st or later, nothing
+  heard after, reads still answer, a new watcher resumes), and Health's concurrency (kinds, buckets, a query
+  running), invalidations (an app subscription re-run by `messages:send` on `messages`, overall and for that
+  mutation) and their errors. The metrics contract area stays off until PR 4 (its setup lists functions).
+- `packages/server/test/executor-invalidations.test.ts`: the executor's read (an empty queue counts, a later
+  run and the first future run do not, cancels do not), a nearer run and its two counts, a failed run under its
+  function's name, nothing while paused.
+- `packages/dashboard-source/test/live.test.ts` (a fake connection): the window (100 pass, the 101st pauses, the
+  window restarts after 10 s), the fingerprint, following and unfollowing, a change between the read and the
+  watch, the list and page bookkeeping, pausing (paged lists unfollowed, the rest live, resumed by a new
+  watcher), errors. `deployment-mapping.test.ts`: the documents and answers in Convex's shapes.
+- The contract (`packages/dashboard/src/contract-metrics.ts`): concurrency (each kind once, in order, a bucket per
+  window bucket) and invalidations (at most k pairs and the rest, ranked, one mutation's tables); they run on the
+  mock. `contract-deployment.ts`: an upload's type is the blob's (Bun adds a charset to `text/plain`); `getFile`
+  of a non-id is null or `invalid_request`.
+- **Oracle** (`packages/differential/test/dashboard-ops.test.ts`, the app in `dashboard-app/`, against
+  `precompiled-2026-10-07-d8bdde0`): the same requests on both backends, answers compared with ids, times and
+  cursors named by order: `paginatedScheduledJobs` (all, one function's, a display path matching nothing),
+  `scheduler:getArgs`, `listCronJobs`, `listCronJobRuns`, `cancel_job` (a bogus id, one run, twice),
+  `cancel_all_jobs`, the cancel and file audit events (action, member, metadata), uploads, `fileMetadata` both
+  ways, `numFiles`, `getFile` (a file, a malformed id, a scheduled function's id), `deleteFiles` (a bad id, a
+  deleted file), `function_concurrency`'s gauges, and `subscription_invalidations_top_k` after a client
+  subscription (the same pairs on both, the executors' included), and a scheduling app step by step: after
+  each of the deploy's cron run, a run on an empty queue, cancelling it, another, a later one, a nearer one that
+  runs, two that run, and cancelling everything, every `subscription_invalidations_top_k` pair and count is equal. One wording is
+  rewritten, not fixed here: bunvex wraps the other-table storage id error as ``Invalid argument `storageId` for
+  `storage.getUrl`: …``, where Convex's model raises it bare (`file_storage/mod.rs:257-291`); it reaches
+  `ctx.storage.getUrl` in apps too, so it is reported for its own PR (STUDY-32 says both are wrapped).
+
+**Sabotage** (each restored after, `git diff` clean; unit / live / server / oracle tests):
+
+| Sabotage | Failing tests |
+|---|---|
+| the pause at the 100th update, not the 101st | 5 |
+| a paused list keeps its subscriptions | 2 |
+| the window never restarts | 2 |
+| a read made while watched is not followed | 5 |
+| a list's first page keeps its older pages | 1 |
+| a page's cursors count as a change | 2 |
+| the last watcher leaves its subscriptions | 1 |
+| an unchanged result counts as a change | 4 |
+| a new watcher does not resume a paused list | 2 |
+| display paths sent to `paginatedScheduledJobs` | 3 |
+| times divided by 10³, not 10⁶ | 5 |
+| arguments as the whole array | 4 |
+| int64 encoded big-endian | 2 |
+| Node actions left out of concurrency | 2 |
+| invalidations split at the first colon | 2 |
+| a cron's skipped runs as failures | 1 |
+| the system as an unknown author | 1 |
+| cancel-all counts nothing | 2 |
+| `watchFiles` never fires | 2 |
+| server: `getFile` not masked | 2 (server, oracle) |
+| server: `cancel_job`'s `InvalidId` left a 500 | 2 (server, oracle) |
+| server: the job filter canonicalizes again | 2 (server, oracle) |
+| DV-480: the first future run inside the read | 8 (server, oracle) |
+| DV-480: the read never moves (always open) | 9 (server, oracle) |
+| DV-480: a scheduled mutation's run counted once | 4 (server, oracle) |
+| DV-480: pause ignored | 1 (server) |
+| DV-480: a failed run saved under a system name | 1 (server) |
+| DV-480: cron runs not counted | 9 (oracle) |
+| DV-480: completed jobs' keys inside the read | 8 (server, oracle) |
+| one mutation's invalidations asked without `udfType` | 0: both servers default it to a query, which names the same function |
+
+The Health intervals (8 s, 60 s) are constants with no test of their own.
+
+**Measurements.** The committer gains one listener (DV-480): 114 ns per commit for a user commit with six
+index writes, 88 ns for one that schedules a job (Bun, M-series, the reads' refresh stubbed); a commit that touches
+a queue then reads its first future run once, off the commit path, coalesced. `getFile` adds two id checks,
+`cancel_job` an error branch. In the
+source, each new result of a followed read is fingerprinted: 58 µs for a 50-run page (Bun, M-series), so at
+Convex's pause rate (10 updates/s) under 1 ms/s.
+
+**A fix found in CI** (`sync.ts`, PR 1's `AdminSync.watch`): a read could answer `null`. A subscription that sees
+a local result delivers it on the next tick; when that result was kept from a subscription just dropped, a server
+transition answering the older query set can clear it before the tick, and the read answered `null` (a cron run
+list, under load). Convex's `listCronJobRuns` always returns an array (`collect()`); its dashboard's `useQuery` is
+`undefined` only while loading, never null. So the read now waits for its own result when the local one is gone,
+rather than handling a null. Tests: `test/sync.test.ts` (a result cleared before the tick is not delivered, one
+still held is) and 150 back-to-back cron reads on the live server; with the fix removed both fail (the live loop
+reproduces it without load).
+
+**Found, not fixed here** (each its own concern): a cron job with an int64 argument makes `start_push` answer 500
+(`JSON.stringify` of a BigInt in the push's answer, `server.ts` `pushRoute`); the storage id wording above.
+
+#### PR 5 Q1 — The scheduler's and crons' own subscriptions in Health's invalidations (DV-480)
+
+- *Convex*: Health's "Subscription Cache Invalidations" counts every subscription its subscription manager
+  invalidates, the ones its scheduler and cron executor wait on included. A mutation that schedules shows as
+  `<mutation>:_scheduled_jobs`, and each cron run as `<function>:_cron_next_run`, beside the app's real pairs
+  (checked against the binary).
+- *bunvex*: counts the subscriptions of clients (apps, and the dashboard's own) only. Its scheduler and crons are
+  woken by the committer's `onCommit`, not by subscriptions, so nothing invalidates for them.
+- *Same?* No: on a scheduler-heavy app, Convex's top 3 often holds `_scheduled_jobs` pairs; bunvex's shows only the
+  app's queries.
+- *Why*: "Ainda não fizemos" — the committer could count one invalidation per commit that writes `_scheduled_jobs`
+  or `_cron_next_run` (and `_backend_state`, which both executors also watch), as if they subscribed.
+- *App impact*: none (the dashboard only).
+- *Recommendation (then)*: keep bunvex's count (accept DV-480). The chart's tooltip says it shows "the mutation and table
+  pairs that caused the most queries to be re-run"; the scheduler's wake-ups are not queries, and counting them
+  would need synthetic events that mirror Convex's executor design rather than anything bunvex runs.
+- **Decision (owner, 2026-10-12): match Convex** — built as above; DV-480 is resolved to match Convex.
+
 ## 6. Open questions
 
 Every question below is in the decision format the owner asked for (what Convex does / what bunvex would do /

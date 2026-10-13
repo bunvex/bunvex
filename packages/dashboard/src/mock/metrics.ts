@@ -6,7 +6,9 @@
 import {
   bucketOf,
   bucketStarts,
+  type FunctionConcurrency,
   type FunctionMetric,
+  type InvalidationSeries,
   type LogEntry,
   type MetricsWindow,
   REST,
@@ -173,4 +175,58 @@ export function scheduledJobLag(logs: readonly LogEntry[], w: MetricsWindow): Ti
     if (b >= 0) worst[b] = Math.max(worst[b]!, (hash(e.executionId ?? e.id) % 1500) / 1000);
   }
   return starts.map((time, i) => ({ time, value: worst[i]! }));
+}
+
+/**
+ * Per kind, the most executions running at once in each bucket (an execution runs from its log time for its
+ * duration); the mock never queues one, so `queued` is 0 where anything ran.
+ */
+export function functionConcurrency(logs: readonly LogEntry[], w: MetricsWindow): FunctionConcurrency {
+  const out: FunctionConcurrency = [];
+  for (const kind of ["query", "mutation", "action"] as const) {
+    const xs = executionsOf(logs)
+      .filter((x) => x.kind === kind)
+      .sort((a, b) => a.time - b.time);
+    const running = bucketStarts(w).map((time) => ({ time, value: null as number | null }));
+    let active: number[] = [];
+    for (const x of xs) {
+      active = active.filter((end) => end > x.time);
+      active.push(x.time + x.durationMs);
+      const b = bucketOf(w, x.time);
+      if (b >= 0) running[b]!.value = Math.max(running[b]!.value ?? 0, active.length);
+    }
+    out.push({ kind, running, queued: running.map((b) => ({ time: b.time, value: b.value === null ? null : 0 })) });
+  }
+  return out;
+}
+
+/**
+ * The mutation and table pairs with the most invalidated subscriptions: a mutation writes the table its module is
+ * named after (as `tableRate`) and re-runs up to three of its queries.
+ */
+export function subscriptionInvalidations(
+  logs: readonly LogEntry[],
+  w: MetricsWindow,
+  k: number,
+  fn?: string,
+): InvalidationSeries {
+  const writes = executionsOf(logs).filter(
+    (x) => x.kind === "mutation" && !x.failed && bucketOf(w, x.time) >= 0 && (fn === undefined || x.fn === fn),
+  );
+  const byFn = new Map<string, Execution[]>();
+  for (const x of writes) byFn.set(x.fn, [...(byFn.get(x.fn) ?? []), x]);
+  const invalidated = (x: Execution) => hash(x.id) % 4;
+  const ranked = [...byFn.entries()]
+    .map(([f, xs]) => ({ f, xs, total: xs.reduce((n, x) => n + invalidated(x), 0) }))
+    .filter((r) => r.total > 0)
+    .sort((a, b) => b.total - a.total || a.f.localeCompare(b.f));
+  const top = ranked.slice(0, k);
+  const rest = ranked.slice(k).flatMap((r) => r.xs);
+  const out: InvalidationSeries = top.map((r) => ({
+    function: r.f,
+    table: r.f.split(":")[0]!,
+    series: counts(w, r.xs, invalidated),
+  }));
+  if (rest.length > 0) out.push({ function: REST, table: null, series: counts(w, rest, invalidated) });
+  return out;
 }
