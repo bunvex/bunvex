@@ -1,7 +1,7 @@
 # STUDY-151 — A batch of small parity items
 
 - **Status:** decided (owner, 2026-10-12); built one PR per item: §1 system table messages (#608), §2 `deploy -y`
-  (this PR), §3–§6 to come
+  (#609), §3 the HTTP API's methods (this PR), §4–§6 to come
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend
   (`npm-packages/convex/src/server/impl/database_impl.ts`, `crates/isolate/src/environment/udf/async_syscall.rs`,
   `npm-packages/convex/src/cli/deploy.ts`, `cli/lib/command.ts`, `crates/local_backend/src/public_api.rs`,
@@ -49,9 +49,13 @@ only, *n/a*.
 
 **Convex** (`public_api.rs`) serves `GET` and `POST /api/query`, and `POST` only for `/api/query_ts`,
 `/api/query_at_ts`, `/api/query_batch`, `/api/mutation`, `/api/action`, `/api/function` and `/api/run/{fn}`: no
-GET form of the others. bunvex serves every one of them. Left: a wrong method on `/api/query_ts` answers 404
-instead of axum's 405; `HEAD /api/query` (axum serves it through GET) answers 405. To do: those two, and the
-rows updated (they listed GET forms Convex does not have).
+GET form of the others. bunvex serves every one of them. A wrong method gets axum's 405 with the methods the route
+takes, and HEAD is served by a GET handler; checked against Convex's local backend: `allow: POST` on
+`/api/query_ts`, `allow: GET,HEAD,POST` on `/api/query`, `HEAD /api/query` answered as GET.
+
+**bunvex before.** A wrong method on `/api/query_ts` answered 404, and `/api/query`'s 405 said `allow: POST`;
+`HEAD /api/query` answered 405. **Now:** as Convex's. The rows are done (they listed GET forms Convex does not
+have).
 
 ## 4. `getServiceToken` / `getServiceUrl`
 
@@ -95,3 +99,4 @@ self-hosted Convex (DV-304), the table present and empty. Decided (owner, 2026-1
   expectations updated (`writes`, `implicit-tables`, `count`, `instance-secret`, `system-reader-edges`,
   `id-forms`, `sync`).
 - §2: `deploy` (a deploy with `-y` and with `--yes` succeeds).
+- §3: `http-request-errors` (`/api/query_ts` among the POST routes' 405s; `/api/query`'s 405 and its HEAD).

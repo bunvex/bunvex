@@ -1623,10 +1623,18 @@ export function createServer(opts: ServerOptions) {
       }
       // The latest ts, for a consistent series of HTTP queries (Convex's `/api/query_ts`): base64 u64, as the
       // sync protocol encodes timestamps.
-      if (url.pathname === "/api/query_ts" && req.method === "POST")
-        return json({ ts: v1.encodeU64(engine.committer.visibleTs) });
-      // `GET /api/query?path=&args=&format=` (STUDY-67 H10, DV-313): `args` is the arguments' JSON.
-      if (url.pathname === "/api/query" && req.method === "GET") return getQuery(url, req);
+      // A POST route: another method is axum's 405 with the one it takes (STUDY-151 §3, checked against Convex's
+      // local backend).
+      if (url.pathname === "/api/query_ts")
+        return req.method === "POST"
+          ? json({ ts: v1.encodeU64(engine.committer.visibleTs) })
+          : new Response(null, { status: 405, headers: { allow: "POST" } });
+      // `GET /api/query?path=&args=&format=` (STUDY-67 H10, DV-313): `args` is the arguments' JSON. HEAD is served
+      // by the GET handler, as axum serves it (Bun sends no body).
+      if (url.pathname === "/api/query" && (req.method === "GET" || req.method === "HEAD")) return getQuery(url, req);
+      // Convex's `/api/query` takes GET and POST: another method's 405 names both (and HEAD).
+      if (url.pathname === "/api/query" && req.method !== "POST")
+        return new Response(null, { status: 405, headers: { allow: "GET,HEAD,POST" } });
       const route = /^\/api\/(query|mutation|action|query_at_ts|query_batch|function|run\/.+)$/.exec(url.pathname);
       if (!route) return requestError(404, "NotFound", `no route for ${url.pathname}`);
       // Convex's routes answer another method 405, with the one they take (STUDY-67 H5).

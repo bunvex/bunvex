@@ -152,10 +152,27 @@ describe("the body", () => {
 describe("the request", () => {
   test("another method is 405 with `allow: POST` and no body", async () => {
     const { base } = await setup();
-    for (const route of ["mutation", "action", "function", "query_at_ts"]) {
+    for (const route of ["mutation", "action", "function", "query_at_ts", "query_ts"]) {
       const r = await fetch(`${base}/api/${route}`);
-      expect([r.status, r.headers.get("allow"), await r.text()]).toEqual([405, "POST", ""]);
+      expect([route, r.status, r.headers.get("allow"), await r.text()]).toEqual([route, 405, "POST", ""]);
     }
+  });
+
+  test("/api/query takes GET (and HEAD, as axum) and POST: another method's 405 names them (STUDY-151 §3)", async () => {
+    const { base } = await setup();
+    for (const method of ["PUT", "DELETE", "PATCH"]) {
+      const r = await fetch(`${base}/api/query`, { method });
+      expect([method, r.status, r.headers.get("allow"), await r.text()]).toEqual([method, 405, "GET,HEAD,POST", ""]);
+    }
+    const url = `${base}/api/query?path=m:ok&args=${encodeURIComponent("{}")}`;
+    const get = await fetch(url);
+    const head = await fetch(url, { method: "HEAD" });
+    expect([head.status, head.headers.get("content-type"), await head.text()]).toEqual([
+      get.status,
+      get.headers.get("content-type"),
+      "",
+    ]);
+    expect(get.status).toBe(200);
   });
 
   test("the auth header's syntax is checked before the body, a key after it", async () => {
