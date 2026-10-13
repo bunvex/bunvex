@@ -372,11 +372,13 @@ export class TokenVerifier {
     }
     const now = this.now() / 1000;
     const invalid = (why: string) => unauthenticated("InvalidAuthHeader", `Could not validate token: ${why}`);
-    if (typeof payload.exp === "number" && payload.exp < now - CUSTOM_JWT_LEEWAY_S) throw invalid("Token expired");
-    if (typeof payload.nbf === "number" && payload.nbf > now + CUSTOM_JWT_LEEWAY_S)
-      throw invalid("Token not yet valid");
-    if (typeof payload.iat === "number" && payload.iat > now + CUSTOM_JWT_LEEWAY_S)
-      throw invalid("Token issued in the future");
+    // As Convex's JWT library (get-convex/biscuit `validate_exp`, `validate_nbf`, `validate_iat`, in that order):
+    // the seconds are the difference cut toward zero.
+    if (typeof payload.exp === "number" && payload.exp < now - CUSTOM_JWT_LEEWAY_S)
+      throw invalid(`Token expired ${Math.trunc(now - payload.exp)} seconds ago`);
+    for (const claim of [payload.nbf, payload.iat])
+      if (typeof claim === "number" && claim > now + CUSTOM_JWT_LEEWAY_S)
+        throw invalid(`Token will be valid in ${Math.trunc(claim - now)} seconds`);
     if (typeof payload.sub !== "string") throw unauthenticated("InvalidAuthHeader", "Missing subject");
     if (typeof payload.exp !== "number") throw unauthenticated("InvalidAuthHeader", "Missing expiry");
     return { identity: identityFromCustomJwt(payload), expiresAt: payload.exp };
