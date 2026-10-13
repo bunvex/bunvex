@@ -183,7 +183,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | `mutation(name, args, opts)` / `action(name, args)` returning values, throwing `ConvexError` with `.data` when `errorData` is present, otherwise `Error` with a "[CONVEX M(name)] … Called by client" message | `browser/sync/client.ts`, `browser/logging.ts` | done (STUDY-26) | As `BaseBunvexClient` / `BunvexClient` (C1); errors are `BunvexError` with `.data`, `[BUNVEX M(path)] …` (C2). |
 | `ConvexClient` (framework-free): `onUpdate(query, args, cb, onError)` returning a callable Unsubscribe with `getCurrentValue()` / `getQueryLogs()`; one-shot `query()` via subscribe-then-unsubscribe; `mutation`; `action`; `close`; `disabled` option for SSR | `browser/simple_client.ts` | done (STUDY-26) |  |
 | Callbacks for one transition run together after it is applied (no partially applied state visible) | `browser/simple_client.ts`, `react/client.ts` (`transition`) | done (STUDY-26) |  |
-| `webSocketConstructor` injection; `setDefaultWebSocketConstructor` (Node entry uses `ws`) | `browser/sync/client.ts`, `browser/simple_client-node.ts` | partial (STUDY-26) | The option exists; Bun and browsers have a global WebSocket, so no `setDefaultWebSocketConstructor` yet. |
+| `webSocketConstructor` injection; `setDefaultWebSocketConstructor` (Node entry uses `ws`) | `browser/sync/client.ts`, `browser/simple_client-node.ts` | done (STUDY-26, STUDY-151 §5) | The option exists; `setDefaultWebSocketConstructor` (internal, from `@bunvex/client`) with Convex's conditions: used when the options name no constructor and there is no global WebSocket. No Node entry bundling `ws`: Bun and Node 22+ have a global WebSocket (owner, 2026-10-12). |
 
 ### 11. React bindings
 

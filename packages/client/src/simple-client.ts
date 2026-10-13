@@ -54,6 +54,17 @@ type QueryInfo = {
   hasEverRun: boolean;
 };
 
+/**
+ * The WebSocket a `BunvexClient` uses where there is no global one and its options name none (Convex's
+ * `setDefaultWebSocketConstructor`, which its Node entry sets to the `ws` package). Bun and Node 22+ have a global
+ * WebSocket; bunvex ships no `ws` (STUDY-151 §5).
+ */
+let defaultWebSocketConstructor: typeof WebSocket | undefined;
+
+/** @internal Set the WebSocket a client uses when there is no global one and its options name none. */
+export function setDefaultWebSocketConstructor(ws: typeof WebSocket) {
+  defaultWebSocketConstructor = ws;
+}
 export class BunvexClient {
   private listeners = new Set<QueryInfo>();
   private _client: BaseBunvexClient | undefined;
@@ -84,6 +95,9 @@ export class BunvexClient {
     if (options.skipDeploymentUrlCheck !== true) validateDeploymentUrl(address);
     const { disabled, ...baseOptions } = options;
     this._disabled = !!disabled;
+    // Convex's conditions: a default set, none in the options, and no global WebSocket (STUDY-151 §5).
+    if (defaultWebSocketConstructor && !("webSocketConstructor" in baseOptions) && typeof WebSocket === "undefined")
+      baseOptions.webSocketConstructor = defaultWebSocketConstructor;
     if (!isBrowser() && !("unsavedChangesWarning" in baseOptions)) baseOptions.unsavedChangesWarning = false;
     if (!this._disabled) {
       this._client = new BaseBunvexClient(address, () => {}, baseOptions); // the paginated client reports it all
