@@ -13,6 +13,7 @@ import {
   formatCalls,
   formatPercent,
   formatSeconds,
+  HEALTH_REFRESH_MS,
   NO_METRICS,
   topSeries,
   useMetric,
@@ -92,8 +93,11 @@ function ViewToggle(props: { title: string; view: View; onView: (v: View) => voi
 
 function TopChart(props: { measure: TopKMeasure; title: string; description: string }) {
   const { source } = useQueryScope();
-  const q = useMetric(["top", props.measure, K], true, (w, signal) =>
-    source.topFunctions!(props.measure, w, K, { signal }),
+  const q = useMetric(
+    ["top", props.measure, K],
+    true,
+    (w, signal) => source.topFunctions!(props.measure, w, K, { signal }),
+    HEALTH_REFRESH_MS,
   );
   const percent = props.measure !== "invocations";
   // as Convex: the failure rate opens as a line chart, the cache hit rate as a heatmap

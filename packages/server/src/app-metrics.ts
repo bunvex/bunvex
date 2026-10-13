@@ -444,6 +444,9 @@ const NEXT_JOB_TS = "scheduled_jobs:next_ts";
 
 /** Convex's `FunctionExecutionLog` metrics, over one `MetricStore`. */
 export class AppMetrics {
+  /** A scheduled mutation's run committed (`ExecutorInvalidations.jobRan`, set by the server). */
+  onScheduledMutationRan?: (source: string) => void;
+
   constructor(
     readonly store = new MetricStore(),
     private readonly now: () => number = Date.now,

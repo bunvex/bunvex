@@ -7,8 +7,8 @@ item. It is the project's to-do list at the scale of the whole product.
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
 | Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 238 | 2 | 6 |
-| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 162 | 2 | 1 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 225 | 21 | 13 |
+| Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 163 | 1 | 1 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 226 | 20 | 13 |
 
 Beyond Convex, [additions.md](additions.md) lists 29 additions: 26 built (11 of them dashboard screens on the
 mock, 3 more with their dashboard part on the mock), 2 accepted, 1 deferred, none proposed (2026-10-11, with AD-29).
@@ -192,7 +192,8 @@ gaps.
   - the data source that calls it, `@bunvex/dashboard-source`, has its first parts (STUDY-149 PR 1: the
     deployment, schema, state, logs, function metrics and the `check_admin_key` sign-in; PR 2: the Data
     screen's reads, with the server's `getTableMapping`, `paginatedTableDocuments`, `indexes`, `listById`,
-    `getById` and `/api/get_indexes`); the rest is PRs 3–6;
+    `getById` and `/api/get_indexes`; PR 5: schedules, files, the audit log, Health's concurrency and
+    invalidations); the rest is PRs 3, 4 and 6;
   - its data mutations (`_system/frontend` `addDocument`, `patchDocumentsFields`, `deleteDocuments`,
     `createTable`, …) bring the `add_documents`, `update_documents`, `delete_documents` and `create_table`
     audit events.

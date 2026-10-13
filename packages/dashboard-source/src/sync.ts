@@ -63,6 +63,9 @@ export class AdminSync {
     if (this.client.hasLocalQueryResultByToken(queryToken))
       setTimeout(() => {
         if (listener.delivered || !set.has(listener)) return;
+        // The result may be gone by now: one kept from a subscription just dropped, then cleared by a server
+        // transition that answered the older query set. The new subscription's own result comes as a transition.
+        if (!this.client.hasLocalQueryResultByToken(queryToken)) return;
         listener.delivered = true;
         onResult(this.localResult(queryToken));
       }, 0);
