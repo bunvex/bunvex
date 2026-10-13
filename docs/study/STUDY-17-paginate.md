@@ -14,10 +14,26 @@
   returns `{ page, isDone, continueCursor, splitCursor, pageStatus }`.
 - **A cursor** holds a position — *after* an index key, or *end* — plus the query's fingerprint. It is
   encrypted with the instance secret.
-  - A tampered cursor fails with `InvalidCursor: Failed to parse cursor`.
+  - A tampered cursor fails with `Failed to parse cursor` (the keybroker's `cursor_parse_error`;
+    `InvalidCursor` is its error code, not part of the message a function sees). Another instance's cursor
+    fails with `Key is invalid for instance "<name>"`, one with no position with `Missing position field`
+    (`proto_to_cursor`). An empty string is a cursor too, and does not parse.
   - A cursor from another query fails with "…this cursor is from a different query.", as a `BunvexError`
     whose data is `{isBunvexSystemError: true, paginationError: "InvalidCursor"}` (Convex:
     `isConvexSystemError`).
+- **The options** are checked in three places (checked against Convex's binary,
+  `packages/differential/test/paginate-args.test.ts`):
+  - Convex's client (`query_impl.ts` `paginate`, an async method): no options is a `TypeError` "Must provide
+    arg 1 `options` to `paginate`"; a `numItems` that is not a number, or is negative, is "`options.numItems`
+    must be a positive number. Received `…`." Zero, a fraction and `NaN` pass. Only then is the query taken.
+  - The `queryPage` syscall reads its JSON arguments (`async_syscall.rs` `query_page`): the client writes
+    `cursor`, `endCursor ?? null`, `pageSize`, `maximumRowsRead ?? null`, `maximumBytesRead` with
+    `JSON.stringify` (a BigInt fails it; `NaN` and the infinities become null), and the first field serde
+    cannot read fails with "Invalid arguments for `queryPage`: invalid type: floating point `0.5`, expected
+    usize" (a fraction, a number past u64, a null size), "invalid value: integer `-1`, expected usize", or
+    "… expected a string" for a cursor that is not one. A null limit is no limit.
+  - Then the syscall's own checks: "Must request at least 1 document while paginating" for 0, "Requested too
+    many items: N" past 32000, then a zero limit, then the cursors.
 - **Filling a page:** without `endCursor`, the page reads until `numItems` documents pass the filters.
   - A full page stops there, so its cursor is "after the last document" and `isDone` is false, even when
     nothing follows.
