@@ -6,7 +6,7 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 236 | 3 | 7 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 237 | 2 | 7 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 162 | 2 | 1 |
 | Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 223 | 23 | 13 |
 
@@ -189,9 +189,10 @@ gaps.
 - The dashboard on a real deployment:
   - the largest single piece of work, but not something an app hits;
   - the server side of most screens exists (STUDY-149 lists the `_system/frontend` functions still to add);
-  - the data source that calls it, `@bunvex/dashboard-source`, has its first part (STUDY-149 PR 1: the
-    deployment, schema, state, logs, function metrics and the `check_admin_key` sign-in); the rest is
-    PRs 2–6;
+  - the data source that calls it, `@bunvex/dashboard-source`, has its first parts (STUDY-149 PR 1: the
+    deployment, schema, state, logs, function metrics and the `check_admin_key` sign-in; PR 2: the Data
+    screen's reads, with the server's `getTableMapping`, `paginatedTableDocuments`, `indexes`, `listById`,
+    `getById` and `/api/get_indexes`); the rest is PRs 3–6;
   - its data mutations (`_system/frontend` `addDocument`, `patchDocumentsFields`, `deleteDocuments`,
     `createTable`, …) bring the `add_documents`, `update_documents`, `delete_documents` and `create_table`
     audit events.

@@ -147,7 +147,7 @@ describe(".paginate() at a transaction limit (STUDY-108)", () => {
           .filter((q) => q.eq(q.field("n"), 1))
           .paginate({ numItems: 2, cursor: "not a cursor" }),
       ),
-    ).rejects.toThrow("InvalidCursor");
+    ).rejects.toThrow(/^Failed to parse cursor$/);
   });
 });
 

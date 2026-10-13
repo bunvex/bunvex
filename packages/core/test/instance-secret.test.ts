@@ -44,7 +44,7 @@ describe("the instance secret, as Convex's self-hosted image (STUDY-17 D2 → op
     const b = await engine(logPath());
     await a.mutation((db) => db.insert("items", {}));
     const cursor = (await firstPage(a)).continueCursor;
-    await expect(next(b, cursor)).rejects.toThrow("InvalidCursor: Failed to parse cursor");
+    await expect(next(b, cursor)).rejects.toThrow(/^Failed to parse cursor$/);
   });
 
   test("a configured INSTANCE_SECRET wins over the stored one", async () => {
@@ -53,7 +53,7 @@ describe("the instance secret, as Convex's self-hosted image (STUDY-17 D2 → op
     const storedCursor = (await firstPage(stored)).continueCursor;
     await open.pop()!.close();
     const configured = await engine(path, "configured-secret");
-    await expect(next(configured, storedCursor)).rejects.toThrow("Failed to parse cursor");
+    await expect(next(configured, storedCursor)).rejects.toThrow(/^Failed to parse cursor$/);
     const own = (await firstPage(configured)).continueCursor;
     expect((await next(configured, own)).isDone).toBe(true);
   });
