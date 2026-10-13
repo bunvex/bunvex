@@ -46,6 +46,9 @@ backend is always started with `--disable-beacon`.
   cursors), `indexes`, `tableSize`, `listById`, `getById` and `GET /api/get_indexes`. Local only.
 - `test/storage-ids.test.ts`: a storage id's errors from every storage method in a query, a mutation and an
   action (the app of `storage-app/`): another table's id, ids that do not parse, UUIDs. Local only.
+- `test/nested-errors.test.ts`: a nested call's error from a V8 and a "use node" action (the app of `nested-errors-app/`):
+  a query, a mutation, a V8 and a Node action that throw, the error uncaught (the client's message: the callee's
+  display, then the action's own `await`) or caught (its name, message and data). Local only.
 - `test/paginate-args.test.ts`: `paginate`'s options (the client's checks, the `queryPage` syscall's serde
   messages in their field order, its own checks), a query's `limit` that is not a usize and a cursor that does
   not parse, from the app of `paginate-app/`; then the system functions' own argument errors, with an admin

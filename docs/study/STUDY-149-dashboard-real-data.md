@@ -771,6 +771,14 @@ executor would count, into the same `subscription_invalidations:` counters as th
   the first future run 0; cancelling that first future run, or every run, 0; a nearer run 1, and its run 2; a cron
   run 1. The rule above reproduces each. Why a mutation's run counts twice is not explained by the source read
   (two subscriptions over the running job, one taken before it fell due, is the likeliest); it is kept as observed.
+- Under load the binary counts less, never more: its executors drop their subscription as soon as a run they
+  started reports back (`select_biased!` on `job_finished_rx` first, `application/src/scheduled_jobs/mod.rs:339`,
+  `cron_jobs/mod.rs:212`), and the subscription worker removes a closed subscription before it reads the log
+  further (`database/src/subscription.rs:321-346`), so a run whose report beats the worker to its commit goes
+  uncounted. bunvex counts what the unhurried binary does. The step-by-step oracle measures each step on its own
+  (the counts it adds, once the due runs have run and the counts stopped moving) and runs the sequence again on
+  fresh backends, up to three times, while the binary counted less than bunvex; bunvex counting less fails at once
+  (the deploy's cron run went missing on the binary in about 1 run in 10 at a load average of 20).
 
 **The server, matched to Convex's binary where the oracle found it apart** (`packages/server`):
 `/api/cancel_job` with an id not of `_scheduled_jobs` was a 500 (an uncaught error) and is Convex's 400
