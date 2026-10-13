@@ -142,7 +142,7 @@ import {
   newRequestId,
   ValidatorError,
 } from "./errors.ts";
-import { canonicalPath, functionAddress, functionNameOf, inHandleScope } from "./function-handles.ts";
+import { canonicalPath, functionAddress, functionNameOf, inActionScope, inHandleScope } from "./function-handles.ts";
 import {
   type CallerName,
   type Completion,
@@ -174,6 +174,7 @@ import { setOperationTracker } from "./pending-ops.ts";
 import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearchQuery } from "./registration.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { ServerMetrics } from "./server-metrics.ts";
+import { setServiceCallContext } from "./service-tokens.ts";
 import type { FileStorage, StorageMeter } from "./storage.ts";
 import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
 import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB, type UsageMeter } from "./usage-limits.ts";
@@ -524,6 +525,8 @@ const storageMeter: StorageMeter = ({ read, written }) => {
 // options, and an isolate action's through its deployment's proxy (`Functions.httpProxy`).
 const nodeSender = nodeFetch();
 setFetchSender(() => meteredAction()?.send ?? null);
+// `getServiceToken` / `getServiceUrl` are action syscalls (STUDY-151 §4).
+setServiceCallContext(inActionScope);
 
 // Convex meters an isolate action's fetch request bodies; a Node action's egress is its Lambda's network
 // counter, 0 when self-hosted (STUDY-71 U2).

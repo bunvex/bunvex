@@ -1,7 +1,8 @@
 # STUDY-151 — A batch of small parity items
 
 - **Status:** decided (owner, 2026-10-12); built one PR per item: §1 system table messages (#608), §2 `deploy -y`
-  (#609), §3 the HTTP API's methods (this PR), §4–§6 to come
+  (#609), §3 the HTTP API's methods (#611), §4 `getServiceToken` /
+  `getServiceUrl` (this PR), §5–§6 to come
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend
   (`npm-packages/convex/src/server/impl/database_impl.ts`, `crates/isolate/src/environment/udf/async_syscall.rs`,
   `npm-packages/convex/src/cli/deploy.ts`, `cli/lib/command.ts`, `crates/local_backend/src/public_api.rs`,
@@ -64,8 +65,11 @@ have).
 Cloud service. On a self-hosted deployment `getServiceToken("ai-gateway")` fails, `AiGatewayUnavailable`
 (`application_function_runner/mod.rs`); `getServiceUrl` still returns the cloud gateway's URL.
 
-**bunvex.** Not exported: an import fails. To do (owner, 2026-10-12): both exported, for actions, both failing
-with the self-hosted `AiGatewayUnavailable`. `getServiceUrl` failing where Convex returns a URL is DV-491 (the
+**bunvex before.** Not exported: an import failed. **Now** (owner, 2026-10-12): both exported from
+`bunvex/server` and its isomorphic entry (`service-tokens.ts`). In an action (or an HTTP action) both fail with
+`AiGatewayUnavailable` and Convex's self-hosted message in bunvex's words ("… the AI gateway is a hosted cloud
+service. Call your model provider directly with your own API key."); elsewhere, Convex's "Unknown async operation
+1.0/createServiceToken"; no argument, Convex's `validateArg` message; another service, serde's "unknown variant". `getServiceUrl` failing where Convex returns a URL is DV-491 (the
 cloud URL cannot be in bunvex's code, and is of no use without a token).
 
 ## 5. `setDefaultWebSocketConstructor`
@@ -99,4 +103,5 @@ self-hosted Convex (DV-304), the table present and empty. Decided (owner, 2026-1
   expectations updated (`writes`, `implicit-tables`, `count`, `instance-secret`, `system-reader-edges`,
   `id-forms`, `sync`).
 - §2: `deploy` (a deploy with `-y` and with `--yes` succeeds).
+- §4: `service-tokens` (both in an action, the argument checks, outside an action).
 - §3: `http-request-errors` (`/api/query_ts` among the POST routes' 405s; `/api/query`'s 405 and its HEAD).
