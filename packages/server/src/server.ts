@@ -312,6 +312,8 @@ export type ServerOptions = {
    * STUDY-147). For tests.
    */
   requestTimeoutMs?: number;
+  /** Bun's idle timeout on the API port, in seconds (default 120); `/echo` keeps it. For tests. */
+  idleTimeoutSeconds?: number;
   /**
    * Splaying of wide invalidations (STUDY-08 §3.5). Defaults: Convex's knobs from the environment
    * (`SUBSCRIPTION_INVALIDATION_DELAY_THRESHOLD`, `SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER`), else
@@ -1509,11 +1511,12 @@ export function createServer(opts: ServerOptions) {
     );
   };
 
+  const idleTimeoutSeconds = opts.idleTimeoutSeconds ?? 120;
   // Convex's CORS layer on `/api` (STUDY-67 H2).
   const apiOptions: Bun.Serve.Options<WsData, never> = {
     port: opts.port ?? 3210,
     ...(opts.hostname ? { hostname: opts.hostname } : {}),
-    idleTimeout: 120,
+    idleTimeout: idleTimeoutSeconds,
     // Uploads have no limit (F4): the API server takes any body, and every other route checks its own cap.
     maxRequestBodySize: Number.MAX_SAFE_INTEGER,
     websocket: {
@@ -1575,6 +1578,11 @@ export function createServer(opts: ServerOptions) {
       }
       // The meta `/version` and Convex's health routes: `/instance_name` (STUDY-34), `/instance_version`, `/`
       // and `/echo` (STUDY-112), with no auth and their own body limit.
+      // `/echo` keeps Bun's idle timeout, which the request timeout turns off: its answer starts at once, so the
+      // 408 never covers it, and under load Bun can leave an echo cut off past its limit open with nothing more
+      // to send or read (Bun bug: https://github.com/oven-sh/bun/issues/45149). The idle timeout closes such a
+      // connection, as before the request timeout.
+      if (url.pathname === "/echo") srv.timeout(req, idleTimeoutSeconds);
       const health = healthRoute(req, url.pathname, engine.instanceName, maxEchoBytes);
       if (health) return health;
       // Prometheus metrics (STUDY-114): a meta route on both ports, as Convex's, open to anyone.
@@ -2063,7 +2071,7 @@ export function createServer(opts: ServerOptions) {
           requireImport();
           const { format, mode } = importArgs(a);
           const upload = await importService.upload(req.body ?? new Uint8Array());
-          return json({ numWritten: await importService.importNow(format, mode, upload) });
+          return json({ numWritten: await importService.importNow(format, mode, upload, auditActor(caller).memberId) });
         }
         case "/api/import/start_upload":
           requireImport();
@@ -2083,7 +2091,7 @@ export function createServer(opts: ServerOptions) {
           const { format, mode } = importArgs(b.import);
           requireImport();
           const upload = await importService.finishUpload(b.uploadToken, b.partTokens);
-          return json({ importId: await importService.start(format, mode, upload) });
+          return json({ importId: await importService.start(format, mode, upload, auditActor(caller).memberId) });
         }
         case "/api/perform_import":
         case "/api/cancel_import": {

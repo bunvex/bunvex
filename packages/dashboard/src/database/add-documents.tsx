@@ -30,7 +30,7 @@ export function parseDocuments(text: string): Parsed {
   return { ok: true, documents: list as Record<string, Value>[] };
 }
 
-export function AddDocuments({ table, onAdded }: { table: string; onAdded: (ids: string[]) => void }) {
+export function AddDocuments({ table, onAdded }: { table: string; onAdded: (count: number) => void }) {
   const { source } = useQueryScope();
   const [text, setText] = useState(() => drafts.get(table) ?? EMPTY);
   const [error, setError] = useState<string>();
@@ -45,9 +45,10 @@ export function AddDocuments({ table, onAdded }: { table: string; onAdded: (ids:
     setSaving(true);
     setError(undefined);
     try {
-      const ids = await source.insertDocuments!(table, parsed.documents);
+      // Convex's mutation answers no ids: its dashboard counts what it sent (`onDocumentsAdded`)
+      await source.insertDocuments!(table, parsed.documents);
       drafts.delete(table);
-      onAdded(ids);
+      onAdded(parsed.documents.length);
     } catch (e) {
       setError(toDataSourceError(e).message);
       setSaving(false);

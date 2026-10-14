@@ -1,5 +1,5 @@
 // The Database screen's destructive actions (UI-01 §12.3), each behind a confirmation that says what will
-// happen: deleting the selected documents, and clearing a table — which asks for its name to be typed.
+// happen: deleting the selected documents, and clearing or deleting a table — which ask for its name to be typed.
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -117,10 +117,20 @@ export function TableMenu(props: {
   canClear: boolean;
   onDone: (o: Outcome) => void;
   panels?: { label: string; open: () => void }[];
+  /**
+   * Deleting the table (Convex's "Delete Table", `/api/delete_tables`): offered when it may write and the source
+   * can; disabled while the schema declares the table, as Convex's menu. `onDeleted` runs once it is gone.
+   */
+  canDelete?: boolean;
+  declared?: boolean;
+  onDeleted?: (o: Outcome) => void;
 }) {
   const [clearing, setClearing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const panels = props.panels ?? [];
-  if (!props.canClear && panels.length === 0) return null;
+  const canDelete = props.canDelete === true;
+  if (!props.canClear && !canDelete && panels.length === 0) return null;
+  const destructive = props.canClear || canDelete;
   return (
     <>
       <DropdownMenu>
@@ -130,8 +140,8 @@ export function TableMenu(props: {
               variant="ghost"
               size="icon-sm"
               aria-label={`More actions on ${props.table}`}
-              // with nothing to clear, the menu only holds the phone's panels
-              className={props.canClear ? undefined : "@2xl/table:hidden"}
+              // with nothing to clear or delete, the menu only holds the phone's panels
+              className={destructive ? undefined : "@2xl/table:hidden"}
             />
           }
         >
@@ -143,15 +153,32 @@ export function TableMenu(props: {
               {p.label}
             </DropdownMenuItem>
           ))}
-          {panels.length > 0 && props.canClear && <DropdownMenuSeparator />}
+          {panels.length > 0 && destructive && <DropdownMenuSeparator />}
           {props.canClear && (
             <DropdownMenuItem variant="destructive" onClick={() => setClearing(true)}>
               Clear table…
             </DropdownMenuItem>
           )}
+          {canDelete &&
+            (props.declared ? (
+              // Convex's menu: a table the schema declares is deleted by removing it from the schema first
+              <DropdownMenuItem disabled>Delete table (declared in the schema)</DropdownMenuItem>
+            ) : (
+              <DropdownMenuItem variant="destructive" onClick={() => setDeleting(true)}>
+                Delete table…
+              </DropdownMenuItem>
+            ))}
         </DropdownMenuContent>
       </DropdownMenu>
       <ClearTable {...props} open={clearing} onOpenChange={setClearing} />
+      {canDelete && (
+        <DeleteTable
+          table={props.table}
+          open={deleting}
+          onOpenChange={setDeleting}
+          onDone={(o) => (o.ok ? props.onDeleted?.(o) : props.onDone(o))}
+        />
+      )}
     </>
   );
 }
@@ -208,6 +235,67 @@ function ClearTable(props: {
             <AlertDialogCancel type="button">Keep the data</AlertDialogCancel>
             <Button type="submit" variant="destructive" disabled={!matches || busy}>
               {busy ? "Clearing…" : `Clear ${props.table}`}
+            </Button>
+          </AlertDialogFooter>
+        </form>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/** Deleting the whole table: its documents and its indexes, in one go (Convex's `/api/delete_tables`). */
+function DeleteTable(props: {
+  table: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onDone: (o: Outcome) => void;
+}) {
+  const { source } = useQueryScope();
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const inputId = useId();
+  const matches = typed === props.table;
+  const close = (open: boolean) => {
+    if (!open) setTyped("");
+    props.onOpenChange(open);
+  };
+  const confirm = async () => {
+    setBusy(true);
+    let outcome: Outcome;
+    try {
+      await source.deleteTables!([props.table]);
+      outcome = { ok: true, message: `Deleted the table ${props.table}.` };
+    } catch (e) {
+      outcome = { ok: false, message: `Could not delete ${props.table}: ${toDataSourceError(e).message}` };
+    }
+    setBusy(false);
+    close(false);
+    props.onDone(outcome);
+  };
+  return (
+    <AlertDialog open={props.open} onOpenChange={close}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete the table {props.table}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Deletes {props.table} with every document and index in it. This cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <form
+          className="flex flex-col gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (matches && !busy) void confirm();
+          }}
+        >
+          <label htmlFor={inputId} className="text-sm">
+            Type <strong className="font-mono">{props.table}</strong> to confirm
+          </label>
+          <Input id={inputId} autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} />
+          <AlertDialogFooter>
+            <AlertDialogCancel type="button">Keep the table</AlertDialogCancel>
+            <Button type="submit" variant="destructive" disabled={!matches || busy}>
+              {busy ? "Deleting…" : `Delete ${props.table}`}
             </Button>
           </AlertDialogFooter>
         </form>

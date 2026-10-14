@@ -107,7 +107,8 @@ export type ImportRow = {
   object_size: bigint;
   /** The hidden tables this import created, by name (bunvex's own field): resumed, or dropped if it fails. */
   hidden_tables?: { name: string; tablet: string }[];
-  member_id: null;
+  /** The admin key's member that started it (Convex's `Option<MemberId>`, an int64), or none. */
+  member_id: bigint | null;
   checkpoints: Checkpoint[] | null;
   requestor: { type: "snapshotImport" };
 };
@@ -308,8 +309,16 @@ export class ImportService {
     return { key: written.key, size: written.size };
   }
 
-  /** Convex's `start_import`: the row, `uploaded`; the worker takes it from there. */
-  async start(format: ImportFormat, mode: ImportMode, upload: { key: string; size: number }): Promise<string> {
+  /**
+   * Convex's `start_import`: the row, `uploaded`, under the member that started it (Convex's
+   * `identity.member_id()`: an admin key's member); the worker takes it from there.
+   */
+  async start(
+    format: ImportFormat,
+    mode: ImportMode,
+    upload: { key: string; size: number },
+    memberId: bigint | null = null,
+  ): Promise<string> {
     let id = "";
     await this.write(async (db) => {
       id = await db.insert(SNAPSHOT_IMPORTS_TABLE, {
@@ -319,7 +328,7 @@ export class ImportService {
         component_path: null,
         fq_object_key: upload.key,
         object_size: BigInt(upload.size),
-        member_id: null,
+        member_id: memberId,
         checkpoints: null,
         requestor: { type: "snapshotImport" },
       });
@@ -383,8 +392,13 @@ export class ImportService {
   }
 
   /** The one-shot import (Convex's `do_import`): the documents written. */
-  async importNow(format: ImportFormat, mode: ImportMode, upload: { key: string; size: number }): Promise<number> {
-    const id = await this.start(format, mode, upload);
+  async importNow(
+    format: ImportFormat,
+    mode: ImportMode,
+    upload: { key: string; size: number },
+    memberId: bigint | null = null,
+  ): Promise<number> {
+    const id = await this.start(format, mode, upload, memberId);
     let row = await this.waitStable(id);
     if (row.state.state === "failed") throw new ImportRequestError(400, "ImportFailed", row.state.error_message);
     await this.perform(id);

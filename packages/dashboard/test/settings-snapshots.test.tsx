@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { Dashboard } from "@bunvex/dashboard";
 import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
@@ -7,6 +7,10 @@ import userEvent from "@testing-library/user-event";
 import { expectAccessible } from "./axe.ts";
 
 const NOW = Date.UTC(2026, 8, 29, 12);
+// The screen judges an export's expiry by the real clock, the mock by its own, which starts at NOW: on the real
+// clock a completed export showed as expired from 14 days after NOW (2026-10-13) on.
+beforeEach(() => setSystemTime(NOW));
+afterEach(() => setSystemTime()); // back to the real clock
 const mockSource = (opts: Partial<ConstructorParameters<typeof MockDataSource>[0]> = {}) =>
   new MockDataSource({
     seed: 7,
@@ -50,6 +54,19 @@ describe("Settings: Snapshots — export", () => {
     expect(made[0]!.type).toBe("application/zip");
     expect(made[0]!.size).toBe((await src.getLatestSnapshotExport())!.size!);
     await expectAccessible();
+  });
+
+  test("a canceled export (Convex's `canceled` state) says so", async () => {
+    const src = mockSource();
+    (src as { getLatestSnapshotExport: unknown }).getLatestSnapshotExport = async () => ({
+      id: "e1",
+      state: "canceled",
+      requestedAt: NOW,
+      includeStorage: false,
+    });
+    mount(src);
+    const s = await exportSection();
+    await within(s).findByText(/was canceled\.$/);
   });
 
   test("a credential that may only view: no Export button, no Download", async () => {

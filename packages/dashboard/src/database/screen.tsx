@@ -145,6 +145,7 @@ function TableView({ info }: { info: TableInfo }) {
     delete: canWrite && typeof source.deleteDocuments === "function",
     clear: canWrite && typeof source.clearTable === "function",
     replace: canWrite && typeof source.replaceDocument === "function",
+    deleteTable: canWrite && typeof source.deleteTables === "function",
   };
   const writable = can.edit;
   const queryClient = useQueryClient();
@@ -248,11 +249,11 @@ function TableView({ info }: { info: TableInfo }) {
       ? can.insert
         ? {
             kind: "add",
-            onAdded: (ids) => {
+            onAdded: (count) => {
               closePanel();
               afterWrite({
                 ok: true,
-                message: `Added ${formatCount(ids.length)} document${ids.length === 1 ? "" : "s"} to ${table}.`,
+                message: `Added ${formatCount(count)} document${count === 1 ? "" : "s"} to ${table}.`,
               });
             },
           }
@@ -370,6 +371,13 @@ function TableView({ info }: { info: TableInfo }) {
               count={info.documentCount}
               canClear={can.clear}
               onDone={afterWrite}
+              canDelete={can.deleteTable}
+              declared={info.declared}
+              onDeleted={() => {
+                // gone: the table list without it, and the first table left (as Convex's, which leaves the table)
+                void queryClient.invalidateQueries({ queryKey: dashboardKeys.tables(scope.scope) });
+                void navigate({ to: "/database" });
+              }}
               panels={(
                 [
                   "schema",

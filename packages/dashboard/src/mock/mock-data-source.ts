@@ -190,6 +190,25 @@ function paginate<T>(
 const NEWEST_FIRST: FilterExpression = { clauses: [], order: "desc" };
 const FIELD_NAME = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 
+/** The root component in an event's metadata, as Convex's system functions record it. */
+const ROOT_COMPONENT = { component_id: null, component: null };
+/** Convex's `MAX_CLEAR_ROWS`: the documents one page of a clear deletes. */
+const MAX_CLEAR_PAGE = 4000;
+
+/** Convex's patch and replace: a system field may be given, with its document's own value only. */
+function checkSystemFields(doc: Document, given: { _id?: unknown; _creationTime?: unknown }) {
+  if (given._id !== undefined && given._id !== doc._id)
+    throw new DataSourceError(
+      "invalid_request",
+      `Provided document ID "${doc._id}" doesn't match '_id' field ${JSON.stringify(given._id)}`,
+    );
+  if (given._creationTime !== undefined && given._creationTime !== doc._creationTime)
+    throw new DataSourceError(
+      "invalid_request",
+      `Provided creation time ${doc._creationTime} doesn't match '_creationTime' field`,
+    );
+}
+
 function checkFields(fields: Record<string, unknown>, what: string) {
   for (const k of Object.keys(fields))
     if (!FIELD_NAME.test(k))
@@ -635,24 +654,56 @@ export class MockDataSource implements DashboardDataSource {
 
   // ---------------------------------------------------------------- writes
 
+  // The contract's write rules are Convex's Data screen mutations (STUDY-149 PR 3), and so are their audit
+  // events: `add_documents`, `update_documents` and `delete_documents` with the documents' ids, `create_table`.
+
   createTable(name: string, opts?: CallOptions): Promise<void> {
     return this.call(opts?.signal, () => {
       this.canWrite();
       const invalid = tableNameProblem(name);
       if (invalid) throw new DataSourceError("invalid_request", invalid);
-      if (this.tables.has(name)) throw new DataSourceError("invalid_request", `Table "${name}" already exists.`);
-      this.tables.set(name, { name, indexes: structuredClone(SYSTEM_INDEXES), documents: [], declared: false });
+      // a taken name is no error: Convex's mutation inserts a document into it and deletes it
+      if (!this.tables.has(name))
+        this.tables.set(name, { name, indexes: structuredClone(SYSTEM_INDEXES), documents: [], declared: false });
+      this.record("create_table", { ...ROOT_COMPONENT, table: name });
     });
   }
 
-  insertDocuments(table: string, documents: Record<string, Value>[], opts?: CallOptions): Promise<string[]> {
+  deleteTables(names: string[], opts?: CallOptions): Promise<void> {
     return this.call(opts?.signal, () => {
       this.canWrite();
-      const t = this.table(table);
+      // a name with no table is skipped, as Convex's route
+      for (const name of names) {
+        const t = this.tables.get(name);
+        if (t?.declared)
+          throw new DataSourceError(
+            "invalid_request",
+            `Failed to delete table "${name}" because it appears in the schema`,
+          );
+      }
+      for (const name of names) if (this.tables.delete(name)) this.changed(name);
+      this.record("delete_tables", { ...ROOT_COMPONENT, table_names: names });
+    });
+  }
+
+  insertDocuments(table: string, documents: Record<string, Value>[], opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
       if (documents.length > MAX_WRITE)
-        throw new DataSourceError("invalid_request", `at most ${MAX_WRITE} documents per insert`);
+        throw new DataSourceError("invalid_request", `Can\u2019t import more than ${MAX_WRITE} documents at once.`);
       // validate everything first: all or nothing
       for (const [i, d] of documents.entries()) checkFields(d, `document ${i + 1}`);
+      const invalid = this.tables.has(table) ? undefined : tableNameProblem(table);
+      if (invalid) throw new DataSourceError("invalid_request", invalid);
+      // a table that does not exist yet is created, as Convex's `db.insert`
+      if (!this.tables.has(table))
+        this.tables.set(table, {
+          name: table,
+          indexes: structuredClone(SYSTEM_INDEXES),
+          documents: [],
+          declared: false,
+        });
+      const t = this.table(table);
       let last = t.documents.reduce((m, d) => Math.max(m, d._creationTime), 0);
       const docs = documents.map((fields) => {
         last = Math.max(this.now(), last + 0.001);
@@ -660,8 +711,7 @@ export class MockDataSource implements DashboardDataSource {
       });
       t.documents.push(...docs);
       this.changed(table);
-      this.record("add_documents", { table, count: docs.length });
-      return docs.map((d) => d._id);
+      this.record("add_documents", { ...ROOT_COMPONENT, table, document_ids: docs.map((d) => d._id) });
     });
   }
 
@@ -679,20 +729,23 @@ export class MockDataSource implements DashboardDataSource {
     return this.call(opts?.signal, () => {
       this.canWrite();
       const t = this.table(table);
-      checkFields(fields, "patch");
       const docs = ids.map((id) => {
         const d = t.documents.find((x) => x._id === id);
-        if (!d) throw new DataSourceError("not_found", `no document ${id} in "${table}"`);
+        if (!d) throw new DataSourceError("not_found", "Cannot read properties of null (reading '_id')");
         return d;
       });
+      // `_id` and `_creationTime` may be given their own values only (Convex's patch)
+      const { _id, _creationTime, ...rest } = fields;
+      checkFields(rest, "patch");
+      for (const d of docs) checkSystemFields(d, { _id, _creationTime });
       for (const d of docs)
-        for (const [k, v] of Object.entries(fields)) {
+        for (const [k, v] of Object.entries(rest)) {
           const isUnset = typeof v === "object" && v !== null && !Array.isArray(v) && "$unset" in v;
           if (isUnset) delete d[k];
           else d[k] = structuredClone(v as Value);
         }
       this.changed(table);
-      this.record("update_documents", { table, count: docs.length });
+      this.record("update_documents", { ...ROOT_COMPONENT, table, document_ids: docs.map((d) => d._id) });
     });
   }
 
@@ -700,13 +753,15 @@ export class MockDataSource implements DashboardDataSource {
     return this.call(opts?.signal, () => {
       this.canWrite();
       const t = this.table(table);
-      checkFields(document, "replace");
       const i = t.documents.findIndex((x) => x._id === id);
-      if (i < 0) throw new DataSourceError("not_found", `no document ${id} in "${table}"`);
+      if (i < 0) throw new DataSourceError("not_found", "Document does not exist.");
       const old = t.documents[i]!;
-      t.documents[i] = { ...structuredClone(document), _id: old._id, _creationTime: old._creationTime };
+      const { _id, _creationTime, ...rest } = document;
+      checkFields(rest, "replace");
+      checkSystemFields(old, { _id, _creationTime });
+      t.documents[i] = { ...structuredClone(rest), _id: old._id, _creationTime: old._creationTime };
       this.changed(table);
-      this.record("update_documents", { table, count: 1 });
+      this.record("update_documents", { ...ROOT_COMPONENT, table, document_ids: [id] });
     });
   }
 
@@ -714,12 +769,21 @@ export class MockDataSource implements DashboardDataSource {
     return this.call(opts?.signal, () => {
       this.canWrite();
       const t = this.table(table);
-      if (ids.length > MAX_WRITE) throw new DataSourceError("invalid_request", `at most ${MAX_WRITE} deletes per call`);
-      const gone = new Set(ids);
-      const before = t.documents.length;
+      if (ids.length > MAX_WRITE)
+        throw new DataSourceError(
+          "invalid_request",
+          `You can't delete more than ${MAX_WRITE}. Try selecting fewer documents instead..`,
+        );
+      // all or nothing: an id that is gone fails the call, as Convex's `db.delete`
+      const gone = new Set<string>();
+      for (const id of ids) {
+        if (gone.has(id) || !t.documents.some((d) => d._id === id))
+          throw new DataSourceError("not_found", `Delete on nonexistent document ID ${id}`);
+        gone.add(id);
+      }
       t.documents = t.documents.filter((d) => !gone.has(d._id));
       this.changed(table);
-      if (t.documents.length < before) this.record("delete_documents", { table, count: before - t.documents.length });
+      this.record("delete_documents", { ...ROOT_COMPONENT, table, document_ids: ids });
     });
   }
 
@@ -727,11 +791,17 @@ export class MockDataSource implements DashboardDataSource {
     return this.call(opts?.signal, () => {
       this.canWrite();
       const t = this.table(table);
-      const deleted = t.documents.length;
+      // oldest first, a page of 4 000 at a time, each page one event (Convex's `clearTablePage`)
+      const oldest = [...t.documents].sort((a, b) => a._creationTime - b._creationTime);
+      for (let i = 0; i < oldest.length; i += MAX_CLEAR_PAGE)
+        this.record("delete_documents", {
+          ...ROOT_COMPONENT,
+          table,
+          document_ids: oldest.slice(i, i + MAX_CLEAR_PAGE).map((d) => d._id),
+        });
       t.documents = [];
       this.changed(table);
-      this.record("clear_tables", {});
-      return { deleted };
+      return { deleted: oldest.length };
     });
   }
 

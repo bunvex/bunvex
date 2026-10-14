@@ -690,6 +690,11 @@ write.
   The batch is durable and visible, so its commits are acknowledged; the listeners after the failing one are
   not called, later batches and queued commits are refused, and `onFatal` runs once. Before, the batch's
   callers hung and the server reported a persistence failure.
+- **Any other internal error of the drain** (a commit's `atTs` throwing, say) stops the committer the same way,
+  with a `CommitterInternalError` cause (which `CommitListenerError` extends): "the committer stopped after an
+  internal error: …", `persistenceFailure` false (owner, 2026-10-13). The commits of the interrupted group are
+  refused, as nothing of them was published. Clients see neither text: a stopped committer is a system error
+  (`INTERNAL_SERVER_ERROR_MESSAGE`, close 1011); the label is for the server's log and `onFatal`.
 - **Statements.** Postgres sends at most 1 024 rows per statement (the fence CTE carries the first chunk);
   MySQL fills each `INSERT` up to 10 MiB of SQL text (an upper bound of the escaped row: 3 bytes per string
   character, 2 per key byte); both as Convex, inside the batch's one transaction (`chunkRows`,

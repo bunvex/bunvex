@@ -1,6 +1,7 @@
 # STUDY-149 — The dashboard on real data: how Convex's dashboard reads a deployment
 
-- **Status:** decided (owner, 2026-10-12); PR 1 built (`@bunvex/dashboard-source`, §5 "PR 1, as built"). Q1: option B, a
+- **Status:** decided (owner, 2026-10-12); PR 1 built (`@bunvex/dashboard-source`, §5 "PR 1, as built"); PRs 2, 3,
+  4 and 5 built (§5 "PR N, as built"; PR 4: functions, the runner and Settings); PRs 6–8 remain. Q1: option B, a
   separate service with its own image (DV-475); Q3: rename (DV-474); Q4: Convex's model plus a `Host` check
   (DV-476); Q5: local links only (DV-477, replaces DV-217); Q2, Q6, Q7 confirmed as planned; AD-32 not taken.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/dashboard-common`,
@@ -227,26 +228,26 @@ there under another name or route; *missing* = not defined.
 
 | `_system/frontend/…` (used by Convex's self-hosted dashboard) | bunvex | where / note |
 |---|---|---|
-| `getTableMapping` | missing | (`_system/cli/tables` lists names) |
-| `paginatedTableDocuments` | missing | (`_system/cli/tableData` is the CLI's) |
-| `listById`, `getById` (cloud palette) | missing | |
+| `getTableMapping` | have (PR 2) | `data-system-functions.ts` |
+| `paginatedTableDocuments` | have (PR 2) | `data-system-functions.ts` |
+| `listById`, `getById` (cloud palette) | have (PR 2) | `data-system-functions.ts` |
 | `tableSize`, `tableSize:sizeOfAllTables` | have | `:445`, `:450` |
-| `indexes` | missing | `/api/get_indexes` missing too (`openapi.ts:494-499`) |
+| `indexes` | have (PR 2) | `data-system-functions.ts`; `/api/get_indexes` too |
 | `getSchemas`, `:schemaValidationProgress` | have | `:136`, `:428` (+ `stagedSchemaValidationProgress` `:437`) |
-| `addDocument`, `patchDocumentsFields`, `replaceDocument`, `deleteDocuments`, `clearTablePage`, `createTable` | missing | their audit events are pending with them (platform:62, :252) |
-| `modules:listForAllComponents`, `modules:argsValidator` | missing | `_system/cli/modules:apiSpec` (`:287`) has the data |
-| `components:list` | missing | components are not built (DV-55); the root alone would do |
-| `getVersion` | missing | `/version`, `/instance_version` answer it (`health.ts:74`) |
-| `convexCloudUrl`, `convexSiteUrl` | missing — **rule 5** (Q3) | `_system/cli/deploymentUrl:cloudUrl` (`:281`); `/api/v1/get_canonical_urls` |
+| `addDocument`, `patchDocumentsFields`, `replaceDocument`, `deleteDocuments`, `clearTablePage`, `createTable` | have (PR 3) | `data-system-mutations.ts`, with their audit events |
+| `modules:listForAllComponents`, `modules:argsValidator` | have (PR 4) | `frontend-system-functions.ts` (`modules:list` too) |
+| `components:list` | have (PR 4) | `frontend-system-functions.ts`; the root alone (DV-55) |
+| `getVersion` | have (PR 4) | `frontend-system-functions.ts` |
+| `convexCloudUrl`, `convexSiteUrl` | have (PR 4) as `cloudUrl`, `siteUrl` — **rule 5** (Q3, DV-474) | `frontend-system-functions.ts` |
 | `backendState:backendState`, `deploymentState:deploymentState` | have | `:152`, `:158` |
 | `deploymentEvents:lastPushEvent`, `paginatedDeploymentEvents`, `listDeploymentEventsFromTime` | have | `:394`, `:336`, `:380` |
 | `paginatedScheduledJobs`, `scheduler:getArgs` | have | `:311`, `:330` |
 | `listCronJobs`, `listCronJobRuns` | have | `:458`, `:536` |
 | `fileStorageV2:{numFiles, fileMetadata, getFile, deleteFile, deleteFiles, generateUploadUrl}` | have | `:482–:559`; each write audited |
-| `listEnvironmentVariables` | partial | `_system/cli/queryEnvironmentVariables` (`:292`); `/api/v1/list_environment_variables` |
+| `listEnvironmentVariables` | have (PR 4) | `frontend-system-functions.ts` |
 | `listAuthProviders` | have | `:130` |
 | `listConfiguredSinks` | have | `:115` |
-| `latestExport`, `snapshotImport:list` (cloud only) | partial | `_system/cli/exports:getLatest` (`:175`), `_system/cli/queryImport:list` (`:188`) |
+| `latestExport`, `snapshotImport:list` (cloud only) | have (PR 4) | `frontend-system-functions.ts` |
 
 **HTTP routes** (`packages/server/src/server.ts`; admin gate `:1588-1617`):
 
@@ -912,6 +913,344 @@ reproduces it without load).
   pairs that caused the most queries to be re-run"; the scheduler's wake-ups are not queries, and counting them
   would need synthetic events that mirror Convex's executor design rather than anything bunvex runs.
 - **Decision (owner, 2026-10-12): match Convex** — built as above; DV-480 is resolved to match Convex.
+
+### PR 3, as built
+
+The Data screen's writes. Convex's side re-read for it (`fe/` and `dc/` as above; `ad/` is
+`npm-packages/system-udfs/convex/_system/`):
+
+- **Six mutations** (`fe/addDocument.ts`, `patchDocumentsFields.ts`, `replaceDocument.ts`, `deleteDocuments.ts`,
+  `clearTablePage.ts`, `createTable.ts`), each `mutationGeneric("WriteData")` (`ad/server.ts:160-189`): the key must
+  allow `WriteData` (`requireOperation`, `:125`), the arguments are checked inside the function (`validateArgs`,
+  `:126-133`, "Uncaught Error: …"), a non-null `componentId` re-runs the function in that component (`:177-183`).
+  The database is an app's (`mutationGeneric`, not `queryPrivateSystem`): `_`-tables are read-only, the schema is
+  enforced, an insert into a table that does not exist creates it.
+  - `addDocument {table, documents}`: past 4 096 (`MAX_IMPORT_COUNT`, half a transaction's user writes) it answers
+    `{success: false, error: "Can’t import more than 4096 documents at once."}` (a typographic apostrophe); each
+    document inserted in order; an insert's error rewrapped as `ConvexError(e.message)` (`:42`, "it could be a
+    schema validation error"), so the dashboard shows the data alone (`useDataToolbarActions.ts:47-60`). It answers
+    `{success: true}` — **no ids**.
+  - `patchDocumentsFields {table, fields, ids?}`: the documents of `ids` (`db.get` each, outside the rewrap: an id
+    that does not decode fails as `db.get` does), or every document of `table` without `ids` (the dashboard's
+    "edit all"); `fields` walked with `for…in`, the undefined placeholder removing a field (`:29`); each patch
+    inside the rewrap — so a document that is gone fails with V8's "Cannot read properties of null (reading
+    '_id')" as a `ConvexError`. `_id` and `_creationTime` may be patched to their own values only (the engine's
+    check). The event names `table` as given and the ids patched (`:39`).
+  - `replaceDocument {id, document}`: a document that is gone answers `{success: false, error: "Document does not
+    exist."}`; the replace rewrapped; the event names the id's table by the table mapping (`:33`).
+  - `deleteDocuments {toDelete: [{id, tableName}]}`: past 4 096 `{success: false, error: "You can't delete more
+    than 4096. Try selecting fewer documents instead.."}`; each `db.delete` unwrapped (a gone id: "Delete on
+    nonexistent document ID …", the whole call fails); one event per `tableName` given, in first-named order.
+  - `clearTablePage {tableName, cursor}`: the oldest 4 000 (`MAX_CLEAR_ROWS`) by `by_creation_time` ascending
+    ("to avoid repeatedly invalidating the query run by the data page"), at most 3 000 000 bytes read (so a page and
+    its deletes stay under 8 MiB, `:36-42`), each deleted, one `delete_documents` event when any was (`:47`);
+    `{deleted, continueCursor, hasMore}`. The dashboard calls it again with `continueCursor` while `hasMore`,
+    showing the progress, and stops if the dialog closes (`ClearTableConfirmation.tsx:58-81`). A table that does
+    not exist fails ("Index nope.by_creation_time not found.").
+  - `createTable {table}`: `db.insert(table, {})` then `db.delete` (`:10-13`), unwrapped. A taken name is no error
+    (the form refuses it, `DataSidebar.tsx:105-160`), unless the table's declared type refuses `{}`; a bad name fails
+    with `db.insert`'s identifier error.
+- **Deleting tables** is the HTTP route (`dc/features/data/lib/api.ts:13-29`, `POST /api/delete_tables {tableNames,
+  componentId}`), already built (STUDY-42); the menu disables it for a table the schema declares
+  (`DataOverflowMenu.tsx:96-125`).
+- **The events.** `writeAuditLog(action, metadata)` is the `1.0/writeDeploymentAuditLog` syscall, system functions
+  only; it adds `component_id` and `component` to the metadata (`crates/isolate/src/environment/udf/async_syscall.rs`
+  `write_deployment_audit_log`) and stores Convex's `DeploymentAuditLogEvent` (`crates/model/src/deployment_audit_log/
+  types.rs:254-280`, serialized `:579-640`): `add_documents`, `update_documents`, `delete_documents` `{component_id,
+  component, table, document_ids}`, `create_table` `{component_id, component, table}`, in the write's transaction.
+  History lists them (`useDeploymentAuditLog.ts:42-79`) and words them "added N documents to T", "updated N documents
+  in T", "deleted N documents from T", "created table T" (`DeploymentEventContent.tsx:485-559`), N being the ids'
+  count. Clearing a table records `delete_documents` per page, not `clear_tables` (that one is streaming import's).
+
+**What was built.**
+
+- Server (`packages/server/src/data-system-mutations.ts`, spread into `SYSTEM_MUTATIONS` by one line; the four events
+  in `audit-log.ts`): the six mutations as above, `componentId` accepted and ignored (DV-55), the rewrap as a
+  `BunvexError` (DV-03), bunvex's placeholder (DV-478). In a transaction of an app's (the `db` system functions get),
+  so the refusals are the engine's own.
+- Source (`packages/dashboard-source/src/writes.ts`, spread into the server source): each contract write is the
+  mutation over the socket with `componentId: null` (values decoded from the contract's JSON encoding; `{$unset:
+  true}` the placeholder); `clearTable` loops `clearTablePage` on its cursor, checks the abort between pages, and
+  answers `not_found` for a table the mapping does not have (the server would answer zeros); `deleteTables` posts the
+  route, then waits (at most 5 s) for the subscribed table mapping to drop the tables, since the route answers ahead
+  of the socket. A failure's code: an application error's data is the message (as Convex's dashboard shows it) and is
+  `invalid_request`, as is any other error the function raised (`Uncaught …`, frames dropped); a document that is gone
+  (`Delete on nonexistent document ID`, the null `_id`, "Document does not exist.") `not_found`; a permission refusal
+  `unauthorized`; anything else `unavailable`. `watchTable` needed nothing: the writes reach it through the size and
+  page subscriptions of PR 2.
+- **The contract follows Convex** (DV-479's standing rule; `data-source.ts`, UI-01 §5): `insertDocuments` answers
+  nothing (Convex's mutation answers no ids; the screen counts what it sent, as Convex's `onDocumentsAdded`), at most
+  4 096, and creates a missing table; `patchDocuments` and `replaceDocument` say `not_found` for a document that is
+  gone; `deleteDocuments` fails for one (it ignored them), at most 4 096; `clearTable` pages and may stop on an abort;
+  `createTable` accepts a taken name; a new optional `deleteTables(names)` (Convex's route, a missing name skipped, a
+  declared table `invalid_request`). The mock follows (its events now carry Convex's metadata: the documents' ids and
+  the root component; a clear records a `delete_documents` per 4 000), and the contract suite checks each rule. The
+  History screen counts a data event's `document_ids` (and a `delete_files`' `storage_ids`), and words
+  `delete_tables`. The Data screen's menu gained "Delete table…" (its name typed to confirm, as Clear; disabled and
+  saying why for a declared table, as Convex's menu); after it the screen opens the first table left.
+- The contract's history opt-in now reads the first page before the write, as the History screen does: a live
+  source hears what changes the pages it served while watched (`watchAuditEvents`' wording says so).
+
+**Tests.**
+
+- **Oracle** (`packages/differential/test/dashboard-writes.test.ts`, the app in `dashboard-writes-app/`): the six
+  mutations on Convex's pinned binary and on bunvex with the same calls, every answer (values, errors and their data),
+  the documents left and the events recorded compared, ids by first appearance: inserts (none, a bad field, another
+  document's `_id`, a new table, the schema, `_storage` and `_foo`, 4 097, a missing argument, `componentId: null`),
+  patches (set, remove, own and other `_id`, an id that does not decode, every document, `fields` not an object, no
+  ids, one gone, another table's name, the schema), replaces (with its own system fields, another `_id`, not an id,
+  gone, the schema), deletes (two tables' events, gone, not an id, 4 097, a wrong table name, a missing `tableName`),
+  clears (4 106 documents: 4 000 oldest then 106, an empty table, `_storage`, a bad cursor, a missing one) and
+  `createTable` (new, taken, 64 characters, `_x`, a declared `v.any()` table), and the six without a key.
+- **Server** (`packages/server/test/data-system-mutations.test.ts`): bunvex's placeholder (Convex's an ordinary
+  string), a refused insert leaving no document and no event, the events' metadata in order, a clear's page cut by
+  the 3 MB bound and oldest first.
+- **Source** (`packages/dashboard-source/test/writes.test.ts`): what each write sends, the clear's loop and abort,
+  `success: false`, the error codes, `deleteTables`' wait.
+- **Live** (`packages/sync-e2e/dashboard/server-source-writes.test.ts`): the contract's `writes` area and history
+  opt-in on a live server, then int64 and bytes written, a field removed, the events with their ids, the schema's,
+  a system table's and the limit's refusals with the deployment's words, a gone document's `not_found` for patch,
+  replace and delete, a clear of 8 192 documents in three pages with three events, `createTable` / `deleteTables`
+  and their events (a missing name skipped, a declared table refused), `watchTable` hearing an insert's count, and a
+  read-only key refused with nothing written.
+- **Dashboard**: the mock's writes under the new contract (`mock.test.ts`'s suite), "Delete table" on the screen
+  (typed name, gone after, disabled for a declared table), History's words from `document_ids`.
+
+**Sabotage** (each restored after, `git diff` clean; counts are failing tests per suite):
+
+| Sabotage | Failing tests |
+|---|---|
+| server: no 4 096 limit on `addDocument` | oracle 1 |
+| server: an insert's error not rewrapped | oracle 1, server 1 |
+| server: the placeholder not read as `undefined` | server 1, live 2 |
+| server: a gone document left to the engine's `TypeError` (JSC's words) | oracle 1, live 2 |
+| server: `deleteDocuments` one event for every table | oracle 1 |
+| server: the clear from the newest | oracle 1, server 1 |
+| server: the clear without the 3 MB bound | server 1 |
+| server: an empty clear page records an event | oracle 1 |
+| server: `createTable` leaves its document | oracle 1 |
+| server: the replace's event without its table | oracle 1 |
+| source: the clear's cursor not passed on | unit 1 |
+| source: `$unset` sent as a value | unit 1, live 2 |
+| source: a gone document `invalid_request` | unit 2, live 2 |
+| source: `componentId` not sent | unit 1 |
+| source: `deleteTables` does not wait for the mapping | unit 1 (first passed everything: the live race was not reliable; the unit fake now lags the mapping) |
+| mock: a gone id ignored by `deleteDocuments` | dashboard 1 (the contract on the mock) |
+| mock: `createTable` refuses a taken name | dashboard 1 |
+| screen: "Delete table" enabled for a declared table | dashboard 1 |
+| History: data events counted from `count` | dashboard 2 |
+
+**Measurements.** No hot path changes: six system functions and four audit events; the route is unchanged. The source adds
+nothing to a read. A clear of 8 192 documents on the in-process server takes three mutations.
+
+**Divergences.** None new (DV-482 to DV-485 unused). What differs is already decided: the application error's name
+(DV-03), the placeholder (DV-478), `componentId` ignored (DV-55). The contract's changes are DV-479's rule, not
+divergences; the delete dialog's typed name is bunvex's screen (STUDY-12 D1).
+
+**Found on the way, outside PR 3** (differences of the engine every function shares, left out of the oracle with a
+note and left to their own PRs):
+
+1. `db.insert` into a name that is not an identifier: bunvex's `Invalid table name "9lives": use at most 64 ASCII
+   letters, …`; Convex's ``Invalid argument `table` for `db.insert`: `` then the identifier's own error ("Invalid first
+   character '9' in 9lives: Identifiers must start with an alphabetic character or underscore", "Identifier cannot be
+   empty", "Identifier is too long (65 > maximum 64)", "Identifier a-b has invalid character '-': …").
+2. `db.insert` of a value that is not an object: bunvex's ``Uncaught TypeError: … expected an object``; Convex's
+   ``Uncaught Error: Invalid argument `value` for `db.insert`: Value must be an Object``.
+3. A missing required field's schema error displays the document and validator with the system fields on bunvex
+   (`Object: {_creationTime: …, _id: …}`, `Validator: v.object({_creationTime: v.float64(), _id: v.id(…), …})`);
+   Convex's without them (`Object: {}`). A wrong type's error matches.
+4. `db.patch` with another `_creationTime`: bunvex shows the patch as JSON (`{"_creationTime":1}`), Convex the merged
+   document in its display (`{_creationTime: 1.0, _id: "…", k: 1.0}`); and bunvex's error carries the server's own
+   frames (`at checkSystemFieldValues (…/packages/core/src/tx.ts:…)`) to the client, where Convex shows the app's.
+5. `withIndex("by_creation_time")` on a table that does not exist: Convex fails ("Index nope.by_creation_time not
+   found."), bunvex answers an empty result.
+6. A `$` field name inside a system function's `v.any()` argument is refused before the function on bunvex
+   ("Invalid arguments for …: Field name $x starts with '$', which is reserved."); Convex's function refuses it
+   ("Uncaught Error: Field name $x starts with a '$', which is reserved.").
+7. A push creates the schema's new tables in declaration order on bunvex, in name order on Convex (table numbers
+   10001, 10002 differ for the same schema).
+
+**Notes for PR 6** (the app on the source): Convex's bulk edit (`patchDocumentsFields` without `ids`, every document of
+the table) has no contract method yet; the History screen words the other actions from their counts (`cancel_all_…`
+has no count on Convex).
+
+### PR 4, as built
+
+The Functions screen, the function runner (with its custom test query) and the Settings screens, on the server
+source. Convex's side re-read for it (citations under `dc/` and `fe/` as above; `fr/` is
+`dc/features/functionRunner/`):
+
+- **The module list.** `fe/modules.ts`: `listForAllComponents` answers `[componentId | null, [path, module][]][]`,
+  the root's modules first, then each child component's (it calls itself in each, `currentSystemUdfInComponent`).
+  A module is listed when it has an analysis (`listHandler`), as `{functions, sourcePackageId, cronSpecs?}`; each
+  function is `{name, lineno, udfType, visibility}` (`processFunction`: the line from `pos.start_lineno`, none for
+  0; `visibility` public when absent), and the module's HTTP routes are appended as functions named
+  `<METHOD> <path>` with `udfType: "HttpAction"` (`processHttpRoute`). `sourcePackageId` is there so a push
+  re-renders every subscriber ("By returning sourcePackageId…", `fe/common.ts`). The dashboard keeps it subscribed
+  for its whole life (`dc/lib/functions/useListModules.ts:20-49`, `FunctionsProvider.tsx`), so a push reaches the
+  tree. The tree (`dc/lib/functions/generateFileTree.ts:96-180`) skips a module with no function, puts folders
+  before files by name, and sorts a file's functions by `lineno` (`-1` when absent); the runner offers queries,
+  mutations and actions only (`SUPPORTED_FUNCTION_TYPES`).
+- **Arguments.** `modules:argsValidator({function})` splits the display name at `:` (two parts), reads the
+  `_modules` row at `<path>.js` by `by_path` (`unique`), and answers the function's stored `args` text, Convex's
+  `DEFAULT_ARGS_VALIDATOR` (`{ "type": "any" }`) when it has none, or null (`fe/modules.ts:48-80`). The runner
+  subscribes it for the open function (`fr/components/FunctionTester.tsx:188`). The returns validator is not shown
+  anywhere in Convex's dashboard.
+- **The runner** (`fr/lib/client.ts:14-48`, `FunctionTester.tsx:520-610`, `QueryResult.tsx`): a second
+  `ConvexReactClient` signed in with `setAdminAuth(adminKey, identity)`; a new identity re-authenticates it. A query
+  is `watchQuery` on it: live, its log lines from `localQueryLogs`, a failure as its error text. A mutation or an
+  action is `mutationInternal` / `actionInternal` on its `BaseConvexClient`, the result with its `logLines`; the
+  request's session id and counter filter the log stream for the run's lines. Internal functions need
+  `RunInternal*`, acting as a user `ActAsUser`.
+- **Custom test query** (`fr/components/FunctionEditor.tsx:71-73`, `:165-300`; `fr/lib/client.ts:50-105`): Monaco
+  holds the TypeScript (with the schema's generated types for completion), its TypeScript worker compiles it
+  (`getEmitOutput`), the preamble `import { query, internalQuery } from "convex:/_system/repl/wrappers.js"` is put
+  first, and `POST /api/run_test_function {bundle: {path: "testQuery.js", source}, adminKey, componentId, args: {},
+  format}` runs it, the key in the body and no `Authorization`. 200: `{status: "success", value, logLines}` or
+  `{status: "error", errorMessage, errorData, logLines}`; a 4xx shows the body's `message` as the run's error; a 5xx a
+  generic one. Gated on `RunTestQuery` (read-only keys have it). The default code is a query reading `take(10)` of
+  the table the Data screen shows (`YOUR_TABLE_NAME` otherwise).
+- **Settings.** `listEnvironmentVariables` (`fe/listEnvironmentVariables.ts`, `ViewEnvironmentVariables`): the
+  `_environment_variables` documents by name, subscribed (`DeploymentEnvironmentVariables.tsx:34`); changes go to
+  `POST /api/update_environment_variables {changes}` (`features/settings/lib/api.ts:20-48`), whose 400 names the
+  variable. `latestExport` (`fe/latestExport.ts`, `ViewBackups`): the newest `_exports` row of the `snapshotExport`
+  requestor; `snapshotImport:list` (`fe/snapshotImport.ts`): the 20 newest `_snapshot_imports`. `getVersion`
+  (`noPermissionRequired`): `_udf_config.serverVersion || null`. `components:list`: each `_components` row with its
+  path from its parents (`""` for the root), `args` as an object, `state` (default `active`), `httpPrefix`.
+  `convexCloudUrl` / `convexSiteUrl` (`ViewData`): `CONVEX_CLOUD_URL` / `CONVEX_SITE_URL`.
+
+**Server** (`packages/server/src/frontend-system-functions.ts`, spread into `SYSTEM_QUERIES` by one line):
+`modules:listForAllComponents`, `modules:list`, `modules:argsValidator`, `components:list`, `getVersion`,
+`cloudUrl` and `siteUrl` (DV-474: Convex's `convexCloudUrl` / `convexSiteUrl`; the canonical URL when set, as
+`_system/cli/deploymentUrl:cloudUrl`), `listEnvironmentVariables`, `latestExport`, `snapshotImport:list`; each
+under Convex's permission. They read the rows bunvex stores as Convex's (`_modules` with its
+`SerializedAnalyzedModule`, `_components`, `_udf_config`; STUDY-134), so the code is Convex's reading of them.
+
+**Source** (`packages/dashboard-source`, `functions.ts` and `settings.ts`, wired in `server-source.ts`):
+
+- `listFunctions`: `listForAllComponents`, the root's queries, mutations and actions at `module:name` with their
+  visibility and `line`; the validators come from `_system/cli/modules:apiSpec` in the same call — the contract
+  carries the arguments and returns validators in the list, and one query serves every function where
+  `argsValidator` would take one each and never gives the returns one. `v.any()` (what a function declared without
+  arguments exports) is no validator, as the contract's "none declared".
+- `watchFunctions` (new optional contract method): the module list kept subscribed while watched (`LiveGroup`, PR 5);
+  a push is a new result. The Functions screen and the runner list the functions again on it (`useLiveFunctions`).
+- `runFunction`, `watchFunction`: a runner client per identity (none: the admin), as Convex's second client, signed
+  in with `setAdminAuth(key, identity)`; at most 4 kept, the least recently used idle one closed. A query is
+  subscribed (once for `runFunction`), a mutation or an action is `mutationInternal` / `actionInternal`; the result's
+  log lines (`[LEVEL] message`, Convex's `entryLogLines`) come with it, values in the contract's encoding, the
+  duration measured as Convex's runner measures it (client side). What the function throws is the run's error. Before
+  a run the source checks what the contract asks (`not_found`, `unauthorized` for a credential without
+  `runFunctions`, a read-only one running a mutation or an action, or one without `actAsUser` acting as a user), so a
+  server refusal is never mistaken for the function's own error.
+- `runTestQuery(code)` (new optional contract method): Convex's request, with bunvex's preamble specifier
+  (`bunvex:/_system/repl/wrappers.js`, DV-390) and format (`encoded_json`, DV-307); a 400 is the run's error (a
+  module that does not load), a refused key `unauthorized`, a 5xx `unavailable`.
+- Settings: `listEnvironmentVariables` subscribed while watched, with the new optional
+  `watchEnvironmentVariables`; `updateEnvironmentVariables` posts the batch as it is (the server checks it whole);
+  `listAuthProviders` (the `_auth` documents, a custom JWT's stored algorithm unquoted); the snapshots —
+  `getLatestSnapshotExport` (`latestExport`), `requestSnapshotExport` (`/api/export/request/zip`, then the latest),
+  `downloadSnapshotExport` (`/api/export/zip/{id}` with the key in `Authorization`), `startSnapshotImport` (the CLI's
+  `start_upload`, 8 MiB `upload_part`s, `finish_upload`, then read until the deployment has parsed it; what changes
+  per table from the row's checkpoints), `confirmSnapshotImport` (`/api/perform_import`), `cancelSnapshotImport`
+  (`/api/cancel_import`), `getSnapshotImport` (`_system/cli/queryImport`). An export or an import is read over
+  `/api/query`, fresh: a socket result kept for a query just dropped could be older than the request that started it.
+- `getDeployment`: `url` from `cloudUrl` (the server's URL when the credential cannot read it), `httpActionsUrl` from
+  `siteUrl` when set.
+
+**The contract, moved to Convex** (the owner's standing rule, DV-479): `FunctionInfo.line` (Convex's `lineno`) and
+the tree ordered by it; `SnapshotExportState` gains Convex's `canceled`; the new optional `watchFunctions`,
+`runTestQuery` and `watchEnvironmentVariables`. The contract suite checks `line`, `runTestQuery` (a value with its
+log lines; a throw and a module that does not load are runs) and that an environment variable watcher hears a change.
+Its invalidations test now picks a deployed mutation's pair (an admin route's write, such as an environment
+variable's, is a pair whose source no mutation filter names — the first live run of the metrics area found it).
+
+**The screens** (`packages/dashboard`): the runner's picker starts with "Custom test query" when the source has
+`runTestQuery`: a TypeScript editor (Monaco's TypeScript language, syntax checked; no type checking, since the app's
+types are not in the browser — Convex's editor has its schema's generated types, a gap), Convex's starting code on the
+first table, compiled by Monaco's TypeScript worker (`transpileTypeScript` in `@bunvex/ui`, Convex's
+`getEmitOutput`), run once, its result and logs beside it. The Functions screen and the runner follow a push; the
+environment variables follow changes made elsewhere, but not over edits waiting to be saved (saving reloads them);
+a canceled export says so.
+
+**Found and fixed on the way** (the oracle): an import's `_snapshot_imports.member_id` was always null; Convex's
+records the admin key's member (`identity.member_id()`, 0 for a key issued without one). `start` and the one-shot
+import now take the caller's member (`imports.ts`, `server.ts`; storage parity).
+
+**Found, not fixed here** (each its own concern): a function declared with a `returns` validator has its analyzed
+line two lines before Convex's (`messages:secret`: 37 against 39; the push's `pos`, STUDY-65 M5), masked in the
+oracle; bunvex's `_system/cli/modules:apiSpec` reads the loaded code rather than the `_modules` rows (not reactive,
+validators `JSON.parse`d rather than `jsonToConvex`), which answers the same today.
+
+**Not built here**: HTTP actions in the Functions tree (Convex lists them under `http.js`; the contract's
+`FunctionKind` has no HTTP action — a contract change with the Logs screen's kinds, for PR 6), the custom query's
+type checking and completions, `latestExport:latestCloudExport` and `canExportFileStorage` (cloud backups, cloud only),
+child components (DV-55).
+
+**Tests.**
+
+- **Oracle** (`packages/differential/test/dashboard-functions.test.ts`, the app in `functions-app/` with a nested
+  module, HTTP routes, a cron, an internal query with an int64 `returns`, a function without a validator, a default
+  export): `listForAllComponents` and `modules:list` (by path; Convex's CLI also pushes `convex.config.js`), eleven
+  `argsValidator` names (compared as JSON), `components:list`, `getVersion`, the URLs, `listEnvironmentVariables`
+  before and after a change, `latestExport` before and after an export, `snapshotImport:list` before and after an
+  upload waiting for confirmation (the confirmation's CLI name rewritten, rule 5), the runner over the socket (a query
+  as the admin and acting as a user, an internal query with an int64, a mutation, an action, a misfit) and two custom
+  test queries (a value with its log line, a throw; a module that does not load is a 400 on both).
+- **Server** (`packages/server/test/frontend-system-functions.test.ts`): a module without an analysis, a function
+  without a position, a route on line 0, crons; `argsValidator`'s misses; a child component's path; an empty
+  version; the canonical site URL; the 20 newest imports without bunvex's own fields; each function's permission.
+  `imports.test.ts`: an import's member.
+- **Source** (`packages/dashboard-source/test/functions-settings.test.ts`): the list's mapping, validators, log
+  lines, values and errors, the test query's request and each answer, the export, import and provider documents.
+- **Live** (`packages/sync-e2e/dashboard/server-source-functions.test.ts`): the contract suite's `functions`, `run`
+  (with a misfit), `metrics`, `snapshot` (an export and an import), `auth` and `deploymentFeatures` (environment
+  variables changed) areas; the list's mapping; a push heard by `watchFunctions`; runs of each kind, an int64, a
+  throw, acting as a user (two identities at once), a read-only key; a watched query following its data and
+  stopping; `not_found` and a watched mutation's `invalid_request`; test queries (a read-only key, a write refused, a
+  wrong key); a variable changed by the CLI's route heard; the URLs.
+- **Screens** (`packages/dashboard/test`): the tree's order by line; a push relisting the functions; the custom test
+  query (first in the picker, Convex's starting code, run, its result, axe) and its absence without `runTestQuery`;
+  the variables reloaded on a change but not over edits; a canceled export. `transpileTypeScript` was run in a
+  browser against Monaco's worker (types and a type-only import erased).
+
+**Sabotage** (each restored after, `git diff` clean; every one turned a test red):
+
+| Sabotage | Failing tests |
+|---|---|
+| server: `argsValidator` reads the path without `.js` | server |
+| server: a module without an analysis listed | server |
+| server: HTTP routes not listed | server |
+| server: `listEnvironmentVariables` under `ViewData` | server |
+| server: `getVersion` answers an empty version | server |
+| server: `siteUrl` ignores the canonical URL | server |
+| server: an import's member left null | server; oracle |
+| source: `v.any()` listed as a validator | unit; live |
+| source: the runner does not act as the user | live (2) |
+| source: one runner client for every identity | live (2) |
+| source: the test query's key in `Authorization` | unit |
+| source: a 4xx test query rejects | unit; live (2) |
+| source: `watchFunctions` never follows the list | live |
+| source: the variables' watcher never fires | live (2) |
+| source: an import's add and delete swapped | unit; live |
+| source: export times left in ns | unit |
+| source: a run's `LOG` lines as debug | unit (2); live (2) |
+| source: `getDeployment` ignores `cloudUrl` | live |
+| source: a test query's value dropped | live (2) |
+| screens: the tree ignores lines | dashboard |
+| screens: the Functions screen not live | dashboard |
+| screens: the variables reloaded over edits | dashboard |
+| screens: no custom test query in the picker | dashboard |
+
+**Measurements.** No hot path changes: the server adds system queries (read when the dashboard asks) and passes the
+caller's member to an import. The dashboard's entry chunk grows by 193 bytes; the value editor's Monaco now loads as
+`code-editor-monaco` (574 KB) plus `editor.api` (2.74 MB), 33 KB more than the one 3.28 MB chunk before (the
+TypeScript language's registration). Monaco's TypeScript mode (674 KB) and worker (6.9 MB) load only when a
+TypeScript editor opens (the custom test query), as Convex's. The source is not in the app's bundle until PR 6.
+
+**Notes for PR 6.** Mount the runner's custom test query on the real source (the app's mock has no `runTestQuery`);
+HTTP actions in the tree need a contract kind (`httpAction`) shared with the Logs screen; `watchEnvironmentVariables`
+and `watchFunctions` are already wired in the screens.
 
 ## 6. Open questions
 

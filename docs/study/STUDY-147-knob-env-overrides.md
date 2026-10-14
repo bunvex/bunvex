@@ -206,7 +206,9 @@ WebSocket upgrade has Bun's idle timeout turned off and its handler raced agains
 past it, 408 with no body. The handler is left running, as it cannot be dropped; a response it makes later is
 never sent and its body is cancelled. Uploads slower than the timeout answer 408, as Convex's (owner,
 2026-10-12: match, the knob raises it). The HTTP actions' own timer is gone; `createServer`'s
-`httpActionHeadTimeoutMs` option became `requestTimeoutMs`.
+`httpActionHeadTimeoutMs` option became `requestTimeoutMs`. `/echo` is the exception to the idle timeout (owner, 2026-10-13):
+it keeps Bun's 120 s, since its answer starts at once (the 408 never covers it) and, under load, Bun can leave an
+echo cut off past its limit open with nothing more to send or read; the idle timeout closes it.
 
 ### 3.4 PR 2, retention: the delete caps and the backoff
 

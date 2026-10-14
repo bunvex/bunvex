@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { Dashboard } from "@bunvex/dashboard";
 import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { changesOf } from "../src/settings/screen.tsx";
 import { expectAccessible } from "./axe.ts";
@@ -75,6 +75,34 @@ describe("Settings: environment variables", () => {
     await screen.findByText("Saved 1 change.");
     expect((await vars(source)).LOG_LEVEL).toBe("debug");
     expect(screen.queryByText(/unsaved/)).toBeNull();
+  });
+
+  test("kept live (watchEnvironmentVariables): a change from elsewhere shows; not over unsaved edits", async () => {
+    const source = mockSource();
+    let changed = () => {};
+    (source as { watchEnvironmentVariables?: unknown }).watchEnvironmentVariables = (onChange: () => void) => {
+      changed = onChange;
+      return () => {
+        changed = () => {};
+      };
+    };
+    mount("/settings/environment-variables", source);
+    await loaded();
+    // the CLI sets one
+    await source.updateEnvironmentVariables([{ name: "FROM_CLI", value: "1" }]);
+    act(() => changed());
+    await waitFor(() => expect(item("FROM_CLI")).toBeDefined());
+    // an edit waiting to be saved is not dropped by the next change
+    const user = userEvent.setup();
+    await user.click(within(item("LOG_LEVEL")).getByRole("button", { name: "Edit LOG_LEVEL" }));
+    const value = within(item("LOG_LEVEL")).getByRole("textbox", { name: "Value" });
+    await user.clear(value);
+    await user.type(value, "trace");
+    await source.updateEnvironmentVariables([{ name: "AGAIN", value: "2" }]);
+    act(() => changed());
+    await new Promise((r) => setTimeout(r, 50));
+    expect((within(item("LOG_LEVEL")).getByRole("textbox", { name: "Value" }) as HTMLInputElement).value).toBe("trace");
+    expect(within(list()).queryByText("AGAIN")).toBeNull();
   });
 
   test("a new variable: a bad name blocks Save and says why; a good one is added", async () => {
