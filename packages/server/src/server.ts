@@ -39,7 +39,6 @@ import {
 import { type BlobStore, blobStoreFromEnv } from "@bunvex/file-storage";
 import { v1 } from "@bunvex/protocol";
 import { decodeId, TOO_NESTED_MESSAGE, type Value } from "@bunvex/values";
-import type { Server } from "bun";
 import { withDefaultUserAgent } from "./action-fetch.ts";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { type AddressScreen, addressScreen, startAddressScreen } from "./address-screen.ts";
@@ -59,6 +58,7 @@ import { AppMetrics } from "./app-metrics.ts";
 import { APP_METRICS_ROUTES, appMetricsRoute, MetricsRequestError } from "./app-metrics-routes.ts";
 import { auditActor, auditEventJson, auditEvents, DEFAULT_AUDIT_LOG_LIMIT, MAX_AUDIT_LOG_LIMIT } from "./audit-log.ts";
 import { putAuthInfo, readAuthInfo } from "./auth-info.ts";
+import type { BunServer } from "./bun-types.ts";
 import {
   REQUEST_DESTINATIONS,
   type RequestDestination,
@@ -790,7 +790,7 @@ export function createServer(opts: ServerOptions) {
         process.exit(1);
       }),
   );
-  let server: Server<WsData> | null = null;
+  let server: BunServer | null = null;
 
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -1865,7 +1865,7 @@ export function createServer(opts: ServerOptions) {
           ? 0
           : server.port + 1
       : opts.sitePort;
-  const site =
+  const site: BunServer | null =
     sitePort === null
       ? null
       : Bun.serve(

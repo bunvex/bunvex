@@ -111,7 +111,9 @@ library is the server's, not the app's bundle: before, the client saw the server
 What still differs: no frame of the library's — bunvex's has none in the app (DV-501, decided by the owner: accept).
 
 Gap, for later: a function reading `error.stack` itself (or logging it as a string) still sees the raw frames,
-`bunvex:/<version>/<module>.js`, where Convex's `prepareStackTrace` maps those too.
+`bunvex:/<version>/<module>.js`, where Convex's `prepareStackTrace` maps those too. Closed by
+[STUDY-150](STUDY-150-error-internal-frames.md): each pushed context formats its own errors' stacks as Convex's, and
+an engine error gets the app's frames.
 
 ## 5. Tests
 

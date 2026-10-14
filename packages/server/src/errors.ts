@@ -131,11 +131,16 @@ export function describeUncaught(e: unknown): UncaughtError {
   return data === undefined ? { message } : { message, data };
 }
 
-/** An error's stack without its first lines, `<name>: <message>`, when the stack starts with them. */
-function stackAfterMessage(e: Error): string {
-  const stack = e.stack ?? "";
-  const head = e.message ? `${e.name}: ${e.message}` : e.name;
-  return stack.startsWith(head) ? stack.slice(head.length) : stack;
+/**
+ * An error's stack without its first lines, `<name>: <message>`, when the stack starts with them — whatever name
+ * the error had when its stack was taken, or `Error` for a `"use node"` action's (`app-errors.ts`, as Convex's
+ * Node executor names every error).
+ */
+export function stackAfterMessage(e: Error): string {
+  const stack = String(e.stack ?? "");
+  if (!e.message) return stack.startsWith(e.name) ? stack.slice(e.name.length) : stack;
+  const at = stack.indexOf(`: ${e.message}`);
+  return at >= 0 && !stack.slice(0, at).includes("\n") ? stack.slice(at + 2 + e.message.length) : stack;
 }
 
 function uncaughtLine(name: string | undefined, message: string | undefined): string {

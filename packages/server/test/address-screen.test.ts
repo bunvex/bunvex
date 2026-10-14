@@ -188,6 +188,100 @@ test("an http: response through the screen says Connection: close, so the client
   expect(head.endsWith("ok")).toBe(true);
 });
 
+test("a target that answers before reading a streamed body: the answer arrives (no reset)", async () => {
+  // Through the screen, a body sent after the head reached a target that had already answered: told to close by
+  // the screen, the target closed with the body unread, its reset lost the answer (ECONNRESET, ~2% of requests).
+  const target = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch: () => new Response(null, { status: 307, headers: { location: "/next" } }),
+  });
+  const screen = startAddressScreen("metadata");
+  stops.push(() => target.stop(true), screen.stop);
+  const failures: string[] = [];
+  for (let i = 0; i < 400; i++) {
+    const body = new ReadableStream({
+      start(c) {
+        c.enqueue(new TextEncoder().encode("streamed"));
+        c.close();
+      },
+    });
+    try {
+      const r = await fetch(`http://127.0.0.1:${target.port}/r`, {
+        method: "POST",
+        body,
+        redirect: "manual",
+        proxy: screen.url,
+      } as RequestInit);
+      await r.arrayBuffer();
+      if (r.status !== 307) failures.push(`status ${r.status}`);
+    } catch (e) {
+      failures.push(String((e as { code?: unknown }).code ?? e));
+    }
+  }
+  expect(failures).toEqual([]);
+});
+
+test("the client's connection ends where the response does, the target's kept alive (each framing)", async () => {
+  // A target that never closes on its own: the screen must find each response's end itself.
+  const answers: Record<string, string> = {
+    "/length": "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
+    "/chunked":
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5;x=1\r\nhello\r\n6\r\n world\r\n0\r\nX-Trailer: t\r\n\r\n",
+    "/empty": "HTTP/1.1 204 No Content\r\n\r\n",
+    "/same": "HTTP/1.1 304 Not Modified\r\nContent-Length: 99\r\n\r\n",
+    "/head": "HTTP/1.1 200 OK\r\nContent-Length: 99\r\n\r\n",
+    "/interim": "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok",
+    "/until-close": "HTTP/1.1 200 OK\r\n\r\nall of it",
+  };
+  const heads: string[] = [];
+  const target = Bun.listen({
+    hostname: "127.0.0.1",
+    port: 0,
+    socket: {
+      data(s, d) {
+        const text = d.toString();
+        heads.push(text);
+        const path = text.split(" ")[1]!;
+        s.write(answers[path]!);
+        if (path === "/until-close") s.end();
+      },
+    },
+  });
+  const screen = startAddressScreen("metadata");
+  stops.push(() => target.stop(true), screen.stop);
+  const proxy = new URL(screen.url);
+  const through = (method: string, path: string) =>
+    new Promise<string>((resolve, reject) => {
+      let got = "";
+      const sock = net.connect(Number(proxy.port), proxy.hostname, () =>
+        sock.write(`${method} http://127.0.0.1:${target.port}${path} HTTP/1.1\r\nHost: x\r\n\r\n`),
+      );
+      sock.on("data", (d) => {
+        got += d.toString("latin1");
+      });
+      sock.on("close", () => resolve(got));
+      sock.on("error", reject);
+      setTimeout(() => reject(new Error(`${path}: the connection never ended; got ${JSON.stringify(got)}`)), 3000);
+    });
+  const body = (r: string) => r.slice(r.lastIndexOf("\r\n\r\n") + 4);
+  expect(body(await through("GET", "/length"))).toBe("hello");
+  const chunked = await through("GET", "/chunked");
+  expect(chunked).toContain(
+    "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n5;x=1\r\nhello\r\n6\r\n world\r\n0\r\n",
+  );
+  expect(chunked.endsWith("X-Trailer: t\r\n\r\n")).toBe(true);
+  expect(await through("GET", "/empty")).toBe("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+  expect(await through("GET", "/same")).toEndWith("Connection: close\r\n\r\n");
+  expect(await through("HEAD", "/head")).toEndWith("Connection: close\r\n\r\n");
+  const interim = await through("GET", "/interim");
+  expect(interim).toStartWith("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\n");
+  expect(body(interim)).toBe("ok");
+  expect(body(await through("GET", "/until-close"))).toBe("all of it");
+  // The target was never told to close.
+  expect(heads.every((h) => !/\r\nconnection:/i.test(h))).toBe(true);
+});
+
 test("a target the screen cannot reach fails as without it (STUDY-142); its answer is trusted from the screen only", async () => {
   // An upstream that forges the screen's answer: a plain 502 for the app (the token is the screen's).
   const forger = Bun.serve({

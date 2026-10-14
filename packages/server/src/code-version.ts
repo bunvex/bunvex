@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import vm from "node:vm";
 import { installDeterminismIn, knob, runImportPhase, secondsKnob } from "@bunvex/core";
+import { appNamespace, installAppErrors } from "./app-errors.ts";
 import { exportedValidator, type ValidatorExport } from "./builders.ts";
 import { type CronSpec, Crons, cronSpecs } from "./cron.ts";
 import { currentAllEnv, isolateProcessEnv, nodeProcessEnv, withPackageEnv } from "./env-scope.ts";
@@ -313,7 +314,7 @@ export class CodeVersion {
       isolate: vm.createContext(contextGlobals(false, env, opts.onMissingEnv)),
       node: vm.createContext(contextGlobals(true, env)),
     };
-    for (const c of Object.values(contexts)) {
+    for (const [environment, c] of Object.entries(contexts)) {
       // The maps live as long as the code that throws: its context (`stack-map.ts` holds them weakly).
       Object.defineProperty(c, FRAME_MAPS, { value: frameMaps });
       const g = vm.runInContext("({ Date, Math })", c) as { Date: DateConstructor; Math: Math };
@@ -321,6 +322,7 @@ export class CodeVersion {
       // The replaced Date goes back in as the context's global.
       vm.runInContext("(D) => { globalThis.Date = D; }", c)(g.Date);
       installNestedCalls(c);
+      installAppErrors(c, environment === "node");
     }
     // Convex's runtime deletes the deprecated RegExp statics (`RegExp.$1`, `lastMatch`, …), which hold the last
     // match's input across calls (udf-runtime `setupMisc`, 644e25f; DV-436). Its Node executor is not known to.
@@ -360,7 +362,7 @@ export class CodeVersion {
     ) => {
       let s = synthetic.get(key);
       if (!s) {
-        const ns = await load();
+        const ns = appNamespace(context, await load());
         const names = Object.keys(ns);
         s = new vm.SyntheticModule(
           names,
