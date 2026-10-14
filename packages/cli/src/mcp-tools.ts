@@ -6,6 +6,7 @@
 import { BunvexHttpClient, type Logger, VERSION } from "@bunvex/client";
 import { fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
 import { z } from "zod";
+import { localDashboardLink } from "./dashboard-links.ts";
 import { functionsDir } from "./deploy.ts";
 import { runTestQuery, TestQueryRequestError } from "./inline-query.ts";
 import type { Io } from "./io.ts";
@@ -191,6 +192,12 @@ If "readOnly" is false or absent, all tools can be used with the deployment.
       deploymentSelector: encodeDeploymentSelector(projectDir, s.kind),
       url,
     };
+    // Convex's `dashboardUrl` (its cloud dashboard's page for the deployment): the local dashboard while `bunvex dev`
+    // serves it, else none, as for Convex's self-hosted deployments (DV-477).
+    if (local) {
+      const dashboardUrl = await localDashboardLink(s.io, ctx.flags)();
+      if (dashboardUrl !== null) d.dashboardUrl = dashboardUrl;
+    }
     // Convex marks production read-only unless production access (or its PII) is allowed.
     if (s.kind === "prod" && !ctx.dangerouslyEnableProductionDeployments)
       d.readOnly = !ctx.cautiouslyAllowProductionPii;

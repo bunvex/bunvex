@@ -41,6 +41,9 @@ backend is always started with `--disable-beacon`.
   of `http-headers-app/` — every body type (string, number, URLSearchParams, FormData, typed and untyped Blob,
   `Response.json`, bytes, a 1 MiB string, streams, no body), with and without an explicit type or length, by GET and
   HEAD, read off a raw socket; the framing each backend picks (DV-483) asserted per backend. Local only.
+- `test/http-action-result.test.ts` (STUDY-31 §9): a handler of `http-results-app/` that returns something other
+  than a Response (an object, `undefined`, `null`, a string, a number, a Response-like object), on both: the 500, the
+  log entries (the Completion's error) and the route's app metrics compared. Local only.
 - `test/http-action-log-route.test.ts` (STUDY-31 §7): what an HTTP action is logged as, on both — requests to the
   exact, prefix and failing routes of `http-routes-app/` and to paths no route matches; the answers, the function log
   stream's entries (names, statuses, errors, lines) and the app metrics per route compared. Local only.

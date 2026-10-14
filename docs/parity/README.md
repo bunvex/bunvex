@@ -40,7 +40,7 @@ The order follows one principle: **first make what exists correct, then make the
 then grow outwards.** Each item becomes one or more PRs, each with its study.
 
 **Where it stands (checked against the parity rows on 2026-10-12):** phases 0, 1 and 2 are done. Phase 3 is done
-except the dashboard on a real deployment (item 12) and built-in auth (item 13). In phase 4, search, vector search,
+except built-in auth (item 13); the dashboard on a real deployment (item 12) is done since STUDY-149 PR 8. In phase 4, search, vector search,
 log streaming, metrics, streaming export and Node's `externalPackages` are done; components remain.
 
 ### Phase 0 — correctness bugs in what already exists
@@ -130,10 +130,9 @@ In this order:
 11. `ctx.runQuery` / `ctx.runMutation` inside queries and mutations, and the 1 s user execution limit
     (STUDY-41) — done, with N2, N3 and N6 built in #213;
 12. the dashboard on a real deployment (its HTTP data source, with the UI session, and the `_system/*`
-    functions it reads), then live logs — open: every screen is built on the mock; the server source,
-    `@bunvex/dashboard-source`, is being built in steps (STUDY-149: PR 1 reads the deployment, schema, state,
-    logs and function metrics; PRs 2–5 the data reads and writes, functions, runner, Settings, schedules, files and
-    history; PR 6, the app's switch to it, remains);
+    functions it reads), then live logs — done (STUDY-149, PRs 1–8: the server source `@bunvex/dashboard-source`,
+    the app on it, the image, `dashboard.zip` and the local dashboard, the CLI's links; [docs/dashboard.md](../dashboard.md));
+    the gaps left are in [Gaps by impact](#gaps-by-impact);
 13. built-in auth (STUDY-28) phases — open (AD-01 accepted, spike done);
 14. import/export in Convex's snapshot format, so data can move between Convex and bunvex (STUDY-42) —
     done; shape inference and the upgrade path remain (platform §18; cloud backups are cloud-only, *n/a*).
@@ -151,10 +150,8 @@ containers up, deploy functions, see them work) before the remaining platform it
 - log streaming (STUDY-47, STUDY-59, STUDY-70) and metrics (§20: 14 done; insights is cloud-only, *n/a*) —
   done;
 - streaming export (STUDY-60, STUDY-69) — done;
-- the dashboard's connection to a real deployment. Every screen is built on the mock (UI-01 §0, platform §21);
-  the server source (`@bunvex/dashboard-source`, STUDY-149) reads the deployment, schema, state, logs, metrics,
-  tables and documents, its writes, functions (and runs them), Settings, schedules, files and history; the app's
-  switch to it (PR 6) is still to come.
+- the dashboard's connection to a real deployment — done (STUDY-149: the screens on `@bunvex/dashboard-source`
+  since PR 6, packaging in PR 7, the CLI's links and the docs in PR 8).
 
 ## Gaps by impact
 
@@ -191,26 +188,14 @@ gaps.
     audit events bunvex does not record are not gaps: `build_indexes`, `change_deployment_state`,
     `change_system_stop_state` and `replace_environment_variable` are not emitted by Convex's open-source
     backend; `push_config` (legacy push) and `delete_component` (components) do not apply.
-- The dashboard on a real deployment:
-  - the largest single piece of work, but not something an app hits;
-  - the server side of the screens Convex's self-hosted dashboard reads exists (STUDY-149 §3.1);
-  - the data source that calls it, `@bunvex/dashboard-source`, is built but for the app's switch (STUDY-149 PR 1: the
-    deployment, schema, state, logs, function metrics and the `check_admin_key` sign-in; PR 2: the Data
-    screen's reads, with the server's `getTableMapping`, `paginatedTableDocuments`, `indexes`, `listById`,
-    `getById` and `/api/get_indexes`; PR 5: schedules, files, the audit log, Health's concurrency and
-    invalidations; PR 3: the Data screen's writes, with the server's `addDocument`, `patchDocumentsFields`,
-    `replaceDocument`, `deleteDocuments`, `clearTablePage` and `createTable` and their `add_documents`,
-    `update_documents`, `delete_documents` and `create_table` audit events; PR 4: the Functions screen, the
-    runner with its custom test query and Settings, with the server's `modules:*`, `components:list`,
-    `getVersion`, `cloudUrl` / `siteUrl`, `listEnvironmentVariables`, `latestExport` and `snapshotImport:list`;
-    PR 6: `apps/dashboard` runs on it — the real sign-in, Convex's connection overlay and polling rules, the live
-    table list, HTTP actions, Health's concurrency and invalidations, the paused lists; PR 7: packaging — the
-    dashboard's own image on 6791, `dashboard.zip` in releases, `bunvex dev`'s local dashboard on 6790 with
-    `/api/current_deployment` and its `Host` check, `bunvex dashboard serve`, `bunvex dashboard` opening it); left:
-    the CLI's links (PR 8), the dashboard server's frame and security headers (owner, 2026-10-14: match Convex in a
-    follow-up), plus the custom query's type checking and Convex's bulk edit.
-- HTTP actions, found while matching their log name to Convex's (STUDY-31 §7.3; the log name itself is done, and
-  a response's implicit headers since STUDY-31 §8):
-  - a handler that returns something other than a Response is answered with Convex's 500 but logged with no error
-    (Convex logs "Uncaught Error: HTTP actions must return a Response");
-  - a body that errors after the head aborts the response, where Convex ends it cleanly.
+- The dashboard on a real deployment (STUDY-149, all eight PRs built; user docs in
+  [docs/dashboard.md](../dashboard.md)): the screens run on a deployment with Convex's calls and freshness, the
+  dashboard has its own image (6791), `dashboard.zip` and `bunvex dev`'s local dashboard (6790), and the CLI links
+  the local one where Convex's links its cloud (DV-477, PR 8). Left, none of them something an app hits:
+  - the dashboard server's frame and security headers (owner, 2026-10-14: match Convex in a follow-up);
+  - the custom test query's type checking and completions, and Convex's bulk edit;
+  - search, vector and staged indexes in the Data screen's index list;
+  - the environment variables screen opening a named variable (Convex's `?var=`, which its CLI's link uses).
+- HTTP actions, found while matching their log name to Convex's (STUDY-31 §7.3; the log name itself is done, a
+  response's implicit headers since STUDY-31 §8, a handler's non-Response since §9): a body that errors after the
+  head aborts the response, where Convex ends it cleanly.
