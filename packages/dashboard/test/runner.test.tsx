@@ -298,4 +298,43 @@ describe("the function runner", () => {
     await screen.findByRole("region", { name: "Run a function" }); // its own chunk
     expect(within(runner()).getByRole("combobox").textContent).toContain("tasks:create");
   });
+
+  test("the custom test query (when the source has runTestQuery): typed, run once, its result and logs", async () => {
+    const source = mockSource();
+    const ran: string[] = [];
+    (source as { runTestQuery?: unknown }).runTestQuery = async (code: string) => {
+      ran.push(code);
+      return { value: [{ n: 1 }], logLines: [{ level: "info", message: "from the test" }], durationMs: 3 };
+    };
+    mount("/functions?function=tasks:list", source);
+    await screen.findByRole("heading", { level: 1, name: "list" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Run" }));
+    await screen.findByRole("region", { name: "Run a function" });
+    await user.click(within(runner()).getByRole("combobox"));
+    // first in the list, as in Convex
+    const options = await screen.findAllByRole("option");
+    expect(options[0]!.textContent).toBe("Custom test query");
+    await user.click(options[0]!);
+    const editor = within(runner()).getByRole("textbox", { name: "Test query" }) as HTMLTextAreaElement;
+    // Convex's starting code, on the first table
+    await waitFor(() => expect(editor.value).toContain('ctx.db.query("'));
+    expect(editor.value).not.toContain("YOUR_TABLE_NAME");
+    fireEvent.change(editor, { target: { value: "export default query({ handler: async () => 1 });" } });
+    await user.click(within(runner()).getByRole("button", { name: "Run test query" }));
+    await within(runner()).findByText("Succeeded in 3 ms");
+    expect(ran).toEqual(["export default query({ handler: async () => 1 });"]);
+    expect(within(runner()).getByText("from the test")).toBeDefined();
+    await expectAccessible(runner());
+  });
+
+  test("no custom test query without runTestQuery", async () => {
+    mount("/functions?function=tasks:list");
+    await screen.findByRole("heading", { level: 1, name: "list" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Run" }));
+    await screen.findByRole("region", { name: "Run a function" });
+    await user.click(within(runner()).getByRole("combobox"));
+    expect((await screen.findAllByRole("option")).map((o) => o.textContent)).not.toContain("Custom test query");
+  });
 });

@@ -10,6 +10,7 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { ChevronRight, FileCode2, Folder, Play } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
+import { useLiveFunctions } from "../data/live.ts";
 import { functionsQuery } from "../data/queries.ts";
 import type { FunctionInfo } from "../data-source.ts";
 import { LogsView, useLogViewInUrl } from "../logs/screen.tsx";
@@ -262,6 +263,8 @@ function FunctionView({ fn }: { fn: FunctionInfo }) {
 
 export function FunctionsScreen() {
   const { data: functions } = useSuspenseQuery(functionsQuery(useQueryScope()));
+  // a push lists them again, as Convex's subscribed module list
+  useLiveFunctions();
   const search = functionsRoute.useSearch();
   const fn = functions.find((f) => f.path === search.function);
   return (

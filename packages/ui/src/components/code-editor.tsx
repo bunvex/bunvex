@@ -29,6 +29,11 @@ export type CodeEditorProps = {
   placeholder?: string;
   /** Several lines: the editor's height in px. Default 240. */
   height?: number;
+  /**
+   * What the text is: a JavaScript literal (the default, a value or a document), or TypeScript (a module, as the
+   * runner's custom test query: highlighted and checked for syntax errors, not for types).
+   */
+  language?: "literal" | "typescript";
   className?: string;
 };
 
@@ -52,6 +57,16 @@ function CodeEditor(props: CodeEditorProps) {
       <MonacoEditor {...props} />
     </Suspense>
   );
+}
+
+/**
+ * A TypeScript module compiled to JavaScript (types erased, the rest kept), as Convex's runner compiles its custom
+ * test query with Monaco's TypeScript worker before running it. Where Monaco cannot run (the plain field), the
+ * text is returned as it is.
+ */
+export async function transpileTypeScript(source: string): Promise<string> {
+  if (implementation === "plain") return source;
+  return (await loadMonaco()).transpile(source);
 }
 
 /** A textarea (or an input) with the editor's keys. */

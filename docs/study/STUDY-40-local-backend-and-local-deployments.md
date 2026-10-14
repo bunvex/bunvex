@@ -143,7 +143,7 @@ will not be available. The scoped `@bunvex/*` packages are the permanent way to 
   `bun add -d @bunvex/cli`), never `bunvex`.
 - Codegen already writes `@bunvex/*` imports when the app's `package.json` depends on `@bunvex/*`.
 - **A preview first:** `0.1.0-alpha.*`, published from the TypeScript sources, which Bun runs from `node_modules`. It is enough to try the whole flow in a new directory with Bun. It needs `allowImportingTsExtensions`, which `codegen --init` writes (STUDY-36 G5), and frameworks such as Next.js need to transpile the dependencies.
-- **The built package** (JS and `.d.ts`) remains the roadmap item.
+- **The built package** (JS and `.d.ts`): done by [STUDY-160](STUDY-160-client-on-node.md) (owner, 2026-10-13: the client must run on Node.js as Convex's).
 
 ## 4. Divergences
 

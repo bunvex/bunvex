@@ -124,6 +124,24 @@ jobs:
         run: bun x playwright-core install --with-deps chromium
       - run: bun run test:examples:browser
 
+  # The packages as npm ships them, on Node.js (STUDY-160): staged with their compiled JavaScript and
+  # declarations, then imported by `node` (ES modules and require) against a bunvex server, and typechecked.
+  npm-packages-node:
+    name: npm packages on Node.js
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bun install --frozen-lockfile
+      - run: bun run test:npm
+
   # Line coverage of the root `bun test`, a table per package and per critical file, and a failure when a
   # critical file drops below its floor (scripts/coverage-floors.ts, TEST-01 §4). Its own job, in parallel
   # with `check`, so the suite's time is not paid twice on the critical path.

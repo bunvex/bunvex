@@ -702,3 +702,14 @@ test("the import service's cleanup drops hidden tables older than twice the impo
   expect(engine.catalog.hidden.size).toBe(0);
   await engine.close();
 });
+
+test("an import is recorded under the admin key's member, as Convex's (`member_id`, an int64)", async () => {
+  const t = await setup();
+  const { importId } = await t.upload(new TextEncoder().encode('{"a":1}\n'), {
+    format: "jsonLines",
+    tableName: "members",
+  });
+  const row = await t.waitState(importId, ["waiting_for_confirmation", "failed"]);
+  // member 0, the key's (a key issued without one), as Convex's binary records it (differential test)
+  expect(row.member_id).toEqual({ $integer: "AAAAAAAAAAA=" });
+});
