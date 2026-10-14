@@ -520,7 +520,6 @@ export class ScheduledJobExecutor {
             ),
           // A job that changed meanwhile did not run.
           (ran) => (ran ? { returnBytes: rawValueSize((value ?? null) as Value) } : { skip: true }),
-          undefined,
           args,
         );
         if (ran) {

@@ -60,6 +60,10 @@ const MODULES = [
         console.log("saying hi");
         return new Response("hi");
       }) });
+      http.route({ pathPrefix: "/files/", method: "GET", handler: httpAction(async (_ctx, req) => {
+        console.log("serving", new URL(req.url).pathname);
+        return new Response("file");
+      }) });
       export default http;`,
   },
 ];
@@ -106,6 +110,7 @@ describe("the Functions screen (modules:listForAllComponents)", () => {
   test("queries, mutations and actions at module:name, with visibility, line and validators; HTTP routes by route", async () => {
     const fns = await open().listFunctions();
     expect(fns.map((f) => f.path).sort()).toEqual([
+      "GET /files/*",
       "GET /hello",
       "dir/nested:default",
       "messages:act",
@@ -133,7 +138,7 @@ describe("the Functions screen (modules:listForAllComponents)", () => {
 
   test("an HTTP action: listed under its module, its log lines and metrics under the same name; never run", async () => {
     const src = open();
-    const route = (await src.listFunctions()).find((f) => f.kind === "httpAction");
+    const route = (await src.listFunctions()).find((f) => f.path === "GET /hello");
     expect(route).toEqual({ path: "GET /hello", kind: "httpAction", module: "http", visibility: "public" });
     const end = Date.now() + 60_000;
     const w = { start: end - 10 * 60_000, end, numBuckets: 10 };
@@ -156,6 +161,39 @@ describe("the Functions screen (modules:listForAllComponents)", () => {
     expect((await src.latencyPercentiles!("GET /hello", [50], w))[0]!.series.some((b) => b.value !== null)).toBe(true);
     // the runner offers queries, mutations and actions only
     expect((await failure(src.runFunction!("GET /hello", {})))?.code).toBe("invalid_request");
+  });
+
+  test("a prefix route: its outcome and metrics under the route, its lines under the request, as Convex's", async () => {
+    const src = open();
+    expect((await src.listFunctions()).find((f) => f.path === "GET /files/*")).toMatchObject({ kind: "httpAction" });
+    const end = Date.now() + 60_000;
+    const w = { start: end - 10 * 60_000, end, numBuckets: 10 };
+    const byRoute: LogEntry[] = [];
+    const all: LogEntry[] = [];
+    const offRoute = src.watchLogs(
+      { function: "GET /files/*" },
+      (e) => byRoute.push(...e),
+      () => {},
+    );
+    const offAll = src.watchLogs(
+      {},
+      (e) => all.push(...e),
+      () => {},
+    );
+    await src.listLogs({ numItems: 1, cursor: null });
+    expect(await (await fetch(`${srv.url}/http/files/a/b.txt`)).text()).toBe("file");
+    await until(() => byRoute.some((e) => e.execution), "the prefix route's outcome line");
+    await until(() => all.some((e) => e.message?.includes("serving")), "the prefix route's log line");
+    offRoute();
+    offAll();
+    // Convex names the outcome by the route (STUDY-31 §7) and the lines by the request
+    expect(byRoute.filter((e) => e.execution).every((e) => e.function?.path === "GET /files/*")).toBe(true);
+    expect(all.find((e) => e.message?.includes("serving"))?.function).toEqual({
+      path: "GET /files/a/b.txt",
+      kind: "httpAction",
+    });
+    const calls = (await src.functionRate!("GET /files/*", "invocations", w)).reduce((n, b) => n + (b.value ?? 0), 0);
+    expect(Math.round(calls)).toBe(1);
   });
 
   test("a push is heard by watchFunctions, and the list then has the new function", async () => {

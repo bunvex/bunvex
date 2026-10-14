@@ -1355,6 +1355,10 @@ and `watchFunctions` are already wired in the screens.
    logged under the request's path (`GET /files/abc`), where Convex logs the route that matched (`GET /files/*` for
    a prefix route; `router.ts` `lookup`, `crates/isolate/src/environment/action/mod.rs:474-500`,
    `application/src/function_log.rs:1149-1200`). Exact routes agree; a prefix route's Logs tab misses its lines.
+   *Fixed since* (STUDY-31 §7, `fix/http-action-log-route`): the outcome, its event and its metrics by the route, as
+   Convex's. Convex's own lines stay under the request (`GET /files/abc`), so on both a prefix route's Logs tab lists
+   its outcome rows, and its lines show on the Logs screen under the request; `server-source-functions.test.ts`
+   checks it live (`watchLogs({ function: "GET /files/*" })`).
 
 **Divergences.** None new (DV-486 to DV-489 unused). The overlay's words name bunvex (rule 5); the key stays in memory
 (DV-210); the contract's changes are DV-479's rule.
