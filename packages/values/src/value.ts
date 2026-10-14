@@ -266,6 +266,46 @@ export function toJsonValue(value: Value): JSONValue {
 }
 
 /**
+ * Throws what `toJsonValue` throws for `value`, without building its JSON when nothing is wrong: a quick walk
+ * accepts what `toJson` surely does, and anything else goes through `toJsonValue`, for its exact error.
+ */
+export function checkJsonValue(value: Value): void {
+  if (!surelyJson(value, 0)) toJsonValue(value);
+}
+
+function surelyJson(v: unknown, depth: number): boolean {
+  switch (typeof v) {
+    case "string":
+    case "boolean":
+    case "number":
+      return true;
+    case "bigint":
+      return MIN_INT64 <= v && v <= MAX_INT64;
+    case "object":
+      break;
+    default:
+      return false;
+  }
+  if (v === null || isBytes(v)) return true;
+  if (depth > MAX_VALUE_NESTING) return false;
+  if (Array.isArray(v)) {
+    for (const x of v) if (!surelyJson(x, depth + 1)) return false;
+    return true;
+  }
+  if (!isSimpleObject(v) || isCommitTsPlaceholder(v)) return false;
+  for (const k of Object.keys(v)) {
+    if (k.length > MAX_FIELD_NAME_LEN || k.startsWith("$")) return false;
+    for (let i = 0; i < k.length; i++) {
+      const c = k.charCodeAt(i);
+      if (c < 32 || c >= 127) return false;
+    }
+    const x = v[k];
+    if (x !== undefined && !surelyJson(x, depth + 1)) return false;
+  }
+  return true;
+}
+
+/**
  * Parse the JSON form back: `$integer` → bigint, `$float` → number, `$bytes` → ArrayBuffer. A value nested
  * deeper than `MAX_VALUE_NESTING` throws `TOO_NESTED_MESSAGE` before going further down.
  */
