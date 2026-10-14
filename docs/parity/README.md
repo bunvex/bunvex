@@ -180,6 +180,10 @@ gaps.
 
 **Low: rare, ops-only, or a missing nicety**
 
+- Error text (STUDY-150 §6): a missing function in `ctx.runQuery` / the scheduler is worded and framed as
+  bunvex's server words it, not as Convex's app-side library (`Couldn't resolve api.nope.x`); a bad id fails before
+  `db.get` awaits; in a `"use node"` action, an external package's own error read as `error.stack` shows its install
+  path (Convex: `convex:/user/…`).
 - Operations:
   - streaming import past `clear_tables` (built with its audit event, STUDY-141 PR 1): Airbyte records,
     Fivetran operations and primary-key indexes (PRs 2–4, future work by the owner's choice, 2026-10-11). The

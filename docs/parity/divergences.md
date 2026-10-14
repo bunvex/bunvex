@@ -455,7 +455,9 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-None as of 2026-10-13.
+| ID | bunvex | Convex | Observable | Why | Decided | Source |
+|---|---|---|---|---|---|---|
+| DV-482 | A `"use node"` action's `error.stack` is `Error: <message>`, then the app's frames mapped to its sources, none of the runtime's | `Error: <message>`, then every frame unmapped (`convex:/user/node.js:1036:11`), its executor's included (`performAsyncSyscall`, `bundledFunctions.js`, `node:internal/…`; `node-executor/src/errors.ts` `registerPrepareStackTrace`) | yes (`error.stack` text in Node actions) | bunvex's runtime is the server: its frames would expose its paths (as DV-501); unmapped bundle positions are possible but unreadable | pending (owner); recommended: accept | [STUDY-150](../study/STUDY-150-error-internal-frames.md#4-divergences) |
 
 DV-480 (STUDY-149 PR 5) was decided by the owner (2026-10-12: match Convex), built, and is in [Resolved to match Convex](#resolved-to-match-convex).
 

@@ -131,6 +131,7 @@ import {
   OperationNotPermittedError,
   SystemIdentityRequiredError,
 } from "./admin-keys.ts";
+import { appContext } from "./app-errors.ts";
 import type { AppMetrics } from "./app-metrics.ts";
 import { type AnyArgs, exportedValidator, type FunctionDef, NODE_FUNCTIONS, type ValidatorExport } from "./builders.ts";
 import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
@@ -1665,7 +1666,7 @@ export class Functions {
           };
     return notAQuery(
       inHandleScope({ db, engine: this.engine }, () =>
-        (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(ctx, args),
+        (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(appContext(f.handler, ctx), args),
       ),
     );
   }
@@ -2407,12 +2408,12 @@ export class Functions {
       ...(f ? { meta: this.meta(f, null, caller) } : {}),
     } as ActionCtx);
     if (!nestedCalls) return ctx;
-    return {
+    return appContext(handler, {
       ...ctx,
       runQuery: nestedCalls(ctx.runQuery, fromNestedCall),
       runMutation: nestedCalls(ctx.runMutation, fromNestedCall),
       runAction: nestedCalls(ctx.runAction, fromNestedCall),
-    };
+    });
   }
 
   /** @internal Run an HTTP action's handler with an action's context, holding an action permit. */
