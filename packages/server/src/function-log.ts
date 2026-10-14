@@ -162,7 +162,10 @@ export type Part = Completion | Progress;
 export class Running implements LogOwner {
   onLine: ((line: LogLine) => void) | null = null;
   cached = false;
-  /** Its name in the app metrics (STUDY-58): `module.js:function`, or an HTTP action's route path. */
+  /**
+   * Its name in the app metrics (STUDY-58): `module.js:function`, or an HTTP action's route path once it ran to the
+   * end under a route (STUDY-31 §7); empty: not measured.
+   */
   metricsName = "";
   /** The caller's `tokenIdentifier` and IP, for log streams' exception events (STUDY-70). */
   tokenIdentifier: string | null = null;

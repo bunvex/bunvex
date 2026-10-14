@@ -160,7 +160,7 @@
   - Convex's 300 s → 408 (empty) is then applied by bunvex.
   - The 1800 s hard stop is H4.
 - **Logs:** run log lines go to the server's output (STUDY-30 S3 applies), and the execution is named
-  `"GET /path"`.
+  `"GET /path"`: its lines by the request, its Completion by the route that matched once it ran to the end (§7).
 
 ### 3.3 PRs
 
@@ -216,3 +216,95 @@ Rows go in [docs/parity/divergences.md](../parity/divergences.md) as DV-143–DV
 ## 6. Open questions
 
 - `defineApp({ httpPrefix })` and component `http_mounts` wait for components (Phase 4).
+
+## 7. The log name: the request or the route (follow-up, 2026-10-14)
+
+Found by STUDY-149 PR 6 (#638): bunvex logged every HTTP action under the request's path (`GET /files/abc`), where
+Convex names an execution by the route that matched (`GET /files/*` for a `pathPrefix` route). Read again at
+Convex's reference commit `d8bdde0`, and checked against its binary (`precompiled-2026-10-07-d8bdde0`).
+
+### 7.1 How Convex names an HTTP action
+
+- **The name** is an `HttpActionRoute` (`crates/common/src/types/actions.rs:134`): a `RoutableMethod` and a path,
+  printed `"<METHOD> <path>"`, plus whether the router matched it. `RoutableMethod` reads `HEAD` as `Get` (`:96`).
+- **Two sources** for it:
+  - *the request*: `HttpActionRequestHead::route_for_failure` (`crates/udf/src/http_action.rs:56`), the request URL's
+    path (no query; percent-encoding kept), `matched: false`;
+  - *the route*: the isolate calls the app's `router.lookup(path, method)` and keeps its `[_, method, path]`
+    (`crates/isolate/src/environment/action/mod.rs:479-505`, `lookup_route` `:876`), `matched: true`. A prefix
+    route's path is the prefix plus `*` (`npm-packages/convex/src/server/router.ts` `lookup`).
+- **Progress entries** (the lines an HTTP action prints as it runs): always the request's name
+  (`application_function_runner/http_routing.rs:117`, `:154`, `function_log.rs:1232`). So are the log streams'
+  `console` events, which come from them.
+- **The Completion** (the function log, `/api/stream_function_logs` `identifier`, the log streams'
+  `function_execution` event): the outcome's route, which is the matched route only when the isolate run returned an
+  outcome (`udf/src/action_outcome.rs:173` falls back to the request). It does not when:
+  - *no route matched*: the isolate answers 404 "No matching routes found" itself (`action/mod.rs:487-497`) and the
+    run is logged with status 404;
+  - *the handler failed before the head* (a throw, a non-Response): the promise `runRequest` returned is rejected
+    with no JS handler, so the run loop terminates the isolate as an unhandled rejection (`action/mod.rs:1071`) and
+    the inner result, with its route, is lost; the termination override keeps a route only from an `Ok` inner
+    result (`:406`). The same for a run past the action timeout, and for a body stream that fails after the head;
+  - *the client left* (before or after the head): `http_routing.rs:195-260` logs an outcome built with no route.
+- **App metrics** are recorded only for a matched outcome (`function_log.rs:1228`), under `UdfIdentifier::Http`,
+  whose name is the route's *path* alone (`common/src/types/functions.rs:180`): `GET` and `POST /files/*` share
+  `/files/*`. The dashboard asks with `udfType=HttpAction&path=GET /files/*`, parsed back to that path
+  (`local_backend/src/app_metrics.rs:266`). A failed run or an unmatched request is not measured: invocations nor
+  errors.
+- **Usage** (`function_log.rs:1164`): the matched route's path, or `[unmatched]`; the call is tracked either way
+  (`usage_tracking/src/lib.rs:248`).
+- **The dashboard** names each log row by its entry's `identifier` (`dashboard-common/src/lib/useLogs.ts:153`
+  `processLogs`), so a prefix route's lines show under the request (`GET /files/abc`) and its outcome rows under the
+  route (`GET /files/*`); filtering on the function keeps the outcome rows.
+- **No router** (no `http.js`): 404 "This … deployment does not have HTTP actions enabled.", nothing logged
+  (`http_routing.rs:88-100`).
+
+Seen on the binary (the oracle below): `GET /files/abc` → lines `GET /files/abc`, Completion `GET /files/*`;
+`HEAD /files/abc` → both as `GET`; `GET /fail/z` (throws) → Completion `GET /fail/z` with the error, not measured;
+`GET /nope` and `PUT /hello` (no route for that method) → Completion `GET /nope` / `PUT /hello`, status 404, no
+lines, not measured; `PATCH /files/q?x=1` → `PATCH /files/q`.
+
+### 7.2 What bunvex does now
+
+- `http-actions.ts`: a request no route matches runs too, as a handler answering Convex's 404, so it is logged
+  (status 404, caller `HttpEndpoint`) and takes an action permit as Convex's isolate run does.
+- `Functions.runHttpAction` names the run by the request (`<METHOD> <path>`, HEAD as GET), which its Progress
+  entries and `console` events keep. When the handler returned a Response under a matched route, its outcome carries
+  the route (`Outcome.route`: `GET /files/*`, metrics name `/files/*`); the Completion, its `function_execution`
+  and `exception` events take that name, and the app metrics record it. A body that fails or loses its client after
+  the head drops the route, as Convex's. Without a route, the app metrics skip the run.
+- The usage meter has no per-function names (STUDY-61), so the `[unmatched]` name has no counterpart; an unmatched
+  request counts as a function call, as Convex's tracked call.
+- The trace span (AD-26) keeps the request's name.
+
+The hot path: one more template string per request; an unmatched request now runs the action machinery. A short run
+(16 concurrent clients, 4000 requests per round, three rounds, on the shared Mac; req/s): exact route 14.9k, 13.7k,
+14.0k before and 13.2k, 15.7k, 15.4k after; prefix route 12.9k, 15.4k, 15.0k before and 13.2k, 15.8k, 14.6k after
+(no change beyond the noise); unmatched 29.7k, 37.8k, 38.6k before (no run) and 13.6k, 15.4k, 15.3k after, the cost
+of a matched route, as Convex runs its isolate for one.
+
+### 7.3 Divergences
+
+None. Found on the way, not about the name and left for their own change: a handler's non-Response is logged with
+no error (Convex: "Uncaught Error: HTTP actions must return a Response"); a `new Response("text")` answers with no
+`content-type` (Convex: `text/plain;charset=UTF-8`); a body that errors after the head ends the response cleanly
+on Convex and aborts it on bunvex. Convex sometimes logs a `HEAD` request no route matches with an extra "Client
+disconnected" line (its 404 body sent to a HEAD client), a race not matched.
+
+### 7.4 Tests
+
+- `packages/server/test/http-action-log-route.test.ts`: prefix and exact routes (Progress by the request,
+  Completion and `function_execution` by the route, HEAD as GET, metrics by the route's path across methods);
+  unmatched requests (logged with 404, not measured); a throwing handler (by the request, not measured); a client
+  that leaves mid-body (by the request, not measured). `http-action-response-log.test.ts` now expects HEAD as GET.
+- `packages/differential/test/http-action-log-route.test.ts` (the app of `http-routes-app/`): fifteen requests on
+  Convex's binary and bunvex's (exact, prefix, a longer prefix, HEAD, a query string, a throw, a throw after an
+  await, a run past a 3 s action timeout, unmatched paths and methods, a percent-encoded path): the answers, every
+  log entry's kind, name, lines, status and error line, and the app metrics of ten names compared.
+- `packages/sync-e2e/dashboard/server-source-functions.test.ts` (live, through `@bunvex/dashboard-source`): a prefix
+  route listed as `GET /files/*`; `watchLogs({ function: "GET /files/*" })` gets its outcome row, the Logs screen its
+  line under `GET /files/a/b.txt`; its calls read under the route. Fails when the Completion is named by the request.
+- Sabotage (each restored, `git diff` clean after): the Completion named by the request (unit and oracle fail);
+  HEAD kept as HEAD (unit fails); the route kept after a body that lost its client (unit fails); unmatched requests
+  not logged (unit and oracle fail); runs measured under their request path (unit fails) or every run under a route
+  (oracle fails); `function_execution` named by the request (unit fails).

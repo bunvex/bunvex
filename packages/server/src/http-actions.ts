@@ -4,9 +4,9 @@
 // - the `Request` the handler gets: the URL rebuilt from Host / X-Forwarded-Proto / Forwarded, no body for
 //   GET, HEAD and OPTIONS, a `bunvex-request-id` header added when missing (H2), the client's abort signal;
 // - auth from `Authorization` that never rejects up front: a failure is thrown by `getUserIdentity()`;
-// - the answer: the handler's response streamed (HEAD without its body, cut past 100 MiB), or Convex's 404,
-//   405 and 500 (`{code, trace?, data?}`) answers; the 408 past 300 s is the server's, for every route
-//   (`request-timeout.ts`).
+// - the answer: the handler's response streamed (HEAD without its body, cut past 100 MiB), or Convex's 404
+//   (a request no route matches, logged as Convex logs it; STUDY-31 §7), 405 and 500 (`{code, trace?, data?}`)
+//   answers; the 408 past 300 s is the server's, for every route (`request-timeout.ts`).
 import type { Caller } from "@bunvex/core";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { describeUncaught, newRequestId } from "./errors.ts";
@@ -27,6 +27,9 @@ export type HttpActionOptions = {
 
 const text = (status: number, body: string) =>
   new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
+
+/** What a request no route matches runs: Convex's 404. */
+const notFound = () => text(404, "No matching routes found");
 
 /** The URL the handler sees: the client's scheme and host, and the path as routed. */
 function requestUrl(req: Request, pathAndQuery: string): string {
@@ -73,9 +76,9 @@ export function httpActionServer(o: HttpActionOptions) {
     const method = req.method.toUpperCase();
     if (method !== "HEAD" && !ROUTABLE_HTTP_METHODS.includes(method as RoutableMethod))
       return new Response(null, { status: 405 });
+    // No route still runs (Convex runs its isolate to look the route up): logged under the request's path,
+    // answered 404.
     const match = o.router.lookup(path, method as RoutableMethod | "HEAD");
-    if (!match) return text(404, "No matching routes found");
-    const [handler, routedMethod, routePath] = match;
 
     const headers = new Headers(req.headers);
     if (!headers.has(REQUEST_ID_HEADER)) headers.set(REQUEST_ID_HEADER, newRequestId());
@@ -92,10 +95,18 @@ export function httpActionServer(o: HttpActionOptions) {
     const { caller, error } = await o.identify(req);
     // No response head within the server's request timeout answers 408 (`request-timeout.ts`); the handler
     // keeps running then, as Convex's does.
-    const outcome = await o.functions.runHttpAction(handler._handler, request, caller, error, routePath).then(
-      (r) => ({ ok: true as const, r }),
-      (e: unknown) => ({ ok: false as const, e }),
-    );
+    const outcome = await o.functions
+      .runHttpAction(
+        match ? match[0]._handler : notFound,
+        request,
+        caller,
+        error,
+        match && { method: match[1], path: match[2] },
+      )
+      .then(
+        (r) => ({ ok: true as const, r }),
+        (e: unknown) => ({ ok: false as const, e }),
+      );
     if (!outcome.ok) {
       if (outcome.e instanceof TooManyConcurrentRequestsError)
         return new Response(JSON.stringify({ code: outcome.e.code, message: outcome.e.message }), {

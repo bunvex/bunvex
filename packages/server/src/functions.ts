@@ -176,6 +176,7 @@ import {
 import { withNodeProcessErrors } from "./node-process-errors.ts";
 import { setOperationTracker } from "./pending-ops.ts";
 import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearchQuery } from "./registration.ts";
+import type { RoutableMethod } from "./router.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { ServerMetrics } from "./server-metrics.ts";
 import { setServiceCallContext } from "./service-tokens.ts";
@@ -759,7 +760,17 @@ export type SourcedCaller = Caller & {
 const argsBytesOf = (args: unknown) => JSON.stringify([toJsonValue((args ?? {}) as Value)]).length;
 
 /** What a logged execution's result tells the log. `skip`: nothing ran (a replayed session request). */
-type Outcome = { returnBytes?: number | null; success?: { status: string } | null; error?: unknown; skip?: boolean };
+type Outcome = {
+  returnBytes?: number | null;
+  success?: { status: string } | null;
+  error?: unknown;
+  skip?: boolean;
+  /**
+   * An HTTP action's route, once it ran to the end: its Completion's name (`GET /files/*`) and its app metrics
+   * name (`/files/*`). Without it the Completion keeps the request's name and the app metrics skip it (STUDY-31 §7).
+   */
+  route?: { identifier: string; metricsName: string };
+};
 
 /** Convex's `Identity::tag()` for a caller: scheduled and cron runs are `unknown`, as anonymous calls. */
 function identityTypeOf(caller: Caller | undefined): IdentityType {
@@ -900,8 +911,6 @@ export class Functions {
     caller: Caller | undefined,
     run: () => Promise<T>,
     outcome?: (value: T) => Outcome,
-    /** An HTTP action's route path, its name in the app metrics. */
-    routePath?: string,
     /** The arguments, for `function_args_bytes` (none for an HTTP action, as Convex's). */
     args?: unknown,
     /**
@@ -914,10 +923,8 @@ export class Functions {
     const tracer = this.engine.tracer;
     const span = tracer.on ? tracer.child(`${spanKindOf(udfType)} ${strippedPath(name)}`) : null;
     if (span)
-      return tracer.within(span, () =>
-        this.loggedRun(span, udfType, name, caller, run, outcome, routePath, args, settled),
-      );
-    return this.loggedRun(null, udfType, name, caller, run, outcome, routePath, args, settled);
+      return tracer.within(span, () => this.loggedRun(span, udfType, name, caller, run, outcome, args, settled));
+    return this.loggedRun(null, udfType, name, caller, run, outcome, args, settled);
   }
 
   private async loggedRun<T>(
@@ -927,7 +934,6 @@ export class Functions {
     caller: Caller | undefined,
     run: () => Promise<T>,
     outcome: ((value: T) => Outcome) | undefined,
-    routePath: string | undefined,
     args: unknown,
     settled: ((value: T) => Promise<() => void> | null) | undefined,
   ): Promise<T> {
@@ -979,7 +985,8 @@ export class Functions {
             { timestamp: line.timestamp, event: { topic: "console", source: this.eventSource(r, null), line } },
           ]);
       };
-    r.metricsName = udfType === "HttpAction" ? (routePath ?? name) : this.metricsNameOf(r.identifier);
+    // An HTTP action's comes with its route (`Outcome.route`), once it ran to the end.
+    r.metricsName = udfType === "HttpAction" ? "" : this.metricsNameOf(r.identifier);
     const sourced = caller as SourcedCaller | undefined;
     r.runReason = sourced?.runReason ?? null;
     r.mutationQueueLength = sourced?.mutationQueueLength ?? null;
@@ -1062,10 +1069,13 @@ export class Functions {
   /** Queries and mutations running now, for the metrics' `function_concurrency`. */
 
   /** Log a completion, and record it in the app metrics as Convex's `log_execution_app_metrics`. */
-  /** Where an event of `r` comes from (Convex's `FunctionEventSource`). */
-  private eventSource(r: Running, cached: boolean | null): FunctionSource {
+  /**
+   * Where an event of `r` comes from (Convex's `FunctionEventSource`): an HTTP action's lines by the request
+   * (`r.identifier`), its execution by its Completion's name (`identifier`).
+   */
+  private eventSource(r: Running, cached: boolean | null, identifier = r.identifier): FunctionSource {
     return {
-      path: r.udfType === "HttpAction" ? r.identifier : this.metricsNameOf(r.identifier),
+      path: r.udfType === "HttpAction" ? identifier : this.metricsNameOf(identifier),
       udfType: r.udfType,
       cached,
       requestId: r.requestId,
@@ -1093,7 +1103,7 @@ export class Functions {
 
   /** Convex's events for a completion: its lines (not an action's, already sent), the execution, an exception. */
   private streamCompletion(r: Running, c: Completion, error: unknown) {
-    const source = this.eventSource(r, c.udfType === "Query" ? c.cachedResult : null);
+    const source = this.eventSource(r, c.udfType === "Query" ? c.cachedResult : null, c.identifier);
     const at = c.timestamp * 1000;
     const events: LogEvent[] = [];
     if (c.udfType !== "Action" && c.udfType !== "HttpAction")
@@ -1174,15 +1184,17 @@ export class Functions {
   private logCompletion(log: FunctionLog, r: Running, c: Completion, error?: unknown) {
     log.append(c);
     if (this.logManager?.active) this.streamCompletion(r, c, error);
-    this.appMetrics?.recordExecution({
-      udfType: c.udfType,
-      name: r.metricsName,
-      at: c.timestamp * 1000,
-      failed: c.error !== null,
-      cached: c.cachedResult,
-      executionTime: c.executionTime,
-      ...(r.tx ? { tables: (r.tx as Tx).tableStats } : {}),
-    });
+    // An HTTP action that did not run to the end under a route is not measured, as Convex's (STUDY-31 §7).
+    if (r.metricsName !== "")
+      this.appMetrics?.recordExecution({
+        udfType: c.udfType,
+        name: r.metricsName,
+        at: c.timestamp * 1000,
+        failed: c.error !== null,
+        cached: c.cachedResult,
+        executionTime: c.executionTime,
+        ...(r.tx ? { tables: (r.tx as Tx).tableStats } : {}),
+      });
     this.serverMetrics?.execution(c.udfType, c.error !== null, c.executionTime);
     this.meterCompletion(r, c, true);
   }
@@ -1193,10 +1205,12 @@ export class Functions {
     // A mutation's writes count once it committed (Convex meters them in `track_commit`).
     const used = (r.tx as Tx | null)?.io(r.udfType === "Mutation" && e === undefined);
     const seconds = (end - r.start) / 1000;
+    // An HTTP action that ran to the end is named, and measured, by its route.
+    if (o.route) r.metricsName = o.route.metricsName;
     return {
       kind: "Completion",
       udfType: r.udfType,
-      identifier: r.identifier,
+      identifier: o.route?.identifier ?? r.identifier,
       logLines: lines,
       timestamp: end / 1000,
       cachedResult: r.cached,
@@ -2100,7 +2114,6 @@ export class Functions {
           caller,
         ),
       returned,
-      undefined,
       args,
     );
   }
@@ -2118,7 +2131,6 @@ export class Functions {
           caller,
         ),
       returnedJson,
-      undefined,
       args,
     );
   }
@@ -2135,7 +2147,6 @@ export class Functions {
       caller,
       () => this.engine.queryJson(this.queryBody(name, args, false, caller, f), undefined, undefined, caller),
       returnedJson,
-      undefined,
       args,
     );
   }
@@ -2155,7 +2166,6 @@ export class Functions {
       caller,
       () => this.engine.queryJson(body, this.cacheKey(name, args), cachedQueryLogs, caller, ts),
       returnedJson,
-      undefined,
       args,
     );
   }
@@ -2192,7 +2202,6 @@ export class Functions {
           THROTTLED,
         ),
       (r) => returned(r.value),
-      undefined,
       args,
     );
   }
@@ -2221,15 +2230,7 @@ export class Functions {
         THROTTLED,
       );
     // A replayed request did not run: nothing to log.
-    return this.logged(
-      "Mutation",
-      name,
-      caller,
-      run,
-      (r) => ("value" in r ? returned(r.value) : { skip: true }),
-      undefined,
-      args,
-    );
+    return this.logged("Mutation", name, caller, run, (r) => ("value" in r ? returned(r.value) : { skip: true }), args);
   }
 
   /**
@@ -2299,7 +2300,6 @@ export class Functions {
         );
       },
       returned,
-      undefined,
       args,
     );
   }
@@ -2422,8 +2422,8 @@ export class Functions {
     request: Request,
     caller: Caller,
     authError: Error | null,
-    /** The route matched (its `path` or `pathPrefix`): the app metrics' name for it, as Convex's. */
-    routePath?: string,
+    /** The route the router matched (a prefix route's path ends in `*`); null for none. */
+    route: { method: RoutableMethod; path: string } | null = null,
   ): Promise<unknown> {
     const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION, handler);
     let t0 = 0;
@@ -2438,11 +2438,13 @@ export class Functions {
         pending: running?.pendingOps ?? new Map(),
         elapsedMs: performance.now() - t0,
       });
-    // Logged under its route, as Convex's `HttpActionRoute` (`<METHOD> <path>`).
-    const route = `${request.method} ${new URL(request.url).pathname}`;
+    // Named as Convex's `HttpActionRoute` (`<METHOD> <path>`, HEAD as GET): its lines by the request
+    // (`route_for_failure`), its Completion by the route matched, once it ran to the end (STUDY-31 §7).
+    const requested = `${request.method === "HEAD" ? "GET" : request.method} ${new URL(request.url).pathname}`;
+    let logged: Outcome = {};
     return this.logged(
       "HttpAction",
-      route,
+      requested,
       caller,
       async () => {
         await this.failActionWhileNotRunning();
@@ -2483,16 +2485,20 @@ export class Functions {
       // The handler ran to the end, but its client left before the head could be sent: as Convex, the
       // execution is logged as failed with "Client disconnected" (its writes stay).
       (r) =>
-        request.signal.aborted
+        (logged = request.signal.aborted
           ? { error: new ClientDisconnectedError() }
           : r instanceof Response
-            ? { success: { status: String(r.status) } }
-            : {},
-      routePath ?? new URL(request.url).pathname,
+            ? {
+                success: { status: String(r.status) },
+                ...(route && { route: { identifier: `${route.method} ${route.path}`, metricsName: route.path } }),
+              }
+            : {}),
       undefined,
       () =>
         body &&
         body.sent.then(({ bytes, errors, tooLarge, disconnected }) => () => {
+          // A body that failed or lost its client ends the run as Convex's failed one: under the request.
+          if (errors.length > 0 || disconnected) delete logged.route;
           for (const e of errors) logSystemLine("ERROR", e, "error:httpAction");
           // The client left mid-body: Convex stops the run there and ends its lines with an INFO line (no
           // more lines or response parts will come); its run is still logged with the head's status.
