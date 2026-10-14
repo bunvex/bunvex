@@ -1732,6 +1732,9 @@ export class Tx {
       throw new Error(SYSTEM_TABLE_MESSAGES.insert);
     const x = extractCommitTs(fields, this.writtenNesting(), "insert");
     refuseLoneSurrogates(x.value, () => JSON.stringify({ table, value: toJsonValue(x.value as Value) }));
+    // Copied before the table is looked up or created: an unsupported value throws at the app's call, its
+    // frame still on the stack, as Convex's `insert` serializes it in the app's code before the syscall.
+    const copied = copyFields(x.value as Record<string, unknown>, "insert", this.writtenNesting());
     const t = this.findTable(table, "insert") ?? (await this.createTable(table));
     // Convex's generator (STUDY-01): 14 random bytes, then the transaction's day number (big-endian). The
     // randomness is the real CSPRNG, drawn outside the deterministic execution.
@@ -1744,7 +1747,7 @@ export class Tx {
     const creationTime = this.nextCreationTime;
     this.nextCreationTime = nextUp(creationTime);
     const doc = {
-      ...copyFields(x.value as Record<string, unknown>, "insert", this.writtenNesting()),
+      ...copied,
       _id: id,
       _creationTime: creationTime,
     };
@@ -2196,7 +2199,9 @@ function copyFields(fields: Record<string, unknown>, method: string, maxNesting:
     // Stryker disable next-line Regex: no other message of `copyValue` contains these words
     if (e instanceof Error && /^(Array length is too long|Object has too many fields) /.test(e.message))
       throw new Error(`Invalid argument \`value\` for \`db.${method}\`: ${e.message}`);
-    throw e;
+    // Made again here, so its stack (at most `Error.stackTraceLimit` frames) reaches the app's call, past the
+    // copy's recursion.
+    throw e instanceof Error && e.constructor === Error ? new Error(e.message) : e;
   }
 }
 

@@ -6,6 +6,7 @@
 // A pushed module runs as a `vm.SourceTextModule` whose `sourceURL` is `moduleUrl(version, path)`: unique per
 // loaded code version, so two versions (a hot swap, two deployments in one process) never map each other's
 // frames.
+import { resolve } from "node:path";
 import type { SourceMapTokens } from "./source-position.ts";
 
 const SCHEME = "bunvex:/";
@@ -29,16 +30,30 @@ export const moduleUrl = (version: string, path: string) => `${SCHEME}${version}
 const FRAME = /^(\s*at )(?:(.*?) \((.*)\)|(.*))$/;
 const LOCATION = /^(.*):(\d+):(\d+)$/;
 
+// The server's own code: bunvex's packages' sources (`<packages>/<package>/src/`, siblings of this one, in the
+// repository or under `node_modules/@bunvex/`) and the packages it depends on (under its `node_modules/`).
+const PACKAGES = resolve(import.meta.dir, "../..");
+const MODULES = import.meta.dir.includes("/node_modules/")
+  ? import.meta.dir.slice(0, import.meta.dir.lastIndexOf("/node_modules/") + "/node_modules/".length)
+  : `${resolve(PACKAGES, "../node_modules")}/`;
+const isServerFile = (file: string) =>
+  file.startsWith(MODULES) ||
+  file.startsWith("node:") ||
+  // The server's code run in a pushed module's context (`installNestedCalls`).
+  file.startsWith("bunvex-runtime:") ||
+  file === "native" ||
+  (file.startsWith(`${PACKAGES}/`) && file.slice(PACKAGES.length + 1).split("/")[1] === "src");
+
 /**
  * The frames of `stack` (an error's `stack`, or any text whose `at` lines are frames) as the app sees them:
  * a pushed module's frame mapped to its original source (`../bunvex/messages.ts:12:4`, the path its source map
  * names), or its module path when the map has no answer; a frame with no location kept as it is; every other
  * frame (the server's own) dropped. Lines that are not frames are kept. A stack with no pushed module's frame
- * is returned as it is: functions registered in-process (`Functions.register`, `@bunvex/testing`) are not
- * pushed code, and their frames are the developer's.
+ * keeps its frames but the server's own code's (`serverFramesDropped`): functions registered in-process
+ * (`Functions.register`, `@bunvex/testing`) are not pushed code, and their frames are the developer's.
  */
 export function mapStack(stack: string): string {
-  if (!stack.includes(SCHEME)) return stack;
+  if (!stack.includes(SCHEME)) return serverFramesDropped(stack);
   const out: { line: string; located: boolean; frame: boolean }[] = [];
   for (const line of stack.split("\n")) {
     const frame = FRAME.exec(line);
@@ -75,4 +90,31 @@ function mapLocation(where: string): string | null | undefined {
   const original = maps?.original(path, Number(line), Number(col));
   if (!original) return `${path}:${line}:${col}`;
   return `${original.source ?? path}:${original.line}:${original.col}`;
+}
+
+/**
+ * A stack with no pushed module's frame, without the server's own frames (its sources, its packages, `node:`
+ * internals): an error the server raised for pushed code (a value it could not serialize) shows no frame of the
+ * server's installation, as Convex's shows none of its runtime's. Frames with no location are kept between the
+ * remaining ones only.
+ */
+function serverFramesDropped(stack: string): string {
+  const out: { line: string; located: boolean; frame: boolean }[] = [];
+  for (const line of stack.split("\n")) {
+    const frame = FRAME.exec(line);
+    if (!frame) {
+      out.push({ line, located: false, frame: false });
+      continue;
+    }
+    const where = (frame[3] ?? frame[4])!;
+    const loc = LOCATION.exec(where);
+    if (!loc) out.push({ line, located: false, frame: true });
+    else if (!isServerFile(loc[1]!)) out.push({ line, located: true, frame: true });
+  }
+  const first = out.findIndex((l) => l.located);
+  const last = out.findLastIndex((l) => l.located);
+  return out
+    .filter((l, i) => !l.frame || (i >= first && i <= last))
+    .map((l) => l.line)
+    .join("\n");
 }

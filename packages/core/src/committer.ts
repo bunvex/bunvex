@@ -175,20 +175,31 @@ export class ConflictError extends Error {
 }
 
 /**
+ * An internal error of bunvex stopped the committer, not a failure of persistence: something threw inside
+ * its drain (a commit's `atTs`, say). Nothing of the group it interrupted was published.
+ */
+export class CommitterInternalError extends Error {
+  constructor(cause: unknown, where?: string) {
+    super(
+      `an internal error${where === undefined ? "" : ` in ${where}`}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+    this.name = "CommitterInternalError";
+  }
+}
+
+/**
  * A commit listener (`onCommit`) or a commit's `onVisible` hook threw: an internal error of bunvex, not of
  * persistence. The commit it was told about is durable and visible; the committer still stops (fail-stop): a
  * layer left half-notified, the sync layer above all, would leave clients silently stale.
  */
-export class CommitListenerError extends Error {
+export class CommitListenerError extends CommitterInternalError {
   constructor(
     /** The listener's name, given at registration, if any. */
     readonly listener: string | undefined,
     cause: unknown,
   ) {
-    super(
-      `an internal error in ${listener === undefined ? "a commit listener" : `commit listener ${JSON.stringify(listener)}`}: ${cause instanceof Error ? cause.message : String(cause)}`,
-      { cause },
-    );
+    super(cause, listener === undefined ? "a commit listener" : `commit listener ${JSON.stringify(listener)}`);
     this.name = "CommitListenerError";
   }
 }
@@ -197,24 +208,25 @@ export class CommitListenerError extends Error {
  * The committer stopped. As in Convex, this is fail-stop: nothing after the failure is ever made visible,
  * every later commit is refused, and the process is expected to restart and recover from what persistence
  * durably holds (PERSIST-01 C5). Usually persistence failed (a throwing `apply` or `flush`, a lost lease);
- * a `CommitListenerError` cause is an internal error in a commit listener instead, and says so.
+ * a `CommitterInternalError` cause (a `CommitListenerError` among them) is an internal error of bunvex
+ * instead, and says so.
  */
 export class CommitterStoppedError extends Error {
-  /** Whether persistence failed (false: a commit listener threw). */
+  /** Whether persistence failed (false: an internal error, such as a throwing commit listener). */
   readonly persistenceFailure: boolean;
   constructor(
     cause: unknown,
     /** What failed, when known: a flush is "write failed, unsure if the group committed to disk" (Convex). */
     context?: string,
   ) {
-    const listener = cause instanceof CommitListenerError;
+    const internal = cause instanceof CommitterInternalError;
     super(
-      listener
+      internal
         ? `the committer stopped after ${cause.message}`
         : `the committer stopped after a persistence failure: ${context ? `${context}: ` : ""}${cause instanceof Error ? cause.message : String(cause)}`,
       { cause },
     );
-    this.persistenceFailure = !listener;
+    this.persistenceFailure = !internal;
   }
 }
 
@@ -596,7 +608,7 @@ export class Committer {
     } catch (e) {
       // An internal error (a bug of bunvex): fail-stop, and the commits of the group not answered yet are refused,
       // as nothing of them was published.
-      this.stop(e);
+      this.stop(new CommitterInternalError(e));
       for (const p of this.draining) p.reject(this.stopped);
     }
     this.draining = [];
