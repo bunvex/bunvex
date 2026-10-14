@@ -1,7 +1,8 @@
 /// <reference path="../worker.d.ts" />
 // The Monaco half of CodeEditor, in its own module so it loads only when an editor opens. Monaco is bundled
 // (loader.config({ monaco })), its worker too; only the editor core and the contributions a value editor
-// needs are imported — no language services. The colours come from the design tokens, per theme.
+// needs are imported, and TypeScript's (the runner's custom test query, compiled by its worker). The colours come
+// from the design tokens, per theme.
 import type { CodeEditorProps } from "@bunvex/ui/components/code-editor";
 import { parseOklch } from "@bunvex/ui/lib/contrast";
 import { cn } from "@bunvex/ui/lib/utils";
@@ -22,11 +23,61 @@ import "monaco-editor/editor/contrib/placeholderText/browser/placeholderText.con
 import "monaco-editor/editor/contrib/toggleTabFocusMode/browser/toggleTabFocusMode";
 import "monaco-editor/editor/contrib/wordOperations/browser/wordOperations";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
+import "monaco-editor/languages/definitions/typescript/register";
+import {
+  getTypeScriptWorker,
+  ModuleKind,
+  ScriptTarget,
+  typescriptDefaults,
+} from "monaco-editor/languages/features/typescript/register";
+import TypeScriptWorker from "monaco-editor/languages/features/typescript/ts.worker?worker";
 import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
-self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
+self.MonacoEnvironment = {
+  getWorker: (_id, label) => (label === "typescript" ? new TypeScriptWorker() : new EditorWorker()),
+};
 loader.config({ monaco });
+
+// ------------------------------------------------------------------ TypeScript (the runner's custom test query)
+
+// A module of its own, compiled as Convex's runner compiles it; checked for syntax only — the app's types are not
+// here, so a type error would be noise.
+typescriptDefaults.setCompilerOptions({
+  target: ScriptTarget.ES2020,
+  module: ModuleKind.ESNext,
+  allowNonTsExtensions: true,
+});
+typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: false });
+
+/**
+ * Monaco's TypeScript worker, once its language is set up: the first TypeScript model sets it up asynchronously
+ * (`onLanguage`), and asking before that fails ("TypeScript not registered!").
+ */
+async function typeScriptWorker() {
+  for (let tries = 0; ; tries++) {
+    try {
+      return await getTypeScriptWorker();
+    } catch (e) {
+      if (tries >= 250) throw e;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+}
+
+let compiled = 0;
+/** `source` compiled by Monaco's TypeScript worker (Convex's `getEmitOutput`). */
+export async function transpile(source: string): Promise<string> {
+  const uri = monaco.Uri.parse(`file:///bunvex-transpile-${compiled++}.ts`);
+  const model = monaco.editor.createModel(source, "typescript", uri);
+  try {
+    const client = await (await typeScriptWorker())(uri);
+    const out = await client.getEmitOutput(uri.toString());
+    return out.outputFiles[0]?.text ?? "";
+  } finally {
+    model.dispose();
+  }
+}
 
 // ------------------------------------------------------------------ the language: JavaScript literals
 
@@ -254,7 +305,7 @@ export default function CodeEditorMonaco(props: CodeEditorProps) {
           emit(text);
         }}
         onMount={onMount}
-        language={LANGUAGE}
+        language={props.language === "typescript" ? "typescript" : LANGUAGE}
         theme={theme}
         loading={null}
         options={{

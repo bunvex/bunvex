@@ -3,8 +3,8 @@
 // WebSocket requests) and on the admin HTTP routes (metrics, the log stream). Built in steps (STUDY-149's PR
 // plan): the deployment, its capabilities and counters, the schema, the deployment state, the logs and the
 // function metrics (PR 1); the tables, their documents, live tables and the table metrics (PR 2, tables.ts); the
-// schedules, the files, the audit log and Health's concurrency and invalidations (PR 5, `deployment.ts`). The rest
-// of the contract's required methods answer `unavailable` until the server functions under them exist (PRs 3–4).
+// schedules, the files, the audit log and Health's concurrency and invalidations (PR 5, `deployment.ts`); the
+// functions, the runner and the Settings screens (PR 4, `functions.ts` and `settings.ts`).
 import {
   type CallOptions,
   type Capabilities,
@@ -29,8 +29,10 @@ import {
 import { AdminHttp, type FetchFn } from "./admin-http.ts";
 import { capabilitiesOf } from "./credentials.ts";
 import { deploymentReads } from "./deployment.ts";
+import { Functions } from "./functions.ts";
 import { LogStream, type LogStreamOptions } from "./logs.ts";
 import { Metrics } from "./metrics.ts";
+import { Settings } from "./settings.ts";
 import { AdminSync, type ConnectionStatus, watchConnection } from "./sync.ts";
 import { Tables } from "./tables.ts";
 import { dataWrites } from "./writes.ts";
@@ -77,13 +79,6 @@ type SchemaJson = {
   schemaValidation: boolean;
 };
 
-const notYet = (what: string) =>
-  new DataSourceError("unavailable", `${what} is not available from a bunvex deployment yet.`);
-
-/** A rejection that waits for the caller's abort first (the contract's AbortError wins). */
-const rejectNotYet = (what: string, opts?: CallOptions) =>
-  opts?.signal?.aborted ? Promise.reject(opts.signal.reason) : Promise.reject(notYet(what));
-
 /**
  * The schema the contract shows: each declared table and its document type (Convex's schema JSON carries no
  * system fields in it); a table declared with `v.any()` has none, as one declared without a validator.
@@ -109,6 +104,17 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
   const deployment = deploymentReads(sync, http);
   const writes = dataWrites(sync, http, tables);
   const statsIntervalMs = opts.statsIntervalMs ?? 2000;
+  // a key's operations do not change: asked once (again after a failure)
+  let caps: Promise<Capabilities> | null = null;
+  const capabilities = () => {
+    caps ??= source.getCapabilities().catch((e: unknown) => {
+      caps = null;
+      throw e;
+    });
+    return caps;
+  };
+  const functions = new Functions(sync, http, opts, capabilities);
+  const settings = new Settings(sync, http);
 
   const getStats = async (o?: CallOptions): Promise<DeploymentStats> => {
     const s = await http.json<StatsJson>("/stats", { signal: o?.signal });
@@ -130,13 +136,15 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     logs.close();
     tables.close();
     deployment.close();
+    settings.close();
+    await functions.close();
     await sync.close();
   };
 
   const source: ServerDataSource = {
     // ---------------------------------------------------------------- the deployment
     async getDeployment(o) {
-      const [name, version, storage] = await Promise.all([
+      const [name, version, storage, urls] = await Promise.all([
         http.text("/instance_name", { signal: o?.signal }),
         http.text("/version", { signal: o?.signal }),
         // `/stats` needs ViewMetrics; without it the persistence is not shown
@@ -147,8 +155,16 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
             throw e;
           },
         ),
+        // Convex's summaries read `convexCloudUrl` and `convexSiteUrl` (DV-474: `cloudUrl`, `siteUrl`)
+        settings.urls(o),
       ]);
-      const info: DeploymentInfo = { name, version, persistence: storage, url: opts.url };
+      const info: DeploymentInfo = {
+        name,
+        version,
+        persistence: storage,
+        url: urls.cloud ?? opts.url,
+        ...(urls.site !== null && { httpActionsUrl: urls.site }),
+      };
       return info;
     },
     async getCapabilities(o): Promise<Capabilities> {
@@ -250,11 +266,28 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     inferDocumentType: (t, o) => tables.inferDocumentType(t, o),
     tableOfId: (id, o) => tables.tableOfId(id, o),
 
+    // ---------------------------------------------------------------- functions and the runner (PR 4)
+    listFunctions: (o) => functions.listFunctions(o),
+    watchFunctions: (onChange, onError) => functions.watchFunctions(onChange, onError),
+    runFunction: (path, args, o) => functions.runFunction(path, args, o),
+    watchFunction: (path, args, onResult, onError, o) => functions.watchFunction(path, args, onResult, onError, o),
+    runTestQuery: (code, o) => functions.runTestQuery(code, o),
+
+    // ---------------------------------------------------------------- settings (PR 4)
+    listEnvironmentVariables: (o) => settings.listEnvironmentVariables(o),
+    updateEnvironmentVariables: (changes, o) => settings.updateEnvironmentVariables(changes, o),
+    watchEnvironmentVariables: (onChange, onError) => settings.watchEnvironmentVariables(onChange, onError),
+    listAuthProviders: (o) => settings.listAuthProviders(o),
+    getLatestSnapshotExport: (o) => settings.getLatestSnapshotExport(o),
+    requestSnapshotExport: (options, o) => settings.requestSnapshotExport(options, o),
+    downloadSnapshotExport: (id, o) => settings.downloadSnapshotExport(id, o),
+    startSnapshotImport: (request, o) => settings.startSnapshotImport(request, o),
+    confirmSnapshotImport: (id, o) => settings.confirmSnapshotImport(id, o),
+    cancelSnapshotImport: (id, o) => settings.cancelSnapshotImport(id, o),
+    getSnapshotImport: (id, o) => settings.getSnapshotImport(id, o),
+
     // ---------------------------------------------------------------- the Data screen's writes (PR 3, writes.ts)
     ...writes,
-
-    // ---------------------------------------------------------------- not yet (STUDY-149 PR 4)
-    listFunctions: (o) => rejectNotYet("The function list", o),
 
     // ---------------------------------------------------------------- the host's
     watchConnection: (onStatus) => watchConnection(() => sync.connectionState(), onStatus),

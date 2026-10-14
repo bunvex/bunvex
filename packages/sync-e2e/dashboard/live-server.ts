@@ -10,6 +10,8 @@ export type LiveServer = {
   readOnlyKey: string;
   /** Runs a public function over the HTTP API, as an app would; its value. */
   call(kind: "query" | "mutation" | "action", path: string, args?: Record<string, unknown>): Promise<unknown>;
+  /** Pushes `modules` again (the first one is the schema), as `bunvex deploy` does. */
+  push(modules: { path: string; source: string }[]): Promise<void>;
   stop(): void;
 };
 
@@ -47,25 +49,28 @@ export async function startLiveServer(
     if (res.status !== 200) throw new Error(`${path}: ${JSON.stringify(json)}`);
     return json;
   };
-  const [schema, ...rest] = modules.map((m) => ({ ...m, environment: "isolate" }));
-  const start = await post("/api/deploy2/start_push", {
-    dryRun: false,
-    functions: "bunvex",
-    appDefinition: {
-      definition: null,
-      dependencies: [],
-      schema,
-      changedModules: rest,
-      unchangedModuleHashes: [],
-      udfServerVersion: "1.46.0",
-    },
-    componentDefinitions: [],
-    nodeDependencies: [],
-  });
-  let wait: Record<string, unknown>;
-  do wait = await post("/api/deploy2/wait_for_schema", { schemaChange: start.schemaChange, timeoutMs: 1000 });
-  while (wait.type === "inProgress");
-  await post("/api/deploy2/finish_push", { startPush: start, dryRun: false });
+  const push = async (modules: { path: string; source: string }[]) => {
+    const [schema, ...rest] = modules.map((m) => ({ ...m, environment: "isolate" }));
+    const start = await post("/api/deploy2/start_push", {
+      dryRun: false,
+      functions: "bunvex",
+      appDefinition: {
+        definition: null,
+        dependencies: [],
+        schema,
+        changedModules: rest,
+        unchangedModuleHashes: [],
+        udfServerVersion: "1.46.0",
+      },
+      componentDefinitions: [],
+      nodeDependencies: [],
+    });
+    let wait: Record<string, unknown>;
+    do wait = await post("/api/deploy2/wait_for_schema", { schemaChange: start.schemaChange, timeoutMs: 1000 });
+    while (wait.type === "inProgress");
+    await post("/api/deploy2/finish_push", { startPush: start, dryRun: false });
+  };
+  await push(modules);
 
   return {
     url,
@@ -81,6 +86,7 @@ export async function startLiveServer(
       if (body.status !== "success") throw new Error(`${path}: ${body.errorMessage}`);
       return body.value;
     },
+    push,
     stop: () => server.shutdown(),
   };
 }

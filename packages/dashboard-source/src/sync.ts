@@ -15,6 +15,11 @@ export type AdminSyncOptions = {
   adminKey: string;
   /** Default: the global `WebSocket`. */
   webSocketConstructor?: typeof WebSocket;
+  /**
+   * The user an admin acts as (Convex's `setAdminAuth(key, identity)`, the runner's "Act as a user"): its claims,
+   * in the client's values. Default: none, the admin itself.
+   */
+  impersonating?: Record<string, unknown>;
 };
 
 type Listener = { onResult: (r: FunctionResult) => void; delivered: boolean };
@@ -37,7 +42,8 @@ export class AdminSync {
       ...(opts.webSocketConstructor && { webSocketConstructor: opts.webSocketConstructor }),
     });
     // Before anything subscribes, as Convex's DeploymentApiProvider.
-    this.client.setAdminAuth(opts.adminKey);
+    // biome-ignore lint/suspicious/noExplicitAny: the claims, as the client's JSON value
+    this.client.setAdminAuth(opts.adminKey, opts.impersonating as any);
     this.client.addOnTransitionHandler((t) => {
       for (const q of t.queries) {
         if (q.modification.kind !== "Updated" || q.modification.result === undefined) continue;
@@ -86,9 +92,16 @@ export class AdminSync {
   }
 
   /** A query's current result, once: subscribed until the first result arrives (Convex's `client.query`). */
-  query<T>(udfPath: string, args: Args = {}, signal?: AbortSignal): Promise<T> {
+  async query<T>(udfPath: string, args: Args = {}, signal?: AbortSignal): Promise<T> {
+    const r = await this.result(udfPath, args, signal);
+    if (!r.success) throw errorOfFailure(udfPath, r);
+    return r.value as T;
+  }
+
+  /** `query`'s first result as the client gives it: its value or its error, with its log lines (the runner's). */
+  result(udfPath: string, args: Args = {}, signal?: AbortSignal): Promise<FunctionResult> {
     if (signal?.aborted) return Promise.reject(signal.reason);
-    return new Promise<T>((resolve, reject) => {
+    return new Promise<FunctionResult>((resolve, reject) => {
       let off = () => {};
       const onAbort = () => {
         off();
@@ -97,8 +110,7 @@ export class AdminSync {
       off = this.watch(udfPath, args, (r) => {
         off();
         signal?.removeEventListener("abort", onAbort);
-        if (r.success) resolve(r.value as T);
-        else reject(errorOfFailure(udfPath, r));
+        resolve(r);
       });
       signal?.addEventListener("abort", onAbort, { once: true });
     });

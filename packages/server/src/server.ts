@@ -2071,7 +2071,7 @@ export function createServer(opts: ServerOptions) {
           requireImport();
           const { format, mode } = importArgs(a);
           const upload = await importService.upload(req.body ?? new Uint8Array());
-          return json({ numWritten: await importService.importNow(format, mode, upload) });
+          return json({ numWritten: await importService.importNow(format, mode, upload, auditActor(caller).memberId) });
         }
         case "/api/import/start_upload":
           requireImport();
@@ -2091,7 +2091,7 @@ export function createServer(opts: ServerOptions) {
           const { format, mode } = importArgs(b.import);
           requireImport();
           const upload = await importService.finishUpload(b.uploadToken, b.partTokens);
-          return json({ importId: await importService.start(format, mode, upload) });
+          return json({ importId: await importService.start(format, mode, upload, auditActor(caller).memberId) });
         }
         case "/api/perform_import":
         case "/api/cancel_import": {

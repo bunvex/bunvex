@@ -1,7 +1,7 @@
 // The deployment's functions as a file tree (STUDY-12 §7): a module path `a/b/file` gives folders `a` and
 // `a/b` and the file `file`; its functions (`a/b/file:name`) are the file's leaves. Folders come before
-// files, each alphabetical; functions alphabetical (Convex orders them by source line, which the contract
-// does not carry).
+// files, each alphabetical; a file's functions by the line they are declared on, as Convex's
+// `generateFileTree` (those without a line first), then by name.
 import type { FunctionInfo } from "../data-source.ts";
 
 export type FunctionFile = { kind: "file"; name: string; module: string; functions: FunctionInfo[] };
@@ -20,7 +20,8 @@ function sortNodes(nodes: FunctionNode[]): FunctionNode[] {
   const folders = nodes.filter((n): n is FunctionFolder => n.kind === "folder").sort(byName);
   const files = nodes.filter((n): n is FunctionFile => n.kind === "file").sort(byName);
   for (const f of folders) f.children = sortNodes(f.children);
-  for (const f of files) f.functions.sort((a, b) => byName(splitPath(a.path), splitPath(b.path)));
+  for (const f of files)
+    f.functions.sort((a, b) => (a.line ?? -1) - (b.line ?? -1) || byName(splitPath(a.path), splitPath(b.path)));
   return [...folders, ...files];
 }
 

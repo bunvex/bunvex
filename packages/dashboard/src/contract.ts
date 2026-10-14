@@ -419,6 +419,8 @@ export function describeDataSourceContract(
         // declared validators come in Convex's JSON form (STUDY-12 V1)
         if (f.args !== undefined) expect(isValidatorJson(f.args)).toBe(true);
         if (f.returns !== undefined) expect(isValidatorJson(f.returns)).toBe(true);
+        // the line it is declared on, as Convex's analysis reports it
+        if (f.line !== undefined) expect(Number.isInteger(f.line) && f.line > 0).toBe(true);
       }
     });
 
@@ -615,6 +617,26 @@ export function describeDataSourceContract(
         while (refused.length === 0 && performance.now() < until) await sleep(5);
         off2();
         expect(refused[0]?.code).toBe("invalid_request");
+      });
+
+      test("runTestQuery (when present): a query's value and log lines; what it throws, or a module that does not load, is a run", async () => {
+        const src = await runner();
+        if (!src.runTestQuery) return;
+        const ok = await src.runTestQuery(
+          'export default query({ handler: async () => { console.log("from the test query"); return 6 * 7; } });',
+        );
+        expect(ok.error).toBeUndefined();
+        expect(ok.value).toBe(42);
+        expect(ok.logLines.map((l) => l.message).join("\n")).toContain("from the test query");
+        expect(ok.durationMs).toBeGreaterThanOrEqual(0);
+        const thrown = await src.runTestQuery(
+          'export default query({ handler: async () => { throw new Error("thrown by the test query"); } });',
+        );
+        expect(thrown.value).toBeUndefined();
+        expect(thrown.error?.message).toBeTruthy();
+        const broken = await src.runTestQuery("export default query({");
+        expect(broken.value).toBeUndefined();
+        expect(broken.error?.message).toBeTruthy();
       });
 
       const misfit = run.misfitArgs;

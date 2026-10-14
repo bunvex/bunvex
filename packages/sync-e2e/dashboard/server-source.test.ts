@@ -2,7 +2,7 @@
 // this process: the dashboard's contract suite for the areas built so far (the deployment and its counters, the
 // tables and documents, the logs, the deployment state), then what the contract does not pin down — the
 // sign-in's verifier, the schema, the function metrics, the live log tail, the Data screen's reads and live
-// tables, and the methods not built yet.
+// tables. The functions, the runner and Settings are server-source-functions.test.ts' (PR 4).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { BunvexClient } from "@bunvex/client";
 import { defineSchema, Engine } from "@bunvex/core";
@@ -360,18 +360,6 @@ describe("function metrics (Convex's /api/app_metrics)", () => {
   test("top functions are named by their display path", async () => {
     const top = (await open().topFunctions?.("invocations", window(), 5)) ?? [];
     expect(top.map((t) => t.function).sort()).toEqual(["items:add", "messages:list", "messages:send"]);
-  });
-});
-
-describe("what is not built yet (STUDY-149 PR 4)", () => {
-  test("the functions answer unavailable", async () => {
-    const e = await open()
-      .listFunctions()
-      .then(
-        () => null,
-        (err: DataSourceError) => err,
-      );
-    expect(e?.code).toBe("unavailable");
   });
 });
 
