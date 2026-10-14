@@ -40,5 +40,8 @@
     "@types/bun": "^1.2.0",
     "fast-check": "4.10.2",
     "typescript": "^5.9.0"
+  },
+  "patchedDependencies": {
+    "object-inspect@1.13.4": "patches/object-inspect@1.13.4.patch"
   }
 }

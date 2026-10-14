@@ -59,8 +59,11 @@ analyzed positions.
   - every other located frame — the server's, Node's — is dropped (Convex drops frames with no module map);
   - frames with no location (native code) are kept between the app's frames and trimmed before and after them
     (Convex trims its harness's);
-  - a stack with no pushed module's frame is returned as it is: functions registered in-process
-    (`Functions.register`, `@bunvex/testing`) are not pushed code, and Convex has no such mode.
+  - a stack with no pushed module's frame keeps its frames but the server's own (bunvex's packages' `src/`, the
+    server's `node_modules/`, `node:` internals, the code it runs in a module's context, `bunvex-runtime:`),
+    native ones kept between the rest only: functions registered in-process (`Functions.register`,
+    `@bunvex/testing`) are not pushed code, and their frames are the developer's; an error the server raises for
+    pushed code with no frame of the app's (a returned value it cannot serialize) shows none.
 
   The maps are held weakly by the registry and strongly by the version's `vm` contexts, so they live exactly as
   long as code that can throw.
@@ -87,6 +90,25 @@ beyond the `sources` names.
 
 Not divergences: dropping the server's frames (Convex has none of them, its harness's are dropped); the sources'
 names (now Convex's).
+
+**A value that is not a supported value** (returned, written by `db.insert`, passed to `ctx.runQuery`). Convex
+raises it in its `convex` library, bundled with the app: `values/value.ts` `convexToJson`, under
+`server/impl/database_impl.ts` `insert` or `actions_impl.ts` `syscallArgs`, synchronously at the app's call. Its
+error shows the library's frames, then the app's call site, e.g. `at convexToJsonInternal
+(../node_modules/convex/src/values/value.ts:394:37)` … `at <anonymous> (../convex/values.ts:21:42)`; a returned
+value shows the library's frames alone. Only the harness frames before and after are trimmed
+(`is_omittable_internal_frame`: `udf-runtime/src`, `convex/src/server/impl`), so `value.ts`'s stay. bunvex's
+library is the server's, not the app's bundle: before, the client saw the server's frames with absolute paths
+(`/…/packages/values/src/value.ts`, `core/src/engine.ts`, `server/src/functions.ts`, `node:async_hooks`). Now:
+- the server's frames are dropped even when no frame of the app's is on the stack (`stack-map.ts`);
+- `db.insert` copies the value before it looks the table up or creates it, and `ctx.runQuery` / `runMutation` /
+  `runAction` check their arguments at the call (`checkJsonValue`: a quick walk, the full serializer only to
+  throw), each error made again at that boundary so that its stack, cut at `Error.stackTraceLimit` frames,
+  reaches the app's call past the serializer's recursion: the app's frame is Convex's, `at <anonymous>
+  (../bunvex/values.ts:N:N)`, synchronous (no `async`, not a nested call's error); an action that catches it
+  sees the bare message, as Convex's.
+
+What still differs: no frame of the library's — bunvex's has none in the app (DV-501, decided by the owner: accept).
 
 Gap, for later: a function reading `error.stack` itself (or logging it as a string) still sees the raw frames,
 `bunvex:/<version>/<module>.js`, where Convex's `prepareStackTrace` maps those too.

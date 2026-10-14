@@ -818,6 +818,9 @@
       },
     },
   },
+  "patchedDependencies": {
+    "object-inspect@1.13.4": "patches/object-inspect@1.13.4.patch",
+  },
   "packages": {
     "@auth0/auth0-auth-js": ["@auth0/auth0-auth-js@1.16.1", "", { "dependencies": { "jose": "^6.0.8", "openid-client": "^6.8.0" } }, "sha512-dtH12GiKEZ+YGnwUe0LTe7gJtEEAvhE5ztUL3i8iXN7D3siXe/MUssQq735UlXJzasXNqZOQUkMbv1VMXMZj+g=="],
 
