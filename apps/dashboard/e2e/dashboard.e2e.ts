@@ -1103,7 +1103,9 @@ describe("the sign-in page (STUDY-12 §19)", () => {
     });
   };
 
-  test("signed out: the page asks for a URL and an admin key; a bad URL or key is said; a good key opens the screens", async () => {
+  // Signing in to a real deployment, and the screens on it, are tested against a live server in
+  // packages/sync-e2e/dashboard/app.e2e.ts (STUDY-149 PR 6).
+  test("signed out: the page asks for a URL and an admin key; a bad URL is said; a deployment that does not answer refuses", async () => {
     const { page, errors, external, close } = await fresh("/database/users");
     await heading(page, "Sign in to a deployment");
     const signIn = page.getByRole("button", { name: "Sign in" });
@@ -1112,41 +1114,17 @@ describe("the sign-in page (STUDY-12 §19)", () => {
     await page.getByLabel("Admin key", { exact: true }).fill("dev|abc");
     await signIn.click();
     await page.getByText("The URL must start with http:// or https://.").waitFor();
-    await page.getByLabel("Deployment URL", { exact: true }).fill("127.0.0.1:3210");
-    await page.getByLabel("Admin key", { exact: true }).fill("not-a-key");
+    // nothing listens there: the real verifier tries 3 times, 500 ms apart, then refuses (Convex's words)
+    await page.getByLabel("Deployment URL", { exact: true }).fill(`127.0.0.1:${PORT + 1}`);
     await signIn.click();
     await page.getByRole("alert").filter({ hasText: "The deployment URL or admin key is invalid" }).waitFor();
+    expect(external.length).toBeGreaterThan(0);
+    expect(external.filter((u) => !u.startsWith(`http://127.0.0.1:${PORT + 1}/`))).toEqual([]);
     // the key is masked until shown
     expect(await page.getByLabel("Admin key", { exact: true }).getAttribute("type")).toBe("password");
     await page.getByRole("button", { name: "Show the admin key" }).click();
     expect(await page.getByLabel("Admin key", { exact: true }).getAttribute("type")).toBe("text");
-    await page.getByLabel("Admin key", { exact: true }).fill("happy-otter|abc");
-    await signIn.click();
-    // the address it was opened at is the screen it opens on
-    await heading(page, "users");
-    // the header says where it is signed in, and signs out
-    await page.getByRole("button", { name: "Signed in: happy-otter" }).click();
-    await page.getByText("http://127.0.0.1:3210").waitFor();
-    await page.getByRole("menuitem", { name: "Sign out" }).click();
-    await heading(page, "Sign in to a deployment");
-    // like Convex, the key is not kept: a reload asks again
-    await page.reload();
-    await heading(page, "Sign in to a deployment");
-    expect(external).toEqual([]);
     expect(errors).toEqual([]);
-    await close();
-  });
-
-  test("a read-only key: the screens open read-only", async () => {
-    const { page, close } = await fresh("/");
-    await heading(page, "Sign in to a deployment");
-    await page.getByLabel("Deployment URL", { exact: true }).fill("http://127.0.0.1:3210");
-    await page.getByLabel("Admin key", { exact: true }).fill("dev|readonly-1");
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await heading(page, "Overview");
-    // within the app (a reload would sign out: the key lives in memory)
-    await page.getByRole("link", { name: "Database" }).first().click();
-    await page.getByText("Read-only").first().waitFor();
     await close();
   });
 

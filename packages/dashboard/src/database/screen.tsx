@@ -22,7 +22,7 @@ import { useCanCreateTable } from "./create-table.tsx";
 import { FilterBar } from "./filter-bar.tsx";
 import { activeCount } from "./filter-model.ts";
 import { decodeFilter, encodeFilter } from "./filter-url.ts";
-import { useLiveTable } from "./live.ts";
+import { useLiveTable, useLiveTables } from "./live.ts";
 import { type PanelState, SidePanel } from "./side-panel.tsx";
 import { SystemTableView } from "./system-table.tsx";
 import { TablesSidebar } from "./tables-sidebar.tsx";
@@ -42,6 +42,7 @@ export function DatabaseScreen(): ReactNode {
   const { table } = tableRoute.useParams();
   const scope = useQueryScope();
   const { data: tables } = useSuspenseQuery(tablesQuery(scope));
+  useLiveTables();
   const info = tables.find((t) => t.name === table);
   const canCreate = useCanCreateTable() === true;
   return (

@@ -11,7 +11,7 @@ import { CLIENT_PLATFORMS, type ClientPlatform } from "../data-source-clients.ts
 export type LogType = "success" | "failure" | LogLevel;
 export const LOG_TYPES: readonly LogType[] = ["success", "failure", "debug", "info", "warn", "error"];
 
-export const FUNCTION_KINDS: readonly FunctionKind[] = ["query", "mutation", "action"];
+export const FUNCTION_KINDS: readonly FunctionKind[] = ["query", "mutation", "action", "httpAction"];
 
 /** The time range presets, newest lines back to this long ago. */
 export const RANGES = { "1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000 } as const;

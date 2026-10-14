@@ -1,8 +1,9 @@
 // The deployment's functions as a file tree (STUDY-12 §7): a module path `a/b/file` gives folders `a` and
 // `a/b` and the file `file`; its functions (`a/b/file:name`) are the file's leaves. Folders come before
 // files, each alphabetical; a file's functions by the line they are declared on, as Convex's
-// `generateFileTree` (those without a line first), then by name.
-import type { FunctionInfo } from "../data-source.ts";
+// `generateFileTree` (those without a line first), then by name. An HTTP action is a leaf of the module that
+// routes it (its `module`, `http`), named by its route, `METHOD /path` (Convex's `processAnalyzedModuleFunction`).
+import type { FunctionInfo, FunctionKind } from "../data-source.ts";
 
 export type FunctionFile = { kind: "file"; name: string; module: string; functions: FunctionInfo[] };
 export type FunctionFolder = { kind: "folder"; name: string; path: string; children: FunctionNode[] };
@@ -14,6 +15,15 @@ export function splitPath(path: string): { module: string; name: string } {
   return i < 0 ? { module: path, name: "default" } : { module: path.slice(0, i), name: path.slice(i + 1) };
 }
 
+/** The module a function is listed under: its own `module` (an HTTP action's), else its path's. */
+export const moduleOf = (f: FunctionInfo) => f.module ?? splitPath(f.path).module;
+
+/** A function's name in its module: an HTTP action's route as it is, else the path's name. */
+export const nameOf = (f: FunctionInfo) => (f.kind === "httpAction" ? f.path : splitPath(f.path).name);
+
+/** Whether the runner can run it: queries, mutations and actions (Convex's `SUPPORTED_FUNCTION_TYPES`). */
+export const runnable = (f: FunctionInfo) => f.kind !== "httpAction";
+
 const byName = (a: { name: string }, b: { name: string }) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 
 function sortNodes(nodes: FunctionNode[]): FunctionNode[] {
@@ -21,7 +31,7 @@ function sortNodes(nodes: FunctionNode[]): FunctionNode[] {
   const files = nodes.filter((n): n is FunctionFile => n.kind === "file").sort(byName);
   for (const f of folders) f.children = sortNodes(f.children);
   for (const f of files)
-    f.functions.sort((a, b) => (a.line ?? -1) - (b.line ?? -1) || byName(splitPath(a.path), splitPath(b.path)));
+    f.functions.sort((a, b) => (a.line ?? -1) - (b.line ?? -1) || byName({ name: nameOf(a) }, { name: nameOf(b) }));
   return [...folders, ...files];
 }
 
@@ -41,7 +51,7 @@ export function buildFunctionTree(functions: FunctionInfo[]): FunctionNode[] {
     return f.children;
   };
   for (const fn of functions) {
-    const { module } = splitPath(fn.path);
+    const module = moduleOf(fn);
     let file = files.get(module);
     if (!file) {
       const slash = module.lastIndexOf("/");
@@ -60,6 +70,16 @@ export const matchFunctions = (functions: FunctionInfo[], text: string) => {
   return t === "" ? functions : functions.filter((f) => f.path.toLowerCase().includes(t));
 };
 
-/** "Internal query", "Action". */
-export const describeFunction = (f: FunctionInfo) =>
-  f.visibility === "internal" ? `Internal ${f.kind}` : f.kind[0]!.toUpperCase() + f.kind.slice(1);
+/** How a kind reads in a sentence: "query", "HTTP action". */
+export const KIND_WORDS: Record<FunctionKind, string> = {
+  query: "query",
+  mutation: "mutation",
+  action: "action",
+  httpAction: "HTTP action",
+};
+
+/** "Internal query", "Action", "HTTP action". */
+export const describeFunction = (f: FunctionInfo) => {
+  const words = KIND_WORDS[f.kind];
+  return f.visibility === "internal" ? `Internal ${words}` : words[0]!.toUpperCase() + words.slice(1);
+};

@@ -59,6 +59,12 @@ describe("metrics", () => {
     expect(asked[0]!.pathname).toBe("/api/app_metrics/udf_rate");
     expect(asked[0]!.searchParams.get("path")).toBe("messages:send");
     expect(asked[0]!.searchParams.get("metric")).toBe("cacheHits");
+    expect(asked[0]!.searchParams.get("udfType")).toBeNull();
+    // an HTTP action is named by its route, and the server reads a route only with its udfType (Convex's
+    // `getUdfMetric` sends it for every function)
+    await metrics.functionRate("GET /hook", "invocations", w);
+    expect(asked[1]!.searchParams.get("path")).toBe("GET /hook");
+    expect(asked[1]!.searchParams.get("udfType")).toBe("HttpAction");
   });
 
   test("latencies: seconds become milliseconds, in the order asked", async () => {

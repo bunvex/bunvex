@@ -5,7 +5,14 @@ import type { ChartSeries } from "@bunvex/ui/components/line-chart";
 import { useQuery } from "@tanstack/react-query";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, dashboardKeys } from "../data/queries.ts";
-import { type DashboardDataSource, type MetricsWindow, REST, type TopKSeries } from "../data-source.ts";
+import {
+  type DashboardDataSource,
+  type InvalidationSeries,
+  type MetricsWindow,
+  REST,
+  type TopKSeries,
+} from "../data-source.ts";
+import { useDisconnected } from "../shell/connection.tsx";
 
 export const HOUR = 3_600_000;
 export const REFRESH_MS = 60_000;
@@ -38,7 +45,10 @@ export const NO_METRICS = {
   denied: "This credential may not view metrics.",
 } as const;
 
-/** A metrics query: refetched every `refreshMs` (a minute) over a fresh window, only when allowed. */
+/**
+ * A metrics query: refetched every `refreshMs` (a minute) over a fresh window, only when allowed and while the
+ * deployment is connected (Convex's metrics hooks pass SWR a null key while disconnected).
+ */
 export function useMetric<T>(
   key: readonly unknown[],
   enabled: boolean,
@@ -46,10 +56,11 @@ export function useMetric<T>(
   refreshMs = REFRESH_MS,
 ) {
   const scope = useQueryScope();
+  const disconnected = useDisconnected();
   return useQuery({
     queryKey: [...dashboardKeys.all(scope.scope), "metrics", ...key],
     queryFn: ({ signal }) => fetch(lastHour(), signal),
-    enabled,
+    enabled: enabled && !disconnected,
     refetchInterval: refreshMs,
   });
 }
@@ -83,6 +94,18 @@ export function topSeries(top: TopKSeries): ChartSeries[] {
     points: t.series,
     color: colorOf.get(t.function) ?? "series-other",
   }));
+}
+
+/**
+ * Invalidation pairs as chart series, coloured as `topSeries`: "mutation → table", or the table alone when one
+ * mutation's are shown (`oneFunction`); the rest is "Other".
+ */
+export function invalidationSeries(pairs: InvalidationSeries, oneFunction = false): ChartSeries[] {
+  const name = (p: InvalidationSeries[number]) =>
+    p.function === REST ? REST : oneFunction ? (p.table ?? p.function) : `${p.function} → ${p.table}`;
+  return topSeries(pairs.map((p) => ({ function: name(p), series: p.series }))).map((s) =>
+    s.id === REST ? { ...s, label: "Other" } : s,
+  );
 }
 
 export const formatPercent = (v: number) => `${v >= 10 || v === 0 ? Math.round(v) : v.toFixed(1)}%`;

@@ -4,7 +4,9 @@
 // (subscriptions are shared by token, as the client's), one-shot queries (subscribe until the first result,
 // as Convex's `client.query`), and the connection watcher Convex's dashboard polls.
 import { BaseBunvexClient, type ConnectionState, type FunctionResult, type QueryToken } from "@bunvex/client";
-import { DataSourceError } from "@bunvex/dashboard/data-source";
+import { type ConnectionStatus, DataSourceError } from "@bunvex/dashboard/data-source";
+
+export type { ConnectionStatus };
 
 /** A system function's arguments: plain JSON here (the client's `Value` without its bigint and bytes). */
 // biome-ignore lint/suspicious/noExplicitAny: the client's Value, without importing @bunvex/values
@@ -141,9 +143,6 @@ export class AdminSync {
     return this.client.close();
   }
 }
-
-/** What the connection watcher reports: Convex's `Connected`, `Disconnected` and `Unknown`. */
-export type ConnectionStatus = "connected" | "disconnected" | "unknown";
 
 /** Convex's dashboard polls the client's connection state this often (`connectionStateCheckIntervalMs`). */
 export const CONNECTION_CHECK_MS = 2500;

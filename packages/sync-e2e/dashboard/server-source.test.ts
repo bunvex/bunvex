@@ -548,11 +548,24 @@ describe("the Data screen (STUDY-149 PR 2)", () => {
     expect(await src.tableOfId?.("not an id")).toBeNull();
   });
 
-  test("the table list is live: a table a later push creates is listed", async () => {
+  test("the table list is live: a table a later push creates is listed, and watchTables hears it", async () => {
     const src = open();
     expect((await src.listTables()).map((t) => t.name)).not.toContain("later");
+    let heard = 0;
+    const errors: DataSourceError[] = [];
+    const off = src.watchTables!(
+      () => heard++,
+      (e) => errors.push(e),
+    );
+    // a write that creates no table is not a change of the list
+    await call("mutation", "messages:send", { body: "not a new table" });
+    await Bun.sleep(100);
+    expect(heard).toBe(0);
     await deploy([schemaModule("\n      later: defineTable(v.any()),"), ...APP_MODULES]);
     // the mapping the source keeps subscribed gets the new table; no refetch of it is asked
     await until(async () => (await src.listTables()).some((t) => t.name === "later"), "the new table");
+    await until(() => heard > 0, "watchTables' call");
+    off();
+    expect(errors).toEqual([]);
   });
 });

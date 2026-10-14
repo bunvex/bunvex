@@ -23,7 +23,6 @@ import {
   type SchemaValidation,
   type TableMetric,
   type TopKMeasure,
-  type Unsubscribe,
   type ValidatorJson,
 } from "@bunvex/dashboard/data-source";
 import { AdminHttp, type FetchFn } from "./admin-http.ts";
@@ -33,7 +32,7 @@ import { Functions } from "./functions.ts";
 import { LogStream, type LogStreamOptions } from "./logs.ts";
 import { Metrics } from "./metrics.ts";
 import { Settings } from "./settings.ts";
-import { AdminSync, type ConnectionStatus, watchConnection } from "./sync.ts";
+import { AdminSync, watchConnection } from "./sync.ts";
 import { Tables } from "./tables.ts";
 import { dataWrites } from "./writes.ts";
 
@@ -54,8 +53,6 @@ export type ServerDataSourceOptions = {
 /** The server source: the contract, plus what a host needs around it (the connection, closing it). */
 export type ServerDataSource = DashboardDataSource &
   Disposable & {
-    /** Reports the connection's state as Convex's dashboard does (polled every 2.5 s). Returns the stop. */
-    watchConnection(onStatus: (s: ConnectionStatus) => void): Unsubscribe;
     /** Closes the socket and stops every loop. */
     close(): Promise<void>;
   };
@@ -263,6 +260,7 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     listDocuments: (q, o) => tables.listDocuments(q, o),
     getDocument: (t, id, o) => tables.getDocument(t, id, o),
     watchTable: (t, onChange, onError) => tables.watchTable(t, onChange, onError),
+    watchTables: (onChange, onError) => tables.watchTables(onChange, onError),
     inferDocumentType: (t, o) => tables.inferDocumentType(t, o),
     tableOfId: (id, o) => tables.tableOfId(id, o),
 
@@ -289,7 +287,7 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     // ---------------------------------------------------------------- the Data screen's writes (PR 3, writes.ts)
     ...writes,
 
-    // ---------------------------------------------------------------- the host's
+    // ---------------------------------------------------------------- the connection, polled every 2.5 s as Convex's
     watchConnection: (onStatus) => watchConnection(() => sync.connectionState(), onStatus),
     close,
     [Symbol.dispose]() {

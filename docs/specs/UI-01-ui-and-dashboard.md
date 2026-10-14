@@ -2314,8 +2314,8 @@ the screens free of any bunvex dependency (§6): a cloud control plane brings it
 
 - `@bunvex/dashboard-source` (`packages/dashboard-source`), private like `@bunvex/dashboard` (changesets
   ignore it): `createServerDataSource({ url, adminKey, fetch?, webSocketConstructor? })` returns the
-  contract plus `watchConnection(onStatus)` (Convex's watcher: polled every 2.5 s, disconnected after two
-  observations in a row), `close()` and `[Symbol.dispose]`.
+  contract (with `watchConnection(onStatus)`, Convex's watcher: polled every 2.5 s, disconnected after two
+  observations in a row; part of the contract since §34.5), `close()` and `[Symbol.dispose]`.
 - One `BaseBunvexClient`, admin-authenticated before anything subscribes; system queries are subscriptions
   (a one-shot read subscribes until the first result, as Convex's `client.query`), writes go as
   `mutationInternal` / `actionInternal`.
@@ -2356,3 +2356,20 @@ expression as the screens do.
 - `getFile` of an id that is not a storage id is null on a deployment, as Convex's (STUDY-149 PR 5); a source that
   can tell may still answer `invalid_request`.
 
+### 34.5 The app on the server source (STUDY-149 PR 6; 14 Oct 2026)
+
+- `apps/dashboard` signs in with `createAdminKeyVerifier` and runs the screens on `createServerDataSource`, a chunk
+  of its own loaded once signed in; "Use the demo data" keeps the mock. A build with
+  `VITE_BUNVEX_USE_CURRENT_DEPLOYMENT=1` signs in from `/api/current_deployment` first, as Convex's local dashboard.
+- Contract additions, each optional (DV-479: where the contract met Convex, it follows Convex):
+  - `watchConnection(onStatus)`: `connected`, `disconnected`, `unknown`. While `disconnected` the dashboard covers
+    the screens with "Connection issue" (the URL from `<Dashboard deploymentUrl>`, else the deployment's own) and
+    disables its polled HTTP reads (metrics, inferred types); back, they are asked at once and failed reads are
+    fetched again. Without it a source is always connected.
+  - `watchTables(onChange, onError)`: the table list changed (a table created or deleted); the Database screen
+    lists the tables again, as Convex's sidebar follows its table mapping.
+  - `FunctionKind` gains `httpAction`, `FunctionInfo` an optional `module`: an HTTP action's `path` is its route
+    (`"GET /hello"`) in `module: "http"`, as Convex names it in its tree, logs and metrics; it is listed, logged and
+    charted, never run (`invalid_request`).
+- The Health screen's Concurrency section, a mutation's invalidations chart, and the Schedules and Files lists'
+  Pause / Go live (kept per deployment in local storage) complete §34.4.

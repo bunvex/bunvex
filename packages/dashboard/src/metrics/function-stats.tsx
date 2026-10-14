@@ -1,6 +1,7 @@
 // A function's Statistics tab (UI-01 §18.2, STUDY-12 §12), as Convex's `PerformanceGraphs.tsx`: over the last
 // hour, its calls and errors per minute, its execution time percentiles (p50, p90, p95, p99: one blue,
-// light to dark, labelled at the lines' ends) and, for a query, the share of calls served from the cache.
+// light to dark, labelled at the lines' ends) and, for a query, the share of calls served from the cache; for a
+// mutation, the tables whose subscriptions it invalidated most (every 8 s, as Convex's `appMetrics.ts`).
 // When the source says which clients made the calls (UI-01 §33, a bunvex addition), its calls and errors by
 // platform over the hour.
 import { Skeleton } from "@bunvex/ui/components/skeleton";
@@ -10,7 +11,16 @@ import { useQueryScope } from "../context.tsx";
 import { type FunctionInfo, toDataSourceError } from "../data-source.ts";
 import { formatCount } from "../screens/stats.ts";
 import { ChartCard } from "./chart-card.tsx";
-import { formatCalls, formatMs, formatPercent, NO_METRICS, useMetric, useMetricsAccess } from "./metrics.ts";
+import {
+  formatCalls,
+  formatMs,
+  formatPercent,
+  HEALTH_REFRESH_MS,
+  invalidationSeries,
+  NO_METRICS,
+  useMetric,
+  useMetricsAccess,
+} from "./metrics.ts";
 
 const PERCENTILES = [50, 90, 95, 99];
 
@@ -76,6 +86,27 @@ function CacheHitRate({ fn }: { fn: string }) {
       formatValue={formatPercent}
       max={100}
       empty="Not called in the last hour."
+    />
+  );
+}
+
+/** Convex's `SubscriptionInvalidationsGraph` (`PerformanceGraphs.tsx`): this mutation's top 5 tables. */
+function Invalidations({ fn }: { fn: string }) {
+  const { source } = useQueryScope();
+  const q = useMetric(
+    ["function", fn, "invalidations"],
+    true,
+    (w, signal) => source.subscriptionInvalidations!(w, 5, { signal, function: fn }),
+    HEALTH_REFRESH_MS,
+  );
+  return (
+    <ChartCard
+      title="Subscription invalidations"
+      description="Queries re-run per minute by its writes, by table, top 5"
+      series={q.data && invalidationSeries(q.data, true)}
+      error={q.error}
+      formatValue={formatCalls}
+      empty="No subscription was invalidated in the last hour."
     />
   );
 }
@@ -165,6 +196,9 @@ export function FunctionStats({ fn }: { fn: FunctionInfo }) {
       <Rate fn={fn.path} metric="errors" title="Errors" description="Failed calls per minute" />
       {typeof source.latencyPercentiles === "function" && <ExecutionTime fn={fn.path} />}
       {fn.kind === "query" && typeof source.cacheHitPercentage === "function" && <CacheHitRate fn={fn.path} />}
+      {fn.kind === "mutation" && typeof source.subscriptionInvalidations === "function" && (
+        <Invalidations fn={fn.path} />
+      )}
       {typeof source.functionClients === "function" && <ByPlatform fn={fn.path} />}
     </div>
   );

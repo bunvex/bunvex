@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { Dashboard } from "@bunvex/dashboard";
 import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expectAccessible } from "./axe.ts";
 
@@ -180,5 +180,85 @@ describe("the Schedules screen", () => {
       Object.defineProperty(source, m, { value: undefined });
     mount("/schedules/functions", source);
     await screen.findByText("This deployment does not offer scheduled functions or cron jobs yet.");
+  });
+
+  describe("live updates, paused as Convex's (`usePausedLiveData`)", () => {
+    /** The mock, with its watcher's callback in the test's hands and its list reads counted. */
+    function pausing() {
+      const source = mockSource();
+      const watch = source.watchScheduledFunctions.bind(source);
+      const list = source.listScheduledFunctions.bind(source);
+      const spy = { emit: (_: { paused: boolean }) => {}, subscribed: 0, reads: 0 };
+      source.watchScheduledFunctions = (onChange, onError) => {
+        spy.subscribed++;
+        spy.emit = (c) => (onChange as (c: { paused: boolean }) => void)(c); // the mock never pauses
+        return watch(onChange, onError);
+      };
+      source.listScheduledFunctions = (q, o) => {
+        spy.reads++;
+        return list(q, o);
+      };
+      return { source, spy };
+    }
+
+    test("the source pausing the list: said, kept, read again only on Refresh; Go live is off for the visit", async () => {
+      const { source, spy } = pausing();
+      mount("/schedules/functions", source);
+      await waitFor(() => expect(rows("Scheduled functions").length).toBeGreaterThan(3));
+      const user = userEvent.setup();
+      expect(screen.getByRole("button", { name: "Pause" })).toBeDefined();
+      expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+      act(() => spy.emit({ paused: true }));
+      await screen.findByText("There are too many updates to show live. Updates have automatically been paused.");
+      expect(screen.getByRole("img", { name: "Live updates paused automatically" })).toBeDefined();
+      const goLive = screen.getByRole("button", { name: "Go live" });
+      expect(goLive.hasAttribute("disabled")).toBe(true);
+      // the deployment's choice is kept in this browser, as Convex's `<deployment>/pauseLiveScheduledJobs`
+      const name = (await source.getDeployment()).name;
+      expect(localStorage.getItem(`bunvex:${name}/pauseLiveScheduledJobs`)).toBe("true");
+      // a change while paused does not read the list again
+      await new Promise((r) => setTimeout(r, 50));
+      const reads = spy.reads;
+      act(() => spy.emit({ paused: true }));
+      await new Promise((r) => setTimeout(r, 100));
+      expect(spy.reads).toBe(reads);
+      await user.click(screen.getByRole("button", { name: "Refresh" }));
+      await waitFor(() => expect(spy.reads).toBeGreaterThan(reads));
+      await expectAccessible();
+    });
+
+    test("pausing by hand stops the list's refreshes; Go live subscribes again and reads it", async () => {
+      const { source, spy } = pausing();
+      mount("/schedules/functions", source);
+      await waitFor(() => expect(rows("Scheduled functions").length).toBeGreaterThan(3));
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Pause" }));
+      expect(screen.queryByText(/too many updates/)).toBeNull();
+      await new Promise((r) => setTimeout(r, 50));
+      const reads = spy.reads;
+      act(() => spy.emit({ paused: false }));
+      await new Promise((r) => setTimeout(r, 100));
+      expect(spy.reads).toBe(reads);
+      const subscribed = spy.subscribed;
+      await user.click(screen.getByRole("button", { name: "Go live" }));
+      await waitFor(() => expect(spy.subscribed).toBe(subscribed + 1));
+      act(() => spy.emit({ paused: false }));
+      await waitFor(() => expect(spy.reads).toBeGreaterThan(reads));
+      expect(screen.getByRole("button", { name: "Pause" })).toBeDefined();
+    });
+
+    test("a list paused before opens paused (kept per deployment), and goes live on a click", async () => {
+      const { source, spy } = pausing();
+      const name = (await source.getDeployment()).name;
+      localStorage.setItem(`bunvex:${name}/pauseLiveScheduledJobs`, "true");
+      mount("/schedules/functions", source);
+      const goLive = await screen.findByRole("button", { name: "Go live" });
+      expect(goLive.hasAttribute("disabled")).toBe(false);
+      await waitFor(() => expect(rows("Scheduled functions").length).toBeGreaterThan(3));
+      await userEvent.setup().click(goLive);
+      await screen.findByRole("button", { name: "Pause" });
+      expect(localStorage.getItem(`bunvex:${name}/pauseLiveScheduledJobs`)).toBe("false");
+      expect(spy.subscribed).toBeGreaterThan(1);
+    });
   });
 });

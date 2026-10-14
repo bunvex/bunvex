@@ -1,7 +1,8 @@
 // Scheduled functions (UI-01 §14.2, §22.5, STUDY-12 §9): the runs waiting in the scheduler, nearest first; a
 // filter column with their state (filtered here, over the loaded runs) and their function (filtered by the
 // source), each with how many loaded runs it has; a run's details docked beside the list, following the
-// current row, where it can be canceled; Cancel all.
+// current row, where it can be canceled; Cancel all. Its live updates can be paused, and the source may pause
+// them itself when there are too many (Convex's `usePausedLiveData`, shell/live-pause.tsx).
 
 import { CopyButton } from "@bunvex/ui/components/copy-button";
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
@@ -18,6 +19,7 @@ import { type ScheduledSearch, scheduledRoute } from "../router.tsx";
 import { BAR_TITLE, BAR1 } from "../shell/bars.ts";
 import { ConfirmButton } from "../shell/confirm.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
+import { LiveControls, LivePausedNotice, useLivePause } from "../shell/live-pause.tsx";
 import { Panel } from "../shell/panel.tsx";
 import { FacetGroup, SectionFilters } from "../shell/section-column.tsx";
 import { useSchedulesColumn } from "./column.tsx";
@@ -68,7 +70,8 @@ export function ScheduledView() {
   const list = useInfiniteQuery(scheduledQuery(scope, one));
   // the column's counts: the loaded runs of every function (the same query when none is picked)
   const every = useInfiniteQuery(scheduledQuery(scope, undefined));
-  const liveError = useSchedulesLive();
+  const pause = useLivePause("pauseLiveScheduledJobs");
+  const liveError = useSchedulesLive(pause);
   const [outcome, setOutcome] = useState<string>();
   const loaded = list.data?.pages.flatMap((p) => p.page) ?? [];
   const states = search.state?.split(",") as RunState[] | undefined;
@@ -172,6 +175,12 @@ export function ScheduledView() {
             <span className="sr-only text-sm text-muted-foreground tabular-nums @xl/schedules:not-sr-only">{`${runs.length}${list.hasNextPage ? "+" : ""} scheduled ${runs.length === 1 && !list.hasNextPage ? "run" : "runs"}`}</span>
           )}
           <span className="ml-auto flex items-center gap-1">
+            <LiveControls
+              pause={pause}
+              what="scheduled functions"
+              refreshing={list.isFetching}
+              onRefresh={() => void refresh()}
+            />
             {typeof source.cancelAllScheduledFunctions === "function" && (!picked || one) && (
               <ConfirmButton
                 label={one ? `Cancel all runs of ${one}` : "Cancel all"}
@@ -190,6 +199,7 @@ export function ScheduledView() {
         <p role="status" className="px-4 text-sm text-muted-foreground empty:hidden md:px-6">
           {outcome}
         </p>
+        <LivePausedNotice pause={pause} />
         {liveError && <ErrorState error={liveError} />}
         {list.error ? (
           <ErrorState error={toDataSourceError(list.error)} />

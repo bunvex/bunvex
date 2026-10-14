@@ -23,7 +23,7 @@
     "test": "bun test --isolate && bun run --cwd packages/sync-e2e test:react && bun run --cwd packages/ui test && bun run --cwd packages/dashboard test && bun run --cwd apps/dashboard test && bun run --cwd apps/site test",
     "conformance": "bun bench/conformance.ts",
     "build:dashboard": "bun run --cwd apps/dashboard build",
-    "e2e": "bun run --cwd apps/dashboard e2e",
+    "e2e": "bun run --cwd apps/dashboard e2e && bun run --cwd packages/sync-e2e e2e:dashboard",
     "build:site": "bun run --cwd apps/site build",
     "check": "bun run lint && bun run typecheck && bun run check:deps && bun run test && bun run build:dashboard && bun run build:site",
     "test:examples": "cd examples && BUNVEX_FREEZE_ENGINE_VALUES=1 bun test --timeout 120000",

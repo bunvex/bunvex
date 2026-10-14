@@ -18,7 +18,15 @@ export { formatLogTime };
 
 export const formatDuration = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${Math.round(ms)} ms`);
 
-export const KIND_LETTER: Record<FunctionKind, string> = { query: "Q", mutation: "M", action: "A" };
+export const KIND_LETTER: Record<FunctionKind, string> = { query: "Q", mutation: "M", action: "A", httpAction: "H" };
+
+/** A kind's name where a letter stands for it (Convex's log details say "HTTP Action"). */
+export const KIND_TITLE: Record<FunctionKind, string> = {
+  query: "query",
+  mutation: "mutation",
+  action: "action",
+  httpAction: "HTTP action",
+};
 
 /** A line that went wrong: an error, or the end of a failed execution. */
 export const isFailure = (e: LogEntry) => e.level === "error" || e.execution?.status === "failure";
@@ -80,7 +88,7 @@ const allColumns: DataTableColumn<LogRow>[] = [
       return (
         <span className="flex min-w-0 items-center gap-2">
           <abbr
-            title={f.kind}
+            title={KIND_TITLE[f.kind]}
             className="shrink-0 border px-1 font-mono text-[10px] leading-4 text-muted-foreground no-underline"
           >
             {KIND_LETTER[f.kind]}

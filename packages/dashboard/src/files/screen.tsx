@@ -1,6 +1,7 @@
 // The Files screen (UI-01 §14.3, STUDY-12 §9): the deployment's stored files, newest first (or oldest),
 // between two dates, with a lookup by storage id; upload, select and delete; a file's details beside the
-// list — a preview for images, as Convex, its metadata, Download and Delete.
+// list — a preview for images, as Convex, its metadata, Download and Delete. Its live updates can be paused, and
+// the source may pause them itself (shell/live-pause.tsx).
 import { Button, buttonVariants } from "@bunvex/ui/components/button";
 import { CopyButton } from "@bunvex/ui/components/copy-button";
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
@@ -18,6 +19,7 @@ import { formatBytes, formatCount } from "../screens/stats.ts";
 import { BAR_TITLE, BAR1, BAR2, SCREEN } from "../shell/bars.ts";
 import { ConfirmButton } from "../shell/confirm.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
+import { LiveControls, LivePausedNotice, useLivePause } from "../shell/live-pause.tsx";
 import { NotOffered } from "../shell/not-offered.tsx";
 import { Panel } from "../shell/panel.tsx";
 import { SectionColumn, useSectionSheet } from "../shell/section-column.tsx";
@@ -57,7 +59,8 @@ function Files() {
   };
   const list = useInfiniteQuery(filesQuery(scope, filter));
   const { data: count } = useQuery(fileCountQuery(scope));
-  const liveError = useFilesLive();
+  const pause = useLivePause("pauseLiveFileStorage");
+  const liveError = useFilesLive(pause);
   const rows = list.data?.pages.flatMap((p) => p.page) ?? [];
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const selectedIds = useMemo(() => rows.filter((f) => selected.has(f.id)).map((f) => f.id), [rows, selected]);
@@ -160,6 +163,12 @@ function Files() {
             <span className="text-sm text-muted-foreground tabular-nums">{files(count)} stored</span>
           )}
           <span className="ml-auto flex items-center gap-1">
+            <LiveControls
+              pause={pause}
+              what="files"
+              refreshing={list.isFetching}
+              onRefresh={() => void queryClient.invalidateQueries({ queryKey: fileKeys.all(scope.scope) })}
+            />
             {canWrite && selectedIds.length > 0 && typeof source.deleteFiles === "function" && (
               <ConfirmButton
                 label={`Delete ${formatCount(selectedIds.length)}`}
@@ -218,6 +227,7 @@ function Files() {
             </Select>
           </div>
         </div>
+        <LivePausedNotice pause={pause} />
         {/* no reserved line when there is nothing to say (UX-17) */}
         <p
           role={outcome && !outcome.ok ? "alert" : "status"}

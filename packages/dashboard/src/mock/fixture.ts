@@ -53,6 +53,15 @@ const THINGS = ["the committer", "group commit", "the query cache", "index backf
 const CHANNELS = ["general", "engine", "dashboard", "random"];
 const WORDS = "the commit is durable once its group is fsynced and every earlier group is too".split(" ");
 
+/**
+ * The app's HTTP routes (its `http` module's router), as a deployment lists them: named by their route, never
+ * run from the runner. Some executions in the log are theirs.
+ */
+export const MOCK_HTTP_ACTIONS: FunctionInfo[] = [
+  { path: "GET /health", kind: "httpAction", module: "http", visibility: "public", line: 8 },
+  { path: "POST /webhooks/payments", kind: "httpAction", module: "http", visibility: "public", line: 14 },
+];
+
 export const MOCK_FUNCTIONS: FunctionInfo[] = [
   { path: "messages:list", kind: "query", visibility: "public" },
   { path: "messages:send", kind: "mutation", visibility: "public" },
@@ -149,7 +158,13 @@ export function makeExecution(
   run?: { fn: FunctionInfo; error?: string; identity?: { subject: string; issuer: string; name?: unknown } },
   within?: { requestId: string; parentExecutionId: string; startedBy: ExecutionIdentity; client?: ClientInfo },
 ): LogEntry[] {
-  const fn = run?.fn ?? rnd.pick(MOCK_FUNCTIONS);
+  const picked = run?.fn ?? rnd.pick(MOCK_FUNCTIONS);
+  // every 13th request is to an HTTP route (from the sequence, and never in place of an action, whose calls
+  // draw from the random stream: the rest of the fixture stays what it was)
+  const fn =
+    !run && !within && seq % 13 === 0 && picked.kind !== "action"
+      ? MOCK_HTTP_ACTIONS[Math.floor(seq / 13) % MOCK_HTTP_ACTIONS.length]!
+      : picked;
   const requestId = within?.requestId ?? rnd.id().slice(0, 16);
   const executionId = rnd.id().slice(0, 16);
   // who started the request (STUDY-12 §10.5): a call inside one inherits it; the runner's are an admin's (or
@@ -176,7 +191,11 @@ export function makeExecution(
           level: "error",
           message: run?.error ?? `Uncaught Error: ${rnd.pick(["document not found", "invalid argument", "timeout"])}`,
         }
-      : { level: "info", message: fn.kind === "query" ? "query ran" : `${fn.kind} committed` },
+      : {
+          level: "info",
+          message:
+            fn.kind === "query" ? "query ran" : fn.kind === "httpAction" ? "responded 200" : `${fn.kind} committed`,
+        },
   );
   const entry = (l: { level: LogLevel; message: string }, n: number, t: number): LogEntry => ({
     id: logId(n),
@@ -218,8 +237,8 @@ export function makeExecution(
 function usageOf(fn: FunctionInfo, durationMs: number, seq: number, top: boolean): ExecutionUsage {
   const read = ((seq * 7919 + durationMs * 131) % 48_000) + 512;
   return {
-    memoryMb: fn.kind === "action" ? 128 : 16,
-    databaseReadBytes: fn.kind === "action" ? 0 : read,
+    memoryMb: fn.kind === "action" || fn.kind === "httpAction" ? 128 : 16,
+    databaseReadBytes: fn.kind === "action" || fn.kind === "httpAction" ? 0 : read,
     databaseWriteBytes: fn.kind === "mutation" ? Math.round(read / 6) : 0,
     ...(top && { returnBytes: (seq * 104_729) % 8_192 }),
   };
@@ -245,7 +264,7 @@ export function createFixture(opts: FixtureOptions = {}): Fixture {
       httpActionsUrl: "http://127.0.0.1:3211",
     },
     tables,
-    functions: MOCK_FUNCTIONS,
+    functions: [...MOCK_FUNCTIONS, ...MOCK_HTTP_ACTIONS],
     logs,
   };
 }

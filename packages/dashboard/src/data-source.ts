@@ -40,6 +40,12 @@ export type Document = { _id: string; _creationTime: number; [field: string]: Va
 export type CallOptions = { signal?: AbortSignal };
 export type Unsubscribe = () => void;
 
+/**
+ * The connection to the deployment, as Convex's dashboard tells it (`deploymentContext.tsx`, polled every 2.5 s):
+ * `disconnected` once the socket was down at two checks in a row, `unknown` while that is not settled.
+ */
+export type ConnectionStatus = "connected" | "disconnected" | "unknown";
+
 // ------------------------------------------------------------------ deployment and capabilities
 
 export type DeploymentInfo = {
@@ -256,12 +262,18 @@ export type ObjectFieldJson = { fieldType: ValidatorJson; optional: boolean };
 
 // ------------------------------------------------------------------ functions and logs
 
-export type FunctionKind = "query" | "mutation" | "action";
+/**
+ * An HTTP action is a route of the app's router (Convex's `HttpAction`): listed and logged, never run by the
+ * runner.
+ */
+export type FunctionKind = "query" | "mutation" | "action" | "httpAction";
 
 export type FunctionInfo = {
-  /** "module:name". */
+  /** "module:name"; an HTTP action's is its route, "METHOD /path", as Convex names it in the logs. */
   path: string;
   kind: FunctionKind;
+  /** The module it is defined in, when `path` does not say: an HTTP action's ("http", Convex's `http.js`). */
+  module?: string;
   visibility: "public" | "internal";
   /** The declared arguments validator (STUDY-12 V1). Absent: none declared — any arguments are accepted. */
   args?: ValidatorJson;
@@ -453,12 +465,25 @@ export interface DashboardDataSource
   getStats(opts?: CallOptions): Promise<DeploymentStats>;
   /** Pushes a fresh sample whenever the source has one (an implementation may poll). Never synchronously. */
   watchStats(onStats: (stats: DeploymentStats) => void, onError: (error: DataSourceError) => void): Unsubscribe;
+  /**
+   * Tells the caller how the connection to the deployment stands, at each change (the first one included). The
+   * dashboard covers the screens while `disconnected`, and stops its polled reads until the connection is back,
+   * as Convex's. Never synchronously. Optional; a source without it is always connected (the mock).
+   */
+  watchConnection?(onStatus: (status: ConnectionStatus) => void): Unsubscribe;
 
   listTables(opts?: CallOptions): Promise<TableInfo[]>;
   getSchema(opts?: CallOptions): Promise<SchemaInfo>;
   listDocuments(query: DocumentQuery, opts?: CallOptions): Promise<Page<Document>>;
   /** `null` when the table exists but the document does not; `not_found` when the table does not exist. */
   getDocument(table: string, id: string, opts?: CallOptions): Promise<Document | null>;
+  /**
+   * Tells the caller the table list may have changed (a table created or deleted, by a push, a write or the
+   * dashboard), as Convex's Data screen keeps the table mapping subscribed (`getTableMapping`). The dashboard
+   * then lists the tables again. Never synchronously. Optional; without it, the list is read again when a watched
+   * table changes.
+   */
+  watchTables?(onChange: () => void, onError: (error: DataSourceError) => void): Unsubscribe;
   /**
    * Tells the caller a table changed — a write committed — with its new count when the source knows it.
    * The dashboard then refreshes what it shows. Never synchronously; coalescing several writes is allowed.

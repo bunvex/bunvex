@@ -181,6 +181,10 @@ gaps.
 
 **Low: rare, ops-only, or a missing nicety**
 
+- Error text (STUDY-150 §6): a missing function in `ctx.runQuery` / the scheduler is worded and framed as
+  bunvex's server words it, not as Convex's app-side library (`Couldn't resolve api.nope.x`); a bad id fails before
+  `db.get` awaits; in a `"use node"` action, an external package's own error read as `error.stack` shows its install
+  path (Convex: `convex:/user/…`).
 - Operations:
   - streaming import past `clear_tables` (built with its audit event, STUDY-141 PR 1): Airbyte records,
     Fivetran operations and primary-key indexes (PRs 2–4, future work by the owner's choice, 2026-10-11). The
@@ -196,6 +200,10 @@ gaps.
     `getById` and `/api/get_indexes`; PR 5: schedules, files, the audit log, Health's concurrency and
     invalidations; PR 3: the Data screen's writes, with the server's `addDocument`, `patchDocumentsFields`,
     `replaceDocument`, `deleteDocuments`, `clearTablePage` and `createTable` and their `add_documents`,
-    `update_documents`, `delete_documents` and `create_table` audit events; PR 4: the Functions screen, the runner
-    with its custom test query and Settings, with the server's `modules:*`, `components:list`, `getVersion`,
-    `cloudUrl` / `siteUrl`, `listEnvironmentVariables`, `latestExport` and `snapshotImport:list`); the rest is PR 6.
+    `update_documents`, `delete_documents` and `create_table` audit events; PR 4: the Functions screen, the
+    runner with its custom test query and Settings, with the server's `modules:*`, `components:list`,
+    `getVersion`, `cloudUrl` / `siteUrl`, `listEnvironmentVariables`, `latestExport` and `snapshotImport:list`;
+    PR 6: `apps/dashboard` runs on it — the real sign-in, Convex's connection overlay and polling rules, the live
+    table list, HTTP actions, Health's concurrency and invalidations, the paused lists); left: packaging (the
+    dashboard's image, `dashboard.zip`, `bunvex dev`'s local dashboard, PR 7) and the CLI's links (PR 8), plus the
+    custom query's type checking and Convex's bulk edit.

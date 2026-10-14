@@ -177,6 +177,19 @@ describe("the function runner", () => {
     expect(readRunHistory("default", "tasks:list")).toEqual([]);
   });
 
+  test("the picker offers queries, mutations and actions only: an HTTP action is not run from here", async () => {
+    mount("/functions?function=GET%20%2Fhealth");
+    await screen.findByRole("heading", { level: 1, name: "GET /health" });
+    await userEvent.setup().click(screen.getByRole("button", { name: "Run functions" }));
+    await screen.findByRole("region", { name: "Run a function" });
+    // opened on a route, the runner falls back to the first function it can run
+    expect(within(runner()).getByRole("combobox").textContent).not.toContain("GET /health");
+    await userEvent.setup().click(within(runner()).getByRole("combobox"));
+    const options = (await screen.findAllByRole("option")).map((o) => o.textContent);
+    expect(options.length).toBeGreaterThan(0);
+    expect(options.some((o) => o?.includes("/health") || o?.includes("/webhooks"))).toBe(false);
+  });
+
   test("no runner where the source cannot run functions, or the credential may not", async () => {
     const without = mockSource({ capabilities: { operations: ["viewData", "viewLogs"], readOnly: false } });
     mount("/functions?function=tasks:list", without);

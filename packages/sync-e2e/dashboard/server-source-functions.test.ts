@@ -5,7 +5,7 @@
 // a watched query following its data, custom test queries, the environment variables kept live, the URLs.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { describeDataSourceContract } from "@bunvex/dashboard/contract";
-import type { DataSourceError, FunctionRun } from "@bunvex/dashboard/data-source";
+import type { DataSourceError, FunctionRun, LogEntry } from "@bunvex/dashboard/data-source";
 import { createServerDataSource, type ServerDataSource } from "@bunvex/dashboard-source";
 import { type LiveServer, startLiveServer, until } from "./live-server.ts";
 
@@ -56,7 +56,10 @@ const MODULES = [
     path: "http.js",
     source: `import { httpAction, httpRouter } from "@bunvex/server";
       const http = httpRouter();
-      http.route({ path: "/hello", method: "GET", handler: httpAction(async () => new Response("hi")) });
+      http.route({ path: "/hello", method: "GET", handler: httpAction(async () => {
+        console.log("saying hi");
+        return new Response("hi");
+      }) });
       export default http;`,
   },
 ];
@@ -100,9 +103,10 @@ const failure = (p: Promise<unknown>) =>
   );
 
 describe("the Functions screen (modules:listForAllComponents)", () => {
-  test("queries, mutations and actions at module:name, with visibility, line and validators; no HTTP routes", async () => {
+  test("queries, mutations and actions at module:name, with visibility, line and validators; HTTP routes by route", async () => {
     const fns = await open().listFunctions();
     expect(fns.map((f) => f.path).sort()).toEqual([
+      "GET /hello",
       "dir/nested:default",
       "messages:act",
       "messages:fails",
@@ -125,6 +129,33 @@ describe("the Functions screen (modules:listForAllComponents)", () => {
     expect(by["messages:loose"]!.returns).toBeUndefined();
     // a push without source maps records no positions, so no lines (the oracle test has them, from the CLIs)
     expect(fns.every((f) => f.line === undefined)).toBe(true);
+  });
+
+  test("an HTTP action: listed under its module, its log lines and metrics under the same name; never run", async () => {
+    const src = open();
+    const route = (await src.listFunctions()).find((f) => f.kind === "httpAction");
+    expect(route).toEqual({ path: "GET /hello", kind: "httpAction", module: "http", visibility: "public" });
+    const end = Date.now() + 60_000;
+    const w = { start: end - 10 * 60_000, end, numBuckets: 10 };
+    const seen: LogEntry[] = [];
+    const off = src.watchLogs(
+      { function: "GET /hello" },
+      (e) => seen.push(...e),
+      () => {},
+    );
+    await src.listLogs({ numItems: 1, cursor: null });
+    expect(await (await fetch(`${srv.url}/http/hello`)).text()).toBe("hi");
+    await until(() => seen.some((e) => e.execution), "the HTTP action's outcome line");
+    off();
+    // the Logs screen and the Functions screen's logs name it as the list does
+    expect(seen.every((e) => e.function?.path === "GET /hello" && e.function.kind === "httpAction")).toBe(true);
+    expect(seen.some((e) => e.message === "saying hi")).toBe(true);
+    // its statistics, as Convex's: the server reads a route's metrics with its udfType
+    const calls = (await src.functionRate!("GET /hello", "invocations", w)).reduce((n, b) => n + (b.value ?? 0), 0);
+    expect(Math.round(calls)).toBeGreaterThanOrEqual(1);
+    expect((await src.latencyPercentiles!("GET /hello", [50], w))[0]!.series.some((b) => b.value !== null)).toBe(true);
+    // the runner offers queries, mutations and actions only
+    expect((await failure(src.runFunction!("GET /hello", {})))?.code).toBe("invalid_request");
   });
 
   test("a push is heard by watchFunctions, and the list then has the new function", async () => {

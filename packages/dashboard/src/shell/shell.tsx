@@ -43,6 +43,7 @@ import { ExtensionLink } from "../extensions/link.tsx";
 import { type NavGroupId, offers } from "../extensions/types.ts";
 import { DashLink } from "../router.tsx";
 import { type Runner, RunnerContext } from "../runner/context.tsx";
+import { DisconnectedOverlay } from "./connection.tsx";
 import { PausedBanner } from "./paused-banner.tsx";
 
 // the runner is fetched when it first opens (it brings the code editor and the result views)
@@ -304,6 +305,7 @@ export function Shell() {
             </div>
           </header>
           <PausedBanner />
+          <DisconnectedOverlay />
           {/* with the runner docked below, the screen keeps room to scroll past it */}
           <main
             id="main"

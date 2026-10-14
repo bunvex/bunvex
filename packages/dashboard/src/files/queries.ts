@@ -3,7 +3,8 @@ import { infiniteQueryOptions, queryOptions, useQueryClient } from "@tanstack/re
 import { useQueryScope } from "../context.tsx";
 import { useWatch } from "../data/live.ts";
 import { dashboardKeys, type QueryScope } from "../data/queries.ts";
-import type { DataSourceError, FileQuery, LiveChange, FileFilter as StatsFilter } from "../data-source.ts";
+import type { FileQuery, LiveChange, FileFilter as StatsFilter } from "../data-source.ts";
+import type { LivePause } from "../shell/live-pause.tsx";
 
 export const FILES_PAGE = 50;
 
@@ -67,13 +68,23 @@ export const fileQuery = ({ source, scope }: QueryScope, id: string) =>
     enabled: typeof source.getFile === "function",
   });
 
-/** While mounted: refreshes the file queries when the source says the files changed. */
-export function useFilesLive(): DataSourceError | undefined {
+/**
+ * While mounted: refreshes the file queries when the source says the files changed. With `pause` (`useLivePause`):
+ * while paused, only the count and the open file follow, as Convex keeps `numFiles` and `getFile` live; the list
+ * waits for a refresh. A change saying the source paused the list pauses it; "Go live" subscribes again.
+ */
+export function useFilesLive(pause?: Pick<LivePause, "paused" | "generation" | "onSourcePaused">) {
   const scope = useQueryScope();
   const queryClient = useQueryClient();
   return useWatch<LiveChange | undefined>(
     (onChange, onError) => scope.source.watchFiles?.(onChange, onError) ?? (() => {}),
-    () => void queryClient.invalidateQueries({ queryKey: fileKeys.all(scope.scope) }),
-    [scope.source, scope.scope],
+    (change) => {
+      if (pause && change?.paused) pause.onSourcePaused();
+      if (pause && (pause.paused || change?.paused)) {
+        void queryClient.invalidateQueries({ queryKey: fileKeys.count(scope.scope) });
+        void queryClient.invalidateQueries({ queryKey: [...fileKeys.all(scope.scope), "file"] });
+      } else void queryClient.invalidateQueries({ queryKey: fileKeys.all(scope.scope) });
+    },
+    [scope.source, scope.scope, pause?.generation],
   );
 }

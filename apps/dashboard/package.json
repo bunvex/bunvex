@@ -2,7 +2,7 @@
   "name": "@bunvex/dashboard-app",
   "version": "0.0.0",
   "private": true,
-  "description": "A thin Vite host that mounts @bunvex/dashboard (with the MockDataSource for now).",
+  "description": "A thin Vite host that mounts @bunvex/dashboard on a deployment (@bunvex/dashboard-source) or on the demo data (the MockDataSource).",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
