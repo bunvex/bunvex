@@ -445,7 +445,8 @@ export function changesToGitIgnore(existing: string | null): string | null {
  * Write the deployment into `.env.local` (Convex's `writeDeploymentEnvVar` and `writeUrlsToEnvFile`): each
  * variable through `changedEnvVarFile`, then `.env.local` added to `.gitignore` unless a line there covers it.
  */
-export function writeEnvLocal(cwd: string, deploymentName: string, cloud: number, site: number) {
+/** Whether `.env.local` or `.gitignore` changed (Convex prints its configuration lines only then). */
+export function writeEnvLocal(cwd: string, deploymentName: string, cloud: number, site: number): boolean {
   const path = join(cwd, ".env.local");
   const before = existsSync(path) ? readFileSync(path, "utf8") : null;
   let text = before;
@@ -456,10 +457,12 @@ export function writeEnvLocal(cwd: string, deploymentName: string, cloud: number
   const vars = urlVariables(cwd);
   set(vars.url, `http://127.0.0.1:${cloud}`);
   set(vars.site, `http://127.0.0.1:${site}`);
-  if (text !== null && text !== before) writeFileSync(path, text);
+  const envChanged = text !== null && text !== before;
+  if (envChanged) writeFileSync(path, text!);
   const gitignore = join(cwd, ".gitignore");
   const ignore = changesToGitIgnore(existsSync(gitignore) ? readFileSync(gitignore, "utf8") : null);
   if (ignore !== null) writeFileSync(gitignore, ignore);
+  return envChanged || ignore !== null;
 }
 
 /** Forget the local deployment's state directory (tests; there is no command, as in Convex). */

@@ -34,6 +34,8 @@ to check "Connection issue" and the recovery).
 The end-to-end tests use the system Chrome locally and Playwright's Chromium in CI (`E2E_BROWSER=chromium`);
 the CI job "e2e · dashboard in Chromium" is not a required check.
 
+Using the dashboard (running it, signing in, its settings): [docs/dashboard.md](../../docs/dashboard.md).
+
 It is a host only: screens, data and styles come from `@bunvex/dashboard` and `@bunvex/ui`
 ([UI-01](../../docs/specs/UI-01-ui-and-dashboard.md)).
 

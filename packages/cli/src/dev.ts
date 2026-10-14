@@ -27,6 +27,7 @@ import {
   unknownOption,
 } from "./args.ts";
 import type { TypecheckMode } from "./codegen.ts";
+import { type DashboardLink, NO_DASHBOARD, servedDashboard } from "./dashboard-links.ts";
 import { deploy, functionsDir } from "./deploy.ts";
 import type { Io } from "./io.ts";
 import { startLocalDashboard } from "./local-dashboard.ts";
@@ -304,6 +305,8 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
   try {
     let target: Target | null;
     let localLog: string | null = null;
+    // the local dashboard this `dev` serves, which its pushes link (DV-477); none on a self-hosted deployment
+    let dashboardLink: DashboardLink = NO_DASHBOARD;
     try {
       target = resolveTarget(taken.flags, io);
     } catch (e) {
@@ -337,7 +340,12 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
       cleanup.push(local.stop);
       target = local.target;
       const vars = urlVariables(io.cwd);
-      writeEnvLocal(io.cwd, local.config.deploymentName, local.config.ports.cloud, local.config.ports.site);
+      const envChanged = writeEnvLocal(
+        io.cwd,
+        local.config.deploymentName,
+        local.config.ports.cloud,
+        local.config.ports.site,
+      );
       io.err(
         `✔ Started running a deployment locally at ${target.url} and saved its:\n    name as BUNVEX_DEPLOYMENT to .env.local\n    URLs as ${vars.url} and ${vars.site} to .env.local`,
       );
@@ -351,11 +359,16 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
             { backendVersion: flags.local.backendVersion, avoid: [local.config.ports.cloud, local.config.ports.site] },
           );
           cleanup.push(dashboard.stop);
+          if (dashboard.server) dashboardLink = servedDashboard(`http://127.0.0.1:${dashboard.server.port}/`);
         } catch (e) {
           io.err(`bunvex dev: ${(e as Error).message}`);
           return 1;
         }
       }
+      // Convex's `finalizeConfiguration` ends the lines about a changed `.env.local` with "View the … dashboard at"
+      // its local dashboard's URL; bunvex prints it once the dashboard serves, and leaves it out without one (DV-477).
+      const root = await dashboardLink();
+      if (envChanged && root !== null) io.err(`View the bunvex dashboard at ${root}`);
     }
     io.err(`Developing against deployment: ${target.url}`);
     // The version check (AD-29) beside the first push, as Convex's version message; its notice when it comes.
@@ -387,7 +400,11 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
       const t0 = performance.now();
       io.err("Preparing bunvex functions...");
       logManager.beginDeploy();
-      const r = await deploy(target, { dryRun: false, codegen: flags.codegen, typecheck: flags.typecheck }, pushIo);
+      const r = await deploy(
+        target,
+        { dryRun: false, codegen: flags.codegen, typecheck: flags.typecheck, dashboard: dashboardLink },
+        pushIo,
+      );
       logManager.endDeploy();
       if (stop.signal.aborted) break;
       if (r.code === 0) {

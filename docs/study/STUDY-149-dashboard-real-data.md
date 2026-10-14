@@ -2,7 +2,9 @@
 
 - **Status:** decided (owner, 2026-10-12); PR 1 built (`@bunvex/dashboard-source`, §5 "PR 1, as built"); PRs 2–5
   built (§5); PR 6 built (`apps/dashboard` on the real source, §5 "PR 6, as built"); PR 7 built (packaging: the
-  dashboard's image, `dashboard.zip`, the local dashboard, `bunvex dashboard serve`, §5 "PR 7, as built"). Q1: option B, a
+  dashboard's image, `dashboard.zip`, the local dashboard, `bunvex dashboard serve`, §5 "PR 7, as built"); PR 8 built
+  (the CLI's dashboard links, DV-477, and the user docs, `docs/dashboard.md`, §5 "PR 8, as built") — **the plan is
+  done**. Q1: option B, a
   separate service with its own image (DV-475); Q3: rename (DV-474); Q4: Convex's model plus a `Host` check
   (DV-476); Q5: local links only (DV-477, replaces DV-217); Q2, Q6, Q7 confirmed as planned; AD-32 not taken.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/dashboard-common`,
@@ -1520,7 +1522,8 @@ Packaging. Convex's side re-read for it (`cli/` is `npm-packages/convex/src/cli/
 - `NEXT_PUBLIC_DEFAULT_LIST_DEPLOYMENTS_API_PORT` and the legacy deployment list (`?a=<port>&d=<name>`): kept by
   Convex for old CLIs, not built (CLAUDE.md: nothing kept only for older clients).
 - `NEXT_PUBLIC_HIDE_HEADER`: a build-time switch for Convex's embedding; bunvex's host has no such switch.
-- The CLI's dashboard links (DV-477) are PR 8's; `dev` prints no dashboard line, as Convex's.
+- The CLI's dashboard links (DV-477) are PR 8's; `dev` prints no dashboard line, as Convex's. (*Corrected by PR 8*:
+  Convex's `dev` does print one, "View the Convex dashboard at …", when it writes `.env.local`.)
 
 **Found on the way.**
 
@@ -1617,6 +1620,121 @@ PR (a gap above).
 locally; the backend's is 198.0 MB); `dashboard.zip` is 4.07 MB (145 files, 16.0 MB unpacked). The app's entry
 chunk grows by 306 bytes (80 gzipped: the prefill reader). The image builds in about 24 s from a warm cache; the
 image smoke runs in about 35 s locally.
+
+### PR 8, as built
+
+The CLI's dashboard links (DV-477) and the user documentation. Convex's side re-read for it (`cli/` is
+`npm-packages/convex/src/cli/`):
+
+- **Where Convex's CLI links its dashboard.** Every link goes through `cli/lib/dashboard.ts`:
+  `deploymentDashboardUrlPage(name, page)` is `https://dashboard.convex.dev/d/<name><page>`, or the bare host plus
+  `<page>` when there is no deployment name (`:42-50`, with the FIXME "this doesn't work correctly in
+  local-dev/self-hosted", `:40-41`); `getDashboardUrl` gives an anonymous (local) deployment its local dashboard,
+  `http://127.0.0.1:<the port saved in dashboard.json>/`, or `null` with none saved (`:9-37`,
+  `lib/localDeployment/dashboard.ts:130-137`). The call sites:
+  - `dev`'s opening lines: `announceDeploymentTarget` adds "(dashboard)" only for a cloud or cloud-linked `local`
+    deployment, never for an anonymous one or a self-hosted one (`lib/announceDeploymentTarget.ts:107-137,200-214`);
+    but `finalizeConfiguration`, when the configuration changed (`.env.local` or `.gitignore` written), ends with
+    "View the Convex dashboard at <getDashboardUrl>" (`lib/init.ts:59-72`). For an anonymous deployment that runs
+    before `handleDashboard` (`lib/dev.ts:88-122`), so it reads the port the *previous* session saved: `null` on a
+    first run, a stale port otherwise. So PR 7's note ("`dev` prints no dashboard line, as Convex's") was wrong.
+  - `export`: "Export is available at …/settings/snapshots" after the export is created, and "Check its progress
+    at …" after the export-in-progress refusal (`convexExport.ts:47-50`; `lib/convexExport.ts:60-64,181-186`).
+  - `import`: "There is already a snapshot import in progress. You can view its progress at ….", and
+    "WARNING: Import is continuing to run on the server. Visit … to monitor its progress." when its subscription
+    ends early (`convexImport.ts:55-60`; `lib/convexImport.ts:198-206,248-254`).
+  - a push: each staged index gets "See progress: …/data?table=<t>&showIndexes=true" (`lib/components.ts:723-732`,
+    dry runs too); waiting on the schema, three lines — backfill and check, backfill only, check only — and past
+    10 s "see progress here" to the first new index's table or, for the check, "See progress here:
+    …/schema?showSchema=true" (`lib/deploy2.ts:240-307`, `lib/indexes.ts:34-46`); an auth config's missing
+    variable sends to "…/settings/environment-variables?var=<name>", or, with no deployment name, "Go set it in the
+    dashboard or using `npx convex env set`" (`lib/config.ts:966-985`).
+  - the MCP `status` tool's `dashboardUrl`, when there is a deployment name (`lib/mcp/tools/status.ts:89-95,128`).
+  - cloud only, not applicable: login, `project create`, `configure`, preview deploy keys (`deploy.ts:200-203`),
+    usage warnings, the region tip, insights, WorkOS; `convex dashboard` itself (PR 7).
+  - nothing in `logs`, `env`, `data`, `run` or function errors.
+- **Self-hosted.** Convex's CLI has no setting for where a self-hosted dashboard is (`CONVEX_SELF_HOSTED_URL` and
+  `CONVEX_SELF_HOSTED_ADMIN_KEY` name the backend only): a self-hosted export prints
+  `https://dashboard.convex.dev/settings/snapshots`, the auth-config hint has no link, and `convex dashboard`
+  refuses.
+- **The pages** in Convex's dashboard: `?var=` fills the add form with the named variables
+  (`dashboard-common/…/DeploymentEnvironmentVariables.tsx:231-250`); `showSchema` opens the schema panel
+  (`SchemaView.tsx:87-95`); `showIndexes` the indexes panel.
+
+**What was built** (DV-477 as decided: the local dashboard while `bunvex dev` serves it, else no link).
+
+- **The links** (`packages/cli/src/dashboard-links.ts`): a command's link is resolved once, at the first message
+  that needs it — never for a deployment given by `--url` or `BUNVEX_SELF_HOSTED_*`; for a local deployment, the
+  port in `dashboard.json`, once its `/api/current_deployment` names this deployment (the check `bunvex dashboard`
+  makes, so a stopped `dev` or another session's port links nothing). `dev` passes its own dashboard to its pushes.
+  Convex's pages map to bunvex's routes: `settings/snapshots` (the same), `database/<table>?panel=indexes`
+  (`data?table=<table>&showIndexes=true`), `schema` (`schema?showSchema=true`), `settings/environment-variables`
+  (without `?var=`, which bunvex's screen does not read: a gap).
+- **`dev`** (`dev.ts`, `local-deployment.ts`): `writeEnvLocal` says whether `.env.local` or `.gitignore` changed;
+  then, once the local dashboard serves, "View the bunvex dashboard at http://127.0.0.1:<port>/" — the URL it is
+  serving, not the previous session's; none without a dashboard (`--once`, DV-486's offline case, self-hosted).
+- **export, import** (`export.ts`, `import.ts`): Convex's lines with the Snapshots link appended, or without it.
+- **a push** (`deploy.ts`, `index-checks.ts`): "See progress:" under each staged index; Convex's three waiting
+  lines (bunvex printed the first one for all three) with their links past 10 s; the auth config's variable,
+  Convex's "Go to: … to set it up." with the link, its no-link words without one.
+- **MCP `status`** (`mcp-tools.ts`): `dashboardUrl` for a local deployment while its dashboard serves.
+- **Docs**: `docs/dashboard.md`, the user documentation — running it (`bunvex dev` / `bunvex dashboard`, the image
+  and compose, `bunvex dashboard serve`), signing in, the settings (`BUNVEX_DEPLOYMENT_URL`, `BUNVEX_ADMIN_KEY`,
+  6790 and 6791, the `Host` check), the offline behaviour (DV-486), the links, what is live and what is polled, the
+  known gaps; linked from the README, the docker README, the CLI's README, `apps/dashboard`'s README and
+  ARCHITECTURE.md. The docker README already covered the dashboard service (PR 7).
+
+**Not built here** (gaps, "Ainda não fizemos", none a divergence):
+
+- `?var=` on the environment variables screen (Convex prefills the add form with the variable its CLI names).
+- The rest of Convex's `finalizeConfiguration` block ("Write your Convex functions in …", the feedback line) and its
+  condition for the configuration lines: bunvex prints its "Started running a deployment locally …" line on every
+  start (STUDY-40's), and only the dashboard line follows Convex's condition.
+- Import's "WARNING: Import is continuing to run on the server": bunvex follows the import by polling, which never
+  stops early, so the case does not arise.
+
+**Divergences.** None new: DV-477 is built as decided, its row now listing every link; DV-487 to DV-489 unused; no
+addition (AD-41 unused). Printing the URL the dashboard is serving where Convex prints the previous session's port
+(or `null`) is DV-477's "the local dashboard bunvex serves".
+
+**Tests.**
+
+- `packages/cli/test/dashboard-links.test.ts`: which dashboard a command links (the local one serving this
+  deployment, asked once; none with nothing saved, a stopped `dev`, another deployment's dashboard; never, and
+  nothing asked, for a self-hosted deployment or `--url`); a staged index's link and none without a dashboard; the
+  three waiting lines with and without their links; `bunvex deploy` to a local deployment linking the staged index
+  and the auth config's variable, and Convex's no-link words on the same deployment as self-hosted; export's and
+  import's in-progress links (a deployment that answers as busy); a completed export's link, none on self-hosted.
+- `dashboard-serve.test.ts`: `bunvex dev` with the real local dashboard prints "View the bunvex dashboard at" its
+  URL, and `bunvex export` from another terminal links its Snapshots page; once `dev` stops, no link; offline
+  with no dashboard (DV-486), no line.
+- `mcp.test.ts`: `status` has no `dashboardUrl` without a local dashboard, and the local one's with it.
+- In Chromium (`local-dashboard.e2e.ts`): each page the CLI links (`settings/snapshots`,
+  `settings/environment-variables`, `schema`, `database/notes?panel=indexes`) opens on its screen after the local
+  dashboard signs in by itself.
+
+**Sabotage** (each restored after, `git diff` checked; counts are failing tests):
+
+| Sabotage | Failing tests |
+|---|---|
+| the link not checked against `/api/current_deployment` | 1 |
+| a self-hosted deployment linked | 1 |
+| no "See progress" under a staged index | 2 |
+| no link past 10 s on the schema check | 1 |
+| one waiting line for every state (bunvex's before) | 1 |
+| export's "Export is available at" dropped | 1 |
+| export's "Check its progress at" dropped | 1 |
+| import's link dropped | 1 |
+| the auth config's link dropped | 1 |
+| the environment variables page wrong | 1 |
+| MCP `dashboardUrl` dropped | 1 |
+| `dev`'s line never printed | 1 |
+| `dev`'s line printed without a dashboard | 1 |
+| `dev` gives its pushes no link (the line follows the same link) | 1 |
+
+**Measurements.** No hot path: CLI messages only. A command asks the local dashboard at most once (one loopback
+request, 2 s timeout), only when a message needs the link and a port is saved; a self-hosted deployment asks
+nothing.
 
 ## 6. Open questions
 

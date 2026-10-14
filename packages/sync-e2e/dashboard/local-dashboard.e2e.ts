@@ -3,6 +3,7 @@
 // local (here a bunvex server in this process), signs in by itself from `/api/current_deployment`, as Convex's
 // local dashboard does — at 127.0.0.1 and at localhost. Opened under another name that resolves to 127.0.0.1 (a
 // DNS-rebinding page), the server refuses the credentials (the `Host` check, DV-476) and the sign-in page is shown.
+// The pages the CLI links (DV-477) open on their screens.
 //
 // Not a `*.test.ts`: it needs a browser and builds the app, so it runs with the dashboard's browser tests (`bun run
 // e2e`, CI's "e2e · dashboard in Chromium"): the system Chrome locally, Playwright's Chromium in CI
@@ -84,7 +85,7 @@ afterAll(async () => {
   if (work) rmSync(work, { recursive: true, force: true });
 });
 
-async function open(host: string) {
+async function open(host: string, path = "") {
   const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
   const page = await context.newPage();
   const errors: string[] = [];
@@ -93,7 +94,7 @@ async function open(host: string) {
   page.on("response", (r) => {
     if (r.url().endsWith("/api/current_deployment")) answers.push(r.status());
   });
-  await page.goto(`http://${host}:${PORT}/`);
+  await page.goto(`http://${host}:${PORT}/${path}`);
   return { page, errors, answers, close: () => context.close() };
 }
 
@@ -108,6 +109,27 @@ describe("bunvex dashboard serve, the local dashboard", () => {
       expect(errors).toEqual([]);
       await close();
     });
+
+  // the pages the CLI links (STUDY-149 PR 8, DV-477): each opens on its screen once signed in by itself
+  test("the CLI's links: each opens its screen", async () => {
+    const pages: [string, (p: import("playwright-core").Page) => Promise<unknown>][] = [
+      ["settings/snapshots", (p) => p.getByRole("heading", { level: 1, name: "Snapshots" }).waitFor()],
+      [
+        "settings/environment-variables",
+        (p) => p.getByRole("heading", { level: 1, name: "Environment variables" }).waitFor(),
+      ],
+      ["schema", (p) => p.getByRole("heading", { level: 1, name: "Schema" }).waitFor()],
+      ["database/notes?panel=indexes", (p) => p.getByText("Indexes of notes", { exact: true }).first().waitFor()],
+    ];
+    for (const [path, shown] of pages) {
+      const { page, errors, answers, close } = await open("127.0.0.1", path);
+      await shown(page);
+      expect(answers).toEqual([200]);
+      expect(new URL(page.url()).pathname).toBe(`/${path.split("?")[0]}`);
+      expect(errors).toEqual([]);
+      await close();
+    }
+  });
 
   test("at a rebound name: the credentials refused (403), the sign-in page shown", async () => {
     const { page, errors, answers, close } = await open(REBOUND);

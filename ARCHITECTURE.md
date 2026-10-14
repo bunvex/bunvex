@@ -156,7 +156,7 @@ bunvex/
 │   │   ├── function-spec            every function's args and returns, as JSON (STUDY-37, STUDY-105) ✅
 │   │   ├── import, export           snapshot ZIP, CSV, JSON, JSON Lines (STUDY-42)            ✅
 │   │   ├── mcp                      MCP server for AI tools: the official SDK, zod (STUDY-121) ✅
-│   │   └── network-test, docs, update, dashboard  as Convex's, self-hosted (STUDY-146)  ✅
+│   │   └── network-test, docs, update, dashboard  as Convex's (STUDY-146, STUDY-149)    ✅
 │   │
 │   ├── testing/                     @bunvex/testing  the REAL engine in memory, to test functions M
 │   │
@@ -171,7 +171,8 @@ bunvex/
 │
 ├── apps/
 │   ├── dashboard/                   thin Vite host mounting @bunvex/dashboard on a deployment     🟡
-│   │                                (dashboard-source) or the demo data; packaging next (STUDY-149)
+│   │                                (dashboard-source) or the demo data; its own image, dashboard.zip,
+│   │                                bunvex dev's local dashboard (STUDY-149; docs/dashboard.md)
 │   └── site/                        bunvex.dev (SITE-01): landing now, user docs later; TanStack Start 🟡
 │
 ├── examples/                        one-feature apps after Convex's demos, each with an end-to-end

@@ -116,7 +116,6 @@ export function httpActionServer(o: HttpActionOptions) {
       return errorResponse(outcome.e);
     }
     const res = outcome.r;
-    if (!(res instanceof Response)) return errorResponse(new Error("HTTP actions must return a Response"));
     // The headers before the body: Bun adds a Blob body's Content-Type (`new Response(blob)`) only if they are
     // read first; reading `body` first drops it.
     const resHeaders = res.headers;

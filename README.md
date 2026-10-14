@@ -27,8 +27,8 @@ A [Convex](https://convex.dev)-style reactive backend written in TypeScript for 
 
 **Status: pre-alpha.** The engine, the persistence drivers, the server (HTTP API, WebSocket sync,
 validation, auth, the scheduler and crons, file storage, HTTP actions), the client SDK with its React and
-Next.js bindings, and the CLI work; the hot paths are benchmarked. Components, built-in authentication and
-the dashboard on a real deployment are still to come. See [ARCHITECTURE.md](ARCHITECTURE.md) and
+Next.js bindings, the CLI and the dashboard ([docs/dashboard.md](docs/dashboard.md)) work; the hot paths are
+benchmarked. Components and built-in authentication are still to come. See [ARCHITECTURE.md](ARCHITECTURE.md) and
 [docs/parity/](docs/parity/README.md) for what exists and what is planned. Moving to a new release, or between
 Convex and bunvex: [docs/upgrading.md](docs/upgrading.md).
 
@@ -63,7 +63,7 @@ the row compares them with that off (Convex's `raw` profile, measured 29 Sep).
 | `packages/react`, `nextjs`, `react-clerk`, `react-auth0`, `react-query` | React bindings, Next.js server rendering, Clerk and Auth0 providers, TanStack Query |
 | `packages/cli` | the `bunvex` command line: admin-key, codegen, dashboard, data, deploy, deployment, dev, docs, env, export, function-spec, import, logs, mcp, network-test, run, typecheck, update (`@bunvex/cli`) |
 | `packages/bunvex` | an internal workspace aggregate re-exporting the `@bunvex/*` packages (private, never published: apps install `@bunvex/*`) |
-| `packages/ui`, `packages/dashboard`, `apps/dashboard` | the design system and the dashboard (on mock data for now) |
+| `packages/ui`, `packages/dashboard`, `packages/dashboard-source`, `apps/dashboard` | the design system, the dashboard's screens, its data source on a deployment, and the app ([docs/dashboard.md](docs/dashboard.md)) |
 | `packages/testing`, `sync-e2e`, `jepsen`, `differential` | test helpers and test suites (not published) |
 | `apps/site` | [bunvex.dev](https://bunvex.dev), the website (landing now, user docs later) |
 | `examples/` | one-feature example apps ([examples/README.md](examples/README.md)) |
