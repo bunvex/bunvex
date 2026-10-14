@@ -1,6 +1,6 @@
 # STUDY-160 — The packages as npm ships them: compiled JavaScript for Node.js and the bundlers
 
-- **Status:** implemented (#PR); DV-503 and DV-504 pending (owner)
+- **Status:** implemented (#633); DV-503 accepted, DV-504 matched to Convex (owner, 2026-10-14)
 - **Convex source read:** `npm-packages/convex` at the commit of [STUDY-137](STUDY-137-convex-reference-2026-10-07.md)
 - **Related:** [STUDY-40](STUDY-40-local-backend-and-local-deployments.md) §1.3 and L7 (the npm packages),
   [STUDY-36](STUDY-36-codegen.md) G5 (DV-177), [STUDY-91](STUDY-91-isomorphic-server.md) (`@bunvex/server`
@@ -59,12 +59,19 @@ Built: `values`, `search`, `protocol`, `core`, `auth`, `file-storage`, `persiste
 `react-clerk`, `react-auth0`, `react-query`, `nextjs`. Not built: `cli`, a Bun program (`bunx bunvex`, STUDY-40 L7)
 that no app imports.
 
-**Two source changes** came out of checking the declarations:
+**Source changes** for declarations that stand alone:
 - `@bunvex/core` exports the type `DiscardedStagedValidator` (part of `SchemaPrediction`, which it already
   exported): without it the declaration of `@bunvex/server`'s push cannot name it.
 - `@bunvex/values`'s `omit`, `pick`, `partial` and `extend` write their return types out. The declaration emit
   inlined `ObjectType<…>` into mapped types that do not typecheck on their own (an app with `skipLibCheck` off
   saw TS2536 and TS2344 in `validators.d.ts`).
+- `@bunvex/server` declares the members of Bun's `Server` and `ServerWebSocket` its API exposes
+  (`bun-types.ts`: `BunServer` for `createServer`'s `server` and `site`, `BunServerWebSocket` for a sync session's
+  socket), so its declarations name nothing of Bun's (DV-504, owner 2026-10-14: as Convex's). Bun's objects have
+  every member; the repository's typecheck checks that where they are assigned.
+- `@bunvex/core`'s `BTree` type names `sorted-btree`'s class as the module's `default` (`import type * as`): its
+  default import is the class to a bundler but the whole `module.exports` to Node's ES modules, where the
+  declaration failed with TS2709.
 
 **The test** (`packages/sync-e2e/node/npm-packages.node.ts`, `bun run test:npm`, its own CI job with Node 22):
 stages the packages into an app's `node_modules`, then
@@ -73,13 +80,14 @@ stages the packages into an app's `node_modules`, then
   React packages loaded;
 - `node cjs.cjs`: the same through `require`;
 - `tsc` over a typed file with `nodenext` (an ES module and a `.cts`) and with `bundler`, `skipLibCheck` on as the
-  frameworks set it, and once with it off (with Bun's types): `@ts-expect-error` lines prove the types are the
-  declarations', not `any`.
+  frameworks set it, and again with it off, with Node's types and no Bun types (both resolutions): zero errors.
+  `@ts-expect-error` lines prove the types are the declarations', not `any`.
 
 Before this change (each package staged as sources only, as published until now) both `node` runs fail with
 `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`. Sabotage: without `esModuleInterop` the CommonJS run fails (the
-version is `undefined`); without the `../package.json` relocation both fail; reverting either source change fails
-staging (core) or the strict typecheck (values).
+version is `undefined`); without the `../package.json` relocation both fail; reverting a source change fails
+staging (core's export) or the strict typecheck (values: TS2536; `site` or the socket typed as Bun's: TS2503 or
+TS2307; the `BTree` type: TS2709).
 
 **Measured** (Apple M-series, warm): staging all fifteen packages takes 5.4–5.8 s (the declarations' program is
 most of it). The packed size grows with `dist/` (gzip, all fifteen): 1.09 MB → 3.37 MB; `@bunvex/client` 40 kB →
@@ -89,8 +97,8 @@ most of it). The packed size grows with `dist/` (gzip, all fifteen): 1.09 MB →
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| DV-503 | Under Bun, the packages run from their TypeScript sources (the `bun` condition, first in `exports`); Node, the bundlers and TypeScript get `dist/`. Convex has no Bun branch: Bun loads its `dist/esm`. Not observable but for file names in stack traces (`src/…ts` instead of `dist/esm/…js`) | The server and the CLI are Bun programs tested only from their sources (pushed code's realm, `import.meta` uses, the CLI's bundling); keeping Bun on the sources keeps what runs there unchanged. Alternative: Bun on `dist/esm` as Convex, after running the server's suites against the build | pending (owner); recommended: accept |
-| DV-504 | `@bunvex/server`'s declarations name Bun's types (`Server`, `ServerWebSocket` from `bun`): an app with `skipLibCheck: false` and no `@types/bun` gets two errors in them. Convex's need nothing beyond its own | The server's public API is Bun's (`createServer` returns Bun's server). `skipLibCheck` is on in `bunvex codegen --init`'s tsconfig, Next.js's and Vite's templates, as in Convex's. Alternative: declare those types structurally in the server so its declarations stand alone | pending (owner); recommended: accept |
+| DV-503 | Under Bun, the packages run from their TypeScript sources (the `bun` condition, first in `exports`); Node, the bundlers and TypeScript get `dist/`. Convex has no Bun branch: Bun loads its `dist/esm`. Not observable but for file names in stack traces (`src/…ts` instead of `dist/esm/…js`) | The server and the CLI are Bun programs tested only from their sources (pushed code's realm, `import.meta` uses, the CLI's bundling); keeping Bun on the sources keeps what runs there unchanged. Alternative: Bun on `dist/esm` as Convex, after running the server's suites against the build | accepted (owner, 2026-10-14: A) |
+| DV-504 | `@bunvex/server`'s declarations name Bun's types (`Server`, `ServerWebSocket` from `bun`): an app with `skipLibCheck: false` and no `@types/bun` gets two errors in them. Convex's need nothing beyond its own | The server's public API is Bun's (`createServer` returns Bun's server). `skipLibCheck` is on in `bunvex codegen --init`'s tsconfig, Next.js's and Vite's templates, as in Convex's. Alternative: declare those types structurally in the server so its declarations stand alone | matched to Convex (owner, 2026-10-14: B): the server declares what it uses (`bun-types.ts`) |
 
 Not done, recorded in the parity inventory: Convex's UMD `browser-bundle.js` (a `<script>` tag build of
 `convex/browser`); `engines.node` (the sync client needs Node 22's `WebSocket` unless one is passed, decided in

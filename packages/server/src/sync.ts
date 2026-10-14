@@ -40,9 +40,9 @@ import {
 } from "@bunvex/core";
 import { v1 } from "@bunvex/protocol";
 import { rawValueSize, type Value } from "@bunvex/values";
-import type { ServerWebSocket } from "bun";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { BadAdminKeyError } from "./admin-keys.ts";
+import type { BunServerWebSocket } from "./bun-types.ts";
 import { closeFrame, isDeterministicUserError, type SyncFailure } from "./close-frame.ts";
 import { tooDeepToStringify } from "./deep-values.ts";
 import {
@@ -903,7 +903,7 @@ export class SyncHub {
   }
 }
 
-type Socket = ServerWebSocket<{ session: SyncSession }>;
+type Socket = BunServerWebSocket;
 
 /** A client message's span name, after `sync-worker/` (Convex's sync worker names its roots so). */
 const MESSAGE_SPANS: Record<v1.ClientMessage["type"], string> = {

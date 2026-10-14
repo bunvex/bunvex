@@ -142,7 +142,10 @@ test("TypeScript reads the published declarations, for import and for require", 
   writeFileSync(join(app, "package.json"), JSON.stringify({ name: "app", private: true, type: "module" }));
   expect(tsc("nodenext", "nodenext", ["types.ts", "types-cjs.cts"])).toBe("");
   expect(tsc("esnext", "bundler", ["types.ts"])).toBe("");
-  // Every declaration checked, as an app with `skipLibCheck` off and Bun's types sees them.
-  linkFrom(ROOT, "@types/bun");
-  expect(tsc("esnext", "bundler", ["types.ts"], { types: ["bun"] })).toBe("");
+  // Every declaration checked, as an app on Node (Node's types, as Next.js's templates add) with `skipLibCheck`
+  // off and no Bun types sees them: they name nothing of Bun's (DV-504, owner 2026-10-14: as Convex's).
+  linkFrom(join(ROOT, "examples/nextjs-app-router"), "@types/node");
+  expect(existsSync(join(app, "node_modules/@types/bun"))).toBe(false);
+  expect(tsc("esnext", "bundler", ["types.ts"], { types: ["node"] })).toBe("");
+  expect(tsc("nodenext", "nodenext", ["types.ts", "types-cjs.cts"], { types: ["node"] })).toBe("");
 }, 60_000);
