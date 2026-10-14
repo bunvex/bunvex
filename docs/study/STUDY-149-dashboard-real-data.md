@@ -1530,6 +1530,19 @@ Packaging. Convex's side re-read for it (`cli/` is `npm-packages/convex/src/cli/
 2. *Test pitfall*: `bun test` sets `NODE_ENV=test`, and a Vite build started from a test inherits it and makes a
    development build (React's StrictMode then runs effects twice: two `/api/current_deployment` requests). The
    browser test and `build-dashboard.ts` set `NODE_ENV=production`.
+3. *Fixed after PR 7* (`fix/local-dashboard-port-race`): the first free port from 6790 was probed, then bound; a
+   process binding it in between (two `bunvex dev` starting at once, parallel tests: the full suite once failed
+   with "Failed to start server. Is port 6790 in use?") stopped `dev`. Convex has the same gap: `choosePorts`
+   probes with `detect-port` (`ld/utils.ts:6-51`), then `startServer`'s `listen` only logs the `EADDRINUSE` and its
+   promise never resolves (`ld/serve.ts:64-71`), so its `dev` hangs before the first push. bunvex now binds and, on
+   `EADDRINUSE` only, moves to the next free port (up to 20 times; `serveOnFirstFreePort`, `local-dashboard.ts`),
+   so both get a dashboard, each port saved for its own project. Not a divergence: where Convex's `dev` works,
+   both pick the same port; they differ only where Convex's hangs. The backend's own ports (`choosePort` for
+   3210/3211, bound by the executable) keep the probe-then-bind gap, as Convex's. Tests (`dashboard-serve.test.ts`):
+   two servers started together from one base serve on two ports; a port taken between the probe and the bind
+   gives the next one, and another start error is not retried; two `startLocalDashboard` together save their own
+   ports. Sabotage: no retry (3 tests fail), a retry on any error (1), retrying the same port (3), `dev`'s dashboard
+   not using the retry (1).
 
 **Divergences and additions.** One new divergence, DV-486 (owner, 2026-10-14: warn and keep going; above);
 DV-487 to DV-489 unused. One addition, AD-40, `bunvex dashboard serve` (owner, 2026-10-14; planned in §3.3). DV-475 and DV-476 are built as decided; DV-475's row now names the

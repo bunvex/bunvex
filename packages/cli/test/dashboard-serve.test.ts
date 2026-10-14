@@ -8,10 +8,16 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { dashboardCommand } from "../src/dashboard.ts";
-import { withPrefill } from "../src/dashboard-server.ts";
+import { serveDashboard, withPrefill } from "../src/dashboard-server.ts";
 import { devCommand } from "../src/dev.ts";
 import type { Io } from "../src/index.ts";
-import { extractZip, readDashboardPort, readDashboardUnavailable } from "../src/local-dashboard.ts";
+import {
+  extractZip,
+  readDashboardPort,
+  readDashboardUnavailable,
+  serveOnFirstFreePort,
+  startLocalDashboard,
+} from "../src/local-dashboard.ts";
 import { EXE, forgetLatestVersion, stateDir } from "../src/local-deployment.ts";
 
 const ENTRY = resolve(import.meta.dir, "../../bunvex/bin/local-backend.ts");
@@ -551,4 +557,73 @@ describe("the local dashboard when its version cannot be had (DV-486: a warning,
     );
     await missing.end();
   }, 60_000);
+});
+
+describe("the first free port, when another process binds it first (two `dev` starting at once)", () => {
+  /** A base with ten free ports after it, away from 6790 and from other tests' fixed ports. */
+  const freeBase = () => {
+    for (;;) {
+      const p = 20_000 + Math.floor(Math.random() * 12_000);
+      if (Array.from({ length: 10 }, (_, i) => bindable(p + i)).every(Boolean)) return p;
+    }
+  };
+
+  test("two servers started together from the same base both serve, on different ports", async () => {
+    const dir = built();
+    const base = freeBase();
+    const servers = await Promise.all(
+      [0, 1].map(() => serveOnFirstFreePort(base, [], (port) => serveDashboard({ dir, port }))),
+    );
+    for (const s of servers) stops.push(s.stop);
+    const ports = servers.map((s) => s.port);
+    expect(new Set(ports).size).toBe(2);
+    for (const p of ports) {
+      expect(p).toBeGreaterThanOrEqual(base);
+      expect(await (await fetch(`http://127.0.0.1:${p}/`)).text()).toBe(INDEX);
+    }
+  });
+
+  test("a port taken between the probe and the bind: the next one; any other start error is not retried", async () => {
+    const dir = built();
+    const base = freeBase();
+    let thief: ReturnType<typeof Bun.serve> | undefined;
+    const server = await serveOnFirstFreePort(base, [], async (port) => {
+      // the first probe found `port` free; someone binds it before we do
+      thief ??= Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response("thief") });
+      return serveDashboard({ dir, port });
+    });
+    stops.push(server.stop, () => thief?.stop(true));
+    expect(server.port).toBe(base + 1);
+    let tries = 0;
+    const failed = await serveOnFirstFreePort(base + 2, [], (port) => {
+      tries++;
+      return serveDashboard({ dir: tmp(), port });
+    }).catch((e: Error) => e);
+    expect((failed as Error).message).toContain("is not a built dashboard");
+    expect(tries).toBe(1);
+  });
+
+  test("two `dev` dashboards starting together each get their own port, saved for their project", async () => {
+    const home = tmp();
+    const cache = join(home, ".cache/bunvex/dashboard");
+    built(join(cache, "out"));
+    writeFileSync(join(cache, "config.json"), JSON.stringify({ version: "precompiled-2026-10-01-aaaaaaa" }));
+    // offline: the cached app is served (DV-486)
+    const env = { HOME: home, BUNVEX_RELEASES_URL: `http://127.0.0.1:${freePort()}` };
+    const base = freeBase();
+    const projects = [tmp(), tmp()];
+    const started = await Promise.all(
+      projects.map((cwd, i) =>
+        startLocalDashboard(
+          io(cwd, env).it,
+          { name: `app-${i}`, url: "http://127.0.0.1:1", adminKey: `app-${i}|01` },
+          { from: base },
+        ),
+      ),
+    );
+    for (const s of started) stops.push(s.stop);
+    const ports = projects.map((cwd) => readDashboardPort(cwd));
+    expect(new Set(ports).size).toBe(2);
+    expect(ports).toEqual(started.map((s) => s.server!.port));
+  });
 });
