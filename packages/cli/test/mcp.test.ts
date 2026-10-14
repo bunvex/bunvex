@@ -255,6 +255,20 @@ describe("bunvex mcp start", () => {
       expect.objectContaining({ kind: "local", url: `http://127.0.0.1:${port}` }),
     ]);
     expect(s.value.availableDeployments[0].readOnly).toBeUndefined();
+    // Convex's `dashboardUrl`: none without a local dashboard; the local one while `dev` serves it (DV-477)
+    expect(s.value.availableDeployments[0].dashboardUrl).toBeUndefined();
+    const dashboard = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: (req) =>
+        new URL(req.url).pathname === "/api/current_deployment"
+          ? Response.json({ name: NAME, url, adminKey: KEY })
+          : new Response(null, { status: 404 }),
+    });
+    stops.push(() => dashboard.stop(true));
+    writeFileSync(join(local, ".bunvex/local/default/dashboard.json"), JSON.stringify({ port: dashboard.port }));
+    const linked = await c.call("status", { projectDir: local });
+    expect(linked.value.availableDeployments[0].dashboardUrl).toBe(`http://127.0.0.1:${dashboard.port}/`);
     const sel = s.value.availableDeployments[0].deploymentSelector;
     const r = await c.call("run", { deploymentSelector: sel, functionName: "messages:list", args: "{}" });
     expect(r.isError).toBe(false);

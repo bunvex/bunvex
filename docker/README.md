@@ -49,7 +49,8 @@ container: the dashboard keeps it in the page's memory, and a reload asks again.
 
 The browser talks to the backend directly, so `BUNVEX_DEPLOYMENT_URL` must be the backend's URL as the browser
 reaches it (default `http://127.0.0.1:$PORT`). Without Docker, `bunvex dashboard serve --deployment-url <url>`
-serves the same app (`--help` for its options).
+serves the same app (`--help` for its options). [docs/dashboard.md](../docs/dashboard.md) covers the dashboard:
+running it, signing in, its settings, and what it shows live.
 
 The dashboard sends Convex's image's security headers, and only its own pages may frame it
 (`X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'`). To embed it in another site's page, which then signs

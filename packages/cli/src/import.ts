@@ -1,6 +1,7 @@
 // `bunvex import` (STUDY-42 PR 3), as Convex's `npx convex import` (npm-packages/convex/src/cli/convexImport.ts,
 // lib/convexImport.ts): upload the file in parts, wait while the deployment parses it, show its change
-// summary and ask before anything is deleted, start it, then follow its progress to the end.
+// summary and ask before anything is deleted, start it, then follow its progress to the end. Convex's link to the
+// snapshots page points at the local dashboard while `bunvex dev` serves it, and is left out otherwise (DV-477).
 import { existsSync, statSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import {
@@ -12,6 +13,7 @@ import {
   tooManyArguments,
   unknownOption,
 } from "./args.ts";
+import { dashboardPage, localDashboardLink, SNAPSHOTS_PAGE } from "./dashboard-links.ts";
 import type { Io } from "./io.ts";
 import { acquireTarget } from "./local-deployment.ts";
 import { adminRequest, NO_DEPLOYMENT, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
@@ -180,7 +182,10 @@ export async function importCommand(args: string[], io: Io, opts: { pollMs?: num
   try {
     const existing = (await systemQuery(target, "_system/cli/queryImport:list", {})) as { state: { state: string } }[];
     if (existing.some((i) => i.state.state === "in_progress")) {
-      io.err("There is already a snapshot import in progress.");
+      const progress = await dashboardPage(localDashboardLink(io, taken.flags), SNAPSHOTS_PAGE);
+      io.err(
+        `There is already a snapshot import in progress.${progress === null ? "" : ` You can view its progress at ${progress}.`}`,
+      );
       if (!yes) {
         const ok = askYesNo(io, "Start another import?");
         if (ok === null) {

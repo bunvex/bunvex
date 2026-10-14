@@ -3,6 +3,7 @@
 // `evaluate_schema` call tells what the push would do. Deleting an index of a large table, or creating
 // (or enabling) a non-staged one that blocks the push for its backfill, asks for confirmation — or needs
 // `--skip-large-indexes-check` without a terminal; a dry run warns about a slow schema walk.
+import { tableIndexesPage } from "./dashboard-links.ts";
 import type { Io } from "./io.ts";
 
 export type CheckMode = "no verification" | "ask for confirmation" | "has confirmation";
@@ -225,12 +226,17 @@ export type IndexDiff = {
 /**
  * What a push did to the indexes, as Convex's `printDiff` (cli/lib/components.ts) prints the root's: deleted,
  * added, added staged, enabled and staged again, each a finished step listing its indexes with `formatIndex`.
- * Convex follows each staged index with a link to its dashboard's progress page; bunvex's CLI knows no
- * dashboard, so there is none (as DV-04 drops links to Convex's sites).
+ * Convex follows each staged index with a link to its table's indexes on its dashboard; bunvex links the local
+ * dashboard (`dashboard`, its root) when there is one, else none (DV-477).
  */
-export function printIndexDiff(io: Io, diff: IndexDiff, dryRun: boolean) {
-  const step = (title: string, mark: string, list: IndexConfig[]) => {
-    if (list.length > 0) io.err(`✔ ${title}\n${list.map((i) => `  [${mark}] ${formatIndex(i)}`).join("\n")}`);
+export function printIndexDiff(io: Io, diff: IndexDiff, dryRun: boolean, dashboard: string | null = null) {
+  const step = (title: string, mark: string, list: IndexConfig[], link?: (i: IndexConfig) => string | null) => {
+    if (list.length === 0) return;
+    const lines = list.map((i) => {
+      const url = link?.(i) ?? null;
+      return `  [${mark}] ${formatIndex(i)}${url === null ? "" : `\n      See progress: ${url}`}`;
+    });
+    io.err(`✔ ${title}\n${lines.join("\n")}`);
   };
   step(`${dryRun ? "Would delete" : "Deleted"} table indexes:`, "-", diff.removed_indexes);
   step(
@@ -242,6 +248,7 @@ export function printIndexDiff(io: Io, diff: IndexDiff, dryRun: boolean) {
     `${dryRun ? "Would add" : "Added"} staged table indexes:`,
     "+",
     diff.added_indexes.filter((i) => i.staged),
+    (i) => (dashboard === null ? null : `${dashboard}${tableIndexesPage(i.name.split(".")[0]!)}`),
   );
   step(dryRun ? "These indexes would be enabled:" : "These indexes are now enabled:", "*", diff.enabled_indexes ?? []);
   step(dryRun ? "These indexes would be staged:" : "These indexes are now staged:", "*", diff.disabled_indexes ?? []);
