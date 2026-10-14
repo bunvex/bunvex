@@ -397,7 +397,7 @@ stream to pump); 5 untyped bytes 16.6k–17.4k → 16.4k–16.8k (the constructo
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| DV-483 | The framing Bun picks. Convex sends a stream and no body chunked, and untyped bytes with their `content-length`. Bun sends a stream that ended before the head (one small chunk) with its length, no body with `content-length: 0`, and untyped bytes past its first chunk chunked | Bun picks the framing of what it sends: it ignores an explicit `content-length` or `transfer-encoding` on a stream (DV-324), and types every whole body. For untyped bytes the choice is (a) streamed: Convex's "no type", no length past ~16 KiB (built), or (b) whole: the length, plus `content-type: application/octet-stream` | pending (owner); recommended: accept, with (a) |
+| DV-483 | The framing Bun picks. Convex sends a stream and no body chunked, and untyped bytes with their `content-length`. Bun sends a stream that ended before the head (one small chunk) with its length, no body with `content-length: 0`, and untyped bytes past its first chunk chunked | Bun picks the framing of what it sends: it ignores an explicit `content-length` or `transfer-encoding` on a stream (DV-324), and types every whole body. For untyped bytes the choice is (a) streamed: Convex's "no type", no length past ~16 KiB (built), or (b) whole: the length, plus `content-type: application/octet-stream` | owner, 2026-10-14: accept, (a) (as recommended) |
 
 Not divergences: a FormData's boundary is random on both, and its encoding is each runtime's own (the parts read
 back are equal; each `content-length` is right for its bytes). An explicit `content-length` on a stream is the case

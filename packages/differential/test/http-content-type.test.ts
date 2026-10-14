@@ -4,7 +4,7 @@
 // a DataView, a 1 MiB string, a stream, no body — with and without an explicit Content-Type or Content-Length, by
 // GET and by HEAD, read off the wire. Compared: the status, Content-Type, Content-Length, the body. A FormData's
 // boundary is random on both (only its form is compared) and so is its encoding (the parts read back are). The
-// framing of a stream and of untyped bytes is the decided-or-pending difference (DV-483), asserted per backend.
+// framing of a stream and of untyped bytes is the decided difference (DV-483), asserted per backend.
 // Local only: skipped, with a note, when Convex's backend is not there (scripts/download-convex-backend.sh, or
 // CONVEX_BACKEND_BIN).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
