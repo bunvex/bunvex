@@ -157,7 +157,7 @@ import {
   type UdfType,
   usageStats,
 } from "./function-log.ts";
-import { HTTP_ACTION_RESPONSE_LIMIT, meteredBody } from "./http-body.ts";
+import { HTTP_ACTION_RESPONSE_LIMIT, meteredBody, type SentBody } from "./http-body.ts";
 import { type HttpProxy, proxiedFetch } from "./http-proxy.ts";
 import { actionWarnings, functionWarnings, httpActionWarnings } from "./limit-warnings.ts";
 import { collectingAuditLines, resolveAuditLines } from "./log-audit.ts";
@@ -183,6 +183,7 @@ import { setServiceCallContext } from "./service-tokens.ts";
 import type { FileStorage, StorageMeter } from "./storage.ts";
 import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
 import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB, type UsageMeter } from "./usage-limits.ts";
+import { bodyLength } from "./web-response.ts";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe), and the
  *  hash of the code it ran (a code version's module, STUDY-35), so a new version never reads an old result. */
@@ -2428,7 +2429,7 @@ export class Functions {
     const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION, handler);
     let t0 = 0;
     let running: Running | null = null;
-    let body: ReturnType<typeof meteredBody> | null = null;
+    let body: { sent: Promise<SentBody> } | null = null;
     // Convex's HTTP action warnings (STUDY-76), when its response is sent or its handler failed.
     const warnings = (sentBytes: number, tooLarge = false) =>
       httpActionWarnings({
@@ -2473,9 +2474,31 @@ export class Functions {
               warnings(0);
               return response;
             }
+            const init = { status: response.status, statusText: response.statusText, headers };
+            let stream = response.body;
+            // A body of known length (not a stream) is sent with its `content-length` unless the app set one, as
+            // Convex's (STUDY-31 §8); Bun sends a stream chunked. Convex's isolate hands such a body over at once,
+            // so the run is logged now.
+            const length = response.bodyUsed ? undefined : bodyLength(response);
+            if (length !== undefined && headers.has("content-type")) {
+              const whole = await response.blob();
+              if (whole.size <= HTTP_ACTION_RESPONSE_LIMIT) {
+                if (!headers.has("content-length")) headers.set("content-length", String(whole.size));
+                body = {
+                  sent: Promise.resolve({ bytes: whole.size, errors: [], tooLarge: false, disconnected: false }),
+                };
+                return new Response(whole, init);
+              }
+              stream = whole.stream();
+            } else if (typeof length === "number" && request.method === "HEAD") {
+              // Untyped bytes: Bun would type a whole body (`application/octet-stream`), so they are streamed, with
+              // the length only when Bun has them at once (DV-483); a HEAD request gets it.
+              if (!headers.has("content-length")) headers.set("content-length", String(length));
+            }
             // The body, sent as Convex's streamer does (100 MiB at most); the run is logged once it is.
-            body = meteredBody(response.body, request.signal);
-            return new Response(body.stream, { status: response.status, statusText: response.statusText, headers });
+            const metered = meteredBody(stream, request.signal);
+            body = metered;
+            return new Response(metered.stream, init);
           } catch (e) {
             if (!isSystemError(e)) warnings(0);
             throw e;

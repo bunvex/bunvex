@@ -255,7 +255,7 @@ describe("bunvex dashboard", () => {
     }
   });
 
-  test("a local deployment has no dashboard (DV-202): Convex's warning", async () => {
+  test("a local deployment whose dashboard is not running: Convex's warning", async () => {
     const r = io({ BUNVEX_DEPLOYMENT: "local:anonymous-app" });
     expect(await main(["dashboard"], r.it)).toBe(0);
     expect(r.err).toEqual([

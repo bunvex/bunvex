@@ -11,6 +11,7 @@ on:
     paths:
       - "docker/**"
       - "packages/**"
+      - "apps/dashboard/**"
       - "bun.lock"
       - "package.json"
       - ".dockerignore"
@@ -39,9 +40,27 @@ jobs:
         env:
           SMOKE_POSTGRES: ${{ matrix.database == 'postgres' && '1' || '' }}
 
+  # The dashboard's own image (STUDY-149 PR 7, DV-475): built, brought up beside the backend, and signed in to
+  # in Chromium (docker/smoke-dashboard.sh).
+  dashboard:
+    name: dashboard image smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: install Chromium (the version playwright-core 1.63.0 drives)
+        working-directory: apps/dashboard
+        run: bun x playwright-core install --with-deps chromium
+      - run: docker/smoke-dashboard.sh
+        env:
+          E2E_BROWSER: chromium
+
   publish:
     name: publish to ghcr.io
-    needs: smoke
+    needs: [smoke, dashboard]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.PUBLISH_IMAGE == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -65,3 +84,12 @@ jobs:
           tags: |
             ghcr.io/bunvex/bunvex-backend:latest
             ghcr.io/bunvex/bunvex-backend:${{ github.sha }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/dashboard.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/bunvex/bunvex-dashboard:latest
+            ghcr.io/bunvex/bunvex-dashboard:${{ github.sha }}

@@ -8,7 +8,7 @@ item. It is the project's to-do list at the scale of the whole product.
 |---|---|--:|--:|--:|
 | Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 238 | 2 | 6 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 163 | 2 | 1 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 228 | 20 | 13 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 229 | 20 | 13 |
 
 Beyond Convex, [additions.md](additions.md) lists 29 additions: 26 built (11 of them dashboard screens on the
 mock, 3 more with their dashboard part on the mock), 2 accepted, 1 deferred, none proposed (2026-10-11, with AD-29).
@@ -204,12 +204,13 @@ gaps.
     runner with its custom test query and Settings, with the server's `modules:*`, `components:list`,
     `getVersion`, `cloudUrl` / `siteUrl`, `listEnvironmentVariables`, `latestExport` and `snapshotImport:list`;
     PR 6: `apps/dashboard` runs on it — the real sign-in, Convex's connection overlay and polling rules, the live
-    table list, HTTP actions, Health's concurrency and invalidations, the paused lists); left: packaging (the
-    dashboard's image, `dashboard.zip`, `bunvex dev`'s local dashboard, PR 7) and the CLI's links (PR 8), plus the
-    custom query's type checking and Convex's bulk edit.
-- HTTP actions, found while matching their log name to Convex's (STUDY-31 §7.3; the log name itself is done):
-  - a `new Response("text")` answers with no `content-type` (Convex: `text/plain;charset=UTF-8`), as the body is
-    re-streamed and Bun only adds that header when it writes a string body itself;
+    table list, HTTP actions, Health's concurrency and invalidations, the paused lists; PR 7: packaging — the
+    dashboard's own image on 6791, `dashboard.zip` in releases, `bunvex dev`'s local dashboard on 6790 with
+    `/api/current_deployment` and its `Host` check, `bunvex dashboard serve`, `bunvex dashboard` opening it); left:
+    the CLI's links (PR 8), the dashboard server's frame and security headers (owner, 2026-10-14: match Convex in a
+    follow-up), plus the custom query's type checking and Convex's bulk edit.
+- HTTP actions, found while matching their log name to Convex's (STUDY-31 §7.3; the log name itself is done, and
+  a response's implicit headers since STUDY-31 §8):
   - a handler that returns something other than a Response is answered with Convex's 500 but logged with no error
     (Convex logs "Uncaught Error: HTTP actions must return a Response");
   - a body that errors after the head aborts the response, where Convex ends it cleanly.

@@ -54,4 +54,4 @@ Commits after the reference that the last bump did not cover:
 | `56a59a9` | docs: AI gateway voice | Docs only |
 | `5b65aed` | evaluate_schema: staged validator state, promotion skip and discard prediction | Staged validators (DV-438 PR 6); the CLI consumer is not released yet |
 | `c178e47` | Require published MySQL v6 buckets before index displacement | Convex's MySQL v6 writer only: nothing an app or bunvex's store observes |
-| `076c52c` | dashboard: schema validation and index backfill progress on the health page | Dashboard, behind a flag: taken when bunvex's dashboard runs on a real deployment (DV-189) |
+| `076c52c` | dashboard: schema validation and index backfill progress on the health page | Dashboard, behind a flag: taken when bunvex's dashboard runs on a real deployment (DV-189, closed by STUDY-149 PR 7) |

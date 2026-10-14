@@ -983,7 +983,7 @@ an injected data source):
 | LG1 | **Use the demo data** on the sign-in page: the screens on the mock, kept for the tab (`sessionStorage`), "Leave the demo" in the header | a bunvex addition: explore the dashboard without a deployment; it is also how development and the e2e tests open it (`?demo=1`) | addition, as the owner asked (2 Oct 2026) |
 | LG2 | The key is never written to storage (Convex writes it to `sessionStorage` but does not sign in from it) | the observable behaviour is the same (a reload asks again); keeping a secret out of storage is simpler | **decided** (owner, 2026-10-03): accepted (DV-210) |
 | LG3 | Embedded credentials accepted only from an allow-list of parent origins set by the operator (`VITE_BUNVEX_EMBED_ORIGINS` / `<meta name="bunvex-embed-origins">`), the request sent only to those origins; none allowed by default (fail closed). Convex accepts them from any origin and asks with target `*` (`_app.tsx`, `useEmbeddedDashboardCredentials`) | the message carries an admin key: any page that frames the dashboard could otherwise sign it in to a deployment of its choosing, and a `*` request tells any parent that a dashboard is waiting | **decided** (owner, 2026-10-03): option A, an allow-list (DV-319) |
-| LG4 | No `/api/current_deployment` and no legacy deployment list | the bunvex CLI's local dashboard is not built yet (DV-202) | follow-up |
+| LG4 | No `/api/current_deployment` and no legacy deployment list | `/api/current_deployment` built with the local dashboard (STUDY-149 PR 7, DV-202 closed); the legacy list is kept by Convex for old CLIs only, not built | done (the route) |
 
 ## 20. The command palette (a bunvex addition, added 2 Oct 2026)
 
