@@ -170,7 +170,8 @@ bunvex/
 │       └── bin/local-backend        the bunvex-local-backend executable (STUDY-39, STUDY-40)   ✅
 │
 ├── apps/
-│   ├── dashboard/                   thin Vite host mounting @bunvex/dashboard (mock data for now) 🟡
+│   ├── dashboard/                   thin Vite host mounting @bunvex/dashboard on a deployment     🟡
+│   │                                (dashboard-source) or the demo data; packaging next (STUDY-149)
 │   └── site/                        bunvex.dev (SITE-01): landing now, user docs later; TanStack Start 🟡
 │
 ├── examples/                        one-feature apps after Convex's demos, each with an end-to-end

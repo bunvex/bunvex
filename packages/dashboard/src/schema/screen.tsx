@@ -9,6 +9,7 @@ import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, inferredTypeQuery, schemaQuery, tablesQuery } from "../data/queries.ts";
 import { toDataSourceError, type ValidatorJson } from "../data-source.ts";
 import { BAR_TITLE } from "../shell/bars.ts";
+import { useDisconnected } from "../shell/connection.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { SchemaDiagram } from "./diagram.tsx";
 import { buildSchemaGraph } from "./graph.ts";
@@ -39,12 +40,18 @@ export function SchemaScreen() {
 
   // tables whose type the schema does not give: typed from their documents, when the source can tell
   const declared = new Set(schema.data?.tables.filter((t) => t.validator).map((t) => t.name));
+  // `/api/shapes2` is polled, so not while disconnected (as Convex's)
+  const disconnected = useDisconnected();
   const toInfer =
     typeof scope.source.inferDocumentType === "function"
       ? (tables.data ?? []).map((t) => t.name).filter((t) => !declared.has(t))
       : [];
   const inferred = useQueries({
-    queries: toInfer.map((t) => ({ ...inferredTypeQuery(scope, t), staleTime: 60_000, enabled: canView })),
+    queries: toInfer.map((t) => ({
+      ...inferredTypeQuery(scope, t),
+      staleTime: 60_000,
+      enabled: canView && !disconnected,
+    })),
   });
   const inferredKey = inferred.map((q) => q.dataUpdatedAt).join(",");
 

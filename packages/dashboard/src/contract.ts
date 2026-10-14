@@ -411,10 +411,18 @@ export function describeDataSourceContract(
     });
 
     area = "functions";
-    test("functions have a module:name path and a kind", async () => {
+    test("functions have a module:name path and a kind; an HTTP action its route and its module", async () => {
       for (const f of await (await make()).listFunctions()) {
-        expect(f.path).toMatch(/^[^:]+:[^:]+$/);
-        expect(["query", "mutation", "action"]).toContain(f.kind);
+        if (f.kind === "httpAction") {
+          // Convex's identifier for a route, `METHOD /path`, under the module that routes it
+          expect(f.path).toMatch(/^[A-Z]+ \/\S*$/);
+          expect(f.module).toMatch(/^[^:]+$/);
+          expect(f.visibility).toBe("public");
+        } else {
+          expect(f.path).toMatch(/^[^:]+:[^:]+$/);
+          expect(["query", "mutation", "action"]).toContain(f.kind);
+          expect(f.module).toBeUndefined();
+        }
         expect(["public", "internal"]).toContain(f.visibility);
         // declared validators come in Convex's JSON form (STUDY-12 V1)
         if (f.args !== undefined) expect(isValidatorJson(f.args)).toBe(true);
@@ -584,6 +592,13 @@ export function describeDataSourceContract(
       test("runFunction: an unknown function is not_found", async () => {
         const src = await runner();
         await expectError(src.runFunction("no_such_module:nothing", {}), "not_found");
+      });
+
+      test("runFunction: an HTTP action, when one is listed, is not run (invalid_request)", async () => {
+        const src = await runner();
+        const route = (await src.listFunctions()).find((f) => f.kind === "httpAction");
+        if (!route) return;
+        await expectError(src.runFunction(route.path, {}), "invalid_request");
       });
 
       test("watchFunction (when present): a query's run arrives, never inside the call; a mutation is invalid_request", async () => {

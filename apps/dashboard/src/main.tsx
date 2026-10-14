@@ -1,30 +1,38 @@
-// The dashboard host for development: mounts @bunvex/dashboard, with plain paths (`/database/users`, the
-// browser history) and the TanStack devtools in development. A host serving the build answers every path
-// with index.html (Vite's dev server and `vite preview` do). It opens on a sign-in page (STUDY-12 §19,
-// UI-01 §31): a deployment URL and admin key — checked by the mock verifier for now, the dashboard does not
-// talk to a real server yet — or the demo data. Either way the screens run on the MockDataSource.
+// The dashboard host: mounts @bunvex/dashboard, with plain paths (`/database/users`, the browser history) and the
+// TanStack devtools in development. A host serving the build answers every path with index.html (Vite's dev
+// server and `vite preview` do). It opens on a sign-in page (STUDY-12 §19, UI-01 §31): a deployment URL and admin
+// key, checked against the deployment (`check_admin_key`, as Convex's self-hosted dashboard), then the screens run
+// on the deployment itself (`@bunvex/dashboard-source`, STUDY-149 PR 6) — or on the demo data (the
+// MockDataSource), which needs no deployment. A build for the CLI's local dashboard signs in by itself with the
+// credentials its server hands out (`VITE_BUNVEX_USE_CURRENT_DEPLOYMENT=1`).
 import { Dashboard } from "@bunvex/dashboard";
-import { OPERATIONS } from "@bunvex/dashboard/data-source";
+import type { DashboardDataSource } from "@bunvex/dashboard/data-source";
 import { MockDataSource } from "@bunvex/dashboard/mock";
+import { createAdminKeyVerifier } from "@bunvex/dashboard-source/credentials";
 import { ThemeToggle } from "@bunvex/ui/components/theme-toggle";
 import { ThemeProvider } from "@bunvex/ui/theme";
-import { lazy, StrictMode, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, StrictMode, Suspense, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./app.css";
 import { forgetDevKnob, takeDevKnobs } from "./knobs.ts";
 import { AccountEntry } from "./login/account-entry.tsx";
-import { type AdminCredentials, capabilitiesOf, deploymentNameOf, mockVerifier } from "./login/credentials.ts";
+import { type AdminCredentials, deploymentNameOf } from "./login/credentials.ts";
+import { fetchCurrentDeployment } from "./login/current-deployment.ts";
 import { listenForEmbeddedCredentials, readAllowedOrigins } from "./login/embedded.ts";
 import { type HostSession, initialSession, rememberDemo } from "./login/host-session.ts";
 
 // ?latency=300&fail=0.2&writes=500 in the URL exercises loading, errors and live data (knobs.ts);
 // ?demo=1 opens the demo data without the sign-in page.
 const params = takeDevKnobs({ location, history, storage: sessionStorage });
-const verifier = mockVerifier();
+const verifier = createAdminKeyVerifier();
+const USE_CURRENT_DEPLOYMENT = import.meta.env.VITE_BUNVEX_USE_CURRENT_DEPLOYMENT === "1";
+// the deployment's source (and the sync client under it) is fetched only once signed in: the sign-in page and the
+// demo do not load it
+const loadServerSource = () => import("@bunvex/dashboard-source");
 // the sign-in page is fetched only when shown: the demo's (and a signed-in) first load stays the shell's
 const LoginScreen = lazy(() => import("./login/login-screen.tsx").then((m) => ({ default: m.LoginScreen })));
 
-function mockSource(session: Exclude<HostSession, { kind: "signed-out" }>) {
+function mockSource() {
   const source = new MockDataSource({
     latencyMs: Number(params.get("latency") ?? 120),
     failRate: Number(params.get("fail") ?? 0),
@@ -38,8 +46,6 @@ function mockSource(session: Exclude<HostSession, { kind: "signed-out" }>) {
     // ?nodes=4: a leader and three followers on the Topology screen (UI-01 §22); one node by default, as today
     nodes: Number(params.get("nodes") ?? 1),
     ...(params.has("tasks") && { documents: { tasks: Number(params.get("tasks")) } }),
-    // a signed-in key brings its permissions (a read-only key, a viewer key: credentials.ts)
-    ...(session.kind === "deployment" && { capabilities: capabilitiesOf(session, OPERATIONS) }),
   });
   // ?validate=pass|fail: as if a schema had just been pushed, checked against the documents (UI-01 §21.4)
   const validate = params.get("validate");
@@ -47,8 +53,39 @@ function mockSource(session: Exclude<HostSession, { kind: "signed-out" }>) {
   return source;
 }
 
+/**
+ * The data source for the session: none signed out, the mock for the demo, the deployment's own once signed in
+ * (closed when the session ends). Each comes with a key, so the dashboard remounts on a new source.
+ */
+let opened = 0;
+
+function useSessionSource(session: HostSession): { source: DashboardDataSource; key: string } | null {
+  const [current, setCurrent] = useState<{ source: DashboardDataSource; key: string } | null>(null);
+  useEffect(() => {
+    if (session.kind === "signed-out") return setCurrent(null);
+    if (session.kind === "demo") return setCurrent({ source: mockSource(), key: "demo" });
+    let ended = false;
+    let close = () => {};
+    setCurrent(null);
+    void loadServerSource().then(({ createServerDataSource }) => {
+      if (ended) return;
+      const source = createServerDataSource({ url: session.deploymentUrl, adminKey: session.adminKey });
+      close = () => void source.close();
+      setCurrent({ source, key: `deployment-${++opened}` });
+    });
+    return () => {
+      ended = true;
+      close();
+    };
+  }, [session]);
+  return current;
+}
+
 function App() {
   const [session, setSession] = useState<HostSession>(() => initialSession(sessionStorage, params.get("demo") === "1"));
+  // a local dashboard's build first asks its server for the deployment (Convex's /api/current_deployment); the
+  // sign-in page waits for the answer, so it does not flash
+  const [askingServer, setAskingServer] = useState(USE_CURRENT_DEPLOYMENT && session.kind === "signed-out");
 
   const signIn = useCallback(async (c: AdminCredentials) => {
     const check = await verifier.verify(c.deploymentUrl, c.adminKey);
@@ -64,15 +101,22 @@ function App() {
   }, []);
   // an embedding page at an allowed origin may hand the credentials over (embedded.ts; none allowed by default)
   useEffect(() => listenForEmbeddedCredentials(window, readAllowedOrigins(document), (c) => void signIn(c)), [signIn]);
+  useEffect(() => {
+    if (!askingServer) return;
+    void fetchCurrentDeployment()
+      .then((c) => (c ? signIn(c) : null))
+      .finally(() => setAskingServer(false));
+  }, [askingServer, signIn]);
 
   const signOut = () => {
     rememberDemo(sessionStorage, false);
     forgetDevKnob(sessionStorage, "demo");
     setSession({ kind: "signed-out" });
   };
-  const source = useMemo(() => (session.kind === "signed-out" ? null : mockSource(session)), [session]);
+  const current = useSessionSource(session);
 
-  if (session.kind === "signed-out" || !source)
+  if (askingServer) return null;
+  if (session.kind === "signed-out")
     return (
       <Suspense fallback={null}>
         <LoginScreen
@@ -87,10 +131,12 @@ function App() {
         />
       </Suspense>
     );
+  // the deployment's source is on its way (its module, the first time)
+  if (!current) return null;
   return (
     <Dashboard
-      key={session.kind === "deployment" ? `${session.deploymentUrl}|${session.adminKey}` : "demo"}
-      dataSource={source}
+      key={current.key}
+      dataSource={current.source}
       headerActions={
         <>
           {session.kind === "demo" ? (
@@ -109,6 +155,7 @@ function App() {
       }
       devtools={import.meta.env.DEV}
       traceUrl={import.meta.env.VITE_BUNVEX_TRACE_URL}
+      {...(session.kind === "deployment" && { deploymentUrl: session.deploymentUrl })}
     />
   );
 }

@@ -156,7 +156,7 @@ export function topFunctions(logs: readonly LogEntry[], measure: TopKMeasure, w:
 
 /** Rows a function read or wrote in the table its module is named after ("tasks:list" → tasks). */
 function rows(x: Execution, metric: TableMetric): number {
-  if (x.failed || x.kind === "action") return 0;
+  if (x.failed || x.kind === "action" || x.kind === "httpAction") return 0;
   if (metric === "rowsWritten") return x.kind === "mutation" ? 1 + (hash(x.id) % 3) : 0;
   return x.kind === "query" ? (cached(x) ? 0 : 5 + (hash(x.id) % 40)) : 1;
 }
@@ -183,7 +183,7 @@ export function scheduledJobLag(logs: readonly LogEntry[], w: MetricsWindow): Ti
  */
 export function functionConcurrency(logs: readonly LogEntry[], w: MetricsWindow): FunctionConcurrency {
   const out: FunctionConcurrency = [];
-  for (const kind of ["query", "mutation", "action"] as const) {
+  for (const kind of ["query", "mutation", "action", "httpAction"] as const) {
     const xs = executionsOf(logs)
       .filter((x) => x.kind === kind)
       .sort((a, b) => a.time - b.time);

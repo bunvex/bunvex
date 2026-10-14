@@ -81,8 +81,8 @@ const KINDS: Record<string, FunctionKind> = {
   Query: "query",
   Mutation: "mutation",
   Action: "action",
-  // an HTTP action is an action to the dashboard's types; its path is `METHOD /route`
-  HttpAction: "action",
+  // its path is its route, `METHOD /path`, as the Functions screen lists it
+  HttpAction: "httpAction",
 };
 
 const LEVELS: Record<string, LogLevel> = { LOG: "info", INFO: "info", DEBUG: "debug", WARN: "warn", ERROR: "error" };
@@ -158,7 +158,9 @@ function failed(e: Extract<FunctionExecution, { kind: "Completion" }>): boolean 
 export function entriesOf(executions: FunctionExecution[], nextId: () => string): LogEntry[] {
   const out: LogEntry[] = [];
   for (const e of executions) {
-    const fn = { path: displayPath(e.identifier), kind: KINDS[e.udfType] ?? "action" };
+    // a route is named as it is (a path may end in `.js`)
+    const path = e.udfType === "HttpAction" ? e.identifier : displayPath(e.identifier);
+    const fn = { path, kind: KINDS[e.udfType] ?? "action" };
     const ms = e.timestamp * 1000;
     const common = {
       function: fn,

@@ -231,6 +231,7 @@ export class MockDataSource implements DashboardDataSource {
   /** The re-runs' own stream (STUDY-131 AD-27), so the rest of the mock's data stays what it was. */
   private readonly rerunRnd: Random;
   private readonly tableWatchers = new Map<string, Set<(c: { count?: number }) => void>>();
+  private readonly tableListWatchers = new Set<() => void>();
   private liveTimer: ReturnType<typeof setInterval> | null = null;
   /** UI-01 §17.2: a paused deployment refuses new calls; its scheduler waits and skips crons. */
   private paused = false;
@@ -416,6 +417,14 @@ export class MockDataSource implements DashboardDataSource {
     const count = this.tables.get(table)?.documents.length;
     setTimeout(() => {
       for (const w of watchers) w({ count });
+    }, 0);
+  }
+
+  /** Tells the table list's watchers (a table created or deleted), later. */
+  private tablesChanged() {
+    if (this.tableListWatchers.size === 0) return;
+    setTimeout(() => {
+      for (const w of this.tableListWatchers) w();
     }, 0);
   }
 
@@ -605,6 +614,16 @@ export class MockDataSource implements DashboardDataSource {
     });
   }
 
+  watchTables(onChange: () => void, _onError: (e: DataSourceError) => void) {
+    let live = true;
+    const deliver = () => live && onChange();
+    this.tableListWatchers.add(deliver);
+    return () => {
+      live = false;
+      this.tableListWatchers.delete(deliver);
+    };
+  }
+
   watchTable(table: string, onChange: (c: { count?: number }) => void, onError: (e: DataSourceError) => void) {
     let live = true;
     const deliver = (c: { count?: number }) => live && onChange(c);
@@ -663,8 +682,10 @@ export class MockDataSource implements DashboardDataSource {
       const invalid = tableNameProblem(name);
       if (invalid) throw new DataSourceError("invalid_request", invalid);
       // a taken name is no error: Convex's mutation inserts a document into it and deletes it
-      if (!this.tables.has(name))
+      if (!this.tables.has(name)) {
         this.tables.set(name, { name, indexes: structuredClone(SYSTEM_INDEXES), documents: [], declared: false });
+        this.tablesChanged();
+      }
       this.record("create_table", { ...ROOT_COMPONENT, table: name });
     });
   }
@@ -681,7 +702,13 @@ export class MockDataSource implements DashboardDataSource {
             `Failed to delete table "${name}" because it appears in the schema`,
           );
       }
-      for (const name of names) if (this.tables.delete(name)) this.changed(name);
+      let deleted = false;
+      for (const name of names)
+        if (this.tables.delete(name)) {
+          this.changed(name);
+          deleted = true;
+        }
+      if (deleted) this.tablesChanged();
       this.record("delete_tables", { ...ROOT_COMPONENT, table_names: names });
     });
   }
@@ -696,13 +723,15 @@ export class MockDataSource implements DashboardDataSource {
       const invalid = this.tables.has(table) ? undefined : tableNameProblem(table);
       if (invalid) throw new DataSourceError("invalid_request", invalid);
       // a table that does not exist yet is created, as Convex's `db.insert`
-      if (!this.tables.has(table))
+      if (!this.tables.has(table)) {
         this.tables.set(table, {
           name: table,
           indexes: structuredClone(SYSTEM_INDEXES),
           documents: [],
           declared: false,
         });
+        this.tablesChanged();
+      }
       const t = this.table(table);
       let last = t.documents.reduce((m, d) => Math.max(m, d._creationTime), 0);
       const docs = documents.map((fields) => {
@@ -918,6 +947,9 @@ export class MockDataSource implements DashboardDataSource {
     return this.call(opts?.signal, () => {
       const fn = this.functions.find((f) => f.path === path);
       if (!fn) throw new DataSourceError("not_found", `no function "${path}"`);
+      // as the runner never offers one (Convex's `SUPPORTED_FUNCTION_TYPES`): a route is called at its URL
+      if (fn.kind === "httpAction")
+        throw new DataSourceError("invalid_request", `${path} is an HTTP action: call it at its URL`);
       const c = this.opts.capabilities;
       if (!c.operations.includes("runFunctions"))
         throw new DataSourceError("unauthorized", "this credential cannot run functions");

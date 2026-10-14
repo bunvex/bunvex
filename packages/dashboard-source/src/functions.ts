@@ -47,7 +47,12 @@ type ModuleJson = {
 };
 type SpecJson = { identifier?: string; functionType: string; args?: unknown; returns?: unknown };
 
-const KINDS: Record<string, FunctionKind> = { Query: "query", Mutation: "mutation", Action: "action" };
+const KINDS: Record<string, FunctionKind> = {
+  Query: "query",
+  Mutation: "mutation",
+  Action: "action",
+  HttpAction: "httpAction",
+};
 const LEVELS: Record<string, LogLevel> = { LOG: "info", INFO: "info", DEBUG: "debug", WARN: "warn", ERROR: "error" };
 
 /**
@@ -61,8 +66,10 @@ function validatorOf(v: unknown): ValidatorJson | undefined {
 }
 
 /**
- * The functions of the root's modules, as Convex's `generateFileTree` reads `listForAllComponents`: a module's
- * queries, mutations and actions (not its HTTP routes, which the runner cannot run either), at `module:name`.
+ * The functions of the root's modules, as Convex's `generateFileTree` reads `listForAllComponents`
+ * (`processAnalyzedModuleFunction`): a module's queries, mutations and actions at `module:name`, and its HTTP
+ * routes under their own name, `METHOD /path` (Convex's identifier for one, in the tree, the logs and the
+ * metrics), with the module that defines them.
  */
 export function functionsOf(modules: [string | null, [string, ModuleJson][]][], spec: SpecJson[]): FunctionInfo[] {
   const validators = new Map(spec.filter((s) => s.identifier).map((s) => [s.identifier!, s]));
@@ -72,11 +79,22 @@ export function functionsOf(modules: [string | null, [string, ModuleJson][]][], 
     for (const f of module.functions) {
       const kind = KINDS[f.udfType];
       if (!kind) continue;
+      const module = path.replace(/\.js$/, "");
+      if (kind === "httpAction") {
+        out.push({
+          path: f.name,
+          kind,
+          module,
+          visibility: "public",
+          ...(f.lineno !== undefined && { line: f.lineno }),
+        });
+        continue;
+      }
       const s = validators.get(`${path}:${f.name}`);
       const args = validatorOf(s?.args);
       const returns = validatorOf(s?.returns);
       out.push({
-        path: `${path.replace(/\.js$/, "")}:${f.name}`,
+        path: `${module}:${f.name}`,
         kind,
         visibility: f.visibility.kind === "internal" ? "internal" : "public",
         ...(args && { args }),
@@ -152,6 +170,10 @@ export class Functions {
     const [functions, caps] = await Promise.all([this.listFunctions({ signal }), this.capabilities()]);
     const fn = functions.find((f) => f.path === path);
     if (!fn) throw new DataSourceError("not_found", `Could not find function "${path}".`);
+    // Convex's runner offers queries, mutations and actions only (`SUPPORTED_FUNCTION_TYPES`): a route is called
+    // at its URL
+    if (fn.kind === "httpAction")
+      throw new DataSourceError("invalid_request", `${path} is an HTTP action: call it at its URL.`);
     if (!caps.operations.includes("runFunctions"))
       throw new DataSourceError("unauthorized", "This credential cannot run functions.");
     if (caps.readOnly && fn.kind !== "query")

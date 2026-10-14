@@ -20,7 +20,7 @@ import { formatBytes, timeAgo } from "../screens/stats.ts";
 import { Panel } from "../shell/panel.tsx";
 import { formatTime } from "../shell/time.tsx";
 import { type CallNode, callTree, countCalls } from "./call-tree.ts";
-import { formatDuration, formatLogTime, isFailure, KIND_LETTER } from "./log-list.tsx";
+import { formatDuration, formatLogTime, isFailure, KIND_LETTER, KIND_TITLE } from "./log-list.tsx";
 import { IDENTITY_TEXT, sumUsage } from "./usage.ts";
 
 function CallItem({ node, current }: { node: CallNode; current?: string }) {
@@ -183,7 +183,7 @@ export function LogDetails(props: {
             <dt className="text-muted-foreground">Function</dt>
             <dd className="flex min-w-0 items-center gap-2 leading-5">
               <abbr
-                title={line.function.kind}
+                title={KIND_TITLE[line.function.kind]}
                 className="shrink-0 border px-1 font-mono text-[10px] leading-4 text-muted-foreground no-underline"
               >
                 {KIND_LETTER[line.function.kind]}

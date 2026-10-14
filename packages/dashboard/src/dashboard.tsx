@@ -10,6 +10,7 @@ import { ExtensionsContext } from "./extensions/context.ts";
 import { extensions as registeredExtensions } from "./extensions/index.ts";
 import type { DashboardExtension } from "./extensions/types.ts";
 import { createDashboardRouter } from "./router.tsx";
+import { ConnectionProvider } from "./shell/connection.tsx";
 import { HeaderActionsContext } from "./shell/shell.tsx";
 
 export type DashboardProps = {
@@ -36,6 +37,11 @@ export type DashboardProps = {
    * trace id is shown with no link.
    */
   traceUrl?: string;
+  /**
+   * The URL the host signed in to, shown when the connection is lost ("Check that your bunvex server is running and
+   * accessible at …", as Convex's self-hosted dashboard says it). Default: the deployment's own URL, when known.
+   */
+  deploymentUrl?: string;
 };
 
 const Devtools = lazy(() => import("./devtools.tsx"));
@@ -61,6 +67,7 @@ export function Dashboard({
   devtools = false,
   extensions = registeredExtensions,
   traceUrl,
+  deploymentUrl,
 }: DashboardProps) {
   const [queryClient] = useState(() => hostClient ?? createDashboardQueryClient());
   const [queryScope] = useState(() => ({ source: dataSource, scope }));
@@ -75,20 +82,22 @@ export function Dashboard({
   return (
     <QueryClientProvider client={queryClient}>
       <QueryScopeContext.Provider value={queryScope}>
-        <HeaderActionsContext.Provider value={headerActions}>
-          <TooltipProvider>
-            <ExtensionsContext.Provider value={extensions}>
-              <TraceUrlContext.Provider value={traceUrl}>
-                <RouterProvider router={router} />
-              </TraceUrlContext.Provider>
-            </ExtensionsContext.Provider>
-            {devtools && (
-              <Suspense>
-                <Devtools router={router} />
-              </Suspense>
-            )}
-          </TooltipProvider>
-        </HeaderActionsContext.Provider>
+        <ConnectionProvider source={dataSource} deploymentUrl={deploymentUrl}>
+          <HeaderActionsContext.Provider value={headerActions}>
+            <TooltipProvider>
+              <ExtensionsContext.Provider value={extensions}>
+                <TraceUrlContext.Provider value={traceUrl}>
+                  <RouterProvider router={router} />
+                </TraceUrlContext.Provider>
+              </ExtensionsContext.Provider>
+              {devtools && (
+                <Suspense>
+                  <Devtools router={router} />
+                </Suspense>
+              )}
+            </TooltipProvider>
+          </HeaderActionsContext.Provider>
+        </ConnectionProvider>
       </QueryScopeContext.Provider>
     </QueryClientProvider>
   );

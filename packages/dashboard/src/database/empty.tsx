@@ -1,14 +1,28 @@
 // `/database` on a deployment with no tables at all (STUDY-12 D11), as Convex's `EmptyData.tsx`: "There are no
 // tables here yet", and — when this credential may create one — Create table, which opens the new table.
-// Otherwise tables appear once data is written. In the same frame as a table (UX2-4): the section column
-// (search, Create table, an empty Tables list) and Bar 1, with the empty state centred where the grid goes.
+// Otherwise tables appear once data is written: the first one to appear (a push, a write; `watchTables`) is
+// opened. In the same frame as a table (UX2-4): the section column (search, Create table, an empty Tables list)
+// and Bar 1, with the empty state centred where the grid goes.
+import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { Table2 } from "lucide-react";
+import { useEffect } from "react";
+import { useQueryScope } from "../context.tsx";
+import { tablesQuery } from "../data/queries.ts";
 import { BAR_TITLE, BAR1 } from "../shell/bars.ts";
 import { CreateTable, useCanCreateTable } from "./create-table.tsx";
+import { useLiveTables } from "./live.ts";
 import { TablesSidebar } from "./tables-sidebar.tsx";
 
 export function EmptyDatabase() {
   const canCreate = useCanCreateTable();
+  useLiveTables();
+  const { data: tables } = useQuery(tablesQuery(useQueryScope()));
+  const first = tables?.map((t) => t.name).sort()[0];
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (first !== undefined) void navigate({ to: "/database/$table", params: { table: first }, replace: true });
+  }, [first, navigate]);
   return (
     <div className="-m-4 flex min-h-[calc(100svh-3rem)] flex-col md:-m-6 lg:h-[calc(100svh-3rem)] lg:flex-row">
       <TablesSidebar tables={[]} current="" canCreate={canCreate === true} />

@@ -15,6 +15,7 @@ import { type TableInfo, toDataSourceError } from "../data-source.ts";
 import { TableMetrics } from "../metrics/table-metrics.tsx";
 import { SchemaValidationStatus } from "../schema/validation.tsx";
 import { formatCount } from "../screens/stats.ts";
+import { useDisconnected } from "../shell/connection.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { Panel } from "../shell/panel.tsx";
 import { AddDocuments } from "./add-documents.tsx";
@@ -218,7 +219,16 @@ function SchemaPanel({ info, onClose }: { info: TableInfo; onClose: () => void }
 
 /** A schema for the table generated from its documents (Convex's "Generated" tab), to start a declaration from. */
 function GeneratedSchema({ table }: { table: string }) {
-  const { data: type, error, isPending } = useQuery(inferredTypeQuery(useQueryScope(), table));
+  // `/api/shapes2` is polled, so not while disconnected (as Convex's)
+  const disconnected = useDisconnected();
+  const {
+    data: type,
+    error,
+    isPending,
+  } = useQuery({
+    ...inferredTypeQuery(useQueryScope(), table),
+    enabled: !disconnected,
+  });
   if (isPending) return <p className="text-sm text-muted-foreground">Looking at the documents…</p>;
   if (error) return <ErrorState error={toDataSourceError(error)} />;
   if (!type) return <p className="text-sm">Add at least one document to {table} to see a suggested schema here.</p>;

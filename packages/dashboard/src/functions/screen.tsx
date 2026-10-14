@@ -1,18 +1,19 @@
 // The Functions screen (STUDY-12 §7, UI-01 §13.2): the deployment's modules as a tree beside the open
-// function — `?function=<module:name>` in the URL, as in Convex — with its kind, visibility, path and its
-// logs. No statistics yet: the server has no app metrics (STUDY-12 L1).
+// function — `?function=<module:name>` in the URL, as in Convex — with its kind, visibility, path, statistics
+// and logs. An HTTP action (`?function=GET /path`) shows its URL where a function shows its validators, and no Run.
 import { Button } from "@bunvex/ui/components/button";
 import { CopyButton } from "@bunvex/ui/components/copy-button";
 import { Input } from "@bunvex/ui/components/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@bunvex/ui/components/tabs";
 import { cn } from "@bunvex/ui/lib/utils";
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { ChevronRight, FileCode2, Folder, Play } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { useLiveFunctions } from "../data/live.ts";
-import { functionsQuery } from "../data/queries.ts";
+import { deploymentQuery, functionsQuery } from "../data/queries.ts";
 import type { FunctionInfo } from "../data-source.ts";
+import { KIND_LETTER } from "../logs/log-list.tsx";
 import { LogsView, useLogViewInUrl } from "../logs/screen.tsx";
 import { useLogLines } from "../logs/use-logs.ts";
 import { FunctionStats } from "../metrics/function-stats.tsx";
@@ -20,7 +21,16 @@ import { DashLink, type FunctionsSearch, functionsRoute } from "../router.tsx";
 import { useRunner } from "../runner/context.tsx";
 import { BAR1 } from "../shell/bars.ts";
 import { displayValidator } from "../validators.ts";
-import { buildFunctionTree, describeFunction, type FunctionNode, matchFunctions, splitPath } from "./tree.ts";
+import {
+  buildFunctionTree,
+  describeFunction,
+  type FunctionNode,
+  KIND_WORDS,
+  matchFunctions,
+  moduleOf,
+  nameOf,
+  runnable,
+} from "./tree.ts";
 
 const ITEM =
   "flex h-8 items-center gap-2 border-l-2 border-transparent pr-3 text-sm outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset";
@@ -78,10 +88,10 @@ function Branch(props: {
                       aria-hidden="true"
                       className="w-4 shrink-0 text-center font-mono text-[10px] text-muted-foreground uppercase"
                     >
-                      {f.kind[0]}
+                      {KIND_LETTER[f.kind]}
                     </span>
-                    <span className="min-w-0 flex-1 truncate font-mono text-xs">{splitPath(f.path).name}</span>
-                    <span className="sr-only">, {f.kind}</span>
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs">{nameOf(f)}</span>
+                    <span className="sr-only">, {KIND_WORDS[f.kind]}</span>
                     {f.visibility === "internal" && <span className="text-xs text-muted-foreground">internal</span>}
                   </DashLink>
                 </li>
@@ -169,6 +179,30 @@ export function ValidatorCode({ code }: { code: string }) {
   );
 }
 
+/**
+ * Where an HTTP action is served (Convex's `useHttpActionRoute`): the deployment's HTTP actions URL and the
+ * route's path; the root's routes have no prefix (bunvex has no components, DV-55). Nothing while it is unknown.
+ */
+export function httpActionUrl(siteUrl: string | undefined, route: string): string | undefined {
+  if (!siteUrl) return undefined;
+  return `${siteUrl.replace(/\/+$/, "")}${route.slice(route.indexOf(" ") + 1)}`;
+}
+
+function HttpActionRoute({ fn }: { fn: FunctionInfo }) {
+  const { data: deployment } = useQuery(deploymentQuery(useQueryScope()));
+  const url = httpActionUrl(deployment?.httpActionsUrl, fn.path);
+  if (!url) return null;
+  return (
+    <section aria-label="Route" className="min-w-0">
+      <h2 className="mb-1 text-sm font-medium">URL</h2>
+      <span className="flex min-w-0 items-center gap-1">
+        <code className="font-mono text-xs break-all">{url}</code>
+        <CopyButton text={url} label="Copy URL" iconOnly />
+      </span>
+    </section>
+  );
+}
+
 /** The declared arguments and return validators, as the `v.*` code (STUDY-12 V1). */
 function FunctionValidators({ fn }: { fn: FunctionInfo }) {
   const shown = [
@@ -206,7 +240,8 @@ function FunctionView({ fn }: { fn: FunctionInfo }) {
   );
   const filter = useMemo(() => ({ function: fn.path }), [fn.path]);
   const logs = useLogLines(filter);
-  const { module, name } = splitPath(fn.path);
+  const module = moduleOf(fn);
+  const name = nameOf(fn);
   const runner = useRunner();
   return (
     <Tabs
@@ -229,7 +264,7 @@ function FunctionView({ fn }: { fn: FunctionInfo }) {
         <span className="ml-auto flex min-w-0 flex-wrap items-center gap-1">
           <code className="font-mono text-xs break-all">{fn.path}</code>
           <CopyButton text={fn.path} label="Copy function path" iconOnly />
-          {runner.available && (
+          {runner.available && runnable(fn) && (
             <Button variant="outline" size="sm" onClick={() => runner.open(fn.path)}>
               <Play aria-hidden="true" />
               Run
@@ -242,7 +277,8 @@ function FunctionView({ fn }: { fn: FunctionInfo }) {
         value="statistics"
         className="flex flex-col gap-6 p-4 md:p-6 lg:min-h-0 lg:flex-1 lg:overflow-y-auto"
       >
-        <FunctionValidators fn={fn} />
+        {/* an HTTP action takes a request, not arguments: its URL instead, as Convex's summary */}
+        {fn.kind === "httpAction" ? <HttpActionRoute fn={fn} /> : <FunctionValidators fn={fn} />}
         <FunctionStats fn={fn} />
       </TabsContent>
       {/* the rest of the screen's height (a screen's own on narrower screens): the list scrolls inside (UI-01 §22.4) */}

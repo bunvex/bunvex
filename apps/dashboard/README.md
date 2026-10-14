@@ -1,6 +1,7 @@
 # @bunvex/dashboard-app
 
-A thin Vite host that mounts [`@bunvex/dashboard`](../../packages/dashboard) over the `MockDataSource`, with
+A thin Vite host that mounts [`@bunvex/dashboard`](../../packages/dashboard) on a deployment, through
+[`@bunvex/dashboard-source`](../../packages/dashboard-source), or on the demo data (the `MockDataSource`), with
 plain paths (`/database/users`) and the TanStack devtools in development. Private.
 
 ```sh
@@ -11,7 +12,7 @@ bun run preview   # the built app
 
 `/design-system.html` shows `@bunvex/ui`'s tokens and components in both themes (UI-01 §17.5).
 
-Query parameters on any page tune the mock (they are taken out of the address and kept for the tab), to see loading, errors and live data:
+Query parameters on any page tune the demo data (they are taken out of the address and kept for the tab), to see loading, errors and live data:
 `?latency=300` (ms per call), `?fail=0.2` (share of calls that fail), `?writes=500` (a live insert or
 delete every 500 ms; `0` turns it off), `?tables=0` (a deployment with no tables yet). `?tasks=100000&executions=4000` give volume: that many tasks, and that many function
 executions in the logs (each writes 1–4 lines). `?nodes=4` shows a leader and three followers on the Topology screen
@@ -26,6 +27,10 @@ bun run e2e       # builds, then Playwright against `vite preview` on :4179: eve
                   # contrast in both themes, phone width, Health's first-load size
 ```
 
+`bun run e2e` at the repository's root also runs the app against a live deployment
+(`packages/sync-e2e/dashboard/app.e2e.ts`: a bunvex server in the test's process, behind a proxy the test takes down
+to check "Connection issue" and the recovery).
+
 The end-to-end tests use the system Chrome locally and Playwright's Chromium in CI (`E2E_BROWSER=chromium`);
 the CI job "e2e · dashboard in Chromium" is not a required check.
 
@@ -34,11 +39,15 @@ It is a host only: screens, data and styles come from `@bunvex/dashboard` and `@
 
 ## Signing in
 
-The app opens on a sign-in page: a deployment URL and an admin key (UI-01 §31, STUDY-12 §19). Only a mock
-verifier exists for now — the dashboard does not talk to a real server yet: a key shaped `name|secret`
-signs in (`name|readonly…` read-only, `name|viewer…` view-only). **Use the demo data** opens the screens on the
-mock; `?demo=1` does it from the address. `VITE_BUNVEX_DEPLOYMENT_URL` / `VITE_BUNVEX_ADMIN_KEY` prefill the
-form. The key lives in memory: a reload asks for it again.
+The app opens on a sign-in page: a deployment URL and an admin key (UI-01 §31, STUDY-12 §19), checked against the
+deployment as Convex's self-hosted dashboard checks them (`GET /api/check_admin_key`, 3 tries 500 ms apart). The
+screens then run on the deployment (STUDY-149): live where Convex's dashboard is live, polled as often as Convex's
+polls, and covered by "Connection issue" while the deployment cannot be reached. `bunvex admin-key` prints a key.
+**Use the demo data** opens the screens on the mock instead; `?demo=1` does it from the address.
+`VITE_BUNVEX_DEPLOYMENT_URL` / `VITE_BUNVEX_ADMIN_KEY` prefill the form. The key lives in memory: a reload asks for
+it again. A build made with `VITE_BUNVEX_USE_CURRENT_DEPLOYMENT=1` (for the CLI's local dashboard) first asks its
+own server's `/api/current_deployment` for `{ name, url, adminKey }` and signs in with them, as Convex's local
+dashboard does; without an answer it shows the form.
 
 ### Embedding the dashboard
 

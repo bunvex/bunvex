@@ -6,6 +6,11 @@ interface ImportMetaEnv {
   /** Prefills the sign-in page's admin key (Convex: NEXT_PUBLIC_ADMIN_KEY). Never bake a real key into a public build. */
   readonly VITE_BUNVEX_ADMIN_KEY?: string;
   /**
+   * "1": a build for the CLI's local dashboard, which signs in with the credentials its server answers at
+   * `/api/current_deployment` (Convex: NEXT_PUBLIC_USE_CURRENT_DEPLOYMENT_API=true).
+   */
+  readonly VITE_BUNVEX_USE_CURRENT_DEPLOYMENT?: string;
+  /**
    * The parent origins allowed to embed the dashboard and hand it credentials, separated by commas or spaces.
    * Written into index.html's `<meta name="bunvex-embed-origins">` at build (vite.config.ts); unset, embedded
    * sign-in is off. Convex has no such list (STUDY-12 LG3).

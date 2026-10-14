@@ -4,8 +4,8 @@ import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ValidatorCode } from "../src/functions/screen.tsx";
-import { buildFunctionTree, describeFunction, splitPath } from "../src/functions/tree.ts";
+import { httpActionUrl, ValidatorCode } from "../src/functions/screen.tsx";
+import { buildFunctionTree, describeFunction, nameOf, runnable, splitPath } from "../src/functions/tree.ts";
 import { expectAccessible } from "./axe.ts";
 
 const NOW = Date.UTC(2026, 8, 29, 12);
@@ -55,6 +55,25 @@ describe("the function tree", () => {
     expect(file.functions.map((f) => f.path)).toEqual(["m:a", "m:b", "m:zeta", "m:mid", "m:alpha"]);
   });
 
+  test("an HTTP action is a leaf of its module (`http`), named by its route, ordered by line", () => {
+    const route = (path: string, line: number): FunctionInfo => ({
+      path,
+      kind: "httpAction",
+      module: "http",
+      visibility: "public",
+      line,
+    });
+    const tree = buildFunctionTree([route("POST /hook", 9), route("GET /a/b:c", 4), fn("tasks:list")]);
+    expect(tree.map((n) => n.name)).toEqual(["http", "tasks"]);
+    const http = tree[0]!;
+    if (http.kind !== "file") throw new Error("http is a file");
+    expect(http.functions.map(nameOf)).toEqual(["GET /a/b:c", "POST /hook"]);
+    expect(describeFunction(http.functions[0]!)).toBe("HTTP action");
+    expect(runnable(http.functions[0]!)).toBe(false);
+    expect(httpActionUrl("http://127.0.0.1:3211/", "GET /a/b:c")).toBe("http://127.0.0.1:3211/a/b:c");
+    expect(httpActionUrl(undefined, "GET /a")).toBeUndefined();
+  });
+
   test("paths and descriptions", () => {
     expect(splitPath("a/b:c")).toEqual({ module: "a/b", name: "c" });
     expect(splitPath("a/b")).toEqual({ module: "a/b", name: "default" });
@@ -89,11 +108,12 @@ describe("the Functions screen", () => {
     await screen.findByRole("heading", { level: 1, name: "Functions" });
     expect(screen.getByText("Pick a function on the left to see its details and its logs.")).toBeDefined();
     const files = within(nav()).getAllByRole("button");
-    expect(files.map((b) => b.textContent)).toEqual(["messages", "tasks", "users"]);
-    expect(within(nav()).getAllByRole("link").length).toBe(11);
-    await userEvent.setup().click(files[1]!);
-    expect(files[1]!.getAttribute("aria-expanded")).toBe("false");
-    expect(within(nav()).getAllByRole("link").length).toBe(6);
+    // the app's HTTP routes are a module of their own, `http`, as Convex's tree shows `http.js`
+    expect(files.map((b) => b.textContent)).toEqual(["http", "messages", "tasks", "users"]);
+    expect(within(nav()).getAllByRole("link").length).toBe(13);
+    await userEvent.setup().click(files[2]!);
+    expect(files[2]!.getAttribute("aria-expanded")).toBe("false");
+    expect(within(nav()).getAllByRole("link").length).toBe(8);
     await expectAccessible();
   });
 
@@ -119,6 +139,26 @@ describe("the Functions screen", () => {
     expect(within(filters).queryByRole("region", { name: "Functions" })).toBeNull();
     expect(within(filters).queryByRole("region", { name: "Function kind" })).toBeNull();
     expect(screen.getByRole("application", { name: "Log lines per time bucket" })).toBeDefined();
+    await expectAccessible();
+  });
+
+  test("an HTTP action opens with its kind, its URL and its logs; it has no Run and no validators", async () => {
+    const { history } = mount();
+    await screen.findByRole("heading", { level: 1, name: "Functions" });
+    const link = within(nav()).getByRole("link", { name: /GET \/health/ });
+    expect(link.textContent).toContain("H");
+    expect(link.textContent).toContain("HTTP action");
+    await userEvent.setup().click(link);
+    await screen.findByRole("heading", { level: 1, name: "GET /health" });
+    expect(history.location.search).toContain("function=GET");
+    expect(screen.getByText(/HTTP action in/)).toBeDefined();
+    // where it is served, from the deployment's HTTP actions URL (Convex's `useHttpActionRoute`)
+    expect(await screen.findByText("http://127.0.0.1:3211/health")).toBeDefined();
+    expect(screen.queryByRole("region", { name: "Arguments validator" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Logs" }));
+    const grid = screen.getByRole("grid", { name: "Log lines of GET /health" });
+    await waitFor(() => expect(within(grid).getAllByRole("row").length).toBeGreaterThan(1));
     await expectAccessible();
   });
 

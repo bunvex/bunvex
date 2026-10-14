@@ -1,13 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { OPERATIONS } from "@bunvex/dashboard/data-source";
 import { forgetDevKnob } from "../src/knobs.ts";
-import {
-  capabilitiesOf,
-  deploymentNameOf,
-  INVALID_CREDENTIALS,
-  mockVerifier,
-  normalizeDeploymentUrl,
-} from "../src/login/credentials.ts";
+import { capabilitiesOf, deploymentNameOf, normalizeDeploymentUrl } from "../src/login/credentials.ts";
+import { fetchCurrentDeployment, parseCurrentDeployment } from "../src/login/current-deployment.ts";
 import { initialSession, rememberDemo } from "../src/login/host-session.ts";
 
 function memoryStorage(init: Record<string, string> = {}) {
@@ -39,16 +34,32 @@ describe("the deployment URL", () => {
   });
 });
 
-describe("the mock verifier and the key's permissions", () => {
-  test("a Convex-shaped key signs in; a read-only or viewer key narrows the capabilities", async () => {
-    const v = mockVerifier(0);
-    expect(await v.verify("http://127.0.0.1:3210", "dev|abc")).toEqual({ ok: true, allowedOps: [], isReadOnly: false });
-    expect(await v.verify("http://127.0.0.1:3210", "nokey")).toEqual({ ok: false, error: INVALID_CREDENTIALS });
-    const ro = await v.verify("http://127.0.0.1:3210", "dev|readonly-1");
-    expect(ro).toMatchObject({ ok: true, isReadOnly: true });
-    const viewer = await v.verify("http://127.0.0.1:3210", "dev|viewer-1");
-    if (!viewer.ok) throw new Error("viewer refused");
-    expect(capabilitiesOf(viewer, OPERATIONS)).toEqual({ operations: ["viewData", "viewLogs"], readOnly: true });
+describe("the current deployment (a local dashboard's build) and the key's permissions", () => {
+  test("/api/current_deployment's { name, url, adminKey } signs in; anything else is no deployment", async () => {
+    const good = { name: "local-otter", url: "http://127.0.0.1:3210", adminKey: "local-otter|abc" };
+    expect(parseCurrentDeployment(good)).toEqual({
+      deploymentName: "local-otter",
+      deploymentUrl: "http://127.0.0.1:3210",
+      adminKey: "local-otter|abc",
+    });
+    for (const bad of [
+      null,
+      "x",
+      { ...good, url: "not a url" },
+      { ...good, url: "ftp://x" },
+      { name: "n", url: good.url },
+    ])
+      expect(parseCurrentDeployment(bad)).toBeNull();
+    const asked: string[] = [];
+    const answer = (res: Response | Error) => (input: string) => {
+      asked.push(input);
+      return res instanceof Error ? Promise.reject(res) : Promise.resolve(res);
+    };
+    expect(await fetchCurrentDeployment(answer(Response.json(good)))).toMatchObject({ deploymentName: "local-otter" });
+    expect(asked).toEqual(["/api/current_deployment"]);
+    expect(await fetchCurrentDeployment(answer(new Response("nope", { status: 404 })))).toBeNull();
+    expect(await fetchCurrentDeployment(answer(new Response("<html>")))).toBeNull();
+    expect(await fetchCurrentDeployment(answer(new Error("offline")))).toBeNull();
   });
 
   test("no operations listed means every operation (Convex); Convex's names map to the dashboard's", () => {

@@ -106,6 +106,13 @@ const TOP_K_ROUTES: Record<TopKMeasure, string> = {
   cacheHitPercentage: "cache_hit_percentage_top_k",
 };
 
+/**
+ * A function's parameters, as Convex's `getUdfMetric` sends them: its path, and its `udfType` for an HTTP action
+ * (named `METHOD /path`; a function's path, `module:name`, has no space), which the server needs to read the route.
+ */
+export const udfParams = (fn: string): Record<string, string> =>
+  /^[A-Z]+ \//.test(fn) ? { path: fn, udfType: "HttpAction" } : { path: fn };
+
 /** The metrics part of the server source. Every call needs the `viewMetrics` operation. */
 export class Metrics {
   constructor(private readonly http: AdminHttp) {}
@@ -116,20 +123,24 @@ export class Metrics {
 
   async functionRate(fn: string, metric: FunctionMetric, w: MetricsWindow, signal?: AbortSignal) {
     const window = windowParam(w);
-    const json = await this.get<SeriesJson>("udf_rate", { path: fn, metric: UDF_METRICS[metric], window }, signal);
+    const json = await this.get<SeriesJson>(
+      "udf_rate",
+      { ...udfParams(fn), metric: UDF_METRICS[metric], window },
+      signal,
+    );
     return seriesOf(json, w, bucketSeconds(w));
   }
 
   async cacheHitPercentage(fn: string, w: MetricsWindow, signal?: AbortSignal) {
     const window = windowParam(w);
-    return seriesOf(await this.get<SeriesJson>("cache_hit_percentage", { path: fn, window }, signal), w);
+    return seriesOf(await this.get<SeriesJson>("cache_hit_percentage", { ...udfParams(fn), window }, signal), w);
   }
 
   async latencyPercentiles(fn: string, percentiles: number[], w: MetricsWindow, signal?: AbortSignal) {
     const window = windowParam(w);
     const json = await this.get<[number, SeriesJson][]>(
       "latency_percentiles",
-      { path: fn, percentiles: JSON.stringify(percentiles), window },
+      { ...udfParams(fn), percentiles: JSON.stringify(percentiles), window },
       signal,
     );
     // The server answers each percentile once, in increasing order; the contract wants the order asked.

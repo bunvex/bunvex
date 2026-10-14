@@ -14,6 +14,7 @@ import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, functionsQuery, referenceQuery, tablesQuery } from "../data/queries.ts";
 import { useExtensions } from "../extensions/context.ts";
 import { offers } from "../extensions/types.ts";
+import { KIND_WORDS } from "../functions/tree.ts";
 import { useRunner } from "../runner/context.tsx";
 import { GROUP_TITLES, looksLikeId, type PaletteItem, rememberPick, searchItems } from "./model.ts";
 
@@ -104,7 +105,7 @@ function useItems(query: string): PaletteItem[] {
         id: `function:${f.path}`,
         kind: "function",
         title: f.path,
-        hint: f.kind,
+        hint: KIND_WORDS[f.kind],
         go: { to: "/functions", search: { function: f.path } },
       });
 

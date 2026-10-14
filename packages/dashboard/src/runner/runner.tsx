@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, Play, X } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { useLiveFunctions } from "../data/live.ts";
 import { capabilitiesQuery, functionsQuery, tablesQuery } from "../data/queries.ts";
@@ -26,7 +26,7 @@ import {
   type Value,
 } from "../data-source.ts";
 import { formatLiteral, parseLiteralLocated, UNSET } from "../database/literal.ts";
-import { describeFunction } from "../functions/tree.ts";
+import { describeFunction, runnable } from "../functions/tree.ts";
 import { formatDuration } from "../logs/log-list.tsx";
 import { defaultValueFor, validateValue } from "../validators.ts";
 import { appendRunHistory, type RunHistoryEntry, readRunHistory } from "./history.ts";
@@ -87,7 +87,9 @@ let testQueryDraft: string | undefined;
 
 export function FunctionRunner(props: { path?: string; onPath: (path: string) => void; onClose: () => void }) {
   const scope = useQueryScope();
-  const { data: functions = [] } = useQuery(functionsQuery(scope));
+  const { data: listed } = useQuery(functionsQuery(scope));
+  // queries, mutations and actions: an HTTP action is called at its URL (Convex's `SUPPORTED_FUNCTION_TYPES`)
+  const functions = useMemo(() => (listed ?? []).filter(runnable), [listed]);
   // a push lists them again, as Convex's subscribed module list
   useLiveFunctions();
   const { data: caps } = useQuery(capabilitiesQuery(scope));

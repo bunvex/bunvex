@@ -15,6 +15,7 @@ import {
   RANGES,
   type RangePreset,
 } from "./log-filter.ts";
+import { KIND_TITLE } from "./log-list.tsx";
 
 export type Counts = {
   functions: Map<string, number>;
@@ -93,6 +94,7 @@ export function FilterSections(props: FilterSectionsProps) {
         <FacetGroup<FunctionKind>
           title="Function kind"
           options={FUNCTION_KINDS}
+          label={(k) => KIND_TITLE[k]}
           value={view.kinds}
           counts={counts.kinds}
           onChange={(kinds) => onView({ ...view, kinds })}

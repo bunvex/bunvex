@@ -199,9 +199,16 @@ type TableState = {
   pending: boolean;
 };
 
+/** The user tables of a table mapping, sorted (Convex's sidebar: the mapping without `_` names). */
+const userTables = (mapping: Record<string, string>) =>
+  Object.values(mapping)
+    .filter((n) => !n.startsWith("_"))
+    .sort();
+
 export class Tables {
   private mappingSub: { off: () => void; value?: Record<string, string>; error?: DataSourceError } | null = null;
   private mappingWaiters: { resolve: (m: Record<string, string>) => void; reject: (e: unknown) => void }[] = [];
+  private readonly listWatchers = new Set<{ onChange: () => void; onError: (e: DataSourceError) => void }>();
   private readonly tables = new Map<string, TableState>();
   private shapes: { at: number; promise: Promise<Record<string, DashboardShape>> } | null = null;
   private closed = false;
@@ -225,10 +232,15 @@ export class Tables {
       this.mappingSub = holder;
       holder.off = this.sync.watch(GET_TABLE_MAPPING, {}, (r) => {
         if (r.success) {
+          const before = holder.value;
           holder.value = r.value as Record<string, string>;
           holder.error = undefined;
+          // a table created or deleted: the list's watchers hear it (Convex's sidebar re-renders on the mapping)
+          if (before && userTables(before).join("\0") !== userTables(holder.value).join("\0"))
+            for (const w of this.listWatchers) w.onChange();
         } else {
           holder.error = errorOfFailure(GET_TABLE_MAPPING, r);
+          for (const w of this.listWatchers) w.onError(holder.error);
           // a refusal is not kept: the next read asks again
           if (!holder.value) {
             holder.off();
@@ -255,8 +267,21 @@ export class Tables {
 
   /** The user tables' names, sorted (Convex's sidebar: the mapping without `_` names). */
   async tableNames(signal?: AbortSignal): Promise<string[]> {
-    const names = Object.values(await this.mapping(signal)).filter((n) => !n.startsWith("_"));
-    return names.sort();
+    return userTables(await this.mapping(signal));
+  }
+
+  /**
+   * The contract's `watchTables`: told when the user tables change (a table created or deleted), from the table
+   * mapping's subscription (kept for the source's life, as Convex's sidebar keeps `getTableMapping`).
+   */
+  watchTables(onChange: () => void, onError: (e: DataSourceError) => void): () => void {
+    const w = { onChange, onError };
+    this.listWatchers.add(w);
+    this.mapping().catch((e: unknown) => {
+      if (this.listWatchers.has(w))
+        onError(e instanceof DataSourceError ? e : new DataSourceError("unavailable", String(e)));
+    });
+    return () => void this.listWatchers.delete(w);
   }
 
   /** Throws `not_found` for a table the mapping does not have. */
@@ -494,6 +519,7 @@ export class Tables {
 
   close() {
     this.closed = true;
+    this.listWatchers.clear();
     this.mappingSub?.off();
     this.mappingSub = null;
     for (const s of this.tables.values()) for (const r of s.reads.values()) r.off?.();

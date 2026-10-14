@@ -20,7 +20,7 @@ const module = (functions: { name: string; lineno?: number; udfType: string; kin
 });
 
 describe("the function list", () => {
-  test("queries, mutations and actions at module:name, with their line; HTTP routes and child components left out", () => {
+  test("queries, mutations and actions at module:name, with their line; HTTP routes by their route, under their module; child components left out", () => {
     const fns = functionsOf(
       [
         [
@@ -45,6 +45,8 @@ describe("the function list", () => {
       { path: "messages:list", kind: "query", visibility: "public", line: 4 },
       { path: "messages:send", kind: "mutation", visibility: "internal" },
       { path: "dir/nested:default", kind: "action", visibility: "public", line: 2 },
+      // Convex's identifier for a route, as the logs and the metrics name it (`processAnalyzedModuleFunction`)
+      { path: "GET /hello", kind: "httpAction", module: "http", visibility: "public", line: 5 },
     ]);
   });
 

@@ -4,7 +4,8 @@ import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { lastHour, topSeries } from "../src/metrics/metrics.ts";
+import { CONCURRENCY_LABEL, concurrencyIssues } from "../src/metrics/health.tsx";
+import { invalidationSeries, lastHour, topSeries } from "../src/metrics/metrics.ts";
 import { executionsOf } from "../src/mock/metrics.ts";
 import { expectAccessible } from "./axe.ts";
 
@@ -60,11 +61,12 @@ describe("the mock's metrics, from its log history", () => {
 });
 
 describe("Health: the last hour's function metrics", () => {
-  test("calls, failure rate, cache hit rate and scheduler lag, each a chart with its legend", async () => {
+  test("calls, failure rate, cache hit rate, each a chart with its legend", async () => {
     mount();
     const section = await screen.findByRole("region", { name: "Functions, last hour" });
-    for (const name of ["Function calls", "Failure rate", "Cache hit rate", "Scheduler lag"])
+    for (const name of ["Function calls", "Failure rate", "Cache hit rate"])
       expect(within(section).getByRole("region", { name })).toBeDefined();
+    expect(within(section).queryByRole("region", { name: "Scheduler lag" })).toBeNull();
     const calls = within(section).getByRole("region", { name: "Function calls" });
     const figure = await within(calls).findByRole("figure");
     expect(figure.getAttribute("aria-label")).toBe("Function calls, Calls per minute, top 5");
@@ -73,11 +75,74 @@ describe("Health: the last hour's function metrics", () => {
     await expectAccessible();
   });
 
+  test("Concurrency, as Convex's section: scheduler lag, running and queued functions per kind, invalidations", async () => {
+    const src = source();
+    mount(src);
+    const section = await screen.findByRole("region", { name: "Concurrency, last hour" });
+    const charts = within(section)
+      .getAllByRole("region")
+      .map((c) => c.querySelector("h3")?.textContent);
+    expect(charts).toEqual(["Scheduler lag", "Running functions", "Queued functions", "Subscription invalidations"]);
+    const running = within(section).getByRole("region", { name: "Running functions" });
+    await within(running).findByRole("figure");
+    const kinds = within(within(running).getByRole("list"))
+      .getAllByRole("listitem")
+      .map((li) => li.textContent);
+    // each kind the source reports, in Convex's names (the mock runs no Node action)
+    const reported = (await src.functionConcurrency(lastHour())).map((k) => CONCURRENCY_LABEL[k.kind]);
+    expect(kinds).toEqual(reported);
+    expect(kinds).toContain("HTTP Actions");
+    const invalidations = within(section).getByRole("region", { name: "Subscription invalidations" });
+    await within(invalidations).findByRole("figure");
+    const pairs = within(within(invalidations).getByRole("list"))
+      .getAllByRole("listitem")
+      .map((li) => li.textContent ?? "");
+    expect(pairs.length).toBeLessThanOrEqual(4); // the top 3 and the rest
+    expect(pairs.filter((p) => p !== "Other").every((p) => / → /.test(p))).toBe(true);
+    await expectAccessible();
+  });
+
+  test("the concurrency issues, as Convex's section says them", () => {
+    const series = (...vs: (number | null)[]) => vs.map((value, i) => ({ time: i * 60_000, value }));
+    expect(concurrencyIssues(series(0, 0, 0), [])).toEqual([]);
+    expect(concurrencyIssues(series(0, 600, 180), undefined)).toEqual([
+      { severity: "critical", message: "Scheduler is 3 minutes behind" },
+    ]);
+    // a minute behind is not yet critical (Convex: more than 1)
+    expect(concurrencyIssues(series(60), undefined)).toEqual([]);
+    expect(concurrencyIssues(series(120, null), undefined)).toEqual([
+      { severity: "warning", message: "Scheduler was behind but has recovered" },
+    ]);
+    expect(
+      concurrencyIssues(undefined, [
+        { kind: "query", running: series(4, 4), queued: series(0, 2) },
+        { kind: "action", running: series(1, 0), queued: series(3, 0) },
+        { kind: "mutation", running: series(1, 1), queued: series(0, 0) },
+      ]),
+    ).toEqual([
+      { severity: "critical", message: "Queries currently at concurrency limit" },
+      { severity: "warning", message: "Actions hit concurrency limit" },
+    ]);
+  });
+
+  test("invalidation pairs: mutation → table overall, the table alone for one mutation", () => {
+    const s = (fn: string, table: string | null) => ({ function: fn, table, series: [] });
+    expect(invalidationSeries([s("tasks:create", "tasks"), s(REST, null)]).map((x) => x.label)).toEqual([
+      "tasks:create → tasks",
+      "Other",
+    ]);
+    expect(invalidationSeries([s("tasks:create", "tasks"), s(REST, null)], true).map((x) => x.label)).toEqual([
+      "tasks",
+      "Other",
+    ]);
+  });
+
   test("a credential that may not view metrics is told so", async () => {
     mount(source({ capabilities: { operations: ["viewData", "viewLogs"], readOnly: true } }));
     const section = await screen.findByRole("region", { name: "Functions, last hour" });
     expect(within(section).getByText("This credential may not view metrics.")).toBeDefined();
     expect(within(section).queryByRole("figure")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Concurrency, last hour" })).toBeNull();
   });
 
   test("a source without metrics says the deployment does not report them", async () => {
@@ -114,11 +179,38 @@ describe("Functions: a function's Statistics tab", () => {
     await expectAccessible();
   });
 
-  test("a mutation has no cache hit rate", async () => {
-    open("/functions?function=tasks:create");
+  test("a mutation has no cache hit rate; it has its subscription invalidations by table, as Convex's", async () => {
+    const src = source();
+    const asked: (string | undefined)[] = [];
+    // a known answer: the tables alone are named, as Convex's per-mutation chart
+    src.subscriptionInvalidations = async (w, k, o) => {
+      asked.push(`${k} ${o?.function}`);
+      const series = (v: number) =>
+        Array.from({ length: w.numBuckets }, (_, i) => ({ time: w.start + i * 60_000, value: v }));
+      return [
+        { function: "tasks:create", table: "tasks", series: series(3) },
+        { function: REST, table: null, series: series(1) },
+      ];
+    };
+    open("/functions?function=tasks:create", src);
     const panel = await screen.findByRole("tabpanel", { name: "Statistics" });
     await within(panel).findByRole("region", { name: "Errors" });
     expect(within(panel).queryByRole("region", { name: "Cache hit rate" })).toBeNull();
+    const chart = within(panel).getByRole("region", { name: "Subscription invalidations" });
+    await within(chart).findByRole("figure");
+    expect(asked).toContain("5 tasks:create");
+    expect(
+      within(chart)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(["tasks", "Other"]);
+  });
+
+  test("a query has no subscription invalidations chart", async () => {
+    open("/functions?function=tasks:list");
+    const panel = await screen.findByRole("tabpanel", { name: "Statistics" });
+    await within(panel).findByRole("region", { name: "Cache hit rate" });
+    expect(within(panel).queryByRole("region", { name: "Subscription invalidations" })).toBeNull();
   });
 
   test("a credential that may not view metrics is told so on the tab", async () => {

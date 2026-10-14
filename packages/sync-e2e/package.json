@@ -32,13 +32,16 @@
     "@testing-library/react": "^16.3.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "axe-core": "4.13.0",
     "convex": "^1.46.0",
     "fast-check": "4.10.2",
     "jose": "6.2.12",
+    "playwright-core": "1.63.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
   "scripts": {
-    "test:react": "bun test --preload ../../scripts/test-loopback.ts --preload ./react/dom.ts ./react"
+    "test:react": "bun test --preload ../../scripts/test-loopback.ts --preload ./react/dom.ts ./react",
+    "e2e:dashboard": "bun test ./dashboard/app.e2e.ts --timeout 90000"
   }
 }

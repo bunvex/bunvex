@@ -196,6 +196,10 @@ gaps.
     `getById` and `/api/get_indexes`; PR 5: schedules, files, the audit log, Health's concurrency and
     invalidations; PR 3: the Data screen's writes, with the server's `addDocument`, `patchDocumentsFields`,
     `replaceDocument`, `deleteDocuments`, `clearTablePage` and `createTable` and their `add_documents`,
-    `update_documents`, `delete_documents` and `create_table` audit events; PR 4: the Functions screen, the runner
-    with its custom test query and Settings, with the server's `modules:*`, `components:list`, `getVersion`,
-    `cloudUrl` / `siteUrl`, `listEnvironmentVariables`, `latestExport` and `snapshotImport:list`); the rest is PR 6.
+    `update_documents`, `delete_documents` and `create_table` audit events; PR 4: the Functions screen, the
+    runner with its custom test query and Settings, with the server's `modules:*`, `components:list`,
+    `getVersion`, `cloudUrl` / `siteUrl`, `listEnvironmentVariables`, `latestExport` and `snapshotImport:list`;
+    PR 6: `apps/dashboard` runs on it — the real sign-in, Convex's connection overlay and polling rules, the live
+    table list, HTTP actions, Health's concurrency and invalidations, the paused lists); left: packaging (the
+    dashboard's image, `dashboard.zip`, `bunvex dev`'s local dashboard, PR 7) and the CLI's links (PR 8), plus the
+    custom query's type checking and Convex's bulk edit.

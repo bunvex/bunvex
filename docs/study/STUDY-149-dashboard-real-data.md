@@ -1,7 +1,7 @@
 # STUDY-149 — The dashboard on real data: how Convex's dashboard reads a deployment
 
-- **Status:** decided (owner, 2026-10-12); PR 1 built (`@bunvex/dashboard-source`, §5 "PR 1, as built"); PRs 2, 3,
-  4 and 5 built (§5 "PR N, as built"; PR 4: functions, the runner and Settings); PRs 6–8 remain. Q1: option B, a
+- **Status:** decided (owner, 2026-10-12); PR 1 built (`@bunvex/dashboard-source`, §5 "PR 1, as built"); PRs 2–5
+  built (§5); PR 6 built (`apps/dashboard` on the real source, §5 "PR 6, as built"). Q1: option B, a
   separate service with its own image (DV-475); Q3: rename (DV-474); Q4: Convex's model plus a `Host` check
   (DV-476); Q5: local links only (DV-477, replaces DV-217); Q2, Q6, Q7 confirmed as planned; AD-32 not taken.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/dashboard-common`,
@@ -284,7 +284,7 @@ Auth on bunvex is `Authorization: Bunvex <key>` (DV-97; `Convex <key>` is a 400 
   the screen refetch its TanStack Query keys (`database/live.ts:9-18`; STUDY-12 D3, decided).
 - `apps/dashboard/src/main.tsx:25-47,96` builds a `MockDataSource` and injects it; sign-in uses
   `mockVerifier()` (`login/credentials.ts:82-94`). `SERVER_OPS` already maps the server's operation names
-  (`:43-63`).
+  (`:43-63`). (As of the study; PR 6 replaced both, §5 "PR 6, as built".)
 - `check-deps` allows `dashboard → ui` and `apps/dashboard → dashboard, ui` only (`scripts/check-deps.ts:62-66`).
 - There is no `@bunvex/client/react`: `@bunvex/client` exports `"."` only; React is `@bunvex/react`
   (`BunvexReactClient`, `packages/react/src/client.ts:125`, `setAdminAuth(token)` `:184`, without
@@ -1251,6 +1251,175 @@ TypeScript editor opens (the custom test query), as Convex's. The source is not 
 **Notes for PR 6.** Mount the runner's custom test query on the real source (the app's mock has no `runTestQuery`);
 HTTP actions in the tree need a contract kind (`httpAction`) shared with the Logs screen; `watchEnvironmentVariables`
 and `watchFunctions` are already wired in the screens.
+
+### PR 6, as built
+
+`apps/dashboard` on the real source. Convex's side re-read for it (`dc/`, `sh/` as above):
+
+- **Signing in** (`sh/pages/_app.tsx:375-430`, `sh/lib/checkDeploymentInfo.ts`, `sh/lib/fetchCurrentDeployment.ts`): the
+  form, the environment's prefill, the embedding parent and, in a build for the CLI's local dashboard,
+  `GET /api/current_deployment` on the dashboard's own origin (`{name, url, adminKey}`; anything else, a 404
+  included, falls back to the form, and nothing is shown while the answer is awaited, `:405-430`, `:483-490`).
+- **The connection** (`dc/lib/deploymentContext.tsx:759-911`): the client's state polled every 2.5 s, `Disconnected`
+  at two checks in a row, `Unknown` otherwise until it is up; only `Disconnected` shows the overlay
+  (`dc/features/disconnectOverlay/DisconnectOverlay.tsx`: "Connection Issue", below the header, with a blur;
+  `SelfHostedDisconnectOverlay.tsx`: "Check that your Convex server is running and accessible at <the URL signed in
+  to>. If you continue to have issues, try restarting your Convex server."). While disconnected the HTTP polls pass
+  SWR a null key (`dc/lib/deploymentApi.ts:54-57` for `/api/shapes2`, `dc/lib/appMetrics.ts:121,199,334,416,522,806`
+  for every app metric); when the key comes back SWR asks at once. The socket's subscriptions resume by themselves.
+- **The table list** is the subscribed table mapping (`dc/lib/useTableMetadata.tsx:26-40`): a table created or
+  deleted anywhere shows in the sidebar without a reload.
+- **HTTP actions** (`system-udfs/convex/_system/frontend/modules.ts:130-146` `processHttpRoute`;
+  `dc/lib/functions/generateFileTree.ts:197-230`): each route is listed in `http.js` as a public function named
+  `"<METHOD> <path>"`, `udfType: "HttpAction"`, with its line; that name is its identifier (in the URL, the logs'
+  filter, the metrics, which add `udfType=HttpAction`). The summary labels it "HTTP" (`FunctionSummary.tsx:227`) and
+  shows its URL (the site URL, the component's `httpPrefix`, the path; `useHttpActionRoute.ts:17-50`); there is no
+  Run button (`:180-185`) and the runner offers queries, mutations and actions only (`SUPPORTED_FUNCTION_TYPES`,
+  `FunctionTester.tsx:128`); its statistics are calls, errors and execution time (`PerformanceGraphs.tsx:180-220`).
+  The Logs screen says "HTTP Action" (`LogMetadata.tsx:541`) and judges one by its status (`useLogs.ts:80`).
+- **Health** (`dc/features/health/components/HealthView.tsx:76-145`): a Functions section (calls, failure rate, cache
+  hit rate) and a Concurrency section — the scheduler's status (lag, 60 s), Running and Queued functions per kind
+  (`useFunctionConcurrency`, `appMetrics.ts:801-915`, 8 s, kinds named by `mapFunctionTypeToDisplayName`, `:789-799`)
+  and Subscription Cache Invalidations, top 3 (`SubscriptionInvalidations.tsx`, `appMetrics.ts:513-559`, 8 s); the
+  issues summary (`ConcurrencyStatus.tsx:30-140`). A mutation's statistics add its invalidations, top 5, 8 s
+  (`PerformanceGraphs.tsx:211-247`).
+- **The paused lists** (`dc/lib/usePausedLiveData.ts`; `ScheduledFunctionsListHeader.tsx:42-84`,
+  `FileStorageListHeader.tsx:94-135`): Pause / Go Live on both lists, Refresh while paused; on an auto-pause a
+  warning, the toast "There are too many updates to show live. Updates have automatically been paused." and the
+  toggle disabled for the visit; the pause kept per deployment in local storage (`pauseLiveScheduledJobs`,
+  `pauseLiveFileStorage`).
+- **The custom test query's types** (`dc/features/functionRunner/components/FunctionEditor.tsx:60-170`): Monaco gets
+  the whole `convex/server` declaration set (`convexServerTypes`) and a `dataModel.d.ts` generated from the schema.
+
+**What was built.**
+
+- **The host** (`apps/dashboard/src/main.tsx`): sign-in checks the key with `createAdminKeyVerifier` (Convex's
+  `check_admin_key`, 3 tries 500 ms apart, the 404 rule; the mock verifier is gone), then the screens run on
+  `createServerDataSource({url, adminKey})`, closed at sign-out. `@bunvex/dashboard-source` (and the sync client
+  under it) is its own chunk, fetched once signed in: the sign-in page and the demo do not load it. "Use the demo
+  data" (and `?demo=1`, and the mock's knobs) keeps the mock. A build with `VITE_BUNVEX_USE_CURRENT_DEPLOYMENT=1`
+  first asks `/api/current_deployment` (`login/current-deployment.ts`, Convex's shape and fallbacks; the server side
+  is PR 7's). Requests carry `Authorization: Bunvex <key>` and `Bunvex-Client: dashboard-<version>` (PR 1).
+- **The contract** (DV-479's rule; `data-source.ts`, UI-01 §34.5): `watchConnection` (moved from the server source's
+  own surface into the contract, optional: a source without it is always connected), `watchTables` (optional),
+  `FunctionKind` gains `httpAction` and `FunctionInfo` an optional `module` (an HTTP action's path is its route,
+  `"GET /hello"`, in `http`). The suite checks an HTTP action's shape and that running one is `invalid_request`.
+- **The connection** (`packages/dashboard/src/shell/connection.tsx`): the source's status in a context; while
+  `disconnected`, "Connection issue" covers the screens below the header with Convex's self-hosted words (the URL
+  the host signed in to, `<Dashboard deploymentUrl>`, else the deployment's own), and the polled HTTP reads (every
+  app metric, the inferred types) are disabled; on the way back the polled reads are asked again at once and every
+  query that failed meanwhile is fetched again (one-shot reads made over HTTP while away); the socket's
+  subscriptions resume by themselves.
+- **The table list** follows `watchTables` (`database/live.ts`): the Database screen lists the tables again on a
+  change, and the empty-database screen opens the first table that appears. The source tells it from the table
+  mapping it keeps subscribed (`tables.ts`), only when the user tables change; the mock when one is created or
+  deleted.
+- **HTTP actions** (`dashboard-source/src/functions.ts`, `logs.ts`, `metrics.ts`; the Functions, runner, Logs and
+  palette screens; the mock): listed as above; the source refuses to run one (`invalid_request`, "… is an HTTP
+  action: call it at its URL") before any permission check; the log stream's `HttpAction` is the `httpAction` kind
+  (it was "action"), its route kept whole (`displayPath` would strip a `.js` from `GET /app.js`); the metrics add
+  `udfType=HttpAction` for a route's name (before, the server read `"GET /hello"` as a `module:name` and failed).
+  The tree shows "H", the page says "HTTP action in http" with its URL (the deployment's HTTP actions URL and the
+  path) and no Run; its statistics are calls, errors and latency; the runner's picker leaves routes out (opened on
+  one, it falls back to the first runnable function); the Logs screen letters it "H", titles it "HTTP action" and
+  filters by it. The mock has two routes and some HTTP action executions in its log.
+- **Health** (`metrics/health.tsx`): "Functions, last hour" (the three top charts) and "Concurrency, last hour" —
+  the scheduler lag (60 s), Running functions and Queued functions per kind under Convex's names (8 s),
+  Subscription invalidations top 3 as "mutation → table" (8 s) — with Convex's issues as a list under the heading
+  (bunvex's sections do not collapse). A mutation's Statistics tab adds its invalidations, top 5, by table, 8 s.
+- **The paused lists** (`shell/live-pause.tsx`; Schedules and Files): Pause / Go live, Refresh while paused, the
+  auto-pause's warning and Convex's words, Go live disabled after an auto-pause for the visit; kept per deployment in
+  local storage (`bunvex:<deployment>/pauseLiveScheduledJobs`, `…/pauseLiveFileStorage`). While paused, only what
+  Convex keeps live refreshes (the crons; the file count and the open file); Go live subscribes again, which
+  resumes the source (PR 5).
+- **Per screen, the freshness is now Convex's on a deployment**: the Data screen's documents, sizes, the table list,
+  the functions, the runner's query, the environment variables, the audit log, the schedules and files (with the
+  auto-pause) live; Health's top functions, concurrency and invalidations every 8 s, the scheduler lag every 60 s,
+  a function's charts once per window, the inferred types every 60 s; Logs over the long poll. The features only a
+  deployment has light up by themselves (the screens test for the source's methods): the custom test query, Delete
+  table, the live Functions list, the live environment variables, Health's concurrency and invalidations.
+
+**Not built here** (gaps, each "Ainda não fizemos", none a divergence):
+
+- The custom test query's type checking and completions: Convex ships the whole `convex/server` declaration set in
+  its bundle and generates the data model from the schema; for bunvex that means shipping `@bunvex/server`'s
+  declarations to the browser. Not cheap; left out.
+- Convex's bulk edit (`patchDocumentsFields` without `ids`, PR 3's note) has no contract method yet.
+- Search, vector and staged indexes in `IndexInfo`; `tableOfId` for system tables (PR 2's notes).
+- Packaging (`bunvex dashboard serve`, the image, `dashboard.zip`, `/api/current_deployment`'s server): PR 7.
+
+**Found on the way.**
+
+1. *Fixed* (above): the source asked a route's metrics without `udfType`, which the server refused.
+2. *Not fixed here* (`packages/server/src/functions.ts`, another change's file): an HTTP action's executions are
+   logged under the request's path (`GET /files/abc`), where Convex logs the route that matched (`GET /files/*` for
+   a prefix route; `router.ts` `lookup`, `crates/isolate/src/environment/action/mod.rs:474-500`,
+   `application/src/function_log.rs:1149-1200`). Exact routes agree; a prefix route's Logs tab misses its lines.
+
+**Divergences.** None new (DV-486 to DV-489 unused). The overlay's words name bunvex (rule 5); the key stays in memory
+(DV-210); the contract's changes are DV-479's rule.
+
+**Tests.**
+
+- **The app in Chromium on a live deployment** (`packages/sync-e2e/dashboard/app.e2e.ts`, run by `bun run e2e` and CI's
+  "e2e · dashboard in Chromium"): the built app, a bunvex server in the process and an HTTP and WebSocket proxy the
+  test takes down. Sign-in (a wrong key refused; the key's requests carry `Bunvex <key>` and
+  `Bunvex-Client: dashboard-x.y.z`; the header names the deployment; sign out, and a reload asks again); a read-only
+  key; Data (the documents, an app's insert shown live, a cell edited and a document added reaching the server, a
+  table a push creates appearing in the sidebar); Functions (the HTTP route listed with no Run) and the runner (a
+  query subscribed and following the data, a mutation with typed arguments, the custom test query and its log line);
+  Logs (a mutation's and an action's lines arriving live); Settings (a variable saved reaching the server, one set
+  by the CLI's route appearing); the connection (down: "Connection issue" naming the URL, axe clean; a write while
+  away; up: the overlay gone, the write shown, live again).
+- **Screens** (`packages/dashboard/test`): `connection.test.tsx` (the overlay's states and words, the host URL and
+  the fallback, the polls gated while away and asked at once on return, a failed read read again, the sidebar
+  following `watchTables`, the empty database opening a new table); `functions.test.tsx`, `runner.test.tsx`,
+  `logs-redesign.test.tsx` (HTTP actions); `metrics.test.tsx` (the Concurrency section, its issues, a mutation's
+  invalidations); `schedules.test.tsx`, `files.test.tsx` (the auto-pause, a manual pause, a stored pause).
+- **Source and live**: `functions-settings.test.ts`, `logs.test.ts`, `metrics-and-connection.test.ts` (routes, kinds,
+  `udfType`); `server-source.test.ts` (`watchTables` hears a push's table, not a write); `server-source-functions.test.ts`
+  (a real `GET /http/hello` reaches `watchLogs({function: "GET /hello"})` as `httpAction`, its rates and latencies,
+  running it refused, and the contract's two new checks).
+- `apps/dashboard`: `/api/current_deployment`'s parsing and fallbacks; the mock-only sign-in tests became a refusal
+  by an address where nothing listens (the real verifier's three tries).
+
+**Sabotage** (each restored after, `git diff` checked; counts are failing tests):
+
+| Sabotage | Failing tests |
+|---|---|
+| the overlay never shown | screens 3 |
+| the metrics not gated while disconnected | screens 1 |
+| a read that failed while away not read again | screens 1 |
+| the polled reads not asked again on return | screens 1 |
+| the Database screen does not follow `watchTables` | screens 1 |
+| the mock never tells the table list | screens 2 |
+| the source's `watchTables` never told | live 1 |
+| the app signed in, still on the mock | browser 7 |
+| the host's URL not passed to the overlay | browser 1 |
+| routes not listed (source) | unit 1, live 2 |
+| a route's log kind left "action" | unit 1, live 1 |
+| a route's metrics without `udfType` | unit 1, live 1 |
+| the source runs routes | live contract 1, live 1 |
+| the tree ignores `module` | screens 2 |
+| the runner offers routes | screens 1 |
+| letter "A" for an HTTP action | screens 1 |
+| the mock runs routes | the mock's contract 1 |
+| Run shown on a route | screens 1 |
+| scheduler critical above 0 minutes, not 1 | screens 1 |
+| the invalidations chart for every kind | screens 2 |
+| a mutation's chart labelled "mutation → table" | screens 1 |
+| the schedules list refreshed while paused | screens 2 |
+| a source's pause not flagged | screens 2 |
+| Go live does not subscribe again | screens 2 |
+| the file count not refreshed while paused | screens 1 |
+| the pause not stored | screens 3 |
+| the source tells `watchTables` on every mapping result | none: the mapping has a new result only when the tables change, so the check is a guard |
+
+**Measurements.** No hot path changes: the server is untouched; the source adds a comparison per table-mapping result
+and one parameter on a route's metrics. The app's entry chunk grows by 2 795 bytes (861 gzipped: the connection
+overlay, the live table list, the Health section, the pause controls, the host's source loader), and the verifier's
+module is a 3 551-byte chunk loaded with it (it was 521 bytes inside the entry); `@bunvex/dashboard-source` with the
+sync client is an 87 331-byte chunk (27 477 gzipped) fetched only after signing in to a deployment.
 
 ## 6. Open questions
 

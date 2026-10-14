@@ -83,7 +83,13 @@ describe("entriesOf", () => {
       entriesOf([completion({ udfType: "HttpAction", identifier: "GET /hook", success: { status } })], ids())[0]!;
     expect(http("204").execution?.status).toBe("success");
     expect(http("500").execution?.status).toBe("failure");
-    expect(http("500").function).toEqual({ path: "GET /hook", kind: "action" });
+    expect(http("500").function).toEqual({ path: "GET /hook", kind: "httpAction" });
+    // a route is named as it is: a path ending in `.js` keeps it
+    const asset = entriesOf(
+      [completion({ udfType: "HttpAction", identifier: "GET /static/app.js", success: { status: "200" } })],
+      ids(),
+    )[0]!;
+    expect(asset.function).toEqual({ path: "GET /static/app.js", kind: "httpAction" });
   });
 
   test("an action's Progress lines have no outcome; links and identities pass through", () => {

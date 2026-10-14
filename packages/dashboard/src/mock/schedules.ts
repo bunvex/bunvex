@@ -72,7 +72,7 @@ export class MockScheduler {
     pending = 24,
   ) {
     const { rnd } = host;
-    const targets = host.functions.filter((f) => f.kind !== "query");
+    const targets = host.functions.filter((f) => f.kind === "mutation" || f.kind === "action");
     for (let i = 0; i < pending; i++) {
       const fn = rnd.pick(targets);
       const created = start - rnd.int(1, 3_600) * 1000;
@@ -222,7 +222,7 @@ export class MockScheduler {
       }
     // a live app keeps scheduling
     if (this.host.rnd.chance(0.3)) {
-      const fn = this.host.rnd.pick(this.host.functions.filter((f) => f.kind !== "query"));
+      const fn = this.host.rnd.pick(this.host.functions.filter((f) => f.kind === "mutation" || f.kind === "action"));
       this.jobs.push({
         id: this.host.rnd.id(),
         creationTime: now,

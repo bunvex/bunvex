@@ -1,5 +1,7 @@
 // Live data for the Database screen (UI-01 §12.4): `watchTable` says a table changed; the loaded pages of
 // its documents, the open document and the table list (its counts) are refreshed through the query cache.
+// `watchTables` says the table list changed (a table created or deleted elsewhere), as Convex's sidebar follows
+// the table mapping (STUDY-149 PR 6).
 import { useQueryClient } from "@tanstack/react-query";
 import { useQueryScope } from "../context.tsx";
 import { useWatch } from "../data/live.ts";
@@ -15,4 +17,15 @@ export function useLiveTable(table: string): DataSourceError | undefined {
     void queryClient.invalidateQueries({ queryKey: [...all, "document", table] });
     void queryClient.invalidateQueries({ queryKey: dashboardKeys.tables(scope) });
   }, [source, scope, table, queryClient]);
+}
+
+/** While mounted: the table list read again when the source says tables were created or deleted. */
+export function useLiveTables(): DataSourceError | undefined {
+  const { source, scope } = useQueryScope();
+  const queryClient = useQueryClient();
+  return useWatch<void>(
+    (onChange, onError) => source.watchTables?.(() => onChange(undefined), onError) ?? (() => {}),
+    () => void queryClient.invalidateQueries({ queryKey: dashboardKeys.tables(scope) }),
+    [source, scope, queryClient],
+  );
 }

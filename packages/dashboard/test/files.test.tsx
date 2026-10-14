@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { Dashboard } from "@bunvex/dashboard";
 import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { formatBytes } from "../src/files/screen.tsx";
 import { expectAccessible } from "./axe.ts";
@@ -209,6 +209,42 @@ describe("the Files screen", () => {
     await user.click(within(filters).getByRole("button", { name: "Reset" }));
     await waitFor(() => expect(params(history)).toEqual({ view: "images" }));
     expect(within(column).getByRole("navigation", { name: "Buckets" }).textContent).toContain("Default");
+    await expectAccessible();
+  });
+
+  test("live updates paused by the source: said; the count still follows, the list waits for Refresh", async () => {
+    const source = mockSource();
+    const watch = source.watchFiles.bind(source);
+    const list = source.listFiles.bind(source);
+    const count = source.countFiles.bind(source);
+    const spy = { emit: (_: { paused: boolean }) => {}, lists: 0, counts: 0 };
+    source.watchFiles = (onChange, onError) => {
+      spy.emit = (c) => (onChange as (c: { paused: boolean }) => void)(c); // the mock never pauses
+      return watch(onChange, onError);
+    };
+    source.listFiles = (q, o) => {
+      spy.lists++;
+      return list(q, o);
+    };
+    source.countFiles = (o) => {
+      spy.counts++;
+      return count(o);
+    };
+    mount("/files", source);
+    await loaded();
+    act(() => spy.emit({ paused: true }));
+    await screen.findByText("There are too many updates to show live. Updates have automatically been paused.");
+    expect(screen.getByRole("button", { name: "Go live" }).hasAttribute("disabled")).toBe(true);
+    const name = (await source.getDeployment()).name;
+    expect(localStorage.getItem(`bunvex:${name}/pauseLiveFileStorage`)).toBe("true");
+    await new Promise((r) => setTimeout(r, 50));
+    const before = { ...spy };
+    act(() => spy.emit({ paused: true }));
+    await waitFor(() => expect(spy.counts).toBeGreaterThan(before.counts)); // as Convex's live `numFiles`
+    await new Promise((r) => setTimeout(r, 100));
+    expect(spy.lists).toBe(before.lists);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(spy.lists).toBeGreaterThan(before.lists));
     await expectAccessible();
   });
 });
