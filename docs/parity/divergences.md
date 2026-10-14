@@ -458,7 +458,9 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-None as of 2026-10-14.
+| ID | bunvex | Convex | Observable | Why | Status | Source |
+|---|---|---|---|---|---|---|
+| DV-483 | An HTTP action's response is framed as Bun picks: a stream that ended before the head (one small chunk) goes with its `content-length`, no body with `content-length: 0`, and untyped bytes (no `content-type`) past Bun's first chunk (~16 KiB) chunked, with no length (a HEAD answer has it) | a stream and no body chunked (hyper, no `content-length`); every body that is not a stream with its `content-length` (`23_response.ts` `convexJsonFromResponse`, `local_backend/src/http_actions.rs`) | yes, on the wire only: a client reading raw HTTP, or download progress for large untyped bytes; `fetch` reads the same body | Bun ignores an explicit `content-length` or `transfer-encoding` on a stream (DV-324) and types every body it sends whole (`application/octet-stream`). For untyped bytes: (a) streamed, Convex's "no type", no length past ~16 KiB (built), or (b) whole, the length plus a `content-type` Convex does not send | pending (owner); recommended: accept, with (a) | [STUDY-31 §8.4](../study/STUDY-31-http-actions.md#84-divergences) |
 
 DV-480 (STUDY-149 PR 5) was decided by the owner (2026-10-12: match Convex), built, and is in [Resolved to match Convex](#resolved-to-match-convex).
 

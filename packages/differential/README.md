@@ -37,6 +37,10 @@ backend is always started with `--disable-beacon`.
 - `test/unawaited-operations.test.ts` (STUDY-143): the unawaited-operations warning of the actions and HTTP
   actions of `unawaited-app/` on both, a timeout included (`env` sets `V8_ACTION_USER_TIMEOUT_SECS` on both).
   Local only.
+- `test/http-content-type.test.ts` (STUDY-31 §8): an HTTP action response's implicit headers on both, from the app
+  of `http-headers-app/` — every body type (string, number, URLSearchParams, FormData, typed and untyped Blob,
+  `Response.json`, bytes, a 1 MiB string, streams, no body), with and without an explicit type or length, by GET and
+  HEAD, read off a raw socket; the framing each backend picks (DV-483) asserted per backend. Local only.
 - `test/http-action-log-route.test.ts` (STUDY-31 §7): what an HTTP action is logged as, on both — requests to the
   exact, prefix and failing routes of `http-routes-app/` and to paths no route matches; the answers, the function log
   stream's entries (names, statuses, errors, lines) and the app metrics per route compared. Local only.
