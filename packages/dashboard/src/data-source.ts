@@ -267,6 +267,11 @@ export type FunctionInfo = {
   args?: ValidatorJson;
   /** The declared return value validator. Absent: none declared. */
   returns?: ValidatorJson;
+  /**
+   * The line it is declared on in its module's source, when the push reported it (Convex's `lineno`): a module's
+   * functions are listed in this order, as in Convex's Functions screen.
+   */
+  line?: number;
 };
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -464,24 +469,47 @@ export interface DashboardDataSource
     onError: (error: DataSourceError) => void,
   ): Unsubscribe;
 
-  // Writes: present when the source can write; allowed when `writeData` is granted and not `readOnly`.
-  /** All or nothing. Returns the new ids, in order. */
-  insertDocuments?(table: string, documents: Record<string, Value>[], opts?: CallOptions): Promise<string[]>;
-  /** Every id must exist (else `not_found`, nothing written). System fields cannot be patched. */
+  // Writes: present when the source can write; allowed when `writeData` is granted and not `readOnly`. Their
+  // rules are Convex's Data screen mutations (`_system/frontend/addDocument`, …; STUDY-149 PR 3, DV-479: where
+  // this contract and Convex differ, the contract follows Convex). A refusal the deployment explains (a field
+  // name, the schema, a read-only system table) is `invalid_request` with its words.
+  /**
+   * All or nothing, at most 4 096 documents (more is `invalid_request`). A table that does not exist yet is
+   * created, as Convex's `db.insert` creates it. Convex's mutation answers no ids, so neither does this.
+   */
+  insertDocuments?(table: string, documents: Record<string, Value>[], opts?: CallOptions): Promise<void>;
+  /**
+   * Every id must exist (an id of a document that is gone: `not_found`; one that is not an id:
+   * `invalid_request`; nothing written either way). `_id` and `_creationTime` may only be given their own values.
+   */
   patchDocuments?(table: string, ids: string[], fields: Record<string, FieldPatch>, opts?: CallOptions): Promise<void>;
-  /** Keeps `_id` and `_creationTime`; replaces every other field. */
+  /** Keeps `_id` and `_creationTime`; replaces every other field. A document that is gone: `not_found`. */
   replaceDocument?(table: string, id: string, document: Record<string, Value>, opts?: CallOptions): Promise<void>;
-  /** Ids that do not exist are ignored. */
+  /**
+   * At most 4 096 ids (more is `invalid_request`). All or nothing: an id of a document that is gone fails the call
+   * (`not_found`), as Convex's `db.delete`.
+   */
   deleteDocuments?(table: string, ids: string[], opts?: CallOptions): Promise<void>;
-  /** Deletes every document of the table (the source may do it in several transactions). */
+  /**
+   * Deletes every document of the table, oldest first, in pages of 4 000 (one transaction each, as Convex's
+   * `clearTablePage`); an abort stops between pages, the table partly cleared. Documents written meanwhile may
+   * stay. An unknown table: `not_found`.
+   */
   clearTable?(table: string, opts?: CallOptions): Promise<{ deleted: number }>;
 
   /**
-   * Creates an empty table (STUDY-12 D11), not in the schema until declared there. A name that is taken, or
-   * not an identifier (letters, digits, `_`; not starting with a digit or `_`; at most 64): `invalid_request`.
-   * Convex's dashboard does it with a mutation that inserts a document and deletes it.
+   * Creates an empty table (STUDY-12 D11), not in the schema until declared there, as Convex's dashboard does: a
+   * mutation that inserts a document and deletes it. A name that is not an identifier (letters, digits, `_`; not
+   * starting with a digit; at most 64), or a system table's (`_`), is `invalid_request`. A taken name is not
+   * refused (the screen refuses it, as Convex's form does), unless the table's declared document type refuses
+   * an empty document.
    */
   createTable?(name: string, opts?: CallOptions): Promise<void>;
+  /**
+   * Deletes whole tables, their documents and indexes, in one transaction (Convex's `/api/delete_tables`). A
+   * table the schema declares (or points to with `v.id`) is `invalid_request`; a name with no table is skipped.
+   */
+  deleteTables?(names: string[], opts?: CallOptions): Promise<void>;
 
   /**
    * A document type every document in the table fits (STUDY-12 D11, the "Generated" schema), in Convex's
@@ -517,6 +545,24 @@ export interface DashboardDataSource
     onError: (error: DataSourceError) => void,
     opts?: Pick<RunOptions, "identity">,
   ): Unsubscribe;
+
+  /**
+   * Tells the caller the deployed functions may have changed (a push), as Convex's dashboard keeps its module list
+   * subscribed (`modules:listForAllComponents`). The dashboard then lists them again. Never synchronously.
+   * Optional; without it, the list is read when a screen opens.
+   */
+  watchFunctions?(onChange: () => void, onError: (error: DataSourceError) => void): Unsubscribe;
+
+  /**
+   * Runs a query written in the dashboard once, as Convex's runner runs its "Custom test query"
+   * (`/api/run_test_function`): `code` is a JavaScript module (the screen compiles the TypeScript typed, as Convex's
+   * does) whose default export is a query; `query` and `internalQuery` are in scope, the source imports them. It
+   * runs with no arguments, against the deployment's data, and changes nothing. What it returns or throws comes
+   * back as a run, with the lines it logged; so does a module that does not load (its error), as in Convex's
+   * runner. Rejects only when the call cannot be made (`unauthorized`, `unavailable`). Allowed with
+   * `runFunctions` (Convex's `RunTestQuery`), read-only credentials included. Optional.
+   */
+  runTestQuery?(code: string, opts?: CallOptions): Promise<FunctionRun>;
 
   listLogs(query: LogQuery, opts?: CallOptions): Promise<Page<LogEntry>>;
   /** Live tail: entries created after the call, in id order, matching the filter. Never synchronously. */

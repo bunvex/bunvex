@@ -419,6 +419,8 @@ export function describeDataSourceContract(
         // declared validators come in Convex's JSON form (STUDY-12 V1)
         if (f.args !== undefined) expect(isValidatorJson(f.args)).toBe(true);
         if (f.returns !== undefined) expect(isValidatorJson(f.returns)).toBe(true);
+        // the line it is declared on, as Convex's analysis reports it
+        if (f.line !== undefined) expect(Number.isInteger(f.line) && f.line > 0).toBe(true);
       }
     });
 
@@ -617,6 +619,26 @@ export function describeDataSourceContract(
         expect(refused[0]?.code).toBe("invalid_request");
       });
 
+      test("runTestQuery (when present): a query's value and log lines; what it throws, or a module that does not load, is a run", async () => {
+        const src = await runner();
+        if (!src.runTestQuery) return;
+        const ok = await src.runTestQuery(
+          'export default query({ handler: async () => { console.log("from the test query"); return 6 * 7; } });',
+        );
+        expect(ok.error).toBeUndefined();
+        expect(ok.value).toBe(42);
+        expect(ok.logLines.map((l) => l.message).join("\n")).toContain("from the test query");
+        expect(ok.durationMs).toBeGreaterThanOrEqual(0);
+        const thrown = await src.runTestQuery(
+          'export default query({ handler: async () => { throw new Error("thrown by the test query"); } });',
+        );
+        expect(thrown.value).toBeUndefined();
+        expect(thrown.error?.message).toBeTruthy();
+        const broken = await src.runTestQuery("export default query({");
+        expect(broken.value).toBeUndefined();
+        expect(broken.error?.message).toBeTruthy();
+      });
+
       const misfit = run.misfitArgs;
       if (misfit)
         test("runFunction: arguments that do not fit the declared validator fail the run, not the call", async () => {
@@ -670,6 +692,22 @@ export function describeDataSourceContract(
       return src as Required<DashboardDataSource>;
     };
 
+    /** The documents of `table` whose `label` is `label`, oldest first (inserts answer no ids, as Convex's). */
+    const labelled = async (src: DashboardDataSource, label: string) =>
+      (
+        await all((cursor) =>
+          src.listDocuments({
+            table,
+            numItems: 100,
+            cursor,
+            filter: {
+              clauses: [{ id: "label", field: "label", op: "eq", value: label, enabled: true }],
+              order: "asc",
+            },
+          }),
+        )
+      ).map((d) => d._id);
+
     test(`writes: insert, patch (set and unset), replace and delete, each seen by watchTable (${table})`, async () => {
       const src = await writer();
       const counts: (number | undefined)[] = [];
@@ -678,11 +716,15 @@ export function describeDataSourceContract(
         (c) => counts.push(c.count),
         () => {},
       );
-      const [a, b] = await src.insertDocuments(table, [
-        { label: "contract a", n: 1 },
-        { label: "contract b", n: 2 },
-      ]);
-      expect((await src.getDocument(table, a!))?.label).toBe("contract a");
+      const label = `contract ${Date.now().toString(36)}`;
+      expect(
+        await src.insertDocuments(table, [
+          { label, n: 1 },
+          { label, n: 2 },
+        ]),
+      ).toBeUndefined();
+      const [a, b] = await labelled(src, label);
+      expect((await src.getDocument(table, a!))?.n).toBe(1);
       await src.patchDocuments(table, [a!, b!], { n: 10, tag: "patched" });
       await src.patchDocuments(table, [b!], { tag: { $unset: true } });
       const pa = await src.getDocument(table, a!);
@@ -702,7 +744,7 @@ export function describeDataSourceContract(
       expect(counts.length).toBeGreaterThan(0);
     });
 
-    test("createTable (when present) makes an empty table outside the schema; a taken or bad name is refused", async () => {
+    test("createTable (when present) makes an empty table outside the schema; a bad name is refused, a taken one not", async () => {
       const src = await make();
       if (!src.createTable) return;
       const name = `contract_${Date.now().toString(36)}`;
@@ -710,19 +752,56 @@ export function describeDataSourceContract(
       const made = (await src.listTables()).find((t) => t.name === name);
       expect(made).toMatchObject({ name, declared: false });
       expect(made?.documentCount ?? 0).toBe(0);
-      await expectError(src.createTable(name), "invalid_request");
+      // Convex's mutation inserts and deletes a document: a taken name is no error (the screen refuses it)
+      await src.createTable(name);
       await expectError(src.createTable("_system"), "invalid_request");
       await expectError(src.createTable("9lives"), "invalid_request");
+      await expectError(src.createTable("a".repeat(65)), "invalid_request");
+      if (src.deleteTables) {
+        await src.deleteTables([name]);
+        expect((await src.listTables()).some((t) => t.name === name)).toBe(false);
+      }
     });
 
     test(`writes are all or nothing, and say what is wrong (${table})`, async () => {
       const src = await writer();
       const before = await all((cursor) => src.listDocuments({ table, numItems: 100, cursor }));
       await expectError(src.insertDocuments(table, [{ ok: 1 }, { _bad: 2 }]), "invalid_request");
-      await expectError(src.patchDocuments(table, ["0000000000000000000000000000zzzz"], { x: 1 }), "not_found");
-      await expectError(src.insertDocuments("no_such_table_x", [{ a: 1 }]), "not_found");
+      await expectError(
+        src.insertDocuments(
+          table,
+          Array.from({ length: 4097 }, () => ({})),
+        ),
+        "invalid_request",
+      );
+      // a document that is gone: patching, replacing or deleting it fails, and nothing else is written
+      const label = `gone ${Date.now().toString(36)}`;
+      await src.insertDocuments(table, [{ label }, { label }]);
+      const [gone, kept] = await labelled(src, label);
+      await src.deleteDocuments(table, [gone!]);
+      await expectError(src.patchDocuments(table, [kept!, gone!], { x: 1 }), "not_found");
+      await expectError(src.replaceDocument(table, gone!, { x: 1 }), "not_found");
+      await expectError(src.deleteDocuments(table, [kept!, gone!]), "not_found");
+      expect((await src.getDocument(table, kept!))?.x).toBeUndefined();
+      await src.deleteDocuments(table, [kept!]);
+      await expectError(
+        src.deleteDocuments(
+          table,
+          Array.from({ length: 4097 }, () => kept!),
+        ),
+        "invalid_request",
+      );
       const after = await all((cursor) => src.listDocuments({ table, numItems: 100, cursor }));
       expect(after.map((d) => d._id)).toEqual(before.map((d) => d._id));
+    });
+
+    // as Convex's `db.insert` (STUDY-149 PR 3)
+    test("writes: an insert into a table that does not exist creates it", async () => {
+      const src = await writer();
+      const name = `contract_new_${Date.now().toString(36)}`;
+      await src.insertDocuments(name, [{ a: 1 }]);
+      expect((await src.listTables()).find((t) => t.name === name)?.documentCount).toBe(1);
+      if (src.deleteTables) await src.deleteTables([name]);
     });
 
     if (writes.clear)
@@ -732,6 +811,7 @@ export function describeDataSourceContract(
         const { deleted } = await src.clearTable(table);
         expect(deleted).toBeGreaterThan(0);
         expect((await src.listDocuments({ table, numItems: 10, cursor: null })).page).toEqual([]);
+        await expectError(src.clearTable("no_such_table_x"), "not_found");
       });
   });
 }

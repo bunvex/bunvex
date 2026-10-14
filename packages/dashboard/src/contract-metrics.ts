@@ -138,7 +138,10 @@ export function describeMetricsContract({ make, test }: Ctx) {
     for (const t of top) expectSeries(t.series, w);
     const totals = named.map((t) => t.series.reduce((n, b) => n + (b.value ?? 0), 0));
     expect([...totals].sort((a, b) => b - a)).toEqual(totals);
-    const first = named[0];
+    // a pair's source can be a write no function made (an admin route's, e.g. an environment variable's), which
+    // cannot be asked for as one mutation's: the first pair of a deployed mutation
+    const mutations = new Set((await src.listFunctions()).filter((f) => f.kind === "mutation").map((f) => f.path));
+    const first = named.find((t) => mutations.has(t.function));
     if (!first) return;
     const mine = await src.subscriptionInvalidations(w, 25, { function: first.function });
     expect(mine.every((t) => t.function === first.function && t.table !== null)).toBe(true);

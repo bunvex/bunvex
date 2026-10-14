@@ -30,8 +30,15 @@ beforeEach(() => localStorage.clear());
 test("events in words", () => {
   const e = (action: string, metadata: Record<string, never> | Record<string, unknown>) =>
     describeEvent({ id: "1", time: 0, action, author: null, metadata: metadata as never });
-  expect(e("add_documents", { table: "tasks", count: 3 })).toBe("Added 3 documents to tasks");
-  expect(e("add_documents", { table: "tasks", count: 1452 })).toBe("Added 1,452 documents to tasks");
+  // Convex's data events carry the documents' ids (STUDY-149 PR 3)
+  const ids = (k: number) => Array.from({ length: k }, (_, i) => `id${i}`);
+  expect(e("add_documents", { table: "tasks", document_ids: ids(3) })).toBe("Added 3 documents to tasks");
+  expect(e("add_documents", { table: "tasks", document_ids: ids(1452) })).toBe("Added 1,452 documents to tasks");
+  expect(e("update_documents", { table: "tasks", document_ids: ids(2) })).toBe("Edited 2 documents in tasks");
+  expect(e("create_table", { table: "notes" })).toBe("Created table notes");
+  expect(e("delete_tables", { table_names: ["a", "b"] })).toBe("Deleted tables a, b");
+  expect(e("delete_tables", { table_names: ["a"] })).toBe("Deleted table a");
+  expect(e("delete_files", { storage_ids: ids(2) })).toBe("Deleted 2 files");
   expect(e("pause_deployment", {})).toBe("Paused the deployment");
   // an action no screen knows: its words, and what it was about
   expect(e("disable_feature_flag", { flag: "new-dashboard" })).toBe("Disable feature flag new-dashboard");
@@ -43,7 +50,7 @@ test("events in words", () => {
     "Imported 2 documents into notes (replacing)",
   );
   expect(e("unpause_deployment", {})).toBe("Resumed the deployment");
-  expect(e("delete_documents", { table: "tasks", count: 1 })).toBe("Deleted 1 document from tasks");
+  expect(e("delete_documents", { table: "tasks", document_ids: ids(1) })).toBe("Deleted 1 document from tasks");
   expect(e("clear_tables", {})).toBe("Cleared tables");
   expect(e("delete_environment_variable", { variable_name: "LOG_LEVEL" })).toBe(
     "Deleted environment variable LOG_LEVEL",

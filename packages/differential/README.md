@@ -44,6 +44,10 @@ backend is always started with `--disable-beacon`.
 - `test/dashboard-data.test.ts` (STUDY-149 PR 2): the dashboard's Data reads on both, as an admin —
   `_system/frontend/getTableMapping`, `paginatedTableDocuments` (field, type and index filters, refusals,
   cursors), `indexes`, `tableSize`, `listById`, `getById` and `GET /api/get_indexes`. Local only.
+- `test/dashboard-functions.test.ts` (STUDY-149 PR 4): the dashboard's Functions, runner and Settings reads on both,
+  from the app of `functions-app/` — `_system/frontend/modules:*`, `components:list`, `getVersion`, the URLs
+  (DV-474), `listEnvironmentVariables`, `latestExport`, `snapshotImport:list`; a function run over the socket as an
+  admin and acting as a user; custom test queries (`/api/run_test_function`). Local only.
 - `test/storage-ids.test.ts`: a storage id's errors from every storage method in a query, a mutation and an
   action (the app of `storage-app/`): another table's id, ids that do not parse, UUIDs. Local only.
 - `test/nested-errors.test.ts`: a nested call's error from a V8 and a "use node" action (the app of `nested-errors-app/`):

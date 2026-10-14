@@ -70,6 +70,7 @@ export {
 export {
   CommitListenerError,
   Committer,
+  CommitterInternalError,
   CommitterStoppedError,
   type Conflict,
   ConflictError,

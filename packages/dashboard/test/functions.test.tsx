@@ -48,6 +48,13 @@ describe("the function tree", () => {
     expect(tasks.functions.map((f) => f.path)).toEqual(["tasks:add", "tasks:list"]);
   });
 
+  test("a file's functions by their line, as Convex's tree (those without one first), then by name", () => {
+    const at = (path: string, line?: number): FunctionInfo => ({ ...fn(path), ...(line !== undefined && { line }) });
+    const [file] = buildFunctionTree([at("m:zeta", 3), at("m:alpha", 9), at("m:mid", 5), at("m:b"), at("m:a")]);
+    if (file?.kind !== "file") throw new Error("m is a file");
+    expect(file.functions.map((f) => f.path)).toEqual(["m:a", "m:b", "m:zeta", "m:mid", "m:alpha"]);
+  });
+
   test("paths and descriptions", () => {
     expect(splitPath("a/b:c")).toEqual({ module: "a/b", name: "c" });
     expect(splitPath("a/b")).toEqual({ module: "a/b", name: "default" });
@@ -57,6 +64,26 @@ describe("the function tree", () => {
 });
 
 describe("the Functions screen", () => {
+  test("a push heard by watchFunctions lists the functions again (Convex's subscribed module list)", async () => {
+    const source = mockSource();
+    let push = () => {};
+    let extra: FunctionInfo[] = [];
+    const list = source.listFunctions.bind(source);
+    (source as { listFunctions: unknown }).listFunctions = async () => [...(await list()), ...extra];
+    (source as { watchFunctions?: unknown }).watchFunctions = (onChange: () => void) => {
+      push = onChange;
+      return () => {
+        push = () => {};
+      };
+    };
+    mount("/functions", source);
+    await screen.findByRole("navigation", { name: "Functions" });
+    expect(within(nav()).queryByText("pushed")).toBeNull();
+    extra = [fn("pushed:later")];
+    act(() => push());
+    await within(nav()).findByText("pushed");
+  });
+
   test("the modules as a tree; nothing open says what to do", async () => {
     mount();
     await screen.findByRole("heading", { level: 1, name: "Functions" });

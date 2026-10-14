@@ -10,6 +10,7 @@ import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff, Plus } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
+import { useWatch } from "../data/live.ts";
 import { capabilitiesQuery, dashboardKeys, type QueryScope } from "../data/queries.ts";
 import { type EnvironmentVariable, type EnvironmentVariableChange, toDataSourceError } from "../data-source.ts";
 import { ErrorState } from "../shell/error-state.tsx";
@@ -116,6 +117,15 @@ function EnvironmentVariables() {
   const problems = useMemo(() => validate(rows), [rows]);
   const update = (key: string, patch: Partial<Row>) =>
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  // kept live, as Convex's page (a change from the CLI shows up); not while there are edits to save, which a
+  // reload would drop — saving reloads them
+  const editing = changes.length > 0 || rows.some((r) => r.editing);
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+  useWatch<void>((onChange, onError) =>
+    source.watchEnvironmentVariables?.(() => onChange(undefined), onError) ?? (() => {}), () => {
+    if (!editingRef.current) void queryClient.invalidateQueries({ queryKey: envVarsQuery(scope).queryKey });
+  }, [source, scope.scope, queryClient]);
 
   if (!canView)
     return <p className="text-sm text-muted-foreground">This credential cannot view environment variables.</p>;

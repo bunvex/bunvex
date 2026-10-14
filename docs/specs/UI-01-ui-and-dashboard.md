@@ -41,7 +41,7 @@ editor (§12.5.7); **plain-path routes** (§11.2).
 `describeDataSourceContract` covers each area, the writes opt-in):
 
 - required: deployment, capabilities, stats, tables, schema, documents (list, get, `watchTable`), functions, logs (list, watch);
-- data: `insertDocuments`, `patchDocuments`, `replaceDocument`, `deleteDocuments`, `clearTable`, `createTable`, `tableOfId`, `inferDocumentType`;
+- data: `insertDocuments`, `patchDocuments`, `replaceDocument`, `deleteDocuments`, `clearTable`, `createTable`, `deleteTables`, `tableOfId`, `inferDocumentType`;
 - functions: `runFunction`, `watchFunction`;
 - deployment (`data-source-deployment.ts`): scheduled functions and crons, files (`listFiles`, `countFiles`, `fileStats`, `getFile`, `uploadFile`, `deleteFiles`, `watchFiles`), environment variables, the audit log;
 - state (`data-source-state.ts`): `getDeploymentState`, `pauseDeployment`, `resumeDeployment`;
@@ -698,11 +698,12 @@ interface DashboardDataSource {
                                                       // @bunvex/values has them), indexes with state
   watchTable(table, onChange: (e: { count?: number }) => void, onError): Unsubscribe;
   // optional, present when capabilities.writeData:
-  insertDocuments?(table, docs: Record<string, Value>[], opts?): Promise<string[]>;  // all or nothing
+  insertDocuments?(table, docs: Record<string, Value>[], opts?): Promise<void>;  // all or nothing; no ids (Convex's)
   patchDocuments?(table, ids: string[], fields: Record<string, Value | { $unset: true }>, opts?): Promise<void>;
   replaceDocument?(table, id, doc, opts?): Promise<void>;
   deleteDocuments?(table, ids: string[], opts?): Promise<void>;
   clearTable?(table, opts?): Promise<{ deleted: number }>;
+  deleteTables?(names: string[], opts?): Promise<void>;  // STUDY-149 PR 3
 }
 
 type Capabilities = { operations: ("viewData" | "writeData" | "viewLogs" | "viewMetrics" | "runFunctions")[];
@@ -719,7 +720,9 @@ type IndexInfo = { name: string; fields: string[]; system: boolean; state: "read
   `check_admin_key`-style endpoint; `listDocuments` ↔ `paginatedTableDocuments` (index range, then field
   filters while scanning, bounded reads per page, `_id eq` as a point lookup); `watchTable` ↔ a
   subscription on the table's write set; the writes ↔ `addDocument` / `patchDocumentsFields` /
-  `replaceDocument` / `deleteDocuments` / `clearTablePage`, each with an audit entry.
+  `replaceDocument` / `deleteDocuments` / `clearTablePage` / `createTable`, each with an audit entry, and
+  `/api/delete_tables` (built in STUDY-149 PR 3, whose rules the contract now follows: an insert answers no ids and
+  creates a missing table, a delete of a document that is gone fails, a taken name is no error for `createTable`).
 - The mock implements all of it, and `describeDataSourceContract` grows to cover filters, `watchTable`,
   and — when a source declares `writeData` — the writes.
 
