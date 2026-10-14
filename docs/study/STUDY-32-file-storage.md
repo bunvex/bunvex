@@ -182,8 +182,9 @@
 | F2 | The public origins are configured as `BUNVEX_CLOUD_ORIGIN` / `BUNVEX_SITE_ORIGIN` (and `cloudOrigin` / `siteOrigin` options), not `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN` | owner rule: no "convex" in shipped names | **accepted** (owner, 2026-10-01) |
 | F3 | A deleted file's bytes are removed after the deleting transaction commits, and a sweep removes blobs no row points to (failed or abandoned uploads, after an hour). Convex never removes them | not observable through the API (the URL already answers 404); without it disk use only grows | **accepted** (owner, 2026-10-01); **reversed** (owner, 2026-10-05, STUDY-130): bytes stay, as Convex |
 | F4 | Uploads have no size limit, as Convex: the upload route is exempt from `maxRequestBodySize` (H3), and other routes keep their caps | Bun applies one cap to a whole server, so the exemption needs its own path (the API server's cap raised, other routes checked per route) | **accepted** (owner, 2026-10-01) |
+| F5 | An upload token is bunvex's own encoding, not Convex's `StoreFileAuthorization`: a token issued by one backend is `StorageTokenInvalid` on the other. Within one backend, the errors, the 1-hour lifetime and reuse are Convex's | the token is opaque to apps; only a migration in the middle of an upload would see it | **accepted** (owner, 2026-10-13; DV-502) |
 
-Recorded in [docs/parity/divergences.md](../parity/divergences.md) as DV-148–DV-151 (decided).
+Recorded in [docs/parity/divergences.md](../parity/divergences.md) as DV-148–DV-151 and DV-502 (decided).
 
 ## 5. Tests
 

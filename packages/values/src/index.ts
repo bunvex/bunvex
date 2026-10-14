@@ -53,6 +53,7 @@ export {
   validatorFromJson,
 } from "./validators.ts";
 export {
+  checkJsonValue,
   compareValues,
   copyValue,
   fromJsonValue,
