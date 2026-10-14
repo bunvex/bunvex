@@ -62,6 +62,8 @@ export type AdminRequest = {
   method?: "GET" | "POST";
   /** Sent as JSON. */
   body?: unknown;
+  /** Sent as it is (an import's part), instead of `body`. */
+  bytes?: Blob;
   signal?: AbortSignal;
 };
 
@@ -87,9 +89,10 @@ export class AdminHttp {
     let res: Response;
     try {
       res = await this.fetchFn(joinUrl(this.url, path), {
-        method: req.method ?? (req.body === undefined ? "GET" : "POST"),
+        method: req.method ?? (req.body === undefined && req.bytes === undefined ? "GET" : "POST"),
         headers,
         ...(req.body !== undefined && { body: JSON.stringify(req.body) }),
+        ...(req.bytes !== undefined && { body: req.bytes }),
         ...(req.signal && { signal: req.signal }),
       });
     } catch (e) {
@@ -98,6 +101,19 @@ export class AdminHttp {
     }
     if (!res.ok) throw await responseError(res);
     return res;
+  }
+
+  /**
+   * A request without the admin key's header, answered whatever its status: for a route that takes the key in its
+   * body (`/api/run_test_function`, as Convex's dashboard calls it). A network error throws `unavailable`.
+   */
+  async unauthenticated(path: string, init: RequestInit): Promise<Response> {
+    try {
+      return await this.fetchFn(joinUrl(this.url, path), init);
+    } catch (e) {
+      if (init.signal?.aborted) throw init.signal.reason;
+      throw new DataSourceError("unavailable", e instanceof Error ? e.message : String(e));
+    }
   }
 
   /** `request`, read as JSON. */

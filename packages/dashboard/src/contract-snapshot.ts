@@ -21,7 +21,7 @@ type Ctx = {
   opts: SnapshotContractOptions;
 };
 
-const STATES = ["requested", "in_progress", "completed", "failed"];
+const STATES = ["requested", "in_progress", "completed", "failed", "canceled"];
 
 async function until<T>(read: () => Promise<T>, done: (v: T) => boolean, timeoutMs: number): Promise<T> {
   const end = Date.now() + timeoutMs;

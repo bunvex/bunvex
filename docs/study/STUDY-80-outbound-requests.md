@@ -208,7 +208,10 @@ addresses by default; `private` is opt-in; `none` restores Convex's behaviour.
 - Cost (`bench/action-fetch.ts`, `probe`): an `https:` target is a `CONNECT` tunnel that Bun reuses (11
   requests to example.com: 1 upstream connection, 57.5 ms per request vs 58.0 ms direct). An `http:` target
   is forwarded once per connection, so it loses keep-alive: ~+0.24 ms per request to a local server (60 →
-  ~300 µs).
+  ~300 µs). The client is told `Connection: close`, and the screen ends its connection where the response
+  ends (no body, `Content-Length`, chunked, or the target's close); the target is not told to close, so one
+  that answers before reading the body keeps reading it. Telling it to close made it reset the connection
+  under a body still coming, and the answer was lost (`ECONNRESET` on ~2% of streamed POSTs answered unread).
 
 **Options.**
 
@@ -246,6 +249,9 @@ than failing with a DNS error.
   behind a redirect, loopback allowed under `metadata` and refused under `private`, bodies and streamed
   bodies forwarded, 20 requests in a row, `none` starting nothing, an operator's proxy replacing the screen.
   Sabotage: the deny check off → 4 of 6 fail.
+  Also: a target that answers before reading a streamed body (400 requests, none reset), and each response
+  framing (`Content-Length`, chunked with trailers, 204, 304, `HEAD`, a 100 before the answer, the target's
+  close) ending the client's connection where the response ends, the target never told to close.
 
 ## 6. Open questions
 

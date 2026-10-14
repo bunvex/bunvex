@@ -5,7 +5,7 @@ import { type DependencyList, useEffect, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import type { DataSourceError, DeploymentStats, Unsubscribe } from "../data-source.ts";
 import { appendSample } from "../screens/stats.ts";
-import { statsHistoryQuery } from "./queries.ts";
+import { dashboardKeys, statsHistoryQuery } from "./queries.ts";
 
 /**
  * A `watch*` subscription for the component's lifetime (re-subscribed when `deps` change). Returns the
@@ -54,4 +54,18 @@ export function useStatsHistory(): { history: DeploymentStats[]; error: DataSour
     [scope.source, scope.scope, queryClient],
   );
   return { history, error };
+}
+
+/**
+ * The deployed functions kept current while mounted (Convex's dashboard keeps its module list subscribed): a
+ * push heard by `watchFunctions` lists them again. Nothing for a source without it.
+ */
+export function useLiveFunctions(): DataSourceError | undefined {
+  const { source, scope } = useQueryScope();
+  const queryClient = useQueryClient();
+  return useWatch<void>(
+    (onChange, onError) => source.watchFunctions?.(() => onChange(undefined), onError) ?? (() => {}),
+    () => void queryClient.invalidateQueries({ queryKey: dashboardKeys.functions(scope) }),
+    [source, scope, queryClient],
+  );
 }

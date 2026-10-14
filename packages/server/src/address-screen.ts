@@ -10,7 +10,10 @@
 //   ranges (Smokescreen's default classes), with IPv4-mapped and NAT64 IPv6 forms checked as IPv4.
 //
 // An `https:` target is a `CONNECT` tunnel (TLS stays end to end; the tunnel is reused). An `http:` one is
-// forwarded once per connection (`Connection: close`), so each request is checked. A target it cannot connect
+// forwarded once per connection, so each request is checked: the client is told `Connection: close`, and the
+// connection ends where the response does. The target is not told to close, as a client without the screen
+// would not tell it: a target that answers before reading the body keeps reading it, where a closing one
+// would reset the connection under the body still coming, and lose its answer. A target it cannot connect
 // to gets a `502` carrying the socket's error code and a secret (STUDY-142): the action's `fetch` then fails as
 // it would have without the screen ("Connection refused", …), where a real proxy's answer is its own.
 import { randomBytes } from "node:crypto";
@@ -148,28 +151,103 @@ const BAD = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\
 const HOP_BY_HOP = /\r\n(proxy-authorization|proxy-connection|connection|keep-alive): [^\r\n]*/gi;
 
 /**
- * Forward an `http:` target's response, its head saying `Connection: close`: the proxy serves one request per
- * connection, so a client that kept the connection alive would send its next request into a closing socket
- * (ECONNRESET). The rest of the response is piped as is.
+ * Forward an `http:` target's response to `method`, its head saying `Connection: close`, and end the client's
+ * connection where the response ends (RFC 9112 §6.3: no body, `Content-Length`, chunked, or the target's close).
+ * The proxy serves one request per connection: a client that kept the connection alive would send its next
+ * request into a closing socket (ECONNRESET). Interim (1xx) heads pass as they are; a body sent after the
+ * response has ended is read and dropped.
  */
-function closingResponse(up: net.Socket, sock: net.Socket) {
-  let head = Buffer.alloc(0);
-  // A target that closes before its head is complete: the client's connection closes too (it would wait).
-  const closedEarly = () => sock.destroy();
-  up.once("end", closedEarly);
-  const onData = (chunk: Buffer) => {
-    head = Buffer.concat([head, chunk]);
-    const end = head.indexOf("\r\n\r\n");
-    if (end < 0) return;
+function forwardResponse(up: net.Socket, sock: net.Socket, method: string) {
+  let buf: Buffer = Buffer.alloc(0);
+  let state: "head" | "length" | "size" | "chunk" | "trailers" | "close" | "done" = "head";
+  let left = 0;
+  const finish = () => {
+    state = "done";
     up.off("data", onData);
-    up.off("end", closedEarly);
-    const lines = head.subarray(0, end).toString("latin1").replace(HOP_BY_HOP, "");
-    sock.write(Buffer.from(`${lines}\r\nConnection: close\r\n\r\n`, "latin1"));
-    const body = head.subarray(end + 4);
-    if (body.length > 0) sock.write(body);
-    up.pipe(sock);
+    sock.unpipe(up);
+    up.destroy();
+    sock.end();
+    sock.resume();
+  };
+  /** Forward up to `left` bytes of `buf`; true when they are all out. */
+  const take = () => {
+    const n = Math.min(left, buf.length);
+    if (n > 0) sock.write(buf.subarray(0, n));
+    buf = buf.subarray(n);
+    left -= n;
+    return left === 0;
+  };
+  /** The next CRLF-ended line of `buf`, forwarded, without its CRLF; null until it is complete. */
+  const line = () => {
+    const end = buf.indexOf("\r\n");
+    if (end < 0) return null;
+    const text = buf.subarray(0, end).toString("latin1");
+    sock.write(buf.subarray(0, end + 2));
+    buf = buf.subarray(end + 2);
+    return text;
+  };
+  const head = () => {
+    const end = buf.indexOf("\r\n\r\n");
+    if (end < 0) return false;
+    const text = buf.subarray(0, end).toString("latin1");
+    buf = buf.subarray(end + 4);
+    const status = Number(text.split(" ")[1]);
+    if (status >= 100 && status < 200 && status !== 101) {
+      sock.write(Buffer.from(`${text}\r\n\r\n`, "latin1"));
+      return true;
+    }
+    sock.write(Buffer.from(`${text.replace(HOP_BY_HOP, "")}\r\nConnection: close\r\n\r\n`, "latin1"));
+    const header = (name: string) => new RegExp(`\r\n${name}:[ \t]*([^\r\n]*)`, "i").exec(text)?.[1]?.trim();
+    const length = header("content-length");
+    if (status === 101) state = "close";
+    else if (method === "HEAD" || status === 204 || status === 304) finish();
+    else if (/(^|,)\s*chunked\s*$/i.test(header("transfer-encoding") ?? "")) state = "size";
+    else if (length !== undefined && /^\d+$/.test(length)) {
+      left = Number(length);
+      state = "length";
+      if (left === 0) finish();
+    } else state = "close";
+    return true;
+  };
+  const onData = (chunk: Buffer) => {
+    buf = buf.length === 0 ? chunk : Buffer.concat([buf, chunk]);
+    for (;;) {
+      if (state === "head") {
+        if (!head()) return;
+      } else if (state === "length") {
+        if (!take()) return;
+        finish();
+      } else if (state === "size") {
+        const size = line();
+        if (size === null) return;
+        left = Number.parseInt(size.split(";")[0]!.trim(), 16);
+        if (Number.isNaN(left)) return void sock.destroy();
+        if (left === 0) state = "trailers";
+        else {
+          left += 2; // the data's CRLF
+          state = "chunk";
+        }
+      } else if (state === "chunk") {
+        if (!take()) return;
+        state = "size";
+      } else if (state === "trailers") {
+        const trailer = line();
+        if (trailer === null) return;
+        if (trailer === "") finish();
+      } else if (state === "close") {
+        if (buf.length > 0) sock.write(buf);
+        buf = Buffer.alloc(0);
+        return;
+      } else return;
+    }
   };
   up.on("data", onData);
+  // A target that closes before its head is complete: the client's connection closes too (it would wait). One
+  // that closes in the body ends the client's connection, which then reads a body that stopped short.
+  up.once("end", () => {
+    if (state === "head") sock.destroy();
+    else if (state !== "done") sock.end();
+  });
 }
 
 /** Start the screening proxy (bound at once); its URL goes where `--http-proxy`'s would. */
@@ -222,14 +300,16 @@ export function startAddressScreen(screen: AddressScreen) {
         );
       }
       up.on("error", () => sock.destroy());
-      if (method === "CONNECT") sock.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      else {
+      if (method === "CONNECT") {
+        sock.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (rest.length > 0) up.write(rest);
+        up.pipe(sock);
+      } else {
+        // The head and what came of the body with it in one write, the target's connection kept alive.
         const lines = head.replace(target, path).replace(HOP_BY_HOP, "");
-        up.write(Buffer.from(`${lines}\r\nConnection: close\r\n\r\n`, "latin1"));
+        up.write(Buffer.concat([Buffer.from(`${lines}\r\n\r\n`, "latin1"), rest]));
+        forwardResponse(up, sock, method);
       }
-      if (rest.length > 0) up.write(rest);
-      if (method === "CONNECT") up.pipe(sock);
-      else closingResponse(up, sock);
       sock.pipe(up);
       sock.resume();
     };

@@ -173,7 +173,14 @@ export {
   wallClock,
   withUserTimer,
 } from "./determinism.ts";
-export type { IndexChange, IndexPrediction, SchemaPrediction, TableOutcome, TablePrediction } from "./engine.ts";
+export type {
+  DiscardedStagedValidator,
+  IndexChange,
+  IndexPrediction,
+  SchemaPrediction,
+  TableOutcome,
+  TablePrediction,
+} from "./engine.ts";
 export {
   type CacheCompanion,
   type Caller,

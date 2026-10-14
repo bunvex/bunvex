@@ -56,6 +56,19 @@ describe("Settings: Snapshots — export", () => {
     await expectAccessible();
   });
 
+  test("a canceled export (Convex's `canceled` state) says so", async () => {
+    const src = mockSource();
+    (src as { getLatestSnapshotExport: unknown }).getLatestSnapshotExport = async () => ({
+      id: "e1",
+      state: "canceled",
+      requestedAt: NOW,
+      includeStorage: false,
+    });
+    mount(src);
+    const s = await exportSection();
+    await within(s).findByText(/was canceled\.$/);
+  });
+
   test("a credential that may only view: no Export button, no Download", async () => {
     const src = mockSource({ capabilities: { operations: ["viewData", "viewBackups"], readOnly: false } });
     mount(src);

@@ -163,7 +163,8 @@ The migration landed as planned (§5), with these differences, now reflected in 
 - **server → persistence**: `@bunvex/persistence` is an OPTIONAL peer of the server, loaded by name when
   `PERSISTENCE=postgres|mysql|mongodb`. The dependency rule records it.
 - **D8**: one root `tsconfig.json` (`tsc -p .`, strict) instead of project references; references come
-  with a build step for publishing (packages export their TypeScript sources until then).
+  with a build step for publishing (packages export their TypeScript sources in the workspace; the published
+  copies add compiled JavaScript and declarations, STUDY-160).
 - **A Bun trap found during the migration**: a file whose first line starts with `// @bun` (e.g.
   `// @bunvex/core — …`) is taken by Bun as its "already transpiled" pragma and loaded as JavaScript —
   every `type` specifier then fails to parse. `check:deps` now refuses such files.
