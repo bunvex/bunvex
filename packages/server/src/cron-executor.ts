@@ -305,7 +305,6 @@ export class CronJobExecutor {
             ),
           // A cron that changed meanwhile did not run.
           (ran) => (ran ? { returnBytes: rawValueSize((value ?? null) as Value) } : { skip: true }),
-          undefined,
           job.cronSpec.udfArgs[0],
         ),
       );

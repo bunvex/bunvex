@@ -82,8 +82,8 @@ async function setup() {
     }
     throw new Error("timed out");
   };
-  const logged = (path: string, method = "GET") =>
-    until(() => completions.find((c) => c.identifier === `${method} ${path}`));
+  // A HEAD request is logged as GET, as Convex's `RoutableMethod` names it.
+  const logged = (path: string) => until(() => completions.find((c) => c.identifier === `GET ${path}`));
   return { site, completions, progress, consoleEvents, logged, until };
 }
 
@@ -132,7 +132,7 @@ test("a body that fails: an error line; the run is logged", async () => {
 test("a HEAD request and a client that goes away still get the run logged", async () => {
   const t = await setup();
   await fetch(`${t.site}/slow`, { method: "HEAD" });
-  await t.logged("/slow", "HEAD");
+  await t.logged("/slow");
   const before = t.completions.length;
   const aborted = new AbortController();
   const r = await fetch(`${t.site}/slow`, { signal: aborted.signal });
@@ -145,7 +145,7 @@ test("a HEAD request and a client that goes away still get the run logged", asyn
 test("a body that never ends: the run is logged when the client goes away, or for a HEAD request", async () => {
   const t = await setup();
   await fetch(`${t.site}/endless`, { method: "HEAD" });
-  await t.logged("/endless", "HEAD");
+  await t.logged("/endless");
   const aborted = new AbortController();
   const r = await fetch(`${t.site}/endless`, { signal: aborted.signal });
   const reader = r.body!.getReader();
@@ -182,7 +182,7 @@ test("a body read to its end, or a HEAD request: no Client disconnected line", a
   await (await fetch(`${t.site}/slow`)).arrayBuffer();
   await fetch(`${t.site}/endless`, { method: "HEAD" });
   const read = await t.logged("/slow");
-  const head = await t.logged("/endless", "HEAD");
+  const head = await t.logged("/endless");
   for (const c of [read, head]) expect(JSON.stringify(c.logLines)).not.toContain("Client disconnected");
   expect(t.progress).toEqual([]);
 });

@@ -688,7 +688,6 @@ export class SyncHub {
           return null;
         },
         () => ({ returnBytes }),
-        undefined,
         args,
       ),
     );
@@ -824,7 +823,6 @@ export class SyncHub {
           returnBytes = rawValueSize((run.value ?? null) as Value);
           return { returnBytes };
         },
-        undefined,
         args,
       ),
     );
