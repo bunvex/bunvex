@@ -26,6 +26,8 @@ jobs:
         run: echo "name=$(date -u +%Y-%m-%d)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - run: bun scripts/build-binary.ts --version "${{ steps.name.outputs.name }}"
       - run: scripts/smoke-binary.sh dist/bin/x86_64-unknown-linux-gnu/bunvex-local-backend
+      # the dashboard's static build, as Convex's dashboard.zip (STUDY-149 PR 7): the local dashboard `bunvex dev` serves
+      - run: bun scripts/build-dashboard.ts && unzip -l dist/bin/dashboard.zip index.html
       - name: Create the prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -19,7 +19,7 @@ cleanup() {
 trap cleanup EXIT
 fail() { echo "smoke: $*" >&2; compose logs backend >&2 || true; exit 1; }
 
-compose up -d --build --wait >/dev/null || fail "the deployment did not come up healthy"
+compose up -d --build --wait backend >/dev/null || fail "the deployment did not come up healthy"
 KEY=$(compose exec -T backend ./generate_admin_key.sh 2>/dev/null) || fail "generate_admin_key.sh failed"
 SECRET=$(compose exec -T backend cat /bunvex/data/credentials/instance_secret)
 [[ "$KEY" == bunvex-self-hosted\|* ]] || fail "unexpected admin key: $KEY"

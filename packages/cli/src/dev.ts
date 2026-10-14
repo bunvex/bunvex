@@ -10,7 +10,8 @@
 //   deployment, a push race): 500 ms, doubling to 16 s, ±50%;
 // - `--once` pushes once; `--until-success` until one succeeds;
 // - without a configured deployment, the project's local deployment: `bunvex-local-backend` downloaded and
-//   run as a child, its state in `.bunvex/local/default/`, `.env.local` naming it (STUDY-40, as Convex).
+//   run as a child, its state in `.bunvex/local/default/`, `.env.local` naming it (STUDY-40, as Convex); unless
+//   `--once` / `--until-success`, the local dashboard beside it, from 6790 (STUDY-149 PR 7, local-dashboard.ts).
 // - the deployment's function logs are tailed to stderr (`--tail-logs`, default `pause-on-deploy`: held back
 //   while a push runs), as `bunvex logs` prints them (STUDY-47).
 import { type FSWatcher, readdirSync, statSync, watch } from "node:fs";
@@ -28,6 +29,7 @@ import {
 import type { TypecheckMode } from "./codegen.ts";
 import { deploy, functionsDir } from "./deploy.ts";
 import type { Io } from "./io.ts";
+import { startLocalDashboard } from "./local-dashboard.ts";
 import {
   backendLogPath,
   configuredDeployment,
@@ -339,6 +341,21 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
       io.err(
         `✔ Started running a deployment locally at ${target.url} and saved its:\n    name as BUNVEX_DEPLOYMENT to .env.local\n    URLs as ${vars.url} and ${vars.site} to .env.local`,
       );
+      // Convex's local dashboard beside a long-running `dev` (`handleDashboard`, STUDY-149 PR 7); as Convex's, a
+      // dashboard that cannot be had stops `dev`.
+      if (!flags.once && !flags.untilSuccess) {
+        try {
+          const dashboard = await startLocalDashboard(
+            io,
+            { name: local.config.deploymentName, url: target.url, adminKey: target.adminKey },
+            { backendVersion: flags.local.backendVersion, avoid: [local.config.ports.cloud, local.config.ports.site] },
+          );
+          cleanup.push(dashboard.stop);
+        } catch (e) {
+          io.err(`bunvex dev: ${(e as Error).message}`);
+          return 1;
+        }
+      }
     }
     io.err(`Developing against deployment: ${target.url}`);
     // The version check (AD-29) beside the first push, as Convex's version message; its notice when it comes.

@@ -27,7 +27,8 @@ jobs:
           release=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets,isDraft)
           missing=$(jq -r '
             ["bunvex-local-backend-aarch64-apple-darwin.zip", "bunvex-local-backend-aarch64-unknown-linux-gnu.zip", "bunvex-local-backend-x86_64-apple-darwin.zip",
-             "bunvex-local-backend-x86_64-pc-windows-msvc.zip", "bunvex-local-backend-x86_64-unknown-linux-gnu.zip"] as $required
+             "bunvex-local-backend-x86_64-pc-windows-msvc.zip", "bunvex-local-backend-x86_64-unknown-linux-gnu.zip",
+             "dashboard.zip"] as $required
             | [.assets[] | select(.state == "uploaded" and .size > 0) | .name] as $uploaded
             | ($required - $uploaded)[]?' <<< "$release")
           [ -z "$missing" ] || { echo "::error::Release $TAG is missing assets: $missing"; exit 1; }

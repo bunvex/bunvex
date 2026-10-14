@@ -40,6 +40,17 @@ bunvex run messages:list
 bunvex env set API_KEY 'secret'
 ```
 
+## The dashboard
+
+`docker compose up` also starts the dashboard, in its own container from its own image (as Convex's
+`convex-dashboard`), at `http://127.0.0.1:6791` (`DASHBOARD_PORT` changes the host port). Its sign-in page comes
+with the deployment's URL filled in; paste the admin key from `generate_admin_key.sh`. No key is passed to the
+container: the dashboard keeps it in the page's memory, and a reload asks again.
+
+The browser talks to the backend directly, so `BUNVEX_DEPLOYMENT_URL` must be the backend's URL as the browser
+reaches it (default `http://127.0.0.1:$PORT`). Without Docker, `bunvex dashboard serve --deployment-url <url>`
+serves the same app (`--help` for its options).
+
 ## Configure it
 
 Set these in the shell or in a `.env` file next to `docker-compose.yml`:
@@ -57,6 +68,7 @@ Set these in the shell or in a `.env` file next to `docker-compose.yml`:
 | `INSTANCE_NAME`, `INSTANCE_SECRET` | The instance's name and secret (32 bytes, hex). By default, generated on the first start and kept in the volume. |
 | `REDACT_LOGS_TO_CLIENT` | Keep functions' log lines and errors' details from clients. |
 | `DOCUMENT_RETENTION_DELAY` | How long old document versions are kept, in seconds (default here: 2 days). |
+| `DASHBOARD_PORT`, `BUNVEX_DEPLOYMENT_URL` | The dashboard's host port (default 6791) and the backend URL its sign-in page is filled in with (Convex's `NEXT_PUBLIC_DEPLOYMENT_URL`). `BUNVEX_ADMIN_KEY` on the `dashboard` service would fill in the key too (Convex's `NEXT_PUBLIC_ADMIN_KEY`): only on a machine nobody else reaches. |
 | `DISABLE_METRICS_ENDPOINT` | `true` (the default here, as Convex's file) answers `/metrics` with 404; `false` serves the Prometheus metrics there, on both ports, with no auth ([STUDY-114](../docs/study/STUDY-114-prometheus-metrics.md)). |
 
 **Tuning.** Every limit and timing parameter of Convex's
@@ -142,7 +154,9 @@ The compose file builds it from this repository. To build it alone, from the rep
 
 ```sh
 docker build -f docker/Dockerfile -t bunvex-backend .
+docker build -f docker/dashboard.Dockerfile -t bunvex-dashboard .
 ```
 
 `docker/smoke.sh` brings a deployment up, deploys and runs a function from the host, and restarts it
-(`SMOKE_POSTGRES=1` for Postgres).
+(`SMOKE_POSTGRES=1` for Postgres). `docker/smoke-dashboard.sh` brings the backend and the dashboard up and signs
+in to the dashboard in Chromium.

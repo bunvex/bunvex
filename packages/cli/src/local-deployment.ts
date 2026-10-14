@@ -95,12 +95,12 @@ export function assetName(): string {
 }
 
 /** Where releases come from; BUNVEX_RELEASES_URL serves both paths in tests. */
-function releaseUrls(env: Io["env"]) {
+export function releaseUrls(env: Io["env"]) {
   const base = env.BUNVEX_RELEASES_URL?.replace(/\/$/, "");
   return {
     latest: base ? `${base}/releases/latest` : `https://api.github.com/repos/${REPO}/releases/latest`,
-    download: (version: string) =>
-      `${base ?? `https://github.com/${REPO}`}/releases/download/${version}/${assetName()}`,
+    download: (version: string, file = assetName()) =>
+      `${base ?? `https://github.com/${REPO}`}/releases/download/${version}/${file}`,
   };
 }
 
@@ -132,8 +132,8 @@ export function forgetLatestVersion() {
   cachedLatestVersion = null;
 }
 
-/** One file of a zip archive (stored or deflated), as the release zips are made (`zip -j`). */
-export function unzipOne(zip: Uint8Array, name: string): Uint8Array {
+/** Each file of a zip archive (stored or deflated), by its name in the archive; directories are left out. */
+export function* zipEntries(zip: Uint8Array): Generator<{ name: string; data: () => Uint8Array }> {
   const v = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
   let eocd = zip.length - 22;
   while (eocd >= 0 && v.getUint32(eocd, true) !== 0x06054b50) eocd--;
@@ -148,16 +148,25 @@ export function unzipOne(zip: Uint8Array, name: string): Uint8Array {
     const extraLen = v.getUint16(p + 30, true);
     const commentLen = v.getUint16(p + 32, true);
     const local = v.getUint32(p + 42, true);
-    const entry = new TextDecoder().decode(zip.subarray(p + 46, p + 46 + nameLen));
-    if (entry === name) {
-      const dataAt = local + 30 + v.getUint16(local + 26, true) + v.getUint16(local + 28, true);
-      const data = zip.subarray(dataAt, dataAt + size);
-      if (method === 0) return data.slice();
-      if (method === 8) return new Uint8Array(inflateRawSync(data));
-      throw new Error(`unsupported zip compression method ${method}`);
-    }
+    const name = new TextDecoder().decode(zip.subarray(p + 46, p + 46 + nameLen));
     p += 46 + nameLen + extraLen + commentLen;
+    if (name.endsWith("/")) continue;
+    yield {
+      name,
+      data: () => {
+        const dataAt = local + 30 + v.getUint16(local + 26, true) + v.getUint16(local + 28, true);
+        const data = zip.subarray(dataAt, dataAt + size);
+        if (method === 0) return data.slice();
+        if (method === 8) return new Uint8Array(inflateRawSync(data));
+        throw new Error(`unsupported zip compression method ${method}`);
+      },
+    };
   }
+}
+
+/** One file of a zip archive, as the backend's release zips are made (`zip -j`). */
+export function unzipOne(zip: Uint8Array, name: string): Uint8Array {
+  for (const entry of zipEntries(zip)) if (entry.name === name) return entry.data();
   throw new Error(`${name} is not in the archive`);
 }
 
@@ -208,7 +217,12 @@ async function portFree(port: number): Promise<boolean> {
 }
 
 /** Convex's port choice: a requested port must be free; else the saved one if free; else the next free from `from`. */
-async function choosePort(requested: number | undefined, saved: number | undefined, from: number, avoid: number[]) {
+export async function choosePort(
+  requested: number | undefined,
+  saved: number | undefined,
+  from: number,
+  avoid: number[],
+) {
   if (requested !== undefined) {
     if (!(await portFree(requested))) throw new Error(`Requested port ${requested} is not available`);
     return requested;

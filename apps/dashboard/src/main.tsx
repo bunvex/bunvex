@@ -20,12 +20,18 @@ import { type AdminCredentials, deploymentNameOf } from "./login/credentials.ts"
 import { fetchCurrentDeployment } from "./login/current-deployment.ts";
 import { listenForEmbeddedCredentials, readAllowedOrigins } from "./login/embedded.ts";
 import { type HostSession, initialSession, rememberDemo } from "./login/host-session.ts";
+import { readPrefill } from "./login/prefill.ts";
 
 // ?latency=300&fail=0.2&writes=500 in the URL exercises loading, errors and live data (knobs.ts);
 // ?demo=1 opens the demo data without the sign-in page.
 const params = takeDevKnobs({ location, history, storage: sessionStorage });
 const verifier = createAdminKeyVerifier();
 const USE_CURRENT_DEPLOYMENT = import.meta.env.VITE_BUNVEX_USE_CURRENT_DEPLOYMENT === "1";
+// the sign-in page's prefill: the serving server's (the image's environment), else the build's
+const prefill = readPrefill(document, {
+  deploymentUrl: import.meta.env.VITE_BUNVEX_DEPLOYMENT_URL,
+  adminKey: import.meta.env.VITE_BUNVEX_ADMIN_KEY,
+});
 // the deployment's source (and the sync client under it) is fetched only once signed in: the sign-in page and the
 // demo do not load it
 const loadServerSource = () => import("@bunvex/dashboard-source");
@@ -125,9 +131,9 @@ function App() {
             rememberDemo(sessionStorage, true);
             setSession({ kind: "demo" });
           }}
-          // prefilled from the build's environment, as Convex's NEXT_PUBLIC_DEPLOYMENT_URL / NEXT_PUBLIC_ADMIN_KEY
-          initialDeploymentUrl={import.meta.env.VITE_BUNVEX_DEPLOYMENT_URL}
-          initialAdminKey={import.meta.env.VITE_BUNVEX_ADMIN_KEY}
+          // prefilled as Convex's NEXT_PUBLIC_DEPLOYMENT_URL / NEXT_PUBLIC_ADMIN_KEY (login/prefill.ts)
+          initialDeploymentUrl={prefill.deploymentUrl}
+          initialAdminKey={prefill.adminKey}
         />
       </Suspense>
     );

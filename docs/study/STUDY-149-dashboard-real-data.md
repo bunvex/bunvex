@@ -1,7 +1,8 @@
 # STUDY-149 — The dashboard on real data: how Convex's dashboard reads a deployment
 
 - **Status:** decided (owner, 2026-10-12); PR 1 built (`@bunvex/dashboard-source`, §5 "PR 1, as built"); PRs 2–5
-  built (§5); PR 6 built (`apps/dashboard` on the real source, §5 "PR 6, as built"). Q1: option B, a
+  built (§5); PR 6 built (`apps/dashboard` on the real source, §5 "PR 6, as built"); PR 7 built (packaging: the
+  dashboard's image, `dashboard.zip`, the local dashboard, `bunvex dashboard serve`, §5 "PR 7, as built"). Q1: option B, a
   separate service with its own image (DV-475); Q3: rename (DV-474); Q4: Convex's model plus a `Host` check
   (DV-476); Q5: local links only (DV-477, replaces DV-217); Q2, Q6, Q7 confirmed as planned; AD-32 not taken.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/dashboard-common`,
@@ -1420,6 +1421,181 @@ and one parameter on a route's metrics. The app's entry chunk grows by 2 795 byt
 overlay, the live table list, the Health section, the pause controls, the host's source loader), and the verifier's
 module is a 3 551-byte chunk loaded with it (it was 521 bytes inside the entry); `@bunvex/dashboard-source` with the
 sync client is an 87 331-byte chunk (27 477 gzipped) fetched only after signing in to a deployment.
+
+### PR 7, as built
+
+Packaging. Convex's side re-read for it (`cli/` is `npm-packages/convex/src/cli/`, `ld/` is
+`cli/lib/localDeployment/`):
+
+- **The image** (`self-hosted/docker-build/Dockerfile.dashboard`): `dashboard-self-hosted` built with Next.js's
+  `standalone` output on Ubuntu with Node, run as a non-root user by `node ./server.js` with `PORT=6791` and
+  `HOSTNAME=0.0.0.0` (`:68-75`); published as `ghcr.io/get-convex/convex-dashboard` for amd64 and arm64
+  (`.github/workflows/release_local_dashboard.yml`, `release_self_hosted_images.yml`). Its server reads
+  `NEXT_PUBLIC_DEPLOYMENT_URL` (normalized, a trailing slash dropped) and `NEXT_PUBLIC_ADMIN_KEY` on each request
+  and hands them to the sign-in form (`sh/pages/_app.tsx:150-182`); `NEXT_PUBLIC_LOAD_MONACO_INTERNALLY` and
+  `NEXT_PUBLIC_HIDE_HEADER` are client-side, so fixed at build. It has no `/api/current_deployment` (no
+  `pages/api`): the client's fetch gets a 404 and shows the form. The standalone server sends
+  `X-Frame-Options: SAMEORIGIN` and `frame-ancestors 'self'` unless built with `EMBEDDED_CORS_HEADERS`
+  (`next.config.js:1-60`).
+- **Compose** (`self-hosted/docker/docker-compose.yml:54-66`): the `dashboard` service, `${DASHBOARD_PORT:-6791}:6791`,
+  `NEXT_PUBLIC_DEPLOYMENT_URL=${NEXT_PUBLIC_DEPLOYMENT_URL:-http://127.0.0.1:${PORT:-3210}}`, no key, after the
+  backend is healthy; no healthcheck of its own.
+- **`dashboard.zip`** (`.github/workflows/precompile.yml:65-83`): `build:export` (`output: "export"`, with
+  `NEXT_PUBLIC_USE_CURRENT_DEPLOYMENT_API=true` and the legacy list's port 6791), zipped from `out/` with the files
+  at the root, uploaded to the `precompiled-*` release; `promote_local_backend.yml:36` requires it.
+- **The local dashboard** (`ld/dashboard.ts:26-128`, from `cli/lib/dev.ts:88-122`): only for an anonymous
+  deployment and a long-running `dev` (not `--once`, not `--until-success`). The version is
+  `--local-backend-version`'s, else the latest release's (`ensureBackendBinaryDownloaded`, which crashes when the
+  latest cannot be found); `ensureDashboardDownloaded` (`ld/download.ts:328-355`) keeps one copy in
+  `~/.cache/convex/dashboard/out`, `dashboard/config.json` naming its version, and replaces it for another
+  (`ld/filePaths.ts:305-372`); a failed download crashes `dev` ("File not found at <url>."). The port is the first
+  free from 6790 (`choosePorts`), saved per deployment as `dashboard.json` next to its `config.json`
+  (`:380-418`). The server (`ld/serve.ts:17-73`) listens on 127.0.0.1 only, with no CORS headers (`cors: false`),
+  answers `/api/current_deployment` with `{ name, url, adminKey }` to any request (`ld/dashboard.ts:66-77`), and
+  serves the export with `serve-handler` otherwise; the first other request reports a telemetry event.
+- **`npx convex dashboard`** (`cli/dashboard.ts:24-84`): self-hosted → the "not supported" message; anonymous → the
+  saved port's `http://127.0.0.1:<port>/`, after `GET /api/current_deployment` answered 200 with this
+  deployment's `name` (the port may since be another session's), else "You are not currently running the
+  dashboard locally…"; `--no-open` prints the URL on stdout, otherwise "Opening <url> in the default browser..."
+  and, when that fails, "⚠️ Could not open dashboard in the default browser.\nPlease visit: <url>". `dev` prints no
+  dashboard link of its own (the links are PR 8's).
+
+**What was built.**
+
+- **The server** (`packages/cli/src/dashboard-server.ts`): the built app served by `Bun.serve` — each file of the
+  build (hashed `/assets/` cached for good, the rest `no-cache`), index.html for any other page the browser opens
+  (`Accept: text/html`; the app routes on the history, where Convex's export has one HTML file per page), a 404 for
+  a missing script, nothing outside the build (the decoded path is resolved and must stay under it), GET and HEAD
+  only. index.html carries the prefill as `<meta name="bunvex-deployment-url">` / `<meta name="bunvex-admin-key">`
+  (normalized and escaped; nothing written for an unset value). `/api/current_deployment` answers Convex's
+  `{ name, url, adminKey }` (`Cache-Control: no-store`, no CORS) when the server was started for a deployment,
+  listens on a loopback address, and the request's `Host` is `127.0.0.1:<port>` or `localhost:<port>`; another
+  `Host` is a 403 (DV-476); without a deployment, a 404 as Convex's image.
+- **The app** (`apps/dashboard/src/login/prefill.ts`): the sign-in page's prefill is the serving server's `<meta>`
+  tags, else the build's `VITE_BUNVEX_DEPLOYMENT_URL` / `VITE_BUNVEX_ADMIN_KEY` — so one static build serves any
+  deployment, as Convex's image reads its environment at request time. Monaco is bundled in the app (as Convex's
+  `NEXT_PUBLIC_LOAD_MONACO_INTERNALLY=true`), so the image needs no CDN.
+- **`bunvex dashboard serve`** (`dashboard-serve.ts`; Convex's CLI has no such command): `--dir` (else the
+  release's `dashboard.zip`, downloaded and cached as `dev` does; `--version`), `--port` (6790), `--hostname`
+  (127.0.0.1), `--deployment-url` / `--admin-key` (else `BUNVEX_DEPLOYMENT_URL` / `BUNVEX_ADMIN_KEY`); in a project
+  whose deployment is local, on a loopback address, it hands that deployment out at `/api/current_deployment`.
+  SIGINT / SIGTERM stop it. `packages/cli/bin/bunvex-dashboard.ts` is the command alone, which the image compiles.
+- **The image** (`docker/dashboard.Dockerfile`, DV-475): built on `oven/bun:1.4.2-slim` (the app's Vite build and
+  `bun build --compile` of `bunvex-dashboard`), run on `gcr.io/distroless/cc-debian12:nonroot` (a non-root user,
+  as Convex's), `--hostname 0.0.0.0 --port 6791`, `EXPOSE 6791`, `STOPSIGNAL SIGINT`. The compose file's
+  `dashboard` service (DV-189 closed): Convex's ports, stop signal, `depends_on` and no key, with
+  `BUNVEX_DEPLOYMENT_URL=${BUNVEX_DEPLOYMENT_URL:-http://127.0.0.1:${PORT:-3210}}`; built from the repository
+  until a published image exists (`BUNVEX_DASHBOARD_IMAGE`, as the backend's `BUNVEX_IMAGE`). `docker.yml`
+  smoke-tests it (`docker/smoke-dashboard.sh`) and publishes it beside the backend's as
+  `ghcr.io/bunvex/bunvex-dashboard` (both behind `PUBLISH_IMAGE`, off). `docker/smoke.sh` now brings up the
+  backend alone.
+- **`dashboard.zip`** (`scripts/build-dashboard.ts`, DV-194 closed): the app built with
+  `VITE_BUNVEX_USE_CURRENT_DEPLOYMENT=1` (and `NODE_ENV=production`), zipped with its files at the root, into
+  `dist/bin/` where `release-binaries.yml` picks every zip up; `promote-binaries.yml` requires it.
+- **The local dashboard** (`local-dashboard.ts`, from `dev.ts`; DV-202 closed): Convex's flow for a local deployment
+  (bunvex's local deployments are Convex's anonymous ones, DV-199): only with a long-running `dev`; the version
+  `--local-backend-version`'s, else the latest release's; `~/.cache/bunvex/dashboard/{config.json,out/}`, unzipped
+  into a temporary directory and renamed into place (an entry outside it fails the whole archive); the first free
+  port from 6790 (the deployment's two ports avoided), saved as `.bunvex/local/default/dashboard.json`
+  (`{ port }`); stopped with `dev`. As Convex's, a dashboard that cannot be had (no latest version, a missing
+  `dashboard.zip`) ends `dev` with the reason.
+- **`bunvex dashboard`** (`dashboard.ts`): for a local deployment, Convex's behaviour above, with `--no-open`, the
+  opening line and the headless warning; `bunvex dashboard serve` is its subcommand (its usage lists it).
+
+**Not built here** (gaps, "Ainda não fizemos", none a divergence):
+
+- The image's frame and security headers (Convex's `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'`,
+  `Strict-Transport-Security`, `Referrer-Policy`, …). bunvex's dashboard can be embedded by allowed origins
+  (DV-319), which `frame-ancestors 'self'` would block; the headers want that list. Left for a follow-up with the
+  owner (question below).
+- Convex's telemetry event on the first request (`self_host_dashboard_connected`): bunvex reports nothing.
+- `NEXT_PUBLIC_DEFAULT_LIST_DEPLOYMENTS_API_PORT` and the legacy deployment list (`?a=<port>&d=<name>`): kept by
+  Convex for old CLIs, not built (CLAUDE.md: nothing kept only for older clients).
+- `NEXT_PUBLIC_HIDE_HEADER`: a build-time switch for Convex's embedding; bunvex's host has no such switch.
+- The CLI's dashboard links (DV-477) are PR 8's; `dev` prints no dashboard line, as Convex's.
+
+**Found on the way.**
+
+1. *Matched, worth a look*: Convex's `dev` crashes when the local dashboard cannot be had, even when the backend runs
+   from an already-downloaded version because the latest could not be found (offline). bunvex now does the same, so
+   an offline `bunvex dev` on a local deployment, which ran before this PR (with the cached backend), stops at the
+   dashboard. Question below.
+2. *Test pitfall*: `bun test` sets `NODE_ENV=test`, and a Vite build started from a test inherits it and makes a
+   development build (React's StrictMode then runs effects twice: two `/api/current_deployment` requests). The
+   browser test and `build-dashboard.ts` set `NODE_ENV=production`.
+
+**Divergences.** None new (DV-486 to DV-489 unused). DV-475 and DV-476 are built as decided; DV-475's row now names the
+image's variables (`BUNVEX_DEPLOYMENT_URL` / `BUNVEX_ADMIN_KEY` for Convex's `NEXT_PUBLIC_*`, which name a Next.js
+mechanism a static app does not have; the naming of the plan's §3.3, which the owner approved). DV-476's check also requires the server's own port and a loopback listening
+address (on any other address `/api/current_deployment` is never offered: a LAN client could send any `Host`).
+DV-189, DV-194 and DV-202 are closed (resolved to match Convex). `bunvex dashboard serve` is a CLI command Convex
+lacks, part of the plan the owner approved (§3.3, "internal"); it is the image's command and has no AD number yet.
+
+**Tests.**
+
+- **The server and the CLI** (`packages/cli/test/dashboard-serve.test.ts`): the app's files, index.html for a page,
+  a missing asset a 404, three spellings of a path out of the build refused, POST a 405, no current deployment a
+  404; the prefill from the environment and from the flags, escaped, absent when unset or not a URL; argument and
+  start errors (a directory with no index.html, a port in use); `/api/current_deployment` for a local project to
+  `127.0.0.1:<port>`, `localhost:<port>` and `LOCALHOST:<port>`, refused (403, no key in the body) for a rebound
+  name, another port, no port, a name ending in `.evil.example`; never on `0.0.0.0`; never for a self-hosted
+  project; `dashboard.zip` downloaded from a release server once per version, cached, replaced for a newer latest,
+  `--version`, a missing release's "File not found at …"; an archive entry outside the directory fails; `bunvex dev`
+  on a local deployment (the backend a shim of the real executable) serves the release's app from 6790, saves the
+  port, hands out the deployment's real key (checked against `check_admin_key`), refuses a foreign `Host`;
+  `bunvex dashboard --no-open` prints the URL, without `--no-open` opens it, a failing browser gets Convex's
+  warning, another deployment's name and a stopped `dev` get Convex's warning; `--once` serves none.
+- **The app** (`apps/dashboard/test/prefill.test.ts`): the server's `<meta>` tags over the build's values; unset ones.
+- **In Chromium** (`packages/sync-e2e/dashboard/local-dashboard.e2e.ts`, in `bun run e2e`): the app built as
+  `dashboard.zip` is, served by the real `bunvex dashboard serve` in a project whose local deployment is a live
+  bunvex server: at `127.0.0.1` and at `localhost` it signs in by itself (the Overview, "Signed in: <name>", one 200
+  from `/api/current_deployment`); at a name the browser resolves to 127.0.0.1 (`--host-resolver-rules`, a DNS
+  rebinding page) the route answers 403, the sign-in page is shown, and the page's own script cannot read the key.
+- **The image** (`docker/smoke-dashboard.sh`, CI's "dashboard image smoke test"): compose up of the backend and the
+  dashboard image; the page has the root element and the backend's URL in its `<meta>`; an app page served, a
+  missing asset a 404, `/api/current_deployment` a 404; then, in Chromium (`apps/dashboard/e2e/sign-in-smoke.ts`),
+  the sign-in form prefilled with the backend's URL, the key from `generate_admin_key.sh` pasted, the Data screen
+  of a table a function wrote showing its document. `docker/smoke.sh` (the backend) passes unchanged.
+
+**Sabotage** (each restored after, checked; counts are failing tests):
+
+| Sabotage | Failing tests |
+|---|---|
+| the `Host` check removed | CLI 2, Chromium 1 |
+| any port, or no port, accepted in `Host` | CLI 1 |
+| `/api/current_deployment` offered on a non-loopback address | CLI 1 |
+| the path guard removed | CLI 1 |
+| no index.html for the app's pages | CLI 1 |
+| index.html for every missing path | CLI 2 |
+| no prefill written | CLI 1; the image smoke ("the backend's URL is not filled in") |
+| the prefill not escaped | CLI 1 |
+| the app ignores the server's prefill | app 1; the image smoke ("the deployment URL is "", not http://127.0.0.1:13220") |
+| the app never asks `/api/current_deployment` | Chromium 3 |
+| `dev` serves no dashboard | CLI 1 |
+| `dev --once` serves one too | CLI 1 |
+| `dashboard.zip` never cached | CLI 1 |
+| the cache ignores the version | CLI 1 |
+| the archive's path guard removed | CLI 1 |
+| `bunvex dashboard` opens without checking the deployment's name | CLI 1 |
+| the dashboard's port not saved | CLI 1 |
+
+**Questions for the owner** (no divergence was built; each would be one):
+
+- *The image's frame headers.* Convex: `X-Frame-Options: SAMEORIGIN` and `frame-ancestors 'self'` (others with
+  `EMBEDDED_CORS_HEADERS`). bunvex: none yet. Same? No (a gap). Why: "Ainda não fizemos" — bunvex's embedding
+  allow-list (DV-319) needs `frame-ancestors` to list those origins. App impact: none (operators: whether another
+  site can frame the dashboard). Recommendation: send `frame-ancestors 'self' <the allowed origins>` and Convex's
+  other headers from `bunvex dashboard serve`, in a follow-up.
+- *Offline `dev` on a local deployment.* Convex: `dev` crashes when the dashboard's version cannot be found or
+  downloaded, even when the backend runs from a cached version. bunvex: the same, since this PR. Same? Yes. Why it
+  could differ: "Ainda não fizemos" — `dev` could warn and go on without the dashboard (or serve a cached one).
+  App impact: none (developers offline lose `dev` until online). Recommendation: diverge — warn and continue, serving
+  the cached dashboard when there is one (a new DV, if the owner agrees).
+
+**Measurements.** No hot path changes (the backend is untouched). The dashboard image is 131.6 MB (arm64, built
+locally; the backend's is 198.0 MB); `dashboard.zip` is 4.07 MB (145 files, 16.0 MB unpacked). The app's entry
+chunk grows by 306 bytes (80 gzipped: the prefill reader). The image builds in about 24 s from a warm cache; the
+image smoke runs in about 35 s locally.
 
 ## 6. Open questions
 

@@ -204,6 +204,7 @@ gaps.
     runner with its custom test query and Settings, with the server's `modules:*`, `components:list`,
     `getVersion`, `cloudUrl` / `siteUrl`, `listEnvironmentVariables`, `latestExport` and `snapshotImport:list`;
     PR 6: `apps/dashboard` runs on it — the real sign-in, Convex's connection overlay and polling rules, the live
-    table list, HTTP actions, Health's concurrency and invalidations, the paused lists); left: packaging (the
-    dashboard's image, `dashboard.zip`, `bunvex dev`'s local dashboard, PR 7) and the CLI's links (PR 8), plus the
-    custom query's type checking and Convex's bulk edit.
+    table list, HTTP actions, Health's concurrency and invalidations, the paused lists; PR 7: packaging — the
+    dashboard's own image on 6791, `dashboard.zip` in releases, `bunvex dev`'s local dashboard on 6790 with
+    `/api/current_deployment` and its `Host` check, `bunvex dashboard serve`, `bunvex dashboard` opening it); left:
+    the CLI's links (PR 8), plus the custom query's type checking and Convex's bulk edit.
