@@ -1,7 +1,7 @@
 # STUDY-31 — HTTP actions (`httpRouter`, `httpAction`)
 
 - **Status:** accepted: H1–H5 as recommended (owner, 2026-10-01)
-- **Convex source read:** commit `4577b9031` of get-convex/convex-backend; §7 and §8 at `d8bdde0`
+- **Convex source read:** commit `4577b9031` of get-convex/convex-backend; §7–§9 at `d8bdde0`
 - **Related:** server-api.md §16, platform.md §8; STUDY-30 S1 (registration at start); STUDY-27 (auth); STUDY-20
   (errors, redaction). HTTP actions come before file storage in the roadmap (owner, 2026-10-01); built-in
   auth (STUDY-28) needs them for OAuth callbacks, email links and JWKS.
@@ -422,6 +422,58 @@ DV-324 already records for downloads.
 
 ### 8.6 Found on the way
 
-Not built here (left to their own change, as in §7.3): a handler's non-Response is logged with no error; a body that
-errors after the head aborts the response where Convex ends it cleanly. A body sent whole (§8.3) can no longer fail
+Not built here (left to their own change, as in §7.3): a handler's non-Response is logged with no error (since §9, as
+Convex's); a body that errors after the head aborts the response where Convex ends it cleanly. A body sent whole (§8.3) can no longer fail
 after the head.
+
+## 9. A handler's non-Response (follow-up, 2026-10-14)
+
+Found by §7 (#639): a handler that returned something other than a Response was answered with Convex's 500, but its
+run was logged as if nothing failed. Read at Convex's reference commit `d8bdde0`, and checked against its binary
+(`precompiled-2026-10-07-d8bdde0`).
+
+### 9.1 How Convex checks the result
+
+- **The check** is the router's, in the app's bundle: `runRequest` (`npm-packages/convex/src/server/router.ts`
+  L304-331) awaits the handler, then hands its result to the `convexJsonFromResponse` syscall to build the head
+  (L328-330). The syscall (`npm-packages/udf-runtime/src/23_response.ts` L270-273) throws
+  `new Error("HTTP actions must return a Response")` for anything that is not an `instanceof Response`: an object
+  shaped like one, `undefined`, `null`, a string, a number.
+- **So it is a failure before the head**: `runRequest`'s promise rejects, as for a handler that throws, and the run
+  is lost to the isolate's termination (§7.1): `HttpActionResult::Error`, the 500 JSON with the error
+  (`Server Error: Uncaught Error: HTTP actions must return a Response`), and a Completion with that error, under the
+  request's name, not measured. The error has one frame, in the `convex` library bundled with the app
+  (`../node_modules/convex/src/server/router.ts:330:4`).
+
+Seen on the binary (the oracle below), for an object, `undefined`, `null`, a string, a number and a Response-like
+object: the 500 with that `code` and `trace`, the handler's line as a Progress entry, a Completion with
+`success: null` and that error under `GET /result/<kind>`; the app metrics of the route count only the run that
+returned a Response.
+
+### 9.2 What bunvex did, and does now
+
+- **Did:** `Functions.runHttpAction` resolved with the value, so the run was logged as a success with no status, and
+  `http-actions.ts` answered the 500 itself.
+- **Does:** `runHttpAction` throws `Error("HTTP actions must return a Response")` there, the way a throwing handler
+  fails: the Completion, its `function_execution` and `exception` events carry the error, under the request's name
+  (no route, not measured, §7.2), and the server answers it with its 500 as for any error before the head. The
+  server's own check went with it: `runHttpAction` now resolves with a Response or fails.
+- No hot-path cost: the check was there already.
+
+### 9.3 Divergences
+
+None new. The error has no frame (the server's are left out, STUDY-95), where Convex's shows one in its library
+bundled with the app: the class DV-501 decided (bunvex's library runs in the server, with no frame of the app's to
+show).
+
+### 9.4 Tests
+
+- `packages/server/test/http-action-result.test.ts`: an object, `undefined`, `null`, a string and a Response-like
+  object answer the 500 with Convex's `code` and `trace`; each Completion and `function_execution` event carries the
+  error under the request's name; only the run that returned a Response is measured.
+- `packages/differential/test/http-action-result.test.ts` (the app of `http-results-app/`): the same, a number
+  included, on Convex's binary and bunvex's: the answers, every log entry's kind, name, lines, status and error line,
+  and the route's app metrics compared.
+- Sabotage (each restored, `git diff` clean after): the value resolved again, the server answering the 500 (unit and
+  oracle fail); another message (unit and oracle fail); a `TypeError` (unit and oracle fail); a Response-like object
+  accepted (unit and oracle fail).

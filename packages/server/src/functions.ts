@@ -2425,7 +2425,7 @@ export class Functions {
     authError: Error | null,
     /** The route the router matched (a prefix route's path ends in `*`); null for none. */
     route: { method: RoutableMethod; path: string } | null = null,
-  ): Promise<unknown> {
+  ): Promise<Response> {
     const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION, handler);
     let t0 = 0;
     let running: Running | null = null;
@@ -2463,10 +2463,9 @@ export class Functions {
                   inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, trackedFormData(request))),
                 ),
             );
-            if (!(response instanceof Response)) {
-              warnings(0);
-              return response;
-            }
+            // Convex's router checks the result (`convexJsonFromResponse`): a failure before the head, logged with
+            // its error and answered with the 500.
+            if (!(response instanceof Response)) throw new Error("HTTP actions must return a Response");
             // The headers before the body: Bun adds a Blob body's Content-Type (`new Response(blob)`) only if
             // they are read first.
             const headers = response.headers;
@@ -2510,12 +2509,10 @@ export class Functions {
       (r) =>
         (logged = request.signal.aborted
           ? { error: new ClientDisconnectedError() }
-          : r instanceof Response
-            ? {
-                success: { status: String(r.status) },
-                ...(route && { route: { identifier: `${route.method} ${route.path}`, metricsName: route.path } }),
-              }
-            : {}),
+          : {
+              success: { status: String(r.status) },
+              ...(route && { route: { identifier: `${route.method} ${route.path}`, metricsName: route.path } }),
+            }),
       undefined,
       () =>
         body &&
