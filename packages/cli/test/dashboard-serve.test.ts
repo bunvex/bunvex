@@ -10,6 +10,7 @@ import { join, resolve } from "node:path";
 import { dashboardCommand } from "../src/dashboard.ts";
 import { withPrefill } from "../src/dashboard-server.ts";
 import { devCommand } from "../src/dev.ts";
+import { exportCommand } from "../src/export.ts";
 import type { Io } from "../src/index.ts";
 import { extractZip, readDashboardPort, readDashboardUnavailable } from "../src/local-dashboard.ts";
 import { EXE, forgetLatestVersion, stateDir } from "../src/local-deployment.ts";
@@ -397,6 +398,13 @@ describe("bunvex dev's local dashboard, and bunvex dashboard", () => {
     });
     expect(check.status).toBe(200);
 
+    // the CLI's links (DV-477): dev's line after writing .env.local, and export's to the snapshots page
+    expect(r.err).toContain(`View the bunvex dashboard at ${url}`);
+    const exported = io(dir, env);
+    expect(await exportCommand(["--path", "snapshot.zip"], exported.it, { pollMs: 20 })).toBe(0);
+    expect(exported.err).toContain(`Export is available at ${url}settings/snapshots`);
+    expect(exported.err.at(-1)).toStartWith("Downloaded snapshot export to ");
+
     // `bunvex dashboard`: its URL (--no-open), or opened
     const print = io(dir, env);
     expect(await dashboardCommand(["--no-open"], print.it)).toBe(0);
@@ -430,6 +438,10 @@ describe("bunvex dev's local dashboard, and bunvex dashboard", () => {
     expect(after.err).toEqual([
       "You are not currently running the dashboard locally. Make sure `bunvex dev` is running and try again.",
     ]);
+    // nor does export link it: the saved port answers nothing (it starts the deployment for itself)
+    const unlinked = io(dir, env);
+    expect(await exportCommand(["--path", "again.zip"], unlinked.it, { pollMs: 20 })).toBe(0);
+    expect(unlinked.err.some((l) => l.startsWith("Export is available at"))).toBe(false);
     // --once serves none
     rmSync(join(stateDir(dir), "dashboard.json"));
     const once = io(dir, env);
@@ -501,6 +513,8 @@ describe("the local dashboard when its version cannot be had (DV-486: a warning,
       "Running without the local dashboard; `bunvex dev` serves it once it can be downloaded.",
     );
     expect(readDashboardPort(dev.dir)).toBeNull();
+    // no dashboard, no link (DV-477): dev's line about it is left out
+    expect(dev.r.err.some((l) => l.startsWith("View the bunvex dashboard"))).toBe(false);
     const ask = io(dev.dir, dev.env);
     expect(await dashboardCommand(["--no-open"], ask.it)).toBe(0);
     expect(ask.out).toEqual([]);

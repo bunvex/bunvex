@@ -16,7 +16,8 @@ self-hosted deployment instead, set `BUNVEX_SELF_HOSTED_URL` and `BUNVEX_SELF_HO
 
 Commands: `dev`, `deploy`, `codegen`, `run`, `env`, `admin-key`, `data`, `logs`, `export`, `import`,
 `function-spec`, `typecheck`, `deployment`, `mcp`, `network-test`, `docs`, `update`, `dashboard`. `bunvex <command> --help`
-for each.
+for each. `bunvex dev` also serves the dashboard for a local deployment, which `bunvex dashboard` opens
+([the dashboard](https://github.com/bunvex/bunvex/blob/main/docs/dashboard.md)).
 
 This is an alpha preview, published from the TypeScript sources: it needs Bun.
 

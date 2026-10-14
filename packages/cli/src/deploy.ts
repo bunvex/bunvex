@@ -20,6 +20,14 @@ import {
   typecheck,
 } from "./codegen.ts";
 import {
+  type DashboardLink,
+  dashboardPage,
+  ENV_VARS_PAGE,
+  localDashboardLink,
+  NO_DASHBOARD,
+  tableIndexesPage,
+} from "./dashboard-links.ts";
+import {
   type CheckMode,
   checkLargeIndexBackfill,
   checkLargeIndexDeletion,
@@ -322,6 +330,7 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
               : "ask for confirmation",
           largeIndexBackfillCheck: flags.skipLargeIndexesCheck ? "has confirmation" : "ask for confirmation",
           warnOnSlowSchemaValidation: true,
+          dashboard: localDashboardLink(io, flags),
         },
         io,
       )
@@ -385,6 +394,8 @@ export type DeployOptions = {
   largeIndexDeletionCheck?: CheckMode;
   largeIndexBackfillCheck?: CheckMode;
   warnOnSlowSchemaValidation?: boolean;
+  /** The dashboard the push's messages link (DV-477); none by default. */
+  dashboard?: DashboardLink;
 };
 /**
  * The exit code; whether a failure is worth retrying (`bunvex dev`'s backoff); whether the deployment failed on
@@ -408,6 +419,43 @@ class DeploymentError extends Error {
   ) {
     super(message);
   }
+}
+
+/** The dashboard's root, asked only when the diff has a staged index to link. */
+async function stagedIndexDashboard(diff: IndexDiff, dashboard: DashboardLink): Promise<string | null> {
+  return diff.added_indexes.some((i) => i.staged) ? dashboard() : null;
+}
+
+type SchemaProgress = { indexesComplete: number; indexesTotal: number; schemaValidationComplete: boolean };
+
+/**
+ * Convex's progress line while a push waits on its schema (deploy2.ts `waitForSchema`): what is still running —
+ * the backfill, the documents' check, or both — and, past 10 s, where to watch it: the first new index's table,
+ * else the Schema screen. The link only when there is a dashboard to link (DV-477).
+ */
+export async function waitMessage(
+  status: Record<string, unknown>,
+  diff: IndexDiff | undefined,
+  slow: boolean,
+  dashboard: DashboardLink,
+): Promise<string> {
+  const c = (status.components as Record<string, SchemaProgress> | undefined)?.[""];
+  const done = c?.indexesComplete ?? 0;
+  const total = c?.indexesTotal ?? 0;
+  const ifSlow = async (msg: string) => {
+    const link = slow ? await dashboardPage(dashboard, "schema") : null;
+    return link === null ? msg : `${msg}\nSee progress here: ${link}`;
+  };
+  if (done !== total && !c?.schemaValidationComplete)
+    return ifSlow(`Backfilling indexes (${done}/${total} ready) and checking that documents match your schema...`);
+  if (done !== total) {
+    const index = (diff?.added_indexes[0] ?? diff?.enabled_indexes?.[0])?.name;
+    const link = slow && index ? await dashboardPage(dashboard, tableIndexesPage(index.split(".")[0]!)) : null;
+    return link === null
+      ? `Backfilling indexes (${done}/${total} ready)...`
+      : `Backfilling index ${index} (${done}/${total} ready), see progress here: ${link}`;
+  }
+  return ifSlow("Checking that documents match your schema...");
 }
 
 /** One deploy (`bunvex deploy`, each push of `bunvex dev`). */
@@ -436,6 +484,7 @@ async function evaluateSchema(
 
 export async function deploy(target: Target, flags: DeployOptions, io: Io): Promise<DeployResult> {
   const { url, adminKey } = target;
+  const dashboard = flags.dashboard ?? NO_DASHBOARD;
   let bundled: Awaited<ReturnType<typeof bundleFunctions>>;
   let dir: string;
   let codegen: CodegenConfig;
@@ -533,7 +582,7 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     // Convex prints the diff from `start_push`'s answer, else `finish_push`'s.
     const startDiff = (start.schemaChange as { indexDiffs?: Record<string, IndexDiff> } | undefined)?.indexDiffs?.[""];
     if (flags.dryRun) {
-      if (startDiff) printIndexDiff(io, startDiff, true);
+      if (startDiff) printIndexDiff(io, startDiff, true, await stagedIndexDashboard(startDiff, dashboard));
       const fns = Object.values(
         (start.analysis as Record<string, { functions: Record<string, { functions: unknown[] }> }>)[""]!.functions,
       );
@@ -542,6 +591,7 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
       );
       return { code: 0 };
     }
+    const waitStart = Date.now();
     for (;;) {
       const s = await post("/api/deploy2/wait_for_schema", { schemaChange: start.schemaChange, timeoutMs: 10_000 });
       if (s.type === "complete") break;
@@ -555,10 +605,7 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
         io.err("Schema was overwritten by another push.");
         return { code: 1 };
       }
-      const c = (s.components as Record<string, { indexesComplete: number; indexesTotal: number }>)[""];
-      io.err(
-        `Backfilling indexes (${c?.indexesComplete ?? 0}/${c?.indexesTotal ?? 0} ready) and checking that documents match your schema...`,
-      );
+      io.err(await waitMessage(s, startDiff, Date.now() - waitStart > 10_000, dashboard));
     }
     const diff = (await post("/api/deploy2/finish_push", {
       startPush: start,
@@ -577,7 +624,7 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     void post("/api/deploy2/report_push_completed", { spans: [] }).catch(() => {});
     const d = diff.componentDiffs[""];
     const indexDiff = startDiff ?? d?.indexDiff;
-    if (indexDiff) printIndexDiff(io, indexDiff, false);
+    if (indexDiff) printIndexDiff(io, indexDiff, false, await stagedIndexDashboard(indexDiff, dashboard));
     if (d) {
       for (const c of d.cronDiff.added) io.err(`  [+] cron ${c}`);
       for (const c of d.cronDiff.deleted) io.err(`  [-] cron ${c}`);
@@ -587,12 +634,17 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
   } catch (e) {
     if (e instanceof PushCanceled) return { code: 1 };
     const message = (e as Error).message;
-    // Convex's `handlePushConfigError`: the variable named, and how to set it (with no deployment dashboard
-    // link to give, Convex's own words for that case).
+    // Convex's `handlePushConfigError`: the variable named, and how to set it — the dashboard's environment
+    // variables page when there is a dashboard to link (DV-477), else Convex's own words for no link.
     if (e instanceof DeploymentError && e.code === "AuthConfigMissingEnvironmentVariable") {
       const [, name] = message.match(/Environment variable (\S+)/i) ?? [];
+      const page = await dashboardPage(dashboard, ENV_VARS_PAGE);
       io.err(
-        `bunvex deploy: Environment variable ${name} is used in auth config file but its value was not set.\nGo set it in the dashboard or using \`bunvex env set\``,
+        `bunvex deploy: Environment variable ${name} is used in auth config file but its value was not set.\n${
+          page === null
+            ? "Go set it in the dashboard or using `bunvex env set`"
+            : `Go to:\n\n    ${page}\n\n  to set it up. `
+        }`,
       );
       return { code: 1, envVars: true };
     }
