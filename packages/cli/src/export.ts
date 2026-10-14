@@ -1,9 +1,11 @@
 // `bunvex export` (STUDY-42 PR 1), as Convex's `npx convex export` (npm-packages/convex/src/cli/convexExport.ts,
 // lib/convexExport.ts): request a snapshot export, follow it until it completes, then download its ZIP into a
-// directory (the server's file name) or to a new path.
+// directory (the server's file name) or to a new path. Convex's snapshots-page links point at the local dashboard
+// while `bunvex dev` serves it, and are left out otherwise (DV-477).
 import { existsSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { argumentError, missingArgument, optionsIn, requiredOption, tooManyArguments, unknownOption } from "./args.ts";
+import { dashboardPage, localDashboardLink, SNAPSHOTS_PAGE } from "./dashboard-links.ts";
 import type { Io } from "./io.ts";
 import { acquireTarget } from "./local-deployment.ts";
 import { adminRequest, NO_DEPLOYMENT, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
@@ -77,14 +79,17 @@ export async function exportCommand(args: string[], io: Io, opts: { pollMs?: num
     return 1;
   }
   const target = acquired.target;
+  const dashboard = localDashboardLink(io, taken.flags);
   try {
     io.err("Creating snapshot export");
     try {
       await adminRequest(target, `/api/export/request/zip?includeStorage=${includeStorage}`, {});
     } catch (e) {
       if (/already an export requested or in progress/.test((e as Error).message)) {
+        // Convex's words, then the link to the snapshots page when there is a dashboard to link (DV-477).
+        const progress = await dashboardPage(dashboard, SNAPSHOTS_PAGE);
         io.err(
-          "A snapshot export is already requested or in progress. Only one can run at a time, so wait for it to finish and try again.",
+          `A snapshot export is already requested or in progress. Only one can run at a time, so wait for it to finish and try again.${progress === null ? "" : `\nCheck its progress at ${progress}`}`,
         );
         return 1;
       }
@@ -110,6 +115,8 @@ export async function exportCommand(args: string[], io: Io, opts: { pollMs?: num
       return 1;
     }
     io.err(`Created snapshot export at timestamp ${state.start_ts}`);
+    const available = await dashboardPage(dashboard, SNAPSHOTS_PAGE);
+    if (available !== null) io.err(`Export is available at ${available}`);
     const res = await fetch(`${target.url}/api/export/zip/${state.start_ts}`, {
       headers: { authorization: `Bunvex ${target.adminKey}` },
     });
