@@ -540,7 +540,7 @@ req/s, a one-chunk stream): before 19.3k–21.4k; with the 32 turns 20.5k–21.5
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| DV-485 | When a streamed body's error counts as before the head. Convex: any error before JS blocks on something outside the isolate (the microtask queue drained). bunvex: an error within 32 microtask turns of the handler's return | Bun cannot see the microtask queue drained without a macrotask, and a macrotask (`setImmediate`) per streamed response costs ~45 % of its requests per second. Options: (a) 32 microtask turns (built); (b) `setImmediate`, exact for microtask-only work, at that cost; (c) no check, every body error ends the response cleanly with the line (Convex's 500 lost) | pending (owner); recommended: accept, with (a) |
+| DV-485 | When a streamed body's error counts as before the head. Convex: any error before JS blocks on something outside the isolate (the microtask queue drained). bunvex: an error within 32 microtask turns of the handler's return | Bun cannot see the microtask queue drained without a macrotask, and a macrotask (`setImmediate`) per streamed response costs ~45 % of its requests per second. Options: (a) 32 microtask turns (built); (b) `setImmediate`, exact for microtask-only work, at that cost; (c) no check, every body error ends the response cleanly with the line (Convex's 500 lost) | owner, 2026-10-14: accept, (a) (as recommended) |
 
 ### 10.5 Tests
 
