@@ -71,8 +71,8 @@ describe("the function runner", () => {
     const result = () => within(runner()).getByText(/_id: "/, { selector: "pre" }).textContent!;
     await waitFor(() => expect(result().match(/_id:/g)?.length).toBe(2));
     expect(within(runner()).getByText(/^Succeeded in \d+ ms$/)).toBeDefined();
-    const [added] = await source.insertDocuments("tasks", [{ text: "live", done: false }]);
-    await waitFor(() => expect(result()).toContain(added!)); // the newest task, without running it again
+    const added = source.insertDocument("tasks", { text: "live", done: false })._id;
+    await waitFor(() => expect(result()).toContain(added)); // the newest task, without running it again
     expect(within(runner()).getByRole("heading", { name: "Logs" })).toBeDefined();
     const grid = screen.getByRole("grid", { name: "Log lines of tasks:list" });
     await waitFor(() =>

@@ -13,7 +13,7 @@ afterEach(async () => {
   for (const s of stops.splice(0)) await s();
 });
 
-async function setup(opts: { maxEchoBytes?: number } = {}) {
+async function setup(opts: { maxEchoBytes?: number; idleTimeoutSeconds?: number } = {}) {
   const engine = await new Engine(defineSchema({}), await MemoryPersistence.open(null, { durable: false })).init();
   const s = createServer({ engine, functions: new Functions(engine), port: 0, ...opts });
   stops.push(s.stop);
@@ -168,6 +168,24 @@ test("/echo: a body without a length is cut off past 128 MiB (streamed, one reus
   expect(await streamed(`${api}/echo`, 3_000_000)).toBe(3_000_000);
   expect(await streamed(`${api}/echo`, MAX_ECHO_BYTES + 1)).toBe(-1);
 }, 60_000);
+
+test("/echo keeps Bun's idle timeout: a body that stops coming closes the connection", async () => {
+  // A backstop for a Bun bug (#591 turned the idle timeout off on timed routes): under load, cutting off a
+  // body past the limit can leave the connection open with nothing more to send or read.
+  const { port } = await setup({ idleTimeoutSeconds: 1 });
+  const { promise: closed, resolve } = Promise.withResolvers<"closed">();
+  const socket = await Bun.connect({
+    hostname: "127.0.0.1",
+    port,
+    socket: { data() {}, close: () => resolve("closed") },
+  });
+  socket.write("POST /echo HTTP/1.1\r\nhost: 127.0.0.1\r\ntransfer-encoding: chunked\r\n\r\n4\r\nabcd\r\n");
+  const late = setTimeout(() => socket.terminate(), 8_000);
+  const out = await Promise.race([closed, Bun.sleep(6_000).then(() => "open" as const)]);
+  clearTimeout(late);
+  socket.terminate();
+  expect(out).toBe("closed");
+}, 15_000);
 
 test("MAX_ECHO_BYTES, Convex's knob: unset or empty is 128 MiB; a bad value is refused", () => {
   expect(maxEchoBytesFromEnv({})).toBe(MAX_ECHO_BYTES);

@@ -233,7 +233,7 @@ there under another name or route; *missing* = not defined.
 | `tableSize`, `tableSize:sizeOfAllTables` | have | `:445`, `:450` |
 | `indexes` | missing | `/api/get_indexes` missing too (`openapi.ts:494-499`) |
 | `getSchemas`, `:schemaValidationProgress` | have | `:136`, `:428` (+ `stagedSchemaValidationProgress` `:437`) |
-| `addDocument`, `patchDocumentsFields`, `replaceDocument`, `deleteDocuments`, `clearTablePage`, `createTable` | missing | their audit events are pending with them (platform:62, :252) |
+| `addDocument`, `patchDocumentsFields`, `replaceDocument`, `deleteDocuments`, `clearTablePage`, `createTable` | have (PR 3) | `data-system-mutations.ts`, with their audit events |
 | `modules:listForAllComponents`, `modules:argsValidator` | missing | `_system/cli/modules:apiSpec` (`:287`) has the data |
 | `components:list` | missing | components are not built (DV-55); the root alone would do |
 | `getVersion` | missing | `/version`, `/instance_version` answer it (`health.ts:74`) |
@@ -912,6 +912,166 @@ reproduces it without load).
   pairs that caused the most queries to be re-run"; the scheduler's wake-ups are not queries, and counting them
   would need synthetic events that mirror Convex's executor design rather than anything bunvex runs.
 - **Decision (owner, 2026-10-12): match Convex** — built as above; DV-480 is resolved to match Convex.
+
+### PR 3, as built
+
+The Data screen's writes. Convex's side re-read for it (`fe/` and `dc/` as above; `ad/` is
+`npm-packages/system-udfs/convex/_system/`):
+
+- **Six mutations** (`fe/addDocument.ts`, `patchDocumentsFields.ts`, `replaceDocument.ts`, `deleteDocuments.ts`,
+  `clearTablePage.ts`, `createTable.ts`), each `mutationGeneric("WriteData")` (`ad/server.ts:160-189`): the key must
+  allow `WriteData` (`requireOperation`, `:125`), the arguments are checked inside the function (`validateArgs`,
+  `:126-133`, "Uncaught Error: …"), a non-null `componentId` re-runs the function in that component (`:177-183`).
+  The database is an app's (`mutationGeneric`, not `queryPrivateSystem`): `_`-tables are read-only, the schema is
+  enforced, an insert into a table that does not exist creates it.
+  - `addDocument {table, documents}`: past 4 096 (`MAX_IMPORT_COUNT`, half a transaction's user writes) it answers
+    `{success: false, error: "Can’t import more than 4096 documents at once."}` (a typographic apostrophe); each
+    document inserted in order; an insert's error rewrapped as `ConvexError(e.message)` (`:42`, "it could be a
+    schema validation error"), so the dashboard shows the data alone (`useDataToolbarActions.ts:47-60`). It answers
+    `{success: true}` — **no ids**.
+  - `patchDocumentsFields {table, fields, ids?}`: the documents of `ids` (`db.get` each, outside the rewrap: an id
+    that does not decode fails as `db.get` does), or every document of `table` without `ids` (the dashboard's
+    "edit all"); `fields` walked with `for…in`, the undefined placeholder removing a field (`:29`); each patch
+    inside the rewrap — so a document that is gone fails with V8's "Cannot read properties of null (reading
+    '_id')" as a `ConvexError`. `_id` and `_creationTime` may be patched to their own values only (the engine's
+    check). The event names `table` as given and the ids patched (`:39`).
+  - `replaceDocument {id, document}`: a document that is gone answers `{success: false, error: "Document does not
+    exist."}`; the replace rewrapped; the event names the id's table by the table mapping (`:33`).
+  - `deleteDocuments {toDelete: [{id, tableName}]}`: past 4 096 `{success: false, error: "You can't delete more
+    than 4096. Try selecting fewer documents instead.."}`; each `db.delete` unwrapped (a gone id: "Delete on
+    nonexistent document ID …", the whole call fails); one event per `tableName` given, in first-named order.
+  - `clearTablePage {tableName, cursor}`: the oldest 4 000 (`MAX_CLEAR_ROWS`) by `by_creation_time` ascending
+    ("to avoid repeatedly invalidating the query run by the data page"), at most 3 000 000 bytes read (so a page and
+    its deletes stay under 8 MiB, `:36-42`), each deleted, one `delete_documents` event when any was (`:47`);
+    `{deleted, continueCursor, hasMore}`. The dashboard calls it again with `continueCursor` while `hasMore`,
+    showing the progress, and stops if the dialog closes (`ClearTableConfirmation.tsx:58-81`). A table that does
+    not exist fails ("Index nope.by_creation_time not found.").
+  - `createTable {table}`: `db.insert(table, {})` then `db.delete` (`:10-13`), unwrapped. A taken name is no error
+    (the form refuses it, `DataSidebar.tsx:105-160`), unless the table's declared type refuses `{}`; a bad name fails
+    with `db.insert`'s identifier error.
+- **Deleting tables** is the HTTP route (`dc/features/data/lib/api.ts:13-29`, `POST /api/delete_tables {tableNames,
+  componentId}`), already built (STUDY-42); the menu disables it for a table the schema declares
+  (`DataOverflowMenu.tsx:96-125`).
+- **The events.** `writeAuditLog(action, metadata)` is the `1.0/writeDeploymentAuditLog` syscall, system functions
+  only; it adds `component_id` and `component` to the metadata (`crates/isolate/src/environment/udf/async_syscall.rs`
+  `write_deployment_audit_log`) and stores Convex's `DeploymentAuditLogEvent` (`crates/model/src/deployment_audit_log/
+  types.rs:254-280`, serialized `:579-640`): `add_documents`, `update_documents`, `delete_documents` `{component_id,
+  component, table, document_ids}`, `create_table` `{component_id, component, table}`, in the write's transaction.
+  History lists them (`useDeploymentAuditLog.ts:42-79`) and words them "added N documents to T", "updated N documents
+  in T", "deleted N documents from T", "created table T" (`DeploymentEventContent.tsx:485-559`), N being the ids'
+  count. Clearing a table records `delete_documents` per page, not `clear_tables` (that one is streaming import's).
+
+**What was built.**
+
+- Server (`packages/server/src/data-system-mutations.ts`, spread into `SYSTEM_MUTATIONS` by one line; the four events
+  in `audit-log.ts`): the six mutations as above, `componentId` accepted and ignored (DV-55), the rewrap as a
+  `BunvexError` (DV-03), bunvex's placeholder (DV-478). In a transaction of an app's (the `db` system functions get),
+  so the refusals are the engine's own.
+- Source (`packages/dashboard-source/src/writes.ts`, spread into the server source): each contract write is the
+  mutation over the socket with `componentId: null` (values decoded from the contract's JSON encoding; `{$unset:
+  true}` the placeholder); `clearTable` loops `clearTablePage` on its cursor, checks the abort between pages, and
+  answers `not_found` for a table the mapping does not have (the server would answer zeros); `deleteTables` posts the
+  route, then waits (at most 5 s) for the subscribed table mapping to drop the tables, since the route answers ahead
+  of the socket. A failure's code: an application error's data is the message (as Convex's dashboard shows it) and is
+  `invalid_request`, as is any other error the function raised (`Uncaught …`, frames dropped); a document that is gone
+  (`Delete on nonexistent document ID`, the null `_id`, "Document does not exist.") `not_found`; a permission refusal
+  `unauthorized`; anything else `unavailable`. `watchTable` needed nothing: the writes reach it through the size and
+  page subscriptions of PR 2.
+- **The contract follows Convex** (DV-479's standing rule; `data-source.ts`, UI-01 §5): `insertDocuments` answers
+  nothing (Convex's mutation answers no ids; the screen counts what it sent, as Convex's `onDocumentsAdded`), at most
+  4 096, and creates a missing table; `patchDocuments` and `replaceDocument` say `not_found` for a document that is
+  gone; `deleteDocuments` fails for one (it ignored them), at most 4 096; `clearTable` pages and may stop on an abort;
+  `createTable` accepts a taken name; a new optional `deleteTables(names)` (Convex's route, a missing name skipped, a
+  declared table `invalid_request`). The mock follows (its events now carry Convex's metadata: the documents' ids and
+  the root component; a clear records a `delete_documents` per 4 000), and the contract suite checks each rule. The
+  History screen counts a data event's `document_ids` (and a `delete_files`' `storage_ids`), and words
+  `delete_tables`. The Data screen's menu gained "Delete table…" (its name typed to confirm, as Clear; disabled and
+  saying why for a declared table, as Convex's menu); after it the screen opens the first table left.
+- The contract's history opt-in now reads the first page before the write, as the History screen does: a live
+  source hears what changes the pages it served while watched (`watchAuditEvents`' wording says so).
+
+**Tests.**
+
+- **Oracle** (`packages/differential/test/dashboard-writes.test.ts`, the app in `dashboard-writes-app/`): the six
+  mutations on Convex's pinned binary and on bunvex with the same calls, every answer (values, errors and their data),
+  the documents left and the events recorded compared, ids by first appearance: inserts (none, a bad field, another
+  document's `_id`, a new table, the schema, `_storage` and `_foo`, 4 097, a missing argument, `componentId: null`),
+  patches (set, remove, own and other `_id`, an id that does not decode, every document, `fields` not an object, no
+  ids, one gone, another table's name, the schema), replaces (with its own system fields, another `_id`, not an id,
+  gone, the schema), deletes (two tables' events, gone, not an id, 4 097, a wrong table name, a missing `tableName`),
+  clears (4 106 documents: 4 000 oldest then 106, an empty table, `_storage`, a bad cursor, a missing one) and
+  `createTable` (new, taken, 64 characters, `_x`, a declared `v.any()` table), and the six without a key.
+- **Server** (`packages/server/test/data-system-mutations.test.ts`): bunvex's placeholder (Convex's an ordinary
+  string), a refused insert leaving no document and no event, the events' metadata in order, a clear's page cut by
+  the 3 MB bound and oldest first.
+- **Source** (`packages/dashboard-source/test/writes.test.ts`): what each write sends, the clear's loop and abort,
+  `success: false`, the error codes, `deleteTables`' wait.
+- **Live** (`packages/sync-e2e/dashboard/server-source-writes.test.ts`): the contract's `writes` area and history
+  opt-in on a live server, then int64 and bytes written, a field removed, the events with their ids, the schema's,
+  a system table's and the limit's refusals with the deployment's words, a gone document's `not_found` for patch,
+  replace and delete, a clear of 8 192 documents in three pages with three events, `createTable` / `deleteTables`
+  and their events (a missing name skipped, a declared table refused), `watchTable` hearing an insert's count, and a
+  read-only key refused with nothing written.
+- **Dashboard**: the mock's writes under the new contract (`mock.test.ts`'s suite), "Delete table" on the screen
+  (typed name, gone after, disabled for a declared table), History's words from `document_ids`.
+
+**Sabotage** (each restored after, `git diff` clean; counts are failing tests per suite):
+
+| Sabotage | Failing tests |
+|---|---|
+| server: no 4 096 limit on `addDocument` | oracle 1 |
+| server: an insert's error not rewrapped | oracle 1, server 1 |
+| server: the placeholder not read as `undefined` | server 1, live 2 |
+| server: a gone document left to the engine's `TypeError` (JSC's words) | oracle 1, live 2 |
+| server: `deleteDocuments` one event for every table | oracle 1 |
+| server: the clear from the newest | oracle 1, server 1 |
+| server: the clear without the 3 MB bound | server 1 |
+| server: an empty clear page records an event | oracle 1 |
+| server: `createTable` leaves its document | oracle 1 |
+| server: the replace's event without its table | oracle 1 |
+| source: the clear's cursor not passed on | unit 1 |
+| source: `$unset` sent as a value | unit 1, live 2 |
+| source: a gone document `invalid_request` | unit 2, live 2 |
+| source: `componentId` not sent | unit 1 |
+| source: `deleteTables` does not wait for the mapping | unit 1 (first passed everything: the live race was not reliable; the unit fake now lags the mapping) |
+| mock: a gone id ignored by `deleteDocuments` | dashboard 1 (the contract on the mock) |
+| mock: `createTable` refuses a taken name | dashboard 1 |
+| screen: "Delete table" enabled for a declared table | dashboard 1 |
+| History: data events counted from `count` | dashboard 2 |
+
+**Measurements.** No hot path changes: six system functions and four audit events; the route is unchanged. The source adds
+nothing to a read. A clear of 8 192 documents on the in-process server takes three mutations.
+
+**Divergences.** None new (DV-482 to DV-485 unused). What differs is already decided: the application error's name
+(DV-03), the placeholder (DV-478), `componentId` ignored (DV-55). The contract's changes are DV-479's rule, not
+divergences; the delete dialog's typed name is bunvex's screen (STUDY-12 D1).
+
+**Found on the way, outside PR 3** (differences of the engine every function shares, left out of the oracle with a
+note and left to their own PRs):
+
+1. `db.insert` into a name that is not an identifier: bunvex's `Invalid table name "9lives": use at most 64 ASCII
+   letters, …`; Convex's ``Invalid argument `table` for `db.insert`: `` then the identifier's own error ("Invalid first
+   character '9' in 9lives: Identifiers must start with an alphabetic character or underscore", "Identifier cannot be
+   empty", "Identifier is too long (65 > maximum 64)", "Identifier a-b has invalid character '-': …").
+2. `db.insert` of a value that is not an object: bunvex's ``Uncaught TypeError: … expected an object``; Convex's
+   ``Uncaught Error: Invalid argument `value` for `db.insert`: Value must be an Object``.
+3. A missing required field's schema error displays the document and validator with the system fields on bunvex
+   (`Object: {_creationTime: …, _id: …}`, `Validator: v.object({_creationTime: v.float64(), _id: v.id(…), …})`);
+   Convex's without them (`Object: {}`). A wrong type's error matches.
+4. `db.patch` with another `_creationTime`: bunvex shows the patch as JSON (`{"_creationTime":1}`), Convex the merged
+   document in its display (`{_creationTime: 1.0, _id: "…", k: 1.0}`); and bunvex's error carries the server's own
+   frames (`at checkSystemFieldValues (…/packages/core/src/tx.ts:…)`) to the client, where Convex shows the app's.
+5. `withIndex("by_creation_time")` on a table that does not exist: Convex fails ("Index nope.by_creation_time not
+   found."), bunvex answers an empty result.
+6. A `$` field name inside a system function's `v.any()` argument is refused before the function on bunvex
+   ("Invalid arguments for …: Field name $x starts with '$', which is reserved."); Convex's function refuses it
+   ("Uncaught Error: Field name $x starts with a '$', which is reserved.").
+7. A push creates the schema's new tables in declaration order on bunvex, in name order on Convex (table numbers
+   10001, 10002 differ for the same schema).
+
+**Notes for PR 6** (the app on the source): Convex's bulk edit (`patchDocumentsFields` without `ids`, every document of
+the table) has no contract method yet; the History screen words the other actions from their counts (`cancel_all_…`
+has no count on Convex).
 
 ## 6. Open questions
 

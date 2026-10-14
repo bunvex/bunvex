@@ -309,10 +309,14 @@ export function describeDeploymentContract({ make, test, watchTimeoutMs, opts }:
         () => heard++,
         () => {},
       );
+      // the screen's first page, read while watched, as the History screen does
+      await src.listAuditEvents({ numItems: 1, cursor: null });
       await src.insertDocuments(history.table, [{ label: "audited" }]);
       const [latest] = (await src.listAuditEvents({ numItems: 1, cursor: null })).page;
       expect(latest?.action).toBe("add_documents");
+      // Convex's metadata: the table and the new documents' ids (STUDY-149 PR 3)
       expect(latest?.metadata.table).toBe(history.table);
+      expect((latest?.metadata.document_ids as unknown[] | undefined)?.length).toBe(1);
       if (off) {
         const deadline = performance.now() + watchTimeoutMs;
         while (heard === 0 && performance.now() < deadline) await sleep(5);

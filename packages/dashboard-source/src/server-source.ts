@@ -33,6 +33,7 @@ import { LogStream, type LogStreamOptions } from "./logs.ts";
 import { Metrics } from "./metrics.ts";
 import { AdminSync, type ConnectionStatus, watchConnection } from "./sync.ts";
 import { Tables } from "./tables.ts";
+import { dataWrites } from "./writes.ts";
 
 export type ServerDataSourceOptions = {
   /** The deployment's URL, e.g. `http://127.0.0.1:3210`. */
@@ -106,6 +107,7 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
   const metrics = new Metrics(http);
   const tables = new Tables(sync, http);
   const deployment = deploymentReads(sync, http);
+  const writes = dataWrites(sync, http, tables);
   const statsIntervalMs = opts.statsIntervalMs ?? 2000;
 
   const getStats = async (o?: CallOptions): Promise<DeploymentStats> => {
@@ -247,6 +249,9 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     watchTable: (t, onChange, onError) => tables.watchTable(t, onChange, onError),
     inferDocumentType: (t, o) => tables.inferDocumentType(t, o),
     tableOfId: (id, o) => tables.tableOfId(id, o),
+
+    // ---------------------------------------------------------------- the Data screen's writes (PR 3, writes.ts)
+    ...writes,
 
     // ---------------------------------------------------------------- not yet (STUDY-149 PR 4)
     listFunctions: (o) => rejectNotYet("The function list", o),
