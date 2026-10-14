@@ -46,6 +46,7 @@ import type { DeploymentOp } from "./admin-keys.ts";
 import { auditActor, auditEvents } from "./audit-log.ts";
 import { readCanonicalUrls } from "./canonical-urls.ts";
 import { DATA_SYSTEM_QUERIES } from "./data-system-functions.ts";
+import { DATA_SYSTEM_MUTATIONS } from "./data-system-mutations.ts";
 import { FRONTEND_SYSTEM_QUERIES } from "./frontend-system-functions.ts";
 import type { Functions } from "./functions.ts";
 import { paginationOptsValidator } from "./pagination.ts";
@@ -551,8 +552,12 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
   },
 };
 
-/** Convex's file mutations for the dashboard (fileStorageV2), each with its audit-log event (STUDY-48). */
+/**
+ * Convex's mutations for the dashboard: the Data screen's (data-system-mutations.ts) and the files'
+ * (fileStorageV2), each with its audit-log event (STUDY-48).
+ */
 export const SYSTEM_MUTATIONS: Record<string, SystemMutation> = {
+  ...DATA_SYSTEM_MUTATIONS, // the Data screen's writes (STUDY-149 PR 3)
   "_system/frontend/fileStorageV2:deleteFile": {
     args: { storageId: v.id(STORAGE_TABLE), componentId },
     handler: async (db, { storageId }: { storageId: string }, { files, caller }) => {

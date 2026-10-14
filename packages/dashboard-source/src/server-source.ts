@@ -35,6 +35,7 @@ import { Metrics } from "./metrics.ts";
 import { Settings } from "./settings.ts";
 import { AdminSync, type ConnectionStatus, watchConnection } from "./sync.ts";
 import { Tables } from "./tables.ts";
+import { dataWrites } from "./writes.ts";
 
 export type ServerDataSourceOptions = {
   /** The deployment's URL, e.g. `http://127.0.0.1:3210`. */
@@ -101,6 +102,7 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
   const metrics = new Metrics(http);
   const tables = new Tables(sync, http);
   const deployment = deploymentReads(sync, http);
+  const writes = dataWrites(sync, http, tables);
   const statsIntervalMs = opts.statsIntervalMs ?? 2000;
   // a key's operations do not change: asked once (again after a failure)
   let caps: Promise<Capabilities> | null = null;
@@ -283,6 +285,9 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     confirmSnapshotImport: (id, o) => settings.confirmSnapshotImport(id, o),
     cancelSnapshotImport: (id, o) => settings.cancelSnapshotImport(id, o),
     getSnapshotImport: (id, o) => settings.getSnapshotImport(id, o),
+
+    // ---------------------------------------------------------------- the Data screen's writes (PR 3, writes.ts)
+    ...writes,
 
     // ---------------------------------------------------------------- the host's
     watchConnection: (onStatus) => watchConnection(() => sync.connectionState(), onStatus),

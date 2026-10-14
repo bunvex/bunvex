@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Dashboard } from "@bunvex/dashboard";
 import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { parseDocuments } from "../src/database/add-documents.tsx";
 import { expectAccessible } from "./axe.ts";
@@ -131,6 +131,32 @@ describe("adding, deleting, clearing", () => {
     await screen.findByText("Cleared messages: 3 documents deleted.");
     expect(await count(src, "messages")).toBe(0);
     await screen.findByText("No documents in messages yet.");
+  });
+
+  test("Delete table (Convex's /api/delete_tables): only once its name is typed; a declared table cannot", async () => {
+    const src = source();
+    await src.createTable("scratch");
+    await src.insertDocuments("scratch", [{ a: 1 }]);
+    const { history } = mount("/database/scratch", src);
+    await heading("scratch");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "More actions on scratch" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Delete table…" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete the table scratch?" });
+    const confirm = within(dialog).getByRole("button", { name: "Delete scratch" });
+    expect(confirm.hasAttribute("disabled")).toBe(true);
+    await user.type(within(dialog).getByRole("textbox", { name: /Type scratch to confirm/ }), "scratch");
+    await user.click(confirm);
+    await waitFor(() => expect(history.location.pathname).not.toBe("/database/scratch"));
+    expect((await src.listTables()).some((t) => t.name === "scratch")).toBe(false);
+    // a table the schema declares: the item is there, disabled, and says why
+    const declared = (await src.listTables()).find((t) => t.declared)!.name;
+    cleanup();
+    mount(`/database/${declared}`, src);
+    await heading(declared);
+    await user.click(screen.getByRole("button", { name: `More actions on ${declared}` }));
+    const item = await screen.findByRole("menuitem", { name: "Delete table (declared in the schema)" });
+    expect(item.getAttribute("aria-disabled") ?? item.getAttribute("data-disabled")).not.toBeNull();
   });
 
   test("read-only: no way to add, select, delete or clear", async () => {

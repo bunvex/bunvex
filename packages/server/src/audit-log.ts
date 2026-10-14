@@ -76,6 +76,11 @@ export const auditEvents = {
       message: o.message,
       node_version_diff: o.nodeVersionDiff ?? null,
     }),
+  /** The Data screen's writes (STUDY-149 PR 3), as Convex's system functions record them. */
+  addDocuments: (table: string, ids: string[]) => event("add_documents", { ...ROOT, table, document_ids: ids }),
+  updateDocuments: (table: string, ids: string[]) => event("update_documents", { ...ROOT, table, document_ids: ids }),
+  deleteDocuments: (table: string, ids: string[]) => event("delete_documents", { ...ROOT, table, document_ids: ids }),
+  createTable: (table: string) => event("create_table", { ...ROOT, table }),
   deleteFiles: (storageIds: string[]) => event("delete_files", { ...ROOT, storage_ids: storageIds }),
   generateUploadUrl: () => event("generate_upload_url", { ...ROOT }),
   /** Log streams (STUDY-59): the sink's id and type. */

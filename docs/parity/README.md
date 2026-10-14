@@ -8,7 +8,7 @@ item. It is the project's to-do list at the scale of the whole product.
 |---|---|--:|--:|--:|
 | Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 238 | 2 | 6 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 163 | 1 | 1 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 226 | 20 | 13 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 227 | 20 | 13 |
 
 Beyond Convex, [additions.md](additions.md) lists 29 additions: 26 built (11 of them dashboard screens on the
 mock, 3 more with their dashboard part on the mock), 2 accepted, 1 deferred, none proposed (2026-10-11, with AD-29).
@@ -132,7 +132,8 @@ In this order:
 12. the dashboard on a real deployment (its HTTP data source, with the UI session, and the `_system/*`
     functions it reads), then live logs — open: every screen is built on the mock; the server source,
     `@bunvex/dashboard-source`, is being built in steps (STUDY-149: PR 1 reads the deployment, schema, state,
-    logs and function metrics; PRs 2, 4 and 5 the data, functions, runner, Settings, schedules, files and history);
+    logs and function metrics; PRs 2–5 the data reads and writes, functions, runner, Settings, schedules, files and
+    history; PR 6, the app's switch to it, remains);
 13. built-in auth (STUDY-28) phases — open (AD-01 accepted, spike done);
 14. import/export in Convex's snapshot format, so data can move between Convex and bunvex (STUDY-42) —
     done; shape inference and the upgrade path remain (platform §18; cloud backups are cloud-only, *n/a*).
@@ -152,8 +153,8 @@ containers up, deploy functions, see them work) before the remaining platform it
 - streaming export (STUDY-60, STUDY-69) — done;
 - the dashboard's connection to a real deployment. Every screen is built on the mock (UI-01 §0, platform §21);
   the server source (`@bunvex/dashboard-source`, STUDY-149) reads the deployment, schema, state, logs, metrics,
-  tables and documents, functions (and runs them), Settings, schedules, files and history so far; the data writes
-  and the app's switch to it are still to come.
+  tables and documents, its writes, functions (and runs them), Settings, schedules, files and history; the app's
+  switch to it (PR 6) is still to come.
 
 ## Gaps by impact
 
@@ -188,14 +189,13 @@ gaps.
     backend; `push_config` (legacy push) and `delete_component` (components) do not apply.
 - The dashboard on a real deployment:
   - the largest single piece of work, but not something an app hits;
-  - the server side of most screens exists (STUDY-149 lists the `_system/frontend` functions still to add);
-  - the data source that calls it, `@bunvex/dashboard-source`, has its first parts (STUDY-149 PR 1: the
+  - the server side of the screens Convex's self-hosted dashboard reads exists (STUDY-149 §3.1);
+  - the data source that calls it, `@bunvex/dashboard-source`, is built but for the app's switch (STUDY-149 PR 1: the
     deployment, schema, state, logs, function metrics and the `check_admin_key` sign-in; PR 2: the Data
     screen's reads, with the server's `getTableMapping`, `paginatedTableDocuments`, `indexes`, `listById`,
     `getById` and `/api/get_indexes`; PR 5: schedules, files, the audit log, Health's concurrency and
-    invalidations; PR 4: the Functions screen, the runner with its custom test query and Settings, with the
-    server's `modules:*`, `components:list`, `getVersion`, `cloudUrl` / `siteUrl`, `listEnvironmentVariables`,
-    `latestExport` and `snapshotImport:list`); the rest is PRs 3 and 6;
-  - its data mutations (`_system/frontend` `addDocument`, `patchDocumentsFields`, `deleteDocuments`,
-    `createTable`, …) bring the `add_documents`, `update_documents`, `delete_documents` and `create_table`
-    audit events.
+    invalidations; PR 3: the Data screen's writes, with the server's `addDocument`, `patchDocumentsFields`,
+    `replaceDocument`, `deleteDocuments`, `clearTablePage` and `createTable` and their `add_documents`,
+    `update_documents`, `delete_documents` and `create_table` audit events; PR 4: the Functions screen, the runner
+    with its custom test query and Settings, with the server's `modules:*`, `components:list`, `getVersion`,
+    `cloudUrl` / `siteUrl`, `listEnvironmentVariables`, `latestExport` and `snapshotImport:list`); the rest is PR 6.
