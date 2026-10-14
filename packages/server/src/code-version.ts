@@ -30,6 +30,7 @@ import { checkRouter, HttpRouter } from "./router.ts";
 import { byPosition, SourceMapTokens, type SourcePosition } from "./source-position.ts";
 import { moduleUrl, registerModules } from "./stack-map.ts";
 import { SpecBlob, SpecFile } from "./web-blob.ts";
+import { SpecResponse } from "./web-response.ts";
 
 const FRAME_MAPS = Symbol("bunvex.frameMaps");
 
@@ -254,6 +255,8 @@ function contextGlobals(node: boolean, env: Record<string, string>, onMissingEnv
   // The File API's `type`, not Bun's MIME table's (DV-441).
   out.Blob = SpecBlob;
   out.File = SpecFile;
+  // A Response's headers as Convex's runtime gives them (STUDY-31 §8); a "use node" action keeps the host's.
+  if (!node) out.Response = SpecResponse;
   // The deployment's variables (STUDY-37): the execution's, else the load's.
   out.process = { env: isolateProcessEnv({ ...env }, onMissingEnv) };
   if (node) {
