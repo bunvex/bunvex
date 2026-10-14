@@ -1,7 +1,7 @@
 # STUDY-31 — HTTP actions (`httpRouter`, `httpAction`)
 
 - **Status:** accepted: H1–H5 as recommended (owner, 2026-10-01)
-- **Convex source read:** commit `4577b9031` of get-convex/convex-backend; §7–§9 at `d8bdde0`
+- **Convex source read:** commit `4577b9031` of get-convex/convex-backend; §7–§10 at `d8bdde0`
 - **Related:** server-api.md §16, platform.md §8; STUDY-30 S1 (registration at start); STUDY-27 (auth); STUDY-20
   (errors, redaction). HTTP actions come before file storage in the roadmap (owner, 2026-10-01); built-in
   auth (STUDY-28) needs them for OAuth callbacks, email links and JWKS.
@@ -423,7 +423,8 @@ DV-324 already records for downloads.
 ### 8.6 Found on the way
 
 Not built here (left to their own change, as in §7.3): a handler's non-Response is logged with no error (since §9, as
-Convex's); a body that errors after the head aborts the response where Convex ends it cleanly. A body sent whole (§8.3) can no longer fail
+Convex's); a body that errors after the head aborts the response where Convex ends it cleanly (since §10, as
+Convex's). A body sent whole (§8.3) can no longer fail
 after the head.
 
 ## 9. A handler's non-Response (follow-up, 2026-10-14)
@@ -477,3 +478,86 @@ show).
 - Sabotage (each restored, `git diff` clean after): the value resolved again, the server answering the 500 (unit and
   oracle fail); another message (unit and oracle fail); a `TypeError` (unit and oracle fail); a Response-like object
   accepted (unit and oracle fail).
+
+## 10. A body that fails (follow-up, 2026-10-14)
+
+Found by §7 (#639): a streamed body that failed after the head aborted the response on bunvex, where Convex ends it
+cleanly. Read at Convex's reference commit `d8bdde0`, and checked against its binary (`precompiled-2026-10-07-d8bdde0`).
+Since §8 only a stream can fail: a body of known length is sent whole.
+
+### 10.1 How Convex handles it
+
+- **A body's error is uncaught in the isolate.** The runtime reads the response's stream into Rust as soon as the
+  handler returns it (`convexJsonFromResponse`, `23_response.ts` L270-288, `constructStreamId`). A stream that errors
+  rejects a promise nothing handles, and the run loop (`crates/isolate/src/environment/action/mod.rs` `run_inner`,
+  L1059-1088) terminates the isolate on the first unhandled rejection it finds, with the error's traceback
+  (`Uncaught <Name>: <message>` and its frames; `Uncaught <value>` for one that is no Error).
+- **Before the head or after decides the outcome** (`run_http_action`, L398-414): the loop drains the microtask
+  queue, looks for unhandled rejections, and only then, once JS is blocked, polls the result stream that sends the
+  head (L1062-1088, L1123-1131, the `select_biased!` from L1164).
+  - *In the handler's turn* (the stream's start errors it, or its first pull throws before it awaits anything
+    outside the isolate): the head has not gone, so the run fails with the error: `HttpActionResult::Error`, the 500
+    JSON with it, and a Completion with it under the request's name, not measured (§7.1). A chunk enqueued before
+    the error is not sent.
+  - *After the head*: `handle_http_streamed_part(Err(e))` (L661-667) adds an `ERROR` line of the error with the
+    `error:httpAction` system code; the run ends there and is logged as streamed, with the head's status, under the
+    request's name. The response streamer is dropped with the isolate, so the client gets the chunks sent so far and
+    a clean end (hyper's chunked terminator).
+
+Seen on the binary (the oracle below): a start that enqueues a chunk and errors (`Uncaught Error: body boom`), a
+first pull that throws at once or after five awaits, and a string (`Uncaught a string`) all answer the 500 with that
+error; two chunks a timer apart and then an Error, a string, or a start that errors two timers in, answer 200 with the
+two chunks and a clean end, with `[ERROR] Uncaught TypeError: late body boom` and its frame (`Uncaught a late string`
+for the string) as a Progress line, and a Completion with status 200 and no error.
+
+### 10.2 What bunvex did
+
+`meteredBody` (`http-body.ts`) passed the error on to Bun's stream (`controller.error`), and Bun reset the
+connection: the client lost the chunks it had not read, and `fetch` failed ("The socket connection was closed
+unexpectedly"). The run got an `error:httpAction` line of the error's message alone (`[ERROR] Error: body boom`),
+whenever the body failed, so a stream that failed in the handler's turn was logged as a success.
+
+### 10.3 What bunvex does now
+
+- **After the head**, `meteredBody` closes Bun's stream instead: the client gets what was sent and a clean end. The
+  line is Convex's: the error as an uncaught one (`describeUncaught`: `Uncaught TypeError: late body boom` and the
+  app's frames, `Uncaught a late string`). The run is logged with the head's status, under the request's name (§7.2).
+- **In the handler's turn**, `runHttpAction` looks at a stream (only a stream, not the untyped bytes §8 streams) for
+  an error before it returns the response: `failedEarly` lets 32 microtask turns pass, watching the reader's `closed`
+  promise. An error there fails the run as a throw: the 500, the Completion with the error, not measured.
+- **The turn**: Convex drains the microtask queue; Bun has no way to know the queue is empty short of a macrotask.
+  Waiting for `setImmediate` costs a streamed response ~45 % of its requests per second (below), so bunvex counts
+  turns: a start that errors needs one, a pull that throws after `k` awaits `k + 3`, so up to ~29 awaits are caught.
+  A pull that throws after more microtask-only awaits ends the response cleanly with the line where Convex answers
+  the 500; and work that is a syscall in Convex but settles in microtasks in bunvex can fall inside the turn here
+  and not there. This is DV-485.
+
+The hot path (16 concurrent clients in a separate process, 4000 requests per round, three rounds, on the shared Mac;
+req/s, a one-chunk stream): before 19.3k–21.4k; with the 32 turns 20.5k–21.5k (no change beyond the noise); with
+`setImmediate` instead 11.4k–12.2k.
+
+### 10.4 Divergences
+
+| # | Divergence | Why | Decision |
+|---|---|---|---|
+| DV-485 | When a streamed body's error counts as before the head. Convex: any error before JS blocks on something outside the isolate (the microtask queue drained). bunvex: an error within 32 microtask turns of the handler's return | Bun cannot see the microtask queue drained without a macrotask, and a macrotask (`setImmediate`) per streamed response costs ~45 % of its requests per second. Options: (a) 32 microtask turns (built); (b) `setImmediate`, exact for microtask-only work, at that cost; (c) no check, every body error ends the response cleanly with the line (Convex's 500 lost) | pending (owner); recommended: accept, with (a) |
+
+### 10.5 Tests
+
+- `packages/server/test/http-action-response-log.test.ts`: a body that fails after the head (two chunks, then an
+  Error; a chunk, then a string) ends cleanly with what was sent (`arrayBuffer` resolves), the run logged with status
+  200 and no error, and one `error:httpAction` line each, Convex's text with the app's frame; a body that fails in
+  the handler's turn (a start that errors, a pull that throws at once or after five awaits) answers the 500 with the
+  error, its Completion carries it, and no line is added.
+- `packages/differential/test/http-body-error.test.ts` (the app of `http-body-errors-app/`): eight streams on Convex's
+  binary and bunvex's, read off a raw socket: the status, the body, a clean end, the 500's `code` and `trace` line,
+  every log entry (name, the first line of each line, status, error line) and the route's app metrics compared.
+- Sabotage (each restored, `git diff` clean after): the stream errored again, not closed (unit and oracle fail); no
+  check in the handler's turn (unit and oracle fail); the line as the error's message alone (unit and oracle fail);
+  one microtask turn instead of 32 (unit and oracle fail); waiting 50 ms instead of the turn (unit and oracle fail).
+
+### 10.6 Found on the way
+
+A chunk that is not bytes (a string enqueued in the stream) is sent as text by Bun; Convex's runtime fails the body
+with `Uncaught Error: serde_v8 error: invalid type; expected: buffer, got: string` (the 500 in the handler's turn).
+Left as a gap.

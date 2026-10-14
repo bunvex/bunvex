@@ -460,7 +460,9 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-None as of 2026-10-14.
+| ID | bunvex | Convex | Observable | Why | Status | Source |
+|---|---|---|---|---|---|---|
+| DV-485 | A streamed HTTP action body that fails within 32 microtask turns of the handler's return fails the run (the 500); one that fails later ends the response cleanly with an `error:httpAction` line | an error before the isolate blocks on anything outside it (its microtask queue drained) fails the run; one after the head ends the response cleanly with the line (`action/mod.rs` `run_inner`, `run_http_action`) | yes, rarely: a stream that fails after more than ~29 microtask-only awaits (Convex: the 500; bunvex: the clean end), or after work that settles in microtasks in bunvex but is a syscall in Convex | Bun cannot see the microtask queue drained short of a macrotask, and `setImmediate` per streamed response costs ~45 % of its requests per second. Options: (a) 32 microtask turns (built), (b) `setImmediate`, (c) no check (every body error a clean end) | pending (owner); recommended: accept, with (a) | [STUDY-31 §10.4](../study/STUDY-31-http-actions.md#104-divergences) |
 
 DV-483 (STUDY-31 §8) was decided by the owner (2026-10-14: accept, option (a): untyped bytes stay streamed with no content-type) and is in [Decided divergences](#decided-divergences).
 

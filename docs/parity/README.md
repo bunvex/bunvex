@@ -209,6 +209,5 @@ gaps.
     `/api/current_deployment` and its `Host` check, `bunvex dashboard serve`, `bunvex dashboard` opening it); left:
     the CLI's links (PR 8), the dashboard server's frame and security headers (owner, 2026-10-14: match Convex in a
     follow-up), plus the custom query's type checking and Convex's bulk edit.
-- HTTP actions, found while matching their log name to Convex's (STUDY-31 §7.3; the log name itself is done, a
-  response's implicit headers since STUDY-31 §8, a handler's non-Response since §9): a body that errors after the
-  head aborts the response, where Convex ends it cleanly.
+- HTTP actions (STUDY-31 §10.6): a response stream's chunk that is not bytes (a string) is sent as text, where
+  Convex fails the body (`serde_v8 … expected: buffer`).
