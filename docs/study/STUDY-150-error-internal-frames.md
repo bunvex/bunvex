@@ -1,6 +1,6 @@
 # STUDY-150 — No server frame or path in what an app sees of an error
 
-- **Status:** implemented; DV-482 pending (owner)
+- **Status:** implemented; DV-482 accepted (owner, 2026-10-14)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend; oracle binary
   `precompiled-2026-10-07-d8bdde0`
 - **Related:** [STUDY-95](STUDY-95-error-stacks.md) (the app's frames, mapped; this closes its "Gap, for later"),
@@ -147,7 +147,7 @@ A first version, which awaited the server's promise directly, cost +8% to +11%.
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| DV-482 | A `"use node"` action's `error.stack` is `Error: <message>`, then the app's frames **mapped to its sources** (`../bunvex/n.ts:12:5`), with none of the runtime's. Convex's is `Error: <message>`, then every frame **unmapped** (`convex:/user/node.js:1036:11`), its executor's included (`performAsyncSyscall`, `bundledFunctions.js`, `node:internal/…`) | bunvex's runtime is the server: its frames would expose the server's paths (as DV-501). Showing unmapped bundle positions (`bunvex:/user/n.js:L:C`) is possible but would show positions nobody can read; Convex maps the uncaught error but not `e.stack` only because its executor cannot | **pending (owner)**; recommended: accept |
+| DV-482 | A `"use node"` action's `error.stack` is `Error: <message>`, then the app's frames **mapped to its sources** (`../bunvex/n.ts:12:5`), with none of the runtime's. Convex's is `Error: <message>`, then every frame **unmapped** (`convex:/user/node.js:1036:11`), its executor's included (`performAsyncSyscall`, `bundledFunctions.js`, `node:internal/…`) | bunvex's runtime is the server: its frames would expose the server's paths (as DV-501). Showing unmapped bundle positions (`bunvex:/user/n.js:L:C`) is possible but would show positions nobody can read; Convex maps the uncaught error but not `e.stack` only because its executor cannot | **accepted** (owner, 2026-10-14) |
 
 Not divergences:
 
@@ -201,7 +201,7 @@ Not divergences:
 
 ## 6. Open questions
 
-- **DV-482** (above), for the owner.
+- **DV-482** (above): accepted by the owner, 2026-10-14.
 - **Found, not changed here.** These are not leaks; they are message and frame differences of their own.
   - A bad id fails before `db.get` awaits on bunvex (synchronous frames). Convex parses it in its async syscall
     (`at async`).
