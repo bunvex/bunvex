@@ -1497,17 +1497,21 @@ Packaging. Convex's side re-read for it (`cli/` is `npm-packages/convex/src/cli/
   `--local-backend-version`'s, else the latest release's; `~/.cache/bunvex/dashboard/{config.json,out/}`, unzipped
   into a temporary directory and renamed into place (an entry outside it fails the whole archive); the first free
   port from 6790 (the deployment's two ports avoided), saved as `.bunvex/local/default/dashboard.json`
-  (`{ port }`); stopped with `dev`. As Convex's, a dashboard that cannot be had (no latest version, a missing
-  `dashboard.zip`) ends `dev` with the reason.
+  (`{ port }`); stopped with `dev`. Where Convex's `dev` crashes, a version that cannot be resolved or downloaded
+  (offline, the release service failing, no `dashboard.zip` in the release) is a warning (DV-486): the dashboard
+  already in the cache is served (a failed download leaves the cache as it was), or, with none, `dev` runs without
+  a dashboard and `dashboard.json` holds `{ unavailable: <why> }` until `dev` stops. A dashboard that cannot be
+  served (no free port) still stops `dev`, as Convex's.
 - **`bunvex dashboard`** (`dashboard.ts`): for a local deployment, Convex's behaviour above, with `--no-open`, the
-  opening line and the headless warning; `bunvex dashboard serve` is its subcommand (its usage lists it).
+  opening line and the headless warning; while `dev` runs without the dashboard, "`bunvex dev` is running without
+  the local dashboard: it could not be downloaded (<why>). Restart `bunvex dev` once it can be." (DV-486).
+  `bunvex dashboard serve` is its subcommand (its usage lists it; AD-40).
 
 **Not built here** (gaps, "Ainda não fizemos", none a divergence):
 
 - The image's frame and security headers (Convex's `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'`,
-  `Strict-Transport-Security`, `Referrer-Policy`, …). bunvex's dashboard can be embedded by allowed origins
-  (DV-319), which `frame-ancestors 'self'` would block; the headers want that list. Left for a follow-up with the
-  owner (question below).
+  `Strict-Transport-Security`, `Referrer-Policy`, …): owner, 2026-10-14: match Convex in a follow-up (with the
+  embedding allow-list, DV-319, in `frame-ancestors`).
 - Convex's telemetry event on the first request (`self_host_dashboard_connected`): bunvex reports nothing.
 - `NEXT_PUBLIC_DEFAULT_LIST_DEPLOYMENTS_API_PORT` and the legacy deployment list (`?a=<port>&d=<name>`): kept by
   Convex for old CLIs, not built (CLAUDE.md: nothing kept only for older clients).
@@ -1516,20 +1520,19 @@ Packaging. Convex's side re-read for it (`cli/` is `npm-packages/convex/src/cli/
 
 **Found on the way.**
 
-1. *Matched, worth a look*: Convex's `dev` crashes when the local dashboard cannot be had, even when the backend runs
-   from an already-downloaded version because the latest could not be found (offline). bunvex now does the same, so
-   an offline `bunvex dev` on a local deployment, which ran before this PR (with the cached backend), stops at the
-   dashboard. Question below.
+1. *Decided (DV-486)*: Convex's `dev` crashes when the local dashboard cannot be had, even when the backend runs
+   from an already-downloaded version because the latest could not be found (offline). Matching it would have
+   stopped an offline `bunvex dev`, which ran before this PR; the owner chose a warning instead.
 2. *Test pitfall*: `bun test` sets `NODE_ENV=test`, and a Vite build started from a test inherits it and makes a
    development build (React's StrictMode then runs effects twice: two `/api/current_deployment` requests). The
    browser test and `build-dashboard.ts` set `NODE_ENV=production`.
 
-**Divergences.** None new (DV-486 to DV-489 unused). DV-475 and DV-476 are built as decided; DV-475's row now names the
+**Divergences and additions.** One new divergence, DV-486 (owner, 2026-10-14: warn and keep going; above);
+DV-487 to DV-489 unused. One addition, AD-40, `bunvex dashboard serve` (owner, 2026-10-14; planned in §3.3). DV-475 and DV-476 are built as decided; DV-475's row now names the
 image's variables (`BUNVEX_DEPLOYMENT_URL` / `BUNVEX_ADMIN_KEY` for Convex's `NEXT_PUBLIC_*`, which name a Next.js
 mechanism a static app does not have; the naming of the plan's §3.3, which the owner approved). DV-476's check also requires the server's own port and a loopback listening
 address (on any other address `/api/current_deployment` is never offered: a LAN client could send any `Host`).
-DV-189, DV-194 and DV-202 are closed (resolved to match Convex). `bunvex dashboard serve` is a CLI command Convex
-lacks, part of the plan the owner approved (§3.3, "internal"); it is the image's command and has no AD number yet.
+DV-189, DV-194 and DV-202 are closed (resolved to match Convex).
 
 **Tests.**
 
@@ -1544,7 +1547,11 @@ lacks, part of the plan the owner approved (§3.3, "internal"); it is the image'
   on a local deployment (the backend a shim of the real executable) serves the release's app from 6790, saves the
   port, hands out the deployment's real key (checked against `check_admin_key`), refuses a foreign `Host`;
   `bunvex dashboard --no-open` prints the URL, without `--no-open` opens it, a failing browser gets Convex's
-  warning, another deployment's name and a stopped `dev` get Convex's warning; `--once` serves none.
+  warning, another deployment's name and a stopped `dev` get Convex's warning; `--once` serves none. DV-486:
+  offline (nothing listening at the release URL) with a dashboard in the cache, it is served with the warnings and
+  `bunvex dashboard` opens it; offline with none, `dev` pushes and runs without one, `bunvex dashboard` says why and,
+  once `dev` stops, gives Convex's warning; the latest version not resolved (a 500) and a release without
+  `dashboard.zip` (the cached one served, the cache left as it was).
 - **The app** (`apps/dashboard/test/prefill.test.ts`): the server's `<meta>` tags over the build's values; unset ones.
 - **In Chromium** (`packages/sync-e2e/dashboard/local-dashboard.e2e.ts`, in `bun run e2e`): the app built as
   `dashboard.zip` is, served by the real `bunvex dashboard serve` in a project whose local deployment is a live
@@ -1578,19 +1585,16 @@ lacks, part of the plan the owner approved (§3.3, "internal"); it is the image'
 | the archive's path guard removed | CLI 1 |
 | `bunvex dashboard` opens without checking the deployment's name | CLI 1 |
 | the dashboard's port not saved | CLI 1 |
+| DV-486: `dev` stops when the dashboard cannot be had (Convex's) | CLI 3 |
+| DV-486: the cached dashboard never used | CLI 2 |
+| DV-486: no `unavailable` note saved | CLI 2 |
+| DV-486: the note left after `dev` stops | CLI 1 |
+| DV-486: `bunvex dashboard` ignores the note | CLI 1 |
+| DV-486: a failed download empties the cache | CLI 1 |
 
-**Questions for the owner** (no divergence was built; each would be one):
-
-- *The image's frame headers.* Convex: `X-Frame-Options: SAMEORIGIN` and `frame-ancestors 'self'` (others with
-  `EMBEDDED_CORS_HEADERS`). bunvex: none yet. Same? No (a gap). Why: "Ainda não fizemos" — bunvex's embedding
-  allow-list (DV-319) needs `frame-ancestors` to list those origins. App impact: none (operators: whether another
-  site can frame the dashboard). Recommendation: send `frame-ancestors 'self' <the allowed origins>` and Convex's
-  other headers from `bunvex dashboard serve`, in a follow-up.
-- *Offline `dev` on a local deployment.* Convex: `dev` crashes when the dashboard's version cannot be found or
-  downloaded, even when the backend runs from a cached version. bunvex: the same, since this PR. Same? Yes. Why it
-  could differ: "Ainda não fizemos" — `dev` could warn and go on without the dashboard (or serve a cached one).
-  App impact: none (developers offline lose `dev` until online). Recommendation: diverge — warn and continue, serving
-  the cached dashboard when there is one (a new DV, if the owner agrees).
+**Owner decisions (2026-10-14)** on the questions this PR raised: offline `dev` diverges (DV-486, built here);
+`bunvex dashboard serve` is an addition (AD-40); the image's frame and security headers match Convex in a follow-up
+PR (a gap above).
 
 **Measurements.** No hot path changes (the backend is untouched). The dashboard image is 131.6 MB (arm64, built
 locally; the backend's is 198.0 MB); `dashboard.zip` is 4.07 MB (145 files, 16.0 MB unpacked). The app's entry

@@ -9,7 +9,7 @@ import { openInBrowser } from "./browser.ts";
 import { dashboardServeCommand } from "./dashboard-serve.ts";
 import { parseNoArguments } from "./docs.ts";
 import type { Io } from "./io.ts";
-import { isLocalDashboardRunning, localDashboardUrl } from "./local-dashboard.ts";
+import { isLocalDashboardRunning, localDashboardUrl, readDashboardUnavailable } from "./local-dashboard.ts";
 import { configuredDeployment } from "./local-deployment.ts";
 import { NO_DEPLOYMENT, resolveTarget, TARGET_OPTIONS, takeTargetFlags } from "./target.ts";
 
@@ -49,6 +49,14 @@ export async function dashboardCommand(args: string[], io: Io, opts: { signal?: 
     }
     const configured = configuredDeployment(io, taken.flags);
     if (configured?.type === "local") {
+      // `dev` running without the dashboard, which it could not download (DV-486)
+      const unavailable = readDashboardUnavailable(io.cwd);
+      if (unavailable !== null) {
+        io.err(
+          `\`bunvex dev\` is running without the local dashboard: it could not be downloaded (${unavailable}). Restart \`bunvex dev\` once it can be.`,
+        );
+        return 0;
+      }
       const url = localDashboardUrl(io.cwd);
       if (url === null || !(await isLocalDashboardRunning(url, configured.name))) {
         io.err("You are not currently running the dashboard locally. Make sure `bunvex dev` is running and try again.");

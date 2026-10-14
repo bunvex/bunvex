@@ -11,7 +11,7 @@ import { dashboardCommand } from "../src/dashboard.ts";
 import { withPrefill } from "../src/dashboard-server.ts";
 import { devCommand } from "../src/dev.ts";
 import type { Io } from "../src/index.ts";
-import { extractZip, readDashboardPort } from "../src/local-dashboard.ts";
+import { extractZip, readDashboardPort, readDashboardUnavailable } from "../src/local-dashboard.ts";
 import { EXE, forgetLatestVersion, stateDir } from "../src/local-deployment.ts";
 
 const ENTRY = resolve(import.meta.dir, "../../bunvex/bin/local-backend.ts");
@@ -435,5 +435,120 @@ describe("bunvex dev's local dashboard, and bunvex dashboard", () => {
     const once = io(dir, env);
     expect(await devCommand(["--typecheck=disable", "--once"], once.it)).toBe(0);
     expect(existsSync(join(stateDir(dir), "dashboard.json"))).toBe(false);
+  }, 60_000);
+});
+
+describe("the local dashboard when its version cannot be had (DV-486: a warning, not Convex's stop)", () => {
+  /** A project with one function, and `bunvex dev` on its local deployment until the first push is ready. */
+  async function startDev(env: Record<string, string>) {
+    const dir = tmp();
+    mkdirSync(join(dir, "bunvex"));
+    writeFileSync(
+      join(dir, "bunvex/items.ts"),
+      `import { query } from ${JSON.stringify(SERVER)};\nexport const all = query(async () => []);`,
+    );
+    const full = { BUNVEX_LOCAL_BACKEND_BINARY: shim(tmp()), BUNVEX_DISABLE_VERSION_CHECK: "1", ...env };
+    const r = io(dir, full);
+    const stop = new AbortController();
+    const done = devCommand(["--typecheck=disable", "--local-cloud-port", String(freePort())], r.it, {
+      signal: stop.signal,
+    });
+    let stopped = false;
+    const end = async () => {
+      if (stopped) return;
+      stopped = true;
+      stop.abort();
+      return await done;
+    };
+    stops.push(end);
+    for (let i = 0; i < 600 && !r.err.some((l) => l.includes("bunvex functions ready!")); i++) {
+      if (Bun.peek.status(done) === "fulfilled") throw new Error(r.err.join("\n"));
+      await Bun.sleep(50);
+    }
+    return { dir, env: full, r, end };
+  }
+
+  /** A dashboard already in the cache of `home`, as an earlier `dev` left it. */
+  function cached(home: string, version: string) {
+    const dir = join(home, ".cache/bunvex/dashboard");
+    built(join(dir, "out"));
+    writeFileSync(join(dir, "out/version.txt"), version);
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ version }));
+  }
+
+  /** A releases URL where nothing listens: offline. */
+  const closedPort = () => `http://127.0.0.1:${freePort()}`;
+
+  test("offline, a dashboard in the cache: dev warns and serves it", async () => {
+    const home = tmp();
+    cached(home, "precompiled-2026-10-01-aaaaaaa");
+    const dev = await startDev({ HOME: home, BUNVEX_RELEASES_URL: closedPort() });
+    expect(dev.r.err).toContain("⚠️ Could not get the bunvex dashboard: Failed to fetch latest backend version");
+    expect(dev.r.err).toContain("Serving the dashboard already downloaded (precompiled-2026-10-01-aaaaaaa).");
+    const port = readDashboardPort(dev.dir);
+    expect(port).toBeGreaterThanOrEqual(6790);
+    expect(await (await fetch(`http://127.0.0.1:${port}/version.txt`)).text()).toBe("precompiled-2026-10-01-aaaaaaa");
+    const open = io(dev.dir, dev.env);
+    expect(await dashboardCommand(["--no-open"], open.it)).toBe(0);
+    expect(open.out).toEqual([`http://127.0.0.1:${port}/`]);
+    expect(await dev.end()).toBe(0);
+  }, 60_000);
+
+  test("offline, nothing in the cache: dev runs without a dashboard; bunvex dashboard says why", async () => {
+    const dev = await startDev({ HOME: tmp(), BUNVEX_RELEASES_URL: closedPort() });
+    expect(dev.r.err).toContain("⚠️ Could not get the bunvex dashboard: Failed to fetch latest backend version");
+    expect(dev.r.err).toContain(
+      "Running without the local dashboard; `bunvex dev` serves it once it can be downloaded.",
+    );
+    expect(readDashboardPort(dev.dir)).toBeNull();
+    const ask = io(dev.dir, dev.env);
+    expect(await dashboardCommand(["--no-open"], ask.it)).toBe(0);
+    expect(ask.out).toEqual([]);
+    expect(ask.err).toEqual([
+      "`bunvex dev` is running without the local dashboard: it could not be downloaded (Failed to fetch latest backend version). Restart `bunvex dev` once it can be.",
+    ]);
+    // dev still works: it pushed, and stops cleanly; then `bunvex dashboard` says dev is not running
+    expect(await dev.end()).toBe(0);
+    const after = io(dev.dir, dev.env);
+    expect(await dashboardCommand(["--no-open"], after.it)).toBe(0);
+    expect(after.err).toEqual([
+      "You are not currently running the dashboard locally. Make sure `bunvex dev` is running and try again.",
+    ]);
+  }, 60_000);
+
+  test("the latest version not resolved, or its dashboard.zip missing: the same fallbacks", async () => {
+    let latest = (): Response => new Response("Internal Server Error", { status: 500 });
+    const releases = Bun.serve({
+      port: 0,
+      fetch(req) {
+        return new URL(req.url).pathname === "/releases/latest" ? latest() : new Response("no", { status: 404 });
+      },
+    });
+    stops.push(() => releases.stop(true));
+    const base = `http://127.0.0.1:${releases.port}`;
+    const unresolved = await startDev({ HOME: tmp(), BUNVEX_RELEASES_URL: base });
+    expect(unresolved.r.err).toContain(
+      `⚠️ Could not get the bunvex dashboard: 127.0.0.1:${releases.port} returned 500: Internal Server Error`,
+    );
+    expect(readDashboardUnavailable(unresolved.dir)).toBe(
+      `127.0.0.1:${releases.port} returned 500: Internal Server Error`,
+    );
+    await unresolved.end();
+    // resolved, but the release has no dashboard.zip: the cached one
+    forgetLatestVersion();
+    latest = () => Response.json({ tag_name: "precompiled-2026-10-04-ddddddd" });
+    const home = tmp();
+    cached(home, "precompiled-2026-10-01-aaaaaaa");
+    const missing = await startDev({ HOME: home, BUNVEX_RELEASES_URL: base });
+    expect(missing.r.err).toContain(
+      `⚠️ Could not get the bunvex dashboard: File not found at ${base}/releases/download/precompiled-2026-10-04-ddddddd/dashboard.zip.`,
+    );
+    const port = readDashboardPort(missing.dir);
+    expect(await (await fetch(`http://127.0.0.1:${port}/version.txt`)).text()).toBe("precompiled-2026-10-01-aaaaaaa");
+    // the failed download left the cache as it was
+    expect(JSON.parse(readFileSync(join(home, ".cache/bunvex/dashboard/config.json"), "utf8")).version).toBe(
+      "precompiled-2026-10-01-aaaaaaa",
+    );
+    await missing.end();
   }, 60_000);
 });

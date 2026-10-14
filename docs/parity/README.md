@@ -207,4 +207,5 @@ gaps.
     table list, HTTP actions, Health's concurrency and invalidations, the paused lists; PR 7: packaging — the
     dashboard's own image on 6791, `dashboard.zip` in releases, `bunvex dev`'s local dashboard on 6790 with
     `/api/current_deployment` and its `Host` check, `bunvex dashboard serve`, `bunvex dashboard` opening it); left:
-    the CLI's links (PR 8), plus the custom query's type checking and Convex's bulk edit.
+    the CLI's links (PR 8), the dashboard server's frame and security headers (owner, 2026-10-14: match Convex in a
+    follow-up), plus the custom query's type checking and Convex's bulk edit.

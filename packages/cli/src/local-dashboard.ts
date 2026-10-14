@@ -8,6 +8,9 @@
 // - it is served on the first free port from 6790, saved per deployment in `.bunvex/local/default/dashboard.json`
 //   (`{ port }`, Convex's `ProjectDashboardConfig`), with `/api/current_deployment` naming the deployment
 //   (dashboard-server.ts, with its `Host` check, DV-476);
+// - unlike Convex, which stops `dev` when the dashboard cannot be had, a version that cannot be resolved or
+//   downloaded (offline) is a warning: the dashboard already in the cache is served, or with none `dev` runs
+//   without one and `dashboard.json` says why (DV-486);
 // - `bunvex dashboard` opens `http://127.0.0.1:<saved port>/` once its `/api/current_deployment` names the
 //   project's deployment (Convex's `isAnonymousDashboardRunning`).
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -35,9 +38,19 @@ export function readDashboardPort(cwd: string): number | null {
   }
 }
 
-function saveDashboardPort(cwd: string, port: number) {
+function saveDashboardConfig(cwd: string, config: { port: number } | { unavailable: string }) {
   mkdirSync(stateDir(cwd), { recursive: true });
-  writeFileSync(projectConfigPath(cwd), JSON.stringify({ port }));
+  writeFileSync(projectConfigPath(cwd), JSON.stringify(config));
+}
+
+/** Why `dev` runs without the local dashboard (DV-486), when it does. */
+export function readDashboardUnavailable(cwd: string): string | null {
+  try {
+    const why = (JSON.parse(readFileSync(projectConfigPath(cwd), "utf8")) as { unavailable?: unknown }).unavailable;
+    return typeof why === "string" ? why : null;
+  } catch {
+    return null;
+  }
 }
 
 function cachedVersion(env: Io["env"]): string | null {
@@ -102,18 +115,33 @@ export async function dashboardVersion(io: Io, requested: string | undefined): P
 
 /**
  * `dev`'s local dashboard (Convex's `handleDashboard`): the app downloaded if needed, served on the first free
- * port from 6790 for `deployment`, the port saved for `bunvex dashboard`.
+ * port from 6790 for `deployment`, the port saved for `bunvex dashboard`. When the app's version cannot be
+ * resolved or downloaded, the cached app is served, or none (`server` null) — a warning either way (DV-486).
  */
 export async function startLocalDashboard(
   io: Io,
   deployment: CurrentDeployment,
   opts: { backendVersion?: string; avoid?: number[] } = {},
-): Promise<DashboardServer> {
-  const dir = await ensureDashboardDownloaded(io, await dashboardVersion(io, opts.backendVersion));
+): Promise<{ server: DashboardServer | null; stop: () => Promise<void> }> {
+  let dir: string;
+  try {
+    dir = await ensureDashboardDownloaded(io, await dashboardVersion(io, opts.backendVersion));
+  } catch (e) {
+    const why = (e as Error).message;
+    const cached = cachedVersion(io.env);
+    io.err(`⚠️ Could not get the bunvex dashboard: ${why}`);
+    if (cached === null) {
+      io.err("Running without the local dashboard; `bunvex dev` serves it once it can be downloaded.");
+      saveDashboardConfig(io.cwd, { unavailable: why });
+      return { server: null, stop: async () => rmSync(projectConfigPath(io.cwd), { force: true }) };
+    }
+    io.err(`Serving the dashboard already downloaded (${cached}).`);
+    dir = dashboardOutDir(io.env);
+  }
   const port = await choosePort(undefined, undefined, DEFAULT_LOCAL_DASHBOARD_PORT, opts.avoid ?? []);
   const server = await serveDashboard({ dir, port, currentDeployment: deployment });
-  saveDashboardPort(io.cwd, server.port);
-  return server;
+  saveDashboardConfig(io.cwd, { port: server.port });
+  return { server, stop: server.stop };
 }
 
 /** `http://127.0.0.1:<port>/` of the project's local dashboard, if one is saved. */

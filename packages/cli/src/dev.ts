@@ -341,8 +341,8 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
       io.err(
         `✔ Started running a deployment locally at ${target.url} and saved its:\n    name as BUNVEX_DEPLOYMENT to .env.local\n    URLs as ${vars.url} and ${vars.site} to .env.local`,
       );
-      // Convex's local dashboard beside a long-running `dev` (`handleDashboard`, STUDY-149 PR 7); as Convex's, a
-      // dashboard that cannot be had stops `dev`.
+      // Convex's local dashboard beside a long-running `dev` (`handleDashboard`, STUDY-149 PR 7); one that cannot be
+      // downloaded is a warning, not Convex's stop (DV-486); one that cannot be served stops `dev`, as Convex's.
       if (!flags.once && !flags.untilSuccess) {
         try {
           const dashboard = await startLocalDashboard(
