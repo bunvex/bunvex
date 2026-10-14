@@ -1,7 +1,7 @@
 // The mock's audit log (UI-01 §14.5, STUDY-12 §9): events with Convex's action names, a few from the past
 // (deploys, index builds, the variables' creation), then whatever the mock's writes record.
 import type { AuditEvent, AuditEventQuery, Json, Page, Value } from "../data-source.ts";
-import type { Random } from "./random.ts";
+import { createRandom, type Random } from "./random.ts";
 
 export type AuditHost = {
   rnd: Random;
@@ -28,15 +28,20 @@ export class MockAudit {
   ) {
     if (!sample) return;
     const day = 86_400_000;
+    // Convex's data events: the root component and the documents' ids (STUDY-149 PR 3)
+    const ROOT = { component_id: null, component: null };
+    // their own random source, so the sample's ids leave the mock's other random data as it was
+    const idSource = createRandom(149);
+    const ids = (k: number) => Array.from({ length: k }, () => idSource.id());
     const past: [number, string, { [key: string]: Json }][] = [
       [20 * day, "push_config", { modules: 4, functions: 11 }],
       [20 * day, "build_indexes", { added: ["tasks.by_owner", "messages.by_channel"] }],
       [19 * day, "create_environment_variable", { variable_name: "AUTH_SECRET" }],
       [19 * day, "create_environment_variable", { variable_name: "SITE_URL" }],
       [12 * day, "push_config", { modules: 4, functions: 11 }],
-      [6 * day, "add_documents", { table: "imports", count: 12 }],
+      [6 * day, "add_documents", { ...ROOT, table: "imports", document_ids: ids(12) }],
       [3 * day, "update_environment_variable", { variable_name: "LOG_LEVEL" }],
-      [2 * day, "delete_documents", { table: "messages", count: 3 }],
+      [2 * day, "delete_documents", { ...ROOT, table: "messages", document_ids: ids(3) }],
       [1 * day, "push_config", { modules: 4, functions: 11 }],
     ];
     for (const [ago, action, metadata] of past)

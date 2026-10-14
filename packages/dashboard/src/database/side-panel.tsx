@@ -38,7 +38,7 @@ export type PanelState =
   | { kind: "schema" }
   | { kind: "indexes" }
   | { kind: "metrics" }
-  | { kind: "add"; onAdded: (ids: string[]) => void }
+  | { kind: "add"; onAdded: (count: number) => void }
   | { kind: "columns"; fields: string[]; state: ColumnState; onChange: (s: ColumnState) => void };
 
 export function SidePanel({ state, info, onClose }: { state: PanelState; info: TableInfo; onClose: () => void }) {
