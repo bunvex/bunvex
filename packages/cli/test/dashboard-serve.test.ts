@@ -2,13 +2,15 @@
 // (the files, index.html for the app's pages, the prefill the image's environment sets), `/api/current_deployment`
 // for a local deployment with its `Host` check (DV-476), `dashboard.zip` downloaded once per version from the
 // release (here a local server), `bunvex dev` serving the local dashboard on a local deployment, and
-// `bunvex dashboard` opening it — as Convex's `npx convex dev` and `npx convex dashboard` do.
+// `bunvex dashboard` opening it — as Convex's `npx convex dev` and `npx convex dashboard` do. The frame and
+// security headers of Convex's image on every response of `dashboard serve`, with the build's embedding parents
+// (DV-319) in `frame-ancestors` (DV-488), and none from the local dashboard.
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { dashboardCommand } from "../src/dashboard.ts";
-import { withPrefill } from "../src/dashboard-server.ts";
+import { dashboardHeaders, embedOrigins, serveDashboard, withPrefill } from "../src/dashboard-server.ts";
 import { devCommand } from "../src/dev.ts";
 import type { Io } from "../src/index.ts";
 import { extractZip, readDashboardPort, readDashboardUnavailable } from "../src/local-dashboard.ts";
@@ -164,6 +166,113 @@ describe("bunvex dashboard serve", () => {
     const help = io(tmp());
     expect(await dashboardCommand(["serve", "--help"], help.it)).toBe(0);
     expect(help.out[0]).toStartWith("Usage: bunvex dashboard serve [options]");
+  });
+});
+
+/** Every response header that is one of Convex's image's frame and security headers, by name. */
+const SECURITY = [
+  "x-dns-prefetch-control",
+  "strict-transport-security",
+  "x-xss-protection",
+  "referrer-policy",
+  "x-frame-options",
+  "content-security-policy",
+  "cross-origin-resource-policy",
+  "cross-origin-embedder-policy",
+  "x-content-type-options",
+];
+const securityOf = (r: Response) =>
+  Object.fromEntries(SECURITY.flatMap((h) => (r.headers.has(h) ? [[h, r.headers.get(h)]] : [])));
+// Convex's `next.config.js`: `securityHeaders` on every path, plus the frame headers unless built for embedding
+const COMMON = {
+  "x-dns-prefetch-control": "on",
+  "strict-transport-security": "max-age=63072000; includeSubDomains; preload",
+  "x-xss-protection": "1; mode=block",
+  "referrer-policy": "origin-when-cross-origin",
+};
+const SAME_ORIGIN = {
+  ...COMMON,
+  "x-frame-options": "SAMEORIGIN",
+  "content-security-policy": "frame-ancestors 'self'",
+};
+const withOrigins = (content: string) =>
+  INDEX.replace("</head>", `<meta name="bunvex-embed-origins" content="${content}"></head>`);
+
+/** Every kind of answer the server gives, for one server. */
+async function everyAnswer(url: string, port = new URL(url).port) {
+  return {
+    index: await fetch(url, { headers: html }),
+    indexHead: await fetch(url, { method: "HEAD" }),
+    asset: await fetch(`${url}assets/index-abc.js`),
+    file: await fetch(`${url}favicon.svg`),
+    page: await fetch(`${url}database/users`, { headers: html }),
+    missing: await fetch(`${url}assets/missing.js`),
+    outside: await fetch(`${url}${"..%2f".repeat(30)}etc%2fpasswd`),
+    method: await fetch(url, { method: "POST" }),
+    current: await fetch(`${url}api/current_deployment`, { headers: { host: `127.0.0.1:${port}` } }),
+    rebound: await fetch(`${url}api/current_deployment`, { headers: { host: `evil.example:${port}` } }),
+  };
+}
+
+describe("frame and security headers (Convex's image, `next.config.js` headers() on /:path*)", () => {
+  test("dashboard serve: Convex's headers on every path and answer, framing same-origin only", async () => {
+    const url = await serve(["--dir", built()], io(localProject()));
+    const answers = await everyAnswer(url);
+    expect(Object.keys(answers).map((k) => [k, answers[k as keyof typeof answers].status])).toEqual([
+      ["index", 200],
+      ["indexHead", 200],
+      ["asset", 200],
+      ["file", 200],
+      ["page", 200],
+      ["missing", 404],
+      ["outside", 404],
+      ["method", 405],
+      ["current", 200],
+      ["rebound", 403],
+    ]);
+    for (const [k, r] of Object.entries(answers)) expect([k, securityOf(r)]).toEqual([k, SAME_ORIGIN]);
+    // the answers' own headers are kept
+    expect(answers.asset.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    expect(answers.current.headers.get("cache-control")).toBe("no-store");
+    expect(answers.method.headers.get("allow")).toBe("GET, HEAD");
+  });
+
+  test("a build that allows embedding parents (DV-319): no X-Frame-Options, CORP / COEP, the parents in frame-ancestors (DV-488)", async () => {
+    const dir = built();
+    writeFileSync(
+      join(dir, "index.html"),
+      withOrigins("https://admin.example.com/some/path, http://localhost:3000 * ftp://files.example.com nope"),
+    );
+    const url = await serve(["--dir", dir]);
+    const embedded = {
+      ...COMMON,
+      "cross-origin-resource-policy": "cross-origin",
+      "cross-origin-embedder-policy": "require-corp",
+      "content-security-policy": "frame-ancestors 'self' https://admin.example.com http://localhost:3000",
+    };
+    for (const [k, r] of Object.entries(await everyAnswer(url))) expect([k, securityOf(r)]).toEqual([k, embedded]);
+    // the page still carries the list, for the app's own check of the parent (DV-319)
+    expect(await (await fetch(url)).text()).toContain('<meta name="bunvex-embed-origins"');
+  });
+
+  test("the build's list, read as the app reads it", () => {
+    expect(embedOrigins(INDEX)).toEqual([]);
+    // Vite writes the tag empty when VITE_BUNVEX_EMBED_ORIGINS is unset: same-origin only
+    expect(embedOrigins(withOrigins(""))).toEqual([]);
+    expect(dashboardHeaders([])).toEqual(Object.entries(SAME_ORIGIN));
+    expect(embedOrigins(withOrigins("*  javascript:alert(1), ,"))).toEqual([]);
+    // commas or spaces; reduced to origins; duplicates once; the first tag only; attributes in any order
+    expect(
+      embedOrigins(
+        `<head><meta content="https://a.example.com:8443/x https://a.example.com:8443,HTTP://B.example.com" name='bunvex-embed-origins'><meta name="bunvex-embed-origins" content="https://c.example.com"></head>`,
+      ),
+    ).toEqual(["https://a.example.com:8443", "http://b.example.com"]);
+  });
+
+  test("the local dashboard sends none, as Convex's CLI's (`serve-handler`)", async () => {
+    const server = await serveDashboard({ dir: built(), port: 0, currentDeployment: null });
+    stops.push(server.stop);
+    for (const [k, r] of Object.entries(await everyAnswer(server.url))) expect([k, securityOf(r)]).toEqual([k, {}]);
   });
 });
 
@@ -380,7 +489,10 @@ describe("bunvex dev's local dashboard, and bunvex dashboard", () => {
     const port = readDashboardPort(dir);
     expect(port).toBeGreaterThanOrEqual(6790);
     const url = `http://127.0.0.1:${port}/`;
-    expect(await (await fetch(url)).text()).toBe(INDEX);
+    const page = await fetch(url);
+    expect(await page.text()).toBe(INDEX);
+    // no frame or security headers, as Convex's local dashboard on 6790
+    expect(securityOf(page)).toEqual({});
     const config = JSON.parse(readFileSync(join(stateDir(dir), "config.json"), "utf8"));
     const current = await fetch(`${url}api/current_deployment`);
     expect(await current.json()).toEqual({

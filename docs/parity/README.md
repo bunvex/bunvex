@@ -207,8 +207,8 @@ gaps.
     table list, HTTP actions, Health's concurrency and invalidations, the paused lists; PR 7: packaging — the
     dashboard's own image on 6791, `dashboard.zip` in releases, `bunvex dev`'s local dashboard on 6790 with
     `/api/current_deployment` and its `Host` check, `bunvex dashboard serve`, `bunvex dashboard` opening it); left:
-    the CLI's links (PR 8), the dashboard server's frame and security headers (owner, 2026-10-14: match Convex in a
-    follow-up), plus the custom query's type checking and Convex's bulk edit.
+    the CLI's links (PR 8), plus the custom query's type checking and Convex's bulk edit. The image's frame and
+    security headers match Convex since PR 7's follow-up, the embedding allow-list in `frame-ancestors` (DV-488).
 - HTTP actions, found while matching their log name to Convex's (STUDY-31 §7.3; the log name itself is done, and
   a response's implicit headers since STUDY-31 §8):
   - a handler that returns something other than a Response is answered with Convex's 500 but logged with no error

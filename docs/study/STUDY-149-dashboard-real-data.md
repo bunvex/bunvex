@@ -2,7 +2,7 @@
 
 - **Status:** decided (owner, 2026-10-12); PR 1 built (`@bunvex/dashboard-source`, §5 "PR 1, as built"); PRs 2–5
   built (§5); PR 6 built (`apps/dashboard` on the real source, §5 "PR 6, as built"); PR 7 built (packaging: the
-  dashboard's image, `dashboard.zip`, the local dashboard, `bunvex dashboard serve`, §5 "PR 7, as built"). Q1: option B, a
+  dashboard's image, `dashboard.zip`, the local dashboard, `bunvex dashboard serve`, §5 "PR 7, as built"), and its follow-up, the server's frame and security headers (§5 "PR 7 follow-up", DV-488). Q1: option B, a
   separate service with its own image (DV-475); Q3: rename (DV-474); Q4: Convex's model plus a `Host` check
   (DV-476); Q5: local links only (DV-477, replaces DV-217); Q2, Q6, Q7 confirmed as planned; AD-32 not taken.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/dashboard-common`,
@@ -387,6 +387,7 @@ Decided by the owner on 2026-10-12 (§6), recorded in [divergences.md](../parity
 | DV-475 (Q1) | the `dashboard` service's own image (6791; locally 6790, as Convex) holds a static Vite build served by Bun, not a Next.js server; topology and image split match Convex | bunvex's dashboard is a static app (STUDY-12 D1) | owner, 2026-10-12: B, its own image |
 | DV-476 (Q4) | the local dashboard's `/api/current_deployment` answers only a `Host` of `127.0.0.1` / `localhost:<port>` | it hands out the admin key; Convex's Node server answers any `Host` (DNS rebinding) | owner, 2026-10-12: add the check |
 | DV-477 (Q5) | export / import print a link to the dashboard bunvex is serving locally, or none on self-hosted; never a cloud link | Convex prints `dashboard.convex.dev` even when that is wrong (its FIXME); bunvex has no cloud and rule 5 forbids the link | owner, 2026-10-12: as proposed; replaces DV-217 |
+| DV-488 (PR 7 follow-up) | with embedding parents allowed (DV-319), the image's server sends `frame-ancestors 'self' <parents>` and Convex's CORP / COEP, no `X-Frame-Options`; Convex's embedding build sends no frame policy at all | an admin key is handed to the frame: only the parents the operator listed may frame it | owner, 2026-10-14: match Convex, with the allow-list in `frame-ancestors` |
 
 Already decided and kept: D1 (bunvex's own screens), D3 (`watchTable` as a signal; now fed by a real
 subscription), DV-97 (`Bunvex` scheme), DV-210 (the key never stored), DV-307 (`encoded_json`), DV-319
@@ -1511,11 +1512,9 @@ Packaging. Convex's side re-read for it (`cli/` is `npm-packages/convex/src/cli/
   the local dashboard: it could not be downloaded (<why>). Restart `bunvex dev` once it can be." (DV-486).
   `bunvex dashboard serve` is its subcommand (its usage lists it; AD-40).
 
-**Not built here** (gaps, "Ainda não fizemos", none a divergence):
+**Not built here** (gaps, "Ainda não fizemos", none a divergence; the frame and security headers, first listed
+here, are built in the follow-up below):
 
-- The image's frame and security headers (Convex's `X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'`,
-  `Strict-Transport-Security`, `Referrer-Policy`, …): owner, 2026-10-14: match Convex in a follow-up (with the
-  embedding allow-list, DV-319, in `frame-ancestors`).
 - Convex's telemetry event on the first request (`self_host_dashboard_connected`): bunvex reports nothing.
 - `NEXT_PUBLIC_DEFAULT_LIST_DEPLOYMENTS_API_PORT` and the legacy deployment list (`?a=<port>&d=<name>`): kept by
   Convex for old CLIs, not built (CLAUDE.md: nothing kept only for older clients).
@@ -1532,7 +1531,7 @@ Packaging. Convex's side re-read for it (`cli/` is `npm-packages/convex/src/cli/
    browser test and `build-dashboard.ts` set `NODE_ENV=production`.
 
 **Divergences and additions.** One new divergence, DV-486 (owner, 2026-10-14: warn and keep going; above);
-DV-487 to DV-489 unused. One addition, AD-40, `bunvex dashboard serve` (owner, 2026-10-14; planned in §3.3). DV-475 and DV-476 are built as decided; DV-475's row now names the
+DV-487 and DV-489 unused (DV-488 is the follow-up's, below). One addition, AD-40, `bunvex dashboard serve` (owner, 2026-10-14; planned in §3.3). DV-475 and DV-476 are built as decided; DV-475's row now names the
 image's variables (`BUNVEX_DEPLOYMENT_URL` / `BUNVEX_ADMIN_KEY` for Convex's `NEXT_PUBLIC_*`, which name a Next.js
 mechanism a static app does not have; the naming of the plan's §3.3, which the owner approved). DV-476's check also requires the server's own port and a loopback listening
 address (on any other address `/api/current_deployment` is never offered: a LAN client could send any `Host`).
@@ -1598,12 +1597,103 @@ DV-189, DV-194 and DV-202 are closed (resolved to match Convex).
 
 **Owner decisions (2026-10-14)** on the questions this PR raised: offline `dev` diverges (DV-486, built here);
 `bunvex dashboard serve` is an addition (AD-40); the image's frame and security headers match Convex in a follow-up
-PR (a gap above).
+PR (built: "PR 7 follow-up" below, DV-488).
 
 **Measurements.** No hot path changes (the backend is untouched). The dashboard image is 131.6 MB (arm64, built
 locally; the backend's is 198.0 MB); `dashboard.zip` is 4.07 MB (145 files, 16.0 MB unpacked). The app's entry
 chunk grows by 306 bytes (80 gzipped: the prefill reader). The image builds in about 24 s from a warm cache; the
 image smoke runs in about 35 s locally.
+
+### PR 7 follow-up: the frame and security headers, as built
+
+The owner's decision on PR 7 (2026-10-14): "match Convex in a follow-up, with the embedding allow-list, DV-319, in
+`frame-ancestors`". Convex's side re-read for it (`sh/` is `npm-packages/dashboard-self-hosted/`, commit
+`4577b9031`):
+
+- **The image's headers** (`sh/next.config.js:1-65`): `headers()` returns one rule, `source: "/:path*"` (every
+  path: pages, `/_next/static` files, 404s), with `securityHeaders` (`:5-22`): `X-DNS-Prefetch-Control: on`,
+  `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload`, `X-XSS-Protection: 1; mode=block`,
+  `Referrer-Policy: origin-when-cross-origin`; then, unless `EMBEDDED_CORS_HEADERS` is set (`:40-60`),
+  `X-Frame-Options: SAMEORIGIN` and `Content-Security-Policy: frame-ancestors 'self'` (`:1-3`, whitespace
+  collapsed). No `X-Content-Type-Options`, no other CSP directive. HSTS is sent whatever the scheme; browsers ignore
+  it over plain HTTP (RFC 6797 §8.1), so it binds only behind an HTTPS proxy.
+- **The embedding mode**: with `EMBEDDED_CORS_HEADERS` set, the two frame headers are replaced by
+  `Cross-Origin-Resource-Policy: cross-origin` and `Cross-Origin-Embedder-Policy: require-corp` (`:41-50`): any
+  page may frame the dashboard, and a cross-origin-isolated parent may load it. It is a build-time switch:
+  `headers()` is evaluated by `next build` into the standalone server's routes manifest, and `turbo.json:7` lists
+  it among the build's inputs; `Dockerfile.dashboard` does not set it, so the published image frames same-origin
+  only. `NEXT_PUBLIC_HIDE_HEADER` goes with it (a build-time UI switch; not built, PR 7's gap list).
+- **The local dashboard** (6790): `build:export` (`sh/package.json:9`) sets `BUILD_TYPE=export`, which takes
+  `optionsForExport` (`next.config.js:24-29,74`): a static export, where Next.js applies no `headers()`. The CLI
+  serves it with `serve-handler` and no header options (`ld/dashboard.ts:87-89`), on a server that adds headers only
+  for `cors: true` (`ld/serve.ts:33-38`; the dashboard passes `cors: false`, `:55`). So the local dashboard sends
+  none of these headers.
+
+**What was built.**
+
+- **The server** (`packages/cli/src/dashboard-server.ts`): with `securityHeaders` on, every response (each file,
+  index.html for a page, a 404, a 405, `/api/current_deployment`'s 200 and 403, HEAD as GET) carries Convex's four
+  common headers and, by default, `X-Frame-Options: SAMEORIGIN` and `Content-Security-Policy: frame-ancestors
+  'self'`. When the build allows embedding parents (DV-319's `<meta name="bunvex-embed-origins">` in index.html,
+  read at start with the app's own rules: origins separated by commas or spaces, reduced to scheme, host and port,
+  anything not an http(s) URL dropped, `*` included), it sends Convex's embedding headers instead: no
+  `X-Frame-Options` (it cannot name an origin: `ALLOW-FROM` is obsolete), `Cross-Origin-Resource-Policy:
+  cross-origin`, `Cross-Origin-Embedder-Policy: require-corp`, and `Content-Security-Policy: frame-ancestors 'self'
+  <origins>` where Convex sends no CSP (DV-488). The answers' own headers (`Cache-Control`, `Allow`) are kept.
+- **`bunvex dashboard serve`** (`dashboard-serve.ts`) turns them on: it is the image's server. The local dashboard
+  `bunvex dev` serves (`local-dashboard.ts`, not changed) leaves them off, as Convex's.
+- **HSTS**: sent as Convex sends it, over plain HTTP too. Browsers ignore it there, so the image on
+  `http://127.0.0.1:6791` and `bunvex dashboard serve` on `http://127.0.0.1:6790` are unaffected; the local
+  dashboard sends none. Behind an HTTPS proxy it binds the proxy's host and its subdomains for two years, as
+  Convex's image does.
+- **One switch, the list**: Convex has two build-time switches (`EMBEDDED_CORS_HEADERS` for the headers, and the
+  app accepting credentials from any parent); bunvex has DV-319's list for both, so the frame policy and the app's
+  check of the parent never disagree, and an empty list is same-origin framing. Like Convex's switch, it is fixed
+  at build: `VITE_BUNVEX_EMBED_ORIGINS` (a `--build-arg` of `docker/dashboard.Dockerfile`, which now declares it),
+  or the tag edited in a built `index.html` before the server starts. No runtime variable is added.
+
+**Divergence.** DV-488 (owner, 2026-10-14, the decision above): in the embedding mode `frame-ancestors` lists
+`'self'` and the allowed parents, where Convex's embedding build lets any page frame it; and the mode follows
+DV-319's list rather than a separate switch. In a browser, `frame-ancestors` overrides `X-Frame-Options` (CSP
+Level 3), so dropping `X-Frame-Options` changes nothing for the listed parents in current browsers; it matters for
+ones that only know `X-Frame-Options`, which would otherwise refuse every parent.
+
+**Tests.**
+
+- **The server and the CLI** (`packages/cli/test/dashboard-serve.test.ts`, "frame and security headers"): ten
+  answers of `bunvex dashboard serve` in a local project (index.html, HEAD, a hashed asset, another file, an app
+  page, a missing asset, a path out of the build, a POST, `/api/current_deployment` 200 and 403) each carry exactly
+  Convex's six headers, and keep their own; a build listing parents (with a path, a duplicate, `*`, `ftp:` and a
+  non-URL in the list) gets the embedding set on all ten, with `frame-ancestors 'self' https://admin.example.com
+  http://localhost:3000`, and still carries the tag; the list's parsing (an empty tag, only junk, commas and
+  spaces, upper case, duplicates, the first tag only, attributes in either order); the local dashboard's server
+  sends none on all ten, and `bunvex dev`'s local dashboard none.
+- **In Chromium** (`packages/sync-e2e/dashboard/local-dashboard.e2e.ts`): the local-project dashboard still signs
+  in by itself at 127.0.0.1 and localhost, its page carrying `X-Frame-Options`, `frame-ancestors 'self'` and HSTS;
+  a page at another origin framing it is refused (the frame's document fails `ERR_BLOCKED_BY_RESPONSE`, the console
+  names `frame-ancestors 'self'`, none of the app's scripts is fetched); the same build with
+  `http://localhost:<port>` in its tag, framed by a page there, loads and signs in from the parent's
+  `dashboard-credentials` answer (the Overview, "Signed in: <name>", no page error; with COEP `require-corp`), while
+  the same parent page at `127.0.0.1` is refused by `frame-ancestors 'self' http://localhost:<port>`.
+- **The image** (`docker/smoke-dashboard.sh`): the page and a missing asset carry the six headers; the Chromium
+  sign-in runs as before.
+
+**Sabotage** (each restored after, checked with `git diff`; counts are failing tests):
+
+| Sabotage | Failing tests |
+|---|---|
+| no `X-Frame-Options` by default | CLI 2 |
+| `X-Frame-Options` kept with embedding parents | CLI 1 (Chromium 0: `frame-ancestors` overrides it) |
+| the parents not in `frame-ancestors` | CLI 1 |
+| `frame-ancestors *` with embedding parents (Convex's any-parent) | Chromium 1 |
+| the headers on `/` only | CLI 2 |
+| no HSTS | CLI 3 |
+| the local dashboard sends them too | CLI 2 |
+| `dashboard serve` does not turn them on | CLI 2; the image smoke ("the page lacks Convex's frame and security headers") |
+| the list's entries not limited to http(s) | CLI 2 |
+
+**Measurements.** No hot path changes (the backend is untouched); the dashboard server sets six headers on each
+response from a list built once at start.
 
 ## 6. Open questions
 

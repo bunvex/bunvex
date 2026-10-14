@@ -51,6 +51,18 @@ The browser talks to the backend directly, so `BUNVEX_DEPLOYMENT_URL` must be th
 reaches it (default `http://127.0.0.1:$PORT`). Without Docker, `bunvex dashboard serve --deployment-url <url>`
 serves the same app (`--help` for its options).
 
+The dashboard sends Convex's image's security headers, and only its own pages may frame it
+(`X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'`). To embed it in another site's page, which then signs
+it in (see [the dashboard's README](../apps/dashboard/README.md#embedding-the-dashboard)), build the image with
+that site's origins, as Convex's embedding build is made at build time (DV-319, DV-488):
+
+```sh
+docker build -f docker/dashboard.Dockerfile --build-arg VITE_BUNVEX_EMBED_ORIGINS="https://admin.example.com" -t bunvex-dashboard .
+```
+
+Only the listed origins may frame it then (`frame-ancestors 'self' https://admin.example.com`). Set
+`BUNVEX_DASHBOARD_IMAGE=bunvex-dashboard` for `docker compose` to run that image.
+
 ## Configure it
 
 Set these in the shell or in a `.env` file next to `docker-compose.yml`:

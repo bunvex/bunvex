@@ -24,6 +24,18 @@ for _ in $(seq 1 50); do curl -sf "$DASHBOARD/" >/dev/null && break; sleep 0.2; 
 PAGE=$(curl -sf "$DASHBOARD/") || fail "the dashboard does not answer"
 [[ "$PAGE" == *'<div id="root">'* ]] || fail "not the dashboard's page"
 [[ "$PAGE" == *"<meta name=\"bunvex-deployment-url\" content=\"$BACKEND\">"* ]] || fail "the backend's URL is not filled in"
+# Convex's image headers on every answer (next.config.js headers()): framing same-origin only, as built here
+headers_ok() {
+  local h
+  h=$(curl -s -o /dev/null -D - "$@" | tr -d '\r' | tr 'A-Z' 'a-z')
+  for want in "x-frame-options: sameorigin" "content-security-policy: frame-ancestors 'self'" \
+    "strict-transport-security: max-age=63072000; includesubdomains; preload" "referrer-policy: origin-when-cross-origin" \
+    "x-xss-protection: 1; mode=block" "x-dns-prefetch-control: on"; do
+    grep -qxF "$want" <<<"$h" || return 1
+  done
+}
+headers_ok "$DASHBOARD/" || fail "the page lacks Convex's frame and security headers"
+headers_ok "$DASHBOARD/assets/missing.js" || fail "a 404 lacks Convex's frame and security headers"
 # a page of the app opened directly is the app; a missing asset is not
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H 'accept: text/html' "$DASHBOARD/database/items")" = 200 ] || fail "an app page is not served"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$DASHBOARD/assets/missing.js")" = 404 ] || fail "a missing asset is not a 404"

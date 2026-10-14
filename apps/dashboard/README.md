@@ -70,6 +70,9 @@ origins only, never `*`, and an answer counts only if it comes from the parent w
 Origins are separated by commas or spaces and compared as scheme, host and port (`https://admin.example.com`,
 not a path). Anything that is not an `http(s)` URL is ignored, `*` included: there is no "any origin" setting.
 The parent page sends the admin key to the dashboard, so it must only be served to people who may hold that key.
+Served by `bunvex dashboard serve` (the dashboard image), the same list is the page's frame policy:
+`frame-ancestors 'self'` and those origins, and with no list only the dashboard's own origin may frame it
+(`X-Frame-Options: SAMEORIGIN`), as Convex's image (DV-488).
 
 `VITE_BUNVEX_TRACE_URL` sets where the Logs screen links a traced execution (STUDY-131 AD-27): a trace UI's URL
 template such as `http://localhost:16686/trace/{traceId}` (Jaeger); `{traceId}` and `{spanId}` are replaced, and a
