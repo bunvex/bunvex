@@ -66,7 +66,6 @@ import {
 } from "./persistence/index.ts";
 import {
   checkOps,
-  identifierError,
   indexNameError,
   MAX_QUERY_OPERATORS,
   Pipeline,

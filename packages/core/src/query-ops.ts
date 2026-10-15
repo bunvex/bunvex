@@ -2,6 +2,7 @@
 // crates/database/src/query/{filter,limit}.rs): `filter` and `limit`, applied in the order the app chained
 // them. Each wraps the stream before it, so `.limit(5).filter(f)` keeps those of the first five that pass,
 // and a limit that is full ends the whole stream before anything more is read.
+import { identifierError } from "@bunvex/values";
 import { type ExpressionOrValue, expressionJson, passes } from "./filter.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import type { Doc } from "./schema.ts";
@@ -183,38 +184,6 @@ export class Pipeline {
 
 // Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
 opaqueToInspect(Pipeline);
-
-/** Convex's `MAX_IDENTIFIER_LEN` (crates/convex/sync_types/src/identifier.rs). */
-const MAX_IDENTIFIER_LEN = 64;
-
-/**
- * A character as Rust's `{:?}` shows a `char` (`char::escape_debug`): `'\n'`, `'\''`, `'\\'`, and `\u{…}` for one
- * Rust does not print (controls, format characters, separators other than the space, unassigned, private use,
- * combining marks); any other as is.
- */
-export function rustCharDebug(c: string): string {
-  const esc: Record<string, string> = { "\0": "\\0", "\t": "\\t", "\r": "\\r", "\n": "\\n", "'": "\\'", "\\": "\\\\" };
-  if (esc[c] !== undefined) return `'${esc[c]}'`;
-  if (c !== " " && /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}\p{Grapheme_Extend}]/u.test(c))
-    return `'\\u{${c.codePointAt(0)!.toString(16)}}'`;
-  return `'${c}'`;
-}
-
-/** Convex's `check_valid_identifier`: why `s` is not an identifier, in its words, or null. */
-export function identifierError(s: string): string | null {
-  const chars = [...s];
-  const first = chars[0];
-  if (first === undefined) return "Identifier cannot be empty";
-  if (!/^[A-Za-z_]$/.test(first))
-    return `Invalid first character ${rustCharDebug(first)} in ${s}: Identifiers must start with an alphabetic character or underscore`;
-  for (const c of chars.slice(1))
-    if (!/^[A-Za-z0-9_]$/.test(c))
-      return `Identifier ${s} has invalid character ${rustCharDebug(c)}: Identifiers can only contain alphanumeric characters or underscores`;
-  const len = Buffer.byteLength(s);
-  if (len > MAX_IDENTIFIER_LEN) return `Identifier is too long (${len} > maximum ${MAX_IDENTIFIER_LEN})`;
-  if (chars.every((c) => c === "_")) return `Identifier ${s} cannot have exclusively underscores`;
-  return null;
-}
 
 /**
  * Why a query's `table.index` name does not parse, as Convex's `IndexName::from_str` (crates/common/src/types/
