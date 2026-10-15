@@ -38,6 +38,7 @@ Key bunvex facts behind the statuses:
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | `.withIndex(name)` with no range (whole index) | server/query.ts, impl/query_impl.ts | done | |
+| A query's table and index when it starts: names parsed, the index looked up | common/src/json/query.rs (`Query::try_from`), types/index.rs (`IndexName::from_str`), indexing/src/index_registry.rs (`index_not_found_error`) | done (STUDY-161 §5) | Checked when the query starts, after its operators: a full scan's table as an identifier, an index's `table.index` as an index name (``Invalid argument `query` for `queryStream` `` / `queryPage`, Convex's words); then `Index <table>.<index> not found.` for an index of a table that does not exist (even `by_id` and `by_creation_time`; a search index too) or that the table lacks. A full scan of a missing table is empty; the error depends on `_tables`, so it runs again once the table is created. |
 | `.withIndex(name, q => …)` range expression | server/index_range_builder.ts | done (#10) | `compileRange`: Convex's `IndexRange::compile` rules and messages (distinct eq fields, one lower and one upper bound on one field, a prefix of the index fields in order). |
 | IndexRangeBuilder `eq(field, value)`, in index-field order | index_range_builder.ts | done (#10) | Field names checked against the index, in order. |
 | IndexRangeBuilder `gt`/`gte` then `lt`/`lte` on the next field | index_range_builder.ts | done (#10) | Both bounds on the same field, after the eq prefix; Convex's errors otherwise. |
