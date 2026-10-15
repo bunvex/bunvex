@@ -400,7 +400,7 @@ subscription), DV-97 (`Bunvex` scheme), DV-210 (the key never stored), DV-307 (`
 | # | Addition | Why | Decision |
 |---|---|---|---|
 | AD-32 (Q1 option C) | the backend can also serve the dashboard itself, same-origin, at `/dashboard` (opt-in) | one container, one port, no CORS | **not taken** (owner, 2026-10-12: Q1 option B); not recorded in additions.md |
-| AD-41 (§7) | storage statistics on a deployment: the Files screen's storage used, views by type with counts and size filter, the Overview's file storage card, from in-memory counters per UTC hour × kind × size class | Convex has none of them; on a deployment they worked on the mock only (#648) | **proposed** (owner to decide; §7.5) |
+| AD-41 (§7) | storage statistics on a deployment: the Files screen's storage used, views by type with counts and size filter, the Overview's file storage card, from in-memory counters per UTC hour × kind × size class | Convex has none of them; on a deployment they worked on the mock only (#648) | **deferred** (owner, 2026-10-14: "keep the study; for now match Convex (only the file count on a deployment)"; §7.5) |
 
 ## 5. Tests
 
@@ -1921,13 +1921,14 @@ same or not / why / app impact / recommendation), followed by the owner's decisi
 - *Recommendation*: accept; PR 1 amends UI-01 §5.7 and §6.
 - **Decision (owner, 2026-10-12): confirmed** as planned.
 
-## 7. Follow-up: storage statistics on a deployment (AD-41, proposed)
+## 7. Follow-up: storage statistics on a deployment (AD-41, deferred)
 
 The #648 docs audit found that the server source does not offer `fileStats` (PR 5: "Convex has no size or kind
 filter"). On a deployment the Files screen therefore loses its **storage used** bar, the **views by type** with
 their counts and the **size filter**, and the Overview loses its **file storage** card; all four work on the mock
 only. The owner chose, on 2026-10-14, to study them as an addition. AD-41 is reserved for it. This section is the
-proposal. Nothing is built.
+proposal. Nothing is built: the owner deferred it (§7.5), so on a deployment bunvex stays as Convex, with only the
+file count.
 
 Convex source read: commit `d8bdde0` of get-convex/convex-backend (`git show d8bdde0:<path>`; the local checkout
 is at `4577b9031`). The citation prefixes are §0's: `dc/`, `sh/`, `cl/`, `udfs`.
@@ -2132,3 +2133,7 @@ The system-table variant of (b) would be observable through OCC, so it is not of
   
   It runs the contract suite on the server source with the stats on, includes the start-scan and hot-path
   measurements, and sabotages a missed delete, a missed import and an edge hour.
+- **Decision (owner, 2026-10-14): deferred** — "keep the study; for now match Convex (only the file count on a deployment)". On a deployment the Files screen keeps Convex's file
+  count, date range and lookup; the server source still offers no `fileStats`, so the storage used, the views by type,
+  the size filter and the Overview's file storage card stay on the mock. This study is kept to revisit; option (c) is
+  the design to start from.
