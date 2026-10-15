@@ -31,6 +31,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 
 | ID | bunvex | Convex | Observable | Why | Decided | Source |
 |---|---|---|---|---|---|---|
+| DV-520 | A function's analyzed line (`modules:listForAllComponents`' `lineno`, the order of a file's functions in the dashboard) is Convex's arithmetic over Bun.build's output, which can land on another line than Convex's (`messages:secret`: 37 against 39) | the token after the handler's bundled position, 0-based lookup with 1-based numbers, over esbuild's printed bundle (`minifySyntax`, `keepNames`) | no (dashboard) | Convex's number is esbuild's printer's; matching it needs esbuild in the CLI | owner, 2026-10-15 (accepted, option (a)) | [STUDY-161 Q1](../study/STUDY-161-engine-messages.md#9-divergences) |
 | DV-496 | A push whose `_componentDeps` import names no pushed definition (undecodable, unknown, or without definitions) is refused with a 400 `InvalidDefinition` | a 500 internal error | no (only a broken client sends it) | A client's malformed request is not a server failure; bunvex's 500s page as internal errors | owner, 2026-10-15 | [STUDY-153 §4](../study/STUDY-153-component-push.md#4-divergences-and-decisions) |
 | DV-495 | The server links `bunvex/server` and `bunvex/values` into a component definition's bundle (`bunvex.config.js`), as it does for functions; a self-contained bundle is accepted too | the CLI bundles `convex/server` into each definition (~22 KB); any other import is refused | no (bundle size) | bunvex's CLI keeps `bunvex/*` external for functions; the same for definitions keeps them ~1 KB | owner, 2026-10-15 | [STUDY-153 §4](../study/STUDY-153-component-push.md#4-divergences-and-decisions) |
 | DV-494 | A component definition is `bunvex.config.ts` (bundled `bunvex.config.js`, the name on the wire and in `_modules`), its error code `InvalidBunvexConfig`, its messages in bunvex's words (`bunvex/server`, `bunx bunvex dev`, the dashboard or CLI, no docs links); a Convex store's definition module is recognised by its role | `convex.config.ts` / `convex.config.js`, `InvalidConvexConfig`, Convex's words | yes (the file an app writes; error codes) | No "convex" in shipped code (rule 5, DV-312) | owner, 2026-10-15 | [STUDY-153 §4](../study/STUDY-153-component-push.md#4-divergences-and-decisions) |
@@ -467,9 +468,9 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-| ID | bunvex | Convex | Observable | Why | Recommendation | Source |
-|---|---|---|---|---|---|---|
-| DV-520 | A function's analyzed line (`modules:listForAllComponents`' `lineno`, the order of a file's functions in the dashboard) is Convex's arithmetic over Bun.build's output, which can land on another line than Convex's (`messages:secret`: 37 against 39) | the token after the handler's bundled position, 0-based lookup with 1-based numbers, over esbuild's printed bundle (`minifySyntax`, `keepNames`) | no (dashboard) | Convex's number is esbuild's printer's; matching it needs esbuild in the CLI | (a) accept | [STUDY-161 Q1](../study/STUDY-161-engine-messages.md#9-divergences) |
+None as of 2026-10-15.
+
+DV-520 (STUDY-161 Q1) was decided by the owner (2026-10-15: accept, option (a): Convex's arithmetic kept over Bun.build's output) and is in [Decided divergences](#decided-divergences).
 
 DV-485 (STUDY-31 §10) was decided by the owner (2026-10-14: accept, option (a): 32 microtask turns) and is in [Decided divergences](#decided-divergences).
 
