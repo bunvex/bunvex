@@ -274,3 +274,23 @@ ids are its own (not observable), so they were not compared.
 - *Sabotage:* declaration order again (core 4 failed, differential 2); search and vector indexes not counted as
   indexes (core 3, differential 2); names compared with `localeCompare` (case-insensitive; core 3, differential 2);
   the tables without an index left in declaration order (core 4, differential 2). Each restored, `git diff` clean.
+
+## 13. Bytes in a displayed value (found with §4)
+
+**Convex.** Every backend message that displays a value uses `Display for ConvexValue` (`crates/value/src/lib.rs:334-346`),
+whose bytes are `Display for ConvexBytes` (`value/src/bytes.rs:46-51`): `b`, then `base64::encode` (the `base64` 0.13
+crate's standard alphabet, padded) printed as a Rust string. On the binary: `b"AQI="`, `b""` for an empty buffer,
+`b"/+8="`, and 3000 bytes as their whole 4000 characters (no cut). Seen in a schema error's `Value:`, an argument or
+returns validator's `Value:`, `Document(value: …)`, a system-field mismatch and a filter's `Cannot use value …`.
+
+**bunvex before.** `displayValue` (`values/src/check.ts`) printed `ArrayBuffer(2 bytes)`.
+
+**bunvex now.** `b"<padded standard base64>"`, whole, for a buffer of any realm. No other display changes.
+
+*Built:* `displayValue`'s bytes branch. Tests: `values/test/error-display.test.ts` (empty, one to three bytes, `+` and
+`/`, nested, 3000 bytes, another realm); `differential/test/schema-errors.test.ts` (8 more calls: schema errors and an
+argument validator's) and `system-fields.test.ts` (2 more) on both backends. Sabotage (each restored, `git diff`
+clean): the old `ArrayBuffer(…)` text, URL-safe unpadded base64, a cut at 100 characters: each fails the unit test and
+the differential test. Found, not fixed: a filter's error names the type in Convex's `type_name` (`Bytes`, `Float64`,
+`String`, …: `crates/value/src/walk.rs:41-52`) where bunvex's `typeName` (`core/src/filter.ts`) says `bytes`,
+`float64`, …

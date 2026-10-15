@@ -53,6 +53,9 @@ describe.skipIf(!ready)("a system-field mismatch's display, against Convex's bac
       { method: "patch", value: { _id: 1 } },
       { method: "replace", value: { _creationTime: 1, k: 2 } },
       { method: "replace", value: { _id: "x" } },
+      // bytes in the display (STUDY-161 §13)
+      { method: "patch", value: { _creationTime: 1, z: { $bytes: "AQI=" } } },
+      { method: "insert", value: { _id: { $bytes: "" } } },
     ];
     for (const args of cases) {
       const c = await error(convex, args);

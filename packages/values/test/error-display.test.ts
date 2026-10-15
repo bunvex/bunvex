@@ -3,6 +3,7 @@
 // opened. Serialising one used to put whatever it reached (for `ctx.db`: the transaction, the catalog, the
 // store) in a message the client receives.
 import { describe, expect, test } from "bun:test";
+import { runInNewContext } from "node:vm";
 import fc from "fast-check";
 import { displayValue, stringifyValueForError, toJsonValue } from "../src/index.ts";
 import { runs, value } from "./arbitraries.ts";
@@ -199,5 +200,21 @@ describe("displayValue (validator messages)", () => {
     const loop: Record<string, unknown> = { a: 1 };
     loop.self = loop;
     expect(displayValue(loop as never)).toBe("{a: 1.0, self: [Circular]}");
+  });
+
+  test("bytes as Convex's `Display for ConvexBytes`: `b` and the padded standard base64, whole (STUDY-161 §13)", () => {
+    const bytes = (...b: number[]) => new Uint8Array(b).buffer;
+    // each checked against Convex's backend (a schema error's `Value:`)
+    expect(displayValue(bytes())).toBe('b""');
+    expect(displayValue(bytes(1, 2))).toBe('b"AQI="');
+    expect(displayValue(bytes(0xff, 0xef))).toBe('b"/+8="');
+    expect(displayValue(bytes(1))).toBe('b"AQ=="');
+    expect(displayValue(bytes(1, 2, 3))).toBe('b"AQID"');
+    expect(displayValue({ z: bytes(1, 2), a: [bytes()] })).toBe('{a: [b""], z: b"AQI="}');
+    // no cut: 3000 bytes are 4000 characters of base64
+    const big = new Uint8Array(3000).fill(7);
+    expect(displayValue(big.buffer)).toBe(`b"${Buffer.from(big).toString("base64")}"`);
+    // a buffer of another realm (a pushed module's)
+    expect(displayValue(runInNewContext("new Uint8Array([1, 2]).buffer"))).toBe('b"AQI="');
   });
 });

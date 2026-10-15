@@ -61,4 +61,17 @@ describe.skipIf(!ready)("a schema error's display, against Convex's backend", ()
       { method: "replace", value: { name: "y", extra: [1] } },
     ]);
   });
+
+  test('bytes in a display: Convex\'s `b"…"` (STUDY-161 §13)', async () => {
+    const big = Buffer.alloc(3000, 7).toString("base64");
+    await same("docs:insert", [
+      { table: "strict", doc: { name: { $bytes: "AQI=" } } },
+      { table: "strict", doc: { name: { $bytes: "" } } },
+      { table: "strict", doc: { name: { $bytes: "/+8=" } } },
+      { table: "strict", doc: { name: { $bytes: big } } },
+      { table: "strict", doc: { name: [{ $bytes: "AQ==" }] } },
+      { table: "strict", doc: { name: "a", extra: { $bytes: "AQID" } } },
+    ]);
+    await same("docs:strArg", [{ s: { $bytes: "AQI=" } }, { s: { $bytes: "" } }]);
+  });
 });

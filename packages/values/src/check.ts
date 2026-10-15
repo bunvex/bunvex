@@ -2,6 +2,7 @@
 // `Validator::check_value` (crates/common/src/schemas/validator.rs): a path from the outermost level, the
 // value and the validator in the same display forms.
 
+import { fromByteArray } from "./base64.ts";
 import { isCommitTsPlaceholder, MAX_COMMIT_TS } from "./commit-ts.ts";
 import { formatExportFloat } from "./export-json.ts";
 import { floatDebugText } from "./float-text.ts";
@@ -13,7 +14,7 @@ import { compareValues, isBytes, isSimpleObject, opaque, type Value } from "./va
 export type TableOfId = (tableNumber: number) => string | undefined;
 
 /**
- * Display a value as the messages do: `1.0`, `NaN`, `"s"`, `5n`→`5`, `[1, 2]`, `{a: 1}`.
+ * Display a value as the messages do: `1.0`, `NaN`, `"s"`, `5n`→`5`, `b"AQI="`, `[1, 2]`, `{a: 1}`.
  *
  * Only plain data is opened. What reaches a check before it is converted can be anything a function
  * returned or passed (Convex converts first, so its check only sees values): a class instance, a `Map` or
@@ -31,7 +32,8 @@ function display(v: Value | undefined, ancestors: Set<object>): string {
   if (typeof v === "number") return floatDebugText(v);
   if (typeof v === "boolean") return String(v);
   if (typeof v === "string") return JSON.stringify(v);
-  if (isBytes(v)) return `ArrayBuffer(${v.byteLength} bytes)`;
+  // Convex's `Display for ConvexBytes`: `b` and the standard, padded base64 as a Rust string (`b"AQI="`, `b""`), whole.
+  if (isBytes(v)) return `b"${fromByteArray(new Uint8Array(v))}"`;
   if (!Array.isArray(v) && !isSimpleObject(v)) return opaque(v);
   if (ancestors.has(v)) return "[Circular]";
   ancestors.add(v);
