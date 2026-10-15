@@ -3,7 +3,8 @@
 - **Status:** K1–K9 accepted as recommended (owner, 2026-10-03). Re-checked against Convex `a4ad353` on
   2026-10-08 (§7): K8 and the root component rows are built; §7.4 lists what that check corrects or adds, and
   K2 is to be confirmed again (§7.3). **No step of §5 is started**: the owner wants the pros and cons laid out
-  before going on (2026-10-08).
+  before going on (2026-10-08). **Studied again in [STUDY-152](STUDY-152-components-restudy.md)** (2026-10-14),
+  which corrects K2–K5 and §6 and revises the plan of §7.5.
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031, npm `convex` 1.46.0), 2026-10-03;
   re-checked at `a4ad3530c` (2026-10-08).
 - **Related:** [STUDY-04](STUDY-04-table-and-index-metadata.md) D4 (DV-55: no namespaces),
