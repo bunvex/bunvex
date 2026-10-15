@@ -220,12 +220,11 @@ export const FEATURES = [
     half: true,
   },
   {
-    tag: "coming",
+    tag: "dashboard",
     title: "A dashboard for your data",
-    body: "Tables, functions, logs and schedules. Every screen is built; the connection to a live deployment is next.",
-    source: "packages/dashboard/README.md",
+    body: "Tables, functions, logs, schedules, files and settings of a live deployment, signed in with an admin key.",
+    source: "docs/dashboard.md",
     half: true,
-    soon: true,
   },
 ] as const;
 
