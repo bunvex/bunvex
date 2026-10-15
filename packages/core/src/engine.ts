@@ -652,6 +652,20 @@ export class Engine {
 
   private lease: { store: Lease; timer: ReturnType<typeof setInterval> } | null = null;
 
+  /**
+   * The store's lease as this process holds it, for the dashboard's topology (STUDY-131 §11): the holder it was
+   * taken as, its scope, when it was taken (wall-clock ms) and how long the last renewal's round trip to the
+   * store took (ms; null before the first, and for a "process" lease, whose renewal does not reach the store).
+   * Null on a store without a lease. Read only by that route: nothing here is on a hot path.
+   */
+  leaseState: {
+    holder: string;
+    scope: "ttl" | "process" | "newest";
+    ttlMs: number;
+    acquiredAt: number;
+    renewalMs: number | null;
+  } | null = null;
+
   private async acquireLease(store: Persistence & Lease) {
     const ttlMs = this.opts.lease?.ttlMs ?? 5000;
     const deadline = Date.now() + (this.opts.lease?.waitMs ?? 0);
@@ -663,6 +677,14 @@ export class Engine {
       if (Date.now() >= deadline) throw new LeaseHeldError(r.heldBy, r.expiresInMs);
       await new Promise((ok) => setTimeout(ok, Math.min(250, Math.max(10, deadline - Date.now()))));
     }
+    const state = {
+      holder,
+      scope: store.leaseScope ?? "ttl",
+      ttlMs,
+      acquiredAt: Date.now(),
+      renewalMs: null as number | null,
+    };
+    this.leaseState = state;
     // Renew every TTL/3. A lost lease, or renewals failing until the TTL runs out (the store may then give it
     // to another process), stops the committer: fail-stop, as a failed flush. So does a renewal still waiting
     // for the store when the TTL runs out (a hung connection; drivers bound a renewal by a quarter of the TTL,
@@ -679,8 +701,10 @@ export class Engine {
       }
       renewing = true;
       try {
+        const began = performance.now();
         await store.renewLease();
         renewedAt = Date.now();
+        if (state.scope !== "process") state.renewalMs = performance.now() - began;
       } catch (e) {
         if (e instanceof LeaseLostError) this.committer.fail(e);
         else if (Date.now() - renewedAt >= ttlMs)

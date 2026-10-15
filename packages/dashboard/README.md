@@ -7,7 +7,7 @@ cloud control plane. `MockDataSource` serves development and tests.
 
 **Status:** every screen is built. `apps/dashboard` runs them on a deployment through
 [`@bunvex/dashboard-source`](../dashboard-source/README.md) (STUDY-149), or on the mock as its demo data; the
-screens that source does not offer yet (Topology, Subscriptions, the system tables, Authentication's user
+screens that source does not offer yet (Subscriptions, the system tables, Authentication's user
 management, the clients and the extensions) run on the mock only — see
 [docs/dashboard.md](../../docs/dashboard.md#7-known-gaps), [UI-01](../../docs/specs/UI-01-ui-and-dashboard.md)
 and [ARCHITECTURE.md](../../ARCHITECTURE.md).

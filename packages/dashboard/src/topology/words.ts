@@ -1,7 +1,7 @@
 // The topology said in words (UI-01 §22): the one-line summary, a node's lag, uptime, the store, and each
 // event. The screen and its tests share them, so what is drawn is also what is read.
-import type { NodeState, StoreDriver, Topology, TopologyEvent, TopologyNode } from "../data-source.ts";
-import { formatCount } from "../screens/stats.ts";
+import type { NodeCache, NodeState, StoreDriver, Topology, TopologyEvent, TopologyNode } from "../data-source.ts";
+import { formatBytes, formatCount } from "../screens/stats.ts";
 
 export const DRIVER: Record<StoreDriver, string> = {
   memory: "Memory",
@@ -9,6 +9,7 @@ export const DRIVER: Record<StoreDriver, string> = {
   postgres: "Postgres",
   mysql: "MySQL",
   mongodb: "MongoDB",
+  other: "Other",
 };
 
 export const STATE: Record<NodeState, string> = { ok: "OK", lagging: "Lagging", down: "Down" };
@@ -32,6 +33,29 @@ export function uptime(startedAt: number, now: number): string {
   const h = Math.floor(m / 60);
   return h < 48 ? `${h} h ${m % 60} min` : `${Math.floor(h / 24)} d ${h % 24} h`;
 }
+
+/**
+ * How full a node's cache is, 0–1: by entries against a count limit, else by bytes against the byte limit (a
+ * deployment's LRU is bounded by bytes); null when the source gives neither.
+ */
+export function cacheFill(c: NodeCache): number | null {
+  if (c.maxEntries) return c.entries / c.maxEntries;
+  if (c.bytes !== undefined && c.maxBytes) return c.bytes / c.maxBytes;
+  return null;
+}
+
+/** The cache's occupancy in a tight strip: "3.1k/5k" entries, or "1.2 MB/100 MB" when bounded by bytes. */
+export function cacheFillText(c: NodeCache): string {
+  if (c.maxEntries) return `${compact(c.entries)}/${compact(c.maxEntries)}`;
+  if (c.bytes !== undefined && c.maxBytes) return `${formatBytes(c.bytes)}/${formatBytes(c.maxBytes)}`;
+  return compact(c.entries);
+}
+
+/** "3,900 of 5,000 entries", or "12 entries" without a count limit. */
+export const cacheEntriesText = (c: NodeCache) =>
+  c.maxEntries
+    ? `${formatCount(c.entries)} of ${formatCount(c.maxEntries)} entries`
+    : plural(c.entries, "entry", "entries");
 
 /** The node that serves clients: the followers, or a leader alone. */
 export const servesClients = (n: TopologyNode, t: Topology) => n.role === "follower" || t.nodes.length === 1;

@@ -74,6 +74,11 @@ export interface Persistence {
    */
   readonly readsInMemory?: boolean;
   /**
+   * The driver's name, as the dashboard's topology shows the store (STUDY-131 §11): `memory`, `sqlite`, `postgres`,
+   * `mysql`, `mongodb` for bunvex's own; a driver of another package may name itself, or not.
+   */
+  readonly driver?: string;
+  /**
    * Whether an error of `flush()` is transient (STUDY-25 L4, as Convex's `is_transient_db_error`): a timeout
    * or an "operational" error (a lost connection, a server shutting down). The committer retries a transient
    * flush failure with backoff, so a driver that classifies anything as transient MUST keep the group a failed
