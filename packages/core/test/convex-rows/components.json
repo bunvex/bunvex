@@ -1,0 +1,200 @@
+{
+  "source": "convex-local-backend precompiled-2026-09-28-5c7cb5b (Convex 1.46.0 CLI), a fresh SQLite deployment, one push of an app with a `messages` table and a `counter` component (tables `counters`, `messages`) mounted twice, as `counter` and `second`; read back by bunvex (STUDY-152 steps 1–2)",
+  "_components": [
+    {
+      "_creationTime": 1792025791040.2056,
+      "_id": "m022b3sc6v2bqpx9jz838jd5bs8gbykn",
+      "args": null,
+      "definitionId": "kw2dbrczh84dvpdwhx5ycmywb58gb6j4",
+      "env": null,
+      "httpPrefix": null,
+      "name": null,
+      "parent": null,
+      "state": "active"
+    },
+    {
+      "_creationTime": 1792025791040.2075,
+      "_id": "m026ymk6kagce105j4nvyh579x8gbr5x",
+      "args": [],
+      "definitionId": "kw21ghz79wh9xjrns2arvevw598gay9a",
+      "env": [],
+      "httpPrefix": null,
+      "name": "second",
+      "parent": "m022b3sc6v2bqpx9jz838jd5bs8gbykn",
+      "state": "active"
+    },
+    {
+      "_creationTime": 1792025791040.2097,
+      "_id": "m02cy7ptafv5f02vycvftjahmn8gb88r",
+      "args": [],
+      "definitionId": "kw21ghz79wh9xjrns2arvevw598gay9a",
+      "env": [],
+      "httpPrefix": null,
+      "name": "counter",
+      "parent": "m022b3sc6v2bqpx9jz838jd5bs8gbykn",
+      "state": "active"
+    }
+  ],
+  "_component_definitions": [
+    {
+      "_creationTime": 1792025791040.205,
+      "_id": "kw2dbrczh84dvpdwhx5ycmywb58gb6j4",
+      "childComponents": [
+        {
+          "args": [],
+          "env": [],
+          "name": "counter",
+          "path": "counter",
+          "type": "SerializedComponentInstantiation"
+        },
+        {
+          "args": [],
+          "env": [],
+          "name": "second",
+          "path": "counter",
+          "type": "SerializedComponentInstantiation"
+        }
+      ],
+      "definitionType": {
+        "type": "app"
+      },
+      "envVars": null,
+      "exports": {
+        "branch": [],
+        "type": "branch"
+      },
+      "httpMounts": {},
+      "httpPrefix": null,
+      "path": ""
+    },
+    {
+      "_creationTime": 1792025791040.2053,
+      "_id": "kw21ghz79wh9xjrns2arvevw598gay9a",
+      "childComponents": [],
+      "definitionType": {
+        "args": [],
+        "name": "counter",
+        "type": "childComponent"
+      },
+      "envVars": null,
+      "exports": {
+        "branch": [],
+        "type": "branch"
+      },
+      "httpMounts": {},
+      "httpPrefix": null,
+      "path": "counter"
+    }
+  ],
+  "componentTableRow": {
+    "_creationTime": 1792025790955.8208,
+    "_id": "g42a7e293edy85d1n0y5ghmxkh8gb2kq",
+    "name": "counters",
+    "namespace": {
+      "id": "m02cy7ptafv5f02vycvftjahmn8gb88r",
+      "kind": "byComponent"
+    },
+    "number": {
+      "$integer": "EScAAAAAAAA="
+    },
+    "state": "active"
+  },
+  "componentNamespace": {
+    "_udf_config": {
+      "number": 518,
+      "indexes": {
+        "by_creation_time": ["_creationTime"],
+        "by_id": ["_id"]
+      }
+    },
+    "_modules": {
+      "number": 521,
+      "indexes": {
+        "by_creation_time": ["_creationTime"],
+        "by_path": ["path"],
+        "by_id": ["_id"]
+      }
+    },
+    "_source_packages": {
+      "number": 524,
+      "indexes": {
+        "by_id": ["_id"],
+        "by_creation_time": ["_creationTime"]
+      }
+    },
+    "_cron_jobs": {
+      "number": 531,
+      "indexes": {
+        "by_creation_time": ["_creationTime"],
+        "by_id": ["_id"],
+        "by_name": ["name"]
+      }
+    },
+    "_schemas": {
+      "number": 532,
+      "indexes": {
+        "by_id": ["_id"],
+        "by_creation_time": ["_creationTime"],
+        "by_state": ["state"]
+      }
+    },
+    "_cron_job_logs": {
+      "number": 533,
+      "indexes": {
+        "by_creation_time": ["_creationTime"],
+        "by_id": ["_id"],
+        "by_name_and_ts": ["name", "ts"]
+      }
+    },
+    "_scheduled_jobs": {
+      "number": 539,
+      "indexes": {
+        "by_udf_path_and_next_event_ts": ["udfPath", "nextTs"],
+        "by_completed_ts": ["completedTs"],
+        "by_next_ts": ["nextTs"],
+        "by_creation_time": ["_creationTime"],
+        "by_id": ["_id"]
+      }
+    },
+    "_file_storage": {
+      "number": 540,
+      "indexes": {
+        "by_creation_time": ["_creationTime"],
+        "by_id": ["_id"],
+        "by_storage_id": ["storageId"]
+      }
+    },
+    "_cron_next_run": {
+      "number": 547,
+      "indexes": {
+        "by_id": ["_id"],
+        "by_creation_time": ["_creationTime"],
+        "by_next_ts": ["nextTs"],
+        "by_cron_job_id": ["cronJobId"]
+      }
+    },
+    "_schema_validation_progress": {
+      "number": 549,
+      "indexes": {
+        "by_creation_time": ["_creationTime"],
+        "by_id": ["_id"],
+        "by_validation_id": ["validationId", "_creationTime"]
+      }
+    },
+    "_scheduled_job_args": {
+      "number": 550,
+      "indexes": {
+        "by_creation_time": ["_creationTime"],
+        "by_id": ["_id"]
+      }
+    },
+    "_schema_validations": {
+      "number": 555,
+      "indexes": {
+        "by_schema_id_and_table_name": ["schemaId", "tableName", "_creationTime"],
+        "by_creation_time": ["_creationTime"],
+        "by_id": ["_id"]
+      }
+    }
+  }
+}

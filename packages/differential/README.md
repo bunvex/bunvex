@@ -32,6 +32,10 @@ backend is always started with `--disable-beacon`.
 - `test/cross-open.test.ts` (STUDY-133 PR 9): a store each binary wrote, opened by the other (same SQLite file
   and storage, the app of `cross-open-app/` redeployed by its CLI), read back by every kind of index, written,
   and read back by the first. Local only: the nightly does not run it.
+- `test/component-store.test.ts` (STUDY-152 steps 1–2): a store Convex writes with the components of
+  `component-store-app/` (a `counter` component, mounted twice, with a table of the root's name), opened by bunvex
+  (the root's tables only, read, written, listed by `data`), then by Convex again (its components intact). Run by
+  the nightly too.
 - `test/component-definitions.test.ts` (STUDY-153 PR 1): the same `defineApp` / `defineComponent` / `use` /
   `componentsGeneric` calls with Convex's package and bunvex's, their `export()` and errors compared. No backend
   needed; run by the nightly too.

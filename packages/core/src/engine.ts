@@ -2110,7 +2110,7 @@ export class Engine {
    */
   private async buildSummaries() {
     const at = this.committer.visibleTs;
-    const defs = [...this.catalog.tables.values(), ...this.catalog.hidden.values(), ...this.catalog.deleting.values()];
+    const defs = this.catalog.everyTable();
     const p = this.persistence;
     const checkpoints = this.opts.summaryCheckpoints !== false && canCheckpoint(p);
     const restored =
@@ -2128,10 +2128,7 @@ export class Engine {
         p,
         this.tableSummaries,
         this.opts.summaryCheckpoints || undefined,
-        () =>
-          [...this.catalog.tables.values(), ...this.catalog.hidden.values(), ...this.catalog.deleting.values()].map(
-            (t) => t.id,
-          ),
+        () => this.catalog.everyTable().map((t) => t.id),
       );
       this.summaryCheckpointer.start();
     }
