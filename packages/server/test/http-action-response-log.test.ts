@@ -2,7 +2,8 @@
 // covers the body, its lines end with the response-size warning, and past 100 MiB (Convex since 82e5c50) the
 // rest of the body is dropped with one `error:httpAction` line and no size warning. A HEAD request or a client
 // that goes away still gets the run logged. A body that fails (STUDY-31 §10) ends the response cleanly with an
-// `error:httpAction` line of its error, or fails the run (the 500) when it failed before the head would go.
+// `error:httpAction` line of its error, or fails the run (the 500) when it failed before the head would go. A chunk
+// that is not bytes fails the body the same way (STUDY-161 §15); null and undefined are no chunk.
 import { afterEach, expect, test } from "bun:test";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
@@ -77,6 +78,30 @@ async function setup() {
         },
       }),
   );
+  const enc = (t: string) => new TextEncoder().encode(t);
+  /** `first`, then each of `values` (after a timer when `late`), then `last`. */
+  const chunkRoute = (path: string, late: boolean, ...values: unknown[]) =>
+    route(
+      path,
+      () =>
+        new ReadableStream<unknown>({
+          async start(c) {
+            c.enqueue(enc("first "));
+            for (const v of values) {
+              if (late) await Bun.sleep(20);
+              c.enqueue(v);
+            }
+            c.enqueue(enc(" last"));
+            c.close();
+          },
+        }) as ReadableStream<Uint8Array>,
+    );
+  chunkRoute("/chunk-string", false, "a string");
+  chunkRoute("/chunk-object", false, { a: 1 });
+  chunkRoute("/chunk-late-number", true, 42);
+  chunkRoute("/chunk-nothing", false, null, undefined);
+  chunkRoute("/chunk-late-nothing", true, null, undefined);
+  chunkRoute("/chunk-buffers", false, enc("ab").buffer, new DataView(enc("dv").buffer), new Uint16Array([0x6968]));
   route("/small", () => "ok");
   // A body that never ends (an event stream).
   route(
@@ -190,6 +215,44 @@ test("a body that fails before the head would go: the run fails with its error, 
     expect(c.success ?? null).toBeNull();
     expect(c.error).toStartWith(`${message}\n`);
   }
+  expect(t.consoleEvents.filter((e) => e.system_code === "error:httpAction")).toEqual([]);
+});
+
+test("a chunk that is not bytes: the 500 in the handler's turn; after the head, a clean end and an error line", async () => {
+  const t = await setup();
+  for (const [path, got] of [
+    ["/chunk-string", "string"],
+    ["/chunk-object", "unknown"],
+  ]) {
+    const message = `Uncaught Error: serde_v8 error: invalid type; expected: buffer, got: ${got}`;
+    const r = await fetch(`${t.site}${path}`);
+    expect(r.status).toBe(500);
+    // Raised by the runtime: no frames.
+    const { code, trace } = (await r.json()) as { code: string; trace: string };
+    expect([code.replace(/^\[Request ID: \w+\] /, ""), trace]).toEqual([`Server Error: ${message}`, message]);
+    const c = await t.logged(path!);
+    expect([c.success ?? null, c.error]).toEqual([null, `${message}\n`]);
+  }
+  const r = await fetch(`${t.site}/chunk-late-number`);
+  expect(r.status).toBe(200);
+  expect(await r.text()).toBe("first ");
+  const c = await t.logged("/chunk-late-number");
+  expect([c.success, c.error ?? null]).toEqual([{ status: "200" }, null]);
+  expect(t.consoleEvents.filter((e) => e.system_code === "error:httpAction").map((e) => e.message)).toEqual([
+    "Uncaught Error: serde_v8 error: invalid type; expected: buffer, got: Number\n",
+  ]);
+});
+
+test("null and undefined chunks are skipped; an ArrayBuffer or any view of one is bytes", async () => {
+  const t = await setup();
+  for (const path of ["/chunk-nothing", "/chunk-late-nothing"]) {
+    const r = await fetch(`${t.site}${path}`);
+    expect([r.status, await r.text()]).toEqual([200, "first  last"]);
+    expect((await t.logged(path)).success).toEqual({ status: "200" });
+  }
+  const r = await fetch(`${t.site}/chunk-buffers`);
+  expect([r.status, await r.text()]).toEqual([200, "first abdvhi last"]);
+  await t.logged("/chunk-buffers");
   expect(t.consoleEvents.filter((e) => e.system_code === "error:httpAction")).toEqual([]);
 });
 
