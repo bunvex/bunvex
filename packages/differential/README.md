@@ -61,6 +61,9 @@ backend is always started with `--disable-beacon`.
   from the app of `functions-app/` — `_system/frontend/modules:*`, `components:list`, `getVersion`, the URLs
   (DV-474), `listEnvironmentVariables`, `latestExport`, `snapshotImport:list`; a function run over the socket as an
   admin and acting as a user; custom test queries (`/api/run_test_function`). Local only.
+- `test/dashboard-cors.test.ts` (STUDY-67 §9): the dashboard's routes, the health and meta routes and some CLI routes
+  from another origin on both: each preflight (the admin key's and the client's headers asked) compared whole, and
+  each request's CORS headers (`vary` included). Local only.
 - `test/storage-ids.test.ts`: a storage id's errors from every storage method in a query, a mutation and an
   action (the app of `storage-app/`): another table's id, ids that do not parse, UUIDs. Local only.
 - `test/nested-errors.test.ts`: a nested call's error from a V8 and a "use node" action (the app of `nested-errors-app/`):
