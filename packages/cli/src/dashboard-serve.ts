@@ -10,6 +10,8 @@
 // - In a project whose deployment is local (`BUNVEX_DEPLOYMENT=local:…`), on a loopback address, it answers
 //   `/api/current_deployment` with that deployment, as `dev`'s local dashboard does: a build made for it
 //   (`dashboard.zip`) signs in by itself.
+// - Every response carries the frame and security headers of Convex's image (dashboard-server.ts
+//   `dashboardHeaders`): framing same-origin only, or by the parents the build allows (DV-319, DV-488).
 import { argumentError, invalidArgument, missingArgument, unknownOption } from "./args.ts";
 import { type CurrentDeployment, isLoopback, normalizeDeploymentUrl, serveDashboard } from "./dashboard-server.ts";
 import type { Io } from "./io.ts";
@@ -83,6 +85,7 @@ export async function dashboardServeCommand(
       hostname,
       currentDeployment: isLoopback(hostname) ? localDeployment(io) : null,
       prefill: { deploymentUrl, adminKey: flags["--admin-key"] ?? io.env.BUNVEX_ADMIN_KEY },
+      securityHeaders: true,
     });
   } catch (e) {
     const message = (e as { code?: string }).code === "EADDRINUSE" ? `port ${port} is in use` : (e as Error).message;
