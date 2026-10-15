@@ -144,6 +144,12 @@ export class MockFiles {
     return e ? this.file(e) : null;
   }
 
+  /** Whether a stored file has this id (the mock's `tableOfId`). */
+  async has(id: string): Promise<boolean> {
+    await this.ready;
+    return this.entries.some((x) => x.meta.id === id);
+  }
+
   /** Not part of the contract: the stored blob, for tests. */
   async blob(id: string): Promise<Blob | null> {
     await this.ready;

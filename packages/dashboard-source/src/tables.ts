@@ -372,8 +372,8 @@ export class Tables {
     } catch {
       return null;
     }
-    const name = (await this.mapping(o?.signal))[String(number)];
-    return name === undefined || name.startsWith("_") ? null : name;
+    // the mapping's system tables are the two ids can point into (`_file_storage`, `_scheduled_jobs`), as Convex's
+    return (await this.mapping(o?.signal))[String(number)] ?? null;
   }
 
   // ---------------------------------------------------------------- shapes

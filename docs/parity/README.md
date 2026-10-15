@@ -202,7 +202,7 @@ gaps.
   Convex's, the embedding allow-list in `frame-ancestors` (DV-488). Left, none of them something an app hits:
   - the custom test query's type checking and completions;
   - the Data screen's editors checking what is typed against the schema (the deployment refuses it on save);
-  - search, vector and staged indexes in the Data screen's index list; `tableOfId` for system tables;
+  - search, vector and staged indexes in the Data screen's index list;
   - bunvex's own screens not offered on a deployment yet ([additions.md](additions.md), "on the mock"): the
     clients, authentication admin, analytics, flags and workflows (no server side). The system tables
     (AD-24) and the subscriptions inspector (AD-25) are on a deployment since STUDY-149's follow-ups, and the

@@ -408,6 +408,11 @@ export function describeDataSourceContract(
       if (!src.tableOfId) return;
       expect(await src.tableOfId(docs[0]!._id)).toBe(table);
       expect(await src.tableOfId("0000000000000000000000000000zzzz")).toBeNull();
+      // a file's and a scheduled run's ids, by the names Convex's table mapping gives their tables (STUDY-163 §2)
+      const file = (await src.listFiles?.({ numItems: 1, cursor: null }))?.page[0];
+      if (file) expect(await src.tableOfId(file.id)).toBe("_file_storage");
+      const run = (await src.listScheduledFunctions?.({ numItems: 1, cursor: null }))?.page[0];
+      if (run) expect(await src.tableOfId(run.id)).toBe("_scheduled_jobs");
     });
 
     area = "functions";

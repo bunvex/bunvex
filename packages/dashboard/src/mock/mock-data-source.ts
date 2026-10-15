@@ -77,6 +77,7 @@ import {
   type ValidatorJson,
   type Value,
 } from "../data-source.ts";
+import { FILE_STORAGE_TABLE, SCHEDULED_JOBS_TABLE } from "../database/reference.ts";
 import { tableNameProblem } from "../database/table-name.ts";
 import { mockParts } from "../extensions/mock.ts";
 import type { MockContext, MockExtensionPart } from "../extensions/mock-types.ts";
@@ -612,11 +613,14 @@ export class MockDataSource implements DashboardDataSource {
     });
   }
 
-  tableOfId(id: string, opts?: CallOptions): Promise<string | null> {
-    return this.call(opts?.signal, () => {
+  async tableOfId(id: string, opts?: CallOptions): Promise<string | null> {
+    const user = await this.call(opts?.signal, () => {
       for (const t of this.tables.values()) if (t.documents.some((d) => d._id === id)) return t.name;
       return null;
     });
+    if (user !== null) return user;
+    if (await this.files.has(id)) return FILE_STORAGE_TABLE;
+    return this.scheduler.has(id) ? SCHEDULED_JOBS_TABLE : null;
   }
 
   watchTables(onChange: () => void, _onError: (e: DataSourceError) => void) {

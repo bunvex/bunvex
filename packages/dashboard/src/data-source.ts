@@ -552,7 +552,10 @@ export interface DashboardDataSource
 
   /**
    * The table a document id belongs to (STUDY-12 D11: "Go to reference"), or null when no table has it — what
-   * Convex's dashboard reads off the id with its table mapping. Optional; without it, ids are plain text.
+   * Convex's dashboard reads off the id with its table mapping (`getReferencedTableName`). Besides the user tables,
+   * a file's id is in `_file_storage` and a scheduled run's in `_scheduled_jobs`, the names Convex's mapping gives
+   * them (STUDY-163 §2); "Go to reference" opens Files and the scheduled functions for them. Optional; without it,
+   * ids are plain text.
    */
   tableOfId?(id: string, opts?: CallOptions): Promise<string | null>;
 

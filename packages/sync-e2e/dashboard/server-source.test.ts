@@ -541,7 +541,7 @@ describe("the Data screen (STUDY-149 PR 2)", () => {
     expect(fetched).toBe(2);
   });
 
-  test("tableOfId: a user table's id names it; a system table's does not", async () => {
+  test("tableOfId: a user table's id names it; not an id is null (system tables: server-source-ops)", async () => {
     const src = open();
     const [doc] = (await src.listDocuments({ table: "items", numItems: 1, cursor: null })).page;
     expect(await src.tableOfId?.(doc!._id)).toBe("items");

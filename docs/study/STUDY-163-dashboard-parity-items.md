@@ -1,6 +1,6 @@
 # STUDY-163 — Small dashboard and CLI parity items
 
-- **Status:** approved by the owner (2026-10-15: match Convex); §1 implemented, §2–§4 planned (one PR each)
+- **Status:** approved by the owner (2026-10-15: match Convex); §1–§2 implemented, §3–§4 planned (one PR each)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend; Convex's CLI as npm's `convex@1.46.0`
 - **Related:** STUDY-149 (the dashboard on real data), STUDY-12 (the dashboard), STUDY-146 / DV-477 (the CLI's
   dashboard links), DV-479 (the dashboard contract follows Convex)
@@ -66,10 +66,29 @@ names it from `getTableMapping`, which lists `_file_storage` and `_scheduled_job
 
 ### bunvex, before
 
-`@bunvex/dashboard-source`'s `tableOfId` answers null for a system table (`tables.ts`: a mapping name starting with
-`_`), so "Go to reference" on a file's or a scheduled run's id says "No document has the id …". To be built: the
-contract's `tableOfId` names those two tables, and "Go to reference" (and the palette's "Open document") opens Files
-on the file or the scheduled functions list, as Convex's.
+`@bunvex/dashboard-source`'s `tableOfId` answered null for a system table (`tables.ts`: a mapping name starting with
+`_`), and the mock knew only its user tables, so "Go to reference" on a file's or a scheduled run's id said "No
+document has the id …", and the cell menu offered "View" instead.
+
+### As built
+
+- The contract's `tableOfId` names those ids by the mapping's names, `_file_storage` and `_scheduled_jobs` (DV-479: the
+  contract follows Convex). The server source returns the mapping's name as it is (`getTableMapping` already lists the
+  two); the mock looks the id up among its files and scheduled runs.
+- `packages/dashboard/src/database/reference.ts` `referenceTarget`, Convex's `documentHref`: a file's id opens Files
+  with the file open (`/files?file=<id>`; Convex's `files?id=`), a scheduled run's the scheduled functions (no run
+  selected, as Convex's), a user table's its document; another system table, none. "Go to reference" (the cell menu,
+  Ctrl+G) and the palette's "Open document" use it.
+
+### Tests
+
+The contract suite: a file's id is `_file_storage`, a scheduled run's `_scheduled_jobs` (mock, and the live server's
+deployment-features run). `sync-e2e/dashboard/server-source-ops.test.ts`: an uploaded file's and a scheduled run's
+ids on a live server. `dashboard/test/database-menu.test.tsx`: "Go to reference" on each lands on Files with the file
+open and on the scheduled functions; `reference.test.ts`: the targets.
+
+**Sabotage** (each restored, `git diff` clean): the source answering null for system tables again → the live test; `referenceTarget` sending a file to the Database screen → `database-menu.test.tsx` and
+`reference.test.ts`; the mock not looking at its files → the contract on the mock.
 
 ## 3. Schema checks in the document editors
 

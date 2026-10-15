@@ -1176,6 +1176,24 @@ describe("the sign-in page (STUDY-12 §19)", () => {
 });
 
 describe("the command palette (UI-01 §32)", () => {
+  test("a file's id opens Files with that file, as Convex's reference link (STUDY-163 §2)", async () => {
+    const { page, errors, close } = await open("/files");
+    await heading(page, "Files");
+    await page.getByRole("grid", { name: "Files" }).getByRole("row").nth(1).getByRole("gridcell").first().click();
+    await expect_(async () => expect(new URL(page.url()).searchParams.get("file")).toBeTruthy());
+    const id = new URL(page.url()).searchParams.get("file")!;
+    await page.goto(url("/database/users"));
+    await heading(page, "users");
+    await page.keyboard.press("Control+k");
+    await page.getByRole("combobox", { name: "Search screens, tables, functions and actions" }).fill(id);
+    await page.getByRole("option", { name: new RegExp(`Open document ${id}`) }).click();
+    await heading(page, "Files");
+    await expect_(async () => expect(new URL(page.url()).searchParams.get("file")).toBe(id));
+    await page.getByRole("complementary", { name: "File" }).waitFor();
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test("Ctrl+K from the Database screen: find a table, go, reopen, theme action, Escape; no freeze; axe in both themes", async () => {
     const { page, errors, close } = await open("/database/users");
     await heading(page, "users");
