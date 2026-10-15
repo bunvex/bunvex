@@ -1146,6 +1146,19 @@ export class Tx {
     return id;
   }
 
+  /**
+   * A new id of the root's table `name` that no document has yet (Convex's `allocate_internal_id`): a component's
+   * id is reserved so when its namespace is made, before its `_components` row is written. System only.
+   */
+  newId(name: string): string {
+    if (!this.systemAccess) throw new Error("newId is for system transactions");
+    const internal = new Uint8Array(16);
+    outsideExecution(() => crypto.getRandomValues(internal.subarray(0, 14)));
+    internal[14] = this.day >> 8;
+    internal[15] = this.day & 0xff;
+    return encodeId(this.catalog.table(name).number, internal);
+  }
+
   /** Delete a document of a table given by its definition (the deletion worker's). System only. */
   async deleteFrom(t: TableDef, doc: Doc) {
     if (!this.systemAccess) throw new Error("deleteFrom is for system transactions");

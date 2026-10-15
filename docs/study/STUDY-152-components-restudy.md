@@ -290,7 +290,26 @@ change no behaviour an app sees on its own and can start before C1 is decided.
 - **Tests:** `packages/core/test/component-namespaces.test.ts`, `packages/server/test/component-tables.test.ts`;
   each change sabotaged in turn (eleven sabotages, each failing a test).
 
-## 11. Sources
+## 11. Step 2: the component registry (built)
+
+- **Convex** keeps `ComponentRegistry` (crates/database/src/component_registry.rs), an in-memory index of the
+  `_components` rows whose lookups record reads on `by_id` and `by_parent_and_name`. Rows are
+  `SerializedComponentMetadata` (crates/common/src/bootstrap_model/components/mod.rs): the root's `parent`, `name`,
+  `args`, `env` null; a child's all set; `state` `active` or `unmounted` (absent read as active); anything else
+  fails to load ("Invalid component type", "Invalid component state: …"). A push's start reserves a new
+  component's namespace (`initialize_component_namespace`, crates/model/src/components/config.rs): a fresh
+  `_components` id and that namespace's system tables; the row with that id is written at the finish.
+- **bunvex** (`packages/core/src/components.ts`): `componentMeta` / `componentRow` read and write the rows as
+  Convex's (Convex's rows round-trip unchanged); `rootComponent`, `componentInParent`, `componentChildren`,
+  `componentPath`, `resolveComponentPath` and `allComponentPaths` query `_components` in the transaction, so a
+  query that resolves a path is invalidated when the tree changes, as Convex's recorded reads. No in-memory copy:
+  each lookup is an indexed read (a cache can come with the calls of step 5, measured).
+  `Engine.initializeComponentNamespace()` reserves the id (`Tx.newId`) and creates the twelve tables
+  (`COMPONENT_NAMESPACE_TABLES`) with the same numbers and indexes as a Convex component's (checked against the
+  fixture). Unmounting and deleting come with the push (step 3) and `/api/delete_component`.
+- **Tests:** `packages/core/test/component-registry.test.ts`; ten sabotages, each failing a test.
+
+## 12. Sources
 
 - Convex source at `d8bdde0` (files cited above); `origin/main` for `paginate`, `SUBFUNCTIONS_IN_SAME_ISOLATE`.
 - docs.convex.dev/components/using, /components/authoring, /understanding/best-practices,

@@ -246,6 +246,7 @@ export function operational(e: unknown): boolean {
 type JoinedEntry = { id: Buffer; json: Buffer | null; found: boolean; deleted: boolean };
 
 export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
+  readonly driver = "mysql";
   /** PERSIST-01 C7 as Convex's lease: the newest process wins (DV-413). */
   readonly leaseScope = "newest";
   private docs: DocRow[] = [];

@@ -255,6 +255,7 @@ export const connectionLost = (e: unknown) => {
 };
 
 export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
+  readonly driver = "postgres";
   /** PERSIST-01 C7 as Convex's lease: the newest process wins (DV-413). */
   readonly leaseScope = "newest";
   private docs: DocRow[] = [];

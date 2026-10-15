@@ -44,6 +44,7 @@ import { type NavGroupId, offers } from "../extensions/types.ts";
 import { DashLink } from "../router.tsx";
 import { type Runner, RunnerContext } from "../runner/context.tsx";
 import { DisconnectedOverlay } from "./connection.tsx";
+import { screenOffered } from "./offered-screens.tsx";
 import { PausedBanner } from "./paused-banner.tsx";
 
 // the runner is fetched when it first opens (it brings the code editor and the result views)
@@ -84,12 +85,15 @@ function NavGroup({ label, children }: { label?: string; children: ReactNode }) 
   );
 }
 
+/** A built-in screen's entry; none for a screen the source does not offer (offered-screens.tsx). */
 function NavItem(props: {
   link: ComponentProps<typeof DashLink>["link"];
   icon: ComponentType<{ className?: string; "aria-hidden"?: "true" }>;
   children: ReactNode;
 }) {
+  const { source } = useQueryScope();
   const Icon = props.icon;
+  if (typeof props.link.to === "string" && !screenOffered(source, props.link.to)) return null;
   return (
     <li>
       <DashLink link={props.link} className={NAV_LINK}>
@@ -119,10 +123,15 @@ function ExtensionNavItems({ group }: { group: NavGroupId }) {
   });
 }
 
+/** Whether some extension the source offers joins `group`. */
+function useOfferedExtensionIn(group: NavGroupId): boolean {
+  const { source } = useQueryScope();
+  return useExtensions().some((e) => e.nav.group === group && offers(source, e));
+}
+
 /** The "Extensions" group, when some extension joins it and the source offers it. */
 function ExtensionsGroup() {
-  const { source } = useQueryScope();
-  if (!useExtensions().some((e) => e.nav.group === "extensions" && offers(source, e))) return null;
+  if (!useOfferedExtensionIn("extensions")) return null;
   return (
     <NavGroup label="Extensions">
       <ExtensionNavItems group="extensions" />
@@ -135,6 +144,9 @@ export function Shell() {
   const main = useRef<HTMLElement>(null);
   const router = useRouter();
   const runner = useRunnerState();
+  const { source } = useQueryScope();
+  // "Manage" holds Authentication and the extensions that join it: no group when the source offers none of them
+  const manageShown = useOfferedExtensionIn("manage") || screenOffered(source, "/auth");
   // below md the screens' list is a menu (UI-01 §17.4): a disclosure that closes on a pick or on Escape
   const [menuOpen, setMenuOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
@@ -238,12 +250,14 @@ export function Shell() {
               </NavItem>
               <ExtensionNavItems group="functions" />
             </NavGroup>
-            <NavGroup label="Manage">
-              <NavItem link={{ to: "/auth" }} icon={KeyRound}>
-                Authentication
-              </NavItem>
-              <ExtensionNavItems group="manage" />
-            </NavGroup>
+            {manageShown && (
+              <NavGroup label="Manage">
+                <NavItem link={{ to: "/auth" }} icon={KeyRound}>
+                  Authentication
+                </NavItem>
+                <ExtensionNavItems group="manage" />
+              </NavGroup>
+            )}
             <NavGroup label="Observe">
               <NavItem link={{ to: "/logs" }} icon={ScrollText}>
                 Logs

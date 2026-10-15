@@ -1,6 +1,6 @@
 # STUDY-131 — Seeing inside a deployment: system tables, subscriptions, traces
 
-- **Status:** accepted (owner, 2026-10-05): AD-24 to AD-27, AD-26 with an in-house exporter, and T1 module by module. AD-26 built (§9); AD-27 built (§10). AD-25's screen on a deployment since 2026-10-14 ([STUDY-149](STUDY-149-dashboard-real-data.md), "Follow-ups after the plan: AD-25 on a deployment").
+- **Status:** accepted (owner, 2026-10-05): AD-24 to AD-27, AD-26 with an in-house exporter, and T1 module by module. AD-26 built (§9); AD-27 built (§10). AD-25's screen on a deployment since 2026-10-14 ([STUDY-149](STUDY-149-dashboard-real-data.md), "Follow-ups after the plan: AD-25 on a deployment"). AD-04's server side, `/api/debug/topology`, built (§11, owner 2026-10-14).
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
 - **Related:** [STUDY-08](STUDY-08-cache-and-subscriptions.md) (read sets, invalidation), [STUDY-12](STUDY-12-dashboard.md)
   (dashboard), [STUDY-58](STUDY-58-app-metrics.md) (app metrics), STUDY-114 (Prometheus `/metrics`), STUDY-125–130
@@ -842,3 +842,176 @@ interleaved, 12 runs each, Bun 1.4.2, Apple Silicon, load average 8–11 from ot
 | this branch | 54.7 ms (52.2) | 55.3 ms |
 
 About 55 µs per re-run on both: the difference is within the run-to-run noise.
+
+## 11. AD-04's server side: the topology endpoint (built 2026-10-14)
+
+The Topology screen (AD-04, [STUDY-12 §15](STUDY-12-dashboard.md#15-topology-a-bunvex-addition-added-1-oct-2026),
+UI-01 §22) was built on the mock: the contract's `getTopology` / `watchTopology` and `mock/topology.ts` define
+what it shows, after STUDY-24's roles (a leader that commits, holds the store's lease and runs the scheduler;
+followers that hold the clients). The #648 audit found no server side for it. The owner approved one on
+2026-10-14: a debug route beside AD-25's, and the dashboard source on it. Here, as one of the debug routes, the
+contract was checked field by field against what the server knows. Where the server can't report a field
+honestly, the contract says so; nothing is faked (DV-479's rule: the contract was mock-driven).
+
+### 11.1 What Convex does
+
+Convex has nothing equivalent. Its topology (Usher, funrun, the backend's leader election) is internal to its
+cloud. The open-source backend is one process and reports none of it, and neither dashboard has a topology view.
+So this is no divergence, only an addition (AD-04, accepted 2026-10-01).
+
+### 11.2 What bunvex is today
+
+One process. STUDY-24's follower mode is decided (H1–H12) but not built. No code path makes a follower, and
+no commit stream leaves the process. So a deployment's topology today is one leader, which holds every client and
+runs the scheduler, plus its store:
+
+- **memory and SQLite**: a file lock next to the store (`ProcessLock`, `leaseScope: "process"`). No second
+  process can open it, so no follower could ever join (STUDY-24 H7). The contract's `singleNode`.
+- **Postgres, MySQL, MongoDB**: Convex's lease (DV-413, `leaseScope: "newest"`). The newest process takes it, there
+  is no TTL, and a renewal only checks that it is still ours. Followers could join here once STUDY-24 is built,
+  and they would show as more nodes with `role: "follower"`, their `lag` and their own cache. The contract
+  already has that shape, and the mock draws it.
+
+### 11.3 The field mapping
+
+What the contract (`data-source-topology.ts`) and the screen ask for, and where each value comes from. All are
+counters the server already keeps, read when asked; the samples are taken every 5 s from the same counters.
+
+| Contract field | bunvex today (single node) | Source |
+|---|---|---|
+| `time` | now | `Date.now()` |
+| `nodes` | one node, the leader | — |
+| `node.id` | the lease holder, `host:pid:random` (as recorded in the store's lease or `.lock.holder`); `host:pid` on a store without a lease | `engine.leaseState.holder` (new) |
+| `node.role` | `leader` | — |
+| `node.state` | `ok`; `down` once the committer stopped (fail-stop: the process is on its way out) | `committer.stopped` |
+| `node.version` | the server's version | `SERVER_VERSION` (`/version`) |
+| `node.startedAt` | the process's start | `performance.timeOrigin` (as `bunvex_process_start_time_seconds`) |
+| `node.cpu` | the process's share of the machine's cores over the last 5 s window | `process.cpuUsage()` deltas, ÷ `availableParallelism()` |
+| `node.memoryBytes` | resident memory | `process.memoryUsage.rss()` (as `bunvex_process_resident_memory_bytes`) |
+| `node.memoryLimitBytes` | **null**: no limit is read (a cgroup's is future work) | — |
+| `node.connections` | WebSocket sync sessions, the dashboard's own included | `sync.sessions.size` (`/stats`' `syncSessions`) |
+| `node.subscriptions` | queries subscribed across them | `sync.subscriptionCount()` (`/stats`' `subscriptions`) |
+| `node.clients` | **absent**: the server keeps no client identity (AD-08's handshake is a later study) | — |
+| `node.cache.entries`, `bytes`, `maxBytes`, `evictions` | the query cache (`QueryCache`) | `engine.cache` |
+| `node.cache.maxEntries` | **absent**: the LRU is bounded by bytes, as Convex's `CacheManager` (`UDF_CACHE_MAX_SIZE`). **Contract change**: now optional | — |
+| `node.cache.hitRate` | hits ÷ (hits + misses) over the last window; null with no lookups | `engine.stats.cacheHits` / `cacheMisses` deltas |
+| `node.cache.invalidationsPerSecond` | results found invalidated by a commit, per second. bunvex's cache drops them lazily, on lookup, so this counts what was looked up | `engine.cache.misses.invalidated` deltas |
+| `node.cache.topQueries` | **absent**: it would scan every entry per call. `/api/debug/query_cache` lists the biggest (AD-25) | — |
+| `node.lag` | absent (the leader) | — |
+| `node.commitsPerSecond` | commits per second over the last window | `committer.commits` deltas (`bunvex_database_commits_total`) |
+| `node.scheduler` | true once the deployed code is loaded (the scheduler starts then) | `codeLoaded` |
+| `node.actionsRunning` | actions and Node actions running now (HTTP actions included) | the limiters' `outstanding.running` (as `function_concurrency`) |
+| `node.history` | up to 12 samples, one per 5 s: a minute. Each sample has `cpu`, `connections`, `cacheHitRate`, `invalidationsPerSecond` and `lagMs: null` | the reporter's ring |
+| `store.driver` | the driver's own name. A driver of another package is `other`. **Contract change**: `other` added | `persistence.driver` (new, on the five drivers) |
+| `store.singleNode` | true on memory and SQLite (a file lock) | `leaseScope === "process"` |
+| `store.leaseHolder` | this node's id while its committer runs, else null | `engine.leaseState` |
+| `store.leaseExpiresAt` | **null**: Convex's lease and the file lock have no expiry, and a TTL lease's would be on the store's clock | — |
+| `store.leaseTtlMs` | **null** for every first-party driver (no TTL). A `ttl` lease's TTL otherwise | `engine.leaseState.ttlMs` |
+| `store.latencyMs` | the last lease renewal's round trip (every TTL/3, 5 s ÷ 3 by default). Null on memory and SQLite, whose renewal does not reach a store | `engine.leaseState.renewalMs` (new) |
+| `store.sizeBytes` | **null**: no cheap size (a file's or a database's would be a call per request) | — |
+| `store.connections` | **null**: the drivers' pools do not report use | — |
+| `events` | `lease_acquired` when this process took a lease other nodes could share (Postgres, MySQL, MongoDB); none for a file lock (the mock's rule) | `engine.leaseState.acquiredAt` |
+
+### 11.4 The route
+
+`GET /api/debug/topology` (`packages/server/src/debug-routes.ts`, its own block; `topology.ts`): an admin key
+with ViewMetrics, as the other debug routes and `/stats`. A read-only key may look. It answers the contract's
+`Topology` as JSON. `TopologyReporter` keeps the last counters and a ring of 12 samples, taken every 5 s by a
+timer that does not keep the process alive and stops with the server. The rates of a node are those of its newest
+sample, and before the first one they are taken since the reporter started. No store read happens per call or
+per sample, so nothing here is on a hot path. The engine's only change is two `performance.now()` calls around
+each lease renewal.
+
+### 11.5 The source and the screen
+
+`@bunvex/dashboard-source` (`topology.ts`, appended to `server-source.ts` in its own block): `getTopology` reads
+the route and copies the contract's fields. An unknown driver becomes `other`; no nodes is `unavailable`.
+`watchTopology` polls every 5 s (the server's sampling period; `topologyIntervalMs` in tests). The first poll is
+at once but never synchronous, one request is out at a time, and unsubscribing aborts the request out and drops
+its answer.
+
+Following STUDY-149 PR 6's rule for polled reads, the Topology screen stops watching and reading while the
+deployment is disconnected. On the way back the watch starts again with a fresh picture. The Overview's polled
+read is gated too, and `topology` joined the polled keys asked again on return (`shell/connection.tsx`, beside
+AD-25's `subscriptions` and `query-cache`). Closing the source stops any watch still polling.
+
+The screen draws a deployment's single node as the mock's: clients, the node, its store. A byte-bounded cache
+shows its occupancy by size (`1.2 MB/100 MB` on the strip, "of the LRU's capacity in use (by size)" in the
+panel). An entry count without a limit is just a count. Nulls show as "—", as on the mock. The commits per second
+on the card are whole numbers, so a quiet deployment shows 0. Since the source offers `getTopology`, the
+Topology entry shows on a deployment (AD-24's follow-up hides only what is not offered).
+
+### 11.6 Divergences and additions
+
+None new. AD-04 was already accepted. The route belongs to it, and so do the contract's two relaxations
+(`maxEntries` optional, the driver `other`). They are DV-479's rule (the contract follows what a server can say),
+not divergences: Convex has no such contract. DV-520 and DV-521 are unused.
+
+### 11.7 Tests
+
+- **Server** (`packages/server/test/topology.test.ts`):
+  - one node on a memory store, field by field;
+  - a sync client connecting and subscribing, then leaving;
+  - samples: commits per second, a hit rate of 1/3 (a miss, a hit, an invalidated miss), invalidations, CPU in
+    range, the ring capped at 12;
+  - a store dressed as Postgres (`newest` lease): `singleNode` false, the holder, the renewal's round trip as
+    latency, the `lease_acquired` event;
+  - a stopped committer: `down`, no lease holder;
+  - another package's driver: `other`;
+  - no key: 403. A read-only key may look; a key without ViewMetrics is refused.
+- **Source, unit** (`packages/dashboard-source/test/topology.test.ts`):
+  - the route and the key;
+  - the contract's fields only;
+  - `other`, an empty picture, a 403;
+  - the watch: never synchronous, one request at a time, an error told and the polling kept, stopped by its
+    unsubscribe even with a request out.
+- **Source, live** (`packages/sync-e2e/dashboard/server-source-topology.test.ts`):
+  - the contract's topology area on a live server;
+  - the node and its memory store;
+  - a `BunvexClient` subscribing, seen through `watchTopology`, then gone;
+  - a read-only key.
+- **Screen** (`packages/dashboard/test/topology.test.tsx`):
+  - a deployment's one node as the server reports it: the summary, the label, the byte-bounded strip, the store,
+    the panel, axe;
+  - no read and no watch while disconnected, and a fresh one on return.
+- **Chromium** (`packages/sync-e2e/dashboard/topology.e2e.ts`, in `bun run e2e`): the built app signs in to a live
+  server at `/topology`.
+  - It shows the node (this process's lease holder), the cache strip by size and the file-locked memory store.
+  - A `BunvexClient` that subscribes raises the client count within a poll, and the node panel says so; axe is
+    clean.
+  - The client leaves, and the count goes back down.
+  - The test signs in cross-origin, as the image does. It does not depend on `/version` or `/stats`, whose CORS
+    preflight fails today (fixed separately on `fix/admin-routes-cors`). It does not hide that bug either: it
+    checks nothing in the header.
+
+**Sabotage.** Each one was restored after its run, and `git diff` was checked clean. The counts are failing tests.
+
+| Sabotage | server | source | live | screen | Chromium |
+|---|--:|--:|--:|--:|--:|
+| connections never counted | 1 | 0 | 1 | 0 | 1 |
+| the hit rate over hits only | 1 | 0 | 0 | 0 | — |
+| no ViewMetrics check | 1 | 0 | 0 | 0 | — |
+| `singleNode` always false | 1 | 0 | 1 | 0 | — |
+| the renewal's round trip not kept | 1 | 0 | 0 | 0 | — |
+| the first picture delivered synchronously | 0 | 1 | 1 | 0 | — |
+| polled without waiting for the answer | 0 | 1 | 0 | 0 | — |
+| unsubscribing does not stop the poll | 0 | 1 | 0 | 0 | — |
+| the source does not offer the topology | 0 | 0 | 3 | 0 | 1 |
+| the watch not stopped while disconnected | 0 | 0 | 0 | 1 | — |
+| the cache's occupancy by entries only | 0 | 0 | 0 | 1 | — |
+
+### 11.8 Measurements
+
+In-process server, 200 sync sessions with 5 subscriptions each, 2000 sequential requests after 100 warm-ups. Bun
+1.4.2, Apple Silicon, a shared machine:
+
+| | per request |
+|---|--:|
+| `GET /version` | 50.4 µs |
+| `GET /stats` | 66.1 µs |
+| `GET /api/debug/topology` | 68.5 µs |
+| `TopologyReporter.snapshot()` alone | 2.2 µs |
+| one sample (every 5 s) | 0.37 µs |
+
+The answer is about 2 KB with a full minute of history. The hot paths (queries, mutations, commits, sync) are
+unchanged; the engine's lease renewal adds two clock reads every TTL/3.
