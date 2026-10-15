@@ -661,8 +661,11 @@ export function bootstrapCatalog(ids: BootstrapIds): Catalog {
   return c;
 }
 
-/** A table a schema change creates: its `_tables` row's fields (its tablet is that row's id, once written). */
-export type NewTable = { name: string; number: number; state: TableState };
+/**
+ * A table a schema change creates: its `_tables` row's fields (its tablet is that row's id, once written); in a
+ * component's namespace when `namespace` names it.
+ */
+export type NewTable = { name: string; number: number; state: TableState; namespace?: string };
 /**
  * An index a schema change creates: on an existing table (`tablet`) or on one it creates (`table`, by name); its
  * id is its `_index` row's, once written.
@@ -758,6 +761,8 @@ export function planCatalog(
   userTables = true,
   /** The next `persistenceIndexId` (`_next_persistence_index_id`, STUDY-128): never a dropped index's. */
   nextPersistenceIndexId?: number,
+  /** The component whose namespace the declared tables are in (its `_components` id); the root's when absent. */
+  namespace?: string,
 ): CatalogChanges {
   // A new table's tablet is its `_tables` row's id, and a new index's id its `_index` row's: the caller writes
   // the rows (`writeCatalogChanges`). Random, so never a purged table's or a dropped index's.
@@ -769,10 +774,10 @@ export function planCatalog(
     restageIndexes: [],
     nextIndexId,
   };
-  // Numbers and names are the root's; the cap on user tables counts every namespace's (Convex's
+  // Numbers and names are the namespace's; the cap on user tables counts every namespace's (Convex's
   // `MAX_USER_TABLES` is per deployment).
-  const usedNumbers = new Set(tables.filter((t) => t.namespace === undefined).map((t) => t.number));
-  const active = activeTables(tables);
+  const usedNumbers = new Set(tables.filter((t) => t.namespace === namespace).map((t) => t.number));
+  const active = activeTables(tables, namespace);
   let userTableCount = tables.filter((t) => (t.state ?? "active") === "active" && !t.name.startsWith("_")).length;
   for (const d of declared) {
     const tablet = active.find((t) => t.name === d.name)?.tablet;
@@ -790,7 +795,12 @@ export function planCatalog(
         while (usedNumbers.has(number) || (system && RESERVED_SYSTEM_NUMBERS.has(number))) number++;
       }
       usedNumbers.add(number);
-      changes.insertTables.push({ name: d.name, number, state: "active" });
+      changes.insertTables.push({
+        name: d.name,
+        number,
+        state: "active",
+        ...(namespace === undefined ? {} : { namespace }),
+      });
     }
     const stored = tablet === undefined ? [] : indexes.filter((i) => i.tablet === tablet);
     const wanted = wantedIndexes(d);

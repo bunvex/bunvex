@@ -6,13 +6,14 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 238 | 2 | 6 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 238 | 3 | 5 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 163 | 2 | 1 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 229 | 20 | 13 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 230 | 20 | 13 |
 
-Beyond Convex, [additions.md](additions.md) lists 32 additions: 27 built (6 of them dashboard screens on the
-mock), 3 accepted, 2 deferred (2026-10-15: the dashboard audit after STUDY-149; AD-41 deferred; AD-24 and AD-25's
-screens on a deployment; AD-42, rooms and presence scopes, accepted in STUDY-164).
+Beyond Convex, [additions.md](additions.md) lists 32 additions: 27 built (5 of them dashboard screens on the
+mock), 3 accepted, 2 deferred, none proposed (2026-10-15, the dashboard audit after STUDY-149; AD-41 deferred; then
+AD-24 and AD-25's screens on a deployment, and AD-04's Topology, STUDY-131 §11; AD-42, rooms and presence scopes,
+accepted in STUDY-164).
 
 These counts were recounted on 2026-10-12 (the docs audit: cloud-only and decided no-build rows re-marked *n/a*) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
@@ -165,7 +166,8 @@ gaps.
 
 **High: an app that uses it does not run**
 
-1. **Components** (DV-55, decided to match Convex; plan in [STUDY-62](../study/STUDY-62-components.md)):
+1. **Components** (DV-55, decided to match Convex; plan in [STUDY-62](../study/STUDY-62-components.md), revised in
+   [STUDY-152](../study/STUDY-152-components-restudy.md); steps 1–2 built: namespaced tables, the registry):
    `convex.config.ts`, `defineApp` / `defineComponent`, table and function namespaces, `components.*`
    references and their codegen, component HTTP mounts and env. Any app on `@convex-dev/*` components
    (rate limiter, aggregate, workpool, auth, …) cannot run.
@@ -199,7 +201,8 @@ gaps.
   - search, vector and staged indexes in the Data screen's index list; `tableOfId` for system tables;
   - the environment variables screen opening a named variable (Convex's `?var=`, which its CLI's link uses);
   - bunvex's own screens not offered on a deployment yet ([additions.md](additions.md), "on the mock"): the
-    topology, the clients, authentication admin, analytics, flags and workflows (no server side). The system tables
-    (AD-24) and the subscriptions inspector (AD-25) are on a deployment since STUDY-149's follow-ups.
+    clients, authentication admin, analytics, flags and workflows (no server side). The system tables
+    (AD-24) and the subscriptions inspector (AD-25) are on a deployment since STUDY-149's follow-ups, and the
+    topology (AD-04, STUDY-131 §11): its one node; followers wait for STUDY-24.
 - HTTP actions (STUDY-31 §10.6): a response stream's chunk that is not bytes (a string) is sent as text, where
   Convex fails the body (`serde_v8 … expected: buffer`).

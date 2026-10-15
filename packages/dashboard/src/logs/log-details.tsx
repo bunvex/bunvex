@@ -13,10 +13,11 @@ import { cn } from "@bunvex/ui/lib/utils";
 import { CircleCheck, CircleX, LoaderCircle } from "lucide-react";
 import { useContext, useId } from "react";
 import { clientLine, PlatformIcon } from "../clients/words.tsx";
-import { TraceUrlContext, traceHref } from "../context.tsx";
+import { TraceUrlContext, traceHref, useQueryScope } from "../context.tsx";
 import type { ClientApp, ExecutionLinks, ExecutionRunReason, LogEntry } from "../data-source.ts";
 import { DashLink } from "../router.tsx";
 import { formatBytes, timeAgo } from "../screens/stats.ts";
+import { screenOffered } from "../shell/offered-screens.tsx";
 import { Panel } from "../shell/panel.tsx";
 import { formatTime } from "../shell/time.tsx";
 import { type CallNode, callTree, countCalls } from "./call-tree.ts";
@@ -75,6 +76,8 @@ const WHY: Record<ExecutionRunReason, string> = {
 function WhyItRan({ links, path }: { links: ExecutionLinks; path: string | undefined }) {
   const id = useId();
   const template = useContext(TraceUrlContext);
+  // the link only where the Subscriptions screen is offered (offered-screens.tsx)
+  const subscriptions = screenOffered(useQueryScope().source, "/subscriptions");
   const sub = links.subscription;
   const trace = links.trace;
   const href = trace && traceHref(template, trace);
@@ -92,7 +95,7 @@ function WhyItRan({ links, path }: { links: ExecutionLinks; path: string | undef
                 {WHY[sub.reason]}
                 {sub.invalidation && ` (commit ts ${sub.invalidation.commitTs})`}
               </span>
-              {path && (
+              {path && subscriptions && (
                 <DashLink
                   link={{
                     to: "/subscriptions",

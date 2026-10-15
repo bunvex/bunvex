@@ -196,11 +196,21 @@ const query = (params: Record<string, string | number | undefined>) => {
 /** The longest a follow request waits on the server (its `FOLLOW_MAX_MS`). */
 export const FOLLOW_MS = 60_000;
 
+/** Runs `fn` once after `ms` until the returned cancel is called (tests pass their own, to drive the waits). */
+export type After = (fn: () => void, ms: number) => () => void;
+
+const afterTimeout: After = (fn, ms) => {
+  const timer = setTimeout(fn, ms);
+  return () => clearTimeout(timer);
+};
+
 export type InspectorOptions = {
   /** The deployment's connection status (the source's `watchConnection`); none: always connected. */
   connection?: (onStatus: (s: ConnectionStatus) => void) => Unsubscribe;
   /** For tests: the backoff between failures. Default: `backoffWithJitter`. */
   backoff?: (failures: number) => number;
+  /** For tests: the loop's timers (its first tick and its back-offs). Default: `setTimeout`. */
+  after?: After;
   /** How long one follow request may wait on the server, in ms. Default: the server's longest, 60 000. */
   followTimeoutMs?: number;
 };
@@ -238,24 +248,30 @@ export class Inspector {
     onEvents: (events: InvalidationEvent[]) => void,
     onError: (e: DataSourceError) => void,
   ): Unsubscribe {
+    const after = this.opts.after ?? afterTimeout;
     const stop = new AbortController();
     // the request in flight, aborted on a disconnection as well as by the stop
     let request: AbortController | null = null;
+    // the request in flight was aborted by a disconnection: its failure is not one, even when the connection is
+    // back by the time it lands (nothing would wake the back-off it started then)
+    let cut = false;
     let connected = true;
     // ends the wait in progress (a back-off, or the wait for the connection) when the connection comes back
     let wake: (() => void) | null = null;
     const offConnection = this.opts.connection?.((s) => {
       // only `disconnected` stops it (`unknown` is not settled yet), as the screens' overlay
       connected = s !== "disconnected";
-      if (!connected) request?.abort();
-      else wake?.();
+      if (!connected && request) {
+        cut = true;
+        request.abort();
+      } else if (connected) wake?.();
     });
     /** Waits `ms` (forever when undefined), or until the connection comes back or the loop stops. */
     const wait = (ms?: number) =>
       new Promise<void>((resolve) => {
-        const timer = ms === undefined ? undefined : setTimeout(done, ms);
+        const cancel = ms === undefined ? undefined : after(done, ms);
         function done() {
-          clearTimeout(timer);
+          cancel?.();
           wake = null;
           stop.signal.removeEventListener("abort", done);
           resolve();
@@ -266,6 +282,7 @@ export class Inspector {
 
     const ask = async (cursor: number, timeoutMs: number): Promise<FeedAnswer> => {
       request = new AbortController();
+      cut = false;
       const signal = AbortSignal.any([stop.signal, request.signal]);
       try {
         return await this.http.json<FeedAnswer>(
@@ -311,8 +328,11 @@ export class Inspector {
           if (a.entries.length > 0) onEvents(invalidationsOf(a));
         } catch (e) {
           if (stop.signal.aborted) return;
-          // aborted by a disconnection: the loop's top waits for the connection, then catches up
-          if (!connected) continue;
+          // aborted by a disconnection (the connection back or not): the loop's top waits for it, then catches up
+          if (!connected || cut) {
+            resync = true;
+            continue;
+          }
           const error = e instanceof DataSourceError ? e : new DataSourceError("unavailable", String(e));
           // a key that may not view metrics (or a refused key) stays so: stop, and say so at once
           if (error.code === "unauthorized") {
@@ -327,10 +347,10 @@ export class Inspector {
       }
     };
     // never synchronously: the first request goes out on a later tick
-    const first = setTimeout(() => void loop(), 0);
+    const cancelFirst = after(() => void loop(), 0);
     const off = () => {
       this.loops.delete(off);
-      clearTimeout(first);
+      cancelFirst();
       stop.abort();
       offConnection?.();
     };

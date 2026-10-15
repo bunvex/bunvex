@@ -43,7 +43,7 @@ class FakeFeed {
   /** Requests aborted while waiting. */
   aborted = 0;
   /** Answers given instead of the feed's, first in first out. */
-  readonly failures: (() => Response)[] = [];
+  readonly failures: (() => Response | Promise<Response>)[] = [];
   private waiters = new Set<() => void>();
   readonly http: AdminHttp;
 
@@ -103,14 +103,63 @@ class FakeFeed {
   }
 }
 
-async function until<T>(f: () => T | undefined | false, what: string, ms = 2000): Promise<T> {
-  const deadline = performance.now() + ms;
-  for (;;) {
+/** One later task: every timer already due runs first (the fake feed's round trip is one such task). */
+const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
+/**
+ * Waits for `f`, a task at a time. The bound counts tasks, not milliseconds: a loaded machine runs them slower,
+ * never fewer, so it only ends a test that would wait forever.
+ */
+async function until<T>(f: () => T | undefined | false, what: string, tasks = 5000): Promise<T> {
+  for (let i = 0; i < tasks; i++) {
     const x = f();
     if (x) return x;
-    if (performance.now() > deadline) throw new Error(`timed out waiting for ${what}`);
-    await Bun.sleep(2);
+    await tick();
   }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+/** Lets the loop run as far as it goes (it asks nothing more after this many round trips), for a "nothing happens". */
+async function settle() {
+  for (let i = 0; i < 20; i++) await tick();
+}
+
+/**
+ * The loop's timers, driven by the test: a 0 ms one (the first tick) runs on a later task, as `setTimeout`'s; the
+ * others (the back-offs) only when `fire` says, so no back-off ever ends on the clock.
+ */
+function manualTimers() {
+  const pending = new Set<{ fn: () => void; ms: number }>();
+  const after = (fn: () => void, ms: number) => {
+    if (ms === 0) {
+      const t = setTimeout(fn, 0);
+      return () => clearTimeout(t);
+    }
+    const timer = { fn, ms };
+    pending.add(timer);
+    return () => void pending.delete(timer);
+  };
+  return {
+    after,
+    /** The waits scheduled and not ended, in ms. */
+    pending: () => [...pending].map((t) => t.ms),
+    /** Ends every wait scheduled. */
+    fire() {
+      for (const t of [...pending]) {
+        pending.delete(t);
+        t.fn();
+      }
+    },
+  };
+}
+
+/** A promise the test resolves. */
+function gate() {
+  let open!: () => void;
+  const opened = new Promise<void>((r) => {
+    open = r;
+  });
+  return { open, opened };
 }
 
 /** A watcher's deliveries and errors. */
@@ -324,12 +373,12 @@ describe("following invalidations", () => {
     off();
     await until(() => feed.aborted === 1, "the abort");
     feed.push();
-    await Bun.sleep(20);
+    await settle();
     expect([feed.asked.length, f.events.length, f.errors.length]).toEqual([asked, 0, 0]);
     // stopped before its first request: none goes out
     const off2 = new Inspector(feed.http).watchInvalidations({}, f.onEvents, f.onError);
     off2();
-    await Bun.sleep(10);
+    await settle();
     expect(feed.asked.length).toBe(asked);
   });
 
@@ -394,7 +443,7 @@ describe("following invalidations", () => {
     feed.failures.push(() => Response.json({ code: "Forbidden", message: "may not view metrics" }, { status: 403 }));
     const off = new Inspector(feed.http, { backoff: () => 1 }).watchInvalidations({}, f.onEvents, f.onError);
     await until(() => f.errors.length === 1, "the refusal");
-    await Bun.sleep(20);
+    await settle();
     expect(f.errors[0]!.code).toBe("unauthorized");
     expect(feed.asked.length).toBe(1);
     off();
@@ -423,7 +472,7 @@ describe("following invalidations", () => {
     const asked = feed.asked.length;
     feed.push();
     feed.push();
-    await Bun.sleep(20);
+    await settle();
     expect(feed.asked.length).toBe(asked);
     expect(f.seqs()).toEqual([1]);
     tell("connected");
@@ -442,9 +491,11 @@ describe("following invalidations", () => {
   test("a back-off ends when the connection comes back", async () => {
     const feed = new FakeFeed();
     const f = follower();
+    const timers = manualTimers();
     let tell: (s: ConnectionStatus) => void = () => {};
     const off = new Inspector(feed.http, {
       backoff: () => 60_000,
+      after: timers.after,
       connection: (onStatus) => {
         tell = onStatus;
         return () => {};
@@ -455,11 +506,62 @@ describe("following invalidations", () => {
       throw new TypeError("connection refused");
     });
     feed.push();
-    await until(() => f.seqs().length === 1 && feed.asked.length === 3, "a failure, then the back-off");
+    // the back-off itself scheduled, not a request seen going out: the failure has landed
+    await until(() => f.seqs().length === 1 && timers.pending().length === 1, "a failure, then the back-off");
+    expect(timers.pending()).toEqual([60_000]);
+    feed.push();
+    tell("disconnected");
+    await settle();
+    // still in its back-off: nothing asked while disconnected
+    expect([feed.asked.length, timers.pending()]).toEqual([3, [60_000]]);
+    tell("connected");
+    // the minute never passes (the test's timers): only the connection's return can end it
+    await until(() => f.seqs().length === 2, "seq 2, without the back-off's minute");
+    expect(timers.pending()).toEqual([]);
+    expect(f.errors).toEqual([]);
+    off();
+  });
+
+  test("a request cut by a disconnection is no failure, even when the connection is back before it lands", async () => {
+    const feed = new FakeFeed();
+    const f = follower();
+    const timers = manualTimers();
+    const backoffs: number[] = [];
+    let tell: (s: ConnectionStatus) => void = () => {};
+    const off = new Inspector(feed.http, {
+      backoff: (n) => {
+        backoffs.push(n);
+        return 60_000;
+      },
+      after: timers.after,
+      connection: (onStatus) => {
+        tell = onStatus;
+        return () => {};
+      },
+    }).watchInvalidations({}, f.onEvents, f.onError);
+    await until(() => feed.waiting === 1, "the follow request");
+    // the next request is held on its way, then fails as an aborted fetch does
+    const held = gate();
+    let arrived = false;
+    feed.failures.push(async () => {
+      arrived = true;
+      await held.opened;
+      throw new DOMException("aborted", "AbortError");
+    });
+    feed.push();
+    await until(() => f.seqs().length === 1 && arrived, "the next request in flight");
+    // a blip: the request is aborted, and the connection is back before its rejection reaches the loop
     feed.push();
     tell("disconnected");
     tell("connected");
-    await until(() => f.seqs().length === 2, "seq 2, long before the back-off's minute");
+    held.open();
+    // caught up at once: no back-off (whose wake-up has already passed), no failure counted
+    await until(() => f.seqs().length === 2 && feed.waiting === 1, "seq 2, then following again");
+    expect([backoffs, timers.pending(), f.errors]).toEqual([[], [], []]);
+    expect(feed.asked.slice(-2)).toEqual([
+      "/api/debug/invalidations?cursor=0&timeoutMs=0",
+      "/api/debug/invalidations?cursor=2&timeoutMs=60000",
+    ]);
     off();
   });
 
@@ -473,7 +575,7 @@ describe("following invalidations", () => {
     inspector.close();
     await until(() => feed.aborted === 2, "both aborted");
     feed.push();
-    await Bun.sleep(20);
+    await settle();
     expect(f.events).toEqual([]);
   });
 });

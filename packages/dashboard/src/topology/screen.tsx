@@ -2,7 +2,9 @@
 // the clients, the followers they connect to, the leader that feeds them the commit stream, and the store the
 // leader holds the lease on, drawn as a diagram (diagram.tsx). A one-line summary above says the same in words;
 // the events feed below lights a node when one is picked. A deployment of one node (bunvex today) shows that
-// node and its store. Live from watchTopology.
+// node and its store. Live from watchTopology, which a deployment's source polls (STUDY-131 §11): while the
+// deployment is disconnected neither it nor the read are asked (STUDY-149 PR 6's rule for polled reads), and on
+// the way back the watch starts again with a fresh picture.
 
 import { Button } from "@bunvex/ui/components/button";
 import { cn } from "@bunvex/ui/lib/utils";
@@ -18,6 +20,7 @@ import { type Topology, toDataSourceError } from "../data-source.ts";
 import { type TopologySearch, topologyRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { BAR_TITLE } from "../shell/bars.ts";
+import { useDisconnected } from "../shell/connection.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { NotOffered } from "../shell/not-offered.tsx";
 import { ClientsPanel } from "./clients-panel.tsx";
@@ -34,16 +37,18 @@ export function TopologyScreen() {
   const caps = useQuery(capabilitiesQuery(scope));
   const canView = caps.data?.operations.includes("viewMetrics") ?? false;
   const offered = typeof source.getTopology === "function";
+  const disconnected = useDisconnected();
   const key = [...dashboardKeys.all(scope.scope), "topology"] as const;
   const topology = useQuery({
     queryKey: key,
     queryFn: ({ signal }) => source.getTopology!({ signal }),
-    enabled: offered && canView,
+    enabled: offered && canView && !disconnected,
   });
+  const live = offered && canView && !disconnected;
   const liveError = useWatch<Topology>(
-    (onValue, onError) => (offered && canView && source.watchTopology?.(onValue, onError)) || (() => {}),
+    (onValue, onError) => (live && source.watchTopology?.(onValue, onError)) || (() => {}),
     (t) => queryClient.setQueryData(key, t),
-    [source, scope.scope, offered, canView],
+    [source, scope.scope, live],
   );
   const search = topologyRoute.useSearch();
   const navigate = topologyRoute.useNavigate();
