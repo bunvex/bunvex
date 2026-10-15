@@ -37,6 +37,7 @@ export {
 } from "./hooks.ts";
 export { type Preloaded, usePreloadedQuery } from "./hydration.ts";
 export type { RequestForQueries } from "./queries-observer.ts";
+export { usePresence, useRoom } from "./rooms.ts";
 export {
   insertAtBottomIfLoaded,
   insertAtPosition,
