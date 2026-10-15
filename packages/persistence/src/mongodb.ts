@@ -176,6 +176,7 @@ export function operational(e: unknown): boolean {
 }
 
 export class MongoPersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
+  readonly driver = "mongodb";
   /** PERSIST-01 C7 as Convex's lease, by analogy: the newest process wins (DV-413, DV-416). */
   readonly leaseScope = "newest";
   private docsBuf: DocRow[] = [];

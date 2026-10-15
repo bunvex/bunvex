@@ -27,6 +27,7 @@ import { type JSONValue, toJsonValue, type Value } from "@bunvex/values";
 import type { Functions } from "./functions.ts";
 import type { Execution, SyncHub } from "./sync.ts";
 import { argsDigest, type FeedRecord, type HistoryRecord } from "./sync-inspector.ts";
+import type { TopologyReporter } from "./topology.ts";
 
 export const DEBUG_ROUTE = /^\/api\/debug\/(subscriptions|query_cache|index_cache|invalidations)$/;
 /** The longest a follow request waits for an invalidation, as the log streams' long poll. */
@@ -227,4 +228,24 @@ export async function debugRoute(ctx: Ctx, url: URL, req: Request, caller: Calle
   if (m[1] === "query_cache") return jsonResponse(queryCache(ctx, url));
   if (m[1] === "index_cache") return jsonResponse(indexCache(ctx));
   return invalidations(ctx, url, req);
+}
+
+// ---------------------------------------------------------------- the topology (STUDY-131 §11, AD-04)
+// `GET /api/debug/topology`: the deployment's topology, as the dashboard's Topology screen draws it (the
+// contract's `Topology`): this process as the leader, alone, with its connections, subscriptions, query cache,
+// commits per second and a minute of samples, and the store with its driver and lease. Admin only, with
+// ViewMetrics, as the inspector's routes; read from counters the server keeps (topology.ts), no store read.
+
+export const TOPOLOGY_ROUTE = "/api/debug/topology";
+
+/** The topology route; `null` when `url` is not it. Throws the caller's access error. */
+export function topologyRoute(
+  ctx: { functions: Functions; topology: TopologyReporter },
+  url: URL,
+  req: Request,
+  caller: Caller,
+): Response | null {
+  if (url.pathname !== TOPOLOGY_ROUTE || req.method !== "GET") return null;
+  ctx.functions.requireOperation(caller, "ViewMetrics");
+  return jsonResponse(ctx.topology.snapshot());
 }

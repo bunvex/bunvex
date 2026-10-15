@@ -23,7 +23,7 @@ export function expectTopology(t: Topology) {
     if (n.cpu !== null) expect(n.cpu >= 0 && n.cpu <= 1).toBe(true);
     if (n.cache) {
       const c = n.cache;
-      expect(c.entries >= 0 && c.entries <= c.maxEntries).toBe(true);
+      expect(c.entries >= 0 && (c.maxEntries === undefined || c.entries <= c.maxEntries)).toBe(true);
       if (c.bytes !== undefined && c.maxBytes !== undefined) expect(c.bytes <= c.maxBytes).toBe(true);
       if (c.hitRate !== null) expect(c.hitRate >= 0 && c.hitRate <= 1).toBe(true);
       expect(c.invalidationsPerSecond >= 0 && c.evictions >= 0).toBe(true);

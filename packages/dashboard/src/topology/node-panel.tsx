@@ -10,7 +10,7 @@ import type { NodeCache, Topology, TopologyNode } from "../data-source.ts";
 import { formatBytes, formatCount, formatPercent } from "../screens/stats.ts";
 import { Panel } from "../shell/panel.tsx";
 import { LagGauge, StateLabel } from "./parts.tsx";
-import { lagText, servesClients, uptime } from "./words.ts";
+import { cacheFill, lagText, servesClients, uptime } from "./words.ts";
 
 const peak = (xs: number[]) => (xs.length ? Math.max(...xs) : 0);
 const last = (xs: number[]) => xs.at(-1) ?? 0;
@@ -128,6 +128,7 @@ function CacheDetails({ n, cache: c, span }: { n: TopologyNode; cache: NodeCache
   const hits = n.history.map((h) => Math.round((h.cacheHitRate ?? 0) * 100));
   const invalidations = n.history.map((h) => h.invalidationsPerSecond ?? 0);
   const top = c.topQueries ?? [];
+  const fill = cacheFill(c);
   return (
     <div className="flex flex-col gap-4 text-sm" data-testid="cache-details">
       <p className="text-muted-foreground">
@@ -136,7 +137,8 @@ function CacheDetails({ n, cache: c, span }: { n: TopologyNode; cache: NodeCache
       <Facts>
         <Fact label="Hit rate">{c.hitRate === null ? "—" : formatPercent(c.hitRate)}</Fact>
         <Fact label="Entries">
-          {formatCount(c.entries)} of {formatCount(c.maxEntries)}
+          {formatCount(c.entries)}
+          {c.maxEntries !== undefined && ` of ${formatCount(c.maxEntries)}`}
         </Fact>
         {c.bytes !== undefined && (
           <Fact label="Size">
@@ -147,17 +149,16 @@ function CacheDetails({ n, cache: c, span }: { n: TopologyNode; cache: NodeCache
         <Fact label="Invalidations">{formatCount(c.invalidationsPerSecond)}/s</Fact>
         <Fact label="Evictions">{formatCount(c.evictions)}</Fact>
       </Facts>
-      <div className="flex flex-col gap-1">
-        <span aria-hidden="true" className="block h-1 w-full bg-muted">
-          <span
-            className="block h-full bg-info"
-            style={{ width: `${Math.round((c.entries / c.maxEntries) * 100)}%` }}
-          />
-        </span>
-        <p className="text-xs text-muted-foreground">
-          {formatPercent(c.entries / c.maxEntries)} of the LRU's capacity in use
-        </p>
-      </div>
+      {fill !== null && (
+        <div className="flex flex-col gap-1">
+          <span aria-hidden="true" className="block h-1 w-full bg-muted">
+            <span className="block h-full bg-info" style={{ width: `${Math.round(Math.min(1, fill) * 100)}%` }} />
+          </span>
+          <p className="text-xs text-muted-foreground">
+            {formatPercent(fill)} of the LRU's capacity in use{c.maxEntries === undefined && " (by size)"}
+          </p>
+        </div>
+      )}
       {n.history.length > 1 && (
         <section aria-label="Recent cache history" className="flex flex-col gap-3">
           <Trend title={`Hit rate, ${span}`}>

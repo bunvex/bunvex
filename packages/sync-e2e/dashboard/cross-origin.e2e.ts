@@ -149,15 +149,18 @@ describe("the dashboard on another origin than its deployment", () => {
     await page.getByRole("heading", { name: "Metrics" }).scrollIntoViewIfNeeded();
     await page.getByRole("heading", { name: "Functions, last hour" }).waitFor({ timeout: 15_000 });
     await shown(page, "Calls per minute");
-    // the live counters (`/stats`, polled)
-    expect(await shown(page, "Live subscriptions")).toMatch(/^\d/);
+    // the live counters (`/stats`, polled); the open connections come from the topology (`/api/debug/topology`,
+    // STUDY-131 §11), which a deployment offers, so the Overview shows them in place of the live subscriptions
+    expect(await shown(page, "Live connections")).toMatch(/^\d/);
     await page.getByText("Engine", { exact: false }).first().click();
     await shown(page, "Commits per second");
     await page.getByRole("heading", { name: "Function calls" }).waitFor();
     expect(await page.getByText(/^Could not load/).count()).toBe(0);
 
     // every route the header and the Overview read was asked from the page's origin, and none failed
-    expect(asked).toEqual(expect.arrayContaining(["/instance_name", "/instance_version", "/stats"]));
+    expect(asked).toEqual(
+      expect.arrayContaining(["/instance_name", "/instance_version", "/stats", "/api/debug/topology"]),
+    );
     expect(failed).toEqual([]);
     expect(errors).toEqual([]);
     await context.close();

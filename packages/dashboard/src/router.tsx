@@ -28,6 +28,7 @@ import { type LogsSearch, validateLogsSearch } from "./logs/log-filter.ts";
 import { LOG_PAGE } from "./logs/use-logs.ts";
 import { NotBuiltYet } from "./screens/not-built-yet.tsx";
 import { ErrorState } from "./shell/error-state.tsx";
+import { offeredOnly } from "./shell/offered-screens.tsx";
 import { Shell } from "./shell/shell.tsx";
 
 export type DashboardRouterContext = { queryClient: QueryClient; scope: QueryScope };
@@ -251,7 +252,8 @@ export const topologyRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "topology",
   validateSearch: validateTopologySearch,
-  component: TopologyScreen,
+  // a screen the source may not offer (offered-screens.tsx): "not offered" without loading it
+  component: offeredOnly("/topology", TopologyScreen),
 });
 
 export const schemaRoute = createRoute({
@@ -296,7 +298,7 @@ export const subscriptionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "subscriptions",
   validateSearch: validateSubscriptionsSearch,
-  component: SubscriptionsScreen,
+  component: offeredOnly("/subscriptions", SubscriptionsScreen),
 });
 
 /** `/settings` opens General, its first page, as Convex's (UI-01 §17.1). */
@@ -383,7 +385,7 @@ export const authRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "auth/$section",
   validateSearch: validateAuthSearch,
-  component: AuthScreen,
+  component: offeredOnly("/auth", AuthScreen),
 });
 
 export const appsSettingsRoute = createRoute({
