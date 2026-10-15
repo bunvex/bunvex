@@ -23,6 +23,11 @@ export type CodeEditorProps = {
   error?: { message: string; offset?: number };
   /** More problems to underline, each at its offset (the field's message stays `error`'s). */
   moreErrors?: { message: string; offset: number }[];
+  /**
+   * Problems that do not stop the text from being used, underlined as warnings at their offsets (Convex's editor
+   * marks a value that does not fit a schema that is not enforced this way).
+   */
+  warnings?: { message: string; offset: number }[];
   /** Ids of elements that describe the field (a hint, the error text). */
   describedBy?: string;
   autoFocus?: boolean;

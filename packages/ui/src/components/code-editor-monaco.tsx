@@ -244,16 +244,17 @@ export default function CodeEditorMonaco(props: CodeEditorProps) {
   };
 
   // underline the error, with its message on hover: alone, from where it is to the end of its line; with more
-  // errors, each one on the word it starts at (so one does not cover the next)
+  // errors or warnings, each one on the word it starts at (so one does not cover the next)
   useEffect(() => {
     const editor = editorRef.current;
     const model = editor?.getModel();
     if (!model) return;
     const e = props.error;
-    if (!e) return monaco.editor.setModelMarkers(model, "bunvex", []);
+    const warnings = props.warnings ?? [];
+    if (!e && warnings.length === 0) return monaco.editor.setModelMarkers(model, "bunvex", []);
     const at = (offset: number) => model.getPositionAt(Math.min(offset, Math.max(0, model.getValueLength() - 1)));
-    const several = (props.moreErrors?.length ?? 0) > 0;
-    const marker = (message: string, offset: number) => {
+    const several = (props.moreErrors?.length ?? 0) > 0 || warnings.length > 0;
+    const marker = (message: string, offset: number, severity = monaco.MarkerSeverity.Error) => {
       const start = at(offset);
       // a quoted value has no word at its quote: take the one after it, and the closing quote
       const word =
@@ -267,7 +268,7 @@ export default function CodeEditorMonaco(props: CodeEditorProps) {
           ? end.column
           : model.getLineMaxColumn(start.lineNumber);
       return {
-        severity: monaco.MarkerSeverity.Error,
+        severity,
         message,
         startLineNumber: start.lineNumber,
         startColumn: start.column,
@@ -276,10 +277,11 @@ export default function CodeEditorMonaco(props: CodeEditorProps) {
       };
     };
     monaco.editor.setModelMarkers(model, "bunvex", [
-      marker(e.message, e.offset ?? 0),
-      ...(props.moreErrors ?? []).map((m) => marker(m.message, m.offset)),
+      ...(e ? [marker(e.message, e.offset ?? 0)] : []),
+      ...(e ? (props.moreErrors ?? []) : []).map((m) => marker(m.message, m.offset)),
+      ...warnings.map((w) => marker(w.message, w.offset, monaco.MarkerSeverity.Warning)),
     ]);
-  }, [props.error, props.moreErrors]);
+  }, [props.error, props.moreErrors, props.warnings]);
 
   const single = !props.multiline;
   return (

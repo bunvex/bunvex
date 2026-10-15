@@ -3,20 +3,29 @@
 // the panel by mistake loses nothing.
 import { Button } from "@bunvex/ui/components/button";
 import { CodeEditor } from "@bunvex/ui/components/code-editor";
+import { cn } from "@bunvex/ui/lib/utils";
+import { useQuery } from "@tanstack/react-query";
 import { useId, useState } from "react";
 import { useQueryScope } from "../context.tsx";
+import { schemaQuery } from "../data/queries.ts";
 import { toDataSourceError, type Value } from "../data-source.ts";
-import { parseLiteral, UNSET } from "./literal.ts";
+import { parseLiteralLocated, UNSET } from "./literal.ts";
+import { issueDisplay, type SchemaIssue, schemaIssues, type TableSchema, tableSchema } from "./schema-check.ts";
 
 const drafts = new Map<string, string>();
 const EMPTY = "{\n  \n}";
 
-type Parsed = { ok: true; documents: Record<string, Value>[] } | { ok: false; error: string; offset?: number };
+type Parsed =
+  | { ok: true; documents: Record<string, Value>[]; issues: SchemaIssue[] }
+  | { ok: false; error: string; offset?: number };
 
-/** One document or a list of them, as JavaScript literals; no system fields. */
-export function parseDocuments(text: string): Parsed {
-  const r = parseLiteral(text);
-  if (!r.ok) return r;
+/**
+ * One document or a list of them, as JavaScript literals; no system fields. With the table's declared type
+ * (`schema`), where each document does not fit it.
+ */
+export function parseDocuments(text: string, schema: TableSchema | null = null): Parsed {
+  const r = parseLiteralLocated(text);
+  if (!r.ok) return { ok: false, error: r.error, offset: r.offset };
   if (r.value === UNSET) return { ok: false, error: "Write a document { … } or a list of them [{ … }, …].", offset: 0 };
   const list = Array.isArray(r.value) ? r.value : [r.value];
   if (list.length === 0) return { ok: false, error: "The list is empty." };
@@ -27,21 +36,30 @@ export function parseDocuments(text: string): Parsed {
     const system = Object.keys(d).find((k) => k.startsWith("_"));
     if (system) return { ok: false, error: `${which}: "${system}" is a system field; the database sets it.` };
   }
-  return { ok: true, documents: list as Record<string, Value>[] };
+  const documents = list as Record<string, Value>[];
+  const issues = schema
+    ? documents.flatMap((d, i) => schemaIssues(schema.validator, d, r.place, Array.isArray(r.value) ? [i] : []))
+    : [];
+  return { ok: true, documents, issues };
 }
 
 export function AddDocuments({ table, onAdded }: { table: string; onAdded: (count: number) => void }) {
-  const { source } = useQueryScope();
+  const qs = useQueryScope();
+  const { source } = qs;
+  const { data: schema } = useQuery(schemaQuery(qs));
   const [text, setText] = useState(() => drafts.get(table) ?? EMPTY);
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
   const inputId = useId();
   const hintId = useId();
-  const parsed = parseDocuments(text);
-  const count = parsed.ok ? parsed.documents.length : 0;
+  const declared = tableSchema(schema, table);
+  const parsed = parseDocuments(text, declared);
+  const shown = issueDisplay(parsed.ok ? parsed.issues : [], declared?.enforced ?? false);
+  const count = parsed.ok && !shown.error ? parsed.documents.length : 0;
 
   const submit = async () => {
     if (!parsed.ok) return setError(parsed.error);
+    if (shown.error) return;
     setSaving(true);
     setError(undefined);
     try {
@@ -76,7 +94,9 @@ export function AddDocuments({ table, onAdded }: { table: string; onAdded: (coun
         height={320}
         autoFocus
         describedBy={`${hintId} ${inputId}-check${error ? ` ${inputId}-error` : ""}`}
-        error={parsed.ok ? undefined : { message: parsed.error, offset: parsed.offset }}
+        error={parsed.ok ? shown.error : { message: parsed.error, offset: parsed.offset }}
+        moreErrors={shown.moreErrors}
+        warnings={shown.warnings}
         value={text}
         onChange={(t) => {
           setText(t);
@@ -87,8 +107,12 @@ export function AddDocuments({ table, onAdded }: { table: string; onAdded: (coun
       />
       {/* what is wrong with the draft, as you type; what the source refused, as an alert */}
       {/* empty when the draft is fine: no reserved line between the editor and the button (UX-25) */}
-      <p id={`${inputId}-check`} aria-live="polite" className="text-sm text-destructive empty:-mt-3">
-        {!parsed.ok && parsed.error}
+      <p
+        id={`${inputId}-check`}
+        aria-live="polite"
+        className={cn("text-sm empty:-mt-3", shown.note ? "text-warning" : "text-destructive")}
+      >
+        {!parsed.ok ? parsed.error : (shown.error?.message ?? shown.note)}
       </p>
       {error && (
         <p id={`${inputId}-error`} role="alert" className="text-sm text-destructive">
