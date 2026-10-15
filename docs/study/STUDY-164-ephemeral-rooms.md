@@ -317,9 +317,9 @@ None. Rooms are opt-in and invisible to an app or a client that does not use the
 
 ## 7. As built (v1)
 
-Built on 2026-10-15 in six PRs after the plan: #677 (the plan), #678 A (protocol, definitions, `RoomHub`), #679 B
+Built on 2026-10-15 in seven PRs after the plan: #677 (the plan), #678 A (protocol, definitions, `RoomHub`), #679 B
 (sessions, limits, gates), #680 C (sync wiring, `ctx.rooms` and `ctx.presence`), #688 D (grace, backpressure, sync
-e2e), #694 E (client `joinRoom` / `joinPresence`), PR F (React `useRoom` / `usePresence`), and this one (the
+e2e), #694 E (client `joinRoom` / `joinPresence`), #696 F (React `useRoom` / `usePresence`), and G, this one (the
 benchmark, [docs/rooms.md](../rooms.md) and [examples/rooms-cursors](../../examples/rooms-cursors)). Scope: §3 as
 decided; no `onJoin` / `onLeave` (R7), no room state (R8), one process (R5).
 
@@ -369,6 +369,8 @@ What it says:
   holds p99 54.7 ms: **a room of 500 meets the tick budget (p99 under 100 ms)**, as the cap was chosen for.
 - Coalescing is what keeps the room flat: at 500 members 10,000 updates a second reach each member as one frame per
   tick (about 33 a second), not as 10,000 deliveries.
+- The 500-member table figures are lower bounds: the run stops recording 4 s after the last send, so receipts later
+  than that are not sampled.
 - Limits of the measurement: one machine and the loopback; unparsed receivers (a real client parses every frame, which
   at 500 members is about 25 KB per tick); a coalesced update is not a sample in either mode (the table coalesces too
   when its sync queue is behind). The cap was not changed.

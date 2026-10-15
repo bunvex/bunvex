@@ -24,6 +24,9 @@ test("a cursor moved in one page appears in the other, and a wave too", async ()
   await two.getByRole("button", { name: "Wave" }).click();
   await eventually(async () => (await one.getByTestId("waves").innerText()).includes(`${nameTwo} waves`), "the wave");
   // A presence scope lists signed-in users: this app has no sign-in, so it says so.
-  expect(await one.getByTestId("online").innerText()).toContain("signed-in");
+  await eventually(
+    async () => (await one.getByTestId("online").innerText()).includes("signed-in"),
+    "the scope's refusal",
+  );
   expect(app.errors).toEqual([]);
 });
