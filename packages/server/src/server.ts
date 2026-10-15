@@ -173,6 +173,7 @@ import {
   splayOptions,
   type WsHeartbeatOptions,
 } from "./sync.ts";
+import { readSystemArgs } from "./system-args.ts";
 import { cancelAllScheduledJobs, cancelScheduledJob, InvalidIdError } from "./system-functions.ts";
 import { standaloneQuery, type TestBundle, TestFunctionError } from "./test-function.ts";
 import { TopologyReporter } from "./topology.ts";
@@ -372,12 +373,14 @@ const fromWire = (args: unknown, path: string) => {
     if (tooDeepToStringify(one)) throw new RangeError("Maximum call stack size exceeded");
     return parseValue(JSON.stringify(one === undefined ? {} : one));
   } catch (e) {
+    const stack = e instanceof RangeError && e.message.includes("call stack");
+    // A system function reads its arguments itself, after the access check (STUDY-161 §6).
+    if (!stack && isSystemPath(path)) return readSystemArgs(Array.isArray(args) ? args[0] : args);
     // Convex's `parse_udf_args`: the backend's message, under the function's canonical path (STUDY-53). Too
     // deep for the stack to stringify (thousands of levels) is past the nesting limit too (STUDY-109).
-    const message =
-      e instanceof RangeError && e.message.includes("call stack")
-        ? TOO_NESTED_MESSAGE
-        : (e as Error).message.replace("starts with a '$'", () => "starts with '$'");
+    const message = stack
+      ? TOO_NESTED_MESSAGE
+      : (e as Error).message.replace("starts with a '$'", () => "starts with '$'");
     throw new FunctionPathError(`Invalid arguments for ${canonicalPath(path)}: ${message}`);
   }
 };
