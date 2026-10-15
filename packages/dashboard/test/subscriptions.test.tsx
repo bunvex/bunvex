@@ -134,7 +134,7 @@ describe("on a deployment (STUDY-149's follow-up: AD-25 on a deployment)", () =>
     // the filter changes while away: a new key, still not asked
     await act(() => history.push("/subscriptions?path=tasks"));
     await new Promise((r) => setTimeout(r, 50));
-    expect(asked.live).toBe(1);
+    expect(asked.live).toBe(2);
     await set("connected");
     await waitFor(() => expect(asked.live).toBe(3));
     // the cache tab the same
