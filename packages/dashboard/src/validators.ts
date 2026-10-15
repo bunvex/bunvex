@@ -50,7 +50,7 @@ export function displayValidator(v: ValidatorJson, opts: { indent?: string; widt
   }
 }
 
-function flatValidator(v: ValidatorJson): string {
+export function flatValidator(v: ValidatorJson): string {
   switch (v.type) {
     case "null":
       return "v.null()";

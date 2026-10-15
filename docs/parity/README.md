@@ -200,8 +200,6 @@ gaps.
   dashboard has its own image (6791), `dashboard.zip` and `bunvex dev`'s local dashboard (6790), and the CLI links
   the local one where Convex's links its cloud (DV-477, PR 8); the image's frame and security headers match
   Convex's, the embedding allow-list in `frame-ancestors` (DV-488). Left, none of them something an app hits:
-  - the custom test query's type checking and completions;
-  - the Data screen's editors checking what is typed against the schema (the deployment refuses it on save);
   - the Data screen's filter by a search index (the server runs it; the index list shows search, vector and staged
     indexes since STUDY-149 "Index list");
   - bunvex's own screens not offered on a deployment yet ([additions.md](additions.md), "on the mock"): the

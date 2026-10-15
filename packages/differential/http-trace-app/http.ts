@@ -1,0 +1,61 @@
+// HTTP routes for the 500's `trace` test (STUDY-31 §11): a handler that throws an Error (its frames), one with no
+// message, a value that is no Error (no frames), an Error whose stack has no frames, one that returns no Response,
+// a body that fails in the handler's turn with a string, and one that runs past the action timeout.
+import { httpActionGeneric, httpRouter } from "convex/server";
+
+const results: Record<string, () => unknown> = {
+  error: () => {
+    throw new Error("boom");
+  },
+  empty: () => {
+    throw new Error("");
+  },
+  typeError: () => {
+    throw new TypeError("bad type");
+  },
+  string: () => {
+    throw "a string";
+  },
+  multilineString: () => {
+    throw "one\ntwo";
+  },
+  number: () => {
+    throw 42;
+  },
+  object: () => {
+    throw { a: 1 };
+  },
+  null: () => {
+    throw null;
+  },
+  undefined: () => {
+    throw undefined;
+  },
+  noStack: () => {
+    const e = new Error("no stack");
+    e.stack = "Error: no stack";
+    throw e;
+  },
+  nonResponse: () => ({ not: "a response" }),
+  // Past the action timeout (3 s in the test).
+  timeout: () => new Promise((r) => setTimeout(r, 10_000)),
+  streamString: () =>
+    new Response(
+      new ReadableStream({
+        start(c) {
+          c.error("in turn");
+        },
+      }),
+    ),
+};
+
+const http = httpRouter();
+http.route({
+  pathPrefix: "/trace/",
+  method: "GET",
+  handler: httpActionGeneric(async (_ctx, req) => {
+    const kind = new URL(req.url).pathname.slice("/trace/".length);
+    return (await results[kind]!()) as Response;
+  }),
+});
+export default http;

@@ -28,8 +28,8 @@ const count = async (src: MockDataSource, table: string) =>
 
 describe("parsing documents to add", () => {
   test("an object or a list of objects; no system fields; readable errors", () => {
-    expect(parseDocuments('{"a": 1}')).toEqual({ ok: true, documents: [{ a: 1 }] });
-    expect(parseDocuments('[{"a": 1}, {}]')).toEqual({ ok: true, documents: [{ a: 1 }, {}] });
+    expect(parseDocuments('{"a": 1}')).toEqual({ ok: true, documents: [{ a: 1 }], issues: [] });
+    expect(parseDocuments('[{"a": 1}, {}]')).toEqual({ ok: true, documents: [{ a: 1 }, {}], issues: [] });
     expect(parseDocuments("[]")).toEqual({ ok: false, error: "The list is empty." });
     expect(parseDocuments("[1]")).toEqual({
       ok: false,
@@ -44,6 +44,7 @@ describe("parsing documents to add", () => {
     expect(parseDocuments("{ name: 'Ada', credits: 10n, }")).toEqual({
       ok: true,
       documents: [{ name: "Ada", credits: { $integer: "CgAAAAAAAAA=" } }],
+      issues: [],
     });
     expect(parseDocuments("{ name: Ada }")).toMatchObject({ ok: false, offset: 8 });
   });

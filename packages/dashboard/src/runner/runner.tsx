@@ -14,13 +14,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { cn } from "@bunvex/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, Play, X } from "lucide-react";
-import { useEffect, useId, useMemo, useState } from "react";
-import { useQueryScope } from "../context.tsx";
+import { useContext, useEffect, useId, useMemo, useState } from "react";
+import { QueryTypesContext, useQueryScope } from "../context.tsx";
 import { useLiveFunctions } from "../data/live.ts";
-import { capabilitiesQuery, functionsQuery, tablesQuery } from "../data/queries.ts";
+import { capabilitiesQuery, dashboardKeys, functionsQuery, schemaQuery, tablesQuery } from "../data/queries.ts";
 import {
   type FunctionInfo,
   type FunctionRun,
+  type TableInfo,
   toDataSourceError,
   type ValidatorJson,
   type Value,
@@ -31,6 +32,7 @@ import { formatDuration } from "../logs/log-list.tsx";
 import { defaultValueFor, validateValue } from "../validators.ts";
 import { appendRunHistory, type RunHistoryEntry, readRunHistory } from "./history.ts";
 import { DEFAULT_IDENTITY, parseIdentity } from "./identity.ts";
+import { QUERY_FILE, queryTypeFiles } from "./query-types.ts";
 
 type Args =
   | { ok: true; args: Record<string, Value> }
@@ -423,12 +425,38 @@ function RunOutcome(props: { outcome?: Outcome; busy: boolean; placeholder: stri
 }
 
 /**
+ * The test query's types (STUDY-162), as Convex's editor has them: the host's declarations (loaded once), and the
+ * query's own files for the deployment's schema, made again when the schema or the tables change. Undefined until
+ * the declarations are there, and without a host that gives them.
+ */
+function useQueryTypes(tables: TableInfo[] | undefined): { path: string; files: Record<string, string> } | undefined {
+  const scope = useQueryScope();
+  const load = useContext(QueryTypesContext);
+  const { data: declarations } = useQuery({
+    queryKey: [...dashboardKeys.all(scope.scope), "query-types"],
+    queryFn: () => load!(),
+    enabled: load !== undefined,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+  });
+  const { data: schema } = useQuery(schemaQuery(scope));
+  return useMemo(
+    () =>
+      declarations === undefined
+        ? undefined
+        : { path: QUERY_FILE, files: { ...declarations, ...queryTypeFiles(schema, tables ?? []) } },
+    [declarations, schema, tables],
+  );
+}
+
+/**
  * Convex's "Custom test query" (`FunctionEditor.tsx`): a query typed in TypeScript, compiled in the browser, run
  * once against the deployment's data with no arguments (`runTestQuery`); its result and logs beside it.
  */
 function CustomTestQuery(props: { canRun: boolean }) {
   const scope = useQueryScope();
   const { data: tables } = useQuery(tablesQuery(scope));
+  const typescript = useQueryTypes(tables);
   const [code, setCode] = useState(() => testQueryDraft ?? defaultTestQuery());
   // the first table, once known, in place of the placeholder (until something is typed)
   useEffect(() => {
@@ -461,6 +489,7 @@ function CustomTestQuery(props: { canRun: boolean }) {
         <CodeEditor
           label="Test query"
           language="typescript"
+          typescript={typescript}
           multiline
           height={220}
           value={code}

@@ -2,13 +2,13 @@
 // the next change, an unreachable deployment backs off), `--once`, `--until-success`, `--run`, `--start`,
 // (local deployments: local-deployment.test.ts).
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineSchema, Engine } from "@bunvex/core";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { adminKeyCipherKey, createServer, Functions, issueAdminKey } from "@bunvex/server";
-import { devCommand } from "../src/dev.ts";
+import { announceTarget, configurationLines, devCommand, nextSteps } from "../src/dev.ts";
 import type { Io } from "../src/io.ts";
 import { memoryStore } from "./memory-store.ts";
 
@@ -96,14 +96,81 @@ function dev(cwd: string, url: string | null, ...args: string[]) {
   return { out, err, done, stop: () => ctl.abort(), until, ready };
 }
 
+describe("dev's lines, as Convex's", () => {
+  test("the deployment it works on: a self-hosted one by its URL; a local one by its port and dashboard", () => {
+    const plain = { env: {}, cwd: "/", out: () => {}, err: () => {} };
+    expect(announceTarget("http://h:1", null, plain)).toBe("▌ Developing against deployment:\n▌ └─ http://h:1");
+    expect(announceTarget("http://127.0.0.1:3210", { port: 3210, dashboard: "http://127.0.0.1:6790/" }, plain)).toBe(
+      "▌ Developing against deployment:\n▌ [Local] Port 3210 (dashboard: http://127.0.0.1:6790/)\n▌ └─ http://127.0.0.1:3210",
+    );
+    expect(announceTarget("http://127.0.0.1:3210", { port: 3210, dashboard: null }, plain)).toContain(
+      "▌ [Local] Port 3210\n",
+    );
+    // on a terminal, links (OSC 8)
+    const tty = announceTarget("http://h:1", { port: 1, dashboard: "http://d/" }, { ...plain, isTTY: true });
+    expect(tty).toContain("(\x1b]8;;http://d/\x1b\\dashboard\x1b]8;;\x1b\\)");
+    expect(tty).toContain("└─ \x1b]8;;http://h:1\x1b\\http://h:1\x1b]8;;\x1b\\");
+  });
+
+  test("the configuration lines: only what changed; the .gitignore line; none for no change", () => {
+    const none = { deployment: false, url: null, site: null, gitignore: false };
+    expect(configurationLines("http://u", none)).toBeNull();
+    expect(configurationLines("http://u", { ...none, deployment: true })).toBe(
+      "✔ Configured a local deployment for http://u and saved its name as BUNVEX_DEPLOYMENT to .env.local",
+    );
+    expect(configurationLines("http://u", { ...none, url: "BUNVEX_URL", gitignore: true })).toBe(
+      '✔ Configured a local deployment for http://u and saved its:\n    client URL as BUNVEX_URL\n to .env.local\n  Added ".env.local" to .gitignore',
+    );
+    expect(configurationLines("http://u", { ...none, gitignore: true })).toBe('  Added ".env.local" to .gitignore');
+  });
+
+  test("the closing lines: the functions' directory, feedback, and the dashboard only while one serves", () => {
+    expect(nextSteps("/p/src/fns", "/p", "http://d/")).toBe(
+      "\nWrite your bunvex functions in src/fns/\nGive us feedback at https://github.com/bunvex/bunvex/issues\nView the bunvex dashboard at http://d/\n",
+    );
+    expect(nextSteps("/p/bunvex", "/p", null)).not.toContain("View");
+  });
+});
+
 describe("bunvex dev", () => {
+  test("self-hosted: the deployment's URLs saved to .env.local once, as Convex's", async () => {
+    const d = await deployment();
+    const app = tmp();
+    write(app, { "bunvex/hello.ts": hello("hi") });
+    const first = dev(app, d.url, "--once");
+    expect(await first.done).toBe(0);
+    expect(first.err.slice(0, 2)).toEqual([
+      "Saved BUNVEX_URL and BUNVEX_SITE_URL to .env.local",
+      `▌ Developing against deployment:\n▌ └─ ${d.url}`,
+    ]);
+    const env = readFileSync(join(app, ".env.local"), "utf8");
+    expect(env).toContain(`BUNVEX_URL=${d.url}`);
+    expect(env).toMatch(/BUNVEX_SITE_URL=http/);
+    const again = dev(app, d.url, "--once");
+    expect(await again.done).toBe(0);
+    expect(again.err[0]).toBe(`▌ Developing against deployment:\n▌ └─ ${d.url}`);
+  });
+
+  test("--url and --admin-key over a configured deployment: BUNVEX_DEPLOYMENT removed from .env.local", async () => {
+    const d = await deployment();
+    const app = tmp();
+    write(app, { "bunvex/hello.ts": hello("hi"), ".env.local": "BUNVEX_DEPLOYMENT=local:old\n" });
+    const err: string[] = [];
+    const it: Io = { env: {}, cwd: app, out: () => {}, err: (l) => err.push(l) };
+    const args = ["--once", "--typecheck=disable", "--url", d.url, "--admin-key", KEY];
+    expect(await devCommand(args, it)).toBe(0);
+    expect(err[0]).toBe("Removed the BUNVEX_DEPLOYMENT environment variable from .env.local");
+    expect(readFileSync(join(app, ".env.local"), "utf8")).not.toContain("BUNVEX_DEPLOYMENT");
+  });
+
   test("--once: one push, Convex's ready line; an app error exits 1", async () => {
     const d = await deployment();
     const app = tmp();
     write(app, { "bunvex/hello.ts": hello("hi") });
     const ok = dev(app, d.url, "--once");
     expect(await ok.done).toBe(0);
-    expect(ok.err.at(-1)).toMatch(/^✔ \d\d:\d\d:\d\d bunvex functions ready! \(\d+\.\d\ds\)$/);
+    // Convex's `formatDuration`: at most two decimals, in ns, µs, ms, s or m
+    expect(ok.err.at(-1)).toMatch(/^✔ \d\d:\d\d:\d\d bunvex functions ready! \(\d+(\.\d{1,2})?(ns|µs|ms|s|m)\)$/);
     expect(ok.out).toEqual([]); // `deploy`'s own success line is replaced
     expect((await d.query("hello:hi")).value).toBe("hi");
     write(app, { "bunvex/broken.ts": `import { nope } from "./missing"; export const x = nope;` });
