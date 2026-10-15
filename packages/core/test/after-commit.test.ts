@@ -27,15 +27,61 @@ describe("Tx.afterCommit", () => {
   });
   test("runs after the commit is visible to a read", async () => {
     const e = await open();
-    let count = -1;
+    let read: Promise<unknown[]> | undefined;
     await e.mutation(async (db) => {
       db.afterCommit(() => {
-        void e.query((q) => q.query("t").collect()).then((r) => (count = r.length));
+        read = e.query((q) => q.query("t").collect());
       });
       await db.insert("t", {});
     });
-    await new Promise((r) => setTimeout(r, 5));
-    expect(count).toBe(1);
+    expect((await read)?.length).toBe(1);
+  });
+  test("an async callback that rejects is logged, and the mutation still resolves", async () => {
+    const e = await open();
+    const errs: string[] = [];
+    const real = console.error;
+    console.error = (...a: unknown[]) => errs.push(a.join(" "));
+    const unhandled: unknown[] = [];
+    const onUnhandled = (r: unknown) => unhandled.push(r);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      expect(
+        await e.mutation(async (db) => {
+          db.afterCommit(async () => {
+            throw new Error("late");
+          });
+          await db.insert("t", {});
+          return 2;
+        }),
+      ).toBe(2);
+      await new Promise((r) => setTimeout(r, 20));
+    } finally {
+      console.error = real;
+      process.off("unhandledRejection", onUnhandled);
+    }
+    expect(errs).toEqual(["bunvex: an after-commit callback failed: late"]);
+    expect(unhandled).toEqual([]);
+  });
+  test("never runs when the commit fails and the committer stops", async () => {
+    const mem = await MemoryPersistence.open(null, { durable: false });
+    const e = await new Engine(defineSchema({ t: defineTable(v.any()) }), mem).init();
+    const seen: string[] = [];
+    const real = mem.apply.bind(mem);
+    mem.apply = () => {
+      throw new Error("disk gone");
+    };
+    const out = await e
+      .mutation(async (db) => {
+        db.afterCommit(() => seen.push("x"));
+        await db.insert("t", {});
+      })
+      .then(
+        () => "committed",
+        (err: Error) => err.constructor.name,
+      );
+    mem.apply = real;
+    expect(out).not.toBe("committed");
+    expect(seen).toEqual([]);
   });
   test("never runs for a mutation that throws", async () => {
     const e = await open();

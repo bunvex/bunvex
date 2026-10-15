@@ -3933,13 +3933,19 @@ export class Engine {
   }
 }
 
-/** Run what `tx` registered with `afterCommit`, in order; one that throws is logged and the rest still run. */
+/**
+ * Run what `tx` registered with `afterCommit`, in order; one that throws (or returns a promise that rejects) is
+ * logged and the rest still run.
+ */
 function runAfterCommit(tx: Tx) {
+  const failed = (e: unknown) =>
+    console.error(`bunvex: an after-commit callback failed: ${e instanceof Error ? e.message : String(e)}`);
   for (const fn of tx.afterCommitCallbacks)
     try {
-      fn();
+      const r = fn() as unknown;
+      if (r && typeof (r as PromiseLike<unknown>).then === "function") (r as Promise<unknown>).then(undefined, failed);
     } catch (e) {
-      console.error(`bunvex: an after-commit callback failed: ${e instanceof Error ? e.message : String(e)}`);
+      failed(e);
     }
 }
 
