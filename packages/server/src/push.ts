@@ -18,6 +18,8 @@
 import { type AuthInfo, parseAuthConfig } from "@bunvex/auth";
 import {
   type AuditLogActor,
+  componentMeta,
+  componentPath,
   declaredTables,
   documentTypeError,
   type Engine,
@@ -79,6 +81,7 @@ import {
 import { indexAuditDiff, indexDiffJson } from "./push-audit.ts";
 import {
   analysisAnswer,
+  byPath,
   type ComponentsSchemaChange,
   DEFAULT_ROOT,
   InvalidConfigError,
@@ -426,27 +429,91 @@ export class PushService {
    */
   async evaluateSchema(req: StartPushRequest) {
     parseNodeVersion(req.nodeVersion);
-    if (req.componentDefinitions?.length)
-      throw new PushError("ComponentsNotSupported", "Components are not supported by this deployment yet");
-    let schema = emptySchema;
-    const schemaModule = req.appDefinition?.schema;
-    if (schemaModule) {
-      const s = schemaExport(await this.evaluateDefault(schemaModule, {}, "InvalidSchema", "schema"));
-      checkIndexReferences(s);
-      schema = s;
+    let pushed: PushedComponents;
+    try {
+      pushed = parsePushedComponents(req.appDefinition, req.componentDefinitions);
+    } catch (e) {
+      if (e instanceof InvalidConfigError) throw new PushError(e.code, e.message);
+      throw e;
     }
-    const p = await this.deps.engine.evaluateSchema(schema);
-    return {
-      componentSchemaEvaluations: {
-        "": {
-          definitionPath: "",
-          schemaValidation: schemaModule ? p.schemaValidation : false,
-          tables: p.tables,
+    // Each pushed definition's schema, by definition path (null: pushed without one), as Convex's `pushed_schemas`.
+    const pushedSchemas = new Map<string, SchemaDefinition | null>();
+    const schemaModule = req.appDefinition?.schema;
+    let rootSchema: SchemaDefinition | null = null;
+    if (schemaModule) {
+      rootSchema = schemaExport(await this.evaluateDefault(schemaModule, {}, "InvalidSchema", "schema"));
+      checkIndexReferences(rootSchema);
+    }
+    pushedSchemas.set("", rootSchema);
+    for (const c of pushed.components) {
+      let schema: SchemaDefinition | null = null;
+      if (c.schema) {
+        schema = schemaExport(await this.evaluateDefault(c.schema, {}, "InvalidSchema", "schema", true));
+        checkIndexReferences(schema);
+      }
+      pushedSchemas.set(c.definitionPath, schema);
+    }
+    // Every instance (Convex's `evaluate_schema_prediction`): the app's, there even with no `_components` row, and each
+    // other component by path; an unmounted one whose definition is gone has nothing to predict.
+    const instances = await this.deps.engine.query((db) =>
+      db.asSystem(async () => {
+        const definitionPaths = new Map(
+          (await db.query("_component_definitions").collect()).map((d) => [d._id as string, d.path as string]),
+        );
+        const out: { id: string | null; path: string; definitionPath: string }[] = [
+          { id: null, path: "", definitionPath: "" },
+        ];
+        for (const row of await db.query("_components").collect()) {
+          const c = componentMeta(row as Record<string, unknown>);
+          if (c.parent === null) continue;
+          const path = await componentPath(db, c._id);
+          if (path === null) continue;
+          const definitionPath = definitionPaths.get(c.definitionId);
+          if (definitionPath === undefined) {
+            if (c.state === "unmounted") continue;
+            // Convex's `bail!`: a system error.
+            throw new Error(`component ${path.join("/")} references an unknown definition`);
+          }
+          out.push({ id: c._id, path: path.join("/"), definitionPath });
+        }
+        return out;
+      }),
+    );
+    const evaluations: [string, unknown][] = [];
+    for (const i of instances) {
+      // A definition the push does not carry keeps its schema, tables and indexes: nothing predicted.
+      if (!pushedSchemas.has(i.definitionPath)) {
+        evaluations.push([
+          i.path,
+          {
+            definitionPath: i.definitionPath,
+            schemaValidation: false,
+            tables: [],
+            indexes: [],
+            discardedStagedValidators: [],
+          },
+        ]);
+        continue;
+      }
+      const schema = pushedSchemas.get(i.definitionPath) ?? null;
+      // Pushed without a schema: every index dropped, no table checked.
+      const p = await this.deps.engine.evaluateSchema(schema ?? emptySchema, i.id);
+      evaluations.push([
+        i.path,
+        {
+          definitionPath: i.definitionPath,
+          schemaValidation: schema ? p.schemaValidation : false,
+          tables: schema ? p.tables : [],
           indexes: p.indexes,
           discardedStagedValidators: p.discardedStagedValidators,
         },
-      },
-      newComponentDefinitions: [],
+      ]);
+    }
+    const instantiated = new Set(instances.map((i) => i.definitionPath));
+    return {
+      componentSchemaEvaluations: Object.fromEntries(evaluations.sort(([a], [b]) => byPath(a, b))),
+      // Pushed definitions with no instance yet: a fresh namespace, nothing walked.
+      newComponentDefinitions: [...pushedSchemas.keys()].filter((p) => !instantiated.has(p)).sort(byPath),
     };
   }
 

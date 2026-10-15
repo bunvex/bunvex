@@ -878,6 +878,38 @@ Measured: a `start_push` of a 500-function app with no components spends 0.4 ms 
 app's exports, as Convex computes them), 0.1 ms in the schema walk and 0.1 ms in the answer (median of 9). End to
 end, under load (load average ~9), the medians were 7.7–8.7 ms on this branch against 6.6–7.3 ms on main.
 
+As built, **PR 3d** (`server/src/push.ts` `evaluateSchema`, `core/src/engine.ts` `evaluateSchema(next, namespace)`):
+
+- **What `evaluate_schema` answers**, as Convex's `evaluate_schema_prediction`:
+  - `componentSchemaEvaluations` has one entry per instance, by component path: the app's (there even with no
+    `_components` row) and each other component's;
+  - an unmounted instance whose definition is gone is skipped, and any other instance with no definition is a
+    system error;
+  - `newComponentDefinitions` lists the pushed definitions with no instance yet.
+- **Each entry** is `predict_component_schema`:
+  - for a definition the push does not carry, nothing (no tables, no indexes);
+  - for one pushed without a schema, its indexes dropped and no table checked;
+  - otherwise, `Engine.evaluateSchema` in the instance's namespace: its tables and their counts, its stored indexes,
+    and its own active schema for the validation outcome and the search/vector indexes. A component has no staged
+    validator or search index yet (PR 2b refuses them), so those parts are empty.
+  - A component's schema error is `InvalidSchema` with the exception alone, as in `start_push`.
+
+Tests (`server/test/push-components.test.ts`):
+
+- no instance yet (a new definition);
+- an existing instance predicted in its namespace (its documents counted, an added index backfilling over them,
+  the app's prediction not seeing its table);
+- the outcome against the component's own active schema (`supersetOfEnforced`);
+- a definition not pushed, and one pushed without a schema;
+- an unmounted instance whose definition is gone.
+
+Sabotage: 7 of 8 caught. The one not caught names an id's table through the component's catalog. In a test-sized
+table, a shape keeps ids as literal unions (Convex's shape rules), so no small test reaches it.
+
+Measured: the app's `evaluate_schema` (20 indexed tables, no components) reads two system tables more. Median of 15,
+five alternated runs after the first: 2.6–3.5 ms on this branch, 2.5–3.5 ms before it.
+
+
 The plan as first written:
 
 

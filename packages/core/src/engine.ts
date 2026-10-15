@@ -2292,12 +2292,15 @@ export class Engine {
   /**
    * Convex's `evaluate_schema_prediction` (STUDY-56): what pushing `next` would do, without doing it — each
    * index added, kept, enabled, disabled or dropped, whether it needs a backfill and its table's document
-   * count; each declared table's validation outcome with its count and size. Needs the table summaries.
+   * count; each declared table's validation outcome with its count and size. Needs the table summaries. In a
+   * component's namespace (`namespace`, its `_components` id; STUDY-153 PR 3d), against its tables and its active
+   * schema, as Convex's `predict_component_schema`.
    */
-  async evaluateSchema(next: SchemaDefinition): Promise<SchemaPrediction> {
+  async evaluateSchema(next: SchemaDefinition, namespace: string | null = null): Promise<SchemaPrediction> {
     if (!this.tableSummaries.ready) throw new TableSummariesUnavailableError();
     const { value: cat } = await this.execute("query", this.committer.visibleTs, (db) => readCatalog(db), true);
-    const active = activeTables(cat.tables);
+    const active = activeTables(cat.tables, namespace ?? undefined);
+    const activeSchema = namespace === null ? this.schema : this.componentSchema(namespace);
     const tabletOf = (name: string) => active.find((t) => t.name === name)?.tablet;
     const docs = (table: string) => {
       const tablet = tabletOf(table);
@@ -2338,7 +2341,7 @@ export class Engine {
         if (!declared?.indexes[st.name])
           push(table, st.name, { type: "database", fields: userFields(st.fields) }, !!st.staged, "dropped", false);
       // Search and vector indexes: the active schema's against the pushed one's.
-      const before = declaredTables(this.schema).get(table);
+      const before = declaredTables(activeSchema).get(table);
       const kinds = [
         {
           now: before?.searchIndexes ?? {},
@@ -2350,8 +2353,11 @@ export class Engine {
             searchField: d.searchField,
             filterFields: [...d.filterFields].sort(),
           }),
+          // A component has no search index yet (STUDY-153 PR 2b refuses them).
           ready: (n: string) =>
-            tablet === undefined ? false : !!this.searchIndexes.get(this.catalog.byTablet(tablet)!, n)?.ready,
+            tablet === undefined || namespace !== null
+              ? false
+              : !!this.searchIndexes.get(this.catalog.byTablet(tablet)!, n)?.ready,
         },
         {
           now: before?.vectorIndexes ?? {},
@@ -2365,7 +2371,9 @@ export class Engine {
             filterFields: [...d.filterFields].sort(),
           }),
           ready: (n: string) =>
-            tablet === undefined ? false : !!this.vectorIndexes.get(this.catalog.byTablet(tablet)!, n)?.ready,
+            tablet === undefined || namespace !== null
+              ? false
+              : !!this.vectorIndexes.get(this.catalog.byTablet(tablet)!, n)?.ready,
         },
       ] as const;
       for (const k of kinds) {
@@ -2387,24 +2395,27 @@ export class Engine {
       }
     }
     // Tables: the outcome of the schema walk bunvex will do (STUDY-35), with counts and sizes.
-    const validStaged = await this.activeValidStaged();
+    // A component has no staged validator yet (STUDY-153 PR 2b refuses them).
+    const validStaged = namespace === null ? await this.activeValidStaged() : new Map<string, unknown>();
     // Convex's staged prediction (5b65aedb3): each table's staged validation, whether finishing the active schema's
     // would spare the walk, and which pending or valid staged validations the push throws away.
     const { items, activeStaged } = await this.query((db) =>
-      db.asSystem(async () => {
-        const rows = await db.query(SCHEMAS_TABLE).collect();
-        const items: { active: boolean; c: StagedCarryOver }[] = [];
-        let activeStaged = new Map<string, StagedValidator>();
-        for (const state of ["active", "pending", "validated"] as const) {
-          const row = rows.find((r) => schemaStateOf(r) === state);
-          if (!row) continue;
-          const staged = stagedValidatorsOf(JSON.parse(row.schema as string) as SchemaJson);
-          if (state === "active") activeStaged = staged;
-          for (const c of await stagedValidationsWithProgress(db, row._id as string, staged))
-            items.push({ active: state === "active", c });
-        }
-        return { items, activeStaged };
-      }),
+      db.asSystem(() =>
+        db.inComponent(namespace, async () => {
+          const rows = await db.query(SCHEMAS_TABLE).collect();
+          const items: { active: boolean; c: StagedCarryOver }[] = [];
+          let activeStaged = new Map<string, StagedValidator>();
+          for (const state of ["active", "pending", "validated"] as const) {
+            const row = rows.find((r) => schemaStateOf(r) === state);
+            if (!row) continue;
+            const staged = stagedValidatorsOf(JSON.parse(row.schema as string) as SchemaJson);
+            if (state === "active") activeStaged = staged;
+            for (const c of await stagedValidationsWithProgress(db, row._id as string, staged))
+              items.push({ active: state === "active", c });
+          }
+          return { items, activeStaged };
+        }),
+      ),
     );
     const nextStaged = stagedValidatorsOf(schemaToJson(next));
     const stateOf = (c: StagedCarryOver): StagedValidatorState =>
@@ -2437,7 +2448,7 @@ export class Engine {
     const tables: TablePrediction[] = [...declaredTables(next).values()].map((t) => {
       const tablet = tabletOf(t.name);
       const s = tablet === undefined ? { count: 0, size: 0 } : this.tableSummaries.get(tablet);
-      const outcome = this.tableOutcome(next, this.schema, t.name, tablet, validStaged);
+      const outcome = this.tableOutcome(next, activeSchema, t.name, tablet, validStaged, namespace);
       const staged = stagedStates.get(t.name);
       const pendingStaged = stillValidating.get(t.name);
       return {

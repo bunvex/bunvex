@@ -347,3 +347,151 @@ describe("the packages' size (Convex's upload_packages)", () => {
     expect(() => checkPackagesSize([big, big], null, limits)).toThrow(ModulesTooLargeError);
   });
 });
+
+describe("evaluate_schema with components (PR 3d)", () => {
+  /** `counter` mounted as a push's finish will write it (PR 4): the rows, in the namespace its start allocated. */
+  async function mounted(
+    d: Awaited<ReturnType<typeof deployment>>,
+    ns: string,
+    state: "active" | "unmounted" = "active",
+    definition = "counter",
+  ) {
+    await d.engine.mutation((db) =>
+      db.asSystem(async () => {
+        const app = await db.insert("_component_definitions", { path: "" } as never);
+        const def = await db.insert("_component_definitions", { path: definition } as never);
+        const root = await db.insert(
+          "_components",
+          componentRow({ definitionId: app, parent: null, name: null, state: "active", httpPrefix: null }) as never,
+        );
+        await db.importInsert(d.engine.catalog.table("_components"), {
+          _id: ns,
+          ...componentRow({
+            definitionId: def,
+            parent: root,
+            name: "counter",
+            args: [],
+            env: [],
+            state,
+            httpPrefix: null,
+          }),
+        });
+      }),
+    );
+  }
+  const evaluate = (d: Awaited<ReturnType<typeof deployment>>, components: object[]) =>
+    d.post("/api/deploy2/evaluate_schema", {
+      appDefinition: {
+        definition: APP_DEFINITION,
+        dependencies: ["counter"],
+        schema: null,
+        changedModules: [],
+        unchangedModuleHashes: [],
+        udfServerVersion: "1.46.0",
+      },
+      componentDefinitions: components,
+    });
+  const withIndex = {
+    ...COUNTER,
+    schema: mod(
+      "schema.js",
+      `import { defineSchema, defineTable } from "bunvex/server";\nimport { v } from "bunvex/values";\nexport default defineSchema({ messages: defineTable({ body: v.string(), n: v.optional(v.number()) }).index("by_body", ["body"]).index("by_both", ["body", "n"]) });`,
+    ),
+  };
+
+  test("no instance yet: the app's prediction, and `counter` a new definition", async () => {
+    const d = await deployment();
+    await d.engine.summariesReady();
+    const r = await evaluate(d, [COUNTER]);
+    expect(r.status).toBe(200);
+    expect(Object.keys(r.body.componentSchemaEvaluations)).toEqual([""]);
+    expect(r.body.newComponentDefinitions).toEqual(["counter"]);
+  });
+
+  test("an existing instance: predicted in its namespace, its documents counted", async () => {
+    const d = await deployment();
+    const { schemaChange } = (await d.start()).body;
+    await d.post("/api/deploy2/wait_for_schema", { schemaChange, timeoutMs: 5000 });
+    const ns = schemaChange.allocatedComponentIds.counter as string;
+    await mounted(d, ns);
+    await d.engine.mutation((db) =>
+      db.inComponent(ns, async () => {
+        await db.insert("messages", { body: "a" });
+        await db.insert("messages", { body: "b" });
+      }),
+    );
+    await d.engine.summariesReady();
+    const r = await evaluate(d, [withIndex]);
+    expect(r.status).toBe(200);
+    expect(Object.keys(r.body.componentSchemaEvaluations)).toEqual(["", "counter"]);
+    const counter = r.body.componentSchemaEvaluations.counter;
+    expect(counter.definitionPath).toBe("counter");
+    expect(counter.tables).toEqual([expect.objectContaining({ name: "messages", numDocs: 2 })]);
+    expect(counter.indexes.find((i: { name: string }) => i.name === "messages.by_both")).toMatchObject({
+      change: "added",
+      needsBackfill: true,
+      numDocs: 2,
+    });
+    expect(r.body.newComponentDefinitions).toEqual([]);
+    // The app's prediction does not see `counter`'s table.
+    expect(r.body.componentSchemaEvaluations[""].indexes).toEqual([]);
+  });
+
+  test("the outcome against the component's own active schema", async () => {
+    const d = await deployment();
+    const { schemaChange } = (await d.start()).body;
+    await d.post("/api/deploy2/wait_for_schema", { schemaChange, timeoutMs: 5000 });
+    const ns = schemaChange.allocatedComponentIds.counter as string;
+    await mounted(d, ns);
+    // `counter`'s schema made active, as PR 4's finish will.
+    await d.engine.commitSchemaPush(
+      schemaChange.schemaIds[""],
+      async () => {},
+      new Map([[ns, schemaChange.schemaIds.counter]]),
+    );
+    await d.engine.mutation((db) => db.inComponent(ns, () => db.insert("messages", { body: "a" })));
+    await d.engine.summariesReady();
+    const same = await evaluate(d, [COUNTER]);
+    expect(same.body.componentSchemaEvaluations.counter.tables[0].outcome).toBe("supersetOfEnforced");
+  });
+
+  test("an instance whose definition is not pushed: nothing predicted; one pushed without a schema: its indexes dropped", async () => {
+    const d = await deployment();
+    const { schemaChange } = (await d.start()).body;
+    await d.post("/api/deploy2/wait_for_schema", { schemaChange, timeoutMs: 5000 });
+    const ns = schemaChange.allocatedComponentIds.counter as string;
+    await mounted(d, ns);
+    await d.engine.summariesReady();
+    const absent = await evaluate(d, []);
+    expect(absent.body.componentSchemaEvaluations.counter).toEqual({
+      definitionPath: "counter",
+      schemaValidation: false,
+      tables: [],
+      indexes: [],
+      discardedStagedValidators: [],
+    });
+    const noSchema = await evaluate(d, [{ ...COUNTER, schema: null }]);
+    const c = noSchema.body.componentSchemaEvaluations.counter;
+    expect(c.tables).toEqual([]);
+    expect(c.indexes.map((i: { change: string }) => i.change)).toEqual(["dropped"]);
+  });
+
+  test("an unmounted instance whose definition is gone is skipped", async () => {
+    const d = await deployment();
+    const { schemaChange } = (await d.start()).body;
+    const ns = schemaChange.allocatedComponentIds.counter as string;
+    await mounted(d, ns, "unmounted", "gone");
+    await d.engine.mutation((db) =>
+      db.asSystem(async () => {
+        const gone = await db
+          .query("_component_definitions")
+          .filter((q) => q.eq(q.field("path"), "gone"))
+          .first();
+        await db.delete("_component_definitions", gone!._id);
+      }),
+    );
+    await d.engine.summariesReady();
+    const r = await evaluate(d, [COUNTER]);
+    expect(Object.keys(r.body.componentSchemaEvaluations)).toEqual([""]);
+  });
+});
