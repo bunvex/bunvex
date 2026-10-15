@@ -2298,7 +2298,7 @@ function validateWritten(
   id: string,
   creationTime: number,
 ) {
-  checkSystemFieldValues(fields, id, creationTime);
+  checkSystemFieldValues(fields, id, creationTime, doc);
   const violations: string[] = [];
   const nesting = valueNesting(doc as Value);
   if (nesting > MAX_DOCUMENT_NESTING)
@@ -2313,13 +2313,22 @@ function validateWritten(
 const underscoreField = (k: string) =>
   `Field '${k}' starts with an underscore, which is only allowed for system fields like '_id'`;
 
-/** `_id` / `_creationTime` in a written value must equal the document's (Convex's `ResolvedDocument::new`). */
-function checkSystemFieldValues(fields: Record<string, unknown>, id: string, creationTime: number) {
+/**
+ * `_id` / `_creationTime` in a written value must equal the document's (Convex's `ResolvedDocument::new`), in Convex's
+ * display: the `_id` field as a value, and for the creation time the value being written (`doc` with the written
+ * `_creationTime`: an insert's or replacement's value, or the merged patch, each with its `_id`).
+ */
+function checkSystemFieldValues(
+  fields: Record<string, unknown>,
+  id: string,
+  creationTime: number,
+  doc: Record<string, unknown>,
+) {
   if ("_id" in fields && fields._id !== undefined && fields._id !== id)
-    throw new Error(`Provided document ID "${id}" doesn't match '_id' field ${JSON.stringify(fields._id)}`);
+    throw new Error(`Provided document ID "${id}" doesn't match '_id' field ${displayValue(fields._id as Value)}`);
   if ("_creationTime" in fields && fields._creationTime !== undefined && fields._creationTime !== creationTime)
     throw new Error(
-      `Provided creation time ${creationTime} doesn't match '_creationTime' field in ${JSON.stringify(fields)}`,
+      `Provided creation time ${creationTime} doesn't match '_creationTime' field in ${displayValue({ ...doc, _creationTime: fields._creationTime } as Value)}`,
     );
 }
 
@@ -2331,7 +2340,7 @@ function checkSystemFields(
   creationTime: number,
 ) {
   // Stryker disable next-line CallExpression: an import passes no written value (`fields` is `{}`)
-  checkSystemFieldValues(fields, id, creationTime);
+  checkSystemFieldValues(fields, id, creationTime, doc);
   for (const k of Object.keys(doc))
     if (k.startsWith("_") && k !== "_id" && k !== "_creationTime") throw new Error(underscoreField(k));
 }

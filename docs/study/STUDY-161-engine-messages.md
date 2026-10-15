@@ -216,7 +216,15 @@ and lists what failed in its *Built* line.
 
 ### §4 (the system-field mismatch's display)
 
-*Built:* not yet.
+*Built:* `checkSystemFieldValues` (`core/src/tx.ts`) displays the `_id` field and the document being written (the
+written `_creationTime` in place of the assigned one) with `displayValue`; no call site changed. Tests:
+`core/test/system-field-mismatch.test.ts` (insert, patch with a removed field, an int64, replace, `_id` before the
+creation time); `differential/test/system-fields.test.ts` (11 writes on both backends, compared with the
+`_creationTime` display kept: `errorText` masks it). Sabotage (each restored, `git diff` clean): the fields as JSON (2
+unit tests and the differential test fail), the assigned creation time in the display (2 and the differential), the
+`_id` as JSON (1 and the differential). Found, not fixed here: `displayValue` shows bytes as `ArrayBuffer(2 bytes)`
+where every Convex backend message shows `b"AQI="` (a schema error's `Value:`, `Document(value: …)`, this message):
+a change to every message that displays a value, left to its own PR.
 
 ### §5 (a query's table and index)
 
