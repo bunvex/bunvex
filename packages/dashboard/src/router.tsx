@@ -316,9 +316,24 @@ export const generalSettingsRoute = createRoute({
   component: GeneralSettingsScreen,
 });
 
+/**
+ * Settings → Environment variables: the names to add rows for, as Convex's `?var=NAME` (repeated for several), which
+ * its CLI links when a push needs a variable the deployment does not have.
+ */
+export type EnvVarsSearch = { var?: string[] };
+export function validateEnvVarsSearch(input: Record<string, unknown>): EnvVarsSearch {
+  const raw = input.var;
+  // the router reads a value as JSON first: a name of digits comes as a number
+  const names = (Array.isArray(raw) ? raw : [raw])
+    .map((x) => (typeof x === "number" || typeof x === "boolean" ? String(x) : str(x)))
+    .filter((x): x is string => x !== undefined);
+  return { var: names.length > 0 ? names : undefined };
+}
+
 export const envVarsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "settings/environment-variables",
+  validateSearch: validateEnvVarsSearch,
   component: EnvironmentVariablesScreen,
 });
 

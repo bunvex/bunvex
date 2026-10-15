@@ -176,6 +176,9 @@ import {
 import { withNodeProcessErrors } from "./node-process-errors.ts";
 import { setOperationTracker } from "./pending-ops.ts";
 import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearchQuery } from "./registration.ts";
+import { roomsCtx } from "./rooms/ctx.ts";
+import { type AnyRoomDef, isRoomDef, type RoomGate } from "./rooms/define.ts";
+import type { RoomHub } from "./rooms/hub.ts";
 import type { RoutableMethod } from "./router.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { ServerMetrics } from "./server-metrics.ts";
@@ -192,7 +195,7 @@ const cacheKeyOf = (hash: string, name: string, args: unknown) =>
   `${hash}\u0000${name}\u0000${stringifyValue(args ?? {})}`;
 
 /** A function name as the registry keys it: `module:function`, `.js` stripped, `default` when unnamed. */
-const registryKey = (name: string) => {
+export const registryKey = (name: string) => {
   const i = name.lastIndexOf(":");
   const [module, fn] = i === -1 ? [name, "default"] : [name.slice(0, i), name.slice(i + 1)];
   return `${module.endsWith(".js") ? module.slice(0, -3) : module}:${fn}`;
@@ -673,6 +676,12 @@ function trackedCtx(ctx: ActionCtx): ActionCtx {
       runAt: wrap("schedule", s.runAt?.bind(s)),
       cancel: wrap("cancel_job", s.cancel?.bind(s)),
     },
+    rooms: {
+      ...c.rooms,
+      broadcast: wrap("rooms.broadcast", c.rooms.broadcast),
+      members: wrap("rooms.members", c.rooms.members),
+    },
+    presence: { ...c.presence, list: wrap("presence.list", c.presence.list) },
     storage: {
       ...st,
       getUrl: wrap("storageGetUrl", st.getUrl),
@@ -816,6 +825,10 @@ function systemArgsError(message: string): Error {
 
 export class Functions {
   private fns = new Map<string, FunctionDef>();
+  /** Every room and presence definition (AD-42), by registry key, as `fns` keys functions. */
+  rooms = new Map<string, AnyRoomDef>();
+  /** The rooms' members in memory (AD-42); set by `createServer`. */
+  roomHub: RoomHub | null = null;
   /** Each function's name as its key (`module:fn`), for `ctx.meta.getFunctionMetadata()`. */
   private names = new WeakMap<FunctionDef, string>();
   /** Each module's code hash (a deployed code version's modules); empty for registered (embedded) code. */
@@ -843,13 +856,18 @@ export class Functions {
    * Replace every function at once with a code version's (STUDY-35): the next call of any name runs the new
    * code. The modules whose code changed (added, removed or a new hash), for re-running what read them.
    */
-  install(fns: Map<string, FunctionDef>, moduleHashes: Map<string, string>): Set<string> {
+  install(
+    fns: Map<string, FunctionDef>,
+    moduleHashes: Map<string, string>,
+    rooms: Map<string, AnyRoomDef> = new Map(),
+  ): Set<string> {
     const changed = new Set<string>();
     for (const [m, h] of moduleHashes) if (this.moduleHashes.get(m) !== h) changed.add(m);
     for (const m of this.moduleHashes.keys()) if (!moduleHashes.has(m)) changed.add(m);
     for (const k of this.fns.keys()) if (!fns.has(k)) changed.add(Functions.moduleOf(k));
     for (const k of fns.keys()) if (!this.fns.has(k)) changed.add(Functions.moduleOf(k));
     this.fns = new Map(fns);
+    this.rooms = new Map(rooms);
     this.moduleHashes = new Map(moduleHashes);
     this.deployed = true;
     return changed;
@@ -1289,9 +1307,16 @@ export class Functions {
     this.actionPermits = this.limits.action;
   }
 
-  register(module: string, fns: Record<string, FunctionDef>) {
-    for (const [n, f] of Object.entries(fns)) this.fns.set(`${module}:${n}`, f);
+  register(module: string, fns: Record<string, FunctionDef | AnyRoomDef>) {
+    for (const [n, f] of Object.entries(fns))
+      if (isRoomDef(f)) this.rooms.set(`${module}:${n}`, f);
+      else this.fns.set(`${module}:${n}`, f);
     return this;
+  }
+
+  /** A room or presence definition by name (`rooms:doc`, or `rooms.doc`-style paths as functions take). */
+  roomDef(name: string): AnyRoomDef | undefined {
+    return this.rooms.get(registryKey(name));
   }
 
   /**
@@ -1675,6 +1700,8 @@ export class Functions {
             // `parent_scheduled_job` down the call tree): what it schedules after that job is canceled is
             // born canceled, and it may not cancel that job.
             scheduler: makeScheduler(this, { db, job: job ?? db.request?.scheduledFunctionId ?? undefined }),
+            // Sent once the mutation committed; dropped if it throws or retries (AD-42).
+            rooms: roomsCtx(this, (fn) => db.afterCommit(fn), false).rooms,
             storage: this.fileStorage?.writer(db) ?? noStorage,
             runQuery: nested.runQuery,
             runMutation: nested.runMutation,
@@ -2160,6 +2187,26 @@ export class Functions {
   }
 
   /**
+   * A room's gate (AD-42, STUDY-164 §3.4): run as a query named `name` (`rooms:doc#canJoin`) with `caller`'s identity, read-only and
+   * without the query cache, as a standalone query runs. Its value, or what it threw. Not a function: no
+   * client can call it by path.
+   */
+  async runGate(gate: RoomGate, name: string, args: Value, caller: Caller): Promise<unknown> {
+    // A query of its own per run, so that runs at once (one gate in two rooms) each keep their name. No args
+    // validator: the room's were checked at join.
+    const f: QueryDef = { kind: "query", visibility: "internal", handler: (ctx, a) => gate(ctx as never, a) };
+    this.names.set(f, registryKey(name));
+    return this.logged(
+      "Query",
+      name,
+      caller,
+      () => this.engine.query(this.queryBody(name, args, false, caller, f), undefined, undefined, caller),
+      returned,
+      args,
+    );
+  }
+
+  /**
    * A query at snapshot `ts` (≤ the visible ts), as JSON: the HTTP API's `query_at_ts`. Through the query
    * cache, as in Convex: a result cached at or before `ts` and still valid at `ts` answers it.
    */
@@ -2328,6 +2375,7 @@ export class Functions {
     // Pushed code's handler: its context's wrapper for nested calls (`installNestedCalls`).
     const nestedCalls = (handler as { [NESTED_CALLS]?: NestedCalls } | undefined)?.[NESTED_CALLS];
     const inContext = nestedCalls !== undefined;
+    const r = roomsCtx(this, null, true);
     const ctx = trackedCtx({
       auth: {
         getUserIdentity: async () => {
@@ -2380,6 +2428,8 @@ export class Functions {
         }),
       ),
       storage: cutOffWithAction(this.fileStorage?.actionWriter(storageMeter) ?? noStorage),
+      rooms: cutOffWithAction(r.rooms),
+      presence: cutOffWithAction(r.presence as NonNullable<typeof r.presence>),
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
         checkActionAlive();
         // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).

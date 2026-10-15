@@ -10,7 +10,9 @@ import {
   internalMutation,
   issueAdminKey,
   mutation,
+  presence,
   query,
+  room,
   type ServerOptions,
 } from "@bunvex/server";
 import { BunvexError, v } from "@bunvex/values";
@@ -84,6 +86,11 @@ export async function startServer(opts: Partial<ServerOptions> = {}) {
       await gates.get("action");
       return x;
     }),
+  });
+  functions.register("rooms", {
+    doc: room({ args: { id: v.string() }, presence: v.any(), events: { wave: v.any() } }),
+    locked: room({ canJoin: () => false, presence: v.any() }),
+    online: presence({ args: { team: v.string() }, state: v.any() }),
   });
   let port = 0;
   // No site port (HTTP actions; no sync test calls one): createServer puts it on the API's port + 1 when the

@@ -245,11 +245,13 @@ function analysisFromRow(row: Record<string, unknown> | null): AnalyzedModule | 
       r.httpRoutes === null ? null : r.httpRoutes.map((h) => ({ route: h.route, pos: positionFromRow(h.pos) })),
     cronSpecs:
       r.cronSpecs === null ? null : Object.fromEntries(r.cronSpecs.map((c) => [c.identifier, cronSpecOf(c.spec)])),
+    // The row is Convex's `SerializedAnalyzedModule`, which has no rooms: a reloaded version analyzes them again.
+    rooms: [],
   };
 }
 
 /** A module that defines no function (the schema, the auth config): Convex analyzes it to nothing. */
-const NOTHING: AnalyzedModule = { functions: [], httpRoutes: null, cronSpecs: null };
+const NOTHING: AnalyzedModule = { functions: [], httpRoutes: null, cronSpecs: null, rooms: [] };
 
 const hexToBase64 = (hex: string) => Buffer.from(hex, "hex").toString("base64");
 const base64ToHex = (b64: string) => Buffer.from(b64, "base64").toString("hex");

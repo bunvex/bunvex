@@ -13,6 +13,8 @@ import type {
   HttpActionBuilder,
   MutationBuilder,
   QueryBuilder,
+  RoomBuilder,
+  PresenceBuilder,
   GenericActionCtx,
   GenericMutationCtx,
   GenericQueryCtx,
@@ -58,6 +60,16 @@ export declare const internalAction: ActionBuilder<DataModel, "internal">;
  * Define an HTTP action, served by the router exported from `http.ts`.
  */
 export declare const httpAction: HttpActionBuilder;
+
+/**
+ * Define a room: members, their presence and events, held in server memory beside the database.
+ */
+export declare const room: RoomBuilder<DataModel>;
+
+/**
+ * Define a presence scope: a signed-in user's state, present while any of their connections is.
+ */
+export declare const presence: PresenceBuilder<DataModel>;
 
 /**
  * The deployment's environment variables.

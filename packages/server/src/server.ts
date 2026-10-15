@@ -148,6 +148,8 @@ import { QueryArgsError, type QueryField, queryArgs } from "./query-args.ts";
 import { RequestLimit, requestLimitFromEnv, withRequestLimit } from "./request-limit.ts";
 import { REQUEST_TIMEOUT_MS, withRequestTimeout } from "./request-timeout.ts";
 import { withRequestTracing } from "./request-tracing.ts";
+import { RoomHub } from "./rooms/hub.ts";
+import { roomLimitsFromEnv } from "./rooms/limits.ts";
 import { checkRouter, type HttpRouter } from "./router.ts";
 import { ScheduledJobExecutor, type SchedulerOptions, schedulerOptionsFromEnv } from "./scheduler.ts";
 import { metricsEndpointDisabled, ServerMetrics } from "./server-metrics.ts";
@@ -935,9 +937,14 @@ export function createServer(opts: ServerOptions) {
     );
   };
 
+  // The rooms' members, in memory beside the database (AD-42); the sync sessions join them, actions read them.
+  const roomLimits = roomLimitsFromEnv();
+  const rooms = new RoomHub(roomLimits);
+  functions.roomHub = rooms;
   const sync = new SyncHub({
     engine,
     functions,
+    rooms: { hub: rooms, limits: roomLimits },
     redact,
     formatError,
     fromWire,
@@ -2186,7 +2193,7 @@ export function createServer(opts: ServerOptions) {
     });
 
   const installCodeVersion = async (version: CodeVersion, o: { crons?: boolean; auth?: AuthInfo[] } = {}) => {
-    const changed = functions.install(version.functions, version.moduleHashes);
+    const changed = functions.install(version.functions, version.moduleHashes, version.rooms);
     // The functions' handles (STUDY-50): a row per function, tombstones for the ones gone.
     await engine.mutation((db) => syncFunctionHandles(db, functions.functionPaths()), "_system/function_handles");
     httpOptions.router = version.router;
@@ -2423,6 +2430,8 @@ export function createServer(opts: ServerOptions) {
     /** The file storage, if any. */
     files,
     sync,
+    /** The rooms and presence scopes (AD-42). */
+    rooms,
     scheduler,
     cronsReady,
     /** The function execution log (STUDY-47). */

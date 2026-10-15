@@ -107,6 +107,8 @@ const SERVER_TYPES = [
   "HttpActionBuilder",
   "MutationBuilder",
   "QueryBuilder",
+  "RoomBuilder",
+  "PresenceBuilder",
   "GenericActionCtx",
   "GenericMutationCtx",
   "GenericQueryCtx",
@@ -121,6 +123,8 @@ const GENERIC_BUILDERS = [
   "internalActionGeneric",
   "internalMutationGeneric",
   "internalQueryGeneric",
+  "roomGeneric",
+  "presenceGeneric",
 ];
 const BUILDERS: [name: string, type: string, generic: string][] = [
   ["query", 'QueryBuilder<DataModel, "public">', "queryGeneric"],
@@ -130,6 +134,8 @@ const BUILDERS: [name: string, type: string, generic: string][] = [
   ["action", 'ActionBuilder<DataModel, "public">', "actionGeneric"],
   ["internalAction", 'ActionBuilder<DataModel, "internal">', "internalActionGeneric"],
   ["httpAction", "HttpActionBuilder", "httpActionGeneric"],
+  ["room", "RoomBuilder<DataModel>", "roomGeneric"],
+  ["presence", "PresenceBuilder<DataModel>", "presenceGeneric"],
 ];
 const BUILDER_DOCS: Record<string, string> = {
   query: "Define a query in this bunvex app's public API, readable by clients.",
@@ -139,6 +145,8 @@ const BUILDER_DOCS: Record<string, string> = {
   action: "Define an action in this bunvex app's public API: it may call third-party services.",
   internalAction: "Define an action that only other bunvex functions can call.",
   httpAction: "Define an HTTP action, served by the router exported from `http.ts`.",
+  room: "Define a room: members, their presence and events, held in server memory beside the database.",
+  presence: "Define a presence scope: a signed-in user's state, present while any of their connections is.",
 };
 const CTX_TYPES = `/** The context of every query: a database reader, \`auth\` and \`storage\`. */
 export type QueryCtx = GenericQueryCtx<DataModel>;

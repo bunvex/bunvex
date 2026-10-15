@@ -16,6 +16,8 @@ import {
   internalActionGeneric,
   internalMutationGeneric,
   internalQueryGeneric,
+  roomGeneric,
+  presenceGeneric,
 } from "bunvex/server";
 
 /**
@@ -52,6 +54,16 @@ export const internalAction = internalActionGeneric;
  * Define an HTTP action, served by the router exported from `http.ts`.
  */
 export const httpAction = httpActionGeneric;
+
+/**
+ * Define a room: members, their presence and events, held in server memory beside the database.
+ */
+export const room = roomGeneric;
+
+/**
+ * Define a presence scope: a signed-in user's state, present while any of their connections is.
+ */
+export const presence = presenceGeneric;
 
 /**
  * The deployment's environment variables.

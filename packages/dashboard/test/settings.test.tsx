@@ -4,6 +4,7 @@ import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { validateEnvVarsSearch } from "../src/router.tsx";
 import { changesOf } from "../src/settings/screen.tsx";
 import { expectAccessible } from "./axe.ts";
 
@@ -41,6 +42,15 @@ test("the batch a set of rows makes: a rename is a delete and a set", () => {
   expect(changesOf([{ key: "n", name: "C", value: "3", deleted: false, editing: true }])).toEqual([
     { name: "C", value: "3" },
   ]);
+});
+
+test("?var=: one name, several, a name the router read as a number; nothing else", () => {
+  expect(validateEnvVarsSearch({ var: "A" })).toEqual({ var: ["A"] });
+  expect(validateEnvVarsSearch({ var: ["A", "B"] })).toEqual({ var: ["A", "B"] });
+  expect(validateEnvVarsSearch({ var: 12 })).toEqual({ var: ["12"] });
+  expect(validateEnvVarsSearch({ var: "" })).toEqual({ var: undefined });
+  expect(validateEnvVarsSearch({ var: { a: 1 } })).toEqual({ var: undefined });
+  expect(validateEnvVarsSearch({})).toEqual({ var: undefined });
 });
 
 describe("Settings: environment variables", () => {
@@ -190,6 +200,38 @@ describe("Settings: environment variables", () => {
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect((await screen.findByRole("alert")).textContent).toBe("Could not save: too many variables");
     expect(screen.getByText("1 unsaved change")).toBeDefined();
+  });
+
+  test("?var=NAME adds a row for it with an empty value, as Convex's link; the parameter leaves the address", async () => {
+    const { history, source } = mount("/settings/environment-variables?var=ISSUER_DOMAIN");
+    await loaded();
+    const name = (await screen.findAllByRole("textbox", { name: "Name" })) as HTMLInputElement[];
+    expect(name.map((n) => n.value)).toEqual(["ISSUER_DOMAIN"]);
+    expect((screen.getByRole("textbox", { name: "Value" }) as HTMLInputElement).value).toBe("");
+    await waitFor(() => expect(history.location.search).toBe(""));
+    const user = userEvent.setup();
+    await user.type(screen.getByRole("textbox", { name: "Value" }), "example.com");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Saved 1 change.");
+    expect((await vars(source)).ISSUER_DOMAIN).toBe("example.com");
+  });
+
+  test("?var= repeated adds a row each; a name already set is a duplicate, as Convex's form says", async () => {
+    mount("/settings/environment-variables?var=A_ONE&var=LOG_LEVEL");
+    await loaded();
+    const names = (await screen.findAllByRole("textbox", { name: "Name" })) as HTMLInputElement[];
+    expect(names.map((n) => n.value)).toEqual(["A_ONE", "LOG_LEVEL"]);
+    expect(screen.getByText("LOG_LEVEL is used twice.")).toBeDefined();
+  });
+
+  test("?var= with a credential that cannot write adds nothing", async () => {
+    const { history } = mount(
+      "/settings/environment-variables?var=ISSUER_DOMAIN",
+      mockSource({ capabilities: { operations: ["viewData", "viewEnvironmentVariables"], readOnly: false } }),
+    );
+    await loaded();
+    await waitFor(() => expect(history.location.search).toBe(""));
+    expect(screen.queryByRole("textbox", { name: "Name" })).toBeNull();
   });
 
   test("without writeEnvironmentVariables: shown and copied, not changed", async () => {

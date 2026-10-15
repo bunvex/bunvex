@@ -258,8 +258,33 @@ export const newDeploymentName = (cwd: string) => `local-${basename(cwd).replace
  * choose the executable (and ask before upgrading), check it is not already running, choose the ports,
  * start it as a child, wait for it, save config.json.
  */
+/** The answer "no" to the first run's "Continue?" (Convex's "Exiting"). */
+export class LocalSetupDeclined extends Error {
+  constructor() {
+    super("Exiting");
+  }
+}
+
+/**
+ * A project's first local deployment, as Convex's anonymous one starts (`handleAnonymousDeployment`,
+ * `chooseDeployment`): "Setting up a new project...", then on a terminal what `dev` does and where to go next, and
+ * "Continue?" (yes by default; no stops with "Exiting").
+ */
+function introduceFirstRun(io: Io) {
+  io.err("Setting up a new project...");
+  if (!io.prompt) return;
+  io.err(
+    "This command, `bunvex dev`, will run your bunvex backend locally and update it with the function you write in the `bunvex/` directory.",
+  );
+  io.err("Use `bunvex dashboard` to view and interact with your project from a web UI.");
+  io.err("Use `bunvex docs` to read the docs and `bunvex help` to see other commands.");
+  const answer = io.prompt("Continue? (Y/n)");
+  if (answer !== null && !/^(y|yes|)$/i.test(answer.trim())) throw new LocalSetupDeclined();
+}
+
 export async function startLocalDeployment(io: Io, opts: LocalOptions = {}): Promise<RunningLocal> {
   const existing = readLocalConfig(io.cwd);
+  if (!existing) introduceFirstRun(io);
   const name = existing?.deploymentName ?? newDeploymentName(io.cwd);
   // The executable's version.
   let version: string;
@@ -441,28 +466,72 @@ export function changesToGitIgnore(existing: string | null): string | null {
   return ignored ? null : `${existing}\n.env.local\n`;
 }
 
+/** What writing `.env.local` changed: the deployment's variable, each URL variable (by name), `.gitignore`. */
+export type EnvLocalChanges = { deployment: boolean; url: string | null; site: string | null; gitignore: boolean };
+
+/** Whether anything changed (Convex prints its configuration lines only then). */
+export const envLocalChanged = (c: EnvLocalChanges) => c.deployment || c.url !== null || c.site !== null || c.gitignore;
+
 /**
  * Write the deployment into `.env.local` (Convex's `writeDeploymentEnvVar` and `writeUrlsToEnvFile`): each
  * variable through `changedEnvVarFile`, then `.env.local` added to `.gitignore` unless a line there covers it.
  */
-/** Whether `.env.local` or `.gitignore` changed (Convex prints its configuration lines only then). */
-export function writeEnvLocal(cwd: string, deploymentName: string, cloud: number, site: number): boolean {
-  const path = join(cwd, ".env.local");
-  const before = existsSync(path) ? readFileSync(path, "utf8") : null;
-  let text = before;
-  const set = (name: string, value: string, comment: string | null = null) => {
-    text = changedEnvVarFile(text, name, value, comment) ?? text;
-  };
-  set("BUNVEX_DEPLOYMENT", `local:${deploymentName}`, "# Deployment used by `bunvex dev`");
-  const vars = urlVariables(cwd);
-  set(vars.url, `http://127.0.0.1:${cloud}`);
-  set(vars.site, `http://127.0.0.1:${site}`);
-  const envChanged = text !== null && text !== before;
-  if (envChanged) writeFileSync(path, text!);
+export function writeEnvLocal(cwd: string, deploymentName: string, cloud: number, site: number): EnvLocalChanges {
+  const deployment =
+    writeEnvVars(cwd, [["BUNVEX_DEPLOYMENT", `local:${deploymentName}`, "# Deployment used by `bunvex dev`"]]).length >
+    0;
+  const urls = writeUrlsToEnvLocal(cwd, `http://127.0.0.1:${cloud}`, `http://127.0.0.1:${site}`);
   const gitignore = join(cwd, ".gitignore");
   const ignore = changesToGitIgnore(existsSync(gitignore) ? readFileSync(gitignore, "utf8") : null);
   if (ignore !== null) writeFileSync(gitignore, ignore);
-  return envChanged || ignore !== null;
+  return { deployment, ...urls, gitignore: ignore !== null };
+}
+
+/**
+ * The client's URL variables in `.env.local` (Convex's `writeUrlsToEnvFile`, which a self-hosted `dev` calls too):
+ * the name of each one that changed, null for one already right.
+ */
+export function writeUrlsToEnvLocal(
+  cwd: string,
+  url: string,
+  site: string | null,
+): { url: string | null; site: string | null } {
+  const vars = urlVariables(cwd);
+  const changed = writeEnvVars(cwd, [
+    [vars.url, url, null],
+    ...(site === null ? [] : [[vars.site, site, null] as const]),
+  ]);
+  return { url: changed.includes(vars.url) ? vars.url : null, site: changed.includes(vars.site) ? vars.site : null };
+}
+
+/** Sets each variable in `.env.local` through `changedEnvVarFile`; the names it changed. */
+function writeEnvVars(cwd: string, vars: (readonly [name: string, value: string, comment: string | null])[]): string[] {
+  const path = join(cwd, ".env.local");
+  const before = existsSync(path) ? readFileSync(path, "utf8") : null;
+  let text = before;
+  const changed: string[] = [];
+  for (const [name, value, comment] of vars) {
+    const next = changedEnvVarFile(text, name, value, comment);
+    if (next !== null) {
+      text = next;
+      changed.push(name);
+    }
+  }
+  if (changed.length > 0) writeFileSync(path, text!);
+  return changed;
+}
+
+/**
+ * `.env.local` without its `BUNVEX_DEPLOYMENT` line (Convex's `eraseDeploymentEnvVar`, which a self-hosted `dev`
+ * calls): whether there was one.
+ */
+export function eraseDeploymentVar(cwd: string): boolean {
+  const path = join(cwd, ".env.local");
+  if (!existsSync(path)) return false;
+  const text = readFileSync(path, "utf8");
+  if (parseEnvFile(text).BUNVEX_DEPLOYMENT === undefined) return false;
+  writeFileSync(path, text.replace(/^BUNVEX_DEPLOYMENT.*$/m, ""));
+  return true;
 }
 
 /** Forget the local deployment's state directory (tests; there is no command, as in Convex). */

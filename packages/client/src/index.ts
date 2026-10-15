@@ -13,6 +13,7 @@ export {
   getFunctionName,
   makeFunctionReference,
   type OptionalRestArgs,
+  type RoomReference,
   v1,
 } from "@bunvex/protocol";
 export type { AuthTokenFetcher } from "./authentication-manager.ts";
@@ -59,6 +60,13 @@ export {
 } from "./pagination.ts";
 /** @internal `bunvexQueryOptions`, as Convex's `convexQueryOptions` (DV-348); `QueryOptions` is public. */
 export { bunvexQueryOptions, type QueryOptions } from "./query-options.ts";
+export type {
+  PresenceHandle,
+  RoomHandle,
+  RoomHandleError,
+  RoomMemberView,
+  RoomStatus,
+} from "./rooms.ts";
 export {
   BunvexClient,
   type BunvexClientOptions,

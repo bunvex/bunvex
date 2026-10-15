@@ -154,6 +154,18 @@ describe("schedules (Convex's paginatedScheduledJobs, scheduler:getArgs, listCro
   });
 });
 
+describe("tableOfId for a file's and a scheduled run's ids (STUDY-163 §2)", () => {
+  test("named by the table mapping's system tables, as Convex's getReferencedTableName", async () => {
+    const src = open();
+    const file = await src.uploadFile!(new Blob(["referenced"]));
+    expect(await src.tableOfId!(file)).toBe("_file_storage");
+    await srv.call("mutation", "jobs:schedule", { count: 1, delayMs: 30 * HOUR, fn: "other" });
+    const [run] = (await src.listScheduledFunctions!({ numItems: 1, cursor: null, function: "jobs:other" })).page;
+    expect(await src.tableOfId!(run!.id)).toBe("_scheduled_jobs");
+    await src.deleteFiles!([file]);
+  });
+});
+
 describe("files (Convex's fileStorageV2)", () => {
   test("a file's metadata as stored, with a URL that serves it", async () => {
     const src = open();

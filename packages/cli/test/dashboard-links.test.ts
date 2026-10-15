@@ -198,7 +198,7 @@ export default defineSchema({ notes: defineTable({ a: v.string() }).index("by_a"
     const refused = io(app);
     expect(await main(["deploy", "--typecheck=disable", "--codegen=disable"], refused.it)).toBe(1);
     expect(refused.err.at(-1)).toBe(
-      `bunvex deploy: Environment variable ISSUER_DOMAIN is used in auth config file but its value was not set.\nGo to:\n\n    ${dash.url}settings/environment-variables\n\n  to set it up. `,
+      `bunvex deploy: Environment variable ISSUER_DOMAIN is used in auth config file but its value was not set.\nGo to:\n\n    ${dash.url}settings/environment-variables?var=ISSUER_DOMAIN\n\n  to set it up. `,
     );
     // the same deployment as self-hosted: Convex's words for no link
     writeFileSync(join(app, ".env.local"), "");

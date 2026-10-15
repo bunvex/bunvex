@@ -560,4 +560,47 @@ req/s, a one-chunk stream): before 19.3k–21.4k; with the 32 turns 20.5k–21.5
 
 A chunk that is not bytes (a string enqueued in the stream) is sent as text by Bun; Convex's runtime fails the body
 with `Uncaught Error: serde_v8 error: invalid type; expected: buffer, got: string` (the 500 in the handler's turn).
-Left as a gap.
+Matched since: [STUDY-161 §15](STUDY-161-engine-messages.md#15-a-streamed-http-action-bodys-chunk-that-is-not-bytes-found-by-study-31-106).
+
+## 11. The 500's `trace` ends with a newline (follow-up, 2026-10-15)
+
+Found by STUDY-161 §15. Read at `d8bdde0` and checked against its binary (`precompiled-2026-10-07-d8bdde0`).
+
+**Convex.** The 500 of a run that failed before its head is `RedactedJsError::to_http_response_parts`
+(`crates/application/src/redaction.rs:143-160`): `trace` is the error's `Display`, which is its `Debug`
+(`crates/common/src/errors.rs:815-831`). That writes the message with `writeln!`, then each frame with `writeln!`.
+So a `trace` always ends with a newline: after the last frame, or after the message when the error has no frames
+(a thrown value that is no Error, an Error whose stack has none, a body errored with a string). Seen on the binary:
+`"Uncaught a string\n"`, `"Uncaught one\ntwo\n"`, `"Uncaught 42\n"`, `"Uncaught #<Object>\n"`, `"Uncaught null\n"`,
+`"Uncaught undefined\n"`, `"Uncaught Error: no stack\n"`, `"Uncaught in turn\n"`, and the action timeout's
+`"Function execution timed out (maximum duration: 3s)\n"`. An Error with frames, and a
+handler that returns no Response, end with `…)\n`.
+
+**bunvex before.** `errorResponse` (`server/src/http-actions.ts`) stripped the last newline of the uncaught error's
+text, so every `trace` ended without one.
+
+**bunvex now.** The `trace` is the uncaught error's text as logged, newline included. The `code` is unchanged.
+
+*Tests:* `server/test/http-actions.test.ts` (a string, null, an Error with no frames, no Response, and an Error with
+frames, each `trace` whole or by its end; `action-timeout.test.ts` and `action-nested-error-frames.test.ts` now expect
+the newline); `differential/test/http-500-trace.test.ts` (13 routes of
+`http-trace-app/` on both backends: the `trace` whole without frames; its first line, whether it has frames and its
+last character with them). Sabotage (each restored, `git diff` clean): the newline stripped again (unit and oracle
+fail); kept only when there are frames (unit and oracle fail); kept only when there are none (unit and oracle fail).
+
+**The `code` (2026-10-15, owner: match Convex).** Convex's `code` is `Server Error: {message}`
+(`redaction.rs:147`): the JsError's message whole, without its frames and without the newline `Debug` writes after it.
+Seen on the binary: `new Error("line one\nline two")` gives `Server Error: Uncaught Error: line one\nline two`;
+`new TypeError("first\n\nthird")` keeps the blank line; a message that ends with a newline keeps it
+(`new Error("ends with a newline\n")`, a thrown `"a string\n"`); a nested action's error carries the callee's frame,
+which is part of its message (`Uncaught Error: nested boom\n    at <anonymous> (../convex/throws.ts:5:1)\n`). The
+Completion record and the log lines already had the whole message on bunvex (the same `describeUncaught` text as
+Convex's, checked for each of these); only the 500's `code` was cut, to its first line, in `errorResponse`.
+
+bunvex now takes the `code` from the same text as the `trace`, without the frames at its end and the newline before
+them (`http-actions.ts`, `FRAMES_AT_END`): what is left is the message, every line of it, a nested call's frames
+included. *Tests:* `server/test/http-actions.test.ts` (several lines, a trailing newline, one line, no frames);
+`differential/test/http-500-trace.test.ts` (9 routes' `code` whole on both backends, the frames' positions masked;
+new routes in `http-trace-app/`, and its `throws.ts`). Sabotage (each restored, `git diff` clean): the first line only
+(unit and oracle fail); the trailing newline trimmed (unit and oracle fail); the frames kept (unit and oracle fail);
+the frames cut from the first run of frame lines (`/m`: oracle fails, on the nested call).

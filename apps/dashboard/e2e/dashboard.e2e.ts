@@ -263,6 +263,22 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Add documents: a value that does not fit the schema is marked as it is typed (not enforced: a warning)", async () => {
+    const { page, errors, close } = await open("/database/users?panel=add");
+    const panel = page.getByRole("complementary", { name: "Add documents to users" });
+    await panel.locator(".monaco-editor").first().click();
+    await page.waitForFunction(() => !!document.activeElement?.closest(".monaco-editor"));
+    await clear(page);
+    await page.keyboard.type("{ name: 1 }");
+    await panel.getByText("not match the schema, which is not enforced", { exact: false }).waitFor();
+    // Monaco's warning underline on the value, not an error's
+    await panel.locator(".squiggly-warning").first().waitFor();
+    expect(await panel.locator(".squiggly-error").count()).toBe(0);
+    expect(await panel.getByRole("button", { name: "Add document" }).isDisabled()).toBe(false);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test("a document: Edit, type fast, Ctrl+Enter saves exactly what was typed", async () => {
     const { page, errors, close } = await open("/database/users");
     await heading(page, "users");
@@ -546,6 +562,32 @@ describe("the dashboard in a browser", () => {
     await phone.close();
   });
 
+  test("Database: the index list's three sections, a staged vector index's backfill; axe with contrast, both themes", async () => {
+    for (const colorScheme of ["light", "dark"] as const) {
+      const { page, errors, close } = await open("/database/messages?panel=indexes", { colorScheme });
+      const panel = page.getByRole("complementary", { name: "Indexes of messages" });
+      await panel.getByRole("listitem", { name: "by_channel" }).waitFor();
+      for (const name of ["Indexes", "Search indexes", "Vector indexes"])
+        await panel.getByRole("region", { name, exact: true }).waitFor();
+      const vector = panel
+        .getByRole("region", { name: "Vector indexes" })
+        .getByRole("listitem", { name: "by_embedding" });
+      expect(await vector.textContent()).toContain("Dimensions:1536");
+      // 120 of the 400 messages
+      expect(await vector.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("30");
+      await page.addScriptTag({ content: AXE });
+      const violations = await page.evaluate(async () => {
+        // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
+        const axe = (window as any).axe;
+        const r = await axe.run("aside", { resultTypes: ["violations"] });
+        return r.violations.map((v: { id: string; nodes: { html: string }[] }) => `${v.id}: ${v.nodes[0]?.html}`);
+      });
+      expect(violations).toEqual([]);
+      expect(errors).toEqual([]);
+      await close();
+    }
+  });
+
   test('Schema: an Id<"users"> type pans to users, lights it and focuses it', async () => {
     const { page, errors, close } = await open("/schema");
     await heading(page, "Schema");
@@ -713,6 +755,24 @@ describe("the dashboard in a browser", () => {
     await page.getByRole("button", { name: "Save" }).click();
     await page.getByText("Saved 1 change.").waitFor();
     await page.getByRole("listitem").filter({ hasText: "E2E_FLAG" }).waitFor();
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Settings: ?var=NAME (the CLI's link) opens a row for it; the parameter leaves the address", async () => {
+    const { page, errors, close } = await open("/settings/environment-variables?var=ISSUER_DOMAIN");
+    await heading(page, "Environment variables");
+    const name = page.getByRole("textbox", { name: "Name" });
+    await expect_(async () => expect(await name.inputValue()).toBe("ISSUER_DOMAIN"));
+    await expect_(async () => expect(new URL(page.url()).search).toBe(""));
+    await page.getByRole("textbox", { name: "Value" }).fill("example.com");
+    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByText("Saved 1 change.").waitFor();
+    // a reload (the demo data start over) does not add the row again
+    await page.reload();
+    await heading(page, "Environment variables");
+    await page.getByRole("listitem").filter({ hasText: "LOG_LEVEL" }).waitFor();
+    expect(await page.getByRole("textbox", { name: "Name" }).count()).toBe(0);
     expect(errors).toEqual([]);
     await close();
   });
@@ -1158,6 +1218,24 @@ describe("the sign-in page (STUDY-12 §19)", () => {
 });
 
 describe("the command palette (UI-01 §32)", () => {
+  test("a file's id opens Files with that file, as Convex's reference link (STUDY-163 §2)", async () => {
+    const { page, errors, close } = await open("/files");
+    await heading(page, "Files");
+    await page.getByRole("grid", { name: "Files" }).getByRole("row").nth(1).getByRole("gridcell").first().click();
+    await expect_(async () => expect(new URL(page.url()).searchParams.get("file")).toBeTruthy());
+    const id = new URL(page.url()).searchParams.get("file")!;
+    await page.goto(url("/database/users"));
+    await heading(page, "users");
+    await page.keyboard.press("Control+k");
+    await page.getByRole("combobox", { name: "Search screens, tables, functions and actions" }).fill(id);
+    await page.getByRole("option", { name: new RegExp(`Open document ${id}`) }).click();
+    await heading(page, "Files");
+    await expect_(async () => expect(new URL(page.url()).searchParams.get("file")).toBe(id));
+    await page.getByRole("complementary", { name: "File" }).waitFor();
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test("Ctrl+K from the Database screen: find a table, go, reopen, theme action, Escape; no freeze; axe in both themes", async () => {
     const { page, errors, close } = await open("/database/users");
     await heading(page, "users");

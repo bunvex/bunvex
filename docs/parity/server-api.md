@@ -50,7 +50,7 @@ Key bunvex facts behind the statuses:
 | `.filter(q => expr)` | server/filter_builder.ts, impl/filter_builder_impl.ts | done (#37) | |
 | Filter `q.field("a.b")`, including nested field paths | filter_builder.ts | done (#37) | |
 | Filter comparisons `eq` / `neq` / `lt` / `lte` / `gt` / `gte`, including `undefined` | filter_builder.ts | done (#37) | |
-| Filter arithmetic `add` / `sub` / `mul` / `div` / `mod` / `neg` | filter_builder.ts | done (#37) | |
+| Filter arithmetic `add` / `sub` / `mul` / `div` / `mod` / `neg` | filter_builder.ts | done (#37) | Errors name a value's type as Convex's `type_name` (`Null`, `Int64`, `Float64`, `Boolean`, `String`, `Bytes`, `Array`, `Object`; `undefined` for a missing field), in `Cannot negate …`, `Cannot add … and …` and `… as a Boolean` (STUDY-161 §14). |
 | Filter logic `and` / `or` / `not` | filter_builder.ts | done (#37) | |
 | Filters compare across types using the global value order | value/sorting.rs | done (#37) | Comparisons use `compareValues`, Convex's total order across types. |
 | At most 256 query operators per query (`MAX_QUERY_OPERATORS`) | impl/query_impl.ts; common/src/query.rs | done (STUDY-66) | As Convex: `filter` refuses the 257th operator ("Can't construct query with more than 256 operators"); the start counts every operator, the terminal's limit included, and refuses more than 256 ("Invalid argument `query` for `queryStream`: Query has too many operators: N"). |
@@ -317,7 +317,7 @@ Key bunvex facts behind the statuses:
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | `defineComponent(name, { env })` in `convex.config.ts` | server/components/index.ts | partial (STUDY-153 PR 1) | In `bunvex/server`, as Convex's: its env validators, `env` references, `use`, and `export()` the same as Convex's package for the same calls (compared in packages/differential); the file is `bunvex.config.ts` (DV-494). The server's push of definitions: STUDY-153 PRs 3–4. |
-| `defineApp({ httpPrefix, env })` + `app.use(component, { name, httpPrefix, env })` | server/components/index.ts | partial (STUDY-153 PR 1) | In `bunvex/server`, as Convex's (names, prefixes normalized, env bindings, the errors); the server reads its `export()` from STUDY-153 PR 3 on. |
+| `defineApp({ httpPrefix, env })` + `app.use(component, { name, httpPrefix, env })` | server/components/index.ts | partial (STUDY-153 PR 1) | In `bunvex/server`, as Convex's (names, prefixes normalized, env bindings, the errors); the server evaluates `bunvex.config.js` as Convex evaluates its definitions (STUDY-153 PR 3a, `definition-eval.ts`); a push calls it from PR 3c on. |
 | `components.<name>.<module>.<fn>` references (`componentsGeneric`) | server/components/index.ts | partial (STUDY-153 PR 1; DV-174) | `componentsGeneric` is in `bunvex/server`, its references Convex's (`_reference/childComponent/…`, compared in packages/differential); codegen still writes `components` as `{}` until STUDY-152 step 6. |
 | Component env definitions with validators and env refs | server/components/index.ts (`EnvDefinition`) | missing (DV-55, DV-186) | With components (STUDY-62). |
 | `createFunctionHandle(fnRef)` returns a string handle usable in `runX` / scheduler | server/components/index.ts | done (STUDY-50) | In queries, mutations and actions; Convex's errors. |

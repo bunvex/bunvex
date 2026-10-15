@@ -98,6 +98,7 @@ export {
   allComponentPaths,
   COMPONENT_NAMESPACE_TABLES,
   type ComponentDefinitionMeta,
+  type ComponentExport,
   type ComponentMeta,
   ComponentMetadataError,
   type ComponentState,
@@ -449,6 +450,7 @@ export {
   type TxQuery,
   type TxQueryChained,
 } from "./tx.ts";
+export { isSubset as validatorIsSubset } from "./validator-subset.ts";
 export {
   type FileStorageDoc,
   VIRTUAL_TABLES,
