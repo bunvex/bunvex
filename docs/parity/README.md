@@ -187,8 +187,8 @@ gaps.
   path (Convex: `convex:/user/…`).
 - Engine messages STUDY-149 found (STUDY-161): `db.insert`'s table and value errors, a schema error's display, a
   system-field mismatch's display, a query on a missing table or index, a `$` field in a system function's
-  arguments and a push's table numbers, matched to Convex one PR each; the analyzed line of a function (the
-  dashboard's Functions tree) differs where esbuild and Bun print a bundle differently (DV-520, open).
+  arguments and a push's table numbers, matched to Convex (#664–#669); the analyzed line of a function (the
+  dashboard's Functions tree) differs where esbuild and Bun print a bundle differently (DV-520, accepted).
 - Operations:
   - streaming import past `clear_tables` (built with its audit event, STUDY-141 PR 1): Airbyte records,
     Fivetran operations and primary-key indexes (PRs 2–4, future work by the owner's choice, 2026-10-11). The
