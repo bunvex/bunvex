@@ -184,6 +184,25 @@ function views(call: Call) {
   return <T extends object>(ctx: T): T => {
     const out: Record<PropertyKey, unknown> = {};
     for (const key of Reflect.ownKeys(ctx)) {
+      const get = Object.getOwnPropertyDescriptor(ctx, key)?.get;
+      if (get) {
+        // A lazy member (ctx.rooms) stays lazy: seen through a view on first read.
+        let w: unknown;
+        let made = false;
+        Object.defineProperty(out, key, {
+          enumerable: true,
+          configurable: true,
+          get() {
+            if (!made) {
+              const v = get.call(ctx);
+              w = v !== null && (typeof v === "object" || typeof v === "function") ? seen(ctx, v) : v;
+              made = true;
+            }
+            return w;
+          },
+        });
+        continue;
+      }
       const v = (ctx as Record<PropertyKey, unknown>)[key];
       out[key] = v !== null && (typeof v === "object" || typeof v === "function") ? seen(ctx, v) : v;
     }

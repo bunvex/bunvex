@@ -25,15 +25,19 @@ type Io = {
 const NO_ACCESS = "You cannot join this room.";
 const SIGNED_IN = "A presence scope is for signed-in users.";
 const NOT_JOINED = "Not in this room.";
+const FULL = "This room is full, or this connection is in too many rooms.";
 
-/** JSON with every object's keys sorted, at every level: one room key for the same args in any key order. */
+/**
+ * JSON with every object's keys sorted, at every level: one room key for the same args in any key order. The
+ * sorted copies have no prototype, so a `__proto__` key stays a key.
+ */
 export function canonicalJson(x: JSONValue): string {
   return JSON.stringify(sorted(x));
 }
 function sorted(x: JSONValue): JSONValue {
   if (Array.isArray(x)) return x.map(sorted);
   if (x === null || typeof x !== "object") return x;
-  const out: Record<string, JSONValue> = {};
+  const out: Record<string, JSONValue> = Object.create(null);
   for (const k of Object.keys(x).sort()) out[k] = sorted(x[k] as JSONValue);
   return out;
 }
@@ -113,7 +117,8 @@ export class RoomConnection implements RoomSink {
     const userId = subjectOf(caller);
     // Checked before the hub, which keys a scope's member by its user.
     if (def.kind === "presence" && userId === null) return this.error(m.roomId, "no_access", SIGNED_IN);
-    const room = { key: { name: m.name }, args };
+    // The gates are named by the room's registry name, as on an identity change: one name in the logs.
+    const room = { key: { name: registryKey(m.name) }, args };
     const allowed = await this.gate(def.canJoin, "canJoin", room, caller);
     const canPublish =
       allowed && (def.kind === "presence" || (await this.gate(def.canPublish, "canPublish", room, caller)));
@@ -121,17 +126,22 @@ export class RoomConnection implements RoomSink {
     if (this.closedFlag) return;
     if (!allowed) return this.error(m.roomId, "no_access", NO_ACCESS);
     // One room whatever the spelling of its name (`rooms:doc`, `rooms.js:doc`) or the order of its args' keys.
-    const key: RoomKey = { kind: def.kind, name: registryKey(m.name), argsJson: canonicalJson(m.args) };
-    this.attach(m.roomId, { def, key, args, userId }, canPublish);
+    const key: RoomKey = { kind: def.kind, name: room.key.name, argsJson: canonicalJson(m.args) };
+    if (!this.attach(m.roomId, { def, key, args, userId }, canPublish)) this.error(m.roomId, "limit", FULL);
   }
 
-  /** Join the hub; the hub ends any other attachment of this connection to the same room. */
-  private attach(roomId: number, j: Joined, canPublish: boolean) {
+  /** Join the hub (false: over a cap); the hub ends any other attachment of this connection to the same room. */
+  private attach(roomId: number, j: Joined, canPublish: boolean): boolean {
     const ks = roomKeyString(j.key);
     for (const [id, other] of this.joined) if (roomKeyString(other.key) === ks) this.joined.delete(id);
-    if (this.deps.hub.join(this, roomId, j.key, { userId: j.userId, canPublish }) === "limit")
-      return this.error(roomId, "limit", "This room is full, or this connection is in too many rooms.");
+    if (this.deps.hub.join(this, roomId, j.key, { userId: j.userId, canPublish }) === "limit") return false;
     this.joined.set(roomId, j);
+    return true;
+  }
+
+  /** A joined membership the server ended on its own: the client's handle ends too (it is not a join error). */
+  private left(roomId: number, code: "no_access" | "limit", message: string) {
+    this.send({ type: "RoomLeft", roomId, code, message });
   }
 
   /**
@@ -212,8 +222,8 @@ export class RoomConnection implements RoomSink {
       // Refused, or a different user, who is a different member: the old one leaves, the new one joins.
       this.joined.delete(roomId);
       this.deps.hub.leave(this, roomId);
-      if (!ok) this.error(roomId, "no_access", NO_ACCESS);
-      else this.attach(roomId, { ...j, userId }, canPublish);
+      if (!ok) this.left(roomId, "no_access", NO_ACCESS);
+      else if (!this.attach(roomId, { ...j, userId }, canPublish)) this.left(roomId, "limit", FULL);
     });
   }
 

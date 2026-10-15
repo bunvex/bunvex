@@ -310,8 +310,23 @@ function insertMount(
 /** A definition's exports before they are resolved (Convex's `ComponentExport`): a function's path at each leaf. */
 type ExportTree = Map<string, { type: "branch"; branch: ExportTree } | { type: "leaf"; udfPath: string }>;
 
-/** Convex's `PathComponent` check of a module path's segment. */
-const isPathComponent = (s: string) => s.length <= 64 && /^[A-Za-z0-9_.]*$/.test(s) && /[A-Za-z0-9]/.test(s);
+/** Convex's `check_valid_path_component` of a module path's segment: why it is none, or null. */
+function pathComponentError(s: string): string | null {
+  const bytes = Buffer.byteLength(s);
+  if (bytes > 64) {
+    // The longest prefix of whole characters within 64 bytes.
+    let prefix = "";
+    for (const c of s) {
+      if (Buffer.byteLength(prefix + c) > 64) break;
+      prefix += c;
+    }
+    return `Path component is too long (${bytes} > maximum 64): ${prefix}...`;
+  }
+  if (!/^[A-Za-z0-9_.]*$/.test(s))
+    return `Path component ${s} can only contain alphanumeric characters, underscores, or periods.`;
+  if (!/[A-Za-z0-9]/.test(s)) return `Path component ${s} must have at least one alphanumeric character.`;
+  return null;
+}
 
 /**
  * Convex's `file_based_exports`: each public function of each module, at its module's path without `.js` and its
@@ -321,13 +336,14 @@ const isPathComponent = (s: string) => s.length <= 64 && /^[A-Za-z0-9_.]*$/.test
 export function fileBasedExports(functions: Record<string, AnalyzedModule>): ExportTree {
   const exports: ExportTree = new Map();
   for (const modulePath of Object.keys(functions).sort()) {
-    const segments = modulePath.replace(/\.js$/, "").split("/");
-    for (const s of segments)
-      if (!isPathComponent(s))
-        throw new ComponentTreeError(
-          "InvalidModulePath",
-          `Invalid component ${debugString(s)} in module path ${modulePath}`,
-        );
+    const stripped = modulePath.replace(/\.js$/, "");
+    const segments = stripped.split("/");
+    for (const s of segments) {
+      // Convex's `InvalidModulePathError::InvalidComponent`, over the path without `.js` (d8bdde0).
+      const error = pathComponentError(s);
+      if (error !== null)
+        throw new ComponentTreeError("InvalidModulePath", `Invalid module path '${stripped}': ${error}`);
+    }
     for (const f of functions[modulePath]!.functions) {
       if (f.visibility.kind !== "public") continue;
       const conflict = () =>

@@ -1,7 +1,8 @@
-# STUDY-164 — Ephemeral state: rooms, presence and broadcast (a proposed addition)
+# STUDY-164 — Ephemeral state: rooms, presence and broadcast (an addition)
 
-- **Status:** decided — AD-42 accepted by the owner on 2026-10-15 (§6): rooms and presence scopes, two concepts
-  (R2); relay through the leader when followers exist, a bus such as Redis measured then (R5); the rest as proposed
+- **Status:** built (v1) — AD-42 accepted by the owner on 2026-10-15 (§6): rooms and presence scopes, two concepts
+  (R2); relay through the leader when followers exist, a bus such as Redis measured then (R5); the rest as proposed.
+  What was built, the rulings made on the way and the measurement are in §7. User docs: [docs/rooms.md](../rooms.md)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (2026-09-28); `@convex-dev/presence`
   at `a7640e7e` (v0.4.0) and `9d69fc93` (v0.3.2)
 - **Related:** [STUDY-23](STUDY-23-sync-protocol-v1.md) (protocol v1, sessions),
@@ -231,7 +232,9 @@ carrying the user's state and activity.
 - server → client: `RoomSync {roomId, self, canPublish, members}` (the full list at join and after a re-sync),
   `RoomMembers {roomId, set: [...], left: [...]}` (one coalesced frame per tick),
   `RoomEvent {roomId, from, event, data}`,
-  `RoomError {roomId, code, message}` (`no_access`, `forbidden`, `validation`, `rate_limited`, `limit`).
+  `RoomError {roomId, code, message}` (`no_access`, `forbidden`, `validation`, `rate_limited`, `limit`),
+  `RoomLeft {roomId, code, message}` (`no_access`, `limit`: the server ended a joined membership on its own, as
+  built in §7.1).
 
 They travel beside `Transition` frames, not inside them: room traffic is not part of a query set's version and must
 not hold one up.
@@ -313,3 +316,81 @@ None. Rooms are opt-in and invisible to an app or a client that does not use the
 | R7 | `onJoin` / `onLeave` server hooks: later, not v1? | later | later |
 | R8 | Room state (a CRDT document, Yjs) in memory: out of scope for now, studied separately if wanted? | out of scope | out of scope |
 | R9 | The name: `room` (Liveblocks, minivex), `channel` (Supabase, Phoenix) or `presence`? | `room` | `room` (and `presence` for scopes) |
+
+## 7. As built (v1)
+
+Built on 2026-10-15 in seven PRs after the plan: #677 (the plan); #678 A (protocol messages, `room()` and
+`presence()` definitions); #679 B (`RoomHub`); #680 C (`Tx.afterCommit`); #688 D (sync wiring, `ctx.rooms` and
+`ctx.presence`); #694 E (client `joinRoom` / `joinPresence`); #696 F (React hooks); and G, this one: the benchmark,
+[docs/rooms.md](../rooms.md), [examples/rooms-cursors](../../examples/rooms-cursors), and the fixes of the
+whole-feature review (the `RoomLeft` frame; a re-join after sign-in; room members keyed by session and user; scope
+idle per handle; one gate name in the logs; `__proto__` in room args; no sends on a refused room; the room span
+names; a lazy `ctx.rooms`). Scope: §3 as decided; no `onJoin` / `onLeave` (R7), no room state (R8), one process (R5).
+
+### 7.1 Rulings made on the way
+
+- **`RoomReference` lives in `@bunvex/protocol`**, so the generated `api` types a room's reference
+  (`RoomReference<"room", Args, Presence, Events>`) for the client, React and server alike.
+- **One attachment per (connection, room id) and per (connection, room key).** Joining a room a connection is
+  already in replaces the attachment. A rejoin within the grace by another user ends the kept member. A scope
+  member's leave and rejoin in one tick is one `set`, not a leave and a join; another tab of a scope user joining or
+  leaving changes nothing the others see, unless it changes the user's idle (idle is every tab idle).
+- **`Tx.afterCommit` (core) carries a mutation's broadcasts.** Measured: no cost on mutations that do not broadcast
+  (medians 1,551,187 against 1,550,941 no-op mutations/s, before and after).
+- **Gates re-run, concurrently, on an identity change**; a `canPublish` change sends a new `RoomSync`; a refused or
+  throwing gate answers "You cannot join this room." and nothing else; server broadcasts obey the 4 KB event limit.
+- **The client** rejoins after the auth message, not before it (the plan had it the other way: a defect found in
+  review, the gates would have run anonymous); what it sends while the socket is paused goes out on resume; a
+  `RoomError` marks a handle as errored only while it is joining (a payload error on a joined room only warns).
+- **`RoomLeft`** (added in the final review): when the server ends a joined membership on its own (an identity change
+  its gates refuse, or the rejoin as the new user over a cap), it says so, and the client's handle becomes `error`
+  with the code, its members cleared and nothing more sent for it. Without it the client showed "joined" with a
+  frozen list. A gate that fails transiently during a token refresh evicts the same way (visible now).
+- **A new token re-joins on the client too** (§3.4): after every `Authenticate` it sends (sign-in, sign-out, a
+  refresh), the client joins again, under a fresh room id, every membership in `error`; a join in flight is retried
+  if the refusal for the previous identity comes back. A scope joined before sign-in joins once signed in.
+- **A room's member is a session's connection as one user**: two live sockets of one session signed in as two users
+  are two members (the old half-open one as the old user), each leaving on its own.
+- **A scope's idle is per handle**: the membership is idle when every live handle that reported idle says so, and a
+  handle's leave takes its idle with it (a surviving component no longer stays idle after the idle one unmounts).
+- **Gates must return exactly `true`**; anything else, a truthy object included, refuses. Members keep the definition
+  they joined with across a push (no re-gate on a push). A server broadcast may reach clients before the `Transition`
+  that carries the mutation's write (it is sent at the commit, the transition after the subscriptions re-run).
+- **`ctx.rooms` is built on first read in a mutation** (and kept lazy for pushed code). Measured: no-op mutations/s on
+  a memory engine, 6 interleaved rounds of 50k, median 324,047 eager (f433fce5) against 325,892 lazy (noise).
+- **React:** `me` and `useMyPresence` read the shared membership (the client notifies on your own presence), so every
+  component of a room follows a `setMyState` made in another.
+
+### 7.2 Measurement: rooms against cursors in a table
+
+`bun bench/rooms.ts` (a script, not a test). N raw sync clients, each moving a cursor 20 times a second for 10 s,
+(a) as a room's presence and (b) as one mutation per move into a `cursors` table that every client watches with a
+`list` query. The server is its own process (memory engine, no persistence cost, loopback network); latency is the
+time from a send to its receipt at another client, over 20 sampled receivers (the others hold their socket and
+parse nothing, so the one client process does not become the measurement); CPU is the server's
+`process.cpuUsage()` over the send window, as a percentage of one core. 8-core Apple silicon laptop, Bun 1.4.2.
+
+| N | Mode | Moves sent | Samples | p50 (ms) | p99 (ms) | Server CPU (% of a core) |
+|---|---|---|---|---|---|---|
+| 10 | room | 1,924 | 17,316 | 15.3 | 34.1 | 2 |
+| 10 | table | 1,920 | 17,280 | 1.6 | 5.3 | 16 |
+| 100 | room | 19,520 | 386,499 | 18.7 | 34.4 | 8 |
+| 100 | table | 19,419 | 384,497 | 11.5 | 22.7 | 80 |
+| 500 | room | 98,000 | 1,463,068 | 32.4 | 54.7 | 62 |
+| 500 | table | 98,562 | 1,083,136 | 4,253 | 8,337 | 137 |
+
+What it says:
+
+- **CPU:** the room costs 8 times less at 10, 10 times less at 100 and 2 times less at 500 (62% against 137%), where the table is past
+  what the server can do (its CPU is above one core and its sync queue grows).
+- **Latency is not lower at every N.** While the table keeps up (10 and 100 members) its updates arrive sooner than a
+  room's: a room waits for the server's 30 ms tick to coalesce, a mutation is sent as soon as it commits. The room's
+  p99 stays at 34 ms from 10 to 100 members. At 500 the table falls behind (p50 over 4 s, p99 over 8 s) while the room
+  holds p99 54.7 ms: **a room of 500 meets the tick budget (p99 under 100 ms)**, as the cap was chosen for.
+- Coalescing is what keeps the room flat: at 500 members 10,000 updates a second reach each member as one frame per
+  tick (about 33 a second), not as 10,000 deliveries.
+- The 500-member table figures are lower bounds: the run stops recording 4 s after the last send, so receipts later
+  than that are not sampled.
+- Limits of the measurement: one machine and the loopback; unparsed receivers (a real client parses every frame, which
+  at 500 members is about 25 KB per tick); a coalesced update is not a sample in either mode (the table coalesces too
+  when its sync queue is behind). The cap was not changed.

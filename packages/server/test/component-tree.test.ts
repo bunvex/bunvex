@@ -424,6 +424,14 @@ describe("refused, as the binary refuses them", () => {
     ).toBe('HTTP mount HttpMountPath("/x/") is invalid: Child component ComponentName(Identifier("zz")) not found.');
   });
 
+  test("exports: a module path that is not one, Convex's text over the path without `.js`", () => {
+    expect(refused(() => fileBasedExports({ "dir/my-mod.js": module([fn("f")]) }))).toEqual({
+      code: "InvalidModulePath",
+      message:
+        "Invalid module path 'dir/my-mod': Path component my-mod can only contain alphanumeric characters, underscores, or periods.",
+    });
+  });
+
   test("exports: a function where a module's branch is is InvalidExport", () => {
     expect(refused(() => fileBasedExports({ "a.js": module([fn("b")]), "a/b.js": module([fn("c")]) }))).toEqual({
       code: "InvalidExport",

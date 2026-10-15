@@ -407,6 +407,22 @@ describe("running a code version", () => {
     expect((await call("query", "dir/other")).errorMessage).toContain("Could not find public function");
   });
 
+  test("pushed code's mutation ctx has rooms, built on first read and the same object after", async () => {
+    const { s, call } = await server();
+    await s.installCodeVersion(
+      await load([
+        mod(
+          "r.js",
+          `import { mutation } from "@bunvex/server";
+           export const shape = mutation(async (ctx) => [Object.keys(ctx).includes("rooms"), typeof ctx.rooms.broadcast, ctx.rooms === ctx.rooms]);
+           export const bad = mutation(async (ctx) => { await ctx.rooms.broadcast("nope:x", {}, "e", 1); });`,
+        ),
+      ]),
+    );
+    expect((await call("mutation", "r:shape")).value).toEqual([true, "function", true]);
+    expect((await call("mutation", "r:bad")).errorMessage).toContain('No room named "nope:x"');
+  });
+
   test("a push re-runs exactly the subscriptions of changed modules; the cache serves the new code", async () => {
     const { s, call } = await server();
     const other = (n: number) =>
