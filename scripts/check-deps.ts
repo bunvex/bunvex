@@ -192,6 +192,8 @@ for (const [name, dir] of dirOfName) {
       } else if (
         !spec.startsWith("node:") &&
         !spec.startsWith("bun") &&
+        // a module a Vite plugin of the package's own makes (apps/dashboard's `virtual:bunvex-query-types`)
+        !spec.startsWith("virtual:") &&
         !declared.has(pkg) &&
         // a types-only package (e.g. "geojson") is declared by its @types package
         !declared.has(`@types/${pkg.replace(/^@/, "").replace("/", "__")}`)

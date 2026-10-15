@@ -34,6 +34,12 @@ export type CodeEditorProps = {
    * runner's custom test query: highlighted and checked for syntax errors, not for types).
    */
   language?: "literal" | "typescript";
+  /**
+   * TypeScript only: the text's file in the editor's file system, and the files it is typed against
+   * (`file:///…` → text: declarations, the project's own files). Given, the text is checked for type errors and
+   * Monaco completes it (STUDY-162); absent, it is checked for syntax only.
+   */
+  typescript?: { path: string; files: Record<string, string> };
   className?: string;
 };
 
