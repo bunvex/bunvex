@@ -120,10 +120,13 @@ export function buildPackage(
   const metadataJson = enc.encode(JSON.stringify(metadata));
   entries.push({ name: "metadata.json", data: metadataJson });
   unzipped += metadataJson.length;
-  // Convex's order: the zipped size, then the unzipped one; sizes in binary units (humansize's BINARY).
   const zip = zipInMemory(entries);
-  const zippedTotal = zip.length + (external?.zipped ?? 0);
-  const unzippedTotal = unzipped + (external?.unzipped ?? 0);
+  checkSize(zip.length + (external?.zipped ?? 0), unzipped + (external?.unzipped ?? 0), limits);
+  return { zip, unzipped };
+}
+
+/** Convex's `verify_size` over a push's total: the zipped size, then the unzipped one, in binary units (humansize's BINARY). */
+function checkSize(zippedTotal: number, unzippedTotal: number, limits: { zipped: number; unzipped: number }) {
   if (zippedTotal >= limits.zipped)
     throw new ModulesTooLargeError(
       `Total module size exceeded the zipped maximum (${formatBytes(zippedTotal)} > maximum size ${formatBytes(limits.zipped)})`,
@@ -132,7 +135,26 @@ export function buildPackage(
     throw new ModulesTooLargeError(
       `Total module size exceeded the unzipped maximum (${formatBytes(unzippedTotal)} > maximum size ${formatBytes(limits.unzipped)})`,
     );
-  return { zip, unzipped };
+}
+
+/**
+ * The size check of a push with components (Convex's `upload_packages`): one package for the app, one per component
+ * definition, the external packages counted once, and ONE check over the total.
+ */
+export function checkPackagesSize(
+  packages: ModuleSource[][],
+  external: PackageExternalDeps | null = null,
+  limits: { zipped: number; unzipped: number } = { zipped: zippedLimit(), unzipped: MAX_UNZIPPED_PACKAGE_BYTES },
+) {
+  const unlimited = { zipped: Number.POSITIVE_INFINITY, unzipped: Number.POSITIVE_INFINITY };
+  let zipped = external?.zipped ?? 0;
+  let unzipped = external?.unzipped ?? 0;
+  for (const modules of packages) {
+    const p = buildPackage(modules, unlimited);
+    zipped += p.zip.length;
+    unzipped += p.unzipped;
+  }
+  checkSize(zipped, unzipped, limits);
 }
 
 /**

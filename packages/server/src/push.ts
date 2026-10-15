@@ -18,10 +18,13 @@
 import { type AuthInfo, parseAuthConfig } from "@bunvex/auth";
 import {
   type AuditLogActor,
+  declaredTables,
   documentTypeError,
   type Engine,
   indexReferenceError,
   insertAuditLogEvents,
+  type NewComponentDefinition,
+  resolveComponentPath,
   SCHEMAS_TABLE,
   type SchemaDefinition,
   SchemaPushError,
@@ -36,7 +39,7 @@ import { auditEvents } from "./audit-log.ts";
 import { putAuthInfo } from "./auth-info.ts";
 import {
   AUTH_CONFIG_MODULE,
-  buildPackage,
+  checkPackagesSize,
   ModulesTooLargeError,
   type PackageExternalDeps,
   readablePackage,
@@ -54,8 +57,16 @@ import {
   InvalidModulesError,
   type ModuleSource,
 } from "./code-version.ts";
+import {
+  type CheckedComponent,
+  ComponentTreeError,
+  checkEnvVarDeclarations,
+  type EvaluatedDefinition,
+  instantiateRoot,
+  serializedCheckedComponent,
+} from "./component-tree.ts";
 import type { CronJobExecutor } from "./cron-executor.ts";
-import { cronSpecsJson } from "./cron-rows.ts";
+import { DefinitionError, evaluateDefinitions } from "./definition-eval.ts";
 import { describeUncaught } from "./errors.ts";
 import {
   buildExternalDeps,
@@ -66,6 +77,16 @@ import {
   type NodeDependency,
 } from "./external-deps.ts";
 import { indexAuditDiff, indexDiffJson } from "./push-audit.ts";
+import {
+  analysisAnswer,
+  type ComponentsSchemaChange,
+  DEFAULT_ROOT,
+  InvalidConfigError,
+  type PushedComponents,
+  parsePushedComponents,
+  schemaChangeAnswer,
+  startComponentSchemas,
+} from "./push-components.ts";
 
 /** A push that cannot go on, as Convex's `ErrorMetadata` (400 unless said otherwise). */
 /**
@@ -127,16 +148,32 @@ function checkIndexReferences(schema: SchemaDefinition) {
   if (error) throw new PushError("SchemaDefinitionError", `Hit an error while evaluating your schema:\n${error}`);
 }
 
+/** A module that did not load, as the push answers it (Convex's `InvalidModules`, or an export's own error). */
+function loadError(e: unknown): unknown {
+  if (e instanceof InvalidModulesError) return new PushError("InvalidModules", e.message);
+  if (e instanceof FunctionExportError) return new PushError(e.code, e.message);
+  return e;
+}
+
 /**
- * A module's analysis as Convex's `start_push` answers it (`SerializedAnalyzedModule`): the crons as
- * `[{identifier, spec}]` with their arguments as bytes (`cronSpecsJson`), and no source map.
+ * What a component's schema may not have yet (STUDY-153 PR 2b, the engine refuses it too): a staged validator, a
+ * search or vector index. Refused before anything is allocated, as a 400.
  */
-const analysisJson = (m: AnalyzedModule) => ({
-  functions: m.functions,
-  httpRoutes: m.httpRoutes,
-  cronSpecs: cronSpecsJson(m.cronSpecs),
-  sourceMapped: null,
-});
+function checkComponentSchemas(definitions: ReadonlyMap<string, { schema: SchemaDefinition | null }>) {
+  for (const [path, d] of definitions) {
+    if (path === "" || d.schema === null) continue;
+    for (const t of declaredTables(d.schema).values()) {
+      const refuse = (what: string) =>
+        new PushError(
+          "ComponentsNotSupported",
+          `Table "${t.name}" of component definition ${path}: ${what} in a component's schema are not supported yet`,
+        );
+      if (t.stagedDocument !== undefined) throw refuse("staged validators");
+      if (Object.keys(t.searchIndexes ?? {}).length + Object.keys(t.vectorIndexes ?? {}).length > 0)
+        throw refuse("search and vector indexes");
+    }
+  }
+}
 
 export class PushError extends Error {
   constructor(
@@ -158,8 +195,14 @@ type StartPushRequest = {
     unchangedModuleHashes?: ModuleHash[];
     /** The CLI's package version, as Convex's: `_udf_config.serverVersion`. */
     udfServerVersion?: string;
+    /** The app's definition module (`bunvex.config.js`, DV-494), and the component definitions it imports. */
+    definition?: ModuleSource | null;
+    dependencies?: unknown;
   };
+  /** Each component definition the app reaches (Convex's `ComponentDefinitionConfigJson`). */
   componentDefinitions?: unknown[];
+  /** Convex's `forCodegen`: a dry run whose tree does not need a child's required variables. */
+  forCodegen?: boolean;
   /** bunvex.json's `node.nodeVersion` (STUDY-145). */
   nodeVersion?: string | null;
   /** The packages to install for the `"use node"` modules (STUDY-148): `[{name, version}]`. */
@@ -228,6 +271,16 @@ type Pending = {
   nodeVersion: string | null;
   /** The push's external packages, recorded with its package (STUDY-148). */
   external: PackageExternalDeps | null;
+  /** Its components (STUDY-153): the tree, each definition evaluated, each namespace's schema change. */
+  components: {
+    tree: CheckedComponent;
+    definitions: Map<
+      string,
+      EvaluatedDefinition & { schema: SchemaDefinition | null; udfServerVersion: string | null }
+    >;
+    versions: Map<string, CodeVersion>;
+    change: ComponentsSchemaChange;
+  };
 };
 
 const AUTH_CONFIG = AUTH_CONFIG_MODULE;
@@ -343,7 +396,14 @@ export class PushService {
   }
 
   /** Evaluate one standalone module (the schema, auth.config) and return its default export. */
-  private async evaluateDefault(m: ModuleSource, env: Record<string, string>, code: string, what: string) {
+  private async evaluateDefault(
+    m: ModuleSource,
+    env: Record<string, string>,
+    code: string,
+    what: string,
+    /** A component's schema: Convex answers its exception alone (`evaluate_components`), with no preamble. */
+    bare = false,
+  ) {
     const config = await udfConfig(this.deps.engine);
     try {
       const v = await CodeVersion.load([{ ...m, path: m.path }], {
@@ -355,6 +415,7 @@ export class PushService {
     } catch (e) {
       const message =
         e instanceof InvalidModulesError ? e.message.split("\n").slice(1).join("\n") : describeUncaught(e).message;
+      if (bare) throw new PushError(code, message.replace(/^Failed to analyze [^:]*: /, ""));
       throw new PushError(code, `Hit an error while evaluating your ${what}:\n${message.trimEnd()}`);
     }
   }
@@ -409,8 +470,13 @@ export class PushService {
   async startPush(req: StartPushRequest) {
     const nodeVersion = parseNodeVersion(req.nodeVersion);
     const nodeDependencies = parseNodeDependencies(req.nodeDependencies);
-    if (req.componentDefinitions?.length)
-      throw new PushError("ComponentsNotSupported", "Components are not supported by this deployment yet");
+    let pushed: PushedComponents;
+    try {
+      pushed = parsePushedComponents(req.appDefinition, req.componentDefinitions);
+    } catch (e) {
+      if (e instanceof InvalidConfigError) throw new PushError(e.code, e.message);
+      throw e;
+    }
     // Convex's `upload_packages` installs them first, on a dry run too.
     const installed = nodeDependencies.length ? await this.externalDeps(nodeDependencies) : null;
     const external: PackageExternalDeps | null = installed && {
@@ -420,10 +486,18 @@ export class PushService {
       unzipped: Number(installed.row.packageSize.unzippedSizeBytes),
     };
     const all = await this.resolveModules(req);
-    // Convex's `start_push` uploads and size-checks the package first (`upload_packages`, `verify_size`), the
-    // external packages counted in.
+    // Convex's `start_push` uploads and size-checks the packages first (`upload_packages`, `verify_size`): the app's
+    // (its modules, schema and definition) and one per component definition, the external packages counted in, ONE
+    // check over the total.
+    const present = (...ms: (ModuleSource | null | undefined)[]) => ms.filter((m): m is ModuleSource => !!m);
     try {
-      buildPackage(req.appDefinition?.schema ? [...all, req.appDefinition.schema] : all, undefined, external);
+      checkPackagesSize(
+        [
+          [...all, ...present(req.appDefinition?.schema, pushed.definition)],
+          ...pushed.components.map((c) => [...c.functions, ...present(c.schema, c.definition)]),
+        ],
+        external,
+      );
     } catch (e) {
       if (e instanceof ModulesTooLargeError) throw new PushError(e.code, e.message);
       throw e;
@@ -443,9 +517,7 @@ export class PushService {
         ...(installed ? { nodeModules: installed.dir } : {}),
       });
     } catch (e) {
-      if (e instanceof InvalidModulesError) throw new PushError("InvalidModules", e.message);
-      if (e instanceof FunctionExportError) throw new PushError(e.code, e.message);
-      throw e;
+      throw loadError(e);
     }
     let schema = emptySchema;
     const schemaModule = req.appDefinition?.schema;
@@ -455,18 +527,29 @@ export class PushService {
       schema = s;
     }
     const auth = authModule ? await evaluateAuthConfig(this.deps.engine, authModule, env) : null;
-    const analysis: Record<string, AnalyzedModule> = version.analysis;
-    // As Convex's `start_push`: what the push does to the indexes, against the active schema (dry run too).
-    const indexDiff = indexDiffJson(indexAuditDiff(this.deps.engine.schema, schema));
+    const components = await this.evaluateComponents(
+      pushed,
+      config,
+      env,
+      version.analysis,
+      schemaModule ? schema : null,
+      req.forCodegen === true,
+    );
     // Convex's `StagedSchemaWithEnforcedValidatorChanges` (STUDY-106 §7.4), dry run too.
     const staged = await this.deps.engine.stagedValidatorConflicts(schema);
     if (staged) throw new PushError(staged.code, staged.message);
     const externalDepsId = external?.id ?? null;
-    if (req.dryRun)
-      return this.response(version, schema, auth, analysis, { schemaId: null, indexDiff, externalDepsId });
+    // A dry run (and Convex's `forCodegen`) writes nothing (DV-444): what the push would do to each namespace's
+    // indexes, against its active schema.
+    const dryRun = req.dryRun === true || req.forCodegen === true;
+    const schemas = new Map([...components.definitions].map(([path, d]) => [path, d.schema]));
+    if (!dryRun) checkComponentSchemas(components.definitions);
+    let change: Awaited<ReturnType<typeof startComponentSchemas>>;
     let schemaId: string;
     try {
-      ({ schemaId } = await this.deps.engine.startSchemaPush(schema));
+      change = await startComponentSchemas(this.deps.engine, components.tree, schemas, schema, dryRun);
+      if (dryRun) return this.response(auth, components, change, externalDepsId);
+      ({ rootSchemaId: schemaId } = await change.start());
     } catch (e) {
       // Convex's `TooManyTables`, a 400 with its message, when the schema adds tables past the cap.
       if (e instanceof TooManyTablesError) throw new PushError(e.code, e.message);
@@ -484,61 +567,155 @@ export class PushService {
       udfConfigDiff: config.diff,
       nodeVersion,
       external,
+      components: { ...components, change },
     });
-    return this.response(version, schema, auth, analysis, { schemaId, indexDiff, externalDepsId });
+    return this.response(auth, components, change, externalDepsId);
+  }
+
+  /**
+   * Convex's `evaluate_components` and the tree's check after it: each component definition's modules analyzed
+   * (the app's import seed and time, no user variables: "User env vars are root-only") and its schema evaluated;
+   * the definitions evaluated from the app's (`definition-eval.ts`), or Convex's default app when the push sends
+   * none; the declarations checked and the tree instantiated (`component-tree.ts`).
+   */
+  private async evaluateComponents(
+    pushed: PushedComponents,
+    config: { seed: Uint32Array; timestamp: number },
+    env: Record<string, string>,
+    rootFunctions: Record<string, AnalyzedModule>,
+    rootSchema: SchemaDefinition | null,
+    forCodegen: boolean,
+  ) {
+    const versions = new Map<string, CodeVersion>();
+    const schemas = new Map<string, SchemaDefinition | null>();
+    for (const c of pushed.components) {
+      // Convex's `ensure!`: a system error.
+      if (versions.has(c.definitionPath)) throw new Error(`Component definition ${c.definitionPath} pushed twice`);
+      try {
+        versions.set(c.definitionPath, await CodeVersion.load(c.functions, { ...config, env: {} }));
+      } catch (e) {
+        throw loadError(e);
+      }
+      let schema: SchemaDefinition | null = null;
+      if (c.schema) {
+        schema = schemaExport(await this.evaluateDefault(c.schema, {}, "InvalidSchema", "schema", true));
+        checkIndexReferences(schema);
+      }
+      schemas.set(c.definitionPath, schema);
+    }
+    let evaluated: Map<string, NewComponentDefinition>;
+    if (pushed.definition) {
+      try {
+        evaluated = await evaluateDefinitions({
+          app: { definition: pushed.definition, dependencies: pushed.dependencies },
+          components: new Map(
+            pushed.components.map((c) => [
+              c.definitionPath,
+              { definition: c.definition, dependencies: c.dependencies },
+            ]),
+          ),
+          env,
+        });
+      } catch (e) {
+        if (e instanceof DefinitionError) throw new PushError(e.code, e.message);
+        throw e;
+      }
+    } else evaluated = new Map([["", DEFAULT_ROOT]]);
+    const udfServerVersions = new Map(pushed.components.map((c) => [c.definitionPath, c.udfServerVersion]));
+    const definitions = new Map(
+      [...evaluated].map(([path, definition]) => [
+        path,
+        {
+          definition,
+          schema: path === "" ? rootSchema : (schemas.get(path) ?? null),
+          functions: path === "" ? rootFunctions : versions.get(path)!.analysis,
+          udfServerVersion: path === "" ? null : (udfServerVersions.get(path) ?? null),
+        },
+      ]),
+    );
+    let tree: CheckedComponent;
+    try {
+      checkEnvVarDeclarations(definitions);
+      tree = instantiateRoot(definitions, { validateEnvVars: !forCodegen });
+    } catch (e) {
+      if (e instanceof ComponentTreeError) throw new PushError(e.code, e.message);
+      throw e;
+    }
+    return { tree, definitions, versions };
   }
 
   private response(
-    _version: CodeVersion,
-    schema: SchemaDefinition,
     auth: unknown[] | null,
-    analysis: Record<string, AnalyzedModule>,
-    change: { schemaId: string | null; indexDiff: ReturnType<typeof indexDiffJson>; externalDepsId: string | null },
+    components: { tree: CheckedComponent; definitions: Pending["components"]["definitions"] },
+    change: ComponentsSchemaChange,
+    externalDepsId: string | null,
   ) {
     return {
       environmentVariables: {},
-      externalDepsId: change.externalDepsId,
+      externalDepsId,
       componentDefinitionPackages: {},
       appAuth: auth ?? [],
-      analysis: {
-        "": {
-          definition: null,
-          schema: schema === emptySchema ? null : schemaToJson(schema),
-          functions: Object.fromEntries(Object.entries(analysis).map(([path, m]) => [path, analysisJson(m)])),
-          udfConfig: null,
-        },
-      },
-      app: { definitionPath: "", componentPath: "", args: {}, childComponents: [] },
-      schemaChange: {
-        allocatedComponentIds: {},
-        schemaIds: change.schemaId ? { "": change.schemaId } : {},
-        indexDiffs: { "": change.indexDiff },
-      },
+      analysis: analysisAnswer(components.definitions),
+      app: serializedCheckedComponent(components.tree),
+      schemaChange: schemaChangeAnswer(change),
     };
   }
 
-  /** Convex's `wait_for_schema`: until the change is no longer in progress, or `timeoutMs`. */
-  async waitForSchema(req: { schemaChange?: { schemaIds?: Record<string, string> }; timeoutMs?: number }) {
-    const schemaId = req.schemaChange?.schemaIds?.[""];
-    if (!schemaId) return { type: "complete" };
+  /**
+   * Convex's `wait_for_schema`: until no component's schema change is in progress, or `timeoutMs`. Each pushed
+   * schema is read in its component's namespace (an existing component's, else the one the push allocated); one
+   * failed is the push's failure, naming its component; one overwritten, a race.
+   */
+  async waitForSchema(req: {
+    schemaChange?: { schemaIds?: Record<string, string | null>; allocatedComponentIds?: Record<string, string> };
+    timeoutMs?: number;
+  }) {
+    const schemaIds = Object.entries(req.schemaChange?.schemaIds ?? {}).filter(
+      (e): e is [string, string] => typeof e[1] === "string",
+    );
+    const allocated = req.schemaChange?.allocatedComponentIds ?? {};
     const deadline = Date.now() + Math.min(req.timeoutMs ?? 10_000, 60_000);
     for (;;) {
-      const s = await this.deps.engine.schemaPushStatus(schemaId);
-      if (s.type === "failed") return { type: "failed", error: s.error, componentPath: "", tableName: s.tableName };
-      if (s.type !== "inProgress") return { type: s.type };
-      if (Date.now() >= deadline)
-        return {
-          type: "inProgress",
-          components: {
-            "": {
-              schemaValidationComplete: s.schemaValidationComplete,
-              indexesComplete: s.indexesComplete,
-              indexesTotal: s.indexesTotal,
-            },
-          },
-        };
+      const components: Record<
+        string,
+        { schemaValidationComplete: boolean; indexesComplete: number; indexesTotal: number }
+      > = {};
+      let complete = true;
+      for (const [path, schemaId] of schemaIds) {
+        const s = await this.deps.engine.schemaPushStatus(schemaId, await this.namespaceOf(path, allocated[path]));
+        if (s.type === "failed") return { type: "failed", error: s.error, componentPath: path, tableName: s.tableName };
+        if (s.type === "raceDetected") return { type: "raceDetected" };
+        if (s.type === "inProgress") {
+          complete = false;
+          components[path] = {
+            schemaValidationComplete: s.schemaValidationComplete,
+            indexesComplete: s.indexesComplete,
+            indexesTotal: s.indexesTotal,
+          };
+        } else
+          components[path] = {
+            schemaValidationComplete: true,
+            indexesComplete: s.indexesTotal,
+            indexesTotal: s.indexesTotal,
+          };
+      }
+      if (complete) return { type: "complete" };
+      if (Date.now() >= deadline) return { type: "inProgress", components };
       await Bun.sleep(100);
     }
+  }
+
+  /**
+   * The namespace of the component at `path` (Convex's `load_component_schema_status`): the app's (null), an existing
+   * component's, or the one the push allocated; both, or neither, is no state a push leaves (a system error, as
+   * Convex's).
+   */
+  private async namespaceOf(path: string, allocated: string | undefined): Promise<string | null> {
+    if (path === "") return null;
+    const existing = await this.deps.engine.query((db) => resolveComponentPath(db, path.split("/")));
+    if (existing && allocated === undefined) return existing._id;
+    if (!existing && allocated !== undefined) return allocated;
+    throw new Error(`Invalid existing component state for ${path}`);
   }
 
   /** Convex's `finish_push`: one commit makes everything live. */
@@ -553,6 +730,10 @@ export class PushService {
     const schemaId = req.startPush?.schemaChange?.schemaIds?.[""];
     const p = schemaId ? this.pending.get(schemaId) : undefined;
     if (!p) throw new PushError("RaceDetected", "Schema was overwritten by another push.");
+    // A push with components finishes from STUDY-153 PR 4 on; its start allocated their namespaces and started their
+    // schemas, which stay as an abandoned start leaves them (Convex's too, C-10).
+    if (p.components.tree.childComponents.size > 0)
+      throw new PushError("ComponentsNotSupported", "Components are not supported by this deployment yet");
     if (req.dryRun)
       return this.diff([], indexDiffJson(indexAuditDiff(this.deps.engine.schema, p.schema)), emptyCronDiff());
     // As Convex: the push was evaluated with variables that must still be the deployment's.
