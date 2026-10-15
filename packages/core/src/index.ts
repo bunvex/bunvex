@@ -98,6 +98,7 @@ export {
   allComponentPaths,
   COMPONENT_NAMESPACE_TABLES,
   type ComponentDefinitionMeta,
+  type ComponentExport,
   type ComponentMeta,
   ComponentMetadataError,
   type ComponentState,

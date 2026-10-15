@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import vm from "node:vm";
 import { installDeterminismIn, knob, runImportPhase, secondsKnob } from "@bunvex/core";
+import type { v1 } from "@bunvex/protocol";
 import { appNamespace, installAppErrors } from "./app-errors.ts";
 import { exportedValidator, type ValidatorExport } from "./builders.ts";
 import { type CronSpec, Crons, cronSpecs } from "./cron.ts";
@@ -26,6 +27,7 @@ import { currentAllEnv, isolateProcessEnv, nodeProcessEnv, withPackageEnv } from
 import { describeUncaught, isError } from "./errors.ts";
 import { type FunctionDef, installNestedCalls, isFunctionDef, NODE_FUNCTIONS } from "./functions.ts";
 import { nodeProcessExit } from "./node-process-errors.ts";
+import { type AnyRoomDef, isRoomDef } from "./rooms/define.ts";
 import { checkRouter, HttpRouter } from "./router.ts";
 import { byPosition, SourceMapTokens, type SourcePosition } from "./source-position.ts";
 import { moduleUrl, registerModules } from "./stack-map.ts";
@@ -53,6 +55,8 @@ export type AnalyzedModule = {
   /** Convex's `AnalyzedHttpRoute`: the route and its handler's position. */
   httpRoutes: { route: { path: string; method: string }; pos: SourcePosition | null }[] | null;
   cronSpecs: Record<string, CronSpec> | null;
+  /** The module's room and presence definitions (AD-42), in export order. */
+  rooms: { name: string; kind: v1.RoomKind }[];
 };
 
 /** A push whose modules cannot load (Convex's `InvalidModules`, 400). */
@@ -132,11 +136,14 @@ export type LoadOptions = {
 export const REPL_WRAPPERS = "bunvex:/_system/repl/wrappers.js";
 
 /** The `bunvex/*` modules a bundle leaves external, each linked to the server's own. */
-const SERVER_MODULES: Record<string, () => Promise<Record<string, unknown>>> = {
+export const BUNVEX_MODULES: Record<string, () => Promise<Record<string, unknown>>> = {
   "bunvex/server": () => import("./index.ts"),
   "@bunvex/server": () => import("./index.ts"),
   "bunvex/values": () => import("@bunvex/values"),
   "@bunvex/values": () => import("@bunvex/values"),
+};
+const SERVER_MODULES: Record<string, () => Promise<Record<string, unknown>>> = {
+  ...BUNVEX_MODULES,
   // The function tester's builders (STUDY-119, DV-390): Convex's `convex:/_system/repl/wrappers.js`.
   [REPL_WRAPPERS]: async () => {
     const { query, internalQuery } = await import("./builders.ts");
@@ -215,7 +222,7 @@ const REGEXP_STATICS = [
 ];
 
 /** The globals of a context, besides its own JS intrinsics: the web platform Convex's runtime offers. */
-function contextGlobals(node: boolean, env: Record<string, string>, onMissingEnv?: (name: string) => void) {
+export function contextGlobals(node: boolean, env: Record<string, string>, onMissingEnv?: (name: string) => void) {
   const g = globalThis as Record<string, unknown>;
   const web = [
     "console",
@@ -282,6 +289,8 @@ export class CodeVersion {
     readonly modules: Map<string, Loaded>,
     /** Every function, by registry key (`dir/file:name`). */
     readonly functions: Map<string, FunctionDef>,
+    /** Every room and presence definition, by registry key (`dir/file:name`). */
+    readonly rooms: Map<string, AnyRoomDef>,
     /** Each module's code hash, by module name. */
     readonly moduleHashes: Map<string, string>,
     readonly analysis: Record<string, AnalyzedModule>,
@@ -438,6 +447,7 @@ export class CodeVersion {
   /** Convex's `udf_analyze` / `http_analyze` / `cron_analyze`, over the evaluated modules. */
   private static analyze(modules: Map<string, Loaded>, maps: SourceMapTokens): CodeVersion {
     const functions = new Map<string, FunctionDef>();
+    const rooms = new Map<string, AnyRoomDef>();
     const moduleHashes = new Map<string, string>();
     const analysis: Record<string, AnalyzedModule> = {};
     let router: HttpRouter | undefined;
@@ -448,7 +458,13 @@ export class CodeVersion {
       moduleHashes.set(name, l.hash);
       const ns = l.module.namespace as Record<string, unknown>;
       const fns: AnalyzedFunction[] = [];
+      const analyzedRooms: AnalyzedModule["rooms"] = [];
       for (const [exported, value] of Object.entries(ns)) {
+        if (isRoomDef(value)) {
+          rooms.set(`${name}:${exported}`, value);
+          analyzedRooms.push({ name: exported, kind: value.kind });
+          continue;
+        }
         if (!isFunctionDef(value)) continue;
         if (l.source.environment === "node" && value.kind !== "action")
           throw new InvalidModulesError(
@@ -466,7 +482,7 @@ export class CodeVersion {
         });
       }
       // Convex sorts them by position, those without one first.
-      const a: AnalyzedModule = { functions: byPosition(fns), httpRoutes: null, cronSpecs: null };
+      const a: AnalyzedModule = { functions: byPosition(fns), httpRoutes: null, cronSpecs: null, rooms: analyzedRooms };
       if (path === "http.js") {
         if (l.source.environment === "node")
           throw new InvalidModulesError(`Failed to analyze ${path}: \`http.js\` may not be a "use node" file`);
@@ -502,7 +518,7 @@ export class CodeVersion {
       }
       analysis[path] = a;
     }
-    const version = new CodeVersion(modules, functions, moduleHashes, analysis, router, crons, maps);
+    const version = new CodeVersion(modules, functions, rooms, moduleHashes, analysis, router, crons, maps);
     if (crons) {
       // Convex's `validate_cron_jobs`: every target exists and is a mutation or an action.
       const specs = cronSpecs(crons, (id, fn) => version.cronTarget(id, fn));

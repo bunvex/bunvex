@@ -209,5 +209,3 @@ gaps.
     clients, authentication admin, analytics, flags and workflows (no server side). The system tables
     (AD-24) and the subscriptions inspector (AD-25) are on a deployment since STUDY-149's follow-ups, and the
     topology (AD-04, STUDY-131 §11): its one node; followers wait for STUDY-24.
-- HTTP actions (STUDY-31 §10.6): a response stream's chunk that is not bytes (a string) is sent as text, where
-  Convex fails the body (`serde_v8 … expected: buffer`).
