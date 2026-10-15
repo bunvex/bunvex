@@ -2029,6 +2029,21 @@ export class Tx {
   searchIndexes: SearchIndexes | null = null;
   /** The vector indexes, for the bytes a write adds to them (STUDY-71). */
   vectorIndexes: VectorIndexes | null = null;
+  /**
+   * A search or vector index's build as the engine holds it (STUDY-149 "Index list"): `built` once every document
+   * is in it (or it is being rebuilt after a start: it was built before), `staged` as declared. Its `_index` row
+   * always says backfilling (DV-415), so the dashboard's index list reads this instead. Undefined for an index the
+   * engine does not hold.
+   */
+  searchIndexBuild(
+    kind: "search" | "vector",
+    tablet: TabletId,
+    name: string,
+  ): { built: boolean; staged: boolean } | undefined {
+    const all = kind === "search" ? this.searchIndexes?.forTablet(tablet) : this.vectorIndexes?.forTablet(tablet);
+    const e = all?.find((x) => x.name === name);
+    return e && { built: e.ready || e.bootstrapping, staged: e.staged };
+  }
   /** A table's document count at a snapshot, from the table summaries (STUDY-52 PR 2); set by the engine. */
   tableCount: ((tablet: TabletId, snapshot: bigint) => number) | null = null;
 

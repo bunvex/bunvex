@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { Dashboard } from "@bunvex/dashboard";
 import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { clipboardText, filterOps, withClause } from "../src/database/cell-menu.tsx";
 import { decodeFilter } from "../src/database/filter-url.ts";
@@ -188,6 +188,28 @@ describe("a cell's context menu and shortcuts on the Database screen", () => {
     await toCell(user, "tasks", "owner");
     await user.keyboard("{Control>}g{/Control}");
     await waitFor(() => expect(history.location.pathname).toBe("/database/users"));
+  });
+
+  test("a file's id goes to Files with it open, a scheduled run's to the scheduled functions (Convex's)", async () => {
+    const src = source();
+    const [first] = (await src.listDocuments({ table: "tasks", numItems: 1, cursor: null })).page;
+    const [file] = (await src.listFiles({ numItems: 1, cursor: null })).page;
+    const [run] = (await src.listScheduledFunctions({ numItems: 1, cursor: null })).page;
+    for (const [id, path, search] of [
+      [file!.id, "/files", { file: file!.id }],
+      [run!.id, "/schedules/functions", {}],
+    ] as const) {
+      await src.patchDocuments("tasks", [first!._id], { text: id });
+      const { history } = mount("/database/tasks", src);
+      await heading("tasks");
+      const user = userEvent.setup();
+      await toCell(user, "tasks", "text");
+      await user.keyboard("{Shift>}{F10}{/Shift}");
+      await user.click(await screen.findByRole("menuitem", { name: "Go to reference" }));
+      await waitFor(() => expect(history.location.pathname).toBe(path));
+      expect(Object.fromEntries(new URLSearchParams(history.location.search))).toEqual(search);
+      cleanup();
+    }
   });
 
   test("the row's own _id, and id-shaped text that names no document, are not references", async () => {
