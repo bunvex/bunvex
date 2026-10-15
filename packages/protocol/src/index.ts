@@ -35,6 +35,7 @@ export {
   getFunctionName,
   makeFunctionReference,
   type OptionalRestArgs,
+  type RoomReference,
   toReferencePath,
 } from "./api.ts";
 
