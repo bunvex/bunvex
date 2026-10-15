@@ -1906,6 +1906,43 @@ export class Engine {
     };
   }
 
+  /**
+   * Once a search or vector index is built: its `_index_backfills` row written once more (created when a build
+   * without segments never wrote one), as Convex's writer replaces it in the transaction that marks the index
+   * backfilled. bunvex's `_index` row of the index does not change then (DV-415), so this write is what tells a
+   * subscription to `_system/frontend/indexes` (the dashboard's index list, STUDY-149 "Index list") to read the
+   * index's state again. Nothing while the index has no `_index` row: writing it does that.
+   */
+  private async noteSearchIndexBuilt(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry) {
+    const indexId = this.indexRows?.rowId(kind, e.tablet, e.name);
+    if (!indexId || this.closed || !this.isCurrent(kind, e)) return;
+    let count: number | null = null;
+    try {
+      count = this.tableSummaries.count(e.tablet);
+    } catch {} // the summaries are not built yet
+    await this.runMutation(
+      async (db) => {
+        const row = await db
+          .query(INDEX_BACKFILLS_TABLE)
+          .withIndex(INDEX_BACKFILLS_INDEX, (q) => q.eq("indexId", indexId))
+          .first();
+        if (!row) {
+          await db.insert(
+            INDEX_BACKFILLS_TABLE,
+            backfillRow({ indexId, numDocsIndexed: count ?? 0, totalDocs: count, cursor: null }),
+          );
+          return;
+        }
+        const m = backfillMeta(row);
+        await db.replace(INDEX_BACKFILLS_TABLE, m._id, backfillRow({ ...m, totalDocs: m.totalDocs ?? count }));
+      },
+      true,
+      "_system/search_backfill_progress",
+    ).catch((err: Error) => {
+      if (!this.closed) console.error(`bunvex: ${kind} index ${e.table}.${e.name}: ${err.message}`);
+    });
+  }
+
   /** At a clean shutdown: every ready index flushed, so the next start replays nothing (STUDY-111). */
   private async flushSearchSegments() {
     if (!this.searchSegments || this.committer.stopped) return;
@@ -2032,8 +2069,10 @@ export class Engine {
           (doc) => vectorEntry(e.def, doc),
           () => dims * 4,
         )
-      )
+      ) {
         this.vectorIndexes.done(e);
+        await this.noteSearchIndexBuilt("vector", e);
+      }
       return;
     }
     const at = this.committer.visibleTs;
@@ -2061,6 +2100,7 @@ export class Engine {
     }
     this.vectorIndexes.done(e);
     this.markRowReady("vector", e);
+    await this.noteSearchIndexBuilt("vector", e);
   }
 
   /**
@@ -2141,8 +2181,10 @@ export class Engine {
           (doc) => indexedDoc(e.def, doc),
           (doc) => indexedDocBytes(e.def, doc),
         )
-      )
+      ) {
         this.searchIndexes.done(e);
+        await this.noteSearchIndexBuilt("text", e);
+      }
       return;
     }
     const at = this.committer.visibleTs;
@@ -2171,6 +2213,7 @@ export class Engine {
     }
     this.searchIndexes.done(e);
     this.markRowReady("text", e);
+    await this.noteSearchIndexBuilt("text", e);
   }
 
   /**

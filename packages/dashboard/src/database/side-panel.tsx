@@ -1,7 +1,6 @@
 // The Database screen's one side panel (UI-01 §12.3): a document, the table's schema, or its indexes —
 // never two at once. Which one is open lives in the URL (`doc`, `panel`); Escape or the close button closes
 // it. Below 1 536 px (2xl) it is a drawer over the table instead of taking width from it.
-import { Badge } from "@bunvex/ui/components/badge";
 import { Button } from "@bunvex/ui/components/button";
 import { CopyButton } from "@bunvex/ui/components/copy-button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@bunvex/ui/components/tabs";
@@ -14,7 +13,6 @@ import { documentQuery, inferredTypeQuery, schemaQuery, tablesQuery } from "../d
 import { type TableInfo, toDataSourceError } from "../data-source.ts";
 import { TableMetrics } from "../metrics/table-metrics.tsx";
 import { SchemaValidationStatus } from "../schema/validation.tsx";
-import { formatCount } from "../screens/stats.ts";
 import { useDisconnected } from "../shell/connection.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { Panel } from "../shell/panel.tsx";
@@ -22,6 +20,7 @@ import { AddDocuments } from "./add-documents.tsx";
 import { BulkEdit, type BulkTarget, bulkLabel } from "./bulk-edit.tsx";
 import { ColumnSettings } from "./column-settings.tsx";
 import { DocumentEditor } from "./document-editor.tsx";
+import { IndexList, useIndexList } from "./index-list.tsx";
 import { formatLiteral } from "./literal.ts";
 import { LiteralView } from "./literal-view.tsx";
 import { generatedSchemaCode, type SchemaCode, schemaCode } from "./schema-code.ts";
@@ -315,34 +314,16 @@ function SavedSchema({ code, table }: { code: SchemaCode; table?: string }) {
 }
 
 function IndexesPanel({ info, onClose }: { info: TableInfo; onClose: () => void }) {
+  const { list, error } = useIndexList(info.name, info.indexes);
   return (
     <Panel kind="database-indexes" title={`Indexes of ${info.name}`} onClose={onClose}>
-      <ul className="divide-y border">
-        {info.indexes.map((ix) => (
-          <li key={ix.name} className="flex flex-col gap-1 p-3 text-sm">
-            <div className="flex items-center gap-2">
-              <span className="font-mono font-medium">{ix.name}</span>
-              {ix.system && <Badge variant="secondary">system</Badge>}
-              {ix.state === "backfilling" ? (
-                <Badge variant="outline" className="border-warning text-warning">
-                  backfilling
-                </Badge>
-              ) : null}
-            </div>
-            <span className="font-mono text-xs text-muted-foreground">
-              {ix.fields.join(", ")}
-              {ix.name !== "by_id" && ", _id"}
-            </span>
-            {ix.state === "backfilling" && ix.progress && (
-              <span className="text-xs text-muted-foreground tabular-nums">
-                {formatCount(ix.progress.indexed)}
-                {ix.progress.total !== undefined && ` of ${formatCount(ix.progress.total)}`} documents indexed. It can
-                be queried once every document is in it.
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
+      {error ? (
+        <ErrorState error={error} />
+      ) : list === undefined ? (
+        <p className="text-sm text-muted-foreground">Loading the indexes…</p>
+      ) : (
+        <IndexList table={info.name} list={list ?? []} />
+      )}
     </Panel>
   );
 }
