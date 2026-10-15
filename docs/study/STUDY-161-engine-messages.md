@@ -220,7 +220,7 @@ and lists what failed in its *Built* line.
 
 ### §5 (a query's table and index)
 
-*Built:* not yet.
+*Built:* #665. The names parse and the index lookup happen at the query's start (`startChecks` in `core/src/tx.ts`, `identifierError` / `indexNameError` in `core/src/query-ops.ts`); `withIndex` still runs the range builder at the call, and its lookup error waits for the start. Tests: `core/test/query-start-errors.test.ts` (every start path, the names, the operators first, the re-run once the table exists), `differential/test/query-start-errors.test.ts` (28 cases, the same answers on both). Sabotage, each caught: no missing-table flag (4 tests), no name parse, `unknown index` back (3), the error at `withIndex` again (2), a third component ignored, `\p{Cf}` dropped from the character display. Found, not changed: `db.system.query("_nope").withIndex(…)` and an unknown index of a private system table throw `Index … not found.` on Convex; bunvex's system reader answers nothing (DV-360's path).
 
 ### §6 (a system function's unparsed arguments)
 
