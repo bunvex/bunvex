@@ -181,7 +181,7 @@ to a spec.
 | [STUDY-151](STUDY-151-small-parity-batch.md) | A batch of small parity items: system table messages, `deploy -y`, the HTTP API's methods, `getServiceToken`/`getServiceUrl`, `setDefaultWebSocketConstructor`, `_audit_log_config` | decided (owner, 2026-10-12); DV-491; implemented (#608, #609, #611, #614, #615, and §6 *n/a*) |
 | [STUDY-152](STUDY-152-components-restudy.md) | Components studied again before building them: where their data lives, what a call into one costs (and why users find them slower), the dashboard's picker, export and import, running Convex's published components, the js-integration-tests as oracles | study; C1–C7 open (owner) |
 | [STUDY-160](STUDY-160-client-on-node.md) | The packages as npm ships them: compiled JavaScript (ES modules and CommonJS) and declarations beside the sources, so the client runs on Node.js and in bundlers as Convex's | implemented (#633); DV-503 accepted, DV-504 matched to Convex (owner, 2026-10-14) |
-| [STUDY-164](STUDY-164-ephemeral-rooms.md) | Ephemeral state: rooms with presence and broadcast held in memory beside the database (Convex keeps it in tables; its presence component, its peers, minivex's lessons) | draft: AD-42 proposed, R1–R9 for the owner |
+| [STUDY-164](STUDY-164-ephemeral-rooms.md) | Ephemeral state: rooms with presence and broadcast held in memory beside the database (Convex keeps it in tables; its presence component, its peers, minivex's lessons) | decided: AD-42 accepted (two concepts, relay through the leader) |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

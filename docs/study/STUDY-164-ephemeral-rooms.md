@@ -1,6 +1,7 @@
 # STUDY-164 — Ephemeral state: rooms, presence and broadcast (a proposed addition)
 
-- **Status:** draft — proposes AD-42; questions R1–R9 for the owner (§6)
+- **Status:** decided — AD-42 accepted by the owner on 2026-10-15 (§6): rooms and presence scopes, two concepts
+  (R2); relay through the leader when followers exist, a bus such as Redis measured then (R5); the rest as proposed
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (2026-09-28); `@convex-dev/presence`
   at `a7640e7e` (v0.4.0) and `9d69fc93` (v0.3.2)
 - **Related:** [STUDY-23](STUDY-23-sync-protocol-v1.md) (protocol v1, sessions),
@@ -141,14 +142,50 @@ const others = room.useOthers();                 // [{ memberId, userId, presenc
 const [mine, setMine] = room.useMyPresence();    // setMine is throttled for you
 const react = room.useBroadcast("reaction");     // react({ emoji: "👋" })
 room.useEvent("reaction", (from, data) => ...);  // listen
-const people = room.useOthers({ by: "user" });   // one entry per user, your other tabs left out
 ```
 
 Sub-hooks rather than one value, as minivex and Liveblocks do: a component that renders cursors re-renders when a
-cursor moves, one that only listens for reactions does not. `useOthers({ by: "user" })` replaces minivex's second
-concept (a "presence scope" with its own `usePresence`) with an option on the same room (R2). A non-React client
-gets the same through `client.joinRoom(ref, args)` returning an object with `others()`, `setPresence()`,
-`broadcast()`, `on()` and `leave()`.
+cursor moves, one that only listens for reactions does not. A non-React client gets the same through
+`client.joinRoom(ref, args)` returning an object with `others()`, `setPresence()`, `broadcast()`, `on()` and
+`leave()`.
+
+**A presence scope is the second concept (R2, the owner's choice).** A room's members are connections: three tabs are
+three cursors. "Who is online in this channel" wants users: three tabs are one person, and a person with no cursor
+still counts. That is its own definition, as minivex's `definePresence`, and the closest thing to what Convex's
+presence component gives (`usePresence` returning the room's users, §1.2):
+
+```ts
+// bunvex/presence.ts
+import { v } from "bunvex/values";
+import { presence } from "./_generated/server";
+
+export const online = presence({
+  args: { channel: v.id("channels") },
+  // Signed-in users only: a scope lists users, so an anonymous connection can neither join nor see it.
+  canJoin: async (ctx, { channel }) => {
+    const user = await ctx.auth.getUserIdentity();
+    const c = await ctx.db.get(channel);
+    return user !== null && c !== null && (c.public || c.members.includes(user.subject));
+  },
+  // Each user's state; any of the user's tabs may set it, the last write wins for the user.
+  state: v.object({ name: v.string(), status: v.optional(v.string()) }),
+});
+```
+
+```tsx
+const { others, count, me, setMyState } = usePresence(api.presence.online, { channel });
+// others: [{ userId, state, idle }], one per user, you left out; count includes you
+```
+
+- **Per user on the server**, not in the client as minivex did: a user is in the scope while any of their
+  connections is (after the grace of §3.5), so `count` is right for every member and a user with ten tabs costs one
+  entry in every other member's frames.
+- **No events and no cursors:** a scope carries a small state per user and changes rarely. What moves fast belongs in
+  a room.
+- **Idle:** `usePresence(ref, args, { idleMs })` marks the user idle after that long without input on any of their
+  tabs (the server keeps the latest of their tabs' activity); an idle user stays in the list, flagged.
+- **One room and one scope can share their args** (a document's cursors and its "who is here"); each is gated on its
+  own.
 
 ### 3.4 The bridges to the database
 
@@ -157,15 +194,16 @@ gets the same through `client.joinRoom(ref, args)` returning an object with `oth
 - **Mutations and actions can broadcast:** `ctx.rooms.broadcast(api.rooms.doc, { docId }, "reaction", data)`. From a
   mutation the event is sent **after the commit**, and not at all if the mutation fails or retries — the same rule as
   scheduling. It lets a server tell the members of a room "a new message arrived" without a subscription (R3).
-- **Reading presence from server functions** — "how many people are in this document" — is proposed for actions
-  only (`ctx.rooms.members(...)`), never for queries or mutations, which must stay deterministic (R3).
+- **Reading presence from server functions** — "how many people are in this document" — is for actions only
+  (`ctx.rooms.members(...)` for a room's connections, `ctx.presence.list(...)` for a scope's users), never for queries
+  or mutations, which must stay deterministic (R3). A scope has no broadcast: it has no events.
 - **No onJoin / onLeave hooks in v1.** An app that wants "last seen" writes it from the client or from a mutation;
   hooks that call a mutation on leave can come later (R7).
 
 ### 3.5 Members, reconnects and limits
 
-- **A member is a connection**, with the `userId` of its identity (`subject`), or none when anonymous. Three tabs are
-  three members; `by: "user"` groups them.
+- **A room's member is a connection**, with the `userId` of its identity (`subject`), or none when anonymous. Three
+  tabs are three members. **A scope's member is a user** (§3.3), present while one of their connections is.
 - **Reconnect grace.** On Convex's presence a dead tab shows for up to 25 s; on minivex a member leaves at once on a
   dropped socket, so a network blip makes everyone see a leave and a join. Proposed: a member whose socket drops is
   kept for **5 s** (Liveblocks' `lostConnectionTimeout`); a reconnect within that window that resumes the protocol v1
@@ -185,7 +223,10 @@ gets the same through `client.joinRoom(ref, args)` returning an object with `oth
 
 New messages in protocol v1, sent only by bunvex's client and only after `useRoom` / `joinRoom`:
 
-- client → server: `RoomJoin {roomId, name, args}`, `RoomLeave {roomId}`, `RoomPresence {roomId, presence}`,
+A scope uses the same messages (`kind: "presence"` on `RoomJoin`), its members keyed by user and its `RoomPresence`
+carrying the user's state and activity.
+
+- client → server: `RoomJoin {roomId, kind, name, args}`, `RoomLeave {roomId}`, `RoomPresence {roomId, presence}`,
   `RoomEvent {roomId, event, data}`;
 - server → client: `RoomSync {roomId, self, canPublish, members}` (the full list at join and after a re-sync),
   `RoomMembers {roomId, set: [...], left: [...]}` (one coalesced frame per tick),
@@ -213,13 +254,16 @@ not hold one up.
     with heartbeats and sweeps, deltas that are lost and repaired, a subscriber that goes deaf, poisoned fields that
     made rooms unjoinable (EPH-1, AUDIT31 F2–F4, EPHEMERAL-02), about 1,000 lines for the Redis side alone. It also
     breaks H4.
-  - **Recommended: A**, decided with SCALE-01; v1 is single-process.
+  - **Decided: A** (the owner, 2026-10-15); v1 is single-process. When horizontal scaling becomes the focus
+    (SCALE-01), the leader's fan-out is measured and the alternatives, a bus such as Redis included, are weighed
+    against those numbers then; nothing here rules them out.
 
 ### 3.8 Lessons kept from minivex, and what changes
 
 Kept: the definition (`args`, `canJoin` / `canPublish`, a presence snapshot, declared events), sub-hooks, the
 per-member rate buckets, insert-before-await on join, closing a client rather than dropping a membership frame, the
-canonical room key. Changed: one concept instead of room plus presence scope (R2); a reconnect grace (none in
+canonical room key, and the two concepts (room and presence scope, R2). Changed: a scope's per-user merge is the
+server's, not the client's; a reconnect grace (none in
 minivex); a member cap; server-side coalescing; broadcast from mutations after commit; no Redis (§3.7); gates
 re-run on an identity change. minivex's rooms had about 60 % test coverage in its last audit; bunvex's would be on
 the coverage floors from the start.
@@ -235,7 +279,7 @@ None. Rooms are opt-in and invisible to an app or a client that does not use the
 
 | # | Addition | Why | Decision |
 |---|---|---|---|
-| R1 | **AD-42 Rooms:** presence and broadcast events in memory beside the database (§3), opt-in through `room()` and `useRoom` | Convex keeps this state in tables, so every cursor move is a durable transaction and a subscription update per member; Convex's own article recommends an in-memory service for cursors | **proposed** |
+| R1 | **AD-42 Rooms:** presence and broadcast events in memory beside the database (§3), opt-in through `room()` / `useRoom` and `presence()` / `usePresence` | Convex keeps this state in tables, so every cursor move is a durable transaction and a subscription update per member; Convex's own article recommends an in-memory service for cursors | **accepted** (owner, 2026-10-15) |
 
 ## 5. Tests
 
@@ -245,7 +289,8 @@ None. Rooms are opt-in and invisible to an app or a client that does not use the
   retries is never sent, one that commits is sent once.
 - **Sync e2e (two and more clients):** a member sees the others' presence and events and not its own; a late joiner
   sees presence and no past events; a reconnect within the grace shows no leave; a reconnect after it shows leave
-  and join; three tabs are three members and `by: "user"` gives one.
+  and join; three tabs are three room members and one scope member, who leaves the scope only when the last tab
+  goes; an anonymous connection is refused by a scope; idle is set and cleared across tabs.
 - **Coalescing and backpressure:** 1,000 presence updates in a tick reach a member as one frame; a stalled client is
   disconnected, not grown without bound; memory returns to its baseline after members leave (minivex's EPH-1 kind
   of witness).
@@ -255,16 +300,16 @@ None. Rooms are opt-in and invisible to an app or a client that does not use the
 - **Against Convex:** nothing to compare (Convex has no rooms); the differential suite checks that a Convex app's
   behaviour is unchanged.
 
-## 6. Open questions (for the owner)
+## 6. Questions and the owner's decisions (2026-10-15)
 
-| # | Question | Proposed |
-|---|---|---|
-| R1 | Take rooms as an addition (AD-42), v1 = presence + events? | yes |
-| R2 | One concept (a room, with `useOthers({ by: "user" })`) or two (room and presence scope, as minivex)? | one |
-| R3 | Server side: broadcast from mutations (after commit) and actions; read members from actions only? | yes, both |
-| R4 | Reconnect grace of 5 s, resuming the member through the protocol v1 session; gates re-run on an identity change, not reactively? | yes |
-| R5 | Multi-node, when followers exist: relay through the leader (A), affinity (B) or a bus (C)? | A, with SCALE-01 |
-| R6 | The limits of §3.5, including a member cap per room (500)? | yes |
-| R7 | `onJoin` / `onLeave` server hooks: later, not v1? | later |
-| R8 | Room state (a CRDT document, Yjs) in memory: out of scope for now, studied separately if wanted? | out of scope |
-| R9 | The name: `room` (Liveblocks, minivex), `channel` (Supabase, Phoenix) or `presence`? | `room` |
+| # | Question | Proposed | Decided |
+|---|---|---|---|
+| R1 | Take rooms as an addition (AD-42), v1 = presence + events? | yes | yes |
+| R2 | One concept (a room, with `useOthers({ by: "user" })`) or two (room and presence scope, as minivex)? | one | **two**: `room` and `presence` with `usePresence` (§3.3) |
+| R3 | Server side: broadcast from mutations (after commit) and actions; read members from actions only? | yes, both | yes |
+| R4 | Reconnect grace of 5 s, resuming the member through the protocol v1 session; gates re-run on an identity change, not reactively? | yes | yes |
+| R5 | Multi-node, when followers exist: relay through the leader (A), affinity (B) or a bus (C)? | A, with SCALE-01 | A; a bus (Redis) measured when scaling out is the focus |
+| R6 | The limits of §3.5, including a member cap per room (500)? | yes | yes |
+| R7 | `onJoin` / `onLeave` server hooks: later, not v1? | later | later |
+| R8 | Room state (a CRDT document, Yjs) in memory: out of scope for now, studied separately if wanted? | out of scope | out of scope |
+| R9 | The name: `room` (Liveblocks, minivex), `channel` (Supabase, Phoenix) or `presence`? | `room` | `room` (and `presence` for scopes) |

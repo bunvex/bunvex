@@ -11,8 +11,8 @@ item. It is the project's to-do list at the scale of the whole product.
 | Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 229 | 20 | 13 |
 
 Beyond Convex, [additions.md](additions.md) lists 32 additions: 27 built (6 of them dashboard screens on the
-mock), 2 accepted, 2 deferred, 1 proposed (2026-10-15: the dashboard audit after STUDY-149; AD-41 deferred; AD-24
-and AD-25's screens on a deployment; AD-42, rooms, proposed in STUDY-164).
+mock), 3 accepted, 2 deferred (2026-10-15: the dashboard audit after STUDY-149; AD-41 deferred; AD-24 and AD-25's
+screens on a deployment; AD-42, rooms and presence scopes, accepted in STUDY-164).
 
 These counts were recounted on 2026-10-12 (the docs audit: cloud-only and decided no-build rows re-marked *n/a*) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
