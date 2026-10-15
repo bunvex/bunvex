@@ -418,6 +418,10 @@ as the owner's calls: the views and filters with counts and the usage bar, backe
 a **placeholder** for named buckets, which neither Convex nor bunvex has (L20, a bunvex addition; it does
 nothing until a bucket concept exists).
 
+On a deployment the server source does not offer `fileStats` yet, so the views, the size filter and the usage
+bar show on the mock only; [STUDY-149 §7](STUDY-149-dashboard-real-data.md#7-follow-up-storage-statistics-on-a-deployment-ad-41-proposed)
+proposes backing them (AD-41).
+
 ### 7.8 Authentication (added 1 Oct 2026, UI-01 §25) — a bunvex addition
 
 **Convex has no such screen.** Its dashboard's Settings → Authentication only lists the token providers from

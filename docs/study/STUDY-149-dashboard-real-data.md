@@ -400,6 +400,7 @@ subscription), DV-97 (`Bunvex` scheme), DV-210 (the key never stored), DV-307 (`
 | # | Addition | Why | Decision |
 |---|---|---|---|
 | AD-32 (Q1 option C) | the backend can also serve the dashboard itself, same-origin, at `/dashboard` (opt-in) | one container, one port, no CORS | **not taken** (owner, 2026-10-12: Q1 option B); not recorded in additions.md |
+| AD-41 (§7) | storage statistics on a deployment: the Files screen's storage used, views by type with counts and size filter, the Overview's file storage card, from in-memory counters per UTC hour × kind × size class | Convex has none of them; on a deployment they worked on the mock only (#648) | **proposed** (owner to decide; §7.5) |
 
 ## 5. Tests
 
@@ -1919,3 +1920,215 @@ same or not / why / app impact / recommendation), followed by the owner's decisi
 - *Why*: Convex's admin API is system functions over the sync protocol; the client already speaks it.
 - *Recommendation*: accept; PR 1 amends UI-01 §5.7 and §6.
 - **Decision (owner, 2026-10-12): confirmed** as planned.
+
+## 7. Follow-up: storage statistics on a deployment (AD-41, proposed)
+
+The #648 docs audit found that the server source does not offer `fileStats` (PR 5: "Convex has no size or kind
+filter"). On a deployment the Files screen therefore loses its **storage used** bar, the **views by type** with
+their counts and the **size filter**, and the Overview loses its **file storage** card; all four work on the mock
+only. The owner chose, on 2026-10-14, to study them as an addition. AD-41 is reserved for it. This section is the
+proposal. Nothing is built.
+
+Convex source read: commit `d8bdde0` of get-convex/convex-backend (`git show d8bdde0:<path>`; the local checkout
+is at `4577b9031`). The citation prefixes are §0's: `dc/`, `sh/`, `cl/`, `udfs`.
+
+### 7.1 What Convex shows
+
+**The Files screen (self-hosted and cloud alike; `sh/pages/files.tsx:3` is `FileStorageView`).**
+
+- The header shows "File Storage" and **"Total Files"** with one number (`dc/features/files/components/
+  FileStorageHeader.tsx:181-191`). That number is `fileStorageV2.numFiles`, live (`FileStorageView.tsx:76-79`),
+  which is `db.system.query("_storage").count()` (`system-udfs/convex/_system/frontend/fileStorageV2.ts:8-13`).
+  The count comes from the table summary (`crates/isolate/src/environment/udf/async_syscall.rs:941-970`), so it
+  costs O(1).
+- It has a **Storage ID** lookup and an **"Uploaded at"** date range with the shortcuts Any time, Last 24 hours,
+  7, 30 and 90 days (`FileStorageHeader.tsx:57-89`, `:202-221`). The only other filter is the order.
+  `FileFilters` is `{minCreationTime, maxCreationTime, order}` (`:13-17`). `fileMetadata` takes those three and
+  pages over `by_creation_time` (`fileStorageV2.ts:19-71`), 20 files a page (`lib/usePaginatedFileMetadata.ts:13`).
+- The list has a Size column and a Content type column (`FilesList.tsx:37-42`, `FileStorageListItem.tsx:116-118`).
+- **There is no byte total, no breakdown by type, no size filter and no kind filter.** No `_system/frontend`
+  function sums sizes. The Health page shows no storage figure at all.
+
+**Storage bytes in Convex exist, but they are cloud-only or off-dashboard.**
+
+- *The cloud usage page* (`cl/components/billing/TeamUsage.tsx:171-184`, `:379-386`, `:1626-1660`) has a "File
+  Storage" section. It is a daily gauge per team and project, read from Convex's Databricks warehouse
+  (`cl/hooks/usageMetrics.ts:30`, `:48`, `:628-654`), not from the deployment. The plan summary shows "File
+  Storage" against the team's entitlement (`cl/components/billing/PlanSummary.tsx:96-99`, `:176-180`).
+- *Cloud backups* warn when a deployment holds more than 1 TB of files (`cl/components/deploymentSettings/
+  BackupStorageSelector.tsx:15-19`). That figure comes from the same warehouse, and only for cloud deployments
+  (`:151-167`).
+- *The deployment itself* computes `total_file_storage_bytes` every hour for the `current_storage_usage` log
+  stream event. This is STUDY-73's worker (`crates/usage_gauges_tracking_worker/src/lib.rs:86-89`, `:355`,
+  `:392-393`). The figure is kept by `FileStorageSizeTracker` (`crates/model/src/file_storage/mod.rs:351-470`),
+  which lives **in memory** and is rebuilt from scratch on start: its first call syncs every `_file_storage`
+  document, and later calls resume from the document log by adding each new revision and subtracting its
+  predecessor. Below `FILE_STORAGE_SIZE_MIN_DOCUMENTS_TO_RESUME` (4096, `crates/common/src/knobs.rs:1589-1592`)
+  it simply syncs again. Convex's docs say the event "is not currently sent for self-hosted deployments"
+  (`npm-packages/docs/docs/production/integrations/log-streams/log-streams.mdx:493`). bunvex sends it (STUDY-73).
+- `_file_storage` has three indexes: `by_id`, `by_creation_time` and `by_storage_id` (`crates/model/src/
+  file_storage/mod.rs:84-113`). There is none on `size` or `contentType`.
+
+So Convex has nothing to match here. Its own precedent is an in-memory total that is rebuilt at start and kept
+up to date incrementally, for one number and with no filters.
+
+### 7.2 What bunvex's mock offers, field by field
+
+The contract is `packages/dashboard/src/data-source-deployment.ts` (UI-01 §24). The mock is
+`packages/dashboard/src/mock/files.ts`.
+
+| Field / argument | Meaning | Used by |
+|---|---|---|
+| `fileStats(filter?)` → `count` | files matching the filter | the column's "N files", the Overview card's detail |
+| → `totalBytes` | the sum of their `size` | the column's "storage used", the Overview card's value |
+| → `byKind.{image,document,other}.count` | the count per `fileKind` | the views' counts (All files, Images, Documents, Other) |
+| → `byKind.*.bytes` | the bytes per kind | the usage bar and its legend |
+| `FileFilter.from` / `to` | creation time in ms, inclusive | the Uploaded presets (Today, 7 and 30 days: local-day bounds) and Bar 2's custom range |
+| `FileFilter.kind` | `fileKind(contentType)`: `image/*`; text, PDF, JSON, XML, RTF and office types; the rest | the views |
+| `FileFilter.minSize` / `maxSize` | bytes, inclusive | the Size filter. The screen only ever sends three ranges: `≤ 1023`, `1024 … 1 MiB − 1` and `≥ 1 MiB` (`files/column.tsx:22-26`) |
+| `listFiles({kind, minSize, maxSize})` | the list filtered the same way | the list under a view or a size |
+
+How the screen calls these matters for cost (`files/column.tsx:63-123`, `screens/overview.tsx:206-211`):
+
+- One render of the Files column makes **10 `fileStats` calls**:
+  - the usage bar (no filter);
+  - the views (the filter without `kind`);
+  - four Uploaded presets;
+  - four sizes.
+- `watchFiles` invalidates all ten after any change to the files (`files/screen.tsx:70`).
+- The Overview makes one more call, with no filter.
+
+The mock scans its in-memory list on every call (`MockFiles.stats`).
+
+### 7.3 Options and their costs
+
+All three options answer through a new bunvex system query, admin-only like `fileStorageV2:*`. One possible
+name is `_system/frontend/fileStorageStats`; the PR picks the final one, and rule 5 holds. Convex's
+`fileStorageV2:fileMetadata` stays exactly as it is. Each option also needs a filtered list query for `kind` and
+size. The dashboard calls the stats one-shot: it never subscribes to them, so they need no read set, and
+`watchFiles` already tells the screen when to refetch.
+
+Scan costs below are extrapolated linearly from STUDY-73's measurement (a paged scan of 10 000 files in 30–45 ms,
+about 3–4.5 µs per file). They are not new measurements, because no benchmarks run on this machine now. The
+implementing PR measures them.
+
+**(a) Scan `_storage` on every call.**
+
+| | 10k files | 1M files | 10M files |
+|---|---|---|---|
+| One unfiltered call | 30–45 ms | 3–4.5 s | 30–45 s |
+| One column refresh (10 calls; 1 scan if the calls are merged into a single "facets" call) | 0.3–0.45 s (30–45 ms) | 30–45 s (3–4.5 s) | 5–7.5 min (30–45 s) |
+
+- *Consistency:* exact, at one snapshot if one transaction is used. A paged scan across transactions, like the
+  gauge's, is not.
+- *Storage backends:* works the same on every persistence driver. It reads `_file_storage.size` and never
+  touches the blob store, whether local, S3 or memory.
+- *Hot path:* nothing changes on store or delete.
+- *Filters and paging:* there is no index on kind or size, and adding one would change Convex's `_file_storage`
+  layout, against the owner's storage-parity decision of 2026-10-05. A filtered list would page over
+  `by_creation_time` and drop the rows that do not match. A rare kind could then read the whole table for one
+  page of 50, unless `maximumRowsRead` (core `tx.ts:321`) caps each page. A capped page comes back short, with
+  `isDone: false`, and the list has to go on loading.
+- *Verdict:* fine at 10k and unusable from about 1M, because every upload re-runs the scans. Caching a result
+  until the next `_file_storage` commit does not help a busy store.
+
+**(b) Counters maintained incrementally.** The counters are kept per bucket. A bucket is one UTC hour of
+`_creationTime`, crossed with the three kinds and the screen's three size classes: 9 cells, each holding a count
+and a byte total. There are also deployment-wide totals.
+
+- *The system-table variant* writes a counter row in the same transaction as each store or delete. This
+  variant is rejected, for four reasons:
+  - Every upload and every `ctx.storage.delete` in an app's mutation would write the same row. Uploads would
+    conflict with each other and with app mutations; `addRow` commits alone precisely "to avoid OCC risk". This
+    would be **app-visible**: more OCC retries, and a divergence.
+  - It adds a system table that Convex's persisted layout does not have (owner, 2026-10-05).
+  - A snapshot import that replaces `_storage` would have to rewrite the row.
+  - A store that Convex's binary wrote would open without the row.
+- *The in-memory variant* updates the buckets when a commit becomes visible. It runs beside
+  `tableSummaries.apply`, in the engine's `onVisible` (`packages/core/src/engine.ts:1047`), and is keyed per
+  tablet as the summaries are. It sees every writer: uploads, `ctx.storage.delete`, the dashboard's
+  `deleteFiles` and imports. An import's hidden tablet keeps its own buckets until the swap. The buckets are
+  rebuilt by a scan at start, which is Convex's own approach for its total (§7.1).
+
+| | 10k files | 1M files | 10M files |
+|---|---|---|---|
+| Build at start: a background scan, once per process (and after the lease moves to another process) | 30–45 ms | 3–4.5 s | 30–45 s |
+| Memory: at most one bucket (~200 B) per hour that has uploads | ≤ 2 MB, usually KBs | ≤ 5 MB (3 years of hours) | ≤ 5 MB: bounded by hours, not files |
+| A call with no time bound | O(1), µs | O(1) | O(1) |
+| A call over 30 days | 720 buckets, ~10 µs | same | same |
+
+- *Consistency:* the counters reflect the latest visible commit. They are applied in commit order, and each
+  commit is applied atomically because the apply is synchronous.
+- *Backends:* no driver work and nothing persisted, so the persisted layout is still Convex's. It reads
+  `_file_storage` metadata, never the blob store. "Storage used" means what `_storage` lists, as Convex's
+  `total_file_storage_bytes` does, not what the bucket holds: bunvex, like Convex, never deletes a blob
+  (STUDY-130).
+- *Hot path:* no extra I/O, no extra write and no OCC. Each written document costs one tablet comparison, and a
+  `_file_storage` write costs one map lookup and four additions.
+- *Limits:* counters alone cannot answer a bound that falls inside an hour. Half-hour and 45-minute zones such as
+  India, Nepal, Newfoundland and parts of Australia produce such bounds. So do arbitrary byte bounds. Counters
+  alone would either answer wrong or refuse.
+
+**(c) Hybrid: (b) in memory, plus a bounded index scan for what the buckets cannot express.**
+
+- *Time:* the hours inside a time range come from the buckets. The partial hour at each end, if any, is read
+  from `by_creation_time` in a query transaction. That transaction starts in the same tick as the counters are
+  read, so both describe the same commit; the PR proves this with a test. The extra cost is the uploads of at
+  most two partial hours, and it does not depend on the size of the store. On whole-hour zones it is zero.
+- *Size:* the contract's free `minSize` / `maxSize` narrows to the screen's three classes,
+  `size?: "small" | "medium" | "large"`, which the buckets answer exactly. This contract is the dashboard's
+  internal one, so the change is not app-visible, and the mock follows it.
+- *Paging a filtered list:* the buckets name the hours that hold at least one match. A page reads only the
+  `by_creation_time` ranges of those hours, so the rows read are the matches plus the non-matching files in
+  hours that contain a match. `maximumRowsRead` still bounds a pathological hour. No new index is needed.
+- *Costs:* (b)'s table, plus the edge scans. Memory, the build and the hot path are the same as (b).
+- *Readiness:* until the build is done, a call answers a retryable "unavailable", the way `count()` answers
+  while the table summaries bootstrap (`TableSummariesUnavailableError`). The column shows "…" and retries. At
+  10k the build finishes before anyone asks.
+- *A side benefit, not observable:* STUDY-73's hourly gauge can read its total from these counters instead of
+  re-scanning `_file_storage` every hour. At 10M files that scan costs 30–45 s per hour. This would bring bunvex
+  closer to Convex's incremental `FileStorageSizeTracker`, and the event's value stays the same.
+
+### 7.4 What an app observes
+
+Nothing, under (b) in memory and under (c):
+
+- the API, `_storage` and its documents, and `ctx.storage` are unchanged;
+- the persisted layout and its indexes are unchanged, and so are exports and imports;
+- the log stream event keeps its value, and no OCC is added.
+
+The new system queries are admin-only and dashboard-only, under `_system/`, which is outside an app's `api`.
+Under (a) nothing is observable either, but a scan competes for the server's thread with the app's functions.
+The system-table variant of (b) would be observable through OCC, so it is not offered.
+
+### 7.5 Recommendation and the owner's decision (AD-41)
+
+- *Convex*: the Files screen has a file count, a date range and a storage-id lookup. It has no bytes, no views
+  by type, no size or kind filter, and the Health page has no storage card. Storage bytes exist only on the
+  cloud usage and billing pages (from Convex's warehouse) and in the hourly `current_storage_usage` event, which
+  is kept by an in-memory tracker rebuilt at start.
+- *bunvex (proposed)*: on a deployment, the server source offers `fileStats` and the filtered `listFiles`, so the
+  storage used, the views by type with counts, the size filter and the Overview's file storage card work as they
+  do on the mock. They are backed by option **(c)**:
+  - in-memory counters per UTC hour × kind × size class, updated when a commit becomes visible and rebuilt by a
+    background scan at start;
+  - an index scan for the partial hours at a range's edges;
+  - bucket-guided paging for the filtered list.
+  
+  The size filter narrows to the screen's three classes. Optionally, STUDY-73's gauge reads its total from the
+  counters.
+- *Same?* No. This is an addition: Convex has nothing to match. It is dashboard-only and additive.
+- *Why*: not a parity gap ("Ainda não fizemos" / "Não dá pra fazer" do not apply). It is something bunvex adds.
+  The design is constrained by Convex's persisted layout (no new system table or index) and by the store and
+  delete path (no new write).
+- *App impact*: none (§7.4).
+- *Recommendation*: accept AD-41 with option (c). Reject (a), because it is unusable from about 1M files.
+  Reject (b) in a system table, because it adds OCC on uploads and a layout divergence. Do not choose (b) alone
+  either, because it is wrong for half-hour zones and arbitrary bounds. If accepted, one PR builds it:
+  - the counters in core;
+  - the system queries in the server;
+  - `fileStats` and the filtered `listFiles` in `@bunvex/dashboard-source`;
+  - the contract's size classes, applied to the mock as well.
+  
+  It runs the contract suite on the server source with the stats on, includes the start-scan and hot-path
+  measurements, and sabotages a missed delete, a missed import and an edge hour.
