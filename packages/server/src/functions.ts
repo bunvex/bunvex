@@ -176,6 +176,7 @@ import {
 import { withNodeProcessErrors } from "./node-process-errors.ts";
 import { setOperationTracker } from "./pending-ops.ts";
 import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearchQuery } from "./registration.ts";
+import { type AnyRoomDef, isRoomDef } from "./rooms/define.ts";
 import type { RoutableMethod } from "./router.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { ServerMetrics } from "./server-metrics.ts";
@@ -816,6 +817,8 @@ function systemArgsError(message: string): Error {
 
 export class Functions {
   private fns = new Map<string, FunctionDef>();
+  /** Every room and presence definition (AD-42), by registry key, as `fns` keys functions. */
+  rooms = new Map<string, AnyRoomDef>();
   /** Each function's name as its key (`module:fn`), for `ctx.meta.getFunctionMetadata()`. */
   private names = new WeakMap<FunctionDef, string>();
   /** Each module's code hash (a deployed code version's modules); empty for registered (embedded) code. */
@@ -843,13 +846,18 @@ export class Functions {
    * Replace every function at once with a code version's (STUDY-35): the next call of any name runs the new
    * code. The modules whose code changed (added, removed or a new hash), for re-running what read them.
    */
-  install(fns: Map<string, FunctionDef>, moduleHashes: Map<string, string>): Set<string> {
+  install(
+    fns: Map<string, FunctionDef>,
+    moduleHashes: Map<string, string>,
+    rooms: Map<string, AnyRoomDef> = new Map(),
+  ): Set<string> {
     const changed = new Set<string>();
     for (const [m, h] of moduleHashes) if (this.moduleHashes.get(m) !== h) changed.add(m);
     for (const m of this.moduleHashes.keys()) if (!moduleHashes.has(m)) changed.add(m);
     for (const k of this.fns.keys()) if (!fns.has(k)) changed.add(Functions.moduleOf(k));
     for (const k of fns.keys()) if (!this.fns.has(k)) changed.add(Functions.moduleOf(k));
     this.fns = new Map(fns);
+    this.rooms = new Map(rooms);
     this.moduleHashes = new Map(moduleHashes);
     this.deployed = true;
     return changed;
@@ -1289,9 +1297,16 @@ export class Functions {
     this.actionPermits = this.limits.action;
   }
 
-  register(module: string, fns: Record<string, FunctionDef>) {
-    for (const [n, f] of Object.entries(fns)) this.fns.set(`${module}:${n}`, f);
+  register(module: string, fns: Record<string, FunctionDef | AnyRoomDef>) {
+    for (const [n, f] of Object.entries(fns))
+      if (isRoomDef(f)) this.rooms.set(`${module}:${n}`, f);
+      else this.fns.set(`${module}:${n}`, f);
     return this;
+  }
+
+  /** A room or presence definition by name (`rooms:doc`, or `rooms.doc`-style paths as functions take). */
+  roomDef(name: string): AnyRoomDef | undefined {
+    return this.rooms.get(registryKey(name));
   }
 
   /**
