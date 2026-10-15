@@ -113,6 +113,19 @@ async function setup(
     }),
   });
   http.route({ path: "/notResponse", method: "GET", handler: httpAction(async () => "hi" as never) });
+  // Thrown values with no frames (STUDY-31 §11).
+  for (const [path, thrown] of [
+    ["/throws-string", "a string"],
+    ["/throws-null", null],
+    ["/throws-unstacked", Object.assign(new Error("no stack"), { stack: "Error: no stack" })],
+  ] as const)
+    http.route({
+      path,
+      method: "GET",
+      handler: httpAction(async () => {
+        throw thrown;
+      }),
+    });
   http.route({
     path: "/whoami",
     method: "GET",
@@ -298,6 +311,17 @@ describe("requests and responses", () => {
     expect(q.code).toMatch(/^\[Request ID: [0-9a-f]{16}\] Server Error$/);
     expect(q.trace).toBeUndefined();
     expect(q.data).toEqual({ code: "nope" });
+  });
+
+  test("the 500's trace ends with a newline, as Convex's: after the last frame, or after the message alone", async () => {
+    const { site } = await setup();
+    const trace = async (path: string) => ((await (await fetch(`${site}${path}`)).json()) as { trace: string }).trace;
+    expect(await trace("/throws-string")).toBe("Uncaught a string\n");
+    expect(await trace("/throws-null")).toBe("Uncaught null\n");
+    expect(await trace("/throws-unstacked")).toBe("Uncaught Error: no stack\n");
+    expect(await trace("/notResponse")).toBe("Uncaught Error: HTTP actions must return a Response\n");
+    const framed = await trace("/throws");
+    expect(framed).toMatch(/^Uncaught BunvexError: \{"code":"nope"\}\n {4}at .+\n$/s);
   });
 
   test("CORS is the app's: its OPTIONS route answers preflights; nothing is added elsewhere", async () => {

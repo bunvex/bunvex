@@ -560,4 +560,34 @@ req/s, a one-chunk stream): before 19.3k–21.4k; with the 32 turns 20.5k–21.5
 
 A chunk that is not bytes (a string enqueued in the stream) is sent as text by Bun; Convex's runtime fails the body
 with `Uncaught Error: serde_v8 error: invalid type; expected: buffer, got: string` (the 500 in the handler's turn).
-Left as a gap.
+Matched since: [STUDY-161 §15](STUDY-161-engine-messages.md#15-a-streamed-http-action-bodys-chunk-that-is-not-bytes-found-by-study-31-106).
+
+## 11. The 500's `trace` ends with a newline (follow-up, 2026-10-15)
+
+Found by STUDY-161 §15. Read at `d8bdde0` and checked against its binary (`precompiled-2026-10-07-d8bdde0`).
+
+**Convex.** The 500 of a run that failed before its head is `RedactedJsError::to_http_response_parts`
+(`crates/application/src/redaction.rs:143-160`): `trace` is the error's `Display`, which is its `Debug`
+(`crates/common/src/errors.rs:815-831`). That writes the message with `writeln!`, then each frame with `writeln!`.
+So a `trace` always ends with a newline: after the last frame, or after the message when the error has no frames
+(a thrown value that is no Error, an Error whose stack has none, a body errored with a string). Seen on the binary:
+`"Uncaught a string\n"`, `"Uncaught one\ntwo\n"`, `"Uncaught 42\n"`, `"Uncaught #<Object>\n"`, `"Uncaught null\n"`,
+`"Uncaught undefined\n"`, `"Uncaught Error: no stack\n"`, `"Uncaught in turn\n"`, and the action timeout's
+`"Function execution timed out (maximum duration: 3s)\n"`. An Error with frames, and a
+handler that returns no Response, end with `…)\n`.
+
+**bunvex before.** `errorResponse` (`server/src/http-actions.ts`) stripped the last newline of the uncaught error's
+text, so every `trace` ended without one.
+
+**bunvex now.** The `trace` is the uncaught error's text as logged, newline included. The `code` is unchanged.
+
+*Tests:* `server/test/http-actions.test.ts` (a string, null, an Error with no frames, no Response, and an Error with
+frames, each `trace` whole or by its end; `action-timeout.test.ts` and `action-nested-error-frames.test.ts` now expect
+the newline); `differential/test/http-500-trace.test.ts` (13 routes of
+`http-trace-app/` on both backends: the `trace` whole without frames; its first line, whether it has frames and its
+last character with them). Sabotage (each restored, `git diff` clean): the newline stripped again (unit and oracle
+fail); kept only when there are frames (unit and oracle fail); kept only when there are none (unit and oracle fail).
+
+*Found, not fixed:* Convex's `code` carries the whole message (`Server Error: {message}`, `redaction.rs:147`), so a
+multi-line message, such as `new Error("line one\nline two")` or a thrown `"one\ntwo"`, is in it whole; bunvex's
+`code` keeps only its first line.

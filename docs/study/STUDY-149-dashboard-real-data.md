@@ -2148,6 +2148,79 @@ listed exactly when the server source has their methods, and a typed URL to one 
 
 **Measurements.** No hot path: one `typeof` per sidebar entry and palette item per render.
 
+### Follow-up: the index list's search, vector and staged indexes ("Index list")
+
+The Data screen's index list showed `TableInfo.indexes` — the database indexes the grid can read, `by_id` and
+`by_creation_time` first, staged ones dropped (`indexInfoOf`) — so a search, vector or staged index never appeared.
+Owner-approved work (2026-10-15); matching Convex, no divergence question.
+
+**Convex** (re-read at d8bdde0). `dashboard-common/src/features/data/components/IndexList.tsx` keeps
+`api._system.frontend.indexes.default` subscribed (`useQuery`, `{ tableName, tableNamespace }`) and draws three
+sections — "Indexes", "Search indexes", "Vector indexes" (`getIndexType`: an array of fields, a `searchField`, a
+`vectorField`) — each with a help tooltip and "`<table>` has no <section>." when empty. A row: the name, "Staged" with
+a tooltip ("Staged indexes are not queryable. To enable this index, remove `{ staged: true }` in your `schema.ts`
+file.") and a dashed rule; "Fields", "Search field", "Vector field", "Filter fields" (only when any) and
+"Dimensions"; while `backfilling`, "Backfill in progress" with a spinner until `totalDocs` is known, then a striped
+bar at `min(0.99, numDocsIndexed / totalDocs)`; when `backfilled`, "Backfill completed" and a full bar; nothing for
+`done`. Above the sections, a hint to use a staged index when an index that is not staged backfills on a table past
+10 000 documents. The query (`system-udfs/convex/_system/frontend/indexes.ts`) reads the table's `_index` rows
+(not `by_id` nor `by_creation_time`), each mapped by `indexFieldsAndState` from its `onDiskState`, and its
+`_index_backfills` row while backfilling. A database index's `fields` come as stored, `_creationTime` last.
+
+**What bunvex did.** The server's `indexes` already had Convex's shapes (STUDY-149 PR 2, compared by
+`dashboard-data.test.ts` on an app with database indexes only). Checked on the oracle with an index of every kind
+(`differential/indexes-app/`): database indexes and staged ones matched, but **every search and vector index stayed
+`backfilling` (with `{numDocsIndexed: 0, totalDocs: null}`) for good**, where Convex says `done` (or `backfilled`
+when staged) once built. The cause is DV-415: bunvex writes those `_index` rows with `onDiskState` "backfilling" and
+never changes them (so the Convex binary rebuilds the index on a cross-open). `GET /api/get_indexes` had the same
+fault (`in_progress` for good).
+
+**As built.**
+- `Tx.searchIndexBuild(kind, tablet, name)` (`core/src/tx.ts`): a search or vector index's build as the engine holds
+  it — built once ready (or rebuilding after a start: it was built), and staged. `indexes` and `get_indexes` take a
+  search or vector row's state from it (`indexFieldsAndState` in `server/src/data-system-functions.ts`): building
+  `backfilling`, built and staged `backfilled`, built and enabled `done` (DV-368: no `Backfilled` while a push waits).
+- Reactivity: Convex's subscription re-runs because the build's last step writes the `_index` row. bunvex's row does
+  not change, so the engine writes the index's `_index_backfills` row once more when the build ends
+  (`Engine.noteSearchIndexBuilt`, after the index is marked ready), as Convex's writer replaces that row in the
+  transaction that marks the index backfilled; a build without a segment store, which wrote no such row, creates it
+  then (Convex creates it when the build starts). `indexes` reads that row while the index is backfilling, so the
+  write invalidates it. Staging or enabling an index rewrites its `_index` row (`staged`), which already invalidated.
+- The contract: `IndexListEntry` (Convex's `Index` shape) and the optional `watchIndexes(table, onIndexes, onError)`;
+  the server source keeps `indexes` subscribed (`sync.watch`), the mock serves its tables' declared indexes and
+  fixture search, vector and staged ones. Without `watchIndexes` the list is built from `TableInfo.indexes`.
+- The UI (`database/index-list.tsx`): Convex's three sections, rows, empty lines, backfill states and hint, in
+  bunvex's components. `by_id` and `by_creation_time` are no longer listed (Convex lists neither); fields as the
+  server stores them. The "Staged" explanation is shown under the row instead of a hover tooltip, and the help texts
+  have no "Learn more" links to Convex's docs (rule 5); presentation only.
+
+**Not built, found on the way** (listed in the parity gaps): the grid's filter has no search-index filter (Convex's
+`IndexFilterBar` offers search indexes and sends `{ name, search, clauses }`; bunvex's server already runs it).
+
+**Tests.** `differential/test/dashboard-indexes.test.ts`: `indexes` and `get_indexes` on both backends for a table
+with database, staged, search and vector indexes (staged ones each kind), a table with none and one that does not
+exist — equal once neither has a staged index still building. `server/test/data-system-functions.test.ts`: search and
+vector indexes `done` (they were matched with `objectContaining({})`). `sync-e2e/dashboard/server-source.test.ts`:
+`watchIndexes` on a live server — a staged search index pushed while its build is held is `backfilling`, then
+`backfilled` by itself once released, `done` when a push enables it, a vector index built during a push `done`,
+nothing after the stop, null for a missing table. The contract suite checks `watchIndexes` against `TableInfo.indexes`
+on the mock and on the live server. `dashboard/test/index-list.test.tsx`: the sections, rows, empty lines, the 99 %
+cap, "Backfill completed", the spinner, live updates, the hint's threshold, a missing table, an error, the fallback,
+axe. In Chromium (`apps/dashboard/e2e`): the sections and a staged vector index's bar, axe with contrast in both
+themes.
+
+**Sabotage** (each restored, `git diff` clean):
+
+| Sabotage | Failing |
+|---|---|
+| no `_index_backfills` write when a build ends | `watchIndexes` (live server): the built staged index never shows |
+| `indexes` reads a search or vector row's state from the row again | `data-system-functions`, `watchIndexes`, and the three differential tests |
+| every entry drawn as a database index | `index-list.test.tsx`: the sections |
+| the backfill bar not capped at 99 % | `index-list.test.tsx`: the cap |
+
+**Measurements.** No hot path: one search-index lookup per search or vector `_index` row in `indexes` and
+`get_indexes`, and one system mutation per finished search or vector build.
+
 ## 6. Open questions
 
 Every question below is in the decision format the owner asked for (what Convex does / what bunvex would do /

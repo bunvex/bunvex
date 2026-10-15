@@ -24,6 +24,7 @@ import { FilterBar } from "./filter-bar.tsx";
 import { activeCount } from "./filter-model.ts";
 import { decodeFilter, encodeFilter } from "./filter-url.ts";
 import { useLiveTable, useLiveTables } from "./live.ts";
+import { referenceTarget } from "./reference.ts";
 import { type PanelState, SidePanel } from "./side-panel.tsx";
 import { SystemTableView } from "./system-table.tsx";
 import { TablesSidebar } from "./tables-sidebar.tsx";
@@ -214,8 +215,9 @@ function TableView({ info }: { info: TableInfo }) {
   const [viewing, setViewing] = useState<Viewing | null>(null);
   const [deleting, setDeleting] = useState<Document | null>(null);
   const goToReference = async (id: string) => {
-    const target = await queryClient.fetchQuery(referenceQuery(scope, id)).catch(() => null);
-    if (target) void navigate({ to: "/database/$table", params: { table: target }, search: { doc: id } });
+    const table = await queryClient.fetchQuery(referenceQuery(scope, id)).catch(() => null);
+    const target = table === null ? null : referenceTarget(table, id);
+    if (target) void navigate(target as never);
     else setNotice({ ok: false, message: `No document has the id ${id}.` });
   };
   const cellActions = (d: Document, field: string, anchor: () => DOMRect | undefined): CellActions => ({

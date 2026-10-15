@@ -13,6 +13,7 @@ import { useQueryScope } from "../context.tsx";
 import { useWatch } from "../data/live.ts";
 import { capabilitiesQuery, dashboardKeys, type QueryScope } from "../data/queries.ts";
 import { type EnvironmentVariable, type EnvironmentVariableChange, toDataSourceError } from "../data-source.ts";
+import { envVarsRoute } from "../router.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { NotOffered } from "../shell/not-offered.tsx";
 import { formatDotenv, nameProblem, parseDotenv, setProblem, valueProblem, valueWarning } from "./env-vars.ts";
@@ -109,10 +110,25 @@ function EnvironmentVariables() {
   const [saving, setSaving] = useState(false);
   const [outcome, setOutcome] = useState<{ ok: boolean; message: string }>();
   const focusKey = useRef<string>(undefined);
-  // what the deployment has replaces the rows when it (re)loads
+  // `?var=NAME` (Convex's `useRequestedEnvVars`): a new row with that name and an empty value, once the variables
+  // load; the parameter leaves the address at once, so a reload does not add it again
+  const search = envVarsRoute.useSearch();
+  const navigate = envVarsRoute.useNavigate();
+  const requested = useRef<string[] | undefined>(search.var);
   useEffect(() => {
-    if (vars.data) setRows(fromServer(vars.data));
-  }, [vars.data]);
+    if (search.var) void navigate({ search: {}, replace: true });
+  }, [search.var, navigate]);
+  // what the deployment has replaces the rows when it (re)loads
+  const capsKnown = caps !== undefined;
+  useEffect(() => {
+    if (!vars.data) return;
+    // the rows are asked for once the credential is known: one that cannot write gets none
+    const asked = capsKnown && canWrite ? (requested.current ?? []) : [];
+    if (capsKnown) requested.current = undefined;
+    const added = asked.map((name) => newRow(name));
+    if (added[0]) focusKey.current = added[0].key;
+    setRows([...fromServer(vars.data), ...added]);
+  }, [vars.data, capsKnown, canWrite]);
   const changes = useMemo(() => changesOf(rows), [rows]);
   const problems = useMemo(() => validate(rows), [rows]);
   const update = (key: string, patch: Partial<Row>) =>

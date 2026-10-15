@@ -161,6 +161,11 @@ export class MockScheduler {
   // ---------------------------------------------------------------- writes
 
   /** As Convex's `cancel_job`: pending or running → canceled (gone from the list); otherwise nothing. */
+  /** Whether a scheduled run has this id (the mock's `tableOfId`). */
+  has(id: string): boolean {
+    return this.jobs.some((j) => j.id === id);
+  }
+
   cancel(id: string) {
     const job = this.jobs.find((j) => j.id === id);
     if (!job) return;

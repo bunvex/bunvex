@@ -9,6 +9,7 @@ import type {
   FunctionInfo,
   FunctionKind,
   IndexInfo,
+  IndexListEntry,
   LogEntry,
   LogLevel,
 } from "../data-source.ts";
@@ -18,7 +19,14 @@ import { clientFor } from "./clients.ts";
 import { MOCK_VALIDATORS } from "./function-validators.ts";
 import { createRandom, type Random } from "./random.ts";
 
-export type FixtureTable = { name: string; indexes: IndexInfo[]; documents: Document[]; declared: boolean };
+export type FixtureTable = {
+  name: string;
+  indexes: IndexInfo[];
+  documents: Document[];
+  declared: boolean;
+  /** The indexes the grid cannot read, which the index list shows too: search, vector and staged ones. */
+  otherIndexes?: IndexListEntry[];
+};
 
 export type Fixture = {
   deployment: DeploymentInfo;
@@ -127,6 +135,20 @@ function makeTables(rnd: Random, now: number, counts: FixtureOptions["documents"
       indexes: [...SYSTEM_INDEXES, index("by_channel", "channel")],
       documents: messages,
       declared: true,
+      otherIndexes: [
+        {
+          name: "search_body",
+          staged: false,
+          fields: { searchField: "body", filterFields: ["channel"] },
+          backfill: { state: "done" },
+        },
+        {
+          name: "by_embedding",
+          staged: true,
+          fields: { vectorField: "embedding", filterFields: ["author"], dimensions: 1536 },
+          backfill: { state: "backfilling", stats: { numDocsIndexed: 120, totalDocs: messages.length } },
+        },
+      ],
     },
     {
       name: "tasks",
@@ -139,6 +161,14 @@ function makeTables(rnd: Random, now: number, counts: FixtureOptions["documents"
       ],
       documents: tasks,
       declared: true,
+      otherIndexes: [
+        {
+          name: "by_owner_done",
+          staged: true,
+          fields: ["owner", "done", "_creationTime"],
+          backfill: { state: "backfilled" },
+        },
+      ],
     },
     { name: "users", indexes: [...SYSTEM_INDEXES, index("by_email", "email")], documents: users, declared: true },
   ];

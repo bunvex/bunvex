@@ -12,6 +12,7 @@ import { CornerDownLeft, Search } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, functionsQuery, referenceQuery, tablesQuery } from "../data/queries.ts";
+import { referenceTarget } from "../database/reference.ts";
 import { useExtensions } from "../extensions/context.ts";
 import { offers } from "../extensions/types.ts";
 import { KIND_WORDS } from "../functions/tree.ts";
@@ -139,7 +140,8 @@ function useItems(query: string): PaletteItem[] {
         title: `Open document ${id}`,
         run: () => {
           void queryClient.fetchQuery(referenceQuery(qs, id)).then((table) => {
-            if (table) void router.navigate({ to: `/database/${table}`, search: { doc: id } } as never);
+            const target = table === null ? null : referenceTarget(table, id);
+            if (target) void router.navigate(target as never);
           });
         },
       });

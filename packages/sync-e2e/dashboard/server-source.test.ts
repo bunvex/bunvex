@@ -13,6 +13,7 @@ import {
   type Document,
   type FieldFilter,
   type FilterExpression,
+  type IndexListEntry,
   type LogEntry,
   OPERATIONS,
   type Page,
@@ -112,14 +113,14 @@ async function deploy(modules: { path: string; source: string }[]) {
   await post("/api/deploy2/finish_push", { startPush: start, dryRun: false });
 }
 
-/** The app's schema; `extra` adds tables (a later push). */
-const schemaModule = (extra = "") => ({
+/** The app's schema; `extra` adds tables, `itemIndexes` indexes of `items` (a later push). */
+const schemaModule = (extra = "", itemIndexes = "") => ({
   path: "schema.js",
   source: `import { defineSchema, defineTable } from "@bunvex/server";
     import { v } from "@bunvex/values";
     export default defineSchema({
       messages: defineTable({ body: v.string() }),
-      items: defineTable(v.any()).index("by_kind", ["kind", "n"]),
+      items: defineTable(v.any()).index("by_kind", ["kind", "n"])${itemIndexes},
       empty: defineTable({ x: v.number() }),${extra}
     });`,
 });
@@ -148,11 +149,15 @@ const APP_MODULES = [
   },
 ];
 
+/** Each search and vector backfill page waits for it: a test holds a build by setting it to a pending promise. */
+let searchGate: Promise<void> = Promise.resolve();
+
 beforeAll(async () => {
   const engine = await new Engine(defineSchema({}), await MemoryPersistence.open(null, { durable: false }), {
     instanceName: INSTANCE,
     instanceSecret: SECRET,
     storedSchema: true,
+    beforeSearchBackfillPage: () => searchGate,
   }).init();
   const server = createServer({
     engine,
@@ -541,7 +546,7 @@ describe("the Data screen (STUDY-149 PR 2)", () => {
     expect(fetched).toBe(2);
   });
 
-  test("tableOfId: a user table's id names it; a system table's does not", async () => {
+  test("tableOfId: a user table's id names it; not an id is null (system tables: server-source-ops)", async () => {
     const src = open();
     const [doc] = (await src.listDocuments({ table: "items", numItems: 1, cursor: null })).page;
     expect(await src.tableOfId?.(doc!._id)).toBe("items");
@@ -567,5 +572,72 @@ describe("the Data screen (STUDY-149 PR 2)", () => {
     await until(() => heard > 0, "watchTables' call");
     off();
     expect(errors).toEqual([]);
+  });
+
+  test("watchIndexes: the index list live, a search index's build followed from backfilling to built", async () => {
+    const src = open();
+    const lists: (IndexListEntry[] | null)[] = [];
+    const errors: DataSourceError[] = [];
+    const off = src.watchIndexes!(
+      "items",
+      (l) => lists.push(l),
+      (e) => errors.push(e),
+    );
+    await until(() => lists.length > 0, "the first list");
+    expect(lists.at(-1)).toEqual([
+      { name: "by_kind", staged: false, fields: ["kind", "n", "_creationTime"], backfill: { state: "done" } },
+    ]);
+    const named = (name: string) => lists.at(-1)?.find((ix) => ix.name === name);
+    // a staged search index (a push does not wait for it), its build held
+    let release = () => {};
+    searchGate = new Promise((r) => {
+      release = r;
+    });
+    const later = "\n      later: defineTable(v.any()),";
+    const staged = `.searchIndex("search_label", { searchField: "label", filterFields: ["kind"], staged: true })`;
+    await deploy([schemaModule(later, staged), ...APP_MODULES]);
+    await until(() => named("search_label"), "the new index");
+    expect(named("search_label")).toMatchObject({
+      staged: true,
+      fields: { searchField: "label", filterFields: ["kind"] },
+      backfill: { state: "backfilling" },
+    });
+    // built: the list says so by itself (no `_index` row changes, DV-415: the `_index_backfills` row's write does)
+    release();
+    searchGate = Promise.resolve();
+    await until(() => named("search_label")?.backfill.state === "backfilled", "the built staged index");
+    expect(named("search_label")?.staged).toBe(true);
+    // enabled by a push: done, no longer staged; a vector index built while the push waits for it, done
+    const enabled = `.searchIndex("search_label", { searchField: "label", filterFields: ["kind"] })
+      .vectorIndex("by_vec", { vectorField: "vec", dimensions: 2 })`;
+    await deploy([schemaModule(later, enabled), ...APP_MODULES]);
+    await until(
+      () => named("search_label")?.backfill.state === "done" && named("by_vec")?.backfill.state === "done",
+      "the enabled indexes",
+    );
+    expect(named("search_label")?.staged).toBe(false);
+    expect(named("by_vec")).toEqual({
+      name: "by_vec",
+      staged: false,
+      fields: { vectorField: "vec", filterFields: [], dimensions: 2 },
+      backfill: { state: "done" },
+    });
+    off();
+    const seen = lists.length;
+    await call("mutation", "items:add", { doc: { kind: "z", label: "after the stop" } });
+    await deploy([schemaModule(later), ...APP_MODULES]);
+    await Bun.sleep(100);
+    expect(lists.length).toBe(seen);
+    expect(errors).toEqual([]);
+    // a table that does not exist: null
+    const none: (IndexListEntry[] | null)[] = [];
+    const offNone = src.watchIndexes!(
+      "nope",
+      (l) => none.push(l),
+      () => {},
+    );
+    await until(() => none.length > 0, "the answer for a missing table");
+    offNone();
+    expect(none).toEqual([null]);
   });
 });
