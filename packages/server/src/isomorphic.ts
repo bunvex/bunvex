@@ -9,7 +9,7 @@ import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
 import type { FunctionHandle } from "./function-handles.ts";
 
 export { defineSchema, defineTable, docValidator } from "@bunvex/core/schema";
-export { anyApi, getFunctionName, makeFunctionReference } from "@bunvex/protocol";
+export { anyApi, getFunctionAddress, getFunctionName, makeFunctionReference } from "@bunvex/protocol";
 export { filterApi } from "./api-types.ts";
 export {
   action,
@@ -25,6 +25,12 @@ export {
   query,
   queryGeneric,
 } from "./builders.ts";
+export {
+  componentsGeneric,
+  currentSystemUdfInComponent,
+  defineApp,
+  defineComponent,
+} from "./components.ts";
 export { Crons, cronJobs } from "./cron.ts";
 // Types: every type ./index.ts exports (erased from every bundle).
 export type * from "./index.ts";

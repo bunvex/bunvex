@@ -1,10 +1,10 @@
 // Tables of components (STUDY-152 step 1): each component's tables are in their own namespace, numbered from 10001
-// as the root's, with the same system tables at the same numbers. The fixture is a SQLite store the Convex binary
-// wrote (precompiled-2026-09-28, Convex 1.46.0 CLI): an app with a `messages` table and a `counter` component
-// mounted twice (`counter`, `second`), each with `counters` (10001) and `messages` (10002); `app:seed` wrote one
-// root message and one document in each component's tables, and scheduled a job in each.
+// as the root's, with the same system tables at the same numbers. The store is built with bunvex's own catalog API
+// as Convex lays one out (component-store.ts; convex-rows/components.json holds Convex's rows): a root with
+// `messages`, and a `counter` component mounted twice (`counter`, `second`), each with `counters` (10001) and
+// `messages` (10002). A store the Convex binary itself wrote is opened in packages/differential.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { v } from "@bunvex/values";
@@ -21,65 +21,52 @@ import {
 } from "../src/catalog.ts";
 import { Engine } from "../src/engine.ts";
 import type { IndexId, TabletId } from "../src/persistence/index.ts";
-import { SqlitePersistence } from "../src/persistence/sqlite.ts";
-import { defineSchema, defineTable } from "../src/schema.ts";
-import { shapeDiff } from "./convex-rows/shape.ts";
+import { MemoryPersistence } from "../src/persistence/memory.ts";
+import { TABLE_SUMMARY_GLOBAL } from "../src/table-summary-checkpoint.ts";
+import { buildComponentStore, rootSchema } from "./component-store.ts";
+import { shapeDiff, stored } from "./convex-rows/shape.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
-/** A copy of the Convex store, to open. */
-function convexStore(): string {
+/** A fresh store with components (component-store.ts); its path. */
+async function componentStore(): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), "bunvex-components-"));
   dirs.push(dir);
-  const path = join(dir, "convex_local_backend.sqlite3");
-  writeFileSync(
-    path,
-    Bun.gunzipSync(readFileSync(join(import.meta.dir, "fixtures/convex-store-components.sqlite3.gz"))),
-  );
-  return path;
+  return (await buildComponentStore(join(dir, "log"))).path;
 }
-const rootSchema = defineSchema({ messages: defineTable({ text: v.string() }).index("by_text", ["text"]) });
 const open = async (path: string) =>
-  await new Engine(rootSchema, new SqlitePersistence(path, { durable: false })).init();
-
-/** The per-namespace system tables Convex creates for a component (`model/src/lib.rs`), at its numbers. */
-const COMPONENT_SYSTEM_TABLES = {
-  _udf_config: 518,
-  _modules: 521,
-  _source_packages: 524,
-  _cron_jobs: 531,
-  _schemas: 532,
-  _cron_job_logs: 533,
-  _scheduled_jobs: 539,
-  _file_storage: 540,
-  _cron_next_run: 547,
-  _schema_validation_progress: 549,
-  _scheduled_job_args: 550,
-  _schema_validations: 555,
+  await new Engine(rootSchema, await MemoryPersistence.open(path, { durable: false })).init();
+/** Convex's rows (convex-rows/components.json). */
+const convex = JSON.parse(readFileSync(join(import.meta.dir, "convex-rows/components.json"), "utf8")) as {
+  componentTableRow: Record<string, unknown>;
+  componentNamespace: Record<string, { number: number; indexes: Record<string, string[]> }>;
 };
 
-describe("a store with components, as the Convex binary wrote it", () => {
+/** The per-namespace system tables Convex creates for a component, at its numbers. */
+const COMPONENT_SYSTEM_TABLES = Object.fromEntries(
+  Object.entries(convex.componentNamespace).map(([name, t]) => [name, t.number]),
+);
+
+describe("a store with components", () => {
   test("the root's tables are the root's: a component's table of the same name and number is apart", async () => {
-    const e = await open(convexStore());
+    const e = await open(await componentStore());
     try {
       const docs = await e.query((db) => db.query("messages").collect());
       expect(docs.map((d) => d.text)).toEqual(["root"]);
       expect(e.catalog.table("messages").number).toBe(10001);
       expect(e.catalog.tables.has("counters")).toBe(false);
-      // The root's system tables are its own: its modules, not a component's.
-      const modules = (await e.query((db) => db.asSystem(() => db.query("_modules").collect()))) as unknown as {
-        path: string;
-      }[];
-      expect(modules.map((m) => m.path).sort()).toEqual(["app.js", "convex.config.js", "schema.js"]);
+      // The root's system tables are its own: a component's `_modules` is another table.
+      for (const c of e.catalog.components.values())
+        expect(c.table("_modules").id).not.toBe(e.catalog.table("_modules").id);
     } finally {
       await e.close();
     }
   });
 
   test("each component's tables are in its own namespace, with Convex's numbers", async () => {
-    const e = await open(convexStore());
+    const e = await open(await componentStore());
     try {
       expect(e.catalog.components.size).toBe(2);
       for (const c of e.catalog.components.values()) {
@@ -97,7 +84,7 @@ describe("a store with components, as the Convex binary wrote it", () => {
   });
 
   test("the root keeps working: writes, and a new table numbered among the root's alone", async () => {
-    const path = convexStore();
+    const path = await componentStore();
     const e = await open(path);
     try {
       await e.mutation((db) => db.insert("messages", { text: "after" }));
@@ -119,7 +106,7 @@ describe("a store with components, as the Convex binary wrote it", () => {
   });
 
   test("a component's _tables row: Convex's shape, its namespace read and written back", async () => {
-    const e = await open(convexStore());
+    const e = await open(await componentStore());
     try {
       const rows = (await e.query((db) => db.asSystem(() => db.query("_tables").collect()))) as Record<
         string,
@@ -137,8 +124,10 @@ describe("a store with components, as the Convex binary wrote it", () => {
         state: "active",
         namespace: row.namespace as { kind: string; id: string },
       });
-      const { _id: _, _creationTime: __, ...stored } = row;
-      expect(shapeDiff(written, stored)).toEqual([]);
+      // Convex's row of a component's table, and the same shape written by bunvex.
+      const { _id: _, _creationTime: __, ...convexRow } = convex.componentTableRow;
+      expect(shapeDiff(stored(written), convexRow)).toEqual([]);
+      expect((convexRow.namespace as { kind: string }).kind).toBe("byComponent");
       // A root table's row has no namespace at all.
       expect("namespace" in tableRow({ name: "messages", number: 10001, state: "active" })).toBe(false);
     } finally {
@@ -227,8 +216,24 @@ describe("the catalog by namespace", () => {
 });
 
 describe("the engine's workers by namespace", () => {
+  test("table summaries count a component's tables, and their checkpoint has them (Convex loads it)", async () => {
+    const p = await MemoryPersistence.open(await componentStore(), { durable: false });
+    const e = await new Engine(rootSchema, p).init();
+    try {
+      await (e as unknown as { summariesBuild: Promise<void> }).summariesBuild;
+      const counter = [...e.catalog.components.values()][0]!;
+      expect(e.tableSummaries.count(counter.table("messages").id)).toBe(1);
+      expect(e.catalog.everyTable().map((t) => t.id)).toContain(counter.table("counters").id);
+      await e.summaryCheckpointer!.tick(true);
+      const checkpoint = (await p.getGlobal(TABLE_SUMMARY_GLOBAL)) as { tables: Record<string, unknown> };
+      for (const t of counter.tables.values()) expect(Object.keys(checkpoint.tables)).toContain(t.id);
+    } finally {
+      await e.close();
+    }
+  });
+
   test("stale hidden tables are dropped from the root only: a component's hidden table stays", async () => {
-    const e = await open(convexStore());
+    const e = await open(await componentStore());
     try {
       await e.mutation((db) =>
         db.asSystem(async () => {
@@ -243,7 +248,7 @@ describe("the engine's workers by namespace", () => {
   });
 
   test("retention prunes a component's index entries: it is given that table's indexes", async () => {
-    const e = await open(convexStore());
+    const e = await open(await componentStore());
     try {
       const messages = [...e.catalog.components.values()][0]!.table("messages");
       // The indexes retention prunes for a tablet (Convex's `expired_index_entries`): a component's too.
@@ -259,7 +264,7 @@ describe("the engine's workers by namespace", () => {
   });
 
   test("a component's index left backfilling is backfilled and enabled", async () => {
-    const path = convexStore();
+    const path = await componentStore();
     const first = await open(path);
     let indexDocId = "";
     try {

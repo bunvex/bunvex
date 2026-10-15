@@ -584,6 +584,16 @@ export class Catalog {
     return this.hidden.get(tablet) ?? this.deleting.get(tablet);
   }
 
+  /**
+   * Every table of every namespace, the root's and each component's: active, hidden and being deleted. What
+   * Convex's table summaries cover (a checkpoint Convex loads must count a component's tables too).
+   */
+  everyTable(): TableDef[] {
+    const own = [...this.tables.values(), ...this.hidden.values(), ...this.deleting.values()];
+    for (const c of this.components.values()) own.push(...c.everyTable());
+    return own;
+  }
+
   /** The table whose persistence id is `tablet`, in this namespace or a component's. */
   anyTablet(tablet: TabletId): TableDef | undefined {
     const t = this.byTablet(tablet);

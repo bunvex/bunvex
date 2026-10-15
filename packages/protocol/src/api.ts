@@ -78,13 +78,42 @@ export function makeFunctionReference<
   return { [functionName]: name } as unknown as FunctionReference<Type, "public", Args, ReturnType>;
 }
 
+/**
+ * A component function's reference path (`_reference/childComponent/<name>/<module>/<fn>`), as Convex's
+ * `toReferencePath`: what `components.<name>…` references carry (STUDY-153).
+ */
+export const toReferencePath = Symbol.for("toReferencePath");
+
+/** How a call names its function (Convex's `getFunctionAddress`): a handle, a name, or a component reference. */
+export type FunctionAddress = { functionHandle: string } | { name: string } | { reference: string };
+
+/**
+ * Convex's `getFunctionAddress` (components/paths.ts): a `function://` string is a handle, another string a name,
+ * a reference its name, and a component reference its path.
+ */
+export function getFunctionAddress(ref: unknown): FunctionAddress {
+  if (typeof ref === "string") return ref.startsWith("function://") ? { functionHandle: ref } : { name: ref };
+  const name = (ref as { [functionName]?: unknown } | null | undefined)?.[functionName];
+  if (name) return { name: name as string };
+  const path = (ref as { [toReferencePath]?: unknown } | null | undefined)?.[toReferencePath];
+  if (!path) throw new Error(`${ref} is not a functionReference`);
+  return { reference: path as string };
+}
+
 /** The function name of a reference (e.g. "messages:list"); a plain string is returned as is. */
 export function getFunctionName(ref: AnyFunctionReference | string): string {
   if (typeof ref === "string") return ref;
   const name = (ref as unknown as { [functionName]?: unknown })?.[functionName];
-  if (typeof name !== "string")
+  if (typeof name !== "string") {
+    const path = (ref as unknown as { [toReferencePath]?: unknown } | null | undefined)?.[toReferencePath];
+    // A component's function is called through its reference, not by a name of this component (Convex's words).
+    if (typeof path === "string")
+      throw new Error(
+        `Expected function reference in the current component like "api.file.func" or "internal.file.func", but received reference ${path}`,
+      );
     throw new Error(
       `Expected function reference like "api.file.func" or "internal.file.func", but received ${String(ref)}`,
     );
+  }
   return name;
 }

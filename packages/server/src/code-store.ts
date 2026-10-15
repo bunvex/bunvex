@@ -444,11 +444,18 @@ export async function loadLatestCode(
     nodeModules = await externalDepsPath(store, row);
   }
   const version = await CodeVersion.load(
-    sources.filter((m) => m.path !== AUTH_CONFIG_MODULE && m.path !== SCHEMA_MODULE),
+    sources.filter((m) => m.path !== AUTH_CONFIG_MODULE && m.path !== SCHEMA_MODULE && isFunctionModule(m.path)),
     { seed: config.seed, timestamp: config.timestamp, env, ...(nodeModules ? { nodeModules } : {}) },
   );
   return { version, authConfig: sources.find((m) => m.path === AUTH_CONFIG_MODULE) ?? null };
 }
+
+/**
+ * Whether a stored module defines functions: not one whose name has more than one dot, as Convex's entry-point rule
+ * (`auth.config.js`, and the component definition a Convex push stores beside the functions, STUDY-153 C-2, which
+ * imports its children from `_componentDeps/` and is no function module).
+ */
+const isFunctionModule = (path: string) => !/\.[^/]*\./.test(path.slice(path.lastIndexOf("/") + 1));
 
 /** The latest deployed version, loaded, or null. */
 export async function loadLatestCodeVersion(

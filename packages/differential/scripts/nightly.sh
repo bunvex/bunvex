@@ -33,6 +33,16 @@ if ! bun test test/fixed.test.ts; then
   fail "A fixed program differs." "bun test test/fixed.test.ts"
 fi
 
+# A store with components, as Convex writes it, opened by bunvex and back (STUDY-152 steps 1-2).
+if ! bun test test/component-store.test.ts; then
+  fail "A store with components, as Convex writes it, does not open in bunvex and back." "bun test test/component-store.test.ts"
+fi
+
+# Components' definitions: Convex's package and bunvex's, the same calls (STUDY-153 PR 1).
+if ! bun test test/component-definitions.test.ts; then
+  fail "A component definition differs." "bun test test/component-definitions.test.ts"
+fi
+
 end=$(( $(date +%s) + MINUTES * 60 ))
 batches=0
 while [ "$(date +%s)" -lt "$end" ]; do
