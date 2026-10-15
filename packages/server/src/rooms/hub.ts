@@ -91,9 +91,21 @@ export class RoomHub {
   ): "ok" | "limit" {
     const ks = roomKeyString(key);
     const mine = this.bySink.get(sink) ?? new Map<number, Attachment>();
-    if (!mine.has(roomId) && mine.size >= this.limits.roomsPerConnection) return "limit";
+    // One attachment per (sink, roomId) and per (sink, room key): a join that reuses either first ends the old one.
+    for (const [id, old] of [...mine]) {
+      if (id === roomId || roomKeyString(old.room.key) === ks) {
+        mine.delete(id);
+        this.detachOne(old);
+      }
+    }
+    if (mine.size >= this.limits.roomsPerConnection) return "limit";
     const kept = this.graced.get(`${sink.sessionId}|${ks}`);
-    if (kept && kept.member.userId === who.userId) {
+    if (kept && kept.member.userId !== who.userId) {
+      // A rejoin within the grace as another user: the old member ends at once, and this is a fresh join.
+      this.timers.clear(kept.grace);
+      this.graced.delete(`${sink.sessionId}|${ks}`);
+      this.detachOne(kept);
+    } else if (kept) {
       // A reconnect within the grace: the same member, moved to the new socket; the others see nothing.
       this.timers.clear(kept.grace);
       this.graced.delete(`${sink.sessionId}|${ks}`);
@@ -137,6 +149,7 @@ export class RoomHub {
     mine.set(roomId, a);
     this.bySink.set(sink, mine);
     if (!existing) {
+      room.left = room.left.filter((id) => id !== member.memberId); // left and back in one tick: one `set` only
       room.members.set(memberKey, member);
       room.changed.add(member);
       this.scheduleTick();

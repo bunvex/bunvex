@@ -247,6 +247,81 @@ describe("presence scopes", () => {
   });
 });
 
+describe("no ghost members", () => {
+  const who = (userId: string | null) => ({ userId, canPublish: true });
+  test("a rejoin within the grace as another user ends the old member at once", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const a = sink("A"),
+      b = sink("B");
+    hub.join(b, 1, DOC, who("ub"));
+    hub.join(a, 1, DOC, who("u1"));
+    hub.detach(a);
+    const a2 = sink("A");
+    hub.join(a2, 1, DOC, who("u2"));
+    expect(
+      hub
+        .members(DOC)
+        .map((m) => m.userId)
+        .sort(),
+    ).toEqual(["u2", "ub"]);
+    hub.detach(a2);
+    t.advance(5000 + 30);
+    expect(hub.members(DOC).map((m) => m.userId)).toEqual(["ub"]);
+    expect(hub.size).toEqual({ rooms: 1, members: 1 });
+  });
+  test("the same roomId joined twice on one sink is one attachment: events arrive once, the member leaves", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const a = sink("A"),
+      b = sink("B");
+    hub.join(b, 1, DOC, who(null));
+    hub.join(a, 1, DOC, who(null));
+    hub.join(a, 1, DOC, who(null));
+    hub.event(b, 1, "wave", {});
+    expect(a.frames.filter((f) => f.type === "RoomEvent")).toHaveLength(1);
+    hub.leave(a, 1);
+    t.advance(30);
+    expect(hub.size).toEqual({ rooms: 1, members: 1 });
+  });
+  test("a roomId reused for another room leaves the old room", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const a = sink("A");
+    hub.join(a, 1, DOC, who(null));
+    hub.join(a, 1, { ...DOC, argsJson: '{"id":"b"}' }, who(null));
+    t.advance(30);
+    expect(hub.members(DOC)).toEqual([]);
+    expect(hub.size).toEqual({ rooms: 1, members: 1 });
+  });
+  test("two roomIds for the same room key on one sink do not leak at detach", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const a = sink("A");
+    hub.join(a, 1, DOC, who(null));
+    hub.join(a, 2, DOC, who(null));
+    expect(hub.roomsOf(a)).toHaveLength(1);
+    hub.detach(a);
+    t.advance(5000 + 30);
+    expect(hub.size).toEqual({ rooms: 0, members: 0 });
+  });
+  test("a scope member who leaves and rejoins in one tick is one set, never a left", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const tab = sink("T"),
+      other = sink("O");
+    hub.join(tab, 1, ONLINE, who("u1"));
+    hub.join(other, 1, ONLINE, who("u2"));
+    t.advance(30);
+    other.frames.length = 0;
+    hub.leave(tab, 1);
+    hub.join(tab, 2, ONLINE, who("u1"));
+    t.advance(30);
+    expect(other.frames).toHaveLength(1);
+    expect(last(other)).toMatchObject({ type: "RoomMembers", set: [{ userId: "u1" }], left: [] });
+  });
+});
+
 describe("backpressure", () => {
   test("a client too far behind is closed for a resync, never sent a partial membership", () => {
     const t = fakeTimers();
