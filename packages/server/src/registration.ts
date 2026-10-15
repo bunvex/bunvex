@@ -11,6 +11,7 @@ import type {
   TableNamesInDataModel,
 } from "@bunvex/core";
 import type {
+  AnyFunctionReference,
   DefaultFunctionArgs,
   EmptyObject,
   FunctionArgs,
@@ -78,12 +79,41 @@ export interface GenericQueryCtx<DataModel extends GenericDataModel> {
   ): Promise<any>;
 }
 
+/** `ctx.rooms` in a mutation (sent once it commits) and an action (sent at once): AD-42. */
+export interface RoomsBroadcaster {
+  /** Send `event` with `data` to a room's members, from nobody (`from` is null). */
+  broadcast(
+    room: AnyFunctionReference | string,
+    // biome-ignore lint/suspicious/noExplicitAny: a room is named by a string, its args are checked at run time
+    args: Record<string, any>,
+    event: string,
+    data: unknown,
+  ): Promise<void>;
+}
+/** `ctx.rooms` in an action: it also reads who is in a room. */
+export interface RoomsReader extends RoomsBroadcaster {
+  // biome-ignore lint/suspicious/noExplicitAny: as above
+  members(
+    room: AnyFunctionReference | string,
+    args: Record<string, any>,
+  ): Promise<{ memberId: string; userId: string | null; presence: unknown }[]>;
+}
+/** `ctx.presence` in an action: the users present in a presence scope. */
+export interface PresenceReader {
+  // biome-ignore lint/suspicious/noExplicitAny: as above
+  list(
+    scope: AnyFunctionReference | string,
+    args: Record<string, any>,
+  ): Promise<{ userId: string; state: unknown; idle: boolean }[]>;
+}
+
 /** A mutation's context: a writer of the data model, the scheduler, and the functions it may run. */
 export interface GenericMutationCtx<DataModel extends GenericDataModel> {
   db: GenericDatabaseWriter<DataModel>;
   auth: Auth;
   storage: StorageWriter;
   scheduler: Scheduler;
+  rooms: RoomsBroadcaster;
   /** The function's, transaction's, deployment's and request's metadata (STUDY-44). */
   meta: MutationMeta;
   /** Run a query in this mutation's transaction, seeing its writes (or, `useStaleSnapshot`, its snapshot). */
@@ -146,6 +176,8 @@ export interface GenericActionCtx<DataModel extends GenericDataModel> {
   auth: Auth;
   storage: StorageActionWriter;
   scheduler: Scheduler;
+  rooms: RoomsReader;
+  presence: PresenceReader;
   /** The function's, deployment's and request's metadata (STUDY-44). */
   meta: ActionMeta;
   /**

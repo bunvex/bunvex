@@ -79,6 +79,8 @@ export type BaseClientInterface = Pick<
   | "clearAuth"
   | "close"
   | "addOnTransitionHandler"
+  | "joinRoom"
+  | "joinPresence"
 >;
 
 export type BunvexReactClientOptions = BaseBunvexClientOptions & { baseClient?: BaseClientInterface };

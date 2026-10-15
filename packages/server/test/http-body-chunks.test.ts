@@ -1,6 +1,7 @@
 // A streamed HTTP action body's chunks (STUDY-161 §15): Convex's `stream/extend` op takes an ArrayBuffer or a view of
-// one, skips null and undefined, and refuses anything else with serde_v8's error, which names the value as v8's
-// `Value::type_repr` does (each name checked on Convex's binary, differential/test/http-body-error.test.ts).
+// one, skips null and undefined, and refuses anything else with an error that names the value as v8's
+// `Value::type_repr` does (each name checked on Convex's binary, differential/test/http-body-error.test.ts); bunvex
+// words that error its own way (DV-529).
 import { expect, test } from "bun:test";
 import { meteredBody } from "../src/http-body.ts";
 
@@ -19,7 +20,7 @@ async function early(value: unknown) {
   return failed && (failed.error as Error);
 }
 
-const got = (name: string) => `serde_v8 error: invalid type; expected: buffer, got: ${name}`;
+const got = (name: string) => `HTTP action response body chunks must be an ArrayBuffer or a view of one, got ${name}`;
 
 test("a value that is not bytes fails the body in the handler's turn, named as v8 names it", async () => {
   const cases: [unknown, string][] = [
@@ -61,12 +62,14 @@ test("a value that is not bytes fails the body in the handler's turn, named as v
   }
 });
 
-test("a resizable ArrayBuffer, or a view of one, is refused as serde_v8 refuses it", async () => {
+test("a resizable ArrayBuffer, or a view of one, is refused", async () => {
   for (const value of [
     new ArrayBuffer(2, { maxByteLength: 4 }),
     new Uint8Array(new ArrayBuffer(2, { maxByteLength: 4 })),
   ])
-    expect((await early(value))?.message).toBe("serde_v8 error: can't create slice from resizable ArrayBuffer");
+    expect((await early(value))?.message).toBe(
+      "HTTP action response body chunks must not be a resizable ArrayBuffer or a view of one",
+    );
 });
 
 test("bytes of any kind, null and undefined pass; the body sends the bytes, in order", async () => {

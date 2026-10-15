@@ -6,15 +6,37 @@
 import { CodeEditor } from "@bunvex/ui/components/code-editor";
 import type { EditOutcome } from "@bunvex/ui/components/data-table";
 import { cn } from "@bunvex/ui/lib/utils";
-import { type InfiniteData, useQueryClient } from "@tanstack/react-query";
+import { type InfiniteData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
-import { dashboardKeys } from "../data/queries.ts";
+import { dashboardKeys, schemaQuery } from "../data/queries.ts";
 import { type Document, type FieldPatch, type Page, toDataSourceError, type Value } from "../data-source.ts";
 import { valueType } from "../filters.ts";
-import { formatLiteral, parseLiteral, UNSET } from "./literal.ts";
+import { formatLiteral, parseLiteral, parseLiteralLocated, UNSET } from "./literal.ts";
+import {
+  fieldSchema,
+  issueDisplay,
+  requiredFieldIssue,
+  type SchemaIssue,
+  schemaIssues,
+  tableSchema,
+} from "./schema-check.ts";
 
 type CellEditorProps = { table: string; doc: Document; field: string; done: (outcome: EditOutcome) => void };
+
+/**
+ * Where a cell's text does not fit its field's declared type (`declared`, Convex's `validatorForColumn`): emptied
+ * or `undefined` while the field is required, or a value of another type. A text that does not parse has none
+ * (its own error comes on save).
+ */
+export function cellIssues(text: string, declared: ReturnType<typeof fieldSchema>): SchemaIssue[] {
+  if (!declared) return [];
+  if (text.trim() === "") return declared.optional ? [] : [requiredFieldIssue(declared.validator)];
+  const r = parseLiteralLocated(text);
+  if (!r.ok) return [];
+  if (r.value === UNSET) return declared.optional ? [] : [requiredFieldIssue(declared.validator)];
+  return schemaIssues(declared.validator, r.value, r.place);
+}
 
 /** A document with one field set, or removed. */
 function patched(doc: Document, field: string, patch: FieldPatch): Document {
@@ -25,8 +47,10 @@ function patched(doc: Document, field: string, patch: FieldPatch): Document {
 }
 
 export function CellEditor({ table, doc, field, done }: CellEditorProps) {
-  const { source, scope } = useQueryScope();
+  const qs = useQueryScope();
+  const { source, scope } = qs;
   const queryClient = useQueryClient();
+  const { data: schema } = useQuery(schemaQuery(qs));
   const current = doc[field];
   const kind = valueType(current);
   const multiline = kind === "object" || kind === "array";
@@ -46,8 +70,13 @@ export function CellEditor({ table, doc, field, done }: CellEditorProps) {
     setAlignRight(el.getBoundingClientRect().right > grid.getBoundingClientRect().right);
   }, []);
 
+  // checked against the field's declared type as it is typed, as Convex's cell editor
+  const declared = fieldSchema(tableSchema(schema, table), field);
+  const shown = issueDisplay(cellIssues(text, declared), declared?.enforced ?? false);
+
   const save = async (outcome: "stay" | "right") => {
     if (text === initial) return done(outcome === "right" ? "right" : "cancel");
+    if (shown.error) return setError(shown.error);
     let patch: FieldPatch;
     if (text.trim() === "") patch = { $unset: true };
     else {
@@ -94,6 +123,17 @@ export function CellEditor({ table, doc, field, done }: CellEditorProps) {
       {error?.message ?? "Saving…"}
     </p>
   );
+  const live = !error && !saving && (shown.error ?? shown.note) && (
+    <p
+      id={errorId}
+      className={cn(
+        "border bg-popover px-2 py-1 text-xs whitespace-normal shadow-sm",
+        shown.error ? "text-destructive" : "text-warning",
+      )}
+    >
+      {shown.error?.message ?? shown.note}
+    </p>
+  );
   const edit = {
     value: text,
     onChange: (t: string) => {
@@ -101,8 +141,10 @@ export function CellEditor({ table, doc, field, done }: CellEditorProps) {
       setError(undefined);
     },
     label: `Edit ${field}`,
-    error,
-    describedBy: error ? `${errorId} ${hintId}` : hintId,
+    error: error ?? shown.error,
+    moreErrors: error ? undefined : shown.moreErrors,
+    warnings: error ? undefined : shown.warnings,
+    describedBy: error || live ? `${errorId} ${hintId}` : hintId,
     autoFocus: true,
     onCancel: () => done("cancel"),
   };
@@ -120,7 +162,7 @@ export function CellEditor({ table, doc, field, done }: CellEditorProps) {
         <span id={hintId} className="px-1 text-xs whitespace-normal text-muted-foreground">
           Ctrl+Enter saves, Escape cancels. <code className="font-mono">undefined</code> removes the field.
         </span>
-        {status}
+        {status || live}
       </div>
     );
 
@@ -136,7 +178,7 @@ export function CellEditor({ table, doc, field, done }: CellEditorProps) {
         Enter saves, Tab saves and moves right, Escape cancels. Text needs quotes; an empty value or undefined removes
         the field.
       </span>
-      {status && <div className="absolute top-full left-0 z-30 w-72">{status}</div>}
+      {(status || live) && <div className="absolute top-full left-0 z-30 w-72">{status || live}</div>}
     </div>
   );
 }

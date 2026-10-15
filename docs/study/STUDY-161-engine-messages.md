@@ -1,7 +1,8 @@
 # STUDY-161 — Engine messages found with the dashboard
 
 - **Status:** decided (owner, 2026-10-15: match Convex on the differences STUDY-149 PR 3 found); one PR per
-  concern (§1–§7, each section's *Built* line); §8 accepted as a divergence (owner, 2026-10-15: Q1 (a), DV-520)
+  concern (§1–§7, each section's *Built* line); §8 accepted as a divergence (owner, 2026-10-15: Q1 (a), DV-520); §15's words accepted as a divergence (owner,
+  2026-10-15: (b), DV-529)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend (`crates/isolate/src/environment/udf/
   async_syscall.rs`, `udf/syscall.rs`, `crates/convex/sync_types/src/identifier.rs`, `crates/value/src/
   table_name.rs`, `crates/common/src/types/index.rs`, `crates/common/src/schemas/mod.rs`, `crates/common/src/
@@ -176,6 +177,7 @@ cannot reproduce it without esbuild's exact output, so this is a choice for the 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | Q1 (DV-520) | The line a function is listed at in the dashboard's Functions tree (`modules:listForAllComponents`'s `lineno`, the order of a file's functions) can differ from Convex's for the same source | Convex's number comes from esbuild's printed bundle under an off-by-one lookup; bunvex bundles with Bun.build | **accepted, (a)** (owner, 2026-10-15) |
+| §15 (DV-529) | The words of the error for a streamed HTTP action body's chunk that is not bytes: bunvex's own, with v8's type names, where Convex gives serde_v8's | serde_v8 is a library bunvex does not use | **accepted, (b)** (owner, 2026-10-15) |
 
 **Q1 — the analyzed line of a function.**
 
@@ -348,8 +350,8 @@ as its UTF-8 text, a number or an object reset the connection after the bytes be
 chunk ended the body with an `error:httpAction` line of Bun's `TypeError` (`null is not an object (evaluating
 'value.byteLength')`). A chunk that is not bytes never failed the run.
 
-**bunvex now.** As Convex. `meteredBody`'s pull skips null and undefined, and fails the body with serde_v8's message
-(the same names, an `Error` with no frames) for any other chunk that is not an unshared, fixed-length ArrayBuffer or
+**bunvex now.** As Convex. `meteredBody`'s pull skips null and undefined, and fails the body with Convex's error
+(the same type names, an `Error` with no frames; its words are bunvex's, DV-529 below) for any other chunk that is not an unshared, fixed-length ArrayBuffer or
 a view of one: after the head, the clean end and the line of STUDY-31 §10. For the handler's turn, Convex reads the
 body at once, so `failedEarly` now reads what the body has ready during its 32 microtask turns (the reads are kept
 in order and sent by the pull): a chunk that is not bytes found there fails the run with the 500. The turn is
@@ -369,6 +371,21 @@ backends: status, body, clean end, the 500's `code` and `trace` line, every log 
 skipped (unit and oracle fail); a resizable buffer accepted (unit and oracle fail); a shared one accepted (unit and
 oracle fail); `number` for `Number` (unit and oracle fail); the error's frames kept (unit fails; the oracle compares
 first lines only).
+
+**The words (DV-529).** serde_v8 is the library Convex's isolate converts values with; bunvex has no such library,
+so its message would name something bunvex does not use. The owner chose bunvex's own words (2026-10-15, option
+(b); option (a) was Convex's text), with everything else as Convex: when the body fails, the status, the body, the
+clean end, `Uncaught Error: `, no frames, the line and the Completion. The type names stay v8's (`string`, `Number`,
+`unknown`, …): they are the ones Convex reports, checked one by one on its binary, so a chunk Convex names one way
+bunvex names the same way. The messages:
+
+- `HTTP action response body chunks must be an ArrayBuffer or a view of one, got <type>`;
+- `HTTP action response body chunks must not be a resizable ArrayBuffer or a view of one`.
+
+*Built (DV-529):* `notBytes`'s two messages. The differential test reads each bunvex message back into serde_v8's
+words (and fails if one is left over, or if bunvex still says serde_v8) and compares everything else as before.
+Sabotage (each restored, `git diff` clean): serde_v8's words back (unit and oracle fail); `number` for `Number`
+(unit and oracle fail); other words for the resizable buffer (unit and oracle fail); frames kept (unit fails).
 
 Found, not fixed: the 500's `trace` for an error with no frames ends with a newline on Convex
 (`"Uncaught Error: serde_v8 …\n"`, `"Uncaught a string\n"`) and without one on bunvex (`http-actions.ts`

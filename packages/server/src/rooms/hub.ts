@@ -73,7 +73,7 @@ export class RoomHub {
   private tick: unknown | null = null;
 
   constructor(
-    private readonly limits: RoomLimits,
+    readonly limits: RoomLimits,
     private readonly timers: Timers = realTimers,
   ) {}
 
@@ -175,6 +175,13 @@ export class RoomHub {
     this.bySink.delete(sink);
     for (const a of mine.values()) {
       const gk = `${sink.sessionId}|${roomKeyString(a.room.key)}`;
+      // Two sockets of one session in one room (the older half-open when the client reconnected): the one in
+      // its grace already is ended now, or its timer, finding the newer in its place, would never end it.
+      const displaced = this.graced.get(gk);
+      if (displaced) {
+        this.timers.clear(displaced.grace);
+        this.detachOne(displaced);
+      }
       this.graced.set(gk, a);
       a.grace = this.timers.set(() => {
         if (this.graced.get(gk) !== a) return;
@@ -222,9 +229,12 @@ export class RoomHub {
     return [...(this.bySink.get(sink)?.values() ?? [])].map((a) => ({ roomId: a.roomId, key: a.room.key }));
   }
 
+  /** A change is sent as a fresh RoomSync (a client takes each as a snapshot); no change sends nothing. */
   setCanPublish(sink: RoomSink, roomId: number, canPublish: boolean) {
     const a = this.bySink.get(sink)?.get(roomId);
-    if (a) a.canPublish = canPublish;
+    if (!a || a.canPublish === canPublish) return;
+    a.canPublish = canPublish;
+    this.sendSync(a);
   }
 
   private detachOne(a: Attachment) {

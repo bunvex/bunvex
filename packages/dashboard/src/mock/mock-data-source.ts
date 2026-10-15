@@ -112,6 +112,11 @@ import { MockTopology } from "./topology.ts";
 export type MockDataSourceOptions = FixtureOptions & {
   /** The extensions' mock parts (UI-01 §26). Default: the registry's (`src/extensions/mock.ts`). */
   extensions?: readonly MockExtensionPart[];
+  /**
+   * Whether the schema says its document types are enforced (`SchemaInfo.enforced`): the Data screen's editors then
+   * block what does not fit (STUDY-163 §3). The mock's writes are not checked either way. Default false.
+   */
+  schemaEnforced?: boolean;
   /** Delay before every call resolves. Default 0. */
   latencyMs?: number;
   /** Probability that a call fails with `unavailable`. Default 0. */
@@ -564,7 +569,7 @@ export class MockDataSource implements DashboardDataSource {
   getSchema(opts?: CallOptions): Promise<SchemaInfo> {
     return this.call(opts?.signal, () => ({
       ...(this.validationNow() && { validation: this.validationNow() }),
-      enforced: false,
+      enforced: this.opts.schemaEnforced ?? false,
       tables: [...this.tables.values()]
         .filter((t) => t.declared)
         .map((t) => {

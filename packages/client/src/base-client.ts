@@ -2,7 +2,7 @@
 // subscriptions (local-state.ts), the results the server sent (remote-query-set.ts), the requests in flight
 // (request-manager.ts) and the optimistic view (optimistic-updates.ts), over one socket that reconnects by
 // itself (web-socket-manager.ts). Friendlier clients (BunvexClient, the React client) are built around it.
-import type { v1 } from "@bunvex/protocol";
+import { getFunctionName, type RoomReference, type v1 } from "@bunvex/protocol";
 import { toJsonValue, type Value } from "@bunvex/values";
 import { parseArgs } from "./args.ts";
 import { AuthenticationManager, type AuthTokenFetcher, decodeJwtPayload } from "./authentication-manager.ts";
@@ -18,6 +18,7 @@ import {
 } from "./optimistic-updates.ts";
 import { RemoteQuerySet } from "./remote-query-set.ts";
 import { RequestManager } from "./request-manager.ts";
+import { type PresenceHandle, type RoomHandle, RoomManager } from "./rooms.ts";
 import { newSessionId } from "./session.ts";
 import { type QueryToken, serializePathAndArgs } from "./udf-path.ts";
 import { VERSION } from "./version.ts";
@@ -110,6 +111,7 @@ export class BaseBunvexClient {
   private readonly onTransitionFns = new Map<number, (transition: Transition) => void>();
   private readonly _sessionId = newSessionId();
   private readonly logger: Logger;
+  private readonly rooms: RoomManager;
   private maxObservedTimestamp: bigint | undefined;
   private readonly connectionStateSubscribers = new Map<number, (s: ConnectionState) => void>();
   private nextConnectionStateSubscriberId = 0;
@@ -147,6 +149,7 @@ export class BaseBunvexClient {
     const wsUri = `${wsProtocol}://${address.substring(i + 3)}/api/${VERSION}/sync`;
 
     this.remoteQuerySet = new RemoteQuerySet((id) => this.state.queryPath(id), this.logger);
+    this.rooms = new RoomManager((m) => this.webSocketManager.sendMessage(m), this.logger);
     this.requestManager = new RequestManager(this.logger, this.markConnectionStateDirty);
     this.addOnTransitionHandler((t) => onTransition(t.queries.map((q) => q.token)));
 
@@ -201,6 +204,7 @@ export class BaseBunvexClient {
           if (auth) this.webSocketManager.sendMessage(auth);
           if (querySet) this.webSocketManager.sendMessage(querySet);
           for (const m of this.requestManager.resume()) this.webSocketManager.sendMessage(m);
+          this.rooms.onResume();
         },
         onMessage: (m) => this.onMessage(m),
         onServerDisconnectError: options.onServerDisconnectError,
@@ -229,6 +233,8 @@ export class BaseBunvexClient {
     if (auth) this.webSocketManager.sendMessage(auth);
     this.webSocketManager.sendMessage(querySet);
     for (const m of this.requestManager.restart()) this.webSocketManager.sendMessage(m);
+    // After the auth message: the server checks who joins when the RoomJoin arrives.
+    this.rooms.onOpen();
   }
 
   private onMessage(m: v1.ServerMessage) {
@@ -259,6 +265,12 @@ export class BaseBunvexClient {
         void this.webSocketManager.terminate();
         throw error;
       }
+      case "RoomSync":
+      case "RoomMembers":
+      case "RoomEvent":
+      case "RoomError":
+        this.rooms.onMessage(m);
+        break;
       case "Ping":
       case "TransitionChunk":
         break; // handled by the socket manager
@@ -514,6 +526,22 @@ export class BaseBunvexClient {
     };
     const mightBeSent = this.webSocketManager.sendMessage(message);
     return this.requestManager.request(message, mightBeSent);
+  }
+
+  /**
+   * Join a room (AD-42). Joins with the same room and arguments share one membership; it ends with the last
+   * handle's `leave()`, and is joined again on every reconnect.
+   */
+  joinRoom<Args, P, E extends Record<string, unknown>>(
+    ref: RoomReference<"room", Args, P, E>,
+    args?: Args,
+  ): RoomHandle<P, E> {
+    return this.rooms.joinRoom<P, E>(getFunctionName(ref as never), args);
+  }
+
+  /** Join a presence scope (AD-42): who among the signed-in users is here, as joins of a room are shared. */
+  joinPresence<Args, S>(ref: RoomReference<"presence", Args, S>, args?: Args): PresenceHandle<S> {
+    return this.rooms.joinPresence<S>(getFunctionName(ref as never), args);
   }
 
   /** Close the socket and stop every subscription. Resolves once the socket closed. */

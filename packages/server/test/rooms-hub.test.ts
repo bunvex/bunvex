@@ -175,6 +175,30 @@ describe("the reconnect grace", () => {
     t.advance(30);
     expect(last(b)).toMatchObject({ type: "RoomMembers", left: [expect.any(String)] });
   });
+  test("a half-open socket's attachment does not outlive it: the member leaves once, after the last grace", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const a1 = sink("A"),
+      b = sink("B");
+    hub.join(b, 1, DOC, { userId: null, canPublish: true });
+    const baseline = hub.size;
+    hub.join(a1, 1, DOC, { userId: null, canPublish: true });
+    t.advance(30);
+    b.frames.length = 0;
+    // The old socket is half-open: the client reconnects with the same session, and joins the same member.
+    const a2 = sink("A");
+    hub.join(a2, 1, DOC, { userId: null, canPublish: true });
+    t.advance(1000);
+    hub.detach(a1); // the old socket dies at last
+    t.advance(1000);
+    hub.detach(a2); // and the new one closes within the old one's grace
+    t.advance(LIMITS.graceMs * 3);
+    expect(hub.size).toEqual(baseline);
+    expect(hub.members(DOC)).toHaveLength(1); // B alone
+    const leaves = b.frames.flatMap((f) => (f.type === "RoomMembers" ? f.left : []));
+    expect(leaves).toHaveLength(1);
+    expect(b.frames.filter((f) => f.type === "RoomMembers" && f.set.length > 0)).toEqual([]);
+  });
   test("past it the member leaves", () => {
     const t = fakeTimers();
     const hub = new RoomHub(LIMITS, t);
