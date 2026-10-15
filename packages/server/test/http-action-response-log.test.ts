@@ -229,7 +229,7 @@ test("a chunk that is not bytes: the 500 in the handler's turn; after the head, 
     expect(r.status).toBe(500);
     // Raised by the runtime: no frames.
     const { code, trace } = (await r.json()) as { code: string; trace: string };
-    expect([code.replace(/^\[Request ID: \w+\] /, ""), trace]).toEqual([`Server Error: ${message}`, message]);
+    expect([code.replace(/^\[Request ID: \w+\] /, ""), trace]).toEqual([`Server Error: ${message}`, `${message}\n`]);
     const c = await t.logged(path!);
     expect([c.success ?? null, c.error]).toEqual([null, `${message}\n`]);
   }
