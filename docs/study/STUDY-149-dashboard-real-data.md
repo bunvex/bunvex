@@ -4,7 +4,7 @@
   built (§5); PR 6 built (`apps/dashboard` on the real source, §5 "PR 6, as built"); PR 7 built (packaging: the
   dashboard's image, `dashboard.zip`, the local dashboard, `bunvex dashboard serve`, §5 "PR 7, as built"); PR 8 built
   (the CLI's dashboard links, DV-477, and the user docs, `docs/dashboard.md`, §5 "PR 8, as built") — **the plan is
-  done**. Q1: option B, a
+  done**; then Convex's bulk edit (§5 "Bulk edit"). Q1: option B, a
   separate service with its own image (DV-475); Q3: rename (DV-474); Q4: Convex's model plus a `Host` check
   (DV-476); Q5: local links only (DV-477, replaces DV-217); Q2, Q6, Q7 confirmed as planned; AD-32 not taken.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/dashboard-common`,
@@ -1074,8 +1074,8 @@ note and left to their own PRs):
    10001, 10002 differ for the same schema).
 
 **Notes for PR 6** (the app on the source): Convex's bulk edit (`patchDocumentsFields` without `ids`, every document of
-the table) has no contract method yet; the History screen words the other actions from their counts (`cancel_all_…`
-has no count on Convex).
+the table) has no contract method yet (built since: "Bulk edit" below); the History screen words the other actions
+from their counts (`cancel_all_…` has no count on Convex).
 
 ### PR 4, as built
 
@@ -1347,7 +1347,6 @@ and `watchFunctions` are already wired in the screens.
 - The custom test query's type checking and completions: Convex ships the whole `convex/server` declaration set in
   its bundle and generates the data model from the schema; for bunvex that means shipping `@bunvex/server`'s
   declarations to the browser. Not cheap; left out.
-- Convex's bulk edit (`patchDocumentsFields` without `ids`, PR 3's note) has no contract method yet.
 - Search, vector and staged indexes in `IndexInfo`; `tableOfId` for system tables (PR 2's notes).
 - Packaging (`bunvex dashboard serve`, the image, `dashboard.zip`, `/api/current_deployment`'s server): PR 7.
 
@@ -1722,6 +1721,136 @@ addition (AD-41 unused). Printing the URL the dashboard is serving where Convex 
 **Measurements.** No hot path: CLI messages only. A command asks the local dashboard at most once (one loopback
 request, 2 s timeout), only when a message needs the link and a port is saved; a self-hosted deployment asks
 nothing.
+
+### Bulk edit
+
+Convex's "Edit all" and "Edit N", PR 3's note: `patchDocumentsFields` without `ids` had no contract method. Built
+after PR 8. Convex re-read at `d8bdde0` (`dd/` is `dc/features/data/`; `fe/` as in PR 3).
+
+**How Convex does it.**
+
+- **When it is offered.** The table's header checkbox has three states (`dd/lib/useSelectionState.ts:7-82`): on a
+  table whose pages are not all loaded, with nothing selected, it selects every document of the table, the ones
+  never loaded too (`allPseudoSelected`, every row's checkbox shown checked); once every page is loaded it selects
+  the loaded documents by id (and a pseudo-selection turns into them). A row's checkbox under the pseudo-selection
+  drops it and selects that row alone (`toggle`, `:33-41`). With a filter (`hasFilters`: an enabled valid clause, an
+  index clause or a search, not an order: `dd/lib/useTableFilters.ts:99-123`) the header checkbox is not shown while
+  nothing is selected and the matches are still paging (`dd/components/Table/ColumnHeader.tsx:136-142`), and
+  "all" never applies (`allRowsSelected = all === true && !hasFilters`, `dd/components/DataContent.tsx:247-248`):
+  a filter's matches are only ever edited by id, once loaded. The toolbar shows Edit and Delete while anything
+  is selected (`DataToolbar.tsx:60-66`), labelled "Edit" (one), "Edit 3", "Edit All" (`documentsLabel`,
+  `:205-214`). One document opens its own editor; more, or all, open the bulk editor (`:361-374`), with `rowIds:
+  "all"` when every document is selected — with a table fully loaded and every row checked too. Delete with
+  "all" opens the clear-table dialog (`:431-432`). A protected (production) deployment asks once per browser
+  session first ("Enable edit mode", `dd/lib/useToolPopup.tsx:128-136`).
+- **The editor** (`dd/components/Table/EditDocumentPanel/EditFieldsPanel.tsx`): a side panel titled "Bulk edit all
+  documents in T" / "Bulk edit 3 documents in T" (`:45`, `:76-82`), the words "You can: • Add new fields •
+  Overwrite existing fields • Remove existing fields by setting them to `undefined`" (`:49-59`), the object editor
+  starting at `{}`, and "Apply", enabled once something changed (`JavascriptDocumentsForm.tsx:90-93`, `:139-141`).
+  A top-level `undefined` is the field to remove, sent as the undefined placeholder (`walkPatchDocuments.ts:65-108`);
+  the editor checks the values against the table's declared type, ignoring the fields not written and refusing to
+  remove a required one (`:43-49`, `:93-106`; warnings, or errors when the schema is enforced). Closing with changes
+  asks "You have unsaved changes…" (`EditFieldsPanel.tsx:28-39`). There is no other confirmation.
+- **The call** (`dd/lib/useDataToolbarActions.ts:68-88`): **one** `patchDocumentsFields({table, fields, ids})`, `ids`
+  left out for "all". No pages, no cursor, no progress, no cancel, and no filter (the mutation takes none; an extra
+  argument fails its validator). An application error shows its data alone; any other error shows "Could not bulk
+  edit documents. Try editing less documents or use a migration." and the error. On success the panel closes; no
+  toast.
+- **The server** (`fe/patchDocumentsFields.ts:20-40`): without `ids`, `db.query(table).collect()` and a `db.patch`
+  of each, in the mutation's one transaction: all or nothing, one `update_documents` event with every id (an empty
+  table: an event with none; a table that does not exist reads as empty). The limit is the transaction's: each patch
+  reads its document, so the 4 096 reads (`TRANSACTION_MAX_READ_SET_INTERVALS`) stop it at **4 093 documents** —
+  long before the 16 000 writes. Past that, "Too many reads in a single function execution (limit: 4096). …",
+  raised inside the rewrap (an application error, its data the message): nothing written, no event. A system
+  table fails ("System tables can only be accessed from db.system.query()."), outside the rewrap.
+
+**The server already matched.** PR 3's `patchDocumentsFields` reads the table whole without `ids`; nothing changed
+there. The oracle now covers the no-ids path (below).
+
+**What was built.**
+
+- **Contract** (`data-source.ts`): `patchAllDocuments?(table, fields)`, Convex's bulk edit: every document of the
+  table, one transaction, all or nothing, no filter and no pages; a table past one transaction's reads is
+  `invalid_request` with the deployment's words; a table that does not exist has nothing to edit. The brief asked
+  for Convex's paging with a cursor; Convex has none for this, so neither has the contract (DV-479's rule: the
+  contract follows Convex). The contract suite checks it on a table of its own (set, remove, a refused system field
+  writing nothing, an unknown table).
+- **Source** (`writes.ts`): the mutation over the socket without `ids` (`componentId: null`, removals as the
+  placeholder); an abort before the call sends nothing, and there is no later page to stop at.
+- **Mock**: the same rules, one `update_documents` event with every id, and the read limit at 4 093 documents.
+- **Screen** (`database/screen.tsx`, `bulk-edit.tsx`, `DataTable`'s `selection.all`): Convex's three-state header
+  checkbox ("Select all documents"; "Select every matching document" under a filter, hidden while the matches page),
+  "Edit" / "Edit 3" / "Edit all" beside Delete, one document opening its own editor, "Delete all" opening Clear
+  table, and the side panel "Bulk edit all documents in T" with Convex's "You can:" list, a literal editor where a
+  top-level `undefined` removes the field, and Apply (Ctrl+Enter). A refusal the deployment explains is shown as it
+  is; anything else after Convex's advice ("Try editing fewer documents or use a migration."). Applied: the panel
+  closes and the screen says "Edited all documents in T." (the screen's notice, as its other writes).
+- In bunvex's components (STUDY-12 D1), three things are bunvex's: a row's checkbox under "all" keeps the other
+  loaded rows (Convex's selects that row alone); the draft is kept per table while the page is open, as Add
+  documents keeps its own, instead of asking before closing; a system field is refused in the editor (the document
+  editor's rule) where Convex lets the deployment refuse it.
+
+**Not built here** ("Ainda não fizemos", none a divergence): the editor's check of the values against the declared
+type as they are typed (Convex's `walkPatchDocuments`) — none of bunvex's document editors has it yet (Add
+documents, the document and cell editors); the deployment's refusal says the same after Apply. "Enable edit mode"
+waits for deployment kinds, as the cell menu's delete (STUDY-12 D13).
+
+**Tests.**
+
+- **Oracle** (`packages/differential/test/dashboard-writes.test.ts`): on Convex's binary and on bunvex,
+  `patchDocumentsFields` without ids — set, remove, both, nothing, a `filters` argument (refused by the validator:
+  there is no filter), `componentId: null`, an empty table (its event with no ids), `_storage`, the schema's refusal
+  (nothing written) and a declared field — the documents left and every event; and a table past the reads: 4 095
+  documents refused whole with no event, 4 093 edited in one call with one event of 4 093 ids. (Also: each test now
+  waits 5 ms before taking its `since`, as the setup's last event could share its millisecond and be counted — seen
+  once on the clear test.)
+- **Source** (`writes.test.ts`): what it sends (no `ids`, the placeholder, int64), the reads' refusal as
+  `invalid_request` with its words, an abort before the call.
+- **Live** (`server-source-writes.test.ts`): on a server in the process, every document set and removed, the
+  `update_documents` event with every id, the schema's refusal writing nothing and recording nothing, 4 095
+  documents refused with the deployment's words, an unknown table resolved.
+- **Mock** (`mock.test.ts`): the contract's test, and the event and the 4 093 limit.
+- **Screen** (`database-bulk-edit.test.tsx`): the header on a table still paging (250 documents, 100 loaded) and
+  Edit all patching the 250 in one call; the header again clearing it, a row leaving "all"; a fully loaded table
+  all checked is Edit all; Edit 2 by id; one selected opening the document editor; a filter hiding the header
+  while paging, then editing its loaded matches by id; the refusals' words, the draft kept; Delete all clearing;
+  read-only. axe on the panel and on the refusal. The parser: top-level `undefined` removes, nested does not,
+  system fields refused.
+- **Chromium** (`sync-e2e/dashboard/app.e2e.ts`): signed in to a live server, a table of 150 documents, the header,
+  Edit all, `{ checked: true, note: undefined }` typed in Monaco, Apply: every document changed on the deployment;
+  then the schema's refusal shown in the panel, and axe.
+
+**Sabotage** (each restored after, `git diff` checked; counts are failing tests per suite):
+
+| Sabotage | Failing tests |
+|---|---|
+| server: the no-ids path reads only the first 100 documents | oracle 1, live 1 |
+| server: no event for an empty bulk edit | oracle 2 |
+| source: `patchAllDocuments` sends `ids: []` | unit 1, live 2 |
+| source: a removal sent as a value | unit 2, live 4 |
+| mock: no read limit | mock 1 |
+| mock: a document written before another's system field is checked | mock 1 |
+| screen: Edit all patches the loaded documents by id | screen 3, Chromium 1 |
+| screen: the header selects the loaded rows only (no "all") | screen 3 |
+| screen: a filter may select "all" | screen 1 |
+| screen: a top-level `undefined` not removed | screen 2 |
+| screen: the advice added to the deployment's refusal | screen 1 |
+| `DataTable`: a row toggled under "all" starts from nothing | screen 1 |
+
+**Measurements.** No hot path: the server is unchanged; the screen adds one optional call.
+
+**Divergences.** None new (DV-487 and DV-489 unused). The contract's shape is DV-479's rule; the three screen
+details above are bunvex's components (STUDY-12 D1).
+
+**Found on the way** (left to their own PRs, out of the oracle with a note):
+
+1. At exactly 4 094 documents the refusal differs in kind: Convex counts one more read before the patches and fails
+   on the last one (inside the rewrap: an application error with data); bunvex records two reads for the scan, so
+   its patches pass and the audit event's own read goes over (outside the rewrap: "Uncaught Error", no data).
+   Refused and nothing written on both; 4 093 and 4 095 agree. The read accounting of a scan and of the audit
+   event (`packages/core/src/tx.ts` `recordInterval`; `insertAuditLogEvents`), not this function.
+2. PR 3's #3 covers an undeclared field too: the schema's error for an extra field displays the document and the
+   validator with the system fields on bunvex, without them on Convex.
 
 ## 6. Open questions
 

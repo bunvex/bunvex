@@ -158,6 +158,42 @@ describe("the Data screen's writes, as Convex's", () => {
     expect(await codeOf(src.clearTable!("nope"))).toBe('not_found: Table "nope" does not exist.');
   }, 60_000);
 
+  test("patchAllDocuments (Convex's bulk edit): every document in one transaction and one event; the schema's and the reads' refusals", async () => {
+    const src = open();
+    await src.insertDocuments!("everyone", [{ k: 1, drop: true }, { k: 2 }, { k: 3, drop: false }]);
+    const ids = (await allOf(src, "everyone")).map((d) => d._id);
+    await src.patchAllDocuments!("everyone", { drop: { $unset: true }, big: { $integer: "AgAAAAAAAAA=" } });
+    expect((await allOf(src, "everyone")).map(({ _id, _creationTime, ...rest }) => rest)).toEqual([
+      { k: 1, big: { $integer: "AgAAAAAAAAA=" } },
+      { k: 2, big: { $integer: "AgAAAAAAAAA=" } },
+      { k: 3, big: { $integer: "AgAAAAAAAAA=" } },
+    ]);
+    const [e] = await latest(src);
+    expect([e?.action, e?.metadata]).toEqual([
+      "update_documents",
+      { component_id: null, component: null, table: "everyone", document_ids: ids },
+    ]);
+    // the schema: one document refused, none written, no event
+    await src.insertDocuments!("strict", [{ name: "a" }, { name: "b" }]);
+    const last = (await latest(src)).at(0)?.id;
+    expect(await codeOf(src.patchAllDocuments!("strict", { name: 1 }))).toMatch(
+      /^invalid_request: Failed to insert or update a document in table "strict" because it does not match the schema/,
+    );
+    expect((await allOf(src, "strict")).map((d) => d.name)).toEqual(["a", "b"]);
+    expect((await latest(src)).at(0)?.id).toBe(last);
+    // past a transaction's reads (4 093 documents with the default limits): refused whole, with the deployment's words
+    await src.insertDocuments!(
+      "everyone",
+      Array.from({ length: 4092 }, (_, i) => ({ i })),
+    );
+    expect(await codeOf(src.patchAllDocuments!("everyone", { edited: true }))).toMatch(
+      /^invalid_request: Too many reads in a single function execution \(limit: 4096\)/,
+    );
+    expect((await allOf(src, "everyone")).filter((d) => d.edited === true)).toEqual([]);
+    // a table that does not exist: nothing to edit
+    expect(await codeOf(src.patchAllDocuments!("no_such_table", { x: 1 }))).toBe("resolved");
+  }, 60_000);
+
   test("createTable and deleteTables: the events, a declared table refused", async () => {
     const src = open();
     await src.createTable!("made");

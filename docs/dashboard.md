@@ -141,7 +141,8 @@ back the polls ask again at once and the subscriptions resume.
   come with a follow-up (owner, 2026-10-14).
 - The custom test query has no type checking or completions (Convex ships its server's declarations to the
   browser).
-- No bulk edit of documents, and the Data screen's index list leaves out search, vector and staged indexes.
+- The Data screen's index list leaves out search, vector and staged indexes, and its editors do not check what is
+  typed against the schema as Convex's do (the deployment's refusal says the same when saving).
 - The environment variables screen does not open a given variable from a link (Convex's `?var=`).
 - Cloud-only screens are absent, as in Convex's self-hosted dashboard: insights, backups, custom domains, team,
   billing and usage. bunvex keeps its own additions (the Overview's summary, Snapshots in Settings, the topology,

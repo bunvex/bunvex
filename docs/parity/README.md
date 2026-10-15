@@ -193,7 +193,8 @@ gaps.
   dashboard has its own image (6791), `dashboard.zip` and `bunvex dev`'s local dashboard (6790), and the CLI links
   the local one where Convex's links its cloud (DV-477, PR 8). Left, none of them something an app hits:
   - the dashboard server's frame and security headers (owner, 2026-10-14: match Convex in a follow-up);
-  - the custom test query's type checking and completions, and Convex's bulk edit;
+  - the custom test query's type checking and completions;
+  - the Data screen's editors checking what is typed against the schema (the deployment refuses it on save);
   - search, vector and staged indexes in the Data screen's index list;
   - the environment variables screen opening a named variable (Convex's `?var=`, which its CLI's link uses).
 - HTTP actions, found while matching their log name to Convex's (STUDY-31 §7.3; the log name itself is done, a
