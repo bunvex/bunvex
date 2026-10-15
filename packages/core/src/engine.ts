@@ -3843,6 +3843,7 @@ export class Engine {
       const resolved = (ts: bigint) => (hasCommitTs(raw) ? resolveCommitTs(raw, ts) : raw);
       if (!tx.hasWrites) {
         const value = resolved(tx.snapshot);
+        runAfterCommit(tx);
         return withTs ? { value, ts: tx.snapshot } : value;
       }
       this.checkMemoryIndexSizes(tx);
@@ -3891,6 +3892,7 @@ export class Engine {
           );
           if (def.namespace !== undefined) added.namespace = def.namespace;
         }
+        runAfterCommit(tx);
         return withTs ? { value, ts } : value;
       } catch (e) {
         // Only an OCC conflict is retried. An OutOfRetentionError (the snapshot fell out of the write log)
@@ -3929,6 +3931,16 @@ export class Engine {
       { table, documentId, writeSource, writeTs: conflict.writeTs, retries },
     );
   }
+}
+
+/** Run what `tx` registered with `afterCommit`, in order; one that throws is logged and the rest still run. */
+function runAfterCommit(tx: Tx) {
+  for (const fn of tx.afterCommitCallbacks)
+    try {
+      fn();
+    } catch (e) {
+      console.error(`bunvex: an after-commit callback failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
 }
 
 /**
