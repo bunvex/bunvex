@@ -303,9 +303,9 @@ used.
 - `failed` carries `componentPath`;
 - `overwritten` is `raceDetected`;
 - index progress is counted per namespace;
-- a component both existing and allocated (or neither) is no state a push leaves: a system error, "Invalid existing
-  component state" (`:775-781`). (Corrected in PR 3c: an earlier text here quoted a 409 `RaceDetected` "was created
-  by a concurrent push" that Convex's source does not have.)
+- a component that exists under another id than the allocated one is 409 **`RaceDetected`**, "Component {path}
+  was created by a concurrent push" (d8bdde0 `:783-789`; the same id is fine); neither existing nor allocated is a
+  system error, "Invalid existing component state".
 
 **`evaluate_schema`** (`:584-689`) answers `componentSchemaEvaluations` keyed by component path, the root always
 included, and `newComponentDefinitions`: pushed definitions with no instance yet. Unmounted instances whose
@@ -340,7 +340,7 @@ definition is gone are skipped.
    | **create** (`:555-618`) | The `_components` row is inserted **with the allocated id**; then in its namespace: `_udf_config` set (diff from "Unspecified version"), the `_source_packages` row, `_modules` (`ModuleModel::apply`), crons (`CronModel::apply`), function handles (`FunctionHandlesModel::apply_config_diff`, global table, component field), the schema applied (`SchemaModel::apply`), its indexes committed (`IndexModel::apply`), and the index diff from `get_full_index_diff`. Diff type `create` |
    | **modify** (`:621-692`) | The row is replaced, then the same writes |
    | **remount** | A modify whose existing row was `unmounted` |
-   | An existing node the push allocated too | No race check: the existing row is modified (`:489-517`; corrected in PR 3c, an earlier text quoted a 409 that Convex's source does not have) |
+   | **RaceDetected** (409, d8bdde0 `:509-516`) | An existing node whose allocated id differs: "Component {path} was created by a concurrent push" |
    | **unmount** (`:694-729`) | An existing node not in the new tree: the row is set to `state: "unmounted"`; modules, crons and handles are cleared; the schema, tables, data, `_udf_config` and `_source_packages` stay. `index_diff` is empty, and `udf_config_diff` and `schema_diff` are null. Its children are then unmounted too |
    | An already unmounted node | Skipped and **not** recursed (`:529-533`) |
 
@@ -395,7 +395,7 @@ definition is gone are skipped.
 | `TypecheckError` (§1.5) | 400 | type_checking.rs |
 | `InvalidExport` | 400 | file_based_routing.rs:50, 66 |
 | `InvalidSchema` (component schema) | 400 | deploy_config.rs:452 |
-| `RaceDetected` (env changed) | 400 | deploy_config.rs:870 |
+| `RaceDetected` (env changed; concurrent component creation) | 400 / 409 | deploy_config.rs:870, 783-789; config.rs:509-516 (d8bdde0) |
 | `MissingEnvironmentVariables`, `InvalidEnvironmentVariable` | 400 | deploy_config.rs:892; lib.rs:588 |
 | `MissingSourcePackage` | 400 | config.rs:136-141 |
 | `ConcurrentPush` | 400 | deploy_config.rs:975 |
@@ -838,7 +838,9 @@ As built, **PR 3c** (`server/src/push.ts`, `server/src/push-components.ts`):
   - Still as before: `componentDefinitionPackages` is `{}` and `udfConfig` null (bunvex writes packages at
     `finish_push`, C-9).
 - **`wait_for_schema`** reads every path of `schemaIds` in its namespace: the app's, an existing component's, or the
-  one the request's `allocatedComponentIds` names; both or neither is a system error, as Convex's.
+  one the request's `allocatedComponentIds` names. A component existing under another id than the allocated one is
+  a 409 `RaceDetected`, "Component {path} was created by a concurrent push" (the CLI pushes again); neither is a
+  system error, as Convex's.
   - A failed schema names its `componentPath`; an overwritten one is a race.
   - `inProgress` lists every path's counts, a finished one's too: `Engine.schemaPushStatus` now answers `complete`
     with its index count, and an active schema's indexes are counted as Convex's `load_component_schema_status`
@@ -848,6 +850,11 @@ As built, **PR 3c** (`server/src/push.ts`, `server/src/push-components.ts`):
     supplies its defaults (step 4).
   - Existing component rows exist only from PR 4 on, so the walk's "existing" branches (kept, removed) are tested
     there.
+- **The reference commit.** Convex's sources here were first read from a local checkout older than bunvex's
+  reference (4577b9031, before d8bdde0, docs/parity/upstream.md). Two differences that matter were found at
+  d8bdde0: the concurrent-push race above (in `wait_for_schema` and `finish_push`), and `file_based_exports`'
+  `InvalidModulePath` text ("Invalid module path 'dir/my-mod': Path component my-mod can only contain …", over the
+  path without `.js`), which PR 3b had in the older form. Both are fixed in PR 3c.
 
 Tests (`server/test/push-components.test.ts`, over HTTP):
 
@@ -949,8 +956,8 @@ The plan as first written:
   6. **App `env: {APPX: v.string()}` with APPX unset:** 400 MissingEnvironmentVariables. With APPX set to a
      value failing a literal: InvalidEnvironmentVariable.
   7. **A variable changed between start and finish:** RaceDetected (existing).
-  8. **A concurrent create** of the same path: the later finish modifies the existing row, as Convex's (no race
-     check there).
+  8. **A concurrent create** of the same path under another id: 409 RaceDetected, "Component second was created
+     by a concurrent push".
   9. **Audit row** `component_diffs` ordered root, `counter`, `second`, with `component_path` null / "counter" /
      "second".
   10. **A blob shared by two instances** survives unmounting one.

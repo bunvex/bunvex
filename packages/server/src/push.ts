@@ -706,15 +706,16 @@ export class PushService {
   }
 
   /**
-   * The namespace of the component at `path` (Convex's `load_component_schema_status`): the app's (null), an existing
-   * component's, or the one the push allocated; both, or neither, is no state a push leaves (a system error, as
-   * Convex's).
+   * The namespace of the component at `path` (Convex's `load_component_schema_status`, d8bdde0): the app's (null), an
+   * existing component's, or the one the push allocated. A component a concurrent push created under another id is a
+   * 409 `RaceDetected` (the CLI pushes again); neither is no state a push leaves (a system error, as Convex's).
    */
   private async namespaceOf(path: string, allocated: string | undefined): Promise<string | null> {
     if (path === "") return null;
     const existing = await this.deps.engine.query((db) => resolveComponentPath(db, path.split("/")));
-    if (existing && allocated === undefined) return existing._id;
-    if (!existing && allocated !== undefined) return allocated;
+    if (existing && (allocated === undefined || allocated === existing._id)) return existing._id;
+    if (existing) throw new PushError("RaceDetected", `Component ${path} was created by a concurrent push`, 409);
+    if (allocated !== undefined) return allocated;
     throw new Error(`Invalid existing component state for ${path}`);
   }
 

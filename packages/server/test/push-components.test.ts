@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineSchema, defineTable, Engine } from "@bunvex/core";
+import { componentRow, defineSchema, defineTable, Engine } from "@bunvex/core";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { v } from "@bunvex/values";
@@ -239,6 +239,40 @@ describe("start_push with components", () => {
       timeoutMs: 5000,
     });
     expect(wait.body).toMatchObject({ type: "failed", componentPath: "counter", tableName: "messages" });
+  });
+});
+
+describe("wait_for_schema and a concurrent push", () => {
+  test("a component another push created under another id: 409 RaceDetected (d8bdde0)", async () => {
+    const d = await deployment();
+    const { schemaChange } = (await d.start()).body;
+    // Another push created `counter` meanwhile, under another id.
+    await d.engine.mutation((db) =>
+      db.asSystem(async () => {
+        const definitionId = await db.insert("_component_definitions", { path: "" } as never);
+        const root = await db.insert(
+          "_components",
+          componentRow({ definitionId, parent: null, name: null, state: "active", httpPrefix: null }) as never,
+        );
+        await db.insert(
+          "_components",
+          componentRow({
+            definitionId,
+            parent: root,
+            name: "counter",
+            args: [],
+            env: [],
+            state: "active",
+            httpPrefix: null,
+          }) as never,
+        );
+      }),
+    );
+    const wait = await d.post("/api/deploy2/wait_for_schema", { schemaChange, timeoutMs: 5000 });
+    expect(wait).toEqual({
+      status: 409,
+      body: { code: "RaceDetected", message: "Component counter was created by a concurrent push" },
+    });
   });
 });
 
