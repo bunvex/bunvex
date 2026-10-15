@@ -128,7 +128,7 @@ describe("query chaining, unique() and async iteration, as Convex (STUDY-16)", (
         rows,
         collect: await db
           .query("nope")
-          .withIndex("by_x")
+          .fullTableScan()
           .order("desc")
           .filter((q) => q.eq(q.field("a"), 1))
           .collect(),

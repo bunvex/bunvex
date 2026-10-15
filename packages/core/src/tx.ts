@@ -66,6 +66,8 @@ import {
 } from "./persistence/index.ts";
 import {
   checkOps,
+  identifierError,
+  indexNameError,
   MAX_QUERY_OPERATORS,
   Pipeline,
   type QueryOp,
@@ -270,6 +272,13 @@ type QState = {
    * shape before the operators see it, so filters run on the virtual fields, as Convex's.
    */
   virtual?: (d: Doc) => Doc | Promise<Doc>;
+  /**
+   * `db.query` of a table that does not exist (its read depends on `_tables`): a full scan finds nothing, but an
+   * index of it is not found (Convex's `IndexNotFoundError`), as is an index the table lacks.
+   */
+  missingTable?: boolean;
+  /** The index lookup's error, raised when the query starts, after its names parse (Convex's `start_query`). */
+  notFound?: () => Error;
 };
 
 type SearchFilter = { type: "Search"; field: string; value: string } | { type: "Eq"; field: string; value: unknown };
@@ -911,7 +920,7 @@ export class Tx {
       return ix;
     }
     const pending = ix ?? t.pending.find((p) => p.name === name);
-    if (!pending) throw new Error(`unknown index ${t.name}.${name}`);
+    if (!pending) throw indexNotFound(t.name, name);
     if (pending.metaId !== undefined) this.recordIndexMeta(pending);
     throw pending.staged ? new IndexStagedError(`${t.name}.${name}`) : new IndexBackfillingError(`${t.name}.${name}`);
   }
@@ -1097,6 +1106,7 @@ export class Tx {
       ops: [],
       closed: false,
       iterated: false,
+      ...(t ? {} : { missingTable: true }),
     };
     return this.makeQuery(table, st);
   }
@@ -2475,6 +2485,22 @@ function refuseLoneSurrogatesInQuery(table: string, st: QState, take: number | n
   });
 }
 
+/** Convex's `index_not_found_error` (crates/indexing/src/index_registry.rs). */
+const indexNotFound = (table: string, index: string) => new Error(`Index ${table}.${index} not found.`);
+
+/**
+ * What Convex's backend checks when a query starts, after its operators (`Query::try_from` under
+ * `with_argument_error`, then `start_query`): the source's names parse (a full scan's table as an identifier, an
+ * index's `table.index` as an index name), then the index is looked up.
+ */
+function startChecks(table: string, st: QState, syscall: "queryStream" | "queryPage") {
+  const index = st.search?.name ?? st.index?.name;
+  const why = index === undefined ? identifierError(table) : indexNameError(`${table}.${index}`);
+  if (why !== null) throw new Error(`Invalid argument \`query\` for \`${syscall}\`: ${why}`);
+  // Made here, so its frames are the start's (the app's `collect`), as Convex's error from the syscall.
+  if (st.notFound) throw st.notFound();
+}
+
 class QueryImpl implements TxQueryChained {
   constructor(
     protected readonly tx: Tx,
@@ -2502,6 +2528,7 @@ class QueryImpl implements TxQueryChained {
     try {
       refuseLoneSurrogatesInQuery(this.table, this.st, take);
       checkOps(this.st.ops, "queryStream", take !== null);
+      startChecks(this.table, this.st, "queryStream");
     } catch (e) {
       return Promise.reject(e);
     }
@@ -2575,6 +2602,7 @@ class QueryImpl implements TxQueryChained {
       refuseLoneSurrogatesInQuery(this.table, this.st, null);
       const args = queryPageArgs(opts);
       checkOps(this.st.ops, "queryPage");
+      startChecks(this.table, this.st, "queryPage");
       return this.tx.paginate(this.table, this.st, args);
     })();
   }
@@ -2586,6 +2614,7 @@ class QueryImpl implements TxQueryChained {
     // Convex starts the stream here, synchronously: its checks throw from this call.
     refuseLoneSurrogatesInQuery(this.table, this.st, null);
     checkOps(this.st.ops, "queryStream");
+    startChecks(this.table, this.st, "queryStream");
     return this.tx.iterate(this.st);
   }
 }
@@ -2598,11 +2627,21 @@ class QueryInitializerImpl extends QueryImpl implements TxQuery {
   withIndex(name: string, f?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQueryChained {
     const t = this.st.t;
     return this.chain((n) => {
-      if (!t) return;
-      const found = this.tx.resolveIndex(t, name);
-      n.ix = found;
+      // The range builder runs here, as Convex's client; the index is looked up when the query starts.
       const exprs = f ? f(new IndexRangeBuilder()).exprs : [];
       n.index = { name, exprs };
+      if (!t) {
+        if (n.missingTable) n.notFound = () => indexNotFound(this.table, name);
+        return;
+      }
+      let found: IndexDef;
+      try {
+        found = this.tx.resolveIndex(t, name);
+      } catch (e) {
+        n.notFound = () => e as Error;
+        return;
+      }
+      n.ix = found;
       n.range = f ? compileRange(found, exprs) : FULL;
     });
   }
@@ -2611,8 +2650,10 @@ class QueryInitializerImpl extends QueryImpl implements TxQuery {
   withSearchIndex(name: string, f: (q: SearchFilterBuilder) => SearchFilterBuilder): TxQueryChained {
     if (typeof f !== "function") throw new TypeError("Must provide arg 2 `filter` to `withSearchIndex`");
     const filters = (f(new SearchFilterBuilder([])) as SearchFilterBuilder).filters();
+    const t = this.st.t;
     return this.chain((n) => {
       n.search = { name, filters };
+      if (!t && n.missingTable) n.notFound = () => indexNotFound(this.table, name);
     });
   }
 

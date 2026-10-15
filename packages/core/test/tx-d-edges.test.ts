@@ -392,7 +392,7 @@ describe("search", () => {
     });
   });
 
-  test("take(0), take(1) and first(); a missing table finds nothing", async () => {
+  test("take(0), take(1) and first(); a missing table's search index is not found (Convex's error)", async () => {
     const e = await seeded();
     await e.query(async (db) => {
       expect(await search(db, "quick").take(0)).toEqual([]);
@@ -403,12 +403,14 @@ describe("search", () => {
           .filter((q) => q.eq(1, 1))
           .take(2),
       ).toHaveLength(2);
-      expect(
-        await db
-          .query("nothere")
-          .withSearchIndex("search_body", (q) => q.search("body", "quick"))
-          .collect(),
-      ).toEqual([]);
+      const missing = db.query("nothere").withSearchIndex("search_body", (q) => q.search("body", "quick"));
+      let error: unknown;
+      try {
+        await missing.collect();
+      } catch (e) {
+        error = e;
+      }
+      expect((error as Error).message).toBe("Index nothere.search_body not found.");
     });
   });
 
