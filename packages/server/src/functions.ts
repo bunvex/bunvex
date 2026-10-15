@@ -2496,6 +2496,11 @@ export class Functions {
             }
             // The body, sent as Convex's streamer does (100 MiB at most); the run is logged once it is.
             const metered = meteredBody(stream, request.signal);
+            // A stream that failed before the head would go fails the run, as a throw (STUDY-31 §10).
+            if (length === undefined) {
+              const early = await metered.failedEarly();
+              if (early) throw early.error;
+            }
             body = metered;
             return new Response(metered.stream, init);
           } catch (e) {
