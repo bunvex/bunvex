@@ -74,10 +74,40 @@ describe("catalog (_tables / _index)", () => {
           _component_definitions: 543,
           _components: 544,
           _instance: 9999,
-          users: 10001,
-          posts: 10002,
+          // A table with an index first, then the others, each by name (Convex's order, the next test).
+          posts: 10001,
+          users: 10002,
         });
         expect([...e.catalog.table("posts").indexes.keys()].sort()).toEqual(["by_author", "by_creation_time", "by_id"]);
+      },
+    );
+  });
+
+  test("a push's new tables are numbered as Convex's binary numbers them: indexed ones by name, then the rest", async () => {
+    // Two schemas the Convex binary (precompiled-2026-09-28) was pushed, and the numbers it gave.
+    const open = store();
+    await open(
+      defineSchema({
+        users: defineTable({ a: v.any() }),
+        zeta: defineTable({ a: v.any() }),
+        posts: defineTable({ author: v.any() }).index("by_author", ["author"]),
+        beta: defineTable({ a: v.any() }),
+        alpha: defineTable({ x: v.any() }).index("by_x", ["x"]),
+      }),
+      async (e) => {
+        expect(numbers(e)).toMatchObject({ alpha: 10001, posts: 10002, beta: 10003, users: 10004, zeta: 10005 });
+      },
+    );
+    const again = store();
+    await again(
+      defineSchema({
+        zz: defineTable({ a: v.string() }).searchIndex("s", { searchField: "a" }),
+        aa: defineTable({ a: v.any() }),
+        vv: defineTable({ e: v.array(v.float64()) }).vectorIndex("v", { vectorField: "e", dimensions: 2 }),
+        mm: defineTable({ x: v.any() }).index("by_x", ["x"]),
+      }),
+      async (e) => {
+        expect(numbers(e)).toMatchObject({ mm: 10001, vv: 10002, zz: 10003, aa: 10004 });
       },
     );
   });
@@ -95,7 +125,7 @@ describe("catalog (_tables / _index)", () => {
       users: defineTable(v.any()),
     });
     await open(reordered, async (e) => {
-      expect(numbers(e)).toMatchObject({ users: 10001, posts: 10002, audit: 10003 });
+      expect(numbers(e)).toMatchObject({ posts: 10001, users: 10002, audit: 10003 });
       expect(await e.query((db) => db.get("users", ids.user))).toMatchObject({ name: "ada" });
       expect(await e.query((db) => db.get("posts", ids.post))).toMatchObject({ title: "hi" });
       expect(await e.query((db) => db.query("audit").collect())).toEqual([]);

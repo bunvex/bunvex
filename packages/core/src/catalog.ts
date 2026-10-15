@@ -754,6 +754,30 @@ function wantedIndexes(d: DeclaredTable): Map<string, { fields: string[]; staged
   return out;
 }
 
+const byName = (a: DeclaredTable, b: DeclaredTable) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+const hasIndexes = (d: DeclaredTable) =>
+  Object.keys(d.indexes).length +
+    Object.keys(d.searchIndexes ?? {}).length +
+    Object.keys(d.vectorIndexes ?? {}).length >
+  0;
+
+/**
+ * The order a push creates, and numbers, new tables in, as Convex's: system tables in the engine's order; then the
+ * user tables with an index (database, search or vector), by name, as Convex's `prepare_new_and_mutated_indexes`
+ * creates each one with its first index (`BTreeMap`s keyed by `table.index`); then the others, by name. Checked
+ * against the Convex binary: `{users, zeta, posts·, beta, alpha·}` is `alpha, posts, beta, users, zeta`, and a table
+ * with only a search or vector index counts as indexed.
+ */
+function creationOrder(declared: Iterable<DeclaredTable>): DeclaredTable[] {
+  const all = [...declared];
+  const user = all.filter((d) => !d.name.startsWith("_"));
+  return [
+    ...all.filter((d) => d.name.startsWith("_")),
+    ...user.filter(hasIndexes).sort(byName),
+    ...user.filter((d) => !hasIndexes(d)).sort(byName),
+  ];
+}
+
 /**
  * The first half of a schema change, as Convex's `prepare_new_and_mutated_indexes` (the push's start):
  * new tables get the next free Convex number and a fresh tablet; a new index (or a new version of one
@@ -789,7 +813,7 @@ export function planCatalog(
   const usedNumbers = new Set(tables.filter((t) => t.namespace === namespace).map((t) => t.number));
   const active = activeTables(tables, namespace);
   let userTableCount = tables.filter((t) => (t.state ?? "active") === "active" && !t.name.startsWith("_")).length;
-  for (const d of declared) {
+  for (const d of creationOrder(declared)) {
     const tablet = active.find((t) => t.name === d.name)?.tablet;
     const isNew = tablet === undefined;
     if (tablet === undefined) {

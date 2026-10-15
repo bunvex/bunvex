@@ -155,3 +155,14 @@ Sabotage (each applied alone, then restored):
 | the counter is never raised | 2 fail |
 | a write's new table does not advance the counter | 2 fail |
 | the start reconciles on the bootstrap catalog | 1 fails |
+
+## Addendum (2026-10-15): the order a push numbers new tables in
+
+Convex's `prepare_new_and_mutated_indexes` creates a new table with its first index, walking the schema's indexes
+as a `BTreeMap` keyed by `table.index`; the tables left without an index are created after, by name. So a push's
+new user tables are numbered: those with an index (database, search or vector), by name, then the others, by name.
+Checked against the Convex binary (precompiled-2026-09-28): `{users, zeta, posts·, beta, alpha·}` (· with an
+index) gives `alpha` 10001, `posts` 10002, `beta` 10003, `users` 10004, `zeta` 10005; `{zz` (search only), `aa`,
+`vv` (vector only), `mm·}` gives `mm`, `vv`, `zz`, `aa`. bunvex numbered them in declaration order;
+`planCatalog`'s `creationOrder` now follows Convex's, in every namespace (found with components, STUDY-153 PR 2b).
+
