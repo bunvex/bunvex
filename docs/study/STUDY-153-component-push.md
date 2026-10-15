@@ -681,6 +681,31 @@ the per-namespace schema push. As built, PR 2a:
 Measured: an in-memory engine running 3000 mutations (insert, two `get`, `normalizeId`) and 3000 indexed queries,
 median of 7 rounds, three alternated runs: 125–128 ms on main, 122–132 ms with PR 2a (noise).
 
+As built, **PR 2b** (`core/src/engine.ts`):
+
+- `startSchemaPush(schema, components)` takes each pushed component's schema (or null) by `_components` id, its
+  namespace made by `initializeComponentNamespace`. In the start's ONE commit, after the root's, each component's
+  tables and indexes are planned in its namespace (`planCatalog`'s namespace) and its schema submitted there:
+  `submitPending`, Convex's `submit_pending`, extracted from the root's code and run with `db.inComponent`. A
+  component without a schema gets none, as Convex's (`schema_id: None`). The result's `components` has each one's
+  schema id and added indexes.
+- The existing documents are walked per namespace (`validateExisting` and `failSchemaPush` take the namespace);
+  `schemaPushStatus(schemaId, namespace)` reads the namespace's `_schemas` and counts its indexes.
+- `commitSchemaPush(schemaId, body, components)` finishes every namespace in the push's ONE commit
+  (`finishSchemaIn`, Convex's `commit_indexes_for_schema` + `mark_active`; `finishCatalog`'s namespace): a component
+  not ready refuses the whole commit, so nothing applies. Its result's `components` has each one's index diff.
+- `Engine.componentSchema(id)` is each component's active schema; a restart loads them and resumes a pending one's
+  walk (`loadComponentSchemas`). Writes in a component are checked against its schema from step 4.
+- Not yet for components, refused at the push with an error naming the table: staged validators (their walk and
+  checks are the root's) and search and vector indexes (built for the root's tables). Staged database indexes work.
+
+A component's new tables are numbered as the root's (`pushOrder`, #667): the tables with indexes first, by name,
+then the rest by name, as Convex's binary does it (checked against it: `alpha`, `posts` with indexes are
+10001–10002; `beta`, `users`, `zeta` without are 10003–10005).
+
+Measured: a root push whose validator change walks 20 000 documents (`v.id` on a string field), median of 5, three
+alternated runs: 94–100 ms on main and on this branch.
+
 The plan as first written:
 
 - **Scope.**

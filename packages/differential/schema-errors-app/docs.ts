@@ -23,3 +23,6 @@ export const write = mutationGeneric({
     await (method === "patch" ? ctx.db.patch(id, fields) : ctx.db.replace(id, fields));
   },
 });
+
+/** A string argument (STUDY-161 §13: a bytes value's display in the argument validator's error). */
+export const strArg = mutationGeneric({ args: { s: v.string() }, handler: async () => null });

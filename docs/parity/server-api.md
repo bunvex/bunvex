@@ -175,7 +175,7 @@ Key bunvex facts behind the statuses:
 | `v.bigint()` / `v.int64()` | values/validator.ts | done (#24) | |
 | `v.boolean()` | values/validator.ts | done (#24) | |
 | `v.string()` | values/validator.ts | done (#24) | |
-| `v.bytes()` (ArrayBuffer) | values/validator.ts | done (#24) | |
+| `v.bytes()` (ArrayBuffer) | values/validator.ts | done (#24) | In a message's value display (a validator's `Value:`, `Document(value: …)`, a system-field mismatch, a filter's), bytes are Convex's `b"AQI="`: padded standard base64, never cut (STUDY-161 §13). |
 | `v.literal(string \| number \| bigint \| boolean)` | values/validator.ts | done (#24) | |
 | `v.array(el)` | values/validator.ts | done (#24) | |
 | `v.object(fields)`, rejecting unknown fields | values/validator.ts | done (#24) | |
