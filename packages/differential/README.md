@@ -32,6 +32,9 @@ backend is always started with `--disable-beacon`.
 - `test/cross-open.test.ts` (STUDY-133 PR 9): a store each binary wrote, opened by the other (same SQLite file
   and storage, the app of `cross-open-app/` redeployed by its CLI), read back by every kind of index, written,
   and read back by the first. Local only: the nightly does not run it.
+- `test/component-definitions.test.ts` (STUDY-153 PR 1): the same `defineApp` / `defineComponent` / `use` /
+  `componentsGeneric` calls with Convex's package and bunvex's, their `export()` and errors compared. No backend
+  needed; run by the nightly too.
 - `test/action-fetch.test.ts` (STUDY-142): an action's `fetch` (the app of `fetch-app/`) to local targets on
   both: how a request fails, redirects, the 407 refusal, aborts, the default `User-Agent`. Local only.
 - `test/unawaited-operations.test.ts` (STUDY-143): the unawaited-operations warning of the actions and HTTP

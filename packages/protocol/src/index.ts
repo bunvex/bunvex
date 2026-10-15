@@ -24,15 +24,18 @@ export {
   anyApi,
   type DefaultFunctionArgs,
   type EmptyObject,
+  type FunctionAddress,
   type FunctionArgs,
   type FunctionReference,
   type FunctionReturnType,
   type FunctionType,
   type FunctionVisibility,
   functionName,
+  getFunctionAddress,
   getFunctionName,
   makeFunctionReference,
   type OptionalRestArgs,
+  toReferencePath,
 } from "./api.ts";
 
 // ---------------------------------------------------------------- v1 (STUDY-23): Convex's sync protocol

@@ -33,6 +33,11 @@ if ! bun test test/fixed.test.ts; then
   fail "A fixed program differs." "bun test test/fixed.test.ts"
 fi
 
+# Components' definitions: Convex's package and bunvex's, the same calls (STUDY-153 PR 1).
+if ! bun test test/component-definitions.test.ts; then
+  fail "A component definition differs." "bun test test/component-definitions.test.ts"
+fi
+
 end=$(( $(date +%s) + MINUTES * 60 ))
 batches=0
 while [ "$(date +%s)" -lt "$end" ]; do
