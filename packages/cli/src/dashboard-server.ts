@@ -13,6 +13,13 @@
 //   was started for (Convex's local dashboard, `:66-77`), on a loopback address only, and only to a request whose
 //   `Host` is `127.0.0.1:<port>` or `localhost:<port>` (DV-476): a page that rebinds its own name to 127.0.0.1
 //   cannot read the admin key. Without a deployment it is a 404, as Convex's image answers it.
+// - With `securityHeaders` (`bunvex dashboard serve`, the image's server), every response carries the headers
+//   Convex's image sends on every path (`dashboard-self-hosted/next.config.js` `headers()`, `source: "/:path*"`).
+//   Framing is same-origin only (`X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'`) unless the build allows
+//   embedding parents (`<meta name="bunvex-embed-origins">`, DV-319): then, as Convex's embedding build
+//   (`EMBEDDED_CORS_HEADERS`), no `X-Frame-Options` (it cannot name an origin) and Convex's CORP / COEP, but
+//   `frame-ancestors` keeps to `'self'` and those origins where Convex's lets any page frame it (DV-488). The local
+//   dashboard sends none, as Convex's CLI's (`serve-handler` without headers).
 import { statSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 
@@ -30,6 +37,8 @@ export type DashboardServerOptions = {
   currentDeployment?: CurrentDeployment | null;
   /** Prefills the sign-in page (the image's BUNVEX_DEPLOYMENT_URL / BUNVEX_ADMIN_KEY). */
   prefill?: { deploymentUrl?: string | null; adminKey?: string | null };
+  /** Convex's image headers on every response (`bunvex dashboard serve`); the local dashboard sends none. */
+  securityHeaders?: boolean;
 };
 
 export type DashboardServer = { url: string; port: number; stop: () => Promise<void> };
@@ -62,6 +71,57 @@ export function withPrefill(html: string, prefill: DashboardServerOptions["prefi
   return at === -1 ? `${tags.join("")}${html}` : `${html.slice(0, at)}${tags.join("")}${html.slice(at)}`;
 }
 
+/** The `<meta name>` in index.html that lists the parents allowed to embed the dashboard (the app's, DV-319). */
+export const EMBED_ORIGINS_META = "bunvex-embed-origins";
+
+/**
+ * The allowed embedding parents in a built index.html, read as the app reads them (`src/login/embedded.ts`
+ * `parseAllowedOrigins`): the first `<meta name="bunvex-embed-origins">`'s origins, separated by commas or spaces,
+ * each reduced to scheme, host and port; anything not an http(s) URL dropped (`*` included).
+ */
+export function embedOrigins(html: string): string[] {
+  let raw: string | null = null;
+  new HTMLRewriter()
+    .on(`meta[name="${EMBED_ORIGINS_META}"]`, {
+      element(e) {
+        raw ??= e.getAttribute("content") ?? "";
+      },
+    })
+    .transform(html);
+  const origins = new Set<string>();
+  for (const entry of (raw ?? "").split(/[\s,]+/)) {
+    if (!entry) continue;
+    try {
+      const u = new URL(entry);
+      if (u.protocol === "http:" || u.protocol === "https:") origins.add(u.origin);
+    } catch {
+      // not a URL: ignored
+    }
+  }
+  return [...origins];
+}
+
+/**
+ * The headers Convex's image sends on every path (`next.config.js:1-65`), with the embedding parents (DV-319) in
+ * `frame-ancestors`. HSTS is sent as Convex sends it, over plain HTTP too, where browsers ignore it (RFC 6797 §8.1).
+ */
+export function dashboardHeaders(embedOrigins: readonly string[]): [string, string][] {
+  const common: [string, string][] = [
+    ["x-dns-prefetch-control", "on"],
+    ["strict-transport-security", "max-age=63072000; includeSubDomains; preload"],
+    ["x-xss-protection", "1; mode=block"],
+    ["referrer-policy", "origin-when-cross-origin"],
+  ];
+  if (embedOrigins.length === 0)
+    return [...common, ["x-frame-options", "SAMEORIGIN"], ["content-security-policy", "frame-ancestors 'self'"]];
+  return [
+    ...common,
+    ["cross-origin-resource-policy", "cross-origin"],
+    ["cross-origin-embedder-policy", "require-corp"],
+    ["content-security-policy", `frame-ancestors 'self' ${embedOrigins.join(" ")}`],
+  ];
+}
+
 /** The file under `root` a URL path names, or null (outside it, not a file, or not a valid path). */
 function fileFor(root: string, pathname: string): string | null {
   let path: string;
@@ -84,12 +144,14 @@ function fileFor(root: string, pathname: string): string | null {
 export async function serveDashboard(o: DashboardServerOptions): Promise<DashboardServer> {
   const root = resolve(o.dir);
   const indexFile = join(root, "index.html");
-  let indexHtml: string;
+  let built: string;
   try {
-    indexHtml = withPrefill(await Bun.file(indexFile).text(), o.prefill);
+    built = await Bun.file(indexFile).text();
   } catch {
     throw new Error(`${root} is not a built dashboard: it has no index.html`);
   }
+  const indexHtml = withPrefill(built, o.prefill);
+  const headers = o.securityHeaders ? dashboardHeaders(embedOrigins(built)) : [];
   const hostname = o.hostname ?? "127.0.0.1";
   const current = o.currentDeployment && isLoopback(hostname) ? o.currentDeployment : null;
   let allowedHosts = new Set<string>();
@@ -97,29 +159,34 @@ export async function serveDashboard(o: DashboardServerOptions): Promise<Dashboa
     new Response(head ? null : indexHtml, {
       headers: { "content-type": "text/html;charset=utf-8", "cache-control": "no-cache" },
     });
+  const respond = (req: Request): Response => {
+    if (req.method !== "GET" && req.method !== "HEAD")
+      return new Response("Method Not Allowed", { status: 405, headers: { allow: "GET, HEAD" } });
+    const { pathname } = new URL(req.url);
+    if (pathname === CURRENT_DEPLOYMENT_PATH && current) {
+      if (!allowedHosts.has((req.headers.get("host") ?? "").toLowerCase()))
+        return new Response("Forbidden: open the dashboard at 127.0.0.1 or localhost", { status: 403 });
+      return Response.json(current, { headers: { "cache-control": "no-store" } });
+    }
+    if (pathname === "/" || pathname === "/index.html") return index(req.method === "HEAD");
+    const file = fileFor(root, pathname);
+    if (file)
+      return new Response(Bun.file(file), {
+        headers: {
+          "cache-control": pathname.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache",
+        },
+      });
+    // a page of the app (its router reads the path); a missing script or image stays a 404
+    if ((req.headers.get("accept") ?? "").includes("text/html")) return index(req.method === "HEAD");
+    return new Response("Not Found", { status: 404 });
+  };
   const server = Bun.serve({
     hostname,
     port: o.port,
     fetch(req) {
-      if (req.method !== "GET" && req.method !== "HEAD")
-        return new Response("Method Not Allowed", { status: 405, headers: { allow: "GET, HEAD" } });
-      const { pathname } = new URL(req.url);
-      if (pathname === CURRENT_DEPLOYMENT_PATH && current) {
-        if (!allowedHosts.has((req.headers.get("host") ?? "").toLowerCase()))
-          return new Response("Forbidden: open the dashboard at 127.0.0.1 or localhost", { status: 403 });
-        return Response.json(current, { headers: { "cache-control": "no-store" } });
-      }
-      if (pathname === "/" || pathname === "/index.html") return index(req.method === "HEAD");
-      const file = fileFor(root, pathname);
-      if (file)
-        return new Response(Bun.file(file), {
-          headers: {
-            "cache-control": pathname.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache",
-          },
-        });
-      // a page of the app (its router reads the path); a missing script or image stays a 404
-      if ((req.headers.get("accept") ?? "").includes("text/html")) return index(req.method === "HEAD");
-      return new Response("Not Found", { status: 404 });
+      const res = respond(req);
+      for (const [name, value] of headers) res.headers.set(name, value);
+      return res;
     },
   });
   const port = server.port ?? o.port;

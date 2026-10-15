@@ -191,8 +191,8 @@ gaps.
 - The dashboard on a real deployment (STUDY-149, all eight PRs built; user docs in
   [docs/dashboard.md](../dashboard.md)): the screens run on a deployment with Convex's calls and freshness, the
   dashboard has its own image (6791), `dashboard.zip` and `bunvex dev`'s local dashboard (6790), and the CLI links
-  the local one where Convex's links its cloud (DV-477, PR 8). Left, none of them something an app hits:
-  - the dashboard server's frame and security headers (owner, 2026-10-14: match Convex in a follow-up);
+  the local one where Convex's links its cloud (DV-477, PR 8); the image's frame and security headers match
+  Convex's, the embedding allow-list in `frame-ancestors` (DV-488). Left, none of them something an app hits:
   - the custom test query's type checking and completions;
   - the Data screen's editors checking what is typed against the schema (the deployment refuses it on save);
   - search, vector and staged indexes in the Data screen's index list;

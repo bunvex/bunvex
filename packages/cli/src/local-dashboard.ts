@@ -5,7 +5,8 @@
 //   downloaded once per version into `~/.cache/bunvex/dashboard/out/`; `dashboard/config.json` records which
 //   version is there, and another version replaces it (Convex's `ensureDashboardDownloaded`);
 // - the version is `--local-backend-version`'s, else the latest release's (Convex's `handleDashboard`);
-// - it is served on the first free port from 6790, saved per deployment in `.bunvex/local/default/dashboard.json`
+// - it is served on the first free port from 6790 (a port taken between the probe and the bind moves on to the next),
+//   saved per deployment in `.bunvex/local/default/dashboard.json`
 //   (`{ port }`, Convex's `ProjectDashboardConfig`), with `/api/current_deployment` naming the deployment
 //   (dashboard-server.ts, with its `Host` check, DV-476);
 // - unlike Convex, which stops `dev` when the dashboard cannot be had, a version that cannot be resolved or
@@ -121,7 +122,7 @@ export async function dashboardVersion(io: Io, requested: string | undefined): P
 export async function startLocalDashboard(
   io: Io,
   deployment: CurrentDeployment,
-  opts: { backendVersion?: string; avoid?: number[] } = {},
+  opts: { backendVersion?: string; avoid?: number[]; from?: number } = {},
 ): Promise<{ server: DashboardServer | null; stop: () => Promise<void> }> {
   let dir: string;
   try {
@@ -138,10 +139,35 @@ export async function startLocalDashboard(
     io.err(`Serving the dashboard already downloaded (${cached}).`);
     dir = dashboardOutDir(io.env);
   }
-  const port = await choosePort(undefined, undefined, DEFAULT_LOCAL_DASHBOARD_PORT, opts.avoid ?? []);
-  const server = await serveDashboard({ dir, port, currentDeployment: deployment });
+  const server = await serveOnFirstFreePort(opts.from ?? DEFAULT_LOCAL_DASHBOARD_PORT, opts.avoid ?? [], (port) =>
+    serveDashboard({ dir, port, currentDeployment: deployment }),
+  );
   saveDashboardConfig(io.cwd, { port: server.port });
   return { server, stop: server.stop };
+}
+
+/** How many ports taken between the probe and the bind `serveOnFirstFreePort` moves past before it gives up. */
+const BIND_RETRIES = 20;
+
+/**
+ * Serve on the first free port from `from` (Convex's `choosePorts`, then `startServer`). A port another process
+ * binds between the probe and the bind — two `bunvex dev` starting at once, or parallel tests — is skipped for
+ * the next free one, where Convex's `listen` only logs the error and never resolves (`dev` hangs).
+ */
+export async function serveOnFirstFreePort<T>(
+  from: number,
+  avoid: number[],
+  serve: (port: number) => Promise<T>,
+): Promise<T> {
+  for (let next = from, retries = 0; ; retries++) {
+    const port = await choosePort(undefined, undefined, next, avoid);
+    try {
+      return await serve(port);
+    } catch (e) {
+      if ((e as { code?: string }).code !== "EADDRINUSE" || retries >= BIND_RETRIES) throw e;
+      next = port + 1;
+    }
+  }
 }
 
 /** `http://127.0.0.1:<port>/` of the project's local dashboard, if one is saved. */
