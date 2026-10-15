@@ -13,6 +13,7 @@ import {
   type FieldFilter,
   type FilterExpression,
   type IndexInfo,
+  type IndexListEntry,
   type Page,
   type TableInfo,
   type Unsubscribe,
@@ -37,16 +38,8 @@ const MAX_LIVE_PAGES = 200;
 /** The most documents read by id (the open document, previews) kept live per table, newest kept. */
 const MAX_LIVE_DOCUMENTS = 50;
 
-/** `indexes`' answer (Convex's `_system/frontend/indexes.ts`). */
-type IndexJson = {
-  name: string;
-  staged: boolean;
-  fields: string[] | Record<string, unknown>;
-  backfill: {
-    state: "backfilling" | "backfilled" | "done";
-    stats?: { numDocsIndexed: number; totalDocs: number | null };
-  };
-};
+/** `indexes`' answer (Convex's `_system/frontend/indexes.ts`): the contract's index list entry as it is. */
+type IndexJson = IndexListEntry;
 /** A refused clause (Convex's `FilterValidationError`), returned as the page's items. */
 type FilterValidationError = { error: string; filter: number };
 /** `/api/shapes2`'s shape of a table (Convex's `dashboard_shape_json`). */
@@ -473,6 +466,21 @@ export class Tables {
       if (this.closed) return;
       for (const w of [...s.watchers]) w.onChange(s.count === undefined ? {} : { count: s.count });
     }, 0);
+  }
+
+  /**
+   * The contract's `watchIndexes`: `indexes` for the table kept subscribed, as Convex's index list keeps it; each
+   * new answer passed on as it is (null for a table that does not exist).
+   */
+  watchIndexes(
+    table: string,
+    onIndexes: (indexes: IndexListEntry[] | null) => void,
+    onError: (error: DataSourceError) => void,
+  ): Unsubscribe {
+    return this.sync.watch(INDEXES, { tableName: table, tableNamespace: null }, (r) => {
+      if (!r.success) onError(errorOfFailure(INDEXES, r));
+      else onIndexes((r.value as IndexJson[] | null) ?? null);
+    });
   }
 
   watchTable(

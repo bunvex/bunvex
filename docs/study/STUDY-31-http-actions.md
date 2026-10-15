@@ -560,4 +560,4 @@ req/s, a one-chunk stream): before 19.3k–21.4k; with the 32 turns 20.5k–21.5
 
 A chunk that is not bytes (a string enqueued in the stream) is sent as text by Bun; Convex's runtime fails the body
 with `Uncaught Error: serde_v8 error: invalid type; expected: buffer, got: string` (the 500 in the handler's turn).
-Left as a gap.
+Matched since: [STUDY-161 §15](STUDY-161-engine-messages.md#15-a-streamed-http-action-bodys-chunk-that-is-not-bytes-found-by-study-31-106).

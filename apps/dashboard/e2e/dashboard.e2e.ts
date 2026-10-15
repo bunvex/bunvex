@@ -546,6 +546,32 @@ describe("the dashboard in a browser", () => {
     await phone.close();
   });
 
+  test("Database: the index list's three sections, a staged vector index's backfill; axe with contrast, both themes", async () => {
+    for (const colorScheme of ["light", "dark"] as const) {
+      const { page, errors, close } = await open("/database/messages?panel=indexes", { colorScheme });
+      const panel = page.getByRole("complementary", { name: "Indexes of messages" });
+      await panel.getByRole("listitem", { name: "by_channel" }).waitFor();
+      for (const name of ["Indexes", "Search indexes", "Vector indexes"])
+        await panel.getByRole("region", { name, exact: true }).waitFor();
+      const vector = panel
+        .getByRole("region", { name: "Vector indexes" })
+        .getByRole("listitem", { name: "by_embedding" });
+      expect(await vector.textContent()).toContain("Dimensions:1536");
+      // 120 of the 400 messages
+      expect(await vector.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("30");
+      await page.addScriptTag({ content: AXE });
+      const violations = await page.evaluate(async () => {
+        // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
+        const axe = (window as any).axe;
+        const r = await axe.run("aside", { resultTypes: ["violations"] });
+        return r.violations.map((v: { id: string; nodes: { html: string }[] }) => `${v.id}: ${v.nodes[0]?.html}`);
+      });
+      expect(violations).toEqual([]);
+      expect(errors).toEqual([]);
+      await close();
+    }
+  });
+
   test('Schema: an Id<"users"> type pans to users, lights it and focuses it', async () => {
     const { page, errors, close } = await open("/schema");
     await heading(page, "Schema");

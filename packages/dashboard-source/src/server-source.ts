@@ -270,6 +270,7 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     getDocument: (t, id, o) => tables.getDocument(t, id, o),
     watchTable: (t, onChange, onError) => tables.watchTable(t, onChange, onError),
     watchTables: (onChange, onError) => tables.watchTables(onChange, onError),
+    watchIndexes: (t, onIndexes, onError) => tables.watchIndexes(t, onIndexes, onError),
     inferDocumentType: (t, o) => tables.inferDocumentType(t, o),
     tableOfId: (id, o) => tables.tableOfId(id, o),
 

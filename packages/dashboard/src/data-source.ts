@@ -136,6 +136,27 @@ export type IndexInfo = {
   progress?: { indexed: number; total?: number };
 };
 
+/**
+ * An index as the Data screen's index list shows it: Convex's `_system/frontend/indexes` entry (dashboard-common's
+ * `Index`, STUDY-149 "Index list"). `fields` is a database index's fields as stored (`_creationTime` last), a
+ * search index's search and filter fields, or a vector index's vector field, filter fields and dimensions. `staged`:
+ * declared `{ staged: true }`, built but not queryable. `backfill`: `backfilling` while the documents are added
+ * (with the counts once known), `backfilled` built and staged, `done` built and enabled. `by_id` and
+ * `by_creation_time` are not listed.
+ */
+export type IndexListEntry = {
+  name: string;
+  staged: boolean;
+  fields:
+    | string[]
+    | { searchField: string; filterFields: string[] }
+    | { vectorField: string; filterFields: string[]; dimensions: number };
+  backfill: {
+    state: "backfilling" | "backfilled" | "done";
+    stats?: { numDocsIndexed: number; totalDocs: number | null };
+  };
+};
+
 export type TableInfo = {
   name: string;
   /** System indexes (`by_id`, `by_creation_time`) first, then the declared ones. */
@@ -484,6 +505,16 @@ export interface DashboardDataSource
    * table changes.
    */
   watchTables?(onChange: () => void, onError: (error: DataSourceError) => void): Unsubscribe;
+  /**
+   * A table's index list, live, as Convex's dashboard keeps `_system/frontend/indexes` subscribed: `onIndexes` with
+   * the list, then again whenever it changes (an index a push adds, stages or enables; a backfill's progress); null
+   * for a table that does not exist. Never synchronously. Without it, the index list shows `TableInfo.indexes`.
+   */
+  watchIndexes?(
+    table: string,
+    onIndexes: (indexes: IndexListEntry[] | null) => void,
+    onError: (error: DataSourceError) => void,
+  ): Unsubscribe;
   /**
    * Tells the caller a table changed — a write committed — with its new count when the source knows it.
    * The dashboard then refreshes what it shows. Never synchronously; coalescing several writes is allowed.

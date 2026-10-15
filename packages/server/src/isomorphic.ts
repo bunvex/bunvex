@@ -36,6 +36,7 @@ export { Crons, cronJobs } from "./cron.ts";
 export type * from "./index.ts";
 export { AuditLogLimitError, log } from "./log.ts";
 export { paginationOptsValidator, paginationResultValidator } from "./pagination.ts";
+export { isRoomDef, presence, presenceGeneric, room, roomGeneric } from "./rooms/define.ts";
 export { HttpRouter, httpAction, httpActionGeneric, httpRouter, ROUTABLE_HTTP_METHODS } from "./router.ts";
 export { getServiceToken, getServiceUrl, type ServiceName } from "./service-tokens.ts";
 

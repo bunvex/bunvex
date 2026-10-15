@@ -25,6 +25,7 @@ import {
   type FilterExpression,
   type FunctionRun,
   type IndexInfo,
+  type IndexListEntry,
   type LogEntry,
   OPERATIONS,
   type Page,
@@ -193,6 +194,36 @@ export function describeDataSourceContract(
         if (t.validator.type === "object")
           expect(Object.keys(t.validator.value).some((k) => k.startsWith("_"))).toBe(false);
       }
+    });
+
+    test("watchIndexes, when offered: a table's declared indexes, not by_id or by_creation_time; null for none", async () => {
+      const src = await make();
+      if (!src.watchIndexes) return;
+      const watch = (table: string) =>
+        new Promise<IndexListEntry[] | null>((resolve, reject) => {
+          let off = () => {};
+          off = src.watchIndexes!(
+            table,
+            (l) => {
+              setTimeout(() => off(), 0);
+              resolve(l);
+            },
+            reject,
+          );
+        });
+      for (const t of await src.listTables()) {
+        const list = await watch(t.name);
+        const names = (list ?? []).map((ix) => ix.name);
+        expect(names).not.toContain("by_id");
+        expect(names).not.toContain("by_creation_time");
+        // every declared database index the grid reads is listed, with its fields (`_creationTime` last)
+        for (const ix of t.indexes.filter((i) => !i.system)) {
+          const entry = list?.find((e) => e.name === ix.name);
+          expect(entry?.fields).toEqual([...ix.fields, "_creationTime"]);
+          expect(entry?.backfill.state).toBe(ix.state === "ready" ? "done" : "backfilling");
+        }
+      }
+      expect(await watch("no_such_table_xyz")).toBeNull();
     });
 
     // -------------------------------------------------------------- pagination

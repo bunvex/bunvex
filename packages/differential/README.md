@@ -67,6 +67,9 @@ backend is always started with `--disable-beacon`.
 - `test/dashboard-data.test.ts` (STUDY-149 PR 2): the dashboard's Data reads on both, as an admin —
   `_system/frontend/getTableMapping`, `paginatedTableDocuments` (field, type and index filters, refusals,
   cursors), `indexes`, `tableSize`, `listById`, `getById` and `GET /api/get_indexes`. Local only.
+- `test/dashboard-indexes.test.ts` (STUDY-149 "Index list"): `_system/frontend/indexes` and `GET /api/get_indexes` on
+  both for the app of `indexes-app/` (database, search and vector indexes, staged and not), once no staged index is
+  still building. Local only.
 - `test/dashboard-functions.test.ts` (STUDY-149 PR 4): the dashboard's Functions, runner and Settings reads on both,
   from the app of `functions-app/` — `_system/frontend/modules:*`, `components:list`, `getVersion`, the URLs
   (DV-474), `listEnvironmentVariables`, `latestExport`, `snapshotImport:list`; a function run over the socket as an

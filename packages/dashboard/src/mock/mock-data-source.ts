@@ -44,6 +44,7 @@ import {
   type FunctionInfo,
   type FunctionMetric,
   type FunctionRun,
+  type IndexListEntry,
   type InspectorFilter,
   type InvalidationEvent,
   type InvalidationSeries,
@@ -78,6 +79,7 @@ import {
   type Value,
 } from "../data-source.ts";
 import { FILE_STORAGE_TABLE, SCHEDULED_JOBS_TABLE } from "../database/reference.ts";
+import { indexListOf } from "../database/index-list-model.ts";
 import { tableNameProblem } from "../database/table-name.ts";
 import { mockParts } from "../extensions/mock.ts";
 import type { MockContext, MockExtensionPart } from "../extensions/mock-types.ts";
@@ -631,6 +633,19 @@ export class MockDataSource implements DashboardDataSource {
       live = false;
       this.tableListWatchers.delete(deliver);
     };
+  }
+
+  /** The table's declared database indexes, then its other ones; null for a table that does not exist. */
+  watchIndexes(
+    table: string,
+    onIndexes: (indexes: IndexListEntry[] | null) => void,
+    _onError: (e: DataSourceError) => void,
+  ): Unsubscribe {
+    const timer = setTimeout(() => {
+      const t = this.tables.get(table);
+      onIndexes(t ? structuredClone([...indexListOf(t.indexes), ...(t.otherIndexes ?? [])]) : null);
+    }, 0);
+    return () => clearTimeout(timer);
   }
 
   watchTable(table: string, onChange: (c: { count?: number }) => void, onError: (e: DataSourceError) => void) {
