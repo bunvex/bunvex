@@ -73,7 +73,7 @@ export class RoomHub {
   private tick: unknown | null = null;
 
   constructor(
-    private readonly limits: RoomLimits,
+    readonly limits: RoomLimits,
     private readonly timers: Timers = realTimers,
   ) {}
 

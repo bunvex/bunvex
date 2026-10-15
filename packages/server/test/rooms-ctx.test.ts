@@ -26,6 +26,7 @@ async function setup() {
   const hold = Promise.withResolvers<void>();
   const read = Promise.withResolvers<void>();
   let attempts = 0;
+  const cutOffSeen: string[] = [];
   const functions = new Functions(engine)
     .register("m", {
       say: mutation(async (ctx: Ctx, { id, text }: { id: string; text: string }) => {
@@ -46,6 +47,12 @@ async function setup() {
       nestedOk: mutation(async (ctx: Ctx) => {
         await ctx.runMutation("m:say", { id: "a", text: "child" });
         return "ok";
+      }),
+      big: mutation(async (ctx: Ctx) => {
+        await ctx.rooms.broadcast("rooms:doc", { id: "a" }, "ping", { text: "x".repeat(5000) });
+      }),
+      undef: mutation(async (ctx: Ctx) => {
+        await ctx.rooms.broadcast("rooms:doc", { id: "a" }, "nothing", undefined);
       }),
       bad: mutation(async (ctx: Ctx, { what }: { what: string }) => {
         if (what === "event") await ctx.rooms.broadcast("rooms:doc", { id: "a" }, "nope", {});
@@ -77,10 +84,29 @@ async function setup() {
         members: await ctx.rooms.members("rooms:doc", { id: "a" }),
         online: await ctx.presence.list("rooms:online", { team: "t" }),
       })),
+      cutOff: action(async (ctx: Ctx) => {
+        await Bun.sleep(300);
+        for (const [what, call] of [
+          ["broadcast", () => ctx.rooms.broadcast("rooms:doc", { id: "a" }, "ping", { text: "late" })],
+          ["members", () => ctx.rooms.members("rooms:doc", { id: "a" })],
+          ["list", () => ctx.presence.list("rooms:online", { team: "t" })],
+        ] as const) {
+          try {
+            await call();
+            cutOffSeen.push(`${what}: ran`);
+          } catch (e) {
+            cutOffSeen.push(`${what}: ${(e as Error).message}`);
+          }
+        }
+      }),
       wrongKind: action(async (ctx: Ctx) => ctx.presence.list("rooms:doc", { id: "a" })),
     })
     .register("rooms", {
-      doc: room({ args: { id: v.string() }, presence: { x: v.number() }, events: { ping: { text: v.string() } } }),
+      doc: room({
+        args: { id: v.string() },
+        presence: { x: v.number() },
+        events: { ping: { text: v.string() }, nothing: v.null() },
+      }),
       online: presence({ args: { team: v.string() }, state: { at: v.bigint() } }),
     });
   const { server, rooms, stop } = createServer({ engine, functions, port: 0, redactLogsToClient: false });
@@ -96,7 +122,8 @@ async function setup() {
     };
     return { ...c, of, join, events: () => of("RoomEvent") };
   };
-  return { engine, functions, rooms, client, hold, read };
+  functions.actionTimeoutMs = 100;
+  return { engine, functions, rooms, client, hold, read, cutOffSeen };
 }
 
 /** Let any frame in flight arrive: a broadcast is flushed on the hub's next tick. */
@@ -171,6 +198,24 @@ describe("ctx.rooms in mutations", () => {
     expect(a.events()).toEqual([]);
   });
 
+  test("a broadcast over the event size limit throws in the mutation and sends nothing", async () => {
+    const { functions, client } = await setup();
+    const a = await client();
+    await a.join(1, "rooms:doc", { id: "a" });
+    await expect(functions.runMutation("m:big", {}, false)).rejects.toThrow("The event is too large.");
+    await settle();
+    expect(a.events()).toEqual([]);
+  });
+
+  test("undefined data is not turned into null: the event's validator refuses it", async () => {
+    const { functions, client } = await setup();
+    const a = await client();
+    await a.join(1, "rooms:doc", { id: "a" });
+    await expect(functions.runMutation("m:undef", {}, false)).rejects.toThrow();
+    await settle();
+    expect(a.events()).toEqual([]);
+  });
+
   test("a broadcast to a room no one is in is a no-op", async () => {
     const { functions, rooms } = await setup();
     expect(await functions.runMutation("m:say", { id: "empty", text: "hi" }, false)).toBe("done");
@@ -236,6 +281,14 @@ describe("ctx.rooms and ctx.presence in actions", () => {
     await settle();
     const r = (await functions.runAction("a:read", {})) as { members: { presence: unknown }[] };
     expect(r.members[0]?.presence).toEqual({ x: 3 });
+  });
+
+  test("a timed-out action's rooms and presence calls are refused", async () => {
+    const { functions, cutOffSeen } = await setup();
+    const timedOut = "Function execution timed out (maximum duration: 100ms)";
+    await expect(functions.runAction("a:cutOff", {})).rejects.toThrow(timedOut);
+    for (let i = 0; i < 100 && cutOffSeen.length < 3; i++) await Bun.sleep(10);
+    expect(cutOffSeen).toEqual([`broadcast: ${timedOut}`, `members: ${timedOut}`, `list: ${timedOut}`]);
   });
 
   test("an action asking a presence list of a room (wrong kind) throws", async () => {

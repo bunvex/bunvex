@@ -34,10 +34,14 @@ export function roomsCtx(functions: Functions, onCommit: ((fn: () => void) => vo
       const { def, key } = resolve(ref, "room", args);
       const validator = def.kind === "room" && Object.hasOwn(def.events, event) ? def.events[event] : undefined;
       if (!validator) throw new Error(`This room has no event "${event}".`);
-      const value = (data === undefined ? null : data) as Value;
+      const value = data as Value;
       const why = checkValue(validator, value);
       if (why) throw ValidatorError.args(why);
       const wire = toJsonValue(value);
+      // The client events' limit, measured the same way (session.ts).
+      const limit = functions.roomHub?.limits.payloadBytes;
+      if (limit !== undefined && Buffer.byteLength(JSON.stringify(wire)) > limit)
+        throw new Error("The event is too large.");
       const send = () => functions.roomHub?.broadcast(key, event, wire);
       if (onCommit) onCommit(send);
       else send();
