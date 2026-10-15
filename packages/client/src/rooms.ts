@@ -62,7 +62,12 @@ type Membership = {
   members: Map<string, Member>;
   /** The local state: what `setPresence` / `setState` last said. */
   presence: Value | undefined;
-  idle: boolean | undefined;
+  /** Each live handle's last `setIdle`; the membership is idle when every one of them says so. */
+  idleBy: Map<object, boolean>;
+  /** Whether an idle flag was ever sent: once one was, a membership no handle reports idle for sends false. */
+  idleSent: boolean;
+  /** A RoomJoin that went out under the previous identity: a refusal of it is retried, not final. */
+  retryOnRefusal: boolean;
   /** Whether the state changed since the last RoomPresence. */
   dirty: boolean;
   lastSentAt: number;
@@ -92,7 +97,8 @@ export function canonical(x: v1.JSONValue): string {
   const sorted = (y: v1.JSONValue): v1.JSONValue => {
     if (Array.isArray(y)) return y.map(sorted);
     if (typeof y === "object" && y !== null) {
-      const out: { [k: string]: v1.JSONValue } = {};
+      // No prototype: a "__proto__" key stays a key.
+      const out: { [k: string]: v1.JSONValue } = Object.create(null);
       for (const k of Object.keys(y).sort()) out[k] = sorted((y as { [k: string]: v1.JSONValue })[k]!);
       return out;
     }
@@ -141,11 +147,41 @@ export class RoomManager {
       m.sent = false;
       m.status = "joining";
       m.error = null;
+      m.retryOnRefusal = false;
       m.dirty = m.presence !== undefined;
       m.lastSentAt = Number.NEGATIVE_INFINITY;
       this.notify(m);
     }
     this.flush();
+  }
+
+  /**
+   * A new Authenticate went out (sign-in, sign-out or a token refresh): a membership refused or ended by the
+   * server joins again under a fresh room id, and one whose join is still unanswered is retried if refused
+   * (it was judged under the previous identity). The server runs the gates of joined rooms itself.
+   */
+  onAuthenticate() {
+    for (const m of this.byKey.values()) {
+      if (m.status === "error") this.rejoin(m);
+      else if (m.status === "joining" && m.sent) m.retryOnRefusal = true;
+    }
+    this.flush();
+  }
+
+  /** Join again under a fresh room id (the old one is the server's no more), with the last presence. */
+  private rejoin(m: Membership) {
+    if (m.timer !== undefined) this.clock.clearTimeout(m.timer);
+    m.timer = undefined;
+    this.byId.delete(m.roomId);
+    m.roomId = this.nextRoomId++;
+    this.byId.set(m.roomId, m);
+    m.sent = false;
+    m.status = "joining";
+    m.error = null;
+    m.retryOnRefusal = false;
+    m.dirty = m.presence !== undefined;
+    m.lastSentAt = Number.NEGATIVE_INFINITY;
+    this.notify(m);
   }
 
   /** The socket was paused and is sending again. */
@@ -163,6 +199,7 @@ export class RoomManager {
         m.canPublish = msg.canPublish;
         m.status = "joined";
         m.error = null;
+        m.retryOnRefusal = false;
         m.members = new Map(msg.members.filter((x) => x.memberId !== msg.self).map((x) => [x.memberId, toMember(x)]));
         this.rebuildOthers(m);
         this.notify(m);
@@ -199,8 +236,29 @@ export class RoomManager {
           this.logger.warn(`Room ${m.name}: ${msg.code}: ${msg.message}`);
           return;
         }
+        if (m.retryOnRefusal) {
+          // Refused under the identity before the last Authenticate: asked again under the new one.
+          this.rejoin(m);
+          this.flush();
+          return;
+        }
         m.status = "error";
         m.error = { code: msg.code, message: msg.message };
+        this.notify(m);
+        return;
+      }
+      case "RoomLeft": {
+        // The server ended a joined membership (a new identity refused): terminal until the next Authenticate.
+        const m = this.byId.get(msg.roomId);
+        if (!m) return;
+        if (m.timer !== undefined) this.clock.clearTimeout(m.timer);
+        m.timer = undefined;
+        m.status = "error";
+        m.error = { code: msg.code, message: msg.message };
+        m.self = null;
+        m.canPublish = false;
+        m.members = new Map();
+        this.rebuildOthers(m);
         this.notify(m);
         return;
       }
@@ -226,7 +284,9 @@ export class RoomManager {
         canPublish: false,
         members: new Map(),
         presence: undefined,
-        idle: undefined,
+        idleBy: new Map(),
+        idleSent: false,
+        retryOnRefusal: false,
         dirty: false,
         lastSentAt: Number.NEGATIVE_INFINITY,
         timer: undefined,
@@ -249,6 +309,7 @@ export class RoomManager {
       this.pendingLeaves.shift();
     }
     for (const m of this.byKey.values()) {
+      if (m.status === "error") continue; // refused or ended: rejoined only on the next Authenticate
       if (m.sent) {
         if (m.dirty && m.timer === undefined) this.sendPresence(m); // held while the socket was paused
         continue;
@@ -276,15 +337,32 @@ export class RoomManager {
     for (const cb of [...m.listeners]) cb();
   }
 
+  /** The membership's idle: every live handle that reported one says idle; undefined before any said. */
+  private idleOf(m: Membership): boolean | undefined {
+    if (m.idleBy.size === 0) return m.idleSent ? false : undefined;
+    for (const idle of m.idleBy.values()) if (!idle) return false;
+    return true;
+  }
+
+  /** A handle's idle (`undefined`: it reports none any more); sent when the membership's idle changes. */
+  private setIdleOf(m: Membership, handle: object, idle: boolean | undefined) {
+    const before = this.idleOf(m);
+    if (idle === undefined) m.idleBy.delete(handle);
+    else m.idleBy.set(handle, idle);
+    if (this.idleOf(m) !== before || idle !== undefined) this.publish(m);
+  }
+
   private sendPresence(m: Membership) {
     if (m.presence === undefined) return; // an idle flag waits for a state: the server validates every send
+    const idle = this.idleOf(m);
     const sent = this.send({
       type: "RoomPresence",
       roomId: m.roomId,
       presence: toJsonValue(m.presence),
-      ...(m.idle === undefined ? {} : { idle: m.idle }),
+      ...(idle === undefined ? {} : { idle }),
     });
     if (!sent) return; // paused: stays dirty, goes out on resume
+    if (idle !== undefined) m.idleSent = true;
     m.dirty = false;
     m.lastSentAt = this.clock.now();
   }
@@ -292,7 +370,8 @@ export class RoomManager {
   /** Leading edge at once; otherwise one trailing send at the end of the window, with the latest value. */
   private publish(m: Membership) {
     m.dirty = true;
-    if (!m.sent || m.timer !== undefined) return; // held for the join, or the trailing send is scheduled
+    // Held for the join, refused or ended (kept for a rejoin), or the trailing send is scheduled.
+    if (!m.sent || m.status === "error" || m.timer !== undefined) return;
     const wait = m.lastSentAt + PRESENCE_THROTTLE_MS - this.clock.now();
     if (wait <= 0) {
       this.sendPresence(m);
@@ -300,7 +379,7 @@ export class RoomManager {
     }
     m.timer = this.clock.setTimeout(() => {
       m.timer = undefined;
-      if (m.dirty && m.sent) this.sendPresence(m);
+      if (m.dirty && m.sent && m.status !== "error") this.sendPresence(m);
     }, wait);
   }
 
@@ -339,7 +418,7 @@ export class RoomManager {
         this.notify(m);
       },
       broadcast: (event, data) => {
-        if (left || !m.sent) return;
+        if (left || !m.sent || m.status === "error") return;
         this.send({ type: "RoomEvent", roomId: m.roomId, event, data: toJsonValue(data as Value) });
       },
       on: (event, cb) => {
@@ -371,6 +450,8 @@ export class RoomManager {
   private presenceHandle<S>(m: Membership): PresenceHandle<S> {
     const own = new Set<() => void>();
     let left = false;
+    /** This handle, as the key of its idle in the membership. */
+    const me = {};
     let cache: { source: Member[]; view: { userId: string; state: S | null; idle: boolean }[] } | undefined;
     return {
       get status() {
@@ -401,14 +482,15 @@ export class RoomManager {
       },
       setIdle: (idle) => {
         if (left) return;
-        m.idle = idle;
-        this.publish(m);
+        this.setIdleOf(m, me, idle);
       },
       subscribe: (cb) => this.subscribeTo(m, own, cb),
       leave: () => {
         if (left) return;
         left = true;
         for (const off of [...own]) off();
+        // Its idle leaves with it: the handles that remain decide (a leave never makes them look idle).
+        if (m.refs > 1) this.setIdleOf(m, me, undefined);
         this.release(m);
       },
     };

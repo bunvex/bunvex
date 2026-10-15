@@ -538,6 +538,45 @@ describe("usePresence", () => {
     await until(() => seen.at(-1) === false, "active again at B");
   });
 
+  test("two consumers of a scope, the idle one unmounts: the other tree sees the user active", async () => {
+    const { signedIn } = await authed();
+    const [ca, cb] = [await signedIn("ada"), await signedIn("bob")];
+    let setA!: (v: { status: string }) => void;
+    function Stays() {
+      setA = usePresence(onlineRef, { team: "t" }).setMyState;
+      return null;
+    }
+    function Idles() {
+      usePresence(onlineRef, { team: "t" }, { idleMs: 50 });
+      return null;
+    }
+    const seen: boolean[] = [];
+    function Watcher() {
+      const p = usePresence(onlineRef, { team: "t" });
+      if (p.others[0]?.state) seen.push(p.others[0].idle);
+      return null;
+    }
+    const view = render(
+      <BunvexProvider client={ca}>
+        <Stays />
+        <Idles />
+      </BunvexProvider>,
+    );
+    render(
+      <BunvexProvider client={cb}>
+        <Watcher />
+      </BunvexProvider>,
+    );
+    act(() => setA({ status: "here" }));
+    await until(() => seen.at(-1) === true, "idle at B");
+    view.rerender(
+      <BunvexProvider client={ca}>
+        <Stays />
+      </BunvexProvider>,
+    );
+    await until(() => seen.at(-1) === false, "active again at B");
+  });
+
   test('"skip" joins nothing', async () => {
     const { signedIn } = await authed();
     const ca = await signedIn("ada");
