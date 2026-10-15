@@ -1810,6 +1810,15 @@ addition (AD-41 unused). Printing the URL the dashboard is serving where Convex 
 **Measurements.** No hot path: CLI messages only. A command asks the local dashboard at most once (one loopback
 request, 2 s timeout), only when a message needs the link and a port is saved; a self-hosted deployment asks
 nothing.
+### Follow-up: the dashboard from its own origin (2026-10-14)
+
+On every real install the dashboard and its deployment are two origins, and `getDeployment` read `/version` (outside
+Convex's CORS layer) and `/stats` (outside bunvex's), so the header showed "Deployment unavailable". It now reads
+`/instance_version`, and `/stats` is behind the layer; the Overview's calls indicator asks Convex's largest top-k (25,
+not 50). Studied, tested against Convex's binary and in Chromium with the dashboard on `bunvex dashboard serve` and
+the server on another port (`cross-origin.e2e.ts`): [STUDY-67 §9](STUDY-67-http-function-api.md#9-the-dashboards-routes-from-another-origin-2026-10-14).
+No new divergence.
+
 ## 6. Open questions
 
 Every question below is in the decision format the owner asked for (what Convex does / what bunvex would do /

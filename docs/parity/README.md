@@ -159,7 +159,7 @@ Checked against main on 2026-10-04, after #370–#395. Since the first ranking, 
 timeout (#371), searches while indexes rebuild (#375), `server-only` and wasm bundling (#376),
 `deploy --cmd` (#378), the `log` export (#380), the write-throughput limit (#374), the SSRF proxy
 (#377–#381), identical database indexes refused (STUDY-66), the sync arguments-size metrics
-(`bunvex_sync_*_args_bytes`, #432; its client-sync row marked done 2026-10-11), the CLI's `network-test`, `docs`, `update` and `dashboard` (STUDY-146), the remaining `bunvex.json` keys (`node.nodeVersion`, `bundler.includeSourcesContent`, STUDY-145), the upgrade guide ([docs/upgrading.md](../upgrading.md)). Decided divergences and cloud-only items are not
+(`bunvex_sync_*_args_bytes`, #432; its client-sync row marked done 2026-10-11), the CLI's `network-test`, `docs`, `update` and `dashboard` (STUDY-146), the remaining `bunvex.json` keys (`node.nodeVersion`, `bundler.includeSourcesContent`, STUDY-145), the upgrade guide ([docs/upgrading.md](../upgrading.md)), the dashboard's reads from its own origin (`/instance_version`, `/stats` behind the CORS layer, STUDY-67 §9; it showed "Deployment unavailable" on every real install). Decided divergences and cloud-only items are not
 gaps.
 
 **High: an app that uses it does not run**

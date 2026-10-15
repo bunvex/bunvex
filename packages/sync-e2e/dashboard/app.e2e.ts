@@ -214,7 +214,9 @@ describe("the dashboard app on a live deployment", () => {
     await heading(page, "Overview");
     // the deployment's own name and version, from the server
     await page.getByRole("button", { name: `Signed in: ${INSTANCE}` }).waitFor();
-    await page.getByText(INSTANCE).first().waitFor();
+    // (the header's visible line: the phone's one-line summary is hidden at this width)
+    await page.getByText(INSTANCE, { exact: true }).filter({ visible: true }).first().waitFor();
+    expect(await page.getByText("Deployment unavailable").count()).toBe(0);
     // as Convex's dashboard: the admin key in Authorization (bunvex's scheme, DV-97) and the client header
     const checks = toDeployment.filter((r) => r.url.endsWith("/api/check_admin_key") && r.headers.authorization);
     expect(checks.map((r) => r.headers.authorization)).toContain(`Bunvex ${srv.adminKey}`);

@@ -73,7 +73,7 @@ export interface MetricsFeatures {
   /**
    * The `k` functions with the most calls, the highest failure rate or the highest cache hit rate over the
    * window, plus `REST` (Convex's `function_call_count_top_k`, `failure_percentage_top_k`,
-   * `cache_hit_percentage_top_k`). Percentages are 0–100.
+   * `cache_hit_percentage_top_k`). Percentages are 0–100. `k` is 1 to 25, as those routes take it.
    */
   topFunctions?(measure: TopKMeasure, window: MetricsWindow, k: number, opts?: CallOptions): Promise<TopKSeries>;
   /** A table's rows read or written per bucket (Convex's `table_rate`). */
