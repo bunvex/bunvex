@@ -16,6 +16,7 @@ import { useExtensions } from "../extensions/context.ts";
 import { offers } from "../extensions/types.ts";
 import { KIND_WORDS } from "../functions/tree.ts";
 import { useRunner } from "../runner/context.tsx";
+import { screenOffered } from "../shell/offered-screens.tsx";
 import { GROUP_TITLES, looksLikeId, type PaletteItem, rememberPick, searchItems } from "./model.ts";
 
 const SCREENS: [string, string, string[]?][] = [
@@ -30,6 +31,7 @@ const SCREENS: [string, string, string[]?][] = [
   ["Authentication", "/auth", ["users"]],
   ["Logs", "/logs"],
   ["History", "/history", ["audit"]],
+  ["Subscriptions", "/subscriptions", ["live queries", "invalidations"]],
 ];
 const SETTINGS: [string, string][] = [
   ["General", "/settings/general"],
@@ -83,7 +85,8 @@ function useItems(query: string): PaletteItem[] {
 
   return useMemo(() => {
     const items: PaletteItem[] = [];
-    for (const [title, to, keywords] of SCREENS)
+    // a screen the source does not offer is left out, as from the sidebar (offered-screens.tsx)
+    for (const [title, to, keywords] of SCREENS.filter(([, to]) => screenOffered(qs.source, to)))
       items.push({ id: `screen:${to}`, kind: "screen", title, keywords, go: { to } });
     for (const e of extensions.filter((e) => offers(qs.source, e))) {
       items.push({ id: `screen:${e.nav.to}`, kind: "screen", title: e.title, hint: "Extension", go: { to: e.nav.to } });
@@ -119,7 +122,7 @@ function useItems(query: string): PaletteItem[] {
         hint: "Settings",
         go: { to: "/settings/apps" },
       });
-    for (const [title, section] of AUTH_PAGES)
+    for (const [title, section] of screenOffered(qs.source, "/auth") ? AUTH_PAGES : [])
       items.push({
         id: `setting:auth:${section}`,
         kind: "setting",

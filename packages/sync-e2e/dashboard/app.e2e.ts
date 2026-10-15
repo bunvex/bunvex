@@ -11,6 +11,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { createServerDataSource } from "@bunvex/dashboard-source";
 import { type Browser, chromium, type Page } from "playwright-core";
 import { type LiveServer, startLiveServer, until } from "./live-server.ts";
 
@@ -391,6 +392,33 @@ describe("the dashboard app on a live deployment", () => {
     // and live again
     await srv.call("mutation", "messages:send", { body: "after the return" });
     await cellOf(page, /^after the return$/).waitFor();
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("bunvex's own screens the deployment does not offer are not in the sidebar; their URL says so", async () => {
+    // what the source offers decides (offered-screens.tsx): asked of the same source the app builds
+    const src = createServerDataSource({ url: srv.url, adminKey: srv.adminKey });
+    const screens = [
+      { name: "Topology", path: "/topology", offered: typeof src.getTopology === "function" },
+      { name: "Authentication", path: "/auth/users", offered: typeof src.listAuthUsers === "function" },
+      { name: "Subscriptions", path: "/subscriptions", offered: typeof src.getSubscriptions === "function" },
+    ];
+    await src.close();
+    const { page, errors, close } = await signedIn("/");
+    await heading(page, "Overview");
+    const nav = page.getByRole("navigation", { name: "Dashboard" });
+    await nav.getByRole("link", { name: "History" }).waitFor();
+    for (const s of screens)
+      expect(await nav.getByRole("link", { name: s.name, exact: true }).count()).toBe(s.offered ? 1 : 0);
+    // a typed URL to one that is not offered: the screen says so
+    const hidden = screens.find((s) => !s.offered);
+    if (hidden) {
+      await page.goto(`${APP}${hidden.path}`);
+      await signIn(page);
+      await heading(page, hidden.name);
+      await page.getByText(/^This deployment does not offer .* yet\.$/).waitFor();
+    }
     expect(errors).toEqual([]);
     await close();
   });
