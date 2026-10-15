@@ -27,6 +27,7 @@ import {
   type CronRun,
   type DashboardDataSource,
   DataSourceError,
+  type DeclaredIndexes,
   type DeploymentInfo,
   type DeploymentState,
   type DeploymentStats,
@@ -151,6 +152,37 @@ export type MockDataSourceOptions = FixtureOptions & {
 
 /** At most this many documents per insert or delete call, as a server bounds a transaction. */
 export const MAX_WRITE = 4096;
+
+/** A fixture table's indexes as its schema would declare them: every kind, staged ones marked. */
+function declaredIndexesOf(t: FixtureTable): DeclaredIndexes {
+  const out: DeclaredIndexes = {
+    database: t.indexes
+      .filter((i) => !i.system)
+      .map((i) => ({ name: i.name, fields: [...i.fields, "_creationTime"], staged: false })),
+    search: [],
+    vector: [],
+  };
+  for (const ix of t.otherIndexes ?? []) {
+    const f = ix.fields;
+    if (Array.isArray(f)) out.database.push({ name: ix.name, fields: [...f], staged: ix.staged });
+    else if ("searchField" in f)
+      out.search.push({
+        name: ix.name,
+        searchField: f.searchField,
+        filterFields: [...f.filterFields],
+        staged: ix.staged,
+      });
+    else
+      out.vector.push({
+        name: ix.name,
+        vectorField: f.vectorField,
+        dimensions: f.dimensions,
+        filterFields: [...f.filterFields],
+        staged: ix.staged,
+      });
+  }
+  return out;
+}
 
 // ------------------------------------------------------------------ cursors
 
@@ -574,7 +606,10 @@ export class MockDataSource implements DashboardDataSource {
         .filter((t) => t.declared)
         .map((t) => {
           const validator = MOCK_DOCUMENT_TYPES[t.name];
-          return validator ? { name: t.name, validator: structuredClone(validator) } : { name: t.name };
+          const indexes = declaredIndexesOf(t);
+          return validator
+            ? { name: t.name, validator: structuredClone(validator), indexes }
+            : { name: t.name, indexes };
         }),
     }));
   }
