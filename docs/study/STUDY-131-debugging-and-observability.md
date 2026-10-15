@@ -294,6 +294,10 @@ function to a non-admin identity (`application_function_runner/mod.rs`, `path.is
 !(identity.is_admin() || identity.is_system())`). AD-24's queries are closed to function code
 (`adminCallOnly`); the general gap is left for the owner.
 
+**Later (STUDY-149's follow-up, "AD-24 on a deployment").** The dashboard's server source calls both queries, so
+the Data screen's system tables run on a deployment. `appVisible` had read every table as private since the virtual
+tables were split from `_file_storage` and `_scheduled_jobs` (STUDY-125); it now names those two.
+
 ## 8. Implementation: AD-25, subscriptions and invalidation inspector (built 2026-10-05)
 
 §7 is AD-24's implementation (#460).

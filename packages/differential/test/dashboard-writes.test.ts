@@ -1,8 +1,9 @@
 // The Data screen's writes (STUDY-149 PR 3): `_system/frontend/addDocument`, `patchDocumentsFields`,
 // `replaceDocument`, `deleteDocuments`, `clearTablePage` and `createTable`, called as an admin on Convex's backend
 // (the oracle) and on bunvex's with the same arguments, in the same order, for the app of `dashboard-writes-app/`
-// (a table of any documents, one with a strict document type). Every answer, the data left in each table and the
-// audit events the calls recorded are compared, ids named by first appearance and times left out. The undefined
+// (a table of any documents, one with a strict document type); `patchDocumentsFields` without ids too, the
+// dashboard's bulk edit (STUDY-149 "Bulk edit"). Every answer, the data left in each table and the audit events the
+// calls recorded are compared, ids named by first appearance and times left out. The undefined
 // placeholder is each backend's own (DV-478), the application error's name too (DV-03). Local only: skipped, with
 // a note, when Convex's backend is not there (scripts/download-convex-backend.sh, or CONVEX_BACKEND_BIN).
 //
@@ -136,6 +137,7 @@ describe.skipIf(!ready)("the Data screen's writes on Convex and on bunvex", () =
       const placeholder = b.name === "convex" ? CONVEX_UNDEFINED : BUNVEX_UNDEFINED;
       await m(b, "addDocument", { table: "pfree", documents: [{ k: 1 }, { k: 2 }, { k: 3 }] });
       const [a, bb, c] = await idsOf(b, "pfree");
+      await Bun.sleep(5); // the setup's events before `since`
       const since = Date.now() - 1;
       const patch = (args: Record<string, unknown>) => m(b, "patchDocumentsFields", { table: "pfree", ...args });
       rec("set", await patch({ ids: [a], fields: { n: 5, s: "x" } }));
@@ -160,10 +162,70 @@ describe.skipIf(!ready)("the Data screen's writes on Convex and on bunvex", () =
     });
   });
 
+  test("patchDocumentsFields without ids (the bulk edit): every document in one call, no filter, the schema", async () => {
+    await same(async (b, rec) => {
+      const placeholder = b.name === "convex" ? CONVEX_UNDEFINED : BUNVEX_UNDEFINED;
+      await m(b, "addDocument", { table: "bfree", documents: [{ k: 1 }, { k: 2, s: "x" }, { k: 3 }] });
+      await Bun.sleep(5); // the setup's events before `since`
+      const since = Date.now() - 1;
+      const all = (table: string, fields: unknown, extra: Record<string, unknown> = {}) =>
+        m(b, "patchDocumentsFields", { table, fields, ...extra });
+      rec("set", await all("bfree", { n: 1, s: "y" }));
+      rec("remove", await all("bfree", { s: placeholder }));
+      rec("set and remove", await all("bfree", { n: placeholder, t: ["1"] }));
+      rec("nothing", await all("bfree", {}));
+      // the dashboard sends no filter: the mutation takes none
+      rec("a filter", await all("bfree", { n: 2 }, { filters: [{ field: "k", op: "eq", value: 1 }] }));
+      rec("componentId null", await all("bfree", { c: true }, { componentId: null }));
+      rec("an empty table", await all("bempty", { x: 1 }));
+      rec("a system table", await all("_storage", { x: 1 }));
+      rec("bfree", await dump(b, "bfree"));
+      // the schema: one document refused fails the whole call, nothing written
+      await m(b, "addDocument", { table: "strict", documents: [{ name: "a" }, { name: "b", n: 1 }] });
+      rec("the schema, a wrong type", await all("strict", { name: 1 }));
+      rec("the schema, a declared field", await all("strict", { n: 2 }));
+      rec("strict", await dump(b, "strict"));
+      rec("events", await eventsSince(b, since));
+    });
+  });
+
+  test("patchDocumentsFields without ids past a transaction's reads: refused whole, nothing written, no event", async () => {
+    await same(async (b, rec) => {
+      // each patch reads its document: a transaction's 4 096 reads (Convex's TRANSACTION_MAX_READ_SET_INTERVALS)
+      // bound a bulk edit at 4 093 documents, well before its 16 000 writes. At 4 094 exactly the error differs
+      // (Convex counts one more read before the patches, bunvex's audit event reads one after: STUDY-149 "Bulk
+      // edit", found on the way), so the refusal is checked at 4 095.
+      await m(b, "addDocument", { table: "bbig", documents: Array.from({ length: 4095 }, (_, i) => ({ i })) });
+      await Bun.sleep(5); // the insert's event before `since`
+      const since = Date.now() - 1;
+      const edit = () => m(b, "patchDocumentsFields", { table: "bbig", fields: { edited: true } });
+      const count = () => call(b, "query", "ops:count", { table: "bbig", field: "edited" });
+      rec("4 095", await edit());
+      rec("after 4 095", await count());
+      for (let n = 0; n < 2; n++) {
+        const first = ((await call(b, "query", "ops:firstId", { table: "bbig" })) as { value: string }).value;
+        await m(b, "deleteDocuments", { toDelete: [{ id: first, tableName: "bbig" }] });
+      }
+      rec("4 093", await edit());
+      rec("after 4 093", await count());
+      rec(
+        "events",
+        (await eventsSince(b, since)).map((e) => ({
+          ...e,
+          metadata: {
+            ...(e.metadata as object),
+            document_ids: (e.metadata as { document_ids: unknown[] }).document_ids.length,
+          },
+        })),
+      );
+    });
+  }, 120_000);
+
   test("replaceDocument: a replace, with its own system fields, another _id, gone, not an id, the schema", async () => {
     await same(async (b, rec) => {
       await m(b, "addDocument", { table: "rfree", documents: [{ k: 1 }, { k: 2 }] });
       const [a, bb] = await idsOf(b, "rfree");
+      await Bun.sleep(5); // the setup's events before `since`
       const since = Date.now() - 1;
       rec("replace", await m(b, "replaceDocument", { id: a, document: { label: "r" } }));
       const doc = (await dump(b, "rfree"))[0]!;
@@ -187,6 +249,7 @@ describe.skipIf(!ready)("the Data screen's writes on Convex and on bunvex", () =
       await m(b, "addDocument", { table: "dother", documents: [{ k: 9 }] });
       const [a, bb, c] = await idsOf(b, "dfree");
       const [o] = await idsOf(b, "dother");
+      await Bun.sleep(5); // the setup's events before `since`
       const since = Date.now() - 1;
       const del = (toDelete: unknown) => m(b, "deleteDocuments", { toDelete });
       rec(
@@ -217,6 +280,7 @@ describe.skipIf(!ready)("the Data screen's writes on Convex and on bunvex", () =
     await same(async (b, rec) => {
       await m(b, "addDocument", { table: "cfree", documents: Array.from({ length: 4096 }, (_, i) => ({ i })) });
       await m(b, "addDocument", { table: "cfree", documents: Array.from({ length: 10 }, (_, i) => ({ i: 4096 + i })) });
+      await Bun.sleep(5); // the setup's events before `since`
       const since = Date.now() - 1;
       const first = (await m(b, "clearTablePage", { tableName: "cfree", cursor: null })) as {
         value: { continueCursor: string };

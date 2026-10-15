@@ -183,7 +183,11 @@ export function TableMenu(props: {
   );
 }
 
-function ClearTable(props: {
+/**
+ * Clearing a table, its name typed to confirm: from the menu, and from "Delete all" with every document selected
+ * (Convex's toolbar opens its clear dialog for that too, `DataToolbar.tsx`).
+ */
+export function ClearTable(props: {
   table: string;
   count?: number;
   open: boolean;

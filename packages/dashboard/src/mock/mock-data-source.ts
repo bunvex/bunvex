@@ -192,6 +192,11 @@ const FIELD_NAME = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 
 /** The root component in an event's metadata, as Convex's system functions record it. */
 const ROOT_COMPONENT = { component_id: null, component: null };
+/**
+ * The most documents Convex's bulk edit (`patchDocumentsFields` without ids) can patch with the default limits:
+ * each patch reads its document, and the transaction may read 4 096 times (three go to the scan and the function).
+ */
+const MAX_PATCH_ALL = 4093;
 /** Convex's `MAX_CLEAR_ROWS`: the documents one page of a clear deletes. */
 const MAX_CLEAR_PAGE = 4000;
 
@@ -763,19 +768,39 @@ export class MockDataSource implements DashboardDataSource {
         if (!d) throw new DataSourceError("not_found", "Cannot read properties of null (reading '_id')");
         return d;
       });
-      // `_id` and `_creationTime` may be given their own values only (Convex's patch)
-      const { _id, _creationTime, ...rest } = fields;
-      checkFields(rest, "patch");
-      for (const d of docs) checkSystemFields(d, { _id, _creationTime });
-      for (const d of docs)
-        for (const [k, v] of Object.entries(rest)) {
-          const isUnset = typeof v === "object" && v !== null && !Array.isArray(v) && "$unset" in v;
-          if (isUnset) delete d[k];
-          else d[k] = structuredClone(v as Value);
-        }
-      this.changed(table);
-      this.record("update_documents", { ...ROOT_COMPONENT, table, document_ids: docs.map((d) => d._id) });
+      this.patch(table, docs, fields);
     });
+  }
+
+  patchAllDocuments(table: string, fields: Record<string, FieldPatch>, opts?: CallOptions) {
+    return this.call(opts?.signal, () => {
+      this.canWrite();
+      // Convex's mutation without ids reads the whole table in its one transaction: a table that does not exist
+      // is no error (nothing to edit), and one past the transaction's reads is refused whole
+      const docs = this.tables.get(table)?.documents ?? [];
+      if (docs.length > MAX_PATCH_ALL)
+        throw new DataSourceError(
+          "invalid_request",
+          "Too many reads in a single function execution (limit: 4096). Consider using smaller limits in your queries, paginating your queries, or using indexed queries with a selective index range expressions.",
+        );
+      this.patch(table, [...docs], fields);
+    });
+  }
+
+  /** Convex's `patchDocumentsFields`: every document patched, or none; one event with the ids. */
+  private patch(table: string, docs: Document[], fields: Record<string, FieldPatch>) {
+    // `_id` and `_creationTime` may be given their own values only (Convex's patch)
+    const { _id, _creationTime, ...rest } = fields;
+    checkFields(rest, "patch");
+    for (const d of docs) checkSystemFields(d, { _id, _creationTime });
+    for (const d of docs)
+      for (const [k, v] of Object.entries(rest)) {
+        const isUnset = typeof v === "object" && v !== null && !Array.isArray(v) && "$unset" in v;
+        if (isUnset) delete d[k];
+        else d[k] = structuredClone(v as Value);
+      }
+    this.changed(table);
+    this.record("update_documents", { ...ROOT_COMPONENT, table, document_ids: docs.map((d) => d._id) });
   }
 
   replaceDocument(table: string, id: string, document: Record<string, Value>, opts?: CallOptions) {
