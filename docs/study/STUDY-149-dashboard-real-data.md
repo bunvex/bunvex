@@ -1812,14 +1812,175 @@ addition (AD-41 unused). Printing the URL the dashboard is serving where Convex 
 **Measurements.** No hot path: CLI messages only. A command asks the local dashboard at most once (one loopback
 request, 2 s timeout), only when a message needs the link and a port is saved; a self-hosted deployment asks
 nothing.
+### Follow-ups after the plan: AD-25 on a deployment
 
+The subscriptions and invalidation inspector ([STUDY-131 AD-25](STUDY-131-debugging-and-observability.md#ad-25--subscriptions-and-invalidation-inspector),
+§8) had its server side since 2026-10-05 and its screen on the mock; the #648 audit classed it (c): the server has
+it, the source does not call it. Approved by the owner on 2026-10-14. Convex has nothing to compare with (it keeps
+read sets internal), so the design follows STUDY-131 and this study's rules for the screens: the routes as the other
+admin routes, the follow stream as the log stream (§1.3), the polls stopped while disconnected (PR 6).
+
+**The source** (`packages/dashboard-source/src/inspector.ts`, its own block at the end of `server-source.ts`):
+
+- `getSubscriptions` and `getQueryCache`: `GET /api/debug/subscriptions[?path=]` and
+  `/api/debug/query_cache[?path=&limit=]` through `AdminHttp` (the admin key, `Bunvex-Client: dashboard-<version>`;
+  a refusal is `unauthorized`), mapped field by field to the contract's types: the server's own fields
+  (`validAt`, `waits`, a running entry's `ts`, `observedTime`) are left out, every miss reason is given (0 when the
+  server leaves one out).
+- `watchInvalidations`: one long-poll loop per watcher on `/api/debug/invalidations?cursor=&timeoutMs=60000&path=`
+  (the server filters by path; `newCursor` still moves past what it filtered out).
+  - *From now on*, as the contract says: the first request is `cursor=0&timeoutMs=0`, which answers at once with the
+    feed's newest `seq`; its entries are dropped.
+  - Each answer's `newCursor` is asked from next. Failures back off as the log stream's (Convex's 500 ms doubling to
+    16 s with jitter) and are reported after 5 in a row; a refusal (`unauthorized`: no key, or no ViewMetrics) stops
+    the loop and is reported at once, since a key's operations do not change.
+  - **While disconnected** (the source's `watchConnection`: Convex's two checks 2.5 s apart; only `disconnected`
+    counts, as the overlay) the request in flight is aborted and nothing is asked. When the connection is back (or
+    after any failure), the loop asks `cursor=0&timeoutMs=0` again and delivers what came after the last `seq` it saw:
+    what landed while away reaches the screen, up to the server's 1024-entry feed. A server that restarted has a feed
+    behind ours; then everything it holds is delivered and its position followed. A back-off in progress ends when
+    the connection returns.
+  - The stop aborts the request in flight (the server drops its waiter); nothing is delivered after it; `close()`
+    stops every loop.
+
+**The screen** (`subscriptions/screen.tsx`, `shell/connection.tsx`):
+
+- **Cadence.** The mock's 5 s poll costs little on the mock, but on a deployment each poll builds the whole
+  snapshot: every session's queries with their read sets read back to values. Measured on this Mac with an in-process
+  server (one bunvex process, 10 client sessions): 100 live queries, 2.7 ms and 275 KB per answer; 1 000, 19 ms and
+  2.1 MB; the query cache, 0.15 ms whatever the count. So the screen keeps 5 s, but paces itself by the last
+  answer's time: the next poll waits 100 times as long (at most 1 % of the server's time), between 5 s and 60 s
+  (`pollInterval`). Not while the tab is hidden (TanStack Query's default) nor while disconnected: the two polls
+  are `enabled: !disconnected`, and are among the polled reads asked again at once on return. The follow stream is
+  a long poll, so it costs a request per batch of invalidations.
+- **The dashboard's own subscriptions** are listed too: its admin session (the table mapping, the open table, the
+  runner) shows as a session with identity `admin`. They are live queries on the deployment, so they stay.
+- **The AD-27 link** ("Open the invalidation" / "Open in Subscriptions" on a query's log entry) needed nothing more:
+  the log's `path` is the display path (`messages:list`), which is the sync hub's canonical `udfPath`; the digest is
+  the same function of the canonical arguments; and the history the source maps keeps `seq`. Checked live and in
+  Chromium.
+
+**Divergences.** None (DV-489 unused): an addition's screen, wired as decided in STUDY-131.
+
+**Tests.**
+
+- `packages/dashboard-source/test/inspector.test.ts` (no server): the snapshots mapped (bounds of every kind, the
+  history's `seq`, the miss reasons filled), the query strings and headers, a refusal; the follow loop against a fake
+  of the server's feed: from now on (the first request and the cursors that follow), the path filter, stop aborting
+  the request in flight, failures backing off and reported on the sixth, the catch-up after failures, a restarted
+  server's feed, a refusal stopping it at once, no request while disconnected and the missed ones on return, a
+  back-off cut short by the return, `close`.
+- `packages/sync-e2e/dashboard/server-source-subscriptions.test.ts` (a live server): the contract suite's
+  subscriptions area; an app's live query listed with its digest, its `by_author` range as values and
+  `newSubscriber`; a mutation's invalidation followed (source, table, index, the key's author), absent for a write
+  outside the range, in the query's history with the same `seq` and its delay until sent, and the re-run's log entry
+  linking that digest, `seq` and commit ts; the query cache's entry with its read set; `close()` stopping the loop.
+- `packages/dashboard/test/subscriptions.test.tsx`: `pollInterval`; the live queries and the cache not asked while
+  disconnected (even for a new filter), and asked at once on return.
+- In Chromium (`app.e2e.ts`, on a live deployment through the test's proxy): an app's live query listed; "Follow
+  invalidations" showing a mutation's invalidation; the connection lost — nothing asked of `/api/debug/*` while
+  away — and the invalidation that landed meanwhile shown on the return; then Logs, the app's re-run, "Open the
+  invalidation", landing on Subscriptions with the query open and that invalidation marked.
+
+**Sabotage** (each restored after, `git diff` checked; failing tests per suite):
+
+| Sabotage | Unit (source) | Live | Screens | Chromium |
+|---|---|---|---|---|
+| no first request: the feed's history delivered | 1 | 1 | | |
+| the cursor not advanced | 5 | 1 | | |
+| followed on while disconnected | 1 | | | 1 |
+| no catch-up after a failure | 2 | | | |
+| a restarted server's feed not followed | 1 | | | |
+| the stop does not abort the request in flight | 2 | 0 | | |
+| every failure reported | 2 | | | |
+| a refusal backs off instead of stopping | 1 | | | |
+| the history's `seq` dropped by the mapping | 1 | 1 | | |
+| a back-off not cut short by the return | 2 | | | |
+| `close` leaves the loops running | 1 | 1 | | |
+| the methods not wired in `server-source.ts` (`getSubscriptions`) | | 2 | | |
+| the polls not gated while disconnected | | | 1 | |
+| the polls not asked again on return (`POLLED`) | | | 1 | |
+| a fixed 5 s pace | | | 1 | |
+
+The first run of "the cursor not advanced" hung the unit file instead of failing it: the fake feed answered on a
+microtask, so the spinning loop starved the test's timers. The fake now answers on a later task, as a network round
+trip does, and the sabotage fails 5 tests.
+
+**Measurements.** No server change and no hot path: the routes' costs above are the screen's, measured to set its
+pace (a throwaway script, not a benchmark: an in-process server, 10 client sessions holding the live queries,
+200 mutations, then 30 requests per route; Bun 1.4.2, Apple Silicon, other sessions running).
+
+### Follow-ups after the plan: AD-24 on a deployment
+[AD-24](../parity/additions.md#additions) (system tables in the Data screen, STUDY-131 §4 and §7) had its server
+side and its screen, on the mock; the source did not call the server (#648's audit, class (c)). Convex has nothing
+to match: its dashboard shows the app's tables and the two virtual ones (`_storage` in Files, `_scheduled_functions`
+in Schedules), never a private system table, so this is bunvex's own screen (STUDY-12 D1) and no divergence.
+**Source** (`packages/dashboard-source/src/system-tables.ts`, its own block in `server-source.ts`):
+- `listSystemTables`: `_system/debug/systemTables` once (a one-shot query: the contract has no live variant, and
+  the screen fetches the list when the switch is on, as on the mock), its rows as the contract's
+  `{name, description, appVisible, documentCount}`, sorted by name. A key without ViewData gets the server's
+  permission refusal, `unauthorized`.
+- `listSystemDocuments`: `_system/debug/systemTable {table, order, paginationOpts}` (oldest first by default), its
+  documents through `toDocument` (int64 and bytes in their JSON encodings, as `tables.ts` pages a user table). A
+  name without `_` and a page size that is not a positive integer are `invalid_request` before anything is sent,
+  as the mock; a cursor the server refuses is `invalid_request` (`tables.ts`' `pageError`). The server reads a `_`
+  name it does not have as an empty table, so the listing is asked beside the page and an unknown name is
+  `not_found`, the contract's answer.
+- The names are the catalog's: `_file_storage` and `_scheduled_jobs` (apps read them as `_storage` and
+  `_scheduled_functions`). `_index` has no `by_creation_time` index, as Convex's (`crates/database/src/database.rs:1556-1558`), so its pages
+  run in id order; the contract's comment now says so (`data-source-system-tables.ts`).
+**Found on the way, fixed here.**
+1. The server's `appVisible` compared each name with `APP_VISIBLE_SYSTEM_TABLES` (the virtual names, `_storage`
+   and `_scheduled_functions`), which are not in the catalog since the virtual tables were split from their system
+   tables (STUDY-125), so every table read as private, in the dashboard and in `bunvex data --system`. It now asks
+   `virtualTableOfSystem(name)`: `_file_storage` and `_scheduled_jobs` are the public two. The server test checked
+   it only `if` `_storage` was listed; it now pins the two names, and the CLI test the two `public` lines.
+2. The mock listed `_storage` and `_scheduled_functions` as system tables; it now uses the catalog's names and
+   descriptions, so the demo data shows what a deployment shows.
+**Not built here: `tableOfId` for system tables** (PR 2's note, still open). The source part is small (the
+mapping already holds `_file_storage` and `_scheduled_jobs`), but what the dashboard does with such an id is not:
+Convex sends a `_file_storage` id to Files with `?id=` and a `_scheduled_jobs` id to Schedules
+(`dc/lib/utils.ts:103-133` `documentHref`, used by `useIdReferenceLink.ts`), while bunvex's "Go to reference" and the palette open `/database/<table>?doc=`,
+which the system table view does not handle (no document panel). It needs the contract to say what `tableOfId`
+answers for a system id, the mock to answer it, and the screens to route it; left for its own change, in the
+screens' area rather than the source's.
+- Unit (`packages/dashboard-source/test/system-tables.test.ts`, a fake connection): what each query is asked
+  (the order defaulted, the cursor passed on), the listing sorted, documents in the contract's JSON, the refusals
+  sent nowhere, a missing system table `not_found`, a refused cursor `invalid_request`, a permission refusal
+  `unauthorized`.
+- Live (`packages/sync-e2e/dashboard/server-source-system-tables.test.ts`): the contract suite's `systemTables`
+  area on a live server, then the listing as the catalog (sizes match a walk), the app's table in `_tables` and its
+  declared index in `_index`, `_file_storage`'s stored fields (`storageKey`, the size an int64) and the two public
+  tables, `_index` walked once in id order both ways, the refusals, and a read-only key.
+- Server and CLI: `system-tables-browser.test.ts` and `data.test.ts` pin the public tables.
+- Chromium (`app.e2e.ts`): signed in to a live deployment, "Show system tables" lists `_tables`, `_index` and
+  `_file_storage`; `_tables` opens read-only with its description and its documents (the bootstrap rows oldest first, the
+  app's table once newest first); axe finds nothing.
+**Sabotage** (each restored after, `git diff` clean; counts are failing tests, unit / live / server):
+| Sabotage | Failing tests |
+|---|---|
+| the listing not sorted | 1 / 2 / 0 |
+| `order` dropped (always oldest first) | 1 / 2 / 0 |
+| no `not_found` for a missing system table | 1 / 1 / 0 |
+| documents not through `toDocument` | 1 / 2 / 0 |
+| the cursor not passed on | 1 / 4 / 0 |
+| a refused cursor left `unavailable` | 1 / 1 / 0 |
+| a user table's name sent to the server | 1 / 2 / 0 |
+| the server's `appVisible` back to the virtual names | 0 / 1 / 1 (and the CLI test) |
+| the two methods not wired in `server-source.ts` | 0 / 6 / 0 (and the Chromium test) |
+**Measurements.** No hot path: two admin-only queries, only while the switch is on or a system table is open. The
+source's chunk grows by about 1.1 KB minified.
+### Follow-up: the dashboard from its own origin (2026-10-14)
+On every real install the dashboard and its deployment are two origins, and `getDeployment` read `/version` (outside
+Convex's CORS layer) and `/stats` (outside bunvex's), so the header showed "Deployment unavailable". It now reads
+`/instance_version`, and `/stats` is behind the layer; the Overview's calls indicator asks Convex's largest top-k (25,
+not 50). Studied, tested against Convex's binary and in Chromium with the dashboard on `bunvex dashboard serve` and
+the server on another port (`cross-origin.e2e.ts`): [STUDY-67 §9](STUDY-67-http-function-api.md#9-the-dashboards-routes-from-another-origin-2026-10-14).
+No new divergence.
 ### Bulk edit
-
 Convex's "Edit all" and "Edit N", PR 3's note: `patchDocumentsFields` without `ids` had no contract method. Built
 after PR 8. Convex re-read at `d8bdde0` (`dd/` is `dc/features/data/`; `fe/` as in PR 3).
-
 **How Convex does it.**
-
 - **When it is offered.** The table's header checkbox has three states (`dd/lib/useSelectionState.ts:7-82`): on a
   table whose pages are not all loaded, with nothing selected, it selects every document of the table, the ones
   never loaded too (`allPseudoSelected`, every row's checkbox shown checked); once every page is loaded it selects
@@ -1854,12 +2015,9 @@ after PR 8. Convex re-read at `d8bdde0` (`dd/` is `dc/features/data/`; `fe/` as 
   long before the 16 000 writes. Past that, "Too many reads in a single function execution (limit: 4096). …",
   raised inside the rewrap (an application error, its data the message): nothing written, no event. A system
   table fails ("System tables can only be accessed from db.system.query()."), outside the rewrap.
-
 **The server already matched.** PR 3's `patchDocumentsFields` reads the table whole without `ids`; nothing changed
 there. The oracle now covers the no-ids path (below).
-
 **What was built.**
-
 - **Contract** (`data-source.ts`): `patchAllDocuments?(table, fields)`, Convex's bulk edit: every document of the
   table, one transaction, all or nothing, no filter and no pages; a table past one transaction's reads is
   `invalid_request` with the deployment's words; a table that does not exist has nothing to edit. The brief asked
@@ -1880,14 +2038,10 @@ there. The oracle now covers the no-ids path (below).
   loaded rows (Convex's selects that row alone); the draft is kept per table while the page is open, as Add
   documents keeps its own, instead of asking before closing; a system field is refused in the editor (the document
   editor's rule) where Convex lets the deployment refuse it.
-
 **Not built here** ("Ainda não fizemos", none a divergence): the editor's check of the values against the declared
 type as they are typed (Convex's `walkPatchDocuments`) — none of bunvex's document editors has it yet (Add
 documents, the document and cell editors); the deployment's refusal says the same after Apply. "Enable edit mode"
 waits for deployment kinds, as the cell menu's delete (STUDY-12 D13).
-
-**Tests.**
-
 - **Oracle** (`packages/differential/test/dashboard-writes.test.ts`): on Convex's binary and on bunvex,
   `patchDocumentsFields` without ids — set, remove, both, nothing, a `filters` argument (refused by the validator:
   there is no filter), `componentId: null`, an empty table (its event with no ids), `_storage`, the schema's refusal
@@ -1910,11 +2064,7 @@ waits for deployment kinds, as the cell menu's delete (STUDY-12 D13).
 - **Chromium** (`sync-e2e/dashboard/app.e2e.ts`): signed in to a live server, a table of 150 documents, the header,
   Edit all, `{ checked: true, note: undefined }` typed in Monaco, Apply: every document changed on the deployment;
   then the schema's refusal shown in the panel, and axe.
-
 **Sabotage** (each restored after, `git diff` checked; counts are failing tests per suite):
-
-| Sabotage | Failing tests |
-|---|---|
 | server: the no-ids path reads only the first 100 documents | oracle 1, live 1 |
 | server: no event for an empty bulk edit | oracle 2 |
 | source: `patchAllDocuments` sends `ids: []` | unit 1, live 2 |
@@ -1927,14 +2077,10 @@ waits for deployment kinds, as the cell menu's delete (STUDY-12 D13).
 | screen: a top-level `undefined` not removed | screen 2 |
 | screen: the advice added to the deployment's refusal | screen 1 |
 | `DataTable`: a row toggled under "all" starts from nothing | screen 1 |
-
 **Measurements.** No hot path: the server is unchanged; the screen adds one optional call.
-
 **Divergences.** None new (DV-487 and DV-489 unused). The contract's shape is DV-479's rule; the three screen
 details above are bunvex's components (STUDY-12 D1).
-
 **Found on the way** (left to their own PRs, out of the oracle with a note):
-
 1. At exactly 4 094 documents the refusal differs in kind: Convex counts one more read before the patches and fails
    on the last one (inside the rewrap: an application error with data); bunvex records two reads for the scan, so
    its patches pass and the audit event's own read goes over (outside the rewrap: "Uncaught Error", no data).

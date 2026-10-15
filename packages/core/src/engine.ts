@@ -619,7 +619,7 @@ export class Engine {
     // So does retention (STUDY-33, Convex's leader-only `LeaderRetentionManager`), on a store that has it.
     if (hasRetention(this.persistence)) {
       this.retention = new Retention(this.persistence, this.committer, this.opts.retention, (tablet) => {
-        const t = this.catalog.byTablet(tablet);
+        const t = this.catalog.anyTablet(tablet);
         return t ? maintainedIndexes(t) : [];
       });
       await this.retention.start();
@@ -3107,7 +3107,9 @@ export class Engine {
         (
           await db.query(TABLES_TABLE).collect()
         )
-          .filter((t) => t.state === "hidden" && now - (t._creationTime as number) > maxAgeMs)
+          .filter(
+            (t) => t.state === "hidden" && t.namespace === undefined && now - (t._creationTime as number) > maxAgeMs,
+          )
           .slice(0, 1000)
           .map((t) => tableMeta(t).tablet),
       ),

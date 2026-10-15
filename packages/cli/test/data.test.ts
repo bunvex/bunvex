@@ -161,6 +161,11 @@ test("bunvex data --system: every system table with its description; a private o
   expect(lines.some((l) => /^_tables\s+\d+\s+private\s+Every table: its name/.test(l))).toBe(true);
   expect(lines.some((l) => l.startsWith("_index "))).toBe(true);
   expect(lines.some((l) => l.startsWith("alpha"))).toBe(false);
+  // the two tables apps read through `db.system` (as `_storage` and `_scheduled_functions`) are public
+  expect(lines.filter((l) => /^\S+\s+\d+\s+public\s/.test(l)).map((l) => l.split(/\s+/)[0])).toEqual([
+    "_file_storage",
+    "_scheduled_jobs",
+  ]);
   // the private `_index`: its documents, as `bunvex data` prints a table's (here as JSON lines)
   const index = await t.run(["--system", "_index", "--format", "jsonl", "--order", "asc"]);
   expect(index.code).toBe(0);
