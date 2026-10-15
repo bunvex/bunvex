@@ -2,7 +2,8 @@
 // bunvex's: the routes of `http-trace-app/` throw an Error, a value that is no Error, an Error whose stack has no
 // frames, return no Response, fail their body in the handler's turn, or run past the action timeout. Compared: the `trace` whole when it has no
 // frames (it ends with a newline on Convex), and its first line and last character when it has (the frames differ in
-// their paths, and Convex's point into its router). Local only: skipped, with a note, when Convex's backend is not
+// their paths, and Convex's point into its router). And the `code`, whole: Convex's carries the error's message
+// whole (several lines, a trailing newline, a nested call's frames), with the frames' positions masked. Local only: skipped, with a note, when Convex's backend is not
 // there (scripts/download-convex-backend.sh, or CONVEX_BACKEND_BIN).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
@@ -74,6 +75,48 @@ describe.skipIf(!ready)("the 500's trace, against Convex's backend", () => {
       undefined: { trace: "Uncaught undefined\n" },
       noStack: { trace: "Uncaught Error: no stack\n" },
       streamString: { trace: "Uncaught in turn\n" },
+    });
+  }, 60_000);
+});
+
+const CODES = [
+  "multiline",
+  "multilineTypeError",
+  "trailingNewline",
+  "trailingNewlineString",
+  "multilineString",
+  "string",
+  "error",
+  "nested",
+  "nonResponse",
+];
+
+/** Each route's `code`, its request id dropped and its frames' positions masked (they differ in paths and columns). */
+async function codes(b: Backend) {
+  const site = b.url.replace(/:(\d+)$/, (_, p) => `:${Number(p) + 1}`);
+  const out: Record<string, string> = {};
+  for (const kind of CODES) {
+    const { code } = (await (await fetch(`${site}/trace/${kind}`)).json()) as { code: string };
+    out[kind] = code.replace(/^\[Request ID: \w+\] /, "").replace(/\(\.\.\/\w+\/([^:)]+):\d+:\d+\)/g, "(<app>/$1)");
+  }
+  return out;
+}
+
+describe.skipIf(!ready)("the 500's code, against Convex's backend", () => {
+  test("it carries the error's message whole: every line, a trailing newline, a nested call's frames", async () => {
+    const c = await codes(convex);
+    expect(await codes(bunvex)).toEqual(c);
+    // What the oracle shows, spelled out.
+    expect(c).toEqual({
+      multiline: "Server Error: Uncaught Error: line one\nline two",
+      multilineTypeError: "Server Error: Uncaught TypeError: first\n\nthird",
+      trailingNewline: "Server Error: Uncaught Error: ends with a newline\n",
+      trailingNewlineString: "Server Error: Uncaught a string\n",
+      multilineString: "Server Error: Uncaught one\ntwo",
+      string: "Server Error: Uncaught a string",
+      error: "Server Error: Uncaught Error: boom",
+      nested: "Server Error: Uncaught Error: nested boom\n    at <anonymous> (<app>/throws.ts)\n",
+      nonResponse: "Server Error: Uncaught Error: HTTP actions must return a Response",
     });
   }, 60_000);
 });

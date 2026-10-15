@@ -258,4 +258,45 @@ describe("signed-in clients: the rejoin comes after the auth message", () => {
     expect(p.status).toBe("joined");
     expect(p.error).toBeNull();
   });
+
+  test("a new identity the gate refuses ends the room on the client: status error, no members, B sees A leave", async () => {
+    const { signedIn, fetcher } = await authed();
+    const [ca, cb] = [await signedIn("ada"), await signedIn("ada")];
+    const a = ca.client.joinRoom<Record<string, never>, Presence, Events>(api.rooms.staff as never, {});
+    const b = cb.client.joinRoom<Record<string, never>, Presence, Events>(api.rooms.staff as never, {});
+    await until(() => a.others().length === 1 && b.others().length === 1, "both in");
+    let bob = false;
+    ca.setAuth(fetcher("bob"), (ok) => {
+      bob = ok;
+    });
+    await until(() => bob, "A is bob");
+    await until(() => a.status === "error", "A's room ended");
+    expect(a.error).toEqual({ code: "no_access", message: "You cannot join this room." });
+    expect(a.others()).toEqual([]);
+    await until(() => b.others().length === 0, "B sees A leave");
+    await Bun.sleep(150);
+    expect(a.status).toBe("error"); // not rejoined until the next sign-in
+  });
+
+  test("a scope refused before sign-in joins after setAuth", async () => {
+    const { client, fetcher } = await authed();
+    const c = client();
+    const p = c.client.joinPresence<Opt, St>(api.rooms.online as never, { team: "t" });
+    await until(() => p.status === "error", "refused while anonymous");
+    expect(p.error?.code).toBe("no_access");
+    c.setAuth(fetcher("ada"), () => {});
+    await until(() => p.status === "joined", "joined once signed in");
+    expect(p.error).toBeNull();
+  });
+
+  test("a room whose canJoin needs a user, refused before sign-in, joins after setAuth", async () => {
+    const { client, fetcher } = await authed();
+    const c = client();
+    const r = c.client.joinRoom<Record<string, never>, Presence, Events>(api.rooms.staff as never, {});
+    await until(() => r.status === "error", "refused while anonymous");
+    c.setAuth(fetcher("ada"), () => {});
+    await until(() => r.status === "joined", "joined once signed in");
+    r.setPresence({ x: 1 });
+    expect(r.myPresence()).toEqual({ x: 1 });
+  });
 });

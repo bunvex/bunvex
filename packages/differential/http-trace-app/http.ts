@@ -1,9 +1,12 @@
 // HTTP routes for the 500's `trace` test (STUDY-31 §11): a handler that throws an Error (its frames), one with no
 // message, a value that is no Error (no frames), an Error whose stack has no frames, one that returns no Response,
-// a body that fails in the handler's turn with a string, and one that runs past the action timeout.
-import { httpActionGeneric, httpRouter } from "convex/server";
+// a body that fails in the handler's turn with a string, and one that runs past the action timeout. For the `code`
+// test: messages of several lines, ones that end with a newline, and a nested action's error (its message carries the
+// callee's frames).
+import { anyApi, httpActionGeneric, httpRouter } from "convex/server";
 
-const results: Record<string, () => unknown> = {
+const results: Record<string, (ctx: { runAction: (f: unknown) => Promise<unknown> }) => unknown> = {
+  nested: (ctx) => ctx.runAction(anyApi.throws!.fails),
   error: () => {
     throw new Error("boom");
   },
@@ -12,6 +15,18 @@ const results: Record<string, () => unknown> = {
   },
   typeError: () => {
     throw new TypeError("bad type");
+  },
+  multiline: () => {
+    throw new Error("line one\nline two");
+  },
+  trailingNewline: () => {
+    throw new Error("ends with a newline\n");
+  },
+  multilineTypeError: () => {
+    throw new TypeError("first\n\nthird");
+  },
+  trailingNewlineString: () => {
+    throw "a string\n";
   },
   string: () => {
     throw "a string";
@@ -53,9 +68,9 @@ const http = httpRouter();
 http.route({
   pathPrefix: "/trace/",
   method: "GET",
-  handler: httpActionGeneric(async (_ctx, req) => {
+  handler: httpActionGeneric(async (ctx, req) => {
     const kind = new URL(req.url).pathname.slice("/trace/".length);
-    return (await results[kind]!()) as Response;
+    return (await results[kind]!(ctx as never)) as Response;
   }),
 });
 export default http;

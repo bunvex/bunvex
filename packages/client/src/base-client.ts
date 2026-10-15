@@ -180,6 +180,7 @@ export class BaseBunvexClient {
         authenticate: (token) => {
           const message = this.state.setAuth(token);
           this.webSocketManager.sendMessage(message);
+          this.rooms.onAuthenticate();
           return message.baseVersion;
         },
         stopSocket: () => this.webSocketManager.stop(),
@@ -204,7 +205,9 @@ export class BaseBunvexClient {
           if (auth) this.webSocketManager.sendMessage(auth);
           if (querySet) this.webSocketManager.sendMessage(querySet);
           for (const m of this.requestManager.resume()) this.webSocketManager.sendMessage(m);
-          this.rooms.onResume();
+          // After a new Authenticate, the rooms it refused before are asked again (STUDY-164 §3.4).
+          if (auth) this.rooms.onAuthenticate();
+          else this.rooms.onResume();
         },
         onMessage: (m) => this.onMessage(m),
         onServerDisconnectError: options.onServerDisconnectError,
@@ -269,6 +272,7 @@ export class BaseBunvexClient {
       case "RoomMembers":
       case "RoomEvent":
       case "RoomError":
+      case "RoomLeft":
         this.rooms.onMessage(m);
         break;
       case "Ping":
@@ -358,10 +362,12 @@ export class BaseBunvexClient {
   /** @internal An admin key (the dashboard), as Convex's `setAdminAuth`. */
   setAdminAuth(value: string, impersonating?: v1.JSONValue) {
     this.webSocketManager.sendMessage(this.state.setAdminAuth(value, impersonating));
+    this.rooms.onAuthenticate();
   }
 
   clearAuth() {
     this.webSocketManager.sendMessage(this.state.clearAuth());
+    this.rooms.onAuthenticate();
   }
 
   /** Subscribe to a query; `onTransition` hears when its result changes. Subscriptions are shared by token. */

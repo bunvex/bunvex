@@ -56,6 +56,9 @@ function typedBlob(request: Request): void {
   });
 }
 
+/** The newline after an uncaught error's message, and the frames after it (`describeUncaught`'s text). */
+const FRAMES_AT_END = /\n(?: {4}at [^\n]*\n)*$/;
+
 export function httpActionServer(o: HttpActionOptions) {
   /**
    * Convex's 500 for an error before the response head: a fresh request id, the message, maybe data. The `trace` is
@@ -63,7 +66,8 @@ export function httpActionServer(o: HttpActionOptions) {
    */
   const errorResponse = (e: unknown) => {
     const u = describeUncaught(e);
-    const head = u.message.split("\n")[0];
+    // Convex's `code` is the error's message, whole: what its trace has before the frames and their newline.
+    const head = u.message.replace(FRAMES_AT_END, "");
     const body: Record<string, unknown> = {
       code: `[Request ID: ${newRequestId()}] ${o.redact ? "Server Error" : `Server Error: ${head}`}`,
     };
