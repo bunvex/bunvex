@@ -717,6 +717,24 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Settings: ?var=NAME (the CLI's link) opens a row for it; the parameter leaves the address", async () => {
+    const { page, errors, close } = await open("/settings/environment-variables?var=ISSUER_DOMAIN");
+    await heading(page, "Environment variables");
+    const name = page.getByRole("textbox", { name: "Name" });
+    await expect_(async () => expect(await name.inputValue()).toBe("ISSUER_DOMAIN"));
+    await expect_(async () => expect(new URL(page.url()).search).toBe(""));
+    await page.getByRole("textbox", { name: "Value" }).fill("example.com");
+    await page.getByRole("button", { name: "Save" }).click();
+    await page.getByText("Saved 1 change.").waitFor();
+    // a reload (the demo data start over) does not add the row again
+    await page.reload();
+    await heading(page, "Environment variables");
+    await page.getByRole("listitem").filter({ hasText: "LOG_LEVEL" }).waitFor();
+    expect(await page.getByRole("textbox", { name: "Name" }).count()).toBe(0);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test("History: a change made in Settings is recorded", async () => {
     const { page, errors, close } = await open("/settings/environment-variables");
     await page.getByRole("button", { name: "Delete LOG_LEVEL" }).click();

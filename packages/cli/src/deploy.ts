@@ -23,6 +23,7 @@ import {
   type DashboardLink,
   dashboardPage,
   ENV_VARS_PAGE,
+  envVarPage,
   localDashboardLink,
   NO_DASHBOARD,
   tableIndexesPage,
@@ -638,7 +639,8 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     // variables page when there is a dashboard to link (DV-477), else Convex's own words for no link.
     if (e instanceof DeploymentError && e.code === "AuthConfigMissingEnvironmentVariable") {
       const [, name] = message.match(/Environment variable (\S+)/i) ?? [];
-      const page = await dashboardPage(dashboard, ENV_VARS_PAGE);
+      // the page with a new row for the variable (Convex's `?var=`), when a name came
+      const page = await dashboardPage(dashboard, name === undefined ? ENV_VARS_PAGE : envVarPage(name));
       io.err(
         `bunvex deploy: Environment variable ${name} is used in auth config file but its value was not set.\n${
           page === null
