@@ -1906,6 +1906,13 @@ The first run of "the cursor not advanced" hung the unit file instead of failing
 microtask, so the spinning loop starved the test's timers. The fake now answers on a later task, as a network round
 trip does, and the sabotage fails 5 tests.
 
+**Flake fix (2026-10-15).** "A back-off ends when the connection comes back" failed once under full-suite load: it
+went on as soon as the failing request had gone out, so a disconnection and return could land before its failure,
+and the loop then took that cut request for a failure and backed off with no wake-up left (a real lost wake-up: a
+blip during a request cost a back-off and a counted failure). The loop now treats a request cut by a disconnection
+as one even when the connection is back, its timers (first tick, back-offs) are injectable (`after`, as
+`watchConnection`'s `every`), and the tests drive them, wait by tasks instead of milliseconds, and pin the race.
+
 **Measurements.** No server change and no hot path: the routes' costs above are the screen's, measured to set its
 pace (a throwaway script, not a benchmark: an in-process server, 10 client sessions holding the live queries,
 200 mutations, then 30 requests per route; Bun 1.4.2, Apple Silicon, other sessions running).
