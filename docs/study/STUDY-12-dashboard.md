@@ -2,7 +2,9 @@
 
 - **Status:** accepted — every divergence decided by the owner (29 Sep–1 Oct 2026); bunvex additions
   (snapshots, Topology, Files buckets placeholder, Authentication, the design language) recorded as such;
-  what is still open, or a call the owner can veto, is listed in §6
+  what is still open, or a call the owner can veto, is listed in §6. The screens were built on the mock; they run
+  on a deployment since [STUDY-149](STUDY-149-dashboard-real-data.md) (some additions still on the mock only:
+  [additions.md](../parity/additions.md))
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/dashboard`,
   `dashboard-common`, `dashboard-self-hosted`, `@convex-dev/design-system`, `system-udfs`,
   `crates/local_backend`)

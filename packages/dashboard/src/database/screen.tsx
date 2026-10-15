@@ -6,7 +6,7 @@ import { preloadCodeEditor } from "@bunvex/ui/components/code-editor";
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { cn } from "@bunvex/ui/lib/utils";
 import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { Pencil, Plus } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, dashboardKeys, documentsQuery, referenceQuery, tablesQuery } from "../data/queries.ts";
@@ -14,7 +14,8 @@ import { type Document, type FilterExpression, type TableInfo, toDataSourceError
 import { DashLink, type TableSearch, tableRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { ErrorState } from "../shell/error-state.tsx";
-import { DeleteDialog, DeleteSelected, deleteDocumentsNow, type Outcome, TableMenu } from "./actions.tsx";
+import { ClearTable, DeleteDialog, DeleteSelected, deleteDocumentsNow, type Outcome, TableMenu } from "./actions.tsx";
+import type { BulkTarget } from "./bulk-edit.tsx";
 import { CellEditor } from "./cell-editor.tsx";
 import { type CellActions, CellMenuItems, cellShortcut, withClause } from "./cell-menu.tsx";
 import { useColumnState } from "./column-settings.tsx";
@@ -122,6 +123,7 @@ function columnsFor(table: string, fields: string[]): DataTableColumn<Document>[
   );
 }
 
+const sameIds = (a: string[], b: string[]) => a.length === b.length && a.every((id, i) => id === b[i]);
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 const describeChanges = ({ changed, added }: { changed: number; added: number }) =>
   [changed > 0 && `${plural(changed, "document")} changed`, added > 0 && `${plural(added, "document")} added`]
@@ -142,6 +144,7 @@ function TableView({ info }: { info: TableInfo }) {
   // each write needs the grant and the source's method for it
   const can = {
     edit: canWrite && typeof source.patchDocuments === "function",
+    editAll: canWrite && typeof source.patchAllDocuments === "function",
     insert: canWrite && typeof source.insertDocuments === "function",
     delete: canWrite && typeof source.deleteDocuments === "function",
     clear: canWrite && typeof source.clearTable === "function",
@@ -162,12 +165,25 @@ function TableView({ info }: { info: TableInfo }) {
 
   // selection: cleared by a new filter; documents that left the list (deleted) leave it too
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  // Convex's selection (`useSelectionState.ts`): the header's checkbox on a table still paging selects every
+  // document, the ones not loaded too ("all"); once every document is loaded, the loaded ones instead
+  const [everyDocument, setEveryDocument] = useState(false);
   const [focusRequest, setFocusRequest] = useState(0);
   const [columnState, setColumnState] = useColumnState(scope.scope, table);
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new filter is a new list
-  useEffect(() => setSelected(new Set()), [search.filter]);
+  useEffect(() => {
+    setSelected(new Set());
+    setEveryDocument(false);
+  }, [search.filter]);
   useEffect(preloadCodeEditor, []); // the filter, cell and document editors all use it
   const selectedIds = useMemo(() => docs.filter((d) => selected.has(d._id)).map((d) => d._id), [docs, selected]);
+  const exhausted = query.isSuccess && !query.hasNextPage && !query.isPlaceholderData;
+  useEffect(() => {
+    if (exhausted && everyDocument) {
+      setEveryDocument(false);
+      setSelected(new Set(docs.map((d) => d._id)));
+    }
+  }, [exhausted, everyDocument, docs]);
 
   // what the last action did, said once (and to screen readers)
   const [notice, setNotice] = useState<Outcome | null>(null);
@@ -236,36 +252,85 @@ function TableView({ info }: { info: TableInfo }) {
     }
     setSearch({ doc: d._id, panel: undefined });
   };
-  const panel: PanelState | null = search.doc
+  const filtered = expr !== undefined && (activeCount(expr) > 0 || expr.order !== "desc" || expr.index !== undefined);
+  // Convex's `hasFilters`: a clause narrows the documents (an index or an order alone does not)
+  const hasFilters = expr !== undefined && activeCount(expr) > 0;
+  // Convex's `allRowsSelected`: every document of the table, not only the ones a filter matches
+  const allRows =
+    !hasFilters && (everyDocument || (exhausted && selectedIds.length > 0 && selectedIds.length === docs.length));
+  // what Edit and Delete act on (Convex's `isEditingAllAndMoreThanOne`): the whole table, or the selected ones
+  const wholeTable = allRows && selectedIds.length !== 1;
+  const bulkTarget: BulkTarget = wholeTable ? "all" : selectedIds;
+  const canBulk = wholeTable ? can.editAll : selectedIds.length === 1 ? can.replace : can.edit;
+  const [bulk, setBulk] = useState<BulkTarget | null>(null);
+  const [clearingAll, setClearingAll] = useState(false);
+  // a document or another panel opened from the URL takes the panel's place
+  useEffect(() => {
+    if (search.doc || search.panel) setBulk(null);
+  }, [search.doc, search.panel]);
+  const toggleEveryDocument = () => {
+    if (exhausted) setSelected(selectedIds.length === 0 ? new Set(docs.map((d) => d._id)) : new Set());
+    else if (selectedIds.length > 0) setSelected(new Set());
+    else setEveryDocument((all) => !all);
+  };
+  const editSelected = () => {
+    if (bulk !== null && (bulk === "all" ? wholeTable : !wholeTable && sameIds(bulk, selectedIds))) {
+      setBulk(null); // the panel open for this selection: the button closes it, as Convex's
+      return;
+    }
+    if (!wholeTable && selectedIds.length === 1) {
+      // one document: its own editor (Convex's `editDocument` popup)
+      setEditRequest((n) => (n ?? 0) + 1);
+      setSearch({ doc: selectedIds[0], panel: undefined });
+      return;
+    }
+    setSearch({ doc: undefined, panel: undefined });
+    setBulk(bulkTarget);
+  };
+  const panel: PanelState | null = bulk
     ? {
-        kind: "document",
-        id: search.doc,
-        canEdit: can.replace,
-        editRequest,
-        onDirtyChange: (dirty) => {
-          documentDirty.current = dirty;
+        kind: "bulkEdit",
+        target: bulk,
+        onApplied: (target) => {
+          setBulk(null);
+          afterWrite({
+            ok: true,
+            message:
+              target === "all"
+                ? `Edited all documents in ${table}.`
+                : `Edited ${formatCount(target.length)} document${target.length === 1 ? "" : "s"} in ${table}.`,
+          });
         },
       }
-    : search.panel === "add"
-      ? can.insert
-        ? {
-            kind: "add",
-            onAdded: (count) => {
-              closePanel();
-              afterWrite({
-                ok: true,
-                message: `Added ${formatCount(count)} document${count === 1 ? "" : "s"} to ${table}.`,
-              });
-            },
-          }
-        : null
-      : search.panel === "columns"
-        ? { kind: "columns", fields, state: columnState, onChange: setColumnState }
-        : search.panel
-          ? { kind: search.panel }
-          : null;
+    : search.doc
+      ? {
+          kind: "document",
+          id: search.doc,
+          canEdit: can.replace,
+          editRequest,
+          onDirtyChange: (dirty) => {
+            documentDirty.current = dirty;
+          },
+        }
+      : search.panel === "add"
+        ? can.insert
+          ? {
+              kind: "add",
+              onAdded: (count) => {
+                closePanel();
+                afterWrite({
+                  ok: true,
+                  message: `Added ${formatCount(count)} document${count === 1 ? "" : "s"} to ${table}.`,
+                });
+              },
+            }
+          : null
+        : search.panel === "columns"
+          ? { kind: "columns", fields, state: columnState, onChange: setColumnState }
+          : search.panel
+            ? { kind: search.panel }
+            : null;
 
-  const filtered = expr !== undefined && (activeCount(expr) > 0 || expr.order !== "desc" || expr.index !== undefined);
   const loaded = docs.length;
   const status = query.isFetchingNextPage
     ? "Loading more…"
@@ -306,16 +371,35 @@ function TableView({ info }: { info: TableInfo }) {
             </span>
           )}
           <span className="ml-auto flex flex-wrap items-center gap-1">
-            {can.delete && selectedIds.length > 0 && (
-              <DeleteSelected
-                table={table}
-                ids={selectedIds}
-                onDone={(o) => {
-                  if (o.ok) setSelected(new Set());
-                  afterWrite(o);
-                }}
-                onClosed={() => setFocusRequest((n) => n + 1)}
-              />
+            {canBulk && (selectedIds.length > 0 || allRows) && (
+              <Button variant="outline" size="sm" aria-pressed={bulk !== null} onClick={editSelected}>
+                <Pencil aria-hidden="true" />
+                {/* Convex's words: "Edit", "Edit 3", "Edit all" */}
+                {wholeTable
+                  ? "Edit all"
+                  : selectedIds.length === 1
+                    ? "Edit"
+                    : `Edit ${formatCount(selectedIds.length)}`}
+              </Button>
+            )}
+            {wholeTable && can.clear ? (
+              // every document: Convex's Delete opens the clear dialog
+              <Button variant="destructive-outline" size="sm" onClick={() => setClearingAll(true)}>
+                Delete all
+              </Button>
+            ) : (
+              can.delete &&
+              selectedIds.length > 0 && (
+                <DeleteSelected
+                  table={table}
+                  ids={selectedIds}
+                  onDone={(o) => {
+                    if (o.ok) setSelected(new Set());
+                    afterWrite(o);
+                  }}
+                  onClosed={() => setFocusRequest((n) => n + 1)}
+                />
+              )
             )}
             {can.insert && (
               <Button
@@ -442,7 +526,23 @@ function TableView({ info }: { info: TableInfo }) {
             // an _id is 32 characters of mono: wide enough to read whole
             defaultColumnWidth={(id) => (id === "_id" ? 260 : 180)}
             onColumnStateChange={setColumnState}
-            selection={can.delete ? { selected, onChange: setSelected, describe: (d) => d._id } : undefined}
+            selection={
+              can.delete || can.edit || can.editAll || can.replace
+                ? {
+                    selected,
+                    onChange: (next) => {
+                      setEveryDocument(false);
+                      setSelected(next);
+                    },
+                    describe: (d) => d._id,
+                    all: everyDocument,
+                    onToggleAll: toggleEveryDocument,
+                    // Convex's: no "select all" while only some of a filter's matches are loaded
+                    allHidden: hasFilters && !exhausted && selectedIds.length === 0,
+                    allLabel: hasFilters ? "Select every matching document" : "Select all documents",
+                  }
+                : undefined
+            }
             onEndReached={() => {
               if (query.hasNextPage && !query.isFetchingNextPage && !query.isPlaceholderData)
                 void query.fetchNextPage();
@@ -481,7 +581,20 @@ function TableView({ info }: { info: TableInfo }) {
           />
         )}
       </div>
-      {panel && <SidePanel state={panel} info={info} onClose={closePanel} />}
+      {panel && <SidePanel state={panel} info={info} onClose={bulk ? () => setBulk(null) : closePanel} />}
+      <ClearTable
+        table={table}
+        count={info.documentCount}
+        open={clearingAll}
+        onOpenChange={setClearingAll}
+        onDone={(o) => {
+          if (o.ok) {
+            setSelected(new Set());
+            setEveryDocument(false);
+          }
+          afterWrite(o);
+        }}
+      />
       {viewing && (
         <ValueView
           viewing={viewing}

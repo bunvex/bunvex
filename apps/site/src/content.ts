@@ -220,12 +220,11 @@ export const FEATURES = [
     half: true,
   },
   {
-    tag: "coming",
+    tag: "dashboard",
     title: "A dashboard for your data",
-    body: "Tables, functions, logs and schedules. Every screen is built; the connection to a live deployment is next.",
-    source: "packages/dashboard/README.md",
+    body: "Tables, functions, logs, schedules, files and settings of a live deployment, signed in with an admin key.",
+    source: "docs/dashboard.md",
     half: true,
-    soon: true,
   },
 ] as const;
 
@@ -272,7 +271,7 @@ export const PARITY = {
   areas: [
     { name: "Function and database API", done: 238, partial: 2, missing: 6 },
     { name: "Clients, sync protocol, React", done: 163, partial: 2, missing: 1 },
-    { name: "Platform: auth, storage, scheduler, CLI…", done: 229, partial: 20, missing: 13 },
+    { name: "Platform: auth, storage, scheduler, CLI…", done: 229, partial: 36, missing: 13 },
   ],
   link: blob("docs/parity/README.md"),
 } as const;

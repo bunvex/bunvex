@@ -71,6 +71,36 @@ describe("what the writes send (Convex's dashboard calls)", () => {
     expect(UNDEFINED_PLACEHOLDER.startsWith("__BUNVEX_PLACEHOLDER_undefined_")).toBe(true);
   });
 
+  test("patchAllDocuments is one patchDocumentsFields without ids (Convex's Edit all); its refusal's words", async () => {
+    const tooMany = Object.assign(
+      new Error("[Request ID: 1] Server Error\nUncaught BunvexError: Too many reads in a single function execution"),
+      { data: "Too many reads in a single function execution (limit: 4096)." },
+    );
+    let answer: unknown = ok();
+    const { writes, calls } = fake(() => answer);
+    await writes.patchAllDocuments("t", { gone: { $unset: true }, big: { $integer: "AQAAAAAAAAA=" } });
+    expect(calls).toEqual([
+      {
+        path: "_system/frontend/patchDocumentsFields",
+        args: { table: "t", fields: { gone: UNDEFINED_PLACEHOLDER, big: 1n }, componentId: null },
+      },
+    ]);
+    expect("ids" in calls[0]!.args).toBe(false);
+    answer = tooMany;
+    const e = (await writes.patchAllDocuments("t", { n: 1 }).catch((x) => x)) as DataSourceError;
+    expect([e.code, e.message]).toEqual([
+      "invalid_request",
+      "Too many reads in a single function execution (limit: 4096).",
+    ]);
+    // an abort before the call sends nothing
+    const ac = new AbortController();
+    ac.abort(new Error("stopped"));
+    expect(await writes.patchAllDocuments("t", { n: 1 }, { signal: ac.signal }).catch((x: Error) => x.message)).toBe(
+      "stopped",
+    );
+    expect(calls.length).toBe(2);
+  });
+
   test("clearTable calls clearTablePage on each page's cursor until hasMore is false, and sums deleted", async () => {
     const pages = [
       { deleted: 4000, continueCursor: "c1", hasMore: true },
