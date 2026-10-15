@@ -123,5 +123,47 @@ same app, with `--once` and without, output captured whole:
 | `✔ <time> Convex functions ready! (197.06ms)` (`formatDuration`) | `✔ <time> bunvex functions ready! (0.02s)` |
 
 A first local run also prints, on a terminal, Convex's three introductory lines and "Continue?"
-(`localDeployment/anonymous.ts` l. 63–90). To be built in its PR, each line in bunvex's words (rule 5); the details
-are settled there.
+(`localDeployment/anonymous.ts` l. 63–90), and after configuring a deployment Convex's `finalizeConfiguration`
+(`cli/lib/init.ts`) says what it saved, only when it changed, then where the functions go, where to give feedback and
+the dashboard (STUDY-149 PR 8 left these as gaps). "- Preparing …" and the blank line are Convex's spinner on a
+stream that is not a terminal, not lines of their own.
+
+### As built
+
+`packages/cli/src/dev.ts` and `local-deployment.ts`, each line in bunvex's words (rule 5):
+
+- **A first local run** (no `.bunvex/local/default/config.json`): "Setting up a new project..." (Convex's
+  `chooseDeployment` for a first anonymous deployment), then, on a terminal, Convex's three lines ("This command,
+  `bunvex dev`, will run your bunvex backend locally …", "Use `bunvex dashboard` …", "Use `bunvex docs` … `bunvex
+  help` …") and "Continue? (Y/n)"; no prints "Exiting" and stops (exit 1), nothing created.
+- **The configuration lines**, Convex's `finalizeConfiguration` in place of the old "✔ Started running a deployment
+  locally at …" (Convex's older wording): only when `.env.local` or `.gitignore` changed, and only what changed —
+  "✔ Configured a local deployment for <url> and saved its:" / "name as BUNVEX_DEPLOYMENT" / "client URL as <name>" /
+  "HTTP actions URL as <name>" / " to .env.local" (or "… saved its name as BUNVEX_DEPLOYMENT to .env.local"), then
+  `  Added ".env.local" to .gitignore`; then "Write your bunvex functions in <dir>/", "Give us feedback at <url>" and,
+  while `dev` serves the local dashboard, "View the bunvex dashboard at <url>" (DV-477: no line without one).
+- **A self-hosted `dev`** (`BUNVEX_SELF_HOSTED_*`, `--url` / `--admin-key`), Convex's `handleManuallySetUrlAndAdminKey`:
+  `BUNVEX_DEPLOYMENT` removed from `.env.local` ("Removed the BUNVEX_DEPLOYMENT environment variable from .env.local"),
+  the deployment's canonical URLs (`/api/v1/get_canonical_urls`) written as the client's variables and said ("Saved
+  BUNVEX_URL and BUNVEX_SITE_URL to .env.local"), each only when it changes. A deployment that cannot be reached
+  leaves the file alone (the push then says so and retries; Convex's `dev` stops there).
+- **The deployment line**, Convex's `announceDeploymentTarget` without colours: "▌ Developing against deployment:",
+  for a local deployment "▌ [Local] Port <port>" with "(dashboard: <url>)" (a link on a terminal), and "▌ └─ <url>".
+- **Durations** in Convex's `formatDuration` (ns, µs, ms, s, m, two decimals): "✔ 16:02:11 bunvex functions ready!
+  (197.06ms)", "Failed due to network error, retrying in 1.2s...".
+
+The feedback line points at bunvex's issues (`https://github.com/bunvex/bunvex/issues`): Convex names its community
+and its support address; rule 5 needs bunvex's own (an owner question below).
+
+### Tests
+
+`cli/test/dev.test.ts`: the deployment line (self-hosted, local with and without a dashboard, the terminal's links),
+the configuration lines (each combination, none for no change), the closing lines (the functions' directory, the
+dashboard only with one), a self-hosted `dev` saving the URLs once, `--url` removing `BUNVEX_DEPLOYMENT`, the ready
+line's duration. `cli/test/local-deployment.test.ts`: the first run's lines exactly; on a terminal the introduction,
+"Continue?" answered no (exit 1, nothing created) and yes; the next run prints none of them and names the deployment by
+its port. `dashboard-serve.test.ts`: the dashboard line inside the closing lines, none offline.
+
+**Sabotage** (each restored, `git diff` clean): the configuration lines printed with nothing changed → 2; the first
+run's introduction skipped → 2; the self-hosted URLs not saved → 2; the old deployment line → 3.
+
