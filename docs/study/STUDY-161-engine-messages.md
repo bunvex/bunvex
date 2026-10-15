@@ -208,19 +208,47 @@ and lists what failed in its *Built* line.
 
 ### §1 and §2 (`db.insert` / `db.patch` / `db.replace` argument errors)
 
-*Built:* not yet.
+*Built* (#666): `identifierError` and `rustDebugChar` in `@bunvex/values` (`identifier.ts`), shared by the engine and the
+server's path and validator parsers (their two partial copies of Rust's character display removed); `Tx.insert`,
+`patch`, `replace` and `count` in `core/src/tx.ts`. Found while building it: a pushed module's objects are its
+context's (another realm), so `extractCommitTs` took a deployed function's value for a leaf: its nesting error lost
+the argument prefix (the copy's own check spoke), and a `db.vars.commitTs` inside such an object was not found. It now
+recognizes a plain object of any realm. Convex's `TypeError` for a top-level function value (its serializer fails in
+`stringifyValueForError`) is not matched: bunvex keeps its unsupported-value message (DV-316's wording).
+Tests: `values/test/identifier.test.ts` (each rule, 17 characters checked against the binary),
+`core/test/write-argument-errors.test.ts` (the messages, their classes and order, `db.table`, `db.count`, a value of
+another realm); `differential/test/write-errors.test.ts` (21 table names, 5 non-object values per write, nesting,
+missing values, on both backends); the old messages' assertions updated (`count`, `implicit-tables`,
+`tx-d-edges`). Sabotage (each restored, `git diff` clean): no table check (the table test fails); Rust's `\u{…}`
+escapes dropped (2 tests); the old "expected an object" (1); the realm check reverted (the realm test); no
+missing-value check (1); a patch's object check after its parse (1); the table checked before the value (2).
 
 ### §3 (the schema error's display)
 
-*Built:* not yet.
+*Built* (#668): `documentValidator` (`core/src/schema.ts`) is the schema's own validator, and `checkDocument` checks a
+document without its top-level `_` fields; the five places a document meets its table's validator use it (a write,
+the pending and staged validators in `tx.ts`; the push's walk and the staged walk in `engine.ts`). Tests:
+`core/test/schema-error-display.test.ts` (missing and extra fields by insert, patch and replace, a wrong value, a
+union, a push's walk); `differential/test/schema-errors.test.ts` (11 writes on both backends, the display without
+`_creationTime` asserted on Convex's side); `tx-d-edges`' pending-validator test now gives the schema's validator.
+Sabotage (each restored, `git diff` clean): the system fields kept in the document (5 tests fail), only `_id` left
+out (5), the old validator with the system fields added (3).
 
 ### §4 (the system-field mismatch's display)
 
-*Built:* not yet.
+*Built* (#669): `checkSystemFieldValues` (`core/src/tx.ts`) displays the `_id` field and the document being written (the
+written `_creationTime` in place of the assigned one) with `displayValue`; no call site changed. Tests:
+`core/test/system-field-mismatch.test.ts` (insert, patch with a removed field, an int64, replace, `_id` before the
+creation time); `differential/test/system-fields.test.ts` (11 writes on both backends, compared with the
+`_creationTime` display kept: `errorText` masks it). Sabotage (each restored, `git diff` clean): the fields as JSON (2
+unit tests and the differential test fail), the assigned creation time in the display (2 and the differential), the
+`_id` as JSON (1 and the differential). Found, not fixed here: `displayValue` shows bytes as `ArrayBuffer(2 bytes)`
+where every Convex backend message shows `b"AQI="` (a schema error's `Value:`, `Document(value: …)`, this message):
+a change to every message that displays a value, left to its own PR.
 
 ### §5 (a query's table and index)
 
-*Built:* not yet.
+*Built:* #665. The names parse and the index lookup happen at the query's start (`startChecks` in `core/src/tx.ts`, `identifierError` / `indexNameError` in `core/src/query-ops.ts`); `withIndex` still runs the range builder at the call, and its lookup error waits for the start. Tests: `core/test/query-start-errors.test.ts` (every start path, the names, the operators first, the re-run once the table exists), `differential/test/query-start-errors.test.ts` (28 cases, the same answers on both). Sabotage, each caught: no missing-table flag (4 tests), no name parse, `unknown index` back (3), the error at `withIndex` again (2), a third component ignored, `\p{Cf}` dropped from the character display. Found, not changed: `db.system.query("_nope").withIndex(…)` and an unknown index of a private system table throw `Index … not found.` on Convex; bunvex's system reader answers nothing (DV-360's path).
 
 ### §6 (a system function's unparsed arguments)
 
@@ -228,4 +256,21 @@ and lists what failed in its *Built* line.
 
 ### §7 (the push's table numbers)
 
-*Built:* not yet.
+*Built:* #667. `pushOrder` (`core/src/schema.ts`) orders the schema's tables for the catalog: those with any index
+(database, staged, search, vector) by name, then the others by name; `allDeclaredTables` (`engine.ts`) puts the system
+tables first as before, so the bootstrap's numbers and a component's namespace (`initializeComponentNamespace`, system
+tables only) are unchanged. Every path that creates a schema's tables (the CLI's push, `startSchemaPush`, and an engine
+started on a schema) goes through it. Checked on the binary: a schema with a database-indexed, a search-only, a
+vector-only and a staged-only table among plain ones, mixed case (`Beta`, `Mango` before `aaa`), numbered alike on both;
+a second push adding four tables while an existing one gains an index numbers only the new ones, alike (`bee`, `yak`,
+`Cat`, `ant`). The order of the `_index` rows a push writes follows the same order now; bunvex's persistence index
+ids are its own (not observable), so they were not compared.
+
+- *Tests:* `core/test/catalog.test.ts` (the oracle's two pushes on an engine; the fresh-store and reordering tests
+  updated: `posts`, indexed, is now 10001), `core/test/schema-push.test.ts` (`startSchemaPush`'s numbers; `pushOrder`),
+  `differential/test/push-table-numbers.test.ts` (both pushes on both backends, `getTableMapping` compared;
+  the app `push-order-app/`); `server/test/imports.test.ts` takes the schema's numbers as a push now gives them
+  (`posts` 10001, `users` 10002). No test masked the numbers before.
+- *Sabotage:* declaration order again (core 4 failed, differential 2); search and vector indexes not counted as
+  indexes (core 3, differential 2); names compared with `localeCompare` (case-insensitive; core 3, differential 2);
+  the tables without an index left in declaration order (core 4, differential 2). Each restored, `git diff` clean.

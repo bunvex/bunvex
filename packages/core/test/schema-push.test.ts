@@ -9,7 +9,7 @@ import { v } from "@bunvex/values";
 import { SCHEMAS_TABLE } from "../src/catalog.ts";
 import { Engine, OccError, SchemaPushError } from "../src/engine.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
-import { declaredTables, defineSchema, defineTable } from "../src/schema.ts";
+import { declaredTables, defineSchema, defineTable, pushOrder } from "../src/schema.ts";
 import { schemaFromJson, schemaToJson } from "../src/schema-json.ts";
 
 const engines: Engine[] = [];
@@ -413,5 +413,39 @@ describe("finish_push retries", () => {
   test("a push that conflicts 8 times commits on its 9th run; 9 times, it fails", async () => {
     expect(await conflicting(8)).toEqual({ result: "committed", attempts: 9 });
     expect(await conflicting(9)).toEqual({ result: "OccError", attempts: 9 });
+  });
+});
+
+describe("a push's new tables (STUDY-161 §7)", () => {
+  test("take their numbers in Convex's order: tables with an index by name, then the others by name", async () => {
+    const e = await open(tmp());
+    const p = await e.startSchemaPush(
+      defineSchema({
+        zeta: defineTable(v.any()),
+        Kite: defineTable(v.any()),
+        mid: defineTable(v.any()).searchIndex("s", { searchField: "t" }),
+        alpha: defineTable(v.any()),
+        Big: defineTable(v.any()).index("by_x", ["x"]),
+      }),
+    );
+    await until(async () => (await e.schemaPushStatus(p.schemaId)).type === "complete");
+    const numbers = Object.fromEntries(
+      ["Big", "mid", "Kite", "alpha", "zeta"].map((t) => [t, e.catalog.table(t).number]),
+    );
+    expect(numbers).toEqual({ Big: 10001, mid: 10002, Kite: 10003, alpha: 10004, zeta: 10005 });
+  });
+
+  test("pushOrder: indexed tables first, each group in byte order", () => {
+    const tables = declaredTables(
+      defineSchema({
+        b: defineTable(v.any()),
+        a: defineTable(v.any()),
+        Z: defineTable(v.any()),
+        v: defineTable(v.any()).vectorIndex("v", { vectorField: "e", dimensions: 2 }),
+        s: defineTable(v.any()).index("by_k", { fields: ["k"], staged: true }),
+        A: defineTable(v.any()).index("by_k", ["k"]),
+      }),
+    ).values();
+    expect(pushOrder(tables).map((t) => t.name)).toEqual(["A", "s", "v", "Z", "a", "b"]);
   });
 });

@@ -6,7 +6,7 @@
 //   whose message is "Invalid JSON" whatever serde said (json_trait/src/lib.rs `json_deserialize`).
 // - Meaning: literals, table names, field names and record keys, in Convex's order (an object's fields in key
 //   order, as its `BTreeMap`) and words.
-import { displayValue, fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
+import { displayValue, fromJsonValue, type JSONValue, rustDebugChar, type Value } from "@bunvex/values";
 import { checkIdentifier } from "./function-path.ts";
 
 /** Convex's `invalid_json` message: every serde failure reads the same. */
@@ -105,28 +105,13 @@ function hasStringLiteral(j: Record<string, Json>): boolean {
   return false;
 }
 
-/** A character as Rust's `{:?}` shows it: `'é'`, `'\n'`, `'\u{1}'`. */
-function rustChar(c: string): string {
-  const named: Record<string, string> = {
-    "\t": "\\t",
-    "\n": "\\n",
-    "\r": "\\r",
-    "\0": "\\0",
-    "'": "\\'",
-    "\\": "\\\\",
-  };
-  if (named[c]) return `'${named[c]}'`;
-  const code = c.codePointAt(0)!;
-  return code < 0x20 || (code >= 0x7f && code < 0xa0) ? `'\\u{${code.toString(16)}}'` : `'${c}'`;
-}
-
 /** Convex's `check_valid_field_name`, then `check_valid_identifier` (`IdentifierFieldName::from_str`). */
 function fieldNameError(s: string): string | null {
   if (s.startsWith("$")) return `Field name ${s} starts with '$', which is reserved.`;
   for (const c of s) {
     const code = c.codePointAt(0)!;
     if (code > 0x7f || code < 0x20 || code === 0x7f)
-      return `Field name ${s} has invalid character ${rustChar(c)}: Field names can only contain non-control ASCII characters`;
+      return `Field name ${s} has invalid character ${rustDebugChar(c)}: Field names can only contain non-control ASCII characters`;
   }
   if (s.length > 1024) return `Field name is too long (${s.length} > maximum 1024)`;
   return checkIdentifier(s);

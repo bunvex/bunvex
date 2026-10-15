@@ -68,7 +68,7 @@ test("resolveIndex: an enabled index's read of its _index row, none for a system
   });
 });
 
-test("resolveIndex: a pending index records its row when it has one; an unknown name is unknown", async () => {
+test("resolveIndex: a pending index records its row when it has one; an unknown name is not found", async () => {
   const { e } = await engine();
   const real = e.catalog.tables.get("items")!;
   const pend = (name: string, metaId?: string): IndexDef => ({
@@ -82,7 +82,7 @@ test("resolveIndex: a pending index records its row when it has one; an unknown 
   const indexById = e.catalog.table(INDEX_TABLE).byId.id;
   await e.query(async (db) => {
     const n = readsOn(db, indexById).length;
-    expect(() => db.resolveIndex(t, "nope")).toThrow("unknown index items.nope");
+    expect(() => db.resolveIndex(t, "nope")).toThrow("Index items.nope not found.");
     expect(readsOn(db, indexById).length).toBe(n);
     expect(() => db.resolveIndex(t, "bare")).toThrow(IndexBackfillingError);
     expect(readsOn(db, indexById).length).toBe(n);
@@ -92,10 +92,10 @@ test("resolveIndex: a pending index records its row when it has one; an unknown 
   });
 });
 
-test("resolveIndex without search indexes: an unknown name is unknown", async () => {
+test("resolveIndex without search indexes: an unknown name is not found", async () => {
   const { e, p } = await engine();
   const tx = new Tx(e.catalog, p, 0n, false);
-  expect(() => tx.resolveIndex(e.catalog.tables.get("items")!, "nope")).toThrow("unknown index items.nope");
+  expect(() => tx.resolveIndex(e.catalog.tables.get("items")!, "nope")).toThrow("Index items.nope not found.");
 });
 
 test("uncountedRead keeps neither the reads nor the documents of its body; it records the whole index", async () => {

@@ -61,6 +61,9 @@ backend is always started with `--disable-beacon`.
   Node module pushed by `later/ext.ts`), installed by each deployment from a registry the test serves: a failed
   install's 400, `start_push`'s id and its reuse, the actions' answers; the decided differences (a packaged binary's
   mode, the server's own variables) asserted on each side. Local only, and only with `npm` on the machine.
+- `test/push-table-numbers.test.ts` (STUDY-161 §7): the numbers a push gives new tables (the app of `push-order-app/`:
+  tables with and without indexes of each kind, mixed case), then a second push adding tables, on both:
+  `_system/frontend/getTableMapping` compared. Local only.
 - `test/dashboard-data.test.ts` (STUDY-149 PR 2): the dashboard's Data reads on both, as an admin —
   `_system/frontend/getTableMapping`, `paginatedTableDocuments` (field, type and index filters, refusals,
   cursors), `indexes`, `tableSize`, `listById`, `getById` and `GET /api/get_indexes`. Local only.
