@@ -588,6 +588,42 @@ describe("the dashboard in a browser", () => {
     }
   });
 
+  test("Database: a search index in the filter, as Convex's: the word found, by relevance; axe with contrast", async () => {
+    const { page, errors, close } = await open("/database/messages");
+    await heading(page, "messages");
+    const filters = page.getByRole("region", { name: "Filters" });
+    await filters.getByRole("combobox", { name: "Index" }).click();
+    await page.getByRole("option", { name: "search_body (search)" }).click();
+    const box = filters.getByRole("searchbox", { name: "Search body" });
+    await box.waitFor();
+    await filters.getByText("By relevance").waitFor();
+    // a word the demo messages are made of (and its prefix: the last word is one)
+    await box.fill("fsync");
+    const grid = page.getByRole("grid", { name: "Documents in messages" });
+    await expect_(async () => {
+      const bodies = await grid
+        .getByRole("gridcell")
+        .filter({ hasText: /\bthe\b|\bcommit\b|\bgroup\b|fsynced/ })
+        .allTextContents();
+      expect(bodies.length).toBeGreaterThan(0);
+      expect(bodies.filter((b) => b.includes("fsynced")).length).toBeGreaterThan(0);
+    }, 5000);
+    await expect_(async () => expect(new URL(page.url()).searchParams.get("filter")).toBeTruthy());
+    // an empty search finds nothing, as a search query
+    await box.fill("");
+    await page.getByText("No document matches these filters.").waitFor();
+    await page.addScriptTag({ content: AXE });
+    const violations = await page.evaluate(async () => {
+      // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
+      const axe = (window as any).axe;
+      const r = await axe.run('[aria-label="Filters"]', { resultTypes: ["violations"] });
+      return r.violations.map((v: { id: string; nodes: { html: string }[] }) => `${v.id}: ${v.nodes[0]?.html}`);
+    });
+    expect(violations).toEqual([]);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test('Schema: an Id<"users"> type pans to users, lights it and focuses it', async () => {
     const { page, errors, close } = await open("/schema");
     await heading(page, "Schema");

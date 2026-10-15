@@ -7,6 +7,7 @@ import {
   type FieldFilter,
   type FilterExpression,
   type IndexFilter,
+  type SearchFilter,
   VALUE_TYPES,
   type Value,
 } from "../data-source.ts";
@@ -63,6 +64,17 @@ function parseIndex(v: unknown): IndexFilter | null {
   return out;
 }
 
+function parseSearch(v: unknown): SearchFilter | null {
+  if (!isObject(v) || typeof v.name !== "string" || typeof v.search !== "string" || !Array.isArray(v.clauses))
+    return null;
+  const clauses: SearchFilter["clauses"] = [];
+  for (const c of v.clauses) {
+    if (!isObject(c) || typeof c.field !== "string" || typeof c.enabled !== "boolean" || !isValue(c.value)) return null;
+    clauses.push({ field: c.field, value: c.value, enabled: c.enabled });
+  }
+  return { name: v.name, search: v.search, clauses };
+}
+
 /** The expression a `filter` param holds, or `null` when it is missing or not one. */
 export function decodeFilter(param: string | undefined): FilterExpression | null {
   if (!param) return null;
@@ -87,6 +99,11 @@ export function decodeFilter(param: string | undefined): FilterExpression | null
     if (!index) return null;
     expr.index = index;
   }
+  if (raw.search !== undefined) {
+    const search = parseSearch(raw.search);
+    if (!search) return null;
+    expr.search = search;
+  }
   return expr;
 }
 
@@ -94,4 +111,5 @@ export function decodeFilter(param: string | undefined): FilterExpression | null
 export const isEmptyFilter = (e: FilterExpression) =>
   e.order === "desc" &&
   e.clauses.length === 0 &&
+  !e.search &&
   (!e.index || (e.index.name === "by_creation_time" && e.index.eq.length === 0 && !e.index.range));
