@@ -315,9 +315,9 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `defineComponent(name, { env })` in `convex.config.ts` | server/components/index.ts | missing (DV-55) | Decided to match Convex, to be built (STUDY-62). |
-| `defineApp({ httpPrefix, env })` + `app.use(component, { name, httpPrefix, env })` | server/components/index.ts | missing (DV-55) | Decided to match Convex, to be built (STUDY-62). |
-| `components.<name>.<module>.<fn>` references (`componentsGeneric`) | server/components/index.ts | missing (DV-55, DV-174) | `components` is generated as `{}` until components exist (STUDY-62). |
+| `defineComponent(name, { env })` in `convex.config.ts` | server/components/index.ts | partial (STUDY-153 PR 1) | In `bunvex/server`, as Convex's: its env validators, `env` references, `use`, and `export()` the same as Convex's package for the same calls (compared in packages/differential); the file is `bunvex.config.ts` (DV-494). The server's push of definitions: STUDY-153 PRs 3–4. |
+| `defineApp({ httpPrefix, env })` + `app.use(component, { name, httpPrefix, env })` | server/components/index.ts | partial (STUDY-153 PR 1) | In `bunvex/server`, as Convex's (names, prefixes normalized, env bindings, the errors); the server reads its `export()` from STUDY-153 PR 3 on. |
+| `components.<name>.<module>.<fn>` references (`componentsGeneric`) | server/components/index.ts | partial (STUDY-153 PR 1; DV-174) | `componentsGeneric` is in `bunvex/server`, its references Convex's (`_reference/childComponent/…`, compared in packages/differential); codegen still writes `components` as `{}` until STUDY-152 step 6. |
 | Component env definitions with validators and env refs | server/components/index.ts (`EnvDefinition`) | missing (DV-55, DV-186) | With components (STUDY-62). |
 | `createFunctionHandle(fnRef)` returns a string handle usable in `runX` / scheduler | server/components/index.ts | done (STUDY-50) | In queries, mutations and actions; Convex's errors. |
 | Isolated per-component tables, functions and data | crates (component registry) | partial (STUDY-152 steps 1–2) | Tables: each component's in its own namespace, as Convex stores them; a store the Convex binary wrote with components opens with them apart (step 1). The registry: `_components` rows in Convex's shape, paths resolved through the tree in the transaction, a new component's namespace with its twelve system tables (step 2). Functions inside a component: steps 3–5. |
