@@ -116,6 +116,7 @@ const idString = (b: Uint8Array) => internalIdString(b);
 type JoinedEntry = { id: Uint8Array; json: string | null; docDeleted: bigint | null };
 
 export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
+  readonly driver = "sqlite";
   /** PERSIST-01 C7 as an OS lock on the file, held for the process's life (STUDY-25 L9). */
   readonly leaseScope = "process";
   /** The store's single-writer lock: taken at open when free, else by acquireLease once it is. */

@@ -131,6 +131,7 @@ As Convex's dashboard ([STUDY-149 §1.2](study/STUDY-149-dashboard-real-data.md#
 | Health: scheduler lag | every 60 s |
 | Schedules, Files | live, paused automatically past 100 updates in 10 s (Pause / Go live, Refresh while paused) |
 | History (audit log), environment variables, deployment state | live |
+| Topology | every 5 s (the server samples its counters every 5 s; a minute of history) |
 
 While the deployment cannot be reached, "Connection issue" covers the screens and the polls stop; when it comes
 back the polls ask again at once and the subscriptions resume.
@@ -144,10 +145,15 @@ back the polls ask again at once and the subscriptions resume.
 - The environment variables screen does not open a given variable from a link (Convex's `?var=`).
 - Cloud-only screens are absent, as in Convex's self-hosted dashboard: insights, backups, custom domains, team,
   billing and usage. bunvex keeps its own additions that work on a deployment (the Overview's summary,
-  Snapshots in Settings, the command palette, the Logs screen's histogram and export).
+  Snapshots in Settings, the command palette, the Logs screen's histogram and export, Topology).
 - Some of bunvex's own screens open on the demo data only, and are hidden on a deployment (or say it does not
   offer them): Subscriptions and the system tables (their server side exists; the dashboard does not read it
-  yet), and Topology, Authentication's user management, the clients, Analytics, Feature flags and Workflows
-  (no server side yet). The Files screen's storage used, views by type and size filters need sizes per kind,
+  yet), and Authentication's user management, the clients, Analytics, Feature flags and Workflows (no server
+  side yet). The Files screen's storage used, views by type and size filters need sizes per kind,
   which a deployment does not report ([additions.md](parity/additions.md)).
+- Topology shows the deployment's one process, the leader. It shows the clients connected to it (the dashboard's
+  own socket among them), its query cache, its commits per second and the store's lease. A credential needs
+  ViewMetrics to see it. There are no followers until bunvex runs more than one node (STUDY-24). The deployment
+  does not report its memory limit, the store's size or connections, or who the clients are, so those show as
+  "—" or are left out ([STUDY-131 §11](study/STUDY-131-debugging-and-observability.md#11-ad-04s-server-side-the-topology-endpoint-built-2026-10-14)).
 - No telemetry and no legacy deployment list (`?a=<port>&d=<name>`), which Convex keeps for old CLIs.

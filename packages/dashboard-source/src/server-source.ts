@@ -34,6 +34,7 @@ import { Metrics } from "./metrics.ts";
 import { Settings } from "./settings.ts";
 import { AdminSync, watchConnection } from "./sync.ts";
 import { Tables } from "./tables.ts";
+import { topologyReads } from "./topology.ts";
 import { dataWrites } from "./writes.ts";
 
 export type ServerDataSourceOptions = {
@@ -48,6 +49,8 @@ export type ServerDataSourceOptions = {
   statsIntervalMs?: number;
   /** The log stream's timings (tests shorten them). */
   logs?: LogStreamOptions;
+  /** How often `watchTopology` asks `/api/debug/topology`. Default 5 000 ms (the server's sampling period). */
+  topologyIntervalMs?: number;
 };
 
 /** The server source: the contract, plus what a host needs around it (the connection, closing it). */
@@ -294,5 +297,10 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
       void close();
     },
   };
+
+  // ---------------------------------------------------------------- the topology (STUDY-131 §11, AD-04)
+  // `/api/debug/topology`, polled while the screen watches: the deployment's one node, its store and lease.
+  Object.assign(source, topologyReads(http, opts));
+
   return source;
 }

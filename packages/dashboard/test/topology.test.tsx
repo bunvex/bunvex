@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { Dashboard, type DashboardDataSource, type Topology } from "@bunvex/dashboard";
+import type { ConnectionStatus } from "@bunvex/dashboard/data-source";
 import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { streamLook, toFlow } from "../src/topology/diagram.tsx";
 import { layoutTopology, neighbourhood } from "../src/topology/layout.ts";
@@ -120,7 +121,7 @@ describe("the mock's caches", () => {
     const t = topo.snapshot();
     for (const [i, n] of t.nodes.entries()) {
       const c = n.cache!;
-      expect(c.entries).toBeLessThanOrEqual(c.maxEntries);
+      expect(c.entries).toBeLessThanOrEqual(c.maxEntries!);
       expect(c.bytes!).toBeLessThanOrEqual(c.maxBytes!);
       if (n.role === "follower") expect(c.evictions).toBeGreaterThan(before[i]!);
       const cps = t.nodes[0]!.commitsPerSecond!;
@@ -270,5 +271,120 @@ describe("the Topology screen", () => {
     mount("/topology", src);
     await heading();
     expect(screen.getByText("This deployment does not offer its topology yet.")).toBeDefined();
+  });
+
+  test("a deployment's one node, as its server reports it: a cache bounded by bytes, nulls shown as unknown", async () => {
+    // what `/api/debug/topology` answers for a SQLite deployment with one client (STUDY-131 §11)
+    const t: Topology = {
+      time: NOW,
+      nodes: [
+        {
+          id: "host:4242:0a1b2c3d",
+          role: "leader",
+          state: "ok",
+          version: "0.9.0",
+          startedAt: NOW - 125_000,
+          cpu: 0.031,
+          memoryBytes: 180 * 1024 * 1024,
+          memoryLimitBytes: null,
+          connections: 1,
+          subscriptions: 2,
+          cache: {
+            entries: 2,
+            bytes: 2048,
+            maxBytes: 100 * 1024 * 1024,
+            hitRate: 0.5,
+            invalidationsPerSecond: 0,
+            evictions: 0,
+          },
+          commitsPerSecond: 0.4,
+          scheduler: true,
+          actionsRunning: 0,
+          history: [0, 1, 2].map((i) => ({
+            time: NOW - (2 - i) * 5000,
+            cpu: 0.03,
+            lagMs: null,
+            connections: 1,
+            cacheHitRate: i === 0 ? null : 0.5,
+            invalidationsPerSecond: 0,
+          })),
+        },
+      ],
+      store: {
+        driver: "sqlite",
+        singleNode: true,
+        leaseHolder: "host:4242:0a1b2c3d",
+        leaseExpiresAt: null,
+        leaseTtlMs: null,
+        latencyMs: null,
+        sizeBytes: null,
+        connections: null,
+      },
+      events: [],
+    };
+    const src = source();
+    src.getTopology = async () => structuredClone(t);
+    src.watchTopology = () => () => {};
+    const { history } = mount("/topology", src);
+    await loaded(3);
+    expect(screen.getByTestId("topology-summary").textContent).toBe(
+      "Leader host:4242:0a1b2c3d · no followers · 1 client · SQLite OK",
+    );
+    const node = card("node:host:4242:0a1b2c3d");
+    expect(node.getAttribute("aria-label")).toBe(
+      "host:4242:0a1b2c3d, the only node, OK, 0 commits per second, 1 clients, cache 50% hits, 2 entries, press Enter for details",
+    );
+    expect(node.querySelector("[data-cache-strip]")!.textContent).toBe("Cache50%2.0 KB/100 MB0/s");
+    expect(card("store").textContent).toBe("SQLitestoreOne node: a file lock keeps a second one out");
+    history.push("/topology?node=host%3A4242%3A0a1b2c3d");
+    const panel = await screen.findByRole("complementary", { name: "host:4242:0a1b2c3d" });
+    expect(within(panel).getByText("Runs here")).toBeDefined();
+    expect(within(panel).getByText("2 min")).toBeDefined(); // uptime
+    const user = userEvent.setup();
+    await user.click(within(panel).getByRole("tab", { name: "Cache" }));
+    const cache = await within(panel).findByTestId("cache-details");
+    expect(within(cache).getByText("2", { selector: "dd" })).toBeDefined(); // no count limit to show
+    expect(within(cache).getByText("2.0 KB of 100 MB")).toBeDefined();
+    expect(within(cache).getByText(/of the LRU's capacity in use \(by size\)$/)).toBeDefined();
+    expect(within(cache).getByText("Hit rate, last 15 s")).toBeDefined();
+    await expectAccessible();
+  });
+
+  test("polled: no read and no watch while the deployment is disconnected; a fresh watch once it is back", async () => {
+    const src = source({ nodes: 1 });
+    const listeners = new Set<(s: ConnectionStatus) => void>();
+    let watching = 0;
+    let asked = 0;
+    const get = src.getTopology.bind(src);
+    Object.assign(src, {
+      watchConnection(onStatus: (s: ConnectionStatus) => void) {
+        listeners.add(onStatus);
+        return () => listeners.delete(onStatus);
+      },
+      getTopology: (...args: Parameters<typeof get>) => {
+        asked++;
+        return get(...args);
+      },
+      watchTopology: () => {
+        watching++;
+        return () => watching--;
+      },
+    });
+    const set = (s: ConnectionStatus) =>
+      act(() => {
+        for (const l of listeners) l(s);
+      });
+    mount("/topology", src);
+    await heading();
+    await screen.findByTestId("topology-summary");
+    expect(watching).toBe(1);
+    await set("disconnected");
+    await waitFor(() => expect(watching).toBe(0));
+    const before = asked;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(asked).toBe(before);
+    await set("connected");
+    await waitFor(() => expect(watching).toBe(1));
+    await waitFor(() => expect(asked).toBeGreaterThan(before)); // asked again on the way back
   });
 });

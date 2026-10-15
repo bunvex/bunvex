@@ -35,8 +35,11 @@ export type NodeSample = {
  */
 export type NodeCache = {
   entries: number;
-  /** The LRU's capacity in entries. */
-  maxEntries: number;
+  /**
+   * The LRU's capacity in entries, when it is bounded by a count; absent when it is bounded by bytes only (a bunvex
+   * deployment's, as Convex's `CacheManager`: `maxBytes`).
+   */
+  maxEntries?: number;
   /** What the entries hold, and the limit, when the node measures it. */
   bytes?: number;
   maxBytes?: number;
@@ -83,7 +86,8 @@ export type TopologyNode = {
   history: NodeSample[];
 };
 
-export type StoreDriver = "memory" | "sqlite" | "postgres" | "mysql" | "mongodb";
+/** `other`: a driver of another package, which the deployment cannot name. */
+export type StoreDriver = "memory" | "sqlite" | "postgres" | "mysql" | "mongodb" | "other";
 
 export type TopologyStore = {
   driver: StoreDriver;

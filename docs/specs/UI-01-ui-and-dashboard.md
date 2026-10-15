@@ -12,7 +12,7 @@
 
 Everything below was built on `MockDataSource`. Since STUDY-149 (14 Oct 2026) `apps/dashboard` also runs it on a
 deployment through `@bunvex/dashboard-source` (§34), which leaves undefined what it does not offer yet:
-`fileStats`, Topology, Subscriptions, the system tables, auth admin, the clients and the extensions
+`fileStats`, Subscriptions, the system tables, auth admin, the clients and the extensions
 ([docs/dashboard.md](../dashboard.md#7-known-gaps)).
 
 **Screens** (main sidebar, in labelled groups, §23.2):
@@ -1647,6 +1647,10 @@ then diagram only, laid out like the Schema screen, with each node's query cache
   capacity, bytes and their limit, hit rate, invalidations per second, evictions, the most-cached
   functions); samples carry its hit rate and invalidations. The contract suite checks the shape
   (`contract-topology.ts`): entries within capacity, rates in range, most-cached in order.
+  *Amended 14 Oct 2026 (STUDY-131 §11, the server side):* `maxEntries` is optional (a deployment's LRU is
+  bounded by bytes, as Convex's; the strip and the panel then show the occupancy by size), and the store's driver
+  may be `other` (a driver the deployment cannot name). On a deployment the source polls `/api/debug/topology`
+  every 5 s, and the screen stops while disconnected, as the other polled reads.
 - **Mock** (`mock/topology.ts`): `nodes` (default 1, as today; the dev host's `?nodes=4`, up to 8) — with several,
   the store is Postgres, clients connect to followers, one follower drifts behind and catches up, emitting
   events. Each node's LRU fills from its queries, is invalidated in step with the leader's commits, and evicts

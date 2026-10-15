@@ -23,6 +23,7 @@ import { describeEvent } from "../history/describe.ts";
 import { formatCalls, formatMs, formatPercent as formatPct, useMetric, useMetricsAccess } from "../metrics/metrics.ts";
 import { DashLink } from "../router.tsx";
 import { BAR_TITLE, BAR1, SCREEN } from "../shell/bars.ts";
+import { useDisconnected } from "../shell/connection.tsx";
 import { RelativeTime } from "../shell/time.tsx";
 import {
   type Attention,
@@ -593,11 +594,12 @@ function useTopology() {
   const { source } = scope;
   const caps = useQuery(capabilitiesQuery(scope));
   const canView = caps.data?.operations.includes("viewMetrics") ?? false;
+  const disconnected = useDisconnected();
   return useQuery({
-    // the Topology screen's key: they share the picture
+    // the Topology screen's key: they share the picture; polled, so not asked while disconnected (PR 6's rule)
     queryKey: [...dashboardKeys.all(scope.scope), "topology"] as const,
     queryFn: ({ signal }) => source.getTopology!({ signal }),
-    enabled: typeof source.getTopology === "function" && canView,
+    enabled: typeof source.getTopology === "function" && canView && !disconnected,
     refetchInterval: 10_000,
   });
 }

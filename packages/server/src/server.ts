@@ -81,7 +81,7 @@ import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
 import { activeSync, cursorFromDeltas, DATA_SYNC_ROUTE, dataSync, listActiveSyncs } from "./data-sync.ts";
 import { applicationIndexes } from "./data-system-functions.ts";
-import { DEBUG_ROUTE, debugRoute } from "./debug-routes.ts";
+import { DEBUG_ROUTE, debugRoute, TOPOLOGY_ROUTE, topologyRoute } from "./debug-routes.ts";
 import { tooDeepToStringify } from "./deep-values.ts";
 import {
   clientError,
@@ -113,7 +113,7 @@ import {
   isSystemIdentity,
   type SourcedCaller,
 } from "./functions.ts";
-import { healthRoute, maxEchoBytesFromEnv, versionRoute } from "./health.ts";
+import { healthRoute, maxEchoBytesFromEnv, SERVER_VERSION, versionRoute } from "./health.ts";
 import { httpActionServer } from "./http-actions.ts";
 import { type HttpProxy, httpProxyUrl, proxiedFetch } from "./http-proxy.ts";
 import type { ImportFormat } from "./import-parse.ts";
@@ -175,6 +175,7 @@ import {
 } from "./sync.ts";
 import { cancelAllScheduledJobs, cancelScheduledJob, InvalidIdError } from "./system-functions.ts";
 import { standaloneQuery, type TestBundle, TestFunctionError } from "./test-function.ts";
+import { TopologyReporter } from "./topology.ts";
 import { UsageGauges } from "./usage-gauges.ts";
 import { USAGE_LIMIT_ROUTE, UsageLimitError, UsageLimitWorker, UsageMeter, usageLimitRoute } from "./usage-limits.ts";
 import { defaultFormat, type Format, parseFormat, reformat } from "./value-format.ts";
@@ -988,6 +989,16 @@ export function createServer(opts: ServerOptions) {
     schedulerBacklog: () => scheduler.backlogSeconds(),
     schedulerStats: scheduler.stats,
   });
+  // The topology the dashboard draws (STUDY-131 §11, AD-04): this process alone, from the counters above.
+  const topology = new TopologyReporter({
+    engine,
+    connections: () => sync.sessions.size,
+    subscriptions: () => sync.subscriptionCount(),
+    actionsRunning: () => functions.limits.action.outstanding.running + functions.limits.nodeAction.outstanding.running,
+    scheduler: () => codeLoaded,
+    version: SERVER_VERSION,
+  });
+  topology.start();
   const specs = opts.crons ? cronSpecs(opts.crons, (id, name) => functions.cronTarget(id, name)) : new Map();
   const cronExecutor = new CronJobExecutor(engine, functions, specs, {
     cronSplaySeconds: knob("CRON_SPLAY_SECONDS", 60),
@@ -1231,6 +1242,9 @@ export function createServer(opts: ServerOptions) {
     // The subscriptions and invalidation inspector (STUDY-131 AD-25): ViewMetrics.
     const debug = await debugRoute({ engine, functions, sync }, url, req, caller);
     if (debug) return debug;
+    // The deployment's topology (STUDY-131 §11, AD-04): ViewMetrics.
+    const topo = topologyRoute({ functions, topology }, url, req, caller);
+    if (topo) return topo;
     if (url.pathname === "/api/v1/list_audit_log_events" && req.method === "GET")
       return listAuditLogEvents(url, caller);
     if (/^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) || url.pathname === "/api/v1/get_canonical_urls")
@@ -1634,6 +1648,7 @@ export function createServer(opts: ServerOptions) {
         METRICS_ROUTE.test(url.pathname) ||
         LOG_STREAM_ROUTE.test(url.pathname) ||
         DEBUG_ROUTE.test(url.pathname) ||
+        url.pathname === TOPOLOGY_ROUTE ||
         STREAMING_EXPORT_ROUTE.test(url.pathname) ||
         STREAMING_IMPORT_ROUTE.test(url.pathname) ||
         DATA_SYNC_ROUTE.test(url.pathname) ||
@@ -2421,8 +2436,11 @@ export function createServer(opts: ServerOptions) {
     spanExporter,
     /** The Prometheus metrics served at `/metrics` (STUDY-114). */
     serverMetrics,
+    /** The topology at `/api/debug/topology` (STUDY-131 §11, AD-04). */
+    topology,
     stop: () => {
       serverMetrics.stop();
+      topology.stop();
       builtinScreen?.stop();
       functionLog.close();
       usageGauges.stop();
@@ -2444,6 +2462,7 @@ export function createServer(opts: ServerOptions) {
       // Every background task that reads or writes the store stops before it closes: after this resolves,
       // nothing of the server touches the store (a caller may delete its files).
       serverMetrics.stop();
+      topology.stop();
       usageGauges.stop();
       logManager.stop();
       await usageLimitWorker.stop();
