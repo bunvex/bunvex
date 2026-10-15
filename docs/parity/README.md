@@ -165,7 +165,8 @@ gaps.
 
 **High: an app that uses it does not run**
 
-1. **Components** (DV-55, decided to match Convex; plan in [STUDY-62](../study/STUDY-62-components.md)):
+1. **Components** (DV-55, decided to match Convex; plan in [STUDY-62](../study/STUDY-62-components.md), revised in
+   [STUDY-152](../study/STUDY-152-components-restudy.md); steps 1–2 built: namespaced tables, the registry):
    `convex.config.ts`, `defineApp` / `defineComponent`, table and function namespaces, `components.*`
    references and their codegen, component HTTP mounts and env. Any app on `@convex-dev/*` components
    (rate limiter, aggregate, workpool, auth, …) cannot run.

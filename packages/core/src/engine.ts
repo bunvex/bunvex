@@ -33,6 +33,7 @@ import {
   buildCatalog,
   CANONICAL_URLS_TABLE,
   Catalog,
+  COMPONENTS_TABLE,
   CRON_JOB_LOGS_TABLE,
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
@@ -95,6 +96,7 @@ import {
   type WriteBatchLimits,
   type WriteLogRetention,
 } from "./committer.ts";
+import { COMPONENT_NAMESPACE_TABLES } from "./components.ts";
 import type { CursorCodec } from "./cursor.ts";
 import {
   checkDatabaseVersion,
@@ -888,6 +890,27 @@ export class Engine {
       ...EMPTY_CLOUD_SYSTEM_TABLES.map((name) => ({ name, indexes: {}, document: v.any() })),
     ];
     return [...systemTables, ...declaredTables(schema).values()];
+  }
+
+  /**
+   * Reserve a new component's namespace (Convex's `initialize_component_namespace`, run by a push's start): a
+   * `_components` id no row has yet, and that namespace's system tables (`COMPONENT_NAMESPACE_TABLES`) at the
+   * root's numbers, their indexes enabled at once. The push writes the component's row with this id when it
+   * finishes (STUDY-152 step 2). The id.
+   */
+  async initializeComponentNamespace(): Promise<string> {
+    const declared = this.allDeclaredTables().filter((t) => COMPONENT_NAMESPACE_TABLES.has(t.name));
+    return this.runMutation(async (db) => {
+      const id = db.newId(COMPONENTS_TABLE);
+      const current = await readCatalog(db);
+      const changes = planCatalog(declared, current.tables, current.indexes, false, current.nextIndexId, id);
+      await writeCatalogChanges(db, changes, this.createdLowerBound(db));
+      const after = await readCatalog(db);
+      db.onCommitVisible = () => {
+        this.catalog = buildCatalog(after.tables, after.indexes);
+      };
+      return id;
+    }, true);
   }
 
   /**
