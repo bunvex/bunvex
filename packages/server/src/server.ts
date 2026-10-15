@@ -2186,7 +2186,7 @@ export function createServer(opts: ServerOptions) {
     });
 
   const installCodeVersion = async (version: CodeVersion, o: { crons?: boolean; auth?: AuthInfo[] } = {}) => {
-    const changed = functions.install(version.functions, version.moduleHashes);
+    const changed = functions.install(version.functions, version.moduleHashes, version.rooms);
     // The functions' handles (STUDY-50): a row per function, tombstones for the ones gone.
     await engine.mutation((db) => syncFunctionHandles(db, functions.functionPaths()), "_system/function_handles");
     httpOptions.router = version.router;

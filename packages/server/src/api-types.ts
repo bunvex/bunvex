@@ -2,8 +2,16 @@
 // `_generated/api.d.ts` writes `ApiFromModules<{ "dir/file": typeof import("../dir/file"), … }>` and
 // filters it into `api` (public) and `internal`. Types, and `filterApi` (the identity, narrowed by type).
 import type { Expand } from "@bunvex/core";
-import type { FunctionReference } from "@bunvex/protocol";
-import type { RegisteredAction, RegisteredMutation, RegisteredQuery } from "./registration.ts";
+import type { FunctionReference, RoomReference } from "@bunvex/protocol";
+import type {
+  RegisteredAction,
+  RegisteredMutation,
+  RegisteredPresence,
+  RegisteredQuery,
+  RegisteredRoom,
+} from "./registration.ts";
+
+export type { RoomReference };
 
 type UndefinedToNull<T> = T extends void ? null : T;
 /** A result as a client sees it: awaited, `undefined` / `void` as `null` (Convex's `ConvertReturnType`). */
@@ -17,13 +25,19 @@ export type FunctionReferenceFromExport<Export> =
       ? FunctionReference<"mutation", Visibility, Args, ConvertReturnType<ReturnValue>>
       : Export extends RegisteredAction<infer Visibility, infer Args, infer ReturnValue>
         ? FunctionReference<"action", Visibility, Args, ConvertReturnType<ReturnValue>>
-        : never;
+        : Export extends RegisteredRoom<infer Args, infer Presence, infer Events>
+          ? RoomReference<"room", Args, Presence, Events>
+          : Export extends RegisteredPresence<infer Args, infer State>
+            ? RoomReference<"presence", Args, State>
+            : never;
 
 // biome-ignore lint/suspicious/noExplicitAny: any module's exports
 type FunctionReferencesInModule<Module extends Record<string, any>> = {
   -readonly [ExportName in keyof Module as Module[ExportName]["isBunvexFunction"] extends true
     ? ExportName
-    : never]: FunctionReferenceFromExport<Module[ExportName]>;
+    : Module[ExportName]["isBunvexRoom"] extends true
+      ? ExportName
+      : never]: FunctionReferenceFromExport<Module[ExportName]>;
 };
 
 /** A module at `dir/file` as `{ dir: { file: … } }`. */
@@ -58,19 +72,38 @@ export type ApiFromModules<AllModules extends Record<string, object>> = FilterAp
 
 // biome-ignore lint/suspicious/noExplicitAny: any reference
 type AnyReference = FunctionReference<any, any, any, any>;
+// biome-ignore lint/suspicious/noExplicitAny: any room reference
+type AnyRoomReference = RoomReference<any, any, any, any>;
+/**
+ * Whether a predicate takes rooms (AD-42): they are public, and not functions, so a predicate takes them only if
+ * it is not for `internal` and its type is `any` or includes "room" (`FunctionReference<"query">` is not).
+ */
+type TakesRooms<Predicate> = Predicate extends { _visibility: infer V; _type: infer T }
+  ? "public" extends V
+    ? "room" extends T
+      ? true
+      : false
+    : false
+  : false;
 type FilterKeysInApi<Key, API, Predicate> = API extends Predicate
   ? Key
-  : API extends AnyReference
-    ? never
-    : FilterApi<API, Predicate> extends Record<string, never>
+  : API extends AnyRoomReference
+    ? TakesRooms<Predicate> extends true
+      ? Key
+      : never
+    : API extends AnyReference
       ? never
-      : Key;
+      : FilterApi<API, Predicate> extends Record<string, never>
+        ? never
+        : Key;
 
 /** The references of an api that match `Predicate` (e.g. `FunctionReference<any, "public">`), dropping empty nodes. */
 export type FilterApi<API, Predicate> = Expand<{
   [Mod in keyof API as FilterKeysInApi<Mod, API[Mod], Predicate>]: API[Mod] extends Predicate
     ? API[Mod]
-    : FilterApi<API[Mod], Predicate>;
+    : API[Mod] extends AnyRoomReference
+      ? API[Mod]
+      : FilterApi<API[Mod], Predicate>;
 }>;
 
 /**
