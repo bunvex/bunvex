@@ -50,7 +50,7 @@ Key bunvex facts behind the statuses:
 | `.filter(q => expr)` | server/filter_builder.ts, impl/filter_builder_impl.ts | done (#37) | |
 | Filter `q.field("a.b")`, including nested field paths | filter_builder.ts | done (#37) | |
 | Filter comparisons `eq` / `neq` / `lt` / `lte` / `gt` / `gte`, including `undefined` | filter_builder.ts | done (#37) | |
-| Filter arithmetic `add` / `sub` / `mul` / `div` / `mod` / `neg` | filter_builder.ts | done (#37) | |
+| Filter arithmetic `add` / `sub` / `mul` / `div` / `mod` / `neg` | filter_builder.ts | done (#37) | Errors name a value's type as Convex's `type_name` (`Null`, `Int64`, `Float64`, `Boolean`, `String`, `Bytes`, `Array`, `Object`; `undefined` for a missing field), in `Cannot negate …`, `Cannot add … and …` and `… as a Boolean` (STUDY-161 §14). |
 | Filter logic `and` / `or` / `not` | filter_builder.ts | done (#37) | |
 | Filters compare across types using the global value order | value/sorting.rs | done (#37) | Comparisons use `compareValues`, Convex's total order across types. |
 | At most 256 query operators per query (`MAX_QUERY_OPERATORS`) | impl/query_impl.ts; common/src/query.rs | done (STUDY-66) | As Convex: `filter` refuses the 257th operator ("Can't construct query with more than 256 operators"); the start counts every operator, the terminal's limit included, and refuses more than 256 ("Invalid argument `query` for `queryStream`: Query has too many operators: N"). |

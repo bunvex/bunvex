@@ -51,15 +51,16 @@ const toExpr = (x: ExpressionOrValue): Expression => {
 /** A predicate's serialized form (a literal one included): what a cursor's fingerprint covers. */
 export const expressionJson = (x: ExpressionOrValue): JSONValue => toExpr(x).json;
 
+/** A value's type as Convex's errors name it (`MaybeValue::type_name`, crates/value/src/walk.rs): `Float64`, `Bytes`, … */
 function typeName(v: MaybeValue): string {
   if (v === undefined) return "undefined";
-  if (v === null) return "null";
-  if (typeof v === "bigint") return "int64";
-  if (typeof v === "number") return "float64";
-  if (typeof v === "boolean") return "boolean";
-  if (typeof v === "string") return "string";
-  if (isBytes(v)) return "bytes";
-  return Array.isArray(v) ? "array" : "object";
+  if (v === null) return "Null";
+  if (typeof v === "bigint") return "Int64";
+  if (typeof v === "number") return "Float64";
+  if (typeof v === "boolean") return "Boolean";
+  if (typeof v === "string") return "String";
+  if (isBytes(v)) return "Bytes";
+  return Array.isArray(v) ? "Array" : "Object";
 }
 
 function asBoolean(v: MaybeValue): boolean {
