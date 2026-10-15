@@ -295,3 +295,81 @@ clean): the old `ArrayBuffer(…)` text, URL-safe unpadded base64, a cut at 100 
 the differential test. Found, not fixed: a filter's error names the type in Convex's `type_name` (`Bytes`, `Float64`,
 `String`, …: `crates/value/src/walk.rs:41-52`) where bunvex's `typeName` (`core/src/filter.ts`) says `bytes`,
 `float64`, …
+
+## 14. A filter's type names (found with §13)
+
+**Convex.** A filter's evaluation errors (`crates/common/src/query.rs:744-751` for arithmetic, `:854-857` for `neg`;
+`common/src/types/maybe_value.rs:55-63` for a non-boolean predicate) name a value's type with `MaybeValue::type_name`:
+`ConvexValueType::type_name` (`crates/value/src/walk.rs:41-52`) for a value (`Null`, `Int64`, `Float64`, `Boolean`,
+`String`, `Bytes`, `Array`, `Object`, every type Convex has), `undefined` for a missing one. On the binary:
+`Cannot negate b"AQI=" (type Bytes)`, `Cannot use value 1.5 (type Float64) as a Boolean`, `Cannot multiply 1 (type
+Int64) and 1.5 (type Float64)`, `Cannot negate undefined (type undefined)`.
+
+**bunvex before.** `typeName` (`core/src/filter.ts`) in lower case: `(type bytes)`, `(type float64)`, `(type null)`.
+
+**bunvex now.** Convex's names. Nothing else in bunvex names a value's type this way (Convex's other `type_name` uses
+are its internal serde of system rows, not app messages).
+
+*Built:* `typeName`. Tests: `core/test/filter-type-names.test.ts` (every type, by `neg`, a predicate and two operators;
+undefined); `differential/test/filter-errors.test.ts` (18 filters on both backends, app `filter-errors-app/`); the old
+names updated in `filter.test.ts` and `server/test/unsupported-value-leak.test.ts` (an opaque value is `(type
+Object)`). Sabotage (each restored, `git diff` clean): `float64`, `null`, bytes named `Object`, `Undefined`: each fails
+the unit test and the differential test.
+
+
+## 15. A streamed HTTP action body's chunk that is not bytes (found by STUDY-31 §10.6)
+
+**Convex.** The runtime reads a returned `Response`'s stream into Rust as soon as the handler returns it
+(`npm-packages/udf-runtime/src/23_response.ts:270-288` `convexJsonFromResponse`, `06_streams.ts:14-31`
+`constructStreamId`): each chunk read goes to the `stream/extend` op (`crates/isolate/src/ops/stream.rs:40-48`), whose
+argument is an `Option<ByteBuf>`. serde_v8 (0.311.0) takes null and undefined as `None`, no chunk
+(`de.rs:211-220`), and reads anything else as a buffer (`de.rs:448-454`, `magic/v8slice.rs:326-347`): an ArrayBuffer
+or any view of one; a shared or resizable one is refused. The op's error rejects the read loop's promise, an
+uncaught error in the isolate, which fails the body as STUDY-31 §10 describes: in the handler's turn the run fails
+with it (the 500; byte chunks before it are not sent); after the head the response ends cleanly with what was sent,
+and the run gets an `error:httpAction` line of it and is logged with the head's status under the request's name. The
+message is serde_v8's, raised in Rust, so it has no frames:
+
+- `Uncaught Error: serde_v8 error: invalid type; expected: buffer, got: <type>`, the type named by v8's
+  `Value::type_repr` (rusty_v8 `src/value.rs`): `string` (an empty one too), `Number`, `Boolean`, `bigint`, `symbol`,
+  `array`, `function`, `Async function`, `Generator function`, `Map`, `Set`, `WeakMap`, `WeakSet`, `Map Iterator`,
+  `Set Iterator`, `Date`, `RegExp`, `Promise`, `Proxy`, `SharedArrayBuffer`, a view's own name over a shared buffer
+  (`Uint8Array`, `Float64Array`, `DataView`; `TypedArray` for a Float16Array), and `unknown` for any other object (a
+  plain object, a Blob, an Error, a boxed string);
+- `Uncaught Error: serde_v8 error: can't create slice from resizable ArrayBuffer` for a resizable ArrayBuffer or a
+  view of one.
+
+Seen on the binary (`precompiled-2026-10-07-d8bdde0`): every name above, in the handler's turn and after the head;
+null and undefined skipped (`first  last`); an ArrayBuffer, a DataView, a Uint16Array and an Int8Array sent as their
+bytes.
+
+**bunvex before.** `meteredBody` (`server/src/http-body.ts`) passed every chunk on to Bun's stream: a string was sent
+as its UTF-8 text, a number or an object reset the connection after the bytes before it, and a null or undefined
+chunk ended the body with an `error:httpAction` line of Bun's `TypeError` (`null is not an object (evaluating
+'value.byteLength')`). A chunk that is not bytes never failed the run.
+
+**bunvex now.** As Convex. `meteredBody`'s pull skips null and undefined, and fails the body with serde_v8's message
+(the same names, an `Error` with no frames) for any other chunk that is not an unshared, fixed-length ArrayBuffer or
+a view of one: after the head, the clean end and the line of STUDY-31 §10. For the handler's turn, Convex reads the
+body at once, so `failedEarly` now reads what the body has ready during its 32 microtask turns (the reads are kept
+in order and sent by the pull): a chunk that is not bytes found there fails the run with the 500. The turn is
+DV-485's (accepted): a start that enqueues its chunks at once is caught whatever their number, and a pull that
+enqueues it after more microtask-only awaits than the turn holds (~10 per pull over two pulls) ends cleanly with the
+line where Convex answers the 500.
+
+*Built:* `http-body.ts` (`isBytes`, `notBytes`, `typeRepr`, the reads of `failedEarly`); `functions.ts` unchanged.
+The cost of the turn's read, in process (50 000 one-chunk streams, three rounds): 1.89–1.92 µs a body before,
+1.94–2.42 µs after, within the noise of a request (~50 µs at 20k req/s); no HTTP benchmark was run (the Mac was
+shared). Tests: `server/test/http-body-chunks.test.ts` (every name, a resizable buffer, bytes of each kind with null
+and undefined, a late chunk's line), `server/test/http-action-response-log.test.ts` (the 500 with no frames and its
+Completion; a late number's clean end and line; null, undefined and buffers through a real server); and
+`differential/test/http-body-error.test.ts` (23 more streams, `/chunk/` of `http-body-errors-app/`, on both
+backends: status, body, clean end, the 500's `code` and `trace` line, every log entry). Sabotage (each restored,
+`git diff` clean): no check in the pull (unit and oracle fail); no reads in the turn (unit and oracle fail); null not
+skipped (unit and oracle fail); a resizable buffer accepted (unit and oracle fail); a shared one accepted (unit and
+oracle fail); `number` for `Number` (unit and oracle fail); the error's frames kept (unit fails; the oracle compares
+first lines only).
+
+Found, not fixed: the 500's `trace` for an error with no frames ends with a newline on Convex
+(`"Uncaught Error: serde_v8 …\n"`, `"Uncaught a string\n"`) and without one on bunvex (`http-actions.ts`
+`errorResponse` strips it), for every such error, not only these.

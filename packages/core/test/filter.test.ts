@@ -34,11 +34,11 @@ describe(".filter() with the filter builder (STUDY-15)", () => {
     expect(await one((q) => q.eq(q.mod(q.field("big"), 3n), 1n))).toEqual([5]);
     expect(await one((q) => q.eq(q.neg(q.field("big")), -10n))).toEqual([5]);
     await expect(one((q) => q.eq(q.add(q.field("big"), 1), 11))).rejects.toThrow(
-      "Cannot add 10 (type int64) and 1.0 (type float64)",
+      "Cannot add 10 (type Int64) and 1.0 (type Float64)",
     );
     await expect(one((q) => q.eq(q.div(q.field("big"), 0n), 1n))).rejects.toThrow("Cannot divide 10 by zero");
     await expect(one((q) => q.mul(q.field("big"), 2n ** 62n))).rejects.toThrow("out of range for Int64");
-    await expect(one((q) => q.field("n"))).rejects.toThrow("Cannot use value 5.0 (type float64) as a Boolean");
+    await expect(one((q) => q.field("n"))).rejects.toThrow("Cannot use value 5.0 (type Float64) as a Boolean");
   });
 
   test("take(n) keeps reading past the first pages until n documents pass", async () => {

@@ -97,7 +97,7 @@ describe("an unsupported value in a function's result, write or arguments", () =
         "m:argsNotObject",
         "Expected to receive an object as the function's argument. Instead received: Vault {…}",
       ],
-      ["query", "m:filterLiteral", "Vault {…} (type object)"],
+      ["query", "m:filterLiteral", "Vault {…} (type Object)"],
       [
         "action",
         "m:actionCtx",
