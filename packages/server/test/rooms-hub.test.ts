@@ -294,6 +294,38 @@ describe("no ghost members", () => {
     expect(hub.members(DOC).map((m) => m.userId)).toEqual(["ub"]);
     expect(hub.size).toEqual({ rooms: 1, members: 1 });
   });
+  test("two live sockets of one session as two users are two members; each leaves cleanly", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const b = sink("B");
+    hub.join(b, 1, DOC, who("ub"));
+    const baseline = hub.size;
+    // The old socket is half-open; the client reconnected with the same session and another user.
+    const old = sink("S"),
+      fresh = sink("S");
+    hub.join(old, 1, DOC, who("alice"));
+    hub.join(fresh, 1, DOC, who("bob"));
+    const alice = (old.frames.find((f) => f.type === "RoomSync") as v1.RoomSync).self;
+    const bob = (fresh.frames.find((f) => f.type === "RoomSync") as v1.RoomSync).self;
+    expect(bob).not.toBe(alice);
+    expect(
+      hub
+        .members(DOC)
+        .map((m) => m.userId)
+        .sort(),
+    ).toEqual(["alice", "bob", "ub"]);
+    hub.leave(old, 1);
+    expect(
+      hub
+        .members(DOC)
+        .map((m) => m.userId)
+        .sort(),
+    ).toEqual(["bob", "ub"]);
+    hub.detach(fresh);
+    t.advance(LIMITS.graceMs + 30);
+    expect(hub.members(DOC).map((m) => m.userId)).toEqual(["ub"]);
+    expect(hub.size).toEqual(baseline);
+  });
   test("the same roomId joined twice on one sink is one attachment: events arrive once, the member leaves", () => {
     const t = fakeTimers();
     const hub = new RoomHub(LIMITS, t);

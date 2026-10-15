@@ -926,6 +926,14 @@ export class Engine {
    * root's numbers, their indexes enabled at once. The push writes the component's row with this id when it
    * finishes (STUDY-152 step 2). The id.
    */
+  /**
+   * A new `_components` id, nothing written: the app's, on its first push with components (Convex's
+   * `initialize_component_namespace` for the root, whose namespace is the global one).
+   */
+  async allocateComponentId(): Promise<string> {
+    return this.runMutation(async (db) => db.newId(COMPONENTS_TABLE), true);
+  }
+
   async initializeComponentNamespace(): Promise<string> {
     const declared = this.allDeclaredTables().filter((t) => COMPONENT_NAMESPACE_TABLES.has(t.name));
     return this.runMutation(async (db) => {
@@ -3036,7 +3044,7 @@ export class Engine {
     | { type: "raceDetected" }
     | { type: "failed"; error: string; tableName: string | null }
     | { type: "inProgress"; indexesComplete: number; indexesTotal: number; schemaValidationComplete: boolean }
-    | { type: "complete" }
+    | { type: "complete"; indexesTotal: number }
   > {
     return this.query((db) =>
       db.asSystem(async () => {
@@ -3048,8 +3056,7 @@ export class Engine {
         if (!row || state === "overwritten") return { type: "raceDetected" as const };
         const failed = schemaFailureOf(row);
         if (failed) return { type: "failed" as const, ...failed };
-        if (state === "active") return { type: "complete" as const };
-        const validated = state === "validated";
+        const validated = state === "validated" || state === "active";
         const indexes = databaseIndexRows(await db.query(INDEX_TABLE).collect());
         const tables = (await db.query(TABLES_TABLE).collect()).map(tableMeta);
         // As Convex's `load_component_schema_status`: every application index there is now (an index the push
@@ -3074,7 +3081,8 @@ export class Engine {
             indexesTotal: total,
             schemaValidationComplete: validated,
           };
-        return { type: "complete" as const };
+        // Its indexes counted too: a push of several namespaces reports each one's (Convex's `ComponentSchemaStatus`).
+        return { type: "complete" as const, indexesTotal: total };
       }),
     ) as never;
   }

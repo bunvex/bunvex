@@ -157,6 +157,12 @@ export type RoomServerEvent = {
 };
 export type RoomErrorCode = "no_access" | "forbidden" | "validation" | "rate_limited" | "limit" | "not_found";
 export type RoomError = { type: "RoomError"; roomId: number; code: RoomErrorCode; message: string };
+/**
+ * The server removed a joined membership on its own: a new identity its gates refuse (`no_access`), or a
+ * rejoin as the new user over a cap (`limit`). The room id is free again; the client rejoins only on a new
+ * Authenticate.
+ */
+export type RoomLeft = { type: "RoomLeft"; roomId: number; code: "no_access" | "limit"; message: string };
 
 export type ServerMessage =
   | Transition
@@ -169,7 +175,8 @@ export type ServerMessage =
   | RoomSync
   | RoomMembers
   | RoomServerEvent
-  | RoomError;
+  | RoomError
+  | RoomLeft;
 
 // ---------------------------------------------------------------- u64 timestamps
 

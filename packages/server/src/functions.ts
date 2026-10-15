@@ -1684,6 +1684,8 @@ export class Functions {
   /** Run a query's or mutation's handler on `db` at nesting `depth`, with its context. */
   private invoke(f: FunctionDef, db: Tx, args: AnyArgs, depth: number, job?: string): unknown {
     const nested = this.nestedCalls(db, f.kind as "query" | "mutation", depth);
+    const functions = this;
+    let rooms: ReturnType<typeof roomsCtx>["rooms"] | undefined;
     const ctx =
       f.kind === "query"
         ? {
@@ -1700,8 +1702,12 @@ export class Functions {
             // `parent_scheduled_job` down the call tree): what it schedules after that job is canceled is
             // born canceled, and it may not cancel that job.
             scheduler: makeScheduler(this, { db, job: job ?? db.request?.scheduledFunctionId ?? undefined }),
-            // Sent once the mutation committed; dropped if it throws or retries (AD-42).
-            rooms: roomsCtx(this, (fn) => db.afterCommit(fn), false).rooms,
+            // Sent once the mutation committed; dropped if it throws or retries (AD-42). Built on first use:
+            // most mutations broadcast nothing.
+            get rooms() {
+              rooms ??= roomsCtx(functions, (fn) => db.afterCommit(fn), false).rooms;
+              return rooms;
+            },
             storage: this.fileStorage?.writer(db) ?? noStorage,
             runQuery: nested.runQuery,
             runMutation: nested.runMutation,

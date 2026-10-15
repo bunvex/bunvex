@@ -188,7 +188,8 @@ stream that is not a terminal, not lines of their own.
   (197.06ms)", "Failed due to network error, retrying in 1.2s...".
 
 The feedback line points at bunvex's issues (`https://github.com/bunvex/bunvex/issues`): Convex names its community
-and its support address; rule 5 needs bunvex's own (an owner question below).
+and its support address; rule 5 needs bunvex's own. Decided by the owner (2026-10-15, option (a)): keep bunvex's
+issues for now; it may change later.
 
 ### Tests
 

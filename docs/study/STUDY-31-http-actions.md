@@ -588,6 +588,19 @@ the newline); `differential/test/http-500-trace.test.ts` (13 routes of
 last character with them). Sabotage (each restored, `git diff` clean): the newline stripped again (unit and oracle
 fail); kept only when there are frames (unit and oracle fail); kept only when there are none (unit and oracle fail).
 
-*Found, not fixed:* Convex's `code` carries the whole message (`Server Error: {message}`, `redaction.rs:147`), so a
-multi-line message, such as `new Error("line one\nline two")` or a thrown `"one\ntwo"`, is in it whole; bunvex's
-`code` keeps only its first line.
+**The `code` (2026-10-15, owner: match Convex).** Convex's `code` is `Server Error: {message}`
+(`redaction.rs:147`): the JsError's message whole, without its frames and without the newline `Debug` writes after it.
+Seen on the binary: `new Error("line one\nline two")` gives `Server Error: Uncaught Error: line one\nline two`;
+`new TypeError("first\n\nthird")` keeps the blank line; a message that ends with a newline keeps it
+(`new Error("ends with a newline\n")`, a thrown `"a string\n"`); a nested action's error carries the callee's frame,
+which is part of its message (`Uncaught Error: nested boom\n    at <anonymous> (../convex/throws.ts:5:1)\n`). The
+Completion record and the log lines already had the whole message on bunvex (the same `describeUncaught` text as
+Convex's, checked for each of these); only the 500's `code` was cut, to its first line, in `errorResponse`.
+
+bunvex now takes the `code` from the same text as the `trace`, without the frames at its end and the newline before
+them (`http-actions.ts`, `FRAMES_AT_END`): what is left is the message, every line of it, a nested call's frames
+included. *Tests:* `server/test/http-actions.test.ts` (several lines, a trailing newline, one line, no frames);
+`differential/test/http-500-trace.test.ts` (9 routes' `code` whole on both backends, the frames' positions masked;
+new routes in `http-trace-app/`, and its `throws.ts`). Sabotage (each restored, `git diff` clean): the first line only
+(unit and oracle fail); the trailing newline trimmed (unit and oracle fail); the frames kept (unit and oracle fail);
+the frames cut from the first run of frame lines (`/m`: oracle fails, on the nested call).

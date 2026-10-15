@@ -390,3 +390,98 @@ Sabotage (each restored, `git diff` clean): serde_v8's words back (unit and orac
 Found, not fixed: the 500's `trace` for an error with no frames ends with a newline on Convex
 (`"Uncaught Error: serde_v8 …\n"`, `"Uncaught a string\n"`) and without one on bunvex (`http-actions.ts`
 `errorResponse` strips it), for every such error, not only these.
+
+## 16. Counting reads toward the read limit (found by STUDY-149 "Bulk edit")
+
+Owner, 2026-10-15: option (a), match Convex's count, in two steps (this study, then one PR, a draft until its
+read-path measurement). **Only the count changes**: the intervals bunvex records for subscriptions and OCC stay exactly
+as they are.
+
+### 16.1 The symptom
+
+`_system/frontend/patchDocumentsFields` without `ids` on a table of exactly 4 094 documents: Convex fails on the last
+patch, inside the function's rewrap (`Uncaught ConvexError: Too many reads …`, with data); bunvex's patches pass and
+the audit event's insert goes over (`Uncaught Error: Too many reads …`, no data). Both count N + 3 in all, in another
+order. The cause is general: bunvex counts reads differently from Convex.
+
+### 16.2 How Convex counts
+
+`TransactionReadSet` (`crates/database/src/reads.rs`) keeps, per index, an `IntervalSet` of everything the transaction
+read, merged: `IntervalSet::add` (`common/src/interval/interval_set.rs:150-215`) folds an interval into every
+overlapping **or adjacent** one; an empty interval adds nothing; `Interval::all` makes the set `All`. The limit's count,
+`num_intervals`, moves only on `record_indexed_directly` (`reads.rs:447-492`): it adds the change of that index's set size
+(`after − before`, the subtraction saturating), then fails past `database_queries` (4 096) with "Too many reads in a single
+function execution (limit: 4096). …". `record_indexed_derived` (`:337-344`) adds to the set **without counting**: reads
+the engine takes on its own behalf. A derived interval still occupies the set, so a later direct read it covers adds
+nothing.
+
+- **Direct** (counted): a document by id (`transaction.rs:1150-1175`, a singleton on `by_id`); each page of an index
+  range or scan (`query/index_range.rs:222-256`, the range the page covered, so a query's consecutive pages merge);
+  system queries (`system_query.rs:276`); a table's count (`table.rs:134`, all of its `by_id`); `take_indexes_dependency`
+  (`bootstrap_model/index.rs:924`); the preloaded environment variables (`preloaded.rs:51`).
+- **Derived** (not counted): the table mapping (`transaction.rs:885`, all of `_tables`); index metadata
+  (`transaction_index.rs:652`); a write's table and indexes (`writes.rs:377-436`: its `_tables` row, the `_index`
+  virtual index); **a new document's id** (`writes.rs:436`, `register_new_id`: a prefix on the table's `by_id`); the schema
+  (`schema_registry.rs:229`); components (`component_registry.rs`).
+- A text search records its terms with `record_search`, outside the intervals (not counted); its hits are fetched by id
+  (direct, one point each).
+- A nested `runQuery` / `runMutation` reads into the same transaction's set (`merge`).
+
+### 16.3 What an app observes (the oracle, `precompiled-2026-10-07-d8bdde0`)
+
+Measured by the warning's `actual` (`Many reads … (actual: N, limit: 4096)`), 3 300 distinct `db.get`s plus one shape:
+
+| shape | Convex | bunvex today |
+|---|---|---|
+| the gets alone (a query or a mutation) | +3 | +3 |
+| get a document again; patch, replace a document read | +0 | +1 |
+| insert (into a known table, twice, then get or patch it) | +0 | +1 |
+| insert into a new table (one or two new tables) | +1 | +8 / +12 |
+| first / collect / take / desc / filter of a table | +1 | +2 (`take` of the read table +1) |
+| the same scan twice | +1 | +3 |
+| `withIndex` eq; twice the same; two values | +1; +1; +2 | +3; +5; +5 |
+| ranges `[10,20)` then `[20,30)` (adjacent) or `[15,30)` (overlapping); with a gap | +1; +2 | +4 |
+| `count` of the read table (all of its `by_id` swallows the 3 300 points) | ≈ +1 in all (no warning) | +1 |
+| a missing table; two | +0 | +1; +2 |
+| `db.system` query | +1 | +2 |
+| a search: no hit; 10 hits; twice | +0; +10; +10 | +2; +12; +23 |
+| `scheduler.runAfter` | +0 | +2 |
+| a first nested `runQuery` / `runMutation` (empty); a second | +2; +0 | +0; +0 |
+| a nested query re-getting 100 of the caller's documents | +2 | +100 |
+| `patchDocumentsFields`, N documents (a system function) | N + 3 | N + 3 |
+
+**The constants.** A user function's transaction starts with three direct reads, made before its code runs
+(`isolate/src/environment/udf/phase.rs` `initialize` and `get_module`): `_udf_config` (`UdfConfigModel::get`), the
+environment variables (`PreloadedEnvVars::load`) and its module (`ModuleModel::get_metadata`, `_modules` by path). A
+system function has no module row: two. bunvex's own three happen to be others: the `_canonical_urls` scan and its
+`_tables` row (read for the default system variables) and the used table's `_tables` row.
+
+### 16.4 bunvex today
+
+`Tx.recordInterval` (`core/src/tx.ts`) pushes every interval onto `readList` and counts its length (less the
+`_backend_state` read, `uncountedRead`). So it counts the table and index metadata it reads for invalidation (`dependOn`,
+`recordIndexMeta`, `readMissingTable`), the search's term intervals, its own catalog reads when it creates a table, and
+every repeat; and nothing merges.
+
+### 16.5 The plan (one PR)
+
+1. **`ReadCount`** (`core/src/read-count.ts`): Convex's per-index merged interval sets and `num_intervals`, `direct` and
+   `derived`, with Convex's saturating update. `Tx` keeps one beside `readList`; `readList` is untouched, so what a
+   subscription or a commit's conflict check sees does not change.
+2. **Which bunvex reads are direct**: a document by id, a page of a query or scan, a `db.system` read, a count. **Derived**:
+   `dependOn`, `recordIndexMeta`, `readMissingTable`, the `_backend_state` read, the environment and canonical URL reads,
+   a search's term intervals, the reads of a table's creation, and, recorded in the count only, a new document's id
+   (Convex's `register_new_id`).
+3. **The constants**: a function's transaction counts Convex's three (two for a `_system/` function) when it starts, as
+   intervals of their own (they never merge with what a function can read); a table created by the transaction counts
+   one, once; the first nested call counts two, once.
+4. The limit, the "Many reads" warning, the read-limit split of `paginate` (`readsFull`) and a nested call's budget read
+   the new count. Documents and bytes read (their own counters, `record_read_document`) are checked by the sweep too.
+5. **Tests**: `ReadCount` unit tests (merging, adjacency, saturation, derived coverage); the existing reactivity, OCC and
+   subscription tests unchanged, plus new ones asserting `readList` is the same as before for each shape above; a
+   differential sweep of every shape in §16.3 (and the 4 094 bulk edit, get-then-patch, re-reads, several tables, adjacent
+   pages, missing tables, nested calls, queries and mutations) comparing `actual` on both backends.
+6. **Measurement**: the read path gains a sorted-set insert per read; the PR stays a draft until the owner's
+   before/after run (`bench/`), prepared in the PR.
+
+*Built:* not yet.
