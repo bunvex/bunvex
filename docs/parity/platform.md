@@ -185,7 +185,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 |---|---|---|---|
 | `convex.config.ts`: `defineApp()`, `app.use(component, {name, httpPrefix, env})` | `npm/convex/server/components/index.ts` | missing | Not on the ARCHITECTURE map. |
 | `defineComponent(name)` and a component's own schema and functions | same; `crates/model/components` | missing | |
-| Table and function isolation per component (`TableNamespace`) | `crates/model/components`; `_components`, `_component_definitions` tables | missing | |
+| Table and function isolation per component (`TableNamespace`) | `crates/model/components`; `_components`, `_component_definitions` tables | partial | Tables: each component's in its own namespace (STUDY-152 step 1); a transaction runs in one with `inComponent` (STUDY-153 PR 2a), its documents checked against no root schema. Functions: STUDY-152 step 4. |
 | Calling a component: `ctx.runQuery(components.x.fn, args)` | `server/impl/actions_impl.ts` | missing | Also works from mutations via `ctx.runMutation`, at depth up to 8. |
 | Function handles (`createFunctionHandle`, `_function_handles`) | `crates/model/components/handles.rs` | done (STUDY-50) | `function://<id>#<path>`; rows per function kept by each push (tombstoned, revived); resolved in the caller's transaction by `runQuery` / `runMutation` / `runAction` and the scheduler. Synced just after the push's commit (DV-264, accepted). |
 | Component type checking on push | `crates/model/components/type_checking.rs` | missing | |
@@ -281,7 +281,7 @@ The first 18 rows are the tables an app can see or depend on. The last row group
 | `_modules`, `_source_packages`, `_udf_config`, `_external_deps_packages` | `crates/model/modules` etc. | done (STUDY-35, STUDY-134, STUDY-148) | `_modules`, `_source_packages`, `_udf_config` as Convex's (STUDY-35), their rows in Convex's shapes (STUDY-134). `_external_deps_packages`: Convex's `{storageKey, sha256, deps: [{package, version}], packageSize}`, one per install, never deleted (STUDY-148). |
 | `_auth` | `crates/model/auth` | done (STUDY-129) | Number 519; Convex's documents; `_system/frontend/listAuthProviders`. |
 | `_environment_variables` | `crates/model/environment_variables` | done (STUDY-37) | `{ name, value }`, indexed `by_name`, as Convex's. |
-| `_components`, `_component_definitions`, `_function_handles` | `crates/model/components` | partial | `_function_handles` done (STUDY-50, number 545); the component tables come with components. |
+| `_components`, `_component_definitions`, `_function_handles` | `crates/model/components` | partial | `_function_handles` done (STUDY-50, number 545); `_components` rows and paths (STUDY-152 step 2) and `_component_definitions` rows (STUDY-153 PR 2a) read and written in Convex's shape; a push writes them from STUDY-153 PR 4. |
 | `_session_requests` | `crates/model/session_requests` | done (STUDY-23) | Mutation idempotency per (session, request seq). This is the sync layer's exactly-once guarantee, listed here for completeness. |
 | `_exports`, `_snapshot_imports` | `crates/model/exports`, `snapshot_imports` | done (STUDY-42) | Convex's fields, states and indexes (timestamps in ns); `_snapshot_imports` also keeps the upload's size (`object_size`, not returned by `queryImport`). |
 | `_log_sinks` | `crates/model/log_sinks` | done (STUDY-59) | Number 535, `{status, config}`; one live sink per type, 8 at most; Convex's states. |

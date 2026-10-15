@@ -659,6 +659,30 @@ can be tested with hand-written requests (§3), as the oracle's `sp.ts handwritt
 
 ### PR 2 — `core`: namespaced writes and per-namespace schemas
 
+Split in two (one concern each): **PR 2a** is `Tx.inComponent` and the `_component_definitions` rows; **PR 2b** is
+the per-namespace schema push. As built, PR 2a:
+
+- `db.inComponent(id, fn)` (`core/src/tx.ts`): while `fn` runs, names and id numbers resolve in the component's
+  catalog; its own system tables (`COMPONENT_NAMESPACE_TABLES`) are the namespace's, the global ones (`_tables`,
+  `_index`, `_components`, the index-id counter, …) the root's, by name and by id. Calls must not overlap (step 4's
+  runtime runs nested calls one at a time). `null` is the root.
+- A table a write creates inside a component is numbered in that namespace (`planCatalog`'s namespace) and is
+  installed in the engine's `catalog.components` at commit. `TableDef.namespace` marks a component's tables.
+- The root's schema checks (enforced, pending and staged validators) apply to the root's tables only: a
+  component's `messages` is not the root's. A component's own schema is enforced from step 4.
+- `catalogTouches` finds a component's table by tablet (`anyTablet`), so an index change on it conflicts as the
+  root's do.
+- `componentDefinitionRow` / `componentDefinitionMeta` (`core/src/components.ts`): Convex's
+  `SerializedComponentDefinitionMetadata`, each child tagged `SerializedComponentInstantiation`, `envVars` null when
+  empty, every map (`env`, `envVars`, `httpMounts`, a branch's exports, `args`) by key as Convex's `BTreeMap`;
+  `componentRow` sorts `args` and `env` the same way. Checked against rows the Convex binary wrote for an app with
+  env bindings, declared env vars and an HTTP mount (`core/test/convex-rows/component-definitions.json`).
+
+Measured: an in-memory engine running 3000 mutations (insert, two `get`, `normalizeId`) and 3000 indexed queries,
+median of 7 rounds, three alternated runs: 125–128 ms on main, 122–132 ms with PR 2a (noise).
+
+The plan as first written:
+
 - **Scope.**
   - `Tx.inComponent(id)`;
   - the `_component_definitions` row (de)serialization (`componentDefinitionRow` / `Meta`);
@@ -666,7 +690,7 @@ can be tested with hand-written requests (§3), as the oracle's `sp.ts handwritt
     with a multi-namespace commit;
   - the per-namespace active schema.
 - **Acceptance tests:**
-  1. On the Convex fixture (`convex-store-components.sqlite3.gz`), every `_component_definitions` row round-trips
+  1. On Convex's rows (`core/test/convex-rows/`; the binary fixture was removed, #661), every `_component_definitions` row round-trips
      unchanged, including `type: "SerializedComponentInstantiation"` and `envVars: null`.
   2. `inComponent(counterId).query("_modules")` returns `lib.js`, `schema.js` and `convex.config.js` of
      `counter` only. An insert into `inComponent(id)` of `messages` gets the namespace's table number (10002 in

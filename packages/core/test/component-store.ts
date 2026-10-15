@@ -12,13 +12,7 @@ import { readNextIndexId } from "../src/index-ids.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { type DeclaredTable, defineSchema, defineTable } from "../src/schema.ts";
 
-const rootTables = { messages: defineTable({ text: v.string() }).index("by_text", ["text"]) };
-export const rootSchema = defineSchema(rootTables);
-/**
- * The root's schema without its validation, for writing a component's documents: until a transaction runs in a
- * component's namespace (STUDY-153 PR 2), a write is checked against the root's schema by table name.
- */
-const unvalidated = defineSchema(rootTables, { schemaValidation: false });
+export const rootSchema = defineSchema({ messages: defineTable({ text: v.string() }).index("by_text", ["text"]) });
 
 /** Each component's own tables, as the `counter` definition declares them. */
 const COMPONENT_TABLES: DeclaredTable[] = [
@@ -30,8 +24,7 @@ export type ComponentStore = { path: string; ids: { root: string; counter: strin
 
 /** Build the store in `path` (a MemoryPersistence log): one root message, one document per component table. */
 export async function buildComponentStore(path: string): Promise<ComponentStore> {
-  const open = async (schema = rootSchema) =>
-    new Engine(schema, await MemoryPersistence.open(path, { durable: false })).init();
+  const open = async () => new Engine(rootSchema, await MemoryPersistence.open(path, { durable: false })).init();
   let e = await open();
   const counter = await e.initializeComponentNamespace();
   const second = await e.initializeComponentNamespace();
@@ -75,20 +68,19 @@ export async function buildComponentStore(path: string): Promise<ComponentStore>
     }),
   );
   await e.close();
-  // Reopened: the catalog is built from the stored rows, as a start does.
-  e = await open(unvalidated);
-  await e.mutation((db) =>
-    db.asSystem(async () => {
-      for (const [id, body] of [
-        [counter, "in counter"],
-        [second, "in second"],
-      ] as const) {
-        const ns = e.catalog.components.get(id)!;
-        await db.importInsert(ns.table("messages"), { body, n: 1 });
-        await db.importInsert(ns.table("counters"), { name: body, value: 1 });
-      }
-    }),
-  );
+  // Reopened: the catalog is built from the stored rows, as a start does. Each component's documents are written
+  // in its namespace, where the root's schema (`messages` with `text`) does not apply.
+  e = await open();
+  await e.mutation(async (db) => {
+    for (const [id, body] of [
+      [counter, "in counter"],
+      [second, "in second"],
+    ] as const)
+      await db.inComponent(id, async () => {
+        await db.insert("messages", { body, n: 1 });
+        await db.insert("counters", { name: body, value: 1 });
+      });
+  });
   await e.close();
   return { path, ids: { root, counter, second } };
 }

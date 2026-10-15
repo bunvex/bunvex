@@ -3740,16 +3740,23 @@ export class Engine {
         const value = resolved(ts);
         // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
         // durable; a transaction that raced to create the same table conflicted on _tables and retries).
-        for (const [name, c] of tx.createdTables)
-          if (!this.catalog.tables.has(name))
-            this.catalog.add(
-              name,
-              c.def.id,
-              c.def.number,
-              [...c.def.indexes.values()].map((i) => ({ name: i.name, fields: i.fields, id: i.id })),
-              "active",
-              c.def.metaId,
-            );
+        for (const { def } of tx.createdTables.values()) {
+          let space = this.catalog;
+          if (def.namespace !== undefined) {
+            space = this.catalog.components.get(def.namespace) ?? new Catalog();
+            this.catalog.components.set(def.namespace, space);
+          }
+          if (space.tables.has(def.name)) continue;
+          const added = space.add(
+            def.name,
+            def.id,
+            def.number,
+            [...def.indexes.values()].map((i) => ({ name: i.name, fields: i.fields, id: i.id })),
+            "active",
+            def.metaId,
+          );
+          if (def.namespace !== undefined) added.namespace = def.namespace;
+        }
         return withTs ? { value, ts } : value;
       } catch (e) {
         // Only an OCC conflict is retried. An OutOfRetentionError (the snapshot fell out of the write log)

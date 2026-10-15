@@ -55,6 +55,8 @@ export type TableDef = {
   name: string;
   /** Its `_tables` document's id: a transaction that uses the table reads it (STUDY-42 PR 2). */
   metaId?: string;
+  /** The component whose namespace it is in (its `_components` id); absent for the root's (STUDY-153 PR 2). */
+  namespace?: string;
   indexes: Map<string, IndexDef>;
   pending: IndexDef[];
   byId: IndexDef;

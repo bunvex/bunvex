@@ -97,10 +97,13 @@ export {
 export {
   allComponentPaths,
   COMPONENT_NAMESPACE_TABLES,
+  type ComponentDefinitionMeta,
   type ComponentMeta,
   ComponentMetadataError,
   type ComponentState,
   componentChildren,
+  componentDefinitionMeta,
+  componentDefinitionRow,
   componentInParent,
   componentMeta,
   componentPath,
@@ -108,6 +111,7 @@ export {
   type EnvBinding,
   formatComponentPath,
   type NewComponent,
+  type NewComponentDefinition,
   resolveComponentPath,
   rootComponent,
 } from "./components.ts";
