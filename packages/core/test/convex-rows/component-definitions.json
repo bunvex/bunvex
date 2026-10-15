@@ -1,0 +1,169 @@
+{
+  "_component_definitions": [
+    {
+      "_creationTime": 1792065985181.774,
+      "_id": "kw23ebqqjbxgw4ynvam7pr87b58gb5gp",
+      "childComponents": [
+        {
+          "args": [],
+          "env": [
+            [
+              "KEY",
+              {
+                "name": "ZETA",
+                "type": "envVar"
+              }
+            ],
+            [
+              "MODE",
+              {
+                "type": "value",
+                "value": "b"
+              }
+            ]
+          ],
+          "name": "counter",
+          "path": "counter",
+          "type": "SerializedComponentInstantiation"
+        },
+        {
+          "args": [],
+          "env": [
+            [
+              "MODE",
+              {
+                "type": "value",
+                "value": "a"
+              }
+            ]
+          ],
+          "name": "second",
+          "path": "counter",
+          "type": "SerializedComponentInstantiation"
+        }
+      ],
+      "definitionType": {
+        "type": "app"
+      },
+      "envVars": [
+        [
+          "ALPHA",
+          {
+            "optional": true,
+            "type": "value",
+            "value": "{\"type\":\"string\"}"
+          }
+        ],
+        [
+          "ZETA",
+          {
+            "type": "value",
+            "value": "{\"type\":\"string\"}"
+          }
+        ]
+      ],
+      "exports": {
+        "branch": [],
+        "type": "branch"
+      },
+      "httpMounts": {
+        "/c/": "_reference/childComponent/counter"
+      },
+      "httpPrefix": null,
+      "path": ""
+    },
+    {
+      "_creationTime": 1792065985181.7742,
+      "_id": "kw22btm49x1y0bfknc64w827p18gaenq",
+      "childComponents": [],
+      "definitionType": {
+        "args": [],
+        "name": "counter",
+        "type": "childComponent"
+      },
+      "envVars": [
+        [
+          "KEY",
+          {
+            "optional": true,
+            "type": "value",
+            "value": "{\"type\":\"string\"}"
+          }
+        ],
+        [
+          "MODE",
+          {
+            "type": "value",
+            "value": "{\"type\":\"union\",\"value\":[{\"type\":\"literal\",\"value\":\"a\"},{\"type\":\"literal\",\"value\":\"b\"}]}"
+          }
+        ]
+      ],
+      "exports": {
+        "branch": [],
+        "type": "branch"
+      },
+      "httpMounts": {},
+      "httpPrefix": null,
+      "path": "counter"
+    }
+  ],
+  "_components": [
+    {
+      "_creationTime": 1792065985181.7744,
+      "_id": "m02c9mwvj7mxy1n9vp5ad2jtzd8ga87a",
+      "args": null,
+      "definitionId": "kw23ebqqjbxgw4ynvam7pr87b58gb5gp",
+      "env": null,
+      "httpPrefix": null,
+      "name": null,
+      "parent": null,
+      "state": "active"
+    },
+    {
+      "_creationTime": 1792065985181.779,
+      "_id": "m02c17t3628ygmdq04t6bbqm818gbjdv",
+      "args": [],
+      "definitionId": "kw22btm49x1y0bfknc64w827p18gaenq",
+      "env": [
+        [
+          "KEY",
+          {
+            "name": "ZETA",
+            "type": "envVar"
+          }
+        ],
+        [
+          "MODE",
+          {
+            "type": "value",
+            "value": "b"
+          }
+        ]
+      ],
+      "httpPrefix": "/c/",
+      "name": "counter",
+      "parent": "m02c9mwvj7mxy1n9vp5ad2jtzd8ga87a",
+      "state": "active"
+    },
+    {
+      "_creationTime": 1792065985181.7764,
+      "_id": "m026gtzmppya30j14admaztme18gbpwq",
+      "args": [],
+      "definitionId": "kw22btm49x1y0bfknc64w827p18gaenq",
+      "env": [
+        [
+          "MODE",
+          {
+            "type": "value",
+            "value": "a"
+          }
+        ]
+      ],
+      "httpPrefix": null,
+      "name": "second",
+      "parent": "m02c9mwvj7mxy1n9vp5ad2jtzd8ga87a",
+      "state": "active"
+    }
+  ],
+  "source": "convex-local-backend precompiled-2026-09-28-5c7cb5b (Convex 1.46.0 CLI), a fresh SQLite deployment, one push of an app declaring env vars ZETA and ALPHA that mounts a `counter` component (env vars MODE, KEY; an http.ts) twice: as `counter` with httpPrefix \"/c\" and env {MODE: \"b\", KEY: app.env.ZETA}, and as `second` with env {MODE: \"a\"}; read back by bunvex (STUDY-153 PR 2)"
+}

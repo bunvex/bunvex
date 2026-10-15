@@ -5,6 +5,9 @@
 import { COMPONENTS_TABLE } from "./catalog.ts";
 import type { Tx } from "./tx.ts";
 
+/** A list of `[key, value]` pairs as Convex keeps a `BTreeMap`: by key, so a row reads back in key order. */
+const byKey = <T>(pairs: [string, T][]): [string, T][] => [...pairs].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+
 /** A component's state, as Convex's `ComponentState`: an unmounted one keeps its data, read-only, and runs nothing. */
 export type ComponentState = "active" | "unmounted";
 
@@ -38,15 +41,15 @@ export class ComponentMetadataError extends Error {
 
 /**
  * A `_components` row as Convex stores it (`SerializedComponentMetadata`): `parent`, `name`, `args` and `env` null
- * for the root; `state` always written.
+ * for the root; `args` and `env` by key; `state` always written.
  */
 export function componentRow(m: NewComponent): Record<string, unknown> {
   return {
     definitionId: m.definitionId,
     parent: m.parent,
     name: m.name,
-    args: m.parent === null ? null : m.args,
-    env: m.parent === null ? null : m.env,
+    args: m.parent === null ? null : byKey(m.args),
+    env: m.parent === null ? null : byKey(m.env),
     state: m.state,
     httpPrefix: m.httpPrefix,
   };
@@ -74,6 +77,131 @@ export function componentMeta(row: Record<string, unknown>): ComponentMeta {
       env: ((row.env as [string, EnvBinding][] | null | undefined) ?? []) as [string, EnvBinding][],
     };
   throw new ComponentMetadataError("Invalid component type");
+}
+
+/** A component's exports (Convex's `SerializedComponentExport`): a branch of named exports, or a function's reference. */
+export type ComponentExport = { type: "branch"; branch: [string, ComponentExport][] } | { type: "leaf"; leaf: string };
+/** A declared environment variable's validator (Convex's `SerializedEnvVarValidator`): its JSON as a string. */
+export type EnvVarValidator = { type: "value"; value: string; optional?: true };
+/** A legacy component argument or argument validator (Convex's): a JSON string. Today's JS API has none (K6). */
+export type ComponentArgument = { type: "value"; value: string };
+/** A child a definition mounts (Convex's `SerializedComponentInstantiation`). */
+export type ComponentInstantiation = {
+  name: string;
+  path: string;
+  args: [string, ComponentArgument][] | null;
+  env: [string, EnvBinding][];
+};
+/** What a definition is (Convex's `SerializedComponentDefinitionType`): the app, or a child component. */
+export type ComponentDefinitionType =
+  | { type: "app" }
+  | { type: "childComponent"; name: string; args: [string, ComponentArgument][] };
+
+/**
+ * A `_component_definitions` row read back (Convex's `ComponentDefinitionMetadata`): one per definition a push
+ * evaluated, by path (`""` for the app's). Its maps (`httpMounts`, a branch's exports, `env`, `envVars`) are by key.
+ */
+export type ComponentDefinitionMeta = {
+  _id: string;
+  path: string;
+  definitionType: ComponentDefinitionType;
+  childComponents: ComponentInstantiation[];
+  httpMounts: Record<string, string>;
+  httpPrefix: string | null;
+  exports: ComponentExport & { type: "branch" };
+  envVars: [string, EnvVarValidator][];
+};
+/** A definition's fields without its id: what a new row is written from. */
+export type NewComponentDefinition = Omit<ComponentDefinitionMeta, "_id">;
+
+const sortExports = (e: ComponentExport): ComponentExport =>
+  e.type === "leaf" ? e : { type: "branch", branch: byKey(e.branch.map(([k, v]) => [k, sortExports(v)])) };
+
+/**
+ * A `_component_definitions` row as Convex stores it (`SerializedComponentDefinitionMetadata`): each child tagged
+ * `SerializedComponentInstantiation`, `envVars` null when none are declared, every map by key (checked against a
+ * store the Convex binary wrote).
+ */
+export function componentDefinitionRow(m: NewComponentDefinition): Record<string, unknown> {
+  return {
+    path: m.path,
+    definitionType:
+      m.definitionType.type === "app"
+        ? { type: "app" }
+        : { type: "childComponent", name: m.definitionType.name, args: byKey(m.definitionType.args) },
+    childComponents: m.childComponents.map((c) => ({
+      type: "SerializedComponentInstantiation",
+      name: c.name,
+      path: c.path,
+      args: c.args && byKey(c.args),
+      env: byKey(c.env),
+    })),
+    httpMounts: Object.fromEntries(byKey(Object.entries(m.httpMounts))),
+    httpPrefix: m.httpPrefix,
+    exports: sortExports(m.exports),
+    envVars: m.envVars.length ? byKey(m.envVars) : null,
+  };
+}
+
+const isPairs = (v: unknown): v is [string, unknown][] =>
+  Array.isArray(v) && v.every((p) => Array.isArray(p) && p.length === 2 && typeof p[0] === "string");
+
+function readExports(e: unknown): ComponentExport {
+  const x = e as { type?: unknown; branch?: unknown; leaf?: unknown } | null;
+  if (x?.type === "leaf" && typeof x.leaf === "string") return { type: "leaf", leaf: x.leaf };
+  if (x?.type === "branch" && isPairs(x.branch))
+    return { type: "branch", branch: x.branch.map(([k, v]) => [k, readExports(v)]) };
+  throw new ComponentMetadataError("Invalid component exports");
+}
+
+/** Convex's `HttpMountPath`: starting and ending with `/`, no `*`, no query. */
+const isHttpMountPath = (s: unknown): s is string =>
+  typeof s === "string" && s.startsWith("/") && s.endsWith("/") && !s.includes("*") && !s.includes("?");
+
+/** A `_component_definitions` row read back, checked as Convex's `TryFrom<SerializedComponentDefinitionMetadata>`. */
+export function componentDefinitionMeta(row: Record<string, unknown>): ComponentDefinitionMeta {
+  const fail = (what: string): never => {
+    throw new ComponentMetadataError(`Invalid component definition: ${what}`);
+  };
+  if (typeof row.path !== "string") fail("path");
+  const type = row.definitionType as { type?: unknown; name?: unknown; args?: unknown } | null | undefined;
+  let definitionType: ComponentDefinitionType;
+  if (type?.type === "app") definitionType = { type: "app" };
+  else if (type?.type === "childComponent" && typeof type.name === "string" && isPairs(type.args))
+    definitionType = { type: "childComponent", name: type.name, args: type.args as [string, ComponentArgument][] };
+  else return fail("definitionType");
+  if (!Array.isArray(row.childComponents)) fail("childComponents");
+  const childComponents = (row.childComponents as Record<string, unknown>[]).map((c): ComponentInstantiation => {
+    if (typeof c?.name !== "string" || typeof c.path !== "string") fail("childComponents");
+    if (c.args !== null && !isPairs(c.args)) fail("childComponents");
+    const env = c.env ?? [];
+    if (!isPairs(env)) fail("childComponents");
+    return {
+      name: c.name as string,
+      path: c.path as string,
+      args: c.args as [string, ComponentArgument][] | null,
+      env: env as [string, EnvBinding][],
+    };
+  });
+  const mounts = (row.httpMounts ?? {}) as Record<string, unknown>;
+  if (typeof mounts !== "object" || Array.isArray(mounts)) fail("httpMounts");
+  for (const [k, v] of Object.entries(mounts)) if (!isHttpMountPath(k) || typeof v !== "string") fail("httpMounts");
+  const httpPrefix = (row.httpPrefix ?? null) as unknown;
+  if (httpPrefix !== null && !isHttpMountPath(httpPrefix)) fail("httpPrefix");
+  const exports = readExports(row.exports);
+  if (exports.type !== "branch") fail("exports");
+  const envVars = row.envVars ?? [];
+  if (!isPairs(envVars)) fail("envVars");
+  return {
+    _id: row._id as string,
+    path: row.path as string,
+    definitionType,
+    childComponents,
+    httpMounts: mounts as Record<string, string>,
+    httpPrefix: httpPrefix as string | null,
+    exports: exports as ComponentExport & { type: "branch" },
+    envVars: envVars as [string, EnvVarValidator][],
+  };
 }
 
 const BY_PARENT_AND_NAME = "by_parent_and_name";

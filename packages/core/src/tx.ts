@@ -45,6 +45,7 @@ import {
 } from "./catalog.ts";
 import { writeCatalogChanges } from "./catalog-writes.ts";
 import { type Interval, type LoggedIndexWrite, OutOfRetentionError, type SearchRead } from "./committer.ts";
+import { COMPONENT_NAMESPACE_TABLES } from "./components.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { failExecution, monotonicNow, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { engineOwned } from "./engine-owned.ts";
@@ -415,6 +416,9 @@ function setAt(doc: Doc, paths: Path[], by: unknown): Doc {
   return out as Doc;
 }
 
+/** A system table of the deployment's, not of each component's namespace (`_tables`, `_index`, `_components`, …). */
+const isGlobalTable = (name: string) => name.startsWith("_") && !COMPONENT_NAMESPACE_TABLES.has(name);
+
 /** An imported document's `_id` refused (STUDY-42), with Convex's code. */
 export class ImportIdError extends Error {
   constructor(
@@ -676,9 +680,60 @@ export class Tx {
   /** Days since the Unix epoch at the transaction's start: the last two bytes of every id it creates. */
   private readonly day: number;
 
+  /**
+   * The namespace table names and id numbers resolve in (STUDY-153 PR 2): the root's catalog, or a component's
+   * while `inComponent` runs. Tablets, the read and write sets and the limits are the transaction's, shared.
+   */
+  private space: Catalog | null = null;
+  /** The component `space` is, by its `_components` id; null for the root. */
+  private spaceId: string | null = null;
+  private get names(): Catalog {
+    return this.space ?? this.catalog;
+  }
+
+  /** The component whose namespace names resolve in now (its `_components` id), or null for the root. */
+  get componentId(): string | null {
+    return this.spaceId;
+  }
+
+  /**
+   * Run `fn` in the namespace of component `id` (its `_components` id; null for the root), as Convex's
+   * per-namespace `TableModel` / `UserFacingModel`: `query`, `insert`, `get`, `normalizeId` and `newId` address
+   * its tables, and ids encode its table numbers. Its tables are the namespace's own, its system tables
+   * included (`COMPONENT_NAMESPACE_TABLES`); the global ones (`_tables`, `_index`, `_components`, …) are the
+   * root's. Its documents are checked against no schema of the root. Calls must not overlap: the namespace is
+   * the transaction's while `fn` runs.
+   */
+  async inComponent<T>(id: string | null, fn: () => Promise<T>): Promise<T> {
+    const space = id === null ? null : this.catalog.components.get(id);
+    if (space === undefined) throw new Error(`No namespace for component ${id}`);
+    const [prevSpace, prevId] = [this.space, this.spaceId];
+    [this.space, this.spaceId] = [space, id];
+    try {
+      return await fn();
+    } finally {
+      [this.space, this.spaceId] = [prevSpace, prevId];
+    }
+  }
+
+  /**
+   * Table `name` of the current namespace, without recording anything: the namespace's own, else, for a global
+   * system table, the root's.
+   */
+  private lookup(name: string): TableDef | undefined {
+    const own = this.names.tables.get(name);
+    if (own || !this.space || !isGlobalTable(name)) return own;
+    return this.catalog.tables.get(name);
+  }
+
+  /** The key of a table this transaction created: its namespace's and its name. */
+  private createdKey(name: string): string {
+    return this.spaceId === null ? name : `${this.spaceId}\u0000${name}`;
+  }
+
   /** Whether the catalog this transaction runs on has table `name` (system code: a table it may write). */
   hasTable(name: string): boolean {
-    return this.catalog.tables.has(name);
+    return this.lookup(name) !== undefined;
   }
 
   /**
@@ -688,9 +743,9 @@ export class Tx {
    */
   private findTable(name: string, op: "insert" | "query" | "other" = "other"): TableDef | undefined {
     if (name.startsWith("_") && !this.systemAccess) throw new Error(SYSTEM_TABLE_MESSAGES[op]);
-    const t = this.catalog.tables.get(name);
+    const t = this.lookup(name);
     if (t) this.dependOn(t);
-    return t ?? this.createdTables.get(name)?.def;
+    return t ?? this.createdTables.get(this.createdKey(name))?.def;
   }
 
   private dependedOn = new Set<TabletId>();
@@ -720,13 +775,16 @@ export class Tx {
     const byId = this.catalog.table(TABLES_TABLE).byId.id;
     const out: { index: IndexId; key: Uint8Array; id: null }[] = [];
     for (const tablet of this.indexedTables) {
-      const metaId = this.catalog.byTablet(tablet)?.metaId;
+      const metaId = this.catalog.anyTablet(tablet)?.metaId;
       if (metaId !== undefined) out.push({ index: byId, key: encodeKey([metaId]), id: null });
     }
     return out;
   }
 
-  /** Tables this transaction created (STUDY-14: a write to an unknown table creates it, as in Convex). */
+  /**
+   * Tables this transaction created (STUDY-14: a write to an unknown table creates it, as in Convex), by name;
+   * a component's by its id and name (`def.namespace` names it).
+   */
   readonly createdTables = new Map<string, { def: TableDef }>();
   private systemDepth = 0;
 
@@ -813,6 +871,7 @@ export class Tx {
         indexes,
         true,
         await readNextIndexId(this),
+        this.spaceId ?? undefined,
       );
       // Its `_tables` row's id gives the table its tablet; its indexes' rows give them their ids.
       const written = await writeCatalogChanges(this, plan, this.snapshot);
@@ -824,7 +883,8 @@ export class Tx {
         written.indexes.map((i) => ({ name: i.name, fields: i.fields, id: i.indexId })),
       );
       def.metaId = meta._id;
-      this.createdTables.set(name, { def });
+      if (this.spaceId !== null) def.namespace = this.spaceId;
+      this.createdTables.set(this.createdKey(name), { def });
       return def;
     } finally {
       this.systemDepth--;
@@ -917,9 +977,13 @@ export class Tx {
    */
   /** The table numbered `n`: in the catalog, or created by this transaction (its ids work at once, as Convex's). */
   private tableByNumber(n: number): TableDef | undefined {
-    const t = this.catalog.byNumber(n);
+    const t = this.names.byNumber(n);
     if (t) return t;
-    for (const { def } of this.createdTables.values()) if (def.number === n) return def;
+    // A global system table's id, from inside a component (`lookup`'s fallback).
+    const global = this.space && this.catalog.byNumber(n);
+    if (global && isGlobalTable(global.name)) return global;
+    const namespace = this.spaceId ?? undefined;
+    for (const { def } of this.createdTables.values()) if (def.number === n && def.namespace === namespace) return def;
     return undefined;
   }
 
@@ -973,7 +1037,7 @@ export class Tx {
     if (typeof table !== "string") throw new Error("Invalid argument `table` for `db.normalizeId`");
     if (table.startsWith("_") && !this.systemAccess)
       throw new Error("System tables can only be accessed from db.system.normalizeId().");
-    const t = this.catalog.tables.get(table) ?? this.createdTables.get(table)?.def;
+    const t = this.names.tables.get(table) ?? this.createdTables.get(this.createdKey(table))?.def;
     // Stryker disable next-line ConditionalExpression,LogicalOperator: t.number of no table and decodeId of a non-string throw in the try below, which gives the same null
     if (!t || typeof idString !== "string") return null;
     try {
@@ -1060,7 +1124,7 @@ export class Tx {
 
   /** @internal The name an id's table number has for apps (a virtual table's for its system table's), if any. */
   publicTableName(number: number): string | undefined {
-    return this.catalog.publicNameOf(number);
+    return this.names.publicNameOf(number);
   }
 
   /**
@@ -1147,8 +1211,9 @@ export class Tx {
   }
 
   /**
-   * A new id of the root's table `name` that no document has yet (Convex's `allocate_internal_id`): a component's
-   * id is reserved so when its namespace is made, before its `_components` row is written. System only.
+   * A new id of table `name` (of the current namespace, or a global one) that no document has yet (Convex's
+   * `allocate_internal_id`): a component's id is reserved so when its namespace is made, before its `_components`
+   * row is written. System only.
    */
   newId(name: string): string {
     if (!this.systemAccess) throw new Error("newId is for system transactions");
@@ -1156,7 +1221,9 @@ export class Tx {
     outsideExecution(() => crypto.getRandomValues(internal.subarray(0, 14)));
     internal[14] = this.day >> 8;
     internal[15] = this.day & 0xff;
-    return encodeId(this.catalog.table(name).number, internal);
+    const t = this.lookup(name);
+    if (!t) throw new Error(`unknown table ${name}`);
+    return encodeId(t.number, internal);
   }
 
   /** Delete a document of a table given by its definition (the deletion worker's). System only. */
@@ -1667,7 +1734,9 @@ export class Tx {
     this.tableStat(t.name).rowsWritten++;
     if (!this.writable) throw new Error("queries cannot write");
     const measured = t.name.startsWith("_") ? undefined : this.checkWriteLimits(next);
-    const dv = next && this.docValidators?.get(t.name);
+    // The schemas below are the root's: a component's table is checked against none of them, whatever its name.
+    const inRoot = t.namespace === undefined;
+    const dv = next && inRoot && this.docValidators?.get(t.name);
     if (dv) {
       const msg = checkValue(dv, next as unknown as Value, this.schemaTables ?? ((n) => this.catalog.publicNameOf(n)));
       if (msg)
@@ -1675,7 +1744,7 @@ export class Tx {
           `Failed to insert or update a document in table "${t.name}" because it does not match the schema: ${msg}`,
         );
     }
-    const pv = next && !this.pendingViolation && this.pendingValidators?.get(t.name);
+    const pv = next && inRoot && !this.pendingViolation && this.pendingValidators?.get(t.name);
     if (pv) {
       const msg = checkValue(pv, next as unknown as Value, (n) => this.catalog.publicNameOf(n));
       if (msg)
@@ -1684,7 +1753,7 @@ export class Tx {
           error: `Failed to insert or update a document in table "${t.name}" because it does not match the schema: ${msg}`,
         };
     }
-    if (next && this.stagedChecks && !t.name.startsWith("_"))
+    if (next && inRoot && this.stagedChecks && !t.name.startsWith("_"))
       for (const c of this.stagedChecks) {
         const sv = c.validators.get(t.name);
         const key = `${c.schemaId}\u0000${t.name}`;
@@ -1948,7 +2017,7 @@ export class Tx {
    */
   systemTableNames(): string[] {
     if (!this.systemAccess) throw new Error("systemTableNames is for system transactions");
-    return [...this.catalog.tables.keys()].filter((n) => n.startsWith("_")).sort();
+    return [...this.names.tables.keys()].filter((n) => n.startsWith("_")).sort();
   }
 
   async countTable(table: string): Promise<number> {

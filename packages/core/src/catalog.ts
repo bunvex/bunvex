@@ -908,7 +908,7 @@ export function buildCatalog(tables: TableMeta[], indexes: IndexMeta[]): Catalog
       ns = c.components.get(t.namespace) ?? new Catalog();
       c.components.set(t.namespace, ns);
     }
-    ns.add(
+    const def = ns.add(
       t.name,
       t.tablet,
       t.number,
@@ -925,6 +925,7 @@ export function buildCatalog(tables: TableMeta[], indexes: IndexMeta[]): Catalog
       t.state ?? "active",
       t._id,
     );
+    if (t.namespace !== undefined) def.namespace = t.namespace;
   }
   return c;
 }

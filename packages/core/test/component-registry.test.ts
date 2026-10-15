@@ -12,6 +12,8 @@ import {
   COMPONENT_NAMESPACE_TABLES,
   ComponentMetadataError,
   componentChildren,
+  componentDefinitionMeta,
+  componentDefinitionRow,
   componentInParent,
   componentMeta,
   componentPath,
@@ -32,6 +34,17 @@ const convex = JSON.parse(readFileSync(join(import.meta.dir, "convex-rows/compon
   _components: Record<string, unknown>[];
   componentNamespace: Record<string, { number: number; indexes: Record<string, string[]> }>;
 };
+/** Convex's rows with env bindings, declared env vars and an HTTP mount (convex-rows/component-definitions.json). */
+const withEnv = JSON.parse(readFileSync(join(import.meta.dir, "convex-rows/component-definitions.json"), "utf8")) as {
+  _component_definitions: Record<string, unknown>[];
+  _components: Record<string, unknown>[];
+};
+const convexDefinitions = JSON.parse(readFileSync(join(import.meta.dir, "convex-rows/components.json"), "utf8"))
+  ._component_definitions as Record<string, unknown>[];
+const unstamped = (row: Record<string, unknown>) => {
+  const { _id: _, _creationTime: __, ...stored } = row;
+  return stored;
+};
 /** The store with components (component-store.ts), opened. */
 async function openStore(): Promise<Engine> {
   const dir = mkdtempSync(join(tmpdir(), "bunvex-component-registry-"));
@@ -44,10 +57,28 @@ const rows = async (e: Engine) =>
 
 describe("_components rows", () => {
   test("Convex's rows read back and write out as they are", () => {
-    for (const row of convex._components) {
+    for (const row of [...convex._components, ...withEnv._components]) {
       const { _id: _, _creationTime: __, ...stored } = row;
       expect(componentRow(componentMeta(row))).toEqual(stored);
     }
+  });
+
+  test("args and env are written by key, as Convex's maps", () => {
+    const row = componentRow({
+      definitionId: "d",
+      parent: "p",
+      name: "counter",
+      args: [],
+      env: [
+        ["MODE", { type: "value", value: "b" }],
+        ["KEY", { type: "envVar", name: "ZETA" }],
+      ],
+      state: "active",
+      httpPrefix: "/c/",
+    });
+    expect(row).toEqual(
+      unstamped({ ...withEnv._components.find((r) => r.name === "counter")!, definitionId: "d", parent: "p" }),
+    );
   });
 
   test("bunvex's rows are Convex's", async () => {
@@ -227,5 +258,102 @@ describe("a new component's namespace", () => {
     } finally {
       await e.close();
     }
+  });
+});
+
+describe("_component_definitions rows", () => {
+  test("Convex's rows read back and write out as they are: tagged children, null envVars, maps by key", () => {
+    for (const row of [...convexDefinitions, ...withEnv._component_definitions])
+      expect(componentDefinitionRow(componentDefinitionMeta(row))).toEqual(unstamped(row));
+    const app = componentDefinitionMeta(withEnv._component_definitions.find((r) => r.path === "")!);
+    expect(app).toMatchObject({
+      definitionType: { type: "app" },
+      httpMounts: { "/c/": "_reference/childComponent/counter" },
+      envVars: [
+        ["ALPHA", { type: "value", value: '{"type":"string"}', optional: true }],
+        ["ZETA", { type: "value", value: '{"type":"string"}' }],
+      ],
+    });
+    expect(app.childComponents.map((c) => c.name)).toEqual(["counter", "second"]);
+  });
+
+  test("a definition as a push gives it (declaration order) is written by key, as Convex's", () => {
+    const stored = withEnv._component_definitions.find((r) => r.path === "")!;
+    const row = componentDefinitionRow({
+      path: "",
+      definitionType: { type: "app" },
+      childComponents: [
+        {
+          name: "counter",
+          path: "counter",
+          args: [],
+          env: [
+            ["MODE", { type: "value", value: "b" }],
+            ["KEY", { type: "envVar", name: "ZETA" }],
+          ],
+        },
+        { name: "second", path: "counter", args: [], env: [["MODE", { type: "value", value: "a" }]] },
+      ],
+      httpMounts: { "/c/": "_reference/childComponent/counter" },
+      httpPrefix: null,
+      exports: { type: "branch", branch: [] },
+      envVars: [
+        ["ZETA", { type: "value", value: '{"type":"string"}' }],
+        ["ALPHA", { type: "value", value: '{"type":"string"}', optional: true }],
+      ],
+    });
+    expect(row).toEqual(unstamped(stored));
+    // Children keep their order (Convex's `Vec`); a branch's exports are by key, as every map.
+    const exports = componentDefinitionRow({
+      ...componentDefinitionMeta(stored),
+      exports: {
+        type: "branch",
+        branch: [
+          ["b", { type: "leaf", leaf: "_reference/function/b" }],
+          [
+            "a",
+            {
+              type: "branch",
+              branch: [
+                ["z", { type: "leaf", leaf: "z" }],
+                ["y", { type: "leaf", leaf: "y" }],
+              ],
+            },
+          ],
+        ],
+      },
+    }).exports;
+    expect(exports).toEqual({
+      type: "branch",
+      branch: [
+        [
+          "a",
+          {
+            type: "branch",
+            branch: [
+              ["y", { type: "leaf", leaf: "y" }],
+              ["z", { type: "leaf", leaf: "z" }],
+            ],
+          },
+        ],
+        ["b", { type: "leaf", leaf: "_reference/function/b" }],
+      ],
+    });
+  });
+
+  test("a row Convex could not load is refused", () => {
+    const good = unstamped(convexDefinitions[0]!);
+    for (const [field, value] of [
+      ["path", 1],
+      ["definitionType", { type: "other" }],
+      ["childComponents", [{ name: "x" }]],
+      ["httpMounts", { "/no-slash": "_reference/childComponent/x" }],
+      ["httpPrefix", "/a*/"],
+      ["exports", { type: "leaf", leaf: "x" }],
+      ["envVars", [["X"]]],
+    ] as const)
+      expect(() => componentDefinitionMeta({ ...good, [field]: value })).toThrow(
+        new ComponentMetadataError(`Invalid component definition: ${field}`),
+      );
   });
 });
