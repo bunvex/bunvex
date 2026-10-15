@@ -153,7 +153,7 @@ async function evaluateOne(
     }
     // Resolved as Convex resolves an import against `convex:/convex.config.js`.
     const target = spec.startsWith("/") || spec.startsWith("./") || spec.startsWith("../") ? resolved(spec) : null;
-    // Convex fails a bare specifier as a system error; bunvex refuses it as any other import (DV-496).
+    // Convex fails a bare specifier as a system error; bunvex refuses it as any other import (DV-497).
     const where = (m: DefinitionError | string) => importError(source, url, spec, m);
     if (target === DEFINITION_MODULE) return module;
     if (target?.startsWith(DEPS_PREFIX)) {
@@ -216,7 +216,7 @@ async function evaluateOne(
   try {
     result = (exportFn as (this: unknown) => unknown).call(exported);
   } catch (e) {
-    // Convex fails this as a system error ("Failed to call export function"); bunvex as the code's exception.
+    // Convex fails this as a system error ("Failed to call export function"); bunvex as the code's exception (DV-498).
     throw invalidConfig(e);
   }
   if (!isObject(result))

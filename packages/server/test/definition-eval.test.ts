@@ -257,6 +257,22 @@ describe("refused, as the binary refuses them", () => {
     });
   });
 
+  test("a bare import: refused as any other, a 400 (DV-497)", async () => {
+    for (const spec of ["lodash", "node:fs"])
+      expect(await refused(input({ source: `import x from "${spec}";export default x;` }))).toEqual({
+        code: "NoImportModuleDuringDefinitionEvaluation",
+        message: `bunvex:/bunvex.config.js:0:14: Can't import ${spec} while evaluating app definition`,
+      });
+  });
+
+  test("an export() that throws: the exception, an InvalidBunvexConfig (DV-498)", async () => {
+    const { code, message } = await refused(
+      input({ source: `export default { export: () => { throw new Error("no"); } };` }),
+    );
+    expect(code).toBe("InvalidBunvexConfig");
+    expect(message).toStartWith("Uncaught Error: no\n    at ");
+  });
+
   test("process.env: the deployment's in the app's definition, refused in a component's", async () => {
     const app = plain(`{ ...${APP}, httpPrefix: process.env.PREFIX }`);
     const out = await evaluateDefinitions(input(app, [], {}, { PREFIX: "/api/" }));

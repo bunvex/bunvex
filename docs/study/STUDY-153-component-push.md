@@ -755,7 +755,7 @@ As built, **PR 3a** (`server/src/definition-eval.ts`, nothing calls it yet):
   `HttpMountPath`'s conditions, references, export names, env var names (`checkEnvVarName`).
 - An exception from the definition's code is `InvalidBunvexConfig` with `describeUncaught`'s text.
 
-Not as Convex, proposed to the owner (STUDY-153 §4, C-18 and C-19):
+Not as Convex, decided by the owner (§4 C-18 / DV-497, C-19 / DV-498):
 
 - A bare import (`lodash`, `node:fs`) in a definition fails Convex's resolver as a 500; bunvex answers it as any
   other import, `NoImportModuleDuringDefinitionEvaluation` (400).
@@ -887,8 +887,8 @@ Rule 5 holds: "no exceptions, wire names included" (`scripts/check-deps.ts:8-12`
 | C-15 | **`finish_push`'s `schemaDiff`** is always null in bunvex's answer | filled | Fix (parity bug) | Fix (parity bug) |
 | C-16 | **Crons in a component**: Convex writes them at push into the component's namespace and runs them | written and run | Write the rows in step 3 (PR 4); run them in step 7. Interim DV (the step-7 row) | Rows in step 3, run in step 7 (missing until then) |
 | C-17 | **Wire names that keep "convex" by design** elsewhere: the `_componentDeps` prefix, `componentDefinitionPath`, `defaultName`, `_reference/childComponent/…` and `Symbol.for("toReferencePath")` contain no "convex"; the definition paths of Convex packages (`../node_modules/@convex-dev/…`) are user data | — | Keep as Convex's. Only C-1, C-3 and C-4 carry the word | Keep Convex's names (no DV) |
-| C-18 | **A bare import in a definition** (`lodash`, `node:fs`): Convex's resolver (`deno_core::resolve_import`) fails it with no `ErrorMetadata`, a 500 | 500 | Answer it as any other import: 400 `NoImportModuleDuringDefinitionEvaluation` (DV-496's reasoning: only a broken client sends it) | Proposed (PR 3a), awaiting the owner |
-| C-19 | **An `export()` that throws**: Convex's `export.call` gives no value and the push fails as a system error ("Failed to call export function"), a 500 (read from `component_definitions.rs:276-278`, not checked on the binary) | 500 | `InvalidBunvexConfig` with the exception, as the module's own exceptions | Proposed (PR 3a), awaiting the owner |
+| C-18 | **A bare import in a definition** (`lodash`, `node:fs`): Convex's resolver (`deno_core::resolve_import`) fails it with no `ErrorMetadata`, a 500 | 500 | Answer it as any other import: 400 `NoImportModuleDuringDefinitionEvaluation` (DV-496's reasoning: only a broken client sends it) | **Decided: 400** (DV-497) |
+| C-19 | **An `export()` that throws**: Convex's `export.call` gives no value and the push fails as a system error ("Failed to call export function"), a 500 (read from `component_definitions.rs:276-278`, not checked on the binary) | 500 | `InvalidBunvexConfig` with the exception, as the module's own exceptions | **Decided: `InvalidBunvexConfig`** (DV-498) |
 
 ---
 
@@ -927,3 +927,5 @@ Rule 5 holds: "no exceptions, wire names included" (`scripts/check-deps.ts:8-12`
 | DV-494 | The definition module is `bunvex.config.ts` / `bunvex.config.js`, its error code `InvalidBunvexConfig`, its messages in bunvex's words (C-1, C-3, C-4) | owner, 2026-10-15 |
 | DV-495 | The server links `bunvex/server` and `bunvex/values` into a definition's bundle, so it need not carry them (C-7) | owner, 2026-10-15 |
 | DV-496 | A malformed `_componentDeps` target is a 400 `InvalidDefinition`, not Convex's 500 (C-11) | owner, 2026-10-15 |
+| DV-497 | A bare import in a definition is a 400 `NoImportModuleDuringDefinitionEvaluation`, not Convex's 500 (C-18) | owner, 2026-10-15 |
+| DV-498 | An `export()` that throws is a 400 `InvalidBunvexConfig`, not Convex's 500 (C-19) | owner, 2026-10-15 |
