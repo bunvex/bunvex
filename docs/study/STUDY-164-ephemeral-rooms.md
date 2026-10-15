@@ -232,7 +232,9 @@ carrying the user's state and activity.
 - server → client: `RoomSync {roomId, self, canPublish, members}` (the full list at join and after a re-sync),
   `RoomMembers {roomId, set: [...], left: [...]}` (one coalesced frame per tick),
   `RoomEvent {roomId, from, event, data}`,
-  `RoomError {roomId, code, message}` (`no_access`, `forbidden`, `validation`, `rate_limited`, `limit`).
+  `RoomError {roomId, code, message}` (`no_access`, `forbidden`, `validation`, `rate_limited`, `limit`),
+  `RoomLeft {roomId, code, message}` (`no_access`, `limit`: the server ended a joined membership on its own, as
+  built in §7.1).
 
 They travel beside `Transition` frames, not inside them: room traffic is not part of a query set's version and must
 not hold one up.
@@ -317,11 +319,13 @@ None. Rooms are opt-in and invisible to an app or a client that does not use the
 
 ## 7. As built (v1)
 
-Built on 2026-10-15 in seven PRs after the plan: #677 (the plan), #678 A (protocol, definitions, `RoomHub`), #679 B
-(sessions, limits, gates), #680 C (sync wiring, `ctx.rooms` and `ctx.presence`), #688 D (grace, backpressure, sync
-e2e), #694 E (client `joinRoom` / `joinPresence`), #696 F (React `useRoom` / `usePresence`), and G, this one (the
-benchmark, [docs/rooms.md](../rooms.md) and [examples/rooms-cursors](../../examples/rooms-cursors)). Scope: §3 as
-decided; no `onJoin` / `onLeave` (R7), no room state (R8), one process (R5).
+Built on 2026-10-15 in seven PRs after the plan: #677 (the plan); #678 A (protocol messages, `room()` and
+`presence()` definitions); #679 B (`RoomHub`); #680 C (`Tx.afterCommit`); #688 D (sync wiring, `ctx.rooms` and
+`ctx.presence`); #694 E (client `joinRoom` / `joinPresence`); #696 F (React hooks); and G, this one: the benchmark,
+[docs/rooms.md](../rooms.md), [examples/rooms-cursors](../../examples/rooms-cursors), and the fixes of the
+whole-feature review (the `RoomLeft` frame; a re-join after sign-in; room members keyed by session and user; scope
+idle per handle; one gate name in the logs; `__proto__` in room args; no sends on a refused room; the room span
+names; a lazy `ctx.rooms`). Scope: §3 as decided; no `onJoin` / `onLeave` (R7), no room state (R8), one process (R5).
 
 ### 7.1 Rulings made on the way
 
@@ -337,7 +341,23 @@ decided; no `onJoin` / `onLeave` (R7), no room state (R8), one process (R5).
   throwing gate answers "You cannot join this room." and nothing else; server broadcasts obey the 4 KB event limit.
 - **The client** rejoins after the auth message, not before it (the plan had it the other way: a defect found in
   review, the gates would have run anonymous); what it sends while the socket is paused goes out on resume; a
-  `RoomError` marks a handle as errored only while it is joining.
+  `RoomError` marks a handle as errored only while it is joining (a payload error on a joined room only warns).
+- **`RoomLeft`** (added in the final review): when the server ends a joined membership on its own (an identity change
+  its gates refuse, or the rejoin as the new user over a cap), it says so, and the client's handle becomes `error`
+  with the code, its members cleared and nothing more sent for it. Without it the client showed "joined" with a
+  frozen list. A gate that fails transiently during a token refresh evicts the same way (visible now).
+- **A new token re-joins on the client too** (§3.4): after every `Authenticate` it sends (sign-in, sign-out, a
+  refresh), the client joins again, under a fresh room id, every membership in `error`; a join in flight is retried
+  if the refusal for the previous identity comes back. A scope joined before sign-in joins once signed in.
+- **A room's member is a session's connection as one user**: two live sockets of one session signed in as two users
+  are two members (the old half-open one as the old user), each leaving on its own.
+- **A scope's idle is per handle**: the membership is idle when every live handle that reported idle says so, and a
+  handle's leave takes its idle with it (a surviving component no longer stays idle after the idle one unmounts).
+- **Gates must return exactly `true`**; anything else, a truthy object included, refuses. Members keep the definition
+  they joined with across a push (no re-gate on a push). A server broadcast may reach clients before the `Transition`
+  that carries the mutation's write (it is sent at the commit, the transition after the subscriptions re-run).
+- **`ctx.rooms` is built on first read in a mutation** (and kept lazy for pushed code). Measured: no-op mutations/s on
+  a memory engine, 6 interleaved rounds of 50k, median 324,047 eager (f433fce5) against 325,892 lazy (noise).
 - **React:** `me` and `useMyPresence` read the shared membership (the client notifies on your own presence), so every
   component of a room follows a `setMyState` made in another.
 

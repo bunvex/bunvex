@@ -64,9 +64,12 @@ export const online = presence({
 });
 ```
 
-- **Gates** (`canJoin`, `canPublish`) run at join, and again when the connection's identity changes (a new token);
-  never reactively mid-session. A gate that returns false, throws or fails answers the same thing, "You cannot join
-  this room.": what it said or threw stays on the server.
+- **Gates** (`canJoin`, `canPublish`) run at join, and again when the connection's identity changes (a new token,
+  a refresh included); never reactively mid-session, and not on a push: a member keeps the definition it joined
+  with. A gate must return exactly `true` to allow; anything else (false, a truthy object) refuses. A gate that
+  refuses, throws or fails answers the same thing, "You cannot join this room.": what it said or threw stays on the
+  server. On an identity change that is final for the room: a gate that fails transiently during a token refresh
+  ends the membership too (the client sees it, below).
 - **Validation.** Join arguments, presence, state and event payloads are checked against their validators; an
   invalid one is a `validation` error, not delivered.
 - A scope's `canJoin` is optional, and whatever it says, an anonymous connection cannot join a scope.
@@ -80,7 +83,7 @@ import { usePresence, useRoom } from "bunvex/react";
 import { api } from "../bunvex/_generated/api";
 
 function Cursors({ docId }) {
-  const room = useRoom(api.rooms.doc, { docId });   // args "skip" joins nothing
+  const room = useRoom(api.rooms.doc, { docId });   // args "skip" joins nothing (status stays "joining")
   const others = room.useOthers();                  // [{ memberId, userId, presence }], not you
   const [mine, setMine] = room.useMyPresence();     // setMine is throttled for you
   const react = room.useBroadcast("reaction");      // react({ emoji: "👋" })
@@ -117,13 +120,17 @@ room.leave();
 
 `client.joinPresence(ref, args)` gives `others()`, `count()`, `myState()`, `setState(s)`, `setIdle(idle)`,
 `subscribe(cb)` and `leave()`. Joins of the same room and arguments share one membership, ended by the last
-`leave()`. Rooms are joined again on every reconnect.
+`leave()`. Rooms are joined again on every reconnect, and a room refused or ended is joined again after every new
+token (`setAuth`, a refresh, `clearAuth`): a scope joined before sign-in joins once the user is signed in. A scope's
+idle is per handle: the user is idle when every handle that called `setIdle` says so, and a handle's `leave()` takes
+its idle with it.
 
 ### From the server
 
 - **A mutation broadcasts after it commits**: `await ctx.rooms.broadcast(api.rooms.doc, { docId }, "reaction", data)`.
   Nothing is sent if the mutation fails or is retried (an OCC retry sends once, for the attempt that committed), as
-  scheduling a function works. The event's `from` is null.
+  scheduling a function works. The event's `from` is null. It is sent at the commit, so it may reach a client before
+  the query update that carries the mutation's write.
 - **An action broadcasts at once**, and may read members (section 4).
 - A scope has no events, so no broadcast.
 
@@ -154,7 +161,12 @@ process, taken when the action asks.
   gap). The server keeps each member's latest presence and sends one frame to the room per tick (30 ms), so the cost
   grows with members times ticks, not updates times members.
 - **Errors.** A refused join is an `error` status with a code: `no_access` (a gate said no, or a scope without a
-  signed-in user), `forbidden` (publishing without `canPublish`), `validation`, `rate_limited` and `limit`.
+  signed-in user), `validation`, `limit` or `not_found`. On a joined room, `forbidden` (publishing without
+  `canPublish`), `rate_limited` and an invalid payload are warnings in the console; the status stays `joined`. A
+  room or scope in `error` sends nothing more.
+- **Ended by the server.** When a new identity is refused by a joined room's gates (or its rejoin as the new user is
+  over a cap), the server sends `RoomLeft`: the handle becomes `error` with that code (`no_access` or `limit`), its
+  others are emptied, and it is joined again only after the next token.
 
 ## 6. Limits
 
