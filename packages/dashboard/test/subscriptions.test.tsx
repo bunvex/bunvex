@@ -125,6 +125,10 @@ describe("on a deployment (STUDY-149's follow-up: AD-25 on a deployment)", () =>
     const { history } = mount("/subscriptions", src);
     await screen.findByRole("grid", { name: "Live queries" });
     await waitFor(() => expect(asked.live).toBe(1));
+    // a short disconnection, the answer still fresh: asked again at once on return all the same
+    await set("disconnected");
+    await set("connected");
+    await waitFor(() => expect(asked.live).toBe(2));
     await set("disconnected");
     await screen.findByRole("alert", { name: "Connection issue" });
     // the filter changes while away: a new key, still not asked
@@ -132,7 +136,7 @@ describe("on a deployment (STUDY-149's follow-up: AD-25 on a deployment)", () =>
     await new Promise((r) => setTimeout(r, 50));
     expect(asked.live).toBe(1);
     await set("connected");
-    await waitFor(() => expect(asked.live).toBe(2));
+    await waitFor(() => expect(asked.live).toBe(3));
     // the cache tab the same
     await act(() => history.push("/subscriptions?tab=cache"));
     await waitFor(() => expect(asked.cache).toBe(1));
