@@ -79,7 +79,9 @@ function fakeTrace() {
 const asSpans = (t: ReturnType<typeof fakeTrace>) => t as unknown as CommitSpans;
 
 const tick = () => new Promise((r) => setImmediate(r));
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// The test's own waits keep the real timer, so that `recordTimeouts` sees only the committer's.
+const realSetTimeout = setTimeout;
+const sleep = (ms: number) => new Promise((r) => realSetTimeout(r, ms));
 async function until(cond: () => boolean, ms = 2000) {
   const end = performance.now() + ms;
   while (!cond()) {
@@ -98,6 +100,19 @@ function stubRandom(x: number) {
   restore.push(() => {
     Math.random = real;
   });
+}
+/** The delays passed to `setTimeout` from now on (the timers still run). */
+function recordTimeouts() {
+  const asked: number[] = [];
+  const real = globalThis.setTimeout;
+  globalThis.setTimeout = ((fn: () => void, ms?: number, ...rest: unknown[]) => {
+    asked.push(ms ?? 0);
+    return real(fn, ms, ...rest);
+  }) as typeof setTimeout;
+  restore.push(() => {
+    globalThis.setTimeout = real;
+  });
+  return asked;
 }
 function captureErrors() {
   const errs: string[] = [];
@@ -603,6 +618,9 @@ describe("flush retries", () => {
 describe("max_repeatable_ts bumps", () => {
   test("the first after commitDelayMs, then every idleMs to twice that (jittered)", async () => {
     stubRandom(0.5);
+    // The waits the committer asks of its timer, not the times its bumps ran: a timer fires late on a busy event
+    // loop (a GC pause, a neighbour test), never early, so only a lower bound holds on the clock.
+    const asked = recordTimeouts();
     const c = new Committer(fakeStore().persistence, {}, () => 0n);
     const at: number[] = [];
     const t0 = performance.now();
@@ -612,14 +630,12 @@ describe("max_repeatable_ts bumps", () => {
       },
       { commitDelayMs: 10, idleMs: 40 },
     );
-    await sleep(200);
+    await until(() => at.length >= 3);
     c.stopRepeatableBumps();
-    expect(at.length).toBeGreaterThanOrEqual(2);
     expect(at[0]).toBeGreaterThanOrEqual(9);
-    for (let i = 1; i < at.length; i++) {
-      expect(at[i]! - at[i - 1]!).toBeGreaterThanOrEqual(59); // 40 × (1 + 0.5)
-      expect(at[i]! - at[i - 1]!).toBeLessThan(90);
-    }
+    for (let i = 1; i < at.length; i++) expect(at[i]! - at[i - 1]!).toBeGreaterThanOrEqual(59); // 40 × (1 + 0.5)
+    const waits = asked.slice(0, at.length).map(Math.round);
+    expect(waits).toEqual([10, ...Array(at.length - 1).fill(60)]);
     expect(c.repeatableBumps).toBe(at.length);
   });
 

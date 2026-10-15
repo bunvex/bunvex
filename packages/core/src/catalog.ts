@@ -858,10 +858,17 @@ export type FinishChanges = {
  * hold it up): enable what is backfilled, disable what became staged, drop what was replaced or removed.
  * Null while an index of the change is still backfilling. Pure: the caller commits, atomically.
  */
-export function finishCatalog(declared: Iterable<DeclaredTable>, tables: TableMeta[], indexes: IndexMeta[]) {
+export function finishCatalog(
+  declared: Iterable<DeclaredTable>,
+  tables: TableMeta[],
+  indexes: IndexMeta[],
+  /** The component whose namespace the declared tables are in (its `_components` id); the root's when absent. */
+  namespace?: string,
+) {
   const out: FinishChanges = { enable: [], disable: [], drop: [] };
+  const active = activeTables(tables, namespace);
   for (const d of declared) {
-    const tablet = activeTables(tables).find((t) => t.name === d.name)?.tablet;
+    const tablet = active.find((t) => t.name === d.name)?.tablet;
     if (tablet === undefined) continue;
     const stored = indexes.filter((i) => i.tablet === tablet);
     const wanted = wantedIndexes(d);
