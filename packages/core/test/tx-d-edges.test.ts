@@ -176,7 +176,7 @@ describe("writes by id", () => {
     const e = await engine();
     await e.mutation(async (db) => {
       expect(await message(db.insert("items", 5 as never))).toBe(
-        "Invalid argument `value` for `db.insert`: expected an object",
+        "Invalid argument `value` for `db.insert`: Value must be an Object",
       );
       expect(await message(db.insert("items", { a: new Array(8193).fill(0) }))).toStartWith(
         "Invalid argument `value` for `db.insert`: Array length is too long",
@@ -393,7 +393,7 @@ describe("search", () => {
     });
   });
 
-  test("take(0), take(1) and first(); a missing table finds nothing", async () => {
+  test("take(0), take(1) and first(); a missing table's search index is not found (Convex's error)", async () => {
     const e = await seeded();
     await e.query(async (db) => {
       expect(await search(db, "quick").take(0)).toEqual([]);
@@ -404,12 +404,14 @@ describe("search", () => {
           .filter((q) => q.eq(1, 1))
           .take(2),
       ).toHaveLength(2);
-      expect(
-        await db
-          .query("nothere")
-          .withSearchIndex("search_body", (q) => q.search("body", "quick"))
-          .collect(),
-      ).toEqual([]);
+      const missing = db.query("nothere").withSearchIndex("search_body", (q) => q.search("body", "quick"));
+      let error: unknown;
+      try {
+        await missing.collect();
+      } catch (e) {
+        error = e;
+      }
+      expect((error as Error).message).toBe("Index nothere.search_body not found.");
     });
   });
 

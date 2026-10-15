@@ -618,6 +618,23 @@ function declareTables(tables: GenericSchema): Map<string, DeclaredTable> {
   return out;
 }
 
+/**
+ * The schema's tables in the order a push creates the new ones, as Convex's start of a push: its added indexes first,
+ * in index-name order (`prepare_new_and_mutated_indexes`), each creating its table if missing, so the tables with any
+ * index (database, staged, text or vector) by name; then `submit_pending` the rest, by name (`BTreeMap` order, which on
+ * ASCII identifiers is JavaScript's string order). New tables take their numbers in this order (STUDY-161 §7).
+ */
+export function pushOrder(tables: Iterable<DeclaredTable>): DeclaredTable[] {
+  const indexed = (t: DeclaredTable) =>
+    Object.keys(t.indexes).length +
+      Object.keys(t.searchIndexes ?? {}).length +
+      Object.keys(t.vectorIndexes ?? {}).length >
+    0;
+  const byName = (a: DeclaredTable, b: DeclaredTable) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  const all = [...tables];
+  return [...all.filter(indexed).sort(byName), ...all.filter((t) => !indexed(t)).sort(byName)];
+}
+
 /** A table definition holding what `table` declares (a schema the engine made, e.g. from a pushed schema's JSON). */
 function tableDefinitionOf(table: DeclaredTable): TableDefinition {
   const t = new TableDefinition(table.document);

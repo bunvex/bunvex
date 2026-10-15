@@ -183,3 +183,51 @@ export class Pipeline {
 
 // Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
 opaqueToInspect(Pipeline);
+
+/** Convex's `MAX_IDENTIFIER_LEN` (crates/convex/sync_types/src/identifier.rs). */
+const MAX_IDENTIFIER_LEN = 64;
+
+/**
+ * A character as Rust's `{:?}` shows a `char` (`char::escape_debug`): `'\n'`, `'\''`, `'\\'`, and `\u{…}` for one
+ * Rust does not print (controls, format characters, separators other than the space, unassigned, private use,
+ * combining marks); any other as is.
+ */
+export function rustCharDebug(c: string): string {
+  const esc: Record<string, string> = { "\0": "\\0", "\t": "\\t", "\r": "\\r", "\n": "\\n", "'": "\\'", "\\": "\\\\" };
+  if (esc[c] !== undefined) return `'${esc[c]}'`;
+  if (c !== " " && /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}\p{Grapheme_Extend}]/u.test(c))
+    return `'\\u{${c.codePointAt(0)!.toString(16)}}'`;
+  return `'${c}'`;
+}
+
+/** Convex's `check_valid_identifier`: why `s` is not an identifier, in its words, or null. */
+export function identifierError(s: string): string | null {
+  const chars = [...s];
+  const first = chars[0];
+  if (first === undefined) return "Identifier cannot be empty";
+  if (!/^[A-Za-z_]$/.test(first))
+    return `Invalid first character ${rustCharDebug(first)} in ${s}: Identifiers must start with an alphabetic character or underscore`;
+  for (const c of chars.slice(1))
+    if (!/^[A-Za-z0-9_]$/.test(c))
+      return `Identifier ${s} has invalid character ${rustCharDebug(c)}: Identifiers can only contain alphanumeric characters or underscores`;
+  const len = Buffer.byteLength(s);
+  if (len > MAX_IDENTIFIER_LEN) return `Identifier is too long (${len} > maximum ${MAX_IDENTIFIER_LEN})`;
+  if (chars.every((c) => c === "_")) return `Identifier ${s} cannot have exclusively underscores`;
+  return null;
+}
+
+/**
+ * Why a query's `table.index` name does not parse, as Convex's `IndexName::from_str` (crates/common/src/types/
+ * index.rs) words it, or null: a bad table or a bad index descriptor are both its `invalid_table_name` (the
+ * descriptor's error is wrapped in it too); a third component is too many.
+ */
+export function indexNameError(full: string): string | null {
+  const parts = full.split(".");
+  const invalid = (part: string) =>
+    `Invalid table name: "${part}". Identifiers must start with a letter and can only contain letters, digits, and underscores.`;
+  if (identifierError(parts[0]!) !== null) return invalid(parts[0]!);
+  if (parts.length < 2) return `Insufficient components in index name ${full}`;
+  if (identifierError(parts[1]!) !== null) return invalid(parts[1]!);
+  if (parts.length > 2) return `Too many components in index name ${full}`;
+  return null;
+}

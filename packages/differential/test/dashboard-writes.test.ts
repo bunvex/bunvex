@@ -7,11 +7,10 @@
 // placeholder is each backend's own (DV-478), the application error's name too (DV-03). Local only: skipped, with
 // a note, when Convex's backend is not there (scripts/download-convex-backend.sh, or CONVEX_BACKEND_BIN).
 //
-// Left out, as differences of `db.insert` / `db.patch` / `db.query` in every function, not of these (STUDY-149
-// "PR 3, as built"): a table name that is not an identifier and a document that is not an object (bunvex's own
-// words), a missing required field's display (bunvex shows the system fields), a `_creationTime` patch's
-// display, `by_creation_time` on a table that does not exist (Convex: "Index … not found."), and a `$` field
-// name in the arguments (refused before the function on bunvex).
+// Left out: what `db.insert` / `db.patch` / `db.query` say in every function, not these functions (STUDY-149 "PR 3, as
+// built"); matched to Convex and compared by STUDY-161's own tests: the write argument errors (write-errors.test.ts),
+// a schema error's display, a `_creationTime` patch's display, an index on a table that does not exist, and a `$`
+// field name in a system function's arguments.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
