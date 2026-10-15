@@ -113,8 +113,10 @@ export class RoomConnection implements RoomSink {
     const userId = subjectOf(caller);
     // Checked before the hub, which keys a scope's member by its user.
     if (def.kind === "presence" && userId === null) return this.error(m.roomId, "no_access", SIGNED_IN);
-    const allowed = await this.gate(def.canJoin, m.name, args, caller);
-    const canPublish = allowed && (def.kind === "presence" || (await this.gate(def.canPublish, m.name, args, caller)));
+    const room = { key: { name: m.name }, args };
+    const allowed = await this.gate(def.canJoin, "canJoin", room, caller);
+    const canPublish =
+      allowed && (def.kind === "presence" || (await this.gate(def.canPublish, "canPublish", room, caller)));
     // The socket may have closed while the gates ran: a member inserted now would never be removed.
     if (this.closedFlag) return;
     if (!allowed) return this.error(m.roomId, "no_access", NO_ACCESS);
@@ -132,11 +134,19 @@ export class RoomConnection implements RoomSink {
     this.joined.set(roomId, j);
   }
 
-  /** A gate: absent is "yes"; it runs as a query with the caller's identity; a throw is "no", with no internals. */
-  private async gate(g: RoomGate | undefined, name: string, args: Value, caller: Caller): Promise<boolean> {
+  /**
+   * A gate: absent is "yes"; it runs as a query with the caller's identity, named `<room>#<gate>`; a throw is
+   * "no", with no internals.
+   */
+  private async gate(
+    g: RoomGate | undefined,
+    which: "canJoin" | "canPublish",
+    room: { key: { name: string }; args: Value },
+    caller: Caller,
+  ): Promise<boolean> {
     if (!g) return true;
     try {
-      return (await this.deps.functions.runGate(g, name, args, caller)) === true;
+      return (await this.deps.functions.runGate(g, `${room.key.name}#${which}`, room.args, caller)) === true;
     } catch {
       return false;
     }
@@ -180,30 +190,31 @@ export class RoomConnection implements RoomSink {
   async identityChanged() {
     const caller = this.io.caller();
     const userId = subjectOf(caller);
-    for (const [roomId, j] of [...this.joined]) {
-      const ok =
-        (j.def.kind !== "presence" || userId !== null) && (await this.gate(j.def.canJoin, j.key.name, j.args, caller));
-      if (this.closedFlag) return;
-      if (!ok || userId !== j.userId) {
-        // A different user is a different member: the old one leaves, and the new one joins when allowed.
-        this.joined.delete(roomId);
-        this.deps.hub.leave(this, roomId);
-        if (!ok) {
-          this.error(roomId, "no_access", NO_ACCESS);
-          continue;
-        }
+    const rooms = [...this.joined];
+    // Every room's gates at once (still inside the inbox, so the next message waits for all of them).
+    const verdicts = await Promise.all(
+      rooms.map(async ([, j]) => {
+        const ok =
+          (j.def.kind !== "presence" || userId !== null) && (await this.gate(j.def.canJoin, "canJoin", j, caller));
         const canPublish =
-          j.def.kind === "presence" ? true : await this.gate(j.def.canPublish, j.key.name, j.args, caller);
-        if (this.closedFlag) return;
-        this.attach(roomId, { ...j, userId }, canPublish);
-        continue;
+          ok && (j.def.kind === "presence" || (await this.gate(j.def.canPublish, "canPublish", j, caller)));
+        return { ok, canPublish };
+      }),
+    );
+    if (this.closedFlag) return;
+    // Applied in the rooms' order.
+    rooms.forEach(([roomId, j], i) => {
+      const { ok, canPublish } = verdicts[i]!;
+      if (ok && userId === j.userId) {
+        if (j.def.kind === "room") this.deps.hub.setCanPublish(this, roomId, canPublish);
+        return;
       }
-      if (j.def.kind === "room") {
-        const canPublish = await this.gate(j.def.canPublish, j.key.name, j.args, caller);
-        if (this.closedFlag) return;
-        this.deps.hub.setCanPublish(this, roomId, canPublish);
-      }
-    }
+      // Refused, or a different user, who is a different member: the old one leaves, the new one joins.
+      this.joined.delete(roomId);
+      this.deps.hub.leave(this, roomId);
+      if (!ok) this.error(roomId, "no_access", NO_ACCESS);
+      else this.attach(roomId, { ...j, userId }, canPublish);
+    });
   }
 
   /** The connection closed: its memberships are kept for the reconnect grace. */

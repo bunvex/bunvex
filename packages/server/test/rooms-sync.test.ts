@@ -22,7 +22,7 @@ async function setup() {
   const issuer = await startIssuer({ cacheControl: "max-age=600" });
   stops.push(issuer.stop);
   const engine = await new Engine(
-    defineSchema({ a: defineTable(v.any()) }),
+    defineSchema({ a: defineTable(v.any()), editors: defineTable(v.any()) }),
     await MemoryPersistence.open(null, { durable: false }),
   ).init();
   /**
@@ -31,10 +31,23 @@ async function setup() {
    */
   const held = () => ({ entered: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() });
   const waiting = { canJoin: held(), canPublish: held(), scope: held() };
+  /** The names the shared gate ran as, as `ctx.meta.getFunctionMetadata()` gave them. */
+  const gateNames: string[] = [];
+  /** The shared gate's runs in flight now, and the most at once. */
+  const gateRuns = { now: 0, most: 0 };
+  type MetaCtx = { meta: { getFunctionMetadata(): Promise<{ name: string }> } };
+  const named = async (ctx: MetaCtx) => {
+    gateRuns.most = Math.max(gateRuns.most, ++gateRuns.now);
+    await Bun.sleep(5 + Math.random() * 5); // runs that start together overlap, and finish in any order
+    gateNames.push((await ctx.meta.getFunctionMetadata()).name);
+    gateRuns.now--;
+    return true;
+  };
   const functions = new Functions(engine)
     .register("m", {
       count: query(async ({ db }) => (await db.query("a").collect()).length),
       insert: mutation(({ db }) => db.insert("a", {})),
+      allow: mutation(({ db }, { user }: { user: string }) => db.insert("editors", { user })),
     })
     .register("rooms", {
       doc: room({
@@ -69,6 +82,19 @@ async function setup() {
         state: { status: v.string() },
       }),
       lobby: room({ presence: v.any() }),
+      /** Publish: a signed-in user listed in `editors`. */
+      board: room({
+        canPublish: async (ctx: {
+          auth: { getUserIdentity(): Promise<{ subject: string } | null> };
+          db: { query(t: string): { collect(): Promise<{ user: string }[]> } };
+        }) => {
+          const me = (await ctx.auth.getUserIdentity())?.subject;
+          return (await ctx.db.query("editors").collect()).some((e) => e.user === me);
+        },
+        presence: v.any(),
+      }),
+      shared1: room({ canJoin: named, canPublish: named, presence: v.any() }),
+      shared2: room({ canJoin: named, canPublish: named, presence: v.any() }),
       secret: room({
         canJoin: async (ctx: { auth: { getUserIdentity(): Promise<{ subject: string } | null> } }) =>
           (await ctx.auth.getUserIdentity())?.subject === "ada",
@@ -83,7 +109,7 @@ async function setup() {
     auth: { providers: [{ domain: issuer.url, applicationID: "app" }] },
   });
   stops.push(stop);
-  return { issuer, rooms, sync, waiting, url: `ws://127.0.0.1:${server.port}/api/1.0.0/sync` };
+  return { issuer, rooms, sync, waiting, gateNames, gateRuns, url: `ws://127.0.0.1:${server.port}/api/1.0.0/sync` };
 }
 
 async function client(url: string, sessionId: string = crypto.randomUUID()) {
@@ -355,6 +381,50 @@ describe("rooms over the sync protocol", () => {
     a.authenticate(await issuer.sign({ sub: "ada" }));
     a.join(2, "rooms:online", { team: "t" }, "presence");
     expect(await a.synced(2)).toMatchObject({ self: "ada", canPublish: true });
+  });
+
+  test("a same-user Authenticate that flips canPublish sends a fresh RoomSync; one that changes nothing, none", async () => {
+    const { url, issuer } = await setup();
+    const a = await client(url);
+    const ada = await issuer.sign({ sub: "ada" });
+    a.authenticate(ada);
+    a.join(1, "rooms:board", {});
+    const first = await a.synced(1);
+    expect(first.canPublish).toBe(false);
+    a.mutate(0, "m:allow", { user: "ada" });
+    await a.until(() => a.responses().length > 0);
+    a.authenticate(ada); // a token refresh: the same user
+    a.presence(99, 1); // handled after the Authenticate: its error comes after any frame of it
+    await a.error(99);
+    const syncs = a.of("RoomSync");
+    expect(syncs).toHaveLength(2);
+    expect(syncs[1]).toEqual({ ...first, canPublish: true });
+    a.presence(1, { x: 1 });
+    a.authenticate(ada); // nothing changes
+    a.presence(98, 1);
+    await a.error(98);
+    expect(a.of("RoomSync")).toHaveLength(2);
+    expect(a.of("RoomError").filter((e) => e.roomId === 1)).toEqual([]);
+  });
+
+  test("an identity change runs every room's gates at once, each under its own name", async () => {
+    const { url, issuer, gateNames, gateRuns } = await setup();
+    const a = await client(url);
+    a.join(1, "rooms:shared1", {});
+    a.join(2, "rooms:shared2", {});
+    await a.synced(2);
+    gateNames.length = 0;
+    gateRuns.most = 0;
+    a.authenticate(await issuer.sign({ sub: "ada" })); // another user: every room's gates run again
+    a.presence(99, 1);
+    await a.error(99);
+    expect(gateNames.toSorted()).toEqual([
+      "rooms:shared1#canJoin",
+      "rooms:shared1#canPublish",
+      "rooms:shared2#canJoin",
+      "rooms:shared2#canPublish",
+    ]);
+    expect(gateRuns.most).toBe(2); // the two rooms at once; a room's canPublish after its canJoin
   });
 
   test("Authenticate to a user canJoin refuses → RoomError no_access for that room, and the others see it leave", async () => {

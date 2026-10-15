@@ -822,8 +822,6 @@ export class Functions {
   rooms = new Map<string, AnyRoomDef>();
   /** The rooms' members in memory (AD-42); set by `createServer`. */
   roomHub: RoomHub | null = null;
-  /** Each room gate as the query it runs as (built once per gate). */
-  private gateQueries = new WeakMap<RoomGate, QueryDef>();
   /** Each function's name as its key (`module:fn`), for `ctx.meta.getFunctionMetadata()`. */
   private names = new WeakMap<FunctionDef, string>();
   /** Each module's code hash (a deployed code version's modules); empty for registered (embedded) code. */
@@ -2180,17 +2178,14 @@ export class Functions {
   }
 
   /**
-   * A room's gate (AD-42, STUDY-164 §3.4): run as a query of `name` with `caller`'s identity, read-only and
+   * A room's gate (AD-42, STUDY-164 §3.4): run as a query named `name` (`rooms:doc#canJoin`) with `caller`'s identity, read-only and
    * without the query cache, as a standalone query runs. Its value, or what it threw. Not a function: no
    * client can call it by path.
    */
   async runGate(gate: RoomGate, name: string, args: Value, caller: Caller): Promise<unknown> {
-    let f = this.gateQueries.get(gate);
-    if (!f) {
-      // No args validator: the room's were checked at join.
-      f = { kind: "query", visibility: "internal", handler: (ctx, a) => gate(ctx as never, a) };
-      this.gateQueries.set(gate, f);
-    }
+    // A query of its own per run, so that runs at once (one gate in two rooms) each keep their name. No args
+    // validator: the room's were checked at join.
+    const f: QueryDef = { kind: "query", visibility: "internal", handler: (ctx, a) => gate(ctx as never, a) };
     this.names.set(f, registryKey(name));
     return this.logged(
       "Query",
