@@ -727,6 +727,50 @@ The plan as first written:
 
 ### PR 3 — server `start_push` / `evaluate_push` / `evaluate_schema` / `wait_for_schema` with components
 
+Built in three PRs: **3a** the definition evaluator, **3b** the tree's check and instantiation
+(`component-tree.ts`), **3c** `start_push` and the rest wired to them.
+
+As built, **PR 3a** (`server/src/definition-eval.ts`, nothing calls it yet):
+
+- `evaluateDefinitions({app, components, env})` evaluates every definition the app's reaches, as Convex's
+  `AppDefinitionEvaluator`: a post-order walk from `""` (each node's dependencies pushed in path order),
+  `CyclicImport` on re-entering one in progress, a diamond's shared child evaluated again. Its result is each
+  definition's metadata by path (`NewComponentDefinition`, core's `_component_definitions` row type).
+- Each definition is a `vm.SourceTextModule` named `bunvex.config.js` in a fresh context (`contextGlobals` with
+  Convex's refusals, each thrown into the code with Convex's text: `Date` (now, `new Date()`, `Date()`;
+  `new Date(0)` works), `Math.random`, `crypto.getRandomValues` / `randomUUID`, `performance`, `fetch`,
+  `setTimeout` / `setInterval`; `console` dropped; `process.env` the given variables in the app's and refused in a
+  component's). A top-level await is refused after the synchronous part runs, as Convex checks the module's promise.
+  One second to evaluate, Convex's `DATABASE_UDF_USER_TIMEOUT`.
+- The linker: `./_componentDeps/<base64url>` is Convex's synthetic module, the child's
+  `SerializedComponentDefinitionMetadata` (`componentDefinitionRow`: maps by key, `envVars` null when empty,
+  children tagged) with its path and default name; `bunvex/server` and `bunvex/values` are the server's (DV-495);
+  anything else is `NoImportModuleDuringDefinitionEvaluation`, located as Convex's
+  `nicely_show_line_number_on_error` (`bunvex:/bunvex.config.js:<line>:<col>: …`, with the original line and its
+  marker when the source map has the source).
+- The default export's five checks, `export()` called, `path` injected, then serde's read (the first missing field
+  in the struct's order, serde's `invalid type` / `unknown variant` wording) and Convex's `TryFrom` in its order
+  (exports, env vars, path, definition type, children, mounts, prefix), each failure `InvalidDefinition` with
+  Convex's text: identifiers (`@bunvex/values`' `identifierError`), definition paths (`definitionPathError`),
+  `HttpMountPath`'s conditions, references, export names, env var names (`checkEnvVarName`).
+- An exception from the definition's code is `InvalidBunvexConfig` with `describeUncaught`'s text.
+
+Not as Convex, proposed to the owner (STUDY-153 §4, C-18 and C-19):
+
+- A bare import (`lodash`, `node:fs`) in a definition fails Convex's resolver as a 500; bunvex answers it as any
+  other import, `NoImportModuleDuringDefinitionEvaluation` (400).
+- An `export()` that throws is a 500 in Convex ("Failed to call export function", read from the source, not
+  checked on the binary); bunvex answers `InvalidBunvexConfig` with the exception, as for the module's own code.
+
+A top-level frame prints as the existing frame mapping prints it (`at bunvex.config.ts:5:15`), not as Convex's
+`at <anonymous> (convex.config.ts:5:15)`: the same for every module's error since STUDY-95, not this PR's.
+
+Measured (evaluating `defineApp` with N `defineComponent` children through `bunvex/server`, median of 7): 0.3 ms
+for 1, 1.7 ms for 10, 6.1 ms for 50; the first evaluation in a process loads `bunvex/server` (~20 ms).
+
+The plan as first written:
+
+
 - **Scope.**
   - The request parsing (§2.1.1);
   - the definition evaluator (§2.3);
@@ -843,6 +887,8 @@ Rule 5 holds: "no exceptions, wire names included" (`scripts/check-deps.ts:8-12`
 | C-15 | **`finish_push`'s `schemaDiff`** is always null in bunvex's answer | filled | Fix (parity bug) | Fix (parity bug) |
 | C-16 | **Crons in a component**: Convex writes them at push into the component's namespace and runs them | written and run | Write the rows in step 3 (PR 4); run them in step 7. Interim DV (the step-7 row) | Rows in step 3, run in step 7 (missing until then) |
 | C-17 | **Wire names that keep "convex" by design** elsewhere: the `_componentDeps` prefix, `componentDefinitionPath`, `defaultName`, `_reference/childComponent/…` and `Symbol.for("toReferencePath")` contain no "convex"; the definition paths of Convex packages (`../node_modules/@convex-dev/…`) are user data | — | Keep as Convex's. Only C-1, C-3 and C-4 carry the word | Keep Convex's names (no DV) |
+| C-18 | **A bare import in a definition** (`lodash`, `node:fs`): Convex's resolver (`deno_core::resolve_import`) fails it with no `ErrorMetadata`, a 500 | 500 | Answer it as any other import: 400 `NoImportModuleDuringDefinitionEvaluation` (DV-496's reasoning: only a broken client sends it) | Proposed (PR 3a), awaiting the owner |
+| C-19 | **An `export()` that throws**: Convex's `export.call` gives no value and the push fails as a system error ("Failed to call export function"), a 500 (read from `component_definitions.rs:276-278`, not checked on the binary) | 500 | `InvalidBunvexConfig` with the exception, as the module's own exceptions | Proposed (PR 3a), awaiting the owner |
 
 ---
 
