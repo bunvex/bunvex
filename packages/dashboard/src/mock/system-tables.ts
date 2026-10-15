@@ -1,8 +1,9 @@
 // The mock's system tables (STUDY-131 AD-24): what a bunvex deployment's catalog would hold for the mock's
 // state, built when asked, so they follow the app's tables, indexes, environment variables, crons and run
 // state. The documents have the shapes bunvex stores (`_tables`: name, number, state, tablet; `_index`:
-// table, name, fields, state; …); the descriptions are the server's (SYSTEM_TABLE_DESCRIPTIONS in
-// @bunvex/core's catalog), copied for the tables the mock fills.
+// table, name, fields, state; …); the names and descriptions are the server's (the catalog's names, so
+// `_file_storage` and `_scheduled_jobs`, which apps read as `_storage` and `_scheduled_functions`;
+// SYSTEM_TABLE_DESCRIPTIONS in @bunvex/core's catalog), copied for the tables the mock fills.
 import type { CronJob, Document, EnvironmentVariable, IndexInfo, SystemTableInfo, Value } from "../data-source.ts";
 
 export type SystemTablesHost = {
@@ -30,15 +31,15 @@ const SYSTEM_TABLES: { name: string; number: number; description: string; appVis
   { name: "_cron_jobs", number: 531, description: "The cron jobs and their schedules." },
   { name: "_backend_state", number: 536, description: "The deployment's run state (running, paused, disabled)." },
   {
-    name: "_scheduled_functions",
+    name: "_scheduled_jobs",
     number: 539,
-    description: "Scheduled function runs and their state (apps read them through db.system).",
+    description: "Scheduled function runs and their state (apps read them as _scheduled_functions).",
     appVisible: true,
   },
   {
-    name: "_storage",
+    name: "_file_storage",
     number: 540,
-    description: "Stored files' metadata (apps read it through db.system).",
+    description: "Stored files' metadata (apps read it as _storage).",
     appVisible: true,
   },
   {

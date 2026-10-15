@@ -18,7 +18,10 @@ export type SystemTableInfo = {
   documentCount: number | null;
 };
 
-/** A page of a system table's documents, as stored (every field), in `_creationTime` order. */
+/**
+ * A page of a system table's documents, as stored (every field), in `_creationTime` order — but `_index`'s, in id
+ * order: as Convex's, `_index` has no `by_creation_time` index.
+ */
 export type SystemDocumentQuery = PageRequest & {
   table: string;
   /** Default: oldest first. */

@@ -819,6 +819,30 @@ export function describeDataSourceContract(
       if (src.deleteTables) await src.deleteTables([name]);
     });
 
+    // Convex's bulk edit (`patchDocumentsFields` without ids; STUDY-149 "Bulk edit"), on a table of its own: it
+    // touches every document of the table
+    test("writes: patchAllDocuments (when present) sets and removes fields in every document, or in none", async () => {
+      const src = await writer();
+      if (!src.patchAllDocuments) return;
+      const name = `contract_bulk_${Date.now().toString(36)}`;
+      await src.insertDocuments(name, [{ n: 1, tag: "a" }, { n: 2 }, { n: 3, tag: "c" }]);
+      await src.patchAllDocuments(name, { n: 10, tag: { $unset: true }, added: true });
+      const docs = await all((cursor) => src.listDocuments({ table: name, numItems: 2, cursor }));
+      expect(docs.map(({ _id, _creationTime, ...rest }) => rest)).toEqual([
+        { n: 10, added: true },
+        { n: 10, added: true },
+        { n: 10, added: true },
+      ]);
+      // one document refused (another `_creationTime`): none is written
+      await expectError(src.patchAllDocuments(name, { n: 11, _creationTime: 1 }), "invalid_request");
+      expect((await all((cursor) => src.listDocuments({ table: name, numItems: 10, cursor }))).map((d) => d.n)).toEqual(
+        [10, 10, 10],
+      );
+      // nothing to edit in a table that does not exist
+      await src.patchAllDocuments(`${name}_none`, { n: 1 });
+      if (src.deleteTables) await src.deleteTables([name]);
+    });
+
     if (writes.clear)
       test(`writes: clearTable empties the table (${table})`, async () => {
         const src = await writer();

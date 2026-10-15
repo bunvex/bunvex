@@ -7,7 +7,6 @@
 // Only an admin may call them (Convex's `queryPrivateSystem("ViewData")`); clients cannot, as no `_system`
 // name is in the public registry. Admin keys (Phase 3 item 6) will expose them over HTTP and WebSocket.
 import {
-  APP_VISIBLE_SYSTEM_TABLES,
   AUTH_TABLE,
   type AuditLogActor,
   type Caller,
@@ -40,6 +39,7 @@ import {
   stringifyValue,
   TableSummariesUnavailableError,
   type Tx,
+  virtualTableOfSystem,
 } from "@bunvex/core";
 import { type GenericValidator, jsonText, toJsonValue, type Value, v } from "@bunvex/values";
 import type { DeploymentOp } from "./admin-keys.ts";
@@ -251,8 +251,9 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
           out.push({
             name,
             description: SYSTEM_TABLE_DESCRIPTIONS[name] ?? "",
-            // readable by apps through `db.system` (projected), or private to the deployment
-            appVisible: APP_VISIBLE_SYSTEM_TABLES.includes(name),
+            // readable by apps through `db.system` (projected, under its virtual name: `_file_storage` as
+            // `_storage`, `_scheduled_jobs` as `_scheduled_functions`), or private to the deployment
+            appVisible: virtualTableOfSystem(name) !== undefined,
             // null while the table summaries are still bootstrapping after a start
             documentCount: await db.countTable(name).catch((e) => {
               if (e instanceof TableSummariesUnavailableError) return null;

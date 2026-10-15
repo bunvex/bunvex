@@ -2,7 +2,7 @@
 
 - **Status:** studied; fixes in follow-up PRs (§4)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend; observed against Convex's
-  precompiled local backend `precompiled-2026-10-02-c449d75` (§5)
+  precompiled local backend `precompiled-2026-10-02-c449d75` (§5); §9 at `d8bdde0`, against the pinned binary
 - **Related:** [STUDY-20](STUDY-20-function-errors-and-logs.md) (function errors, `logLines`, redaction),
   [STUDY-26](STUDY-26-sync-client.md) §9 (the HTTP client), [STUDY-34](STUDY-34-admin-keys.md) (admin keys,
   `/api/function`), [STUDY-37](STUDY-37-cli-and-environment-variables.md) (`bunvex run`), [STUDY-60](STUDY-60-streaming-export.md)
@@ -289,3 +289,95 @@ Not matched:
 - a log stream body written as an array: serde's per-variant struct length message;
 - the inside of a data sync's `selection`: serde's messages for `Selection`'s own fields;
 - `shapes2`'s `component`: bunvex has no components.
+
+## 9. The dashboard's routes from another origin (2026-10-14)
+
+**The bug.** The dashboard is served on its own origin on every real install (the image on 6791, `bunvex dashboard
+serve`, `bunvex dev`'s local dashboard on 6790) and its deployment on another (3210). Every admin request carries
+`Authorization` and `Bunvex-Client`, which are not simple headers, so Chrome sends a preflight first. `getDeployment`
+read `/version` (the preflight answered 405, no `Access-Control-Allow-Origin`) and `/stats` (403: the admin check
+ran on the `OPTIONS`, no layer at all), so in the browser it always failed and the header said "Deployment
+unavailable" in red. The same-process tests (`fetch` has no CORS) and `app.e2e.ts` (it checked only the name, which
+the sign-in gives) did not see it.
+
+**Convex** (commit `d8bdde0`, `crates/local_backend/src/router.rs`):
+
+- `cors()` (`router.rs:618-632`): origin and request headers mirrored (`AllowOrigin::mirror_request`,
+  `AllowHeaders::mirror_request`), credentials allowed, `GET,POST,OPTIONS,PATCH,DELETE,PUT`, max age 86 400 s.
+  tower-http answers any `OPTIONS` with `Access-Control-Request-Method` as a 200 preflight with no body, before
+  the route (so before any auth), and adds `vary: origin, access-control-request-method,
+  access-control-request-headers` and the origin to every other answer.
+- The layer is not global. `router()` (`router.rs:383-431`) puts it on the `/api` routes (`.nest("/api",
+  api_routes)` and the `migrated` router's own `.layer(cors())`, `router.rs:410-412`) and on
+  `health_check_routes` (`router.rs:541-563`: `/instance_name`, `/instance_version`, `/`, `/echo`; their own `.layer(cors())` at
+  `router.rs:562`, and the outer one at `router.rs:428`). `/http/` is nested after the layer (HTTP actions answer CORS
+  themselves).
+- The meta routes `/version` and `/metrics` (`crates/common/src/http/mod.rs:568-573`) are merged by
+  `ConvexHttpService::serve` after the router is built (`mod.rs:575-584`): no layer. An `OPTIONS /version` is axum's
+  405 (a GET-only route) and a cross-origin `GET /version` has no `Access-Control-Allow-Origin`: a page on another
+  origin cannot read it. `/version` and `/instance_version` carry the same `SERVER_VERSION_STR` (STUDY-112).
+- The CLI's routes (`router.rs:320-356`: `push_config`, `prepare_schema`, `deploy2/*`, `run_test_function`,
+  `get_config`, `get_config_hashes`, `schema_state/{id}`, `stream_udf_execution`, `stream_function_logs` and the import
+  routes) have their own `cli_cors()` (`common/src/http/mod.rs:1335-1348`) under the router's. The outer layer answers
+  their preflights (the router's methods); their other answers, like the health routes', carry the `vary` list twice,
+  once per layer.
+- Convex's self-hosted dashboard reads a deployment cross-origin only through `/api/*` (`deploymentFetch`,
+  `dashboard-common/src/lib/appMetrics.ts`, …) and `/instance_name` (`dashboard-common/src/lib/deploymentContext.tsx:797`),
+  all behind the layer. It never reads `/version`; it has no `/stats`.
+
+**bunvex.** `/version` matched Convex already (outside the layer, DV-373's version); the dashboard was the one reading
+the wrong route. Fixed as Convex is built, at the layer and in the source, not per route:
+
+- `@bunvex/dashboard-source` reads the version from `/instance_version`, the health route that carries it under the
+  layer (`server-source.ts` `getDeployment`).
+- `/stats` (bunvex's counters, DV-162: no Convex counterpart) is behind the layer (`packages/server/src/cors.ts`
+  `hasApiCors`), as the `/api` routes the dashboard reads: its preflight is answered before the admin check, and its
+  answers, a 403 included, carry the origin. Not a divergence (Convex has no such route); the route was decided by
+  the owner (DV-162), and the dashboard the owner chose to ship on its own origin (DV-475) reads it.
+- The `vary` list twice on the health and CLI routes' answers, as Convex's two layers give it (found by the oracle
+  below; harmless either way, matched because it is free).
+- Every route `@bunvex/dashboard-source` calls is under `/api/` (or is `/instance_name`, `/instance_version`,
+  `/stats`), so the layer covers them, `/api/debug/*` (AD-25, and the topology route AD-04 adds) included; the sync
+  socket is a WebSocket upgrade (no CORS).
+
+Found with it: the Overview's "Calls per minute" asked `topFunctions` for `k = 50`, which Convex's top-k routes refuse
+(`k must be between 1 and 25`, `local_backend/src/app_metrics.rs:336`; bunvex's the same), so the indicator never
+loaded on a deployment (the mock takes any `k`). It asks 25 now; the contract says so.
+
+No divergence remains: no DV.
+
+**Tests.**
+
+- `packages/server/test/cors.test.ts`: for each route the dashboard calls (22, from `server-source.ts`,
+  `credentials.ts`, `metrics.ts`, `logs.ts`, `settings.ts`, `tables.ts`, `writes.ts`, `deployment.ts`,
+  `functions.ts`, and `/api/debug/subscriptions`), the preflight with `authorization,bunvex-client,content-type`
+  asked (200, no body, the layer's headers, those three allowed) and the request with the key from another origin
+  (the origin mirrored, credentials, `vary` once or twice); what the header reads (name, version equal to `/version`'s,
+  persistence; `/stats` without a key a 403 the page can read); `/version` still outside the layer (405 preflight).
+- `packages/differential/test/dashboard-cors.test.ts` (the oracle, Convex's binary): the same preflight on 25 routes
+  both serve (the dashboard's, the health and meta routes, four CLI routes), compared whole (status, body, every
+  `access-control-*` and `vary`; the asked headers name each one's own client header); each request from another
+  origin, its CORS headers compared; `/instance_version` from another origin readable on both, equal to `/version`.
+- `packages/sync-e2e/dashboard/cross-origin.e2e.ts` (Chromium, in `bun run e2e`): the app as a release ships it,
+  served by `bunvex dashboard serve` on one port, signed in by hand to a server on another. The header shows the
+  name, `memory` and the version (not "Deployment unavailable"); the Overview's "Calls per minute" (app metrics),
+  "Live subscriptions" (`/stats`), the Engine's commit clock and the "Function calls" chart load; no request to the
+  deployment fails in the browser, no CORS console error.
+- `app.e2e.ts` (already cross-origin, through its proxy) now also checks that the header shows the name and not
+  "Deployment unavailable"; its name check had matched the phone's hidden line, which only the failed header left
+  as the first match.
+
+**Sabotage** (each restored, `git diff` clean after):
+
+| Broken | Caught by |
+|---|---|
+| `/stats` outside the layer (the bug) | `cors.test.ts` (3 tests), the Chromium e2e |
+| the dashboard reads `/version` again (the bug) | the Chromium e2e (the header's version never shows) |
+| the Overview asks `k = 50` again | the Chromium e2e ("Calls per minute" never shows) |
+| `vary` once on every route | the oracle, `cors.test.ts` |
+| the preflight without the asked headers | the oracle, `cors.test.ts` (2 tests) |
+| `/version` put behind the layer (diverging from Convex) | the oracle (2 tests), `cors.test.ts` (2 tests) |
+
+**Measured** (the layer runs on every `/api` answer): `apiCors` around a trivial handler, 200 000 `POST /api/query`
+from another origin, twice each: 0.585–0.588 µs a request before, 0.637–0.651 µs after (the CLI routes' pattern),
+against a request's tens of µs. A short run, as the Mac is shared.
