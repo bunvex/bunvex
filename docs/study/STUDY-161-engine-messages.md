@@ -1,7 +1,7 @@
 # STUDY-161 — Engine messages found with the dashboard
 
 - **Status:** decided (owner, 2026-10-15: match Convex on the differences STUDY-149 PR 3 found); one PR per
-  concern (§1–§7, each section's *Built* line); §8 open (Q1, DV-520)
+  concern (§1–§7, each section's *Built* line); §8 accepted as a divergence (owner, 2026-10-15: Q1 (a), DV-520)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend (`crates/isolate/src/environment/udf/
   async_syscall.rs`, `udf/syscall.rs`, `crates/convex/sync_types/src/identifier.rs`, `crates/value/src/
   table_name.rs`, `crates/common/src/types/index.rs`, `crates/common/src/schemas/mod.rs`, `crates/common/src/
@@ -154,7 +154,7 @@ order. So the new tables that have an index (database, staged, text or vector) t
 **bunvex now.** The push declares the schema's tables to the catalog in Convex's order (indexed first, each group by
 name); the numbers of tables that exist are untouched.
 
-## 8. The line the push analysis records for a function (open: Q1)
+## 8. The line the push analysis records for a function (Q1: accepted, DV-520)
 
 **Convex.** `udf_analyze` (`analyze.rs:681-722`) takes the handler's V8 start in the *bundled* module, adds 1 to the
 0-based line and column, passes them to the 0-based `lookup_token`, and records the token's 0-based original line
@@ -169,13 +169,13 @@ followed by a declaration esbuild joins with a comma does not.
 **Why it is not matched here.** The number is an artifact of esbuild's printer under Convex's off-by-one lookup. bunvex
 cannot reproduce it without esbuild's exact output, so this is a choice for the owner (Q1), not a fix.
 
-*Built:* nothing (Q1 open).
+*Built:* nothing to build: the owner accepted (a) (2026-10-15, DV-520).
 
 ## 9. Divergences
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| Q1 (DV-520) | The line a function is listed at in the dashboard's Functions tree (`modules:listForAllComponents`'s `lineno`, the order of a file's functions) can differ from Convex's for the same source | Convex's number comes from esbuild's printed bundle under an off-by-one lookup; bunvex bundles with Bun.build | **open (owner)** |
+| Q1 (DV-520) | The line a function is listed at in the dashboard's Functions tree (`modules:listForAllComponents`'s `lineno`, the order of a file's functions) can differ from Convex's for the same source | Convex's number comes from esbuild's printed bundle under an off-by-one lookup; bunvex bundles with Bun.build | **accepted, (a)** (owner, 2026-10-15) |
 
 **Q1 — the analyzed line of a function.**
 
@@ -192,6 +192,7 @@ cannot reproduce it without esbuild's exact output, so this is a choice for the 
   (the token at the handler's own position): right more often than Convex, never Convex's quirk. (c) bundle with
   esbuild in the CLI (a new dependency and a second bundler path, against STUDY-35's choice of Bun.build).
 - *Recommendation:* (a): no app observes it, and (c) costs a bundler for a dashboard number.
+- *Decision:* (a), accepted by the owner (2026-10-15); DV-520 in [divergences.md](../parity/divergences.md).
 
 ## 10. Tests
 
@@ -202,7 +203,7 @@ and lists what failed in its *Built* line.
 
 ## 11. Open questions
 
-- Q1 (§8, DV-520).
+None: Q1 (§8) was decided by the owner (2026-10-15: (a), DV-520).
 
 ## 12. As built
 
