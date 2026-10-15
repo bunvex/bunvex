@@ -136,11 +136,14 @@ export type LoadOptions = {
 export const REPL_WRAPPERS = "bunvex:/_system/repl/wrappers.js";
 
 /** The `bunvex/*` modules a bundle leaves external, each linked to the server's own. */
-const SERVER_MODULES: Record<string, () => Promise<Record<string, unknown>>> = {
+export const BUNVEX_MODULES: Record<string, () => Promise<Record<string, unknown>>> = {
   "bunvex/server": () => import("./index.ts"),
   "@bunvex/server": () => import("./index.ts"),
   "bunvex/values": () => import("@bunvex/values"),
   "@bunvex/values": () => import("@bunvex/values"),
+};
+const SERVER_MODULES: Record<string, () => Promise<Record<string, unknown>>> = {
+  ...BUNVEX_MODULES,
   // The function tester's builders (STUDY-119, DV-390): Convex's `convex:/_system/repl/wrappers.js`.
   [REPL_WRAPPERS]: async () => {
     const { query, internalQuery } = await import("./builders.ts");
@@ -219,7 +222,7 @@ const REGEXP_STATICS = [
 ];
 
 /** The globals of a context, besides its own JS intrinsics: the web platform Convex's runtime offers. */
-function contextGlobals(node: boolean, env: Record<string, string>, onMissingEnv?: (name: string) => void) {
+export function contextGlobals(node: boolean, env: Record<string, string>, onMissingEnv?: (name: string) => void) {
   const g = globalThis as Record<string, unknown>;
   const web = [
     "console",

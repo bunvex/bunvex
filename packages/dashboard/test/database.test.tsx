@@ -143,8 +143,8 @@ describe("the Database screen", () => {
     await heading("tasks");
     await user.click(screen.getByRole("button", { name: "Indexes" }));
     const panel = await screen.findByRole("complementary", { name: "Indexes of tasks" });
-    expect(panel.textContent).toContain("by_done_priority");
-    expect(panel.textContent).toMatch(/backfilling.*documents indexed/);
+    await within(panel).findByRole("listitem", { name: "by_done_priority" });
+    expect(within(panel).getByRole("progressbar", { name: "Backfill of by_text" })).toBeTruthy();
   });
 
   test("the schema panel shows the saved schema as code, this table's lines marked", async () => {

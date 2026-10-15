@@ -49,7 +49,7 @@ export function localDashboardLink(io: Io, flags: TargetFlags = {}): DashboardLi
 /**
  * The URL of one of the dashboard's pages, Convex's pages mapped to bunvex's routes: `settings/snapshots`
  * (Convex's too), `database/<table>?panel=indexes` (Convex's `data?table=<table>&showIndexes=true`), `schema`
- * (`schema?showSchema=true`), `settings/environment-variables`.
+ * (`schema?showSchema=true`), `settings/environment-variables` (with `?var=<name>`, Convex's too).
  */
 export async function dashboardPage(link: DashboardLink, page: string): Promise<string | null> {
   const root = await link();
@@ -61,6 +61,9 @@ export const SNAPSHOTS_PAGE = "settings/snapshots";
 
 /** Settings → Environment variables, where Convex sends a push refused for a variable its auth config needs. */
 export const ENV_VARS_PAGE = "settings/environment-variables";
+
+/** That page with a new row for `name` to fill in, as Convex links it (`?var=<name>`). */
+export const envVarPage = (name: string) => `${ENV_VARS_PAGE}?var=${encodeURIComponent(name)}`;
 
 /** A table's indexes on the Database screen, where Convex links a staged index's backfill progress. */
 export const tableIndexesPage = (table: string) => `database/${encodeURIComponent(table)}?panel=indexes`;
