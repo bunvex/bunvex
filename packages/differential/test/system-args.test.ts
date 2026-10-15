@@ -67,7 +67,9 @@ describe.skipIf(!ready)("a system function's arguments on Convex and on bunvex",
     };
     const [c, x] = [await run(convex), await run(bunvex)];
     // what the comparison stands on
-    expect(c.$x).toEqual({ error: "Server Error\nUncaught Error: Field name $x starts with a '$', which is reserved." });
+    expect(c.$x).toEqual({
+      error: "Server Error\nUncaught Error: Field name $x starts with a '$', which is reserved.",
+    });
     expect(c.written).toEqual([]);
     expect(x).toEqual(c);
   });
