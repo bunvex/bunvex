@@ -450,6 +450,7 @@ export {
   type TxQuery,
   type TxQueryChained,
 } from "./tx.ts";
+export { isSubset as validatorIsSubset } from "./validator-subset.ts";
 export {
   type FileStorageDoc,
   VIRTUAL_TABLES,

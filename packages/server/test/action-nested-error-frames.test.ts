@@ -119,6 +119,6 @@ test("an HTTP action's uncaught nested error: the same, with the route handler's
   expect(r.status).toBe(500);
   const { trace } = (await r.json()) as { trace: string };
   expect(trace).toMatch(
-    /^Uncaught Error: Normal error\n {4}at <anonymous> \(throws\.js:\d+:\d+\)\n\n {4}at async <anonymous> \(http\.js:\d+:\d+\)$/,
+    /^Uncaught Error: Normal error\n {4}at <anonymous> \(throws\.js:\d+:\d+\)\n\n {4}at async <anonymous> \(http\.js:\d+:\d+\)\n$/,
   );
 });

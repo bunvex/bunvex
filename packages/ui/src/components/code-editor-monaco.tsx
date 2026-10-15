@@ -5,6 +5,7 @@
 // from the design tokens, per theme.
 import type { CodeEditorProps } from "@bunvex/ui/components/code-editor";
 import { parseOklch } from "@bunvex/ui/lib/contrast";
+import { QUERY_COMPILER_OPTIONS } from "@bunvex/ui/lib/query-compiler-options";
 import { cn } from "@bunvex/ui/lib/utils";
 import MonacoReact, { loader, type OnMount } from "@monaco-editor/react";
 import * as monaco from "monaco-editor/editor/editor.api";
@@ -19,7 +20,9 @@ import "monaco-editor/editor/contrib/gotoError/browser/gotoError";
 import "monaco-editor/editor/contrib/hover/browser/hoverContribution";
 import "monaco-editor/editor/contrib/linesOperations/browser/linesOperations";
 import "monaco-editor/editor/contrib/multicursor/browser/multicursor";
+import "monaco-editor/editor/contrib/parameterHints/browser/parameterHints";
 import "monaco-editor/editor/contrib/placeholderText/browser/placeholderText.contribution";
+import "monaco-editor/editor/contrib/suggest/browser/suggestController";
 import "monaco-editor/editor/contrib/toggleTabFocusMode/browser/toggleTabFocusMode";
 import "monaco-editor/editor/contrib/wordOperations/browser/wordOperations";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
@@ -49,6 +52,20 @@ typescriptDefaults.setCompilerOptions({
   allowNonTsExtensions: true,
 });
 typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: false });
+
+/**
+ * The files a typed editor is checked against (STUDY-162), as Convex's runner sets them up (`FunctionEditor.tsx`):
+ * every one an extra lib, Convex's compiler options, and type errors underlined. Set again only when they change
+ * (the deployment's schema).
+ */
+let typeFiles: Record<string, string> | null = null;
+function installTypeFiles(files: Record<string, string> | undefined) {
+  if (!files || files === typeFiles) return;
+  typeFiles = files;
+  typescriptDefaults.setCompilerOptions({ ...QUERY_COMPILER_OPTIONS, typeRoots: [] });
+  typescriptDefaults.setExtraLibs(Object.entries(files).map(([filePath, content]) => ({ filePath, content })));
+  typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: false, noSyntaxValidation: false });
+}
 
 /**
  * Monaco's TypeScript worker, once its language is set up: the first TypeScript model sets it up asynchronously
@@ -183,6 +200,8 @@ function useTheme(): string {
 // ------------------------------------------------------------------ the editor
 
 export default function CodeEditorMonaco(props: CodeEditorProps) {
+  const typed = props.language === "typescript" && props.typescript !== undefined;
+  installTypeFiles(typed ? props.typescript!.files : undefined);
   const theme = useTheme();
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const latest = useRef(props);
@@ -308,6 +327,7 @@ export default function CodeEditorMonaco(props: CodeEditorProps) {
         }}
         onMount={onMount}
         language={props.language === "typescript" ? "typescript" : LANGUAGE}
+        path={props.typescript?.path}
         theme={theme}
         loading={null}
         options={{
@@ -332,10 +352,11 @@ export default function CodeEditorMonaco(props: CodeEditorProps) {
             ? { vertical: "hidden", horizontal: "hidden", alwaysConsumeMouseWheel: false }
             : { alwaysConsumeMouseWheel: false },
           fixedOverflowWidgets: true,
-          quickSuggestions: false,
-          suggestOnTriggerCharacters: false,
+          // a typed editor completes as Convex's (its types' suggestions and parameter hints); a value editor does not
+          quickSuggestions: typed ? { other: true, comments: false, strings: true } : false,
+          suggestOnTriggerCharacters: typed,
           wordBasedSuggestions: "off",
-          parameterHints: { enabled: false },
+          parameterHints: { enabled: typed },
           contextmenu: false,
           // one line: Tab leaves the field (unless the caller takes it); several: Ctrl+M toggles it
           tabFocusMode: single && !props.onTab,
