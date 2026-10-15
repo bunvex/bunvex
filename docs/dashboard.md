@@ -137,13 +137,18 @@ back the polls ask again at once and the subscriptions resume.
 
 ## 7. Known gaps
 
-- The image does not send Convex's frame and security headers yet (`X-Frame-Options`, `frame-ancestors`, …); they
-  come with a follow-up (owner, 2026-10-14).
 - The custom test query has no type checking or completions (Convex ships its server's declarations to the
   browser).
-- No bulk edit of documents, and the Data screen's index list leaves out search, vector and staged indexes.
+- The Data screen's index list leaves out search, vector and staged indexes, and its editors do not check what is
+  typed against the schema as Convex's do (the deployment's refusal says the same when saving). Going to a system
+  table's document by its id is not offered.
 - The environment variables screen does not open a given variable from a link (Convex's `?var=`).
 - Cloud-only screens are absent, as in Convex's self-hosted dashboard: insights, backups, custom domains, team,
-  billing and usage. bunvex keeps its own additions (the Overview's summary, Snapshots in Settings, the topology,
-  subscriptions and system tables screens).
+  billing and usage. bunvex keeps its own additions that work on a deployment (the Overview's summary,
+  Snapshots in Settings, the command palette, the Logs screen's histogram and export).
+- Some of bunvex's own screens open on the demo data only, and are hidden on a deployment (or say it does not
+  offer them): Subscriptions and the system tables (their server side exists; the dashboard does not read it
+  yet), and Topology, Authentication's user management, the clients, Analytics, Feature flags and Workflows
+  (no server side yet). The Files screen's storage used, views by type and size filters need sizes per kind,
+  which a deployment does not report ([additions.md](parity/additions.md)).
 - No telemetry and no legacy deployment list (`?a=<port>&d=<name>`), which Convex keeps for old CLIs.
