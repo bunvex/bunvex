@@ -10,7 +10,10 @@
 
 ## 0. Current state (1 Oct 2026)
 
-Everything below runs on `MockDataSource`; no server implements the contract yet (§5.7).
+Everything below was built on `MockDataSource`. Since STUDY-149 (14 Oct 2026) `apps/dashboard` also runs it on a
+deployment through `@bunvex/dashboard-source` (§34), which leaves undefined what it does not offer yet:
+`fileStats`, Topology, Subscriptions, the system tables, auth admin, the clients and the extensions
+([docs/dashboard.md](../dashboard.md#7-known-gaps)).
 
 **Screens** (main sidebar, in labelled groups, §23.2):
 
@@ -53,7 +56,8 @@ editor (§12.5.7); **plain-path routes** (§11.2).
 **The dev host's mock knobs** (`apps/dashboard`, query params kept for the tab, §11.2): `latency`,
 `fail`, `writes`, `tables` (`0`: no tables), `tasks`, `executions` (volume, §19.3), `nodes` (Topology).
 
-**Tests:** happy-dom + Testing Library + axe per package (`bun test`); the contract suite on the mock;
+**Tests:** happy-dom + Testing Library + axe per package (`bun test`); the contract suite on the mock and on a live
+server (`packages/sync-e2e/dashboard`);
 Playwright end-to-end in Chromium (`bun run e2e` in `apps/dashboard`, the CI job "e2e · dashboard in
 Chromium", not a required check), with axe and colour contrast in both themes and a guard on Health's
 first load (§12.5.10, §14.1, §19.4).
