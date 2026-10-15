@@ -5,6 +5,7 @@
 // from the design tokens, per theme.
 import type { CodeEditorProps } from "@bunvex/ui/components/code-editor";
 import { parseOklch } from "@bunvex/ui/lib/contrast";
+import { QUERY_COMPILER_OPTIONS } from "@bunvex/ui/lib/query-compiler-options";
 import { cn } from "@bunvex/ui/lib/utils";
 import MonacoReact, { loader, type OnMount } from "@monaco-editor/react";
 import * as monaco from "monaco-editor/editor/editor.api";
@@ -19,7 +20,9 @@ import "monaco-editor/editor/contrib/gotoError/browser/gotoError";
 import "monaco-editor/editor/contrib/hover/browser/hoverContribution";
 import "monaco-editor/editor/contrib/linesOperations/browser/linesOperations";
 import "monaco-editor/editor/contrib/multicursor/browser/multicursor";
+import "monaco-editor/editor/contrib/parameterHints/browser/parameterHints";
 import "monaco-editor/editor/contrib/placeholderText/browser/placeholderText.contribution";
+import "monaco-editor/editor/contrib/suggest/browser/suggestController";
 import "monaco-editor/editor/contrib/toggleTabFocusMode/browser/toggleTabFocusMode";
 import "monaco-editor/editor/contrib/wordOperations/browser/wordOperations";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
@@ -49,6 +52,20 @@ typescriptDefaults.setCompilerOptions({
   allowNonTsExtensions: true,
 });
 typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: false });
+
+/**
+ * The files a typed editor is checked against (STUDY-162), as Convex's runner sets them up (`FunctionEditor.tsx`):
+ * every one an extra lib, Convex's compiler options, and type errors underlined. Set again only when they change
+ * (the deployment's schema).
+ */
+let typeFiles: Record<string, string> | null = null;
+function installTypeFiles(files: Record<string, string> | undefined) {
+  if (!files || files === typeFiles) return;
+  typeFiles = files;
+  typescriptDefaults.setCompilerOptions({ ...QUERY_COMPILER_OPTIONS, typeRoots: [] });
+  typescriptDefaults.setExtraLibs(Object.entries(files).map(([filePath, content]) => ({ filePath, content })));
+  typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: false, noSyntaxValidation: false });
+}
 
 /**
  * Monaco's TypeScript worker, once its language is set up: the first TypeScript model sets it up asynchronously
@@ -183,6 +200,8 @@ function useTheme(): string {
 // ------------------------------------------------------------------ the editor
 
 export default function CodeEditorMonaco(props: CodeEditorProps) {
+  const typed = props.language === "typescript" && props.typescript !== undefined;
+  installTypeFiles(typed ? props.typescript!.files : undefined);
   const theme = useTheme();
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const latest = useRef(props);
@@ -244,16 +263,17 @@ export default function CodeEditorMonaco(props: CodeEditorProps) {
   };
 
   // underline the error, with its message on hover: alone, from where it is to the end of its line; with more
-  // errors, each one on the word it starts at (so one does not cover the next)
+  // errors or warnings, each one on the word it starts at (so one does not cover the next)
   useEffect(() => {
     const editor = editorRef.current;
     const model = editor?.getModel();
     if (!model) return;
     const e = props.error;
-    if (!e) return monaco.editor.setModelMarkers(model, "bunvex", []);
+    const warnings = props.warnings ?? [];
+    if (!e && warnings.length === 0) return monaco.editor.setModelMarkers(model, "bunvex", []);
     const at = (offset: number) => model.getPositionAt(Math.min(offset, Math.max(0, model.getValueLength() - 1)));
-    const several = (props.moreErrors?.length ?? 0) > 0;
-    const marker = (message: string, offset: number) => {
+    const several = (props.moreErrors?.length ?? 0) > 0 || warnings.length > 0;
+    const marker = (message: string, offset: number, severity = monaco.MarkerSeverity.Error) => {
       const start = at(offset);
       // a quoted value has no word at its quote: take the one after it, and the closing quote
       const word =
@@ -267,7 +287,7 @@ export default function CodeEditorMonaco(props: CodeEditorProps) {
           ? end.column
           : model.getLineMaxColumn(start.lineNumber);
       return {
-        severity: monaco.MarkerSeverity.Error,
+        severity,
         message,
         startLineNumber: start.lineNumber,
         startColumn: start.column,
@@ -276,10 +296,11 @@ export default function CodeEditorMonaco(props: CodeEditorProps) {
       };
     };
     monaco.editor.setModelMarkers(model, "bunvex", [
-      marker(e.message, e.offset ?? 0),
-      ...(props.moreErrors ?? []).map((m) => marker(m.message, m.offset)),
+      ...(e ? [marker(e.message, e.offset ?? 0)] : []),
+      ...(e ? (props.moreErrors ?? []) : []).map((m) => marker(m.message, m.offset)),
+      ...warnings.map((w) => marker(w.message, w.offset, monaco.MarkerSeverity.Warning)),
     ]);
-  }, [props.error, props.moreErrors]);
+  }, [props.error, props.moreErrors, props.warnings]);
 
   const single = !props.multiline;
   return (
@@ -306,6 +327,7 @@ export default function CodeEditorMonaco(props: CodeEditorProps) {
         }}
         onMount={onMount}
         language={props.language === "typescript" ? "typescript" : LANGUAGE}
+        path={props.typescript?.path}
         theme={theme}
         loading={null}
         options={{
@@ -330,10 +352,11 @@ export default function CodeEditorMonaco(props: CodeEditorProps) {
             ? { vertical: "hidden", horizontal: "hidden", alwaysConsumeMouseWheel: false }
             : { alwaysConsumeMouseWheel: false },
           fixedOverflowWidgets: true,
-          quickSuggestions: false,
-          suggestOnTriggerCharacters: false,
+          // a typed editor completes as Convex's (its types' suggestions and parameter hints); a value editor does not
+          quickSuggestions: typed ? { other: true, comments: false, strings: true } : false,
+          suggestOnTriggerCharacters: typed,
           wordBasedSuggestions: "off",
-          parameterHints: { enabled: false },
+          parameterHints: { enabled: typed },
           contextmenu: false,
           // one line: Tab leaves the field (unless the caller takes it); several: Ctrl+M toggles it
           tabFocusMode: single && !props.onTab,

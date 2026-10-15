@@ -263,6 +263,22 @@ describe("the dashboard in a browser", () => {
     await close();
   });
 
+  test("Add documents: a value that does not fit the schema is marked as it is typed (not enforced: a warning)", async () => {
+    const { page, errors, close } = await open("/database/users?panel=add");
+    const panel = page.getByRole("complementary", { name: "Add documents to users" });
+    await panel.locator(".monaco-editor").first().click();
+    await page.waitForFunction(() => !!document.activeElement?.closest(".monaco-editor"));
+    await clear(page);
+    await page.keyboard.type("{ name: 1 }");
+    await panel.getByText("not match the schema, which is not enforced", { exact: false }).waitFor();
+    // Monaco's warning underline on the value, not an error's
+    await panel.locator(".squiggly-warning").first().waitFor();
+    expect(await panel.locator(".squiggly-error").count()).toBe(0);
+    expect(await panel.getByRole("button", { name: "Add document" }).isDisabled()).toBe(false);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test("a document: Edit, type fast, Ctrl+Enter saves exactly what was typed", async () => {
     const { page, errors, close } = await open("/database/users");
     await heading(page, "users");

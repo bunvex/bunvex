@@ -262,6 +262,6 @@ describe("the action timeout", () => {
     expect(body.code).toMatch(
       /^\[Request ID: [0-9a-f]{16}\] Server Error: Function execution timed out \(maximum duration: 100ms\)$/,
     );
-    expect(body.trace).toBe("Function execution timed out (maximum duration: 100ms)");
+    expect(body.trace).toBe("Function execution timed out (maximum duration: 100ms)\n");
   });
 });

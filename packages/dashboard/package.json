@@ -10,7 +10,8 @@
     "./contract": "./src/contract.ts",
     "./data-source": "./src/data-source.ts",
     "./filters": "./src/filters.ts",
-    "./mock": "./src/mock/index.ts"
+    "./mock": "./src/mock/index.ts",
+    "./runner/query-types": "./src/runner/query-types.ts"
   },
   "scripts": {
     "test": "bun test"

@@ -1,6 +1,6 @@
 # STUDY-163 — Small dashboard and CLI parity items
 
-- **Status:** approved by the owner (2026-10-15: match Convex); §1–§2 implemented, §3–§4 planned (one PR each)
+- **Status:** approved by the owner (2026-10-15: match Convex); §1–§4 implemented
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend; Convex's CLI as npm's `convex@1.46.0`
 - **Related:** STUDY-149 (the dashboard on real data), STUDY-12 (the dashboard), STUDY-146 / DV-477 (the CLI's
   dashboard links), DV-479 (the dashboard contract follows Convex)
@@ -104,9 +104,44 @@ editor does the same with the field's type (`validatorForColumn`, mode `editFiel
 
 ### bunvex, before
 
-The editors check only that the text is a value; a misfit is refused by the deployment on save. bunvex has the check
-already (`validators.ts` `validateValue`, used by the function runner's arguments with located underlines). To be
-built: the same check in the add, edit and cell editors, blocking when enforced, a warning otherwise.
+The editors checked only that the text is a value; a misfit was refused by the deployment on save (enforced) or
+saved without a word (not enforced). bunvex had the check already (`validators.ts` `validateValue`, the function
+runner's arguments with located underlines).
+
+### As built
+
+- `packages/dashboard/src/database/schema-check.ts`: the table's declared type from `getSchema` (`tableSchema`,
+  Convex's `documentType` lookup), a field's (`fieldSchema`, `validatorForColumn`), each misfit at its place in the
+  text (`schemaIssues`, `validateValue` over `parseLiteralLocated`; "Document N: " in a list), an emptied required
+  field (`requiredFieldIssue`), and how they show (`issueDisplay`).
+- The add-documents panel, the document editor and the cell editor check as you type. Enforced: the first misfit is
+  the editor's error (underlined, said below it) and the others are underlined too; Save / Add / Enter do nothing.
+  Not enforced: each misfit is underlined as a warning, a note says the schema is not enforced, and saving works.
+- `@bunvex/ui`'s `CodeEditor` gained `warnings` (Monaco's warning markers).
+- The messages are the runner's (`validateValue`'s), bunvex's wording of Convex's `ConvexSchemaValidationError`
+  ("Type 'number' is not assignable to v.string()"; Convex prints the validator on the next line, pretty). Below the
+  editor, enforced, bunvex says the first misfit where Convex says "Please fix the errors above to continue.":
+  presentation, the markers being the same.
+- The mock's `schemaEnforced` option says the schema is enforced (default false, as before).
+
+### Tests
+
+`dashboard/test/editor-schema-checks.test.tsx`: the model (a table's and a field's type, places of a wrong value, an
+extra key and a missing field, a list's document number, a cell emptied or `undefined`, the display both ways); add
+documents enforced (blocked, then added once it fits) and not (a warning, added); the document editor enforced
+(blocked); the cell editor enforced (said as typed, Enter keeps the editor, nothing saved). The existing writes
+tests keep passing on the mock (not enforced). In Chromium (`apps/dashboard/e2e`): Monaco's warning underline and the
+note, and Add allowed.
+
+**Sabotage** (each restored, `git diff` clean; failing tests in `editor-schema-checks.test.tsx`):
+
+| Sabotage | Failing |
+|---|---|
+| enforced shown as warnings | 4 |
+| an extra key pointed at its value, not its key | 1 |
+| the document editor's Save not blocked | 1 |
+| the cell editor's Enter saving a misfit | 1 |
+| Add not blocked | 1 |
 
 ## 4. `dev`'s remaining lines
 
@@ -123,5 +158,47 @@ same app, with `--once` and without, output captured whole:
 | `✔ <time> Convex functions ready! (197.06ms)` (`formatDuration`) | `✔ <time> bunvex functions ready! (0.02s)` |
 
 A first local run also prints, on a terminal, Convex's three introductory lines and "Continue?"
-(`localDeployment/anonymous.ts` l. 63–90). To be built in its PR, each line in bunvex's words (rule 5); the details
-are settled there.
+(`localDeployment/anonymous.ts` l. 63–90), and after configuring a deployment Convex's `finalizeConfiguration`
+(`cli/lib/init.ts`) says what it saved, only when it changed, then where the functions go, where to give feedback and
+the dashboard (STUDY-149 PR 8 left these as gaps). "- Preparing …" and the blank line are Convex's spinner on a
+stream that is not a terminal, not lines of their own.
+
+### As built
+
+`packages/cli/src/dev.ts` and `local-deployment.ts`, each line in bunvex's words (rule 5):
+
+- **A first local run** (no `.bunvex/local/default/config.json`): "Setting up a new project..." (Convex's
+  `chooseDeployment` for a first anonymous deployment), then, on a terminal, Convex's three lines ("This command,
+  `bunvex dev`, will run your bunvex backend locally …", "Use `bunvex dashboard` …", "Use `bunvex docs` … `bunvex
+  help` …") and "Continue? (Y/n)"; no prints "Exiting" and stops (exit 1), nothing created.
+- **The configuration lines**, Convex's `finalizeConfiguration` in place of the old "✔ Started running a deployment
+  locally at …" (Convex's older wording): only when `.env.local` or `.gitignore` changed, and only what changed —
+  "✔ Configured a local deployment for <url> and saved its:" / "name as BUNVEX_DEPLOYMENT" / "client URL as <name>" /
+  "HTTP actions URL as <name>" / " to .env.local" (or "… saved its name as BUNVEX_DEPLOYMENT to .env.local"), then
+  `  Added ".env.local" to .gitignore`; then "Write your bunvex functions in <dir>/", "Give us feedback at <url>" and,
+  while `dev` serves the local dashboard, "View the bunvex dashboard at <url>" (DV-477: no line without one).
+- **A self-hosted `dev`** (`BUNVEX_SELF_HOSTED_*`, `--url` / `--admin-key`), Convex's `handleManuallySetUrlAndAdminKey`:
+  `BUNVEX_DEPLOYMENT` removed from `.env.local` ("Removed the BUNVEX_DEPLOYMENT environment variable from .env.local"),
+  the deployment's canonical URLs (`/api/v1/get_canonical_urls`) written as the client's variables and said ("Saved
+  BUNVEX_URL and BUNVEX_SITE_URL to .env.local"), each only when it changes. A deployment that cannot be reached
+  leaves the file alone (the push then says so and retries; Convex's `dev` stops there).
+- **The deployment line**, Convex's `announceDeploymentTarget` without colours: "▌ Developing against deployment:",
+  for a local deployment "▌ [Local] Port <port>" with "(dashboard: <url>)" (a link on a terminal), and "▌ └─ <url>".
+- **Durations** in Convex's `formatDuration` (ns, µs, ms, s, m, two decimals): "✔ 16:02:11 bunvex functions ready!
+  (197.06ms)", "Failed due to network error, retrying in 1.2s...".
+
+The feedback line points at bunvex's issues (`https://github.com/bunvex/bunvex/issues`): Convex names its community
+and its support address; rule 5 needs bunvex's own (an owner question below).
+
+### Tests
+
+`cli/test/dev.test.ts`: the deployment line (self-hosted, local with and without a dashboard, the terminal's links),
+the configuration lines (each combination, none for no change), the closing lines (the functions' directory, the
+dashboard only with one), a self-hosted `dev` saving the URLs once, `--url` removing `BUNVEX_DEPLOYMENT`, the ready
+line's duration. `cli/test/local-deployment.test.ts`: the first run's lines exactly; on a terminal the introduction,
+"Continue?" answered no (exit 1, nothing created) and yes; the next run prints none of them and names the deployment by
+its port. `dashboard-serve.test.ts`: the dashboard line inside the closing lines, none offline.
+
+**Sabotage** (each restored, `git diff` clean): the configuration lines printed with nothing changed → 2; the first
+run's introduction skipped → 2; the self-hosted URLs not saved → 2; the old deployment line → 3.
+

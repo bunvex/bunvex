@@ -22,3 +22,9 @@ interface ImportMetaEnv {
    */
   readonly VITE_BUNVEX_TRACE_URL?: string;
 }
+
+/** The custom test query's declarations (STUDY-162), made by vite.config.ts's plugin: `file:///…` → text. */
+declare module "virtual:bunvex-query-types" {
+  const files: Record<string, string>;
+  export default files;
+}

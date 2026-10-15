@@ -111,7 +111,11 @@ describe("bunvex dev with a local deployment", () => {
     const r = io(dir, env);
     expect(await devCommand(["--once", "--typecheck=disable", "--local-cloud-port", String(cloud)], r.it)).toBe(0);
     expect(r.err.join("\n")).toContain(
-      `✔ Started running a deployment locally at http://127.0.0.1:${cloud} and saved its:\n    name as BUNVEX_DEPLOYMENT to .env.local\n    URLs as VITE_BUNVEX_URL and VITE_BUNVEX_SITE_URL to .env.local`,
+      [
+        "Setting up a new project...",
+        `✔ Configured a local deployment for http://127.0.0.1:${cloud} and saved its:\n    name as BUNVEX_DEPLOYMENT\n    client URL as VITE_BUNVEX_URL\n    HTTP actions URL as VITE_BUNVEX_SITE_URL\n to .env.local\n  Added ".env.local" to .gitignore`,
+        "\nWrite your bunvex functions in bunvex/\nGive us feedback at https://github.com/bunvex/bunvex/issues\n",
+      ].join("\n"),
     );
     const name = `local-${dir
       .split("/")
@@ -138,6 +142,45 @@ describe("bunvex dev with a local deployment", () => {
     expect(await devCommand(["--once", "--typecheck=disable", "--run", "items:all"], again.it)).toBe(0);
     expect(again.out).toEqual(["[\n  7\n]"]);
     expect(readLocalConfig(dir)!.ports).toEqual(config.ports);
+  }, 60_000);
+
+  test("first run on a terminal: Convex's introduction and Continue?; no stops with Exiting", async () => {
+    const dir = app();
+    const env = { BUNVEX_LOCAL_BACKEND_BINARY: shim(tmp()), HOME: tmp() };
+    const asked: string[] = [];
+    const no = io(dir, env);
+    no.it.prompt = (q) => {
+      asked.push(q);
+      return "n";
+    };
+    expect(await devCommand(["--once", "--typecheck=disable", "--local-cloud-port", String(freePort())], no.it)).toBe(
+      1,
+    );
+    expect(no.err).toEqual([
+      "Setting up a new project...",
+      "This command, `bunvex dev`, will run your bunvex backend locally and update it with the function you write in the `bunvex/` directory.",
+      "Use `bunvex dashboard` to view and interact with your project from a web UI.",
+      "Use `bunvex docs` to read the docs and `bunvex help` to see other commands.",
+      "Exiting",
+    ]);
+    expect(asked).toEqual(["Continue? (Y/n)"]);
+    expect(readLocalConfig(dir)).toBeNull();
+    // yes (Enter): it goes on; the next run asks nothing and says nothing of the configuration
+    const yes = io(dir, env);
+    yes.it.prompt = () => "";
+    expect(await devCommand(["--once", "--typecheck=disable", "--local-cloud-port", String(freePort())], yes.it)).toBe(
+      0,
+    );
+    expect(yes.err.join("\n")).toContain("✔ Configured a local deployment for ");
+    const again = io(dir, env);
+    again.it.prompt = () => {
+      throw new Error("asked again");
+    };
+    expect(await devCommand(["--once", "--typecheck=disable"], again.it)).toBe(0);
+    expect(again.err.some((l) => /Setting up|Configured|Write your/.test(l))).toBe(false);
+    expect(again.err.join("\n")).toContain(
+      `▌ Developing against deployment:\n▌ [Local] Port ${readLocalConfig(dir)!.ports.cloud}\n▌ └─ http://127.0.0.1:`,
+    );
   }, 60_000);
 
   test("still running, a busy requested port, --local-* with a self-hosted deployment", async () => {
