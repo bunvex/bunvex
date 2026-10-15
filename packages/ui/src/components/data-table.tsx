@@ -52,6 +52,17 @@ export type SelectionOptions<TData> = {
   onChange: (next: Set<string>) => void;
   /** How a row is named to screen readers ("Select row …"). Default: its id. */
   describe?: (row: TData) => string;
+  /**
+   * Every row is selected, the ones not loaded yet too (a "select all" of a list still paging): every checkbox
+   * shows checked, and toggling a row starts from the loaded rows (`onChange` gets them less that one).
+   */
+  all?: boolean;
+  /** What the header's checkbox does, in place of selecting or clearing every loaded row (it may set `all`). */
+  onToggleAll?: () => void;
+  /** No checkbox in the header (e.g. while only some of a filter's matches are loaded). */
+  allHidden?: boolean;
+  /** The header checkbox's accessible name. Default "Select every loaded row". */
+  allLabel?: string;
 };
 
 /** The id of the checkbox column `selection` adds in front. */
@@ -200,7 +211,7 @@ function DataTable<TData extends RowData>({
   const toggle = useCallback((id: string, range: boolean) => {
     const sel = selectionRef.current;
     if (!sel) return;
-    const next = new Set(sel.selected);
+    const next = new Set(sel.all ? rowsRef.current.map((r) => r.id) : sel.selected);
     const on = !next.has(id);
     const ids = rowsRef.current.map((r) => r.id);
     const from = range && anchor.current !== null ? ids.indexOf(anchor.current) : -1;
@@ -275,16 +286,17 @@ function DataTable<TData extends RowData>({
       id: SELECT_COLUMN,
       header: () => {
         const sel = selectionRef.current!;
+        if (sel.allHidden) return null;
         const ids = rowsRef.current.map((r) => r.id);
         const count = ids.filter((id) => sel.selected.has(id)).length;
-        const all = count > 0 && count === ids.length;
+        const all = sel.all === true || (count > 0 && count === ids.length);
         return (
           <Checkbox
-            aria-label="Select every loaded row"
+            aria-label={sel.allLabel ?? "Select every loaded row"}
             tabIndex={-1}
             checked={all}
             indeterminate={count > 0 && !all}
-            onCheckedChange={() => sel.onChange(all ? new Set() : new Set(ids))}
+            onCheckedChange={() => (sel.onToggleAll ? sel.onToggleAll() : sel.onChange(all ? new Set() : new Set(ids)))}
           />
         );
       },
@@ -301,7 +313,7 @@ function DataTable<TData extends RowData>({
             <Checkbox
               aria-label={`Select row ${sel.describe?.(c.row.original) ?? id}`}
               tabIndex={-1}
-              checked={sel.selected.has(id)}
+              checked={sel.all === true || sel.selected.has(id)}
               onCheckedChange={() => toggle(id, shift.current)}
             />
           </span>

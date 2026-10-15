@@ -4,9 +4,10 @@
   built (§5); PR 6 built (`apps/dashboard` on the real source, §5 "PR 6, as built"); PR 7 built (packaging: the
   dashboard's image, `dashboard.zip`, the local dashboard, `bunvex dashboard serve`, §5 "PR 7, as built"), and its
   follow-up, the server's frame and security headers (§5 "PR 7 follow-up", DV-488); PR 8 built (the CLI's dashboard
-  links, DV-477, and the user docs, `docs/dashboard.md`, §5 "PR 8, as built") — **the plan is done**. Q1: option B,
-  a separate service with its own image (DV-475); Q3: rename (DV-474); Q4: Convex's model plus a `Host` check
-  (DV-476); Q5: local links only (DV-477, replaces DV-217); Q2, Q6, Q7 confirmed as planned; AD-32 not taken.
+  links, DV-477, and the user docs, `docs/dashboard.md`, §5 "PR 8, as built") — **the plan is done**; then Convex's
+  bulk edit (§5 "Bulk edit"). Q1: option B, a separate service with its own image (DV-475); Q3: rename (DV-474); Q4:
+  Convex's model plus a `Host` check (DV-476); Q5: local links only (DV-477, replaces DV-217); Q2, Q6, Q7 confirmed as
+  planned; AD-32 not taken.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/dashboard-common`,
   `dashboard-self-hosted`, `dashboard`, `system-udfs/convex/_system/frontend`, `@convex-dev/platform`,
   `convex/src/cli`, `self-hosted/docker`, `crates/local_backend`, `crates/application`)
@@ -400,6 +401,7 @@ subscription), DV-97 (`Bunvex` scheme), DV-210 (the key never stored), DV-307 (`
 | # | Addition | Why | Decision |
 |---|---|---|---|
 | AD-32 (Q1 option C) | the backend can also serve the dashboard itself, same-origin, at `/dashboard` (opt-in) | one container, one port, no CORS | **not taken** (owner, 2026-10-12: Q1 option B); not recorded in additions.md |
+| AD-41 (§7) | storage statistics on a deployment: the Files screen's storage used, views by type with counts and size filter, the Overview's file storage card, from in-memory counters per UTC hour × kind × size class | Convex has none of them; on a deployment they worked on the mock only (#648) | **deferred** (owner, 2026-10-14: "keep the study; for now match Convex (only the file count on a deployment)"; §7.5) |
 
 ## 5. Tests
 
@@ -1075,8 +1077,8 @@ note and left to their own PRs):
    10001, 10002 differ for the same schema).
 
 **Notes for PR 6** (the app on the source): Convex's bulk edit (`patchDocumentsFields` without `ids`, every document of
-the table) has no contract method yet; the History screen words the other actions from their counts (`cancel_all_…`
-has no count on Convex).
+the table) has no contract method yet (built since: "Bulk edit" below); the History screen words the other actions
+from their counts (`cancel_all_…` has no count on Convex).
 
 ### PR 4, as built
 
@@ -1348,7 +1350,6 @@ and `watchFunctions` are already wired in the screens.
 - The custom test query's type checking and completions: Convex ships the whole `convex/server` declaration set in
   its bundle and generates the data model from the schema; for bunvex that means shipping `@bunvex/server`'s
   declarations to the browser. Not cheap; left out.
-- Convex's bulk edit (`patchDocumentsFields` without `ids`, PR 3's note) has no contract method yet.
 - Search, vector and staged indexes in `IndexInfo`; `tableOfId` for system tables (PR 2's notes).
 - Packaging (`bunvex dashboard serve`, the image, `dashboard.zip`, `/api/current_deployment`'s server): PR 7.
 
@@ -1807,9 +1808,141 @@ addition (AD-41 unused). Printing the URL the dashboard is serving where Convex 
 | `dev`'s line never printed | 1 |
 | `dev`'s line printed without a dashboard | 1 |
 | `dev` gives its pushes no link (the line follows the same link) | 1 |
+
 **Measurements.** No hot path: CLI messages only. A command asks the local dashboard at most once (one loopback
 request, 2 s timeout), only when a message needs the link and a port is saved; a self-hosted deployment asks
 nothing.
+
+### Bulk edit
+
+Convex's "Edit all" and "Edit N", PR 3's note: `patchDocumentsFields` without `ids` had no contract method. Built
+after PR 8. Convex re-read at `d8bdde0` (`dd/` is `dc/features/data/`; `fe/` as in PR 3).
+
+**How Convex does it.**
+
+- **When it is offered.** The table's header checkbox has three states (`dd/lib/useSelectionState.ts:7-82`): on a
+  table whose pages are not all loaded, with nothing selected, it selects every document of the table, the ones
+  never loaded too (`allPseudoSelected`, every row's checkbox shown checked); once every page is loaded it selects
+  the loaded documents by id (and a pseudo-selection turns into them). A row's checkbox under the pseudo-selection
+  drops it and selects that row alone (`toggle`, `:33-41`). With a filter (`hasFilters`: an enabled valid clause, an
+  index clause or a search, not an order: `dd/lib/useTableFilters.ts:99-123`) the header checkbox is not shown while
+  nothing is selected and the matches are still paging (`dd/components/Table/ColumnHeader.tsx:136-142`), and
+  "all" never applies (`allRowsSelected = all === true && !hasFilters`, `dd/components/DataContent.tsx:247-248`):
+  a filter's matches are only ever edited by id, once loaded. The toolbar shows Edit and Delete while anything
+  is selected (`DataToolbar.tsx:60-66`), labelled "Edit" (one), "Edit 3", "Edit All" (`documentsLabel`,
+  `:205-214`). One document opens its own editor; more, or all, open the bulk editor (`:361-374`), with `rowIds:
+  "all"` when every document is selected — with a table fully loaded and every row checked too. Delete with
+  "all" opens the clear-table dialog (`:431-432`). A protected (production) deployment asks once per browser
+  session first ("Enable edit mode", `dd/lib/useToolPopup.tsx:128-136`).
+- **The editor** (`dd/components/Table/EditDocumentPanel/EditFieldsPanel.tsx`): a side panel titled "Bulk edit all
+  documents in T" / "Bulk edit 3 documents in T" (`:45`, `:76-82`), the words "You can: • Add new fields •
+  Overwrite existing fields • Remove existing fields by setting them to `undefined`" (`:49-59`), the object editor
+  starting at `{}`, and "Apply", enabled once something changed (`JavascriptDocumentsForm.tsx:90-93`, `:139-141`).
+  A top-level `undefined` is the field to remove, sent as the undefined placeholder (`walkPatchDocuments.ts:65-108`);
+  the editor checks the values against the table's declared type, ignoring the fields not written and refusing to
+  remove a required one (`:43-49`, `:93-106`; warnings, or errors when the schema is enforced). Closing with changes
+  asks "You have unsaved changes…" (`EditFieldsPanel.tsx:28-39`). There is no other confirmation.
+- **The call** (`dd/lib/useDataToolbarActions.ts:68-88`): **one** `patchDocumentsFields({table, fields, ids})`, `ids`
+  left out for "all". No pages, no cursor, no progress, no cancel, and no filter (the mutation takes none; an extra
+  argument fails its validator). An application error shows its data alone; any other error shows "Could not bulk
+  edit documents. Try editing less documents or use a migration." and the error. On success the panel closes; no
+  toast.
+- **The server** (`fe/patchDocumentsFields.ts:20-40`): without `ids`, `db.query(table).collect()` and a `db.patch`
+  of each, in the mutation's one transaction: all or nothing, one `update_documents` event with every id (an empty
+  table: an event with none; a table that does not exist reads as empty). The limit is the transaction's: each patch
+  reads its document, so the 4 096 reads (`TRANSACTION_MAX_READ_SET_INTERVALS`) stop it at **4 093 documents** —
+  long before the 16 000 writes. Past that, "Too many reads in a single function execution (limit: 4096). …",
+  raised inside the rewrap (an application error, its data the message): nothing written, no event. A system
+  table fails ("System tables can only be accessed from db.system.query()."), outside the rewrap.
+
+**The server already matched.** PR 3's `patchDocumentsFields` reads the table whole without `ids`; nothing changed
+there. The oracle now covers the no-ids path (below).
+
+**What was built.**
+
+- **Contract** (`data-source.ts`): `patchAllDocuments?(table, fields)`, Convex's bulk edit: every document of the
+  table, one transaction, all or nothing, no filter and no pages; a table past one transaction's reads is
+  `invalid_request` with the deployment's words; a table that does not exist has nothing to edit. The brief asked
+  for Convex's paging with a cursor; Convex has none for this, so neither has the contract (DV-479's rule: the
+  contract follows Convex). The contract suite checks it on a table of its own (set, remove, a refused system field
+  writing nothing, an unknown table).
+- **Source** (`writes.ts`): the mutation over the socket without `ids` (`componentId: null`, removals as the
+  placeholder); an abort before the call sends nothing, and there is no later page to stop at.
+- **Mock**: the same rules, one `update_documents` event with every id, and the read limit at 4 093 documents.
+- **Screen** (`database/screen.tsx`, `bulk-edit.tsx`, `DataTable`'s `selection.all`): Convex's three-state header
+  checkbox ("Select all documents"; "Select every matching document" under a filter, hidden while the matches page),
+  "Edit" / "Edit 3" / "Edit all" beside Delete, one document opening its own editor, "Delete all" opening Clear
+  table, and the side panel "Bulk edit all documents in T" with Convex's "You can:" list, a literal editor where a
+  top-level `undefined` removes the field, and Apply (Ctrl+Enter). A refusal the deployment explains is shown as it
+  is; anything else after Convex's advice ("Try editing fewer documents or use a migration."). Applied: the panel
+  closes and the screen says "Edited all documents in T." (the screen's notice, as its other writes).
+- In bunvex's components (STUDY-12 D1), three things are bunvex's: a row's checkbox under "all" keeps the other
+  loaded rows (Convex's selects that row alone); the draft is kept per table while the page is open, as Add
+  documents keeps its own, instead of asking before closing; a system field is refused in the editor (the document
+  editor's rule) where Convex lets the deployment refuse it.
+
+**Not built here** ("Ainda não fizemos", none a divergence): the editor's check of the values against the declared
+type as they are typed (Convex's `walkPatchDocuments`) — none of bunvex's document editors has it yet (Add
+documents, the document and cell editors); the deployment's refusal says the same after Apply. "Enable edit mode"
+waits for deployment kinds, as the cell menu's delete (STUDY-12 D13).
+
+**Tests.**
+
+- **Oracle** (`packages/differential/test/dashboard-writes.test.ts`): on Convex's binary and on bunvex,
+  `patchDocumentsFields` without ids — set, remove, both, nothing, a `filters` argument (refused by the validator:
+  there is no filter), `componentId: null`, an empty table (its event with no ids), `_storage`, the schema's refusal
+  (nothing written) and a declared field — the documents left and every event; and a table past the reads: 4 095
+  documents refused whole with no event, 4 093 edited in one call with one event of 4 093 ids. (Also: each test now
+  waits 5 ms before taking its `since`, as the setup's last event could share its millisecond and be counted — seen
+  once on the clear test.)
+- **Source** (`writes.test.ts`): what it sends (no `ids`, the placeholder, int64), the reads' refusal as
+  `invalid_request` with its words, an abort before the call.
+- **Live** (`server-source-writes.test.ts`): on a server in the process, every document set and removed, the
+  `update_documents` event with every id, the schema's refusal writing nothing and recording nothing, 4 095
+  documents refused with the deployment's words, an unknown table resolved.
+- **Mock** (`mock.test.ts`): the contract's test, and the event and the 4 093 limit.
+- **Screen** (`database-bulk-edit.test.tsx`): the header on a table still paging (250 documents, 100 loaded) and
+  Edit all patching the 250 in one call; the header again clearing it, a row leaving "all"; a fully loaded table
+  all checked is Edit all; Edit 2 by id; one selected opening the document editor; a filter hiding the header
+  while paging, then editing its loaded matches by id; the refusals' words, the draft kept; Delete all clearing;
+  read-only. axe on the panel and on the refusal. The parser: top-level `undefined` removes, nested does not,
+  system fields refused.
+- **Chromium** (`sync-e2e/dashboard/app.e2e.ts`): signed in to a live server, a table of 150 documents, the header,
+  Edit all, `{ checked: true, note: undefined }` typed in Monaco, Apply: every document changed on the deployment;
+  then the schema's refusal shown in the panel, and axe.
+
+**Sabotage** (each restored after, `git diff` checked; counts are failing tests per suite):
+
+| Sabotage | Failing tests |
+|---|---|
+| server: the no-ids path reads only the first 100 documents | oracle 1, live 1 |
+| server: no event for an empty bulk edit | oracle 2 |
+| source: `patchAllDocuments` sends `ids: []` | unit 1, live 2 |
+| source: a removal sent as a value | unit 2, live 4 |
+| mock: no read limit | mock 1 |
+| mock: a document written before another's system field is checked | mock 1 |
+| screen: Edit all patches the loaded documents by id | screen 3, Chromium 1 |
+| screen: the header selects the loaded rows only (no "all") | screen 3 |
+| screen: a filter may select "all" | screen 1 |
+| screen: a top-level `undefined` not removed | screen 2 |
+| screen: the advice added to the deployment's refusal | screen 1 |
+| `DataTable`: a row toggled under "all" starts from nothing | screen 1 |
+
+**Measurements.** No hot path: the server is unchanged; the screen adds one optional call.
+
+**Divergences.** None new (DV-487 and DV-489 unused). The contract's shape is DV-479's rule; the three screen
+details above are bunvex's components (STUDY-12 D1).
+
+**Found on the way** (left to their own PRs, out of the oracle with a note):
+
+1. At exactly 4 094 documents the refusal differs in kind: Convex counts one more read before the patches and fails
+   on the last one (inside the rewrap: an application error with data); bunvex records two reads for the scan, so
+   its patches pass and the audit event's own read goes over (outside the rewrap: "Uncaught Error", no data).
+   Refused and nothing written on both; 4 093 and 4 095 agree. The read accounting of a scan and of the audit
+   event (`packages/core/src/tx.ts` `recordInterval`; `insertAuditLogEvents`), not this function.
+2. PR 3's #3 covers an undeclared field too: the schema's error for an extra field displays the document and the
+   validator with the system fields on bunvex, without them on Convex.
+
 ## 6. Open questions
 
 Every question below is in the decision format the owner asked for (what Convex does / what bunvex would do /
@@ -1919,3 +2052,220 @@ same or not / why / app impact / recommendation), followed by the owner's decisi
 - *Why*: Convex's admin API is system functions over the sync protocol; the client already speaks it.
 - *Recommendation*: accept; PR 1 amends UI-01 §5.7 and §6.
 - **Decision (owner, 2026-10-12): confirmed** as planned.
+
+## 7. Follow-up: storage statistics on a deployment (AD-41, deferred)
+
+The #648 docs audit found that the server source does not offer `fileStats` (PR 5: "Convex has no size or kind
+filter"). On a deployment the Files screen therefore loses its **storage used** bar, the **views by type** with
+their counts and the **size filter**, and the Overview loses its **file storage** card; all four work on the mock
+only. The owner chose, on 2026-10-14, to study them as an addition. AD-41 is reserved for it. This section is the
+proposal. Nothing is built: the owner deferred it (§7.5), so on a deployment bunvex stays as Convex, with only the
+file count.
+
+Convex source read: commit `d8bdde0` of get-convex/convex-backend (`git show d8bdde0:<path>`; the local checkout
+is at `4577b9031`). The citation prefixes are §0's: `dc/`, `sh/`, `cl/`, `udfs`.
+
+### 7.1 What Convex shows
+
+**The Files screen (self-hosted and cloud alike; `sh/pages/files.tsx:3` is `FileStorageView`).**
+
+- The header shows "File Storage" and **"Total Files"** with one number (`dc/features/files/components/
+  FileStorageHeader.tsx:181-191`). That number is `fileStorageV2.numFiles`, live (`FileStorageView.tsx:76-79`),
+  which is `db.system.query("_storage").count()` (`system-udfs/convex/_system/frontend/fileStorageV2.ts:8-13`).
+  The count comes from the table summary (`crates/isolate/src/environment/udf/async_syscall.rs:941-970`), so it
+  costs O(1).
+- It has a **Storage ID** lookup and an **"Uploaded at"** date range with the shortcuts Any time, Last 24 hours,
+  7, 30 and 90 days (`FileStorageHeader.tsx:57-89`, `:202-221`). The only other filter is the order.
+  `FileFilters` is `{minCreationTime, maxCreationTime, order}` (`:13-17`). `fileMetadata` takes those three and
+  pages over `by_creation_time` (`fileStorageV2.ts:19-71`), 20 files a page (`lib/usePaginatedFileMetadata.ts:13`).
+- The list has a Size column and a Content type column (`FilesList.tsx:37-42`, `FileStorageListItem.tsx:116-118`).
+- **There is no byte total, no breakdown by type, no size filter and no kind filter.** No `_system/frontend`
+  function sums sizes. The Health page shows no storage figure at all.
+
+**Storage bytes in Convex exist, but they are cloud-only or off-dashboard.**
+
+- *The cloud usage page* (`cl/components/billing/TeamUsage.tsx:171-184`, `:379-386`, `:1626-1660`) has a "File
+  Storage" section. It is a daily gauge per team and project, read from Convex's Databricks warehouse
+  (`cl/hooks/usageMetrics.ts:30`, `:48`, `:628-654`), not from the deployment. The plan summary shows "File
+  Storage" against the team's entitlement (`cl/components/billing/PlanSummary.tsx:96-99`, `:176-180`).
+- *Cloud backups* warn when a deployment holds more than 1 TB of files (`cl/components/deploymentSettings/
+  BackupStorageSelector.tsx:15-19`). That figure comes from the same warehouse, and only for cloud deployments
+  (`:151-167`).
+- *The deployment itself* computes `total_file_storage_bytes` every hour for the `current_storage_usage` log
+  stream event. This is STUDY-73's worker (`crates/usage_gauges_tracking_worker/src/lib.rs:86-89`, `:355`,
+  `:392-393`). The figure is kept by `FileStorageSizeTracker` (`crates/model/src/file_storage/mod.rs:351-470`),
+  which lives **in memory** and is rebuilt from scratch on start: its first call syncs every `_file_storage`
+  document, and later calls resume from the document log by adding each new revision and subtracting its
+  predecessor. Below `FILE_STORAGE_SIZE_MIN_DOCUMENTS_TO_RESUME` (4096, `crates/common/src/knobs.rs:1589-1592`)
+  it simply syncs again. Convex's docs say the event "is not currently sent for self-hosted deployments"
+  (`npm-packages/docs/docs/production/integrations/log-streams/log-streams.mdx:493`). bunvex sends it (STUDY-73).
+- `_file_storage` has three indexes: `by_id`, `by_creation_time` and `by_storage_id` (`crates/model/src/
+  file_storage/mod.rs:84-113`). There is none on `size` or `contentType`.
+
+So Convex has nothing to match here. Its own precedent is an in-memory total that is rebuilt at start and kept
+up to date incrementally, for one number and with no filters.
+
+### 7.2 What bunvex's mock offers, field by field
+
+The contract is `packages/dashboard/src/data-source-deployment.ts` (UI-01 §24). The mock is
+`packages/dashboard/src/mock/files.ts`.
+
+| Field / argument | Meaning | Used by |
+|---|---|---|
+| `fileStats(filter?)` → `count` | files matching the filter | the column's "N files", the Overview card's detail |
+| → `totalBytes` | the sum of their `size` | the column's "storage used", the Overview card's value |
+| → `byKind.{image,document,other}.count` | the count per `fileKind` | the views' counts (All files, Images, Documents, Other) |
+| → `byKind.*.bytes` | the bytes per kind | the usage bar and its legend |
+| `FileFilter.from` / `to` | creation time in ms, inclusive | the Uploaded presets (Today, 7 and 30 days: local-day bounds) and Bar 2's custom range |
+| `FileFilter.kind` | `fileKind(contentType)`: `image/*`; text, PDF, JSON, XML, RTF and office types; the rest | the views |
+| `FileFilter.minSize` / `maxSize` | bytes, inclusive | the Size filter. The screen only ever sends three ranges: `≤ 1023`, `1024 … 1 MiB − 1` and `≥ 1 MiB` (`files/column.tsx:22-26`) |
+| `listFiles({kind, minSize, maxSize})` | the list filtered the same way | the list under a view or a size |
+
+How the screen calls these matters for cost (`files/column.tsx:63-123`, `screens/overview.tsx:206-211`):
+
+- One render of the Files column makes **10 `fileStats` calls**:
+  - the usage bar (no filter);
+  - the views (the filter without `kind`);
+  - four Uploaded presets;
+  - four sizes.
+- `watchFiles` invalidates all ten after any change to the files (`files/screen.tsx:70`).
+- The Overview makes one more call, with no filter.
+
+The mock scans its in-memory list on every call (`MockFiles.stats`).
+
+### 7.3 Options and their costs
+
+All three options answer through a new bunvex system query, admin-only like `fileStorageV2:*`. One possible
+name is `_system/frontend/fileStorageStats`; the PR picks the final one, and rule 5 holds. Convex's
+`fileStorageV2:fileMetadata` stays exactly as it is. Each option also needs a filtered list query for `kind` and
+size. The dashboard calls the stats one-shot: it never subscribes to them, so they need no read set, and
+`watchFiles` already tells the screen when to refetch.
+
+Scan costs below are extrapolated linearly from STUDY-73's measurement (a paged scan of 10 000 files in 30–45 ms,
+about 3–4.5 µs per file). They are not new measurements, because no benchmarks run on this machine now. The
+implementing PR measures them.
+
+**(a) Scan `_storage` on every call.**
+
+| | 10k files | 1M files | 10M files |
+|---|---|---|---|
+| One unfiltered call | 30–45 ms | 3–4.5 s | 30–45 s |
+| One column refresh (10 calls; 1 scan if the calls are merged into a single "facets" call) | 0.3–0.45 s (30–45 ms) | 30–45 s (3–4.5 s) | 5–7.5 min (30–45 s) |
+
+- *Consistency:* exact, at one snapshot if one transaction is used. A paged scan across transactions, like the
+  gauge's, is not.
+- *Storage backends:* works the same on every persistence driver. It reads `_file_storage.size` and never
+  touches the blob store, whether local, S3 or memory.
+- *Hot path:* nothing changes on store or delete.
+- *Filters and paging:* there is no index on kind or size, and adding one would change Convex's `_file_storage`
+  layout, against the owner's storage-parity decision of 2026-10-05. A filtered list would page over
+  `by_creation_time` and drop the rows that do not match. A rare kind could then read the whole table for one
+  page of 50, unless `maximumRowsRead` (core `tx.ts:321`) caps each page. A capped page comes back short, with
+  `isDone: false`, and the list has to go on loading.
+- *Verdict:* fine at 10k and unusable from about 1M, because every upload re-runs the scans. Caching a result
+  until the next `_file_storage` commit does not help a busy store.
+
+**(b) Counters maintained incrementally.** The counters are kept per bucket. A bucket is one UTC hour of
+`_creationTime`, crossed with the three kinds and the screen's three size classes: 9 cells, each holding a count
+and a byte total. There are also deployment-wide totals.
+
+- *The system-table variant* writes a counter row in the same transaction as each store or delete. This
+  variant is rejected, for four reasons:
+  - Every upload and every `ctx.storage.delete` in an app's mutation would write the same row. Uploads would
+    conflict with each other and with app mutations; `addRow` commits alone precisely "to avoid OCC risk". This
+    would be **app-visible**: more OCC retries, and a divergence.
+  - It adds a system table that Convex's persisted layout does not have (owner, 2026-10-05).
+  - A snapshot import that replaces `_storage` would have to rewrite the row.
+  - A store that Convex's binary wrote would open without the row.
+- *The in-memory variant* updates the buckets when a commit becomes visible. It runs beside
+  `tableSummaries.apply`, in the engine's `onVisible` (`packages/core/src/engine.ts:1047`), and is keyed per
+  tablet as the summaries are. It sees every writer: uploads, `ctx.storage.delete`, the dashboard's
+  `deleteFiles` and imports. An import's hidden tablet keeps its own buckets until the swap. The buckets are
+  rebuilt by a scan at start, which is Convex's own approach for its total (§7.1).
+
+| | 10k files | 1M files | 10M files |
+|---|---|---|---|
+| Build at start: a background scan, once per process (and after the lease moves to another process) | 30–45 ms | 3–4.5 s | 30–45 s |
+| Memory: at most one bucket (~200 B) per hour that has uploads | ≤ 2 MB, usually KBs | ≤ 5 MB (3 years of hours) | ≤ 5 MB: bounded by hours, not files |
+| A call with no time bound | O(1), µs | O(1) | O(1) |
+| A call over 30 days | 720 buckets, ~10 µs | same | same |
+
+- *Consistency:* the counters reflect the latest visible commit. They are applied in commit order, and each
+  commit is applied atomically because the apply is synchronous.
+- *Backends:* no driver work and nothing persisted, so the persisted layout is still Convex's. It reads
+  `_file_storage` metadata, never the blob store. "Storage used" means what `_storage` lists, as Convex's
+  `total_file_storage_bytes` does, not what the bucket holds: bunvex, like Convex, never deletes a blob
+  (STUDY-130).
+- *Hot path:* no extra I/O, no extra write and no OCC. Each written document costs one tablet comparison, and a
+  `_file_storage` write costs one map lookup and four additions.
+- *Limits:* counters alone cannot answer a bound that falls inside an hour. Half-hour and 45-minute zones such as
+  India, Nepal, Newfoundland and parts of Australia produce such bounds. So do arbitrary byte bounds. Counters
+  alone would either answer wrong or refuse.
+
+**(c) Hybrid: (b) in memory, plus a bounded index scan for what the buckets cannot express.**
+
+- *Time:* the hours inside a time range come from the buckets. The partial hour at each end, if any, is read
+  from `by_creation_time` in a query transaction. That transaction starts in the same tick as the counters are
+  read, so both describe the same commit; the PR proves this with a test. The extra cost is the uploads of at
+  most two partial hours, and it does not depend on the size of the store. On whole-hour zones it is zero.
+- *Size:* the contract's free `minSize` / `maxSize` narrows to the screen's three classes,
+  `size?: "small" | "medium" | "large"`, which the buckets answer exactly. This contract is the dashboard's
+  internal one, so the change is not app-visible, and the mock follows it.
+- *Paging a filtered list:* the buckets name the hours that hold at least one match. A page reads only the
+  `by_creation_time` ranges of those hours, so the rows read are the matches plus the non-matching files in
+  hours that contain a match. `maximumRowsRead` still bounds a pathological hour. No new index is needed.
+- *Costs:* (b)'s table, plus the edge scans. Memory, the build and the hot path are the same as (b).
+- *Readiness:* until the build is done, a call answers a retryable "unavailable", the way `count()` answers
+  while the table summaries bootstrap (`TableSummariesUnavailableError`). The column shows "…" and retries. At
+  10k the build finishes before anyone asks.
+- *A side benefit, not observable:* STUDY-73's hourly gauge can read its total from these counters instead of
+  re-scanning `_file_storage` every hour. At 10M files that scan costs 30–45 s per hour. This would bring bunvex
+  closer to Convex's incremental `FileStorageSizeTracker`, and the event's value stays the same.
+
+### 7.4 What an app observes
+
+Nothing, under (b) in memory and under (c):
+
+- the API, `_storage` and its documents, and `ctx.storage` are unchanged;
+- the persisted layout and its indexes are unchanged, and so are exports and imports;
+- the log stream event keeps its value, and no OCC is added.
+
+The new system queries are admin-only and dashboard-only, under `_system/`, which is outside an app's `api`.
+Under (a) nothing is observable either, but a scan competes for the server's thread with the app's functions.
+The system-table variant of (b) would be observable through OCC, so it is not offered.
+
+### 7.5 Recommendation and the owner's decision (AD-41)
+
+- *Convex*: the Files screen has a file count, a date range and a storage-id lookup. It has no bytes, no views
+  by type, no size or kind filter, and the Health page has no storage card. Storage bytes exist only on the
+  cloud usage and billing pages (from Convex's warehouse) and in the hourly `current_storage_usage` event, which
+  is kept by an in-memory tracker rebuilt at start.
+- *bunvex (proposed)*: on a deployment, the server source offers `fileStats` and the filtered `listFiles`, so the
+  storage used, the views by type with counts, the size filter and the Overview's file storage card work as they
+  do on the mock. They are backed by option **(c)**:
+  - in-memory counters per UTC hour × kind × size class, updated when a commit becomes visible and rebuilt by a
+    background scan at start;
+  - an index scan for the partial hours at a range's edges;
+  - bucket-guided paging for the filtered list.
+  
+  The size filter narrows to the screen's three classes. Optionally, STUDY-73's gauge reads its total from the
+  counters.
+- *Same?* No. This is an addition: Convex has nothing to match. It is dashboard-only and additive.
+- *Why*: not a parity gap ("Ainda não fizemos" / "Não dá pra fazer" do not apply). It is something bunvex adds.
+  The design is constrained by Convex's persisted layout (no new system table or index) and by the store and
+  delete path (no new write).
+- *App impact*: none (§7.4).
+- *Recommendation*: accept AD-41 with option (c). Reject (a), because it is unusable from about 1M files.
+  Reject (b) in a system table, because it adds OCC on uploads and a layout divergence. Do not choose (b) alone
+  either, because it is wrong for half-hour zones and arbitrary bounds. If accepted, one PR builds it:
+  - the counters in core;
+  - the system queries in the server;
+  - `fileStats` and the filtered `listFiles` in `@bunvex/dashboard-source`;
+  - the contract's size classes, applied to the mock as well.
+  
+  It runs the contract suite on the server source with the stats on, includes the start-scan and hot-path
+  measurements, and sabotages a missed delete, a missed import and an edge hour.
+- **Decision (owner, 2026-10-14): deferred** — "keep the study; for now match Convex (only the file count on a deployment)". On a deployment the Files screen keeps Convex's file
+  count, date range and lookup; the server source still offers no `fileStats`, so the storage used, the views by type,
+  the size filter and the Overview's file storage card stay on the mock. This study is kept to revisit; option (c) is
+  the design to start from.

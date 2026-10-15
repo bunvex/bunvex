@@ -207,3 +207,29 @@ describe("MockDataSource", () => {
     expect(imports.page.some((d) => d.checksum && "$bytes" in (d.checksum as object))).toBe(true);
   });
 });
+
+describe("MockDataSource, bulk edit (STUDY-149 'Bulk edit')", () => {
+  test("patchAllDocuments: one update_documents event with every id; past 4 093 documents refused whole", async () => {
+    const src = new MockDataSource({ ...small, documents: { ...small.documents, imports: 3 } });
+    const ids = (await src.listDocuments({ table: "imports", numItems: 10, cursor: null })).page.map((d) => d._id);
+    await src.patchAllDocuments("imports", { k: 1 });
+    const events = (await src.listAuditEvents!({ numItems: 10, cursor: null, actions: ["update_documents"] })).page;
+    expect(events.map((e) => e.metadata)).toEqual([
+      { component_id: null, component: null, table: "imports", document_ids: expect.arrayContaining(ids) },
+    ]);
+    await src.insertDocuments(
+      "imports",
+      Array.from({ length: 4090 }, () => ({})),
+    );
+    await src.insertDocuments("imports", [{}]);
+    let error: unknown;
+    try {
+      await src.patchAllDocuments("imports", { k: 2 });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toMatchObject({ code: "invalid_request", message: expect.stringContaining("Too many reads") });
+    const page = (await src.listDocuments({ table: "imports", numItems: 5000, cursor: null })).page;
+    expect(page.filter((d) => d.k === 2)).toEqual([]);
+  });
+});
