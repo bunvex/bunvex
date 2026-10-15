@@ -3,7 +3,7 @@
 // (`paginatedTableDocuments.ts` with `lib/filters.ts`), a table's indexes (`indexes.ts`) and documents by id
 // (`listById.ts`, `getById.ts`). Same names, arguments, result shapes and errors; `componentId` is accepted
 // and ignored, as bunvex has only the root component (DV-55). `tableSize` is in system-functions.ts.
-import { SCHEMAS_TABLE, schemaStateOf, type Tx, type TxQueryChained, tabletOf } from "@bunvex/core";
+import { SCHEMAS_TABLE, schemaStateOf, type TabletId, type Tx, type TxQueryChained, tabletOf } from "@bunvex/core";
 import { decodeId, fromJsonValue, type JSONValue, type Value, v } from "@bunvex/values";
 import { paginationOptsValidator } from "./pagination.ts";
 import type { SystemQuery } from "./system-functions.ts";
@@ -473,7 +473,7 @@ export const DATA_SYSTEM_QUERIES: Record<string, SystemQuery> = {
         const out = [];
         for (const ix of rows) {
           if (ix.descriptor === "by_id" || ix.descriptor === "by_creation_time") continue;
-          const { fields, state, staged } = fieldsAndState(ix.config as Record<string, unknown>);
+          const { fields, state, staged } = indexFieldsAndState(db, ix);
           if (state === "backfilling") {
             const backfill = (await db
               .query("_index_backfills")
@@ -526,6 +526,21 @@ export const DATA_SYSTEM_QUERIES: Record<string, SystemQuery> = {
     },
   },
 };
+
+/**
+ * `fieldsAndState` of an `_index` row, a search or vector index's state taken from the engine: bunvex writes their
+ * rows backfilling for good (DV-415), so the state Convex's row would hold is the engine's build — built and enabled
+ * `done`, built and staged `backfilled` (DV-368: no `Backfilled` while a push waits).
+ */
+function indexFieldsAndState(db: Tx, ix: Row): ReturnType<typeof fieldsAndState> {
+  const config = ix.config as Record<string, unknown>;
+  const read = fieldsAndState(config);
+  if (config.type !== "search" && config.type !== "vector") return read;
+  const build = db.searchIndexBuild(config.type, ix.table_id as TabletId, ix.descriptor as string);
+  if (!build) return read;
+  const state = !build.built ? "backfilling" : build.staged ? "backfilled" : "done";
+  return { fields: read.fields, state, staged: state !== "done" && build.staged };
+}
 
 /** An `_index` row's fields, state and staging, as Convex's `indexes` reads them (`getIndexFieldsAndState`). */
 function fieldsAndState(config: Record<string, unknown>): {
@@ -599,7 +614,7 @@ export async function applicationIndexes(db: Tx) {
     for (const ix of (await db.query("_index").collect()) as Row[]) {
       const table = tables.get(ix.table_id as string);
       if (table === undefined || ix.descriptor === "by_id" || ix.descriptor === "by_creation_time") continue;
-      const { fields, state, staged } = fieldsAndState(ix.config as Record<string, unknown>);
+      const { fields, state, staged } = indexFieldsAndState(db, ix);
       out.push({
         table,
         name: ix.descriptor as string,

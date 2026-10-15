@@ -361,6 +361,7 @@ export type Savepoint = {
   pendingViolation: { table: string; error: string } | null;
   stagedViolations: Map<string, StagedViolation>;
   commitTs: Map<string, Path[]>;
+  afterCommit: number;
 };
 
 /** A schema's staged validators, by table, that writes are checked against (STUDY-106 §7.2). */
@@ -440,6 +441,8 @@ export class ImportIdError extends Error {
 }
 
 export class Tx {
+  /** Callbacks to run once this transaction has committed (STUDY-164 §3.4: a mutation's broadcasts). */
+  afterCommitCallbacks: (() => void)[] = [];
   private readList: Interval[] = [];
   /** Intervals in `readList` that do not count against `databaseQueries` (`uncountedRead`). */
   private uncountedReads = 0;
@@ -1950,7 +1953,16 @@ export class Tx {
       pendingViolation: this.pendingViolation,
       stagedViolations: new Map(this.stagedViolations),
       commitTs: new Map(this.commitTs),
+      afterCommit: this.afterCommitCallbacks.length,
     };
+  }
+
+  /**
+   * Run `fn` once this transaction has committed, in registration order. Dropped when the attempt fails or is
+   * retried (a retry is a fresh `Tx`) or is rolled back to a savepoint taken before this call.
+   */
+  afterCommit(fn: () => void) {
+    this.afterCommitCallbacks.push(fn);
   }
 
   /** Undo every write since `sp` (a nested mutation that failed). */
@@ -1964,6 +1976,7 @@ export class Tx {
     this.pendingViolation = sp.pendingViolation;
     this.stagedViolations = sp.stagedViolations;
     this.commitTs = sp.commitTs;
+    this.afterCommitCallbacks.length = sp.afterCommit;
   }
 
   /** The writes as persistence rows: the new version of each doc and the index entries that changed. */
@@ -2016,6 +2029,21 @@ export class Tx {
   searchIndexes: SearchIndexes | null = null;
   /** The vector indexes, for the bytes a write adds to them (STUDY-71). */
   vectorIndexes: VectorIndexes | null = null;
+  /**
+   * A search or vector index's build as the engine holds it (STUDY-149 "Index list"): `built` once every document
+   * is in it (or it is being rebuilt after a start: it was built before), `staged` as declared. Its `_index` row
+   * always says backfilling (DV-415), so the dashboard's index list reads this instead. Undefined for an index the
+   * engine does not hold.
+   */
+  searchIndexBuild(
+    kind: "search" | "vector",
+    tablet: TabletId,
+    name: string,
+  ): { built: boolean; staged: boolean } | undefined {
+    const all = kind === "search" ? this.searchIndexes?.forTablet(tablet) : this.vectorIndexes?.forTablet(tablet);
+    const e = all?.find((x) => x.name === name);
+    return e && { built: e.ready || e.bootstrapping, staged: e.staged };
+  }
   /** A table's document count at a snapshot, from the table summaries (STUDY-52 PR 2); set by the engine. */
   tableCount: ((tablet: TabletId, snapshot: bigint) => number) | null = null;
 

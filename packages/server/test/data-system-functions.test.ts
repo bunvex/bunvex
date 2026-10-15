@@ -71,13 +71,13 @@ describe("indexes", () => {
         name: "by_vec",
         staged: false,
         fields: { vectorField: "vec", filterFields: ["tag"], dimensions: 2 },
-        backfill: expect.objectContaining({}),
+        backfill: { state: "done" },
       },
       {
         name: "search_title",
         staged: false,
         fields: { searchField: "title", filterFields: ["tag"] },
-        backfill: expect.objectContaining({}),
+        backfill: { state: "done" },
       },
     ] as never);
   });

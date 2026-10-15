@@ -6,6 +6,10 @@
 // log stream's entries (each Progress and Completion's name, the first line of each line, status and error line:
 // the frames differ in their paths) and the route's app metrics. Local only: skipped, with a note, when Convex's
 // backend is not there (scripts/download-convex-backend.sh, or CONVEX_BACKEND_BIN).
+//
+// The routes under `/chunk/` stream a chunk that is not bytes (a string, a number, an object, …), nothing (null,
+// undefined) or bytes of another kind (an ArrayBuffer, a DataView, a Uint16Array), in the handler's turn or after the
+// head (STUDY-161 §15), compared the same way.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { connect } from "node:net";
@@ -17,6 +21,29 @@ if (!ready) console.warn(`http-body-error: skipped, no Convex backend at ${ORACL
 
 const APP = resolve(import.meta.dir, "../http-body-errors-app");
 const KINDS = ["start", "pull", "microtasks", "string", "later", "laterString", "startLater", "ok"];
+const CHUNKS = [
+  ...[
+    "string",
+    "empty",
+    "number",
+    "boolean",
+    "object",
+    "array",
+    "blob",
+    "map",
+    "symbol",
+    "bigint",
+    "sharedView",
+    "resizable",
+    "proxy",
+    "null",
+    "undefined",
+    "arrayBuffer",
+    "dataView",
+    "uint16",
+  ].map((k) => `now/${k}`),
+  ...["string", "number", "object", "null", "arrayBuffer"].map((k) => `later/${k}`),
+];
 
 let convex: Backend;
 let bunvex: Backend;
@@ -92,10 +119,11 @@ type Entry = {
   error?: string;
 };
 
-async function play(b: Backend) {
+/** Each path under `prefix` in turn, read raw, then the log entries of their runs. */
+async function play(b: Backend, prefix = "/stream/", paths = KINDS) {
   const answers: unknown[] = [];
-  for (const kind of KINDS) {
-    const r = await raw(b, `/stream/${kind}`);
+  for (const path of paths) {
+    const r = await raw(b, `${prefix}${path}`);
     if (r.status !== 500) {
       answers.push(r);
       continue;
@@ -109,8 +137,10 @@ async function play(b: Backend) {
   let entries: Entry[] = [];
   for (let i = 0; i < 100; i++) {
     const r = await fetch(`${b.url}/api/stream_function_logs?cursor=0`, { headers: auth(b) });
-    entries = ((await r.json()) as { entries: Entry[] }).entries.filter((e) => e.udfType === "HttpAction");
-    if (entries.filter((e) => e.kind === "Completion").length >= KINDS.length) break;
+    entries = ((await r.json()) as { entries: Entry[] }).entries.filter(
+      (e) => e.udfType === "HttpAction" && e.identifier.startsWith(`GET ${prefix}`),
+    );
+    if (entries.filter((e) => e.kind === "Completion").length >= paths.length) break;
     await Bun.sleep(100);
   }
   const log = entries.map((e) => ({
@@ -185,5 +215,49 @@ describe.skipIf(!ready)("a body that fails, against Convex's backend", () => {
     const cm = await metrics(convex);
     expect(await metrics(bunvex)).toEqual(cm);
     expect(cm).toEqual([1, 0]);
+  }, 60_000);
+});
+
+describe.skipIf(!ready)("a chunk that is not bytes, against Convex's backend", () => {
+  test("in the handler's turn: the 500; after the head: a clean end and an error line; nothing is no chunk", async () => {
+    const c = await play(convex, "/chunk/", CHUNKS);
+    const b = await play(bunvex, "/chunk/", CHUNKS);
+    expect(b.answers).toEqual(c.answers);
+    expect(b.log).toEqual(c.log);
+    // What the oracle shows, spelled out.
+    const refused = (got: string) => {
+      const message = `Uncaught Error: serde_v8 error: ${got.startsWith("can't") ? got : `invalid type; expected: buffer, got: ${got}`}`;
+      return {
+        status: 500,
+        type: "application/json",
+        ended: true,
+        body: { code: `Server Error: ${message}`, trace: message },
+      };
+    };
+    const text = (body: string) => ({ status: 200, type: "text/plain", body, ended: true });
+    expect(c.answers).toEqual([
+      ...["string", "string", "Number", "Boolean", "unknown", "array", "unknown", "Map", "symbol", "bigint"].map(
+        refused,
+      ),
+      refused("Uint8Array"),
+      refused("can't create slice from resizable ArrayBuffer"),
+      refused("Proxy"),
+      text("first  last"),
+      text("first  last"),
+      text("first ab last"),
+      text("first dv last"),
+      text("first hi last"),
+      text("first "),
+      text("first "),
+      text("first "),
+      text("first  last"),
+      text("first ab last"),
+    ]);
+    const lines = c.log.filter((e) => e.kind === "Progress").flatMap((e) => e.lines);
+    expect(lines.filter((l) => l.startsWith("[ERROR]"))).toEqual(
+      ["string", "Number", "unknown"].map(
+        (got) => `[ERROR] Uncaught Error: serde_v8 error: invalid type; expected: buffer, got: ${got}`,
+      ),
+    );
   }, 60_000);
 });
