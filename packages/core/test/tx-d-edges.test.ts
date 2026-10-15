@@ -80,7 +80,8 @@ describe("stage", () => {
       await db.insert("items", { n: 2 }),
     ]);
     await e.mutation(async (db) => {
-      const doc = { _id: v.id("items"), _creationTime: v.number(), n: v.number(), ref: v.optional(v.id("other")) };
+      // a table's validator never names the system fields (STUDY-161 §3)
+      const doc = { n: v.number(), ref: v.optional(v.id("other")) };
       db.pendingValidators = new Map([["items", v.object(doc)]]);
       await db.patch(ids[0]!, { ref: otherId }); // valid, an id of the right table
       await db.delete(ids[1]!); // no document to check

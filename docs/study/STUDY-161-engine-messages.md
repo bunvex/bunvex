@@ -212,7 +212,14 @@ and lists what failed in its *Built* line.
 
 ### §3 (the schema error's display)
 
-*Built:* not yet.
+*Built:* `documentValidator` (`core/src/schema.ts`) is the schema's own validator, and `checkDocument` checks a
+document without its top-level `_` fields; the five places a document meets its table's validator use it (a write,
+the pending and staged validators in `tx.ts`; the push's walk and the staged walk in `engine.ts`). Tests:
+`core/test/schema-error-display.test.ts` (missing and extra fields by insert, patch and replace, a wrong value, a
+union, a push's walk); `differential/test/schema-errors.test.ts` (11 writes on both backends, the display without
+`_creationTime` asserted on Convex's side); `tx-d-edges`' pending-validator test now gives the schema's validator.
+Sabotage (each restored, `git diff` clean): the system fields kept in the document (5 tests fail), only `_id` left
+out (5), the old validator with the system fields added (3).
 
 ### §4 (the system-field mismatch's display)
 

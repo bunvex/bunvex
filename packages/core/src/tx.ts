@@ -9,7 +9,6 @@
 import { MAX_CANDIDATE_REVISIONS, MAX_QUERY_TERMS, tokenize } from "@bunvex/search";
 import {
   type CommitTsPlaceholder,
-  checkValue,
   commitTsPlaceholder,
   copyValue,
   decodeId,
@@ -75,6 +74,7 @@ import {
   TOO_MANY_OPERATORS,
 } from "./query-ops.ts";
 import {
+  checkDocument,
   checkIdentifier,
   type Doc,
   type IndexDef,
@@ -1738,7 +1738,7 @@ export class Tx {
     const inRoot = t.namespace === undefined;
     const dv = next && inRoot && this.docValidators?.get(t.name);
     if (dv) {
-      const msg = checkValue(dv, next as unknown as Value, this.schemaTables ?? ((n) => this.catalog.publicNameOf(n)));
+      const msg = checkDocument(dv, next, this.schemaTables ?? ((n) => this.catalog.publicNameOf(n)));
       if (msg)
         throw new Error(
           `Failed to insert or update a document in table "${t.name}" because it does not match the schema: ${msg}`,
@@ -1746,7 +1746,7 @@ export class Tx {
     }
     const pv = next && inRoot && !this.pendingViolation && this.pendingValidators?.get(t.name);
     if (pv) {
-      const msg = checkValue(pv, next as unknown as Value, (n) => this.catalog.publicNameOf(n));
+      const msg = checkDocument(pv, next, (n) => this.catalog.publicNameOf(n));
       if (msg)
         this.pendingViolation = {
           table: t.name,
@@ -1758,11 +1758,7 @@ export class Tx {
         const sv = c.validators.get(t.name);
         const key = `${c.schemaId}\u0000${t.name}`;
         if (!sv || this.stagedViolations.has(key)) continue;
-        const msg = checkValue(
-          sv,
-          next as unknown as Value,
-          this.schemaTables ?? ((n) => this.catalog.publicNameOf(n)),
-        );
+        const msg = checkDocument(sv, next, this.schemaTables ?? ((n) => this.catalog.publicNameOf(n)));
         if (msg)
           this.stagedViolations.set(key, {
             schemaId: c.schemaId,
