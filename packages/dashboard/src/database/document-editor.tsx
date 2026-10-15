@@ -3,28 +3,37 @@
 // Convex's document editor (STUDY-12 D9).
 import { Button } from "@bunvex/ui/components/button";
 import { CodeEditor } from "@bunvex/ui/components/code-editor";
-import { useQueryClient } from "@tanstack/react-query";
+import { cn } from "@bunvex/ui/lib/utils";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
-import { dashboardKeys } from "../data/queries.ts";
+import { dashboardKeys, schemaQuery } from "../data/queries.ts";
 import { type Document, toDataSourceError, type Value } from "../data-source.ts";
-import { formatLiteral, parseLiteral, UNSET } from "./literal.ts";
+import { formatLiteral, parseLiteralLocated, UNSET } from "./literal.ts";
+import { issueDisplay, type SchemaIssue, schemaIssues, type TableSchema, tableSchema } from "./schema-check.ts";
 
 /** The document's own fields: what an editor shows and a replace writes. */
 const fieldsOf = (doc: Document) =>
   Object.fromEntries(Object.entries(doc).filter(([k]) => !k.startsWith("_"))) as Record<string, Value>;
 
-type Check = { ok: true; fields: Record<string, Value> } | { ok: false; error: string; offset?: number };
+type Check =
+  | { ok: true; fields: Record<string, Value>; issues: SchemaIssue[] }
+  | { ok: false; error: string; offset?: number };
 
-export function checkDocument(text: string): Check {
-  const r = parseLiteral(text);
-  if (!r.ok) return r;
+/** The document's fields, and where they do not fit the table's declared type (`schema`, when it has one). */
+export function checkDocument(text: string, schema: TableSchema | null = null): Check {
+  const r = parseLiteralLocated(text);
+  if (!r.ok) return { ok: false, error: r.error, offset: r.offset };
   const v = r.value;
   if (v === UNSET || typeof v !== "object" || v === null || Array.isArray(v) || "$integer" in v || "$bytes" in v)
     return { ok: false, error: "A document is an object: { field: value, … }", offset: 0 };
   const system = Object.keys(v).find((k) => k.startsWith("_"));
   if (system) return { ok: false, error: `"${system}" is a system field; it cannot be changed here.` };
-  return { ok: true, fields: v as Record<string, Value> };
+  return {
+    ok: true,
+    fields: v as Record<string, Value>,
+    issues: schema ? schemaIssues(schema.validator, v, r.place) : [],
+  };
 }
 
 export function DocumentEditor(props: {
@@ -34,8 +43,10 @@ export function DocumentEditor(props: {
   /** Told when the text starts or stops differing from the document (and false when the editor closes). */
   onDirtyChange?: (dirty: boolean) => void;
 }) {
-  const { source, scope } = useQueryScope();
+  const qs = useQueryScope();
+  const { source, scope } = qs;
   const queryClient = useQueryClient();
+  const { data: schema } = useQuery(schemaQuery(qs));
   const [initial] = useState(() => formatLiteral(fieldsOf(props.doc), "  "));
   const [text, setText] = useState(initial);
   const dirty = text !== initial;
@@ -47,10 +58,13 @@ export function DocumentEditor(props: {
   const [saving, setSaving] = useState(false);
   const hintId = useId();
   const checkId = useId();
-  const check = checkDocument(text);
+  const declared = tableSchema(schema, props.table);
+  const check = checkDocument(text, declared);
+  const shown = issueDisplay(check.ok ? check.issues : [], declared?.enforced ?? false);
+  const blocked = !check.ok || shown.error !== undefined;
 
   const save = async () => {
-    if (!check.ok) return;
+    if (!check.ok || blocked) return;
     setSaving(true);
     setError(undefined);
     try {
@@ -88,13 +102,19 @@ export function DocumentEditor(props: {
           setText(t);
           setError(undefined);
         }}
-        error={check.ok ? undefined : { message: check.error, offset: check.offset }}
+        error={check.ok ? shown.error : { message: check.error, offset: check.offset }}
+        moreErrors={shown.moreErrors}
+        warnings={shown.warnings}
         describedBy={`${hintId} ${checkId}`}
         onSubmit={() => void save()}
         onCancel={() => props.onDone(false)}
       />
-      <p id={checkId} aria-live="polite" className="min-h-5 text-sm text-destructive">
-        {!check.ok && check.error}
+      <p
+        id={checkId}
+        aria-live="polite"
+        className={cn("min-h-5 text-sm", shown.note ? "text-warning" : "text-destructive")}
+      >
+        {!check.ok ? check.error : (shown.error?.message ?? shown.note)}
       </p>
       {error && (
         <p role="alert" className="text-sm text-destructive">
@@ -105,7 +125,7 @@ export function DocumentEditor(props: {
         <Button type="button" variant="outline" onClick={() => props.onDone(false)}>
           Cancel
         </Button>
-        <Button type="submit" disabled={saving || !check.ok}>
+        <Button type="submit" disabled={saving || blocked}>
           {saving ? "Saving…" : "Save"}
         </Button>
       </div>

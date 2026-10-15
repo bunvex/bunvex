@@ -517,7 +517,7 @@ describe("bunvex dev's local dashboard, and bunvex dashboard", () => {
     expect(check.status).toBe(200);
 
     // the CLI's links (DV-477): dev's line after writing .env.local, and export's to the snapshots page
-    expect(r.err).toContain(`View the bunvex dashboard at ${url}`);
+    expect(r.err.join("\n")).toContain(`View the bunvex dashboard at ${url}\n`);
     const exported = io(dir, env);
     expect(await exportCommand(["--path", "snapshot.zip"], exported.it, { pollMs: 20 })).toBe(0);
     expect(exported.err).toContain(`Export is available at ${url}settings/snapshots`);
@@ -632,7 +632,7 @@ describe("the local dashboard when its version cannot be had (DV-486: a warning,
     );
     expect(readDashboardPort(dev.dir)).toBeNull();
     // no dashboard, no link (DV-477): dev's line about it is left out
-    expect(dev.r.err.some((l) => l.startsWith("View the bunvex dashboard"))).toBe(false);
+    expect(dev.r.err.some((l) => l.includes("View the bunvex dashboard"))).toBe(false);
     const ask = io(dev.dir, dev.env);
     expect(await dashboardCommand(["--no-open"], ask.it)).toBe(0);
     expect(ask.out).toEqual([]);

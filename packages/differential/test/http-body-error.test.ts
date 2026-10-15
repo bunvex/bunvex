@@ -9,7 +9,7 @@
 //
 // The routes under `/chunk/` stream a chunk that is not bytes (a string, a number, an object, …), nothing (null,
 // undefined) or bytes of another kind (an ArrayBuffer, a DataView, a Uint16Array), in the handler's turn or after the
-// head (STUDY-161 §15), compared the same way.
+// head (STUDY-161 §15), compared the same way, the error read in Convex's words (bunvex has its own, DV-529).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { connect } from "node:net";
@@ -222,8 +222,23 @@ describe.skipIf(!ready)("a chunk that is not bytes, against Convex's backend", (
   test("in the handler's turn: the 500; after the head: a clean end and an error line; nothing is no chunk", async () => {
     const c = await play(convex, "/chunk/", CHUNKS);
     const b = await play(bunvex, "/chunk/", CHUNKS);
-    expect(b.answers).toEqual(c.answers);
-    expect(b.log).toEqual(c.log);
+    // DV-529: bunvex words the error its own way, with the same type names. Everything else is compared as is: each
+    // message read in serde_v8's words, and every bunvex one must read back.
+    const words = JSON.stringify(b);
+    const read = words
+      .replaceAll(
+        /HTTP action response body chunks must be an ArrayBuffer or a view of one, got ([^"\\]+)/g,
+        "serde_v8 error: invalid type; expected: buffer, got: $1",
+      )
+      .replaceAll(
+        "HTTP action response body chunks must not be a resizable ArrayBuffer or a view of one",
+        "serde_v8 error: can't create slice from resizable ArrayBuffer",
+      );
+    expect(read).not.toContain("HTTP action response body chunks");
+    expect(words).not.toContain("serde_v8");
+    const seen = JSON.parse(read) as typeof b;
+    expect(seen.answers).toEqual(c.answers);
+    expect(seen.log).toEqual(c.log);
     // What the oracle shows, spelled out.
     const refused = (got: string) => {
       const message = `Uncaught Error: serde_v8 error: ${got.startsWith("can't") ? got : `invalid type; expected: buffer, got: ${got}`}`;

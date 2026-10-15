@@ -15,6 +15,9 @@ export const useDataSource = () => useQueryScope().source;
 /** The host's trace UI URL template (`DashboardProps.traceUrl`, STUDY-131 AD-27); undefined when unset. */
 export const TraceUrlContext = createContext<string | undefined>(undefined);
 
+/** The declarations the custom test query is typed against, as the host loads them (STUDY-162); none: syntax only. */
+export const QueryTypesContext = createContext<(() => Promise<Record<string, string>>) | undefined>(undefined);
+
 /**
  * A trace's address in the host's trace UI: `{traceId}` and `{spanId}` in the template are replaced; a template
  * without `{traceId}` gets the trace id appended (a base URL such as Jaeger's `…/trace/`). Undefined when no
