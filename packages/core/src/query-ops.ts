@@ -2,6 +2,7 @@
 // crates/database/src/query/{filter,limit}.rs): `filter` and `limit`, applied in the order the app chained
 // them. Each wraps the stream before it, so `.limit(5).filter(f)` keeps those of the first five that pass,
 // and a limit that is full ends the whole stream before anything more is read.
+import { identifierError } from "@bunvex/values";
 import { type ExpressionOrValue, expressionJson, passes } from "./filter.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import type { Doc } from "./schema.ts";
@@ -183,3 +184,19 @@ export class Pipeline {
 
 // Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
 opaqueToInspect(Pipeline);
+
+/**
+ * Why a query's `table.index` name does not parse, as Convex's `IndexName::from_str` (crates/common/src/types/
+ * index.rs) words it, or null: a bad table or a bad index descriptor are both its `invalid_table_name` (the
+ * descriptor's error is wrapped in it too); a third component is too many.
+ */
+export function indexNameError(full: string): string | null {
+  const parts = full.split(".");
+  const invalid = (part: string) =>
+    `Invalid table name: "${part}". Identifiers must start with a letter and can only contain letters, digits, and underscores.`;
+  if (identifierError(parts[0]!) !== null) return invalid(parts[0]!);
+  if (parts.length < 2) return `Insufficient components in index name ${full}`;
+  if (identifierError(parts[1]!) !== null) return invalid(parts[1]!);
+  if (parts.length > 2) return `Too many components in index name ${full}`;
+  return null;
+}

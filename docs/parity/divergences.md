@@ -467,7 +467,9 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-None as of 2026-10-14.
+| ID | bunvex | Convex | Observable | Why | Recommendation | Source |
+|---|---|---|---|---|---|---|
+| DV-520 | A function's analyzed line (`modules:listForAllComponents`' `lineno`, the order of a file's functions in the dashboard) is Convex's arithmetic over Bun.build's output, which can land on another line than Convex's (`messages:secret`: 37 against 39) | the token after the handler's bundled position, 0-based lookup with 1-based numbers, over esbuild's printed bundle (`minifySyntax`, `keepNames`) | no (dashboard) | Convex's number is esbuild's printer's; matching it needs esbuild in the CLI | (a) accept | [STUDY-161 Q1](../study/STUDY-161-engine-messages.md#9-divergences) |
 
 DV-485 (STUDY-31 §10) was decided by the owner (2026-10-14: accept, option (a): 32 microtask turns) and is in [Decided divergences](#decided-divergences).
 

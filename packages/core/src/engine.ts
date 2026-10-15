@@ -4,7 +4,6 @@
 
 import { hostname } from "node:os";
 import {
-  checkValue,
   fromJsonValue,
   type GenericValidator,
   hasCommitTs,
@@ -145,12 +144,14 @@ import { Retention, type RetentionOptions } from "./retention.ts";
 import { type Runtime, realRuntime } from "./runtime.ts";
 import { SCHEDULED_JOBS_INDEXES } from "./scheduled-jobs.ts";
 import {
+  checkDocument,
   type DeclaredTable,
   type Doc,
   declaredTables,
   documentValidator,
   MAX_VECTOR_DIMENSIONS,
   maintainedIndexes,
+  pushOrder,
   referencedTables,
   type SchemaDefinition,
   SYSTEM_INDEXES,
@@ -913,7 +914,7 @@ export class Engine {
       { name: EXTERNAL_DEPS_PACKAGES_TABLE, indexes: {}, document: v.any() },
       ...EMPTY_CLOUD_SYSTEM_TABLES.map((name) => ({ name, indexes: {}, document: v.any() })),
     ];
-    return [...systemTables, ...declaredTables(schema).values()];
+    return [...systemTables, ...pushOrder(declaredTables(schema).values())];
   }
 
   /**
@@ -2617,7 +2618,7 @@ export class Engine {
       if (this.closed || !this.catalog.tables.has(tableName)) return;
       const page = await this.query(async (db) => db.query(tableName).paginate({ numItems: 256, cursor }));
       for (const doc of page.page) {
-        const msg = checkValue(validator, doc as unknown as Value, (n) => this.catalog.publicNameOf(n));
+        const msg = checkDocument(validator, doc, (n) => this.catalog.publicNameOf(n));
         if (msg) {
           await this.runMutation(
             (db) =>
@@ -2702,7 +2703,7 @@ export class Engine {
         if (!stillPending()) return;
         const page = await this.query(async (db) => db.query(t.name).paginate({ numItems: 256, cursor }));
         for (const doc of page.page) {
-          const msg = checkValue(t.validator, doc as unknown as Value, (n) => this.catalog.publicNameOf(n));
+          const msg = checkDocument(t.validator, doc, (n) => this.catalog.publicNameOf(n));
           if (msg) {
             await this.failSchemaPush(
               schemaId,

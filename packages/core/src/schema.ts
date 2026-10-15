@@ -4,6 +4,7 @@
 // resolves them into its own catalog (catalog.ts, STUDY-04). Every table also gets Convex's two system
 // indexes, `by_id` and `by_creation_time`.
 import {
+  checkValue,
   displayValidator,
   type GenericId,
   type GenericValidator,
@@ -13,6 +14,7 @@ import {
   rawValueSize,
   type Validator,
   type ValidatorJSON,
+  type Value,
   type VFloat64,
   type VId,
   type VObject,
@@ -616,6 +618,23 @@ function declareTables(tables: GenericSchema): Map<string, DeclaredTable> {
   return out;
 }
 
+/**
+ * The schema's tables in the order a push creates the new ones, as Convex's start of a push: its added indexes first,
+ * in index-name order (`prepare_new_and_mutated_indexes`), each creating its table if missing, so the tables with any
+ * index (database, staged, text or vector) by name; then `submit_pending` the rest, by name (`BTreeMap` order, which on
+ * ASCII identifiers is JavaScript's string order). New tables take their numbers in this order (STUDY-161 §7).
+ */
+export function pushOrder(tables: Iterable<DeclaredTable>): DeclaredTable[] {
+  const indexed = (t: DeclaredTable) =>
+    Object.keys(t.indexes).length +
+      Object.keys(t.searchIndexes ?? {}).length +
+      Object.keys(t.vectorIndexes ?? {}).length >
+    0;
+  const byName = (a: DeclaredTable, b: DeclaredTable) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  const all = [...tables];
+  return [...all.filter(indexed).sort(byName), ...all.filter((t) => !indexed(t)).sort(byName)];
+}
+
 /** A table definition holding what `table` declares (a schema the engine made, e.g. from a pushed schema's JSON). */
 function tableDefinitionOf(table: DeclaredTable): TableDefinition {
   const t = new TableDefinition(table.document);
@@ -680,13 +699,27 @@ export function defineSchema<Schema extends GenericSchema, StrictTableNameTypes 
   ) as SchemaDefinition<Schema, StrictTableNameTypes> & SchemaValidators<Schema>;
 }
 
-/** A table's validator for its stored documents: the declared one with the system fields added. */
-export function documentValidator(table: string, doc: GenericValidator): GenericValidator | null {
-  const withSystem = (o: GenericValidator) =>
-    v.object({ ...(o as { fields: PropertyValidators }).fields, _id: v.id(table), _creationTime: v.number() });
-  if (doc.kind === "any") return null;
-  if (doc.kind === "object") return withSystem(doc);
-  return v.union(...(doc as { members: GenericValidator[] }).members.map(withSystem));
+/**
+ * A table's validator for its stored documents: the declared one, or null for `v.any()`. It never names the system
+ * fields: `checkDocument` leaves them out of the document, as Convex's `DocumentSchema::check_value`.
+ */
+export function documentValidator(_table: string, doc: GenericValidator): GenericValidator | null {
+  return doc.kind === "any" ? null : doc;
+}
+
+/**
+ * A stored document against its table's validator (`documentValidator`), as Convex's `DocumentSchema::check_value`:
+ * every top-level field that starts with `_` left out (`filter_system_fields`), so the error's display shows neither
+ * `_id` nor `_creationTime`. The violation's message, or null.
+ */
+export function checkDocument(
+  validator: GenericValidator,
+  doc: Record<string, unknown>,
+  tableOf: (n: number) => string | undefined,
+): string | null {
+  const fields: Record<string, unknown> = {};
+  for (const k of Object.keys(doc)) if (!k.startsWith("_")) fields[k] = doc[k];
+  return checkValue(validator, fields as Value, tableOf);
 }
 
 /** A field's value at a dotted path (`a.b`), or undefined when any step is missing. */

@@ -38,6 +38,7 @@ Key bunvex facts behind the statuses:
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | `.withIndex(name)` with no range (whole index) | server/query.ts, impl/query_impl.ts | done | |
+| A query's table and index when it starts: names parsed, the index looked up | common/src/json/query.rs (`Query::try_from`), types/index.rs (`IndexName::from_str`), indexing/src/index_registry.rs (`index_not_found_error`) | done (STUDY-161 §5) | Checked when the query starts, after its operators: a full scan's table as an identifier, an index's `table.index` as an index name (``Invalid argument `query` for `queryStream` `` / `queryPage`, Convex's words); then `Index <table>.<index> not found.` for an index of a table that does not exist (even `by_id` and `by_creation_time`; a search index too) or that the table lacks. A full scan of a missing table is empty; the error depends on `_tables`, so it runs again once the table is created. |
 | `.withIndex(name, q => …)` range expression | server/index_range_builder.ts | done (#10) | `compileRange`: Convex's `IndexRange::compile` rules and messages (distinct eq fields, one lower and one upper bound on one field, a prefix of the index fields in order). |
 | IndexRangeBuilder `eq(field, value)`, in index-field order | index_range_builder.ts | done (#10) | Field names checked against the index, in order. |
 | IndexRangeBuilder `gt`/`gte` then `lt`/`lte` on the next field | index_range_builder.ts | done (#10) | Both bounds on the same field, after the eq prefix; Convex's errors otherwise. |
@@ -84,10 +85,10 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `db.insert(table, value)` returns `Id<table>` | server/database.ts, impl/database_impl.ts | done (#21, #29) | Values validated at the call, and against the schema. |
+| `db.insert(table, value)` returns `Id<table>` | server/database.ts, impl/database_impl.ts | done (#21, #29) | Values validated at the call, and against the schema. Argument errors in Convex's words and order (STUDY-161 §1, §2): a missing value (`Must provide arg 2 …`), then the value (nesting, then "Value must be an Object", `db.patch` / `db.replace` too), then the table's name (``Invalid argument `table` for `db.insert`: `` and the identifier's own message, Rust's display of the character). |
 | A write to a table that does not exist creates it (in the same transaction); reads of a missing table return nothing | database/src/bootstrap_model/table.rs (`insert_table_metadata`) | done (#33) | Reads depend on `_tables`, so they re-run when the table is created. |
 | `insert` rejects system tables (names starting with `_`) | impl/database_impl.ts | done (#6) | "System table … is not accessible here." |
-| `insert` assigns `_id` and `_creationTime` and rejects caller-supplied values that don't match | crates/common/src/document.rs | done (#21) | A caller-supplied `_id` / `_creationTime` that does not match throws Convex's message; other `_`-prefixed fields are refused. |
+| `insert` assigns `_id` and `_creationTime` and rejects caller-supplied values that don't match | crates/common/src/document.rs | done (#21) | A caller-supplied `_id` / `_creationTime` that does not match throws Convex's message, in its display (STUDY-161 §4: the `_id` field as a value; the value being written, with its `_id`, for the creation time; `patch` and `replace` too); other `_`-prefixed fields are refused. |
 | `_creationTime` is strictly increasing within a transaction, so inserts sort in insert order | crates/database/src/transaction.rs (`next_creation_time`) | done | `nextUp()` float increment, on main. |
 | Convex-format document ids (base32; table number plus random bytes plus checksum; ~31–37 chars) | crates/value/src/id_v6.rs | done (#7) | Convex's format and generator exactly (STUDY-01 option C). Legacy v4/v5 formats are not accepted by `normalizeId`, since bunvex has no legacy data. |
 | `db.patch(table, id, partial)`: shallow merge | server/database.ts | done (#21) | Validation, `undefined` removes a field, system fields as Convex. |
@@ -100,7 +101,7 @@ Key bunvex facts behind the statuses:
 | `db.vars.commitTs` placeholder, resolved at commit to an int64 in commit order, plus `v.commitTs()` | server/database.ts; values/value.ts (`CommitTsPlaceholder`) | done (STUDY-53) | Resolved in documents, index entries, the result and session replays; read back as the placeholder; `i64::MAX` before the commit; refused in client and scheduled arguments and filters with Convex's messages; a nested query is a reader (STUDY-53 PR 2). |
 | Writes are atomic: all or none, and a throwing mutation commits nothing | crates/database | done | |
 | Optimistic concurrency with automatic retry on conflict | crates/database; knobs `UDF_EXECUTOR_OCC_MAX_RETRIES` = 4 | done (STUDY-21) | 4 retries with 100 ms – 2 s full-jitter backoff. After them comes `OptimisticConcurrencyControlFailure` with Convex's message (without its docs link); HTTP 503. |
-| Writes are validated against the schema when `schemaValidation` is on | crates/common/src/schemas | done (#29) | |
+| Writes are validated against the schema when `schemaValidation` is on | crates/common/src/schemas | done (#29) | As Convex's `DocumentSchema::check_value` (STUDY-161 §3): the document without its top-level `_` fields against the schema's own validator, so an error shows neither `_id` nor `_creationTime` (writes, pending and staged validators, a push's walk). |
 
 ### 5. Function builders and registration
 

@@ -181,6 +181,7 @@ import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { ServerMetrics } from "./server-metrics.ts";
 import { setServiceCallContext } from "./service-tokens.ts";
 import type { FileStorage, StorageMeter } from "./storage.ts";
+import { UnparsedSystemArgs } from "./system-args.ts";
 import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
 import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB, type UsageMeter } from "./usage-limits.ts";
 import { bodyLength } from "./web-response.ts";
@@ -1947,6 +1948,8 @@ export class Functions {
    * check's display. A client sees `Uncaught Error: <check>`, with no frames (the system modules show none).
    */
   private systemArgs(args: Record<string, unknown> | unknown, validators: Record<string, GenericValidator>) {
+    // Arguments its reader refused (STUDY-161 §6): Convex's wrapper reads them first, after the access check.
+    if (args instanceof UnparsedSystemArgs) throw systemArgsError(args.message);
     const a = args === undefined ? {} : args;
     if (!isSimpleObject(a))
       throw systemArgsError(
@@ -1954,8 +1957,12 @@ export class Functions {
       );
     // As Convex's `op_validate_args` (4991db1): an array over 8192 elements or an object over 1024 fields is a
     // user error before the validator ("Uncaught Error: Invalid arguments: …").
-    const { tooBig } = measureRawValue([a as Value], Number.POSITIVE_INFINITY);
+    // Past 64 levels (the backend's parse no longer refuses them for a system function, STUDY-161 §6) it is
+    // that op's error too; at 64, `[args]` is 65 and the validator's own measure refuses it, without the prefix.
+    const { tooBig, nesting } = measureRawValue([a as Value], Number.POSITIVE_INFINITY);
+    if (nesting > MAX_VALUE_NESTING + 1) throw systemArgsError(`Invalid arguments: ${TOO_NESTED_MESSAGE}`);
     if (tooBig !== undefined) throw systemArgsError(`Invalid arguments: ${tooBig}`);
+    if (nesting > MAX_VALUE_NESTING) throw systemArgsError(TOO_NESTED_MESSAGE);
     const msg = checkValue(v.object(validators), a as Value, this.tableOf);
     if (msg) throw systemArgsError(`${msg}\n`);
     return a as never;

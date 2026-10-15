@@ -59,7 +59,14 @@ describe("tables are created on first insert, as Convex (STUDY-14)", () => {
     const { e } = await engine();
     const q = (db: any) => db.query("later").collect();
     expect(await e.query(q, "k")).toEqual([]);
-    expect(await e.query((db) => db.query("later").withIndex("by_anything").first())).toBeNull();
+    // An index of it is not found (Convex's `IndexNotFoundError`), even `by_creation_time`.
+    let error: unknown;
+    try {
+      await e.query((db) => db.query("later").withIndex("by_creation_time").first());
+    } catch (err) {
+      error = err;
+    }
+    expect((error as Error).message).toBe("Index later.by_creation_time not found.");
     await e.mutation((db) => db.insert("later", { a: 1 }));
     expect(await e.query(q, "k")).toHaveLength(1); // the cached [] was invalidated by the creation
   });
@@ -96,7 +103,9 @@ describe("tables are created on first insert, as Convex (STUDY-14)", () => {
 
   test("names follow the identifier rule", async () => {
     const { e } = await engine();
-    await expect(e.mutation((db) => db.insert("bad-name", {}))).rejects.toThrow("Invalid table name");
+    await expect(e.mutation((db) => db.insert("bad-name", {}))).rejects.toThrow(
+      "Invalid argument `table` for `db.insert`: Identifier bad-name has invalid character '-'",
+    );
     await expect(e.mutation((db) => db.insert("_mine", {}))).rejects.toThrow(
       "System tables (prefixed with `_`) are read-only.",
     );
