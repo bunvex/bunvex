@@ -1,6 +1,6 @@
 # STUDY-163 — Small dashboard and CLI parity items
 
-- **Status:** approved by the owner (2026-10-15: match Convex); §1–§3 implemented, §4 planned
+- **Status:** approved by the owner (2026-10-15: match Convex); §1–§4 implemented
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend; Convex's CLI as npm's `convex@1.46.0`
 - **Related:** STUDY-149 (the dashboard on real data), STUDY-12 (the dashboard), STUDY-146 / DV-477 (the CLI's
   dashboard links), DV-479 (the dashboard contract follows Convex)
