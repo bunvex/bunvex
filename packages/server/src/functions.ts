@@ -176,6 +176,7 @@ import {
 import { withNodeProcessErrors } from "./node-process-errors.ts";
 import { setOperationTracker } from "./pending-ops.ts";
 import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearchQuery } from "./registration.ts";
+import { roomsCtx } from "./rooms/ctx.ts";
 import { type AnyRoomDef, isRoomDef, type RoomGate } from "./rooms/define.ts";
 import type { RoomHub } from "./rooms/hub.ts";
 import type { RoutableMethod } from "./router.ts";
@@ -675,6 +676,12 @@ function trackedCtx(ctx: ActionCtx): ActionCtx {
       runAt: wrap("schedule", s.runAt?.bind(s)),
       cancel: wrap("cancel_job", s.cancel?.bind(s)),
     },
+    rooms: {
+      ...c.rooms,
+      broadcast: wrap("rooms.broadcast", c.rooms.broadcast),
+      members: wrap("rooms.members", c.rooms.members),
+    },
+    presence: { ...c.presence, list: wrap("presence.list", c.presence.list) },
     storage: {
       ...st,
       getUrl: wrap("storageGetUrl", st.getUrl),
@@ -1693,6 +1700,8 @@ export class Functions {
             // `parent_scheduled_job` down the call tree): what it schedules after that job is canceled is
             // born canceled, and it may not cancel that job.
             scheduler: makeScheduler(this, { db, job: job ?? db.request?.scheduledFunctionId ?? undefined }),
+            // Sent once the mutation committed; dropped if it throws or retries (AD-42).
+            rooms: roomsCtx(this, (fn) => db.afterCommit(fn), false).rooms,
             storage: this.fileStorage?.writer(db) ?? noStorage,
             runQuery: nested.runQuery,
             runMutation: nested.runMutation,
@@ -2366,6 +2375,7 @@ export class Functions {
     // Pushed code's handler: its context's wrapper for nested calls (`installNestedCalls`).
     const nestedCalls = (handler as { [NESTED_CALLS]?: NestedCalls } | undefined)?.[NESTED_CALLS];
     const inContext = nestedCalls !== undefined;
+    const r = roomsCtx(this, null, true);
     const ctx = trackedCtx({
       auth: {
         getUserIdentity: async () => {
@@ -2418,6 +2428,8 @@ export class Functions {
         }),
       ),
       storage: cutOffWithAction(this.fileStorage?.actionWriter(storageMeter) ?? noStorage),
+      rooms: cutOffWithAction(r.rooms),
+      presence: cutOffWithAction(r.presence as NonNullable<typeof r.presence>),
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
         checkActionAlive();
         // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
