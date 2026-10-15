@@ -224,12 +224,12 @@ test("a chunk that is not bytes: the 500 in the handler's turn; after the head, 
     ["/chunk-string", "string"],
     ["/chunk-object", "unknown"],
   ]) {
-    const message = `Uncaught Error: serde_v8 error: invalid type; expected: buffer, got: ${got}`;
+    const message = `Uncaught Error: HTTP action response body chunks must be an ArrayBuffer or a view of one, got ${got}`;
     const r = await fetch(`${t.site}${path}`);
     expect(r.status).toBe(500);
     // Raised by the runtime: no frames.
     const { code, trace } = (await r.json()) as { code: string; trace: string };
-    expect([code.replace(/^\[Request ID: \w+\] /, ""), trace]).toEqual([`Server Error: ${message}`, message]);
+    expect([code.replace(/^\[Request ID: \w+\] /, ""), trace]).toEqual([`Server Error: ${message}`, `${message}\n`]);
     const c = await t.logged(path!);
     expect([c.success ?? null, c.error]).toEqual([null, `${message}\n`]);
   }
@@ -239,7 +239,7 @@ test("a chunk that is not bytes: the 500 in the handler's turn; after the head, 
   const c = await t.logged("/chunk-late-number");
   expect([c.success, c.error ?? null]).toEqual([{ status: "200" }, null]);
   expect(t.consoleEvents.filter((e) => e.system_code === "error:httpAction").map((e) => e.message)).toEqual([
-    "Uncaught Error: serde_v8 error: invalid type; expected: buffer, got: Number\n",
+    "Uncaught Error: HTTP action response body chunks must be an ArrayBuffer or a view of one, got Number\n",
   ]);
 });
 

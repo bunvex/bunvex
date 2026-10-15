@@ -22,6 +22,9 @@ import { listenForEmbeddedCredentials, readAllowedOrigins } from "./login/embedd
 import { type HostSession, initialSession, rememberDemo } from "./login/host-session.ts";
 import { readPrefill } from "./login/prefill.ts";
 
+/** The custom test query's declarations (STUDY-162), a chunk of their own, fetched the first time it opens. */
+const loadQueryTypes = () => import("virtual:bunvex-query-types").then((m) => m.default);
+
 // ?latency=300&fail=0.2&writes=500 in the URL exercises loading, errors and live data (knobs.ts);
 // ?demo=1 opens the demo data without the sign-in page.
 const params = takeDevKnobs({ location, history, storage: sessionStorage });
@@ -161,6 +164,7 @@ function App() {
       }
       devtools={import.meta.env.DEV}
       traceUrl={import.meta.env.VITE_BUNVEX_TRACE_URL}
+      queryTypes={loadQueryTypes}
       {...(session.kind === "deployment" && { deploymentUrl: session.deploymentUrl })}
     />
   );

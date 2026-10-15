@@ -428,6 +428,39 @@ describe("the dashboard app on a live deployment", () => {
     await close();
   });
 
+  test("the custom test query knows the deployment's types: a type error underlined, completions, still run (STUDY-162)", async () => {
+    const { page, errors, close } = await signedIn("/functions?function=messages:list");
+    await page.getByRole("heading", { level: 1, name: "list" }).waitFor();
+    await page.getByRole("button", { name: "Run", exact: true }).click();
+    const runner = page.getByRole("region", { name: "Run a function" });
+    await runner.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: "Custom test query" }).click();
+    await runner.getByRole("textbox", { name: "Test query" }).focus();
+    // a document's field of the wrong type is a type error, underlined (once the declarations have loaded)
+    await typeInEditor(
+      page,
+      'export default query({ handler: async (ctx) => { const n: number = (await ctx.db.query("messages").first())!.body; return n; } });',
+    );
+    await runner.locator(".squiggly-error").first().waitFor({ timeout: 30_000 });
+    // as Convex's: types are erased, the query runs anyway
+    await runner.getByRole("button", { name: "Run test query" }).click();
+    await runner.getByText(/^Succeeded in/).waitFor();
+    // a correct query has none
+    await runner.getByRole("textbox", { name: "Test query" }).focus();
+    await typeInEditor(
+      page,
+      'export default query({ handler: async (ctx) => (await ctx.db.query("messages").first())?.body ?? "" });',
+    );
+    await until(async () => (await runner.locator(".squiggly-error").count()) === 0, "no type error", 15_000);
+    // a table name completes from the schema
+    await typeInEditor(page, 'export default query({ handler: async (ctx) => ctx.db.query("');
+    await page.keyboard.press("Control+Space");
+    await page.locator(".suggest-widget").getByText("messages", { exact: true }).first().waitFor();
+    await page.keyboard.press("Escape");
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test("Logs: an execution's line arrives live (the long poll)", async () => {
     const { page, errors, close } = await signedIn("/logs");
     await heading(page, "Logs");
