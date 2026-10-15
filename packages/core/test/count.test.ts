@@ -39,7 +39,7 @@ test("a missing table counts 0; a bad table name is an argument error", async ()
   const e = await engine();
   expect(await e.query((db) => db.query("nothing_here").count())).toBe(0);
   await expect(e.query((db) => db.query("bad-name").count())).rejects.toThrow(
-    'Invalid argument `table` for `db.count`: Invalid table name "bad-name"',
+    "Invalid argument `table` for `db.count`: Identifier bad-name has invalid character '-': Identifiers can only contain alphanumeric characters or underscores",
   );
 });
 

@@ -175,7 +175,7 @@ describe("writes by id", () => {
     const e = await engine();
     await e.mutation(async (db) => {
       expect(await message(db.insert("items", 5 as never))).toBe(
-        "Invalid argument `value` for `db.insert`: expected an object",
+        "Invalid argument `value` for `db.insert`: Value must be an Object",
       );
       expect(await message(db.insert("items", { a: new Array(8193).fill(0) }))).toStartWith(
         "Invalid argument `value` for `db.insert`: Array length is too long",

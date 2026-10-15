@@ -17,6 +17,7 @@ import {
   encodeId,
   fromJsonValue,
   type GenericValidator,
+  identifierError,
   isCommitTsPlaceholder,
   isSimpleObject,
   keyBytesLength,
@@ -75,7 +76,6 @@ import {
   TOO_MANY_OPERATORS,
 } from "./query-ops.ts";
 import {
-  checkIdentifier,
   type Doc,
   type IndexDef,
   indexKey,
@@ -384,7 +384,8 @@ function extractCommitTs(
     const out = value.map((x, i) => extractCommitTs(x, max, method, [...at, i], paths).value);
     return { value: out, paths };
   }
-  if (value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+  // A plain object of any realm: a pushed module's objects are its context's.
+  if (isSimpleObject(value)) {
     if (at.length >= max) throw tooNestedWrite(method);
     const out: Record<string, unknown> = {};
     for (const [k, x] of Object.entries(value)) out[k] = extractCommitTs(x, max, method, [...at, k], paths).value;
@@ -859,7 +860,6 @@ export class Tx {
 
   /** Create table `name` in this transaction: the next free Convex number, a fresh tablet, system indexes. */
   private async createTable(name: string): Promise<TableDef> {
-    checkIdentifier("table", name);
     if (name.startsWith("_")) throw new Error(`Invalid table name "${name}": names starting with "_" are reserved.`);
     this.systemDepth++;
     try {
@@ -1812,11 +1812,15 @@ export class Tx {
     // Convex's `insert` refuses a system table first, before it reads the value (`database_impl.ts`).
     if (typeof table === "string" && table.startsWith("_") && !this.systemAccess)
       throw new Error(SYSTEM_TABLE_MESSAGES.insert);
+    if (fields === undefined) throw missingArgument(2, "value", "insert");
     const x = extractCommitTs(fields, this.writtenNesting(), "insert");
     refuseLoneSurrogates(x.value, () => JSON.stringify({ table, value: toJsonValue(x.value as Value) }));
     // Copied before the table is looked up or created: an unsupported value throws at the app's call, its
     // frame still on the stack, as Convex's `insert` serializes it in the app's code before the syscall.
     const copied = copyFields(x.value as Record<string, unknown>, "insert", this.writtenNesting());
+    // Then the table's name (the syscall parses `table` after `value`), in the identifier's own words.
+    const invalid = identifierError(table);
+    if (invalid !== null) throw new Error(`Invalid argument \`table\` for \`db.insert\`: ${invalid}`);
     const t = this.findTable(table, "insert") ?? (await this.createTable(table));
     // Convex's generator (STUDY-01): 14 random bytes, then the transaction's day number (big-endian). The
     // randomness is the real CSPRNG, drawn outside the deterministic execution.
@@ -1847,6 +1851,8 @@ export class Tx {
   /** `db.patch(table, id, fields)`, or Convex's `db.patch(id, fields)`. */
   async patch(a: string, b: string | Record<string, unknown>, c?: Record<string, unknown>) {
     if (c === undefined) {
+      if (a === undefined) throw missingArgument(1, "id", "patch");
+      if (b === undefined) throw missingArgument(2, "value", "patch");
       const table = this.tableOfIdArg(a, "db.patch");
       if (table === undefined) throw new Error(`Update on nonexistent document ID ${a}`);
       return this.patchIn(table, a, b as Record<string, unknown>);
@@ -1855,8 +1861,9 @@ export class Tx {
   }
 
   private async patchIn(table: string, id: string, fields: Record<string, unknown>) {
-    // Convex parses the patch before it reads the document. Each field's value is a value of its own, so the
-    // patch object may be one level deeper than the limit.
+    // Convex parses the patch before it reads the document: an object first (`PatchValue`), then each field's
+    // value, a value of its own, so the patch object may be one level deeper than the limit.
+    if (!isSimpleObject(fields)) throw notAnObject(fields, "patch");
     const x = extractCommitTs(fields, this.writtenNesting() + 1, "patch");
     refuseLoneSurrogates(x.value, () => JSON.stringify({ id, value: patchJson(x.value as Record<string, unknown>) }));
     const t = this.findTable(table);
@@ -1878,6 +1885,8 @@ export class Tx {
   /** Convex's `db.replace(table, id, value)` or `db.replace(id, value)`: every non-system field is replaced. */
   async replace(a: string, b: string | Record<string, unknown>, c?: Record<string, unknown>) {
     if (c === undefined) {
+      if (a === undefined) throw missingArgument(1, "id", "replace");
+      if (b === undefined) throw missingArgument(2, "value", "replace");
       const table = this.tableOfIdArg(a, "db.replace");
       if (table === undefined) throw new Error(`Replace on nonexistent document ID ${a}`);
       return this.replaceIn(table, a, b as Record<string, unknown>);
@@ -2271,10 +2280,9 @@ function countRemovals(pend: [Uint8Array, Doc | null][]) {
  * `maxNesting` levels.
  */
 function copyFields(fields: Record<string, unknown>, method: string, maxNesting: number): Record<string, unknown> {
-  if (!isSimpleObject(fields))
-    throw new TypeError(`Invalid argument \`value\` for \`db.${method}\`: expected an object`);
+  let copied: Value;
   try {
-    return copyValue(fields as Value, maxNesting) as Record<string, unknown>;
+    copied = copyValue(fields as Value, maxNesting);
   } catch (e) {
     // An array's or an object's size is checked where Convex's syscall parses the value (Rust), under its
     // `with_argument_error`; the other checks are its JS side's, with no prefix.
@@ -2285,7 +2293,30 @@ function copyFields(fields: Record<string, unknown>, method: string, maxNesting:
     // copy's recursion.
     throw e instanceof Error && e.constructor === Error ? new Error(e.message) : e;
   }
+  // A value, but not an object: the syscall refuses it once parsed (Convex's `insert` and `replace`).
+  if (!isSimpleObject(fields)) throw notAnObject(fields, method);
+  return copied as Record<string, unknown>;
 }
+
+/**
+ * Convex's refusal of a written value that is not an object (`Value must be an Object`, under the syscall's
+ * argument prefix). Its JS side serialized the value first, so what is not a value at all keeps the serializer's
+ * error; the parse's own limits (sizes) are not reached before the refusal.
+ */
+function notAnObject(value: unknown, method: string): Error {
+  try {
+    copyValue(value as Value, Number.POSITIVE_INFINITY);
+  } catch (e) {
+    // Stryker disable next-line Regex: no other message of `copyValue` contains these words
+    if (!(e instanceof Error && /^(Array length is too long|Object has too many fields) /.test(e.message)))
+      return e instanceof Error && e.constructor === Error ? new Error(e.message) : (e as Error);
+  }
+  return new Error(`Invalid argument \`value\` for \`db.${method}\`: Value must be an Object`);
+}
+
+/** Convex's `validateArg` (impl/validate.ts): an argument the call left out. */
+const missingArgument = (idx: number, name: string, method: string) =>
+  new TypeError(`Must provide arg ${idx} \`${name}\` to \`${method}\``);
 
 /**
  * As Convex's `ResolvedDocument::new` then `must_validate`, for `db.insert` / `db.patch` / `db.replace`: the
@@ -2626,11 +2657,8 @@ class QueryInitializerImpl extends QueryImpl implements TxQuery {
    * leaves the query usable, as Convex's (a call of its own, by table name).
    */
   async count(): Promise<number> {
-    try {
-      checkIdentifier("table", this.table);
-    } catch (e) {
-      throw new Error(`Invalid argument \`table\` for \`db.count\`: ${(e as Error).message}`);
-    }
+    const invalid = identifierError(this.table);
+    if (invalid !== null) throw new Error(`Invalid argument \`table\` for \`db.count\`: ${invalid}`);
     return this.tx.countTable(this.table);
   }
 }

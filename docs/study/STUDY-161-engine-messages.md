@@ -208,7 +208,20 @@ and lists what failed in its *Built* line.
 
 ### §1 and §2 (`db.insert` / `db.patch` / `db.replace` argument errors)
 
-*Built:* not yet.
+*Built:* `identifierError` and `rustDebugChar` in `@bunvex/values` (`identifier.ts`), shared by the engine and the
+server's path and validator parsers (their two partial copies of Rust's character display removed); `Tx.insert`,
+`patch`, `replace` and `count` in `core/src/tx.ts`. Found while building it: a pushed module's objects are its
+context's (another realm), so `extractCommitTs` took a deployed function's value for a leaf: its nesting error lost
+the argument prefix (the copy's own check spoke), and a `db.vars.commitTs` inside such an object was not found. It now
+recognizes a plain object of any realm. Convex's `TypeError` for a top-level function value (its serializer fails in
+`stringifyValueForError`) is not matched: bunvex keeps its unsupported-value message (DV-316's wording).
+Tests: `values/test/identifier.test.ts` (each rule, 17 characters checked against the binary),
+`core/test/write-argument-errors.test.ts` (the messages, their classes and order, `db.table`, `db.count`, a value of
+another realm); `differential/test/write-errors.test.ts` (21 table names, 5 non-object values per write, nesting,
+missing values, on both backends); the old messages' assertions updated (`count`, `implicit-tables`,
+`tx-d-edges`). Sabotage (each restored, `git diff` clean): no table check (the table test fails); Rust's `\u{…}`
+escapes dropped (2 tests); the old "expected an object" (1); the realm check reverted (the realm test); no
+missing-value check (1); a patch's object check after its parse (1); the table checked before the value (2).
 
 ### §3 (the schema error's display)
 

@@ -96,7 +96,9 @@ describe("tables are created on first insert, as Convex (STUDY-14)", () => {
 
   test("names follow the identifier rule", async () => {
     const { e } = await engine();
-    await expect(e.mutation((db) => db.insert("bad-name", {}))).rejects.toThrow("Invalid table name");
+    await expect(e.mutation((db) => db.insert("bad-name", {}))).rejects.toThrow(
+      "Invalid argument `table` for `db.insert`: Identifier bad-name has invalid character '-'",
+    );
     await expect(e.mutation((db) => db.insert("_mine", {}))).rejects.toThrow(
       "System tables (prefixed with `_`) are read-only.",
     );
