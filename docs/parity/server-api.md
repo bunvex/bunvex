@@ -320,7 +320,7 @@ Key bunvex facts behind the statuses:
 | `components.<name>.<module>.<fn>` references (`componentsGeneric`) | server/components/index.ts | missing (DV-55, DV-174) | `components` is generated as `{}` until components exist (STUDY-62). |
 | Component env definitions with validators and env refs | server/components/index.ts (`EnvDefinition`) | missing (DV-55, DV-186) | With components (STUDY-62). |
 | `createFunctionHandle(fnRef)` returns a string handle usable in `runX` / scheduler | server/components/index.ts | done (STUDY-50) | In queries, mutations and actions; Convex's errors. |
-| Isolated per-component tables, functions and data | crates (component registry) | missing | |
+| Isolated per-component tables, functions and data | crates (component registry) | partial (STUDY-152 steps 1–2) | Tables: each component's in its own namespace, as Convex stores them; a store the Convex binary wrote with components opens with them apart (step 1). The registry: `_components` rows in Convex's shape, paths resolved through the tree in the transaction, a new component's namespace with its twelve system tables (step 2). Functions inside a component: steps 3–5. |
 
 ### 18. Errors surfaced to apps
 

@@ -847,7 +847,8 @@ the List view.
 | T5 | The contract's optional `getTopology` / `watchTopology`, needing `viewMetrics` (no new operation) | my call, owner can veto |
 | T6 | Topology events are their own list in the picture (joined, left, leader changed, lease taken or expired, fell behind, caught up), not the audit log: the audit log records what people did, these are what the system did | my call, owner can veto |
 
-Not yet: the server reports none of this (the mock simulates a leader and followers, `nodes`); the store's
+Since 14 Oct 2026 the server reports the single node it is (`/api/debug/topology`, [STUDY-131 §11](STUDY-131-debugging-and-observability.md#11-ad-04s-server-side-the-topology-endpoint-built-2026-10-14));
+not yet: followers (the mock simulates a leader and followers, `nodes`); the store's
 own clock for the lease; per-node logs.
 
 ## 16. Analytics (a bunvex addition, added 1 Oct 2026)

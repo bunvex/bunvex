@@ -2095,6 +2095,59 @@ details above are bunvex's components (STUDY-12 D1).
    event (`packages/core/src/tx.ts` `recordInterval`; `insertAuditLogEvents`), not this function.
 2. PR 3's #3 covers an undeclared field too: the schema's error for an extra field displays the document and the
    validator with the system fields on bunvex, without them on Convex.
+
+### Follow-ups after the plan: hiding the screens a deployment does not offer
+
+On a deployment the sidebar listed Topology, Authentication and Subscriptions, and each opened "This deployment
+does not offer … yet", while an extension the source lacks was already left out (`requires`, UI-01 §26). These
+three are bunvex's own screens (STUDY-12 D1; AD-04, AD-02, AD-25), so this is not a divergence question.
+
+**Convex, for reference** (re-read): its main sidebar is a fixed list (`dc/layouts/DeploymentDashboardLayout.tsx:
+64-157`), filtered only by the `visiblePages` an embedding parent sends (`sh/pages/_app.tsx:598-620`); History is
+*muted* with a tooltip when the plan has no audit log (`DeploymentDashboardLayout.tsx:121-133`). Settings hides Components when there are none
+and Snapshots always, and *disables* Backups and Custom Domains on self-hosted and local deployments with a
+tooltip (`dc/layouts/SettingsSidebar.tsx:63-91`, `:160-172`). So Convex hides or disables what a deployment
+lacks in Settings, and keeps its main screens listed.
+
+**The rule** (`packages/dashboard/src/shell/offered-screens.tsx`): `OFFERED_SCREENS` names each of bunvex's own
+screens with the source methods it needs — `/topology` `getTopology`, `/auth` `listAuthUsers`, `/subscriptions`
+`getSubscriptions` — as an extension's `requires`. Such a screen is in the sidebar (`NavItem`) and the command
+palette (its screens and the auth pages; Subscriptions joins the palette) only when the source has every method;
+the Manage group goes when nothing is left in it; a log line's "Open the invalidation" link goes with
+Subscriptions. Its route (`offeredOnly` in `router.tsx`) says "This deployment does not offer … yet" without
+loading the screen's chunk, as an extension's guard does; a lazy screen keeps its preload. Convex's own screens
+(Database, Schema, Files, Functions, Schedules, Logs, History, Settings) are not in the table: they stay listed
+whatever the source, as Convex's (UI-01 §14.2). The rule is keyed on methods only, so a source that gains them
+shows the screen: with AD-25's and AD-04's sources (`getSubscriptions`, `getTopology`), Subscriptions and
+Topology appear on a deployment; Authentication stays hidden until `_system/auth:*` exists (AD-01). Note: the
+auth configuration's "Sign in / Providers" page lives in that screen, so it is not reachable on a deployment
+(it was not before either: the screen said "not offered").
+
+**Tests.** `packages/dashboard/test/offered-screens.test.tsx`: `screenOffered` (pages, prefixes, per screen);
+the sidebar on the mock and on a source without the methods (Convex's screens kept, axe), Manage with only an
+extension and gone when empty; each deep link (`/topology`, `/auth/users`, `/auth/providers`, `/subscriptions`)
+says so (axe); the guard alone around a stand-in screen (preload kept, the screen not rendered); the palette
+both ways; the log line's link both ways. In Chromium (`app.e2e.ts`): on a live deployment the three entries are
+listed exactly when the server source has their methods, and a typed URL to one it lacks says so.
+
+**Sabotage** (each restored, `git diff` clean; failing tests in `offered-screens.test.tsx`):
+
+| Sabotage | Failing |
+|---|---|
+| `NavItem` ignores the rule | 7 |
+| Manage always shown | 1 |
+| the palette's screens not filtered | 1 |
+| the palette's auth pages not filtered | 1 |
+| the route guard always renders the screen | 1 |
+| the guard drops a lazy screen's preload | 1 |
+| a loose prefix (`/authors` as `/auth`) | 1 |
+| a screen's pages not its own (`/auth/users`) | 1 |
+| Subscriptions keyed on another method | 6 |
+| the log link shown regardless | 1 |
+| `some` instead of `every` | 0: every entry needs one method today, so the two are the same |
+
+**Measurements.** No hot path: one `typeof` per sidebar entry and palette item per render.
+
 ## 6. Open questions
 
 Every question below is in the decision format the owner asked for (what Convex does / what bunvex would do /

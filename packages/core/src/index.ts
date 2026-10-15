@@ -94,6 +94,23 @@ export {
   type WriteBatchLimits,
   type WriteLogRetention,
 } from "./committer.ts";
+export {
+  allComponentPaths,
+  COMPONENT_NAMESPACE_TABLES,
+  type ComponentMeta,
+  ComponentMetadataError,
+  type ComponentState,
+  componentChildren,
+  componentInParent,
+  componentMeta,
+  componentPath,
+  componentRow,
+  type EnvBinding,
+  formatComponentPath,
+  type NewComponent,
+  resolveComponentPath,
+  rootComponent,
+} from "./components.ts";
 export type {
   AnyDataModel,
   BetterOmit,

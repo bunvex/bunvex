@@ -32,7 +32,7 @@ import { formatBytes, formatCount, formatPercent } from "../screens/stats.ts";
 import { FlowBackground, FlowControls } from "../shell/flow-controls.tsx";
 import { type LayoutMode, type Link, layoutTopology, neighbourhood, STORE_ID, serverId } from "./layout.ts";
 import { LagGauge, StateLabel } from "./parts.tsx";
-import { compact, DRIVER, lagText, servesClients } from "./words.ts";
+import { cacheEntriesText, cacheFill, cacheFillText, DRIVER, lagText, servesClients } from "./words.ts";
 
 const isDark = () => document.documentElement.classList.contains("dark");
 function useDark(): boolean {
@@ -148,10 +148,8 @@ export function CacheStrip({ cache: c }: { cache: NodeCache }) {
     <div className="flex items-center gap-1.5 border-t px-3 py-1.5" data-cache-strip="">
       <span className={MUTED}>Cache</span>
       <span className="font-mono tabular-nums">{c.hitRate === null ? "—" : `${Math.round(c.hitRate * 100)}%`}</span>
-      <Bar value={c.entries / c.maxEntries} warn={0.95} />
-      <span className="font-mono tabular-nums">
-        {compact(c.entries)}/{compact(c.maxEntries)}
-      </span>
+      <Bar value={cacheFill(c)} warn={0.95} />
+      <span className="font-mono tabular-nums">{cacheFillText(c)}</span>
       <span className={cn("font-mono tabular-nums", MUTED)}>{formatCount(c.invalidationsPerSecond)}/s</span>
     </div>
   );
@@ -400,7 +398,7 @@ export function toFlow(
           n.lag ? lagText(n.lag) : `${formatCount(n.commitsPerSecond ?? 0)} commits per second`,
           servesClients(n, t) ? `${formatCount(n.connections)} clients` : "",
           n.cache
-            ? `cache ${n.cache.hitRate === null ? "unused" : `${formatPercent(n.cache.hitRate)} hits`}, ${formatCount(n.cache.entries)} of ${formatCount(n.cache.maxEntries)} entries`
+            ? `cache ${n.cache.hitRate === null ? "unused" : `${formatPercent(n.cache.hitRate)} hits`}, ${cacheEntriesText(n.cache)}`
             : "",
           "press Enter for details",
         ]
