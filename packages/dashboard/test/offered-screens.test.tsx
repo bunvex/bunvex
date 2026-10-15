@@ -231,6 +231,6 @@ describe("a log line's link to Subscriptions", () => {
   test("not where it is not: the cause stays, the link goes", async () => {
     const region = await why(without("getSubscriptions"));
     expect(within(region).getByTestId("log-why").textContent).toContain("A commit changed what it read");
-    expect(within(region).queryByRole("link", { name: /Open the invalidation|Open in Subscriptions/ })).toBeNull();
+    expect(within(region).queryAllByRole("link").map((a) => a.textContent)).toEqual([]);
   });
 });
