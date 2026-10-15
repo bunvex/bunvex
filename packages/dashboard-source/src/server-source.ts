@@ -146,7 +146,9 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     async getDeployment(o) {
       const [name, version, storage, urls] = await Promise.all([
         http.text("/instance_name", { signal: o?.signal }),
-        http.text("/version", { signal: o?.signal }),
+        // the health route, not the meta `/version`: only the health routes answer another origin, as Convex's
+        // (STUDY-67 §9); both carry the same version
+        http.text("/instance_version", { signal: o?.signal }),
         // `/stats` needs ViewMetrics; without it the persistence is not shown
         http.json<StatsJson>("/stats", { signal: o?.signal }).then(
           (s) => s.storage,

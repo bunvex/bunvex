@@ -40,6 +40,15 @@ const MODULES = [
       export const shout = action({ args: {}, handler: async () => { console.warn("shouting"); return "HI"; } });`,
   },
   {
+    path: "bulk.js",
+    source: `import { mutation, query } from "@bunvex/server";
+      import { v } from "@bunvex/values";
+      export const seed = mutation({ args: { n: v.number() }, handler: async ({ db }, { n }) => {
+        for (let i = 0; i < n; i++) await db.insert("bulk", { i, note: "x" });
+      } });
+      export const all = query({ args: {}, handler: async ({ db }) => await db.query("bulk").collect() });`,
+  },
+  {
     path: "http.js",
     source: `import { httpAction, httpRouter } from "@bunvex/server";
       const http = httpRouter();
@@ -214,7 +223,9 @@ describe("the dashboard app on a live deployment", () => {
     await heading(page, "Overview");
     // the deployment's own name and version, from the server
     await page.getByRole("button", { name: `Signed in: ${INSTANCE}` }).waitFor();
-    await page.getByText(INSTANCE).first().waitFor();
+    // (the header's visible line: the phone's one-line summary is hidden at this width)
+    await page.getByText(INSTANCE, { exact: true }).filter({ visible: true }).first().waitFor();
+    expect(await page.getByText("Deployment unavailable").count()).toBe(0);
     // as Convex's dashboard: the admin key in Authorization (bunvex's scheme, DV-97) and the client header
     const checks = toDeployment.filter((r) => r.url.endsWith("/api/check_admin_key") && r.headers.authorization);
     expect(checks.map((r) => r.headers.authorization)).toContain(`Bunvex ${srv.adminKey}`);
@@ -259,6 +270,47 @@ describe("the dashboard app on a live deployment", () => {
     await page.getByRole("button", { name: "Add document", exact: true }).click();
     await cellOf(page, /^added$/).waitFor();
     await until(async () => (await messages()).includes("added"), "the insert on the deployment");
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("Data: bulk edit — the header selects every document of a table still paging; Edit all patches them all", async () => {
+    // more documents than the screen's first page (100), so "all" covers documents never loaded
+    await srv.call("mutation", "bulk:seed", { n: 150 });
+    const { page, errors, close } = await signedIn("/database/bulk");
+    await heading(page, "bulk");
+    await page.getByRole("checkbox", { name: "Select all documents" }).click();
+    await page.getByRole("button", { name: "Edit all" }).click();
+    const panel = page.getByRole("complementary", { name: "Bulk edit all documents in bulk" });
+    await panel.waitFor();
+    await page.waitForFunction(() => !!document.activeElement?.closest(".monaco-editor"));
+    await typeInEditor(page, "{ checked: true, note: undefined }");
+    await panel.getByRole("button", { name: "Apply" }).click();
+    await page.getByText("Edited all documents in bulk.").waitFor();
+    // on the deployment: every document, in one patchDocumentsFields without ids
+    await until(async () => {
+      const docs = (await srv.call("query", "bulk:all")) as Record<string, unknown>[];
+      return docs.length === 150 && docs.every((d) => d.checked === true && !("note" in d));
+    }, "the bulk edit on the deployment");
+    // the schema's refusal, in the deployment's words; nothing written
+    await page.getByRole("navigation", { name: "Tables" }).getByRole("link", { name: "messages" }).click();
+    await heading(page, "messages");
+    await page.getByRole("checkbox", { name: "Select all documents" }).click();
+    await page.getByRole("button", { name: "Edit all" }).click();
+    await page.waitForFunction(() => !!document.activeElement?.closest(".monaco-editor"));
+    await typeInEditor(page, "{ body: 1 }");
+    const messagesPanel = page.getByRole("complementary", { name: "Bulk edit all documents in messages" });
+    await messagesPanel.getByRole("button", { name: "Apply" }).click();
+    await messagesPanel.getByRole("alert").filter({ hasText: "does not match the schema" }).waitFor();
+    expect((await messages()).every((b) => typeof b === "string")).toBe(true);
+    // axe on the open panel
+    await page.addScriptTag({ content: AXE });
+    const violations = await page.evaluate(async () => {
+      // biome-ignore lint/suspicious/noExplicitAny: axe is the injected global
+      const r = await (window as any).axe.run(document, { resultTypes: ["violations"] });
+      return r.violations.map((v: { id: string }) => v.id);
+    });
+    expect(violations).toEqual([]);
     expect(errors).toEqual([]);
     await close();
   });

@@ -16,11 +16,15 @@ const MAP = JSON.stringify({
   names: [],
 });
 const maps = new SourceMapTokens((path) => (path === "messages.js" ? MAP : undefined));
-// The module's maps are kept alive by this test, as a code version's context keeps them.
-const version = registerModules(maps);
-const at = (path: string, line: number, col: number) => `${moduleUrl(version, path)}:${line}:${col}`;
+// The version holds its maps weakly, so the test keeps them alive as a code version's context does: `at`, which
+// every mapped test calls, closes over them. A module-level binding alone does not: a collection before the test
+// ran (the full suite's, or `Bun.gc`) left the frames unmapped.
+const loaded = { maps, version: registerModules(maps) };
+const at = (path: string, line: number, col: number) => `${moduleUrl(loaded.version, path)}:${line}:${col}`;
 
 test("a pushed module's frames are mapped; the server's are dropped; native ones kept between the app's", () => {
+  // A collection first, as the full suite may run one: the maps must still answer.
+  Bun.gc(true);
   const stack = [
     "Error: boom",
     `    at assertShort (${at("messages.js", 2, 6)})`,

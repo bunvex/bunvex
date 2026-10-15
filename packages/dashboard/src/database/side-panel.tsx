@@ -19,6 +19,7 @@ import { useDisconnected } from "../shell/connection.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { Panel } from "../shell/panel.tsx";
 import { AddDocuments } from "./add-documents.tsx";
+import { BulkEdit, type BulkTarget, bulkLabel } from "./bulk-edit.tsx";
 import { ColumnSettings } from "./column-settings.tsx";
 import { DocumentEditor } from "./document-editor.tsx";
 import { formatLiteral } from "./literal.ts";
@@ -40,6 +41,8 @@ export type PanelState =
   | { kind: "indexes" }
   | { kind: "metrics" }
   | { kind: "add"; onAdded: (count: number) => void }
+  /** Bulk edit (STUDY-149): the fields to change in `target`, the selected documents or all of them. */
+  | { kind: "bulkEdit"; target: BulkTarget; onApplied: (target: BulkTarget) => void }
   | { kind: "columns"; fields: string[]; state: ColumnState; onChange: (s: ColumnState) => void };
 
 export function SidePanel({ state, info, onClose }: { state: PanelState; info: TableInfo; onClose: () => void }) {
@@ -66,6 +69,12 @@ export function SidePanel({ state, info, onClose }: { state: PanelState; info: T
     return (
       <Panel kind="database-add" title={`Add documents to ${info.name}`} onClose={onClose}>
         <AddDocuments table={info.name} onAdded={state.onAdded} />
+      </Panel>
+    );
+  if (state.kind === "bulkEdit")
+    return (
+      <Panel kind="database-bulk-edit" title={`Bulk edit ${bulkLabel(state.target)} in ${info.name}`} onClose={onClose}>
+        <BulkEdit table={info.name} target={state.target} onApplied={state.onApplied} />
       </Panel>
     );
   if (state.kind === "metrics")

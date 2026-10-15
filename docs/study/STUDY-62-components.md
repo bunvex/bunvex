@@ -3,7 +3,8 @@
 - **Status:** K1–K9 accepted as recommended (owner, 2026-10-03). Re-checked against Convex `a4ad353` on
   2026-10-08 (§7): K8 and the root component rows are built; §7.4 lists what that check corrects or adds, and
   K2 is to be confirmed again (§7.3). **No step of §5 is started**: the owner wants the pros and cons laid out
-  before going on (2026-10-08).
+  before going on (2026-10-08). **Studied again in [STUDY-152](STUDY-152-components-restudy.md)** (2026-10-14),
+  which corrects K2–K5 and §6 and revises the plan of §7.5.
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031, npm `convex` 1.46.0), 2026-10-03;
   re-checked at `a4ad3530c` (2026-10-08).
 - **Related:** [STUDY-04](STUDY-04-table-and-index-metadata.md) D4 (DV-55: no namespaces),
@@ -135,7 +136,7 @@ There are no components. These are the touch points:
 | # | Question | Convex | Recommendation |
 |---|---|---|---|
 | K1 | Table numbers per namespace (10001 in each component), IDs opaque across components? | yes | **Yes, as Convex.** Export/import round-trips and IDs behave as Convex's. The catalog becomes (namespace, name / number) → tablet. |
-| K2 | Running unmodified `@convex-dev/*` packages, which import `convex/server` and `convex/values` and use the `"convex"` condition | native | **An explicit rule-5 exception**: bunvex's bundler and linker alias the `convex` module names and condition to bunvex's. The alternatives (a shim installed as `convex`, or forks) cost the ecosystem. Same family as DV-307 and DV-308. |
+| K2 | Running unmodified `@convex-dev/*` packages, which import `convex/server` and `convex/values` and use the `"convex"` condition | native | **An explicit rule-5 exception**: bunvex's bundler and linker alias the `convex` module names and condition to bunvex's. The alternatives (a shim installed as `convex`, or forks) cost the ecosystem. Same family as DV-307 and DV-308. **Turned down** (owner, 2026-10-14): bunvex's own `@bunvex/*` components instead (STUDY-152 C1, DV-493). |
 | K3 | Bundling the definition graph under Bun (`Bun.build` has no esbuild metafile) | esbuild metafile | Use a plugin's `onResolve` to record the edges. Keep Convex's definition paths (`../node_modules/…`) and the `_componentDeps/<b64url>` rewrite. |
 | K4 | Module isolation | one isolate per component call | One `vm` module graph per component per code version, in the same context, plus per-component env and globals. Measure memory against DV-164. |
 | K5 | Identity inside a component's query or mutation | the caller's (shared transaction); actions pass only admins | **As Convex today**, with a note to follow if Convex tightens it. |
