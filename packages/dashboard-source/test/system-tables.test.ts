@@ -9,8 +9,8 @@ import { SystemTables } from "../src/system-tables.ts";
 type Call = { path: string; args: Record<string, unknown> };
 
 const ROWS = [
-  { name: "_tables", description: "Every table.", appVisible: false, documentCount: 4 },
   { name: "_storage", description: "Files.", appVisible: true, documentCount: null },
+  { name: "_tables", description: "Every table.", appVisible: false, documentCount: 4 },
   { name: "_index", description: "Every index.", appVisible: false, documentCount: 2 },
 ];
 
