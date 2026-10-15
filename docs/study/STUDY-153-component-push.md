@@ -768,6 +768,35 @@ A top-level frame prints as the existing frame mapping prints it (`at bunvex.con
 Measured (evaluating `defineApp` with N `defineComponent` children through `bunvex/server`, median of 7): 0.3 ms
 for 1, 1.7 ms for 10, 6.1 ms for 50; the first evaluation in a process loads `bunvex/server` (~20 ms).
 
+As built, **PR 3b** (`server/src/component-tree.ts`, nothing calls it yet):
+
+- `checkEnvVarDeclarations(definitions)` is Convex's `validate_env_var_declarations`: by path, the app's first, every
+  declared variable `v.string()`, a string literal or a union of those, else `InvalidEnvVarDeclaration`.
+- `instantiateRoot(definitions)` is Convex's `TypecheckContext::instantiate_root` / `instantiate`, its checks in its
+  order: the arguments (`check_args`; the legacy `args: null` initializer refused, C-13), each child's bindings
+  against its declarations and its parent's (`validate_component_env`: a literal's value checked with
+  `@bunvex/values`' `checkValue`, the parent's validator a subset of the child's with core's `isSubset`), the
+  bindings resolved down the tree (the app's stay deployment variables; below, the parent's own binding, or dropped
+  when the parent has none), each child's HTTP prefix (its mount path, under its parent's below the root),
+  duplicate names, then the mounts (a direct child with HTTP routes, no overlap with a `/p/*` route of the parent's
+  `http.js` or another mount), then the exports.
+- `fileBasedExports(functions)` is Convex's `file_based_exports`: each public function at its module's path without
+  `.js` and its name, `InvalidExport` on a clash, `InvalidModulePath` on a segment that is no path component.
+- `serializedCheckedComponent(tree)` is Convex's `SerializedCheckedComponent`, every map by key;
+  `componentsOf(tree)` lists the instances by path, parents first.
+- The texts are Convex's byte for byte (C-5), Rust's `Debug` forms included (`[ComponentName(Identifier("counter"))]`,
+  `ComponentDefinitionPath { path: "nope" }`, `HttpMountPath("/c/")`), and the unformatted
+  `{definition_path:?}` of `type_checking.rs:149`.
+
+Tests (`server/test/component-tree.test.ts`): each tree case of §1.10 (non-string declarations, a required variable
+unbound, an undeclared one, a literal refused, undeclared and optional parent variables, a wider parent validator,
+duplicate names, an unknown definition, a mount without routes, an overlap), the base tree's shape, prefixes, the
+env chain two levels down, an unbound optional dropped, and one end to end from `bunvex/server`'s definitions.
+Sabotage: 21 of 21 caught.
+
+Measured (instantiating and serializing the tree, each component with 20 modules of 10 public functions, median of
+7): 0.4 ms for 1 component, 2.7 ms for 10, 6.7 ms for 50.
+
 The plan as first written:
 
 
