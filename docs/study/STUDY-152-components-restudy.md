@@ -1,6 +1,6 @@
 # STUDY-152 — Components, studied again before building them
 
-- **Status:** study; decisions C1–C7 open (owner). Extends [STUDY-62](STUDY-62-components.md), which it corrects
+- **Status:** study; C1 and C3 decided (owner, 2026-10-14, §9), C2 asked again (security), C4–C7 open. Extends [STUDY-62](STUDY-62-components.md), which it corrects
   in §7; STUDY-62's plan (§7.5) stays the base, revised in §8.
 - **Convex source read:** `d8bdde0` of get-convex/convex-backend (the reference commit,
   [upstream.md](../parity/upstream.md)), with `origin/main` checked where noted; the published `@convex-dev/*`
@@ -207,7 +207,7 @@ In every way the word "convex" has to exist somewhere — module names (`convex/
 | **C. Rewrite on install** (`bunvex components add`) | Rewrites specifiers and names in the package's `dist` and `.d.ts`, vendored | Can also fix env names and syscalls | The rename table ships in the CLI; transitive (convex-helpers, batch-worker, workpool); redone at every install; front end too |
 | **D. Forks under `@bunvex/*`** | Republished ports | Clean under rule 5; the path to the owner's goal (b) | 24+ packages releasing often; apps change imports; third-party components stay out; needs a ruling, as they are Convex's Apache-2.0 code |
 
-Whatever the choice, the components runtime comes first, proven with a component written for `bunvex/*`
+Decided: D (§9 C1). The components runtime comes first, proven with a component written for `bunvex/*`
 (sharded-counter is the smallest: queries and mutations only), then rate-limiter (nesting, env), then workpool
 (scheduler, `useStaleSnapshot`, `commitTs`).
 
@@ -238,7 +238,7 @@ each step writes its own tests and checks against these):
 | 5 | Calls across components (references, handles, identity, subtransaction) | A1–A3, A5–A12, A13–A17, B1–B3, and every test's cleanup |
 | 6 | CLI push and codegen (DV-174, DV-385) | every test |
 | 7 | Scheduler, crons, storage, HTTP mounts, env per component | B4–B8, A4, A16, A17 |
-| 8 | Convex's packages (C1) | sharded-counter, rate-limiter, workpool end to end |
+| 8 | bunvex's own components (C1, C7) | each against its Convex package's behaviour |
 | 9 | Dashboard and CLI flags (DV-224, DV-391), with sandbox-86 | — |
 | 10 | Export, import, streaming export (DV-215) | — |
 
@@ -250,9 +250,9 @@ change no behaviour an app sees on its own and can start before C1 is decided.
 
 | # | Question | Convex | Recommendation |
 |---|---|---|---|
-| C1 | How Convex's published components run on bunvex (§6.3) | native | **B, a compatibility package the user installs as `convex`**, kept out of bunvex's shipped packages: the only way that reaches the front end and the types too. Built after steps 1–7 |
+| C1 | How Convex's published components run on bunvex (§6.3) | native | **Decided (owner, 2026-10-14): D, bunvex's own `@bunvex/*` components**, written from scratch for `bunvex/*` (not copied), no `convex` alias or compatibility package (K2 turned down). The owner wants to grow them beyond Convex's. Proposed: the same client API, component name and schema as Convex's package, so an app moves by changing imports and a Convex export of its data imports unchanged. Where they live (the main ones in this monorepo, the rest in another) is open |
 | C2 | Module state across calls: Convex evaluates a component's modules afresh on every call (unless `experimental_reuseContext`); bunvex evaluates once per code version (DV-164) | fresh per call | **Keep bunvex's (evaluate once)**, extended to components: the performance gap in §2 is mostly this. Observable only by code keeping state in module variables between calls. Recorded as an extension of DV-164 |
-| C3 | Isolation of a component's globals (K4: one module graph per component in the version's single context) | a separate context per call | **One `vm` context per component per code version**, revising K4: its own `globalThis`, env and realm, values crossing as JSON as today; measure memory against DV-164 |
+| C3 | Isolation of a component's globals (K4: one module graph per component in the version's single context) | a separate context per call | **Decided (owner, 2026-10-14): one `vm` context per component per code version**, revising K4: its own `globalThis`, env and realm, values crossing as JSON as today; memory measured against DV-164 |
 | C4 | `v.id` of a component accepting another namespace's ID when the numbers match (§1) | accepts (inferred) | As Convex, once confirmed on the binary |
 | C5 | `import --replace-all --component` clearing every namespace (§5) | appears so | As Convex, once confirmed on the binary |
 | C6 | Order: the runtime first with a component written for bunvex, Convex's packages after (§6.3, §8) | — | Yes |
