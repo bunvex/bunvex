@@ -241,6 +241,73 @@ describe("useRoom", () => {
     await waitFor(() => expect(b.queryAllByRole("listitem")).toHaveLength(0), { timeout: 4000 });
   });
 
+  test("two components with useRoom on the same room: one's setter updates the other's useMyPresence", async () => {
+    const { client, mount } = await setup();
+    let setFirst!: (p: Pos) => void;
+    function First() {
+      const room = useRoom(docRef, { id: "a" });
+      setFirst = room.useMyPresence()[1];
+      return null;
+    }
+    function Second() {
+      const room = useRoom(docRef, { id: "a" });
+      const [mine] = room.useMyPresence();
+      return <p>{`second=${mine?.x ?? "-"} ${room.status}`}</p>;
+    }
+    mount(
+      client(),
+      <>
+        <First />
+        <Second />
+      </>,
+    );
+    await screen.findByText("second=- joined");
+    act(() => setFirst({ x: 4 }));
+    await screen.findByText("second=4 joined");
+  });
+
+  test("the same args in another key order are the same room: no leave, no new join", async () => {
+    let joins = 0;
+    let leaves = 0;
+    const handle = {
+      status: "joining",
+      error: null,
+      others: () => [],
+      myPresence: () => null,
+      subscribe: () => () => {},
+      on: () => () => {},
+      leave: () => leaves++,
+    };
+    const fake = {
+      addOnTransitionHandler() {},
+      joinRoom: () => {
+        joins++;
+        return handle;
+      },
+    };
+    const c = new BunvexReactClient("http://127.0.0.1:1", {
+      logger: false,
+      baseClient: fake as never,
+    });
+    function Keyed({ args }: { args: { a: number; b: number } }) {
+      useRoom(docRef as never, args as never);
+      return null;
+    }
+    const view = render(
+      <BunvexProvider client={c}>
+        <Keyed args={{ a: 1, b: 2 }} />
+      </BunvexProvider>,
+    );
+    expect(joins).toBe(1);
+    view.rerender(
+      <BunvexProvider client={c}>
+        <Keyed args={{ b: 2, a: 1 }} />
+      </BunvexProvider>,
+    );
+    expect(joins).toBe(1);
+    expect(leaves).toBe(0);
+  });
+
   test("StrictMode (mount, unmount, mount) leaves exactly one member; unmounting ends it", async () => {
     const { client } = await setup();
     const z = client().sync.joinRoom(docRef, { id: "a" });
@@ -385,6 +452,90 @@ describe("usePresence", () => {
       win.addEventListener = realAdd;
       warn.mockRestore();
     }
+  });
+
+  test("two components on the same scope: one's setMyState shows as `me` in both", async () => {
+    const { signedIn } = await authed();
+    const ca = await signedIn("ada");
+    let set!: (v: { status: string }) => void;
+    function Picker() {
+      set = usePresence(onlineRef, { team: "t" }).setMyState;
+      return null;
+    }
+    function Badge() {
+      return <p>{`badge=${usePresence(onlineRef, { team: "t" }).me?.status ?? "-"}`}</p>;
+    }
+    render(
+      <BunvexProvider client={ca}>
+        <Picker />
+        <Badge />
+      </BunvexProvider>,
+    );
+    await screen.findByText("badge=-");
+    act(() => set({ status: "busy" }));
+    await screen.findByText("badge=busy");
+  });
+
+  test("a remount while another component keeps the membership still shows `me`", async () => {
+    const { signedIn } = await authed();
+    const ca = await signedIn("ada");
+    let set!: (v: { status: string }) => void;
+    function Keeper() {
+      set = usePresence(onlineRef, { team: "t" }).setMyState;
+      return null;
+    }
+    function Badge() {
+      return <p>{`badge=${usePresence(onlineRef, { team: "t" }).me?.status ?? "-"}`}</p>;
+    }
+    function App({ badge }: { badge: boolean }) {
+      return (
+        <BunvexProvider client={ca}>
+          <Keeper />
+          {badge ? <Badge /> : null}
+        </BunvexProvider>
+      );
+    }
+    const view = render(<App badge />);
+    await screen.findByText("badge=-");
+    act(() => set({ status: "busy" }));
+    await screen.findByText("badge=busy");
+    view.rerender(<App badge={false} />);
+    view.rerender(<App badge />);
+    await screen.findByText("badge=busy");
+  });
+
+  test("changing idleMs while idle: the other tree sees the user active again, not stuck idle", async () => {
+    const { signedIn } = await authed();
+    const [ca, cb] = [await signedIn("ada"), await signedIn("bob")];
+    let setA!: (v: { status: string }) => void;
+    function A({ idleMs }: { idleMs: number }) {
+      setA = usePresence(onlineRef, { team: "t" }, { idleMs }).setMyState;
+      return null;
+    }
+    const seen: boolean[] = [];
+    function Watcher() {
+      const p = usePresence(onlineRef, { team: "t" });
+      if (p.others[0]?.state) seen.push(p.others[0].idle);
+      return null;
+    }
+    const view = render(
+      <BunvexProvider client={ca}>
+        <A idleMs={50} />
+      </BunvexProvider>,
+    );
+    render(
+      <BunvexProvider client={cb}>
+        <Watcher />
+      </BunvexProvider>,
+    );
+    act(() => setA({ status: "here" }));
+    await until(() => seen.at(-1) === true, "idle at B");
+    view.rerender(
+      <BunvexProvider client={ca}>
+        <A idleMs={60_000} />
+      </BunvexProvider>,
+    );
+    await until(() => seen.at(-1) === false, "active again at B");
   });
 
   test('"skip" joins nothing', async () => {

@@ -1,8 +1,10 @@
 // `useRoom` and `usePresence` (AD-42, STUDY-164 §3.5): a membership joined in an effect and left in its
-// cleanup (StrictMode's mount, unmount, mount leaves one member: the client ref-counts joins). The joined
+// cleanup. In dev StrictMode the effect runs, cleans up and runs again: on the wire that is a join, a leave and
+// a join, and the end state is one member (the client ref-counts handles, not wire joins). The joined
 // handle is stored with the client and the key of the args it was joined for, and is only used while both
 // still match the render, so a switch of args or provider never shows the previous room's members.
 import {
+  canonicalJson,
   getFunctionName,
   type PresenceHandle,
   type RoomHandle,
@@ -59,7 +61,7 @@ function useJoined<H extends Handle>(
 }
 
 function argsKey(ref: unknown, args: unknown): string {
-  return `${getFunctionName(ref as never)}|${JSON.stringify(toJsonValue((args ?? {}) as Value))}`;
+  return `${getFunctionName(ref as never)}|${canonicalJson(toJsonValue((args ?? {}) as Value))}`;
 }
 
 const NO_MEMBERS: never[] = [];
@@ -70,7 +72,6 @@ function roomHooks<R extends RoomReference<"room", any, any, any>>(
   sub: (cb: () => void) => () => void,
 ) {
   type P = R["_presence"];
-  const own = new Set<() => void>();
   return {
     useOthers(): RoomMemberView<P>[] {
       return useSyncExternalStore(
@@ -80,26 +81,13 @@ function roomHooks<R extends RoomReference<"room", any, any, any>>(
       );
     },
     useMyPresence(): [P | null, (p: P) => void] {
-      // The handle does not announce a change of its own presence: this hook's setter does.
+      // The handle tells its subscribers of its own presence too, so every consumer of the room follows.
       const mine = useSyncExternalStore(
-        (cb) => {
-          const off = sub(cb);
-          own.add(cb);
-          return () => {
-            own.delete(cb);
-            off();
-          };
-        },
+        sub,
         () => (handle ? handle.myPresence() : null) as P | null,
         () => null,
       );
-      const set = useCallback(
-        (p: P) => {
-          handle?.setPresence(p);
-          for (const cb of [...own]) cb();
-        },
-        [handle, own],
-      );
+      const set = useCallback((p: P) => handle?.setPresence(p), [handle]);
       return [mine, set];
     },
     useBroadcast<K extends keyof R["_events"] & string>(event: K): (data: R["_events"][K]) => void {
@@ -182,16 +170,12 @@ export function usePresence<R extends RoomReference<"presence", any, any>>(
     () => (handle ? handle.count() : 0),
     () => 0,
   );
-  const [mine, setMine] = useState<{ handle: PresenceHandle<S>; state: S } | null>(null);
-  const setMyState = useCallback(
-    (s: S) => {
-      if (!handle) return;
-      handle.setState(s);
-      setMine({ handle, state: s });
-    },
-    [handle],
+  const me = useSyncExternalStore(
+    sub,
+    () => (handle ? handle.myState() : null) as S | null,
+    () => null,
   );
-  const me = mine !== null && mine.handle === handle ? mine.state : null;
+  const setMyState = useCallback((s: S) => handle?.setState(s), [handle]);
   const isIdle = useIdle(handle, opts?.idleMs);
   return { status, error, others, count, me, setMyState, isIdle };
 }
@@ -242,6 +226,7 @@ function useIdle(handle: PresenceHandle<never> | PresenceHandle<any> | null, idl
     arm();
     return () => {
       clearTimeout(timer);
+      if (idle) handle.setIdle(false); // the next effect starts active: do not leave the others a stale idle
       win.removeEventListener("pointermove", onInput);
       win.removeEventListener("keydown", onInput);
       win.removeEventListener("visibilitychange", onVisibility);

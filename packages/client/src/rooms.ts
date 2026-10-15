@@ -22,7 +22,7 @@ export interface RoomHandle<P, E extends Record<string, unknown>> {
   setPresence(p: P): void;
   broadcast<K extends keyof E & string>(event: K, data: E[K]): void;
   on<K extends keyof E & string>(event: K, cb: (from: string | null, data: E[K]) => void): () => void;
-  /** Called on any change of status, others or canPublish. */
+  /** Called on any change of status, others, canPublish or this member's own presence. */
   subscribe(cb: () => void): () => void;
   leave(): void;
 }
@@ -34,7 +34,9 @@ export interface PresenceHandle<S> {
   others(): { userId: string; state: S | null; idle: boolean }[];
   /** The users in the scope, you included. */
   count(): number;
-  /** Throttled like a room's presence. */
+  /** This user's own state, as `setState` last said (shared by every handle of the scope). */
+  myState(): S | null;
+  /** Throttled like a room's presence. Subscribers are told at once. */
   setState(s: S): void;
   /** Sent with the state: before the first `setState` it is kept until there is one. */
   setIdle(idle: boolean): void;
@@ -86,7 +88,7 @@ const SYSTEM_CLOCK: RoomManagerClock = {
 };
 
 /** JSON with every object's keys sorted, so equal args are one key. */
-function canonical(x: v1.JSONValue): string {
+export function canonical(x: v1.JSONValue): string {
   const sorted = (y: v1.JSONValue): v1.JSONValue => {
     if (Array.isArray(y)) return y.map(sorted);
     if (typeof y === "object" && y !== null) {
@@ -334,6 +336,7 @@ export class RoomManager {
         if (left) return;
         m.presence = p as Value;
         this.publish(m);
+        this.notify(m);
       },
       broadcast: (event, data) => {
         if (left || !m.sent) return;
@@ -389,10 +392,12 @@ export class RoomManager {
         return cache.view;
       },
       count: () => m.members.size + 1,
+      myState: () => (m.presence === undefined ? null : (m.presence as S)),
       setState: (s) => {
         if (left) return;
         m.presence = s as Value;
         this.publish(m);
+        this.notify(m);
       },
       setIdle: (idle) => {
         if (left) return;
