@@ -3,14 +3,7 @@
 // `check_valid_identifier` in crates/convex/sync_types/src). A path that does not parse is the request's
 // error: 400, with the reason (STUDY-67 H7).
 
-/** Convex's `MAX_IDENTIFIER_LEN`. */
-const MAX_IDENTIFIER_LEN = 64;
-
-/** A character as Rust's `{:?}` shows a `char`: `'-'`, `'\n'`. */
-const rustChar = (c: string) => {
-  const esc: Record<string, string> = { "\n": "\\n", "\r": "\\r", "\t": "\\t", "\\": "\\\\", "'": "\\'", "\0": "\\0" };
-  return `'${esc[c] ?? c}'`;
-};
+import { identifierError, MAX_IDENTIFIER_LEN } from "@bunvex/values";
 
 const isAsciiAlnum = (c: string) => /^[A-Za-z0-9]$/.test(c);
 
@@ -37,20 +30,7 @@ function checkPathComponent(s: string): string | null {
 }
 
 /** Convex's `check_valid_identifier`: the reason `s` is not an identifier, or null. */
-export function checkIdentifier(s: string): string | null {
-  const chars = [...s];
-  const first = chars[0];
-  if (first === undefined) return "Identifier cannot be empty";
-  if (!/^[A-Za-z_]$/.test(first))
-    return `Invalid first character ${rustChar(first)} in ${s}: Identifiers must start with an alphabetic character or underscore`;
-  for (const c of chars.slice(1))
-    if (!isAsciiAlnum(c) && c !== "_")
-      return `Identifier ${s} has invalid character ${rustChar(c)}: Identifiers can only contain alphanumeric characters or underscores`;
-  const len = Buffer.byteLength(s);
-  if (len > MAX_IDENTIFIER_LEN) return `Identifier is too long (${len} > maximum ${MAX_IDENTIFIER_LEN})`;
-  if (chars.every((c) => c === "_")) return `Identifier ${s} cannot have exclusively underscores`;
-  return null;
-}
+export const checkIdentifier = identifierError;
 
 /**
  * Rust's `Path::components` on a Unix path: `/` a root, `.` only as the first component, `..` anywhere,

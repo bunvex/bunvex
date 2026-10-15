@@ -38,6 +38,7 @@ Key bunvex facts behind the statuses:
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
 | `.withIndex(name)` with no range (whole index) | server/query.ts, impl/query_impl.ts | done | |
+| A query's table and index when it starts: names parsed, the index looked up | common/src/json/query.rs (`Query::try_from`), types/index.rs (`IndexName::from_str`), indexing/src/index_registry.rs (`index_not_found_error`) | done (STUDY-161 §5) | Checked when the query starts, after its operators: a full scan's table as an identifier, an index's `table.index` as an index name (``Invalid argument `query` for `queryStream` `` / `queryPage`, Convex's words); then `Index <table>.<index> not found.` for an index of a table that does not exist (even `by_id` and `by_creation_time`; a search index too) or that the table lacks. A full scan of a missing table is empty; the error depends on `_tables`, so it runs again once the table is created. |
 | `.withIndex(name, q => …)` range expression | server/index_range_builder.ts | done (#10) | `compileRange`: Convex's `IndexRange::compile` rules and messages (distinct eq fields, one lower and one upper bound on one field, a prefix of the index fields in order). |
 | IndexRangeBuilder `eq(field, value)`, in index-field order | index_range_builder.ts | done (#10) | Field names checked against the index, in order. |
 | IndexRangeBuilder `gt`/`gte` then `lt`/`lte` on the next field | index_range_builder.ts | done (#10) | Both bounds on the same field, after the eq prefix; Convex's errors otherwise. |
@@ -84,7 +85,7 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `db.insert(table, value)` returns `Id<table>` | server/database.ts, impl/database_impl.ts | done (#21, #29) | Values validated at the call, and against the schema. |
+| `db.insert(table, value)` returns `Id<table>` | server/database.ts, impl/database_impl.ts | done (#21, #29) | Values validated at the call, and against the schema. Argument errors in Convex's words and order (STUDY-161 §1, §2): a missing value (`Must provide arg 2 …`), then the value (nesting, then "Value must be an Object", `db.patch` / `db.replace` too), then the table's name (``Invalid argument `table` for `db.insert`: `` and the identifier's own message, Rust's display of the character). |
 | A write to a table that does not exist creates it (in the same transaction); reads of a missing table return nothing | database/src/bootstrap_model/table.rs (`insert_table_metadata`) | done (#33) | Reads depend on `_tables`, so they re-run when the table is created. |
 | `insert` rejects system tables (names starting with `_`) | impl/database_impl.ts | done (#6) | "System table … is not accessible here." |
 | `insert` assigns `_id` and `_creationTime` and rejects caller-supplied values that don't match | crates/common/src/document.rs | done (#21) | A caller-supplied `_id` / `_creationTime` that does not match throws Convex's message; other `_`-prefixed fields are refused. |

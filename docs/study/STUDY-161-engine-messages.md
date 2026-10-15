@@ -208,7 +208,20 @@ and lists what failed in its *Built* line.
 
 ### §1 and §2 (`db.insert` / `db.patch` / `db.replace` argument errors)
 
-*Built:* not yet.
+*Built* (#666): `identifierError` and `rustDebugChar` in `@bunvex/values` (`identifier.ts`), shared by the engine and the
+server's path and validator parsers (their two partial copies of Rust's character display removed); `Tx.insert`,
+`patch`, `replace` and `count` in `core/src/tx.ts`. Found while building it: a pushed module's objects are its
+context's (another realm), so `extractCommitTs` took a deployed function's value for a leaf: its nesting error lost
+the argument prefix (the copy's own check spoke), and a `db.vars.commitTs` inside such an object was not found. It now
+recognizes a plain object of any realm. Convex's `TypeError` for a top-level function value (its serializer fails in
+`stringifyValueForError`) is not matched: bunvex keeps its unsupported-value message (DV-316's wording).
+Tests: `values/test/identifier.test.ts` (each rule, 17 characters checked against the binary),
+`core/test/write-argument-errors.test.ts` (the messages, their classes and order, `db.table`, `db.count`, a value of
+another realm); `differential/test/write-errors.test.ts` (21 table names, 5 non-object values per write, nesting,
+missing values, on both backends); the old messages' assertions updated (`count`, `implicit-tables`,
+`tx-d-edges`). Sabotage (each restored, `git diff` clean): no table check (the table test fails); Rust's `\u{…}`
+escapes dropped (2 tests); the old "expected an object" (1); the realm check reverted (the realm test); no
+missing-value check (1); a patch's object check after its parse (1); the table checked before the value (2).
 
 ### §3 (the schema error's display)
 
@@ -220,7 +233,7 @@ and lists what failed in its *Built* line.
 
 ### §5 (a query's table and index)
 
-*Built:* not yet.
+*Built:* #665. The names parse and the index lookup happen at the query's start (`startChecks` in `core/src/tx.ts`, `identifierError` / `indexNameError` in `core/src/query-ops.ts`); `withIndex` still runs the range builder at the call, and its lookup error waits for the start. Tests: `core/test/query-start-errors.test.ts` (every start path, the names, the operators first, the re-run once the table exists), `differential/test/query-start-errors.test.ts` (28 cases, the same answers on both). Sabotage, each caught: no missing-table flag (4 tests), no name parse, `unknown index` back (3), the error at `withIndex` again (2), a third component ignored, `\p{Cf}` dropped from the character display. Found, not changed: `db.system.query("_nope").withIndex(…)` and an unknown index of a private system table throw `Index … not found.` on Convex; bunvex's system reader answers nothing (DV-360's path).
 
 ### §6 (a system function's unparsed arguments)
 
