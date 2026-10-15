@@ -29,6 +29,7 @@ import { AdminHttp, type FetchFn } from "./admin-http.ts";
 import { capabilitiesOf } from "./credentials.ts";
 import { deploymentReads } from "./deployment.ts";
 import { Functions } from "./functions.ts";
+import { Inspector } from "./inspector.ts";
 import { LogStream, type LogStreamOptions } from "./logs.ts";
 import { Metrics } from "./metrics.ts";
 import { Settings } from "./settings.ts";
@@ -294,5 +295,19 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
       void close();
     },
   };
+
+  // ---------------------------------------------------------------- the subscriptions inspector (STUDY-131 AD-25)
+  // Its own block: the follow loops stop while the deployment is disconnected, and with the source.
+  const inspector = new Inspector(http, { connection: (onStatus) => source.watchConnection!(onStatus) });
+  source.getSubscriptions = (filter, o) => inspector.getSubscriptions(filter, o);
+  source.getQueryCache = (filter, o) => inspector.getQueryCache(filter, o);
+  source.watchInvalidations = (filter, onEvents, onError) => inspector.watchInvalidations(filter, onEvents, onError);
+  const closeBeforeInspector = source.close;
+  source.close = () => {
+    inspector.close();
+    return closeBeforeInspector();
+  };
+  source[Symbol.dispose] = () => void source.close();
+
   return source;
 }

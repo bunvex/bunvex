@@ -10,7 +10,7 @@ import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/co
 import { Input } from "@bunvex/ui/components/input";
 import { cn } from "@bunvex/ui/lib/utils";
 import { keepPreviousData, queryOptions, useQuery } from "@tanstack/react-query";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { useWatch } from "../data/live.ts";
 import { capabilitiesQuery, dashboardKeys, type QueryScope } from "../data/queries.ts";
@@ -26,6 +26,7 @@ import { formatTime } from "../database/values.ts";
 import { type SubscriptionsSearch, subscriptionsRoute } from "../router.tsx";
 import { formatCount } from "../screens/stats.ts";
 import { BAR_TITLE, BAR1, BAR2, SCREEN } from "../shell/bars.ts";
+import { useDisconnected } from "../shell/connection.tsx";
 import { ErrorState } from "../shell/error-state.tsx";
 import { NotOffered } from "../shell/not-offered.tsx";
 import { Panel } from "../shell/panel.tsx";
@@ -33,17 +34,36 @@ import { Panel } from "../shell/panel.tsx";
 /** How many followed invalidations stay listed. */
 const FOLLOWED = 50;
 
-const subscriptionsQuery = ({ source, scope }: QueryScope, path: string | undefined) =>
+/**
+ * How often the live queries and the cache are asked again, from how long the last answer took: every 5 s, slower
+ * when answering is slow (the server builds the whole snapshot each time: about 20 ms for 1 000 live queries), so
+ * the screen takes at most 1 % of the server's time, and at least once a minute. Not while the tab is hidden
+ * (TanStack Query's default) nor while the deployment is disconnected (PR 6's rule for polled reads).
+ */
+export const pollInterval = (lastMs: number) => Math.min(60_000, Math.max(5_000, Math.round(lastMs * 100)));
+
+/** How long the last answer took, per poll. */
+type Took = { ms: number };
+async function timed<T>(took: Took, f: () => Promise<T>): Promise<T> {
+  const start = performance.now();
+  try {
+    return await f();
+  } finally {
+    took.ms = performance.now() - start;
+  }
+}
+
+const subscriptionsQuery = ({ source, scope }: QueryScope, path: string | undefined, took: Took) =>
   queryOptions({
     queryKey: [...dashboardKeys.all(scope), "subscriptions", path ?? null] as const,
-    queryFn: ({ signal }) => source.getSubscriptions!(path ? { path } : {}, { signal }),
-    refetchInterval: 5_000,
+    queryFn: ({ signal }) => timed(took, () => source.getSubscriptions!(path ? { path } : {}, { signal })),
+    refetchInterval: () => pollInterval(took.ms),
   });
-const queryCacheQuery = ({ source, scope }: QueryScope, path: string | undefined) =>
+const queryCacheQuery = ({ source, scope }: QueryScope, path: string | undefined, took: Took) =>
   queryOptions({
     queryKey: [...dashboardKeys.all(scope), "query-cache", path ?? null] as const,
-    queryFn: ({ signal }) => source.getQueryCache!(path ? { path } : {}, { signal }),
-    refetchInterval: 5_000,
+    queryFn: ({ signal }) => timed(took, () => source.getQueryCache!(path ? { path } : {}, { signal })),
+    refetchInterval: () => pollInterval(took.ms),
   });
 
 export function SubscriptionsScreen() {
@@ -83,14 +103,16 @@ function Subscriptions() {
   const { data: caps } = useQuery(capabilitiesQuery(scope));
   const allowed = caps?.operations.includes("viewMetrics") ?? true;
   const cacheTab = search.tab === "cache";
+  const disconnected = useDisconnected();
+  const took = useRef({ live: { ms: 0 }, cache: { ms: 0 } }).current;
   const live = useQuery({
-    ...subscriptionsQuery(scope, search.path),
-    enabled: allowed && !cacheTab,
+    ...subscriptionsQuery(scope, search.path, took.live),
+    enabled: allowed && !cacheTab && !disconnected,
     placeholderData: keepPreviousData,
   });
   const cache = useQuery({
-    ...queryCacheQuery(scope, search.path),
-    enabled: allowed && cacheTab && typeof scope.source.getQueryCache === "function",
+    ...queryCacheQuery(scope, search.path, took.cache),
+    enabled: allowed && cacheTab && !disconnected && typeof scope.source.getQueryCache === "function",
     placeholderData: keepPreviousData,
   });
   const [following, setFollowing] = useState(false);

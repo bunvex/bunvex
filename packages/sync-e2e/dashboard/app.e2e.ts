@@ -3,7 +3,9 @@
 // @bunvex/dashboard-source — the sign-in (Convex's `check_admin_key`, the client header), Data read live and
 // written, Functions and the runner (a query subscribed, a mutation, the custom test query), Logs live, the
 // environment variables both ways, a table created by a push appearing by itself, and the connection lost and
-// recovered (Convex's "Connection issue" and the live reads resuming).
+// recovered (Convex's "Connection issue" and the live reads resuming). And bunvex's Subscriptions screen (STUDY-131
+// AD-25 on a deployment): an app's live query, its invalidations followed across a lost connection, and Logs' "why it
+// ran" link (AD-27) landing on that query and invalidation.
 //
 // Not a `*.test.ts`: it needs a browser and the app's build, so it runs with the dashboard's browser tests
 // (`bun run e2e` at the root, CI's "e2e · dashboard in Chromium"): the system Chrome locally, Playwright's Chromium
@@ -11,6 +13,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { BunvexClient } from "@bunvex/client";
 import { type Browser, chromium, type Page } from "playwright-core";
 import { type LiveServer, startLiveServer, until } from "./live-server.ts";
 
@@ -365,6 +368,79 @@ describe("the dashboard app on a live deployment", () => {
     await page.getByRole("listitem").filter({ hasText: "FROM_THE_CLI" }).waitFor();
     expect(errors).toEqual([]);
     await close();
+  });
+
+  test("Subscriptions: an app's live query, its invalidations followed (the connection lost meanwhile), Logs' link to it", async () => {
+    // an app's live query, on its own connection (not through the proxy)
+    const appClient = new BunvexClient(srv.url, { logger: false });
+    let shown: string[] = [];
+    appClient.onUpdate("messages:list", {}, (v: string[]) => {
+      shown = v;
+    });
+    await until(() => shown.length > 0, "the app's first result");
+    const { page, errors, close } = await signedIn("/subscriptions");
+    try {
+      await heading(page, "Subscriptions");
+      const grid = page.getByRole("grid", { name: "Live queries" });
+      await grid.getByRole("row").filter({ hasText: "messages:list" }).first().waitFor();
+      // following: the feed's position asked first, then the long poll from it
+      const following = page.waitForRequest((r) =>
+        /\/api\/debug\/invalidations\?cursor=\d+&timeoutMs=60000/.test(r.url()),
+      );
+      await page.getByRole("button", { name: "Follow invalidations" }).click();
+      await following;
+      const followed = page.getByRole("region", { name: "Followed invalidations" }).getByRole("listitem");
+      const send = async (body: string) => {
+        const before = shown.length;
+        await srv.call("mutation", "messages:send", { body });
+        await until(() => shown.length > before, "the app's new result");
+      };
+      await send("for the inspector");
+      await followed
+        .filter({ hasText: /messages:send wrote messages\.by_creation_time .* → messages:list/ })
+        .first()
+        .waitFor();
+      const seen = await followed.count();
+      // the connection lost while following: nothing asked while away, what landed meanwhile shown on the return
+      proxy.down();
+      const issue = page.getByRole("alert").filter({ hasText: "Connection issue" });
+      await issue.waitFor({ timeout: 15_000 });
+      let asked = 0;
+      page.on("request", (r) => {
+        if (r.url().includes("/api/debug/")) asked++;
+      });
+      // the follow loop's own watcher may settle up to one check (2.5 s) after the overlay's
+      await Bun.sleep(3_000);
+      const askedWhileAway = asked;
+      await send("while the dashboard is away");
+      // longer than the screen's 5 s poll
+      await Bun.sleep(6_000);
+      expect(asked).toBe(askedWhileAway);
+      proxy.up();
+      await issue.waitFor({ state: "detached", timeout: 30_000 });
+      await until(async () => (await followed.count()) > seen, "the invalidation that landed while away", 15_000);
+      // Logs: the app's re-run says why it ran, and its link opens that query with that invalidation marked
+      await page.getByRole("link", { name: "Logs", exact: true }).first().click();
+      await heading(page, "Logs");
+      const lines = page.getByRole("grid", { name: "Log lines" });
+      const rerun = lines.getByRole("row").filter({ hasText: "messages:list" }).first();
+      await rerun.waitFor({ timeout: 15_000 });
+      await rerun.getByRole("gridcell").last().click();
+      const why = page.getByTestId("log-why");
+      await why.getByText(/A commit changed what it read \(commit ts \d+\)/).waitFor();
+      await why.getByRole("link", { name: "Open the invalidation" }).click();
+      await heading(page, "Subscriptions");
+      expect(new URL(page.url()).searchParams.get("path")).toBe("messages:list");
+      const panel = page.getByRole("complementary", { name: "Live query" });
+      await panel.getByText("messages:list").first().waitFor();
+      const marked = panel.locator('li[aria-current="true"]');
+      await marked.getByText("The run the log entry is for").waitFor();
+      expect(await marked.textContent()).toContain("by messages:send into messages.by_creation_time");
+      expect(errors).toEqual([]);
+    } finally {
+      await close();
+      await appClient.close();
+    }
   });
 
   test("the connection lost: Connection issue covers the screens; back: it goes and the live data resumes", async () => {
