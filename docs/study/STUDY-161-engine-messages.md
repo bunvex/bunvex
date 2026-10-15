@@ -208,7 +208,7 @@ and lists what failed in its *Built* line.
 
 ### §1 and §2 (`db.insert` / `db.patch` / `db.replace` argument errors)
 
-*Built:* `identifierError` and `rustDebugChar` in `@bunvex/values` (`identifier.ts`), shared by the engine and the
+*Built* (#666): `identifierError` and `rustDebugChar` in `@bunvex/values` (`identifier.ts`), shared by the engine and the
 server's path and validator parsers (their two partial copies of Rust's character display removed); `Tx.insert`,
 `patch`, `replace` and `count` in `core/src/tx.ts`. Found while building it: a pushed module's objects are its
 context's (another realm), so `extractCommitTs` took a deployed function's value for a leaf: its nesting error lost
