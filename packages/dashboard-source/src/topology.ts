@@ -84,8 +84,13 @@ export function topologyReads(http: AdminHttp, opts: { topologyIntervalMs?: numb
   const intervalMs = opts.topologyIntervalMs ?? TOPOLOGY_INTERVAL_MS;
   const getTopology = async (o?: CallOptions): Promise<Topology> =>
     topologyOf(await http.json<TopologyJson>("/api/debug/topology", { signal: o?.signal }));
+  /** The watches polling now, stopped by the source's close. */
+  const live = new Set<Unsubscribe>();
   return {
     getTopology,
+    close() {
+      for (const off of [...live]) off();
+    },
     watchTopology(onTopology: (t: Topology) => void, onError: (e: DataSourceError) => void): Unsubscribe {
       let stopped = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -102,11 +107,14 @@ export function topologyReads(http: AdminHttp, opts: { topologyIntervalMs?: numb
             if (!stopped) timer = setTimeout(poll, intervalMs);
           });
       timer = setTimeout(poll, 0);
-      return () => {
+      const off = () => {
         stopped = true;
         clearTimeout(timer);
         ask.abort();
+        live.delete(off);
       };
+      live.add(off);
+      return off;
     },
   };
 }

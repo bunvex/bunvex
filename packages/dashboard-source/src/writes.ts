@@ -1,9 +1,10 @@
 // The Data screen's writes over a bunvex deployment (STUDY-149 PR 3), as Convex's dashboard makes them
 // (`dashboard-common/src/features/data/lib/useDataToolbarActions.ts`, `useToolPopup.tsx`, `DataSidebar.tsx`,
 // `ClearTableConfirmation.tsx`, `lib/api.ts`): the `_system/frontend` mutations over the socket (`addDocument`,
-// `patchDocumentsFields`, `replaceDocument`, `deleteDocuments`, `clearTablePage` called again on its cursor until
-// it has no more, `createTable`) with `componentId: null`, and `/api/delete_tables` over HTTP. The deployment
-// records each in its audit log; a watched table hears them through its subscriptions (tables.ts).
+// `patchDocumentsFields` with ids or, for "Edit all", without them, `replaceDocument`, `deleteDocuments`,
+// `clearTablePage` called again on its cursor until it has no more, `createTable`) with `componentId: null`, and
+// `/api/delete_tables` over HTTP. The deployment records each in its audit log; a watched table hears them through
+// its subscriptions (tables.ts).
 import { type DashboardDataSource, DataSourceError, type FieldPatch, type Value } from "@bunvex/dashboard/data-source";
 import { fromJsonValue, type JSONValue } from "@bunvex/values";
 import type { AdminHttp } from "./admin-http.ts";
@@ -51,6 +52,7 @@ export type Writes = Required<
     DashboardDataSource,
     | "insertDocuments"
     | "patchDocuments"
+    | "patchAllDocuments"
     | "replaceDocument"
     | "deleteDocuments"
     | "clearTable"
@@ -77,10 +79,12 @@ export function dataWrites(sync: AdminSync, http: AdminHttp, tables: Tables): Wr
       await mutate("addDocument", { table, documents: documents.map((d) => decoded(d)) }, o?.signal);
     },
     async patchDocuments(table, ids, fields, o) {
-      const patch: Args = {};
-      for (const [k, v] of Object.entries(fields as Record<string, FieldPatch>))
-        patch[k] = isUnset(v) ? UNDEFINED_PLACEHOLDER : decoded(v);
-      await mutate("patchDocumentsFields", { table, ids, fields: patch }, o?.signal);
+      await mutate("patchDocumentsFields", { table, ids, fields: fieldPatch(fields) }, o?.signal);
+    },
+    async patchAllDocuments(table, fields, o) {
+      // Convex's "Edit all" (`useDataToolbarActions.ts` `patchFields` with `rowIds === "all"`): the mutation
+      // without ids patches every document of the table in its one transaction; no pages, no filter
+      await mutate("patchDocumentsFields", { table, fields: fieldPatch(fields) }, o?.signal);
     },
     async replaceDocument(_table, id, document, o) {
       await mutate("replaceDocument", { id, document: decoded(document) }, o?.signal);
@@ -120,6 +124,13 @@ export function dataWrites(sync: AdminSync, http: AdminHttp, tables: Tables): Wr
         await new Promise((r) => setTimeout(r, 10));
     },
   };
+}
+
+/** A contract patch as the mutation's `fields`: values decoded, a removal the undefined placeholder. */
+function fieldPatch(fields: Record<string, FieldPatch>): Args {
+  const patch: Args = {};
+  for (const [k, v] of Object.entries(fields)) patch[k] = isUnset(v) ? UNDEFINED_PLACEHOLDER : decoded(v);
+  return patch;
 }
 
 const isUnset = (v: FieldPatch): v is { $unset: true } =>

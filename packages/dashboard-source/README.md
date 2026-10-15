@@ -22,8 +22,10 @@ deployment state (pause and resume), the logs (Convex's long poll on `stream_fun
 environment variables, authentication providers and snapshots (PR 4); the schedules, crons, files and audit log,
 every read a subscription while the screen watches and the busy lists auto-paused as Convex's, and Health's
 concurrency and subscription invalidations (PR 5); the topology, `/api/debug/topology` polled every 5 s (STUDY-131
-§11, AD-04). `apps/dashboard` runs on it since PR 6. Not offered (each
-optional method left undefined, so the screen hides or says so): `fileStats`; the subscriptions inspector and the
-system tables (their server side exists, AD-25 and AD-24); the clients, authentication admin and
+§11, AD-04). `apps/dashboard` runs on it since PR 6. The subscriptions
+inspector (STUDY-131 AD-25, `inspector.ts`): the live queries and the query cache over `/api/debug/*`, and the
+invalidations followed as a long poll, stopped while the deployment is disconnected. Not offered (each optional
+method left undefined, so the screen hides or says so): `fileStats`; the system tables (their server side exists,
+AD-24); the clients, authentication admin and
 the extensions (no server side yet). Its tests:
 `test/` (no server), and `packages/sync-e2e/dashboard` (the dashboard's contract suite on a live server).

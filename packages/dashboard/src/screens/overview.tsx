@@ -182,6 +182,8 @@ const Muted = ({ children }: { children: ReactNode }) => <span className="text-m
 
 /** The busiest functions whose latency the indicator watches. */
 const BUSIEST = 5;
+/** The functions the calls indicator sums: the most a deployment's top-k route answers (Convex's `MAX_K`). */
+const CALLS_TOP_K = 25;
 
 function Indicators() {
   const scope = useQueryScope();
@@ -189,7 +191,7 @@ function Indicators() {
   const metrics = useMetricsAccess("topFunctions") === "ok";
   const latencyOk = useMetricsAccess("latencyPercentiles") === "ok";
   const calls = useMetric(["overview", "calls"], metrics, (w, signal) =>
-    source.topFunctions!("invocations", w, 50, { signal }),
+    source.topFunctions!("invocations", w, CALLS_TOP_K, { signal }),
   );
   const failures = useFailures(metrics);
   const busiest = (calls.data ?? [])

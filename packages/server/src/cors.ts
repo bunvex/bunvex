@@ -1,16 +1,31 @@
 // Convex's CORS layer for its API (`crates/local_backend/src/router.rs` `cors()`, tower-http's `CorsLayer`):
 // every route under `/api` and the health routes; never HTTP actions (`/http/`, the site), which answer CORS
-// themselves (STUDY-31), nor the sync socket's upgrade. STUDY-67 H2.
+// themselves (STUDY-31), nor the sync socket's upgrade, nor the meta `/version` and `/metrics`. STUDY-67 H2, §9.
 
 const VARY = "origin, access-control-request-method, access-control-request-headers";
 const METHODS = "GET,POST,OPTIONS,PATCH,DELETE,PUT";
 
-/** The health routes (`health_check_routes`), which have the layer too; the meta `/version` does not. */
+/**
+ * The health routes (`health_check_routes`), which have the layer too, twice (theirs and the router's); the meta
+ * `/version` does not, so the dashboard reads `/instance_version`.
+ */
 const HEALTH = new Set(["/instance_name", "/instance_version", "/", "/echo"]);
 
-/** Whether Convex's layer wraps this path: `/api/*` (but the sync upgrade) and the health routes. */
+/**
+ * The CLI's routes (`router.rs` `cli_routes`), which have their own layer (`cli_cors()`) under the router's: their
+ * answers carry the `vary` list twice too; the router's layer answers their preflights.
+ */
+const CLI =
+  /^\/api\/(push_config|prepare_schema|deploy2\/[^/]+|run_test_function|get_config|get_config_hashes|schema_state\/[^/]+|stream_udf_execution|stream_function_logs|import|import\/[^/]+|perform_import|cancel_import)$/;
+
+/**
+ * Whether Convex's layer wraps this path: `/api/*` (but the sync upgrade) and the health routes; and bunvex's
+ * `/stats` (DV-162), which the dashboard reads from its own origin as it reads the `/api` routes (STUDY-67 §9).
+ */
 export const hasApiCors = (pathname: string) =>
-  (pathname.startsWith("/api/") && !/^\/api\/[^/]+\/sync$/.test(pathname)) || HEALTH.has(pathname);
+  (pathname.startsWith("/api/") && !/^\/api\/[^/]+\/sync$/.test(pathname)) ||
+  HEALTH.has(pathname) ||
+  pathname === "/stats";
 
 /**
  * Any `OPTIONS` request (tower-http answers it as a preflight before the route): 200, no body, every method,
@@ -30,11 +45,14 @@ export function preflight(req: Request): Response {
   return new Response(null, { status: 200, headers: h });
 }
 
-/** A response with Convex's CORS headers: credentials always, the origin mirrored when there is one. */
-export function withCors(req: Request, res: Response): Response {
+/**
+ * A response with Convex's CORS headers: credentials always, the origin mirrored when there is one. `twice`: a route
+ * under two layers (the health and the CLI routes) carries the `vary` list twice, once per layer.
+ */
+export function withCors(req: Request, res: Response, twice = false): Response {
   const origin = req.headers.get("origin");
   const set = (h: Headers) => {
-    h.set("vary", VARY);
+    h.set("vary", twice ? `${VARY}, ${VARY}` : VARY);
     h.set("access-control-allow-credentials", "true");
     if (origin !== null) h.set("access-control-allow-origin", origin);
   };
@@ -66,7 +84,7 @@ export function apiCors<S, R extends Response | undefined>(
     if (!hasApiCors(path)) return fetch(req, srv);
     if (req.method === "OPTIONS") return preflight(req) as R;
     const res = await fetch(req, srv);
-    return (res === undefined ? res : withCors(req, res)) as R;
+    return (res === undefined ? res : withCors(req, res, HEALTH.has(path) || CLI.test(path))) as R;
   };
 }
 

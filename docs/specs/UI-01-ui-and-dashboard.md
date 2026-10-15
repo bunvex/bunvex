@@ -44,7 +44,7 @@ editor (§12.5.7); **plain-path routes** (§11.2).
 `describeDataSourceContract` covers each area, the writes opt-in):
 
 - required: deployment, capabilities, stats, tables, schema, documents (list, get, `watchTable`), functions, logs (list, watch);
-- data: `insertDocuments`, `patchDocuments`, `replaceDocument`, `deleteDocuments`, `clearTable`, `createTable`, `deleteTables`, `tableOfId`, `inferDocumentType`;
+- data: `insertDocuments`, `patchDocuments`, `patchAllDocuments` (Convex's bulk edit, STUDY-149), `replaceDocument`, `deleteDocuments`, `clearTable`, `createTable`, `deleteTables`, `tableOfId`, `inferDocumentType`;
 - functions: `runFunction`, `watchFunction`;
 - deployment (`data-source-deployment.ts`): scheduled functions and crons, files (`listFiles`, `countFiles`, `fileStats`, `getFile`, `uploadFile`, `deleteFiles`, `watchFiles`), environment variables, the audit log;
 - state (`data-source-state.ts`): `getDeploymentState`, `pauseDeployment`, `resumeDeployment`;
@@ -704,6 +704,8 @@ interface DashboardDataSource {
   // optional, present when capabilities.writeData:
   insertDocuments?(table, docs: Record<string, Value>[], opts?): Promise<void>;  // all or nothing; no ids (Convex's)
   patchDocuments?(table, ids: string[], fields: Record<string, Value | { $unset: true }>, opts?): Promise<void>;
+  // every document of the table, in one transaction (Convex's bulk edit; STUDY-149 "Bulk edit")
+  patchAllDocuments?(table, fields: Record<string, Value | { $unset: true }>, opts?): Promise<void>;
   replaceDocument?(table, id, doc, opts?): Promise<void>;
   deleteDocuments?(table, ids: string[], opts?): Promise<void>;
   clearTable?(table, opts?): Promise<{ deleted: number }>;

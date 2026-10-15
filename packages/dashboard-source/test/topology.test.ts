@@ -162,6 +162,22 @@ describe("watchTopology", () => {
     expect(asked).toHaveLength(1);
   });
 
+  test("closing the reads stops every watch still polling", async () => {
+    const { http, asked } = answering(() => Response.json(answer()));
+    const reads = topologyReads(http, { topologyIntervalMs: 10 });
+    const got: Topology[] = [];
+    reads.watchTopology(
+      (t) => got.push(t),
+      () => {},
+    );
+    await Bun.sleep(25);
+    expect(got.length).toBeGreaterThan(0);
+    reads.close();
+    const sent = asked.length;
+    await Bun.sleep(50);
+    expect(asked.length).toBe(sent);
+  });
+
   test("the default cadence is the server's sampling period", () => {
     expect(TOPOLOGY_INTERVAL_MS).toBe(5_000);
   });

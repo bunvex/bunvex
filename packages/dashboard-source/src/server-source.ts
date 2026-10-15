@@ -29,10 +29,12 @@ import { AdminHttp, type FetchFn } from "./admin-http.ts";
 import { capabilitiesOf } from "./credentials.ts";
 import { deploymentReads } from "./deployment.ts";
 import { Functions } from "./functions.ts";
+import { Inspector } from "./inspector.ts";
 import { LogStream, type LogStreamOptions } from "./logs.ts";
 import { Metrics } from "./metrics.ts";
 import { Settings } from "./settings.ts";
 import { AdminSync, watchConnection } from "./sync.ts";
+import { SystemTables } from "./system-tables.ts";
 import { Tables } from "./tables.ts";
 import { topologyReads } from "./topology.ts";
 import { dataWrites } from "./writes.ts";
@@ -115,6 +117,8 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
   };
   const functions = new Functions(sync, http, opts, capabilities);
   const settings = new Settings(sync, http);
+  // the system tables (STUDY-131 AD-24)
+  const systemTables = new SystemTables(sync);
 
   const getStats = async (o?: CallOptions): Promise<DeploymentStats> => {
     const s = await http.json<StatsJson>("/stats", { signal: o?.signal });
@@ -146,7 +150,9 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     async getDeployment(o) {
       const [name, version, storage, urls] = await Promise.all([
         http.text("/instance_name", { signal: o?.signal }),
-        http.text("/version", { signal: o?.signal }),
+        // the health route, not the meta `/version`: only the health routes answer another origin, as Convex's
+        // (STUDY-67 §9); both carry the same version
+        http.text("/instance_version", { signal: o?.signal }),
         // `/stats` needs ViewMetrics; without it the persistence is not shown
         http.json<StatsJson>("/stats", { signal: o?.signal }).then(
           (s) => s.storage,
@@ -290,6 +296,10 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     // ---------------------------------------------------------------- the Data screen's writes (PR 3, writes.ts)
     ...writes,
 
+    // ---------------------------------------------------------------- the system tables (STUDY-131 AD-24), read-only
+    listSystemTables: (o) => systemTables.listSystemTables(o),
+    listSystemDocuments: (q, o) => systemTables.listSystemDocuments(q, o),
+
     // ---------------------------------------------------------------- the connection, polled every 2.5 s as Convex's
     watchConnection: (onStatus) => watchConnection(() => sync.connectionState(), onStatus),
     close,
@@ -298,9 +308,31 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     },
   };
 
+  // ---------------------------------------------------------------- the subscriptions inspector (STUDY-131 AD-25)
+  // Its own block: the follow loops stop while the deployment is disconnected, and with the source.
+  const inspector = new Inspector(http, { connection: (onStatus) => source.watchConnection!(onStatus) });
+  source.getSubscriptions = (filter, o) => inspector.getSubscriptions(filter, o);
+  source.getQueryCache = (filter, o) => inspector.getQueryCache(filter, o);
+  source.watchInvalidations = (filter, onEvents, onError) => inspector.watchInvalidations(filter, onEvents, onError);
+  const closeBeforeInspector = source.close;
+  source.close = () => {
+    inspector.close();
+    return closeBeforeInspector();
+  };
+  source[Symbol.dispose] = () => void source.close();
+
   // ---------------------------------------------------------------- the topology (STUDY-131 §11, AD-04)
-  // `/api/debug/topology`, polled while the screen watches: the deployment's one node, its store and lease.
-  Object.assign(source, topologyReads(http, opts));
+  // `/api/debug/topology`, polled while the screen watches: the deployment's one node, its store and lease. Its
+  // polls stop with the source.
+  const topology = topologyReads(http, opts);
+  source.getTopology = topology.getTopology;
+  source.watchTopology = topology.watchTopology;
+  const closeBeforeTopology = source.close;
+  source.close = () => {
+    topology.close();
+    return closeBeforeTopology();
+  };
+  source[Symbol.dispose] = () => void source.close();
 
   return source;
 }

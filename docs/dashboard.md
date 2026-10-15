@@ -123,6 +123,7 @@ As Convex's dashboard ([STUDY-149 §1.2](study/STUDY-149-dashboard-real-data.md#
 |---|---|
 | Data: the table list, documents, sizes, indexes, schema | live (a subscription) |
 | Data: inferred types | every 60 s |
+| Data: system tables ("Show system tables", a bunvex addition) | once, when listed or opened (not live) |
 | Functions: the list, the runner's query, its argument validator | live |
 | Functions: a function's charts | once per time window |
 | Functions: a mutation's invalidations | every 8 s |
@@ -131,6 +132,8 @@ As Convex's dashboard ([STUDY-149 §1.2](study/STUDY-149-dashboard-real-data.md#
 | Health: scheduler lag | every 60 s |
 | Schedules, Files | live, paused automatically past 100 updates in 10 s (Pause / Go live, Refresh while paused) |
 | History (audit log), environment variables, deployment state | live |
+| Subscriptions: live queries, query cache | every 5 s, slower when the deployment takes long to answer (at most 1 % of its time, at least once a minute) |
+| Subscriptions: followed invalidations | a long poll, from when you press "Follow invalidations" |
 | Topology | every 5 s (the server samples its counters every 5 s; a minute of history) |
 
 While the deployment cannot be reached, "Connection issue" covers the screens and the polls stop; when it comes
@@ -140,15 +143,19 @@ back the polls ask again at once and the subscriptions resume.
 
 - The custom test query has no type checking or completions (Convex ships its server's declarations to the
   browser).
-- No bulk edit of documents yet (bulk edit: in progress), and the Data screen's index list leaves out search,
-  vector and staged indexes. Going to a system table's document by its id is not offered.
+- The Data screen's index list leaves out search, vector and staged indexes, and its editors do not check what is
+  typed against the schema as Convex's do (the deployment's refusal says the same when saving). Going to a system
+  table's document by its id is not offered.
+  Going to a system table's document by its id is not offered (Convex opens a file's id in Files and a scheduled
+  run's in Schedules).
 - The environment variables screen does not open a given variable from a link (Convex's `?var=`).
 - Cloud-only screens are absent, as in Convex's self-hosted dashboard: insights, backups, custom domains, team,
   billing and usage. bunvex keeps its own additions that work on a deployment (the Overview's summary,
-  Snapshots in Settings, the command palette, the Logs screen's histogram and export, Topology).
+  Snapshots in Settings, the command palette, the Logs screen's histogram and export, the system tables,
+  Subscriptions: which queries are live, what each read and why it ran again, with Logs' "why it ran" links to it,
+  and Topology).
 - Some of bunvex's own screens open on the demo data only, and are hidden on a deployment (or say it does not
-  offer them): Subscriptions and the system tables (their server side exists; the dashboard does not read it
-  yet), and Authentication's user management, the clients, Analytics, Feature flags and Workflows (no server
+  offer them): Authentication's user management, the clients, Analytics, Feature flags and Workflows (no server
   side yet). The Files screen's storage used, views by type and size filters need sizes per kind,
   which a deployment does not report ([additions.md](parity/additions.md)).
 - Topology shows the deployment's one process, the leader. It shows the clients connected to it (the dashboard's
