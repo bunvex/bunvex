@@ -2,10 +2,10 @@
 
 - **Status:** decided (owner, 2026-10-12); PR 1 built (`@bunvex/dashboard-source`, §5 "PR 1, as built"); PRs 2–5
   built (§5); PR 6 built (`apps/dashboard` on the real source, §5 "PR 6, as built"); PR 7 built (packaging: the
-  dashboard's image, `dashboard.zip`, the local dashboard, `bunvex dashboard serve`, §5 "PR 7, as built"), and its follow-up, the server's frame and security headers (§5 "PR 7 follow-up", DV-488); PR 8 built
-  (the CLI's dashboard links, DV-477, and the user docs, `docs/dashboard.md`, §5 "PR 8, as built") — **the plan is
-  done**. Q1: option B, a
-  separate service with its own image (DV-475); Q3: rename (DV-474); Q4: Convex's model plus a `Host` check
+  dashboard's image, `dashboard.zip`, the local dashboard, `bunvex dashboard serve`, §5 "PR 7, as built"), and its
+  follow-up, the server's frame and security headers (§5 "PR 7 follow-up", DV-488); PR 8 built (the CLI's dashboard
+  links, DV-477, and the user docs, `docs/dashboard.md`, §5 "PR 8, as built") — **the plan is done**. Q1: option B,
+  a separate service with its own image (DV-475); Q3: rename (DV-474); Q4: Convex's model plus a `Host` check
   (DV-476); Q5: local links only (DV-477, replaces DV-217); Q2, Q6, Q7 confirmed as planned; AD-32 not taken.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/dashboard-common`,
   `dashboard-self-hosted`, `dashboard`, `system-udfs/convex/_system/frontend`, `@convex-dev/platform`,
