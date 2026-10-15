@@ -23,6 +23,11 @@ export type CodeEditorProps = {
   error?: { message: string; offset?: number };
   /** More problems to underline, each at its offset (the field's message stays `error`'s). */
   moreErrors?: { message: string; offset: number }[];
+  /**
+   * Problems that do not stop the text from being used, underlined as warnings at their offsets (Convex's editor
+   * marks a value that does not fit a schema that is not enforced this way).
+   */
+  warnings?: { message: string; offset: number }[];
   /** Ids of elements that describe the field (a hint, the error text). */
   describedBy?: string;
   autoFocus?: boolean;
@@ -34,6 +39,12 @@ export type CodeEditorProps = {
    * runner's custom test query: highlighted and checked for syntax errors, not for types).
    */
   language?: "literal" | "typescript";
+  /**
+   * TypeScript only: the text's file in the editor's file system, and the files it is typed against
+   * (`file:///…` → text: declarations, the project's own files). Given, the text is checked for type errors and
+   * Monaco completes it (STUDY-162); absent, it is checked for syntax only.
+   */
+  typescript?: { path: string; files: Record<string, string> };
   className?: string;
 };
 

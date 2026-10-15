@@ -15,7 +15,7 @@
 // - the deployment's function logs are tailed to stderr (`--tail-logs`, default `pause-on-deploy`: held back
 //   while a push runs), as `bunvex logs` prints them (STUDY-47).
 import { type FSWatcher, readdirSync, statSync, watch } from "node:fs";
-import { join, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import { BunvexClient, makeFunctionReference } from "@bunvex/client";
 import {
   argumentError,
@@ -34,12 +34,17 @@ import { startLocalDashboard } from "./local-dashboard.ts";
 import {
   backendLogPath,
   configuredDeployment,
+  type EnvLocalChanges,
+  envLocalChanged,
+  eraseDeploymentVar,
   type LocalOptions,
+  LocalSetupDeclined,
   startLocalDeployment,
-  urlVariables,
   writeEnvLocal,
+  writeUrlsToEnvLocal,
 } from "./local-deployment.ts";
 import { COLORS, LogManager, type LogMode, NO_COLORS, watchLogs } from "./logs.ts";
+import { formatDuration } from "./network-test.ts";
 import { runCommand } from "./run.ts";
 import { resolveTarget, TARGET_OPTIONS, type Target, takeTargetFlags } from "./target.ts";
 import { startVersionCheck } from "./version-check.ts";
@@ -256,6 +261,83 @@ const sleep = (ms: number, signal: AbortSignal) =>
 
 const clock = () => new Date().toTimeString().slice(0, 8);
 
+/** Where bunvex's users give feedback: the repository's issues (Convex names its community and support address). */
+export const FEEDBACK_URL = "https://github.com/bunvex/bunvex/issues";
+
+/**
+ * Convex's `finalizeConfiguration` lines for a local deployment: what `.env.local` now holds, only what changed,
+ * then the `.gitignore` line; nothing when nothing changed.
+ */
+export function configurationLines(url: string, c: EnvLocalChanges): string | null {
+  const urls = [
+    ...(c.url ? [`    client URL as ${c.url}\n`] : []),
+    ...(c.site ? [`    HTTP actions URL as ${c.site}\n`] : []),
+  ];
+  const lines: string[] = [];
+  if (urls.length > 0)
+    lines.push(
+      `✔ Configured a local deployment for ${url} and saved its:\n${c.deployment ? "    name as BUNVEX_DEPLOYMENT\n" : ""}${urls.join("")} to .env.local`,
+    );
+  else if (c.deployment)
+    lines.push(`✔ Configured a local deployment for ${url} and saved its name as BUNVEX_DEPLOYMENT to .env.local`);
+  if (c.gitignore) lines.push(`  Added ".env.local" to .gitignore`);
+  return lines.length > 0 ? lines.join("\n") : null;
+}
+
+/**
+ * Convex's closing lines after a changed configuration: where the functions go, where to give feedback, and the
+ * dashboard (only while `dev` serves one, DV-477).
+ */
+export function nextSteps(functions: string, cwd: string, dashboard: string | null): string {
+  const dir = `${relative(cwd, functions) || "."}/`;
+  return (
+    `\nWrite your bunvex functions in ${dir}\nGive us feedback at ${FEEDBACK_URL}\n` +
+    (dashboard === null ? "" : `View the bunvex dashboard at ${dashboard}\n`)
+  );
+}
+
+/**
+ * The deployment `dev` works on, as Convex's `announceDeploymentTarget` prints it without colours: the header, a
+ * local deployment's tag line (its port, and its dashboard: a link on a terminal, the URL otherwise), the URL.
+ */
+export function announceTarget(url: string, local: { port: number; dashboard: string | null } | null, io: Io): string {
+  const link = (text: string, href: string) => `\x1b]8;;${href}\x1b\\${text}\x1b]8;;\x1b\\`;
+  const dashboard =
+    local?.dashboard == null
+      ? ""
+      : io.isTTY
+        ? ` (${link("dashboard", local.dashboard)})`
+        : ` (dashboard: ${local.dashboard})`;
+  return [
+    "▌ Developing against deployment:",
+    ...(local ? [`▌ [Local] Port ${local.port}${dashboard}`] : []),
+    `▌ └─ ${io.isTTY ? link(url, url) : url}`,
+  ].join("\n");
+}
+
+/**
+ * A self-hosted `dev`'s configuration (Convex's `handleManuallySetUrlAndAdminKey`): `BUNVEX_DEPLOYMENT` out of
+ * `.env.local`, and the deployment's canonical URLs in as the client's variables, each change said. URLs the
+ * deployment does not give leave the file as it is.
+ */
+async function saveSelfHostedUrls(io: Io, target: Target) {
+  if (eraseDeploymentVar(io.cwd)) io.err("Removed the BUNVEX_DEPLOYMENT environment variable from .env.local");
+  let urls: { bunvexCloudUrl?: string; bunvexSiteUrl?: string | null };
+  try {
+    const r = await fetch(`${target.url}/api/v1/get_canonical_urls`, {
+      headers: { authorization: `Bunvex ${target.adminKey}` },
+    });
+    if (!r.ok) return;
+    urls = (await r.json()) as typeof urls;
+  } catch {
+    return; // unreachable: the push says so, and retries
+  }
+  if (!urls.bunvexCloudUrl) return;
+  const saved = writeUrlsToEnvLocal(io.cwd, urls.bunvexCloudUrl, urls.bunvexSiteUrl ?? null);
+  const names = [saved.url, saved.site].filter((n) => n !== null);
+  if (names.length > 0) io.err(`Saved ${names.join(" and ")} to .env.local`);
+}
+
 /**
  * Resolves when a system query's result changes (Convex's `getFunctionWatch`): a subscription whose first
  * result is the current state, the next one a change. Used for the deployment's environment variables
@@ -307,6 +389,9 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
     let localLog: string | null = null;
     // the local dashboard this `dev` serves, which its pushes link (DV-477); none on a self-hosted deployment
     let dashboardLink: DashboardLink = NO_DASHBOARD;
+    // a local deployment's port and dashboard, for the line naming the deployment
+    let localPort: number | null = null;
+    let localDashboard: string | null = null;
     try {
       target = resolveTarget(taken.flags, io);
     } catch (e) {
@@ -334,21 +419,19 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
       try {
         local = await startLocalDeployment(io, flags.local);
       } catch (e) {
-        io.err(`bunvex dev: ${(e as Error).message}`);
+        io.err(e instanceof LocalSetupDeclined ? e.message : `bunvex dev: ${(e as Error).message}`);
         return 1;
       }
       cleanup.push(local.stop);
       target = local.target;
-      const vars = urlVariables(io.cwd);
-      const envChanged = writeEnvLocal(
+      const changes = writeEnvLocal(
         io.cwd,
         local.config.deploymentName,
         local.config.ports.cloud,
         local.config.ports.site,
       );
-      io.err(
-        `✔ Started running a deployment locally at ${target.url} and saved its:\n    name as BUNVEX_DEPLOYMENT to .env.local\n    URLs as ${vars.url} and ${vars.site} to .env.local`,
-      );
+      const lines = configurationLines(target.url, changes);
+      if (lines) io.err(lines);
       // Convex's local dashboard beside a long-running `dev` (`handleDashboard`, STUDY-149 PR 7); one that cannot be
       // downloaded is a warning, not Convex's stop (DV-486); one that cannot be served stops `dev`, as Convex's.
       if (!flags.once && !flags.untilSuccess) {
@@ -367,10 +450,15 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
       }
       // Convex's `finalizeConfiguration` ends the lines about a changed `.env.local` with "View the … dashboard at"
       // its local dashboard's URL; bunvex prints it once the dashboard serves, and leaves it out without one (DV-477).
-      const root = await dashboardLink();
-      if (envChanged && root !== null) io.err(`View the bunvex dashboard at ${root}`);
+      if (envLocalChanged(changes)) io.err(nextSteps(functionsDir(io.cwd), io.cwd, await dashboardLink()));
+      localDashboard = await dashboardLink();
+      localPort = local.config.ports.cloud;
+    } else {
+      // A deployment named by its URL and admin key (self-hosted): its URLs into `.env.local`, as Convex's
+      // `handleManuallySetUrlAndAdminKey`.
+      await saveSelfHostedUrls(io, target);
     }
-    io.err(`Developing against deployment: ${target.url}`);
+    io.err(announceTarget(target.url, localPort === null ? null : { port: localPort, dashboard: localDashboard }, io));
     // The version check (AD-29) beside the first push, as Convex's version message; its notice when it comes.
     void startVersionCheck(io).then((notice) => {
       if (notice && !stop.signal.aborted) io.err(notice);
@@ -409,7 +497,7 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
       if (stop.signal.aborted) break;
       if (r.code === 0) {
         backoff = 500;
-        io.err(`✔ ${clock()} bunvex functions ready! (${((performance.now() - t0) / 1000).toFixed(2)}s)`);
+        io.err(`✔ ${clock()} bunvex functions ready! (${formatDuration(performance.now() - t0)})`);
         if (first) {
           first = false;
           if (flags.run !== undefined) {
@@ -441,7 +529,7 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
           break;
         }
         const wait = Math.round(backoff * (0.5 + Math.random()));
-        io.err(`Failed due to network error, retrying in ${(wait / 1000).toFixed(2)}s...`);
+        io.err(`Failed due to network error, retrying in ${formatDuration(wait)}...`);
         await sleep(wait, stop.signal);
         backoff = Math.min(backoff * 2, 16_000);
         continue;

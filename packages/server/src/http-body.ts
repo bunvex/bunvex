@@ -12,8 +12,9 @@
 //
 // A chunk is bytes (an ArrayBuffer or a view of one) or nothing (null or undefined, skipped): Convex's runtime hands
 // each chunk to its `stream/extend` op (`06_streams.ts` `constructStreamId`, `crates/isolate/src/ops/stream.rs`), whose
-// `Option<ByteBuf>` argument refuses anything else, so a string, a number or an object fails the body as above, with
-// serde_v8's message (STUDY-161 §15).
+// `Option<ByteBuf>` argument refuses anything else, so a string, a number or an object fails the body as above. The
+// error is Convex's in all but its words: serde_v8's message names a library bunvex does not use, so bunvex says what
+// a chunk must be, with the same type names (DV-529, STUDY-161 §15).
 import { types } from "node:util";
 import { formatBytes } from "@bunvex/core";
 import { describeUncaught } from "./errors.ts";
@@ -127,7 +128,7 @@ export function meteredBody(body: ReadableStream<Uint8Array>, signal?: AbortSign
 
 /**
  * A chunk Convex's `stream/extend` takes: an ArrayBuffer, or a view of one, of any realm, neither shared nor
- * resizable (serde_v8 refuses both).
+ * resizable (Convex's serde_v8 refuses both).
  */
 function isBytes(v: unknown): v is ArrayBuffer | ArrayBufferView {
   const buffer = ArrayBuffer.isView(v) ? v.buffer : v;
@@ -141,15 +142,15 @@ const resizable = (buffer: object) => {
 };
 
 /**
- * serde_v8's error for a chunk its `ByteBuf` refuses (`magic/v8slice.rs`, v8's `Value::type_repr` names the value),
- * raised in Convex's Rust: an `Error` with no frames of the app.
+ * The error for a chunk Convex's `ByteBuf` refuses (serde_v8's `magic/v8slice.rs`; v8's `Value::type_repr` names the
+ * value), raised in Convex's Rust: an `Error` with no frames of the app. Its words are bunvex's (DV-529).
  */
 function notBytes(v: unknown): Error {
   const buffer = ArrayBuffer.isView(v) ? v.buffer : v;
   const e = new Error(
     types.isAnyArrayBuffer(buffer) && resizable(buffer)
-      ? "serde_v8 error: can't create slice from resizable ArrayBuffer"
-      : `serde_v8 error: invalid type; expected: buffer, got: ${typeRepr(v)}`,
+      ? "HTTP action response body chunks must not be a resizable ArrayBuffer or a view of one"
+      : `HTTP action response body chunks must be an ArrayBuffer or a view of one, got ${typeRepr(v)}`,
   );
   e.stack = `Error: ${e.message}`;
   return e;
