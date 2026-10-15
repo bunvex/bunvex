@@ -4,7 +4,7 @@ import { TooltipProvider } from "@bunvex/ui/components/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserHistory, type RouterHistory, RouterProvider } from "@tanstack/react-router";
 import { lazy, type ReactNode, Suspense, useState } from "react";
-import { QueryScopeContext, TraceUrlContext } from "./context.tsx";
+import { QueryScopeContext, QueryTypesContext, TraceUrlContext } from "./context.tsx";
 import { type DashboardDataSource, toDataSourceError } from "./data-source.ts";
 import { ExtensionsContext } from "./extensions/context.ts";
 import { extensions as registeredExtensions } from "./extensions/index.ts";
@@ -42,6 +42,12 @@ export type DashboardProps = {
    * accessible at …", as Convex's self-hosted dashboard says it). Default: the deployment's own URL, when known.
    */
   deploymentUrl?: string;
+  /**
+   * The declarations the runner's custom test query is typed against (STUDY-162), loaded the first time it opens:
+   * `file:///node_modules/…` → text (`apps/dashboard`'s build bundles `bunvex/server` and `bunvex/values`'s).
+   * Without it, the query is checked for syntax only.
+   */
+  queryTypes?: () => Promise<Record<string, string>>;
 };
 
 const Devtools = lazy(() => import("./devtools.tsx"));
@@ -68,6 +74,7 @@ export function Dashboard({
   extensions = registeredExtensions,
   traceUrl,
   deploymentUrl,
+  queryTypes,
 }: DashboardProps) {
   const [queryClient] = useState(() => hostClient ?? createDashboardQueryClient());
   const [queryScope] = useState(() => ({ source: dataSource, scope }));
@@ -87,7 +94,9 @@ export function Dashboard({
             <TooltipProvider>
               <ExtensionsContext.Provider value={extensions}>
                 <TraceUrlContext.Provider value={traceUrl}>
-                  <RouterProvider router={router} />
+                  <QueryTypesContext.Provider value={queryTypes}>
+                    <RouterProvider router={router} />
+                  </QueryTypesContext.Provider>
                 </TraceUrlContext.Provider>
               </ExtensionsContext.Provider>
               {devtools && (
