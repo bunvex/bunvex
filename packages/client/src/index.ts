@@ -67,6 +67,8 @@ export type {
   RoomMemberView,
   RoomStatus,
 } from "./rooms.ts";
+/** @internal the canonical (key-sorted) JSON the client keys memberships by. */
+export { canonical as canonicalJson } from "./rooms.ts";
 export {
   BunvexClient,
   type BunvexClientOptions,

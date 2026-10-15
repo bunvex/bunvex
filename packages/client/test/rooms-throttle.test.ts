@@ -193,3 +193,133 @@ describe("memberships", () => {
     expect(g.error).toEqual({ code: "no_access", message: "first" });
   });
 });
+
+describe("memberships the server ends, a new identity, and idle per handle", () => {
+  const joinOf = (sent: v1.ClientMessage[]) => sent.filter((m): m is v1.RoomJoin => m.type === "RoomJoin").at(-1)!;
+
+  test("RoomLeft on a joined room is terminal: status error, members cleared, and nothing more is sent", () => {
+    const { rooms, sent, advance } = setup();
+    const h = rooms.joinRoom<{ x: number }, { wave: number }>("rooms:doc", {});
+    const roomId = joinOf(sent).roomId;
+    rooms.onMessage({
+      type: "RoomSync",
+      roomId,
+      self: "me",
+      canPublish: true,
+      members: [{ memberId: "u", userId: null, presence: null }],
+    });
+    let calls = 0;
+    h.subscribe(() => calls++);
+    rooms.onMessage({ type: "RoomLeft", roomId, code: "no_access", message: "You cannot join this room." });
+    expect(h.status).toBe("error");
+    expect(h.error).toEqual({ code: "no_access", message: "You cannot join this room." });
+    expect(h.others()).toEqual([]);
+    expect(h.canPublish).toBe(false);
+    expect(calls).toBe(1);
+    sent.length = 0;
+    h.setPresence({ x: 1 });
+    h.broadcast("wave", 1);
+    advance(500);
+    expect(sent).toEqual([]);
+  });
+
+  test("a refused room sends no presence or event (no warning spam); a retry carries the presence", () => {
+    const { rooms, sent, advance } = setup();
+    const h = rooms.joinRoom<{ x: number }, { wave: number }>("rooms:doc", {});
+    rooms.onMessage({ type: "RoomError", roomId: joinOf(sent).roomId, code: "no_access", message: "no" });
+    sent.length = 0;
+    h.setPresence({ x: 2 });
+    h.broadcast("wave", 1);
+    advance(500);
+    expect(sent).toEqual([]);
+    rooms.onAuthenticate();
+    expect(sent.map((m) => m.type)).toEqual(["RoomJoin", "RoomPresence"]);
+    expect(sent[1]).toMatchObject({ roomId: (sent[0] as v1.RoomJoin).roomId, presence: { x: 2 } });
+  });
+
+  test("a new Authenticate rejoins memberships in error under a fresh room id, and leaves the others alone", () => {
+    const { rooms, sent } = setup();
+    const refused = rooms.joinPresence("rooms:online", {});
+    const refusedId = joinOf(sent).roomId;
+    const ok = rooms.joinRoom("rooms:doc", {});
+    const okId = joinOf(sent).roomId;
+    rooms.onMessage({ type: "RoomError", roomId: refusedId, code: "no_access", message: "sign in" });
+    rooms.onMessage({ type: "RoomSync", roomId: okId, self: "me", canPublish: true, members: [] });
+    sent.length = 0;
+    rooms.onAuthenticate();
+    expect(sent).toHaveLength(1);
+    const again = sent[0] as v1.RoomJoin;
+    expect(again).toMatchObject({ type: "RoomJoin", kind: "presence", name: "rooms:online" });
+    expect(again.roomId).not.toBe(refusedId);
+    expect(again.roomId).not.toBe(okId);
+    expect(refused.status).toBe("joining");
+    expect(refused.error).toBeNull();
+    expect(ok.status).toBe("joined");
+    rooms.onMessage({ type: "RoomSync", roomId: again.roomId, self: "ada", canPublish: true, members: [] });
+    expect(refused.status).toBe("joined");
+    // The old id is no longer this membership's.
+    rooms.onMessage({ type: "RoomError", roomId: refusedId, code: "no_access", message: "late" });
+    expect(refused.status).toBe("joined");
+  });
+
+  test("a join in flight when Authenticate went out, refused under the old identity, is retried", () => {
+    const { rooms, sent } = setup();
+    const p = rooms.joinPresence("rooms:online", {});
+    const first = joinOf(sent).roomId;
+    rooms.onAuthenticate(); // the RoomJoin went out before it; its answer is not in yet
+    expect(sent.filter((m) => m.type === "RoomJoin")).toHaveLength(1);
+    rooms.onMessage({ type: "RoomError", roomId: first, code: "no_access", message: "sign in" });
+    expect(p.status).toBe("joining");
+    const retry = joinOf(sent);
+    expect(retry.roomId).not.toBe(first);
+    rooms.onMessage({ type: "RoomError", roomId: retry.roomId, code: "no_access", message: "still no" });
+    expect(p.status).toBe("error"); // under the new identity: final
+  });
+
+  test("RoomLeft memberships rejoin on the next Authenticate", () => {
+    const { rooms, sent } = setup();
+    const h = rooms.joinRoom("rooms:doc", {});
+    const roomId = joinOf(sent).roomId;
+    rooms.onMessage({ type: "RoomSync", roomId, self: "me", canPublish: true, members: [] });
+    rooms.onMessage({ type: "RoomLeft", roomId, code: "no_access", message: "no" });
+    sent.length = 0;
+    rooms.onAuthenticate();
+    expect(sent.map((m) => m.type)).toEqual(["RoomJoin"]);
+    expect(h.status).toBe("joining");
+  });
+
+  test("args differing only by a __proto__ key are separate client keys", async () => {
+    const { canonical } = await import("../src/rooms.ts");
+    expect(canonical(JSON.parse('{"x":1,"__proto__":{"y":2}}'))).not.toBe(canonical({ x: 1 }));
+    expect(canonical(JSON.parse('{"__proto__":{"y":2},"x":1}'))).toBe('{"__proto__":{"y":2},"x":1}');
+  });
+
+  test("idle is per handle: the idle handle's leave makes the membership active for the one that remains", () => {
+    const { rooms, presences, advance } = setup();
+    const a = rooms.joinPresence<{ s: number }>("rooms:online", {});
+    const b = rooms.joinPresence<{ s: number }>("rooms:online", {});
+    b.setState({ s: 1 });
+    a.setIdle(true);
+    advance(60);
+    expect(presences().at(-1)).toMatchObject({ presence: { s: 1 }, idle: true });
+    a.leave(); // as React runs a component's cleanups: the handle's leave, then its idle reset (dropped)
+    a.setIdle(false);
+    advance(60);
+    expect(presences().at(-1)).toMatchObject({ presence: { s: 1 }, idle: false });
+    expect(b.status).toBe("joining");
+  });
+
+  test("a membership is idle only when every handle that reported idle says so", () => {
+    const { rooms, presences, advance } = setup();
+    const a = rooms.joinPresence<{ s: number }>("rooms:online", {});
+    const b = rooms.joinPresence<{ s: number }>("rooms:online", {});
+    a.setState({ s: 1 });
+    a.setIdle(true);
+    b.setIdle(false);
+    advance(60);
+    expect(presences().at(-1)?.idle).toBe(false);
+    b.setIdle(true);
+    advance(60);
+    expect(presences().at(-1)?.idle).toBe(true);
+  });
+});

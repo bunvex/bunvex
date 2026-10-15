@@ -923,10 +923,10 @@ const MESSAGE_SPANS: Record<v1.ClientMessage["type"], string> = {
   Action: "action",
   Authenticate: "authenticate",
   Event: "event",
-  RoomJoin: "sync.room_join",
-  RoomLeave: "sync.room_leave",
-  RoomPresence: "sync.room_presence",
-  RoomEvent: "sync.room_event",
+  RoomJoin: "room-join",
+  RoomLeave: "room-leave",
+  RoomPresence: "room-presence",
+  RoomEvent: "room-event",
 };
 
 /** One connection's sync state and its message handling. */

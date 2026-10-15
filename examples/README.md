@@ -57,6 +57,7 @@ drives it in Chromium; any page error or console error fails the test.
 | [custom-errors](custom-errors) | `BunvexError` with a message or data, from mutations and queries |
 | [relational-data-modeling](relational-data-modeling) | Channels and messages: `v.id`, an index, a join |
 | [pagination](pagination) | `usePaginatedQuery`, `loadMore`, a page that stays live |
+| [rooms-cursors](rooms-cursors) | `room` and `presence`: live cursors, a wave and who is online, held in memory (AD-42) |
 | [search](search) | Full-text search over a `searchIndex`, live |
 | [vector-search](vector-search) | `vectorSearch` with embeddings from an action (OpenAI) |
 | [file-storage](file-storage) | Upload URLs, `ctx.storage`, serving files |

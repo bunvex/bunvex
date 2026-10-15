@@ -298,6 +298,21 @@ describe("a request is one trace", () => {
 });
 
 describe("sync", () => {
+  test("room messages are spans named as the other messages: sync-worker/room-join, room-leave", async () => {
+    const c = collector();
+    const s = await setup({ url: c.url });
+    const ws = await v1Client(syncUrl(s.server!.port));
+    cleanups.push(() => ws.ws.close());
+    ws.send({ type: "RoomJoin", roomId: 1, kind: "room", name: "rooms:none", args: {} });
+    ws.send({ type: "RoomLeave", roomId: 1 });
+    await ws.until(() => ws.got.find((m) => m.type === "RoomError"));
+    await Bun.sleep(50);
+    await settle(s.spanExporter);
+    const names = c.spans().map((x) => x.name);
+    expect(names).toContain("sync-worker/room-join");
+    expect(names).toContain("sync-worker/room-leave");
+  });
+
   test("a subscription's re-run after a commit: a transition with the query it re-ran, under it", async () => {
     const c = collector();
     const s = await setup({ url: c.url });
