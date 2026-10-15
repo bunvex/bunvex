@@ -49,7 +49,14 @@ class Bucket {
     return true;
   }
 }
-type Member = { memberId: string; userId: string | null; presence: JSONValue | null; attachments: Set<Attachment> };
+type Member = {
+  memberId: string;
+  /** Its key in the room: the user in a scope; the session and the user in a room (`memberKeyOf`). */
+  memberKey: string;
+  userId: string | null;
+  presence: JSONValue | null;
+  attachments: Set<Attachment>;
+};
 type Attachment = {
   sink: RoomSink;
   roomId: number;
@@ -63,13 +70,21 @@ type Attachment = {
 };
 type Room = { key: RoomKey; members: Map<string, Member>; changed: Set<Member>; left: string[] };
 
+/**
+ * A member's key: a scope's member is its user; a room's is the session's connection as one user, so two live
+ * sockets of one session signed in as two users are two members.
+ */
+const memberKeyOf = (kind: v1.RoomKind, sessionId: string, userId: string | null) =>
+  kind === "presence" ? userId! : `${sessionId}|${userId ?? ""}`;
+
 /** A scope member's idle: every attachment idle (a member with none is not idle). */
 const idleOf = (m: Member) => m.attachments.size > 0 && [...m.attachments].every((x) => x.idle);
 
 export class RoomHub {
   private readonly rooms = new Map<string, Room>();
   private readonly bySink = new Map<RoomSink, Map<number, Attachment>>();
-  private readonly graced = new Map<string, Attachment>();
+  /** Attachments in their grace, by `${sessionId}|${room key}`, then by member key. */
+  private readonly graced = new Map<string, Map<string, Attachment>>();
   private tick: unknown | null = null;
 
   constructor(
@@ -99,16 +114,21 @@ export class RoomHub {
       }
     }
     if (mine.size >= this.limits.roomsPerConnection) return "limit";
-    const kept = this.graced.get(`${sink.sessionId}|${ks}`);
-    if (kept && kept.member.userId !== who.userId) {
-      // A rejoin within the grace as another user: the old member ends at once, and this is a fresh join.
-      this.timers.clear(kept.grace);
-      this.graced.delete(`${sink.sessionId}|${ks}`);
-      this.detachOne(kept);
-    } else if (kept) {
+    const memberKey = memberKeyOf(key.kind, sink.sessionId, who.userId);
+    const gk = `${sink.sessionId}|${ks}`;
+    const inGrace = this.graced.get(gk);
+    const kept = inGrace?.get(memberKey);
+    // A rejoin within the grace as another user: the old member ends at once, and this is a fresh join.
+    for (const [k, other] of inGrace ?? [])
+      if (k !== memberKey) {
+        this.timers.clear(other.grace);
+        this.ungrace(gk, k);
+        this.detachOne(other);
+      }
+    if (kept) {
       // A reconnect within the grace: the same member, moved to the new socket; the others see nothing.
       this.timers.clear(kept.grace);
-      this.graced.delete(`${sink.sessionId}|${ks}`);
+      this.ungrace(gk, memberKey);
       kept.grace = null;
       kept.sink = sink;
       kept.roomId = roomId;
@@ -119,7 +139,6 @@ export class RoomHub {
       return "ok";
     }
     let room = this.rooms.get(ks);
-    const memberKey = key.kind === "presence" ? who.userId! : sink.sessionId;
     const existing = room?.members.get(memberKey);
     if (!existing && (room?.members.size ?? 0) >= this.limits.memberCap) return "limit";
     if (!room) {
@@ -128,6 +147,7 @@ export class RoomHub {
     }
     const member: Member = existing ?? {
       memberId: key.kind === "presence" ? who.userId! : randomUUID(),
+      memberKey,
       userId: who.userId,
       presence: null,
       attachments: new Set(),
@@ -175,17 +195,23 @@ export class RoomHub {
     this.bySink.delete(sink);
     for (const a of mine.values()) {
       const gk = `${sink.sessionId}|${roomKeyString(a.room.key)}`;
-      // Two sockets of one session in one room (the older half-open when the client reconnected): the one in
-      // its grace already is ended now, or its timer, finding the newer in its place, would never end it.
-      const displaced = this.graced.get(gk);
+      const mk = a.member.memberKey;
+      let inGrace = this.graced.get(gk);
+      if (!inGrace) {
+        inGrace = new Map();
+        this.graced.set(gk, inGrace);
+      }
+      // Two sockets of one session in one room as one member (the older half-open when the client reconnected):
+      // the one in its grace already is ended now, or its timer, finding the newer in its place, would never end it.
+      const displaced = inGrace.get(mk);
       if (displaced) {
         this.timers.clear(displaced.grace);
         this.detachOne(displaced);
       }
-      this.graced.set(gk, a);
+      inGrace.set(mk, a);
       a.grace = this.timers.set(() => {
-        if (this.graced.get(gk) !== a) return;
-        this.graced.delete(gk);
+        if (this.graced.get(gk)?.get(mk) !== a) return;
+        this.ungrace(gk, mk);
         this.detachOne(a);
       }, this.limits.graceMs);
     }
@@ -237,6 +263,13 @@ export class RoomHub {
     this.sendSync(a);
   }
 
+  private ungrace(gk: string, memberKey: string) {
+    const inGrace = this.graced.get(gk);
+    if (!inGrace) return;
+    inGrace.delete(memberKey);
+    if (inGrace.size === 0) this.graced.delete(gk);
+  }
+
   private detachOne(a: Attachment) {
     const { room, member } = a;
     const idleBefore = idleOf(member);
@@ -249,8 +282,7 @@ export class RoomHub {
       }
       return;
     }
-    const memberKey = room.key.kind === "presence" ? member.userId! : a.sink.sessionId;
-    room.members.delete(memberKey);
+    room.members.delete(member.memberKey);
     room.changed.delete(member);
     room.left.push(member.memberId);
     this.scheduleTick();

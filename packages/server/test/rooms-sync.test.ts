@@ -427,7 +427,37 @@ describe("rooms over the sync protocol", () => {
     expect(gateRuns.most).toBe(2); // the two rooms at once; a room's canPublish after its canJoin
   });
 
-  test("Authenticate to a user canJoin refuses → RoomError no_access for that room, and the others see it leave", async () => {
+  test("a gate's name is the room's registry name, whatever the spelling the join used", async () => {
+    const { url } = await setup();
+    // The name the gate's run is logged under (its function metadata is normalised either way).
+    const logged: string[] = [];
+    const runGate = Functions.prototype.runGate;
+    Functions.prototype.runGate = function (this: Functions, ...a: Parameters<typeof runGate>) {
+      logged.push(a[1]);
+      return runGate.apply(this, a);
+    };
+    try {
+      const a = await client(url);
+      a.join(1, "rooms.js:shared1", {});
+      await a.synced(1);
+    } finally {
+      Functions.prototype.runGate = runGate;
+    }
+    expect(logged.toSorted()).toEqual(["rooms:shared1#canJoin", "rooms:shared1#canPublish"]);
+  });
+
+  test("args differing only by a __proto__ key are two rooms", async () => {
+    const { url, rooms } = await setup();
+    const a = await client(url);
+    const b = await client(url);
+    a.join(1, "rooms:lobby", { x: 1 });
+    await a.synced(1);
+    b.join(2, "rooms:lobby", JSON.parse('{"x":1,"__proto__":{"y":2}}'));
+    expect((await b.synced(2)).members).toEqual([]);
+    expect(rooms.size).toEqual({ rooms: 2, members: 2 });
+  });
+
+  test("Authenticate to a user canJoin refuses → RoomLeft no_access for that room, and the others see it leave", async () => {
     const { url, issuer } = await setup();
     const a = await client(url);
     const b = await client(url);
@@ -441,12 +471,13 @@ describe("rooms over the sync protocol", () => {
     b.join(5, "rooms:secret", {});
     await b.synced(5);
     a.authenticate(await issuer.sign({ sub: "bob" }));
-    expect(await a.error(1)).toEqual({
-      type: "RoomError",
+    expect(await a.until(() => a.of("RoomLeft").find((m) => m.roomId === 1))).toEqual({
+      type: "RoomLeft",
       roomId: 1,
       code: "no_access",
       message: "You cannot join this room.",
     });
+    expect(a.of("RoomError").filter((e) => e.roomId === 1)).toEqual([]);
     const left = await b.until(() => b.of("RoomMembers").find((m) => m.left.length > 0));
     expect(left.left).toEqual([selfA]);
     // The room the new user may still join is kept (as a new member, for a new user).
