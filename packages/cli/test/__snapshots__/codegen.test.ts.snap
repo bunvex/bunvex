@@ -203,6 +203,8 @@ import type {
   HttpActionBuilder,
   MutationBuilder,
   QueryBuilder,
+  RoomBuilder,
+  PresenceBuilder,
   GenericActionCtx,
   GenericMutationCtx,
   GenericQueryCtx,
@@ -250,6 +252,16 @@ export declare const internalAction: ActionBuilder<DataModel, "internal">;
 export declare const httpAction: HttpActionBuilder;
 
 /**
+ * Define a room: members, their presence and events, held in server memory beside the database.
+ */
+export declare const room: RoomBuilder<DataModel>;
+
+/**
+ * Define a presence scope: a signed-in user's state, present while any of their connections is.
+ */
+export declare const presence: PresenceBuilder<DataModel>;
+
+/**
  * The deployment's environment variables.
  */
 export declare const env: Record<string, string | undefined>;
@@ -295,6 +307,8 @@ import {
   internalActionGeneric,
   internalMutationGeneric,
   internalQueryGeneric,
+  roomGeneric,
+  presenceGeneric,
 } from "@bunvex/server";
 
 /**
@@ -331,6 +345,16 @@ export const internalAction = internalActionGeneric;
  * Define an HTTP action, served by the router exported from \`http.ts\`.
  */
 export const httpAction = httpActionGeneric;
+
+/**
+ * Define a room: members, their presence and events, held in server memory beside the database.
+ */
+export const room = roomGeneric;
+
+/**
+ * Define a presence scope: a signed-in user's state, present while any of their connections is.
+ */
+export const presence = presenceGeneric;
 
 /**
  * The deployment's environment variables.
@@ -503,12 +527,16 @@ import {
   internalActionGeneric,
   internalMutationGeneric,
   internalQueryGeneric,
+  roomGeneric,
+  presenceGeneric,
 } from "@bunvex/server";
 import type {
   ActionBuilder,
   HttpActionBuilder,
   MutationBuilder,
   QueryBuilder,
+  RoomBuilder,
+  PresenceBuilder,
   GenericActionCtx,
   GenericMutationCtx,
   GenericQueryCtx,
@@ -554,6 +582,16 @@ export const internalAction: ActionBuilder<DataModel, "internal"> = internalActi
  * Define an HTTP action, served by the router exported from \`http.ts\`.
  */
 export const httpAction: HttpActionBuilder = httpActionGeneric;
+
+/**
+ * Define a room: members, their presence and events, held in server memory beside the database.
+ */
+export const room: RoomBuilder<DataModel> = roomGeneric;
+
+/**
+ * Define a presence scope: a signed-in user's state, present while any of their connections is.
+ */
+export const presence: PresenceBuilder<DataModel> = presenceGeneric;
 
 /**
  * The deployment's environment variables.

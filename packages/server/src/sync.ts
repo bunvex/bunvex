@@ -911,6 +911,10 @@ const MESSAGE_SPANS: Record<v1.ClientMessage["type"], string> = {
   Action: "action",
   Authenticate: "authenticate",
   Event: "event",
+  RoomJoin: "sync.room_join",
+  RoomLeave: "sync.room_leave",
+  RoomPresence: "sync.room_presence",
+  RoomEvent: "sync.room_event",
 };
 
 /** One connection's sync state and its message handling. */
@@ -1296,6 +1300,11 @@ export class SyncSession {
       }
       case "Event":
         return; // client telemetry (STUDY-23 P11)
+      case "RoomJoin":
+      case "RoomLeave":
+      case "RoomPresence":
+      case "RoomEvent":
+        return; // rooms are wired in Task 5
     }
   }
 

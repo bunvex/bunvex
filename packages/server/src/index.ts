@@ -163,13 +163,29 @@ export type {
   HttpActionBuilder,
   MutationBuilder,
   MutationBuilderWithTable,
+  PresenceBuilder,
   QueryBuilder,
   QueryBuilderWithTable,
   RegisteredAction,
   RegisteredMutation,
+  RegisteredPresence,
   RegisteredQuery,
+  RegisteredRoom,
+  RoomBuilder,
   TransactionLimits,
 } from "./registration.ts";
+// Rooms and presence scopes (AD-42).
+export {
+  type AnyRoomDef,
+  isRoomDef,
+  type PresenceDef,
+  presence,
+  presenceGeneric,
+  type RoomDef,
+  type RoomGate,
+  room,
+  roomGeneric,
+} from "./rooms/define.ts";
 export {
   type HttpActionCtx,
   type HttpActionHandler,
