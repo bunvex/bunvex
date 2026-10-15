@@ -352,13 +352,14 @@ describe("modes, ids and the summary", () => {
   });
 
   test("schema: documents are checked with the import's tables; a failure leaves nothing behind", async () => {
+    // The schema numbered its tables as a push does (STUDY-161 §7): `posts` 10001, `users` 10002; the import keeps them.
     const schema = defineSchema({
       users: defineTable({ name: v.string() }),
       posts: defineTable({ author: v.id("users"), title: v.string() }),
     });
     const t = await setup(schema);
     const zip = await zipOf([
-      ["_tables/documents.jsonl", '{"name":"users","id":10001}\n{"name":"posts","id":10002}\n'],
+      ["_tables/documents.jsonl", '{"name":"users","id":10002}\n{"name":"posts","id":10001}\n'],
       ["users/documents.jsonl", '{"name":"Ada"}\n'],
       ["users/generated_schema.jsonl", '"uniform"\n'],
       ["posts/documents.jsonl", '{"title":5}\n'],
@@ -366,9 +367,9 @@ describe("modes, ids and the summary", () => {
     ]);
     // Valid: posts point at users, a table that is still hidden while they are checked.
     const good = await zipOf([
-      ["_tables/documents.jsonl", '{"name":"users","id":10001}\n{"name":"posts","id":10002}\n'],
-      ["users/documents.jsonl", '{"_id":"USER","name":"Ada"}\n'.replace("USER", encodeId(10001, new Uint8Array(16)))],
-      ["posts/documents.jsonl", `{"author":"${encodeId(10001, new Uint8Array(16))}","title":"t"}\n`],
+      ["_tables/documents.jsonl", '{"name":"users","id":10002}\n{"name":"posts","id":10001}\n'],
+      ["users/documents.jsonl", '{"_id":"USER","name":"Ada"}\n'.replace("USER", encodeId(10002, new Uint8Array(16)))],
+      ["posts/documents.jsonl", `{"author":"${encodeId(10002, new Uint8Array(16))}","title":"t"}\n`],
     ]);
     expect((await t.importNow(good, "format=zip&mode=replace")).body).toEqual({ numWritten: 2 });
     await t.importNow(new Uint8Array(await zipOf([["_tables/documents.jsonl", ""]])), "format=zip&mode=replaceAll");

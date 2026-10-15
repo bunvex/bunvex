@@ -228,4 +228,21 @@ and lists what failed in its *Built* line.
 
 ### §7 (the push's table numbers)
 
-*Built:* not yet.
+*Built:* #667. `pushOrder` (`core/src/schema.ts`) orders the schema's tables for the catalog: those with any index
+(database, staged, search, vector) by name, then the others by name; `allDeclaredTables` (`engine.ts`) puts the system
+tables first as before, so the bootstrap's numbers and a component's namespace (`initializeComponentNamespace`, system
+tables only) are unchanged. Every path that creates a schema's tables (the CLI's push, `startSchemaPush`, and an engine
+started on a schema) goes through it. Checked on the binary: a schema with a database-indexed, a search-only, a
+vector-only and a staged-only table among plain ones, mixed case (`Beta`, `Mango` before `aaa`), numbered alike on both;
+a second push adding four tables while an existing one gains an index numbers only the new ones, alike (`bee`, `yak`,
+`Cat`, `ant`). The order of the `_index` rows a push writes follows the same order now; bunvex's persistence index
+ids are its own (not observable), so they were not compared.
+
+- *Tests:* `core/test/catalog.test.ts` (the oracle's two pushes on an engine; the fresh-store and reordering tests
+  updated: `posts`, indexed, is now 10001), `core/test/schema-push.test.ts` (`startSchemaPush`'s numbers; `pushOrder`),
+  `differential/test/push-table-numbers.test.ts` (both pushes on both backends, `getTableMapping` compared;
+  the app `push-order-app/`); `server/test/imports.test.ts` takes the schema's numbers as a push now gives them
+  (`posts` 10001, `users` 10002). No test masked the numbers before.
+- *Sabotage:* declaration order again (core 4 failed, differential 2); search and vector indexes not counted as
+  indexes (core 3, differential 2); names compared with `localeCompare` (case-insensitive; core 3, differential 2);
+  the tables without an index left in declaration order (core 4, differential 2). Each restored, `git diff` clean.

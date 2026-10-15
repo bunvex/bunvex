@@ -74,8 +74,9 @@ describe("catalog (_tables / _index)", () => {
           _component_definitions: 543,
           _components: 544,
           _instance: 9999,
-          users: 10001,
-          posts: 10002,
+          // Convex's push order (STUDY-161 §7): an indexed table first.
+          posts: 10001,
+          users: 10002,
         });
         expect([...e.catalog.table("posts").indexes.keys()].sort()).toEqual(["by_author", "by_creation_time", "by_id"]);
       },
@@ -95,11 +96,56 @@ describe("catalog (_tables / _index)", () => {
       users: defineTable(v.any()),
     });
     await open(reordered, async (e) => {
-      expect(numbers(e)).toMatchObject({ users: 10001, posts: 10002, audit: 10003 });
+      expect(numbers(e)).toMatchObject({ posts: 10001, users: 10002, audit: 10003 });
       expect(await e.query((db) => db.get("users", ids.user))).toMatchObject({ name: "ada" });
       expect(await e.query((db) => db.get("posts", ids.post))).toMatchObject({ title: "hi" });
       expect(await e.query((db) => db.query("audit").collect())).toEqual([]);
       expect(await e.query((db) => db.query("users").collect())).toHaveLength(1);
+    });
+  });
+
+  test("a push numbers its new tables as Convex's: those with an index by name, then the others by name", async () => {
+    // Seen on Convex's binary (d8bdde0): the indexes are added first (each creating its table), in index-name order,
+    // then the schema's other tables, in name order (byte order: `Beta` and `Mango` before `aaa`).
+    const open = store();
+    const tables = {
+      zebra: defineTable({ a: v.string() }),
+      strict: defineTable({ name: v.string() }),
+      free: defineTable(v.any()).index("by_k", ["k"]),
+      apple: defineTable(v.any()),
+      Mango: defineTable(v.any()),
+      srch: defineTable({ body: v.string() }).searchIndex("s", { searchField: "body" }),
+      vec: defineTable({ e: v.array(v.float64()) }).vectorIndex("v", { vectorField: "e", dimensions: 2 }),
+      stg: defineTable({ k: v.number() }).index("by_k", { fields: ["k"], staged: true }),
+      Beta: defineTable(v.any()),
+      aaa: defineTable(v.any()),
+    };
+    const first = {
+      free: 10001,
+      srch: 10002,
+      stg: 10003,
+      vec: 10004,
+      Beta: 10005,
+      Mango: 10006,
+      aaa: 10007,
+      apple: 10008,
+      strict: 10009,
+      zebra: 10010,
+    };
+    await open(defineSchema(tables), async (e) => {
+      expect(numbers(e)).toMatchObject(first);
+    });
+    // The next push: the tables that exist keep their numbers (`apple` gains an index), the new ones follow the rule.
+    const next = defineSchema({
+      ...tables,
+      apple: defineTable(v.any()).index("by_x", ["x"]),
+      yak: defineTable(v.any()).index("by_y", ["y"]),
+      Cat: defineTable(v.any()),
+      bee: defineTable(v.any()).searchIndex("s", { searchField: "b" }),
+      ant: defineTable(v.any()),
+    });
+    await open(next, async (e) => {
+      expect(numbers(e)).toMatchObject({ ...first, bee: 10011, yak: 10012, Cat: 10013, ant: 10014 });
     });
   });
 

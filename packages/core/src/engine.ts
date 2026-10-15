@@ -151,6 +151,7 @@ import {
   documentValidator,
   MAX_VECTOR_DIMENSIONS,
   maintainedIndexes,
+  pushOrder,
   referencedTables,
   type SchemaDefinition,
   SYSTEM_INDEXES,
@@ -913,7 +914,7 @@ export class Engine {
       { name: EXTERNAL_DEPS_PACKAGES_TABLE, indexes: {}, document: v.any() },
       ...EMPTY_CLOUD_SYSTEM_TABLES.map((name) => ({ name, indexes: {}, document: v.any() })),
     ];
-    return [...systemTables, ...declaredTables(schema).values()];
+    return [...systemTables, ...pushOrder(declaredTables(schema).values())];
   }
 
   /**
