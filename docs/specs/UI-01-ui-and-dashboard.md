@@ -1864,6 +1864,13 @@ content full-bleed) · the docked details panel, only while something is selecte
 with Database (it describes the data) and Files is stored data; Schedules run functions; Logs and History are
 what happened. **Manage** (Authentication) joins with §25.
 
+**Screens a source does not offer** (STUDY-149 follow-up, `shell/offered-screens.tsx`): bunvex's own screens —
+Topology (`getTopology`), Authentication (`listAuthUsers`) and Subscriptions (`getSubscriptions`) — follow the
+extensions' rule (§26): listed in the sidebar and the command palette only when the source has the methods they
+need, a group left with no entry is not shown, and a typed URL says "This deployment does not offer … yet". The
+rule is keyed on methods, so a source that gains them shows the screen. Convex's own screens stay listed whatever
+the source, as Convex's sidebar lists them (§14.2).
+
 ### 23.3 The screens on the column
 
 - **Database**: "Database"; search, Create table (it turns into its name box in place, so it stays at the top
