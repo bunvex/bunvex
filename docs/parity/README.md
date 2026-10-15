@@ -196,6 +196,5 @@ gaps.
   - the custom test query's type checking and completions, and Convex's bulk edit;
   - search, vector and staged indexes in the Data screen's index list;
   - the environment variables screen opening a named variable (Convex's `?var=`, which its CLI's link uses).
-- HTTP actions, found while matching their log name to Convex's (STUDY-31 §7.3; the log name itself is done, a
-  response's implicit headers since STUDY-31 §8, a handler's non-Response since §9): a body that errors after the
-  head aborts the response, where Convex ends it cleanly.
+- HTTP actions (STUDY-31 §10.6): a response stream's chunk that is not bytes (a string) is sent as text, where
+  Convex fails the body (`serde_v8 … expected: buffer`).

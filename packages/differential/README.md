@@ -44,6 +44,9 @@ backend is always started with `--disable-beacon`.
 - `test/http-action-result.test.ts` (STUDY-31 §9): a handler of `http-results-app/` that returns something other
   than a Response (an object, `undefined`, `null`, a string, a number, a Response-like object), on both: the 500, the
   log entries (the Completion's error) and the route's app metrics compared. Local only.
+- `test/http-body-error.test.ts` (STUDY-31 §10): streamed bodies of `http-body-errors-app/` that fail in the handler's
+  turn or after the head, on both, read off a raw socket: the status, the body, a clean end, the 500, the log entries
+  and the route's app metrics compared. Local only.
 - `test/http-action-log-route.test.ts` (STUDY-31 §7): what an HTTP action is logged as, on both — requests to the
   exact, prefix and failing routes of `http-routes-app/` and to paths no route matches; the answers, the function log
   stream's entries (names, statuses, errors, lines) and the app metrics per route compared. Local only.
