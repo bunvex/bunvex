@@ -131,6 +131,8 @@ As Convex's dashboard ([STUDY-149 §1.2](study/STUDY-149-dashboard-real-data.md#
 | Health: scheduler lag | every 60 s |
 | Schedules, Files | live, paused automatically past 100 updates in 10 s (Pause / Go live, Refresh while paused) |
 | History (audit log), environment variables, deployment state | live |
+| Subscriptions: live queries, query cache | every 5 s, slower when the deployment takes long to answer (at most 1 % of its time, at least once a minute) |
+| Subscriptions: followed invalidations | a long poll, from when you press "Follow invalidations" |
 
 While the deployment cannot be reached, "Connection issue" covers the screens and the polls stop; when it comes
 back the polls ask again at once and the subscriptions resume.
@@ -144,10 +146,10 @@ back the polls ask again at once and the subscriptions resume.
 - The environment variables screen does not open a given variable from a link (Convex's `?var=`).
 - Cloud-only screens are absent, as in Convex's self-hosted dashboard: insights, backups, custom domains, team,
   billing and usage. bunvex keeps its own additions that work on a deployment (the Overview's summary,
-  Snapshots in Settings, the command palette, the Logs screen's histogram and export).
+  Snapshots in Settings, the command palette, the Logs screen's histogram and export, and Subscriptions: which
+  queries are live, what each read and why it ran again, with Logs' "why it ran" links to it).
 - Some of bunvex's own screens open on the demo data only, and are hidden on a deployment (or say it does not
-  offer them): Subscriptions and the system tables (their server side exists; the dashboard does not read it
-  yet), and Topology, Authentication's user management, the clients, Analytics, Feature flags and Workflows
-  (no server side yet). The Files screen's storage used, views by type and size filters need sizes per kind,
+  offer them): the system tables (its server side exists; the dashboard does not read it yet), and Topology,
+  Authentication's user management, the clients, Analytics, Feature flags and Workflows (no server side yet). The Files screen's storage used, views by type and size filters need sizes per kind,
   which a deployment does not report ([additions.md](parity/additions.md)).
 - No telemetry and no legacy deployment list (`?a=<port>&d=<name>`), which Convex keeps for old CLIs.

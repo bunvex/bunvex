@@ -1810,6 +1810,104 @@ addition (AD-41 unused). Printing the URL the dashboard is serving where Convex 
 **Measurements.** No hot path: CLI messages only. A command asks the local dashboard at most once (one loopback
 request, 2 s timeout), only when a message needs the link and a port is saved; a self-hosted deployment asks
 nothing.
+### Follow-ups after the plan: AD-25 on a deployment
+
+The subscriptions and invalidation inspector ([STUDY-131 AD-25](STUDY-131-debugging-and-observability.md#ad-25--subscriptions-and-invalidation-inspector),
+§8) had its server side since 2026-10-05 and its screen on the mock; the #648 audit classed it (c): the server has
+it, the source does not call it. Approved by the owner on 2026-10-14. Convex has nothing to compare with (it keeps
+read sets internal), so the design follows STUDY-131 and this study's rules for the screens: the routes as the other
+admin routes, the follow stream as the log stream (§1.3), the polls stopped while disconnected (PR 6).
+
+**The source** (`packages/dashboard-source/src/inspector.ts`, its own block at the end of `server-source.ts`):
+
+- `getSubscriptions` and `getQueryCache`: `GET /api/debug/subscriptions[?path=]` and
+  `/api/debug/query_cache[?path=&limit=]` through `AdminHttp` (the admin key, `Bunvex-Client: dashboard-<version>`;
+  a refusal is `unauthorized`), mapped field by field to the contract's types: the server's own fields
+  (`validAt`, `waits`, a running entry's `ts`, `observedTime`) are left out, every miss reason is given (0 when the
+  server leaves one out).
+- `watchInvalidations`: one long-poll loop per watcher on `/api/debug/invalidations?cursor=&timeoutMs=60000&path=`
+  (the server filters by path; `newCursor` still moves past what it filtered out).
+  - *From now on*, as the contract says: the first request is `cursor=0&timeoutMs=0`, which answers at once with the
+    feed's newest `seq`; its entries are dropped.
+  - Each answer's `newCursor` is asked from next. Failures back off as the log stream's (Convex's 500 ms doubling to
+    16 s with jitter) and are reported after 5 in a row; a refusal (`unauthorized`: no key, or no ViewMetrics) stops
+    the loop and is reported at once, since a key's operations do not change.
+  - **While disconnected** (the source's `watchConnection`: Convex's two checks 2.5 s apart; only `disconnected`
+    counts, as the overlay) the request in flight is aborted and nothing is asked. When the connection is back (or
+    after any failure), the loop asks `cursor=0&timeoutMs=0` again and delivers what came after the last `seq` it saw:
+    what landed while away reaches the screen, up to the server's 1024-entry feed. A server that restarted has a feed
+    behind ours; then everything it holds is delivered and its position followed. A back-off in progress ends when
+    the connection returns.
+  - The stop aborts the request in flight (the server drops its waiter); nothing is delivered after it; `close()`
+    stops every loop.
+
+**The screen** (`subscriptions/screen.tsx`, `shell/connection.tsx`):
+
+- **Cadence.** The mock's 5 s poll costs little on the mock, but on a deployment each poll builds the whole
+  snapshot: every session's queries with their read sets read back to values. Measured on this Mac with an in-process
+  server (one bunvex process, 10 client sessions): 100 live queries, 2.7 ms and 275 KB per answer; 1 000, 19 ms and
+  2.1 MB; the query cache, 0.15 ms whatever the count. So the screen keeps 5 s, but paces itself by the last
+  answer's time: the next poll waits 100 times as long (at most 1 % of the server's time), between 5 s and 60 s
+  (`pollInterval`). Not while the tab is hidden (TanStack Query's default) nor while disconnected: the two polls
+  are `enabled: !disconnected`, and are among the polled reads asked again at once on return. The follow stream is
+  a long poll, so it costs a request per batch of invalidations.
+- **The dashboard's own subscriptions** are listed too: its admin session (the table mapping, the open table, the
+  runner) shows as a session with identity `admin`. They are live queries on the deployment, so they stay.
+- **The AD-27 link** ("Open the invalidation" / "Open in Subscriptions" on a query's log entry) needed nothing more:
+  the log's `path` is the display path (`messages:list`), which is the sync hub's canonical `udfPath`; the digest is
+  the same function of the canonical arguments; and the history the source maps keeps `seq`. Checked live and in
+  Chromium.
+
+**Divergences.** None (DV-489 unused): an addition's screen, wired as decided in STUDY-131.
+
+**Tests.**
+
+- `packages/dashboard-source/test/inspector.test.ts` (no server): the snapshots mapped (bounds of every kind, the
+  history's `seq`, the miss reasons filled), the query strings and headers, a refusal; the follow loop against a fake
+  of the server's feed: from now on (the first request and the cursors that follow), the path filter, stop aborting
+  the request in flight, failures backing off and reported on the sixth, the catch-up after failures, a restarted
+  server's feed, a refusal stopping it at once, no request while disconnected and the missed ones on return, a
+  back-off cut short by the return, `close`.
+- `packages/sync-e2e/dashboard/server-source-subscriptions.test.ts` (a live server): the contract suite's
+  subscriptions area; an app's live query listed with its digest, its `by_author` range as values and
+  `newSubscriber`; a mutation's invalidation followed (source, table, index, the key's author), absent for a write
+  outside the range, in the query's history with the same `seq` and its delay until sent, and the re-run's log entry
+  linking that digest, `seq` and commit ts; the query cache's entry with its read set; `close()` stopping the loop.
+- `packages/dashboard/test/subscriptions.test.tsx`: `pollInterval`; the live queries and the cache not asked while
+  disconnected (even for a new filter), and asked at once on return.
+- In Chromium (`app.e2e.ts`, on a live deployment through the test's proxy): an app's live query listed; "Follow
+  invalidations" showing a mutation's invalidation; the connection lost — nothing asked of `/api/debug/*` while
+  away — and the invalidation that landed meanwhile shown on the return; then Logs, the app's re-run, "Open the
+  invalidation", landing on Subscriptions with the query open and that invalidation marked.
+
+**Sabotage** (each restored after, `git diff` checked; failing tests per suite):
+
+| Sabotage | Unit (source) | Live | Screens | Chromium |
+|---|---|---|---|---|
+| no first request: the feed's history delivered | 1 | 1 | | |
+| the cursor not advanced | 5 | 1 | | |
+| followed on while disconnected | 1 | | | 1 |
+| no catch-up after a failure | 2 | | | |
+| a restarted server's feed not followed | 1 | | | |
+| the stop does not abort the request in flight | 2 | 0 | | |
+| every failure reported | 2 | | | |
+| a refusal backs off instead of stopping | 1 | | | |
+| the history's `seq` dropped by the mapping | 1 | 1 | | |
+| a back-off not cut short by the return | 2 | | | |
+| `close` leaves the loops running | 1 | 1 | | |
+| the methods not wired in `server-source.ts` (`getSubscriptions`) | | 2 | | |
+| the polls not gated while disconnected | | | 1 | |
+| the polls not asked again on return (`POLLED`) | | | 1 | |
+| a fixed 5 s pace | | | 1 | |
+
+The first run of "the cursor not advanced" hung the unit file instead of failing it: the fake feed answered on a
+microtask, so the spinning loop starved the test's timers. The fake now answers on a later task, as a network round
+trip does, and the sabotage fails 5 tests.
+
+**Measurements.** No server change and no hot path: the routes' costs above are the screen's, measured to set its
+pace (a throwaway script, not a benchmark: an in-process server, 10 client sessions holding the live queries,
+200 mutations, then 30 requests per route; Bun 1.4.2, Apple Silicon, other sessions running).
+
 ## 6. Open questions
 
 Every question below is in the decision format the owner asked for (what Convex does / what bunvex would do /

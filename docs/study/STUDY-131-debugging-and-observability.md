@@ -1,6 +1,6 @@
 # STUDY-131 — Seeing inside a deployment: system tables, subscriptions, traces
 
-- **Status:** accepted (owner, 2026-10-05): AD-24 to AD-27, AD-26 with an in-house exporter, and T1 module by module. AD-26 built (§9); AD-27 built (§10).
+- **Status:** accepted (owner, 2026-10-05): AD-24 to AD-27, AD-26 with an in-house exporter, and T1 module by module. AD-26 built (§9); AD-27 built (§10). AD-25's screen on a deployment since 2026-10-14 ([STUDY-149](STUDY-149-dashboard-real-data.md), "Follow-ups after the plan: AD-25 on a deployment").
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
 - **Related:** [STUDY-08](STUDY-08-cache-and-subscriptions.md) (read sets, invalidation), [STUDY-12](STUDY-12-dashboard.md)
   (dashboard), [STUDY-58](STUDY-58-app-metrics.md) (app metrics), STUDY-114 (Prometheus `/metrics`), STUDY-125–130
@@ -137,6 +137,12 @@ Nothing exposes these per query.
 - **Cost.** Medium. One write path is touched: the invalidation step records a small entry per invalidated
   query (measure it; it is off with the knob at 0). Reads happen only when the screen asks.
 - **A Convex app notices?** No.
+- **On a deployment** (2026-10-14, [STUDY-149](STUDY-149-dashboard-real-data.md)'s follow-up "AD-25 on a
+  deployment"): `@bunvex/dashboard-source` reads the two snapshots and follows `/api/debug/invalidations` as the log
+  stream (from now on, back-off, catch-up after a failure or a disconnection, stopped while disconnected). A snapshot
+  is built whole on every read (about 20 ms and 2 MB for 1 000 live queries, measured there), so the screen polls
+  every 5 s but waits 100 times the last answer's time when that is longer (at most a minute), and not while the
+  tab is hidden or the deployment disconnected. The dashboard's own admin session is listed with the app's.
 
 ### AD-26 — Traces over OpenTelemetry
 
@@ -167,6 +173,8 @@ Nothing exposes these per query.
   it) and to its trace (AD-26) when tracing is on.
 - **Cost.** Small, once AD-25 and AD-26 exist.
 - **A Convex app notices?** No.
+- **On a deployment:** the links since STUDY-149 PR 6; "Open the invalidation" / "Open in Subscriptions" land on the
+  query, with that invalidation marked, since AD-25's screen runs on a deployment (2026-10-14; checked in Chromium).
 
 ## 5. Test infrastructure (not an addition)
 
@@ -229,7 +237,7 @@ The questions, as asked:
 - `bunvex data --system <table>` prints the documents through `_system/debug/systemTable`, with `--limit`,
   `--order` and `--format` as for any table.
 
-**Dashboard** (`packages/dashboard`, on the mock).
+**Dashboard** (`packages/dashboard`, on the mock; on a deployment since 2026-10-14, §4).
 
 - Contract: `data-source-system-tables.ts` adds the optional `listSystemTables` and `listSystemDocuments`
   (`viewData`). Its part of the contract suite is `contract-system-tables.ts`:
