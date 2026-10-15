@@ -61,7 +61,26 @@ export type Authenticate =
 /** Client telemetry; the server accepts and ignores it (STUDY-23 P11). */
 export type ClientEvent = { type: "Event"; eventType: string; event: unknown };
 
-export type ClientMessage = Connect | ModifyQuerySet | MutationRequest | ActionRequest | Authenticate | ClientEvent;
+// Rooms (AD-42, STUDY-164 §3.6): beside the query set, never inside a Transition. `roomId` is chosen by the
+// client per connection, like `queryId`.
+
+export type RoomKind = "room" | "presence";
+export type RoomJoin = { type: "RoomJoin"; roomId: number; kind: RoomKind; name: string; args: JSONValue };
+export type RoomLeave = { type: "RoomLeave"; roomId: number };
+export type RoomPresence = { type: "RoomPresence"; roomId: number; presence: JSONValue; idle?: boolean };
+export type RoomClientEvent = { type: "RoomEvent"; roomId: number; event: string; data: JSONValue };
+
+export type ClientMessage =
+  | Connect
+  | ModifyQuerySet
+  | MutationRequest
+  | ActionRequest
+  | Authenticate
+  | ClientEvent
+  | RoomJoin
+  | RoomLeave
+  | RoomPresence
+  | RoomClientEvent;
 
 // ---------------------------------------------------------------- server → client
 
@@ -124,6 +143,21 @@ export type TransitionChunk = {
   transitionId: string;
 };
 
+/** A room member is a connection. A presence scope's member has `memberId === userId`. `presence` carries the
+ *  scope's `state`. */
+export type RoomMember = { memberId: string; userId: string | null; presence: JSONValue | null; idle?: boolean };
+export type RoomSync = { type: "RoomSync"; roomId: number; self: string; canPublish: boolean; members: RoomMember[] };
+export type RoomMembers = { type: "RoomMembers"; roomId: number; set: RoomMember[]; left: string[] };
+export type RoomServerEvent = {
+  type: "RoomEvent";
+  roomId: number;
+  from: string | null;
+  event: string;
+  data: JSONValue;
+};
+export type RoomErrorCode = "no_access" | "forbidden" | "validation" | "rate_limited" | "limit" | "not_found";
+export type RoomError = { type: "RoomError"; roomId: number; code: RoomErrorCode; message: string };
+
 export type ServerMessage =
   | Transition
   | TransitionChunk
@@ -131,7 +165,11 @@ export type ServerMessage =
   | ActionResponse
   | AuthError
   | FatalError
-  | Ping;
+  | Ping
+  | RoomSync
+  | RoomMembers
+  | RoomServerEvent
+  | RoomError;
 
 // ---------------------------------------------------------------- u64 timestamps
 
@@ -260,6 +298,36 @@ export function parseClientMessage(frame: string): ClientMessage {
     }
     case "Event":
       return { type: "Event", eventType: str(m.eventType, "eventType"), event: m.event };
+    case "RoomJoin": {
+      if (m.kind !== "room" && m.kind !== "presence")
+        throw new ProtocolError('Invalid message: `kind` must be "room" or "presence"');
+      if (!("args" in m)) throw new ProtocolError("Invalid message: `args` is required");
+      return {
+        type: "RoomJoin",
+        roomId: u32(m.roomId, "roomId"),
+        kind: m.kind,
+        name: str(m.name, "name"),
+        args: m.args as JSONValue,
+      };
+    }
+    case "RoomLeave":
+      return { type: "RoomLeave", roomId: u32(m.roomId, "roomId") };
+    case "RoomPresence": {
+      if (!("presence" in m)) throw new ProtocolError("Invalid message: `presence` is required");
+      return {
+        type: "RoomPresence",
+        roomId: u32(m.roomId, "roomId"),
+        presence: m.presence as JSONValue,
+        ...(m.idle === undefined ? {} : { idle: m.idle === true }),
+      };
+    }
+    case "RoomEvent":
+      return {
+        type: "RoomEvent",
+        roomId: u32(m.roomId, "roomId"),
+        event: str(m.event, "event"),
+        data: (m.data ?? null) as JSONValue,
+      };
     default:
       throw new ProtocolError(`Invalid message: unknown type ${JSON.stringify(m.type)}`);
   }

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import * as v1 from "../src/v1.ts";
 import {
   decodeU64,
   encodeClientMessage,
@@ -95,5 +96,53 @@ describe("sync protocol v1 codecs (STUDY-23)", () => {
       '{"type":"Connect","sessionId":1,"connectionCount":0}',
     ];
     for (const f of bad) expect(() => parseClientMessage(f)).toThrow(ProtocolError);
+  });
+});
+
+describe("room messages (AD-42, STUDY-164 §3.6)", () => {
+  test("RoomJoin, RoomLeave, RoomPresence and RoomEvent parse", () => {
+    expect(
+      v1.parseClientMessage(
+        JSON.stringify({ type: "RoomJoin", roomId: 1, kind: "room", name: "rooms:doc", args: { docId: "x" } }),
+      ),
+    ).toEqual({ type: "RoomJoin", roomId: 1, kind: "room", name: "rooms:doc", args: { docId: "x" } });
+    expect(v1.parseClientMessage(JSON.stringify({ type: "RoomLeave", roomId: 1 }))).toEqual({
+      type: "RoomLeave",
+      roomId: 1,
+    });
+    expect(
+      v1.parseClientMessage(JSON.stringify({ type: "RoomPresence", roomId: 2, presence: { x: 1 }, idle: true })),
+    ).toEqual({ type: "RoomPresence", roomId: 2, presence: { x: 1 }, idle: true });
+    expect(v1.parseClientMessage(JSON.stringify({ type: "RoomEvent", roomId: 2, event: "wave", data: null }))).toEqual({
+      type: "RoomEvent",
+      roomId: 2,
+      event: "wave",
+      data: null,
+    });
+  });
+  test("a bad room message is a ProtocolError", () => {
+    for (const m of [
+      { type: "RoomJoin", roomId: 1, kind: "lobby", name: "a:b", args: {} },
+      { type: "RoomJoin", roomId: -1, kind: "room", name: "a:b", args: {} },
+      { type: "RoomJoin", roomId: 1, kind: "room", args: {} },
+      { type: "RoomPresence", roomId: 1 },
+      { type: "RoomEvent", roomId: 1, event: 3, data: 1 },
+    ])
+      expect(() => v1.parseClientMessage(JSON.stringify(m))).toThrow(v1.ProtocolError);
+  });
+  test("server room frames encode and parse back unchanged", () => {
+    const frames: v1.ServerMessage[] = [
+      {
+        type: "RoomSync",
+        roomId: 1,
+        self: "m1",
+        canPublish: true,
+        members: [{ memberId: "m2", userId: "u2", presence: { x: 1 } }],
+      },
+      { type: "RoomMembers", roomId: 1, set: [], left: ["m2"] },
+      { type: "RoomEvent", roomId: 1, from: null, event: "wave", data: { emoji: "👋" } },
+      { type: "RoomError", roomId: 1, code: "no_access", message: "You cannot join this room." },
+    ];
+    for (const f of frames) expect(v1.parseServerMessage(v1.encodeServerMessage(f))).toEqual(f);
   });
 });

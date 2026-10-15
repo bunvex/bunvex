@@ -30,6 +30,7 @@ import type {
 } from "@bunvex/values";
 import type { Auth, FunctionDef, StorageActionWriter, StorageReader, StorageWriter } from "./functions.ts";
 import type { ActionMeta, MutationMeta, QueryMeta } from "./meta.ts";
+import type { PresenceDef, RoomDef } from "./rooms/define.ts";
 import type { PublicHttpAction } from "./router.ts";
 import type { Scheduler } from "./scheduler.ts";
 
@@ -317,3 +318,59 @@ export type HttpActionBuilder = (
   // biome-ignore lint/suspicious/noExplicitAny: an HTTP action's context is not bound to the data model
   func: (ctx: GenericActionCtx<any>, request: Request) => Promise<Response>,
 ) => PublicHttpAction;
+
+// ---------------------------------------------------------------- rooms and presence (AD-42, STUDY-164 §3.3)
+
+/** A room's value as a validator or an object of field validators describes it. */
+type ValueOfFields<F> = F extends PropertyValidators
+  ? ObjectType<F>
+  : F extends GenericValidator
+    ? Infer<F>
+    : EmptyObject;
+
+/** A room definition, its arguments, presence and events as phantom types (not present at run time). */
+export type RegisteredRoom<Args, Presence, Events> = RoomDef & {
+  isBunvexRoom: true;
+  __args?: Args;
+  __presence?: Presence;
+  __events?: Events;
+};
+/** A presence scope definition, its arguments and state as phantom types (not present at run time). */
+export type RegisteredPresence<Args, State> = PresenceDef & {
+  isBunvexRoom: true;
+  __args?: Args;
+  __state?: State;
+};
+
+type Fields = PropertyValidators | GenericValidator;
+type Gate<DataModel extends GenericDataModel, Args> = (
+  ctx: GenericQueryCtx<DataModel>,
+  args: Args,
+) => boolean | Promise<boolean>;
+
+/** `room` for a data model: a room's presence and events, and who may join and publish. */
+export type RoomBuilder<DataModel extends GenericDataModel> = <
+  ArgsFields extends Fields | undefined = undefined,
+  PresenceFields extends Fields = Fields,
+  Events extends Record<string, Fields> = EmptyObject,
+>(spec: {
+  args?: ArgsFields;
+  canJoin?: Gate<DataModel, ValueOfFields<ArgsFields>>;
+  canPublish?: Gate<DataModel, ValueOfFields<ArgsFields>>;
+  presence: PresenceFields;
+  events?: Events;
+}) => RegisteredRoom<
+  ValueOfFields<ArgsFields>,
+  ValueOfFields<PresenceFields>,
+  { [K in keyof Events]: ValueOfFields<Events[K]> }
+>;
+
+/** `presence` for a data model: a signed-in user's state, present while any of their connections is. */
+export type PresenceBuilder<DataModel extends GenericDataModel> = <
+  ArgsFields extends Fields | undefined = undefined,
+  StateFields extends Fields = Fields,
+>(spec: {
+  args?: ArgsFields;
+  canJoin?: Gate<DataModel, ValueOfFields<ArgsFields>>;
+  state: StateFields;
+}) => RegisteredPresence<ValueOfFields<ArgsFields>, ValueOfFields<StateFields>>;

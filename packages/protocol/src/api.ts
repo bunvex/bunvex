@@ -25,6 +25,24 @@ export type FunctionReference<
   _returnType: ReturnType;
 };
 
+/**
+ * A reference to a room (`Kind` "room") or a presence scope (`Kind` "presence") an app defines (AD-42): what
+ * `anyApi.rooms.doc` is typed as. Phantom types: a reference holds only its name.
+ */
+export type RoomReference<
+  Kind extends "room" | "presence" = "room" | "presence",
+  Args = DefaultFunctionArgs,
+  Presence = unknown,
+  Events = Record<string, never>,
+> = {
+  _type: "room";
+  _kind: Kind;
+  _args: Args;
+  _presence: Presence;
+  _events: Events;
+  _name?: string;
+};
+
 // biome-ignore lint/suspicious/noExplicitAny: any reference
 export type AnyFunctionReference = FunctionReference<any, any, any, any>;
 export type FunctionArgs<F extends AnyFunctionReference> = F["_args"];
