@@ -71,6 +71,8 @@ class FakeFeed {
   private async fetch(input: string, init?: RequestInit): Promise<Response> {
     const url = new URL(input);
     this.asked.push(`${url.pathname}${url.search}`);
+    // a network round trip is a task, never a microtask: a loop that spins still lets timers run
+    await new Promise((r) => setTimeout(r, 0));
     const failure = this.failures.shift();
     if (failure) return failure();
     const cursor = Number(url.searchParams.get("cursor") ?? 0);
