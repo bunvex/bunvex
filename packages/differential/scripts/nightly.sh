@@ -33,6 +33,11 @@ if ! bun test test/fixed.test.ts; then
   fail "A fixed program differs." "bun test test/fixed.test.ts"
 fi
 
+# A store with components, as Convex writes it, opened by bunvex and back (STUDY-152 steps 1-2).
+if ! bun test test/component-store.test.ts; then
+  fail "A store with components, as Convex writes it, does not open in bunvex and back." "bun test test/component-store.test.ts"
+fi
+
 end=$(( $(date +%s) + MINUTES * 60 ))
 batches=0
 while [ "$(date +%s)" -lt "$end" ]; do

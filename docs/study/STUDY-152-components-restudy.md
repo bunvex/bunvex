@@ -279,15 +279,20 @@ change no behaviour an app sees on its own and can start before C1 is decided.
   (a component index left backfilling is finished; its index entries are pruned); hidden-table cleanup and
   `_system/cli/tables` keep to the root's. Nothing runs inside a component yet (steps 2–5), and export, streaming
   export and the dashboard stay the root's (steps 9–10).
-- **The fixture.** A SQLite store the Convex binary (precompiled-2026-09-28, Convex 1.46.0 CLI) wrote:
-  an app with `messages` and a `counter` component mounted twice (`counter`, `second`), each with `counters`
-  (10001) and `messages` (10002), one seeded document per table and a scheduled job per component
-  (`packages/core/test/fixtures/convex-store-components.sqlite3.gz`, a copy for the server's tests). It shows
-  Convex's per-component system tables: `_udf_config` 518, `_modules` 521, `_source_packages` 524, `_cron_jobs`
-  531, `_schemas` 532, `_cron_job_logs` 533, `_scheduled_jobs` 539, `_file_storage` 540, `_cron_next_run` 547,
-  `_schema_validation_progress` 549, `_scheduled_job_args` 550, `_schema_validations` 555; and a component's
-  user tables numbered in name order.
-- **Tests:** `packages/core/test/component-namespaces.test.ts`, `packages/server/test/component-tables.test.ts`;
+- **The Convex store.** A store the Convex binary wrote (an app with `messages` and a `counter` component mounted
+  twice, `counter` and `second`, each with `counters` (10001) and `messages` (10002)) shows Convex's per-component
+  system tables: `_udf_config` 518, `_modules` 521, `_source_packages` 524, `_cron_jobs` 531, `_schemas` 532,
+  `_cron_job_logs` 533, `_scheduled_jobs` 539, `_file_storage` 540, `_cron_next_run` 547,
+  `_schema_validation_progress` 549, `_scheduled_job_args` 550, `_schema_validations` 555; and a component's user
+  tables numbered in name order. Its rows are kept as text (`packages/core/test/convex-rows/components.json`); the
+  unit tests build the same layout with bunvex's own catalog API (`component-store.ts`), and
+  `packages/differential/test/component-store.test.ts` has the binary write such a store, bunvex open it, and the
+  binary open it again (the owner asked for no binary fixture in the repo, 2026-10-15). That test found two bugs,
+  fixed with it: a Convex store's component definition module (`convex.config.js`, which imports its children from
+  `_componentDeps/`) was loaded as a function module, failing every deploy (multi-dot names are skipped, as
+  Convex's entry-point rule; STUDY-153 C-2); and the table summary checkpoint left out a component's tables, so
+  Convex could not finish a push on the store after bunvex had run on it (`Catalog.everyTable`).
+- **Tests:** `packages/core/test/component-namespaces.test.ts`, `packages/differential/test/component-store.test.ts`;
   each change sabotaged in turn (eleven sabotages, each failing a test).
 
 ## 11. Step 2: the component registry (built)

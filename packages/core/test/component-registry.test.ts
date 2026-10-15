@@ -1,11 +1,11 @@
 // The component registry (STUDY-152 step 2): `_components` rows in Convex's shape, paths resolved through the tree,
-// and a new component's namespace. The Convex store is the one component-namespaces.test.ts describes: a root with
-// `counter` and `second`, both instances of one `counter` definition.
+// and a new component's namespace. Convex's rows are convex-rows/components.json; the store is component-store.ts's:
+// a root with `counter` and `second`, both instances of one `counter` definition.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decodeId, v } from "@bunvex/values";
+import { decodeId } from "@bunvex/values";
 import { SYSTEM_TABLE_NUMBERS } from "../src/catalog.ts";
 import {
   allComponentPaths,
@@ -21,37 +21,44 @@ import {
 } from "../src/components.ts";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { SqlitePersistence } from "../src/persistence/sqlite.ts";
-import { defineSchema, defineTable } from "../src/schema.ts";
+import { buildComponentStore, rootSchema } from "./component-store.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
-function convexStore(): string {
+/** Convex's rows (convex-rows/components.json). */
+const convex = JSON.parse(readFileSync(join(import.meta.dir, "convex-rows/components.json"), "utf8")) as {
+  _components: Record<string, unknown>[];
+  componentNamespace: Record<string, { number: number; indexes: Record<string, string[]> }>;
+};
+/** The store with components (component-store.ts), opened. */
+async function openStore(): Promise<Engine> {
   const dir = mkdtempSync(join(tmpdir(), "bunvex-component-registry-"));
   dirs.push(dir);
-  const path = join(dir, "convex_local_backend.sqlite3");
-  writeFileSync(
-    path,
-    Bun.gunzipSync(readFileSync(join(import.meta.dir, "fixtures/convex-store-components.sqlite3.gz"))),
-  );
-  return path;
+  const { path } = await buildComponentStore(join(dir, "log"));
+  return await new Engine(rootSchema, await MemoryPersistence.open(path, { durable: false })).init();
 }
-const rootSchema = defineSchema({ messages: defineTable({ text: v.string() }).index("by_text", ["text"]) });
-const openConvex = async () =>
-  await new Engine(rootSchema, new SqlitePersistence(convexStore(), { durable: false })).init();
 const rows = async (e: Engine) =>
   (await e.query((db) => db.asSystem(() => db.query("_components").collect()))) as Record<string, unknown>[];
 
 describe("_components rows", () => {
-  test("Convex's rows read back and write out as they are", async () => {
-    const e = await openConvex();
+  test("Convex's rows read back and write out as they are", () => {
+    for (const row of convex._components) {
+      const { _id: _, _creationTime: __, ...stored } = row;
+      expect(componentRow(componentMeta(row))).toEqual(stored);
+    }
+  });
+
+  test("bunvex's rows are Convex's", async () => {
+    const e = await openStore();
     try {
-      for (const row of await rows(e)) {
-        const { _id: _, _creationTime: __, ...stored } = row;
-        expect(componentRow(componentMeta(row))).toEqual(stored);
-      }
+      const strip = (r: Record<string, unknown>) => {
+        const { _id: _, _creationTime: __, definitionId: ___, parent: ____, ...rest } = r;
+        return rest;
+      };
+      const byName = (rs: Record<string, unknown>[]) => Object.fromEntries(rs.map((r) => [String(r.name), strip(r)]));
+      expect(byName(await rows(e))).toEqual(byName(convex._components));
     } finally {
       await e.close();
     }
@@ -72,7 +79,7 @@ describe("_components rows", () => {
 
 describe("the tree", () => {
   test("paths and ids, both ways", async () => {
-    const e = await openConvex();
+    const e = await openStore();
     try {
       // A `_components` id no row has.
       const absent = await e.mutation((db) => db.asSystem(async () => db.newId("_components")));
@@ -105,7 +112,7 @@ describe("the tree", () => {
   });
 
   test("a path resolved in a query is a read: changing the tree invalidates it, another table's write does not", async () => {
-    const e = await openConvex();
+    const e = await openStore();
     try {
       const r = await e.queryTracked((db) => resolveComponentPath(db, ["counter"]));
       expect(r.ok && r.value?.name).toBe("counter");
@@ -175,19 +182,7 @@ describe("the tree", () => {
 
 describe("a new component's namespace", () => {
   test("its system tables and indexes are a Convex component's", async () => {
-    const convex = await openConvex();
-    const expected = (() => {
-      const c = [...convex.catalog.components.values()][0]!;
-      return Object.fromEntries(
-        [...c.tables.values()]
-          .filter((t) => t.name.startsWith("_"))
-          .map((t) => [
-            t.name,
-            { number: t.number, indexes: Object.fromEntries([...t.indexes].map(([n, i]) => [n, i.fields])) },
-          ]),
-      );
-    })();
-    await convex.close();
+    const expected = convex.componentNamespace;
     expect(Object.keys(expected).sort()).toEqual([...COMPONENT_NAMESPACE_TABLES].sort());
 
     const path = join(mkdtempSync(join(tmpdir(), "bunvex-component-ns-")), "log");
