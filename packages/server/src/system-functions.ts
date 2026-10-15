@@ -210,10 +210,12 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
       const tables = (await db.asSystem(() => db.query("_tables").collect())) as unknown as {
         name: string;
         state?: string;
+        namespace?: unknown;
       }[];
       return {
+        // The root's: a component's tables have a `namespace` (STUDY-152 step 1).
         page: tables
-          .filter((t) => (t.state ?? "active") === "active" && !t.name.startsWith("_"))
+          .filter((t) => (t.state ?? "active") === "active" && t.namespace === undefined && !t.name.startsWith("_"))
           .map((t) => ({ name: t.name })),
         isDone: true,
         continueCursor: "end",

@@ -225,26 +225,43 @@ export const SYSTEM_TABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
  * documents removed in the background, then its metadata).
  */
 export type TableState = "active" | "hidden" | "deleting";
-/** A table's `_tables` row; `tablet` is its id's internal id, not a field. */
-export type TableMeta = { _id: string; name: string; number: number; tablet: TabletId; state: TableState };
+/**
+ * A table's `_tables` row; `tablet` is its id's internal id, not a field. `namespace` is the id of the component
+ * the table belongs to (its `_components` row's), absent for the root's (STUDY-152 step 1).
+ */
+export type TableMeta = {
+  _id: string;
+  name: string;
+  number: number;
+  tablet: TabletId;
+  state: TableState;
+  namespace?: string;
+};
 /**
  * A `_tables` row as stored: Convex's `SerializedTableMetadata` (crates/common/src/bootstrap_model/tables.rs):
- * `name`, `number` an int64 (STUDY-134), `state`; no `namespace` (a root component's table). The catalog works
- * on numbers; rows are converted when written and read.
+ * `name`, `number` an int64 (STUDY-134), `state`, and `namespace` only for a component's table
+ * (`{kind: "byComponent", id}`, the component's `_components` id; the root's tables have none). The catalog
+ * works on numbers; rows are converted when written and read.
  */
-export const tableRow = (t: { name: string; number: number; state: TableState }) => ({
+export const tableRow = (t: { name: string; number: number; state: TableState; namespace?: string }) => ({
   name: t.name,
   number: BigInt(t.number),
   state: t.state,
+  ...(t.namespace === undefined ? {} : { namespace: { kind: "byComponent", id: t.namespace } }),
 });
 /** A `_tables` row read back: its `number` a number again, its tablet its id's internal id. */
-export const tableMeta = (row: Record<string, unknown>): TableMeta => ({
-  _id: row._id as string,
-  name: row.name as string,
-  number: Number(row.number as bigint | number),
-  tablet: tabletOf(row._id as string),
-  state: (row.state as TableState | undefined) ?? "active",
-});
+export const tableMeta = (row: Record<string, unknown>): TableMeta => {
+  const meta: TableMeta = {
+    _id: row._id as string,
+    name: row.name as string,
+    number: Number(row.number as bigint | number),
+    tablet: tabletOf(row._id as string),
+    state: (row.state as TableState | undefined) ?? "active",
+  };
+  const namespace = (row.namespace as { id?: string } | null | undefined)?.id;
+  if (namespace !== undefined) meta.namespace = namespace;
+  return meta;
+};
 /** Convex's `MAX_USER_TABLES` (crates/database/src/bootstrap_model/table.rs): active user tables, at most. */
 export const MAX_USER_TABLES = 10_000;
 
@@ -257,8 +274,13 @@ export class TooManyTablesError extends Error {
   }
 }
 
-/** The active tables of a `_tables` listing (old rows have no state: active). */
-export const activeTables = (tables: TableMeta[]) => tables.filter((t) => (t.state ?? "active") === "active");
+/**
+ * The active tables of one namespace in a `_tables` listing (old rows have no state: active): the root's unless
+ * `namespace` names a component. Tables are found by name within a namespace only: a component may have a
+ * table of the same name and number as the root's.
+ */
+export const activeTables = (tables: TableMeta[], namespace?: string) =>
+  tables.filter((t) => (t.state ?? "active") === "active" && t.namespace === namespace);
 /**
  * An index's lifecycle, as Convex's `DatabaseIndexState` (STUDY-29): `backfilling` (the worker is copying
  * the table into it; every write already maintains it), `backfilled` (complete, not yet enabled: the
@@ -474,8 +496,15 @@ export type CatalogIndex = {
   metaId?: string;
 };
 
+/**
+ * The tables of one namespace, by name and by number, and their indexes. The engine's catalog is the root's;
+ * each component's is in its `components`, by component id (STUDY-152 step 1). Tablets are global, so a
+ * component's tables are found by tablet with `anyTablet`; by name or number only within their namespace.
+ */
 export class Catalog {
   readonly tables = new Map<string, TableDef>();
+  /** Each component's catalog, by its `_components` id (the root's only). */
+  components = new Map<string, Catalog>();
   private readonly numbers = new Map<number, TableDef>();
   /** Hidden tables (an import's), by tablet: invisible to functions. */
   readonly hidden = new Map<TabletId, TableDef>();
@@ -545,13 +574,25 @@ export class Catalog {
       out.numbers.set(t.number, t);
     }
     for (const tablet of c.gone ?? []) out.deleting.delete(tablet);
+    out.components = this.components;
     return out;
   }
 
-  /** The table whose persistence id is `tablet`, if any. */
+  /** The table of this namespace whose persistence id is `tablet`, if any. */
   byTablet(tablet: TabletId): TableDef | undefined {
     for (const t of this.tables.values()) if (t.id === tablet) return t;
     return this.hidden.get(tablet) ?? this.deleting.get(tablet);
+  }
+
+  /** The table whose persistence id is `tablet`, in this namespace or a component's. */
+  anyTablet(tablet: TabletId): TableDef | undefined {
+    const t = this.byTablet(tablet);
+    if (t) return t;
+    for (const c of this.components.values()) {
+      const found = c.byTablet(tablet);
+      if (found) return found;
+    }
+    return undefined;
   }
 
   /**
@@ -580,6 +621,7 @@ export class Catalog {
     }
     for (const [k, t] of this.hidden) c.hidden.set(k, t);
     for (const [k, t] of this.deleting) c.deleting.set(k, t);
+    for (const [id, component] of this.components) c.components.set(id, component.withIndexChanges(changes, readyTs));
     return c;
   }
 
@@ -727,9 +769,11 @@ export function planCatalog(
     restageIndexes: [],
     nextIndexId,
   };
-  const usedNumbers = new Set(tables.map((t) => t.number));
+  // Numbers and names are the root's; the cap on user tables counts every namespace's (Convex's
+  // `MAX_USER_TABLES` is per deployment).
+  const usedNumbers = new Set(tables.filter((t) => t.namespace === undefined).map((t) => t.number));
   const active = activeTables(tables);
-  let userTableCount = active.filter((t) => !t.name.startsWith("_")).length;
+  let userTableCount = tables.filter((t) => (t.state ?? "active") === "active" && !t.name.startsWith("_")).length;
   for (const d of declared) {
     const tablet = active.find((t) => t.name === d.name)?.tablet;
     const isNew = tablet === undefined;
@@ -838,8 +882,13 @@ export function buildCatalog(tables: TableMeta[], indexes: IndexMeta[]): Catalog
       !indexes.some((i) => i.tablet === t.tablet && i.name === "by_id" && i.state === "enabled")
     )
       throw new CatalogError(`Missing \`by_id\` index for ${t.name}`);
-  for (const t of tables)
-    c.add(
+  for (const t of tables) {
+    let ns = c;
+    if (t.namespace !== undefined) {
+      ns = c.components.get(t.namespace) ?? new Catalog();
+      c.components.set(t.namespace, ns);
+    }
+    ns.add(
       t.name,
       t.tablet,
       t.number,
@@ -856,6 +905,7 @@ export function buildCatalog(tables: TableMeta[], indexes: IndexMeta[]): Catalog
       t.state ?? "active",
       t._id,
     );
+  }
   return c;
 }
 

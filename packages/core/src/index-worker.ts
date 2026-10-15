@@ -61,7 +61,7 @@ const FULL_HI = Uint8Array.from([0xff, 0xff, 0xff, 0xff]);
 export interface IndexWorkerHost {
   readonly committer: Committer;
   readonly persistence: Persistence;
-  readonly catalog: { byTablet(tablet: TabletId): TableDef | undefined };
+  readonly catalog: { anyTablet(tablet: TabletId): TableDef | undefined };
   /** Run a system transaction (OCC retries included). */
   system<T>(body: (db: Tx) => Promise<T>, source: string): Promise<T>;
   /** Install a committed `_index` change into the catalog (called from the commit's visibility). */
@@ -182,7 +182,7 @@ export class IndexWorker {
 
   /** Fill every `backfilling` index of one table, from its checkpoint, then mark them done. */
   private async backfillTable(metas: IndexMeta[], empty = false) {
-    const t = this.host.catalog.byTablet(metas[0].tablet);
+    const t = this.host.catalog.anyTablet(metas[0].tablet);
     if (!t) return;
     const defs = metas
       .map((m) => t.pending.find((p) => p.id === m.indexId))
