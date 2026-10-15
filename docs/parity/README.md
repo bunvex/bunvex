@@ -10,8 +10,9 @@ item. It is the project's to-do list at the scale of the whole product.
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 163 | 2 | 1 |
 | Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 229 | 20 | 13 |
 
-Beyond Convex, [additions.md](additions.md) lists 29 additions: 26 built (11 of them dashboard screens on the
-mock, 3 more with their dashboard part on the mock), 2 accepted, 1 deferred, none proposed (2026-10-11, with AD-29).
+Beyond Convex, [additions.md](additions.md) lists 30 additions: 27 built (6 of them dashboard screens on the
+mock, 1 more with its dashboard part on the mock), 2 accepted, 1 deferred, none proposed (2026-10-14, the
+dashboard audit after STUDY-149, then AD-24 on a deployment).
 
 These counts were recounted on 2026-10-12 (the docs audit: cloud-only and decided no-build rows re-marked *n/a*) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
@@ -194,7 +195,11 @@ gaps.
   the local one where Convex's links its cloud (DV-477, PR 8); the image's frame and security headers match
   Convex's, the embedding allow-list in `frame-ancestors` (DV-488). Left, none of them something an app hits:
   - the custom test query's type checking and completions, and Convex's bulk edit;
-  - search, vector and staged indexes in the Data screen's index list;
-  - the environment variables screen opening a named variable (Convex's `?var=`, which its CLI's link uses).
+  - search, vector and staged indexes in the Data screen's index list; `tableOfId` for system tables;
+  - the environment variables screen opening a named variable (Convex's `?var=`, which its CLI's link uses);
+  - bunvex's own screens not offered on a deployment yet ([additions.md](additions.md), "on the mock"): the
+    subscriptions inspector (AD-25: the server has it, the source does not call it), and the topology, the
+    clients, authentication admin, analytics, flags and workflows (no server side). The system tables (AD-24)
+    are on a deployment since STUDY-149's follow-up.
 - HTTP actions (STUDY-31 §10.6): a response stream's chunk that is not bytes (a string) is sent as text, where
   Convex fails the body (`serde_v8 … expected: buffer`).

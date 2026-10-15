@@ -123,6 +123,7 @@ As Convex's dashboard ([STUDY-149 §1.2](study/STUDY-149-dashboard-real-data.md#
 |---|---|
 | Data: the table list, documents, sizes, indexes, schema | live (a subscription) |
 | Data: inferred types | every 60 s |
+| Data: system tables ("Show system tables", a bunvex addition) | once, when listed or opened (not live) |
 | Functions: the list, the runner's query, its argument validator | live |
 | Functions: a function's charts | once per time window |
 | Functions: a mutation's invalidations | every 8 s |
@@ -142,8 +143,13 @@ back the polls ask again at once and the subscriptions resume.
 - The custom test query has no type checking or completions (Convex ships its server's declarations to the
   browser).
 - No bulk edit of documents, and the Data screen's index list leaves out search, vector and staged indexes.
+  Going to a system table's document by its id is not offered (Convex opens a file's id in Files and a scheduled
+  run's in Schedules).
 - The environment variables screen does not open a given variable from a link (Convex's `?var=`).
 - Cloud-only screens are absent, as in Convex's self-hosted dashboard: insights, backups, custom domains, team,
-  billing and usage. bunvex keeps its own additions (the Overview's summary, Snapshots in Settings, the topology,
-  subscriptions and system tables screens).
+  billing and usage. bunvex keeps its own additions that work on a deployment (the Overview's summary,
+  Snapshots in Settings, the command palette, the Logs screen's histogram and export, the system tables).
+- Some of bunvex's own screens open on the demo data only, and are hidden on a deployment (or say it does not
+  offer them): Subscriptions (its server side exists; the dashboard does not read it yet), and Topology,
+  Authentication's user management, the clients, Analytics, Feature flags and Workflows (no server side yet).
 - No telemetry and no legacy deployment list (`?a=<port>&d=<name>`), which Convex keeps for old CLIs.

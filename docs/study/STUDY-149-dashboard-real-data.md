@@ -1810,6 +1810,80 @@ addition (AD-41 unused). Printing the URL the dashboard is serving where Convex 
 **Measurements.** No hot path: CLI messages only. A command asks the local dashboard at most once (one loopback
 request, 2 s timeout), only when a message needs the link and a port is saved; a self-hosted deployment asks
 nothing.
+
+### Follow-ups after the plan: AD-24 on a deployment
+
+[AD-24](../parity/additions.md#additions) (system tables in the Data screen, STUDY-131 §4 and §7) had its server
+side and its screen, on the mock; the source did not call the server (#648's audit, class (c)). Convex has nothing
+to match: its dashboard shows the app's tables and the two virtual ones (`_storage` in Files, `_scheduled_functions`
+in Schedules), never a private system table, so this is bunvex's own screen (STUDY-12 D1) and no divergence.
+
+**Source** (`packages/dashboard-source/src/system-tables.ts`, its own block in `server-source.ts`):
+
+- `listSystemTables`: `_system/debug/systemTables` once (a one-shot query: the contract has no live variant, and
+  the screen fetches the list when the switch is on, as on the mock), its rows as the contract's
+  `{name, description, appVisible, documentCount}`, sorted by name. A key without ViewData gets the server's
+  permission refusal, `unauthorized`.
+- `listSystemDocuments`: `_system/debug/systemTable {table, order, paginationOpts}` (oldest first by default), its
+  documents through `toDocument` (int64 and bytes in their JSON encodings, as `tables.ts` pages a user table). A
+  name without `_` and a page size that is not a positive integer are `invalid_request` before anything is sent,
+  as the mock; a cursor the server refuses is `invalid_request` (`tables.ts`' `pageError`). The server reads a `_`
+  name it does not have as an empty table, so the listing is asked beside the page and an unknown name is
+  `not_found`, the contract's answer.
+- The names are the catalog's: `_file_storage` and `_scheduled_jobs` (apps read them as `_storage` and
+  `_scheduled_functions`). `_index` has no `by_creation_time` index, as Convex's (`crates/database/src/database.rs:1556-1558`), so its pages
+  run in id order; the contract's comment now says so (`data-source-system-tables.ts`).
+
+**Found on the way, fixed here.**
+
+1. The server's `appVisible` compared each name with `APP_VISIBLE_SYSTEM_TABLES` (the virtual names, `_storage`
+   and `_scheduled_functions`), which are not in the catalog since the virtual tables were split from their system
+   tables (STUDY-125), so every table read as private, in the dashboard and in `bunvex data --system`. It now asks
+   `virtualTableOfSystem(name)`: `_file_storage` and `_scheduled_jobs` are the public two. The server test checked
+   it only `if` `_storage` was listed; it now pins the two names, and the CLI test the two `public` lines.
+2. The mock listed `_storage` and `_scheduled_functions` as system tables; it now uses the catalog's names and
+   descriptions, so the demo data shows what a deployment shows.
+
+**Not built here: `tableOfId` for system tables** (PR 2's note, still open). The source part is small (the
+mapping already holds `_file_storage` and `_scheduled_jobs`), but what the dashboard does with such an id is not:
+Convex sends a `_file_storage` id to Files with `?id=` and a `_scheduled_jobs` id to Schedules
+(`dc/lib/utils.ts:103-133` `documentHref`, used by `useIdReferenceLink.ts`), while bunvex's "Go to reference" and the palette open `/database/<table>?doc=`,
+which the system table view does not handle (no document panel). It needs the contract to say what `tableOfId`
+answers for a system id, the mock to answer it, and the screens to route it; left for its own change, in the
+screens' area rather than the source's.
+
+**Tests.**
+
+- Unit (`packages/dashboard-source/test/system-tables.test.ts`, a fake connection): what each query is asked
+  (the order defaulted, the cursor passed on), the listing sorted, documents in the contract's JSON, the refusals
+  sent nowhere, a missing system table `not_found`, a refused cursor `invalid_request`, a permission refusal
+  `unauthorized`.
+- Live (`packages/sync-e2e/dashboard/server-source-system-tables.test.ts`): the contract suite's `systemTables`
+  area on a live server, then the listing as the catalog (sizes match a walk), the app's table in `_tables` and its
+  declared index in `_index`, `_file_storage`'s stored fields (`storageKey`, the size an int64) and the two public
+  tables, `_index` walked once in id order both ways, the refusals, and a read-only key.
+- Server and CLI: `system-tables-browser.test.ts` and `data.test.ts` pin the public tables.
+- Chromium (`app.e2e.ts`): signed in to a live deployment, "Show system tables" lists `_tables`, `_index` and
+  `_file_storage`; `_tables` opens read-only with its description and its documents (the bootstrap rows oldest first, the
+  app's table once newest first); axe finds nothing.
+
+**Sabotage** (each restored after, `git diff` clean; counts are failing tests, unit / live / server):
+
+| Sabotage | Failing tests |
+|---|---|
+| the listing not sorted | 1 / 2 / 0 |
+| `order` dropped (always oldest first) | 1 / 2 / 0 |
+| no `not_found` for a missing system table | 1 / 1 / 0 |
+| documents not through `toDocument` | 1 / 2 / 0 |
+| the cursor not passed on | 1 / 4 / 0 |
+| a refused cursor left `unavailable` | 1 / 1 / 0 |
+| a user table's name sent to the server | 1 / 2 / 0 |
+| the server's `appVisible` back to the virtual names | 0 / 1 / 1 (and the CLI test) |
+| the two methods not wired in `server-source.ts` | 0 / 6 / 0 (and the Chromium test) |
+
+**Measurements.** No hot path: two admin-only queries, only while the switch is on or a system table is open. The
+source's chunk grows by about 1.1 KB minified.
+
 ## 6. Open questions
 
 Every question below is in the decision format the owner asked for (what Convex does / what bunvex would do /
