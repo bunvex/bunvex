@@ -118,6 +118,8 @@ async function setup(
     ["/throws-string", "a string"],
     ["/throws-null", null],
     ["/throws-unstacked", Object.assign(new Error("no stack"), { stack: "Error: no stack" })],
+    ["/throws-lines", new Error("line one\nline two")],
+    ["/throws-string-newline", "a string\n"],
   ] as const)
     http.route({
       path,
@@ -322,6 +324,17 @@ describe("requests and responses", () => {
     expect(await trace("/notResponse")).toBe("Uncaught Error: HTTP actions must return a Response\n");
     const framed = await trace("/throws");
     expect(framed).toMatch(/^Uncaught BunvexError: \{"code":"nope"\}\n {4}at .+\n$/s);
+  });
+
+  test("the 500's code carries the error's message whole, as Convex's: every line, a trailing newline", async () => {
+    const { site } = await setup();
+    const code = async (path: string) =>
+      ((await (await fetch(`${site}${path}`)).json()) as { code: string }).code.replace(/^\[Request ID: \w+\] /, "");
+    expect(await code("/throws-lines")).toBe("Server Error: Uncaught Error: line one\nline two");
+    expect(await code("/throws-string-newline")).toBe("Server Error: Uncaught a string\n");
+    expect(await code("/throws-string")).toBe("Server Error: Uncaught a string");
+    // No frames in it: they are the trace's.
+    expect(await code("/throws")).toBe('Server Error: Uncaught BunvexError: {"code":"nope"}');
   });
 
   test("CORS is the app's: its OPTIONS route answers preflights; nothing is added elsewhere", async () => {
