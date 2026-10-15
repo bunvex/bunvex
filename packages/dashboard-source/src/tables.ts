@@ -528,7 +528,7 @@ export class Tables {
 }
 
 /** A failed page read: a cursor or an expression the server refuses is the caller's mistake. */
-function pageError(e: unknown): unknown {
+export function pageError(e: unknown): unknown {
   if (!(e instanceof DataSourceError) || e.code !== "unavailable") return e;
   if (/InvalidCursor|Failed to parse cursor|Invalid filters|at least 1 document|options\.numItems/.test(e.message))
     return new DataSourceError("invalid_request", e.message);

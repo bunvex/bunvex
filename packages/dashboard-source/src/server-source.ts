@@ -33,6 +33,7 @@ import { LogStream, type LogStreamOptions } from "./logs.ts";
 import { Metrics } from "./metrics.ts";
 import { Settings } from "./settings.ts";
 import { AdminSync, watchConnection } from "./sync.ts";
+import { SystemTables } from "./system-tables.ts";
 import { Tables } from "./tables.ts";
 import { dataWrites } from "./writes.ts";
 
@@ -112,6 +113,8 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
   };
   const functions = new Functions(sync, http, opts, capabilities);
   const settings = new Settings(sync, http);
+  // the system tables (STUDY-131 AD-24)
+  const systemTables = new SystemTables(sync);
 
   const getStats = async (o?: CallOptions): Promise<DeploymentStats> => {
     const s = await http.json<StatsJson>("/stats", { signal: o?.signal });
@@ -286,6 +289,10 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
 
     // ---------------------------------------------------------------- the Data screen's writes (PR 3, writes.ts)
     ...writes,
+
+    // ---------------------------------------------------------------- the system tables (STUDY-131 AD-24), read-only
+    listSystemTables: (o) => systemTables.listSystemTables(o),
+    listSystemDocuments: (q, o) => systemTables.listSystemDocuments(q, o),
 
     // ---------------------------------------------------------------- the connection, polled every 2.5 s as Convex's
     watchConnection: (onStatus) => watchConnection(() => sync.connectionState(), onStatus),

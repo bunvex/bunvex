@@ -283,6 +283,47 @@ describe("the dashboard app on a live deployment", () => {
     await close();
   });
 
+  test("Data: the system tables (AD-24) are listed, and one opens with its documents, read-only", async () => {
+    const { page, errors, close } = await signedIn("/database/messages");
+    await heading(page, "messages");
+    await page.getByRole("checkbox", { name: "Show system tables" }).click();
+    const list = page.getByRole("list", { name: "System tables" });
+    // the deployment's catalog, private tables included, and the one apps read as `_storage`
+    for (const name of ["_tables", "_index", "_file_storage"])
+      await list.getByRole("link", { name: new RegExp(`^${name}\\b`) }).waitFor();
+    await list.getByRole("link", { name: /^_tables\b/ }).click();
+    await heading(page, "_tables");
+    await page.getByText("Private system table").waitFor();
+    await page.getByText(/^Every table: its name, number and state/).waitFor();
+    // `_tables`' documents as stored, oldest first: the bootstrap tables' rows, their numbers int64s
+    const grid = page.getByRole("table", { name: "Documents in _tables" });
+    await grid
+      .getByText(/^_index$/)
+      .first()
+      .waitFor();
+    await grid
+      .getByText(/^514n$/)
+      .first()
+      .waitFor();
+    // newest first: the app's table, created by its push, comes near the top
+    await page.getByRole("button", { name: "Oldest first" }).click();
+    await page.getByRole("button", { name: "Newest first" }).waitFor();
+    await grid
+      .getByText(/^messages$/)
+      .first()
+      .waitFor();
+    expect(await page.getByRole("button", { name: /Add documents/ }).count()).toBe(0);
+    await page.addScriptTag({ content: AXE });
+    const violations = await page.evaluate(async () => {
+      // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
+      const r = await (window as any).axe.run(document, { resultTypes: ["violations"] });
+      return r.violations.map((v: { id: string; nodes: unknown[] }) => `${v.id} (${v.nodes.length})`);
+    });
+    expect(violations).toEqual([]);
+    expect(errors).toEqual([]);
+    await close();
+  });
+
   test("Functions and the runner: a query subscribed, a mutation run, the custom test query", async () => {
     const { page, errors, close } = await signedIn("/functions?function=messages:list");
     await page.getByRole("heading", { level: 1, name: "list" }).waitFor();
