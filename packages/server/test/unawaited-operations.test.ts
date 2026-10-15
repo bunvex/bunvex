@@ -63,7 +63,8 @@ async function setup() {
     }),
     hang: action(async (ctx) => {
       void ctx.runQuery("m:q" as never, {});
-      void new Promise((r) => setTimeout(r, 10_000)).then(() => ctx.runQuery("m:q" as never, {}));
+      // Refused once the action is cut off; caught, or its rejection would fail whichever test runs 10 s later.
+      void new Promise((r) => setTimeout(r, 10_000)).then(() => ctx.runQuery("m:q" as never, {})).catch(() => {});
       void fetch("http://127.0.0.1:1/").catch(() => {});
       await new Promise(() => {});
     }),
