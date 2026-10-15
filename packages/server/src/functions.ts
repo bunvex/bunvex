@@ -176,7 +176,8 @@ import {
 import { withNodeProcessErrors } from "./node-process-errors.ts";
 import { setOperationTracker } from "./pending-ops.ts";
 import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearchQuery } from "./registration.ts";
-import { type AnyRoomDef, isRoomDef } from "./rooms/define.ts";
+import { type AnyRoomDef, isRoomDef, type RoomGate } from "./rooms/define.ts";
+import type { RoomHub } from "./rooms/hub.ts";
 import type { RoutableMethod } from "./router.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { ServerMetrics } from "./server-metrics.ts";
@@ -193,7 +194,7 @@ const cacheKeyOf = (hash: string, name: string, args: unknown) =>
   `${hash}\u0000${name}\u0000${stringifyValue(args ?? {})}`;
 
 /** A function name as the registry keys it: `module:function`, `.js` stripped, `default` when unnamed. */
-const registryKey = (name: string) => {
+export const registryKey = (name: string) => {
   const i = name.lastIndexOf(":");
   const [module, fn] = i === -1 ? [name, "default"] : [name.slice(0, i), name.slice(i + 1)];
   return `${module.endsWith(".js") ? module.slice(0, -3) : module}:${fn}`;
@@ -819,6 +820,10 @@ export class Functions {
   private fns = new Map<string, FunctionDef>();
   /** Every room and presence definition (AD-42), by registry key, as `fns` keys functions. */
   rooms = new Map<string, AnyRoomDef>();
+  /** The rooms' members in memory (AD-42); set by `createServer`. */
+  roomHub: RoomHub | null = null;
+  /** Each room gate as the query it runs as (built once per gate). */
+  private gateQueries = new WeakMap<RoomGate, QueryDef>();
   /** Each function's name as its key (`module:fn`), for `ctx.meta.getFunctionMetadata()`. */
   private names = new WeakMap<FunctionDef, string>();
   /** Each module's code hash (a deployed code version's modules); empty for registered (embedded) code. */
@@ -2170,6 +2175,29 @@ export class Functions {
       caller,
       () => this.engine.queryJson(this.queryBody(name, args, false, caller, f), undefined, undefined, caller),
       returnedJson,
+      args,
+    );
+  }
+
+  /**
+   * A room's gate (AD-42, STUDY-164 §3.4): run as a query of `name` with `caller`'s identity, read-only and
+   * without the query cache, as a standalone query runs. Its value, or what it threw. Not a function: no
+   * client can call it by path.
+   */
+  async runGate(gate: RoomGate, name: string, args: Value, caller: Caller): Promise<unknown> {
+    let f = this.gateQueries.get(gate);
+    if (!f) {
+      // No args validator: the room's were checked at join.
+      f = { kind: "query", visibility: "internal", handler: (ctx, a) => gate(ctx as never, a) };
+      this.gateQueries.set(gate, f);
+    }
+    this.names.set(f, registryKey(name));
+    return this.logged(
+      "Query",
+      name,
+      caller,
+      () => this.engine.query(this.queryBody(name, args, false, caller, f), undefined, undefined, caller),
+      returned,
       args,
     );
   }

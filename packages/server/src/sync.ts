@@ -39,7 +39,7 @@ import {
   TooManyWritesError,
 } from "@bunvex/core";
 import { v1 } from "@bunvex/protocol";
-import { rawValueSize, type Value } from "@bunvex/values";
+import { fromJsonValue, rawValueSize, type Value } from "@bunvex/values";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { BadAdminKeyError } from "./admin-keys.ts";
 import type { BunServerWebSocket } from "./bun-types.ts";
@@ -58,6 +58,9 @@ import { wsRequestId } from "./function-log.ts";
 import { type AdminCaller, callerOf, type Deadline, Functions, type SourcedCaller } from "./functions.ts";
 import type { RunReason } from "./log-events.ts";
 import { cachedQueryLogs, collectLogs, type LogLine, type WithLogLines } from "./logs.ts";
+import { RoomHub } from "./rooms/hub.ts";
+import { type RoomLimits, roomLimitsFromEnv } from "./rooms/limits.ts";
+import { RoomConnection } from "./rooms/session.ts";
 import { argsDigest, invalidationHistoryFromEnv, type RerunReason, SyncInspector } from "./sync-inspector.ts";
 
 /**
@@ -266,6 +269,8 @@ export type SyncDeps = {
   metrics?: SyncMetrics;
   /** The WS ping interval and the client timeout; defaults: Convex's 5 s and 120 s. For tests. */
   wsHeartbeat?: Partial<WsHeartbeatOptions>;
+  /** The rooms' members and limits (AD-42); default: a hub of its own, limits from the environment. */
+  rooms?: { hub: RoomHub; limits: RoomLimits };
 };
 
 type Observer = { observe(v: number): void };
@@ -420,6 +425,8 @@ export class SyncHub {
   unavailableRetryMs: number;
   /** What made each key run again, for the inspector (STUDY-131 AD-25). */
   readonly inspector: SyncInspector;
+  /** The rooms (AD-42): a session joins them through its `RoomConnection`. */
+  readonly rooms: { hub: RoomHub; limits: RoomLimits };
 
   /**
    * Sends each idle session its `Ping`, each session its WS ping, and closes the silent ones; one timer for all
@@ -439,6 +446,11 @@ export class SyncHub {
       deps.maxSendTransitions ?? knob("SYNC_MAX_SEND_TRANSITION_COUNT", SYNC_MAX_SEND_TRANSITION_COUNT);
     this.unavailableRetryMs = deps.unavailableRetryMs ?? secondsKnob("SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY", 3);
     this.inspector = new SyncInspector(deps.invalidationHistory ?? invalidationHistoryFromEnv());
+    if (deps.rooms) this.rooms = deps.rooms;
+    else {
+      const limits = roomLimitsFromEnv();
+      this.rooms = { hub: new RoomHub(limits), limits };
+    }
     deps.engine.committer.onCommit((entries) => this.onCommit(entries), "sync");
     this.retry = retryOptions(deps.retry);
     this.wsHeartbeat = {
@@ -961,6 +973,8 @@ export class SyncSession {
   private versionText = versionJson(this.version);
   /** The pending rerun of queries that found an index unavailable (STUDY-79). */
   private unavailableTimer: ReturnType<typeof setTimeout> | null = null;
+  /** This connection's rooms (AD-42): made on its first room message, so one without rooms costs nothing. */
+  private rooms: RoomConnection | null = null;
 
   constructor(private hub: SyncHub) {
     this.lastSent = this.lastReceived = this.lastWsPing = hub.clock();
@@ -985,6 +999,33 @@ export class SyncSession {
     this.watching.clear();
     this.queries.clear();
     this.hub.sessions.delete(this);
+    this.rooms?.closed();
+  }
+
+  private roomConnection(): RoomConnection {
+    if (this.rooms) return this.rooms;
+    // Fixed once the first room is joined: the hub keys this connection's members and their grace by it. A
+    // client sends `Connect` first; one that did not gets an id of its own, and no reconnect grace.
+    const sessionId = this.sessionId ?? crypto.randomUUID();
+    this.rooms = new RoomConnection(
+      {
+        hub: this.hub.rooms.hub,
+        functions: this.hub.deps.functions,
+        limits: this.hub.rooms.limits,
+        fromWire: fromJsonValue,
+      },
+      {
+        sessionId: () => sessionId,
+        send: (frame) => this.send(v1.encodeServerMessage(frame)),
+        buffered: () => this.ws?.getBufferedAmount() ?? 0,
+        // A connection too far behind on room frames: closed as an internal error is (1011), so the client
+        // reconnects and rejoins. Once closed, `fail` does nothing.
+        close: (reason) => this.fail({ code: "OperationalInternalServerError", shortMsg: reason, msg: reason }),
+        // An expired token ends the connection (`currentCaller`); the room work after it stops on the close.
+        caller: () => this.currentCaller() ?? callerOf(null),
+      },
+    );
+    return this.rooms;
   }
 
   /** Whether this client takes `TransitionChunk`s: set by the server from the client's version (DV-10). */
@@ -1296,7 +1337,9 @@ export class SyncSession {
         this.received.identity++;
         this.identityChanged = true;
         if (span) this.transitionParent = span;
-        return this.schedule();
+        this.schedule();
+        // The rooms' gates run again for the new identity (STUDY-164 §3.4), before the next message.
+        return this.rooms?.identityChanged();
       }
       case "Event":
         return; // client telemetry (STUDY-23 P11)
@@ -1304,7 +1347,7 @@ export class SyncSession {
       case "RoomLeave":
       case "RoomPresence":
       case "RoomEvent":
-        return; // rooms are wired in Task 5
+        return this.roomConnection().handle(m);
     }
   }
 
