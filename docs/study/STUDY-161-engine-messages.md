@@ -216,7 +216,7 @@ and lists what failed in its *Built* line.
 
 ### §4 (the system-field mismatch's display)
 
-*Built:* `checkSystemFieldValues` (`core/src/tx.ts`) displays the `_id` field and the document being written (the
+*Built* (#669): `checkSystemFieldValues` (`core/src/tx.ts`) displays the `_id` field and the document being written (the
 written `_creationTime` in place of the assigned one) with `displayValue`; no call site changed. Tests:
 `core/test/system-field-mismatch.test.ts` (insert, patch with a removed field, an int64, replace, `_id` before the
 creation time); `differential/test/system-fields.test.ts` (11 writes on both backends, compared with the
