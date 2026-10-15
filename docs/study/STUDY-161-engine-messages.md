@@ -295,3 +295,24 @@ clean): the old `ArrayBuffer(…)` text, URL-safe unpadded base64, a cut at 100 
 the differential test. Found, not fixed: a filter's error names the type in Convex's `type_name` (`Bytes`, `Float64`,
 `String`, …: `crates/value/src/walk.rs:41-52`) where bunvex's `typeName` (`core/src/filter.ts`) says `bytes`,
 `float64`, …
+
+## 14. A filter's type names (found with §13)
+
+**Convex.** A filter's evaluation errors (`crates/common/src/query.rs:744-751` for arithmetic, `:854-857` for `neg`;
+`common/src/types/maybe_value.rs:55-63` for a non-boolean predicate) name a value's type with `MaybeValue::type_name`:
+`ConvexValueType::type_name` (`crates/value/src/walk.rs:41-52`) for a value (`Null`, `Int64`, `Float64`, `Boolean`,
+`String`, `Bytes`, `Array`, `Object`, every type Convex has), `undefined` for a missing one. On the binary:
+`Cannot negate b"AQI=" (type Bytes)`, `Cannot use value 1.5 (type Float64) as a Boolean`, `Cannot multiply 1 (type
+Int64) and 1.5 (type Float64)`, `Cannot negate undefined (type undefined)`.
+
+**bunvex before.** `typeName` (`core/src/filter.ts`) in lower case: `(type bytes)`, `(type float64)`, `(type null)`.
+
+**bunvex now.** Convex's names. Nothing else in bunvex names a value's type this way (Convex's other `type_name` uses
+are its internal serde of system rows, not app messages).
+
+*Built:* `typeName`. Tests: `core/test/filter-type-names.test.ts` (every type, by `neg`, a predicate and two operators;
+undefined); `differential/test/filter-errors.test.ts` (18 filters on both backends, app `filter-errors-app/`); the old
+names updated in `filter.test.ts` and `server/test/unsupported-value-leak.test.ts` (an opaque value is `(type
+Object)`). Sabotage (each restored, `git diff` clean): `float64`, `null`, bytes named `Object`, `Undefined`: each fails
+the unit test and the differential test.
+
