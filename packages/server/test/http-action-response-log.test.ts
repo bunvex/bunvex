@@ -1,7 +1,8 @@
 // An HTTP action's run is logged once its response is sent (STUDY-76, DV-323), as Convex's: its duration
 // covers the body, its lines end with the response-size warning, and past 100 MiB (Convex since 82e5c50) the
 // rest of the body is dropped with one `error:httpAction` line and no size warning. A HEAD request or a client
-// that goes away still gets the run logged.
+// that goes away still gets the run logged. A body that fails (STUDY-31 §10) ends the response cleanly with an
+// `error:httpAction` line of its error, or fails the run (the 500) when it failed before the head would go.
 import { afterEach, expect, test } from "bun:test";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
@@ -42,7 +43,40 @@ async function setup() {
     http.route({ path, method: "GET", handler: httpAction(async () => new Response(body())) });
   route("/slow", () => chunks([10, 10, 10], 60));
   route("/big", () => chunks([60 * MiB, 50 * MiB, MiB, 30 * MiB]));
-  route("/broken", () => chunks([5], 0, true));
+  route("/broken", () => chunks([5, 5], 20, true));
+  route("/broken-now", () => chunks([5], 0, true));
+  // Errored with a value that is no Error, after a chunk and a timer.
+  route(
+    "/broken-string",
+    () =>
+      new ReadableStream<Uint8Array>({
+        async start(c) {
+          c.enqueue(new Uint8Array(3));
+          await Bun.sleep(20);
+          c.error("a string");
+        },
+      }),
+  );
+  route(
+    "/pull-throws",
+    () =>
+      new ReadableStream<Uint8Array>({
+        pull() {
+          throw new TypeError("no body");
+        },
+      }),
+  );
+  // Its first pull throws after a few awaits, still in the handler's turn.
+  route(
+    "/pull-throws-awaited",
+    () =>
+      new ReadableStream<Uint8Array>({
+        async pull() {
+          for (let i = 0; i < 5; i++) await null;
+          throw new TypeError("no body yet");
+        },
+      }),
+  );
   route("/small", () => "ok");
   // A body that never ends (an event stream).
   route(
@@ -120,13 +154,43 @@ test("past 100 MiB the rest of the body is dropped, with one error line and no s
   expect(line).toMatchObject({ log_level: "ERROR", system_code: "error:httpAction" });
 });
 
-test("a body that fails: an error line; the run is logged", async () => {
+test("a body that fails after the head: the response ends cleanly; an error line; the run is logged", async () => {
   const t = await setup();
-  await fetch(`${t.site}/broken`)
-    .then((r) => r.arrayBuffer())
-    .catch(() => null);
+  const r = await fetch(`${t.site}/broken`);
+  expect(r.status).toBe(200);
+  // What was sent before the error, then a clean end (no reset: `arrayBuffer` resolves).
+  expect((await r.arrayBuffer()).byteLength).toBe(10);
   const c = await t.logged("/broken");
-  expect(JSON.stringify(c.logLines)).toContain("the body broke");
+  expect([c.success, c.error ?? null]).toEqual([{ status: "200" }, null]);
+  const line = t.consoleEvents.find((e) => e.system_code === "error:httpAction")!;
+  expect(line).toMatchObject({ log_level: "ERROR" });
+  // As Convex's uncaught error: `Uncaught`, its name and message, then the app's frames.
+  expect(line.message).toStartWith("Uncaught Error: the body broke\n    at ");
+  expect(line.message).toContain("http-action-response-log.test.ts");
+  const s = await fetch(`${t.site}/broken-string`);
+  expect((await s.arrayBuffer()).byteLength).toBe(3);
+  await t.logged("/broken-string");
+  expect(t.consoleEvents.filter((e) => e.system_code === "error:httpAction").map((e) => e.message)).toEqual([
+    line.message,
+    "Uncaught a string\n",
+  ]);
+});
+
+test("a body that fails before the head would go: the run fails with its error, answered 500", async () => {
+  const t = await setup();
+  for (const [path, message] of [
+    ["/broken-now", "Uncaught Error: the body broke"],
+    ["/pull-throws", "Uncaught TypeError: no body"],
+    ["/pull-throws-awaited", "Uncaught TypeError: no body yet"],
+  ]) {
+    const r = await fetch(`${t.site}${path}`);
+    expect(r.status).toBe(500);
+    expect(((await r.json()) as { code: string }).code).toEndWith(`Server Error: ${message}`);
+    const c = await t.logged(path!);
+    expect(c.success ?? null).toBeNull();
+    expect(c.error).toStartWith(`${message}\n`);
+  }
+  expect(t.consoleEvents.filter((e) => e.system_code === "error:httpAction")).toEqual([]);
 });
 
 test("a HEAD request and a client that goes away still get the run logged", async () => {

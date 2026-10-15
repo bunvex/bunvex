@@ -200,6 +200,5 @@ gaps.
   - bunvex's own screens not offered on a deployment yet ([additions.md](additions.md), "on the mock"): the
     subscriptions inspector and the system tables (AD-25, AD-24: the server has them, the source does not call
     them), and the topology, the clients, authentication admin, analytics, flags and workflows (no server side).
-- HTTP actions, found while matching their log name to Convex's (STUDY-31 §7.3; the log name itself is done, a
-  response's implicit headers since STUDY-31 §8, a handler's non-Response since §9): a body that errors after the
-  head aborts the response, where Convex ends it cleanly.
+- HTTP actions (STUDY-31 §10.6): a response stream's chunk that is not bytes (a string) is sent as text, where
+  Convex fails the body (`serde_v8 … expected: buffer`).
