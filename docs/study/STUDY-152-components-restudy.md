@@ -1,6 +1,6 @@
 # STUDY-152 — Components, studied again before building them
 
-- **Status:** study; C1 and C3 decided (owner, 2026-10-14, §9), C2 asked again (security), C4–C7 open. Extends [STUDY-62](STUDY-62-components.md), which it corrects
+- **Status:** study; C1–C3 decided (owner, 2026-10-14, §9; DV-492, DV-493), C4–C7 open. Extends [STUDY-62](STUDY-62-components.md), which it corrects
   in §7; STUDY-62's plan (§7.5) stays the base, revised in §8.
 - **Convex source read:** `d8bdde0` of get-convex/convex-backend (the reference commit,
   [upstream.md](../parity/upstream.md)), with `origin/main` checked where noted; the published `@convex-dev/*`
@@ -251,12 +251,19 @@ change no behaviour an app sees on its own and can start before C1 is decided.
 | # | Question | Convex | Recommendation |
 |---|---|---|---|
 | C1 | How Convex's published components run on bunvex (§6.3) | native | **Decided (owner, 2026-10-14): D, bunvex's own `@bunvex/*` components**, written from scratch for `bunvex/*` (not copied), no `convex` alias or compatibility package (K2 turned down). The owner wants to grow them beyond Convex's. Proposed: the same client API, component name and schema as Convex's package, so an app moves by changing imports and a Convex export of its data imports unchanged. Where they live (the main ones in this monorepo, the rest in another) is open |
-| C2 | Module state across calls: Convex evaluates a component's modules afresh on every call (unless `experimental_reuseContext`); bunvex evaluates once per code version (DV-164) | fresh per call | **Keep bunvex's (evaluate once)**, extended to components: the performance gap in §2 is mostly this. Observable only by code keeping state in module variables between calls. Recorded as an extension of DV-164 |
+| C2 | Module state across calls: Convex evaluates a component's modules afresh on every call (unless `experimental_reuseContext`); bunvex evaluates once per code version (DV-164) | fresh per call | **Decided (owner, 2026-10-14, after the security question): evaluate once** (DV-492). Not a new risk: the app already runs so, and the `vm` is no security boundary either way (a component is trusted code). The risk is correctness — module state leaking between users' calls or read by a query outside reactivity — which bunvex's own components avoid by keeping none; C3 keeps one component's globals from another's |
 | C3 | Isolation of a component's globals (K4: one module graph per component in the version's single context) | a separate context per call | **Decided (owner, 2026-10-14): one `vm` context per component per code version**, revising K4: its own `globalThis`, env and realm, values crossing as JSON as today; memory measured against DV-164 |
 | C4 | `v.id` of a component accepting another namespace's ID when the numbers match (§1) | accepts (inferred) | As Convex, once confirmed on the binary |
 | C5 | `import --replace-all --component` clearing every namespace (§5) | appears so | As Convex, once confirmed on the binary |
 | C6 | Order: the runtime first with a component written for bunvex, Convex's packages after (§6.3, §8) | — | Yes |
 | C7 | Native bunvex versions of the main components (goal b): which first | — | After C1 works: workpool, rate-limiter, aggregate, migrations (the most used), written from scratch for `bunvex/*` |
+
+## Divergences
+
+| # | Divergence | Decision |
+|---|---|---|
+| DV-492 | A component's modules evaluated once per code version; module state survives between calls | owner, 2026-10-14 (C2) |
+| DV-493 | Convex's `@convex-dev/*` packages do not run unchanged; bunvex's own `@bunvex/*` components with the same API, name and schema | owner, 2026-10-14 (C1) |
 
 ## 10. Sources
 
