@@ -156,4 +156,40 @@ describe("memberships", () => {
     expect(h.error).toEqual({ code: "no_access", message: "nope" });
     expect(sent.filter((m) => m.type === "RoomJoin")).toHaveLength(1);
   });
+
+  test("a presence set and a leave made while the socket is paused go out once, on resume", () => {
+    const { rooms, sent, advance, setOpen } = setup();
+    const keep = rooms.joinRoom<number, Record<string, never>>("rooms:doc", { id: "keep" });
+    const gone = rooms.joinRoom("rooms:doc", { id: "gone" });
+    const goneId = (sent[1] as v1.RoomJoin).roomId;
+    sent.length = 0;
+    setOpen(false); // setAuth paused the socket: sends return false
+    keep.setPresence(4);
+    gone.leave();
+    advance(500);
+    expect(sent).toEqual([]);
+    setOpen(true);
+    rooms.onResume();
+    rooms.onResume();
+    advance(500);
+    expect(sent.map((m) => m.type).sort()).toEqual(["RoomLeave", "RoomPresence"]);
+    expect(sent.find((m) => m.type === "RoomLeave")).toMatchObject({ roomId: goneId });
+    expect(sent.find((m) => m.type === "RoomPresence")).toMatchObject({ presence: 4 });
+  });
+
+  test("a payload error on a joined room warns and keeps the status; a join error is not overwritten", () => {
+    const { rooms, sent, warnings } = setup();
+    const h = rooms.joinRoom("rooms:doc", {});
+    const roomId = (sent[0] as v1.RoomJoin).roomId;
+    rooms.onMessage({ type: "RoomSync", roomId, self: "me", canPublish: true, members: [] });
+    rooms.onMessage({ type: "RoomError", roomId, code: "validation", message: "bad presence" });
+    expect(h.status).toBe("joined");
+    expect(h.error).toBeNull();
+    expect(warnings).toHaveLength(1);
+    const g = rooms.joinRoom("rooms:doc", { id: "x" });
+    const gid = (sent.at(-1) as v1.RoomJoin).roomId;
+    rooms.onMessage({ type: "RoomError", roomId: gid, code: "no_access", message: "first" });
+    rooms.onMessage({ type: "RoomError", roomId: gid, code: "limit", message: "second" });
+    expect(g.error).toEqual({ code: "no_access", message: "first" });
+  });
 });

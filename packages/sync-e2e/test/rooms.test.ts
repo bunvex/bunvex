@@ -192,3 +192,70 @@ describe("joinPresence", () => {
     await until(() => pa1.others()[0]?.idle === true, "bob idle at ada");
   });
 });
+
+describe("signed-in clients: the rejoin comes after the auth message", () => {
+  async function authed() {
+    const issuer = await startIssuer({ cacheControl: "max-age=600" });
+    cleanup.push(issuer.stop);
+    const env = await setup({ auth: { providers: [{ domain: issuer.url, applicationID: "app" }] } });
+    const fetcher = (sub: string) => async () => issuer.sign({ sub });
+    const signedIn = async (sub: string) => {
+      const c = env.client();
+      let ok = false;
+      c.setAuth(fetcher(sub), (a) => {
+        ok = a;
+      });
+      await until(() => ok, `${sub} signed in`);
+      return c;
+    };
+    return { ...env, fetcher, signedIn };
+  }
+  type Opt = { team: string };
+  type St = { status: string };
+
+  test("a socket drop within the grace: B sees the same member, no leave and no join", async () => {
+    const { signedIn, sockets } = await authed();
+    const [ca, cb] = [await signedIn("ada"), await signedIn("bob")];
+    const a = ca.client.joinRoom<{ id: string }, Presence, Events>(...doc());
+    const b = cb.client.joinRoom<{ id: string }, Presence, Events>(...doc());
+    await until(() => a.others().length === 1 && b.others().length === 1, "both in");
+    const memberId = a.self;
+    const seen = watch(b);
+    const opened = sockets.get(ca)!.length;
+    sockets.get(ca)!.at(-1)!.close();
+    await until(() => sockets.get(ca)!.length > opened, "A reconnecting");
+    await until(() => a.status === "joined" && a.self === memberId && a.others().length === 1, "A rejoined");
+    await Bun.sleep(150);
+    expect(a.self).toBe(memberId);
+    expect(seen.every((o) => o.length === 1 && o[0]!.memberId === memberId)).toBe(true);
+  });
+
+  test("a presence scope survives a reconnect", async () => {
+    const { signedIn, sockets } = await authed();
+    const [ca, cb] = [await signedIn("ada"), await signedIn("bob")];
+    const a = ca.client.joinPresence<Opt, St>(api.rooms.online as never, { team: "t" });
+    const b = cb.client.joinPresence<Opt, St>(api.rooms.online as never, { team: "t" });
+    a.setState({ status: "here" });
+    await until(() => b.others().length === 1 && a.others().length === 1, "both in");
+    const seen = watch(b);
+    const opened = sockets.get(ca)!.length;
+    sockets.get(ca)!.at(-1)!.close();
+    await until(() => sockets.get(ca)!.length > opened, "A reconnecting");
+    await Bun.sleep(300);
+    expect(a.status).toBe("joined");
+    expect(a.error).toBeNull();
+    expect(a.others()).toHaveLength(1);
+    expect(b.others()[0]?.state).toEqual({ status: "here" });
+    expect(seen.every((o) => o.length === 1)).toBe(true);
+  });
+
+  test("joinPresence before the socket opens, with setAuth, succeeds", async () => {
+    const { client, fetcher } = await authed();
+    const c = client();
+    const p = c.client.joinPresence<Opt, St>(api.rooms.online as never, { team: "t" });
+    c.setAuth(fetcher("ada"), () => {});
+    await until(() => p.status === "joined" || p.status === "error", "the join");
+    expect(p.status).toBe("joined");
+    expect(p.error).toBeNull();
+  });
+});

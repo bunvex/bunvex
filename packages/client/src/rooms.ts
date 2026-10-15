@@ -110,6 +110,8 @@ export class RoomManager {
   private nextRoomId = 0;
   private readonly byKey = new Map<string, Membership>();
   private readonly byId = new Map<number, Membership>();
+  /** RoomLeave frames that found the socket paused; sent on resume (a new socket forgets them). */
+  private pendingLeaves: number[] = [];
 
   constructor(
     private readonly send: (m: v1.ClientMessage) => boolean,
@@ -128,6 +130,7 @@ export class RoomManager {
   /** A new socket: every membership gets a fresh room id, and joins again with its last presence. */
   onOpen() {
     this.byId.clear();
+    this.pendingLeaves = [];
     for (const m of this.byKey.values()) {
       if (m.timer !== undefined) this.clock.clearTimeout(m.timer);
       m.timer = undefined;
@@ -189,6 +192,11 @@ export class RoomManager {
           this.logger.warn(`Room ${m.name}: ${msg.code}: ${msg.message}`);
           return;
         }
+        if (m.status !== "joining") {
+          // A payload error on a live membership, or a second one after a join error: not a new status.
+          this.logger.warn(`Room ${m.name}: ${msg.code}: ${msg.message}`);
+          return;
+        }
         m.status = "error";
         m.error = { code: msg.code, message: msg.message };
         this.notify(m);
@@ -234,8 +242,15 @@ export class RoomManager {
 
   /** Send RoomJoin (and the held presence) for each membership not yet joined on this socket. */
   private flush() {
+    while (this.pendingLeaves.length > 0) {
+      if (!this.send({ type: "RoomLeave", roomId: this.pendingLeaves[0]! })) return;
+      this.pendingLeaves.shift();
+    }
     for (const m of this.byKey.values()) {
-      if (m.sent) continue;
+      if (m.sent) {
+        if (m.dirty && m.timer === undefined) this.sendPresence(m); // held while the socket was paused
+        continue;
+      }
       if (!this.send({ type: "RoomJoin", roomId: m.roomId, kind: m.kind, name: m.name, args: m.wireArgs })) return;
       m.sent = true;
       if (m.dirty) this.sendPresence(m);
@@ -248,7 +263,7 @@ export class RoomManager {
     m.timer = undefined;
     this.byKey.delete(m.key);
     this.byId.delete(m.roomId);
-    if (m.sent) this.send({ type: "RoomLeave", roomId: m.roomId });
+    if (m.sent && !this.send({ type: "RoomLeave", roomId: m.roomId })) this.pendingLeaves.push(m.roomId);
   }
 
   private rebuildOthers(m: Membership) {
@@ -261,14 +276,15 @@ export class RoomManager {
 
   private sendPresence(m: Membership) {
     if (m.presence === undefined) return; // an idle flag waits for a state: the server validates every send
-    m.dirty = false;
-    m.lastSentAt = this.clock.now();
-    this.send({
+    const sent = this.send({
       type: "RoomPresence",
       roomId: m.roomId,
       presence: toJsonValue(m.presence),
       ...(m.idle === undefined ? {} : { idle: m.idle }),
     });
+    if (!sent) return; // paused: stays dirty, goes out on resume
+    m.dirty = false;
+    m.lastSentAt = this.clock.now();
   }
 
   /** Leading edge at once; otherwise one trailing send at the end of the window, with the latest value. */

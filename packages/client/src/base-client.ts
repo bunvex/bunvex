@@ -228,12 +228,13 @@ export class BaseBunvexClient {
       clientTs: reconnect.clientTs,
       ...(this.maxObservedTimestamp === undefined ? {} : { maxObservedTimestamp: this.maxObservedTimestamp }),
     });
-    this.rooms.onOpen();
     this.remoteQuerySet = new RemoteQuerySet((id) => this.state.queryPath(id), this.logger);
     const [querySet, auth] = this.state.restart();
     if (auth) this.webSocketManager.sendMessage(auth);
     this.webSocketManager.sendMessage(querySet);
     for (const m of this.requestManager.restart()) this.webSocketManager.sendMessage(m);
+    // After the auth message: the server checks who joins when the RoomJoin arrives.
+    this.rooms.onOpen();
   }
 
   private onMessage(m: v1.ServerMessage) {
