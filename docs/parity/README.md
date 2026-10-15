@@ -10,9 +10,9 @@ item. It is the project's to-do list at the scale of the whole product.
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 163 | 2 | 1 |
 | Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 229 | 20 | 13 |
 
-Beyond Convex, [additions.md](additions.md) lists 30 additions: 27 built (6 of them dashboard screens on the
-mock, 2 more with their dashboard part on the mock), 2 accepted, 1 deferred, none proposed (2026-10-14, the
-dashboard audit after STUDY-149).
+Beyond Convex, [additions.md](additions.md) lists 32 additions: 27 built (6 of them dashboard screens on the
+mock), 2 accepted, 2 deferred, 1 proposed (2026-10-15: the dashboard audit after STUDY-149; AD-41 deferred; AD-24
+and AD-25's screens on a deployment; AD-42, rooms, proposed in STUDY-164).
 
 These counts were recounted on 2026-10-12 (the docs audit: cloud-only and decided no-build rows re-marked *n/a*) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
@@ -160,7 +160,7 @@ Checked against main on 2026-10-04, after #370–#395. Since the first ranking, 
 timeout (#371), searches while indexes rebuild (#375), `server-only` and wasm bundling (#376),
 `deploy --cmd` (#378), the `log` export (#380), the write-throughput limit (#374), the SSRF proxy
 (#377–#381), identical database indexes refused (STUDY-66), the sync arguments-size metrics
-(`bunvex_sync_*_args_bytes`, #432; its client-sync row marked done 2026-10-11), the CLI's `network-test`, `docs`, `update` and `dashboard` (STUDY-146), the remaining `bunvex.json` keys (`node.nodeVersion`, `bundler.includeSourcesContent`, STUDY-145), the upgrade guide ([docs/upgrading.md](../upgrading.md)). Decided divergences and cloud-only items are not
+(`bunvex_sync_*_args_bytes`, #432; its client-sync row marked done 2026-10-11), the CLI's `network-test`, `docs`, `update` and `dashboard` (STUDY-146), the remaining `bunvex.json` keys (`node.nodeVersion`, `bundler.includeSourcesContent`, STUDY-145), the upgrade guide ([docs/upgrading.md](../upgrading.md)), the dashboard's reads from its own origin (`/instance_version`, `/stats` behind the CORS layer, STUDY-67 §9; it showed "Deployment unavailable" on every real install). Decided divergences and cloud-only items are not
 gaps.
 
 **High: an app that uses it does not run**
@@ -194,11 +194,12 @@ gaps.
   dashboard has its own image (6791), `dashboard.zip` and `bunvex dev`'s local dashboard (6790), and the CLI links
   the local one where Convex's links its cloud (DV-477, PR 8); the image's frame and security headers match
   Convex's, the embedding allow-list in `frame-ancestors` (DV-488). Left, none of them something an app hits:
-  - the custom test query's type checking and completions, and Convex's bulk edit (bulk edit: in progress);
+  - the custom test query's type checking and completions;
+  - the Data screen's editors checking what is typed against the schema (the deployment refuses it on save);
   - search, vector and staged indexes in the Data screen's index list; `tableOfId` for system tables;
   - the environment variables screen opening a named variable (Convex's `?var=`, which its CLI's link uses);
   - bunvex's own screens not offered on a deployment yet ([additions.md](additions.md), "on the mock"): the
-    subscriptions inspector and the system tables (AD-25, AD-24: the server has them, the source does not call
-    them), and the topology, the clients, authentication admin, analytics, flags and workflows (no server side).
+    topology, the clients, authentication admin, analytics, flags and workflows (no server side). The system tables
+    (AD-24) and the subscriptions inspector (AD-25) are on a deployment since STUDY-149's follow-ups.
 - HTTP actions (STUDY-31 §10.6): a response stream's chunk that is not bytes (a string) is sent as text, where
   Convex fails the body (`serde_v8 … expected: buffer`).

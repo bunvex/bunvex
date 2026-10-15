@@ -88,7 +88,8 @@ test("the listing comes from the catalog: every system table it has, private one
   expect(tables.appVisible).toBe(false);
   expect(tables.documentCount).toBe(catalog.length);
   expect(rows.find((x) => x.name === "_index")!.documentCount).toBeGreaterThan(0);
-  if (names.includes("_storage")) expect(rows.find((x) => x.name === "_storage")!.appVisible).toBe(true);
+  // apps read these two through `db.system`, under their virtual names (`_storage`, `_scheduled_functions`)
+  expect(rows.filter((x) => x.appVisible).map((x) => x.name)).toEqual(["_file_storage", "_scheduled_jobs"]);
 });
 
 test("a private system table: readable through the debug query only", async () => {

@@ -33,6 +33,8 @@ class Parser {
   i = 0;
   /** Filled only when asked for (`parseLiteralLocated`): the place of every value, by its path. */
   places: Map<string, LiteralPlace> | null = null;
+  /** Filled only when asked for (`parseFieldPatch`): the top-level fields given `undefined`, in order. */
+  unset: string[] | null = null;
   constructor(readonly s: string) {}
 
   place(path: (string | number)[], value: number, key?: number) {
@@ -179,7 +181,9 @@ class Parser {
       if (key in out) this.fail(`"${key}" appears twice`, at);
       this.expect(":");
       const v = this.value(false, [...path, key], at);
-      if (v !== UNSET) out[key] = v; // { a: undefined } is {}: the field is not there
+      if (v !== UNSET)
+        out[key] = v; // { a: undefined } is {}: the field is not there
+      else if (path.length === 0) this.unset?.push(key); // …or, in a patch, a field to remove
       this.skip();
       if (this.s[this.i] === ",") this.i++;
       else if (this.s[this.i] !== "}")
@@ -215,6 +219,22 @@ export function parseLiteral(text: string): ParseResult {
 }
 
 /**
+ * The fields a patch changes, as Convex's bulk edit takes them (`{ status: "done", note: undefined }`): an object
+ * whose top-level `undefined` fields are removed (`unset`), every other field set.
+ */
+export function parseFieldPatch(
+  text: string,
+): { ok: true; set: Record<string, Value>; unset: string[] } | { ok: false; error: string; offset: number } {
+  const unset: string[] = [];
+  const { place: _, ...r } = parse(text, false, unset);
+  if (!r.ok) return r;
+  const v = r.value;
+  if (v === UNSET || typeof v !== "object" || v === null || Array.isArray(v) || "$integer" in v || "$bytes" in v)
+    return { ok: false, error: "Write the fields to change as an object: { field: value, … }", offset: 0 };
+  return { ok: true, set: v as Record<string, Value>, unset };
+}
+
+/**
  * `parseLiteral`, and where each value is: `place(path)` gives the offset of the value at `path` (and of its
  * key, for an object's property) — to point at a problem a validator finds in it.
  */
@@ -223,9 +243,11 @@ export const parseLiteralLocated = (text: string) => parse(text, true);
 function parse(
   text: string,
   located: boolean,
+  unset: string[] | null = null,
 ): ParseResult & { place: (path: (string | number)[]) => LiteralPlace | undefined } {
   const p = new Parser(text);
   if (located) p.places = new Map();
+  p.unset = unset;
   const place = (path: (string | number)[]) => p.places?.get(JSON.stringify(path));
   try {
     p.skip();

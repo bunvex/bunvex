@@ -508,6 +508,13 @@ export interface DashboardDataSource
    * `invalid_request`; nothing written either way). `_id` and `_creationTime` may only be given their own values.
    */
   patchDocuments?(table: string, ids: string[], fields: Record<string, FieldPatch>, opts?: CallOptions): Promise<void>;
+  /**
+   * Sets or removes `fields` in every document of the table (the screen's "Edit all"), in one transaction, as
+   * Convex's bulk edit (`patchDocumentsFields` without ids): all or nothing, with no filter and no pages. A table
+   * past what one transaction may read is refused (`invalid_request`, the deployment's words; 4 093 documents
+   * with the default limits), nothing written. A table that does not exist has nothing to edit: no error.
+   */
+  patchAllDocuments?(table: string, fields: Record<string, FieldPatch>, opts?: CallOptions): Promise<void>;
   /** Keeps `_id` and `_creationTime`; replaces every other field. A document that is gone: `not_found`. */
   replaceDocument?(table: string, id: string, document: Record<string, Value>, opts?: CallOptions): Promise<void>;
   /**

@@ -2,11 +2,13 @@
 // the query cache, a path filter in the URL, following new invalidations, and no data without `viewMetrics`.
 import { afterEach, describe, expect, test } from "bun:test";
 import { Dashboard } from "@bunvex/dashboard";
+import type { ConnectionStatus } from "@bunvex/dashboard/data-source";
 import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describeSubscriptionsContract } from "../src/contract-subscriptions.ts";
+import { pollInterval } from "../src/subscriptions/screen.tsx";
 import { expectAccessible } from "./axe.ts";
 
 const NOW = Date.UTC(2026, 9, 5, 12);
@@ -86,5 +88,63 @@ describe("the Subscriptions screen", () => {
     mount("/subscriptions", source({ capabilities: { operations: ["viewData"], readOnly: true } }));
     expect(await screen.findByText("This credential cannot view metrics.")).toBeDefined();
     expect(screen.queryByRole("grid", { name: "Live queries" })).toBeNull();
+  });
+});
+
+describe("on a deployment (STUDY-149's follow-up: AD-25 on a deployment)", () => {
+  test("the polls' pace: every 5 s, slower when an answer is slow (1 % of the server's time), at least each minute", () => {
+    expect([pollInterval(0), pollInterval(20), pollInterval(50), pollInterval(200), pollInterval(5_000)]).toEqual([
+      5_000, 5_000, 5_000, 20_000, 60_000,
+    ]);
+  });
+
+  test("the live queries and the cache are not asked while disconnected, and are asked at once on return", async () => {
+    const src = source();
+    const listeners = new Set<(s: ConnectionStatus) => void>();
+    Object.assign(src, {
+      watchConnection(onStatus: (s: ConnectionStatus) => void) {
+        listeners.add(onStatus);
+        return () => listeners.delete(onStatus);
+      },
+    });
+    const set = (s: ConnectionStatus) =>
+      act(() => {
+        for (const l of listeners) l(s);
+      });
+    const asked = { live: 0, cache: 0 };
+    const getSubscriptions = src.getSubscriptions.bind(src);
+    const getQueryCache = src.getQueryCache.bind(src);
+    src.getSubscriptions = (...a: Parameters<typeof getSubscriptions>) => {
+      asked.live++;
+      return getSubscriptions(...a);
+    };
+    src.getQueryCache = (...a: Parameters<typeof getQueryCache>) => {
+      asked.cache++;
+      return getQueryCache(...a);
+    };
+    const { history } = mount("/subscriptions", src);
+    await screen.findByRole("grid", { name: "Live queries" });
+    await waitFor(() => expect(asked.live).toBe(1));
+    // a short disconnection, the answer still fresh: asked again at once on return all the same
+    await set("disconnected");
+    await set("connected");
+    await waitFor(() => expect(asked.live).toBe(2));
+    await set("disconnected");
+    await screen.findByRole("alert", { name: "Connection issue" });
+    // the filter changes while away: a new key, still not asked
+    await act(() => history.push("/subscriptions?path=tasks"));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(asked.live).toBe(2);
+    await set("connected");
+    await waitFor(() => expect(asked.live).toBe(3));
+    // the cache tab the same
+    await act(() => history.push("/subscriptions?tab=cache"));
+    await waitFor(() => expect(asked.cache).toBe(1));
+    await set("disconnected");
+    await act(() => history.push("/subscriptions?tab=cache&path=tasks"));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(asked.cache).toBe(1);
+    await set("connected");
+    await waitFor(() => expect(asked.cache).toBe(2));
   });
 });
