@@ -487,24 +487,58 @@ export async function referencedPackageKeys(db: Tx, namespaces: Iterable<string 
 }
 
 /** The modules as stored: their rows and the package they live in, or null when nothing was deployed. */
-export async function storedModules(engine: Engine): Promise<{ rows: ModuleRow[]; pkg: SourcePackage } | null> {
+export async function storedModules(
+  engine: Engine,
+  /** A component's namespace (its `_components` id), or null for the app's (STUDY-154). */
+  namespace: string | null = null,
+): Promise<{ rows: ModuleRow[]; pkg: SourcePackage } | null> {
   return engine.query(async (db) =>
-    db.asSystem(async () => {
-      const rows = ((await db.query(MODULES_TABLE).collect()) as Record<string, unknown>[]).map(
-        (r): ModuleRow => ({
-          _id: r._id as string,
-          path: r.path as string,
-          sourcePackageId: r.sourcePackageId as string,
-          environment: r.environment as ModuleRow["environment"],
-          sha256: base64ToHex(r.sha256 as string),
-          analyzeResult: analysisFromRow(r.analyzeResult as Record<string, unknown> | null),
-        }),
-      );
-      if (!rows.length) return null;
-      const pkg = (await db.get(SOURCE_PACKAGES_TABLE, rows[0]!.sourcePackageId)) as unknown as SourcePackage | null;
-      if (!pkg) throw new Error(`the code package ${rows[0]!.sourcePackageId} of ${rows[0]!.path} is missing`);
-      return { rows, pkg };
-    }),
+    db.asSystem(() =>
+      db.inComponent(namespace, async () => {
+        const rows = ((await db.query(MODULES_TABLE).collect()) as Record<string, unknown>[]).map(
+          (r): ModuleRow => ({
+            _id: r._id as string,
+            path: r.path as string,
+            sourcePackageId: r.sourcePackageId as string,
+            environment: r.environment as ModuleRow["environment"],
+            sha256: base64ToHex(r.sha256 as string),
+            analyzeResult: analysisFromRow(r.analyzeResult as Record<string, unknown> | null),
+          }),
+        );
+        if (!rows.length) return null;
+        const pkg = (await db.get(SOURCE_PACKAGES_TABLE, rows[0]!.sourcePackageId)) as unknown as SourcePackage | null;
+        if (!pkg) throw new Error(`the code package ${rows[0]!.sourcePackageId} of ${rows[0]!.path} is missing`);
+        return { rows, pkg };
+      }),
+    ),
+  );
+}
+
+/**
+ * A component's latest code (STUDY-154): its namespace's modules loaded with its own `_udf_config`'s import seed and
+ * time, in contexts of its own (C3), no deployment variable at import ("User env vars are root-only"); or null when
+ * it has none (unmounted, or never pushed).
+ */
+export async function loadComponentCode(
+  engine: Engine,
+  store: BlobStore,
+  namespace: string,
+): Promise<CodeVersion | null> {
+  const stored = await storedModules(engine, namespace);
+  if (!stored) return null;
+  const sources = await readablePackage(store, stored.pkg.storageKey);
+  if (!sources) return null;
+  const row = (await engine.query((db) =>
+    db.asSystem(() => db.inComponent(namespace, () => db.query(UDF_CONFIG_TABLE).first())),
+  )) as Record<string, unknown> | null;
+  if (!row) throw new Error(`component ${namespace} has code but no _udf_config`);
+  return CodeVersion.load(
+    sources.filter((m) => m.path !== SCHEMA_MODULE && isFunctionModule(m.path)),
+    {
+      seed: new Uint32Array(row.importPhaseRngSeed as ArrayBuffer),
+      timestamp: msOfNs(row.importPhaseUnixTimestamp as bigint),
+      env: {},
+    },
   );
 }
 

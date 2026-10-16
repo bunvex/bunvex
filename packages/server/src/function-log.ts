@@ -116,6 +116,8 @@ export type Completion = {
   kind: "Completion";
   udfType: UdfType;
   identifier: string;
+  /** The component the function is in (`a/b`, STUDY-154), absent for the app's. */
+  componentPath?: string | null;
   logLines: LogLine[];
   /** When the completion was logged. */
   timestamp: number;
@@ -147,6 +149,7 @@ export type Progress = {
   kind: "Progress";
   udfType: UdfType;
   identifier: string;
+  componentPath?: string | null;
   /** The function's start. */
   timestamp: number;
   logLines: LogLine[];
@@ -161,6 +164,8 @@ export type Part = Completion | Progress;
 /** An execution being logged: the owner of the lines it prints (logs.ts). */
 export class Running implements LogOwner {
   onLine: ((line: LogLine) => void) | null = null;
+  /** The component the function is in (`a/b`, STUDY-154), null for the app's. */
+  componentPath: string | null = null;
   cached = false;
   /**
    * Its name in the app metrics (STUDY-58): `module.js:function`, or an HTTP action's route path once it ran to the
@@ -314,7 +319,7 @@ export function partJson(p: Part, opts: { structured: boolean; parts: boolean; l
     return {
       kind: "Progress",
       udfType: p.udfType,
-      componentPath: null,
+      componentPath: p.componentPath ?? null,
       identifier: p.identifier,
       timestamp: p.timestamp,
       logLines: lines(p.logLines),
@@ -325,7 +330,7 @@ export function partJson(p: Part, opts: { structured: boolean; parts: boolean; l
   return {
     kind: "Completion",
     udfType: p.udfType,
-    componentPath: null,
+    componentPath: p.componentPath ?? null,
     identifier: p.identifier,
     logLines: streamed ? [] : lines(p.logLines),
     timestamp: p.timestamp,
