@@ -458,12 +458,15 @@ export class Tx {
   private countedNestedCall = false;
   /** @internal (ScanReads) Scans that reached documents since their read-set was last brought up to date. */
   readonly unsettled: ScanReads[] = [];
+  /** @internal (ScanReads) The same scans by the index they read, each until it settles: what a counted read settles. */
+  readonly unsettledByIndex = new Map<IndexId, Set<ScanReads>>();
   /** The read-set: the intervals of every read so far, as the committer and the invalidation index see them. */
   get reads(): Interval[] {
     // Stryker disable next-line ConditionalExpression: with none unsettled the loop does nothing and the length stays 0
     if (this.unsettled.length) {
       for (const s of this.unsettled) s.settle();
       this.unsettled.length = 0;
+      this.unsettledByIndex.clear();
     }
     return this.readList;
   }
@@ -1013,7 +1016,8 @@ export class Tx {
   /** @internal (ScanReads) Count a read the function made, and fail past the limit. */
   countDirect(i: Interval) {
     // A scan of the same index still running reached further than its counted interval: count that first.
-    for (const s of this.unsettled) if (s.index === i.index) s.settle();
+    const scans = this.unsettledByIndex.get(i.index);
+    if (scans) for (const s of scans) s.settle();
     this.readCount.direct(i);
     this.checkReadCount();
   }
@@ -2350,15 +2354,30 @@ class ScanReads {
 
   /** The scan reached `doc` (in its order). */
   reached(doc: Doc) {
-    const first = !this.iv;
-    if (first) this.open();
+    if (!this.iv) {
+      this.open();
+      // Convex counts a page's read as it fetches it: the scan counts at its first document (and fails there past
+      // the limit); what it reads further only widens that interval.
+      if (this.counts) {
+        this.last = doc;
+        this.vals = null;
+        this.settle();
+        return;
+      }
+    }
     // Stryker disable next-line LogicalOperator: a second entry in `unsettled` only settles it again, a no-op
-    if (this.last === null && this.vals === null) this.tx.unsettled.push(this);
+    if (this.last === null && this.vals === null) {
+      this.tx.unsettled.push(this);
+      if (this.counts) {
+        const by = this.tx.unsettledByIndex;
+        const index = this.iv!.index;
+        const scans = by.get(index);
+        if (scans) scans.add(this);
+        else by.set(index, new Set([this]));
+      }
+    }
     this.last = doc;
     this.vals = null;
-    // Convex counts a page's read as it fetches it: the scan counts at its first document (and fails there past the
-    // limit); what it reads further only widens that interval.
-    if (first && this.counts) this.settle();
   }
 
   /** The index it reads. */
@@ -2404,6 +2423,7 @@ class ScanReads {
     this.last = null;
     this.vals = null;
     const iv = this.iv!;
+    if (this.counts) this.tx.unsettledByIndex.get(iv.index)?.delete(this);
     if (this.st.desc) {
       iv.lo = key;
       iv.hi = this.st.range.hi;

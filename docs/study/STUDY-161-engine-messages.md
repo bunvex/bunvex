@@ -509,6 +509,16 @@ every repeat; and nothing merges.
   differential); no nested reads (3 differential); a new id not in the set (1 differential); the count on the default
   index (1 unit, 1 differential).
 - Bytes and documents read keep their own counters (Convex's `record_read_document`), unchanged.
+- **The first measurement** (2026-10-15, interleaved, 4 runs each) showed regressions: 4 000 distinct gets +29 %,
+  1 000 index ranges +97 % (every counted read looped over all the transaction's unsettled scans), 100 gets +12 %,
+  a scan with a get per document +13 %, one document 4 000 times +7 %. Fixed: the unsettled scans grouped by index,
+  each dropped once it settles (a scan settles at its first document without being queued); an interval already
+  contained returns after one search; the sets ordered in O(log n), two ways to be measured against each other
+  (`READ_COUNT_SET`: a B-tree, or sorted chunks of at most 256, the default), one to stay. Both count exactly as the
+  first version: `core/test/read-count.property.test.ts` (random reads over three indexes, the count compared after
+  each read with the plain sorted array; thousands of points across chunks, then bridging ranges). Sabotage: a touching
+  predecessor or successor not merged, a fold stopping at a chunk's end, too wide a containment check, no saturation:
+  each fails it.
 - **Q2 (DV-521), accepted (owner, 2026-10-15):** the module count is esbuild's chunking as bunvex can predict it.
 
 **Q2 (DV-521) — the modules a function loads.** Accepted (owner, 2026-10-15).

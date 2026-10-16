@@ -2,8 +2,9 @@
 // timed in one engine (memory persistence, so the read path and not the store is measured). Run it on main and on the
 // change, on an idle machine, and compare the medians:
 //
-//   bun bench/read-count.ts            # every shape, 30 rounds each
-//   ROUNDS=5 bun bench/read-count.ts   # a quick look (not a measurement)
+//   bun bench/read-count.ts                          # every shape, 30 rounds each
+//   READ_COUNT_SET=tree bun bench/read-count.ts      # the change with its B-tree set (default: sorted chunks)
+//   ROUNDS=5 bun bench/read-count.ts                 # a quick look (not a measurement)
 //
 // The shapes: distinct gets (the count's sorted insert), the same document again (a merge), a scan of 1 000 documents
 // with a get per document (a scan settled before each counted read), a collect, index ranges, and a page.
@@ -89,7 +90,9 @@ const shapes: [string, (db: Db) => Promise<unknown>][] = [
 ];
 
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
-console.log(`read path, ${ROUNDS} rounds per shape (median ms)`);
+console.log(
+  `read path, ${ROUNDS} rounds per shape (median ms)${process.env.READ_COUNT_SET ? `, ${process.env.READ_COUNT_SET} set` : ""}`,
+);
 for (const [label, shape] of shapes) {
   const times: number[] = [];
   for (let r = 0; r < ROUNDS; r++) {
