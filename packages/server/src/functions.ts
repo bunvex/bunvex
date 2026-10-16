@@ -147,7 +147,18 @@ import {
   newRequestId,
   ValidatorError,
 } from "./errors.ts";
-import { canonicalPath, functionAddress, functionNameOf, inActionScope, inHandleScope } from "./function-handles.ts";
+import {
+  canonicalPath,
+  componentFunctionName,
+  functionAddress,
+  functionNameOf,
+  inActionScope,
+  inHandleScope,
+  splitComponentFunctionName,
+} from "./function-handles.ts";
+
+export { componentFunctionName, splitComponentFunctionName };
+
 import {
   type CallerName,
   type Completion,
@@ -215,17 +226,6 @@ export type ComponentRuntime = {
   env: ReadonlyMap<string, { type: "value"; value: string } | { type: "envVar"; name: string }>;
   httpPrefix: string | null;
 };
-
-const COMPONENT_MARK = "\u0000component\u0000";
-/** The registry's name of component `id`'s function `name` (`module:fn`): no app's function name can collide. */
-export const componentFunctionName = (id: string, name: string) => `${COMPONENT_MARK}${id}\u0000${registryKey(name)}`;
-/** A registry name's component and function, or null for the app's. */
-export function splitComponentFunctionName(name: string): { id: string; name: string } | null {
-  if (!name.startsWith(COMPONENT_MARK)) return null;
-  const rest = name.slice(COMPONENT_MARK.length);
-  const i = rest.indexOf("\u0000");
-  return { id: rest.slice(0, i), name: rest.slice(i + 1) };
-}
 
 /**
  * A component's `process.env` (Convex's `udf/src/environment.rs`, STUDY-154): its bindings first (a value, or the
@@ -1895,7 +1895,7 @@ export class Functions {
           };
     const run = () => (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(appContext(f.handler, ctx), args);
     return notAQuery(
-      inHandleScope({ db, engine: this.engine }, () =>
+      inHandleScope({ db, engine: this.engine, resolve: (ref) => this.resolveCall(ref, component, db, false) }, () =>
         component
           ? this.inComponentRun(db, component, run)
           : // The app's function called from a component (through a handle, STUDY-155): back in the app's namespace.
@@ -2656,7 +2656,15 @@ export class Functions {
                 await withActionTimeout(ms, timeout, () => {
                   const run = () =>
                     this.inActionEnv(
-                      () => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a)),
+                      () =>
+                        inHandleScope(
+                          {
+                            db: null,
+                            engine: this.engine,
+                            resolve: (ref) => this.resolveCall(ref, this.componentOf.get(f), null, true),
+                          },
+                          () => f.handler(ctx, a),
+                        ),
                       this.componentOf.get(f),
                     );
                   // A Node action's uncaught callback exception or `process.exit` fails it at once (platform §9).

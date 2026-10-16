@@ -2301,6 +2301,8 @@ export function createServer(opts: ServerOptions) {
       if (!live.has(id)) {
         functions.removeComponent(id);
         changed.add(id);
+        // Its handles soft-deleted (Convex's `apply_config_diff(component, None)` at an unmount).
+        await engine.mutation((db) => syncFunctionHandles(db, [], id), "_system/function_handles");
       }
     for (const { meta, path } of mounted) {
       if (meta.parent === null) continue;
@@ -2315,6 +2317,9 @@ export function createServer(opts: ServerOptions) {
         version.moduleHashes,
         version.moduleLoads,
       );
+      // A handle row per function of the component, any visibility (Convex's `FunctionHandlesModel`, STUDY-155).
+      const paths = [...version.functions.keys()].map(canonicalPath);
+      await engine.mutation((db) => syncFunctionHandles(db, paths, meta._id), "_system/function_handles");
       for (const key of version.functions.keys()) changed.add(Functions.moduleOf(componentFunctionName(meta._id, key)));
     }
     if (changed.size) sync.invalidateModules(changed);

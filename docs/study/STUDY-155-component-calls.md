@@ -212,6 +212,26 @@ target (STUDY-154's `componentFunctionName` for a component's function), as Conv
   action, plus the rollback, a re-run subscription, identity, C4, `BunvexError`, the depth limit, the log source
   and the scheduler's refusal. Sabotage: 9 of 9 checks failed when the fix was broken.
 
+### As built, PR 2 (`server/src/function-handles.ts`, `functions.ts`, `server.ts`, `scheduler.ts`)
+
+- **Rows.**
+  - `_function_handles` rows carry their component.
+  - `installComponents` runs `syncFunctionHandles(db, paths, component)` for each mounted instance.
+  - An unmount soft-deletes that instance's rows. Its handles are then "Function handle not found", as a deleted
+    function's.
+- **Names.** `componentFunctionName` / `splitComponentFunctionName` moved into `function-handles.ts`, which
+  `functions.ts` re-exports.
+- **Resolving.**
+  - `resolveHandle` reads the rows in the app's namespace, wherever the call runs, and gives a component row's
+    registry name.
+  - A handle to an app function, called from a component, runs in the app's namespace.
+- **Creating.** The handle scope's `resolve` lets `createFunctionHandle(components.counter.lib.add)` find the
+  child's row. A component may hand out a handle to its own internal function, and the app may call it.
+- **Scheduling (Q-4).** A handle to a component's function is refused with PR 1's text until step 7.
+- **Tests.** Five more cases in `component-calls.test.ts`: the app's handle, a call back into the app, an internal
+  function, an unmounted component's handle, and scheduling. Sabotage: 7 of 7 checks failed when the fix was
+  broken.
+
 ## 5. Questions for the owner
 
 | # | Where bunvex would differ | Convex | Recommendation | Decision |

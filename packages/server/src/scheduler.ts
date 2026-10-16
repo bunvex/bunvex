@@ -62,7 +62,7 @@ import {
   type Value,
 } from "@bunvex/values";
 import { describeUncaught, newRequestId } from "./errors.ts";
-import { functionAddress, functionNameOf } from "./function-handles.ts";
+import { functionAddress, functionNameOf, splitComponentFunctionName } from "./function-handles.ts";
 import { type Functions, type SourcedCaller, THROTTLED } from "./functions.ts";
 
 /** A function to schedule: a reference (`api.module.fn`) or its name (`"module:fn"`). */
@@ -143,8 +143,12 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
     if (typeof fn === "object" && fn !== null && (fn as Record<symbol, unknown>)[toReferencePath] !== undefined)
       throw new Error("Scheduling a function of a component is not supported yet");
     // A function handle (STUDY-50) names its function by its row, read in the scheduling transaction.
+    const resolved = await functionNameOf(fn, "db" in target ? target.db : null, functions.engineOf());
+    // A handle to a component's function too (STUDY-155 Q-4).
+    if (splitComponentFunctionName(resolved))
+      throw new Error("Scheduling a function of a component is not supported yet");
     const name = functions.scheduledTarget(
-      await functionNameOf(fn, "db" in target ? target.db : null, functions.engineOf()),
+      resolved,
       "db" in target ? target.db.systemIdentity : target.systemIdentity === true,
     );
     // As Convex's `validate_schedule_args`: the positional args, `[args]`, are parsed as a value, so they nest
