@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { v, valueSize } from "@bunvex/values";
+import { encodeId, v, valueSize } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
@@ -39,12 +39,24 @@ describe("transaction read limits (Convex's knobs) and collect()", () => {
 
   test("more than 4096 read intervals: TooManyReads", async () => {
     const e = await engine(1);
-    const id = (await e.query((db) => db.query("items").first()))!._id;
+    const number = e.catalog.tables.get("items")!.number;
+    // 4 097 distinct ids (the same one read again merges, STUDY-161 §16): the last read fails
+    const ids = Array.from({ length: 4097 }, (_, i) =>
+      encodeId(
+        number,
+        Uint8Array.from({ length: 16 }, (_, j) => (i >> (8 * (j % 2))) & 255),
+      ),
+    );
     await expect(
       e.query(async (db) => {
-        for (let i = 0; i < 4097; i++) await db.get("items", id);
+        for (const id of ids) await db.get("items", id);
       }),
     ).rejects.toThrow("Too many reads in a single function execution (limit: 4096).");
+    // the same document 4 097 times is one read
+    const id = (await e.query((db) => db.query("items").first()))!._id;
+    await e.query(async (db) => {
+      for (let i = 0; i < 4097; i++) await db.get("items", id);
+    });
   });
 
   test("take(n) needs a non-negative integer; take(0) is empty", async () => {
