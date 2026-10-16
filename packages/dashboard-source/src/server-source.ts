@@ -10,6 +10,7 @@ import {
   type Capabilities,
   type DashboardDataSource,
   DataSourceError,
+  type DeclaredIndexes,
   type DeploymentInfo,
   type DeploymentState,
   type DeploymentStats,
@@ -76,10 +77,41 @@ type StatsJson = {
 };
 
 /** Convex's schema JSON (`DatabaseSchema`), as `getSchemas` returns it. */
+type IndexJson = { indexDescriptor: string; fields: string[] };
+type SearchIndexJson = { indexDescriptor: string; searchField: string; filterFields: string[] };
+type VectorIndexJson = { indexDescriptor: string; vectorField: string; dimensions: number; filterFields: string[] };
 type SchemaJson = {
-  tables: { tableName: string; documentType?: ValidatorJson | null }[];
+  tables: ({ tableName: string; documentType?: ValidatorJson | null } & Partial<{
+    indexes: IndexJson[];
+    stagedDbIndexes: IndexJson[];
+    searchIndexes: SearchIndexJson[];
+    stagedSearchIndexes: SearchIndexJson[];
+    vectorIndexes: VectorIndexJson[];
+    stagedVectorIndexes: VectorIndexJson[];
+  }>)[];
   schemaValidation: boolean;
 };
+
+/** A table's declared indexes from its schema JSON, staged ones marked (Convex's `displayTableDefinition` reads both). */
+function declaredIndexesOf(t: SchemaJson["tables"][number]): DeclaredIndexes {
+  const db = (xs: IndexJson[] = [], staged: boolean) =>
+    xs.map((i) => ({ name: i.indexDescriptor, fields: [...i.fields], staged }));
+  const search = (xs: SearchIndexJson[] = [], staged: boolean) =>
+    xs.map((i) => ({ name: i.indexDescriptor, searchField: i.searchField, filterFields: [...i.filterFields], staged }));
+  const vector = (xs: VectorIndexJson[] = [], staged: boolean) =>
+    xs.map((i) => ({
+      name: i.indexDescriptor,
+      vectorField: i.vectorField,
+      dimensions: Number(i.dimensions),
+      filterFields: [...i.filterFields],
+      staged,
+    }));
+  return {
+    database: [...db(t.indexes, false), ...db(t.stagedDbIndexes, true)],
+    search: [...search(t.searchIndexes, false), ...search(t.stagedSearchIndexes, true)],
+    vector: [...vector(t.vectorIndexes, false), ...vector(t.stagedVectorIndexes, true)],
+  };
+}
 
 /**
  * The schema the contract shows: each declared table and its document type (Convex's schema JSON carries no
@@ -92,6 +124,7 @@ export function schemaInfoOf(json: string | undefined, progress: SchemaValidatio
     tables: (schema?.tables ?? []).map((t) => ({
       name: t.tableName,
       ...(t.documentType && t.documentType.type !== "any" && { validator: t.documentType }),
+      indexes: declaredIndexesOf(t),
     })),
     ...(progress && { validation: progress }),
   };

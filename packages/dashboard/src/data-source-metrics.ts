@@ -5,7 +5,10 @@
 // `data-source.ts`.
 import type { CallOptions } from "./data-source.ts";
 
-/** `[start, end)` in wall-clock ms, split into `numBuckets` equal buckets (Convex's `MetricsWindow`). */
+/**
+ * `[start, end)` in wall-clock ms, split into `numBuckets` equal buckets (Convex's `MetricsWindow`): `end` after
+ * `start`, 1 to 10 000 buckets (a deployment's limit); anything else is `invalid_request`.
+ */
 export type MetricsWindow = { start: number; end: number; numBuckets: number };
 
 /** A bucket's start (ms) and its value; `null` when there was nothing to measure in it. */
@@ -73,7 +76,8 @@ export interface MetricsFeatures {
   /**
    * The `k` functions with the most calls, the highest failure rate or the highest cache hit rate over the
    * window, plus `REST` (Convex's `function_call_count_top_k`, `failure_percentage_top_k`,
-   * `cache_hit_percentage_top_k`). Percentages are 0–100. `k` is 1 to 25, as those routes take it.
+   * `cache_hit_percentage_top_k`). Percentages are 0–100. `k` is 1 to 25, as those routes take it; any other is
+   * `invalid_request` (Convex's `InvalidTopKParameter`).
    */
   topFunctions?(measure: TopKMeasure, window: MetricsWindow, k: number, opts?: CallOptions): Promise<TopKSeries>;
   /** A table's rows read or written per bucket (Convex's `table_rate`). */
@@ -84,7 +88,8 @@ export interface MetricsFeatures {
   functionConcurrency?(window: MetricsWindow, opts?: CallOptions): Promise<FunctionConcurrency>;
   /**
    * The `k` mutation and table pairs that invalidated the most subscriptions over the window, plus `REST`
-   * (Convex's `subscription_invalidations_top_k`). With `function`, that mutation's tables only.
+   * (Convex's `subscription_invalidations_top_k`). With `function`, that mutation's tables only. `k` as
+   * `topFunctions`'.
    */
   subscriptionInvalidations?(
     window: MetricsWindow,
