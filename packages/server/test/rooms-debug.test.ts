@@ -38,6 +38,7 @@ async function setup() {
       closed: room({ canJoin: async () => false, presence: v.any() }),
     });
   const s = createServer({ engine, functions, port: 0, onFatal: () => {} });
+  const hub = s.rooms;
   stops.push(() => s.shutdown());
   const api = `http://127.0.0.1:${s.server.port}`;
   const get = async (path: string, key: string | null = KEY) => {
@@ -55,7 +56,7 @@ async function setup() {
       synced: (roomId: number) => c.until(() => c.got.find((m) => m.type === "RoomSync" && m.roomId === roomId)),
     };
   };
-  return { get, client, api };
+  return { get, client, api, hub };
 }
 
 test("the endpoints need the admin key", async () => {
@@ -123,9 +124,39 @@ test("bad parameters are 400 with a message", async () => {
   }
 });
 
-test("numItems is capped at 100", async () => {
-  const { get } = await setup();
-  expect((await get("/api/debug/rooms/members?kind=room&name=rooms:lobby&numItems=5000")).status).toBe(200);
+test("numItems is capped at 100: a page of 100 with a cursor", async () => {
+  const { get, hub } = await setup();
+  for (let i = 0; i < 150; i++)
+    hub.join(
+      { sessionId: `s${i}`, send() {}, behind: () => 0, resync() {} },
+      1,
+      { kind: "room", name: "rooms:lobby", argsJson: "{}" },
+      { userId: null, canPublish: true },
+    );
+  const r = (await get("/api/debug/rooms/members?kind=room&name=rooms:lobby&numItems=5000")).body;
+  expect(r.page).toHaveLength(100);
+  expect(r.isDone).toBe(false);
+  expect(r.continueCursor).toBe(r.page[99].memberId);
+  const next = (await get(`/api/debug/rooms/members?kind=room&name=rooms:lobby&cursor=${r.continueCursor}`)).body;
+  expect(next.page).toHaveLength(50);
+  expect(next.isDone).toBe(true);
+});
+
+test("a preflight on the rooms routes is answered by the CORS layer", async () => {
+  const { api } = await setup();
+  for (const p of ["/api/debug/rooms", "/api/debug/rooms/members", "/api/debug/rooms/definitions"]) {
+    const r = await fetch(`${api}${p}`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "http://localhost:6791",
+        "access-control-request-method": "GET",
+        "access-control-request-headers": "authorization",
+      },
+    });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("access-control-allow-origin")).toBe("http://localhost:6791");
+    expect(r.headers.get("access-control-allow-headers")).toBe("authorization");
+  }
 });
 
 test("/stats has the rooms counters, /metrics the series", async () => {

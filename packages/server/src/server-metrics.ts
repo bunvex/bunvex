@@ -169,7 +169,17 @@ export class ServerMetrics {
       () => this.sources?.syncStats.reused ?? 0,
     );
     // Rooms (AD-43): gauges now, counters since the server started.
-    const rooms = () => this.sources?.rooms();
+    // One snapshot per scrape: the render is synchronous, so a microtask ends it (the gauges walk every room).
+    let snapshot: RoomStats | undefined;
+    const rooms = () => {
+      if (snapshot) return snapshot;
+      snapshot = this.sources?.rooms();
+      if (snapshot)
+        queueMicrotask(() => {
+          snapshot = undefined;
+        });
+      return snapshot;
+    };
     r.gauge("bunvex_rooms_open", "Rooms and presence scopes with members", () => rooms()?.rooms ?? 0);
     r.gauge("bunvex_rooms_members", "Members across every open room", () => rooms()?.members ?? 0);
     r.gauge(
@@ -178,10 +188,13 @@ export class ServerMetrics {
       () => rooms()?.connections ?? 0,
     );
     const roomCounters = [
-      ["joins", "Room joins that succeeded (a rejoin within the grace included)"],
+      ["joins", "Room joins that succeeded (a re-join within the grace included)"],
       ["joinsRefusedByGate", "Room joins a gate refused"],
       ["joinsRefusedByLimit", "Room joins refused by the member or per-connection cap"],
-      ["leaves", "Members that left a room"],
+      [
+        "leaves",
+        "Members that left (grace expiries included; an identity change or a re-join of the same roomId counts a leave and a join)",
+      ],
       ["graceExpiries", "Memberships ended by the reconnect grace running out"],
       ["presenceAccepted", "Presence updates accepted"],
       ["presenceDropped", "Presence updates dropped by the rate limit"],
