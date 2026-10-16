@@ -911,7 +911,10 @@ export function buildCatalog(tables: TableMeta[], indexes: IndexMeta[]): Catalog
       throw new CatalogError(`Missing \`by_id\` index for ${t.name}`);
   for (const t of tables) {
     let ns = c;
-    if (t.namespace !== undefined) {
+    // A component's table being deleted goes to the root's `deleting`, which the deletion worker empties (a deleted
+    // component's namespace has no catalog left, STUDY-153 PR 4b).
+    if (t.namespace !== undefined && t.state === "deleting") ns = new Catalog();
+    else if (t.namespace !== undefined) {
       ns = c.components.get(t.namespace) ?? new Catalog();
       c.components.set(t.namespace, ns);
     }
@@ -933,6 +936,7 @@ export function buildCatalog(tables: TableMeta[], indexes: IndexMeta[]): Catalog
       t._id,
     );
     if (t.namespace !== undefined) def.namespace = t.namespace;
+    if (t.namespace !== undefined && t.state === "deleting") c.deleting.set(t.tablet, def);
   }
   return c;
 }

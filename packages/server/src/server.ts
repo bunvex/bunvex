@@ -12,6 +12,7 @@ import {
   applyEnvVarChanges,
   BackendIsNotRunningError,
   type Caller,
+  ComponentDeletionError,
   checkIdentifier,
   DEFAULT_SAMPLER,
   DEPLOYMENT_AUDIT_LOG_TABLE,
@@ -447,6 +448,10 @@ const WRITE_DATA_BODIES: Record<string, BodyShape> = {
   },
   "/api/delete_scheduled_functions_table": {
     name: "DeleteScheduledFunctionsTableRequest",
+    fields: [["componentId", "optString"]],
+  },
+  "/api/delete_component": {
+    name: "DeleteComponentArgs",
     fields: [["componentId", "optString"]],
   },
   "/api/delete_tables": {
@@ -1452,6 +1457,23 @@ export function createServer(opts: ServerOptions) {
       );
       return new Response(null, { status: 200 });
     }
+    // Convex's `/api/delete_component {componentId}` (dashboard.rs, STUDY-153 PR 4b): an unmounted component and every
+    // one under it deleted, rows and tables, in one commit, with its audit event. The app (no id), an id that is no
+    // component's or names none, are Convex's system errors.
+    if (url.pathname === "/api/delete_component") {
+      const id = body.componentId as string | null | undefined;
+      try {
+        if (id === undefined || id === null) throw new Error("Cannot delete root component");
+        await engine.deleteComponent(id, (db, path) =>
+          insertAuditLogEvents(db, [auditEvents.deleteComponent(id, path.join("/"))], auditActor(caller)),
+        );
+      } catch (e) {
+        if (e instanceof ComponentDeletionError) return requestError(e.status, e.code, e.message);
+        console.error("bunvex: deleting a component failed:", e);
+        return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+      }
+      return new Response(null, { status: 200 });
+    }
     // Convex's `/api/delete_tables {tableNames, componentId}` (dashboard.rs): the tables deleted in one commit.
     if (url.pathname === "/api/delete_tables") {
       if (body.componentId !== undefined && body.componentId !== null && body.componentId !== "")
@@ -1651,6 +1673,7 @@ export function createServer(opts: ServerOptions) {
         url.pathname === "/api/check_admin_key" ||
         /^\/api\/cancel_(all_)?jobs?$/.test(url.pathname) ||
         url.pathname === "/api/delete_tables" ||
+        url.pathname === "/api/delete_component" ||
         url.pathname === "/api/delete_scheduled_functions_table" ||
         url.pathname === "/api/v1/list_audit_log_events" ||
         /^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) ||

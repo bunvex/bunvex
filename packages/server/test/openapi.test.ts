@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { defineSchema, defineTable, Engine } from "@bunvex/core";
+import { componentRow, defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { v } from "@bunvex/values";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
@@ -235,6 +235,7 @@ describe("the documents' structure", () => {
       "shapes2",
       "get_indexes",
       "delete_tables",
+      "delete_component",
       "delete_scheduled_functions_table",
       "public_query_get",
       "public_query_post",
@@ -331,7 +332,7 @@ describe("served", () => {
   });
 
   test("every documented route answers as documented", async () => {
-    const { base } = await setup();
+    const { base, engine } = await setup();
     const docs = Object.fromEntries(DOCS.map((d) => [d, openApiDocument(d) as Doc]));
     const called = new Set<string>();
     /** Call a documented route: the body must match its request schema, the answer its response schema. */
@@ -391,6 +392,30 @@ describe("served", () => {
     expect((await call("get_indexes")).indexes).toBeArray();
     await call("delete_tables", { body: { tableNames: ["doomed"] } });
     await call("delete_scheduled_functions_table", { body: {} });
+    // An unmounted component, as a push leaves one it removed (STUDY-153 PR 4b).
+    const unmounted = await engine.initializeComponentNamespace();
+    await engine.mutation((db) =>
+      db.asSystem(async () => {
+        const definitionId = await db.insert("_component_definitions", { path: "c" } as never);
+        const root = await db.insert(
+          "_components",
+          componentRow({ definitionId, parent: null, name: null, state: "active", httpPrefix: null }) as never,
+        );
+        await db.importInsert(engine.catalog.table("_components")!, {
+          _id: unmounted,
+          ...componentRow({
+            definitionId,
+            parent: root,
+            name: "c",
+            args: [],
+            env: [],
+            state: "unmounted",
+            httpPrefix: null,
+          }),
+        });
+      }),
+    );
+    await call("delete_component", { body: { componentId: unmounted } });
 
     expect(
       await call("public_query_get", { query: `?path=m:echo&args=${encodeURIComponent('{"x":1}')}&format=json` }),

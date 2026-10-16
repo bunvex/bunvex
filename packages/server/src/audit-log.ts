@@ -25,6 +25,8 @@ export const auditEvents = {
   updateEnvironmentVariable: (name: string) => event("update_environment_variable", { variable_name: name }),
   deleteEnvironmentVariable: (name: string) => event("delete_environment_variable", { variable_name: name }),
   deleteTables: (names: string[]) => event("delete_tables", { ...ROOT, table_names: names }),
+  /** Convex's `DeleteComponent`: the deleted component's id and path. */
+  deleteComponent: (id: string, path: string) => event("delete_component", { component_id: id, component: path }),
   /** Streaming import's `clear_tables` (STUDY-141): no metadata, as Convex's ("consider adding table names"). */
   clearTables: () => event("clear_tables", {}),
   cancelScheduledFunction: (id: string, functionPath: string | null) =>

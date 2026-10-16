@@ -96,7 +96,7 @@ import {
   type WriteBatchLimits,
   type WriteLogRetention,
 } from "./committer.ts";
-import { COMPONENT_NAMESPACE_TABLES } from "./components.ts";
+import { COMPONENT_NAMESPACE_TABLES, type ComponentMeta, componentMeta, componentPath } from "./components.ts";
 import type { CursorCodec } from "./cursor.ts";
 import {
   checkDatabaseVersion,
@@ -926,6 +926,65 @@ export class Engine {
    * root's numbers, their indexes enabled at once. The push writes the component's row with this id when it
    * finishes (STUDY-152 step 2). The id.
    */
+  /**
+   * Delete an unmounted component and every component under it (Convex's `ComponentConfigModel::delete_component`),
+   * in one commit: their `_components` rows, then every table of their namespaces, system tables included, deleted
+   * in the background. A component still mounted, or with a mounted one under it, is refused
+   * (`ComponentMustBeUnmounted`); an id with no component is Convex's system error. `body` runs in the commit (the
+   * server records its audit event there) and is given the component's path.
+   */
+  async deleteComponent(id: string, body?: (db: Tx, path: string[]) => Promise<void>) {
+    const deleted: TableDef[] = [];
+    let gone: string[] = [];
+    await this.runMutation(
+      async (db) => {
+        const path = await componentPath(db, id);
+        if (path === null) throw new Error(`Component Child(${id}) not found`);
+        const rows = (await db.query(COMPONENTS_TABLE).collect()).map((r) =>
+          componentMeta(r as Record<string, unknown>),
+        );
+        const start = rows.find((r) => r._id === id)!;
+        if (start.parent === null) throw new Error("Cannot delete root component");
+        const stack: ComponentMeta[] = [start];
+        const ids: string[] = [];
+        for (let c = stack.pop(); c; c = stack.pop()) {
+          if (c.state !== "unmounted")
+            throw new ComponentDeletionError("ComponentMustBeUnmounted", "Component must be unmounted before deletion");
+          stack.push(...rows.filter((r) => r.parent === c!._id));
+          ids.push(c._id);
+        }
+        const { tables } = await readCatalog(db);
+        for (const c of ids) {
+          await db.delete(COMPONENTS_TABLE, c);
+          for (const t of tables)
+            if (t.namespace === c && t.state !== "deleting") await db.patch(TABLES_TABLE, t._id, { state: "deleting" });
+        }
+        if (body) await body(db, path);
+        gone = ids;
+        db.onCommitVisible = () => {
+          const next = this.catalog.withTableStates({});
+          const components = new Map(next.components);
+          for (const c of gone) {
+            const ns = components.get(c);
+            if (ns)
+              for (const t of [...ns.tables.values(), ...ns.hidden.values(), ...ns.deleting.values()]) deleted.push(t);
+            components.delete(c);
+            this.componentSchemas.delete(c);
+          }
+          for (const t of deleted) next.deleting.set(t.id, t);
+          next.components = components;
+          this.catalog = next;
+          this.cache.clear();
+          this.cacheEpoch++;
+        };
+      },
+      true,
+      "_system/delete_component",
+      true,
+    );
+    this.startTableDeletion();
+  }
+
   /**
    * A new `_components` id, nothing written: the app's, on its first push with components (Convex's
    * `initialize_component_namespace` for the root, whose namespace is the global one).
@@ -4229,6 +4288,18 @@ async function submitPending(
  * root's only, and search and vector indexes, which the engine builds for the root's tables. Each is refused at the
  * push until it is built for components. (Staged database indexes are only catalog state: they work.)
  */
+/** A component deletion refused, as Convex's `delete_component` (a 400). */
+export class ComponentDeletionError extends Error {
+  readonly status = 400;
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ComponentDeletionError";
+  }
+}
+
 function checkComponentSchema(schema: SchemaDefinition) {
   for (const t of declaredTables(schema).values()) {
     if (t.stagedDocument !== undefined)

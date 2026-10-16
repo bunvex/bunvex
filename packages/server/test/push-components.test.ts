@@ -110,7 +110,17 @@ async function deployment() {
       },
       componentDefinitions: o.components ?? [COUNTER],
     });
-  return { engine, post, start, store };
+  /** A dashboard route, with the admin key in the header. */
+  const admin = async (path: string, body: object) => {
+    const r = await fetch(`${api}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bunvex ${KEY}` },
+      body: JSON.stringify(body),
+    });
+    const text = await r.text();
+    return { status: r.status, body: text ? (JSON.parse(text) as Record<string, any>) : null };
+  };
+  return { engine, post, start, store, admin };
 }
 
 describe("start_push with components", () => {
@@ -666,5 +676,86 @@ describe("finish_push with components (PR 4)", () => {
       status: 409,
       body: { code: "RaceDetected", message: "Component counter was created by a concurrent push" },
     });
+  });
+});
+
+describe("delete_component (PR 4b)", () => {
+  async function pushed(d: Awaited<ReturnType<typeof deployment>>, o: Parameters<typeof d.start>[0] = {}) {
+    const start = await d.start(o);
+    await d.post("/api/deploy2/wait_for_schema", { schemaChange: start.body.schemaChange, timeoutMs: 5000 });
+    await d.post("/api/deploy2/finish_push", { startPush: start.body, dryRun: false });
+    return start.body.schemaChange.allocatedComponentIds as Record<string, string>;
+  }
+  const onlyCounter = mod(
+    "bunvex.config.js",
+    `import { defineApp } from "bunvex/server";\nimport counter from "${dep("counter")}";\nconst app = defineApp();\napp.use(counter);\nexport default app;`,
+  );
+
+  test("a mounted component is refused; an unmounted one goes, rows and tables, with its audit event", async () => {
+    const d = await deployment();
+    const ids = await pushed(d);
+    expect(await d.admin("/api/delete_component", { componentId: ids.second })).toEqual({
+      status: 400,
+      body: { code: "ComponentMustBeUnmounted", message: "Component must be unmounted before deletion" },
+    });
+    await d.engine.mutation((db) => db.inComponent(ids.second!, () => db.insert("messages", { body: "x" })));
+    await pushed(d, { definition: onlyCounter });
+    expect(await d.admin("/api/delete_component", { componentId: ids.second })).toEqual({ status: 200, body: null });
+    const components = await d.engine.query((db) => db.asSystem(() => db.query("_components").collect()));
+    expect(components.map((c) => c._id)).not.toContain(ids.second);
+    expect(d.engine.catalog.components.has(ids.second!)).toBe(false);
+    // Its tables (its `messages` and its system tables) are deleted in the background.
+    for (let i = 0; i < 200 && d.engine.catalog.deleting.size; i++) await Bun.sleep(10);
+    const tables = await d.engine.query((db) => db.asSystem(() => db.query("_tables").collect()));
+    expect(tables.filter((t) => t.namespace === ids.second)).toEqual([]);
+    expect(d.engine.catalog.components.has(ids.counter!)).toBe(true);
+    const events = await d.engine.query((db) => db.asSystem(() => db.query("_deployment_audit_log").collect()));
+    expect(events.find((e) => e.action === "delete_component")?.metadata).toEqual({
+      component_id: ids.second,
+      component: "second",
+    });
+  });
+
+  test("a component with one under it: both go", async () => {
+    const d = await deployment();
+    const app = mod(
+      "bunvex.config.js",
+      `import { defineApp } from "bunvex/server";\nimport outer from "${dep("outer")}";\nconst app = defineApp();\napp.use(outer);\nexport default app;`,
+    );
+    const outer = {
+      ...COUNTER,
+      definitionPath: "outer",
+      dependencies: ["inner"],
+      definition: mod(
+        "bunvex.config.js",
+        `import { defineComponent } from "bunvex/server";\nimport inner from "${dep("inner")}";\nconst c = defineComponent("outer");\nc.use(inner);\nexport default c;`,
+      ),
+    };
+    const inner = {
+      ...COUNTER,
+      definitionPath: "inner",
+      definition: mod(
+        "bunvex.config.js",
+        `import { defineComponent } from "bunvex/server";\nexport default defineComponent("inner");`,
+      ),
+    };
+    const ids = await pushed(d, { definition: app, dependencies: ["outer"], components: [outer, inner] });
+    expect(Object.keys(ids)).toEqual(["", "outer", "outer/inner"]);
+    const none = mod("bunvex.config.js", `import { defineApp } from "bunvex/server";\nexport default defineApp();`);
+    await pushed(d, { definition: none, dependencies: [], components: [] });
+    expect((await d.admin("/api/delete_component", { componentId: ids.outer })).status).toBe(200);
+    const left = await d.engine.query((db) => db.asSystem(() => db.query("_components").collect()));
+    expect(left.map((c) => c._id)).toEqual([ids[""]]);
+    expect(d.engine.catalog.components.has(ids["outer/inner"]!)).toBe(false);
+  });
+
+  test("the app, or an id that names no component: Convex's system errors", async () => {
+    const d = await deployment();
+    const ids = await pushed(d);
+    expect((await d.admin("/api/delete_component", {})).status).toBe(500);
+    expect((await d.admin("/api/delete_component", { componentId: ids[""] })).status).toBe(500);
+    await pushed(d, { definition: onlyCounter });
+    await d.admin("/api/delete_component", { componentId: ids.second });
+    expect((await d.admin("/api/delete_component", { componentId: ids.second })).status).toBe(500);
   });
 });

@@ -167,6 +167,18 @@ describe("the catalog by namespace", () => {
     expect(c.anyTablet("nope" as TabletId)).toBeUndefined();
   });
 
+  test("buildCatalog puts a deleted component's tables in the root's deleting, which the deletion worker empties", () => {
+    const gone = [table(4, "messages", 10001, "c2"), table(5, "_modules", 7, "c2")].map((t) => ({
+      ...t,
+      state: "deleting" as const,
+    }));
+    const c = buildCatalog([...tables, ...gone], indexes);
+    expect([...c.deleting.keys()].sort()).toEqual([tablet(4), tablet(5)]);
+    expect(c.deleting.get(tablet(4))?.namespace).toBe("c2");
+    // No catalog is left for the deleted component's namespace.
+    expect(c.components.has("c2")).toBe(false);
+  });
+
   test("activeTables finds names in one namespace", () => {
     expect(activeTables(tables).map((t) => t.tablet)).toEqual([tablet(1)]);
     expect(activeTables(tables, "c1").map((t) => t.tablet)).toEqual([tablet(2), tablet(3)]);

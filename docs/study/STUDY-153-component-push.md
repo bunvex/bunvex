@@ -1010,6 +1010,34 @@ Measured: a whole push (start, wait, finish) of a 500-function app with no compo
 runs under load (load average ~9): 29.7–45.4 ms with this PR (median of medians 33.1) against 29.1–45.2 ms before it
 (35.0). No difference shows above the noise; the finish reads each namespace's `_modules` once.
 
+As built, **PR 4b** (`core/src/engine.ts` `deleteComponent`, `server/src/server.ts` `/api/delete_component`):
+
+- **The route.** `POST /api/delete_component {componentId}`, with the `WriteData` operation, as Convex's
+  `dashboard.rs`.
+- **The commit** (Convex's `ComponentConfigModel::delete_component`):
+  - the component and every one under it must be unmounted, else 400 `ComponentMustBeUnmounted`, "Component must
+    be unmounted before deletion";
+  - their `_components` rows are deleted;
+  - every table of their namespaces, system tables included, is set `deleting`, and the deletion worker empties
+    them;
+  - the audit event `delete_component {component_id, component: <path>}` is written.
+- **System errors, as Convex's:** the app (no id) is "Cannot delete root component", and an id that names no
+  component fails Convex's `must_component_path`. Both are 500s.
+- **After a restart,** a deleted component's tables being deleted go to the root's `deleting` (`buildCatalog`),
+  which the worker resumes, and no catalog is left for the namespace.
+
+Tests:
+
+- a mounted component refused;
+- an unmounted one deleted: its rows, its tables (its data and its system tables) emptied, the audit event, its
+  sibling kept;
+- a component with one under it: both deleted;
+- the app and an unknown id;
+- `buildCatalog` with a deleted component's tables.
+
+Sabotage: 8 of 8 caught.
+
+
 - **Scope.**
   - Definitions diff; tree diff (create / modify / remount / unmount);
   - per-namespace `_udf_config` / `_source_packages` / `_modules` (definition module included) / crons (rows
