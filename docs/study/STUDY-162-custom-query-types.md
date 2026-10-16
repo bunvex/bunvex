@@ -1,6 +1,6 @@
 # STUDY-162 — The custom test query's types and completions
 
-- **Status:** approved by the owner (2026-10-15: match Convex); implemented (one PR: the declarations and the editor
+- **Status:** approved by the owner (2026-10-15: match Convex); implemented, §8 too (owner, 2026-10-15) (one PR: the declarations and the editor
   only work together)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend; npm's `convex@1.46.0`
 - **Related:** STUDY-149 PR 4 (the runner and its custom test query), STUDY-119 (`/api/run_test_function`), DV-390
@@ -87,9 +87,7 @@ modules), semantic diagnostics on, and Monaco's suggest and parameter-hint contr
 no suggestions. Running is unchanged (`transpileTypeScript`, the preamble): a type error does not stop the run, as
 Convex's.
 
-**Not built:** the schema text has no `.searchIndex` / `.vectorIndex` lines (`schemaCode` writes database indexes
-only), so `withSearchIndex` names are not checked or completed; Convex's `displaySchema` writes them. A follow-up for
-`schemaCode` (the Schema panel shows the same gap).
+**Then built** (§8): the schema text's search and vector indexes, and the staged ones.
 
 ## 5. Divergences
 
@@ -125,3 +123,49 @@ own chunks are unchanged. In the browser, Monaco's worker reads the 149 files on
 ## 7. Open questions
 
 None for the owner: matching Convex. The chunk's size (673 KB, 190 KB gzipped, lazy) is reported for the record.
+
+## 8. Search and vector index names (follow-up)
+
+Approved by the owner on 2026-10-15.
+
+**Convex.** `displaySchema` (`dashboard-common/src/lib/format.ts`, `displayTableDefinition`) writes a table from the
+active schema JSON:
+- `.index(name, [fields])` for each database index, then the staged ones as `.index(name, { fields, staged: true })`;
+- `.searchIndex(name, {searchField, filterFields})` for each search index, then the staged ones (`staged: true`);
+- `.vectorIndex(name, {vectorField, dimensions, filterFields})` for each vector index, then the staged ones;
+- `filterFields` only when there are some;
+- a database index's fields without the system ones (its schema JSON ends them with `_creationTime`).
+
+The custom query's `schema.ts` is that text, so `withSearchIndex("…")` completes and checks the search indexes'
+names, their search fields and their filter fields. A vector index has no use in a query (`vectorSearch` is an
+action's), so its name only types the schema, as in Convex.
+
+**bunvex before.** `schemaCode` wrote only the database indexes, from `TableInfo.indexes`, which also leaves out the
+staged ones. So `withSearchIndex` completed nothing and accepted any name.
+
+**As built.**
+- The contract's `SchemaInfo.tables[].indexes` (`DeclaredIndexes`): the schema's own lists — database, search and
+  vector, staged ones marked.
+  - The server source reads them from the schema JSON (`declaredIndexesOf`: `indexes`, `stagedDbIndexes`,
+    `searchIndexes`, `stagedSearchIndexes`, `vectorIndexes`, `stagedVectorIndexes`).
+  - The mock reads them from its fixture.
+- `schemaCode` writes them in Convex's order and form (`declaredIndexes`). It falls back to `TableInfo.indexes` for
+  a source that gives none.
+- The same text is the Database screen's schema panel, which now shows search, vector and staged indexes as
+  Convex's schema view does.
+
+**Tests.**
+- `apps/dashboard/test/editor-types.test.ts`: the search index's name completes after `withSearchIndex("` (and a
+  database index's does not); a name the schema does not declare is an error, and so is a search field that is not
+  the index's; the vector index is written into `schema.ts`.
+- `dashboard/test/schema-code.test.ts`: every kind, staged ones, the order, `filterFields` only when present, and the
+  schema's lists winning over the table's.
+- `dashboard-source/test/server-source.test.ts`: `schemaInfoOf` reads the six lists.
+- `dashboard/test/database.test.tsx`: the schema panel shows the mock's staged index.
+- Chromium on a live deployment (`app.e2e.ts`): the search index's name is in Monaco's suggestions after
+  `withSearchIndex("`.
+
+**Sabotage** (each restored, `git diff` clean): the source drops the search lists → 1 (`server-source.test.ts`);
+`schemaCode` skips search indexes → 1 each in `schema-code.test.ts` and `editor-types.test.ts`; `staged` never
+written → 1.
+
