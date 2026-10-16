@@ -1,6 +1,9 @@
 # STUDY-165 — Rooms in the dashboard (a proposed addition)
 
-- **Status:** draft. It proposes AD-43, with questions D1–D8 for the owner (§6).
+- **Status:** decided. The owner accepted AD-43 on 2026-10-16 with every recommendation of §6: polled `/api/debug/rooms*`
+  endpoints, the Rooms screen and the definitions on the Functions screen, the counters, a 1 s period, then the
+  event tap, then the actions. This session builds the server side and the data source, with the dashboard session
+  building the screens.
 - **Convex source read:** nothing to read. Convex has no rooms (STUDY-164 §1), so its dashboard has no screen for them.
 - **Related:**
   - [STUDY-164](STUDY-164-ephemeral-rooms.md): rooms and presence scopes, AD-42, built.
@@ -131,13 +134,13 @@ dashboard is the other session's area (sandbox-86), so the screen PRs would be c
 
 ## 6. Questions for the owner
 
-| # | Question | Proposed |
-|---|---|---|
-| D1 | Take this as an addition (AD-43): the dashboard shows rooms and presence scopes | yes |
-| D2 | Read them through polled `/api/debug/rooms*` endpoints (A), not a live sync channel (B) or a system table (C)? | A |
-| D3 | A Rooms screen with a room's detail (members, presence, grace, can-publish), plus the definitions on the Functions screen? | yes |
-| D4 | Room counters and gauges in `DeploymentStats`/Health and in `/metrics`? | yes |
-| D5 | Polling period while the screen is open | 1 s |
-| D6 | The event tap (a bounded buffer kept only while tapped)? | yes, after D1–D4 |
-| D7 | Actions: send a test event, remove a member (`RoomLeft`), close a room, audit-logged and refused to read-only keys? | yes, last |
-| D8 | Who builds the screens: this session (server, data source) with the dashboard session (screens)? | yes |
+| # | Question | Proposed | Decided (owner, 2026-10-16) |
+|---|---|---|---|
+| D1 | Take this as an addition (AD-43): the dashboard shows rooms and presence scopes | yes | yes |
+| D2 | Read them through polled `/api/debug/rooms*` endpoints (A), not a live sync channel (B) or a system table (C)? | A | A |
+| D3 | A Rooms screen with a room's detail (members, presence, grace, can-publish), plus the definitions on the Functions screen? | yes | yes |
+| D4 | Room counters and gauges in `DeploymentStats`/Health and in `/metrics`? | yes | yes |
+| D5 | Polling period while the screen is open | 1 s | 1 s |
+| D6 | The event tap (a bounded buffer kept only while tapped)? | yes, after D1–D4 | yes, after D1–D4 |
+| D7 | Actions: send a test event, remove a member (`RoomLeft`), close a room, audit-logged and refused to read-only keys? | yes, last | yes, last |
+| D8 | Who builds the screens: this session (server, data source) with the dashboard session (screens)? | yes | yes |
