@@ -166,6 +166,11 @@ export class MockScheduler {
     return this.jobs.some((j) => j.id === id);
   }
 
+  /** The function a scheduled run calls, or undefined for no such run. */
+  functionOf(id: string): string | undefined {
+    return this.jobs.find((j) => j.id === id)?.function;
+  }
+
   cancel(id: string) {
     const job = this.jobs.find((j) => j.id === id);
     if (!job) return;

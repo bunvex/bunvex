@@ -172,9 +172,19 @@ export type TableInfo = {
   searchIndexes?: SearchIndexInfo[];
 };
 
+/**
+ * A table's indexes as its schema declares them (Convex's schema JSON: `indexes`, `searchIndexes`, `vectorIndexes`
+ * and their staged lists), for the schema's code (STUDY-162 §8). Database index fields as stored (`_creationTime`
+ * last, as the schema JSON has them).
+ */
+export type DeclaredIndexes = {
+  database: { name: string; fields: string[]; staged: boolean }[];
+  search: { name: string; searchField: string; filterFields: string[]; staged: boolean }[];
+  vector: { name: string; vectorField: string; dimensions: number; filterFields: string[]; staged: boolean }[];
+};
+
 /** A search index, as the filter reads it: the field it searches, and the fields it can filter on by equality. */
 export type SearchIndexInfo = { name: string; searchField: string; filterFields: string[] };
-
 export type SchemaInfo = {
   /** Whether documents are validated against the declared types. */
   enforced: boolean;
@@ -182,7 +192,7 @@ export type SchemaInfo = {
    * One entry per declared table. `validator` is the declared document type (STUDY-12 V2), in Convex's JSON
    * form, without the system fields; absent when the table is declared without one.
    */
-  tables: { name: string; validator?: ValidatorJson }[];
+  tables: { name: string; validator?: ValidatorJson; indexes?: DeclaredIndexes }[];
   /**
    * A schema being checked against the documents already stored (STUDY-12 §14.7), as Convex's
    * `getSchemas.schemaValidationProgress` (`numDocsValidated` / `totalDocs`, `totalDocs` unknown at first);
@@ -263,7 +273,10 @@ export type FilterExpression = {
 };
 
 export type PageRequest = {
-  /** A hint: a page may hold fewer items without being the last one (`isDone` decides). */
+  /**
+   * A hint: a page may hold fewer items without being the last one (`isDone` decides). At most 32 000, as a
+   * deployment's `paginate` reads (more is `invalid_request`, "Requested too many items").
+   */
   numItems: number;
   /** `null` starts; then the previous page's `continueCursor`. */
   cursor: string | null;
