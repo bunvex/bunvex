@@ -1,0 +1,147 @@
+// The rooms (AD-43, STUDY-165) on a live bunvex server: the contract's rooms area with rooms opened by real
+// clients, then what it does not pin down — the values as clients sent them, a user on two tabs, a room that
+// closes dropping out of the list, the stats' counters, and a read-only key.
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { anyApi, BunvexClient } from "@bunvex/client";
+import { describeDataSourceContract } from "@bunvex/dashboard/contract";
+import { createServerDataSource, type ServerDataSource } from "@bunvex/dashboard-source";
+import { adminKeyCipherKey, issueAdminKey } from "@bunvex/server";
+import { startServer } from "../test/harness.ts";
+import { startIssuer } from "../test/issuer.ts";
+import { until } from "./live-server.ts";
+
+const SECRET = "4361726e697461732c206c69746572616c6c79206d65616e696e6720226c6974";
+const cipherKey = adminKeyCipherKey(SECRET);
+const ADMIN_KEY = issueAdminKey({ instanceName: "harness", cipherKey });
+const READ_ONLY_KEY = issueAdminKey({ instanceName: "harness", cipherKey, readOnly: true });
+
+const api = anyApi;
+const quiet = { logVerbose() {}, log() {}, error() {}, warn() {} };
+let srv: Awaited<ReturnType<typeof startServer>>;
+let issuer: Awaited<ReturnType<typeof startIssuer>>;
+const clients: BunvexClient[] = [];
+const sources: ServerDataSource[] = [];
+const open = (adminKey = ADMIN_KEY) => {
+  const s = createServerDataSource({ url: srv.url, adminKey });
+  sources.push(s);
+  return s;
+};
+const client = () => {
+  const c = new BunvexClient(srv.url, { logger: quiet });
+  clients.push(c);
+  return c;
+};
+const signedIn = async (sub: string) => {
+  const c = client();
+  let ok = false;
+  c.setAuth(
+    async () => issuer.sign({ sub }),
+    (a) => {
+      ok = a;
+    },
+  );
+  await until(() => ok, `${sub} signed in`);
+  return c;
+};
+
+type Handle = { status: string; leave(): void };
+const SETUP_MS = 30_000;
+const handles: Handle[] = [];
+let closing: Handle;
+
+beforeAll(async () => {
+  issuer = await startIssuer({ cacheControl: "max-age=600" });
+  srv = await startServer({ auth: { providers: [{ domain: issuer.url, applicationID: "app" }] } });
+  // three members in one room (one with a bigint and bytes in its presence), one in another
+  for (let i = 0; i < 3; i++) {
+    const h = client().client.joinRoom<{ id: string }, unknown, Record<string, unknown>>(api.rooms.doc as never, {
+      id: "a",
+    });
+    if (i === 0) h.setPresence({ x: 1, big: 5n, raw: new Uint8Array([1, 2, 3]).buffer });
+    handles.push(h);
+  }
+  closing = client().client.joinRoom<{ id: string }, unknown, Record<string, unknown>>(api.rooms.doc as never, {
+    id: "b",
+  });
+  handles.push(closing);
+  // a scope: ada on two tabs, bob on one
+  const [ada1, ada2, bob] = [await signedIn("ada"), await signedIn("ada"), await signedIn("bob")];
+  for (const c of [ada1, ada2, bob]) {
+    const h = c.client.joinPresence<{ team: string }, { status: string }>(api.rooms.online as never, { team: "t" });
+    // a scope joins with its first state
+    h.setState({ status: "here" });
+    handles.push(h);
+  }
+  await until(() => handles.every((h) => h.status === "joined"), "everyone joined");
+  const probe = open();
+  await until(async () => (await probe.getStats()).rooms?.members === 6, "the members in the hub");
+}, SETUP_MS);
+
+afterAll(async () => {
+  await Promise.all(sources.map((s) => s.close()));
+  for (const c of clients) await c.close();
+  srv.stop();
+  issuer.stop();
+});
+
+describeDataSourceContract("@bunvex/dashboard-source on a live server (rooms)", () => open(), { only: ["rooms"] });
+
+describe("the open rooms", () => {
+  test("two rooms and a scope, the scope's user on two tabs one member with two connections", async () => {
+    const src = open();
+    const rooms = await src.listRooms!();
+    expect(rooms.map((r) => [r.kind, r.name, r.args, r.members, r.connections])).toEqual([
+      ["room", "rooms:doc", { id: "a" }, 3, 3],
+      ["room", "rooms:doc", { id: "b" }, 1, 1],
+      ["presence", "rooms:online", { team: "t" }, 2, 3],
+    ]);
+    const scope = rooms.find((r) => r.kind === "presence")!;
+    const users = (await src.listRoomMembers!({ key: scope.key }, { numItems: 10, cursor: null })).page;
+    expect(users.map((m) => m.connections).sort()).toEqual([1, 2]);
+    expect(users.every((m) => m.userId !== null && m.idle === false)).toBe(true);
+  });
+
+  test("a member's presence arrives in the contract's value form", async () => {
+    const src = open();
+    const room = (await src.listRooms!()).find((r) => r.name === "rooms:doc" && r.members === 3)!;
+    const { page } = await src.listRoomMembers!({ key: room.key }, { numItems: 10, cursor: null });
+    const withPresence = await until(async () => {
+      const p = (await src.listRoomMembers!({ key: room.key }, { numItems: 10, cursor: null })).page;
+      return p.find((m) => m.presence !== null);
+    }, "the first member's presence");
+    expect(withPresence.presence).toEqual({ x: 1, big: { $integer: "BQAAAAAAAAA=" }, raw: { $bytes: "AQID" } });
+    expect(page.filter((m) => m.presence === null)).toHaveLength(2);
+    expect(page.every((m) => m.userId === null && m.canPublish)).toBe(true);
+  });
+
+  test("the definitions are the deployed rooms and scopes", async () => {
+    const defs = await open().listRoomDefinitions!();
+    expect(defs.map((d) => [d.kind, d.name])).toEqual(
+      [
+        ["room", "rooms:doc"],
+        ["room", "rooms:locked"],
+        ["presence", "rooms:online"],
+        ["room", "rooms:staff"],
+      ].sort((a, b) => (a[1]! < b[1]! ? -1 : 1)),
+    );
+    expect(defs.find((d) => d.name === "rooms:doc")!.args).toMatchObject({ type: "object" });
+  });
+
+  test("a room whose last member leaves is gone from the list, and its members page is empty", async () => {
+    const src = open();
+    const key = (await src.listRooms!()).find((r) => r.members === 1 && r.kind === "room")!.key;
+    closing.leave();
+    await until(async () => !(await src.listRooms!()).some((r) => r.key === key), "the room closed");
+    expect(await src.listRoomMembers!({ key }, { numItems: 10, cursor: null })).toEqual({
+      page: [],
+      isDone: true,
+      continueCursor: "",
+    });
+    const rooms = (await src.getStats()).rooms!;
+    expect(rooms.leaves).toBeGreaterThanOrEqual(1);
+  });
+
+  test("a read-only key may look (ViewMetrics)", async () => {
+    expect((await open(READ_ONLY_KEY).listRooms!()).length).toBeGreaterThan(0);
+  });
+});

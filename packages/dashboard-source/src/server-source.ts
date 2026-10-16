@@ -20,6 +20,7 @@ import {
   type LogQuery,
   type MetricsWindow,
   OPERATIONS,
+  type RoomStats,
   type SchemaInfo,
   type SchemaValidation,
   type TableMetric,
@@ -33,6 +34,7 @@ import { Functions } from "./functions.ts";
 import { Inspector } from "./inspector.ts";
 import { LogStream, type LogStreamOptions } from "./logs.ts";
 import { Metrics } from "./metrics.ts";
+import { roomStatsOf, roomsReads } from "./rooms.ts";
 import { Settings } from "./settings.ts";
 import { AdminSync, watchConnection } from "./sync.ts";
 import { SystemTables } from "./system-tables.ts";
@@ -73,6 +75,8 @@ type StatsJson = {
   cacheHits: number;
   cacheMisses: number;
   subscriptions?: number;
+  /** The rooms' gauges and counters (AD-43); absent from a server without rooms. */
+  rooms?: RoomStats;
   sync: { executions: number; transitions: number };
 };
 
@@ -166,6 +170,7 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
       subscriptions: s.subscriptions ?? 0,
       subscriptionReruns: s.sync.executions,
       subscriptionUpdates: s.sync.transitions,
+      ...(s.rooms && { rooms: roomStatsOf(s.rooms) }),
     };
   };
 
@@ -367,6 +372,13 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
     return closeBeforeTopology();
   };
   source[Symbol.dispose] = () => void source.close();
+
+  // ---------------------------------------------------------------- the rooms (AD-43, STUDY-165)
+  // `/api/debug/rooms`, read once per call (the screen polls). A server without rooms answers `not_found`.
+  const rooms = roomsReads(http);
+  source.listRooms = rooms.listRooms;
+  source.listRoomMembers = rooms.listRoomMembers;
+  source.listRoomDefinitions = rooms.listRoomDefinitions;
 
   return source;
 }

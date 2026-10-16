@@ -122,6 +122,8 @@ export type DeploymentStats = {
   subscriptionReruns: number;
   /** Updates published to subscribers. */
   subscriptionUpdates: number;
+  /** The rooms' gauges and counters; absent from a server without rooms. */
+  rooms?: RoomStats;
 };
 
 // ------------------------------------------------------------------ tables, schema, indexes
@@ -484,6 +486,7 @@ import type { AuthFeatures } from "./data-source-auth.ts";
 import type { AuthAdminFeatures } from "./data-source-auth-admin.ts";
 import type { ClientInfo, ClientsFeatures } from "./data-source-clients.ts";
 import type { MetricsFeatures } from "./data-source-metrics.ts";
+import type { RoomStats, RoomsFeatures } from "./data-source-rooms.ts";
 import type { SnapshotFeatures } from "./data-source-snapshot.ts";
 import type { DeploymentStateFeatures } from "./data-source-state.ts";
 import type { SubscriptionsFeatures } from "./data-source-subscriptions.ts";
@@ -495,6 +498,7 @@ export * from "./data-source-auth-admin.ts";
 export * from "./data-source-clients.ts";
 export * from "./data-source-deployment.ts";
 export * from "./data-source-metrics.ts";
+export * from "./data-source-rooms.ts";
 export * from "./data-source-snapshot.ts";
 export * from "./data-source-state.ts";
 export * from "./data-source-subscriptions.ts";
@@ -511,6 +515,7 @@ export interface DashboardDataSource
     AuthAdminFeatures,
     SnapshotFeatures,
     TopologyFeatures,
+    RoomsFeatures,
     SubscriptionsFeatures,
     SystemTablesFeatures,
     ClientsFeatures,

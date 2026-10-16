@@ -1,7 +1,7 @@
 // What the overview derives from two stats samples. Pure, so it is tested without a DOM.
 import type { DeploymentStats } from "../data-source.ts";
 
-type Counter = Exclude<keyof DeploymentStats, "at" | "subscriptions">;
+type Counter = Exclude<keyof DeploymentStats, "at" | "subscriptions" | "rooms">;
 
 /** Per-second rate of a counter between two samples; 0 when time did not move or the counter went back. */
 export function ratePerSecond(prev: DeploymentStats, cur: DeploymentStats, counter: Counter): number {
