@@ -6,13 +6,9 @@
 //
 // Only the count: the intervals a transaction records for subscriptions and OCC are `Tx`'s `readList`, unchanged.
 //
-// On the read path, so three shortcuts, none changing the count (a property test checks them against a plain sorted
-// array, read after read):
-// - a document by id is a point, `[key, key + 1)` with `key` an id's encoded key (no zero byte but its last): two
-//   different points never overlap nor touch, so while an index has only points they are a hash set;
-// - the interval the last read on an index merged into (and where the next one starts) is kept: a read inside it, or
-//   one extending it short of the next, needs no search;
-// - the rest are sorted chunks, so an insert moves at most a chunk.
+// Counted exactly only when it can matter (`ReadCounter`): until then a bound, one per interval added (direct or
+// derived) plus the constants, and a log of the additions in order; the exact count is the log replayed into
+// `ReadCount`, at the first moment an answer depends on it.
 import type { Interval } from "./committer.ts";
 import { compareKeys } from "./keyenc.ts";
 import type { IndexId } from "./persistence/index.ts";
@@ -20,18 +16,15 @@ import type { IndexId } from "./persistence/index.ts";
 /** Chunks of at most twice this many intervals: a splice moves at most a chunk. */
 const CHUNK = 128;
 
-/** Where an interval of a `Chunked` set is: its chunk and its place in it. */
-type At = { c: number; k: number };
-
 /** An index's merged intervals as sorted chunks: a binary search over the chunks, then within one. */
 class Chunked {
   /** Each chunk's `lo`s and `hi`s, sorted; no chunk is empty. */
-  los: Uint8Array[][] = [];
-  his: Uint8Array[][] = [];
+  private los: Uint8Array[][] = [];
+  private his: Uint8Array[][] = [];
   size = 0;
 
-  /** Fold `[lo, hi)` (not empty) in, merging what overlaps or touches it: where the merged interval now is. */
-  add(lo: Uint8Array, hi: Uint8Array): At {
+  /** Fold `[lo, hi)` (not empty) in, merging what overlaps or touches it. */
+  add(lo: Uint8Array, hi: Uint8Array) {
     // The first interval ending at or after `lo` (the first that overlaps or touches it).
     let c = 0;
     let n = this.his.length;
@@ -51,7 +44,7 @@ class Chunked {
         else m = mid;
       }
       // Contained: nothing changes.
-      if (compareKeys(this.los[c]![k]!, lo) <= 0 && compareKeys(hs[k]!, hi) >= 0) return { c, k };
+      if (compareKeys(this.los[c]![k]!, lo) <= 0 && compareKeys(hs[k]!, hi) >= 0) return;
     }
     let g = k;
     for (let x = 0; x < c; x++) g += this.los[x]!.length;
@@ -69,13 +62,7 @@ class Chunked {
       if (j < ls.length) break;
     }
     this.remove(g, removed);
-    return this.insert(g, from, to);
-  }
-
-  /** The `lo` of the interval after the one at `at`, if any. */
-  nextLo(at: At): Uint8Array | undefined {
-    const ls = this.los[at.c]!;
-    return at.k + 1 < ls.length ? ls[at.k + 1] : this.los[at.c + 1]?.[0];
+    this.insert(g, from, to);
   }
 
   /** Remove `count` intervals from global position `g` on. */
@@ -101,13 +88,13 @@ class Chunked {
     }
   }
 
-  /** Insert `[lo, hi)` at global position `g`: where it is. */
-  private insert(g: number, lo: Uint8Array, hi: Uint8Array): At {
+  /** Insert `[lo, hi)` at global position `g`. */
+  private insert(g: number, lo: Uint8Array, hi: Uint8Array) {
     this.size++;
     if (this.los.length === 0) {
       this.los.push([lo]);
       this.his.push([hi]);
-      return { c: 0, k: 0 };
+      return;
     }
     let c = 0;
     while (c < this.los.length - 1 && g > this.los[c]!.length) g -= this.los[c++]!.length;
@@ -118,106 +105,140 @@ class Chunked {
     if (ls.length > 2 * CHUNK) {
       this.los.splice(c + 1, 0, ls.splice(CHUNK));
       this.his.splice(c + 1, 0, hs.splice(CHUNK));
-      if (g >= CHUNK) return { c: c + 1, k: g - CHUNK };
     }
-    return { c, k: g };
   }
 }
 
-/** A point's key in the hash set: its bytes as a string. */
-const pointKey = (lo: Uint8Array) => String.fromCharCode.apply(null, lo as unknown as number[]);
-
-/** One index's set. */
-class IndexSet {
-  /** While the index has only points: each one's `lo` and `hi`, by key. Null once a range came (then all is `ranges`). */
-  points: Map<string, [Uint8Array, Uint8Array]> | null;
-  ranges = new Chunked();
-  /** The interval the last read merged into, where it is, and the next one's `lo` (none: it is the last). */
-  private last: { lo: Uint8Array; hi: Uint8Array; at: At; next: Uint8Array | undefined } | null = null;
-
-  constructor(point: boolean) {
-    this.points = point ? new Map() : null;
-  }
-
-  get size(): number {
-    return this.ranges.size + (this.points?.size ?? 0);
-  }
-
-  addPoint(lo: Uint8Array, hi: Uint8Array) {
-    if (this.points) this.points.set(pointKey(lo), [lo, hi]);
-    else this.addRange(lo, hi);
-  }
-
-  addRange(lo: Uint8Array, hi: Uint8Array) {
-    if (this.points) {
-      // The first range: the points join the sorted set (in order, so each is appended), then everything is there.
-      const points = [...this.points.values()].sort((a, b) => compareKeys(a[0], b[0]));
-      this.points = null;
-      // (No last interval to forget: only a range sets it.)
-      for (const [l, h] of points) this.ranges.add(l, h);
-    }
-    const last = this.last;
-    if (last && compareKeys(last.lo, lo) <= 0 && compareKeys(lo, last.hi) <= 0) {
-      // Inside the last merged interval: nothing changes. (The set only grows, so it still holds that interval.)
-      if (compareKeys(hi, last.hi) <= 0) return;
-      // Extending it, short of the next interval: it grows in place.
-      if (!last.next || compareKeys(hi, last.next) < 0) {
-        this.ranges.his[last.at.c]![last.at.k] = hi;
-        last.hi = hi;
-        return;
-      }
-    }
-    const at = this.ranges.add(lo, hi);
-    this.last = {
-      lo: this.ranges.los[at.c]![at.k]!,
-      hi: this.ranges.his[at.c]![at.k]!,
-      at,
-      next: this.ranges.nextLo(at),
-    };
-  }
-}
-
+/** Convex's count, exactly: per index the merged intervals (sorted chunks), and `num_intervals`. */
 export class ReadCount {
-  private sets = new Map<IndexId, IndexSet>();
+  private sets = new Map<IndexId, Chunked>();
   /** Convex's `num_intervals`. */
   count = 0;
 
-  /**
-   * A read the function made: counted by the change of its index's merged set. `point`: a document by id (its key
-   * an encoded id, `hi` just past it).
-   */
-  direct(i: Interval, point = false) {
-    const [before, after] = this.add(i, point);
+  /** A read the function made: counted by the change of its index's merged set. */
+  direct(i: Interval) {
+    const [before, after] = this.add(i);
     // Convex's update: the old size taken off (saturating), the new one added.
-    if (before !== after || this.count < before) this.count = Math.max(0, this.count - before) + after;
+    this.count = Math.max(0, this.count - before) + after;
   }
 
   /** A read the engine took on its own behalf: in the set, not counted. */
-  derived(i: Interval, point = false) {
-    this.add(i, point);
+  derived(i: Interval) {
+    this.add(i);
   }
 
-  /**
-   * Reads Convex makes on indexes a function cannot reach (its configuration, its module): counted, never merged
-   * with anything.
-   */
+  /** Reads Convex makes on indexes a function cannot reach (its configuration, its modules): counted as they are. */
   constant(n: number) {
     this.count += n;
   }
 
   /** Fold `i` into its index's set: that set's size before and after. */
-  private add(i: Interval, point: boolean): [number, number] {
+  private add(i: Interval): [number, number] {
     let set = this.sets.get(i.index);
     if (!set) {
-      set = new IndexSet(point);
+      set = new Chunked();
       this.sets.set(i.index, set);
     }
     const before = set.size;
     // An empty interval adds nothing (`Interval::is_empty`).
-    if (compareKeys(i.lo, i.hi) < 0) {
-      if (point) set.addPoint(i.lo, i.hi);
-      else set.addRange(i.lo, i.hi);
-    }
+    if (compareKeys(i.lo, i.hi) < 0) set.add(i.lo, i.hi);
     return [before, set.size];
+  }
+}
+
+/** One addition, as the exact count would take it: a direct read, a derived one, or a scan's first read (resolved late). */
+type Entry =
+  | { kind: "direct" | "derived"; i: Interval }
+  | { kind: "constant"; n: number }
+  | { kind: "scan"; resolve: () => Interval };
+
+/**
+ * The count a transaction keeps (STUDY-161 §16.6): `bound` until an answer depends on the exact count, then `ReadCount`.
+ *
+ * `bound` is never below the exact count: it is one per interval added (direct or derived) plus the constants. A direct
+ * addition moves the exact count to `max(0, count − before) + after`: with `count ≥ before` that is at most one more (an
+ * addition grows its set by at most one), and with `count < before` it is `after`, the set's size, which is at most the
+ * intervals ever added to it. A derived one does not move it. So each consumer compares the bound to its own point
+ * (the limit, the warning's floor) and needs the exact count only past it.
+ */
+export class ReadCounter {
+  /** One per interval added, plus the constants: never below the exact count. */
+  bound = 0;
+  private log: Entry[] | null = [];
+  private exact: ReadCount | null = null;
+
+  /** A read the function made. */
+  direct(i: Interval) {
+    if (this.exact) this.exact.direct(i);
+    else {
+      this.bound++;
+      this.log!.push({ kind: "direct", i: { index: i.index, lo: i.lo, hi: i.hi } });
+    }
+  }
+
+  /** A scan's first read: its interval, known later (it ends at its first document). */
+  scan(resolve: () => Interval) {
+    if (this.exact) this.exact.direct(resolve());
+    else {
+      this.bound++;
+      this.log!.push({ kind: "scan", resolve });
+    }
+  }
+
+  /** A read the engine took on its own behalf. */
+  derived(i: Interval) {
+    if (this.exact) this.exact.derived(i);
+    else {
+      this.bound++;
+      this.log!.push({ kind: "derived", i: { index: i.index, lo: i.lo, hi: i.hi } });
+    }
+  }
+
+  /** Reads Convex makes outside what a function reads (counted as they are, in both). */
+  constant(n: number) {
+    if (this.exact) this.exact.constant(n);
+    else {
+      this.bound += n;
+      this.log!.push({ kind: "constant", n });
+    }
+  }
+
+  /** Whether the exact count is known (the log replayed). */
+  get isExact(): boolean {
+    return this.exact !== null;
+  }
+
+  /** The exact count: the log replayed in order, the first time it is asked. */
+  count(): number {
+    if (!this.exact) {
+      const exact = new ReadCount();
+      for (const e of this.log!)
+        switch (e.kind) {
+          case "direct":
+            exact.direct(e.i);
+            break;
+          case "derived":
+            exact.derived(e.i);
+            break;
+          case "scan":
+            exact.direct(e.resolve());
+            break;
+          case "constant":
+            exact.constant(e.n);
+        }
+      this.exact = exact;
+      this.log = null;
+    }
+    return this.exact.count;
+  }
+
+  /** Whether the exact count is past `limit`: the bound answers while it is not past it. */
+  over(limit: number): boolean {
+    return (this.exact ? this.exact.count : this.bound) > limit && this.count() > limit;
+  }
+
+  /** The count where it is above `floor` (exact), else a number not above it (the bound): what a warning needs. */
+  upTo(floor: number): number {
+    return this.exact || this.bound > floor ? this.count() : this.bound;
   }
 }

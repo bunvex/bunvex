@@ -1,10 +1,12 @@
-// `ReadCount`'s two sets (a B-tree, sorted chunks) count exactly as the plain sorted array it replaced, Convex's
-// `IntervalSet::add` and `num_intervals` (STUDY-161 §16): every random sequence of reads, direct and derived, over a few
-// indexes, gives the same count after each read.
+// The read count (STUDY-161 §16): `ReadCount` (sorted chunks) and the two-mode `ReadCounter` (a bound and a log, the
+// exact count replayed when asked) against the plain sorted array, Convex's `IntervalSet::add` and `num_intervals`, read
+// after read: the bound never below the exact count, the exact count the reference's from whatever read it is first
+// asked at, and a limit's answer the reference's, with limits low enough that the bound crosses them often.
 import { expect, test } from "bun:test";
 import fc from "fast-check";
+import type { Interval } from "../src/committer.ts";
 import { compareKeys } from "../src/keyenc.ts";
-import { ReadCount } from "../src/read-count.ts";
+import { ReadCount, ReadCounter } from "../src/read-count.ts";
 
 /** The reference: one sorted array per index, scanned linearly, as first built. */
 class Reference {
@@ -41,93 +43,108 @@ class Reference {
   }
 }
 
-// Short keys from a small alphabet, so intervals overlap, touch and repeat often. A point is a document by id as `Tx`
-// records it: a key with no zero byte but its last, and just past it.
+// Short keys from a small alphabet, so intervals overlap, touch and repeat often.
 const key = fc.uint8Array({ minLength: 1, maxLength: 3, max: 4, size: "max" });
-const pointKey = fc
-  .uint8Array({ minLength: 1, maxLength: 2, min: 1, max: 3, size: "max" })
-  .map((b) => Uint8Array.of(...b, 0));
 const op = fc.oneof(
   fc.record({
-    derived: fc.boolean(),
+    kind: fc.constantFrom("direct", "derived", "scan"),
     index: fc.constantFrom("a", "b", "c"),
     lo: key,
     hi: key,
-    point: fc.constant(false),
   }),
-  fc
-    .record({ derived: fc.boolean(), index: fc.constantFrom("a", "b", "c"), point: fc.constant(true), lo: pointKey })
-    .map((o) => ({ ...o, hi: Uint8Array.of(...o.lo.slice(0, -1), 1) })),
+  fc.record({ kind: fc.constant("constant"), n: fc.integer({ min: 1, max: 3 }) }),
 );
-type Op = { derived: boolean; index: string; lo: Uint8Array; hi: Uint8Array; point: boolean };
+type Op =
+  | { kind: "direct" | "derived" | "scan"; index: string; lo: Uint8Array; hi: Uint8Array }
+  | { kind: "constant"; n: number };
 
-/** Play `ops` on the reference and on `ReadCount`, the counts compared after each. */
-function play(ops: Op[]) {
+const interval = (o: { index: string; lo: Uint8Array; hi: Uint8Array }): Interval => ({
+  index: o.index as never,
+  lo: o.lo,
+  hi: o.hi,
+});
+
+/** Play `ops` on the reference and on `count`, with what to check after each read. */
+function play(ops: Op[], check: (ref: Reference, step: number) => void, apply: (o: Op) => void) {
   const ref = new Reference();
-  const got = new ReadCount();
-  for (const o of ops) {
-    const i = { index: o.index as never, lo: o.lo, hi: o.hi };
-    if (o.derived) {
-      ref.derived(o.index, o.lo, o.hi);
-      got.derived(i, o.point);
-    } else {
-      ref.direct(o.index, o.lo, o.hi);
-      got.direct(i, o.point);
-    }
-    expect(got.count).toBe(ref.count);
-  }
+  ops.forEach((o, step) => {
+    if (o.kind === "constant") ref.count += o.n;
+    else if (o.kind === "derived") ref.derived(o.index, o.lo, o.hi);
+    else ref.direct(o.index, o.lo, o.hi);
+    apply(o);
+    check(ref, step);
+  });
 }
 
-test("ReadCount counts as the reference, read after read (points, ranges, direct and derived)", () => {
+const applyTo = (c: ReadCount | ReadCounter) => (o: Op) => {
+  if (o.kind === "constant") c.constant(o.n);
+  else if (o.kind === "derived") c.derived(interval(o));
+  else if (o.kind === "scan" && c instanceof ReadCounter) c.scan(() => interval(o));
+  else c.direct(interval(o));
+};
+
+const ops = fc.array(op, { minLength: 20, maxLength: 400, size: "max" }) as fc.Arbitrary<Op[]>;
+
+test("ReadCount counts as the reference, read after read", () => {
   fc.assert(
-    fc.property(fc.array(op, { minLength: 20, maxLength: 400, size: "max" }), (ops) => play(ops as Op[])),
-    { numRuns: 400 },
+    fc.property(ops, (list) => {
+      const c = new ReadCount();
+      play(list, (ref) => expect(c.count).toBe(ref.count), applyTo(c));
+    }),
+    { numRuns: 300 },
   );
 });
 
-const pt = (n: number, derived = false): Op => ({
-  derived,
-  index: "a",
-  lo: Uint8Array.of(2, n, 0),
-  hi: Uint8Array.of(2, n, 1),
-  point: true,
-});
-const range = (lo: number[], hi: number[], derived = false): Op => ({
-  derived,
-  index: "a",
-  lo: Uint8Array.of(...lo),
-  hi: Uint8Array.of(...hi),
-  point: false,
+test("ReadCounter: the bound is never below the exact count; the exact count, from any first ask on, is the reference's", () => {
+  fc.assert(
+    fc.property(ops, fc.nat(400), (list, at) => {
+      const c = new ReadCounter();
+      play(
+        list,
+        (ref, step) => {
+          if (!c.isExact) expect(c.bound).toBeGreaterThanOrEqual(ref.count);
+          if (step >= at) expect(c.count()).toBe(ref.count);
+        },
+        applyTo(c),
+      );
+    }),
+    { numRuns: 300 },
+  );
 });
 
-test("each shortcut, on its own", () => {
-  // points (some twice, some derived), then a range covering some of them, then a range touching one
-  play([pt(5), pt(9), pt(5), pt(7, true), pt(9), range([2, 6], [2, 9]), range([2, 9, 1], [3])]);
-  // a range, then points inside it, around it and touching it
-  play([range([2, 4], [2, 8]), pt(5), pt(4), pt(9), pt(3), range([2, 3, 1], [2, 4])]);
-  // the last interval: read inside it, extended short of the next, extended onto the next, then a stale one merged away
-  play([
-    range([1], [2]),
-    range([5], [6]),
-    range([1, 1], [1, 5]),
-    range([1, 2], [3]),
-    range([2, 9], [5]),
-    range([1], [1, 1]),
-    range([0], [7]),
-    range([6], [6, 5]),
-  ]);
-  // thousands of points in a scrambled order, then ranges bridging many of them (across chunks)
-  const many: Op[] = [];
-  for (let i = 0; i < 3000; i++) {
-    const n = (i * 7919) % 6000;
-    many.push({
-      derived: false,
-      index: "a",
-      lo: Uint8Array.of(9, 1 + (n >> 8), 1 + ((n & 255) % 255), 0),
-      hi: Uint8Array.of(9, 1 + (n >> 8), 1 + ((n & 255) % 255), 1),
-      point: true,
-    });
-  }
-  many.push(range([9, 2], [9, 5]), range([9, 9, 9], [9, 9, 10]), range([9, 1], [9, 30]), range([9], [10]));
-  play(many);
+test("ReadCounter: a limit's answer (and the warning's number) is the reference's, the bound crossing low limits often", () => {
+  fc.assert(
+    fc.property(ops, fc.integer({ min: 0, max: 12 }), (list, limit) => {
+      const c = new ReadCounter();
+      play(
+        list,
+        (ref) => {
+          expect(c.over(limit)).toBe(ref.count > limit);
+        },
+        applyTo(c),
+      );
+      // a warning past `limit` gets the exact number; under it, any number not past it (on a counter of its own:
+      // the limit's question above makes the count exact)
+      const w = new ReadCounter();
+      play(
+        list,
+        (ref) => {
+          const n = w.upTo(limit);
+          if (ref.count > limit) expect(n).toBe(ref.count);
+          else expect(n).toBeLessThanOrEqual(limit);
+        },
+        applyTo(w),
+      );
+    }),
+    { numRuns: 300 },
+  );
+});
+
+test("a scan's first read is taken as it is when the exact count is first asked", () => {
+  const c = new ReadCounter();
+  let hi = Uint8Array.of(2);
+  c.direct({ index: "a" as never, lo: Uint8Array.of(5), hi: Uint8Array.of(6) });
+  c.scan(() => ({ index: "a" as never, lo: Uint8Array.of(1), hi }));
+  hi = Uint8Array.of(5); // known only later: it touches [5, 6)
+  expect(c.count()).toBe(1);
 });

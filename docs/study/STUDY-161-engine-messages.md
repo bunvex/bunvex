@@ -513,16 +513,10 @@ every repeat; and nothing merges.
   1 000 index ranges +97 % (every counted read looped over all the transaction's unsettled scans), 100 gets +12 %,
   a scan with a get per document +13 %, one document 4 000 times +7 %. A second, after grouping the unsettled scans by
   index and ordering the sets in O(log n) (sorted chunks beat a B-tree on every shape), still showed +7 % to +19 %.
-  Now (owner, option (b)): the unsettled scans grouped by index, each dropped once it settles (a scan settles at its
-  first document without being queued); per index, the points (documents by id: never overlapping nor touching one
-  another) a hash set while the index has nothing else, the interval the last read merged into kept (a read inside it,
-  or extending it short of the next, needs no search), the rest sorted chunks of at most 256. The count is the first
-  version's: `core/test/read-count.property.test.ts` (random points and ranges, direct and derived, over three indexes,
-  compared after each read with the plain sorted array; points then ranges covering them, ranges then points inside,
-  the last interval read inside, extended, extended onto the next, merged away; thousands of points across chunks).
-  Sabotage: points not deduplicated, points dropped at the first range, the last interval taken as containing by its
-  start only, extended over or onto the next, matched by an earlier start: each fails it; touching neighbours not
-  merged, a fold stopping at a chunk's end, too wide a containment check, no saturation (the earlier set) too.
+  A third, with points as a hash set and the last interval kept (owner, option (b)): 100 gets +11 %, 4 000 gets +9 %,
+  one document 4 000 times +12 %, a scan with a get per document +9 %, 1 000 index ranges +22 % — a cost on every
+  counted read, near the limit or not.
+
 - **Q2 (DV-521), accepted (owner, 2026-10-15):** the module count is esbuild's chunking as bunvex can predict it.
 
 **Q2 (DV-521) — the modules a function loads.** Accepted (owner, 2026-10-15).
@@ -537,3 +531,32 @@ every repeat; and nothing merges.
   could pass on one backend and fail on the other.
 - *Recommendation:* accept (a): the prediction as built.
 - *Decision:* accepted, the prediction as built (owner, 2026-10-15); DV-521 in [divergences.md](../parity/divergences.md).
+
+### 16.6 Counting exactly only when it can matter (owner, option (c))
+
+The shortcuts are gone; sorted chunks are the only exact set (`ReadCount`). `ReadCounter`, which `Tx` keeps, has two
+modes:
+
+- **A bound and a log** (from the start): `bound` is one per interval added (direct or derived) plus the constants, and
+  the log keeps each addition in order (a scan's first read as a reference to its first document, resolved later).
+- **The bound is never below the exact count.** A direct addition moves the exact count to `max(0, count − before) +
+  after`: with `count ≥ before` that is at most one more, since an addition grows its set by at most one; with `count
+  < before` it is `after`, the set's size, which is at most the intervals ever added to it, so at most the bound. A
+  derived addition does not move it, and a constant moves both alike.
+- **Each consumer compares the bound to its own point**, so there is no fixed threshold: the limit check (on every
+  counted read: past the limit by the bound, then exactly) and `paginate`'s full-reads check; the warning (`Many
+  reads`, past its floor `⌊ratio × 4 096⌋`: under it by the bound there is no warning and no number); a nested call's
+  budget and `ctx.meta` (`usage.databaseQueries`, exact when read). The first exact answer replays the log in order into
+  `ReadCount`, so Convex's order-dependent, saturating arithmetic comes out the same; the count is exact from then on.
+- **A scan** counts its first read at its first document without working out the key: the interval is resolved from
+  the document (its key, or its key values taken when it was handed out, or the document itself, which the app never
+  held) only if the exact count is ever needed. What it grows by later is counted when it settles, as before.
+
+*Tests:* `core/test/read-count.property.test.ts`: random direct, derived and scan reads and constants over three
+indexes against the plain sorted array, read after read: `ReadCount` exact; the bound never below the reference; the
+exact count right from any first ask on; a limit's answer and a warning's number right, with limits of 0 to 12 so the
+bound crosses them at random points. Sabotage (each restored): the bound short of derived reads, short by one on
+constants, a replay without the derived reads, a reordered replay, the warning's number taken past its floor + 1, no
+replay at all, a scan's first read resolved at once: each fails it; the warning taking the bound alone fails
+`limit-warnings`. The read-set-unchanged, unit and differential tests (the at-limit and nested-budget shapes included)
+pass unchanged.
