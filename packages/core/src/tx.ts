@@ -1003,22 +1003,22 @@ export class Tx {
   /**
    * @internal (ScanReads) Record a read: kept for subscriptions and OCC, and counted as Convex counts it (STUDY-161
    * §16) — `direct`, a read the function made (by the change of its index's merged intervals); `derived`, a read the
-   * engine takes on its own behalf (never counted); `none`, counted otherwise by the caller (a scan once it settles,
-   * a count).
+   * engine takes on its own behalf (never counted); `point`, a direct read of a document by id (counted the same, a
+   * shortcut); `none`, counted otherwise by the caller (a scan once it settles, a count).
    */
-  recordInterval(i: Interval, how: "direct" | "derived" | "none" = "direct") {
+  recordInterval(i: Interval, how: "direct" | "point" | "derived" | "none" = "direct") {
     this.readList.push(i);
     if (how === "none" || !this.counting) return;
     if (how === "derived") this.readCount.derived(i);
-    else this.countDirect(i);
+    else this.countDirect(i, how === "point");
   }
 
   /** @internal (ScanReads) Count a read the function made, and fail past the limit. */
-  countDirect(i: Interval) {
+  countDirect(i: Interval, point = false) {
     // A scan of the same index still running reached further than its counted interval: count that first.
     const scans = this.unsettledByIndex.get(i.index);
     if (scans) for (const s of scans) s.settle();
-    this.readCount.direct(i);
+    this.readCount.direct(i, point);
     this.checkReadCount();
   }
 
@@ -1183,7 +1183,7 @@ export class Tx {
       return w.next && structuredClone(w.next);
     }
     const k = encodeKey([id]);
-    this.recordInterval({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
+    this.recordInterval({ index: t.byId.id, lo: k, hi: prefixEnd(k) }, "point");
     this.retention?.check(this.snapshot);
     const spans = this.indexSpans;
     const start = spans ? monotonicNow() : 0;
@@ -1951,7 +1951,7 @@ export class Tx {
     // document back counts nothing. In the count only (subscriptions and OCC see no read).
     if (this.counting) {
       const k = encodeKey([id]);
-      this.readCount.derived({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
+      this.readCount.derived({ index: t.byId.id, lo: k, hi: prefixEnd(k) }, true);
     }
     // As in Convex: each insert takes the next float, so a transaction's inserts sort in insert order.
     const creationTime = this.nextCreationTime;

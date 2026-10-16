@@ -41,59 +41,93 @@ class Reference {
   }
 }
 
-// Short keys from a small alphabet, so intervals overlap, touch and repeat often.
+// Short keys from a small alphabet, so intervals overlap, touch and repeat often. A point is a document by id as `Tx`
+// records it: a key with no zero byte but its last, and just past it.
 const key = fc.uint8Array({ minLength: 1, maxLength: 3, max: 4, size: "max" });
-const op = fc.record({
-  derived: fc.boolean(),
-  index: fc.constantFrom("a", "b", "c"),
-  lo: key,
-  hi: key,
+const pointKey = fc
+  .uint8Array({ minLength: 1, maxLength: 2, min: 1, max: 3, size: "max" })
+  .map((b) => Uint8Array.of(...b, 0));
+const op = fc.oneof(
+  fc.record({
+    derived: fc.boolean(),
+    index: fc.constantFrom("a", "b", "c"),
+    lo: key,
+    hi: key,
+    point: fc.constant(false),
+  }),
+  fc
+    .record({ derived: fc.boolean(), index: fc.constantFrom("a", "b", "c"), point: fc.constant(true), lo: pointKey })
+    .map((o) => ({ ...o, hi: Uint8Array.of(...o.lo.slice(0, -1), 1) })),
+);
+type Op = { derived: boolean; index: string; lo: Uint8Array; hi: Uint8Array; point: boolean };
+
+/** Play `ops` on the reference and on `ReadCount`, the counts compared after each. */
+function play(ops: Op[]) {
+  const ref = new Reference();
+  const got = new ReadCount();
+  for (const o of ops) {
+    const i = { index: o.index as never, lo: o.lo, hi: o.hi };
+    if (o.derived) {
+      ref.derived(o.index, o.lo, o.hi);
+      got.derived(i, o.point);
+    } else {
+      ref.direct(o.index, o.lo, o.hi);
+      got.direct(i, o.point);
+    }
+    expect(got.count).toBe(ref.count);
+  }
+}
+
+test("ReadCount counts as the reference, read after read (points, ranges, direct and derived)", () => {
+  fc.assert(
+    fc.property(fc.array(op, { minLength: 20, maxLength: 400, size: "max" }), (ops) => play(ops as Op[])),
+    { numRuns: 400 },
+  );
 });
 
-for (const kind of ["tree", "chunked"] as const)
-  test(`the ${kind} set counts as the reference, read after read`, () => {
-    fc.assert(
-      fc.property(fc.array(op, { minLength: 20, maxLength: 400, size: "max" }), (ops) => {
-        const ref = new Reference();
-        const got = new ReadCount(kind);
-        for (const o of ops) {
-          const i = { index: o.index as never, lo: o.lo, hi: o.hi };
-          if (o.derived) {
-            ref.derived(o.index, o.lo, o.hi);
-            got.derived(i);
-          } else {
-            ref.direct(o.index, o.lo, o.hi);
-            got.direct(i);
-          }
-          expect(got.count).toBe(ref.count);
-        }
-      }),
-      { numRuns: 300 },
-    );
-  });
+const pt = (n: number, derived = false): Op => ({
+  derived,
+  index: "a",
+  lo: Uint8Array.of(2, n, 0),
+  hi: Uint8Array.of(2, n, 1),
+  point: true,
+});
+const range = (lo: number[], hi: number[], derived = false): Op => ({
+  derived,
+  index: "a",
+  lo: Uint8Array.of(...lo),
+  hi: Uint8Array.of(...hi),
+  point: false,
+});
 
-test("the chunked set across many chunks (thousands of points, then ranges bridging chunks)", () => {
-  const ref = new Reference();
-  const got = new ReadCount("chunked");
-  const tree = new ReadCount("tree");
-  const k = (n: number) => Uint8Array.of(n >> 8, n & 255);
-  // points in a scrambled order (ids are random), then wide ranges
+test("each shortcut, on its own", () => {
+  // points (some twice, some derived), then a range covering some of them, then a range touching one
+  play([pt(5), pt(9), pt(5), pt(7, true), pt(9), range([2, 6], [2, 9]), range([2, 9, 1], [3])]);
+  // a range, then points inside it, around it and touching it
+  play([range([2, 4], [2, 8]), pt(5), pt(4), pt(9), pt(3), range([2, 3, 1], [2, 4])]);
+  // the last interval: read inside it, extended short of the next, extended onto the next, then a stale one merged away
+  play([
+    range([1], [2]),
+    range([5], [6]),
+    range([1, 1], [1, 5]),
+    range([1, 2], [3]),
+    range([2, 9], [5]),
+    range([1], [1, 1]),
+    range([0], [7]),
+    range([6], [6, 5]),
+  ]);
+  // thousands of points in a scrambled order, then ranges bridging many of them (across chunks)
+  const many: Op[] = [];
   for (let i = 0; i < 3000; i++) {
     const n = (i * 7919) % 6000;
-    for (const c of [ref, got, tree] as const)
-      c instanceof Reference
-        ? c.direct("a", k(n), Uint8Array.of(...k(n), 0))
-        : c.direct({ index: "a" as never, lo: k(n), hi: Uint8Array.of(...k(n), 0) });
+    many.push({
+      derived: false,
+      index: "a",
+      lo: Uint8Array.of(9, 1 + (n >> 8), 1 + ((n & 255) % 255), 0),
+      hi: Uint8Array.of(9, 1 + (n >> 8), 1 + ((n & 255) % 255), 1),
+      point: true,
+    });
   }
-  for (const [lo, hi] of [
-    [100, 900],
-    [2000, 2001],
-    [5990, 6100],
-    [0, 3000],
-  ]) {
-    ref.direct("a", k(lo), k(hi));
-    got.direct({ index: "a" as never, lo: k(lo), hi: k(hi) });
-    tree.direct({ index: "a" as never, lo: k(lo), hi: k(hi) });
-    expect([got.count, tree.count]).toEqual([ref.count, ref.count]);
-  }
+  many.push(range([9, 2], [9, 5]), range([9, 9, 9], [9, 9, 10]), range([9, 1], [9, 30]), range([9], [10]));
+  play(many);
 });

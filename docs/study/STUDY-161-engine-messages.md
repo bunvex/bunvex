@@ -511,14 +511,18 @@ every repeat; and nothing merges.
 - Bytes and documents read keep their own counters (Convex's `record_read_document`), unchanged.
 - **The first measurement** (2026-10-15, interleaved, 4 runs each) showed regressions: 4 000 distinct gets +29 %,
   1 000 index ranges +97 % (every counted read looped over all the transaction's unsettled scans), 100 gets +12 %,
-  a scan with a get per document +13 %, one document 4 000 times +7 %. Fixed: the unsettled scans grouped by index,
-  each dropped once it settles (a scan settles at its first document without being queued); an interval already
-  contained returns after one search; the sets ordered in O(log n), two ways to be measured against each other
-  (`READ_COUNT_SET`: a B-tree, or sorted chunks of at most 256, the default), one to stay. Both count exactly as the
-  first version: `core/test/read-count.property.test.ts` (random reads over three indexes, the count compared after
-  each read with the plain sorted array; thousands of points across chunks, then bridging ranges). Sabotage: a touching
-  predecessor or successor not merged, a fold stopping at a chunk's end, too wide a containment check, no saturation:
-  each fails it.
+  a scan with a get per document +13 %, one document 4 000 times +7 %. A second, after grouping the unsettled scans by
+  index and ordering the sets in O(log n) (sorted chunks beat a B-tree on every shape), still showed +7 % to +19 %.
+  Now (owner, option (b)): the unsettled scans grouped by index, each dropped once it settles (a scan settles at its
+  first document without being queued); per index, the points (documents by id: never overlapping nor touching one
+  another) a hash set while the index has nothing else, the interval the last read merged into kept (a read inside it,
+  or extending it short of the next, needs no search), the rest sorted chunks of at most 256. The count is the first
+  version's: `core/test/read-count.property.test.ts` (random points and ranges, direct and derived, over three indexes,
+  compared after each read with the plain sorted array; points then ranges covering them, ranges then points inside,
+  the last interval read inside, extended, extended onto the next, merged away; thousands of points across chunks).
+  Sabotage: points not deduplicated, points dropped at the first range, the last interval taken as containing by its
+  start only, extended over or onto the next, matched by an earlier start: each fails it; touching neighbours not
+  merged, a fold stopping at a chunk's end, too wide a containment check, no saturation (the earlier set) too.
 - **Q2 (DV-521), accepted (owner, 2026-10-15):** the module count is esbuild's chunking as bunvex can predict it.
 
 **Q2 (DV-521) — the modules a function loads.** Accepted (owner, 2026-10-15).
