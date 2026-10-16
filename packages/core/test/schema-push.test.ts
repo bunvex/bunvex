@@ -349,7 +349,7 @@ describe("a push of a schema already there (Convex's submit_pending, STUDY-35 §
     });
     const again = await e.startSchemaPush(same);
     expect(again.schemaId).toBe(p.schemaId);
-    expect(await e.schemaPushStatus(again.schemaId)).toEqual({ type: "complete" });
+    expect(await e.schemaPushStatus(again.schemaId)).toEqual({ type: "complete", indexesTotal: 1 });
     const committed = await e.commitSchemaPush(again.schemaId, async () => "body ran");
     expect(committed.value).toBe("body ran");
     expect((await rows(e)).map((r) => [r._id, r.state.state])).toEqual([[p.schemaId, "active"]]);
@@ -361,7 +361,7 @@ describe("a push of a schema already there (Convex's submit_pending, STUDY-35 §
     const a = await e.startSchemaPush(v1);
     const b = await e.startSchemaPush(v1);
     expect(b.schemaId).toBe(a.schemaId);
-    expect(await complete(e, a.schemaId)).toEqual({ type: "complete" });
+    expect(await complete(e, a.schemaId)).toEqual({ type: "complete", indexesTotal: 1 });
     const c = await e.startSchemaPush(v2);
     expect(c.schemaId).not.toBe(a.schemaId);
     expect(await e.schemaPushStatus(a.schemaId)).toEqual({ type: "raceDetected" });

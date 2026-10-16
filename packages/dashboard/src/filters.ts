@@ -9,6 +9,7 @@ import {
   type FieldFilter,
   type FilterExpression,
   type IndexInfo,
+  type SearchIndexInfo,
   VALUE_TYPES,
   type Value,
   type ValueType,
@@ -161,8 +162,17 @@ const bad = (message: string, clause: string) => new DataSourceError("invalid_re
  * Checks an expression against a table's indexes; throws `invalid_request` naming the clause. Returns the
  * index it reads (the default when none is given).
  */
-export function validateFilter(expr: FilterExpression, indexes: IndexInfo[]): IndexInfo {
+export function validateFilter(
+  expr: FilterExpression,
+  indexes: IndexInfo[],
+  searchIndexes: SearchIndexInfo[] = [],
+): IndexInfo {
   if (expr.order !== "asc" && expr.order !== "desc") throw bad(`order must be "asc" or "desc"`, "order");
+  if (expr.search) {
+    validateSearch(expr, indexes, searchIndexes);
+    validateClauses(expr);
+    return indexes.find((i) => i.name === DEFAULT_INDEX) ?? indexes[0]!;
+  }
   const name = expr.index?.name ?? DEFAULT_INDEX;
   const ix = indexes.find((i) => i.name === name);
   if (!ix) throw bad(`no index "${name}"`, "index");
@@ -183,6 +193,39 @@ export function validateFilter(expr: FilterExpression, indexes: IndexInfo[]): In
         throw bad("the upper bound must be lt or lte", "index");
     }
   }
+  validateClauses(expr);
+  return ix;
+}
+
+/**
+ * A search index read, as Convex's `validateSearchIndexFilter`: the index must be one of the table's search
+ * indexes, read in ascending (relevance) order, with each enabled equality on one of its filter fields, once.
+ */
+function validateSearch(expr: FilterExpression, indexes: IndexInfo[], searchIndexes: SearchIndexInfo[]) {
+  const s = expr.search!;
+  if (expr.index) throw bad("a search cannot be combined with an index range", "index");
+  const ix = searchIndexes.find((i) => i.name === s.name);
+  if (!ix) {
+    if (indexes.some((i) => i.name === s.name))
+      throw bad(`Index ${s.name} is not a search index, but the query is trying to use it as search index.`, "index");
+    throw bad(`Index ${s.name} does not exist.`, "index");
+  }
+  if (expr.order !== "asc") throw bad(`Trying to query search index \`${s.name}\` in descending order.`, "index");
+  if (typeof s.search !== "string") throw bad("the search is text", "index");
+  for (const c of s.clauses) {
+    if (!c.enabled) continue;
+    if (!ix.filterFields.includes(c.field))
+      throw bad(
+        `Invalid index filter selection: found a filter for field \`${c.field}\` which is not part of the filter fields of the search index \`${s.name}\`.`,
+        "index",
+      );
+    if (s.clauses.filter((o) => o.enabled && o.field === c.field).length > 1)
+      throw bad(`Invalid filter: there are multiple filters for field \`${c.field}\`.`, "index");
+  }
+}
+
+/** The field clauses: unique ids, and each enabled one complete. */
+function validateClauses(expr: FilterExpression) {
   const ids = new Set<string>();
   for (const c of expr.clauses) {
     if (!c.id || ids.has(c.id)) throw bad("every clause needs a unique id", c.id || "?");
@@ -197,7 +240,6 @@ export function validateFilter(expr: FilterExpression, indexes: IndexInfo[]): In
     if (!["anyOf", "noneOf", "type", "notype"].includes(c.op) && c.value === undefined)
       throw bad(`${c.op} needs a value`, c.id);
   }
-  return ix;
 }
 
 /** Whether a document is inside the index part the expression reads (its eq prefix and range). */
@@ -217,14 +259,29 @@ export function inIndexRange(doc: Document, expr: FilterExpression, ix: IndexInf
   return true;
 }
 
-/** Whether a document passes the whole expression (index part and every enabled clause). */
+/** Whether a document passes the whole expression (index part, search equalities and every enabled clause). */
 export const matchesFilter = (doc: Document, expr: FilterExpression, ix: IndexInfo) =>
-  inIndexRange(doc, expr, ix) && expr.clauses.every((c) => !c.enabled || matchesClause(doc, c));
+  inIndexRange(doc, expr, ix) &&
+  (expr.search?.clauses ?? []).every((c) => !c.enabled || compareValues(fieldValue(doc, c.field), c.value) === 0) &&
+  expr.clauses.every((c) => !c.enabled || matchesClause(doc, c));
 
 /** The same query, whatever its disabled clauses or clause ids: what a cursor is bound to. */
 export function canonicalFilter(table: string, expr: FilterExpression | undefined): string {
   if (!expr) return JSON.stringify([table, DEFAULT_INDEX, [], null, [], "desc"]);
   const eq = (expr.index?.eq ?? []).filter((c) => c.enabled).map((c) => c.value);
   const clauses = expr.clauses.filter((c) => c.enabled).map((c) => [c.field, c.op, c.value ?? null]);
-  return JSON.stringify([table, expr.index?.name ?? DEFAULT_INDEX, eq, expr.index?.range ?? null, clauses, expr.order]);
+  const search = expr.search && [
+    expr.search.name,
+    expr.search.search,
+    expr.search.clauses.filter((c) => c.enabled).map((c) => [c.field, c.value]),
+  ];
+  return JSON.stringify([
+    table,
+    expr.index?.name ?? DEFAULT_INDEX,
+    eq,
+    expr.index?.range ?? null,
+    clauses,
+    expr.order,
+    ...(search ? [search] : []),
+  ]);
 }

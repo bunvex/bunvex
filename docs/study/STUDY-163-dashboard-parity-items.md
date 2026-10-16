@@ -1,6 +1,6 @@
 # STUDY-163 — Small dashboard and CLI parity items
 
-- **Status:** approved by the owner (2026-10-15: match Convex); §1–§4 implemented
+- **Status:** approved by the owner (2026-10-15: match Convex); §1–§4 implemented; §5 implemented (owner, 2026-10-15)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend; Convex's CLI as npm's `convex@1.46.0`
 - **Related:** STUDY-149 (the dashboard on real data), STUDY-12 (the dashboard), STUDY-146 / DV-477 (the CLI's
   dashboard links), DV-479 (the dashboard contract follows Convex)
@@ -202,4 +202,90 @@ its port. `dashboard-serve.test.ts`: the dashboard line inside the closing lines
 
 **Sabotage** (each restored, `git diff` clean): the configuration lines printed with nothing changed → 2; the first
 run's introduction skipped → 2; the self-hosted URLs not saved → 2; the old deployment line → 3.
+
+## 5. The Data screen's filter by a search index
+
+Approved by the owner on 2026-10-15 as the follow-up STUDY-149 "Index list" recorded.
+
+### How Convex does it
+
+`dashboard-common/src/features/data/components/IndexFilterBar/` (`filterModel.ts`, `IndexSelector.tsx`,
+`useFilterActions.ts`):
+- **The picker.** The index picker lists the database indexes and then the search indexes (`buildIndexDefs`: not
+  staged; vector indexes are not offered, since the Data page has no pagination for them). A search index shows its
+  search field.
+- **Picking a search index** (`setSearchIndex`) keeps the field clauses (`expr.clauses`) and the text searched (from
+  another search index). The order becomes `asc`, and the index part becomes Convex's `SearchIndexFilter`:
+  `{ name, search, clauses: [{ field, enabled, value }] }`.
+- **The search.** The bar has a box for the search text and an equality per filter field, each at most once
+  (`nextSearchFilterFields`). There is no sort control: results come by relevance (`sortOptionForField` →
+  `unavailable`).
+- **Field clauses** apply to the search's results ("table scans on top").
+- **Leaving the search** for a database index (`clearSearchIndex`) keeps nothing: no clauses, creation-time order.
+- **The query.** `paginatedTableDocuments` runs `withSearchIndex(name, q => q.search(searchField, text).eq(…)…)`
+  and then the field filters. `validateSearchIndexFilter` refuses, as the page's only item, in this order:
+  - "Index … does not exist.";
+  - "Index … is not a search index, but the query is trying to use it as search index.";
+  - "Trying to query search index `…` in descending order.";
+  - "Invalid index filter selection: found a filter for field `…` which is not part of the filter fields of the
+    search index `…`.";
+  - "Invalid filter: there are multiple filters for field `…`." (disabled equalities are not checked).
+
+  An empty search finds nothing (a search query's own rule).
+
+### bunvex, before
+
+The server already ran it, as Convex's (STUDY-149 PR 2). The contract had no search part, the filter bar no search
+index, and `TableInfo` no search indexes. This was the gap STUDY-149 "Index list" recorded.
+
+### As built
+
+- **The contract** (DV-479):
+  - `FilterExpression.search` (`SearchFilter`: `name`, `search`, `clauses`), never with `index`;
+  - `TableInfo.searchIndexes` (`SearchIndexInfo`: `name`, `searchField`, `filterFields`; the staged ones left out);
+  - `validateFilter` checks a search as Convex's `validateSearchIndexFilter` does, in Convex's words;
+  - `matchesFilter` applies the equalities.
+- **The server source** reads the search indexes from `indexes` (`searchIndexOf`) and sends the search as
+  Convex's `SearchIndexFilter` (`toServerFilter`). A refusal about the search's own equalities names the index, not a
+  field clause.
+- **The mock** reads its search indexes from its fixture and searches the search field's words (`mock/search.ts`):
+  - the last word is a prefix;
+  - documents are ranked by how many words they match, then newest first (a deployment ranks by BM25);
+  - an empty search finds nothing;
+  - a page is a slice of the ranking.
+- **The filter bar** (`filter-bar.tsx`, `filter-model.ts`):
+  - the index picker lists the search indexes ("… (search)");
+  - a search shows a "Search <field>" box, a "<field> =" button per free filter field, and "By relevance" in place
+    of the order;
+  - the field filters stay.
+  - The draft follows Convex's moves: picking a search index keeps the field clauses and the text; leaving the search
+    starts over, newest first.
+  - The URL carries the search (`filter-url.ts`).
+- The equality boxes are the bar's literal boxes (`"general"`, `5`), as the index equalities are. Presentation only.
+
+### Tests
+
+- `differential/test/dashboard-search-filter.test.ts` (Convex's binary and bunvex, the app of `indexes-app/`):
+  - the documents found (as sets) for words, a prefix, a number, an equality (enabled, disabled, two), a field
+    clause on the results, nothing found, and an empty search;
+  - each refusal, word for word.
+
+  Equal on both before any bunvex change: the server already matched.
+- `sync-e2e/dashboard/server-source.test.ts`: on a live server, the search index listed after a push, the words, a
+  prefix, an equality, a field clause on the results, an empty search, and two refusals.
+- The contract suite: a word finds the documents holding it, an empty search finds nothing, and descending is
+  refused (on the mock).
+- `dashboard/test/database-search-filter.test.tsx`: validation in Convex's words, the draft's moves, the URL's round
+  trip, the mock's search; on the screen, the picker, typing a word, an equality, leaving the search, and a link that
+  opens searching (axe).
+- Chromium (`apps/dashboard/e2e`): the search found, the empty search, and axe with contrast.
+
+**Sabotage** (each restored, `git diff` clean):
+
+| Sabotage | Failing |
+|---|---|
+| the source sends no search | the live test |
+| descending not refused | 5 (the model and the contract runs) |
+| picking a search index drops the field clauses | 1 |
+| the search's equalities not applied | 1 (the screen's) |
 
