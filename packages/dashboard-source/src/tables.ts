@@ -15,6 +15,7 @@ import {
   type IndexInfo,
   type IndexListEntry,
   type Page,
+  type SearchIndexInfo,
   type TableInfo,
   type Unsubscribe,
   type ValidatorJson,
@@ -90,6 +91,12 @@ export function indexInfoOf(ix: IndexJson): IndexInfo | null {
   };
 }
 
+/** A search index the filter can read (Convex's `buildIndexDefs`: not staged), or null for any other entry. */
+export function searchIndexOf(ix: IndexJson): SearchIndexInfo | null {
+  if (Array.isArray(ix.fields) || !("searchField" in ix.fields) || ix.staged) return null;
+  return { name: ix.name, searchField: ix.fields.searchField, filterFields: [...ix.fields.filterFields] };
+}
+
 /**
  * The contract's expression in Convex's form (`lib/filters.ts` `FilterExpression`): the contract's rules are
  * Convex's (DV-479), so the clauses pass as they are, the type `int64` named `bigint`. `origins` names each
@@ -105,6 +112,13 @@ export function toServerFilter(expr: FilterExpression): { json: Record<string, u
   }));
   const origins = clauses.map((c) => c.id);
   const json: Record<string, unknown> = { clauses, order: expr.order };
+  // a search index: Convex's `SearchIndexFilter`, its equalities as they are
+  if (expr.search)
+    json.index = {
+      name: expr.search.name,
+      search: expr.search.search,
+      clauses: expr.search.clauses.map((c) => ({ field: c.field, enabled: c.enabled, value: c.value })),
+    };
   if (expr.index) {
     // The enabled equalities (a prefix), then the range on the next field.
     const eq = expr.index.eq.filter((e) => e.enabled).map((e) => ({ type: "indexEq", enabled: true, value: e.value }));
@@ -284,11 +298,20 @@ export class Tables {
 
   // ---------------------------------------------------------------- tables
 
-  /** A table's indexes: the two system ones, then the declared ones by name. */
-  private async indexesOf(table: string, signal?: AbortSignal): Promise<IndexInfo[]> {
+  /**
+   * A table's indexes: the two system ones, then the declared ones by name; and its search indexes a filter can
+   * read (STUDY-163 §5).
+   */
+  private async indexesOf(
+    table: string,
+    signal?: AbortSignal,
+  ): Promise<{ indexes: IndexInfo[]; searchIndexes: SearchIndexInfo[] }> {
     const json = await this.sync.query<IndexJson[] | null>(INDEXES, { tableName: table, tableNamespace: null }, signal);
+    const byName = <T extends { name: string }>(xs: T[]) =>
+      xs.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     const declared = (json ?? []).map(indexInfoOf).filter((i): i is IndexInfo => i !== null);
-    return [...SYSTEM_INDEXES, ...declared.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))];
+    const searchIndexes = (json ?? []).map(searchIndexOf).filter((i): i is SearchIndexInfo => i !== null);
+    return { indexes: [...SYSTEM_INDEXES, ...byName(declared)], searchIndexes: byName(searchIndexes) };
   }
 
   async listTables(o?: CallOptions): Promise<TableInfo[]> {
@@ -304,11 +327,11 @@ export class Tables {
     );
     return Promise.all(
       names.map(async (name) => {
-        const [indexes, documentCount] = await Promise.all([
+        const [{ indexes, searchIndexes }, documentCount] = await Promise.all([
           this.indexesOf(name, signal),
           this.sync.query<number>(TABLE_SIZE, { tableName: name }, signal),
         ]);
-        return { name, indexes, documentCount, declared: declared.has(name) };
+        return { name, indexes, documentCount, declared: declared.has(name), searchIndexes };
       }),
     );
   }
@@ -324,12 +347,12 @@ export class Tables {
     let origins: string[] = [];
     if (q.filter) {
       // The declared indexes are read only when the expression names one.
-      const named = q.filter.index?.name;
-      const indexes =
+      const named = q.filter.search?.name ?? q.filter.index?.name;
+      const { indexes, searchIndexes } =
         named === undefined || SYSTEM_INDEXES.some((i) => i.name === named)
-          ? SYSTEM_INDEXES
+          ? { indexes: SYSTEM_INDEXES, searchIndexes: [] }
           : await this.indexesOf(q.table, signal);
-      validateFilter(q.filter, indexes);
+      validateFilter(q.filter, indexes, searchIndexes);
       const server = toServerFilter(q.filter);
       filters = base64(JSON.stringify(server.json));
       origins = server.origins;
@@ -343,7 +366,9 @@ export class Tables {
     const refused = result.page.filter((d): d is FilterValidationError & Record<string, unknown> => !("_id" in d));
     if (refused.length > 0) {
       const first = refused[0]!;
-      throw badRequest(first.error, first.filter === -1 ? "index" : origins[first.filter]);
+      // a search index's own refusals name its equality's position, not a field clause's (Convex's)
+      const searchRefusal = /^Invalid (index filter selection|filter: there are multiple filters)/.test(first.error);
+      throw badRequest(first.error, first.filter === -1 || searchRefusal ? "index" : origins[first.filter]);
     }
     this.servedPage(q, args, result);
     return { ...result, page: result.page.map(toDocument) };

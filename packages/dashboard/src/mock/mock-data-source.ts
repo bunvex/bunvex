@@ -60,6 +60,7 @@ import {
   type ScheduledFunctionQuery,
   type SchemaInfo,
   type SchemaValidation,
+  type SearchIndexInfo,
   type SnapshotExport,
   type SnapshotImport,
   type SnapshotImportRequest,
@@ -104,6 +105,7 @@ import { inferDocumentType } from "./infer.ts";
 import * as metrics from "./metrics.ts";
 import { createRandom, type Random } from "./random.ts";
 import { MockScheduler } from "./schedules.ts";
+import { searchDocuments } from "./search.ts";
 import { MockSnapshots } from "./snapshots.ts";
 import { MockSubscriptions } from "./subscriptions.ts";
 import { MockSystemTables } from "./system-tables.ts";
@@ -151,6 +153,15 @@ export type MockDataSourceOptions = FixtureOptions & {
 
 /** At most this many documents per insert or delete call, as a server bounds a transaction. */
 export const MAX_WRITE = 4096;
+
+/** A table's search indexes the filter can read: its declared ones that are not staged (Convex's `buildIndexDefs`). */
+function searchIndexesOf(t: FixtureTable): SearchIndexInfo[] {
+  return (t.otherIndexes ?? []).flatMap((ix) =>
+    !ix.staged && !Array.isArray(ix.fields) && "searchField" in ix.fields
+      ? [{ name: ix.name, searchField: ix.fields.searchField, filterFields: [...ix.fields.filterFields] }]
+      : [],
+  );
+}
 
 // ------------------------------------------------------------------ cursors
 
@@ -522,6 +533,7 @@ export class MockDataSource implements DashboardDataSource {
         indexes: structuredClone(t.indexes),
         documentCount: t.documents.length,
         declared: t.declared,
+        searchIndexes: searchIndexesOf(t),
       })),
     );
   }
@@ -584,7 +596,23 @@ export class MockDataSource implements DashboardDataSource {
       const t = this.table(q.table);
       checkNumItems(q.numItems);
       const expr = q.filter ?? NEWEST_FIRST;
-      const ix = validateFilter(expr, t.indexes);
+      const ix = validateFilter(expr, t.indexes, searchIndexesOf(t));
+      if (expr.search) {
+        // by relevance: a page is a slice of the ranked results, its cursor the position after it
+        const found = searchDocuments(
+          t.documents,
+          searchIndexesOf(t).find((s) => s.name === expr.search!.name)!,
+          expr.search.search,
+        ).filter((d) => matchesFilter(d, expr, ix));
+        const query = canonicalFilter(q.table, q.filter);
+        const start = q.cursor === null ? 0 : Number((decodeCursor(q.cursor, query) ?? [0])[0]);
+        const end = start + q.numItems;
+        return {
+          page: found.slice(start, end).map((d) => structuredClone(d)),
+          isDone: end >= found.length,
+          continueCursor: encodeCursor(query, [end]),
+        };
+      }
       const fields = ix.name === "by_id" ? ["_id"] : ix.fields;
       // the index key: its fields, then _id (unique, the tiebreaker) — except by_id, which is _id alone
       const key = (d: Document): Key =>

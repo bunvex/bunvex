@@ -165,7 +165,15 @@ export type TableInfo = {
   documentCount?: number;
   /** In the deployment's schema. A table can also exist only because documents were written to it. */
   declared: boolean;
+  /**
+   * The search indexes a filter can read (STUDY-163 §5), as Convex's filter offers them: the declared ones that
+   * are not staged. Absent: the source has none to offer.
+   */
+  searchIndexes?: SearchIndexInfo[];
 };
+
+/** A search index, as the filter reads it: the field it searches, and the fields it can filter on by equality. */
+export type SearchIndexInfo = { name: string; searchField: string; filterFields: string[] };
 
 export type SchemaInfo = {
   /** Whether documents are validated against the declared types. */
@@ -232,10 +240,23 @@ export type IndexFilter = {
   range?: { lower?: { op: "gt" | "gte"; value: Value }; upper?: { op: "lt" | "lte"; value: Value } };
 };
 
+/**
+ * A search index read (Convex's `SearchIndexFilter`, STUDY-163 §5): the text searched in its search field, and
+ * equalities on its filter fields. Results come by relevance, so the expression's order is `asc`; an empty search
+ * finds nothing, as a search query does.
+ */
+export type SearchFilter = {
+  name: string;
+  search: string;
+  clauses: { field: string; value: Value; enabled: boolean }[];
+};
+
 /** Everything that selects and orders a table's documents. Serializable: it lives in the URL. */
 export type FilterExpression = {
   /** Default: `by_creation_time`, unbounded. */
   index?: IndexFilter;
+  /** A search index instead of `index` (never both); `clauses` then apply to its results. */
+  search?: SearchFilter;
   clauses: FieldFilter[];
   /** The index order, ascending or descending. */
   order: "asc" | "desc";
