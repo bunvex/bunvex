@@ -1161,7 +1161,7 @@ export class Engine {
   private schemasOf(id: string): ComponentSchemas {
     let c = this.componentSchemas.get(id);
     if (!c) {
-      c = { schema: EMPTY_SCHEMA, activeSchemaId: null, pendingPush: null };
+      c = { schema: EMPTY_SCHEMA, validators: new Map(), activeSchemaId: null, pendingPush: null };
       this.componentSchemas.set(id, c);
     }
     return c;
@@ -1202,6 +1202,7 @@ export class Engine {
       const c = this.schemasOf(id);
       if (active) {
         c.schema = schemaFromJson(JSON.parse(active.schema as string) as SchemaJson);
+        c.validators = validatorsOf(c.schema);
         c.activeSchemaId = active._id as string;
       }
       if (pending) {
@@ -3207,6 +3208,7 @@ export class Engine {
           for (const [id, c] of finishing) {
             const schemas = this.schemasOf(id);
             schemas.schema = c.schema;
+            schemas.validators = validatorsOf(c.schema);
             schemas.activeSchemaId = c.id;
             if (schemas.pendingPush?.id === c.id) schemas.pendingPush = null;
           }
@@ -3613,6 +3615,7 @@ export class Engine {
     tx.tableCount = this.tableCountOf;
     if (kind === "mutation") {
       tx.docValidators = this.docValidators;
+      tx.componentValidators = (ns) => this.componentSchemas.get(ns)?.validators;
       tx.pendingValidators = this.pendingValidators;
       tx.stagedChecks = this.stagedChecks;
     }
@@ -4357,6 +4360,8 @@ async function finishSchemaIn(
 /** A component's schemas (`Engine.componentSchemas`). */
 type ComponentSchemas = {
   schema: SchemaDefinition;
+  /** Its document validators, which a write in the namespace is checked against (STUDY-154). */
+  validators: Map<string, GenericValidator>;
   activeSchemaId: string | null;
   pendingPush: { id: string; schema: SchemaDefinition } | null;
 };

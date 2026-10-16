@@ -33,6 +33,7 @@ import {
 import { BTree } from "./btree.ts";
 import {
   Catalog,
+  COMPONENTS_TABLE,
   databaseIndexRows,
   INDEX_TABLE,
   IndexBackfillingError,
@@ -1416,6 +1417,9 @@ export class Tx {
     const start = opts.cursor !== null ? decodeCursor(secret, opts.cursor, fp) : null;
     const endStr = opts.endCursor ?? this.prevEndCursor;
     const end = endStr !== null ? decodeCursor(secret, endStr, fp) : null;
+    // Convex's `PaginationUnsupportedInComponents`, after the page's checks and cursors, for a user's function in a
+    // component (STUDY-154), its docs link left out (DV-04); the engine's own reads there (a schema's walk) page.
+    if (this.spaceId !== null && this.componentFunction) throw new Error("paginate() is only supported in the app.");
     // As Convex's `read_page_from_query`: a limit of 0 never reads, so without an end cursor the page has no
     // cursor at all, and Convex fails with a system error ("Cursor was None").
     if (pipe.done && !end) {
@@ -1733,6 +1737,35 @@ export class Tx {
    * against the tables as they will be once it is activated (Convex's `table_mapping_for_schema`).
    */
   schemaTables: ((n: number) => string | undefined) | null = null;
+  /** Each component's active schema's document validators, by its `_components` id (STUDY-154). */
+  componentValidators: ((namespace: string) => Map<string, GenericValidator> | undefined) | null = null;
+  /**
+   * Whether a component's own function is running (set by the server while it runs one, STUDY-154): what Convex
+   * refuses in a component, it refuses to user code only.
+   */
+  componentFunction = false;
+  /** Whether each component written in is mounted, read once per transaction from its `_components` row. */
+  private mounted = new Map<string, boolean>();
+
+  /**
+   * Convex's refusal of a user's write in an unmounted component (`UserFacingModel`, `user_facing.rs`): its data is
+   * kept, read-only, until it is mounted again or deleted. In bunvex's words (`bunvex.config.ts`, DV-494). The
+   * server's own writes there (a push unmounting it) are not refused.
+   */
+  private async checkMounted() {
+    const ns = this.spaceId;
+    if (ns === null || this.systemAccess) return;
+    let mounted = this.mounted.get(ns);
+    if (mounted === undefined) {
+      const row = await this.asSystem(() => this.inComponent(null, () => this.get(COMPONENTS_TABLE, ns)));
+      mounted = (row as { state?: unknown } | null)?.state !== "unmounted";
+      this.mounted.set(ns, mounted);
+    }
+    if (!mounted)
+      throw new Error(
+        "Cannot perform write operations in an unmounted component. Make sure your component is installed in your `bunvex.config.ts` file.",
+      );
+  }
 
   private stage(t: TableDef, id: string, old: Doc | null, next: Doc | null) {
     // The versions a write keeps are the engine's own (test mode freezes them: nothing may change them).
@@ -1748,9 +1781,15 @@ export class Tx {
     const measured = t.name.startsWith("_") ? undefined : this.checkWriteLimits(next);
     // The schemas below are the root's: a component's table is checked against none of them, whatever its name.
     const inRoot = t.namespace === undefined;
-    const dv = next && inRoot && this.docValidators?.get(t.name);
+    // A component's table is checked against its own active schema (STUDY-154), with the root's message, its ids'
+    // tables named in its namespace.
+    const dv =
+      next && (inRoot ? this.docValidators?.get(t.name) : this.componentValidators?.(t.namespace!)?.get(t.name));
     if (dv) {
-      const msg = checkDocument(dv, next, this.schemaTables ?? ((n) => this.catalog.publicNameOf(n)));
+      const names = inRoot
+        ? (this.schemaTables ?? ((n: number) => this.catalog.publicNameOf(n)))
+        : (n: number) => this.catalog.components.get(t.namespace!)?.publicNameOf(n);
+      const msg = checkDocument(dv, next, names);
       if (msg)
         throw new Error(
           `Failed to insert or update a document in table "${t.name}" because it does not match the schema: ${msg}`,
@@ -1814,6 +1853,8 @@ export class Tx {
 
   async insert(table: string, fields: Record<string, unknown>): Promise<string> {
     if (!this.writable) throw new Error("queries cannot write");
+    // Only a component's write awaits the check: the app's keeps its synchronous errors at the app's call (STUDY-95).
+    if (this.spaceId !== null) await this.checkMounted();
     // Validated and copied at the call, as Convex serializes the value: its nesting first, before the table
     // (Convex's `insert` syscall parses `value`, then `table`); an unsupported type throws below, and mutating
     // `fields` afterwards cannot change what is written.
@@ -1869,6 +1910,7 @@ export class Tx {
   }
 
   private async patchIn(table: string, id: string, fields: Record<string, unknown>) {
+    if (this.spaceId !== null) await this.checkMounted();
     // Convex parses the patch before it reads the document: an object first (`PatchValue`), then each field's
     // value, a value of its own, so the patch object may be one level deeper than the limit.
     if (!isSimpleObject(fields)) throw notAnObject(fields, "patch");
@@ -1903,6 +1945,7 @@ export class Tx {
   }
 
   private async replaceIn(table: string, id: string, value: Record<string, unknown>) {
+    if (this.spaceId !== null) await this.checkMounted();
     const x = extractCommitTs(value, this.writtenNesting(), "replace"); // before the read, as in Convex
     refuseLoneSurrogates(x.value, () => JSON.stringify({ id, value: toJsonValue(x.value as Value) }));
     const t = this.findTable(table);
@@ -1930,6 +1973,7 @@ export class Tx {
   }
 
   private async deleteIn(table: string, id: string) {
+    if (this.spaceId !== null) await this.checkMounted();
     const t = this.findTable(table);
     const cur = await this.read(table, id, "db.delete");
     if (!cur || !t) throw new Error(`Delete on nonexistent document ID ${id}`);

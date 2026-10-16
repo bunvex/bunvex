@@ -32,6 +32,7 @@ import {
   ReadSetIndex,
   type RuntimeTimer,
   realRuntime,
+  resolveComponentPath,
   SPAN_KIND,
   type Span,
   secondsKnob,
@@ -55,7 +56,14 @@ import {
   withRequestId,
 } from "./errors.ts";
 import { wsRequestId } from "./function-log.ts";
-import { type AdminCaller, callerOf, type Deadline, Functions, type SourcedCaller } from "./functions.ts";
+import {
+  type AdminCaller,
+  callerOf,
+  componentFunctionName,
+  type Deadline,
+  Functions,
+  type SourcedCaller,
+} from "./functions.ts";
 import type { RunReason } from "./log-events.ts";
 import { cachedQueryLogs, collectLogs, type LogLine, type WithLogLines } from "./logs.ts";
 import { RoomHub } from "./rooms/hub.ts";
@@ -822,8 +830,25 @@ export class SyncHub {
         q.udfPath,
         this.syncCaller(q, caller),
         async () => {
-          if (q.component !== undefined) throw componentNotFound(q.component);
-          const kept = cachedQueryLogs.wrap(functions.queryBody(q.udfPath, fromWire(q.args, q.udfPath), true, caller));
+          let body =
+            q.component === undefined
+              ? functions.queryBody(q.udfPath, fromWire(q.args, q.udfPath), true, caller)
+              : null;
+          if (q.component !== undefined) {
+            const component = q.component;
+            // Resolved in the query's own transaction: a change of the tree runs it again (Convex's registry reads).
+            body = async (db) => {
+              const meta = await resolveComponentPath(db, component.split("/"));
+              if (!meta) throw componentNotFound(component);
+              return functions.queryBody(
+                componentFunctionName(meta._id, q.udfPath),
+                fromWire(q.args, q.udfPath),
+                true,
+                caller,
+              )(db);
+            };
+          }
+          const kept = cachedQueryLogs.wrap(body!);
           try {
             return await engine.queryTracked(kept.body, parseJournal(q.journal), ts, caller);
           } finally {
@@ -1241,6 +1266,12 @@ export class SyncSession {
    * WebSocket request (`RequestId::new_for_ws_session`), which the log stream filters by (STUDY-47); a new
    * one before Connect.
    */
+  /** A component path's `_components` id (STUDY-154), or null when no component has it. */
+  private async componentIdOf(path: string): Promise<string | null> {
+    const meta = await this.hub.deps.functions.engineOf().query((db) => resolveComponentPath(db, path.split("/")));
+    return meta?._id ?? null;
+  }
+
   private requestCaller(counter: number): SourcedCaller | null {
     const caller = this.currentCaller();
     if (caller === null) return null;
@@ -1690,12 +1721,17 @@ export class SyncSession {
         } catch (e) {
           return this.internalError(e);
         }
+        const udfPath = canonicalizeUdfPath(m.udfPath);
+        let path = udfPath;
         if (component !== null) {
-          const missing = await collectLogs(async () => Promise.reject(componentNotFound(component!)));
-          this.send(this.response("MutationResponse", m.requestId, missing, null));
-          return;
+          const id = await this.componentIdOf(component);
+          if (id === null) {
+            const missing = await collectLogs(async () => Promise.reject(componentNotFound(component!)));
+            this.send(this.response("MutationResponse", m.requestId, missing, null));
+            return;
+          }
+          path = componentFunctionName(id, udfPath);
         }
-        const path = canonicalizeUdfPath(m.udfPath);
         // With a session (Connect came first), the request runs at most once: a resend after a reconnect
         // gets the recorded answer (`_session_requests`). Without one, as in Convex, it just runs.
         const session = this.sessionId;
@@ -1709,10 +1745,10 @@ export class SyncSession {
         }, this.hub.mutationTimeoutMs);
         const r = await collectLogs(() =>
           session === null
-            ? functions.runMutationWithTs(path, fromWire(m.args, path), true, caller, deadline)
+            ? functions.runMutationWithTs(path, fromWire(m.args, udfPath), true, caller, deadline)
             : functions.runSessionMutation(
                 path,
-                fromWire(m.args, path),
+                fromWire(m.args, udfPath),
                 { sessionId: session, requestId: m.requestId },
                 caller,
                 deadline,
@@ -1771,19 +1807,20 @@ export class SyncSession {
       span?.fail(e).finish();
       return this.internalError(e);
     }
-    if (component !== null) {
-      void collectLogs(async () => Promise.reject(componentNotFound(component!))).then((r) => {
-        this.send(this.response("ActionResponse", m.requestId, r));
-        span?.finish();
-      });
-      return;
-    }
     this.inflightActions++;
     void (async () => {
       try {
         const { functions, fromWire } = this.hub.deps;
+        const udfPath = canonicalizeUdfPath(m.udfPath);
+        const id = component === null ? null : await this.componentIdOf(component);
         const r = await collectLogs(() =>
-          functions.runAction(canonicalizeUdfPath(m.udfPath), fromWire(m.args, m.udfPath), caller),
+          component !== null && id === null
+            ? Promise.reject(componentNotFound(component))
+            : functions.runAction(
+                id === null ? udfPath : componentFunctionName(id, udfPath),
+                fromWire(m.args, m.udfPath),
+                caller,
+              ),
         );
         if (this.closed) return;
         if (!r.ok && (failsSession(r.error) || r.error instanceof TooManyConcurrentRequestsError))
@@ -1835,7 +1872,7 @@ function componentOf(componentPath: string | undefined, caller: Caller): string 
   return componentPath;
 }
 
-/** Convex's `ComponentPathNotFound`: bunvex has no components (STUDY-62), so every non-root path is missing. */
+/** Convex's `ComponentPathNotFound` (`udf/src/validation.rs`): a path no mounted component has. */
 const componentNotFound = (path: string) => new FunctionPathError(`Component path '${path}' not found`);
 const keyOf = (q: SessionQuery) => `${baseKeyOf(q)}\u0000${q.idPart}`;
 const PING = v1.encodeServerMessage({ type: "Ping" });
