@@ -193,7 +193,7 @@ export class ServerMetrics {
       ["joinsRefusedByLimit", "Room joins refused by the member or per-connection cap"],
       [
         "leaves",
-        "Members that left (grace expiries included; an identity change or a re-join of the same roomId counts a leave and a join)",
+        "Members that left (grace expiries included; an identity change or a re-join of the same roomId on a live connection counts a leave and a join; a reconnect within the grace counts a join only)",
       ],
       ["graceExpiries", "Memberships ended by the reconnect grace running out"],
       ["presenceAccepted", "Presence updates accepted"],

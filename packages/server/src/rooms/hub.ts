@@ -63,7 +63,7 @@ export type RoomMemberInfo = {
  * `rooms`, `members` and `connections` are gauges; every other field is a counter, monotonic since the hub was
  * made. `joins` counts every successful join, a re-join within the grace included. `leaves` counts members that
  * left, grace expiries included (`graceExpiries` counts those again); an identity change or a re-join of the same
- * roomId counts a leave and a join.
+ * roomId on a live connection counts a leave and a join, a reconnect within the grace a join only.
  */
 export type RoomStats = {
   rooms: number;
