@@ -484,7 +484,7 @@ every repeat; and nothing merges.
 6. **Measurement**: the read path gains a sorted-set insert per read; the PR stays a draft until the owner's
    before/after run (`bench/`), prepared in the PR.
 
-*Built* (draft, waiting on its measurement):
+*Built* (#704):
 - `core/src/read-count.ts`, Convex's per-index merged sets and `num_intervals` (its saturating update included). `Tx`
   keeps one beside `readList`: `recordInterval(i, "direct" | "derived" | "none")`. Derived: `dependOn`, `readMissingTable`,
   `recordIndexMeta`, the environment variables' per-name reads, a search's terms, and (in the count only) a new
@@ -560,3 +560,7 @@ constants, a replay without the derived reads, a reordered replay, the warning's
 replay at all, a scan's first read resolved at once: each fails it; the warning taking the bound alone fails
 `limit-warnings`. The read-set-unchanged, unit and differential tests (the at-limit and nested-budget shapes included)
 pass unchanged.
+
+*Measured* (2026-10-16, interleaved, 4 × main and branch): every shape of `bench/read-count.ts` within 3 % of main
+(100 gets +2.3 %, 4 000 gets +2.4 %, one document 4 000 times +1.8 %, a scan with a get per document +2.6 %, collect
+−0.2 %, 1 000 index ranges +3.0 %, a page +2.0 %), inside or near the runs' own spread (2–11 %).
