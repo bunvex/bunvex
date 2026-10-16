@@ -564,3 +564,34 @@ pass unchanged.
 *Measured* (2026-10-16, interleaved, 4 × main and branch): every shape of `bench/read-count.ts` within 3 % of main
 (100 gets +2.3 %, 4 000 gets +2.4 %, one document 4 000 times +1.8 %, a scan with a get per document +2.6 %, collect
 −0.2 %, 1 000 index ranges +3.0 %, a page +2.0 %), inside or near the runs' own spread (2–11 %).
+
+### 16.7 Components (the follow-up)
+
+Measured on Convex's binary (an app with components `probe` — two function modules, mounted twice — `probe2` and
+`probe3`, one module each; the read limit at 60, so the "Many reads" warning shows each count; the root's count before
+any call is 3, or 4 once the root has two modules):
+
+| shape | Convex |
+|---|---|
+| a component's function, called directly (two modules) | 5: 2 + its two modules (the library chunk) + 1 |
+| the same, writing a document | 5: the write adds nothing |
+| the first nested call into a component (two modules; one module) | +5; +4: 2 + its modules + 1 |
+| a second nested call, into any component or the app (even a new module) | +0 |
+| a first nested call into the app (its own module; another module) | +2; +3 |
+| a first nested call into the app, then one into a component | +2 |
+
+So a component's function starts like the app's (its configuration and environment, then each module it loads, from its
+namespace's own `_modules`) plus one read (`load_component_args`); and only the **first** nested call in a transaction
+reads its callee's start, whatever the later ones call.
+
+*Built (this PR):* a component's code version's module loads reach `Functions.installComponent` (keyed in its
+namespace), and a component's function starts with 3 rather than 2. Core's mounted check on a component's writes
+(`Tx.checkMounted`, #709) is the engine's read, as Convex's component registry: recorded, not counted. Test:
+`server/test/component-read-count.test.ts` (an app with a one-module and a two-module component, the latter mounted
+twice: each function's count, after a read and after a write). Sabotage (each restored): no component read, the module
+loads not passed, the component's modules not loaded, the mounted check counted: each fails it.
+
+*Left for the calls across components (STUDY-155):* the nested-call rule above. Today bunvex counts its +2 at the first
+nested call and then each callee's new modules at every call; Convex counts the callee's start (its new modules, and
+the component's read) at the first call only, and nothing at later ones. The difference is a read or a few, in a
+function that calls several modules or components near the limit.
