@@ -41,7 +41,11 @@ async function setup() {
       // n distinct ids (a document read again is no new read, STUDY-161 §16): the items', then ids of none
       const number = idTableNumber(ids[0]!)!;
       for (let i = 0; i < n; i++)
-        await db.get((i < ids.length ? ids[i] : encodeId(number, Uint8Array.of(i & 255, i >> 8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14))) as never);
+        await db.get(
+          (i < ids.length
+            ? ids[i]
+            : encodeId(number, Uint8Array.of(i & 255, i >> 8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14))) as never,
+        );
       return null;
     }),
     write: mutation(async ({ db, scheduler }) => {
