@@ -83,7 +83,7 @@ import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
 import { activeSync, cursorFromDeltas, DATA_SYNC_ROUTE, dataSync, listActiveSyncs } from "./data-sync.ts";
 import { applicationIndexes } from "./data-system-functions.ts";
-import { DEBUG_ROUTE, debugRoute, TOPOLOGY_ROUTE, topologyRoute } from "./debug-routes.ts";
+import { DEBUG_ROUTE, debugRoute, ROOMS_ROUTE, roomsRoute, TOPOLOGY_ROUTE, topologyRoute } from "./debug-routes.ts";
 import { tooDeepToStringify } from "./deep-values.ts";
 import {
   clientError,
@@ -1001,6 +1001,7 @@ export function createServer(opts: ServerOptions) {
     syncSessions: () => sync.sessions.size,
     syncSubscriptions: () => sync.subscriptionCount(),
     syncStats: sync.stats,
+    rooms: () => rooms.stats(),
     schedulerRunning: () => scheduler.runningJobs,
     schedulerBacklog: () => scheduler.backlogSeconds(),
     schedulerStats: scheduler.stats,
@@ -1250,6 +1251,9 @@ export function createServer(opts: ServerOptions) {
         // The queries subscribed across every session now: the dashboard's `subscriptions` (STUDY-149).
         subscriptions: sync.subscriptionCount(),
         sync: sync.stats,
+        // The rooms (AD-43): `rooms`, `members` and `connections` are gauges (now); every other field is a
+        // counter, monotonic since the server started.
+        rooms: rooms.stats(),
         // Spans exported, dropped (queue full) and failed (STUDY-131 AD-26); null when tracing is off.
         tracing: spanExporter?.stats ?? null,
       });
@@ -1261,6 +1265,9 @@ export function createServer(opts: ServerOptions) {
     // The deployment's topology (STUDY-131 §11, AD-04): ViewMetrics.
     const topo = topologyRoute({ functions, topology }, url, req, caller);
     if (topo) return topo;
+    // The rooms in memory and their definitions (AD-43): ViewMetrics.
+    const roomsDebug = roomsRoute({ functions, sync }, url, req, caller);
+    if (roomsDebug) return roomsDebug;
     if (url.pathname === "/api/v1/list_audit_log_events" && req.method === "GET")
       return listAuditLogEvents(url, caller);
     if (/^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) || url.pathname === "/api/v1/get_canonical_urls")
@@ -1683,6 +1690,7 @@ export function createServer(opts: ServerOptions) {
         LOG_STREAM_ROUTE.test(url.pathname) ||
         DEBUG_ROUTE.test(url.pathname) ||
         url.pathname === TOPOLOGY_ROUTE ||
+        ROOMS_ROUTE.test(url.pathname) ||
         STREAMING_EXPORT_ROUTE.test(url.pathname) ||
         STREAMING_IMPORT_ROUTE.test(url.pathname) ||
         DATA_SYNC_ROUTE.test(url.pathname) ||

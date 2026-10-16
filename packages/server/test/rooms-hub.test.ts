@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { v1 } from "@bunvex/protocol";
-import { RoomHub, type RoomKey, type RoomSink, type Timers } from "../src/rooms/hub.ts";
+import { RoomHub, type RoomKey, type RoomSink, roomKeyString, type Timers } from "../src/rooms/hub.ts";
 import type { RoomLimits } from "../src/rooms/limits.ts";
 
 const LIMITS: RoomLimits = {
@@ -18,9 +18,11 @@ const LIMITS: RoomLimits = {
 function fakeTimers(): Timers & { advance(ms: number): void } {
   let now = 0;
   let seq = 0;
+  const EPOCH = 1_700_000_000_000;
   const due = new Map<number, { at: number; fn: () => void }>();
   return {
     now: () => now,
+    wall: () => EPOCH + now,
     set: (fn, ms) => {
       due.set(++seq, { at: now + ms, fn });
       return seq;
@@ -391,5 +393,238 @@ describe("backpressure", () => {
     t.advance(30);
     expect(slow.resyncs).toBe(1);
     expect(slow.frames).toEqual([]);
+  });
+});
+
+const EPOCH = 1_700_000_000_000;
+const NOARGS = (name: string): RoomKey => ({ kind: "room", name, argsJson: "{}" });
+const who = (userId: string | null = null, canPublish = true) => ({ userId, canPublish });
+
+describe("rooms: the debug snapshot (AD-43)", () => {
+  test("list is empty with no rooms", () => {
+    expect(new RoomHub(LIMITS, fakeTimers()).list()).toEqual([]);
+  });
+  test("list: sorted by name then args, with counts, the args parsed, openedAt and a stable key", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const [a, b, c, d] = [sink("A"), sink("B"), sink("C"), sink("D")];
+    const docB = { ...DOC, argsJson: '{"id":"b"}' };
+    hub.join(a, 1, docB, who("u1"));
+    t.advance(100);
+    hub.join(b, 1, DOC, who("u2"));
+    hub.join(c, 1, DOC, who("u3"));
+    // A scope user with two tabs: one member, two connections.
+    hub.join(c, 2, ONLINE, who("u3"));
+    hub.join(d, 1, ONLINE, who("u3"));
+    expect(hub.list()).toEqual([
+      {
+        key: roomKeyString(DOC),
+        kind: "room",
+        name: "rooms:doc",
+        args: { id: "a" },
+        members: 2,
+        connections: 2,
+        openedAt: EPOCH + 100,
+      },
+      {
+        key: roomKeyString(docB),
+        kind: "room",
+        name: "rooms:doc",
+        args: { id: "b" },
+        members: 1,
+        connections: 1,
+        openedAt: EPOCH,
+      },
+      {
+        key: roomKeyString(ONLINE),
+        kind: "presence",
+        name: "rooms:online",
+        args: {},
+        members: 1,
+        connections: 2,
+        openedAt: EPOCH + 100,
+      },
+    ]);
+  });
+  test("list counts graced connections; a room whose last member left is gone", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const a = sink("A");
+    hub.join(a, 1, DOC, who());
+    hub.detach(a);
+    expect(hub.list()[0]).toMatchObject({ members: 1, connections: 1 });
+    t.advance(LIMITS.graceMs + 1);
+    expect(hub.list()).toEqual([]);
+  });
+  test("membersPage: 250 members in pages of 100 by memberId, with the cursor", () => {
+    const hub = new RoomHub({ ...LIMITS, memberCap: 1000 }, fakeTimers());
+    for (let i = 0; i < 250; i++) hub.join(sink(`s${i}`), 1, DOC, who(`u${i}`));
+    const all: string[] = [];
+    let cursor: string | null = null;
+    const sizes: number[] = [];
+    for (;;) {
+      const r = hub.membersPage(DOC, cursor, 1000);
+      sizes.push(r.page.length);
+      all.push(...r.page.map((m) => m.memberId));
+      if (r.isDone) {
+        expect(r.continueCursor).toBe("");
+        break;
+      }
+      expect(r.continueCursor).toBe(r.page.at(-1)!.memberId);
+      cursor = r.continueCursor;
+    }
+    expect(sizes).toEqual([100, 100, 50]);
+    expect(new Set(all).size).toBe(250);
+    expect(all).toEqual([...all].sort());
+    expect(hub.membersPage(DOC, null, 10).page).toHaveLength(10);
+  });
+  test("membersPage: graced, canPublish, connections, presence, idle, joinedAt and lastActivityAt", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const a = sink("A"),
+      b = sink("B");
+    hub.join(a, 1, DOC, who("u1", true));
+    hub.join(b, 1, DOC, who("u2", false));
+    t.advance(500);
+    hub.setPresence(a, 1, { x: 1 });
+    hub.detach(b);
+    const page = hub.membersPage(DOC, null, 100).page;
+    const mA = page.find((m) => m.userId === "u1")!;
+    const mB = page.find((m) => m.userId === "u2")!;
+    expect(mA).toMatchObject({
+      presence: { x: 1 },
+      canPublish: true,
+      graced: false,
+      connections: 1,
+      joinedAt: EPOCH,
+      lastActivityAt: EPOCH + 500,
+    });
+    expect("idle" in mA).toBe(false);
+    expect(mB).toMatchObject({
+      presence: null,
+      canPublish: false,
+      graced: true,
+      connections: 1,
+      joinedAt: EPOCH,
+      lastActivityAt: EPOCH,
+    });
+    hub.join(sink("C"), 1, ONLINE, who("u9"));
+    const scope = hub.membersPage(ONLINE, null, 100).page[0]!;
+    expect(scope.idle).toBe(false);
+    expect(scope.memberId).toBe("u9");
+  });
+  test("membersPage: joinedAt is kept across a reconnect within the grace; a closed room is an empty done page", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const a = sink("A");
+    hub.join(a, 1, DOC, who("u1"));
+    hub.detach(a);
+    t.advance(1000);
+    const a2 = sink("A");
+    hub.join(a2, 1, DOC, who("u1"));
+    expect(hub.membersPage(DOC, null, 100).page[0]).toMatchObject({ joinedAt: EPOCH, graced: false });
+    expect(hub.membersPage(NOARGS("rooms:none"), null, 100)).toEqual({ page: [], isDone: true, continueCursor: "" });
+  });
+});
+
+describe("rooms: the counters (AD-43)", () => {
+  const zero = {
+    joins: 0,
+    joinsRefusedByGate: 0,
+    joinsRefusedByLimit: 0,
+    leaves: 0,
+    graceExpiries: 0,
+    presenceAccepted: 0,
+    presenceDropped: 0,
+    eventsAccepted: 0,
+    eventsDropped: 0,
+    resyncs: 0,
+    roomLeft: 0,
+  };
+  const moved = (hub: RoomHub, only: Partial<typeof zero>) => {
+    const { rooms: _r, members: _m, connections: _c, ...counters } = hub.stats();
+    expect(counters).toEqual({ ...zero, ...only });
+  };
+  test("a fresh hub reads zero", () => {
+    const hub = new RoomHub(LIMITS, fakeTimers());
+    expect(hub.stats()).toEqual({ rooms: 0, members: 0, connections: 0, ...zero });
+  });
+  test("joins, and the gauges", () => {
+    const hub = new RoomHub(LIMITS, fakeTimers());
+    hub.join(sink("A"), 1, DOC, who());
+    hub.join(sink("B"), 1, DOC, who());
+    moved(hub, { joins: 2 });
+    expect(hub.stats()).toMatchObject({ rooms: 1, members: 2, connections: 2 });
+  });
+  test("a rejoin within the grace counts as a join", () => {
+    const hub = new RoomHub(LIMITS, fakeTimers());
+    const a = sink("A");
+    hub.join(a, 1, DOC, who());
+    hub.detach(a);
+    hub.join(sink("A"), 1, DOC, who());
+    moved(hub, { joins: 2 });
+  });
+  test("a refusal by the limit", () => {
+    const hub = new RoomHub({ ...LIMITS, memberCap: 1 }, fakeTimers());
+    hub.join(sink("A"), 1, DOC, who());
+    hub.join(sink("B"), 1, DOC, who());
+    moved(hub, { joins: 1, joinsRefusedByLimit: 1 });
+  });
+  test("a refusal by a gate is counted by countGateRefusal", () => {
+    const hub = new RoomHub(LIMITS, fakeTimers());
+    hub.countGateRefusal();
+    moved(hub, { joinsRefusedByGate: 1 });
+  });
+  test("a member leaving; a scope tab that leaves while another stays does not", () => {
+    const hub = new RoomHub(LIMITS, fakeTimers());
+    const a = sink("A"),
+      b = sink("B");
+    hub.join(a, 1, ONLINE, who("u1"));
+    hub.join(b, 1, ONLINE, who("u1"));
+    hub.leave(a, 1);
+    moved(hub, { joins: 2 });
+    hub.leave(b, 1);
+    moved(hub, { joins: 2, leaves: 1 });
+  });
+  test("a grace expiry ends a membership (and is a leave)", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const a = sink("A");
+    hub.join(a, 1, DOC, who());
+    hub.detach(a);
+    moved(hub, { joins: 1 });
+    t.advance(LIMITS.graceMs + 1);
+    moved(hub, { joins: 1, leaves: 1, graceExpiries: 1 });
+  });
+  test("presence and events, accepted and dropped", () => {
+    const hub = new RoomHub(LIMITS, fakeTimers());
+    const a = sink("A");
+    hub.join(a, 1, DOC, who());
+    for (let i = 0; i < 41; i++) hub.setPresence(a, 1, { i });
+    for (let i = 0; i < 11; i++) hub.event(a, 1, "wave", {});
+    moved(hub, { joins: 1, presenceAccepted: 40, presenceDropped: 1, eventsAccepted: 10, eventsDropped: 1 });
+  });
+  test("a forbidden publish counts as neither", () => {
+    const hub = new RoomHub(LIMITS, fakeTimers());
+    const a = sink("A");
+    hub.join(a, 1, DOC, who(null, false));
+    hub.setPresence(a, 1, {});
+    hub.event(a, 1, "wave", {});
+    moved(hub, { joins: 1 });
+  });
+  test("a resync", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const a = sink("A"),
+      b = sink("B");
+    hub.join(a, 1, DOC, who());
+    b.queued = LIMITS.maxBufferedBytes + 1;
+    hub.join(b, 1, DOC, who());
+    moved(hub, { joins: 2, resyncs: 1 });
+  });
+  test("a RoomLeft sent is counted by countRoomLeft", () => {
+    const hub = new RoomHub(LIMITS, fakeTimers());
+    hub.countRoomLeft();
+    moved(hub, { roomLeft: 1 });
   });
 });

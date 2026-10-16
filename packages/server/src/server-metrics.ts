@@ -9,6 +9,7 @@ import type { Engine } from "@bunvex/core";
 import { boolKnob, type KnobEnv } from "@bunvex/core";
 import packageJson from "../package.json" with { type: "json" };
 import { type HistogramFamily, Registry, type Sample } from "./prometheus.ts";
+import type { RoomStats } from "./rooms/hub.ts";
 
 /** Convex's `DISABLE_METRICS_ENDPOINT` knob: a bool knob, so only `true` turns it on; another value is ignored. */
 export function metricsEndpointDisabled(env: KnobEnv = process.env): boolean {
@@ -35,6 +36,7 @@ export type MetricSources = {
   engine: Engine;
   syncSessions: () => number;
   syncSubscriptions: () => number;
+  rooms: () => RoomStats;
   syncStats: { executions: number; reused: number; transitions: number };
   schedulerRunning: () => number;
   /** Seconds the oldest runnable scheduled job has waited (0 with none). */
@@ -166,6 +168,34 @@ export class ServerMetrics {
       "Subscribed query results reused from another session's run",
       () => this.sources?.syncStats.reused ?? 0,
     );
+    // Rooms (AD-43): gauges now, counters since the server started.
+    const rooms = () => this.sources?.rooms();
+    r.gauge("bunvex_rooms_open", "Rooms and presence scopes with members", () => rooms()?.rooms ?? 0);
+    r.gauge("bunvex_rooms_members", "Members across every open room", () => rooms()?.members ?? 0);
+    r.gauge(
+      "bunvex_rooms_connections",
+      "Room attachments, the ones in their grace included",
+      () => rooms()?.connections ?? 0,
+    );
+    const roomCounters = [
+      ["joins", "Room joins that succeeded (a rejoin within the grace included)"],
+      ["joinsRefusedByGate", "Room joins a gate refused"],
+      ["joinsRefusedByLimit", "Room joins refused by the member or per-connection cap"],
+      ["leaves", "Members that left a room"],
+      ["graceExpiries", "Memberships ended by the reconnect grace running out"],
+      ["presenceAccepted", "Presence updates accepted"],
+      ["presenceDropped", "Presence updates dropped by the rate limit"],
+      ["eventsAccepted", "Room events accepted"],
+      ["eventsDropped", "Room events dropped by the rate limit"],
+      ["resyncs", "Connections closed for being too far behind on room frames"],
+      ["roomLeft", "RoomLeft frames sent (a membership the server ended)"],
+    ] as const;
+    for (const [field, help] of roomCounters)
+      r.collectedCounter(
+        `bunvex_rooms_${field.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}_total`,
+        help,
+        () => rooms()?.[field] ?? 0,
+      );
     const bytes = (name: string, help: string) => {
       const h = r.histogram(name, help, BYTES);
       return h.labels();

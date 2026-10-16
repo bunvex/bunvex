@@ -116,7 +116,10 @@ export class RoomConnection implements RoomSink {
     const caller = this.io.caller();
     const userId = subjectOf(caller);
     // Checked before the hub, which keys a scope's member by its user.
-    if (def.kind === "presence" && userId === null) return this.error(m.roomId, "no_access", SIGNED_IN);
+    if (def.kind === "presence" && userId === null) {
+      this.deps.hub.countGateRefusal();
+      return this.error(m.roomId, "no_access", SIGNED_IN);
+    }
     // The gates are named by the room's registry name, as on an identity change: one name in the logs.
     const room = { key: { name: registryKey(m.name) }, args };
     const allowed = await this.gate(def.canJoin, "canJoin", room, caller);
@@ -124,7 +127,10 @@ export class RoomConnection implements RoomSink {
       allowed && (def.kind === "presence" || (await this.gate(def.canPublish, "canPublish", room, caller)));
     // The socket may have closed while the gates ran: a member inserted now would never be removed.
     if (this.closedFlag) return;
-    if (!allowed) return this.error(m.roomId, "no_access", NO_ACCESS);
+    if (!allowed) {
+      this.deps.hub.countGateRefusal();
+      return this.error(m.roomId, "no_access", NO_ACCESS);
+    }
     // One room whatever the spelling of its name (`rooms:doc`, `rooms.js:doc`) or the order of its args' keys.
     const key: RoomKey = { kind: def.kind, name: room.key.name, argsJson: canonicalJson(m.args) };
     if (!this.attach(m.roomId, { def, key, args, userId }, canPublish)) this.error(m.roomId, "limit", FULL);
@@ -141,6 +147,7 @@ export class RoomConnection implements RoomSink {
 
   /** A joined membership the server ended on its own: the client's handle ends too (it is not a join error). */
   private left(roomId: number, code: "no_access" | "limit", message: string) {
+    this.deps.hub.countRoomLeft();
     this.send({ type: "RoomLeft", roomId, code, message });
   }
 
