@@ -465,7 +465,7 @@ classed as bugs by their study; they are listed here because they change what op
 | ID | Gap | Convex | Source |
 |---|---|---|---|
 | DV-55 | No namespaces (components). (`Backfilled` and staged indexes are built: STUDY-29, #115) | has them | [STUDY-04 D4](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
-| DV-429 | No `_modules` row for the app definition module (`convex.config.js`): bunvex's CLI pushes `definition: null` | stores the app definition the CLI pushes | [STUDY-134 S9](../study/STUDY-134-system-row-shapes.md#4-divergences); waits on components |
+| DV-429 | No `_modules` row for the app definition module (`convex.config.js`): bunvex's CLI pushes `definition: null` | stores the app definition the CLI pushes | [STUDY-134 S9](../study/STUDY-134-system-row-shapes.md#4-divergences); the server stores it when sent (STUDY-153 PR 4a); closes when bunvex's CLI sends it (STUDY-152 step 6) |
 
 ## Pending owner decisions
 

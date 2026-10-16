@@ -11,7 +11,7 @@ import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { v } from "@bunvex/values";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
-import { checkPackagesSize, ModulesTooLargeError } from "../src/code-store.ts";
+import { checkPackagesSize, loadLatestCode, ModulesTooLargeError } from "../src/code-store.ts";
 import type { ModuleSource } from "../src/code-version.ts";
 import { Functions } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
@@ -67,12 +67,13 @@ async function deployment() {
     instanceSecret: SECRET,
     storedSchema: true,
   }).init();
+  const store = new MemoryBlobStore();
   const s = createServer({
     engine,
     functions: new Functions(engine),
     port: 0,
     deployable: true,
-    moduleStorage: new MemoryBlobStore(),
+    moduleStorage: store,
     redactLogsToClient: false,
   });
   stops.push(
@@ -109,7 +110,7 @@ async function deployment() {
       },
       componentDefinitions: o.components ?? [COUNTER],
     });
-  return { engine, post, start };
+  return { engine, post, start, store };
 }
 
 describe("start_push with components", () => {
@@ -152,21 +153,6 @@ describe("start_push with components", () => {
     // Both instances' schemas become ready: wait_for_schema reads each in its namespace.
     const wait = await d.post("/api/deploy2/wait_for_schema", { schemaChange, timeoutMs: 5000 });
     expect(wait.body).toEqual({ type: "complete" });
-  });
-
-  test("finish_push of a push with components is refused until PR 4; its namespaces stay allocated (C-10)", async () => {
-    const d = await deployment();
-    const r = await d.start();
-    await d.post("/api/deploy2/wait_for_schema", { schemaChange: r.body.schemaChange, timeoutMs: 5000 });
-    const f = await d.post("/api/deploy2/finish_push", { startPush: r.body, dryRun: false });
-    expect(f).toEqual({
-      status: 400,
-      body: {
-        code: "ComponentsNotSupported",
-        message: "Hit an error while pushing:\nComponents are not supported by this deployment yet",
-      },
-    });
-    expect(d.engine.catalog.components.has(r.body.schemaChange.allocatedComponentIds.counter)).toBe(true);
   });
 
   test("an app definition with no children: the push finishes as before", async () => {
@@ -493,5 +479,192 @@ describe("evaluate_schema with components (PR 3d)", () => {
     await d.engine.summariesReady();
     const r = await evaluate(d, [COUNTER]);
     expect(Object.keys(r.body.componentSchemaEvaluations)).toEqual([""]);
+  });
+});
+
+describe("finish_push with components (PR 4)", () => {
+  /** A start, its wait and its finish, as the CLI does. */
+  async function push(d: Awaited<ReturnType<typeof deployment>>, o: Parameters<typeof d.start>[0] = {}) {
+    const start = await d.start(o);
+    if (start.status !== 200) return { start, finish: start };
+    await d.post("/api/deploy2/wait_for_schema", { schemaChange: start.body.schemaChange, timeoutMs: 5000 });
+    return { start, finish: await d.post("/api/deploy2/finish_push", { startPush: start.body, dryRun: false }) };
+  }
+  const rowsIn = (d: Awaited<ReturnType<typeof deployment>>, ns: string | null, table: string) =>
+    d.engine.query((db) => db.asSystem(() => db.inComponent(ns, () => db.query(table).collect()))) as Promise<
+      Record<string, any>[]
+    >;
+  const onlyCounter = mod(
+    "bunvex.config.js",
+    `import { defineApp } from "bunvex/server";\nimport counter from "${dep("counter")}";\nconst app = defineApp();\napp.use(counter);\nexport default app;`,
+  );
+
+  test("create: `counter` and `second`, Convex's answer and rows", async () => {
+    const d = await deployment();
+    const { start, finish } = await push(d);
+    expect(finish.status).toBe(200);
+    const ids = start.body.schemaChange.allocatedComponentIds;
+    expect(finish.body.definitionDiffs).toEqual({ "": {}, counter: {} });
+    expect(Object.keys(finish.body.componentDiffs)).toEqual(["", "counter", "second"]);
+    for (const k of ["", "counter", "second"])
+      expect(finish.body.componentDiffs[k].diffType).toEqual({ type: "create" });
+    const counter = finish.body.componentDiffs.counter;
+    expect(counter.moduleDiff).toEqual({ added: ["bunvex.config.js", "lib.js", "schema.js"], removed: [] });
+    expect(counter.udfConfigDiff).toEqual({ previous_version: "Unspecified version", next_version: "1.46.0" });
+    expect(counter.schemaDiff.previous_schema).toBeNull();
+    expect(JSON.parse(counter.schemaDiff.next_schema).tables[0].tableName).toBe("messages");
+    expect(finish.body.componentDiffs[""].moduleDiff.added).toContain("bunvex.config.js");
+    // The rows: the definitions, the instances with their allocated ids, each namespace's code.
+    const definitions = await rowsIn(d, null, "_component_definitions");
+    expect(definitions.map((r) => r.path).sort()).toEqual(["", "counter"]);
+    expect(definitions.find((r) => r.path === "")!.childComponents[0]).toEqual({
+      type: "SerializedComponentInstantiation",
+      name: "counter",
+      path: "counter",
+      args: [],
+      env: [],
+    });
+    const components = await rowsIn(d, null, "_components");
+    expect(components.map((r) => r._id).sort()).toEqual([ids[""], ids.counter, ids.second].sort());
+    expect(components.find((r) => r._id === ids.second)).toMatchObject({
+      name: "second",
+      parent: ids[""],
+      state: "active",
+    });
+    const modules = await rowsIn(d, ids.counter, "_modules");
+    expect(modules.map((r) => r.path).sort()).toEqual(["bunvex.config.js", "lib.js", "schema.js"]);
+    // Two instances of one definition share one package.
+    const [p1] = await rowsIn(d, ids.counter, "_source_packages");
+    const [p2] = await rowsIn(d, ids.second, "_source_packages");
+    expect(p1!._id).not.toBe(p2!._id);
+    expect(p1!.storageKey).toBe(p2!.storageKey);
+    // Every namespace's `_udf_config` has the app's import seed.
+    const [rootConfig] = await rowsIn(d, null, "_udf_config");
+    const [counterConfig] = await rowsIn(d, ids.counter, "_udf_config");
+    expect(new Uint8Array(counterConfig!.importPhaseRngSeed)).toEqual(new Uint8Array(rootConfig!.importPhaseRngSeed));
+    // Each instance's schema is active in its namespace.
+    expect(d.engine.componentSchema(ids.counter).tables).toHaveProperty("messages");
+    // The audit event: the app's diff first, then by path.
+    const [event] = (await rowsIn(d, null, "_deployment_audit_log")).filter(
+      (r) => r.action === "push_config_with_components",
+    );
+    expect(event!.metadata.component_diffs.map((c: { component_path: string | null }) => c.component_path)).toEqual([
+      null,
+      "counter",
+      "second",
+    ]);
+  });
+
+  test("remove `second`: unmounted, its code gone, its data and package kept; added back: remounted", async () => {
+    const d = await deployment();
+    const { start } = await push(d);
+    const ids = start.body.schemaChange.allocatedComponentIds;
+    const removed = await push(d, { definition: onlyCounter });
+    expect(removed.finish.status).toBe(200);
+    expect(removed.start.body.schemaChange.schemaIds).not.toHaveProperty("second");
+    const second = removed.finish.body.componentDiffs.second;
+    expect(second).toMatchObject({
+      diffType: { type: "unmount" },
+      moduleDiff: { added: [], removed: ["bunvex.config.js", "lib.js", "schema.js"] },
+      udfConfigDiff: null,
+      schemaDiff: null,
+    });
+    expect((await rowsIn(d, null, "_components")).find((r) => r._id === ids.second)!.state).toBe("unmounted");
+    expect(await rowsIn(d, ids.second, "_modules")).toEqual([]);
+    expect(await rowsIn(d, ids.second, "_source_packages")).toHaveLength(1);
+    expect(await rowsIn(d, ids.second, "_udf_config")).toHaveLength(1);
+    // Removing it again: no diff for it.
+    const again = await push(d, { definition: onlyCounter });
+    expect(again.finish.body.componentDiffs).not.toHaveProperty("second");
+    // Back: remounted, its code there again, its server version unchanged.
+    const back = await push(d);
+    expect(back.finish.body.componentDiffs.second).toMatchObject({
+      diffType: { type: "remount" },
+      udfConfigDiff: null,
+    });
+    expect((await rowsIn(d, ids.second, "_modules")).length).toBe(3);
+  });
+
+  test("every child and its definition removed: unmounted, the definition's row deleted", async () => {
+    const d = await deployment();
+    await push(d);
+    const none = mod("bunvex.config.js", `import { defineApp } from "bunvex/server";\nexport default defineApp();`);
+    const r = await push(d, { definition: none, dependencies: [], components: [] });
+    expect(r.finish.status).toBe(200);
+    expect(r.finish.body.definitionDiffs).toEqual({ "": {}, counter: {} });
+    expect(r.finish.body.componentDiffs.counter.diffType).toEqual({ type: "unmount" });
+    expect((await rowsIn(d, null, "_component_definitions")).map((x) => x.path)).toEqual([""]);
+  });
+
+  test("the app's code loads back with its definition module beside it (C-2), and shared blobs are kept", async () => {
+    const d = await deployment();
+    const first = await push(d);
+    const ids = first.start.body.schemaChange.allocatedComponentIds;
+    // The app's package holds `bunvex.config.js`, which imports `_componentDeps/…`: not loaded as functions.
+    const loaded = await loadLatestCode(d.engine, d.store);
+    expect(loaded?.version.functions.has("app:hello")).toBe(true);
+    // `second` unmounted keeps its package row, which shares `counter`'s first blob.
+    const [shared] = await rowsIn(d, ids.second, "_source_packages");
+    await push(d, { definition: onlyCounter });
+    expect(await d.store.get(shared!.storageKey).catch(() => null)).not.toBeNull();
+    // `counter`'s next package replaced its row, but `second`'s still names the blob.
+    const [counterNow] = await rowsIn(d, ids.counter, "_source_packages");
+    expect(counterNow!.storageKey).not.toBe(shared!.storageKey);
+  });
+
+  test("the app's declared variables: one unset, one failing its validator", async () => {
+    const d = await deployment();
+    const withEnv = mod(
+      "bunvex.config.js",
+      `import { defineApp } from "bunvex/server";\nimport { v } from "bunvex/values";\nexport default defineApp({ env: { APPX: v.literal("a") } });`,
+    );
+    const unset = await push(d, { definition: withEnv, dependencies: [], components: [] });
+    expect(unset.finish).toEqual({
+      status: 400,
+      body: {
+        code: "MissingEnvironmentVariables",
+        message:
+          "Hit an error while pushing:\nRequired environment variables are not set: APPX. Set them in the dashboard or CLI before pushing.",
+      },
+    });
+    await d.engine.mutation((db) => d.engine.environment.update(db, [{ name: "APPX", value: "b" }]));
+    const invalid = await push(d, { definition: withEnv, dependencies: [], components: [] });
+    expect(invalid.finish.body.code).toBe("InvalidEnvironmentVariable");
+    expect(invalid.finish.body.message).toStartWith(
+      "Hit an error while pushing:\nEnvironment variable APPX does not match its declared validator: ",
+    );
+  });
+
+  test("a component another push created under another id: 409 RaceDetected at the finish too", async () => {
+    const d = await deployment();
+    const start = await d.start();
+    await d.post("/api/deploy2/wait_for_schema", { schemaChange: start.body.schemaChange, timeoutMs: 5000 });
+    // Another push finished `counter` meanwhile, under another id.
+    await d.engine.mutation((db) =>
+      db.asSystem(async () => {
+        const definitionId = await db.insert("_component_definitions", { path: "x" } as never);
+        await db.importInsert(d.engine.catalog.table("_components")!, {
+          _id: start.body.schemaChange.allocatedComponentIds[""],
+          ...componentRow({ definitionId, parent: null, name: null, state: "active", httpPrefix: null }),
+        });
+        await db.insert(
+          "_components",
+          componentRow({
+            definitionId,
+            parent: start.body.schemaChange.allocatedComponentIds[""],
+            name: "counter",
+            args: [],
+            env: [],
+            state: "active",
+            httpPrefix: null,
+          }) as never,
+        );
+      }),
+    );
+    const f = await d.post("/api/deploy2/finish_push", { startPush: start.body, dryRun: false });
+    expect(f).toEqual({
+      status: 409,
+      body: { code: "RaceDetected", message: "Component counter was created by a concurrent push" },
+    });
   });
 });

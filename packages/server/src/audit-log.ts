@@ -10,6 +10,16 @@ const event = (action: string, metadata: Record<string, Value>): AuditLogEvent =
 /** The root component, as Convex serializes it (`component_id`, `component`: null). */
 const ROOT = { component_id: null, component: null };
 
+/** A component's push diff (Convex's `SerializedComponentDiff`): in the audit event and `finish_push`'s answer. */
+export type ComponentDiff = {
+  diffType: { type: "create" | "modify" | "unmount" | "remount" };
+  moduleDiff: { added: string[]; removed: string[] };
+  udfConfigDiff: { previous_version: string; next_version: string } | null;
+  cronDiff: { added: string[]; updated: string[]; deleted: string[] };
+  indexDiff: Record<"added_indexes" | "removed_indexes" | "enabled_indexes" | "disabled_indexes", Value[]>;
+  schemaDiff: { previous_schema: string | null; next_schema: string | null } | null;
+};
+
 export const auditEvents = {
   createEnvironmentVariable: (name: string) => event("create_environment_variable", { variable_name: name }),
   updateEnvironmentVariable: (name: string) => event("update_environment_variable", { variable_name: name }),
@@ -48,31 +58,15 @@ export const auditEvents = {
   /** Convex's `PushConfigWithComponents` (finish_push), for the root component (bunvex has no others). */
   pushConfigWithComponents: (o: {
     authDiff: { added: string[]; removed: string[] };
-    create: boolean;
-    moduleDiff: { added: string[]; removed: string[] };
-    cronDiff: { added: string[]; updated: string[]; deleted: string[] };
-    indexDiff: Record<"added_indexes" | "removed_indexes" | "enabled_indexes" | "disabled_indexes", Value[]>;
-    udfConfigDiff?: { previous_version: string; next_version: string } | null;
-    schemaDiff: { previous_schema: string | null; next_schema: string | null } | null;
+    /** Each component's diff, by path (null for the app's), as Convex's `component_diffs`: the app's first, by path. */
+    componentDiffs: { path: string | null; diff: ComponentDiff }[];
     message: string | null;
     /** Convex's `SerializedNodeVersionDiff` (STUDY-145): null when the push keeps the Node version. */
     nodeVersionDiff?: { previous_version: string | null; next_version: string | null } | null;
   }) =>
     event("push_config_with_components", {
       auth_diff: o.authDiff,
-      component_diffs: [
-        {
-          component_path: null,
-          component_diff: {
-            diffType: { type: o.create ? "create" : "modify" },
-            moduleDiff: o.moduleDiff,
-            udfConfigDiff: o.udfConfigDiff ?? null,
-            cronDiff: o.cronDiff,
-            indexDiff: o.indexDiff,
-            schemaDiff: o.schemaDiff,
-          },
-        },
-      ],
+      component_diffs: o.componentDiffs.map((c) => ({ component_path: c.path, component_diff: c.diff })),
       message: o.message,
       node_version_diff: o.nodeVersionDiff ?? null,
     }),

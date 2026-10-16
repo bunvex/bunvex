@@ -146,6 +146,14 @@ export class CronJobExecutor {
     return applyCrons(db, specs, Date.now(), this.o);
   }
 
+  /**
+   * A component's crons in its namespace, inside a push's commit (Convex's `CronModel::apply` per component): the
+   * rows only; this executor runs the app's (a component's run from STUDY-152 step 7).
+   */
+  applyInComponent(db: Tx, namespace: string, specs: Map<string, CronSpec>) {
+    return db.inComponent(namespace, () => applyCrons(db, specs, Date.now(), this.o));
+  }
+
   /** Look at the stored crons again (after a commit that changed them). */
   refresh() {
     this.poke();
