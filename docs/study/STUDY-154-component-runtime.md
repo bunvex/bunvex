@@ -187,6 +187,75 @@
    - `modules:list {componentId}` and `modules:argsValidator {componentId, function}` answering for that
      component.
 
+### As built, PR 1 (`core/src/tx.ts`, `core/src/engine.ts`)
+
+- **Its schema.**
+  - A write in a component's namespace is checked against the component's active schema. `Engine` keeps each
+    component's document validators beside its schema and hands them to every mutation's `Tx`
+    (`componentValidators`).
+  - The message is the root's, and the ids in a document are named in the component's catalog.
+  - The pending schema's walk and staged validators stay root-only, as PR 2b of STUDY-153 leaves them.
+- **Unmounted.** A user's write (`insert`, `patch`, `replace`, `delete`) into an unmounted component is refused
+  with Convex's text in bunvex's words. The `_components` row is read once per transaction. The server's own
+  writes there (a push unmounting it) are not refused. Only a component's write awaits that check: an app's write
+  keeps its synchronous errors at the app's call (the error-frame tests caught the first version).
+- **`.paginate()`.** It is refused after the page's own checks (size, limits, cursors) when
+  `Tx.componentFunction` is set, which the server sets while a component's function runs. The engine's own reads
+  in a namespace (a schema's walk) still page.
+- **Tests** (`core/test/component-writes.test.ts`):
+  - its documents against its schema, and the app's against the app's;
+  - its ids named in its namespace;
+  - the unmounted refusals, reads kept, the server's writes allowed;
+  - `.paginate()` refused after the page-size check, and the app's and the engine's pages fine.
+- **Sabotage:** 8 of 8 caught.
+- **Measured:** 4,000 inserts in the app (40 mutations of 100), median of 7, four alternated runs: 125.2–130.9 ms
+  with this PR, 125.3–131.2 ms before it.
+
+### As built, PR 2 (`server/src/functions.ts`, `code-store.ts`, `server.ts`, `sync.ts`, `function-log.ts`)
+
+- **Loading.**
+  - `loadComponentCode` loads a component's latest package from its namespace with its own `_udf_config`'s seed
+    and time and no deployment variable, in contexts of its own (C3).
+  - `installComponents` (server) loads every active instance at a start and after every push, and removes an
+    unmounted or deleted one.
+  - It reloads every instance after each push, not only the changed ones: about 8 ms per instance (below).
+- **Running.**
+  - `Functions` keeps a component's functions under `componentFunctionName(id, name)`, apart from the app's (which
+    `install` replaces whole), with each `FunctionDef`'s component in a `WeakMap`.
+  - `invoke` runs a component's query or mutation in `db.inComponent(id)` with `Tx.componentFunction` set.
+  - Its `process.env` is `componentEnv`: its bindings, then the built-ins, `BUNVEX_SITE_URL` with its HTTP prefix.
+  - Its nested `ctx.runQuery` / `runMutation`, and an action's `runQuery` / `runMutation` / `runAction`, resolve a
+    name among its own functions (other components are step 5).
+  - `ctx.scheduler` and `ctx.storage` (P-2), and an action's `ctx.vectorSearch`, are refused: "`ctx.scheduler` in a
+    component is not supported yet". A component has no vector index (STUDY-153 PR 2b), so its search would read the
+    app's tables.
+  - The query cache keys a component's function by its registry name, with its own module hashes.
+- **Entries.**
+  - `/api/function {componentPath}`: an admin only. An admin acting as a user gets Convex's text as a 400. An
+    invalid segment is `InvalidComponentPath`, an unknown path `ComponentPathNotFound` (DV-530), and a missing
+    function "Could not find function for 'lib:nope' in 'counter'. Did you forget to run `bunvex dev`?".
+  - The websocket's `Query` / `Mutation` / `Action` with `componentPath` (admin): a query resolves the path in its
+    own transaction, so it re-runs when the tree changes.
+  - `run_test_function {componentId}` is left for PR 3.
+- **Logs.** Function logs and the log stream carry `componentPath` beside `identifier` (the function's own name).
+- **Tests** (`server/test/component-runtime.test.ts`, over HTTP and the websocket):
+  - a query, a mutation and an action in each instance's own namespace;
+  - nested calls and an action's calls within the component;
+  - an internal function by an admin;
+  - the refusals (not an admin, an unknown path, a missing function);
+  - the env (a value, a deployment variable through `envVar`, an unbound one absent);
+  - its schema on writes, `.paginate()`, the scheduler;
+  - each instance's module state its own;
+  - an unmounted instance's functions not found;
+  - a restart;
+  - a websocket subscription re-run by a mutation;
+  - the log's `componentPath`.
+  - One existing test changed for DV-530: `/api/function` with an unknown component path is now a 400.
+- **Sabotage:** 12 of 12 caught.
+- **Measured (P-3):** a component of 10 modules with 10 functions each, mounted N more times, heap after a full GC:
+  +0.68 MB per instance for N = 10 and +0.65 MB for N = 40, below the 2 MB budget. The `finish_push` that loads 11
+  instances takes 66 ms, and 41 instances 350 ms.
+
 ## 5. Questions for the owner
 
 | # | Where bunvex would differ | Convex | Recommendation | Decision |
