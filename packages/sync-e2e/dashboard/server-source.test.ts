@@ -257,7 +257,10 @@ describe("the deployment", () => {
         validator: { type: "object", value: { x: { fieldType: { type: "number" }, optional: false } } },
         indexes: none,
       },
-      { name: "items", indexes: { ...none, database: [{ name: "by_kind", fields: ["kind", "n", "_creationTime"], staged: false }] } },
+      {
+        name: "items",
+        indexes: { ...none, database: [{ name: "by_kind", fields: ["kind", "n", "_creationTime"], staged: false }] },
+      },
       {
         name: "messages",
         validator: { type: "object", value: { body: { fieldType: { type: "string" }, optional: false } } },
