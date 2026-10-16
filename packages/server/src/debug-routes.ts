@@ -24,7 +24,9 @@ import {
   type KeyValue,
 } from "@bunvex/core";
 import { type JSONValue, toJsonValue, type Value } from "@bunvex/values";
-import type { Functions } from "./functions.ts";
+import { type Functions, registryKey } from "./functions.ts";
+import { MEMBERS_PAGE_MAX, type RoomKey } from "./rooms/hub.ts";
+import { canonicalJson } from "./rooms/session.ts";
 import type { Execution, SyncHub } from "./sync.ts";
 import { argsDigest, type FeedRecord, type HistoryRecord } from "./sync-inspector.ts";
 import type { TopologyReporter } from "./topology.ts";
@@ -248,4 +250,82 @@ export function topologyRoute(
   if (url.pathname !== TOPOLOGY_ROUTE || req.method !== "GET") return null;
   ctx.functions.requireOperation(caller, "ViewMetrics");
   return jsonResponse(ctx.topology.snapshot());
+}
+
+// ---------------------------------------------------------------- the rooms (AD-43, STUDY-165)
+// `GET /api/debug/rooms`: the open rooms and scopes; `GET /api/debug/rooms/members`: one room's members, a page at
+// a time (`?key=` from the list, or `?kind=&name=&args=`; `cursor`, `numItems` up to 100); `GET
+// /api/debug/rooms/definitions`: the deployed rooms and scopes with their validators. Admin only, with
+// ViewMetrics, as the topology; read from the hub's memory, no store read.
+
+export const ROOMS_ROUTE = /^\/api\/debug\/rooms(?:\/(members|definitions))?$/;
+const ROOM_KINDS = new Set(["room", "presence"]);
+
+const badRequest = (message: string) => jsonResponse({ code: "BadRequest", message }, 400);
+
+/** The room a members request names, or why it names none. */
+function roomKeyOf(params: URLSearchParams): RoomKey | string {
+  const key = params.get("key");
+  if (key !== null) {
+    const i = key.indexOf("|");
+    const j = key.indexOf("|", i + 1);
+    const kind = key.slice(0, i);
+    if (i < 0 || j < 0 || !ROOM_KINDS.has(kind)) return "`key` is not a room key from the list.";
+    return { kind: kind as RoomKey["kind"], name: key.slice(i + 1, j), argsJson: key.slice(j + 1) };
+  }
+  const kind = params.get("kind");
+  if (kind === null || !ROOM_KINDS.has(kind)) return "`kind` must be `room` or `presence` (or pass `key`).";
+  const name = params.get("name");
+  if (!name) return "`name` is required (or pass `key`).";
+  let args: JSONValue = {};
+  const raw = params.get("args");
+  if (raw !== null)
+    try {
+      args = JSON.parse(raw) as JSONValue;
+    } catch {
+      return "`args` is not valid JSON.";
+    }
+  // The same name and args spelling as a client's join, so one room whichever way it is written.
+  return { kind: kind as RoomKey["kind"], name: registryKey(name), argsJson: canonicalJson(args) };
+}
+
+/** The rooms routes; `null` when `url` is none of them. Throws the caller's access error. */
+export function roomsRoute(
+  ctx: { functions: Functions; sync: SyncHub },
+  url: URL,
+  req: Request,
+  caller: Caller,
+): Response | null {
+  const m = ROOMS_ROUTE.exec(url.pathname);
+  if (!m || req.method !== "GET") return null;
+  ctx.functions.requireOperation(caller, "ViewMetrics");
+  const hub = ctx.sync.rooms.hub;
+  if (m[1] === undefined) return jsonResponse({ rooms: hub.list() });
+  if (m[1] === "definitions") return jsonResponse({ definitions: roomDefinitions(ctx.functions) });
+  const key = roomKeyOf(url.searchParams);
+  if (typeof key === "string") return badRequest(key);
+  const rawCount = url.searchParams.get("numItems");
+  const numItems = rawCount === null ? MEMBERS_PAGE_MAX : Number(rawCount);
+  if (!Number.isInteger(numItems) || numItems < 1) return badRequest("`numItems` must be a positive integer.");
+  return jsonResponse(hub.membersPage(key, url.searchParams.get("cursor"), Math.min(numItems, MEMBERS_PAGE_MAX)));
+}
+
+/** The deployed rooms and scopes by name, with their validators as the function metadata gives them. */
+function roomDefinitions(functions: Functions) {
+  return [...functions.rooms]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([name, d]) => {
+      const base = {
+        kind: d.kind,
+        name,
+        module: `${name.slice(0, name.lastIndexOf(":"))}.js`,
+        args: d.args?.json ?? null,
+      };
+      if (d.kind === "presence") return { ...base, state: d.state.json, events: [] };
+      return {
+        ...base,
+        presence: d.presence.json,
+        events: Object.entries(d.events).map(([event, v]) => ({ name: event, payload: v.json })),
+      };
+    });
 }
