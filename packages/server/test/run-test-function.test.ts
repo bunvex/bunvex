@@ -263,12 +263,9 @@ export default query({ handler: async () => t });`);
     expect(at.body.value).toBe(Number(row!.importPhaseUnixTimestamp / 1_000_000n)); // the row holds ns
   });
 
-  test("components: bunvex has none (DV-391)", async () => {
+  test("a componentId that names no component: Convex's system error (STUDY-154 PR 3)", async () => {
     const d = await deployment();
-    expect(await d.tester(wrapped("return 1;"), { extra: { componentId: "abc" } })).toEqual({
-      status: 400,
-      body: { code: "ComponentsNotSupported", message: "bunvex does not have components yet." },
-    });
+    expect((await d.tester(wrapped("return 1;"), { extra: { componentId: "abc" } })).status).toBe(500);
     // No component (null or empty) is the app's root.
     expect((await d.tester(wrapped("return 1;"), { extra: { componentId: null } })).body.value).toBe(1);
   });

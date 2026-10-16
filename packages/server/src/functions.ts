@@ -2318,8 +2318,21 @@ export class Functions {
    * A query that is not deployed, as JSON (STUDY-119): Convex's `execute_standalone_module` runs the function
    * tester's query with `run_query_without_caching`, so it never reads or fills the cache. It runs as `name`.
    */
-  async runStandaloneQueryJson(f: QueryDef, name: string, args: unknown, caller?: Caller): Promise<string> {
+  async runStandaloneQueryJson(
+    f: QueryDef,
+    name: string,
+    args: unknown,
+    caller?: Caller,
+    /** The component it runs in (the dashboard's custom query in a component, STUDY-154), else the app. */
+    componentId: string | null = null,
+  ): Promise<string> {
     this.names.set(f, registryKey(name));
+    if (componentId !== null) {
+      // Convex's `must_component_path`: an id with no mounted component is a system error.
+      const runtime = this.componentRuntimes.get(componentId)?.runtime;
+      if (!runtime) throw new Error(`Component ${componentId} not found`);
+      this.componentOf.set(f, runtime);
+    }
     return this.logged(
       "Query",
       name,

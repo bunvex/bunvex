@@ -256,6 +256,25 @@
   +0.68 MB per instance for N = 10 and +0.65 MB for N = 40, below the 2 MB budget. The `finish_push` that loads 11
   instances takes 66 ms, and 41 instances 350 ms.
 
+### As built, PR 3 (`server/src/frontend-system-functions.ts`, `server/src/server.ts`)
+
+- **`modules:listForAllComponents`** lists the app's modules, then each other component's, by its `_components` id,
+  in the table's order. An unmounted component's list is empty: its `_modules` were cleared.
+- **`modules:list` and `modules:argsValidator`** with a `componentId` read that component's namespace, as Convex's
+  `queryWithComponent` re-runs the system function there. `components:list` already gave every path.
+- **`/api/run_test_function {componentId}`**:
+  - the test query is analyzed with the component's own `_udf_config` and no deployment variable at import;
+  - it runs in the component's namespace, with its env;
+  - an id with no component is Convex's system error (500).
+- **Not in this PR:** the data screens' system functions (`componentId` in `data-system-*`) are step 9's, with
+  sandbox-86.
+- **Tests** (`server/test/component-runtime.test.ts`):
+  - every component's modules, one component's, a function's validator in its component (none in the app), the
+    paths;
+  - the custom query in each component with its data, an unknown id;
+  - no deployment variable at its import in a component.
+- **Sabotage:** 6 of 6 caught.
+
 ## 5. Questions for the owner
 
 | # | Where bunvex would differ | Convex | Recommendation | Decision |
