@@ -114,6 +114,28 @@
         }
       }
     },
+    "/delete_component": {
+      "post": {
+        "summary": "Delete component",
+        "description": "Delete an unmounted component, every component under it, and all their data.",
+        "operationId": "delete_component",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteComponentArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/delete_scheduled_functions_table": {
       "post": {
         "summary": "Delete all scheduled functions",
@@ -139,6 +161,17 @@
   },
   "components": {
     "schemas": {
+      "DeleteComponentArgs": {
+        "type": "object",
+        "properties": {
+          "componentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "DeleteScheduledFunctionsTableRequest": {
         "type": "object",
         "properties": {

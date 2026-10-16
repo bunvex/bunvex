@@ -194,7 +194,7 @@ gaps.
     Fivetran operations and primary-key indexes (PRs 2–4, future work by the owner's choice, 2026-10-11). The
     audit events bunvex does not record are not gaps: `build_indexes`, `change_deployment_state`,
     `change_system_stop_state` and `replace_environment_variable` are not emitted by Convex's open-source
-    backend; `push_config` (legacy push) and `delete_component` (components) do not apply.
+    backend; `push_config` (legacy push) does not apply (`delete_component` is recorded since STUDY-153 PR 4b).
 - The dashboard on a real deployment (STUDY-149, all eight PRs built; user docs in
   [docs/dashboard.md](../dashboard.md)): the screens run on a deployment with Convex's calls and freshness, the
   dashboard has its own image (6791), `dashboard.zip` and `bunvex dev`'s local dashboard (6790), and the CLI links

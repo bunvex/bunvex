@@ -375,6 +375,15 @@ export const OPENAPI_OPERATIONS: readonly ApiOperation[] = [
   {
     doc: "dashboard",
     method: "post",
+    path: "/delete_component",
+    operationId: "delete_component",
+    summary: "Delete component",
+    description: "Delete an unmounted component, every component under it, and all their data.",
+    body: "DeleteComponentArgs",
+  },
+  {
+    doc: "dashboard",
+    method: "post",
     path: "/delete_scheduled_functions_table",
     operationId: "delete_scheduled_functions_table",
     summary: "Delete all scheduled functions",
@@ -509,13 +518,6 @@ export const OPENAPI_LEFT_OUT: readonly {
     path: "/deployment_info",
     reason: "not built yet",
     note: 'A self-hosted deployment answers `{kind: "selfHosted"}`; a cloud one, its team and project ids.',
-  },
-  {
-    doc: "dashboard",
-    method: "post",
-    path: "/delete_component",
-    reason: "not built yet",
-    note: "bunvex has no components yet (STUDY-62).",
   },
 ];
 
