@@ -187,6 +187,30 @@
    - `modules:list {componentId}` and `modules:argsValidator {componentId, function}` answering for that
      component.
 
+### As built, PR 1 (`core/src/tx.ts`, `core/src/engine.ts`)
+
+- **Its schema.**
+  - A write in a component's namespace is checked against the component's active schema. `Engine` keeps each
+    component's document validators beside its schema and hands them to every mutation's `Tx`
+    (`componentValidators`).
+  - The message is the root's, and the ids in a document are named in the component's catalog.
+  - The pending schema's walk and staged validators stay root-only, as PR 2b of STUDY-153 leaves them.
+- **Unmounted.** A user's write (`insert`, `patch`, `replace`, `delete`) into an unmounted component is refused
+  with Convex's text in bunvex's words. The `_components` row is read once per transaction. The server's own
+  writes there (a push unmounting it) are not refused. Only a component's write awaits that check: an app's write
+  keeps its synchronous errors at the app's call (the error-frame tests caught the first version).
+- **`.paginate()`.** It is refused after the page's own checks (size, limits, cursors) when
+  `Tx.componentFunction` is set, which the server sets while a component's function runs. The engine's own reads
+  in a namespace (a schema's walk) still page.
+- **Tests** (`core/test/component-writes.test.ts`):
+  - its documents against its schema, and the app's against the app's;
+  - its ids named in its namespace;
+  - the unmounted refusals, reads kept, the server's writes allowed;
+  - `.paginate()` refused after the page-size check, and the app's and the engine's pages fine.
+- **Sabotage:** 8 of 8 caught.
+- **Measured:** 4,000 inserts in the app (40 mutations of 100), median of 7, four alternated runs: 125.2–130.9 ms
+  with this PR, 125.3–131.2 ms before it.
+
 ## 5. Questions for the owner
 
 | # | Where bunvex would differ | Convex | Recommendation | Decision |
