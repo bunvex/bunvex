@@ -1898,7 +1898,10 @@ export class Tx {
     if (ns === null || this.systemAccess) return;
     let mounted = this.mounted.get(ns);
     if (mounted === undefined) {
-      const row = await this.asSystem(() => this.inComponent(null, () => this.get(COMPONENTS_TABLE, ns)));
+      // The engine's own read (Convex's component registry, a derived read): recorded, not counted (STUDY-161 §16.7).
+      const row = await this.notCounted(() =>
+        this.asSystem(() => this.inComponent(null, () => this.get(COMPONENTS_TABLE, ns))),
+      );
       mounted = (row as { state?: unknown } | null)?.state !== "unmounted";
       this.mounted.set(ns, mounted);
     }

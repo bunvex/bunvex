@@ -2297,6 +2297,7 @@ export function createServer(opts: ServerOptions) {
         { id: meta._id, path: path.join("/"), env: new Map(meta.env), httpPrefix: meta.httpPrefix },
         version.functions,
         version.moduleHashes,
+        version.moduleLoads,
       );
       for (const key of version.functions.keys()) changed.add(Functions.moduleOf(componentFunctionName(meta._id, key)));
     }
