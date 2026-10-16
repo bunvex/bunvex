@@ -68,6 +68,34 @@ describe("the saved schema as code", () => {
     expect(lines[12]).toBe('    }).index("by_owner", ["owner"]),');
   });
 
+  test("the schema's own indexes: database, search and vector, staged ones too, in Convex's order (STUDY-162 §8)", () => {
+    const schema: SchemaInfo = {
+      enforced: true,
+      tables: [
+        {
+          name: "docs",
+          indexes: {
+            database: [
+              { name: "by_b", fields: ["b"], staged: true },
+              { name: "by_a", fields: ["a", "c", "_creationTime"], staged: false },
+            ],
+            search: [
+              { name: "search_t", searchField: "t", filterFields: ["a"], staged: false },
+              { name: "search_u", searchField: "u", filterFields: [], staged: true },
+            ],
+            vector: [{ name: "by_e", vectorField: "e", dimensions: 3, filterFields: ["a", "b"], staged: false }],
+          },
+        },
+      ],
+    };
+    // the schema's lists win over the table's database indexes
+    expect(schemaCode(schema, [table("docs", ["by_x", ["x"]])])!.code.split("\n")[4]).toBe(
+      '  docs: defineTable(v.any()).index("by_a", ["a", "c"]).index("by_b", { fields: ["b"], staged: true })' +
+        '.searchIndex("search_t", { searchField: "t", filterFields: ["a"] }).searchIndex("search_u", { searchField: "u", staged: true })' +
+        '.vectorIndex("by_e", { vectorField: "e", dimensions: 3, filterFields: ["a", "b"] }),',
+    );
+  });
+
   test("a union document type stays a validator; nothing declared is no schema", () => {
     const r = schemaCode(
       { enforced: true, tables: [{ name: "users", validator: { type: "union", value: [{ type: "null" }] } }] },

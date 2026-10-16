@@ -1,6 +1,6 @@
 # STUDY-163 — Small dashboard and CLI parity items
 
-- **Status:** approved by the owner (2026-10-15: match Convex); §1–§4 implemented; §5 implemented (owner, 2026-10-15)
+- **Status:** approved by the owner (2026-10-15: match Convex); §1–§6 implemented
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend; Convex's CLI as npm's `convex@1.46.0`
 - **Related:** STUDY-149 (the dashboard on real data), STUDY-12 (the dashboard), STUDY-146 / DV-477 (the CLI's
   dashboard links), DV-479 (the dashboard contract follows Convex)
@@ -288,4 +288,52 @@ index, and `TableInfo` no search indexes. This was the gap STUDY-149 "Index list
 | descending not refused | 5 (the model and the contract runs) |
 | picking a search index drops the field clauses | 1 |
 | the search's equalities not applied | 1 (the screen's) |
+
+## 6. The mock refuses what a deployment refuses
+
+Approved by the owner on 2026-10-15. The rule: the demo data (`MockDataSource`) must not accept input a real
+deployment rejects, so that what works on the mock works on a deployment. This is the contract's own rule (DV-479),
+so no divergence question arises.
+
+### What was checked
+
+Each contract method's inputs, on the mock and on the server source against a live server (and, for the page size,
+Convex's binary):
+
+| Input | Convex / bunvex's server | Mock, before | Now |
+|---|---|---|---|
+| `topFunctions` / `subscriptionInvalidations` `k` outside 1–25 | 400 `InvalidTopKParameter` "k must be between 1 and 25, got …" (`app_metrics.rs` `validate_k`) → `invalid_request` | clamped (`Math.max(1, k)`), any `k` accepted | refused, in those words |
+| a page of more than 32 000 items (documents, scheduled runs, files, audit events, system tables) | "Uncaught Error: Requested too many items: …" (`query_page`'s `PageSizeTooLarge`, the same on both binaries) → the source said `unavailable` | accepted | refused (`invalid_request`); the source now maps that message to `invalid_request` |
+| a metrics window of 1 001 to 10 000 buckets | accepted (the server allows up to 10 000) | refused (it capped at 1 000) | accepted, the source's limit and words |
+
+The mock's log history is not paged by a deployment (the source reads the log stream from memory), so `listLogs`
+keeps no page limit.
+
+### Found, not changed (listed for the record)
+
+- A metrics window with `end == start`: Convex's server accepts it, but the contract (the source and the mock) refuses
+  it. The two sources agree, so the mock accepts nothing a deployment refuses here.
+- The mock's text search (§5): it does not refuse queries with more terms or filters than a search index allows
+  (Convex's limits on search terms and filter conditions). A follow-up, once §5 has landed.
+- Writes: inserts and deletes of more than 4 096 documents, table names, and environment variable names, values and
+  totals are refused alike already: the mock uses the same limits (`MAX_WRITE`, `tableNameProblem`,
+  `settings/env-vars.ts`).
+
+### Tests
+
+- The contract suite, on the mock and on a live server:
+  - `k` = 0 and 26 are refused in Convex's words, and 25 is accepted;
+  - a window of 10 000 buckets is accepted and 10 001 refused;
+  - `subscriptionInvalidations` with `k` = 26 is refused;
+  - a page of 32 001 documents is refused ("Requested too many items: 32001") and 32 000 is accepted.
+- The mock's own tests keep passing: its internal lookups no longer page past the limit.
+
+**Sabotage** (each restored, `git diff` clean):
+
+| Sabotage | Failing |
+|---|---|
+| `k` not checked | 4 (the mock's contract runs) |
+| the page limit not checked | 4 |
+| the window capped at 1 000 again | 4 |
+| the source not mapping "Requested too many items" | 1 (the live contract) |
 

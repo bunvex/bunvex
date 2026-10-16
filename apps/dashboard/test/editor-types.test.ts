@@ -24,7 +24,14 @@ const SCHEMA: SchemaInfo = {
         value: {
           name: { fieldType: { type: "string" }, optional: false },
           age: { fieldType: { type: "number" }, optional: true },
+          embedding: { fieldType: { type: "array", value: { type: "number" } }, optional: true },
         },
+      },
+      // the schema's own lists (STUDY-162 §8): the code writes every kind, and the types know them
+      indexes: {
+        database: [{ name: "by_name", fields: ["name"], staged: false }],
+        search: [{ name: "search_name", searchField: "name", filterFields: ["age"], staged: false }],
+        vector: [{ name: "by_embedding", vectorField: "embedding", dimensions: 2, filterFields: [], staged: false }],
       },
     },
   ],
@@ -112,6 +119,30 @@ describe("the custom test query's types", () => {
     const at = `${code}users").withIndex("`.length;
     const indexes = ls.getCompletionsAtPosition(file, at, {})?.entries.map((e) => e.name);
     expect(indexes).toContain("by_name");
+  });
+
+  test('search indexes: their names complete after withSearchIndex(", a name the schema does not declare is an error', () => {
+    const code = `export default query({ handler: async (ctx) => ctx.db.query("users").withSearchIndex("`;
+    const { ls, file } = service(`${code}search_name", (q) => q.search("name", "ada").eq("age", 3)).take(1) });`);
+    const names = ls.getCompletionsAtPosition(file, code.length, {})?.entries.map((e) => e.name);
+    expect(names).toContain("search_name");
+    expect(names).not.toContain("by_name");
+    const { errors } = service(
+      `export default query({ handler: async (ctx) => ctx.db.query("users").withSearchIndex("nope", (q) => q.search("name", "a")).take(1) });`,
+    );
+    expect(errors().join("\n")).toContain('"nope"');
+    // and its search field, from the schema
+    const wrongField = service(
+      `export default query({ handler: async (ctx) => ctx.db.query("users").withSearchIndex("search_name", (q) => q.search("age", "a")).take(1) });`,
+    );
+    expect(wrongField.errors().join("\n")).toContain('"age"');
+  });
+
+  test("vector indexes: written into the schema the types read", () => {
+    const files = queryTypeFiles(SCHEMA, TABLES);
+    expect(files["file:///schema.ts"]).toContain(
+      '.vectorIndex("by_embedding", { vectorField: "embedding", dimensions: 2 })',
+    );
   });
 
   test("without a schema: any table, documents of any type", () => {

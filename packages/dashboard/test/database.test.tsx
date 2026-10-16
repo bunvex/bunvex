@@ -160,7 +160,7 @@ describe("the Database screen", () => {
     const marked = [...saved.querySelectorAll("[data-table-line]")].map((l) => l.textContent);
     expect(marked[0]).toBe("    tasks: defineTable({");
     expect(marked.at(-1)).toBe(
-      '    }).index("by_owner", ["owner"]).index("by_done_priority", ["done", "priority"]).index("by_text", ["text"]),',
+      '    }).index("by_owner", ["owner"]).index("by_done_priority", ["done", "priority"]).index("by_text", ["text"]).index("by_owner_done", { fields: ["owner", "done"], staged: true }),',
     );
     expect(saved.querySelector("pre")?.textContent).toContain("{ schemaValidation: false }");
     expect(within(saved).getByText(/^Lines \d+ to \d+ declare tasks\.$/)).toBeDefined();
