@@ -94,6 +94,20 @@ describe("listRoomMembers", () => {
     expect(url.searchParams.get("numItems")).toBe("100");
   });
 
+  test("a numItems that is NaN is asked as the default, 100", async () => {
+    const { rooms, asked } = answering(() => Response.json({ page: [], isDone: true, continueCursor: "" }));
+    await rooms.listRoomMembers({ key: "k" }, { numItems: Number.NaN, cursor: null });
+    expect(new URL(asked[0]!.url).searchParams.get("numItems")).toBe("100");
+  });
+
+  test("a 400 for a malformed key is invalid_request with the server's message", async () => {
+    const { rooms } = answering(() =>
+      Response.json({ code: "BadRequest", message: "`key` is not a room key from the list." }, { status: 400 }),
+    );
+    const e = await rooms.listRoomMembers({ key: "" }, { numItems: 1, cursor: null }).catch((x: unknown) => x);
+    expect(e).toMatchObject({ code: "invalid_request", message: "`key` is not a room key from the list." });
+  });
+
   test("idle is kept for a scope's member only, null presence stays null", async () => {
     const { rooms } = answering(() =>
       Response.json({

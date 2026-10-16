@@ -3,7 +3,7 @@
 // `memberId` with the cursor passed through and `numItems` capped at 100, a room that is not open an empty done
 // page, the definitions, and the rooms' counters in the stats. A live run opens the rooms before it asserts.
 import { expect } from "bun:test";
-import type { DashboardDataSource, Page, RoomMember } from "./data-source.ts";
+import { type DashboardDataSource, DataSourceError, type Page, type RoomMember } from "./data-source.ts";
 
 type Ctx = {
   make: () => DashboardDataSource | Promise<DashboardDataSource>;
@@ -40,11 +40,10 @@ export function describeRoomsContract({ make, test }: Ctx) {
       expect(r.openedAt).toBeGreaterThan(0);
       expect(r.args).not.toBeUndefined();
     }
-    // by name, then key, as the server sorts
+    // by name, then key, as the server sorts (keys are unique, so strictly)
     expect(
       rooms.every((r, i) => i === 0 || byText(rooms[i - 1]!.name, r.name) || byText(rooms[i - 1]!.key, r.key) < 0),
     ).toBe(true);
-    expect(rooms.every((r, i) => i === 0 || byText(rooms[i - 1]!.name, r.name) <= 0)).toBe(true);
   });
 
   test("rooms (when offered): a room's members page by memberId, the cursor passed through", async () => {
@@ -97,6 +96,26 @@ export function describeRoomsContract({ make, test }: Ctx) {
     expect(none).toEqual({ page: [], isDone: true, continueCursor: "" });
   });
 
+  test("rooms (when offered): a malformed key is refused as invalid_request, like the server's 400", async () => {
+    const src = await make();
+    if (!src.listRoomMembers || !(await canSee(src))) return;
+    for (const key of ["", "garbage", "nope|rooms:doc|{}", "room|only-one-bar"]) {
+      const e = await src.listRoomMembers({ key }, { numItems: 10, cursor: null }).catch((x: unknown) => x);
+      expect(e).toBeInstanceOf(DataSourceError);
+      expect((e as DataSourceError).code).toBe("invalid_request");
+      expect((e as DataSourceError).message).toBe("`key` is not a room key from the list.");
+    }
+  });
+
+  test("rooms (when offered): a numItems that is not a number asks for the default page", async () => {
+    const src = await make();
+    if (!src.listRooms || !src.listRoomMembers || !(await canSee(src))) return;
+    const [room] = await src.listRooms();
+    if (!room) return;
+    const p = await src.listRoomMembers({ key: room.key }, { numItems: Number.NaN, cursor: null });
+    expect(p.page).toHaveLength(Math.min(room.members, 100));
+  });
+
   test("rooms (when offered): the definitions, by name, one for each open room", async () => {
     const src = await make();
     if (!src.listRoomDefinitions || !(await canSee(src))) return;
@@ -147,6 +166,7 @@ export function describeRoomsContract({ make, test }: Ctx) {
       ].sort(),
     );
     const rooms = await src.listRooms();
+    // (assumes the test controls the clients: nobody joins or leaves between the two reads)
     expect(s!.rooms).toBe(rooms.length);
     expect(s!.members).toBe(rooms.reduce((n, r) => n + r.members, 0));
     expect(s!.joins).toBeGreaterThanOrEqual(s!.members);

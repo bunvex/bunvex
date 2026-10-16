@@ -122,7 +122,7 @@ export type DeploymentStats = {
   subscriptionReruns: number;
   /** Updates published to subscribers. */
   subscriptionUpdates: number;
-  /** The rooms' gauges and counters; absent from a server without rooms. */
+  /** The rooms' gauges and counters; absent from a deployment without rooms (whose room methods reject `not_found`). */
   rooms?: RoomStats;
 };
 

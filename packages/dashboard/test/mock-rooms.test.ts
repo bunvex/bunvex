@@ -89,4 +89,12 @@ describe("MockDataSource rooms", () => {
       expect((e as DataSourceError).code).toBe("unauthorized");
     }
   });
+
+  test("a numItems that is NaN gives the default page, not a broken one", async () => {
+    const src = make();
+    const [room] = await src.listRooms!();
+    const p = await src.listRoomMembers!({ key: room!.key }, { numItems: Number.NaN, cursor: null });
+    expect(p.page).toHaveLength(room!.members);
+    expect(p.isDone).toBe(true);
+  });
 });

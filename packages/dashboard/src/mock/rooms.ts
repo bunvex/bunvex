@@ -4,13 +4,15 @@
 // of a timer, so a screenshot or a test at a given clock sees the same picture. Not part of the contract: the
 // source wraps it.
 
-import type { Page, PageRequest } from "../data-source.ts";
+import { DataSourceError, type Page, type PageRequest } from "../data-source.ts";
 import type { RoomDefinition, RoomInfo, RoomMember, RoomRef, RoomStats } from "../data-source-rooms.ts";
 import { createRandom, type Random } from "./random.ts";
 
 /** The most members one page holds, as the server's. */
 const MEMBERS_PAGE_MAX = 100;
 const HOUR = 3_600_000;
+/** The server's refusal of a malformed key (400 BadRequest). */
+const BAD_KEY = "`key` is not a room key from the list.";
 
 type Seat = { member: RoomMember; phase: number };
 type OpenRoom = { info: RoomInfo; seats: Seat[] };
@@ -131,9 +133,16 @@ export class MockRooms {
   }
 
   members(room: RoomRef, page: PageRequest): Page<RoomMember> {
+    // as the server refuses a key that is not `kind|name|args` of a room or a scope
+    const i = room.key.indexOf("|");
+    const j = room.key.indexOf("|", i + 1);
+    if (i < 0 || j < 0 || !["room", "presence"].includes(room.key.slice(0, i)))
+      throw new DataSourceError("invalid_request", BAD_KEY);
     const r = this.open.find((o) => o.info.key === room.key);
     if (!r) return { page: [], isDone: true, continueCursor: "" };
-    const size = Math.max(1, Math.min(Math.floor(page.numItems), MEMBERS_PAGE_MAX));
+    const size = Number.isFinite(page.numItems)
+      ? Math.max(1, Math.min(Math.floor(page.numItems), MEMBERS_PAGE_MAX))
+      : MEMBERS_PAGE_MAX;
     const sorted = r.seats
       .map((s, i) => this.view(r, s, i))
       .filter((m) => !page.cursor || m.memberId > page.cursor)

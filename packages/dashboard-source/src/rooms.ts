@@ -68,7 +68,11 @@ export function roomsReads(http: AdminHttp) {
     async listRoomMembers(room: RoomRef, page: PageRequest, o?: CallOptions): Promise<Page<RoomMember>> {
       const q = new URLSearchParams({
         key: room.key,
-        numItems: String(Math.max(1, Math.min(Math.floor(page.numItems), ROOM_MEMBERS_PAGE_MAX))),
+        numItems: String(
+          Number.isFinite(page.numItems)
+            ? Math.max(1, Math.min(Math.floor(page.numItems), ROOM_MEMBERS_PAGE_MAX))
+            : ROOM_MEMBERS_PAGE_MAX,
+        ),
       });
       if (page.cursor) q.set("cursor", page.cursor);
       const res = await orNoRooms(http.json<Page<RoomMember>>(`/api/debug/rooms/members?${q}`, { signal: o?.signal }));

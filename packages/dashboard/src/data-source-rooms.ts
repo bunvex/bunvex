@@ -81,14 +81,20 @@ export type RoomStats = {
   roomLeft: number;
 };
 
+/**
+ * A source offers the Rooms screen by having `listRooms`. A deployment without rooms rejects all three methods with
+ * a `DataSourceError` of code `not_found` ("This deployment does not run rooms."): the screen shows an empty state,
+ * not an error. A malformed `RoomRef.key` is `invalid_request`.
+ */
 export interface RoomsFeatures {
-  /** The open rooms and scopes, by name, then key. */
+  /** The open rooms and scopes, by name, then key. Rejects `not_found` on a deployment without rooms. */
   listRooms?(opts?: CallOptions): Promise<RoomInfo[]>;
   /**
    * One page of a room's members by `memberId`; `numItems` is capped at 100. A room that is not open (closed since
-   * the list) is an empty, done page. The cursor is the last member returned, `""` when done.
+   * the list) is an empty, done page. The cursor is the last member returned, `""` when done. A `numItems` that is
+   * not a number asks for the default (100). Rejects `not_found` on a deployment without rooms.
    */
   listRoomMembers?(room: RoomRef, page: PageRequest, opts?: CallOptions): Promise<Page<RoomMember>>;
-  /** The rooms and scopes the deployed code defines, by name. */
+  /** The rooms and scopes the deployed code defines, by name. Rejects `not_found` on a deployment without rooms. */
   listRoomDefinitions?(opts?: CallOptions): Promise<RoomDefinition[]>;
 }
