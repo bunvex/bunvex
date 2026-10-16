@@ -96,7 +96,7 @@ import {
   type WriteBatchLimits,
   type WriteLogRetention,
 } from "./committer.ts";
-import { COMPONENT_NAMESPACE_TABLES } from "./components.ts";
+import { COMPONENT_NAMESPACE_TABLES, type ComponentMeta, componentMeta, componentPath } from "./components.ts";
 import type { CursorCodec } from "./cursor.ts";
 import {
   checkDatabaseVersion,
@@ -926,6 +926,73 @@ export class Engine {
    * root's numbers, their indexes enabled at once. The push writes the component's row with this id when it
    * finishes (STUDY-152 step 2). The id.
    */
+  /**
+   * Delete an unmounted component and every component under it (Convex's `ComponentConfigModel::delete_component`),
+   * in one commit: their `_components` rows, then every table of their namespaces, system tables included, deleted
+   * in the background. A component still mounted, or with a mounted one under it, is refused
+   * (`ComponentMustBeUnmounted`); an id with no component is Convex's system error. `body` runs in the commit (the
+   * server records its audit event there) and is given the component's path.
+   */
+  async deleteComponent(id: string, body?: (db: Tx, path: string[]) => Promise<void>) {
+    const deleted: TableDef[] = [];
+    let gone: string[] = [];
+    await this.runMutation(
+      async (db) => {
+        const path = await componentPath(db, id);
+        if (path === null) throw new Error(`Component Child(${id}) not found`);
+        const rows = (await db.query(COMPONENTS_TABLE).collect()).map((r) =>
+          componentMeta(r as Record<string, unknown>),
+        );
+        const start = rows.find((r) => r._id === id)!;
+        if (start.parent === null) throw new Error("Cannot delete root component");
+        const stack: ComponentMeta[] = [start];
+        const ids: string[] = [];
+        for (let c = stack.pop(); c; c = stack.pop()) {
+          if (c.state !== "unmounted")
+            throw new ComponentDeletionError("ComponentMustBeUnmounted", "Component must be unmounted before deletion");
+          stack.push(...rows.filter((r) => r.parent === c!._id));
+          ids.push(c._id);
+        }
+        const { tables } = await readCatalog(db);
+        for (const c of ids) {
+          await db.delete(COMPONENTS_TABLE, c);
+          for (const t of tables)
+            if (t.namespace === c && t.state !== "deleting") await db.patch(TABLES_TABLE, t._id, { state: "deleting" });
+        }
+        if (body) await body(db, path);
+        gone = ids;
+        db.onCommitVisible = () => {
+          const next = this.catalog.withTableStates({});
+          const components = new Map(next.components);
+          for (const c of gone) {
+            const ns = components.get(c);
+            if (ns)
+              for (const t of [...ns.tables.values(), ...ns.hidden.values(), ...ns.deleting.values()]) deleted.push(t);
+            components.delete(c);
+            this.componentSchemas.delete(c);
+          }
+          for (const t of deleted) next.deleting.set(t.id, t);
+          next.components = components;
+          this.catalog = next;
+          this.cache.clear();
+          this.cacheEpoch++;
+        };
+      },
+      true,
+      "_system/delete_component",
+      true,
+    );
+    this.startTableDeletion();
+  }
+
+  /**
+   * A new `_components` id, nothing written: the app's, on its first push with components (Convex's
+   * `initialize_component_namespace` for the root, whose namespace is the global one).
+   */
+  async allocateComponentId(): Promise<string> {
+    return this.runMutation(async (db) => db.newId(COMPONENTS_TABLE), true);
+  }
+
   async initializeComponentNamespace(): Promise<string> {
     const declared = this.allDeclaredTables().filter((t) => COMPONENT_NAMESPACE_TABLES.has(t.name));
     return this.runMutation(async (db) => {
@@ -2284,12 +2351,15 @@ export class Engine {
   /**
    * Convex's `evaluate_schema_prediction` (STUDY-56): what pushing `next` would do, without doing it — each
    * index added, kept, enabled, disabled or dropped, whether it needs a backfill and its table's document
-   * count; each declared table's validation outcome with its count and size. Needs the table summaries.
+   * count; each declared table's validation outcome with its count and size. Needs the table summaries. In a
+   * component's namespace (`namespace`, its `_components` id; STUDY-153 PR 3d), against its tables and its active
+   * schema, as Convex's `predict_component_schema`.
    */
-  async evaluateSchema(next: SchemaDefinition): Promise<SchemaPrediction> {
+  async evaluateSchema(next: SchemaDefinition, namespace: string | null = null): Promise<SchemaPrediction> {
     if (!this.tableSummaries.ready) throw new TableSummariesUnavailableError();
     const { value: cat } = await this.execute("query", this.committer.visibleTs, (db) => readCatalog(db), true);
-    const active = activeTables(cat.tables);
+    const active = activeTables(cat.tables, namespace ?? undefined);
+    const activeSchema = namespace === null ? this.schema : this.componentSchema(namespace);
     const tabletOf = (name: string) => active.find((t) => t.name === name)?.tablet;
     const docs = (table: string) => {
       const tablet = tabletOf(table);
@@ -2330,7 +2400,7 @@ export class Engine {
         if (!declared?.indexes[st.name])
           push(table, st.name, { type: "database", fields: userFields(st.fields) }, !!st.staged, "dropped", false);
       // Search and vector indexes: the active schema's against the pushed one's.
-      const before = declaredTables(this.schema).get(table);
+      const before = declaredTables(activeSchema).get(table);
       const kinds = [
         {
           now: before?.searchIndexes ?? {},
@@ -2342,8 +2412,11 @@ export class Engine {
             searchField: d.searchField,
             filterFields: [...d.filterFields].sort(),
           }),
+          // A component has no search index yet (STUDY-153 PR 2b refuses them).
           ready: (n: string) =>
-            tablet === undefined ? false : !!this.searchIndexes.get(this.catalog.byTablet(tablet)!, n)?.ready,
+            tablet === undefined || namespace !== null
+              ? false
+              : !!this.searchIndexes.get(this.catalog.byTablet(tablet)!, n)?.ready,
         },
         {
           now: before?.vectorIndexes ?? {},
@@ -2357,7 +2430,9 @@ export class Engine {
             filterFields: [...d.filterFields].sort(),
           }),
           ready: (n: string) =>
-            tablet === undefined ? false : !!this.vectorIndexes.get(this.catalog.byTablet(tablet)!, n)?.ready,
+            tablet === undefined || namespace !== null
+              ? false
+              : !!this.vectorIndexes.get(this.catalog.byTablet(tablet)!, n)?.ready,
         },
       ] as const;
       for (const k of kinds) {
@@ -2379,24 +2454,27 @@ export class Engine {
       }
     }
     // Tables: the outcome of the schema walk bunvex will do (STUDY-35), with counts and sizes.
-    const validStaged = await this.activeValidStaged();
+    // A component has no staged validator yet (STUDY-153 PR 2b refuses them).
+    const validStaged = namespace === null ? await this.activeValidStaged() : new Map<string, unknown>();
     // Convex's staged prediction (5b65aedb3): each table's staged validation, whether finishing the active schema's
     // would spare the walk, and which pending or valid staged validations the push throws away.
     const { items, activeStaged } = await this.query((db) =>
-      db.asSystem(async () => {
-        const rows = await db.query(SCHEMAS_TABLE).collect();
-        const items: { active: boolean; c: StagedCarryOver }[] = [];
-        let activeStaged = new Map<string, StagedValidator>();
-        for (const state of ["active", "pending", "validated"] as const) {
-          const row = rows.find((r) => schemaStateOf(r) === state);
-          if (!row) continue;
-          const staged = stagedValidatorsOf(JSON.parse(row.schema as string) as SchemaJson);
-          if (state === "active") activeStaged = staged;
-          for (const c of await stagedValidationsWithProgress(db, row._id as string, staged))
-            items.push({ active: state === "active", c });
-        }
-        return { items, activeStaged };
-      }),
+      db.asSystem(() =>
+        db.inComponent(namespace, async () => {
+          const rows = await db.query(SCHEMAS_TABLE).collect();
+          const items: { active: boolean; c: StagedCarryOver }[] = [];
+          let activeStaged = new Map<string, StagedValidator>();
+          for (const state of ["active", "pending", "validated"] as const) {
+            const row = rows.find((r) => schemaStateOf(r) === state);
+            if (!row) continue;
+            const staged = stagedValidatorsOf(JSON.parse(row.schema as string) as SchemaJson);
+            if (state === "active") activeStaged = staged;
+            for (const c of await stagedValidationsWithProgress(db, row._id as string, staged))
+              items.push({ active: state === "active", c });
+          }
+          return { items, activeStaged };
+        }),
+      ),
     );
     const nextStaged = stagedValidatorsOf(schemaToJson(next));
     const stateOf = (c: StagedCarryOver): StagedValidatorState =>
@@ -2429,7 +2507,7 @@ export class Engine {
     const tables: TablePrediction[] = [...declaredTables(next).values()].map((t) => {
       const tablet = tabletOf(t.name);
       const s = tablet === undefined ? { count: 0, size: 0 } : this.tableSummaries.get(tablet);
-      const outcome = this.tableOutcome(next, this.schema, t.name, tablet, validStaged);
+      const outcome = this.tableOutcome(next, activeSchema, t.name, tablet, validStaged, namespace);
       const staged = stagedStates.get(t.name);
       const pendingStaged = stillValidating.get(t.name);
       return {
@@ -3036,7 +3114,7 @@ export class Engine {
     | { type: "raceDetected" }
     | { type: "failed"; error: string; tableName: string | null }
     | { type: "inProgress"; indexesComplete: number; indexesTotal: number; schemaValidationComplete: boolean }
-    | { type: "complete" }
+    | { type: "complete"; indexesTotal: number }
   > {
     return this.query((db) =>
       db.asSystem(async () => {
@@ -3048,8 +3126,7 @@ export class Engine {
         if (!row || state === "overwritten") return { type: "raceDetected" as const };
         const failed = schemaFailureOf(row);
         if (failed) return { type: "failed" as const, ...failed };
-        if (state === "active") return { type: "complete" as const };
-        const validated = state === "validated";
+        const validated = state === "validated" || state === "active";
         const indexes = databaseIndexRows(await db.query(INDEX_TABLE).collect());
         const tables = (await db.query(TABLES_TABLE).collect()).map(tableMeta);
         // As Convex's `load_component_schema_status`: every application index there is now (an index the push
@@ -3074,7 +3151,8 @@ export class Engine {
             indexesTotal: total,
             schemaValidationComplete: validated,
           };
-        return { type: "complete" as const };
+        // Its indexes counted too: a push of several namespaces reports each one's (Convex's `ComponentSchemaStatus`).
+        return { type: "complete" as const, indexesTotal: total };
       }),
     ) as never;
   }
@@ -4210,6 +4288,18 @@ async function submitPending(
  * root's only, and search and vector indexes, which the engine builds for the root's tables. Each is refused at the
  * push until it is built for components. (Staged database indexes are only catalog state: they work.)
  */
+/** A component deletion refused, as Convex's `delete_component` (a 400). */
+export class ComponentDeletionError extends Error {
+  readonly status = 400;
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ComponentDeletionError";
+  }
+}
+
 function checkComponentSchema(schema: SchemaDefinition) {
   for (const t of declaredTables(schema).values()) {
     if (t.stagedDocument !== undefined)

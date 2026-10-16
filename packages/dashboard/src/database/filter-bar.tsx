@@ -6,6 +6,7 @@
 import { Button } from "@bunvex/ui/components/button";
 import { Checkbox } from "@bunvex/ui/components/checkbox";
 import { CodeEditor } from "@bunvex/ui/components/code-editor";
+import { Input } from "@bunvex/ui/components/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@bunvex/ui/components/select";
 import { cn } from "@bunvex/ui/lib/utils";
 import { Plus, X } from "lucide-react";
@@ -15,6 +16,7 @@ import {
   FIELD_OPS,
   type FieldOp,
   type FilterExpression,
+  type SearchIndexInfo,
   type TableInfo,
   VALUE_TYPES,
 } from "../data-source.ts";
@@ -34,6 +36,7 @@ import {
   rangeField,
   removeClause,
   removeEq,
+  type SearchDraft,
   setIndex,
   toDraft,
   updateClause,
@@ -81,12 +84,12 @@ export function FilterBar({ info, fields, applied, appliedParam, onApply, reject
     const errs: DraftErrors = { ...out.errors };
     if (Object.keys(errs).length === 0)
       try {
-        validateFilter(out.expr, info.indexes);
+        validateFilter(out.expr, info.indexes, info.searchIndexes ?? []);
       } catch (e) {
         if (e instanceof DataSourceError) errs[e.details.clause ?? "index"] = e.message;
       }
     return { expr: out.expr, errors: errs };
-  }, [draft, info.indexes]);
+  }, [draft, info.indexes, info.searchIndexes]);
   const blocked = Object.keys(errors).length > 0;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: onApply is read at the time of applying
@@ -101,7 +104,9 @@ export function FilterBar({ info, fields, applied, appliedParam, onApply, reject
     return () => clearTimeout(t);
   }, [expr, blocked]);
 
-  const ix = info.indexes.find((i) => i.name === draft.index) ?? info.indexes[1]!;
+  const searchIndexes = info.searchIndexes ?? [];
+  const searchIx = draft.search ? searchIndexes.find((i) => i.name === draft.index) : undefined;
+  const ix = (!draft.search && info.indexes.find((i) => i.name === draft.index)) || info.indexes[1]!;
   const eqFields = indexFields(ix);
   const next = nextEqField(draft, ix);
   const rangeOn = rangeField(draft, ix);
@@ -121,9 +126,20 @@ export function FilterBar({ info, fields, applied, appliedParam, onApply, reject
           Index
         </span>
         <Select
-          items={info.indexes.map((i) => ({ value: i.name, label: i.name }))}
+          items={[
+            ...info.indexes.map((i) => ({ value: i.name, label: i.name })),
+            ...searchIndexes.map((i) => ({ value: i.name, label: `${i.name} (search)` })),
+          ]}
           value={draft.index}
-          onValueChange={(v) => setDraft((d) => setIndex(d, v as string))}
+          onValueChange={(v) =>
+            setDraft((d) =>
+              setIndex(
+                d,
+                v as string,
+                searchIndexes.some((i) => i.name === v),
+              ),
+            )
+          }
         >
           <SelectTrigger aria-labelledby={indexLabel} className="min-w-40">
             <SelectValue />
@@ -135,8 +151,21 @@ export function FilterBar({ info, fields, applied, appliedParam, onApply, reject
                 {i.state !== "ready" && " (backfilling)"}
               </SelectItem>
             ))}
+            {searchIndexes.map((i) => (
+              <SelectItem key={`search ${i.name}`} value={i.name}>
+                {i.name} (search)
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
+        {draft.search && (
+          <SearchPart
+            ix={searchIx}
+            draft={draft.search}
+            errors={errors}
+            onChange={(search) => setDraft((d) => ({ ...d, search }))}
+          />
+        )}
         {draft.eq.map((c, i) => (
           <IndexEq
             // biome-ignore lint/suspicious/noArrayIndexKey: an equality is identified by its position in the index
@@ -149,13 +178,14 @@ export function FilterBar({ info, fields, applied, appliedParam, onApply, reject
           />
         ))}
         {/* nobody looks for one exact creation time: that index offers its range only */}
-        {next !== undefined && !byTime && !draft.range.lower && !draft.range.upper && (
+        {!draft.search && next !== undefined && !byTime && !draft.range.lower && !draft.range.upper && (
           <Button variant="outline" size="sm" onClick={() => setDraft((d) => addEq(d, ix))}>
             <Plus aria-hidden="true" />
             {next} =
           </Button>
         )}
-        {rangeOn !== undefined &&
+        {!draft.search &&
+          rangeOn !== undefined &&
           (draft.range.lower || draft.range.upper ? (
             <Range
               field={rangeOn}
@@ -174,32 +204,53 @@ export function FilterBar({ info, fields, applied, appliedParam, onApply, reject
           <Plus aria-hidden="true" />
           <span className="sr-only @2xl/table:not-sr-only">Add </span>filter
         </Button>
-        {(draft.clauses.length > 0 || draft.eq.length > 0 || draft.range.lower || draft.range.upper) && (
-          <Button variant="ghost" size="sm" onClick={() => setDraft((d) => ({ ...d, eq: [], range: {}, clauses: [] }))}>
+        {(draft.clauses.length > 0 ||
+          draft.eq.length > 0 ||
+          draft.range.lower ||
+          draft.range.upper ||
+          (draft.search && (draft.search.text || draft.search.eq.length > 0))) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() =>
+              setDraft((d) => ({
+                ...d,
+                eq: [],
+                range: {},
+                clauses: [],
+                ...(d.search && { search: { text: "", eq: [] } }),
+              }))
+            }
+          >
             Clear filters
           </Button>
         )}
-        <span className="ml-auto flex items-center gap-2">
-          <span id={orderLabel} className="sr-only text-muted-foreground @2xl/table:not-sr-only">
-            Order
+        {draft.search ? (
+          // a search's results come by relevance, as Convex's: no order to pick
+          <span className="ml-auto text-muted-foreground">By relevance</span>
+        ) : (
+          <span className="ml-auto flex items-center gap-2">
+            <span id={orderLabel} className="sr-only text-muted-foreground @2xl/table:not-sr-only">
+              Order
+            </span>
+            <Select
+              items={[
+                { value: "desc", label: byTime ? "Newest first" : "Descending" },
+                { value: "asc", label: byTime ? "Oldest first" : "Ascending" },
+              ]}
+              value={draft.order}
+              onValueChange={(v) => setDraft((d) => ({ ...d, order: v as "asc" | "desc" }))}
+            >
+              <SelectTrigger aria-labelledby={orderLabel} className="min-w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="desc">{byTime ? "Newest first" : "Descending"}</SelectItem>
+                <SelectItem value="asc">{byTime ? "Oldest first" : "Ascending"}</SelectItem>
+              </SelectContent>
+            </Select>
           </span>
-          <Select
-            items={[
-              { value: "desc", label: byTime ? "Newest first" : "Descending" },
-              { value: "asc", label: byTime ? "Oldest first" : "Ascending" },
-            ]}
-            value={draft.order}
-            onValueChange={(v) => setDraft((d) => ({ ...d, order: v as "asc" | "desc" }))}
-          >
-            <SelectTrigger aria-labelledby={orderLabel} className="min-w-32">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="desc">{byTime ? "Newest first" : "Descending"}</SelectItem>
-              <SelectItem value="asc">{byTime ? "Oldest first" : "Ascending"}</SelectItem>
-            </SelectContent>
-          </Select>
-        </span>
+        )}
       </div>
       {indexError && (
         <p role="alert" className="text-destructive">
@@ -226,6 +277,54 @@ export function FilterBar({ info, fields, applied, appliedParam, onApply, reject
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * A search index's part of the bar (STUDY-163 §5), as Convex's: the text searched in its search field, and an
+ * equality per filter field, each at most once.
+ */
+function SearchPart(props: {
+  ix: SearchIndexInfo | undefined;
+  draft: SearchDraft;
+  errors: DraftErrors;
+  onChange: (s: SearchDraft) => void;
+}) {
+  const { ix, draft } = props;
+  const field = ix?.searchField ?? "text";
+  const free = ix ? ix.filterFields.filter((f) => !draft.eq.some((c) => c.field === f)) : [];
+  return (
+    <>
+      <Input
+        type="search"
+        aria-label={`Search ${field}`}
+        placeholder={`Search ${field}…`}
+        className="h-7 w-56"
+        value={draft.text}
+        onChange={(e) => props.onChange({ ...draft, text: e.target.value })}
+      />
+      {draft.eq.map((c, i) => (
+        <IndexEq
+          key={c.field}
+          field={c.field}
+          text={c.text}
+          error={props.errors[`search.${i}`]}
+          onText={(text) => props.onChange({ ...draft, eq: draft.eq.map((e, j) => (j === i ? { ...e, text } : e)) })}
+          onRemove={() => props.onChange({ ...draft, eq: draft.eq.filter((_, j) => j !== i) })}
+        />
+      ))}
+      {free.map((f) => (
+        <Button
+          key={f}
+          variant="outline"
+          size="sm"
+          onClick={() => props.onChange({ ...draft, eq: [...draft.eq, { field: f, text: "", enabled: true }] })}
+        >
+          <Plus aria-hidden="true" />
+          {f} =
+        </Button>
+      ))}
+    </>
   );
 }
 

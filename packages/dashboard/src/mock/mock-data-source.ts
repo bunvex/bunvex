@@ -27,6 +27,7 @@ import {
   type CronRun,
   type DashboardDataSource,
   DataSourceError,
+  type DeclaredIndexes,
   type DeploymentInfo,
   type DeploymentState,
   type DeploymentStats,
@@ -60,6 +61,7 @@ import {
   type ScheduledFunctionQuery,
   type SchemaInfo,
   type SchemaValidation,
+  type SearchIndexInfo,
   type SnapshotExport,
   type SnapshotImport,
   type SnapshotImportRequest,
@@ -104,6 +106,7 @@ import { inferDocumentType } from "./infer.ts";
 import * as metrics from "./metrics.ts";
 import { createRandom, type Random } from "./random.ts";
 import { MockScheduler } from "./schedules.ts";
+import { searchDocuments } from "./search.ts";
 import { MockSnapshots } from "./snapshots.ts";
 import { MockSubscriptions } from "./subscriptions.ts";
 import { MockSystemTables } from "./system-tables.ts";
@@ -152,6 +155,46 @@ export type MockDataSourceOptions = FixtureOptions & {
 /** At most this many documents per insert or delete call, as a server bounds a transaction. */
 export const MAX_WRITE = 4096;
 
+/** A fixture table's indexes as its schema would declare them: every kind, staged ones marked. */
+function declaredIndexesOf(t: FixtureTable): DeclaredIndexes {
+  const out: DeclaredIndexes = {
+    database: t.indexes
+      .filter((i) => !i.system)
+      .map((i) => ({ name: i.name, fields: [...i.fields, "_creationTime"], staged: false })),
+    search: [],
+    vector: [],
+  };
+  for (const ix of t.otherIndexes ?? []) {
+    const f = ix.fields;
+    if (Array.isArray(f)) out.database.push({ name: ix.name, fields: [...f], staged: ix.staged });
+    else if ("searchField" in f)
+      out.search.push({
+        name: ix.name,
+        searchField: f.searchField,
+        filterFields: [...f.filterFields],
+        staged: ix.staged,
+      });
+    else
+      out.vector.push({
+        name: ix.name,
+        vectorField: f.vectorField,
+        dimensions: f.dimensions,
+        filterFields: [...f.filterFields],
+        staged: ix.staged,
+      });
+  }
+  return out;
+}
+
+/** A table's search indexes the filter can read: its declared ones that are not staged (Convex's `buildIndexDefs`). */
+function searchIndexesOf(t: FixtureTable): SearchIndexInfo[] {
+  return (t.otherIndexes ?? []).flatMap((ix) =>
+    !ix.staged && !Array.isArray(ix.fields) && "searchField" in ix.fields
+      ? [{ name: ix.name, searchField: ix.fields.searchField, filterFields: [...ix.fields.filterFields] }]
+      : [],
+  );
+}
+
 // ------------------------------------------------------------------ cursors
 
 type Key = Value[];
@@ -173,8 +216,20 @@ function decodeCursor(cursor: string, query: string): Key | null {
   return parsed.k as Key | null;
 }
 
-function checkNumItems(n: number) {
+/** At most this many items per page, as a deployment's `paginate` (Convex's `TRANSACTION_MAX_READ_SIZE_ROWS`). */
+export const MAX_PAGE_ITEMS = 32_000;
+
+/** A page's size. `paged`: read by a deployment's `paginate` (not the logs, which the source reads from memory). */
+function checkNumItems(n: number, paged = true) {
   if (!Number.isInteger(n) || n < 1) throw new DataSourceError("invalid_request", `numItems must be ≥ 1: ${n}`);
+  // a deployment refuses it ("Uncaught Error: Requested too many items: …"); the mock does not accept it either
+  if (paged && n > MAX_PAGE_ITEMS) throw new DataSourceError("invalid_request", `Requested too many items: ${n}`);
+}
+
+/** Convex's `validate_k` for the top-k metrics: from 1 to 25 ("InvalidTopKParameter"). */
+function checkTopK(k: number) {
+  if (!Number.isInteger(k) || k < 1 || k > 25)
+    throw new DataSourceError("invalid_request", `k must be between 1 and 25, got ${k}`);
 }
 
 /** One page after `after` (exclusive) of items already in order; `null` = from the start. */
@@ -522,6 +577,7 @@ export class MockDataSource implements DashboardDataSource {
         indexes: structuredClone(t.indexes),
         documentCount: t.documents.length,
         declared: t.declared,
+        searchIndexes: searchIndexesOf(t),
       })),
     );
   }
@@ -574,7 +630,10 @@ export class MockDataSource implements DashboardDataSource {
         .filter((t) => t.declared)
         .map((t) => {
           const validator = MOCK_DOCUMENT_TYPES[t.name];
-          return validator ? { name: t.name, validator: structuredClone(validator) } : { name: t.name };
+          const indexes = declaredIndexesOf(t);
+          return validator
+            ? { name: t.name, validator: structuredClone(validator), indexes }
+            : { name: t.name, indexes };
         }),
     }));
   }
@@ -584,7 +643,23 @@ export class MockDataSource implements DashboardDataSource {
       const t = this.table(q.table);
       checkNumItems(q.numItems);
       const expr = q.filter ?? NEWEST_FIRST;
-      const ix = validateFilter(expr, t.indexes);
+      const ix = validateFilter(expr, t.indexes, searchIndexesOf(t));
+      if (expr.search) {
+        // by relevance: a page is a slice of the ranked results, its cursor the position after it
+        const found = searchDocuments(
+          t.documents,
+          searchIndexesOf(t).find((s) => s.name === expr.search!.name)!,
+          expr.search.search,
+        ).filter((d) => matchesFilter(d, expr, ix));
+        const query = canonicalFilter(q.table, q.filter);
+        const start = q.cursor === null ? 0 : Number((decodeCursor(q.cursor, query) ?? [0])[0]);
+        const end = start + q.numItems;
+        return {
+          page: found.slice(start, end).map((d) => structuredClone(d)),
+          isDone: end >= found.length,
+          continueCursor: encodeCursor(query, [end]),
+        };
+      }
       const fields = ix.name === "by_id" ? ["_id"] : ix.fields;
       // the index key: its fields, then _id (unique, the tiebreaker) — except by_id, which is _id alone
       const key = (d: Document): Key =>
@@ -893,7 +968,7 @@ export class MockDataSource implements DashboardDataSource {
 
   listLogs(q: LogQuery, opts?: CallOptions): Promise<Page<LogEntry>> {
     return this.call(opts?.signal, () => {
-      checkNumItems(q.numItems);
+      checkNumItems(q.numItems, false);
       const levels = q.levels ? [...q.levels].sort() : null;
       const query = `logs\u0000${q.function ?? ""}\u0000${levels?.join(",") ?? "*"}`;
       const after = q.cursor === null ? null : decodeCursor(q.cursor, query);
@@ -1097,7 +1172,7 @@ export class MockDataSource implements DashboardDataSource {
   cancelScheduledFunction(id: string, opts?: CallOptions): Promise<void> {
     return this.call(opts?.signal, () => {
       this.canWrite();
-      const fn = this.scheduler.list({ numItems: 100_000, cursor: null }).page.find((j) => j.id === id)?.function;
+      const fn = this.scheduler.functionOf(id);
       this.scheduler.cancel(id);
       this.record("cancel_scheduled_function", { id, function: fn ?? null });
     });
@@ -1386,8 +1461,10 @@ export class MockDataSource implements DashboardDataSource {
     return this.call(signal, () => {
       if (!this.opts.capabilities.operations.includes("viewMetrics"))
         throw new DataSourceError("unauthorized", "this credential cannot view metrics");
-      if (!(w.end > w.start) || !Number.isInteger(w.numBuckets) || w.numBuckets < 1 || w.numBuckets > 1000)
-        throw new DataSourceError("invalid_request", "a metrics window needs start < end and 1–1000 buckets");
+      // a deployment's limits (Convex's `MetricsWindow`: 1 to 10 000 buckets), in the server source's words
+      if (!Number.isInteger(w.numBuckets) || w.numBuckets < 1 || w.numBuckets > 10_000)
+        throw new DataSourceError("invalid_request", `A window needs 1 to 10000 buckets, not ${w.numBuckets}.`);
+      if (!(w.end > w.start)) throw new DataSourceError("invalid_request", "A window must end after it starts.");
       return body();
     });
   }
@@ -1413,7 +1490,10 @@ export class MockDataSource implements DashboardDataSource {
   }
 
   topFunctions(measure: TopKMeasure, w: MetricsWindow, k: number, opts?: CallOptions): Promise<TopKSeries> {
-    return this.metrics(opts?.signal, w, () => metrics.topFunctions(this.logs, measure, w, Math.max(1, k)));
+    return this.metrics(opts?.signal, w, () => {
+      checkTopK(k);
+      return metrics.topFunctions(this.logs, measure, w, k);
+    });
   }
 
   tableRate(table: string, metric: TableMetric, w: MetricsWindow, opts?: CallOptions): Promise<Timeseries> {
@@ -1436,9 +1516,10 @@ export class MockDataSource implements DashboardDataSource {
     k: number,
     opts?: CallOptions & { function?: string },
   ): Promise<InvalidationSeries> {
-    return this.metrics(opts?.signal, w, () =>
-      metrics.subscriptionInvalidations(this.logs, w, Math.max(1, k), opts?.function),
-    );
+    return this.metrics(opts?.signal, w, () => {
+      checkTopK(k);
+      return metrics.subscriptionInvalidations(this.logs, w, k, opts?.function);
+    });
   }
 
   // ---------------------------------------------------------------- topology (§22), simulated

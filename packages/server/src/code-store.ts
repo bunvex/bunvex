@@ -120,10 +120,13 @@ export function buildPackage(
   const metadataJson = enc.encode(JSON.stringify(metadata));
   entries.push({ name: "metadata.json", data: metadataJson });
   unzipped += metadataJson.length;
-  // Convex's order: the zipped size, then the unzipped one; sizes in binary units (humansize's BINARY).
   const zip = zipInMemory(entries);
-  const zippedTotal = zip.length + (external?.zipped ?? 0);
-  const unzippedTotal = unzipped + (external?.unzipped ?? 0);
+  checkSize(zip.length + (external?.zipped ?? 0), unzipped + (external?.unzipped ?? 0), limits);
+  return { zip, unzipped };
+}
+
+/** Convex's `verify_size` over a push's total: the zipped size, then the unzipped one, in binary units (humansize's BINARY). */
+function checkSize(zippedTotal: number, unzippedTotal: number, limits: { zipped: number; unzipped: number }) {
   if (zippedTotal >= limits.zipped)
     throw new ModulesTooLargeError(
       `Total module size exceeded the zipped maximum (${formatBytes(zippedTotal)} > maximum size ${formatBytes(limits.zipped)})`,
@@ -132,7 +135,26 @@ export function buildPackage(
     throw new ModulesTooLargeError(
       `Total module size exceeded the unzipped maximum (${formatBytes(unzippedTotal)} > maximum size ${formatBytes(limits.unzipped)})`,
     );
-  return { zip, unzipped };
+}
+
+/**
+ * The size check of a push with components (Convex's `upload_packages`): one package for the app, one per component
+ * definition, the external packages counted once, and ONE check over the total.
+ */
+export function checkPackagesSize(
+  packages: ModuleSource[][],
+  external: PackageExternalDeps | null = null,
+  limits: { zipped: number; unzipped: number } = { zipped: zippedLimit(), unzipped: MAX_UNZIPPED_PACKAGE_BYTES },
+) {
+  const unlimited = { zipped: Number.POSITIVE_INFINITY, unzipped: Number.POSITIVE_INFINITY };
+  let zipped = external?.zipped ?? 0;
+  let unzipped = external?.unzipped ?? 0;
+  for (const modules of packages) {
+    const p = buildPackage(modules, unlimited);
+    zipped += p.zip.length;
+    unzipped += p.unzipped;
+  }
+  checkSize(zipped, unzipped, limits);
 }
 
 /**
@@ -322,34 +344,35 @@ export async function peekUdfConfig(engine: Engine): Promise<UdfConfig> {
 }
 
 /**
- * The root component's rows, as a push leaves them in Convex (STUDY-133 §12 M2): the app's definition in
- * `_component_definitions` and its instance in `_components` (Convex's `SerializedComponentDefinitionMetadata`
- * and `SerializedComponentMetadata` for `ComponentType::App`). bunvex has no other component (DV-55), so they are
- * written once and never change.
+ * The root component's rows for a deploy that is not a push (`deployCode`: the dev loop, tests), as a push leaves
+ * them in Convex with no components (STUDY-133 §12 M2): the default app definition in `_component_definitions` and
+ * its instance in `_components`, written once. A push writes them from the evaluated tree (STUDY-153 PR 4).
  */
-async function ensureRootComponent(db: Tx) {
-  const definitions = (await db.query("_component_definitions").collect()) as Record<string, unknown>[];
-  let root = definitions.find((d) => d.path === "")?._id as string | undefined;
-  root ??= await db.insert("_component_definitions", {
-    path: "",
-    definitionType: { type: "app" },
-    childComponents: [],
-    httpMounts: {},
-    httpPrefix: null,
-    exports: { type: "branch", branch: [] },
-    envVars: null,
-  });
-  const components = (await db.query("_components").collect()) as Record<string, unknown>[];
-  if (!components.some((c) => c.parent === null))
-    await db.insert("_components", {
-      definitionId: root,
-      parent: null,
-      name: null,
-      args: null,
-      env: null,
-      state: "active",
+export async function ensureRootComponent(db: Tx) {
+  await db.asSystem(async () => {
+    const definitions = (await db.query("_component_definitions").collect()) as Record<string, unknown>[];
+    let root = definitions.find((d) => d.path === "")?._id as string | undefined;
+    root ??= await db.insert("_component_definitions", {
+      path: "",
+      definitionType: { type: "app" },
+      childComponents: [],
+      httpMounts: {},
       httpPrefix: null,
+      exports: { type: "branch", branch: [] },
+      envVars: null,
     });
+    const components = (await db.query("_components").collect()) as Record<string, unknown>[];
+    if (!components.some((c) => c.parent === null))
+      await db.insert("_components", {
+        definitionId: root,
+        parent: null,
+        name: null,
+        args: null,
+        env: null,
+        state: "active",
+        httpPrefix: null,
+      });
+  });
 }
 
 /**
@@ -362,38 +385,105 @@ export async function writeCodeRows(
   version: CodeVersion,
   /** The package's modules that define no function (the schema, the auth config): rows analyzed to nothing. */
   other: ModuleSource[] = [],
+  /** The component whose code it is (its `_components` id), or null for the app's (STUDY-153 PR 4). */
+  namespace: string | null = null,
 ): Promise<SourcePackage[]> {
-  return db.asSystem(async () => {
-    const sourcePackageId = await db.insert(SOURCE_PACKAGES_TABLE, pkg);
-    const old = (await db.query(MODULES_TABLE).collect()) as unknown as ModuleRow[];
-    const byPath = new Map(old.map((m) => [m.path, m]));
-    const modules = [
-      ...[...version.modules].map(([path, l]) => ({ path, source: l.source, hash: l.hash, a: version.analysis[path] })),
-      ...other.map((m) => ({ path: m.path, source: m, hash: moduleHash(m), a: NOTHING })),
-    ];
-    for (const { path, source, hash, a } of modules) {
-      const row = {
-        path,
-        sourcePackageId,
-        environment: source.environment,
-        sha256: hexToBase64(hash),
-        analyzeResult: a ? analysisRow(a) : null,
-      };
-      const cur = byPath.get(path);
-      if (cur) await db.replace(MODULES_TABLE, cur._id, row);
-      else await db.insert(MODULES_TABLE, row);
-      byPath.delete(path);
-    }
-    for (const gone of byPath.values()) await db.delete(MODULES_TABLE, gone._id);
-    await ensureRootComponent(db);
-    const unused: SourcePackage[] = [];
-    for (const p of (await db.query(SOURCE_PACKAGES_TABLE).collect()) as unknown as SourcePackage[])
-      if (p._id !== sourcePackageId) {
-        await db.delete(SOURCE_PACKAGES_TABLE, p._id);
-        unused.push(p);
+  return db.asSystem(() =>
+    db.inComponent(namespace, async () => {
+      const sourcePackageId = await db.insert(SOURCE_PACKAGES_TABLE, pkg);
+      const old = (await db.query(MODULES_TABLE).collect()) as unknown as ModuleRow[];
+      const byPath = new Map(old.map((m) => [m.path, m]));
+      const modules = [
+        ...[...version.modules].map(([path, l]) => ({
+          path,
+          source: l.source,
+          hash: l.hash,
+          a: version.analysis[path],
+        })),
+        ...other.map((m) => ({ path: m.path, source: m, hash: moduleHash(m), a: NOTHING })),
+      ];
+      for (const { path, source, hash, a } of modules) {
+        const row = {
+          path,
+          sourcePackageId,
+          environment: source.environment,
+          sha256: hexToBase64(hash),
+          analyzeResult: a ? analysisRow(a) : null,
+        };
+        const cur = byPath.get(path);
+        if (cur) await db.replace(MODULES_TABLE, cur._id, row);
+        else await db.insert(MODULES_TABLE, row);
+        byPath.delete(path);
       }
-    return unused;
-  }) as Promise<SourcePackage[]>;
+      for (const gone of byPath.values()) await db.delete(MODULES_TABLE, gone._id);
+      const unused: SourcePackage[] = [];
+      for (const p of (await db.query(SOURCE_PACKAGES_TABLE).collect()) as unknown as SourcePackage[])
+        if (p._id !== sourcePackageId) {
+          await db.delete(SOURCE_PACKAGES_TABLE, p._id);
+          unused.push(p);
+        }
+      return unused;
+    }),
+  ) as Promise<SourcePackage[]>;
+}
+
+/** A component's module paths as stored (its `_modules` rows), in its namespace. */
+export async function modulePathsIn(db: Tx, namespace: string | null): Promise<string[]> {
+  return db.asSystem(() =>
+    db.inComponent(namespace, async () => (await db.query(MODULES_TABLE).collect()).map((r) => r.path as string)),
+  );
+}
+
+/**
+ * An unmounted component's code (Convex's `unmount_component`): its `_modules` rows deleted; its `_source_packages`
+ * and `_udf_config`, its schema and tables kept. The paths it had.
+ */
+export async function clearCodeRows(db: Tx, namespace: string): Promise<string[]> {
+  return db.asSystem(() =>
+    db.inComponent(namespace, async () => {
+      const rows = await db.query(MODULES_TABLE).collect();
+      for (const r of rows) await db.delete(MODULES_TABLE, r._id as string);
+      return rows.map((r) => r.path as string);
+    }),
+  );
+}
+
+/**
+ * A component's `_udf_config` (Convex's `UdfConfigModel::set` in its namespace): its definition's server version,
+ * with the app's import seed and time. The version's change, from "Unspecified version" when it had none; null when
+ * it is the same.
+ */
+export async function setUdfConfigIn(
+  db: Tx,
+  namespace: string,
+  config: UdfConfig,
+): Promise<UdfServerVersionDiff | null> {
+  return db.asSystem(() =>
+    db.inComponent(namespace, async () => {
+      const row = (await db.query(UDF_CONFIG_TABLE).first()) as Record<string, unknown> | null;
+      if (row && row.serverVersion === config.serverVersion) return null;
+      const fields = {
+        serverVersion: config.serverVersion,
+        importPhaseRngSeed: config.seed.buffer.slice(0),
+        importPhaseUnixTimestamp: nsOfMs(config.timestamp),
+      };
+      if (row) await db.replace(UDF_CONFIG_TABLE, row._id as string, fields);
+      else await db.insert(UDF_CONFIG_TABLE, fields);
+      return {
+        previous_version: row ? (row.serverVersion as string) : "Unspecified version",
+        next_version: config.serverVersion,
+      };
+    }),
+  );
+}
+
+/** Every package's blob some namespace's `_source_packages` row still names (two instances share one). */
+export async function referencedPackageKeys(db: Tx, namespaces: Iterable<string | null>): Promise<Set<string>> {
+  const keys = new Set<string>();
+  for (const ns of namespaces)
+    for (const p of await db.asSystem(() => db.inComponent(ns, () => db.query(SOURCE_PACKAGES_TABLE).collect())))
+      keys.add(p.storageKey as string);
+  return keys;
 }
 
 /** The modules as stored: their rows and the package they live in, or null when nothing was deployed. */

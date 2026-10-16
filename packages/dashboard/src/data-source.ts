@@ -165,8 +165,26 @@ export type TableInfo = {
   documentCount?: number;
   /** In the deployment's schema. A table can also exist only because documents were written to it. */
   declared: boolean;
+  /**
+   * The search indexes a filter can read (STUDY-163 §5), as Convex's filter offers them: the declared ones that
+   * are not staged. Absent: the source has none to offer.
+   */
+  searchIndexes?: SearchIndexInfo[];
 };
 
+/**
+ * A table's indexes as its schema declares them (Convex's schema JSON: `indexes`, `searchIndexes`, `vectorIndexes`
+ * and their staged lists), for the schema's code (STUDY-162 §8). Database index fields as stored (`_creationTime`
+ * last, as the schema JSON has them).
+ */
+export type DeclaredIndexes = {
+  database: { name: string; fields: string[]; staged: boolean }[];
+  search: { name: string; searchField: string; filterFields: string[]; staged: boolean }[];
+  vector: { name: string; vectorField: string; dimensions: number; filterFields: string[]; staged: boolean }[];
+};
+
+/** A search index, as the filter reads it: the field it searches, and the fields it can filter on by equality. */
+export type SearchIndexInfo = { name: string; searchField: string; filterFields: string[] };
 export type SchemaInfo = {
   /** Whether documents are validated against the declared types. */
   enforced: boolean;
@@ -174,7 +192,7 @@ export type SchemaInfo = {
    * One entry per declared table. `validator` is the declared document type (STUDY-12 V2), in Convex's JSON
    * form, without the system fields; absent when the table is declared without one.
    */
-  tables: { name: string; validator?: ValidatorJson }[];
+  tables: { name: string; validator?: ValidatorJson; indexes?: DeclaredIndexes }[];
   /**
    * A schema being checked against the documents already stored (STUDY-12 §14.7), as Convex's
    * `getSchemas.schemaValidationProgress` (`numDocsValidated` / `totalDocs`, `totalDocs` unknown at first);
@@ -232,17 +250,33 @@ export type IndexFilter = {
   range?: { lower?: { op: "gt" | "gte"; value: Value }; upper?: { op: "lt" | "lte"; value: Value } };
 };
 
+/**
+ * A search index read (Convex's `SearchIndexFilter`, STUDY-163 §5): the text searched in its search field, and
+ * equalities on its filter fields. Results come by relevance, so the expression's order is `asc`; an empty search
+ * finds nothing, as a search query does.
+ */
+export type SearchFilter = {
+  name: string;
+  search: string;
+  clauses: { field: string; value: Value; enabled: boolean }[];
+};
+
 /** Everything that selects and orders a table's documents. Serializable: it lives in the URL. */
 export type FilterExpression = {
   /** Default: `by_creation_time`, unbounded. */
   index?: IndexFilter;
+  /** A search index instead of `index` (never both); `clauses` then apply to its results. */
+  search?: SearchFilter;
   clauses: FieldFilter[];
   /** The index order, ascending or descending. */
   order: "asc" | "desc";
 };
 
 export type PageRequest = {
-  /** A hint: a page may hold fewer items without being the last one (`isDone` decides). */
+  /**
+   * A hint: a page may hold fewer items without being the last one (`isDone` decides). At most 32 000, as a
+   * deployment's `paginate` reads (more is `invalid_request`, "Requested too many items").
+   */
   numItems: number;
   /** `null` starts; then the previous page's `continueCursor`. */
   cursor: string | null;

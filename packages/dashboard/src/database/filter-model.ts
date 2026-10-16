@@ -8,13 +8,18 @@ import { formatValueInput, parseValueInput } from "./value-input.ts";
 
 export type ClauseDraft = { id: string; field: string; op: FieldOp; text: string; enabled: boolean };
 export type BoundDraft = { op: "gt" | "gte" | "lt" | "lte"; text: string };
+/** A search index's draft (STUDY-163 §5): the text searched, and equalities on its filter fields. */
+export type SearchDraft = { text: string; eq: { field: string; text: string; enabled: boolean }[] };
 export type FilterDraft = {
+  /** A database index's name, or the search index's while `search` is set. */
   index: string;
   /** One entry per leading index field fixed to a value, in index order. */
   eq: { text: string; enabled: boolean }[];
   range: { lower?: BoundDraft; upper?: BoundDraft };
   clauses: ClauseDraft[];
   order: "asc" | "desc";
+  /** Set while a search index is read: then `eq` and `range` are empty and the order is `asc` (relevance). */
+  search?: SearchDraft;
 };
 
 export const OP_LABEL: Record<FieldOp, string> = {
@@ -45,8 +50,12 @@ const listText = (vs: Value[]) => vs.map(formatValueInput).join(", ");
 export function toDraft(expr: FilterExpression | null): FilterDraft {
   if (!expr) return emptyDraft();
   const r = expr.index?.range;
+  const search = expr.search && {
+    text: expr.search.search,
+    eq: expr.search.clauses.map((c) => ({ field: c.field, text: formatValueInput(c.value), enabled: c.enabled })),
+  };
   return {
-    index: expr.index?.name ?? DEFAULT_INDEX,
+    index: expr.search?.name ?? expr.index?.name ?? DEFAULT_INDEX,
     eq: (expr.index?.eq ?? []).map((c) => ({ text: formatValueInput(c.value), enabled: c.enabled })),
     range: {
       lower: r?.lower && { op: r.lower.op, text: formatValueInput(r.lower.value) },
@@ -67,6 +76,7 @@ export function toDraft(expr: FilterExpression | null): FilterDraft {
               : formatValueInput(c.value as Value),
     })),
     order: expr.order,
+    ...(search && { search }),
   };
 }
 
@@ -126,6 +136,19 @@ export function fromDraft(d: FilterDraft): { expr: FilterExpression; errors: Dra
       clauses.push({ id: c.id, field: c.field, op: c.op, enabled: false });
     }
   }
+  if (d.search) {
+    // a search index: its equalities, the text as typed, by relevance (Convex's `setSearchIndex` sets `asc`)
+    const searchClauses: NonNullable<FilterExpression["search"]>["clauses"] = [];
+    d.search.eq.forEach((c, i) => {
+      const p = parseValueInput(c.text);
+      if (p.ok) searchClauses.push({ field: c.field, value: p.value, enabled: c.enabled });
+      else if (c.enabled) errors[`search.${i}`] = p.error;
+    });
+    return {
+      expr: { clauses, order: "asc", search: { name: d.index, search: d.search.text, clauses: searchClauses } },
+      errors,
+    };
+  }
   const expr: FilterExpression = { clauses, order: d.order };
   if (d.index !== DEFAULT_INDEX || eq.length > 0 || lower || upper) {
     expr.index = { name: d.index, eq };
@@ -136,8 +159,16 @@ export function fromDraft(d: FilterDraft): { expr: FilterExpression; errors: Dra
 
 // ------------------------------------------------------------------ valid moves
 
-/** Switches the index; its clauses start over (they were about another index's fields). */
-export const setIndex = (d: FilterDraft, index: string): FilterDraft => ({ ...d, index, eq: [], range: {} });
+/**
+ * Switches the index; its clauses start over (they were about another index's fields). To a search index, as
+ * Convex's `setSearchIndex`: the field clauses stay, the text searched too (from another search index), the order
+ * is relevance. From a search index to a database one, as Convex's `clearSearchIndex`: nothing stays, newest first.
+ */
+export function setIndex(d: FilterDraft, index: string, search = false): FilterDraft {
+  if (search) return { ...d, index, eq: [], range: {}, order: "asc", search: { text: d.search?.text ?? "", eq: [] } };
+  if (d.search) return { ...emptyDraft(), index };
+  return { ...d, index, eq: [], range: {} };
+}
 
 /** The index field the next equality would fix, if any is left (a range, if set, moves after it). */
 export function nextEqField(d: FilterDraft, ix: IndexInfo): string | undefined {
@@ -193,5 +224,6 @@ export const removeClause = (d: FilterDraft, id: string): FilterDraft => ({
 /** How many conditions are on: shown on the filter button. */
 export const activeCount = (e: FilterExpression) =>
   e.clauses.filter((c) => c.enabled).length +
+  (e.search ? (e.search.search.trim() ? 1 : 0) + e.search.clauses.filter((c) => c.enabled).length : 0) +
   (e.index?.eq.filter((c) => c.enabled).length ?? 0) +
   (e.index?.range ? 1 : 0);

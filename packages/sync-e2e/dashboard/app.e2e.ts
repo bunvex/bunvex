@@ -26,7 +26,9 @@ const SCHEMA = {
   path: "schema.js",
   source: `import { defineSchema, defineTable } from "@bunvex/server";
     import { v } from "@bunvex/values";
-    export default defineSchema({ messages: defineTable({ body: v.string() }) });`,
+    export default defineSchema({
+      messages: defineTable({ body: v.string() }).searchIndex("search_body", { searchField: "body" }),
+    });`,
 };
 const MODULES = [
   SCHEMA,
@@ -328,8 +330,8 @@ describe("the dashboard app on a live deployment", () => {
       {
         ...SCHEMA,
         source: SCHEMA.source.replace(
-          "messages: defineTable({ body: v.string() })",
-          "messages: defineTable({ body: v.string() }), notes: defineTable({ text: v.string() })",
+          '.searchIndex("search_body", { searchField: "body" }),',
+          '.searchIndex("search_body", { searchField: "body" }), notes: defineTable({ text: v.string() }),',
         ),
       },
       ...MODULES.slice(1),
@@ -456,6 +458,14 @@ describe("the dashboard app on a live deployment", () => {
     await typeInEditor(page, 'export default query({ handler: async (ctx) => ctx.db.query("');
     await page.keyboard.press("Control+Space");
     await page.locator(".suggest-widget").getByText("messages", { exact: true }).first().waitFor();
+    await page.keyboard.press("Escape");
+    // a search index's name completes from the schema's code (STUDY-162 §8)
+    await typeInEditor(
+      page,
+      'export default query({ handler: async (ctx) => ctx.db.query("messages").withSearchIndex("',
+    );
+    await page.keyboard.press("Control+Space");
+    await page.locator(".suggest-widget").getByText("search_body", { exact: true }).first().waitFor();
     await page.keyboard.press("Escape");
     expect(errors).toEqual([]);
     await close();

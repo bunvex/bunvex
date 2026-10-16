@@ -194,14 +194,12 @@ gaps.
     Fivetran operations and primary-key indexes (PRs 2–4, future work by the owner's choice, 2026-10-11). The
     audit events bunvex does not record are not gaps: `build_indexes`, `change_deployment_state`,
     `change_system_stop_state` and `replace_environment_variable` are not emitted by Convex's open-source
-    backend; `push_config` (legacy push) and `delete_component` (components) do not apply.
+    backend; `push_config` (legacy push) does not apply (`delete_component` is recorded since STUDY-153 PR 4b).
 - The dashboard on a real deployment (STUDY-149, all eight PRs built; user docs in
   [docs/dashboard.md](../dashboard.md)): the screens run on a deployment with Convex's calls and freshness, the
   dashboard has its own image (6791), `dashboard.zip` and `bunvex dev`'s local dashboard (6790), and the CLI links
   the local one where Convex's links its cloud (DV-477, PR 8); the image's frame and security headers match
   Convex's, the embedding allow-list in `frame-ancestors` (DV-488). Left, none of them something an app hits:
-  - the Data screen's filter by a search index (the server runs it; the index list shows search, vector and staged
-    indexes since STUDY-149 "Index list");
   - bunvex's own screens not offered on a deployment yet ([additions.md](additions.md), "on the mock"): the
     clients, authentication admin, analytics, flags and workflows (no server side). The system tables
     (AD-24) and the subscriptions inspector (AD-25) are on a deployment since STUDY-149's follow-ups, and the

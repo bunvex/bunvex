@@ -207,6 +207,7 @@ export {
   type CacheCompanion,
   type Caller,
   type CallRequest,
+  ComponentDeletionError,
   DEFAULT_INSTANCE_NAME,
   Engine,
   FINISH_PUSH_MAX_OCC_FAILURES,
