@@ -178,6 +178,40 @@ target (STUDY-154's `componentFunctionName` for a component's function), as Conv
    - A handle passed to a child and called back into the parent (the namespace switch); a deleted one's
      `FunctionHandleNotFound`.
 
+### As built, PR 1 (`server/src/functions.ts`, `logs.ts`, `log-events.ts`, `scheduler.ts`)
+
+- **Resolving.** `resolveCall(ref, callerComponent, db, action)` is Convex's `resolve`.
+  - A name resolves among the caller's own component's functions.
+  - A `_reference/childComponent/<child>/<attributes>` resolves among the caller's direct children only
+    (`componentInParent`, `rootComponent`), and only to a public export.
+  - A handle passes through.
+  - The texts are Convex's: "Child component 'nope' not found", "Child component 'counter' does not export
+    'lib.secret'", and from an action "Couldn't resolve counter.lib.add".
+  - A branch (`components.counter.lib`, or `components.counter`) is "does not export 'lib'" (or `''`). From a
+    query or mutation too it is a refusal like the others (`InvalidReference`, a plain `Error` in the caller), not
+    a system error (DV-531).
+  - The wrong kind is Convex's text with the component's path: "Trying to execute lib.js:add in 'counter' as Query,
+    but it is defined as Mutation.".
+- **Running.**
+  - A nested `ctx.runQuery` / `runMutation` runs the callee in its namespace (`inComponentRun`), and goes back to
+    the app's with `inAppRun` when a component calls an app function through a handle.
+  - Its arguments and return value are checked in the callee's namespace: an app `v.id` passes where the
+    component's table of that number has that name (C4, Q-2).
+  - A failed nested mutation's writes are rolled back, and the caller may catch the error. A `BunvexError` crosses
+    with its data. The depth limit counts calls inside a component.
+  - An action resolves the target before it builds the caller (`callerOf`), so a miss is not wrapped as
+    "Uncaught Error". Its identity is the caller's unless the call crosses into or out of a component, which gets
+    none (`propagate_component_auth`, Q-3).
+- **Scheduling (Q-4).** A reference to a component's function is "Scheduling a function of a component is not
+  supported yet", until step 7.
+- **Logs (Q-5).** `withSubFunction` tags the callee's console lines with `{componentPath, path}`, and the log stream
+  carries them as each line's source (`component_path`).
+- **Measured.** 200 nested `runQuery` calls from one query: about 0.42 ms before, about 0.53 ms after (+0.5 µs a
+  call, the resolution and the sub-function scope).
+- **Tests.** `server/test/component-calls.test.ts` covers each of §1.1's cases from a query, a mutation and an
+  action, plus the rollback, a re-run subscription, identity, C4, `BunvexError`, the depth limit, the log source
+  and the scheduler's refusal. Sabotage: 9 of 9 checks failed when the fix was broken.
+
 ## 5. Questions for the owner
 
 | # | Where bunvex would differ | Convex | Recommendation | Decision |

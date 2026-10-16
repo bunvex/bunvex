@@ -36,7 +36,18 @@ export type LogLine = {
    * `warning:TooManyReads` (STUDY-76). Never cut, and not counted against the line limit.
    */
   systemCode?: string;
+  /**
+   * The nested function that wrote it (Convex's `LogLine::SubFunction`, STUDY-155): its component's path (null for
+   * the app's) and its name. Absent for the executing function's own lines.
+   */
+  subFunction?: SubFunction;
 };
+
+/** A nested call's function, as its lines name it. */
+export type SubFunction = { componentPath: string | null; path: string };
+const subFunctions = new AsyncLocalStorage<SubFunction>();
+/** Run a nested call so the lines it writes name it. */
+export const withSubFunction = <T>(sub: SubFunction, fn: () => T): T => subFunctions.run(sub, fn);
 
 /**
  * The function execution lines belong to, for the function log (STUDY-47). Set on the executions the
@@ -288,6 +299,8 @@ const said = (e: Execution, text: string) => (inNode(e) ? render(e, [text]) : [t
 
 function emit(execution: Execution, level: LogLevel, messages: string[]) {
   const line = makeLogLine(level, messages);
+  const sub = subFunctions.getStore();
+  if (sub) line.subFunction = sub;
   execution.entries.push(line);
   execution.owner?.onLine?.(line);
 }

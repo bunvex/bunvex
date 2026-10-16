@@ -47,6 +47,7 @@ import {
   type FunctionReference,
   getFunctionName,
   type OptionalRestArgs,
+  toReferencePath,
 } from "@bunvex/protocol";
 import {
   type GenericId,
@@ -138,6 +139,9 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
       throw new Error(`${unixTimestampDebug(tsMs / 1000)} is more than 5 years in the future`);
     if (tsMs - now < -FIVE_YEARS_MS)
       throw new Error(`${unixTimestampDebug(tsMs / 1000)} is more than 5 years in the past`);
+    // A component's function (`components.counter.lib.add`) is scheduled from STUDY-152 step 7 on (STUDY-155 Q-4).
+    if (typeof fn === "object" && fn !== null && (fn as Record<symbol, unknown>)[toReferencePath] !== undefined)
+      throw new Error("Scheduling a function of a component is not supported yet");
     // A function handle (STUDY-50) names its function by its row, read in the scheduling transaction.
     const name = functions.scheduledTarget(
       await functionNameOf(fn, "db" in target ? target.db : null, functions.engineOf()),
