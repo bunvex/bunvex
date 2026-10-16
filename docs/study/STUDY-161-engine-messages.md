@@ -484,4 +484,41 @@ every repeat; and nothing merges.
 6. **Measurement**: the read path gains a sorted-set insert per read; the PR stays a draft until the owner's
    before/after run (`bench/`), prepared in the PR.
 
-*Built:* not yet.
+*Built* (draft, waiting on its measurement):
+- `core/src/read-count.ts`, Convex's per-index merged sets and `num_intervals` (its saturating update included). `Tx`
+  keeps one beside `readList`: `recordInterval(i, "direct" | "derived" | "none")`. Derived: `dependOn`, `readMissingTable`,
+  `recordIndexMeta`, the environment variables' per-name reads, a search's terms, and (in the count only) a new
+  document's id. Not counted: `unrecorded`, the new `notCounted` (the canonical URLs of the default system variables;
+  a table's creation, which counts one, once). A scan counts at its first document and widens as it settles (a counted
+  read on the same index settles it first); `count` counts all of the table's `by_id`.
+- **The modules.** Convex reads a `_modules` row for each module a function loads: its own and every chunk it imports.
+  esbuild puts Convex's library into a chunk of its own once two or more function modules use it; bunvex links its
+  library, so `CodeVersion` counts that chunk where Convex's would be (unless one of the app's own chunks has the same
+  importers), each module once per transaction (a nested call to another module counts its new ones).
+- Function starts count 2 plus the modules (a `_system/` function, 2); the first nested call 2.
+- Tests: `core/test/read-count.test.ts` (`ReadCount`: merging, adjacency on either side, bridging, empty intervals,
+  derived intervals, saturation; a transaction's count per shape; the limit at the read that passes it);
+  `core/test/read-set-unchanged.test.ts` (17 shapes' read-sets equal to those main recorded before the change,
+  `fixtures/read-sets.json`); `differential/test/read-count.test.ts` (app `read-count-app/`, both backends at a limit
+  of 60: 52 shapes' counts, 6 shapes at 4 bases around the limit, a nested call's budget, the bulk edit at 54–58
+  documents: the error inside the rewrap with its data on both). Updated to the new count: `tx-b-edges`,
+  `paginate-limits` (a page from an `end` cursor reads an empty interval: done, no split), `read-limits`,
+  `limit-warnings`, `nested-calls`, `pause-deployment` (the caller's usage includes the start's reads).
+- Sabotage (each restored, `git diff` clean): no merging (7 unit and 2 differential tests fail); adjacency on one side
+  only (1 unit); derived reads counted (3 unit, 4 differential); no start reads (3 differential); no library chunk (3
+  differential); no nested reads (3 differential); a new id not in the set (1 differential); the count on the default
+  index (1 unit, 1 differential).
+- Bytes and documents read keep their own counters (Convex's `record_read_document`), unchanged.
+- **Open (Q2, DV-521):** the module count is esbuild's chunking as bunvex can predict it.
+
+**Q2 (DV-521) — the modules a function loads.**
+
+- *Convex:* one read per module the function loads; how many depends on how esbuild chunked the push (its library in a
+  chunk once two function modules use it; the app's shared code in chunks per set of importers).
+- *bunvex:* the same count from its own bundle (Bun.build's chunks of the app's code) plus Convex's library chunk where
+  esbuild would make one; matched on every app the sweep tried (one module; two or more modules).
+- *Same?* Yes on the apps tried; possibly not where esbuild and Bun.build chunk the app's own shared code differently.
+- *Why:* "Não dá pra fazer" exactly without esbuild's chunking (as DV-520).
+- *App impact:* a function within one or two reads of the 4 096 limit, in an app whose shared code chunks differently,
+  could pass on one backend and fail on the other.
+- *Recommendation:* accept (a): the prediction as built.

@@ -471,7 +471,9 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-None as of 2026-10-15.
+| ID | bunvex | Convex | Observable | Why | Recommendation | Source |
+|---|---|---|---|---|---|---|
+| DV-521 | The reads a function's start counts for its modules come from bunvex's own bundle, plus the chunk esbuild would give Convex's library | one read per module loaded, as esbuild chunked the push | yes (the read limit, by one or two reads, in some apps) | the count is esbuild's chunking; bunvex bundles with Bun.build | accept (a) | [STUDY-161 §16 Q2](../study/STUDY-161-engine-messages.md#16-counting-reads-toward-the-read-limit-found-by-study-149-bulk-edit) |
 
 DV-529 (STUDY-161 §15) was decided by the owner (2026-10-15: accept, option (b): bunvex's own words for a chunk that is not bytes) and is in [Decided divergences](#decided-divergences).
 

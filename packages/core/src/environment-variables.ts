@@ -120,7 +120,8 @@ export class EnvironmentVariables {
       if (this.intervals.size >= 4096) this.intervals.clear();
       this.intervals.set(name, i);
     }
-    db.recordInterval(i);
+    // Convex reads the variables once, preloaded at the function's start (counted there, `countConstantReads`).
+    db.recordInterval(i, "derived");
   }
 
   /** A query's or mutation's reader: one name at a time, each read recorded. */

@@ -191,6 +191,45 @@ async function importPackage(path: string, env: Record<string, string>): Promise
 /** A module's name as the registry keys it: its path without `.js` (`dir/file.js` → `dir/file`). */
 export const moduleName = (path: string) => path.replace(/\.js$/, "");
 const isDeps = (path: string) => path.startsWith("_deps/");
+
+/** What `imports` names for a module that imports the server's library (`bunvex/server`, `bunvex/values`). */
+const SERVER_LIBRARY = "\0library";
+
+/**
+ * The modules running each function module loads, as Convex's: itself and every module it imports (STUDY-161
+ * §16.3: Convex reads each one's `_modules` row as the function's read). Convex's CLI bundles its library into the
+ * modules, so when two or more function modules use it, it lives in a shared chunk of its own — unless a chunk of
+ * the app's own code already has exactly those modules as importers (esbuild's chunks are per set of importers);
+ * bunvex's server links its library instead, so that chunk is counted where Convex's would be.
+ */
+function moduleLoadCounts(modules: Map<string, Loaded>, imports: Map<string, Set<string>>): Map<string, string[]> {
+  const closure = (path: string) => {
+    const seen = new Set([path]);
+    const todo = [path];
+    for (let p = todo.pop(); p !== undefined; p = todo.pop())
+      for (const q of imports.get(p) ?? [])
+        if (!seen.has(q)) {
+          seen.add(q);
+          todo.push(q);
+        }
+    return seen;
+  };
+  const entries = [...modules.keys()].filter(
+    (p) => !isDeps(p) && modules.get(p)!.source.environment === "isolate" && moduleName(p) !== "schema",
+  );
+  const closures = new Map(entries.map((p) => [p, closure(p)]));
+  const library = entries.filter((p) => closures.get(p)!.has(SERVER_LIBRARY));
+  const libraryKey = library.join("\0");
+  const importersKey = (chunk: string) => entries.filter((p) => closures.get(p)!.has(chunk)).join("\0");
+  const out = new Map<string, string[]>();
+  for (const p of entries) {
+    const mine = [...closures.get(p)!].filter((q) => q !== SERVER_LIBRARY);
+    const libraryChunk =
+      library.length >= 2 && library.includes(p) && !mine.some((q) => isDeps(q) && importersKey(q) === libraryKey);
+    out.set(moduleName(p), libraryChunk ? [...mine, SERVER_LIBRARY] : mine);
+  }
+  return out;
+}
 /** A module's hash, as Convex's `hash_module_source`: sha256 of its source and its source map, in hex (the push's wire form). */
 export const moduleHash = (m: ModuleSource) =>
   createHash("sha256")
@@ -298,6 +337,11 @@ export class CodeVersion {
     readonly crons: Crons | undefined,
     /** The modules' source maps, which map this version's error frames (`stack-map.ts`) while it lives. */
     readonly frameMaps: SourceMapTokens,
+    /**
+     * The modules running a module's function loads, by module name: itself and every module it imports, the shared
+     * `_deps` chunks included. Convex reads each one's `_modules` row as the function's read (STUDY-161 §16.3).
+     */
+    readonly moduleLoads: Map<string, string[]> = new Map(),
   ) {}
 
   /**
@@ -387,10 +431,15 @@ export class CodeVersion {
       }
       return s;
     };
+    /** Each module's own imports of other modules of the push (by path). */
+    const imports = new Map<string, Set<string>>();
     const linker = async (spec: string, referencing: vm.Module) => {
       const from = referencing.identifier;
       const env = modules.get(from)?.source.environment ?? "isolate";
-      if (spec in SERVER_MODULES) return serverModule(spec, contexts[env], `${env}:${spec}`);
+      if (spec in SERVER_MODULES) {
+        imports.set(from, (imports.get(from) ?? new Set()).add(SERVER_LIBRARY));
+        return serverModule(spec, contexts[env], `${env}:${spec}`);
+      }
       if (spec.startsWith("./") || spec.startsWith("../")) {
         const path = posix.normalize(posix.join(posix.dirname(from), spec));
         const target = modules.get(path);
@@ -400,6 +449,7 @@ export class CodeVersion {
           throw new InvalidModulesError(
             `Failed to analyze ${from}: it imports ${path}, which runs in the other runtime ("use node")`,
           );
+        imports.set(from, (imports.get(from) ?? new Set()).add(path));
         return target.module;
       }
       if (BUILTINS.has(spec) && env === "node") return serverModule(spec, contexts.node, `node:${spec}`);
@@ -441,11 +491,15 @@ export class CodeVersion {
         throw new InvalidModulesError(`Failed to analyze ${path}: ${uncaught(e)}`);
       }
     }
-    return CodeVersion.analyze(modules, frameMaps);
+    return CodeVersion.analyze(modules, frameMaps, imports);
   }
 
   /** Convex's `udf_analyze` / `http_analyze` / `cron_analyze`, over the evaluated modules. */
-  private static analyze(modules: Map<string, Loaded>, maps: SourceMapTokens): CodeVersion {
+  private static analyze(
+    modules: Map<string, Loaded>,
+    maps: SourceMapTokens,
+    imports: Map<string, Set<string>> = new Map(),
+  ): CodeVersion {
     const functions = new Map<string, FunctionDef>();
     const rooms = new Map<string, AnyRoomDef>();
     const moduleHashes = new Map<string, string>();
@@ -518,7 +572,18 @@ export class CodeVersion {
       }
       analysis[path] = a;
     }
-    const version = new CodeVersion(modules, functions, rooms, moduleHashes, analysis, router, crons, maps);
+    const moduleLoads = moduleLoadCounts(modules, imports);
+    const version = new CodeVersion(
+      modules,
+      functions,
+      rooms,
+      moduleHashes,
+      analysis,
+      router,
+      crons,
+      maps,
+      moduleLoads,
+    );
     if (crons) {
       // Convex's `validate_cron_jobs`: every target exists and is a mutation or an action.
       const specs = cronSpecs(crons, (id, fn) => version.cronTarget(id, fn));

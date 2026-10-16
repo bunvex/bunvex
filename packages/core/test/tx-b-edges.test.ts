@@ -120,15 +120,17 @@ test("uncountedRead keeps neither the reads nor the documents of its body; it re
   });
 });
 
-test("the read limit counts recorded reads less the uncounted ones, up to the limit included", async () => {
+test("the read limit counts the function's reads (uncounted ones left out), up to the limit included", async () => {
   const { e } = await engine();
   const byId = e.catalog.tables.get("items")!.byId.id;
   await e.query(async (db) => {
     db.recordUncounted(byId);
     db.recordUncounted(byId);
     db.limits.databaseQueries = db.usage.databaseQueries + 1;
-    db.recordInterval({ index: byId, lo: FULL_LO, hi: prefixEnd(FULL_LO) });
-    expect(() => db.recordInterval({ index: byId, lo: FULL_LO, hi: prefixEnd(FULL_LO) })).toThrow(
+    db.recordInterval({ index: byId, lo: FULL_LO, hi: Uint8Array.of(1) });
+    // the same interval again merges (STUDY-161 §16): no new read
+    db.recordInterval({ index: byId, lo: FULL_LO, hi: Uint8Array.of(1) });
+    expect(() => db.recordInterval({ index: byId, lo: Uint8Array.of(2), hi: Uint8Array.of(3) })).toThrow(
       "Too many reads in a single function execution",
     );
   });

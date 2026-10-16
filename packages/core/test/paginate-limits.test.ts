@@ -83,14 +83,15 @@ describe(".paginate() at a transaction limit (STUDY-108)", () => {
     // Convex's cursor moved past the first document before its read failed: the next page starts after it.
     const next = await e.query((db) => paginate(db, 3, { cursor: p.continueCursor }));
     expect(ns(next.page)).toEqual([1, 2, 3]);
-    // Past the end, the cursor is already "end": done, split required.
+    // Past the end, the cursor is already "end": its read is an empty interval, which adds nothing to the count
+    // (STUDY-161 §16, Convex's `IntervalSet::add`), so the page is done, with no split.
     const end = await e.query((db) => paginate(db, 10));
     const past = await e.query(async (db) => {
       const q = db.query("items").withIndex("by_n");
       db.limits.databaseQueries = db.usage.databaseQueries;
       return q.paginate({ numItems: 3, cursor: end.continueCursor });
     });
-    expect([past.page, past.pageStatus, past.isDone]).toEqual([[], "SplitRequired", true]);
+    expect([past.page, past.pageStatus, past.isDone]).toEqual([[], null, true]);
   });
 
   test("before any document: a first page fails with a system error; a later page continues from its start", async () => {
