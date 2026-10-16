@@ -26,10 +26,19 @@ export type AdminSyncOptions = {
 
 type Listener = { onResult: (r: FunctionResult) => void; delivered: boolean };
 
-/** A failed system call's error: a permission refusal is `unauthorized`, anything else `unavailable`. */
+/**
+ * A failed system call's error: a permission refusal is `unauthorized`; a page larger than a deployment reads
+ * (`paginate`'s "Requested too many items", Convex's `PageSizeTooLarge`) is the caller's `invalid_request`; anything
+ * else `unavailable`.
+ */
 export function errorOfFailure(udfPath: string, f: Extract<FunctionResult, { success: false }>): DataSourceError {
   const unauthorized = /permission|not authorized|deploy key was invalid|admin key/i.test(f.errorMessage);
-  return new DataSourceError(unauthorized ? "unauthorized" : "unavailable", `${udfPath}: ${f.errorMessage}`);
+  const code = unauthorized
+    ? "unauthorized"
+    : /Requested too many items/.test(f.errorMessage)
+      ? "invalid_request"
+      : "unavailable";
+  return new DataSourceError(code, `${udfPath}: ${f.errorMessage}`);
 }
 
 export class AdminSync {

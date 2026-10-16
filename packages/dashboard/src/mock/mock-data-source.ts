@@ -173,8 +173,20 @@ function decodeCursor(cursor: string, query: string): Key | null {
   return parsed.k as Key | null;
 }
 
-function checkNumItems(n: number) {
+/** At most this many items per page, as a deployment's `paginate` (Convex's `TRANSACTION_MAX_READ_SIZE_ROWS`). */
+export const MAX_PAGE_ITEMS = 32_000;
+
+/** A page's size. `paged`: read by a deployment's `paginate` (not the logs, which the source reads from memory). */
+function checkNumItems(n: number, paged = true) {
   if (!Number.isInteger(n) || n < 1) throw new DataSourceError("invalid_request", `numItems must be ≥ 1: ${n}`);
+  // a deployment refuses it ("Uncaught Error: Requested too many items: …"); the mock does not accept it either
+  if (paged && n > MAX_PAGE_ITEMS) throw new DataSourceError("invalid_request", `Requested too many items: ${n}`);
+}
+
+/** Convex's `validate_k` for the top-k metrics: from 1 to 25 ("InvalidTopKParameter"). */
+function checkTopK(k: number) {
+  if (!Number.isInteger(k) || k < 1 || k > 25)
+    throw new DataSourceError("invalid_request", `k must be between 1 and 25, got ${k}`);
 }
 
 /** One page after `after` (exclusive) of items already in order; `null` = from the start. */
@@ -893,7 +905,7 @@ export class MockDataSource implements DashboardDataSource {
 
   listLogs(q: LogQuery, opts?: CallOptions): Promise<Page<LogEntry>> {
     return this.call(opts?.signal, () => {
-      checkNumItems(q.numItems);
+      checkNumItems(q.numItems, false);
       const levels = q.levels ? [...q.levels].sort() : null;
       const query = `logs\u0000${q.function ?? ""}\u0000${levels?.join(",") ?? "*"}`;
       const after = q.cursor === null ? null : decodeCursor(q.cursor, query);
@@ -1097,7 +1109,7 @@ export class MockDataSource implements DashboardDataSource {
   cancelScheduledFunction(id: string, opts?: CallOptions): Promise<void> {
     return this.call(opts?.signal, () => {
       this.canWrite();
-      const fn = this.scheduler.list({ numItems: 100_000, cursor: null }).page.find((j) => j.id === id)?.function;
+      const fn = this.scheduler.functionOf(id);
       this.scheduler.cancel(id);
       this.record("cancel_scheduled_function", { id, function: fn ?? null });
     });
@@ -1386,8 +1398,10 @@ export class MockDataSource implements DashboardDataSource {
     return this.call(signal, () => {
       if (!this.opts.capabilities.operations.includes("viewMetrics"))
         throw new DataSourceError("unauthorized", "this credential cannot view metrics");
-      if (!(w.end > w.start) || !Number.isInteger(w.numBuckets) || w.numBuckets < 1 || w.numBuckets > 1000)
-        throw new DataSourceError("invalid_request", "a metrics window needs start < end and 1–1000 buckets");
+      // a deployment's limits (Convex's `MetricsWindow`: 1 to 10 000 buckets), in the server source's words
+      if (!Number.isInteger(w.numBuckets) || w.numBuckets < 1 || w.numBuckets > 10_000)
+        throw new DataSourceError("invalid_request", `A window needs 1 to 10000 buckets, not ${w.numBuckets}.`);
+      if (!(w.end > w.start)) throw new DataSourceError("invalid_request", "A window must end after it starts.");
       return body();
     });
   }
@@ -1413,7 +1427,10 @@ export class MockDataSource implements DashboardDataSource {
   }
 
   topFunctions(measure: TopKMeasure, w: MetricsWindow, k: number, opts?: CallOptions): Promise<TopKSeries> {
-    return this.metrics(opts?.signal, w, () => metrics.topFunctions(this.logs, measure, w, Math.max(1, k)));
+    return this.metrics(opts?.signal, w, () => {
+      checkTopK(k);
+      return metrics.topFunctions(this.logs, measure, w, k);
+    });
   }
 
   tableRate(table: string, metric: TableMetric, w: MetricsWindow, opts?: CallOptions): Promise<Timeseries> {
@@ -1436,9 +1453,10 @@ export class MockDataSource implements DashboardDataSource {
     k: number,
     opts?: CallOptions & { function?: string },
   ): Promise<InvalidationSeries> {
-    return this.metrics(opts?.signal, w, () =>
-      metrics.subscriptionInvalidations(this.logs, w, Math.max(1, k), opts?.function),
-    );
+    return this.metrics(opts?.signal, w, () => {
+      checkTopK(k);
+      return metrics.subscriptionInvalidations(this.logs, w, k, opts?.function);
+    });
   }
 
   // ---------------------------------------------------------------- topology (§22), simulated

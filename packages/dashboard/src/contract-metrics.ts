@@ -114,6 +114,32 @@ export function describeMetricsContract({ make, test }: Ctx) {
     expect(bad instanceof DataSourceError && bad.code === "invalid_request").toBe(true);
   });
 
+  test("refused as a deployment refuses (when offered): k outside 1–25; a window's 10 000 buckets are fine, 10 001 not", async () => {
+    const src = await make();
+    const w = src.topFunctions || src.subscriptionInvalidations ? await windowOf(src) : null;
+    if (!w) return;
+    const refused = async (p: Promise<unknown>, message: string) => {
+      const e = await p.then(
+        () => null,
+        (x: unknown) => x,
+      );
+      expect(e instanceof DataSourceError && e.code === "invalid_request").toBe(true);
+      expect((e as Error).message).toBe(message);
+    };
+    if (src.topFunctions) {
+      for (const k of [0, 26])
+        await refused(src.topFunctions("invocations", w, k), `k must be between 1 and 25, got ${k}`);
+      expect(Array.isArray(await src.topFunctions("invocations", w, 25))).toBe(true);
+      expect(Array.isArray(await src.topFunctions("invocations", { ...w, numBuckets: 10_000 }, 5))).toBe(true);
+      await refused(
+        src.topFunctions("invocations", { ...w, numBuckets: 10_001 }, 5),
+        "A window needs 1 to 10000 buckets, not 10001.",
+      );
+    }
+    if (src.subscriptionInvalidations)
+      await refused(src.subscriptionInvalidations(w, 26), "k must be between 1 and 25, got 26");
+  });
+
   test("concurrency (when offered): each kind once, in order, running and queued a bucket per window bucket", async () => {
     const src = await make();
     const w = src.functionConcurrency ? await windowOf(src) : null;

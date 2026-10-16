@@ -228,6 +228,17 @@ export function describeDataSourceContract(
 
     // -------------------------------------------------------------- pagination
     area = "documents";
+    test("a page of more than 32 000 items is refused, as a deployment's paginate refuses it", async () => {
+      const { src, table } = await fixture();
+      const e = await src.listDocuments({ table, numItems: 32_001, cursor: null }).then(
+        () => null,
+        (x: unknown) => x,
+      );
+      expect(e instanceof DataSourceError && e.code === "invalid_request").toBe(true);
+      expect((e as Error).message).toContain("Requested too many items: 32001");
+      expect((await src.listDocuments({ table, numItems: 32_000, cursor: null })).page.length).toBeGreaterThan(0);
+    });
+
     test("pages walk every document once, newest first by default, and end with isDone", async () => {
       const { src, table, docs } = await fixture();
       const ids = docs.map((d) => d._id);

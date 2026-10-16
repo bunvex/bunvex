@@ -242,7 +242,10 @@ export type FilterExpression = {
 };
 
 export type PageRequest = {
-  /** A hint: a page may hold fewer items without being the last one (`isDone` decides). */
+  /**
+   * A hint: a page may hold fewer items without being the last one (`isDone` decides). At most 32 000, as a
+   * deployment's `paginate` reads (more is `invalid_request`, "Requested too many items").
+   */
   numItems: number;
   /** `null` starts; then the previous page's `continueCursor`. */
   cursor: string | null;
