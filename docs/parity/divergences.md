@@ -31,6 +31,7 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 
 | ID | bunvex | Convex | Observable | Why | Decided | Source |
 |---|---|---|---|---|---|---|
+| DV-521 | The reads a function's start counts for its modules come from bunvex's own bundle, plus the chunk esbuild would give Convex's library | one read per module loaded, as esbuild chunked the push | yes (the read limit, by one or two reads, in some apps) | the count is esbuild's chunking; bunvex bundles with Bun.build | owner, 2026-10-15 (accepted: the prediction as built) | [STUDY-161 §16 Q2](../study/STUDY-161-engine-messages.md#16-counting-reads-toward-the-read-limit-found-by-study-149-bulk-edit) |
 | DV-529 | A streamed HTTP action body's chunk that is not bytes fails the body with bunvex's words: `HTTP action response body chunks must be an ArrayBuffer or a view of one, got <type>` (v8's type names: `string`, `Number`, `unknown`, …), and `HTTP action response body chunks must not be a resizable ArrayBuffer or a view of one`; when it fails, the status, the body, the clean end, `Uncaught Error: `, no frames and the log are Convex's | `serde_v8 error: invalid type; expected: buffer, got: <type>` and `serde_v8 error: can't create slice from resizable ArrayBuffer` (the `stream/extend` op's `ByteBuf`) | yes: the text of the 500's `code` and `trace`, of the Completion's error and of the `error:httpAction` line | serde_v8 is the library Convex's isolate uses; bunvex does not use it, so its message would name something bunvex does not have. Options: (a) Convex's words; (b) bunvex's own, with the same type names | owner, 2026-10-15: accept, (b) | [STUDY-161 §15](../study/STUDY-161-engine-messages.md#15-a-streamed-http-action-bodys-chunk-that-is-not-bytes-found-by-study-31-106) |
 | DV-520 | A function's analyzed line (`modules:listForAllComponents`' `lineno`, the order of a file's functions in the dashboard) is Convex's arithmetic over Bun.build's output, which can land on another line than Convex's (`messages:secret`: 37 against 39) | the token after the handler's bundled position, 0-based lookup with 1-based numbers, over esbuild's printed bundle (`minifySyntax`, `keepNames`) | no (dashboard) | Convex's number is esbuild's printer's; matching it needs esbuild in the CLI | owner, 2026-10-15 (accepted, option (a)) | [STUDY-161 Q1](../study/STUDY-161-engine-messages.md#9-divergences) |
 | DV-498 | An `export()` in a component definition that throws is refused as the definition's own exception: a 400 `InvalidBunvexConfig` with its message and frames | a 500 internal error ("Failed to call export function", from the source) | no (only an invalid definition reaches it) | A definition's error is the developer's to fix, shown like any other exception in it; bunvex's 500s page as internal errors | owner, 2026-10-15 | [STUDY-153 §4](../study/STUDY-153-component-push.md#4-divergences-and-decisions) |
@@ -471,9 +472,9 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-| ID | bunvex | Convex | Observable | Why | Recommendation | Source |
-|---|---|---|---|---|---|---|
-| DV-521 | The reads a function's start counts for its modules come from bunvex's own bundle, plus the chunk esbuild would give Convex's library | one read per module loaded, as esbuild chunked the push | yes (the read limit, by one or two reads, in some apps) | the count is esbuild's chunking; bunvex bundles with Bun.build | accept (a) | [STUDY-161 §16 Q2](../study/STUDY-161-engine-messages.md#16-counting-reads-toward-the-read-limit-found-by-study-149-bulk-edit) |
+None as of 2026-10-15.
+
+DV-521 (STUDY-161 §16 Q2) was decided by the owner (2026-10-15: accept, the module reads predicted from bunvex's bundle as built) and is in [Decided divergences](#decided-divergences).
 
 DV-529 (STUDY-161 §15) was decided by the owner (2026-10-15: accept, option (b): bunvex's own words for a chunk that is not bytes) and is in [Decided divergences](#decided-divergences).
 

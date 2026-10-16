@@ -509,9 +509,9 @@ every repeat; and nothing merges.
   differential); no nested reads (3 differential); a new id not in the set (1 differential); the count on the default
   index (1 unit, 1 differential).
 - Bytes and documents read keep their own counters (Convex's `record_read_document`), unchanged.
-- **Open (Q2, DV-521):** the module count is esbuild's chunking as bunvex can predict it.
+- **Q2 (DV-521), accepted (owner, 2026-10-15):** the module count is esbuild's chunking as bunvex can predict it.
 
-**Q2 (DV-521) — the modules a function loads.**
+**Q2 (DV-521) — the modules a function loads.** Accepted (owner, 2026-10-15).
 
 - *Convex:* one read per module the function loads; how many depends on how esbuild chunked the push (its library in a
   chunk once two function modules use it; the app's shared code in chunks per set of importers).
@@ -522,3 +522,4 @@ every repeat; and nothing merges.
 - *App impact:* a function within one or two reads of the 4 096 limit, in an app whose shared code chunks differently,
   could pass on one backend and fail on the other.
 - *Recommendation:* accept (a): the prediction as built.
+- *Decision:* accepted, the prediction as built (owner, 2026-10-15); DV-521 in [divergences.md](../parity/divergences.md).
