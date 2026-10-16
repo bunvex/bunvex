@@ -222,9 +222,10 @@ describe("/api/function", () => {
     expect(
       (await post("function", JSON.stringify({ path: "m:ok", args: {}, componentPath: "" }), admin)).body.value,
     ).toBe("ok");
+    // A path no component has: a 400, as the websocket answers it (DV-530; Convex: a 500 here).
     expect(await post("function", JSON.stringify({ path: "m:ok", args: {}, componentPath: "x" }), admin)).toEqual({
-      status: 500,
-      body: { code: "InternalServerError", message: "Your request couldn't be completed. Try again later." },
+      status: 400,
+      body: { code: "ComponentPathNotFound", message: "Component path 'x' not found" },
     });
   });
 });

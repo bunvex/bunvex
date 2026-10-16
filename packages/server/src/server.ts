@@ -12,7 +12,11 @@ import {
   applyEnvVarChanges,
   BackendIsNotRunningError,
   type Caller,
+  ComponentDeletionError,
+  type ComponentMeta,
   checkIdentifier,
+  componentMeta,
+  componentPath,
   DEFAULT_SAMPLER,
   DEPLOYMENT_AUDIT_LOG_TABLE,
   directFetch,
@@ -27,6 +31,7 @@ import {
   orderEnvVarChanges,
   parseValue,
   readBackendState,
+  resolveComponentPath,
   SCHEDULED_JOB_ARGS_TABLE,
   SCHEDULED_JOBS_TABLE,
   SchemaEnforcementError,
@@ -68,6 +73,8 @@ import {
 } from "./canonical-urls.ts";
 import { requestVerdict, withClientVersionCheck } from "./client-version.ts";
 import {
+  ensureRootComponent,
+  loadComponentCode,
   loadLatestCode,
   peekUdfConfig,
   type SourcePackage,
@@ -109,7 +116,8 @@ import {
   type AdminCaller,
   adminCallerOf,
   callerOf,
-  type Functions,
+  componentFunctionName,
+  Functions,
   isSystemIdentity,
   type SourcedCaller,
 } from "./functions.ts";
@@ -389,9 +397,9 @@ const fromWire = (args: unknown, path: string) => {
 
 /** Convex's message for a function `/api/function` or `/api/run` cannot find. */
 const isSystemPath = (path: unknown) => typeof path === "string" && path.startsWith("_system/");
-const anyFunctionNotFound = (path: string) =>
+const anyFunctionNotFound = (path: string, component: string | null = null) =>
   new FunctionPathError(
-    `Could not find function for '${path.replace(/\.js(?=:|$)/, "").replace(/:default$/, "")}'. Did you forget to run \`bunvex dev\`?`,
+    `Could not find function for '${path.replace(/\.js(?=:|$)/, "").replace(/:default$/, "")}'${component === null ? "" : ` in '${component}'`}. Did you forget to run \`bunvex dev\`?`,
   );
 
 /**
@@ -446,6 +454,10 @@ const WRITE_DATA_BODIES: Record<string, BodyShape> = {
   },
   "/api/delete_scheduled_functions_table": {
     name: "DeleteScheduledFunctionsTableRequest",
+    fields: [["componentId", "optString"]],
+  },
+  "/api/delete_component": {
+    name: "DeleteComponentArgs",
     fields: [["componentId", "optString"]],
   },
   "/api/delete_tables": {
@@ -1451,6 +1463,23 @@ export function createServer(opts: ServerOptions) {
       );
       return new Response(null, { status: 200 });
     }
+    // Convex's `/api/delete_component {componentId}` (dashboard.rs, STUDY-153 PR 4b): an unmounted component and every
+    // one under it deleted, rows and tables, in one commit, with its audit event. The app (no id), an id that is no
+    // component's or names none, are Convex's system errors.
+    if (url.pathname === "/api/delete_component") {
+      const id = body.componentId as string | null | undefined;
+      try {
+        if (id === undefined || id === null) throw new Error("Cannot delete root component");
+        await engine.deleteComponent(id, (db, path) =>
+          insertAuditLogEvents(db, [auditEvents.deleteComponent(id, path.join("/"))], auditActor(caller)),
+        );
+      } catch (e) {
+        if (e instanceof ComponentDeletionError) return requestError(e.status, e.code, e.message);
+        console.error("bunvex: deleting a component failed:", e);
+        return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+      }
+      return new Response(null, { status: 200 });
+    }
     // Convex's `/api/delete_tables {tableNames, componentId}` (dashboard.rs): the tables deleted in one commit.
     if (url.pathname === "/api/delete_tables") {
       if (body.componentId !== undefined && body.componentId !== null && body.componentId !== "")
@@ -1650,6 +1679,7 @@ export function createServer(opts: ServerOptions) {
         url.pathname === "/api/check_admin_key" ||
         /^\/api\/cancel_(all_)?jobs?$/.test(url.pathname) ||
         url.pathname === "/api/delete_tables" ||
+        url.pathname === "/api/delete_component" ||
         url.pathname === "/api/delete_scheduled_functions_table" ||
         url.pathname === "/api/v1/list_audit_log_events" ||
         /^\/api\/(v1\/)?update_canonical_url$/.test(url.pathname) ||
@@ -1782,23 +1812,43 @@ export function createServer(opts: ServerOptions) {
           );
         kind = found;
       }
+      // The function a call runs: the app's `path`, or a component's (STUDY-154).
+      let target = body.path as string;
       if (kind === "function") {
         if ((caller as AdminCaller).admin?.kind !== "admin") {
           const denied = new BadDeployKeyError();
           return requestError(denied.status, denied.code, denied.message);
         }
-        // bunvex has no components (STUDY-62): Convex fails a path it cannot find with an internal error.
-        if (typeof body.componentPath === "string" && body.componentPath !== "")
-          return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+        // A component's function (Convex's `/api/function {componentPath}`, STUDY-154): an admin's only, not one
+        // acting as a user; an unknown path a 400, as the websocket answers it (DV-530).
+        let component: string | null = null;
+        if (typeof body.componentPath === "string" && body.componentPath !== "") {
+          if (caller.identity != null)
+            return requestError(
+              400,
+              "BadRequest",
+              "Only admin or system users can call functions on non-root components directly",
+            );
+          const segments = body.componentPath.split("/");
+          for (const s of segments) {
+            const invalid = identifierError(s);
+            if (invalid !== null) return requestError(400, "InvalidComponentPath", invalid);
+          }
+          const found = await engine.query((db) => resolveComponentPath(db, segments));
+          if (!found)
+            return requestError(400, "ComponentPathNotFound", `Component path '${body.componentPath}' not found`);
+          component = body.componentPath;
+          target = componentFunctionName(found._id, body.path);
+        }
         const bad = badPath();
         if (bad) return bad;
         // system modules are not the deployment's: not found, even to an admin (Convex's `any_udf`)
-        const found = isSystemPath(body.path) ? null : functions.kindOf(body.path);
+        const found = isSystemPath(body.path) ? null : functions.kindOf(target);
         if (!found)
           return udfResponse(
             {
               ok: false,
-              error: anyFunctionNotFound(body.path),
+              error: anyFunctionNotFound(body.path, component),
               logLines: [],
             } as never,
             kind,
@@ -1827,18 +1877,18 @@ export function createServer(opts: ServerOptions) {
         await collectLogs(async () => {
           if (Array.isArray(body.args) && body.args.length !== 1)
             functions.checkArity(
-              body.path,
+              target,
               kind === "query_at_ts" ? "query" : (kind as "query" | "mutation" | "action"),
               body.args.map((a) => fromWire(a, body.path) as Value),
               caller,
             );
           const args = fromWire(body.args, body.path);
-          if (kind === "query") return functions.runQueryJson(body.path, args, caller);
-          if (kind === "query_at_ts") return functions.runQueryAtJson(body.path, args, at!, caller);
+          if (kind === "query") return functions.runQueryJson(target, args, caller);
+          if (kind === "query_at_ts") return functions.runQueryAtJson(target, args, at!, caller);
           const value =
             kind === "mutation"
-              ? await functions.runMutation(body.path, args, true, caller)
-              : await functions.runAction(body.path, args, caller);
+              ? await functions.runMutation(target, args, true, caller)
+              : await functions.runAction(target, args, caller);
           return stringifyValue(value);
         }),
         kind,
@@ -2157,7 +2207,11 @@ export function createServer(opts: ServerOptions) {
     const pkg = await writePackage(modulesStore, modules);
     let unused: SourcePackage[];
     try {
-      unused = await engine.mutation((db) => writeCodeRows(db, pkg, version), "_system/push");
+      unused = await engine.mutation(async (db) => {
+        const gone = await writeCodeRows(db, pkg, version);
+        await ensureRootComponent(db);
+        return gone;
+      }, "_system/push");
     } catch (e) {
       await modulesStore.delete(pkg.storageKey).catch(() => {});
       throw e;
@@ -2172,6 +2226,7 @@ export function createServer(opts: ServerOptions) {
         const code = await loadLatestCode(engine, modulesStore, env);
         if (!code) return;
         await installCodeVersion(code.version);
+        await installComponents();
         authModule = code.authConfig;
         // The providers stored by the last push or variable change, as Convex's token checks read `_auth`:
         // nothing is evaluated at a start.
@@ -2207,14 +2262,56 @@ export function createServer(opts: ServerOptions) {
     sync.invalidateModules(changed);
     return { changed, crons };
   };
+  /**
+   * Every mounted component's code, loaded from its namespace and installed (STUDY-154): at a start, and after a push
+   * or a deletion changed the tree. An unmounted or deleted one is removed: its functions are "not found".
+   */
+  const installComponents = async () => {
+    const mounted = await engine.query((db) =>
+      db.asSystem(async () => {
+        const out: { meta: ComponentMeta; path: string[] }[] = [];
+        for (const row of await db.query("_components").collect()) {
+          const meta = componentMeta(row as Record<string, unknown>);
+          if (meta.parent === null || meta.state !== "active") continue;
+          const path = await componentPath(db, meta._id);
+          if (path !== null) out.push({ meta, path });
+        }
+        return out;
+      }),
+    );
+    const live = new Set(mounted.map((m) => m.meta._id));
+    const changed = new Set<string>();
+    for (const id of functions.installedComponents())
+      if (!live.has(id)) {
+        functions.removeComponent(id);
+        changed.add(id);
+      }
+    for (const { meta, path } of mounted) {
+      if (meta.parent === null) continue;
+      const version = await loadComponentCode(engine, modulesStore, meta._id);
+      if (!version) {
+        functions.removeComponent(meta._id);
+        continue;
+      }
+      functions.installComponent(
+        { id: meta._id, path: path.join("/"), env: new Map(meta.env), httpPrefix: meta.httpPrefix },
+        version.functions,
+        version.moduleHashes,
+      );
+      for (const key of version.functions.keys()) changed.add(Functions.moduleOf(componentFunctionName(meta._id, key)));
+    }
+    if (changed.size) sync.invalidateModules(changed);
+  };
   /** Pushes over HTTP (Convex's deploy2 protocol), for a deployable server. */
   const push = new PushService({
     engine,
     modulesStore,
     cronExecutor,
-    install: (version, auth, module) => {
+    install: async (version, auth, module) => {
       authModule = module;
-      return installCodeVersion(version, { crons: false, auth });
+      const live = await installCodeVersion(version, { crons: false, auth });
+      await installComponents();
+      return live;
     },
     deploymentEnv,
   });

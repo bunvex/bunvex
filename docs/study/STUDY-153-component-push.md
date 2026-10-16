@@ -878,6 +878,38 @@ Measured: a `start_push` of a 500-function app with no components spends 0.4 ms 
 app's exports, as Convex computes them), 0.1 ms in the schema walk and 0.1 ms in the answer (median of 9). End to
 end, under load (load average ~9), the medians were 7.7–8.7 ms on this branch against 6.6–7.3 ms on main.
 
+As built, **PR 3d** (`server/src/push.ts` `evaluateSchema`, `core/src/engine.ts` `evaluateSchema(next, namespace)`):
+
+- **What `evaluate_schema` answers**, as Convex's `evaluate_schema_prediction`:
+  - `componentSchemaEvaluations` has one entry per instance, by component path: the app's (there even with no
+    `_components` row) and each other component's;
+  - an unmounted instance whose definition is gone is skipped, and any other instance with no definition is a
+    system error;
+  - `newComponentDefinitions` lists the pushed definitions with no instance yet.
+- **Each entry** is `predict_component_schema`:
+  - for a definition the push does not carry, nothing (no tables, no indexes);
+  - for one pushed without a schema, its indexes dropped and no table checked;
+  - otherwise, `Engine.evaluateSchema` in the instance's namespace: its tables and their counts, its stored indexes,
+    and its own active schema for the validation outcome and the search/vector indexes. A component has no staged
+    validator or search index yet (PR 2b refuses them), so those parts are empty.
+  - A component's schema error is `InvalidSchema` with the exception alone, as in `start_push`.
+
+Tests (`server/test/push-components.test.ts`):
+
+- no instance yet (a new definition);
+- an existing instance predicted in its namespace (its documents counted, an added index backfilling over them,
+  the app's prediction not seeing its table);
+- the outcome against the component's own active schema (`supersetOfEnforced`);
+- a definition not pushed, and one pushed without a schema;
+- an unmounted instance whose definition is gone.
+
+Sabotage: 7 of 8 caught. The one not caught names an id's table through the component's catalog. In a test-sized
+table, a shape keeps ids as literal unions (Convex's shape rules), so no small test reaches it.
+
+Measured: the app's `evaluate_schema` (20 indexed tables, no components) reads two system tables more. Median of 15,
+five alternated runs after the first: 2.6–3.5 ms on this branch, 2.5–3.5 ms before it.
+
+
 The plan as first written:
 
 
@@ -919,6 +951,92 @@ The plan as first written:
   - a dry run allocates nothing (the read-only path).
 
 ### PR 4 — server `finish_push` with components (closes DV-429), and `/api/delete_component`
+
+Built in two PRs: **4a** `finish_push` with components, **4b** `/api/delete_component`.
+
+As built, **PR 4a** (`server/src/push.ts` `finishPush`, `server/src/push-components.ts` `finishComponents`,
+`server/src/code-store.ts`):
+
+- **ONE commit** (`Engine.commitSchemaPush` with every component's schema id), as Convex's `finish_push`:
+  - the app's declared variables are checked: a required one unset is `MissingEnvironmentVariables` ("… Set them
+    in the dashboard or CLI before pushing.", DV-494's words), and a set one failing its validator is
+    `InvalidEnvironmentVariable`;
+  - the auth;
+  - the definitions diff: rows replaced or inserted, stored with their exports empty, and deleted when no longer
+    pushed;
+  - the tree diff, walked as Convex's `apply_component_tree_diff`, with each instance's code
+    (`writeCodeRows` in its namespace: `_source_packages`, `_modules`), `_udf_config` (`setUdfConfigIn`: the
+    definition's version with the app's seed; a change from "Unspecified version", null when unchanged) and crons
+    (`applyInComponent`: rows only; they run from step 7);
+  - the audit event with every component's diff, the app's first, then by path.
+- **Each instance in the tree diff:**
+  - created, its `_components` row inserted with the id `start_push` allocated (`importInsert`);
+  - modified, or remounted when it was unmounted;
+  - unmounted: its row `unmounted`, its `_modules` and crons cleared, its package, `_udf_config`, schema and data
+    kept;
+  - an instance already unmounted is left alone, as are its children;
+  - an existing one whose id differs from the allocated one is a 409 `RaceDetected` (d8bdde0).
+- **Packages.**
+  - One per definition, written before the commit: the app's holds its definition module (`bunvex.config.js`,
+    analyzed to nothing; `loadLatestCode` skips it, C-2), each component's its definition, schema and functions.
+  - Two instances of one definition share the blob, each with its own `_source_packages` row.
+  - After the commit, a package no namespace's row names any more is deleted (`referencedPackageKeys`).
+- **The answer** (`SerializedFinishPushDiff`) has `definitionDiffs` (`{}` for each pushed and deleted definition)
+  and each instance's diff by path: `diffType`, module diff (sorted, as Convex's `BTreeSet`), `udfConfigDiff`, cron
+  diff, index diff and `schemaDiff`. `schemaDiff` is now filled for the app too, which fixes C-15.
+- **A deploy that is not a push** (`deployCode`) still writes the default app's rows (`ensureRootComponent`); a push
+  writes them from the evaluated tree.
+- **Not yet:**
+  - a component's function handles (Convex's `FunctionHandlesModel::apply_config_diff`, step 4);
+  - `/api/delete_component` (PR 4b).
+  - A component pushed without a schema keeps its earlier schema's indexes (Convex drops them).
+  - The `finish_push` race, like the others, has no "while pushing" prefix: bunvex's route drops it for every
+    `RaceDetected`.
+
+Tests (`server/test/push-components.test.ts`):
+
+- create, checked on the answer and the rows: the definitions with tagged children, the allocated ids, each
+  namespace's modules, one blob shared by two rows, the app's seed in every `_udf_config`, each schema active, the
+  audit event's order;
+- remove `second` (unmount), remove it again (no diff), add it back (remount);
+- every child and definition removed;
+- the app's variables unset and invalid;
+- the 409 race at finish;
+- the app's code loaded back with its definition module beside it, and a shared blob kept.
+
+Sabotage: 14 of 14 caught.
+
+Measured: a whole push (start, wait, finish) of a 500-function app with no components, median of 11, five alternated
+runs under load (load average ~9): 29.7–45.4 ms with this PR (median of medians 33.1) against 29.1–45.2 ms before it
+(35.0). No difference shows above the noise; the finish reads each namespace's `_modules` once.
+
+As built, **PR 4b** (`core/src/engine.ts` `deleteComponent`, `server/src/server.ts` `/api/delete_component`):
+
+- **The route.** `POST /api/delete_component {componentId}`, with the `WriteData` operation, as Convex's
+  `dashboard.rs`.
+- **The commit** (Convex's `ComponentConfigModel::delete_component`):
+  - the component and every one under it must be unmounted, else 400 `ComponentMustBeUnmounted`, "Component must
+    be unmounted before deletion";
+  - their `_components` rows are deleted;
+  - every table of their namespaces, system tables included, is set `deleting`, and the deletion worker empties
+    them;
+  - the audit event `delete_component {component_id, component: <path>}` is written.
+- **System errors, as Convex's:** the app (no id) is "Cannot delete root component", and an id that names no
+  component fails Convex's `must_component_path`. Both are 500s.
+- **After a restart,** a deleted component's tables being deleted go to the root's `deleting` (`buildCatalog`),
+  which the worker resumes, and no catalog is left for the namespace.
+
+Tests:
+
+- a mounted component refused;
+- an unmounted one deleted: its rows, its tables (its data and its system tables) emptied, the audit event, its
+  sibling kept;
+- a component with one under it: both deleted;
+- the app and an unknown id;
+- `buildCatalog` with a deleted component's tables.
+
+Sabotage: 8 of 8 caught.
+
 
 - **Scope.**
   - Definitions diff; tree diff (create / modify / remount / unmount);

@@ -7,16 +7,31 @@ import {
   type ComponentMeta,
   componentDefinitionRow,
   componentMeta,
+  componentRow,
   type Engine,
+  type NewComponent,
   type NewComponentDefinition,
   type SchemaDefinition,
   schemaToJson,
+  type TableDef,
+  type Tx,
 } from "@bunvex/core";
-import type { AnalyzedModule, ModuleSource } from "./code-version.ts";
+import type { ComponentDiff } from "./audit-log.ts";
+import {
+  clearCodeRows,
+  modulePathsIn,
+  type SourcePackage,
+  type SourcePackageFields,
+  setUdfConfigIn,
+  type UdfServerVersionDiff,
+  writeCodeRows,
+} from "./code-store.ts";
+import type { AnalyzedModule, CodeVersion, ModuleSource } from "./code-version.ts";
 import { type CheckedComponent, fileBasedExports } from "./component-tree.ts";
 import { cronSpecsJson } from "./cron-rows.ts";
 import { DEFINITION_MODULE, definitionPathError } from "./definition-eval.ts";
 import { indexAuditDiff, indexDiffJson } from "./push-audit.ts";
+import { SERVER_VERSION } from "./server-version.ts";
 
 /** A pushed component definition (Convex's `ComponentDefinitionConfig`). */
 export type ComponentDefinitionConfig = {
@@ -232,3 +247,172 @@ export function schemaChangeAnswer(change: ComponentsSchemaChange) {
 
 /** The definition module's name a push stores (DV-494), whatever path the request gave it, as Convex's. */
 export const definitionModule = (m: ModuleSource): ModuleSource => ({ ...m, path: DEFINITION_MODULE });
+
+/** A definition's code as `finish_push` writes it: its package, its loaded modules, its other modules (no functions). */
+export type DefinitionCode = { pkg: SourcePackageFields; version: CodeVersion; other: ModuleSource[] };
+
+/** What `finishComponents` needs besides the transaction (Convex's `apply_component_definitions_diff` and tree diff). */
+export type FinishComponentsInput = {
+  definitions: ReadonlyMap<string, { definition: NewComponentDefinition; udfServerVersion: string | null }>;
+  tree: CheckedComponent;
+  change: ComponentsSchemaChange;
+  /** Each definition's code, by definition path (two instances of one share it, as Convex's). */
+  code: ReadonlyMap<string, DefinitionCode>;
+  /** The app's import seed and time: every namespace's `_udf_config` has them. */
+  importPhase: { seed: Uint32Array; timestamp: number };
+  /** The app's server version change, made at `start_push`. */
+  rootUdfConfigDiff: UdfServerVersionDiff | null;
+  /** Each instance's index and schema change, by component path, read before the commit. */
+  indexDiffs: ReadonlyMap<string, ComponentDiff["indexDiff"]>;
+  schemaDiffs: ReadonlyMap<string, ComponentDiff["schemaDiff"]>;
+  /** The `_components` table (global), whose rows a create inserts with their allocated ids. */
+  componentsTable: TableDef;
+  /** Apply a namespace's crons (null: the app's), Convex's `CronModel::apply`. */
+  crons: (db: Tx, namespace: string | null, version: CodeVersion | null) => Promise<ComponentDiff["cronDiff"]>;
+};
+
+/** Module paths as Convex's `ModuleDiff` lists them (a `BTreeSet`): sorted, `_deps/` left out. */
+const notDeps = (paths: string[]) => paths.filter((p) => !p.startsWith("_deps/")).sort();
+const pathsDiff = (before: string[], after: string[]) => ({
+  added: notDeps(after.filter((p) => !before.includes(p))),
+  removed: notDeps(before.filter((p) => !after.includes(p))),
+});
+const EMPTY_INDEX_DIFF: ComponentDiff["indexDiff"] = {
+  added_indexes: [],
+  removed_indexes: [],
+  enabled_indexes: [],
+  disabled_indexes: [],
+};
+
+/**
+ * In `finish_push`'s ONE commit (Convex's `apply_component_definitions_diff` and `apply_component_tree_diff`): the
+ * `_component_definitions` rows replaced, inserted, or deleted when no longer pushed; then the existing and the new
+ * trees walked together, each instance created (its `_components` row with the id `start_push` allocated), modified,
+ * remounted or unmounted, with its namespace's code (`_source_packages`, `_modules`), `_udf_config` and crons. A
+ * component another push created meanwhile under another id is a 409 `RaceDetected`. Each definition's diff (`{}`)
+ * and each instance's, by path; the packages no row names any more.
+ */
+export async function finishComponents(db: Tx, input: FinishComponentsInput) {
+  const definitionDiffs = new Map<string, Record<string, never>>();
+  const definitionIds = new Map<string, string>();
+  await db.asSystem(async () => {
+    const existing = await db.query("_component_definitions").collect();
+    for (const row of existing) {
+      const path = row.path as string;
+      if (input.definitions.has(path)) definitionIds.set(path, row._id as string);
+      else {
+        await db.delete("_component_definitions", row._id as string);
+        definitionDiffs.set(path, {});
+      }
+    }
+    for (const [path, d] of input.definitions) {
+      // Stored with its exports empty, as Convex's (`load_all_definitions` clears them).
+      const row = componentDefinitionRow({ ...d.definition, exports: { type: "branch", branch: [] } });
+      const id = definitionIds.get(path);
+      if (id) await db.replace("_component_definitions", id, row);
+      else definitionIds.set(path, await db.insert("_component_definitions", row));
+      definitionDiffs.set(path, {});
+    }
+  });
+
+  const rows = (await db.asSystem(() => db.query("_components").collect())).map((r) =>
+    componentMeta(r as Record<string, unknown>),
+  );
+  const childrenOf = (parent: string) =>
+    rows.filter((r): r is ComponentMeta & { name: string } => r.parent === parent && r.name !== null);
+  const componentDiffs = new Map<string, ComponentDiff>();
+  const unused: SourcePackage[] = [];
+
+  /** An instance's code written in its namespace: its module diff, its server version's, its crons'. */
+  const writeCode = async (key: string, ns: string | null, node: CheckedComponent) => {
+    const code = input.code.get(node.definitionPath);
+    if (!code) throw new Error(`Missing code for component definition ${node.definitionPath}`);
+    const before = await modulePathsIn(db, ns);
+    unused.push(...(await writeCodeRows(db, code.pkg, code.version, code.other, ns)));
+    // What `writeCodeRows` left: the version's modules and the others.
+    const after = [...code.version.modules.keys(), ...code.other.map((m) => m.path)];
+    const udfConfigDiff =
+      ns === null
+        ? input.rootUdfConfigDiff
+        : await setUdfConfigIn(db, ns, {
+            serverVersion: input.definitions.get(node.definitionPath)?.udfServerVersion ?? SERVER_VERSION,
+            ...input.importPhase,
+          });
+    return {
+      moduleDiff: pathsDiff(before, after),
+      udfConfigDiff,
+      cronDiff: await input.crons(db, ns, code.version),
+      indexDiff: input.indexDiffs.get(key) ?? EMPTY_INDEX_DIFF,
+      schemaDiff: input.schemaDiffs.get(key) ?? null,
+    };
+  };
+
+  type Visit = { path: string[]; parent: string | null; existing: ComponentMeta | null; node: CheckedComponent | null };
+  const stack: Visit[] = [
+    { path: [], parent: null, existing: rows.find((r) => r.parent === null) ?? null, node: input.tree },
+  ];
+  for (let visit = stack.pop(); visit; visit = stack.pop()) {
+    const { path, parent, existing, node } = visit;
+    const key = path.join("/");
+    const root = path.length === 0;
+    let id: string;
+    if (node) {
+      const definitionId = definitionIds.get(node.definitionPath);
+      if (!definitionId) throw new Error(`Missing definition id for ${node.definitionPath}`);
+      const meta: NewComponent = root
+        ? { definitionId, parent: null, name: null, state: "active", httpPrefix: node.httpPrefix }
+        : {
+            definitionId,
+            parent: parent!,
+            name: path.at(-1)!,
+            args: [...node.args].map(([k, r]) => [k, r]),
+            env: [...node.env],
+            state: "active",
+            httpPrefix: node.httpPrefix,
+          };
+      if (!existing) {
+        const allocated = input.change.allocatedComponentIds.get(key);
+        if (!allocated) throw new Error(`Missing allocated component id for ${key || "the app"}`);
+        await db.asSystem(() => db.importInsert(input.componentsTable, { _id: allocated, ...componentRow(meta) }));
+        id = allocated;
+        componentDiffs.set(key, { diffType: { type: "create" }, ...(await writeCode(key, root ? null : id, node)) });
+      } else {
+        const allocated = input.change.allocatedComponentIds.get(key);
+        if (allocated !== undefined && allocated !== existing._id)
+          throw new RaceError(`Component ${key} was created by a concurrent push`);
+        id = existing._id;
+        await db.asSystem(() => db.replace("_components", id, componentRow(meta)));
+        const type = existing.state === "unmounted" ? "remount" : "modify";
+        componentDiffs.set(key, { diffType: { type }, ...(await writeCode(key, root ? null : id, node)) });
+      }
+    } else {
+      // Removed: unmounted, its code and crons cleared, its data kept; one unmounted already is left, with its
+      // children (Convex does not recurse into it).
+      if (!existing || existing.state === "unmounted") continue;
+      id = existing._id;
+      await db.asSystem(() => db.replace("_components", id, componentRow({ ...existing, state: "unmounted" })));
+      const removed = await clearCodeRows(db, id);
+      componentDiffs.set(key, {
+        diffType: { type: "unmount" },
+        moduleDiff: { added: [], removed: notDeps(removed) },
+        udfConfigDiff: null,
+        cronDiff: await input.crons(db, id, null),
+        indexDiff: EMPTY_INDEX_DIFF,
+        schemaDiff: null,
+      });
+    }
+    const seen = new Set<string>();
+    for (const c of childrenOf(id)) {
+      seen.add(c.name);
+      stack.push({ path: [...path, c.name], parent: id, existing: c, node: node?.childComponents.get(c.name) ?? null });
+    }
+    for (const [name, c] of node?.childComponents ?? [])
+      if (!seen.has(name)) stack.push({ path: [...path, name], parent: id, existing: null, node: c });
+  }
+  return { definitionDiffs, componentDiffs, unused };
+}
+
+/** A component a concurrent push created: Convex's 409 `RaceDetected`. */
+export class RaceError extends Error {
+  readonly code = "RaceDetected";
+}

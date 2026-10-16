@@ -202,6 +202,60 @@ export const registryKey = (name: string) => {
 };
 
 /**
+ * A component instance's runtime (STUDY-154): its `_components` id, its path (`a/b`), its variables' bindings
+ * (resolved at push to values or deployment variables) and its HTTP prefix. Its functions sit in the registry
+ * under `componentFunctionName(id, name)`.
+ */
+export type ComponentRuntime = {
+  id: string;
+  path: string;
+  env: ReadonlyMap<string, { type: "value"; value: string } | { type: "envVar"; name: string }>;
+  httpPrefix: string | null;
+};
+
+const COMPONENT_MARK = "\u0000component\u0000";
+/** The registry's name of component `id`'s function `name` (`module:fn`): no app's function name can collide. */
+export const componentFunctionName = (id: string, name: string) => `${COMPONENT_MARK}${id}\u0000${registryKey(name)}`;
+/** A registry name's component and function, or null for the app's. */
+export function splitComponentFunctionName(name: string): { id: string; name: string } | null {
+  if (!name.startsWith(COMPONENT_MARK)) return null;
+  const rest = name.slice(COMPONENT_MARK.length);
+  const i = rest.indexOf("\u0000");
+  return { id: rest.slice(0, i), name: rest.slice(i + 1) };
+}
+
+/**
+ * A component's `process.env` (Convex's `udf/src/environment.rs`, STUDY-154): its bindings first (a value, or the
+ * deployment's variable it names), then the built-ins, `BUNVEX_SITE_URL` with its HTTP prefix when it has one;
+ * nothing else of the deployment's.
+ */
+function componentEnv(c: ComponentRuntime, read: EnvReader, builtin: Record<string, string>): EnvReader {
+  return (name) => {
+    const b = c.env.get(name);
+    const bound = b === undefined ? undefined : b.type === "value" ? b.value : read(b.name);
+    if (bound !== undefined) return bound;
+    const site = builtin[name];
+    if (name === "BUNVEX_SITE_URL" && site !== undefined && c.httpPrefix !== null)
+      return `${site}${c.httpPrefix.replace(/\/+$/, "")}`;
+    return builtin[name];
+  };
+}
+
+/** What a component's function may not use yet (STUDY-154 P-2): its scheduler and storage come in step 7. */
+const notYetInComponents = (what: string) =>
+  new Proxy(
+    {},
+    {
+      get(_t, prop) {
+        if (prop === "then") return undefined;
+        return () => {
+          throw new Error("`ctx." + what + "` in a component is not supported yet");
+        };
+      },
+    },
+  );
+
+/**
  * An index still being rebuilt after a start (STUDY-79), as an action sees it: Convex rejects the action's
  * syscall promise with a plain `Error` carrying the message, which the action may catch.
  */
@@ -833,6 +887,38 @@ export class Functions {
   private names = new WeakMap<FunctionDef, string>();
   /** Each module's code hash (a deployed code version's modules); empty for registered (embedded) code. */
   private moduleHashes = new Map<string, string>();
+  /** Each mounted component's functions (STUDY-154), by `componentFunctionName`. */
+  private componentFns = new Map<string, FunctionDef>();
+  /** Each mounted component's runtime and module hashes, by its `_components` id. */
+  private componentRuntimes = new Map<string, { runtime: ComponentRuntime; hashes: Map<string, string> }>();
+  /** The component each of its functions belongs to. */
+  private componentOf = new WeakMap<FunctionDef, ComponentRuntime>();
+
+  /**
+   * Install a component instance's code version (STUDY-154): its functions replace its previous ones, the app's and
+   * the other components' untouched. Its modules were evaluated in its own contexts (C3, DV-492).
+   */
+  installComponent(runtime: ComponentRuntime, fns: Map<string, FunctionDef>, moduleHashes: Map<string, string>) {
+    this.removeComponent(runtime.id);
+    for (const [key, f] of fns) {
+      this.componentFns.set(componentFunctionName(runtime.id, key), f);
+      this.componentOf.set(f, runtime);
+      this.names.set(f, key);
+    }
+    this.componentRuntimes.set(runtime.id, { runtime, hashes: new Map(moduleHashes) });
+  }
+
+  /** Remove a component's functions (unmounted or deleted): calling one is "not found", as on Convex. */
+  removeComponent(id: string) {
+    const prefix = componentFunctionName(id, "x:x").slice(0, -"x:x".length);
+    for (const key of [...this.componentFns.keys()]) if (key.startsWith(prefix)) this.componentFns.delete(key);
+    this.componentRuntimes.delete(id);
+  }
+
+  /** The components whose code is installed, by id. */
+  installedComponents(): string[] {
+    return [...this.componentRuntimes.keys()];
+  }
 
   /** A function name's module, as the registry and code versions key it (`dir/file` of `dir/file:fn`). */
   static moduleOf(name: string) {
@@ -843,7 +929,11 @@ export class Functions {
   private cacheKey(name: string, args: unknown): string | undefined {
     if (tooDeepToStringify(args)) return undefined;
     try {
-      return cacheKeyOf(this.moduleHashes.get(Functions.moduleOf(name)) ?? "", name, args);
+      const c = splitComponentFunctionName(name);
+      const hash = c
+        ? this.componentRuntimes.get(c.id)?.hashes.get(Functions.moduleOf(c.name))
+        : this.moduleHashes.get(Functions.moduleOf(name));
+      return cacheKeyOf(hash ?? "", name, args);
     } catch (e) {
       // Arguments too deep for the stack to stringify are past the nesting limit: no key, and the run's own
       // check refuses them with Convex's message (STUDY-109).
@@ -898,11 +988,12 @@ export class Functions {
   httpRoutes: () => readonly (readonly [string, string])[] = () => [];
 
   /** A query's or mutation's `process.env`: each read in `db`'s read set. */
-  private async txEnv(db: Tx): Promise<EnvReader | null> {
+  private async txEnv(db: Tx, component?: ComponentRuntime): Promise<EnvReader | null> {
     if (!this.deployed) return null;
     const read = await this.engine.environment.reader(db);
     // The canonical URLs in place of the origins (STUDY-49), read here so a change re-runs what read them.
     const builtin = withCanonical(this.builtinEnv, await readCanonicalUrls(db));
+    if (component) return componentEnv(component, read, builtin);
     return (name) => read(name) ?? builtin[name];
   }
 
@@ -923,9 +1014,24 @@ export class Functions {
   }
 
   /** Run `fn` under an action's environment. */
-  private async inActionEnv<T>(fn: () => T | Promise<T>): Promise<T> {
+  private async inActionEnv<T>(fn: () => T | Promise<T>, component?: ComponentRuntime): Promise<T> {
     const env = await this.actionEnv();
+    if (env && component) {
+      // A component's: its bindings and the built-ins (STUDY-154), at the action's start.
+      const read = componentEnv(component, (n) => env.read(n), this.builtinEnvNow(env));
+      const all: Record<string, string> = {};
+      for (const name of new Set([...component.env.keys(), ...Object.keys(this.builtinEnv)])) {
+        const value = read(name);
+        if (value !== undefined) all[name] = value;
+      }
+      return withAllEnv(all, read, fn);
+    }
     return env ? withAllEnv(env.all, env.read, fn) : fn();
+  }
+
+  /** The built-ins as an action's start read them (their canonical URLs included). */
+  private builtinEnvNow(env: { all: Record<string, string> }): Record<string, string> {
+    return Object.fromEntries(Object.keys(this.builtinEnv).map((k) => [k, env.all[k] ?? this.builtinEnv[k]!]));
   }
 
   /**
@@ -991,6 +1097,9 @@ export class Functions {
     }
     const up = currentOwner();
     const parent = up instanceof Running ? up : null;
+    // A component's function is logged by its own name and its component's path (STUDY-154).
+    const inComponent = splitComponentFunctionName(name);
+    if (inComponent) name = inComponent.name;
     const r = new Running(
       crypto.randomUUID(),
       parent?.requestId ?? caller?.request?.requestId ?? newRequestId(),
@@ -1002,6 +1111,7 @@ export class Functions {
       this.engine.runtime.now(),
       udfType === "Action" && this.isNodeAction(name) ? "node" : "isolate",
     );
+    if (inComponent) r.componentPath = this.componentRuntimes.get(inComponent.id)?.runtime.path ?? null;
     r.tokenIdentifier = ((caller?.identity as { tokenIdentifier?: unknown } | null)?.tokenIdentifier as string) ?? null;
     r.ip = caller?.request?.ip ?? null;
     if (!system && (udfType === "Action" || udfType === "HttpAction"))
@@ -1010,6 +1120,7 @@ export class Functions {
           kind: "Progress",
           udfType,
           identifier: r.identifier,
+          componentPath: r.componentPath,
           timestamp: r.start / 1000,
           logLines: [line],
           requestId: r.requestId,
@@ -1248,6 +1359,7 @@ export class Functions {
       kind: "Completion",
       udfType: r.udfType,
       identifier: o.route?.identifier ?? r.identifier,
+      componentPath: r.componentPath,
       logLines: lines,
       timestamp: end / 1000,
       cachedResult: r.cached,
@@ -1366,8 +1478,9 @@ export class Functions {
 
   private fn<K extends FunctionDef["kind"]>(name: string, kind: K, fromClient: boolean, caller?: Caller) {
     // `dir/file` is its default export, and `.js` is optional, as Convex canonicalizes a path.
-    const key = this.fns.has(name) ? name : registryKey(name);
-    const f = this.fns.get(key);
+    const c = splitComponentFunctionName(name);
+    const key = c ? componentFunctionName(c.id, c.name) : this.fns.has(name) ? name : registryKey(name);
+    const f = c ? this.componentFns.get(key) : this.fns.get(key);
     if (f) this.names.set(f, key);
     // As Convex (crates/udf/src/validation.rs): a missing function and an internal one called from a
     // client read the same, with the path stripped (no `.js`, no `:default`); a function of another kind
@@ -1395,12 +1508,19 @@ export class Functions {
       const n = name.replace(/:default$/, "");
       return SYSTEM_QUERIES[n] ? "query" : SYSTEM_MUTATIONS[n] ? "mutation" : null;
     }
-    return (this.fns.get(name) ?? this.fns.get(registryKey(name)))?.kind ?? null;
+    return this.lookup(name)?.kind ?? null;
+  }
+
+  /** A function by name, an app's or a component's (`componentFunctionName`), or undefined. */
+  private lookup(name: string): FunctionDef | undefined {
+    const c = splitComponentFunctionName(name);
+    if (c) return this.componentFns.get(componentFunctionName(c.id, c.name));
+    return this.fns.get(name) ?? this.fns.get(registryKey(name));
   }
 
   /** Whether a function is internal (false when it does not exist). */
   isInternal(name: string): boolean {
-    return (this.fns.get(name) ?? this.fns.get(registryKey(name)))?.visibility === "internal";
+    return this.lookup(name)?.visibility === "internal";
   }
 
   /**
@@ -1586,7 +1706,7 @@ export class Functions {
       const f = resolved();
       const a = this.checkArgs(f, args);
       this.countStartReads(db, f);
-      const env = await this.txEnv(db);
+      const env = await this.txEnv(db, this.componentOf.get(f));
       // A permit for the run, once it is validated (STUDY-68); a cached result never gets here.
       return this.limits.query.run(async () => {
         const timer = timed(this.newTimer());
@@ -1613,7 +1733,7 @@ export class Functions {
       const f = resolved();
       const a = this.checkArgs(f, args);
       this.countStartReads(db, f);
-      const env = await this.txEnv(db);
+      const env = await this.txEnv(db, this.componentOf.get(f));
       // A permit per attempt (STUDY-68), with the timeout even for a scheduled mutation, as in Convex.
       return this.limits.mutation.run(async () => {
         const timer = timed(this.newTimer());
@@ -1705,7 +1825,8 @@ export class Functions {
 
   /** Run a query's or mutation's handler on `db` at nesting `depth`, with its context. */
   private invoke(f: FunctionDef, db: Tx, args: AnyArgs, depth: number, job?: string): unknown {
-    const nested = this.nestedCalls(db, f.kind as "query" | "mutation", depth);
+    const component = this.componentOf.get(f);
+    const nested = this.nestedCalls(db, f.kind as "query" | "mutation", depth, component);
     const functions = this;
     let rooms: ReturnType<typeof roomsCtx>["rooms"] | undefined;
     const ctx =
@@ -1713,7 +1834,7 @@ export class Functions {
         ? {
             db: (db.vars ? readerView(db) : db) as unknown as QueryCtx["db"],
             auth: txAuth(db),
-            storage: this.fileStorage?.reader(db) ?? noStorage,
+            storage: component ? notYetInComponents("storage") : (this.fileStorage?.reader(db) ?? noStorage),
             runQuery: nested.runQuery,
             meta: this.meta(f, db, undefined),
           }
@@ -1723,23 +1844,38 @@ export class Functions {
             // The scheduled job this runs under, also when an action it ran called it (Convex propagates
             // `parent_scheduled_job` down the call tree): what it schedules after that job is canceled is
             // born canceled, and it may not cancel that job.
-            scheduler: makeScheduler(this, { db, job: job ?? db.request?.scheduledFunctionId ?? undefined }),
+            scheduler: component
+              ? notYetInComponents("scheduler")
+              : makeScheduler(this, { db, job: job ?? db.request?.scheduledFunctionId ?? undefined }),
             // Sent once the mutation committed; dropped if it throws or retries (AD-42). Built on first use:
             // most mutations broadcast nothing.
             get rooms() {
               rooms ??= roomsCtx(functions, (fn) => db.afterCommit(fn), false).rooms;
               return rooms;
             },
-            storage: this.fileStorage?.writer(db) ?? noStorage,
+            storage: component ? notYetInComponents("storage") : (this.fileStorage?.writer(db) ?? noStorage),
             runQuery: nested.runQuery,
             runMutation: nested.runMutation,
             meta: this.meta(f, db, undefined),
           };
+    const run = () => (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(appContext(f.handler, ctx), args);
     return notAQuery(
-      inHandleScope({ db, engine: this.engine }, () =>
-        (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(appContext(f.handler, ctx), args),
-      ),
+      inHandleScope({ db, engine: this.engine }, () => (component ? this.inComponentRun(db, component, run) : run())),
     );
+  }
+
+  /**
+   * A component's function run in its namespace (STUDY-154): `ctx.db` its tables and schema, what Convex refuses in
+   * a component refused (`Tx.componentFunction`).
+   */
+  private async inComponentRun(db: Tx, component: ComponentRuntime, run: () => unknown): Promise<unknown> {
+    const was = db.componentFunction;
+    db.componentFunction = true;
+    try {
+      return await db.inComponent(component.id, async () => run());
+    } finally {
+      db.componentFunction = was;
+    }
   }
 
   /** @internal The engine the functions run on (the scheduler resolves function handles with it). */
@@ -1817,7 +1953,7 @@ export class Functions {
    * without its pending writes, its reads discarded. `transactionLimits` lowers the read and write limits
    * for the call. Any error reaches the caller as a catchable one.
    */
-  private nestedCalls(db: Tx, callerKind: "query" | "mutation", depth: number) {
+  private nestedCalls(db: Tx, callerKind: "query" | "mutation", depth: number, component?: ComponentRuntime) {
     // One queue per running function: Convex runs its nested calls one at a time, in call order (STUDY-41
     // N4). Per function, not per transaction: a nested function's own calls must not wait for its caller's.
     let queue: Promise<unknown> = Promise.resolve();
@@ -1836,7 +1972,7 @@ export class Functions {
               ...functionAddress(ref),
             }),
           );
-          return pausingUserTime(() => this.runNested(db, kind, ref, args, opts, depth));
+          return pausingUserTime(() => this.runNested(db, kind, ref, args, opts, depth, component));
         })
         .catch((e) => {
           throw atCallSite(e, site);
@@ -1860,6 +1996,8 @@ export class Functions {
     args: unknown,
     opts: NestedOptions | undefined,
     depth: number,
+    /** The calling component's: a name resolves among its functions (STUDY-154); other components are step 5. */
+    component?: ComponentRuntime,
   ): Promise<unknown> {
     // Convex's `runUdf` syscall parses `args` as a value of its own before it resolves the function, so past
     // 64 levels its check speaks; at 64, the callee's (`[args]` is 65).
@@ -1884,7 +2022,7 @@ export class Functions {
           : this.systemMutationBody(name, args, false, undefined, true);
       return body(db);
     }
-    const f = this.fn(name, kind, false);
+    const f = this.fn(component ? componentFunctionName(component.id, name) : name, kind, false);
     // The callee's modules, those not loaded yet in this transaction (Convex reads each `_modules` row once).
     db.countModuleLoads(this.moduleLoads.get(f) ?? ["\0unknown"]);
     const a = acrossArgs(this.checkArgs(f, args === undefined ? {} : args, measured)) as AnyArgs;
@@ -2377,7 +2515,10 @@ export class Functions {
                 f,
                 await withActionTimeout(ms, timeout, () => {
                   const run = () =>
-                    this.inActionEnv(() => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a)));
+                    this.inActionEnv(
+                      () => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a)),
+                      this.componentOf.get(f),
+                    );
                   // A Node action's uncaught callback exception or `process.exit` fails it at once (platform §9).
                   return node ? withNodeProcessErrors(run) : run();
                 }),
@@ -2410,6 +2551,12 @@ export class Functions {
     handler: unknown = f?.handler,
   ): ActionCtx {
     const identity = (caller?.identity ?? null) as UserIdentity | null;
+    // A component's action calls its own component's functions by name (STUDY-154); other components are step 5.
+    const component = f ? this.componentOf.get(f) : undefined;
+    const target = (name: string) => {
+      const t = actionTarget(name);
+      return component && !isSystemPath(t) ? componentFunctionName(component.id, t) : t;
+    };
     // Pushed code's handler: its context's wrapper for nested calls (`installNestedCalls`).
     const nestedCalls = (handler as { [NESTED_CALLS]?: NestedCalls } | undefined)?.[NESTED_CALLS];
     const inContext = nestedCalls !== undefined;
@@ -2427,7 +2574,7 @@ export class Functions {
         checkActionCallArgs(n, a);
         return acrossCall(
           await asActionCaller(
-            this.runQuery(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
+            this.runQuery(target(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
             inContext,
           ),
         );
@@ -2437,7 +2584,7 @@ export class Functions {
         checkActionCallArgs(n, a);
         return acrossCall(
           await asActionCaller(
-            this.runMutation(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
+            this.runMutation(target(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
             inContext,
           ),
         );
@@ -2447,7 +2594,7 @@ export class Functions {
         checkActionCallArgs(n, a);
         return acrossCall(
           await asActionCaller(
-            this.runAction(actionTarget(await functionNameOf(n, null, this.engine)), acrossArgs(a), caller, {
+            this.runAction(target(await functionNameOf(n, null, this.engine)), acrossArgs(a), caller, {
               internal: true,
               authError,
             }),
@@ -2456,20 +2603,26 @@ export class Functions {
         );
       },
       // As a mutation's: the job also reaches an action that a scheduled action ran.
-      scheduler: cutOffWithAction(
-        makeScheduler(this, {
-          engine: this.engine,
-          // Convex's action scheduler sends its request id first (an HTTP action's is "").
-          requestId: f === HTTP_ACTION ? "" : (caller?.request?.requestId ?? ""),
-          systemIdentity: isSystemIdentity(caller),
-          job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
-        }),
-      ),
-      storage: cutOffWithAction(this.fileStorage?.actionWriter(storageMeter) ?? noStorage),
+      scheduler: component
+        ? (notYetInComponents("scheduler") as never)
+        : cutOffWithAction(
+            makeScheduler(this, {
+              engine: this.engine,
+              // Convex's action scheduler sends its request id first (an HTTP action's is "").
+              requestId: f === HTTP_ACTION ? "" : (caller?.request?.requestId ?? ""),
+              systemIdentity: isSystemIdentity(caller),
+              job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
+            }),
+          ),
+      storage: component
+        ? (notYetInComponents("storage") as never)
+        : cutOffWithAction(this.fileStorage?.actionWriter(storageMeter) ?? noStorage),
       rooms: cutOffWithAction(r.rooms),
       presence: cutOffWithAction(r.presence as NonNullable<typeof r.presence>),
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
         checkActionAlive();
+        // A component has no vector index yet (STUDY-153 PR 2b refuses them): its search would read the app's.
+        if (component) throw new Error("`ctx.vectorSearch` in a component is not supported yet");
         // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
         const args = [tableName, indexName, query];
         const argNames = ["tableName", "indexName", "query"];
