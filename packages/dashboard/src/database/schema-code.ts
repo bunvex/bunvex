@@ -1,7 +1,7 @@
 // The deployment's declared schema as the `bunvex/schema.ts` that declares it (STUDY-12 §8, V2): each
 // declared table's document type as `v.*` code and its indexes, as Convex's dashboard shows the saved
 // schema. Also says which lines are a given table's, to highlight them.
-import type { SchemaInfo, TableInfo, ValidatorJson } from "../data-source.ts";
+import type { DeclaredIndexes, SchemaInfo, TableInfo, ValidatorJson } from "../data-source.ts";
 import { displayValidator } from "../validators.ts";
 
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -13,8 +13,45 @@ function documentType(v: ValidatorJson | undefined, indent: string): string {
   return v?.type === "object" && shown.startsWith("v.object(") ? shown.slice("v.object(".length, -1) : shown;
 }
 
-/** Declared indexes, as `.index("name", ["field", …])`; system fields (`_creationTime`) are implied. */
-function indexes(table: TableInfo | undefined): string {
+const list = (xs: string[]) => `[${xs.map((x) => JSON.stringify(x)).join(", ")}]`;
+/** An index's fields as a schema declares them: the system ones (`_creationTime`) left out, as Convex's. */
+const own = (fields: string[]) => fields.filter((f) => !f.startsWith("_"));
+
+/**
+ * The schema's declared indexes as its code writes them, in Convex's `displayTableDefinition` order: database
+ * indexes, staged ones, search indexes, staged ones, vector indexes, staged ones (`{ …, staged: true }`); a search or
+ * vector index's `filterFields` only when it has some.
+ */
+function declaredIndexes(d: DeclaredIndexes): string {
+  const staged = (s: boolean) => (s ? ", staged: true" : "");
+  const filters = (f: string[]) => (f.length > 0 ? `, filterFields: ${list(f)}` : "");
+  const byStaged = <T extends { staged: boolean }>(xs: T[]) => [
+    ...xs.filter((x) => !x.staged),
+    ...xs.filter((x) => x.staged),
+  ];
+  return [
+    ...byStaged(d.database).map((i) =>
+      i.staged
+        ? `.index(${JSON.stringify(i.name)}, { fields: ${list(own(i.fields))}, staged: true })`
+        : `.index(${JSON.stringify(i.name)}, ${list(own(i.fields))})`,
+    ),
+    ...byStaged(d.search).map(
+      (i) =>
+        `.searchIndex(${JSON.stringify(i.name)}, { searchField: ${JSON.stringify(i.searchField)}${filters(i.filterFields)}${staged(i.staged)} })`,
+    ),
+    ...byStaged(d.vector).map(
+      (i) =>
+        `.vectorIndex(${JSON.stringify(i.name)}, { vectorField: ${JSON.stringify(i.vectorField)}, dimensions: ${i.dimensions}${filters(i.filterFields)}${staged(i.staged)} })`,
+    ),
+  ].join("");
+}
+
+/**
+ * Declared indexes, as `.index("name", ["field", …])`; system fields (`_creationTime`) are implied. From the schema's
+ * own lists when the source gives them (every kind, staged ones too), else from the table's database indexes.
+ */
+function indexes(table: TableInfo | undefined, declared: DeclaredIndexes | undefined): string {
+  if (declared) return declaredIndexes(declared);
   return (table?.indexes ?? [])
     .filter((ix) => !ix.system)
     .map(
@@ -49,7 +86,7 @@ export function schemaCode(schema: SchemaInfo, tables: TableInfo[]): SchemaCode 
   const declared = [...schema.tables].sort((a, b) => a.name.localeCompare(b.name));
   for (const t of declared) {
     const table = tables.find((x) => x.name === t.name);
-    const text = `${indent}${key(t.name)}: defineTable(${documentType(t.validator, indent)})${indexes(table)},`;
+    const text = `${indent}${key(t.name)}: defineTable(${documentType(t.validator, indent)})${indexes(table, t.indexes)},`;
     const from = out.length + 1;
     out.push(...text.split("\n"));
     lines.set(t.name, { from, to: out.length });

@@ -239,6 +239,40 @@ export function describeDataSourceContract(
       expect((await src.listDocuments({ table, numItems: 32_000, cursor: null })).page.length).toBeGreaterThan(0);
     });
 
+    test("a search index (when a table has one): its word finds the documents; descending and empty as a deployment's", async () => {
+      const src = await make();
+      const t = (await src.listTables()).find((x) => (x.searchIndexes ?? []).length > 0);
+      if (!t) return;
+      const ix = t.searchIndexes![0]!;
+      const docs = await all((cursor) => src.listDocuments({ table: t.name, numItems: 50, cursor }));
+      const text = docs.map((d) => d[ix.searchField]).find((v): v is string => typeof v === "string" && /\w/.test(v));
+      if (text === undefined) return;
+      const word = text.toLowerCase().match(/[\p{L}\p{N}]+/u)![0];
+      const search = (s: string, order: "asc" | "desc" = "asc") =>
+        all((cursor) =>
+          src.listDocuments({
+            table: t.name,
+            numItems: 25,
+            cursor,
+            filter: { clauses: [], order, search: { name: ix.name, search: s, clauses: [] } },
+          }),
+        );
+      const found = await search(word);
+      expect(found.length).toBeGreaterThan(0);
+      for (const d of found) expect(String(d[ix.searchField]).toLowerCase()).toContain(word);
+      // an empty search finds nothing, as a search query does
+      expect(await search("")).toEqual([]);
+      // by relevance only: descending is refused in Convex's words
+      let refused: DataSourceError | undefined;
+      try {
+        await search(word, "desc");
+      } catch (e) {
+        refused = e as DataSourceError;
+      }
+      expect(refused?.code).toBe("invalid_request");
+      expect(refused?.message).toBe(`Trying to query search index \`${ix.name}\` in descending order.`);
+    });
+
     test("pages walk every document once, newest first by default, and end with isDone", async () => {
       const { src, table, docs } = await fixture();
       const ids = docs.map((d) => d._id);

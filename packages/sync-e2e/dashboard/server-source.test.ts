@@ -249,15 +249,22 @@ describe("the deployment", () => {
     const schema = await open().getSchema();
     expect(schema.enforced).toBe(true);
     expect(schema.validation).toBeUndefined();
+    // each table's declared indexes, from the schema (STUDY-162 §8)
+    const none = { database: [], search: [], vector: [] };
     expect(schema.tables).toEqual([
       {
         name: "empty",
         validator: { type: "object", value: { x: { fieldType: { type: "number" }, optional: false } } },
+        indexes: none,
       },
-      { name: "items" },
+      {
+        name: "items",
+        indexes: { ...none, database: [{ name: "by_kind", fields: ["kind", "n", "_creationTime"], staged: false }] },
+      },
       {
         name: "messages",
         validator: { type: "object", value: { body: { fieldType: { type: "string" }, optional: false } } },
+        indexes: none,
       },
     ]);
   });
@@ -572,6 +579,53 @@ describe("the Data screen (STUDY-149 PR 2)", () => {
     await until(() => heard > 0, "watchTables' call");
     off();
     expect(errors).toEqual([]);
+  });
+
+  test("a search index: listed, read with its text, equalities and field clauses; refused as Convex's", async () => {
+    const src = open();
+    const later = "\n      later: defineTable(v.any()),";
+    await deploy([
+      schemaModule(later, `.searchIndex("search_label", { searchField: "label", filterFields: ["kind"] })`),
+      ...APP_MODULES,
+    ]);
+    const items = await until(async () => {
+      const t = (await src.listTables()).find((x) => x.name === "items");
+      return t?.searchIndexes?.length ? t : undefined;
+    }, "the search index in the table list");
+    expect(items.searchIndexes).toEqual([{ name: "search_label", searchField: "label", filterFields: ["kind"] }]);
+    const find = (search: string, clauses: { field: string; value: string; enabled: boolean }[] = [], more = {}) =>
+      src.listDocuments({
+        table: "items",
+        numItems: 50,
+        cursor: null,
+        filter: { clauses: [], order: "asc", search: { name: "search_label", search, clauses }, ...more },
+      });
+    const labels = async (p: Promise<Page<Document>>) => (await p).page.map((d) => d.label).sort();
+    await until(async () => (await labels(find("seven"))).length === 1, "the search index built");
+    expect(await labels(find("seven"))).toEqual(["seven"]);
+    // the last word a prefix, as a search query
+    expect(await labels(find("ei"))).toEqual(["eight"]);
+    expect(await labels(find("seven eight"))).toEqual(["eight", "seven"]);
+    expect(await labels(find("seven eight", [{ field: "kind", value: "c", enabled: true }]))).toEqual(["seven"]);
+    const clauses: FieldFilter[] = [{ id: "x", field: "n", op: "gt", value: 7, enabled: true }];
+    expect(await labels(find("seven eight", [], { clauses }))).toEqual(["eight"]);
+    expect((await find("")).page).toEqual([]);
+    // refusals in Convex's words (the contract's check, before anything is sent); awaited here, not in `rejects`
+    const refusal = async (p: Promise<unknown>) => {
+      try {
+        await p;
+        return null;
+      } catch (e) {
+        return (e as Error).message;
+      }
+    };
+    expect(await refusal(find("seven", [], { order: "desc" }))).toBe(
+      "Trying to query search index `search_label` in descending order.",
+    );
+    expect(await refusal(find("seven", [{ field: "label", value: "x", enabled: true }]))).toBe(
+      "Invalid index filter selection: found a filter for field `label` which is not part of the filter fields of the search index `search_label`.",
+    );
+    await deploy([schemaModule(later), ...APP_MODULES]);
   });
 
   test("watchIndexes: the index list live, a search index's build followed from backfilling to built", async () => {
