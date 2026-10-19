@@ -2303,6 +2303,11 @@ export class Functions {
     return out;
   }
 
+  /** The path of installed component `id` (`a/b`), the app's (`""`) for null; undefined when its code is not installed. */
+  componentPathOf(id: string | null): string | undefined {
+    return id === null ? "" : this.componentRuntimes.get(id)?.runtime.path;
+  }
+
   /** The id of the component at `path` whose code is installed (`""`: the app, null), or undefined. */
   private componentAt(path: string): string | null | undefined {
     if (path === "") return null;

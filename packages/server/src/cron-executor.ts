@@ -3,9 +3,12 @@
 // - A mutation runs exactly once: its log and the next run are written in the transaction that commits it.
 // - An action runs at most once: in progress is committed first; one found in progress that no one runs
 //   was cut short, so it is logged as "Transient error while executing action" and the cron moves on.
+// - Every namespace's crons (STUDY-157 PR 2), as Convex's executor merges them: a component's cron runs its own
+//   component's function; its next run and its logs are its namespace's.
 import {
   BACKEND_STATE_TABLE,
   CommitterStoppedError,
+  CRON_NEXT_RUN_TABLE,
   type Engine,
   isStopped,
   OccError,
@@ -36,6 +39,7 @@ import {
 import { describeUncaught } from "./errors.ts";
 import { type Functions, type SourcedCaller, THROTTLED } from "./functions.ts";
 import { collectLogs, currentLogLines } from "./logs.ts";
+import { inNamespace } from "./scheduler.ts";
 
 export type CronExecutorOptions = NextOpts & {
   parallelism?: number;
@@ -50,6 +54,11 @@ const backoff = (failures: number, initialMs: number, maxMs: number) =>
 const randomId = () => crypto.randomUUID().replaceAll("-", "");
 /** A cron runs with no identity (Convex's `Identity::Unknown`), logged as the `Cron` caller (STUDY-47). */
 const NO_ONE: SourcedCaller = { identity: null, key: "", source: "Cron" };
+
+/** A cron as the executor holds it: with the namespace it lives in (a `_components` id; null the app's). */
+type Queued = CronJob & { ns: string | null };
+/** A running cron's key: ids of different namespaces may share a table number. */
+const runningKey = (job: Queued) => `${job.ns ?? ""}\u0000${job.id}`;
 
 function resultStatus(value: unknown): CronStatus {
   const v = (value ?? null) as Value;
@@ -100,15 +109,63 @@ export class CronJobExecutor {
   start(apply = true): Promise<CronDiff | undefined> {
     // Started late (a deployable server starts it once its code is loaded) after a stop: nothing to run.
     if (this.stopped) return Promise.resolve(undefined);
-    const byNextTs = this.engine.catalog.table("_cron_next_run").indexes.get("by_next_ts")!.id;
-    // And by a pause or unpause (STUDY-63), as Convex's executors subscribe to `_backend_state`.
+    // Woken by a commit to any namespace's next runs (a push adds a component's: the set follows the catalog), and
+    // by a pause or unpause (STUDY-63), as Convex's executors subscribe to `_backend_state`.
     const backendState = this.engine.catalog.table(BACKEND_STATE_TABLE).byId.id;
+    let catalog = this.engine.catalog;
+    let watched = this.queueIndexes();
     this.engine.committer.onCommit((entries) => {
-      if (entries.some((e) => e.writes.some((w) => w.index === byNextTs || w.index === backendState))) this.poke();
+      if (this.engine.catalog !== catalog) {
+        catalog = this.engine.catalog;
+        watched = this.queueIndexes();
+      }
+      if (entries.some((e) => e.writes.some((w) => watched.has(w.index) || w.index === backendState))) this.poke();
     }, "cron executor");
     const registered = apply ? this.register() : Promise.resolve(undefined);
     this.loop = registered.then(() => (this.stopped ? undefined : this.run()));
     return registered;
+  }
+
+  /**
+   * The namespaces whose crons run: the app's (null) and each component's whose code is installed, by `_components`
+   * id. A push commits a component's crons before it installs its code, then `refresh()`es: until then they wait.
+   */
+  private namespaces(): (string | null)[] {
+    const ids = [...this.engine.catalog.components]
+      .filter(([id, c]) => c.tables.has(CRON_NEXT_RUN_TABLE) && this.functions.componentPathOf(id) !== undefined)
+      .map(([id]) => id);
+    return [null, ...ids];
+  }
+
+  /** Each namespace's `_cron_next_run.by_next_ts`. */
+  private queueIndexes(): Set<string> {
+    const catalog = this.engine.catalog;
+    const ids = new Set<string>();
+    for (const c of [catalog, ...catalog.components.values()]) {
+      const index = c.tables.get(CRON_NEXT_RUN_TABLE)?.indexes.get("by_next_ts");
+      if (index) ids.add(index.id);
+    }
+    return ids;
+  }
+
+  /** The first `limit` crons due at `now` across the namespaces, by next run (Convex merges them). */
+  private async dueCrons(db: Tx, now: number, limit: number): Promise<Queued[]> {
+    const order = this.namespaces();
+    const all: Queued[] = [];
+    for (const ns of order)
+      for (const job of await inNamespace(db, ns, () => dueCrons(db, now, limit))) all.push({ ...job, ns });
+    all.sort((a, b) => a.nextTs - b.nextTs || order.indexOf(a.ns) - order.indexOf(b.ns));
+    return all.slice(0, limit);
+  }
+
+  /** The earliest next run after `now` (ms) across the namespaces, if any. */
+  private async nextCronTs(db: Tx, now: number): Promise<number | null> {
+    let next: number | null = null;
+    for (const ns of this.namespaces()) {
+      const t = await inNamespace(db, ns, () => nextCronTs(db, now));
+      if (t !== null && (next === null || t < next)) next = t;
+    }
+    return next;
   }
 
   /** The startup diff, until it commits (or the executor stops). */
@@ -147,8 +204,8 @@ export class CronJobExecutor {
   }
 
   /**
-   * A component's crons in its namespace, inside a push's commit (Convex's `CronModel::apply` per component): the
-   * rows only; this executor runs the app's (a component's run from STUDY-152 step 7).
+   * A component's crons in its namespace, inside a push's commit (Convex's `CronModel::apply` per component); the
+   * executor runs them with the app's (STUDY-157 PR 2).
    */
   applyInComponent(db: Tx, namespace: string, specs: Map<string, CronSpec>) {
     return db.inComponent(namespace, () => applyCrons(db, specs, Date.now(), this.o));
@@ -199,20 +256,21 @@ export class CronJobExecutor {
           continue;
         }
         if (this.running.size < this.o.parallelism) {
-          const due = await this.engine.query((db) => dueCrons(db, now, this.o.parallelism + this.running.size));
+          const due = await this.engine.query((db) => this.dueCrons(db, now, this.o.parallelism + this.running.size));
           for (const job of due) {
+            const key = runningKey(job);
             if (this.running.size >= this.o.parallelism) break;
-            if (this.running.has(job.id)) continue; // never two runs of one cron at once
-            this.running.add(job.id);
+            if (this.running.has(key)) continue; // never two runs of one cron at once
+            this.running.add(key);
             const t = this.execute(job).finally(() => {
-              this.running.delete(job.id);
+              this.running.delete(key);
               this.tasks.delete(t);
               this.poke();
             });
             this.tasks.add(t);
           }
         }
-        nextAt = await this.engine.query((db) => nextCronTs(db, now));
+        nextAt = await this.engine.query((db) => this.nextCronTs(db, now));
         failures = 0;
       } catch (e) {
         if (e instanceof CommitterStoppedError) return;
@@ -234,13 +292,14 @@ export class CronJobExecutor {
   }
 
   /** An attempt goes ahead only if the cron is still as it was picked (Convex's `new_transaction_for_job_state`). */
-  private async unchanged(db: Tx, job: CronJob) {
-    const now = await currentJob(db, job.id);
-    return now !== null && stringifyValue(now as never) === stringifyValue(job as never);
+  private async unchanged(db: Tx, job: Queued) {
+    const { ns, ...cron } = job;
+    const now = await inNamespace(db, ns, () => currentJob(db, job.id));
+    return now !== null && stringifyValue(now as never) === stringifyValue(cron as never);
   }
 
   /** Traced (STUDY-131 AD-26), each run is a `cron/run` trace of its own, its function's execution under it. */
-  private execute(job: CronJob): Promise<void> {
+  private execute(job: Queued): Promise<void> {
     const tracer = this.engine.tracer;
     if (!tracer.on) return this.executeJob(job);
     const span = tracer.root("cron/run", SPAN_KIND.consumer);
@@ -248,19 +307,23 @@ export class CronJobExecutor {
     return tracer.within(span, () => this.executeJob(job)).finally(() => span?.finish());
   }
 
-  private async executeJob(job: CronJob) {
+  private async executeJob(job: Queued) {
     for (let failures = 0; ; failures++) {
       try {
         if (job.state.type === "inProgress") return await this.finishCutShort(job);
-        const target = this.functions.scheduledKind(job.cronSpec.udfPath);
+        // Its own component's function (a component whose code is gone has none).
+        const target = this.functions.scheduledKind(
+          job.cronSpec.udfPath,
+          this.functions.componentPathOf(job.ns) ?? "\u0000gone",
+        );
         if ("error" in target) {
           // As Convex's `run_function`: the job is checked before the function. A push that deleted the cron
           // with its function leaves nothing to run; only a cron that still exists is a (retried) system error.
           if (!(await this.engine.query((db) => this.unchanged(db, job)))) return;
           throw new Error(`Cron trying to execute missing function: ${target.error}`);
         }
-        if (target.kind === "mutation") return await this.runMutation(job);
-        return await this.runAction(job);
+        if (target.kind === "mutation") return await this.runMutation(job, target.key);
+        return await this.runAction(job, target.key);
       } catch (e) {
         if (e instanceof CommitterStoppedError || this.stopped) return;
         // A system error: retry, with backoff (Convex retries these without end).
@@ -270,23 +333,26 @@ export class CronJobExecutor {
     }
   }
 
-  private async finishCutShort(job: CronJob) {
+  private async finishCutShort(job: Queued) {
     await this.engine.mutation(async (db) => {
       if (!(await this.unchanged(db, job))) return;
-      await insertLog(
-        db,
-        job,
-        job.nextTs,
-        { type: "err", error: "Transient error while executing action" },
-        { logLines: [], isTruncated: false },
-        0,
-      );
-      await completeRun(db, job, Date.now(), this.o);
+      await inNamespace(db, job.ns, async () => {
+        await insertLog(
+          db,
+          job,
+          job.nextTs,
+          { type: "err", error: "Transient error while executing action" },
+          { logLines: [], isTruncated: false },
+          0,
+        );
+        await completeRun(db, job, Date.now(), this.o);
+      });
     }, "_system/cron_transient_error");
   }
 
-  private async runMutation(job: CronJob) {
-    const body = this.functions.scheduledMutationBody(job.cronSpec.udfPath, job.cronSpec.udfArgs[0]);
+  /** `name`: what to run it by (`scheduledKind`'s `key`). */
+  private async runMutation(job: Queued, name: string) {
+    const body = this.functions.scheduledMutationBody(name, job.cronSpec.udfArgs[0]);
     const retries = { n: 0 };
     for (let occ = 0; ; ) {
       const t0 = performance.now();
@@ -294,17 +360,20 @@ export class CronJobExecutor {
       const r = await collectLogs(() =>
         this.functions.logged(
           "Mutation",
-          job.cronSpec.udfPath,
+          name,
           { ...NO_ONE, retries, retriesOcc: true } as SourcedCaller,
           () =>
             this.engine.mutation(
               async (db) => {
                 if (!(await this.unchanged(db, job))) return false;
                 value = await body(db);
-                // The log of this run, with its lines so far, and the next run: in the run's own transaction.
+                // The log of this run, with its lines so far, and the next run: in the run's own transaction, in
+                // the cron's namespace.
                 const lines = truncateLogLines(currentLogLines());
-                await insertLog(db, job, job.nextTs, resultStatus(value), lines, (performance.now() - t0) / 1000);
-                await completeRun(db, job, Date.now(), this.o);
+                await inNamespace(db, job.ns, async () => {
+                  await insertLog(db, job, job.nextTs, resultStatus(value), lines, (performance.now() - t0) / 1000);
+                  await completeRun(db, job, Date.now(), this.o);
+                });
                 return true;
               },
               job.cronSpec.udfPath,
@@ -330,32 +399,38 @@ export class CronJobExecutor {
       const error = describeUncaught(r.error).message;
       await this.engine.mutation(async (db) => {
         if (!(await this.unchanged(db, job))) return;
-        await insertLog(
-          db,
-          job,
-          job.nextTs,
-          { type: "err", error },
-          truncateLogLines(r.logLines),
-          (performance.now() - t0) / 1000,
-        );
-        await completeRun(db, job, Date.now(), this.o);
+        await inNamespace(db, job.ns, async () => {
+          await insertLog(
+            db,
+            job,
+            job.nextTs,
+            { type: "err", error },
+            truncateLogLines(r.logLines),
+            (performance.now() - t0) / 1000,
+          );
+          await completeRun(db, job, Date.now(), this.o);
+        });
       }, "_system/cron_save_mutation_error");
       this.stats.runs++;
       return;
     }
   }
 
-  private async runAction(job: CronJob) {
+  /** `name`: what to run it by (`scheduledKind`'s `key`). */
+  private async runAction(job: Queued, name: string) {
     const state = { type: "inProgress" as const, requestId: randomId(), executionId: randomId() };
     const started = await this.engine.mutation(async (db) => {
       if (!(await this.unchanged(db, job))) return null;
-      await setCronState(db, job, state);
-      return currentJob(db, job.id);
+      return inNamespace(db, job.ns, async () => {
+        await setCronState(db, job, state);
+        const now = await currentJob(db, job.id);
+        return now && { ...now, ns: job.ns };
+      });
     }, "_system/cron_in_progress");
     if (!started) return;
     const t0 = performance.now();
     const r = await collectLogs(() =>
-      this.functions.runAction(job.cronSpec.udfPath, job.cronSpec.udfArgs[0], NO_ONE, {
+      this.functions.runAction(name, job.cronSpec.udfArgs[0], NO_ONE, {
         internal: true,
         waitForPermit: true,
       }),
@@ -367,8 +442,10 @@ export class CronJobExecutor {
         await this.engine.mutation(async (db) => {
           // Recorded only if the cron is still the run that started (a changed schedule drops it).
           if (!(await this.unchanged(db, started))) return;
-          await insertLog(db, started, started.nextTs, status, truncateLogLines(r.logLines), elapsed);
-          await completeRun(db, started, Date.now(), this.o);
+          await inNamespace(db, started.ns, async () => {
+            await insertLog(db, started, started.nextTs, status, truncateLogLines(r.logLines), elapsed);
+            await completeRun(db, started, Date.now(), this.o);
+          });
         }, "_system/cron_complete_action");
         this.stats.runs++;
         return;

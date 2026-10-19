@@ -9,7 +9,8 @@
       "types": "./src/index.ts",
       "bun": "./src/index.ts",
       "default": "./src/isomorphic.ts"
-    }
+    },
+    "./executor": "./src/function-executor.ts"
   },
   "dependencies": {
     "@bunvex/auth": "workspace:*",

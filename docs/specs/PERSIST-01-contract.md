@@ -217,12 +217,14 @@ network closed, a server shutting down or not serving — are retried instead of
 
 - **Classification.** A driver implements `isTransient(e)`: whether an error of `flush()` is transient. The
   first-party rules are Convex's per driver, with one decided divergence: Postgres, a timeout or a lost
-  connection (Convex: a timeout only; DV-123, owner 2026-10-01); MySQL, a timeout or an operational error
-  (Convex's `classify_mysql_error`: lost connection, IO, 1290, 2013, 1053, 1040); MongoDB (no Convex
-  counterpart; owner-approved), a timeout, a network or server-selection error, or a server shutting down or
-  not primary. A
-  `LeaseLostError`, a duplicate key, a deadlock or a serialization failure is never transient. A driver
-  without `isTransient` (memory, SQLite) has no transient errors.
+  connection (Convex: a timeout only; DV-123, owner 2026-10-01); MySQL, a timeout, an operational error
+  (Convex's `classify_mysql_error`: lost connection, IO, 1290, 2013, 1053, 1040) or a deadlock (1213
+  `ER_LOCK_DEADLOCK`, as Convex's write batcher since 1a9f5e1, `is_db_deadlock_error`: InnoDB rolled the
+  victim back whole; not operational, so its connection is kept and reads are not retried for it); MongoDB
+  (no Convex counterpart; owner-approved), a timeout, a network or server-selection error, or a server
+  shutting down or not primary. A `LeaseLostError`, a duplicate key, a MySQL lock wait timeout (1205), or a
+  Postgres deadlock or serialization failure (40P01, 40001) is never transient. A driver without
+  `isTransient` (memory, SQLite) has no transient errors.
 - **Flush retries (the committer).** A `flush()` that fails transiently is retried with full-jitter
   exponential backoff from 100 ms to 10 s, with no limit on attempts (Convex's write batcher); the lease's TTL
   bounds it in practice (C7). Anything else stops the committer: "write failed, unsure if the group committed

@@ -280,7 +280,7 @@ const asJob = (job: Queued): SourcedCaller => ({
 });
 
 /** `fn` in namespace `ns` (a `_components` id; null the app's): at once when `db` is already in it. */
-const inNamespace = <T>(db: Tx, ns: string | null, fn: () => Promise<T>): Promise<T> =>
+export const inNamespace = <T>(db: Tx, ns: string | null, fn: () => Promise<T>): Promise<T> =>
   db.componentId === ns ? fn() : db.inComponent(ns, fn);
 
 /** A job as the executor holds it: with the namespace it lives in (a `_components` id; null the app's). */

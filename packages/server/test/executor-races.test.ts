@@ -142,7 +142,9 @@ describe("cron jobs", () => {
     const executor = new CronJobExecutor(s.engine, s.functions, declare(true), { cronSplaySeconds: 0, ...fast });
     stops.push(() => executor.stop());
     await executor.push(declare(true));
-    const execute = (job: CronJob) => (executor as unknown as { execute(j: CronJob): Promise<void> }).execute(job);
+    // With its namespace (the app's).
+    const execute = (job: CronJob) =>
+      (executor as unknown as { execute(j: CronJob & { ns: null }): Promise<void> }).execute({ ...job, ns: null });
     const [picked] = await s.engine.query((db) => dueCrons(db, Date.now() + 1000, 10));
     expect(picked?.name).toBe("tick");
     const logs = () => s.engine.query(async (db) => db.asSystem(() => db.query(CRON_JOB_LOGS_TABLE).collect()));

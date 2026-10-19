@@ -221,6 +221,10 @@ const LOST = new Set([
  *  connections. */
 const OPERATIONAL_ERRNO = new Set([1290, 2013, 1053, 1040]);
 
+/** InnoDB chose this transaction as a deadlock's victim and rolled it back (Convex's `DatabaseDeadlockError`). */
+const ER_LOCK_DEADLOCK = 1213;
+const deadlock = (e: unknown) => (e as { errno?: unknown } | null)?.errno === ER_LOCK_DEADLOCK;
+
 /**
  * An "operational" error, as Convex's `classify_mysql_error` (`crates/mysql/src/connection.rs`): the connection
  * is gone or the server is not serving. Transient: a flush that fails with one is retried, and so is a read,
@@ -357,9 +361,15 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
     return retryN(() => this.call(fn), operational, MYSQL_MAX_QUERY_RETRIES);
   }
 
-  /** As Convex's `is_transient_db_error`: a timeout or an operational error (STUDY-25 L4). */
+  /**
+   * Whether the committer retries a failed flush (STUDY-25 L4): a timeout or an operational error, as Convex's
+   * `is_transient_db_error`, or a deadlock (1213 ER_LOCK_DEADLOCK), as Convex's write batcher since 1a9f5e1
+   * (`is_db_deadlock_error`). InnoDB rolls the victim's whole transaction back, so the retry writes the kept
+   * group again at the same timestamps (DV-124). A deadlock is not operational: its connection is kept and a
+   * read is not retried for it. A lock wait timeout (1205) is not transient, as in Convex.
+   */
   isTransient(e: unknown) {
-    return e instanceof DatabaseTimeoutError || operational(e);
+    return e instanceof DatabaseTimeoutError || operational(e) || deadlock(e);
   }
 
   /** The server and store checks (C10), then Convex's tables, created only when one is missing. */
