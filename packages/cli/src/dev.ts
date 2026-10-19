@@ -78,6 +78,7 @@ type Flags = {
   codegen: boolean;
   tailLogs: LogMode;
   local: LocalOptions;
+  liveComponentSources?: boolean;
 };
 
 function parseFlags(args: string[]): Flags | string {
@@ -95,6 +96,8 @@ function parseFlags(args: string[]): Flags | string {
     if (name === "--once") f.once = true;
     else if (name === "--until-success") f.untilSuccess = true;
     else if (name === "--local-force-upgrade") f.local.forceUpgrade = true;
+    // Hidden, as Convex's: packages resolve to their components' sources.
+    else if (name === "--live-component-sources") f.liveComponentSources = true;
     else if (
       [
         "--run",
@@ -182,39 +185,52 @@ function mtimes(dir: string): Map<string, number | null> {
   return out;
 }
 
-/** The functions directory, watched: dirty when a file that matters changed, `quiet()` once it settles. */
+/**
+ * The functions directory, watched: dirty when a file that matters changed, `quiet()` once it settles. The
+ * directories of the app's local components are watched too, once a push has found them (STUDY-156).
+ */
 class DirWatcher {
   dirty = false;
-  private watcher: FSWatcher;
+  private watchers = new Map<string, FSWatcher>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private waiting: (() => void) | null = null;
+  /** Each watched directory's files' mtimes when the last push began (null: absent). */
+  private snapshots = new Map<string, Map<string, number | null>>();
   constructor(
-    private readonly dir: string,
+    dir: string,
     private quietMs = 500,
   ) {
-    this.snapshot = mtimes(dir);
-    this.watcher = watch(dir, { recursive: true }, (_event, file) => {
-      if (!file) return;
-      const parts = String(file).split(sep);
-      if (parts[0] === "_generated" || parts.some((p) => p.startsWith(".") || p === "node_modules")) return;
-      // macOS can deliver, late, the events of writes made before: only a file that differs from what the
-      // last push saw is a change.
-      let mtime: number | null = null;
-      try {
-        mtime = statSync(join(dir, String(file))).mtimeMs;
-      } catch {
-        // gone: a deletion is a change (unless it was gone already)
-      }
-      if (this.snapshot.get(String(file)) === mtime) return;
-      this.dirty = true;
-      clearTimeout(this.timer);
-      this.timer = setTimeout(() => {
-        this.timer = undefined;
-        const w = this.waiting;
-        this.waiting = null;
-        w?.();
-      }, this.quietMs);
-    });
+    this.add(dir);
+  }
+  /** Watch `dir` too (a no-op for one already watched). */
+  add(dir: string) {
+    if (this.watchers.has(dir)) return;
+    this.snapshots.set(dir, mtimes(dir));
+    this.watchers.set(
+      dir,
+      watch(dir, { recursive: true }, (_event, file) => {
+        if (!file) return;
+        const parts = String(file).split(sep);
+        if (parts[0] === "_generated" || parts.some((p) => p.startsWith(".") || p === "node_modules")) return;
+        // macOS can deliver, late, the events of writes made before: only a file that differs from what the
+        // last push saw is a change.
+        let mtime: number | null = null;
+        try {
+          mtime = statSync(join(dir, String(file))).mtimeMs;
+        } catch {
+          // gone: a deletion is a change (unless it was gone already)
+        }
+        if (this.snapshots.get(dir)?.get(String(file)) === mtime) return;
+        this.dirty = true;
+        clearTimeout(this.timer);
+        this.timer = setTimeout(() => {
+          this.timer = undefined;
+          const w = this.waiting;
+          this.waiting = null;
+          w?.();
+        }, this.quietMs);
+      }),
+    );
   }
   /** Resolves once a change has happened and the files have been quiet for a while (or on abort). */
   quiet(signal: AbortSignal): Promise<void> {
@@ -230,19 +246,17 @@ class DirWatcher {
       this.waiting = finish;
     });
   }
-  /** Each file's mtime when the last push began (null: absent). */
-  private snapshot = new Map<string, number | null>();
 
   /** Start a push: forget what came before, and remember the files as the push sees them. */
   reset() {
-    this.snapshot = mtimes(this.dir);
+    for (const dir of this.watchers.keys()) this.snapshots.set(dir, mtimes(dir));
     this.dirty = false;
     clearTimeout(this.timer);
     this.timer = undefined;
   }
   close() {
     clearTimeout(this.timer);
-    this.watcher.close();
+    for (const w of this.watchers.values()) w.close();
   }
 }
 
@@ -490,11 +504,19 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
       logManager.beginDeploy();
       const r = await deploy(
         target,
-        { dryRun: false, codegen: flags.codegen, typecheck: flags.typecheck, dashboard: dashboardLink },
+        {
+          dryRun: false,
+          codegen: flags.codegen,
+          typecheck: flags.typecheck,
+          dashboard: dashboardLink,
+          liveComponentSources: flags.liveComponentSources,
+        },
         pushIo,
       );
       logManager.endDeploy();
       if (stop.signal.aborted) break;
+      // The local components' directories, outside the functions directory or not (a watched one is skipped).
+      for (const d of r.watch ?? []) if (!d.startsWith(`${dir}${sep}`)) watcher?.add(d);
       if (r.code === 0) {
         backoff = 500;
         io.err(`✔ ${clock()} bunvex functions ready! (${formatDuration(performance.now() - t0)})`);

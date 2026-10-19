@@ -70,6 +70,8 @@ type Graph = {
   children: Map<string, string[]>;
   /** `importer \0 specifier` → the definition file it names. */
   imports: Map<string, string>;
+  /** Each child's import as first written, without `/bunvex.config…` (Convex's `importSpecifier`). */
+  specifiers: Map<string, string>;
 };
 
 /** Convex's `componentGraph`: the definitions reachable from the app's, from Bun's metafile. */
@@ -89,7 +91,7 @@ async function componentGraph(appFile: string, conditions: string[]): Promise<Gr
   const inputs = new Map(
     Object.entries(r.metafile.inputs).map(([path, input]) => [real(resolve(process.cwd(), path)), input]),
   );
-  const graph: Graph = { files: [], children: new Map(), imports: new Map() };
+  const graph: Graph = { files: [], children: new Map(), imports: new Map(), specifiers: new Map() };
   const queue = [real(appFile)];
   while (queue.length) {
     const file = queue.shift()!;
@@ -104,6 +106,7 @@ async function componentGraph(appFile: string, conditions: string[]): Promise<Gr
           `Invalid component directory (Component definition ${CONFIG_FILES[0]} isn't a file): ${dirname(child)}`,
         );
       graph.imports.set(`${file}\0${imp.original}`, child);
+      if (!graph.specifiers.has(child)) graph.specifiers.set(child, imp.original.replace(/\/bunvex\.config.*$/, ""));
       if (!kids.includes(child)) kids.push(child);
       queue.push(child);
     }
@@ -162,30 +165,67 @@ async function bundleDefinition(
   return { path: DEFINITION_MODULE, source, ...(sourceMap ? { sourceMap } : {}), environment: "isolate" };
 }
 
+/** A component's directory, as codegen needs it (Convex's `ComponentDirectory`). */
+export type ComponentDirectory = {
+  definitionPath: string;
+  dir: string;
+  /** How its parent imports it, without `/bunvex.config…`: a package name, or a relative path. */
+  importSpecifier: string;
+  /** Written in TypeScript (its definition is `.ts`): codegen writes its `_generated/`; a published one has its own. */
+  local: boolean;
+};
+
+/** The app's component graph: none without a definition. */
+export type Components = {
+  root: string;
+  appFile: string | null;
+  conditions: string[];
+  graph: Graph | null;
+  /** The components' directories, the app's left out. */
+  directories: ComponentDirectory[];
+};
+
 /**
- * The app's definition and its components, as `start_push` takes them. `liveComponentSources`: packages resolve
- * to their sources (the `"@bunvex/component-source"` condition, Convex's `--live-component-sources`).
+ * The definitions reachable from the app's. `liveComponentSources`: packages resolve to their sources (the
+ * `"@bunvex/component-source"` condition, Convex's `--live-component-sources`).
  */
-export async function bundleComponents(
+export async function findComponents(
   root: string,
+  {
+    liveComponentSources = false,
+    appFile = definitionFile(root),
+  }: { liveComponentSources?: boolean; appFile?: string | null } = {},
+): Promise<Components> {
+  const conditions = liveComponentSources ? ["@bunvex/component-source", ...CONDITIONS] : CONDITIONS;
+  if (appFile === null) return { root, appFile, conditions, graph: null, directories: [] };
+  const graph = await componentGraph(appFile, conditions);
+  const directories = graph.files.slice(1).map((file) => ({
+    definitionPath: definitionPathOf(root, file),
+    dir: dirname(file),
+    importSpecifier: graph.specifiers.get(file)!,
+    local: file.endsWith(".ts"),
+  }));
+  return { root, appFile, conditions, graph, directories };
+}
+
+/** The app's definition and its components, as `start_push` takes them. */
+export async function bundleComponents(
+  found: Components,
   project: string,
-  { includeSourcesContent = false, liveComponentSources = false } = {},
+  { includeSourcesContent = false } = {},
 ): Promise<BundledComponents> {
-  const appFile = definitionFile(root);
-  if (appFile === null)
+  const { root, graph, conditions } = found;
+  if (graph === null)
     return {
       app: { definition: { path: DEFINITION_MODULE, source: DEFAULT_APP, environment: "isolate" }, dependencies: [] },
       components: [],
     };
-  const conditions = liveComponentSources ? ["@bunvex/component-source", ...CONDITIONS] : CONDITIONS;
-  const graph = await componentGraph(appFile, conditions);
   const dependencies = (file: string) => graph.children.get(file)!.map((c) => definitionPathOf(root, c));
   const definition = (file: string) => bundleDefinition(root, file, graph, conditions, project, includeSourcesContent);
   const [app, ...children] = graph.files;
   const components: ComponentDefinitionConfig[] = [];
   for (const file of children) {
-    const dir = dirname(file);
-    const bundled = await bundleFunctions(dir, project, { includeSourcesContent, component: true });
+    const bundled = await bundleFunctions(dirname(file), project, { includeSourcesContent, component: true });
     components.push({
       definitionPath: definitionPathOf(root, file),
       definition: await definition(file),

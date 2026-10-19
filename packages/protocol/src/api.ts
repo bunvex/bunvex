@@ -18,11 +18,14 @@ export type FunctionReference<
   Visibility extends FunctionVisibility = "public",
   Args extends DefaultFunctionArgs = DefaultFunctionArgs,
   ReturnType = unknown,
+  /** The component the function is in, by its path: what a component's `ComponentApi<Name>` passes (Convex's). */
+  ComponentPath = string | undefined,
 > = {
   _type: Type;
   _visibility: Visibility;
   _args: Args;
   _returnType: ReturnType;
+  _componentPath: ComponentPath;
 };
 
 /**

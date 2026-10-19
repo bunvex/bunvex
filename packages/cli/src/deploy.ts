@@ -19,7 +19,8 @@ import {
   type TypescriptCompiler,
   typecheck,
 } from "./codegen.ts";
-import { type BundledComponents, bundleComponents } from "./components.ts";
+import { type Analysis, appComponentEntries, componentCodegen } from "./component-codegen.ts";
+import { type BundledComponents, bundleComponents, type Components, findComponents } from "./components.ts";
 import {
   type DashboardLink,
   dashboardPage,
@@ -242,6 +243,7 @@ type Flags = TargetFlags & {
   typecheck: TypecheckMode;
   cmd?: string;
   cmdUrlEnvVarName?: string;
+  liveComponentSources?: boolean;
 };
 function parseFlags(all: string[]): Flags | string {
   const taken = takeTargetFlags(all);
@@ -259,6 +261,8 @@ function parseFlags(all: string[]): Flags | string {
     const a = args[i]!;
     const [name, inline] = a.includes("=") ? [a.slice(0, a.indexOf("=")), a.slice(a.indexOf("=") + 1)] : [a, undefined];
     if (name === "--dry-run") f.dryRun = true;
+    // Hidden, as Convex's: packages resolve to their components' sources.
+    else if (name === "--live-component-sources") f.liveComponentSources = true;
     else if (name === "--skip-large-indexes-check") f.skipLargeIndexesCheck = true;
     // Its predecessor, hidden as in Convex: it skips the deletion confirmation only.
     else if (name === "--allow-deleting-large-indexes") f.allowDeletingLargeIndexes = true;
@@ -398,6 +402,8 @@ export type DeployOptions = {
   warnOnSlowSchemaValidation?: boolean;
   /** The dashboard the push's messages link (DV-477); none by default. */
   dashboard?: DashboardLink;
+  /** Packages resolve to their components' sources (`"@bunvex/component-source"`, hidden as Convex's). */
+  liveComponentSources?: boolean;
 };
 /**
  * The exit code; whether a failure is worth retrying (`bunvex dev`'s backoff); whether the deployment failed on
@@ -406,6 +412,8 @@ export type DeployOptions = {
  */
 export type DeployResult = {
   code: number;
+  /** The local components' directories, for `bunvex dev` to watch beside the functions directory (STUDY-156). */
+  watch?: string[];
   transient?: boolean;
   internal?: boolean;
   envVars?: boolean;
@@ -492,10 +500,23 @@ async function evaluateSchema(
 }
 
 export async function deploy(target: Target, flags: DeployOptions, io: Io): Promise<DeployResult> {
+  const seen: { watch?: string[] } = {};
+  const r = await deployOnce(target, flags, io, seen);
+  return seen.watch ? { ...r, watch: seen.watch } : r;
+}
+
+/** `deploy`, noting in `seen` the local components' directories once it has found them. */
+async function deployOnce(
+  target: Target,
+  flags: DeployOptions,
+  io: Io,
+  seen: { watch?: string[] },
+): Promise<DeployResult> {
   const { url, adminKey } = target;
   const dashboard = flags.dashboard ?? NO_DASHBOARD;
   let bundled: Awaited<ReturnType<typeof bundleFunctions>>;
   let components: BundledComponents;
+  let found: Components;
   let dir: string;
   let codegen: CodegenConfig;
   let project: ProjectConfig;
@@ -505,11 +526,15 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     codegen = codegenConfig(io.cwd);
     // Convex's initial codegen: what modules importing `_generated/` need to bundle.
     if (flags.codegen && existsSync(dir)) runCodegen(dir, codegen, { initial: true });
+    // The components' graph first: their modules import their own `_generated/` too (STUDY-156).
+    found = await findComponents(dir, { liveComponentSources: flags.liveComponentSources });
+    seen.watch = found.directories.filter((d) => d.local).map((d) => d.dir);
+    if (flags.codegen) componentCodegen(found, codegen, null);
     bundled = await bundleFunctions(dir, io.cwd, {
       includeSourcesContent: project.bundler?.includeSourcesContent ?? false,
       externalPackages: project.node?.externalPackages ?? [],
     });
-    components = await bundleComponents(dir, io.cwd, {
+    components = await bundleComponents(found, io.cwd, {
       includeSourcesContent: project.bundler?.includeSourcesContent ?? false,
     });
   } catch (e) {
@@ -585,7 +610,12 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     }
     const start = await post("/api/deploy2/start_push", request);
     // Convex's final codegen and typecheck, after the push is analyzed and before it is finished.
-    if (flags.codegen) runCodegen(dir, codegen);
+    if (flags.codegen) {
+      // The components' types from the push's analysis, as Convex's final codegen reads them.
+      const analysis = start.analysis as Analysis;
+      runCodegen(dir, codegen, { components: appComponentEntries(found, analysis) });
+      componentCodegen(found, codegen, analysis);
+    }
     const checked = await typecheck(dir, io.cwd, flags.typecheck, typescriptCompilerOf(io.cwd));
     if (!checked.ok) {
       printTypecheckFailure(io, checked);

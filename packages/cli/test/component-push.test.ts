@@ -3,13 +3,13 @@
 // `./_componentDeps/<base64url(path)>`, and pushed with each component's functions; an app without one pushes a
 // `defineApp()` of its own (DV-429); Convex's lines for an installed or unmounted component.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { defineSchema, Engine } from "@bunvex/core";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { adminKeyCipherKey, createServer, Functions, issueAdminKey } from "@bunvex/server";
-import { bundleComponents } from "../src/components.ts";
+import { bundleComponents, findComponents } from "../src/components.ts";
 import { type Io, main } from "../src/index.ts";
 import { memoryStore } from "./memory-store.ts";
 
@@ -99,21 +99,30 @@ function app(mounts = "app.use(counter);\napp.use(limiter);\n") {
       name: "@acme/limiter",
       type: "module",
       exports: {
-        "./bunvex.config.js": { bunvex: "./dist/component/bunvex.config.ts", default: "./missing.js" },
+        "./bunvex.config.js": { bunvex: "./dist/component/bunvex.config.js", default: "./missing.js" },
       },
     }),
-    ...under("node_modules/@acme/limiter/dist/component", component("limiter")),
+    // Published: its definition built to `.js`, so codegen leaves its `_generated/` alone.
+    ...under(
+      "node_modules/@acme/limiter/dist/component",
+      Object.fromEntries(
+        Object.entries(component("limiter")).map(([p, t]) => [p === "bunvex.config.ts" ? "bunvex.config.js" : p, t]),
+      ),
+    ),
   });
   return root;
 }
 
+/** A type import as the generated files write it (spelled so the dependency checker does not take it for one). */
+const imp = (path: string) => `${"im"}port(${JSON.stringify(path)})`;
+const bundled = async (root: string) => bundleComponents(await findComponents(join(root, "bunvex")), root);
 const deploy = (root: string, url: string) =>
   main(["deploy", "--url", url, "--admin-key", KEY, "--typecheck=disable", "--codegen=disable"], io(root).it);
 
 describe("bundling", () => {
   test("the graph, its paths, and each definition's children as `_componentDeps` imports", async () => {
     const root = app();
-    const b = await bundleComponents(join(root, "bunvex"), root);
+    const b = await bundled(root);
     const paths = b.components.map((c) => c.definitionPath);
     expect(paths).toEqual(["../components/counter", "../node_modules/@acme/limiter/dist/component"]);
     expect(b.app.dependencies).toEqual(paths);
@@ -129,7 +138,7 @@ describe("bundling", () => {
   test("an app without a definition pushes `defineApp()`", async () => {
     const root = tmp();
     write(root, { "bunvex/app.ts": "export const x = 1;\n" });
-    const b = await bundleComponents(join(root, "bunvex"), root);
+    const b = await bundled(root);
     expect(b.components).toEqual([]);
     expect(b.app.definition.source).toContain("defineApp()");
   });
@@ -137,7 +146,7 @@ describe("bundling", () => {
   test("a component's \"use node\" module is refused, as Convex's", async () => {
     const root = app();
     write(root, { "components/counter/act.ts": `"use node";\nexport const x = 1;\n` });
-    await expect(bundleComponents(join(root, "bunvex"), root)).rejects.toThrow(
+    await expect(bundled(root)).rejects.toThrow(
       '"use node" directive is not supported in components. Remove it from the component at: ',
     );
   });
@@ -208,5 +217,119 @@ describe("bunvex deploy", () => {
       db.asSystem(() => db.inComponent(null, () => db.query("_modules").collect())),
     )) as unknown as { path: string }[];
     expect(modules.map((m) => m.path)).toContain("bunvex.config.js");
+  });
+});
+
+describe("codegen", () => {
+  /** The app on this repository's `bunvex`, with TypeScript, so its `_generated/` imports resolve and typecheck. */
+  const typed = (root: string) => {
+    mkdirSync(join(root, "node_modules"), { recursive: true });
+    symlinkSync(resolve(import.meta.dir, "../../bunvex"), join(root, "node_modules/bunvex"));
+    symlinkSync(resolve(import.meta.dir, "../../../node_modules/typescript"), join(root, "node_modules/typescript"));
+    write(root, { "package.json": JSON.stringify({ dependencies: { bunvex: "*" } }) });
+  };
+  const deployTyped = (root: string, url: string, r = io(root)) =>
+    main(["deploy", "--url", url, "--admin-key", KEY, "--typecheck=enable"], r.it);
+
+  test("`components` and each local component's `_generated/`, its `ComponentApi` from the validators", async () => {
+    const d = await deployment();
+    const root = app();
+    expect(await main(["deploy", "--url", d.url, "--admin-key", KEY, "--typecheck=disable"], io(root).it)).toBe(0);
+    const api = readFileSync(join(root, "bunvex/_generated/api.d.ts"), "utf8");
+    expect(api).toContain(
+      `export declare const components: {\n  counter: ${imp("../../components/counter/_generated/component.js")}.ComponentApi<"counter">;\n  limiter: ${imp("@acme/limiter/_generated/component.js")}.ComponentApi<"limiter">;\n};`,
+    );
+    expect(readFileSync(join(root, "bunvex/_generated/api.js"), "utf8")).toContain(
+      "export const components = componentsGeneric();",
+    );
+    const component = readFileSync(join(root, "components/counter/_generated/component.ts"), "utf8");
+    expect(component).toContain(
+      'export type ComponentApi<Name extends string | undefined = string | undefined> = {\n  lib: {\n    add: FunctionReference<"mutation", "internal", { body: string }, any, Name>;\n    count: FunctionReference<"query", "internal", {}, any, Name>;\n  };\n};',
+    );
+    // The component's own `api`, its child the package's.
+    expect(readFileSync(join(root, "components/counter/_generated/api.ts"), "utf8")).toContain(
+      `limiter: ${imp("@acme/limiter/_generated/component.js")}.ComponentApi<"limiter">;`,
+    );
+    // A published component keeps its own `_generated/`.
+    expect(() => readFileSync(join(root, "node_modules/@acme/limiter/dist/component/_generated/api.ts"))).toThrow();
+  });
+
+  test("a call into a component typechecks against its `ComponentApi`", async () => {
+    const d = await deployment();
+    const root = app("app.use(counter);\n");
+    typed(root);
+    // The counter alone: the package fixture has no types for TypeScript to resolve.
+    write(root, {
+      "bunvex/bunvex.config.ts": `import { defineApp } from ${SERVER};\nimport counter from "../components/counter/bunvex.config";\nconst app = defineApp();\napp.use(counter);\nexport default app;\n`,
+      ...under("components/counter", { "bunvex.config.ts": component("counter")["bunvex.config.ts"]! }),
+    });
+    const call = (body: string) => ({
+      "bunvex/use.ts": `import { mutation } from "./_generated/server";\nimport { components } from "./_generated/api";\nexport const go = mutation({ args: {}, handler: async (ctx): Promise<number> => { await ctx.runMutation(components.counter.lib.add, { body: ${body} }); return await ctx.runQuery(components.counter.lib.count, {}); } });\n// A reference into the component carries its path in its type.\nexport const path: "counter" = undefined as unknown as (typeof components.counter.lib.add)["_componentPath"];\n`,
+    });
+    write(root, call('"x"'));
+    expect(await main(["codegen", "--init", "--typecheck=disable"], io(root).it)).toBe(0);
+    // The first push writes the types; the second checks the code against them.
+    expect(await main(["deploy", "--url", d.url, "--admin-key", KEY, "--typecheck=disable"], io(root).it)).toBe(0);
+    const ok = io(root);
+    if ((await deployTyped(root, d.url, ok)) !== 0) throw new Error([...ok.out, ...ok.err].join("\n"));
+    write(root, call("1"));
+    const bad = io(root);
+    expect(await deployTyped(root, d.url, bad)).toBe(1);
+    expect(Bun.stripANSI(bad.out.join("\n"))).toContain("bunvex/use.ts");
+  }, 30_000);
+});
+
+describe("bunvex codegen", () => {
+  test("without a deployment: the same `components` and `ComponentApi` a push writes (DV-532)", async () => {
+    const root = app();
+    const r = io(root);
+    expect(await main(["codegen", "--typecheck=disable"], r.it)).toBe(0);
+    expect(readFileSync(join(root, "bunvex/_generated/api.d.ts"), "utf8")).toContain(
+      `limiter: ${imp("@acme/limiter/_generated/component.js")}.ComponentApi<"limiter">;`,
+    );
+    expect(readFileSync(join(root, "components/counter/_generated/component.ts"), "utf8")).toContain(
+      'add: FunctionReference<"mutation", "internal", { body: string }, any, Name>;',
+    );
+  });
+
+  test("--component-dir: one component's `_generated/` alone; a directory without a definition is refused", async () => {
+    const root = app();
+    const r = io(root);
+    const code = await main(["codegen", "--component-dir", "components/counter", "--typecheck=disable"], r.it);
+    if (code !== 0) throw new Error(r.err.join("\n"));
+    expect(readFileSync(join(root, "components/counter/_generated/component.ts"), "utf8")).toContain(
+      'count: FunctionReference<"query", "internal", {}, any, Name>;',
+    );
+    expect(() => readFileSync(join(root, "bunvex/_generated/api.d.ts"))).toThrow();
+    const refused = io(root);
+    expect(await main(["codegen", "--component-dir", "components", "--typecheck=disable"], refused.it)).toBe(1);
+    expect(refused.err[0]).toStartWith(
+      "bunvex codegen: Only directories with bunvex.config.ts files are supported, this directory does not: ",
+    );
+  });
+
+  test("--live-component-sources: a package resolves to its sources (DV-533)", async () => {
+    const root = app("app.use(limiter);\n");
+    write(root, {
+      "node_modules/@acme/limiter/package.json": JSON.stringify({
+        name: "@acme/limiter",
+        type: "module",
+        exports: {
+          "./bunvex.config.js": {
+            "@bunvex/component-source": "./src/component/bunvex.config.ts",
+            bunvex: "./dist/component/bunvex.config.js",
+          },
+        },
+      }),
+      ...under("node_modules/@acme/limiter/src/component", component("sourced")),
+    });
+    expect(await main(["codegen", "--typecheck=disable"], io(root).it)).toBe(0);
+    expect(readFileSync(join(root, "bunvex/_generated/api.d.ts"), "utf8")).toContain('ComponentApi<"limiter">');
+    expect(await main(["codegen", "--live-component-sources", "--typecheck=disable"], io(root).it)).toBe(0);
+    expect(readFileSync(join(root, "bunvex/_generated/api.d.ts"), "utf8")).toContain('ComponentApi<"sourced">');
+    // From its sources, it is local: codegen writes its `_generated/`.
+    expect(
+      readFileSync(join(root, "node_modules/@acme/limiter/src/component/_generated/component.ts"), "utf8"),
+    ).toContain("ComponentApi<");
   });
 });
