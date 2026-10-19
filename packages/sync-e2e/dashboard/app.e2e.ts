@@ -437,8 +437,11 @@ describe("the dashboard app on a live deployment", () => {
     const runner = page.getByRole("region", { name: "Run a function" });
     await runner.getByRole("combobox").first().click();
     await page.getByRole("option", { name: "Custom test query" }).click();
+    // the editor's readiness (STUDY-162): the declarations loaded and checked once by Monaco's worker; generous, as a
+    // loaded machine makes the worker slow, but what follows waits on the editor, not on time
+    await runner.locator('[data-types="checked"]').waitFor({ timeout: 90_000 });
     await runner.getByRole("textbox", { name: "Test query" }).focus();
-    // a document's field of the wrong type is a type error, underlined (once the declarations have loaded)
+    // a document's field of the wrong type is a type error, underlined
     await typeInEditor(
       page,
       'export default query({ handler: async (ctx) => { const n: number = (await ctx.db.query("messages").first())!.body; return n; } });',
@@ -467,6 +470,32 @@ describe("the dashboard app on a live deployment", () => {
     await page.keyboard.press("Control+Space");
     await page.locator(".suggest-widget").getByText("search_body", { exact: true }).first().waitFor();
     await page.keyboard.press("Escape");
+    expect(errors).toEqual([]);
+    await close();
+  });
+
+  test("the custom test query: a run survives new type files arriving meanwhile (the worker is not restarted)", async () => {
+    const { page, errors, close } = await signedIn("/functions?function=messages:list");
+    await page.getByRole("heading", { level: 1, name: "list" }).waitFor();
+    await page.getByRole("button", { name: "Run", exact: true }).click();
+    const runner = page.getByRole("region", { name: "Run a function" });
+    await runner.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: "Custom test query" }).click();
+    await runner.locator('[data-types="checked"]').waitFor({ timeout: 90_000 });
+    // the runs' answers, in the result pane (the editor holds the same text)
+    const result = runner.locator('[aria-live="polite"]');
+    for (let i = 0; i < 2; i++) {
+      await runner.getByRole("textbox", { name: "Test query" }).focus();
+      await typeInEditor(page, `export default query({ handler: async () => "run ${i}" });`);
+      // a table's size changes and the tables query goes stale (the dashboard's queries are fresh for 5 s)
+      await srv.call("mutation", "messages:send", { body: `meanwhile ${i}` });
+      await page.waitForTimeout(5_500);
+      await runner.getByRole("button", { name: "Run test query" }).click();
+      // a focus refetches the tables: new type files while the run compiles (a worker restart here hung the run)
+      await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+      await result.getByText(`"run ${i}"`).waitFor({ timeout: 30_000 });
+      await runner.getByRole("button", { name: "Run test query" }).waitFor();
+    }
     expect(errors).toEqual([]);
     await close();
   });
