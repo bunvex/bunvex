@@ -14,6 +14,7 @@ import {
   CRON_JOBS_TABLE,
   CRON_NEXT_RUN_TABLE,
   cancelJob,
+  componentPath,
   DEPLOYMENT_AUDIT_LOG_TABLE,
   ENVIRONMENT_VARIABLES_TABLE,
   type Engine,
@@ -43,7 +44,7 @@ import {
 } from "@bunvex/core";
 import { type GenericValidator, jsonText, toJsonValue, type Value, v } from "@bunvex/values";
 import type { DeploymentOp } from "./admin-keys.ts";
-import { auditActor, auditEvents } from "./audit-log.ts";
+import { type AuditComponent, auditActor, auditEvents } from "./audit-log.ts";
 import { readCanonicalUrls } from "./canonical-urls.ts";
 import { DATA_SYSTEM_QUERIES } from "./data-system-functions.ts";
 import { DATA_SYSTEM_MUTATIONS } from "./data-system-mutations.ts";
@@ -598,53 +599,86 @@ export class InvalidIdError extends Error {
   }
 }
 
+/** Component `id`'s audit fields (its path, as Convex's `must_component_path`), the root's for null. */
+async function auditComponent(db: Tx, id: string | null): Promise<AuditComponent> {
+  if (id === null) return { component_id: null, component: null };
+  const path = await componentPath(db, id);
+  if (path === null) throw new Error(`Component not found for id: ${id}`);
+  return { component_id: id, component: path.join("/") };
+}
+
 /**
- * Convex's `POST /api/cancel_job` (admin, WriteData): cancel one job; a finished or unknown one is a no-op. An id
- * that is not one of `_scheduled_jobs` is Convex's `InvalidId` (`parse_document_id`).
+ * Convex's `POST /api/cancel_job` (admin, WriteData): cancel one job of component `componentId`'s namespace (the
+ * app's for null); a finished or unknown one is a no-op. An id that is not one of `_scheduled_jobs` is Convex's
+ * `InvalidId` (`parse_document_id`).
  */
-export async function cancelScheduledJob(engine: Engine, id: string, actor: AuditLogActor = SYSTEM_ACTOR) {
+export async function cancelScheduledJob(
+  engine: Engine,
+  id: string,
+  actor: AuditLogActor = SYSTEM_ACTOR,
+  componentId: string | null = null,
+) {
   await engine.mutation(async (db) => {
-    const jobId = db.asSystemSync(() => db.normalizeId(SCHEDULED_JOBS_TABLE, id));
-    if (!jobId) throw new InvalidIdError(SCHEDULED_JOBS_TABLE);
-    const job = await getJob(db, jobId);
-    await cancelJob(db, jobId, Date.now());
-    // As Convex, in the cancel's transaction, whether the job was still pending or not.
-    await insertAuditLogEvents(db, [auditEvents.cancelScheduledFunction(id, job?.name ?? null)], actor);
+    const component = await auditComponent(db, componentId);
+    await db.inComponent(componentId, async () => {
+      const jobId = db.asSystemSync(() => db.normalizeId(SCHEDULED_JOBS_TABLE, id));
+      if (!jobId) throw new InvalidIdError(SCHEDULED_JOBS_TABLE);
+      const job = await getJob(db, jobId);
+      await cancelJob(db, jobId, Date.now());
+      // As Convex, in the cancel's transaction, whether the job was still pending or not.
+      await insertAuditLogEvents(db, [auditEvents.cancelScheduledFunction(id, job?.name ?? null, component)], actor);
+    });
   }, "_system/cancel_job");
 }
 
 /**
- * Convex's `POST /api/cancel_all_jobs` (admin, WriteData): cancel every pending or running job, or one
- * function's, optionally only those with `startNextTs ≤ nextTs < endNextTs` (ns), in batches.
+ * Convex's `POST /api/cancel_all_jobs` (admin, WriteData): cancel every pending or running job of component
+ * `componentId`'s namespace (the app's for null), or one function's (its path and component path: a job may run in
+ * another component than the one it lives in), optionally only those with `startNextTs ≤ nextTs < endNextTs` (ns), in
+ * batches.
  */
 export async function cancelAllScheduledJobs(
   engine: Engine,
-  opts: { udfPath?: string; startNextTs?: bigint; endNextTs?: bigint } = {},
+  opts: { udfPath?: string; componentPath?: string; startNextTs?: bigint; endNextTs?: bigint } = {},
   actor: AuditLogActor = SYSTEM_ACTOR,
+  componentId: string | null = null,
 ): Promise<number> {
   const lo = opts.startNextTs ?? null;
   const hi = opts.endNextTs ?? null;
+  const path = opts.componentPath ?? "";
   let total = 0;
   for (;;) {
     const n = await engine.mutation(async (db) => {
-      const jobs = (await db.asSystem(() =>
-        (opts.udfPath === undefined
-          ? db.query(SCHEDULED_JOBS_TABLE).withIndex("by_next_ts", (q) => {
-              const b = lo === null ? q.gt("nextTs", null) : q.gte("nextTs", lo);
-              return hi === null ? b : b.lt("nextTs", hi);
-            })
-          : db.query(SCHEDULED_JOBS_TABLE).withIndex("by_udf_path_and_next_event_ts", (q) => {
-              const b0 = q.eq("udfPath", canonical(opts.udfPath!));
-              const b = lo === null ? b0.gt("nextTs", null) : b0.gte("nextTs", lo);
-              return hi === null ? b : b.lt("nextTs", hi);
-            })
-        ).take(MAX_JOBS_CANCEL_BATCH),
-      )) as unknown as ScheduledJobDoc[];
-      const now = Date.now();
-      for (const j of jobs) await cancelJob(db, j._id, now);
-      // As Convex: one event per batch that canceled anything.
-      if (jobs.length > 0) await insertAuditLogEvents(db, [auditEvents.cancelAllScheduledFunctions()], actor);
-      return jobs.length;
+      const component = await auditComponent(db, componentId);
+      return db.inComponent(componentId, async () => {
+        const jobs = (await db.asSystem(() =>
+          (opts.udfPath === undefined
+            ? db.query(SCHEDULED_JOBS_TABLE).withIndex("by_next_ts", (q) => {
+                const b = lo === null ? q.gt("nextTs", null) : q.gte("nextTs", lo);
+                return hi === null ? b : b.lt("nextTs", hi);
+              })
+            : db
+                .query(SCHEDULED_JOBS_TABLE)
+                .withIndex("by_udf_path_and_next_event_ts", (q) => {
+                  const b0 = q.eq("udfPath", canonical(opts.udfPath!));
+                  const b = lo === null ? b0.gt("nextTs", null) : b0.gte("nextTs", lo);
+                  return hi === null ? b : b.lt("nextTs", hi);
+                })
+                // Convex's filter on the job's component path (an old row without one is the root's).
+                .filter((q) =>
+                  path === ""
+                    ? q.or(q.eq(q.field("component"), ""), q.eq(q.field("component"), undefined))
+                    : q.eq(q.field("component"), path),
+                )
+          ).take(MAX_JOBS_CANCEL_BATCH),
+        )) as unknown as ScheduledJobDoc[];
+        const now = Date.now();
+        for (const j of jobs) await cancelJob(db, j._id, now);
+        // As Convex: one event per batch that canceled anything.
+        if (jobs.length > 0)
+          await insertAuditLogEvents(db, [auditEvents.cancelAllScheduledFunctions(component)], actor);
+        return jobs.length;
+      });
     }, "_system/cancel_all_jobs");
     total += n;
     if (n < MAX_JOBS_CANCEL_BATCH) return total;

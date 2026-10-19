@@ -414,6 +414,8 @@ const fromWire = (args: unknown, path: string) => {
 };
 
 /** Convex's message for a function `/api/function` or `/api/run` cannot find. */
+/** A body's `componentId` (Convex's `ComponentId::deserialize_from_string`): a component's id, or null for the app. */
+const componentIdOf = (id: unknown) => (typeof id === "string" && id !== "" ? id : null);
 const isSystemPath = (path: unknown) => typeof path === "string" && path.startsWith("_system/");
 const anyFunctionNotFound = (path: string, component: string | null = null) =>
   new FunctionPathError(
@@ -1463,7 +1465,7 @@ export function createServer(opts: ServerOptions) {
     // endNextTs?, componentId?, componentPath?}` (scheduling.rs): 200 with no body.
     if (url.pathname === "/api/cancel_job") {
       try {
-        await cancelScheduledJob(engine, body.id as string, auditActor(caller));
+        await cancelScheduledJob(engine, body.id as string, auditActor(caller), componentIdOf(body.componentId));
       } catch (e) {
         if (e instanceof InvalidIdError) return requestError(400, e.code, e.message);
         throw e;
@@ -1476,10 +1478,12 @@ export function createServer(opts: ServerOptions) {
         engine,
         {
           ...(typeof body.udfPath === "string" ? { udfPath: body.udfPath } : {}),
+          ...(typeof body.componentPath === "string" ? { componentPath: body.componentPath } : {}),
           ...(ns(body.startNextTs) === undefined ? {} : { startNextTs: ns(body.startNextTs) }),
           ...(ns(body.endNextTs) === undefined ? {} : { endNextTs: ns(body.endNextTs) }),
         },
         auditActor(caller),
+        componentIdOf(body.componentId),
       );
       return new Response(null, { status: 200 });
     }

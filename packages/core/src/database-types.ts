@@ -173,6 +173,8 @@ export type SystemDataModel = {
       args: Value[];
       scheduledTime: number;
       completedTime?: number;
+      /** The component path of a job whose function is in a child component (AD-33); absent for the app's. */
+      component?: string;
       state:
         | { kind: "pending" }
         | { kind: "inProgress" }
@@ -180,7 +182,16 @@ export type SystemDataModel = {
         | { kind: "failed"; error: string }
         | { kind: "canceled" };
     };
-    fieldPaths: "_id" | "_creationTime" | "name" | "args" | "scheduledTime" | "completedTime" | "state" | "state.kind";
+    fieldPaths:
+      | "_id"
+      | "_creationTime"
+      | "name"
+      | "args"
+      | "scheduledTime"
+      | "completedTime"
+      | "component"
+      | "state"
+      | "state.kind";
     indexes: { by_id: ["_id"]; by_creation_time: ["_creationTime"] };
     searchIndexes: {};
     vectorIndexes: {};

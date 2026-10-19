@@ -59,7 +59,6 @@ const COUNTER = {
         "export const env = query({ args: {}, handler: async () => ({ mode: process.env.MODE ?? null, key: process.env.KEY ?? null, appx: process.env.APPX ?? null, site: process.env.BUNVEX_SITE_URL ?? null }) });",
         "export const bump = mutation({ args: {}, handler: async () => ++calls });",
         'export const page = query({ args: {}, handler: async (ctx) => ctx.db.query("messages").paginate({ numItems: 1, cursor: null }) });',
-        'export const schedule = mutation({ args: {}, handler: async (ctx) => { await ctx.scheduler.runAfter(0, "lib:bump", {}); } });',
         'export const viaAction = action({ args: {}, handler: async (ctx) => ctx.runQuery("lib:count", {}) });',
         'export const nested = mutation({ args: {}, handler: async (ctx) => { await ctx.runMutation("lib:add", { body: "nested" }); return ctx.runQuery("lib:count", {}); } });',
       ].join("\n"),
@@ -178,7 +177,7 @@ describe("a component's functions, run by an admin", () => {
     expect(second).toMatchObject({ mode: null, key: null, appx: null });
   });
 
-  test("its schema on writes, and what a component may not do", async () => {
+  test("its schema on writes, and what a component may not do (paginate)", async () => {
     const d = await deployment();
     await d.push();
     expect((await d.run("counter", "lib:bad")).body!.errorMessage).toContain(
@@ -186,9 +185,6 @@ describe("a component's functions, run by an admin", () => {
     );
     expect((await d.run("counter", "lib:page")).body!.errorMessage).toContain(
       "paginate() is only supported in the app.",
-    );
-    expect((await d.run("counter", "lib:schedule")).body!.errorMessage).toContain(
-      "`ctx.scheduler` in a component is not supported yet",
     );
   });
 

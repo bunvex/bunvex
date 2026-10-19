@@ -72,10 +72,11 @@ describe("scheduled jobs", () => {
     // Not started: the test hands jobs to the executor, as Convex's `test_one_off_scheduled_job_executor_run`.
     const executor = new ScheduledJobExecutor(s.engine, s.functions, fast);
     stops.push(() => executor.stop());
-    // With its arguments, as the executor reads them (`_scheduled_job_args`) when it picks the job.
+    // With its arguments, as the executor reads them (`_scheduled_job_args`) when it picks the job, and its namespace
+    // (the app's).
     const execute = async (job: JobDoc) =>
-      (executor as unknown as { execute(j: JobDoc, args: Value[]): Promise<void> }).execute(
-        job,
+      (executor as unknown as { execute(j: JobDoc & { ns: null }, args: Value[]): Promise<void> }).execute(
+        { ...job, ns: null },
         await s.engine.query((db) => jobArgs(db, job)),
       );
     const read = (id: string) => s.engine.query((db) => getJob(db, id));
