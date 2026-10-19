@@ -11,14 +11,18 @@
 import { AsyncResource } from "node:async_hooks";
 import { existsSync, mkdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { realRuntime } from "@bunvex/core";
+import { pausingUserTime, realRuntime } from "@bunvex/core";
 import type { Subprocess } from "bun";
 import { action, mutation, query } from "bunvex/server";
 import { decode, encode, replay, type Step, type ToChild, type ToHost, type Wire, type WireError } from "./wire.ts";
 
 // The host's own clock and timers: inside an execution the globals are the deterministic ones (frozen, refused).
 const clock = realRuntime.monotonicNow;
-/** Env SANDBOX_SABOTAGE (tests only): drop one protection, to check that a test catches it. */
+/**
+ * Env SANDBOX_SABOTAGE (tests only): drop one protection, to check that a test catches it. Round 1:
+ * net, fs, env, seccomp, cgroup, timeout, memory; the no-namespace mode adds landlock and uid; round 2's fixes:
+ * accounting (host-measured user time), pool (no pool), slack (a backstop that never fires in time).
+ */
 const sabotage = new Set((process.env.SANDBOX_SABOTAGE ?? "").split(",").filter(Boolean));
 
 type Kind = "query" | "mutation" | "action";
@@ -29,7 +33,9 @@ export type SandboxOptions = {
   /** The app module the child loads (its exports are `{ name: query(…) }` groups, as a bunvex module). */
   app: string;
   /** "bwrap": Linux namespaces + seccomp + cgroup; "none": a plain child process (macOS dev, baselines). */
-  sandbox?: "bwrap" | "seatbelt" | "none";
+  sandbox?: "bwrap" | "confine" | "seatbelt" | "none";
+  /** "confine": the uid the child runs as (one per deployment, so RLIMIT_NPROC and signals are per deployment). */
+  uid?: number;
   /** cgroup v2 limits (bwrap only). */
   memoryMiB?: number;
   pidsMax?: number;
@@ -44,6 +50,24 @@ export type SandboxOptions = {
   env?: Record<string, string>;
   /** Called with each log line the app writes. */
   onLog?: (level: string, text: string) => void;
+  /**
+   * Who measures user time. "host" (the first round): the host's clock while the child runs, so IPC transit counts
+   * as user time. "child": the child reports how long each stretch of the call's own JS ran (between an op's answer
+   * and its next op), and the host's timer only backstops a child that stops talking (budget + `slackMs`).
+   */
+  accounting?: "host" | "child";
+  /** The backstop's margin over the budget ("child" accounting): what IPC transit may add before a kill. */
+  slackMs?: number;
+  /**
+   * 0 (the first round): one child per deployment runs every call concurrently, and a kill fails them all.
+   * N > 0: a pool of N children, each running one call at a time (calls queue for a free one), so a timeout or an
+   * OOM kills only the guilty call's process, and each process's cgroup cap is that call's cap.
+   */
+  poolSize?: number;
+  /** `taskset -c` for the children (Linux): the CPUs they may run on. */
+  cpuList?: string;
+  /** Ops started in the same tick travel in one message each way. */
+  batchOps?: boolean;
 };
 
 /** Convex's user-facing messages (crates/isolate/src/termination.rs), bunvex's words where they name the product. */
@@ -53,7 +77,18 @@ export const INTERNAL_ERROR = "Your request couldn't be completed. Try again lat
 
 const RUNNER_DIR = import.meta.dir;
 const VALUES_DIR = resolve(import.meta.dir, "../../packages/values");
-const CGROUP_ROOT = "/sys/fs/cgroup/bunvex-study";
+/**
+ * Env SANDBOX_CGROUP_ROOT: the cgroup subtree the children's leaves go in. "auto": `sandbox/` under this process's
+ * own cgroup, which is what an unprivileged host uses (a systemd unit with Delegate=yes owns its cgroup).
+ */
+const CGROUP_ROOT =
+  process.env.SANDBOX_CGROUP_ROOT === "auto"
+    ? join("/sys/fs/cgroup", readFileSync("/proc/self/cgroup", "utf8").trim().split("::")[1] ?? "/", "sandbox")
+    : (process.env.SANDBOX_CGROUP_ROOT ?? "/sys/fs/cgroup/bunvex-study");
+/** Env SANDBOX_BWRAP: the bubblewrap binary (a copy only the service's group may run, with its AppArmor profile). */
+const BWRAP = process.env.SANDBOX_BWRAP ?? "bwrap";
+/** Env SANDBOX_NO_PROC=1: no /proc in the sandbox (Docker masks paths of its /proc, so a new one cannot be mounted). */
+const NO_PROC = process.env.SANDBOX_NO_PROC === "1";
 const SECCOMP_BPF = join(import.meta.dir, "seccomp.bpf");
 
 type Call = {
@@ -82,6 +117,10 @@ type Child = {
   /** Why it died, once it did. */
   death: { reason: "timeout" | "oom" | "crash" | "stopped"; message: string } | null;
   exited: Promise<number>;
+  /** A pool child running a call. */
+  busy: boolean;
+  /** batchOps: answers waiting for the end of the tick. */
+  outbox: ToChild[];
 };
 
 let nextCall = 0;
@@ -89,6 +128,10 @@ let nextChild = 0;
 
 export class SandboxedDeployment {
   private child: Child | null = null;
+  /** poolSize > 0: the pool, and the calls waiting for a free child. */
+  private pool: Child[] = [];
+  private waiting: (() => void)[] = [];
+  private stopped = false;
   private opts: Required<Omit<SandboxOptions, "onLog" | "env">> & Pick<SandboxOptions, "onLog" | "env">;
   /** Times of the last kill: the timeout firing → the process gone → a fresh child ready. */
   lastKill: { firedAt: number; exitedAt: number | null; respawnedAt: number | null } | null = null;
@@ -104,8 +147,18 @@ export class SandboxedDeployment {
       name: `dep${process.pid}-${++nextChild}`,
       userTimeoutMs: 1000,
       actionTimeoutMs: 600_000,
+      uid: 60_000 + (nextChild % 5000),
+      accounting: "child",
+      slackMs: 50,
+      poolSize: 0,
+      cpuList: "",
+      batchOps: false,
       ...opts,
     };
+    // Round 2's sabotage: undo a fix, to check that its test catches it.
+    if (sabotage.has("accounting")) this.opts.accounting = "host";
+    if (sabotage.has("pool")) this.opts.poolSize = 0;
+    if (sabotage.has("slack")) this.opts.slackMs = 60_000;
   }
 
   get pid(): number | undefined {
@@ -117,6 +170,15 @@ export class SandboxedDeployment {
 
   /** Spawns the child and waits for its function list (Convex's analyze). */
   async start(): Promise<{ functions: Record<string, Kind>; spawnToReadyMs: number }> {
+    if (this.opts.poolSize > 0) {
+      this.pool = Array.from({ length: this.opts.poolSize }, () => this.spawn(this.opts.app));
+      const lists = await Promise.all(this.pool.map((c) => c.ready));
+      const first = this.pool[0] as Child;
+      return {
+        functions: lists[0] as Record<string, Kind>,
+        spawnToReadyMs: (first.readyAt as number) - first.spawnedAt,
+      };
+    }
     const child = this.spawn(this.opts.app);
     this.child = child;
     const functions = await child.ready;
@@ -146,12 +208,51 @@ export class SandboxedDeployment {
   }
 
   async stop() {
-    const c = this.child;
+    this.stopped = true;
+    const all = [this.child, ...this.pool].filter((c): c is Child => c !== null);
     this.child = null;
-    if (!c) return;
-    c.death ??= { reason: "stopped", message: "stopped" };
-    c.proc.kill("SIGKILL");
-    await c.exited;
+    this.pool = [];
+    for (const c of all) {
+      c.death ??= { reason: "stopped", message: "stopped" };
+      c.proc.kill("SIGKILL");
+    }
+    await Promise.all(all.map((c) => c.exited));
+    if (this.opts.sandbox === "bwrap") removeCgroup(join(CGROUP_ROOT, this.opts.name));
+  }
+
+  /** The pids and cgroups of every live child (the pool's, or the one child's). */
+  get children(): { pid: number; cgroup: string | null }[] {
+    return [this.child, ...this.pool]
+      .filter((c): c is Child => c !== null && !c.death)
+      .map((c) => ({ pid: c.proc.pid, cgroup: c.cgroup }));
+  }
+
+  /** A pool child for one call: a free live one, else a replacement for a dead one, else wait for one to finish. */
+  private async acquire(): Promise<Child> {
+    for (;;) {
+      if (this.stopped) throw new Error("deployment stopped");
+      const i = this.pool.findIndex((c) => c.death !== null);
+      if (i >= 0) {
+        const dead = this.pool[i] as Child;
+        const fresh = this.spawn(this.opts.app);
+        this.pool[i] = fresh;
+        void dead.exited.then(() => this.release());
+      }
+      const free = this.pool.find((c) => !c.death && !c.busy && c.readyAt !== null);
+      if (free) {
+        free.busy = true;
+        return free;
+      }
+      const pending = this.pool.find((c) => !c.death && !c.busy && c.readyAt === null);
+      if (pending) {
+        await pending.ready.catch(() => {});
+        continue;
+      }
+      await new Promise<void>((r) => this.waiting.push(r));
+    }
+  }
+  private release() {
+    this.waiting.shift()?.();
   }
 
   /** Stand-ins for the child's functions, to `register` on the real `Functions` (module → name → def). */
@@ -168,10 +269,32 @@ export class SandboxedDeployment {
 
   /** Runs `fn` in the child, answering its ops with `ctx` (the engine's real context for this execution). */
   async call(fn: string, kind: Kind, ctx: AnyCtx, args: unknown): Promise<unknown> {
-    let child = this.child;
-    if (!child) throw new Error("deployment stopped");
-    if (child.death) child = await this.respawn();
+    let child: Child;
+    if (this.opts.poolSize > 0) {
+      // Waiting for a free child is system time, not the call's own: the engine's timer is paused meanwhile.
+      child = await pausingUserTime(() => this.acquire());
+      try {
+        return await this.callOn(child, fn, kind, ctx, args);
+      } finally {
+        child.busy = false;
+        this.release();
+      }
+    }
+    if (!this.child) throw new Error("deployment stopped");
+    child = this.child.death ? await this.respawn() : this.child;
     await child.ready;
+    return this.callOn(child, fn, kind, ctx, args);
+  }
+
+  private callOn(child: Child, fn: string, kind: Kind, ctx: AnyCtx, args: unknown): Promise<unknown> {
+    // "child" accounting: the engine's own cooperative timer (STUDY-41) would count the whole wait, IPC included,
+    // as user time; it is paused, and the budget is enforced here from the child's reports. A real executor would
+    // charge the reported time to the engine's timer instead (see the study's plan, PR 3).
+    if (this.opts.accounting === "child") return pausingUserTime(() => this.callOnce(child, fn, kind, ctx, args));
+    return this.callOnce(child, fn, kind, ctx, args);
+  }
+
+  private callOnce(child: Child, fn: string, kind: Kind, ctx: AnyCtx, args: unknown): Promise<unknown> {
     // Inside a query or mutation these come from the engine's deterministic globals (seeded per execution).
     const seed = Math.floor(Math.random() * 2 ** 32);
     const now = Date.now();
@@ -196,17 +319,21 @@ export class SandboxedDeployment {
       child.calls.set(id, call);
       this.resume(child, call);
       const m: ToChild = { t: "call", call: id, fn, kind, args: encode(args), seed, now, env: this.opts.env ?? {} };
-      child.proc.send(m);
+      this.send(child, m);
     });
   }
 
   private resume(child: Child, call: Call) {
     call.runningSince = clock();
     if (sabotage.has("timeout")) return;
-    call.timer = realRuntime.setTimeout(() => this.timedOut(child, call), Math.max(0, call.budgetMs - call.usedMs));
+    const slack = this.opts.accounting === "child" ? this.opts.slackMs : 0;
+    call.timer = realRuntime.setTimeout(
+      () => this.timedOut(child, call),
+      Math.max(0, call.budgetMs - call.usedMs + slack),
+    );
   }
   private pause(call: Call) {
-    if (call.runningSince !== null) call.usedMs += clock() - call.runningSince;
+    if (call.runningSince !== null && this.opts.accounting === "host") call.usedMs += clock() - call.runningSince;
     call.runningSince = null;
     if (call.timer) realRuntime.clearTimeout(call.timer as never);
     call.timer = null;
@@ -242,14 +369,16 @@ export class SandboxedDeployment {
 
   private spawn(app: string): Child {
     const ready = Promise.withResolvers<Record<string, Kind>>();
-    const env = { APP: app, VALUES: join(VALUES_DIR, "src/index.ts") };
+    const batch: Record<string, string> = this.opts.batchOps ? { SANDBOX_BATCH: "1" } : {};
+    const env = { APP: app, VALUES: join(VALUES_DIR, "src/index.ts"), ...batch };
     let cmd: string[];
     let cgroup: string | null = null;
     const name = `${this.opts.name}-${++nextChild}`;
     if (this.opts.sandbox === "bwrap") {
-      cgroup = makeCgroup(name, this.opts);
-      cmd = bwrapCommand(app, cgroup);
-    } else if (this.opts.sandbox === "seatbelt") cmd = seatbeltCommand(app);
+      cgroup = makeCgroup(this.opts.name, name, this.opts);
+      cmd = bwrapCommand(app, cgroup, batch);
+    } else if (this.opts.sandbox === "confine") cmd = confineCommand(app, this.opts.uid, this.opts.pidsMax);
+    else if (this.opts.sandbox === "seatbelt") cmd = seatbeltCommand(app);
     else cmd = [process.execPath, join(RUNNER_DIR, "child.ts")];
     const child: Child = {
       proc: undefined as unknown as Subprocess,
@@ -260,14 +389,19 @@ export class SandboxedDeployment {
       readyAt: null,
       death: null,
       exited: undefined as unknown as Promise<number>,
+      busy: false,
+      outbox: [],
     };
+    if (this.opts.cpuList) cmd = ["/usr/bin/taskset", "-c", this.opts.cpuList, ...cmd];
     child.proc = Bun.spawn(cmd, {
       env:
-        this.opts.sandbox !== "bwrap"
-          ? { ...env, PATH: process.env.PATH ?? "" }
-          : sabotage.has("env")
-            ? { ...process.env }
-            : { PATH: "/usr/bin:/bin" },
+        this.opts.sandbox === "confine"
+          ? { ...(sabotage.has("env") ? process.env : {}), ...env, HOME: "/nonexistent" }
+          : this.opts.sandbox !== "bwrap"
+            ? { ...env, PATH: process.env.PATH ?? "" }
+            : sabotage.has("env")
+              ? { ...process.env }
+              : { PATH: "/usr/bin:/bin" },
       ipc: (m) => this.onMessage(child, m as ToHost, ready.resolve),
       serialization: "json",
       stdio: ["ignore", "inherit", "inherit"],
@@ -299,12 +433,32 @@ export class SandboxedDeployment {
       onReady(m.functions);
       return;
     }
+    if (m.t === "ops") {
+      if (Array.isArray(m.list)) for (const o of m.list) if (o?.t !== "ops") this.onMessage(child, o, onReady);
+      return;
+    }
     const call = child.calls.get(m.call);
     // A message for no running call (or a malformed one) is the child misbehaving: ignored, never trusted.
     if (!call) return;
     if (m.t === "log") {
       call.scope.runInAsyncScope(() => (this.opts.onLog ?? defaultLog)(m.level, m.text));
       return;
+    }
+    if (this.opts.accounting === "child" && (m.t === "op" || m.t === "done")) {
+      call.usedMs += Math.max(0, Number(m.ran) || 0);
+      if (call.usedMs > call.budgetMs) {
+        // The call's own JS ran past its budget. Its process is waiting on this op or done: nothing to kill.
+        if (m.t === "op")
+          this.send(child, {
+            t: "result",
+            call: call.id,
+            op: m.op,
+            ok: false,
+            error: { name: "Error", message: timeoutMessage(call.budgetMs) },
+          });
+        this.finish(child, call, false, new Error(timeoutMessage(call.budgetMs)));
+        return;
+      }
     }
     if (m.t === "done") {
       if (m.ok) this.finish(child, call, true, decode(m.value));
@@ -332,7 +486,23 @@ export class SandboxedDeployment {
   private answer(child: Child, call: Call, m: ToChild) {
     if (!child.calls.has(call.id) || child.death) return;
     if (--call.opsInFlight === 0) this.resume(child, call);
-    child.proc.send(m);
+    this.send(child, m);
+  }
+
+  /** With batchOps, the answers produced in one tick go out as one message. */
+  private send(child: Child, m: ToChild) {
+    if (!this.opts.batchOps) {
+      child.proc.send(m);
+      return;
+    }
+    child.outbox.push(m);
+    if (child.outbox.length === 1)
+      queueMicrotask(() => {
+        const list = child.outbox;
+        child.outbox = [];
+        if (child.death) return;
+        child.proc.send(list.length === 1 ? (list[0] as ToChild) : { t: "results", list });
+      });
   }
 }
 
@@ -440,23 +610,51 @@ async function runOp(call: Call, name: string, wireArgs: Wire[]): Promise<unknow
 
 // --- Linux: cgroup v2 and bubblewrap ---
 
-function makeCgroup(name: string, o: { memoryMiB: number; pidsMax: number; cpus: number }): string {
+/**
+ * `<root>/<deployment>/<child>`: the deployment's cgroup holds its CPU share (cpu.max, for all its children
+ * together, so a pool cannot multiply it), each child's leaf its memory and pid caps (per process, so per call in a
+ * pool of one-call processes).
+ */
+function makeCgroup(deployment: string, name: string, o: { memoryMiB: number; pidsMax: number; cpus: number }): string {
   if (!existsSync(CGROUP_ROOT)) {
     mkdirSync(CGROUP_ROOT);
   }
-  // Controllers must be enabled for the children of the root and of our subtree.
-  for (const dir of ["/sys/fs/cgroup", CGROUP_ROOT]) {
-    const enabled = readFileSync(join(dir, "cgroup.subtree_control"), "utf8");
-    for (const c of ["memory", "pids", "cpu"])
-      if (!enabled.split(/\s+/).includes(c)) writeFileSync(join(dir, "cgroup.subtree_control"), `+${c}`);
-  }
-  const dir = join(CGROUP_ROOT, name);
+  const dep = join(CGROUP_ROOT, deployment);
+  const fresh = !existsSync(dep);
+  mkdirSync(dep, { recursive: true });
+  // Controllers must be enabled for the children of the parent, of our subtree, and of the deployment.
+  for (const dir of [dirname(CGROUP_ROOT), CGROUP_ROOT, dep]) enableControllers(dir);
+  if (fresh) writeFileSync(join(dep, "cpu.max"), `${Math.round(o.cpus * 100_000)} 100000`);
+  const dir = join(dep, name);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "memory.max"), String((sabotage.has("memory") ? 2048 : o.memoryMiB) * 1024 * 1024));
   writeFileSync(join(dir, "memory.swap.max"), "0");
   writeFileSync(join(dir, "pids.max"), String(o.pidsMax));
-  writeFileSync(join(dir, "cpu.max"), `${Math.round(o.cpus * 100_000)} 100000`);
   return dir;
+}
+
+/**
+ * Enables memory, pids and cpu for `dir`'s children. A non-root cgroup that holds processes cannot (cgroup v2's
+ * "no internal processes" rule): inside a container, or in a delegated systemd unit, its processes move to a leaf
+ * `init` first, as container runtimes do.
+ */
+function enableControllers(dir: string) {
+  const enabled = readFileSync(join(dir, "cgroup.subtree_control"), "utf8").split(/\s+/);
+  const missing = ["memory", "pids", "cpu"].filter((c) => !enabled.includes(c));
+  if (missing.length === 0) return;
+  const write = () => writeFileSync(join(dir, "cgroup.subtree_control"), missing.map((c) => `+${c}`).join(" "));
+  try {
+    write();
+  } catch (e) {
+    if ((e as { code?: string }).code !== "EBUSY") throw e;
+    const init = join(dir, "init");
+    mkdirSync(init, { recursive: true });
+    for (const pid of readFileSync(join(dir, "cgroup.procs"), "utf8").split("\n").filter(Boolean))
+      try {
+        writeFileSync(join(init, "cgroup.procs"), pid);
+      } catch {}
+    write();
+  }
 }
 
 function readNumber(path: string): number | null {
@@ -487,7 +685,7 @@ function removeCgroup(dir: string) {
   }
 }
 
-export function bwrapCommand(app: string, cgroup: string): string[] {
+export function bwrapCommand(app: string, cgroup: string, extraEnv: Record<string, string> = {}): string[] {
   const appDir = dirname(app);
   const ns = sabotage.has("net")
     ? ["--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts"]
@@ -520,6 +718,7 @@ export function bwrapCommand(app: string, cgroup: string): string[] {
     "--setenv",
     "HOME",
     "/tmp",
+    ...Object.entries(extraEnv).flatMap(([k, v]) => ["--setenv", k, v]),
     "--ro-bind",
     "/usr/lib/x86_64-linux-gnu",
     "/usr/lib/x86_64-linux-gnu",
@@ -546,8 +745,7 @@ export function bwrapCommand(app: string, cgroup: string): string[] {
     "/values",
     "--dev",
     "/dev",
-    "--proc",
-    "/proc",
+    ...(NO_PROC ? [] : ["--proc", "/proc"]),
     "--tmpfs",
     "/tmp",
   ];
@@ -557,8 +755,49 @@ export function bwrapCommand(app: string, cgroup: string): string[] {
   args.push("/bun", "/runner/child.ts");
   // The shell moves itself into the cgroup before exec, so the child never runs outside it.
   const intoCgroup = sabotage.has("cgroup") ? "" : 'echo $$ > "$CG/cgroup.procs" && ';
-  const script = `${intoCgroup}exec bwrap "$@"${seccomp ? ` 9< "${SECCOMP_BPF}"` : ""}`;
-  return ["/usr/bin/env", `CG=${cgroup}`, "/bin/sh", "-c", script, "sh", ...args];
+  const script = `${intoCgroup}exec "$BWRAP" "$@"${seccomp ? ` 9< "${SECCOMP_BPF}"` : ""}`;
+  return ["/usr/bin/env", `CG=${cgroup}`, `BWRAP=${BWRAP}`, "/bin/sh", "-c", script, "sh", ...args];
+}
+
+// --- Linux without namespaces (a container with Docker's default options): uid, Landlock, seccomp, rlimits ---
+
+const CONFINE = join(import.meta.dir, "confine");
+
+/**
+ * `setpriv` drops to the deployment's own uid with no capabilities (a container's root may do this by default),
+ * then `confine` (confine.c) applies Landlock (reads only beneath the runtime, the runner and the app; no TCP at
+ * all), the seccomp deny list and RLIMIT_NPROC before it execs bun. No pid, mount or network namespace, and no
+ * cgroup: memory is capped only by the container's own limit.
+ */
+export function confineCommand(app: string, uid: number, pidsMax: number): string[] {
+  const ro = ["/usr", "/lib", "/lib64", process.execPath, RUNNER_DIR, dirname(app), VALUES_DIR, "/proc/self"];
+  const setpriv = sabotage.has("uid")
+    ? []
+    : [
+        "/usr/bin/setpriv",
+        `--reuid=${uid}`,
+        `--regid=${uid}`,
+        "--clear-groups",
+        "--inh-caps=-all",
+        "--bounding-set=-all",
+        "--",
+      ];
+  return [
+    ...setpriv,
+    CONFINE,
+    ...(sabotage.has("landlock") ? ["--no-landlock"] : []),
+    ...(sabotage.has("seccomp") ? [] : ["--bpf", SECCOMP_BPF]),
+    ...(sabotage.has("cgroup") ? [] : ["--nproc", String(pidsMax)]),
+    ...ro.filter((p) => existsSync(p)).flatMap((p) => ["--ro", p]),
+    "--ro",
+    "/dev/urandom",
+    "--rw",
+    "/dev/null",
+    ...(sabotage.has("fs") ? ["--ro", "/"] : []),
+    "--",
+    process.execPath,
+    join(RUNNER_DIR, "child.ts"),
+  ];
 }
 
 // --- macOS dev: Seatbelt (`sandbox-exec`, deprecated by Apple but still shipped) ---

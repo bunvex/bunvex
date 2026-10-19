@@ -31,4 +31,6 @@ if (mode === "worker") {
   sock.setNoDelay(true);
   const reader = new FrameReader((m) => sock.write(frame(answer(m as { call: number; op: number }))));
   sock.on("data", (d) => reader.push(d as Uint8Array));
+  // The host hung up: exit, so a container running this stops too (container-rtt.ts).
+  sock.on("close", () => process.exit(0));
 }

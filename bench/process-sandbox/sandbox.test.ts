@@ -12,11 +12,22 @@ import { oomMessage, timeoutMessage } from "./host.ts";
 import { type Mode, setup } from "./setup.ts";
 
 const enabled = process.env.SANDBOX_STUDY === "1";
+/** Env SANDBOX_MODE: "bwrap" (namespaces, the default) or "confine" (no namespaces: uid, Landlock, seccomp, rlimits). */
+const SANDBOX = (process.env.SANDBOX_MODE ?? "bwrap") as "bwrap" | "confine";
 const linuxSandbox =
-  enabled && process.platform === "linux" && existsSync("/usr/bin/bwrap") && process.getuid?.() === 0;
+  enabled &&
+  process.platform === "linux" &&
+  existsSync(
+    SANDBOX === "bwrap" ? (process.env.SANDBOX_BWRAP ?? "/usr/bin/bwrap") : join(import.meta.dir, "confine"),
+  ) &&
+  // SANDBOX_UNPRIVILEGED=1: a non-root host with a delegated cgroup and bwrap's AppArmor profile (study §10.5).
+  (process.getuid?.() === 0 || process.env.SANDBOX_UNPRIVILEGED === "1");
 
 const SECRET_ENV = "BUNVEX_STUDY_SECRET";
-const secretDir = join(process.platform === "linux" ? "/root" : tmpdir(), `bunvex-study-secret-${process.pid}`);
+const secretDir = join(
+  process.platform === "linux" && process.getuid?.() === 0 ? "/root" : (process.env.HOME ?? tmpdir()),
+  `bunvex-study-secret-${process.pid}`,
+);
 const secretFile = join(secretDir, "admin-key.txt");
 let server: ReturnType<typeof Bun.serve> | null = null;
 
@@ -50,7 +61,10 @@ describe.skipIf(!enabled)("today: the vm executor is not a boundary (DV-164)", (
     const r = await escapes("vm");
     for (const k of ["process", "env", "fsRead", "fsWrite", "network", "signalHost", "forkBomb"])
       expect(`${k}: ${r[k]}`).toStartWith(`${k}: ESCAPED`);
-    if (process.platform === "linux") expect(r.hostEnviron).toStartWith("ESCAPED");
+    if (process.platform === "linux") {
+      expect(r.hostEnviron).toStartWith("ESCAPED");
+      expect(r.hostCmdline).toStartWith("ESCAPED");
+    }
   }, 30_000);
 
   test("a synchronous loop is never interrupted (DV-208)", async () => {
@@ -64,9 +78,9 @@ describe.skipIf(!enabled)("today: the vm executor is not a boundary (DV-164)", (
   }, 10_000);
 });
 
-describe.skipIf(!linuxSandbox)("sandboxed process (bwrap + seccomp + cgroup)", () => {
+describe.skipIf(!linuxSandbox)(`sandboxed process (${SANDBOX})`, () => {
   test("every escape is blocked", async () => {
-    const r = await escapes("bwrap");
+    const r = await escapes(SANDBOX);
     for (const [k, v] of Object.entries(r)) {
       // `process` is the child's own (a real Bun process, holding nothing): what matters is what it can reach.
       if (k === "process") continue;
@@ -75,7 +89,7 @@ describe.skipIf(!linuxSandbox)("sandboxed process (bwrap + seccomp + cgroup)", (
   }, 30_000);
 
   test("an infinite loop is killed at the user timeout and the deployment recovers", async () => {
-    const s = await setup("bwrap", { memoryMiB: 128 });
+    const s = await setup(SANDBOX, { memoryMiB: 128 });
     try {
       const t = performance.now();
       let message = "returned";
@@ -93,27 +107,32 @@ describe.skipIf(!linuxSandbox)("sandboxed process (bwrap + seccomp + cgroup)", (
     }
   }, 20_000);
 
-  test("an allocating loop is stopped at the memory cap, reported, and the host survives", async () => {
-    const s = await setup("bwrap", { memoryMiB: 128, userTimeoutMs: 10_000 });
-    try {
-      let message = "returned";
+  // "confine" has no cgroup of its own: the container's memory limit is the only cap.
+  test.skipIf(SANDBOX === "confine")(
+    "an allocating loop is stopped at the memory cap, reported, and the host survives",
+    async () => {
+      const s = await setup(SANDBOX, { memoryMiB: 128, userTimeoutMs: 10_000 });
       try {
-        await s.functions.runQuery("sb:allocate", {});
-      } catch (e) {
-        message = (e as Error).message;
+        let message = "returned";
+        try {
+          await s.functions.runQuery("sb:allocate", {});
+        } catch (e) {
+          message = (e as Error).message;
+        }
+        expect(message).toContain(oomMessage(128));
+        expect(s.dep?.lastDeath?.reason).toBe("oom");
+        expect(s.dep?.lastDeath?.peakMiB).toBeLessThanOrEqual(128);
+        expect(process.memoryUsage().rss).toBeLessThan(2 ** 30);
+        expect(await s.functions.runQuery("sb:empty", { nonce: 2 })).toBeNull();
+      } finally {
+        await s.close();
       }
-      expect(message).toContain(oomMessage(128));
-      expect(s.dep?.lastDeath?.reason).toBe("oom");
-      expect(s.dep?.lastDeath?.peakMiB).toBeLessThanOrEqual(128);
-      expect(process.memoryUsage().rss).toBeLessThan(2 ** 30);
-      expect(await s.functions.runQuery("sb:empty", { nonce: 2 })).toBeNull();
-    } finally {
-      await s.close();
-    }
-  }, 30_000);
+    },
+    30_000,
+  );
 
   test("the host refuses ops a function's kind does not allow, whatever the child sends", async () => {
-    const s = await setup("bwrap", { memoryMiB: 128 });
+    const s = await setup(SANDBOX, { memoryMiB: 128 });
     try {
       const refused = (await s.functions.runQuery("sb:forgeInsert", {})) as string[];
       expect(refused.length).toBeGreaterThan(0);
@@ -126,7 +145,7 @@ describe.skipIf(!linuxSandbox)("sandboxed process (bwrap + seccomp + cgroup)", (
 
   test("results match the vm executor", async () => {
     const results: Record<string, unknown[]> = {};
-    for (const mode of ["vm", "bwrap"] as const) {
+    for (const mode of ["vm", SANDBOX] as const) {
       const s = await setup(mode, { memoryMiB: 128 });
       const f = s.functions;
       const ids = (await f.runMutation("sb:seed", { tenants: 2, perTenant: 30, counters: 2 })) as string[];
@@ -144,6 +163,61 @@ describe.skipIf(!linuxSandbox)("sandboxed process (bwrap + seccomp + cgroup)", (
       results[mode] = out;
       await s.close();
     }
-    expect(results.bwrap).toEqual(results.vm as unknown[]);
+    expect(results[SANDBOX]).toEqual(results.vm as unknown[]);
+  }, 30_000);
+});
+
+// The first round's findings, fixed in the prototype (study §10). Linux sandbox when there is one, else a plain child.
+const FIX_MODE = linuxSandbox ? SANDBOX : "process";
+describe.skipIf(!enabled)(`fixes (${FIX_MODE})`, () => {
+  test("user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget", async () => {
+    const s = await setup(FIX_MODE, { memoryMiB: 256, accounting: "child" });
+    try {
+      expect(await s.functions.runMutation("sb:insertMany", { n: 10_000 })).toBe(10_000);
+      // A loop is still stopped: by the host's backstop, at the budget plus the slack.
+      const t = performance.now();
+      const e = await s.functions.runQuery("sb:spin", {}).catch((x) => x as Error);
+      expect((e as Error).message).toContain(timeoutMessage(1000));
+      expect(performance.now() - t).toBeLessThan(2500);
+    } finally {
+      await s.close();
+    }
+  }, 60_000);
+
+  test("a pool of one-call processes: a timeout fails only the guilty call", async () => {
+    const s = await setup(FIX_MODE, { memoryMiB: 128, poolSize: 3 });
+    try {
+      const calls = [
+        s.functions.runQuery("sb:spin", {}),
+        ...Array.from({ length: 6 }, (_, i) => s.functions.runQuery("sb:page", { n: 1, nonce: i })),
+      ];
+      const settled = await Promise.allSettled(calls);
+      expect(settled[0]?.status).toBe("rejected");
+      expect(String((settled[0] as PromiseRejectedResult).reason?.message)).toContain(timeoutMessage(1000));
+      for (const r of settled.slice(1)) expect(r.status).toBe("fulfilled");
+      expect(await s.functions.runQuery("sb:empty", { nonce: 99 })).toBeNull();
+    } finally {
+      await s.close();
+    }
+  }, 30_000);
+
+  test("batched ops give the same results", async () => {
+    const results: Record<string, unknown[]> = {};
+    for (const [label, mode, batchOps] of [
+      ["vm", "vm", false],
+      ["batched", FIX_MODE, true],
+    ] as const) {
+      const s = await setup(mode, { memoryMiB: 128, batchOps });
+      const f = s.functions;
+      const ids = (await f.runMutation("sb:seed", { tenants: 2, perTenant: 30, counters: 2 })) as string[];
+      results[label] = [
+        await f.runQuery("sb:getManyParallel", { ids: ids.slice(0, 50) }),
+        await f.runQuery("sb:getMany", { ids: ids.slice(0, 10) }),
+        await f.runAction("sb:readThenWrite", { tenantId: "t0" }),
+        await f.runQuery("sb:page", { n: 100 }),
+      ];
+      await s.close();
+    }
+    expect(results.batched).toEqual(results.vm as unknown[]);
   }, 30_000);
 });

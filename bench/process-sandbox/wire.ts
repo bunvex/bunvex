@@ -23,14 +23,20 @@ export type ToChild =
       env: Record<string, string>;
     }
   | { t: "result"; call: number; op: number; ok: true; value: Wire }
-  | { t: "result"; call: number; op: number; ok: false; error: WireError };
+  | { t: "result"; call: number; op: number; ok: false; error: WireError }
+  /** batchOps: the answers of one tick. */
+  | { t: "results"; list: ToChild[] };
 
 /** child → host */
 export type ToHost =
   | { t: "ready"; functions: Record<string, "query" | "mutation" | "action">; loadMs: number }
-  | { t: "op"; call: number; op: number; name: string; args: Wire[] }
-  | { t: "done"; call: number; ok: true; value: Wire }
-  | { t: "done"; call: number; ok: false; error: WireError }
+  // `ran`: how long the call's own JS ran since its last op was answered (or since it started), in ms, by the child's
+  // clock: the user time the host charges ("child" accounting).
+  | { t: "op"; call: number; op: number; name: string; args: Wire[]; ran?: number }
+  | { t: "done"; call: number; ok: true; value: Wire; ran?: number }
+  | { t: "done"; call: number; ok: false; error: WireError; ran?: number }
+  /** batchOps: the ops of one tick. */
+  | { t: "ops"; list: ToHost[] }
   | { t: "log"; call: number; level: string; text: string };
 
 export type WireError = { name: string; message: string; data?: Wire; stack?: string };

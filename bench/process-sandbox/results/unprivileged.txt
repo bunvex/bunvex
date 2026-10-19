@@ -1,0 +1,26 @@
+sysctl: 1
+== 1. no profile: the system bwrap, then the copy
+bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted
+bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted
+== 2. an AppArmor profile for the copy only (as Ubuntu ships for browsers): unconfined, plus userns
+loaded
+uid=65534 gid=65534 groups=65534
+bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted
+another user (nobody) on the copy: runuser: failed to execute /opt/bunvex-study/bin/bwrap: Permission denied
+== 3. the tests as bunvex-study, in a unit with Delegate=yes
+(pass) today: the vm executor is not a boundary (DV-164) > app code reaches the host's process, secrets, files, network and other processes [661.24ms]
+(pass) today: the vm executor is not a boundary (DV-164) > a synchronous loop is never interrupted (DV-208) [4020.70ms]
+(pass) sandboxed process (bwrap) > every escape is blocked [485.31ms]
+(pass) sandboxed process (bwrap) > an infinite loop is killed at the user timeout and the deployment recovers [1230.70ms]
+(pass) sandboxed process (bwrap) > an allocating loop is stopped at the memory cap, reported, and the host survives [263.44ms]
+(pass) sandboxed process (bwrap) > the host refuses ops a function's kind does not allow, whatever the child sends [596.85ms]
+(pass) sandboxed process (bwrap) > results match the vm executor [186.51ms]
+(pass) fixes (bwrap) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [2695.70ms]
+(pass) fixes (bwrap) > a pool of one-call processes: a timeout fails only the guilty call [1172.40ms]
+(pass) fixes (bwrap) > batched ops give the same results [118.10ms]
+ 10 pass
+ 0 fail
+== 4. the same without Delegate=yes
+EACCES: permission denied, mkdir '/sys/fs/cgroup/system.slice/run-u724.service/sandbox'
+    code: "EACCES"
+(fail) sandboxed process (bwrap) > every escape is blocked [108.81ms]

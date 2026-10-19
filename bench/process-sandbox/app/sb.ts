@@ -18,6 +18,31 @@ export const getMany = query({
   },
 });
 
+/** `n` concurrent `db.get`s (`Promise.all`): what op batching can put in one message. */
+export const getManyParallel = query({
+  args: { ids: v.array(v.string()), nonce },
+  handler: async ({ db }, { ids }) => (await Promise.all(ids.map((id) => db.get(id as never)))).filter(Boolean).length,
+});
+
+/** `n` sequential inserts in one mutation: user time against IPC (the first round's finding, §4.6). */
+export const insertMany = mutation({
+  args: { n: v.number() },
+  handler: async ({ db }, { n }) => {
+    for (let i = 0; i < n; i++) await db.insert("counters", { key: `m${i}`, value: i });
+    return n;
+  },
+});
+
+/** Pure computation: `iters` loop turns (no clock: queries see a frozen one). A busy tenant. */
+export const burn = query({
+  args: { iters: v.number(), nonce },
+  handler: async (_ctx, { iters }) => {
+    let x = 0;
+    for (let i = 0; i < iters; i++) x = (x + Math.sqrt(i)) % 1e9;
+    return x > 0;
+  },
+});
+
 /** One index range page of `n` documents. */
 export const page = query({
   args: { n: v.number(), nonce },
@@ -172,7 +197,17 @@ export const escapes = action({
       hostEnviron: await attempt(() => {
         const s = fs.readFileSync(`/proc/${p.hostPid}/environ`);
         if (s.length === 0) throw new Error("empty");
+        // The same pid number inside the sandbox's own pid namespace is another process (in Docker the host is
+        // pid 1, and so is the sandbox's init): only the host's secret in it counts as an escape.
+        // The host was started with SANDBOX_STUDY=1 (the tests are opt-in), and nothing in the sandbox was.
+        if (!String(s).includes("SANDBOX_STUDY=")) throw new Error(`pid ${p.hostPid} here is not the host`);
         return `read the host's environ (${s.length} bytes)`;
+      }),
+      // Any uid may read another process's command line, and the Docker image passes --instance-secret there.
+      hostCmdline: await attempt(() => {
+        const s = String(fs.readFileSync(`/proc/${p.hostPid}/cmdline`)).replaceAll("\0", " ");
+        if (s.includes("child.ts")) throw new Error(`pid ${p.hostPid} here is the sandboxed process`);
+        return `read the host's command line: ${s.slice(0, 40)}`;
       }),
       fsRead: await attempt(() => fs.readFileSync(p.secretFile, "utf8")),
       fsWrite: await attempt(() => {
@@ -196,7 +231,19 @@ export const escapes = action({
           }),
       ),
       signalHost: await attempt(() => {
-        // Signal 0: permission and existence only, nothing is delivered.
+        // Signal 0: permission and existence only, nothing is delivered. Inside a pid namespace the host's pid
+        // number can be one of this process's own threads (kill() accepts a thread id): that is no escape.
+        if (proc.pid !== p.hostPid) {
+          const status = (() => {
+            try {
+              return String(fs.readFileSync(`/proc/${p.hostPid}/status`));
+            } catch {
+              return "";
+            }
+          })();
+          if (new RegExp(`^Tgid:\\s+${proc.pid}$`, "m").test(status))
+            throw new Error(`pid ${p.hostPid} here is a thread of the sandboxed process`);
+        }
         proc.kill(p.hostPid, 0);
         return `could signal pid ${p.hostPid}`;
       }),

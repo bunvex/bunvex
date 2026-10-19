@@ -9,7 +9,7 @@ import { CodeVersion } from "../../packages/server/src/code-version.ts";
 import { benchSchema } from "../functions.ts";
 import { SandboxedDeployment, type SandboxOptions } from "./host.ts";
 
-export type Mode = "vm" | "process" | "bwrap" | "seatbelt";
+export type Mode = "vm" | "process" | "bwrap" | "seatbelt" | "confine";
 export const APP = `${import.meta.dir}/app/sb.ts`;
 
 export async function bundle(path = APP): Promise<string> {

@@ -1,0 +1,4 @@
+{"part":"neighbour","mode":"bwrap","variant":"B alone","b":{"perSec":1502,"failed":0,"p50":0.5,"p99":2.2,"mean":0.7},"aBurnsPerSec":0}
+{"part":"neighbour","mode":"bwrap","variant":"A unlimited","b":{"perSec":1960,"failed":0,"p50":0.4,"p99":2.8,"mean":0.5},"aBurnsPerSec":27}
+{"part":"neighbour","mode":"bwrap","variant":"A cpu.max 1 CPU","b":{"perSec":2185,"failed":0,"p50":0.4,"p99":2.4,"mean":0.5},"aBurnsPerSec":23}
+{"part":"neighbour","mode":"bwrap","variant":"A cpu.max 0.5 CPU","b":{"perSec":1777,"failed":0,"p50":0.4,"p99":2.8,"mean":0.6},"aBurnsPerSec":11}

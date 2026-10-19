@@ -9,10 +9,38 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { decode, encode, recorder, type ToChild, type ToHost, type Wire } from "./wire.ts";
 
 type Def = { kind: "query" | "mutation" | "action"; handler: (ctx: unknown, args: unknown) => unknown };
-type Execution = { call: number; kind: Def["kind"]; now: number; random: () => number; env: Record<string, string> };
+type Execution = {
+  call: number;
+  kind: Def["kind"];
+  now: number;
+  random: () => number;
+  env: Record<string, string>;
+  /** When the call's JS last resumed (its start, or its last op's answer): the start of the stretch `ran` reports. */
+  resumedAt: number;
+};
 
 const started = performance.now();
-const send = (m: ToHost) => process.send?.(m);
+const BATCH = process.env.SANDBOX_BATCH === "1";
+let outbox: ToHost[] = [];
+/** With SANDBOX_BATCH, the messages of one tick go out as one. */
+const send = (m: ToHost) => {
+  if (!BATCH) return process.send?.(m);
+  outbox.push(m);
+  if (outbox.length === 1)
+    queueMicrotask(() => {
+      const list = outbox;
+      outbox = [];
+      process.send?.(list.length === 1 ? list[0] : { t: "ops", list });
+    });
+};
+const monotonic = () => performance.now();
+/** The user time of the stretch that ends now. */
+function ran(e: Execution): number {
+  const t = monotonic();
+  const d = t - e.resumedAt;
+  e.resumedAt = t;
+  return d;
+}
 const executions = new AsyncLocalStorage<Execution>();
 
 // --- The app's view of `bunvex/server`: the builders only (validation runs on the host). ---
@@ -35,6 +63,25 @@ Bun.plugin({
         internalMutation: builder("mutation"),
         action: builder("action"),
         internalAction: builder("action"),
+        // What an app's `_generated/server.js` imports (examples/pagination, example-workload.ts).
+        queryGeneric: builder("query"),
+        internalQueryGeneric: builder("query"),
+        mutationGeneric: builder("mutation"),
+        internalMutationGeneric: builder("mutation"),
+        actionGeneric: builder("action"),
+        internalActionGeneric: builder("action"),
+        httpActionGeneric: () => ({}),
+        roomGeneric: () => ({}),
+        presenceGeneric: () => ({}),
+        componentsGeneric: () => ({}),
+        paginationOptsValidator: values.v.object({
+          numItems: values.v.number(),
+          cursor: values.v.union(values.v.string(), values.v.null()),
+          endCursor: values.v.optional(values.v.union(values.v.string(), values.v.null())),
+          id: values.v.optional(values.v.number()),
+          maximumRowsRead: values.v.optional(values.v.number()),
+          maximumBytesRead: values.v.optional(values.v.number()),
+        }),
       },
     }));
     build.module("bunvex/values", () => ({ loader: "object", exports: values }));
@@ -66,14 +113,14 @@ function mulberry32(seed: number) {
 
 // --- Ops: each one a round trip to the host, answered in order of its id. ---
 let nextOp = 0;
-const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
+const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void; e: Execution }>();
 function op(name: string, ...args: unknown[]): Promise<unknown> {
   const e = executions.getStore();
   if (!e) return Promise.reject(new Error(`${name} called outside a function`));
   const id = ++nextOp;
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    send({ t: "op", call: e.call, op: id, name, args: args.map(encode) });
+    pending.set(id, { resolve, reject, e });
+    send({ t: "op", call: e.call, op: id, name, args: args.map(encode), ran: ran(e) });
   });
 }
 
@@ -165,26 +212,38 @@ const defs = new Map<string, Def>();
 for (const [name, def] of Object.entries(mod))
   if (def && typeof def.handler === "function") defs.set(`${moduleName}:${name}`, def);
 
-process.on("message", (raw) => {
-  const m = raw as ToChild;
+process.on("message", (raw) => onMessage(raw as ToChild));
+function onMessage(m: ToChild) {
+  if (m.t === "results") {
+    for (const r of m.list) onMessage(r);
+    return;
+  }
   if (m.t === "result") {
     const p = pending.get(m.op);
     if (!p) return;
     pending.delete(m.op);
+    p.e.resumedAt = monotonic();
     if (m.ok) p.resolve(decode(m.value));
     else p.reject(Object.assign(new Error(m.error.message), { name: m.error.name, data: m.error.data }));
     return;
   }
   if (m.t === "call") void run(m);
-});
+}
 
 async function run(m: Extract<ToChild, { t: "call" }>) {
   const def = defs.get(m.fn);
-  const e: Execution = { call: m.call, kind: m.kind, now: m.now, random: mulberry32(m.seed), env: m.env };
+  const e: Execution = {
+    call: m.call,
+    kind: m.kind,
+    now: m.now,
+    random: mulberry32(m.seed),
+    env: m.env,
+    resumedAt: monotonic(),
+  };
   try {
     if (!def) throw new Error(`Could not find function for '${m.fn}'`);
     const value = await executions.run(e, () => def.handler(makeCtx(def.kind), decode(m.args)));
-    send({ t: "done", call: m.call, ok: true, value: encode(value) });
+    send({ t: "done", call: m.call, ok: true, value: encode(value), ran: ran(e) });
   } catch (err) {
     const x = err as { name?: string; message?: string; data?: unknown; stack?: string };
     send({
@@ -192,6 +251,7 @@ async function run(m: Extract<ToChild, { t: "call" }>) {
       call: m.call,
       ok: false,
       error: { name: x?.name ?? "Error", message: String(x?.message ?? err), data: encode(x?.data), stack: x?.stack },
+      ran: ran(e),
     });
   }
 }

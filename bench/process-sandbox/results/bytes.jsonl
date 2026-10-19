@@ -1,0 +1,8 @@
+{"transport":"ipc json (base64)","sizeKiB":1,"p50Us":39.2,"mibPerSec":24.9}
+{"transport":"ipc json (base64)","sizeKiB":64,"p50Us":362,"mibPerSec":172.6}
+{"transport":"ipc json (base64)","sizeKiB":1024,"p50Us":6330.4,"mibPerSec":158}
+{"transport":"ipc json (base64)","sizeKiB":8192,"p50Us":31552,"mibPerSec":253.5}
+{"transport":"unix socket frames (binary)","sizeKiB":1,"p50Us":101.5,"mibPerSec":9.6}
+{"transport":"unix socket frames (binary)","sizeKiB":64,"p50Us":414.2,"mibPerSec":150.9}
+{"transport":"unix socket frames (binary)","sizeKiB":1024,"p50Us":3309.6,"mibPerSec":302.2}
+{"transport":"unix socket frames (binary)","sizeKiB":8192,"p50Us":83190.3,"mibPerSec":96.2}

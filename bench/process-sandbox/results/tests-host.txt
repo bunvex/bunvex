@@ -1,0 +1,12 @@
+(pass) today: the vm executor is not a boundary (DV-164) > app code reaches the host's process, secrets, files, network and other processes [489.18ms]
+(pass) today: the vm executor is not a boundary (DV-164) > a synchronous loop is never interrupted (DV-208) [4014.31ms]
+(pass) sandboxed process (bwrap) > every escape is blocked [249.58ms]
+(pass) sandboxed process (bwrap) > an infinite loop is killed at the user timeout and the deployment recovers [1179.10ms]
+(pass) sandboxed process (bwrap) > an allocating loop is stopped at the memory cap, reported, and the host survives [272.65ms]
+(pass) sandboxed process (bwrap) > the host refuses ops a function's kind does not allow, whatever the child sends [596.31ms]
+(pass) sandboxed process (bwrap) > results match the vm executor [160.88ms]
+(pass) fixes (bwrap) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [2267.59ms]
+(pass) fixes (bwrap) > a pool of one-call processes: a timeout fails only the guilty call [1163.36ms]
+(pass) fixes (bwrap) > batched ops give the same results [122.92ms]
+ 10 pass
+ 0 fail

@@ -1,0 +1,6 @@
+{"phase":"example-http","app":"examples/pagination","mode":"vm","poolSize":0,"concurrency":8,"perSec":1797,"errors":0,"firstError":"","p50Ms":3.659,"p99Ms":12.964}
+{"phase":"example-http","app":"examples/pagination","mode":"bwrap","poolSize":0,"concurrency":8,"perSec":1317,"errors":0,"firstError":"","p50Ms":5.261,"p99Ms":17.984}
+{"phase":"example-http","app":"examples/pagination","mode":"bwrap","poolSize":2,"concurrency":8,"perSec":1264,"errors":0,"firstError":"","p50Ms":5.593,"p99Ms":16.951}
+{"phase":"example-http","app":"examples/pagination","mode":"vm","poolSize":0,"concurrency":32,"perSec":1976,"errors":0,"firstError":"","p50Ms":13.472,"p99Ms":36.86}
+{"phase":"example-http","app":"examples/pagination","mode":"bwrap","poolSize":0,"concurrency":32,"perSec":1865,"errors":0,"firstError":"","p50Ms":15.761,"p99Ms":38.937}
+{"phase":"example-http","app":"examples/pagination","mode":"bwrap","poolSize":2,"concurrency":32,"perSec":1311,"errors":0,"firstError":"","p50Ms":23.268,"p99Ms":48.659}

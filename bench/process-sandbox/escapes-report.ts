@@ -9,7 +9,7 @@ const dir = `/root/bunvex-study-secret-${process.pid}`;
 mkdirSync(dir, { recursive: true });
 writeFileSync(`${dir}/admin-key.txt`, "s3cr3t-admin-key");
 const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("host") });
-for (const mode of process.argv.slice(2) as ("vm" | "process" | "bwrap")[]) {
+for (const mode of process.argv.slice(2) as ("vm" | "process" | "bwrap" | "confine")[]) {
   const s = await setup(mode, { memoryMiB: 128, pidsMax: 64 });
   const r = await s.functions.runAction("sb:escapes", {
     hostPid: process.pid,
