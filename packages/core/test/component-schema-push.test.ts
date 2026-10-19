@@ -220,16 +220,12 @@ describe("component schema pushes", () => {
     expect(e.componentSchema(b).tables).toEqual({});
   });
 
-  test("refused: a component's staged validator, search or vector index, an unknown namespace, a stale schema id", async () => {
+  test("refused: a component's staged validator, an unknown namespace, a stale schema id", async () => {
     const e = await open(tmp());
     const id = await e.initializeComponentNamespace();
     const staged = defineSchema({ t: defineTable(v.object({ a: v.string() })).staged(v.any()) });
     await expect(e.startSchemaPush(root, new Map([[id, staged]]))).rejects.toThrow(
       'Table "t": staged validators in a component\'s schema are not supported yet',
-    );
-    const search = defineSchema({ t: defineTable({ a: v.string() }).searchIndex("s", { searchField: "a" }) });
-    await expect(e.startSchemaPush(root, new Map([[id, search]]))).rejects.toThrow(
-      'Table "t": search and vector indexes in a component\'s schema are not supported yet',
     );
     const missing = "kh7aaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     await expect(e.startSchemaPush(root, new Map([[missing, counter1]]))).rejects.toThrow(

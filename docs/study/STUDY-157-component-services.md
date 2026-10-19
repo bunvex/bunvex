@@ -8,7 +8,7 @@
 
   Built: PR 1, the scheduler (`packages/server/test/component-scheduler.test.ts`); PR 2, the crons
   (`component-crons.test.ts`); PR 3, storage (`component-storage.test.ts`); PR 4, HTTP mounts
-  (`component-http.test.ts`).
+  (`component-http.test.ts`); PR 5, search and vector indexes (`component-search.test.ts`). Step 7 is built.
 - **Convex source read:** `d8bdde0`, the reference commit (docs/parity/upstream.md). Paths are relative to its
   root. Tests: js-integration-tests at `c358201e1`, Rust tests at `bea52bde0` (memory: Convex test snapshots).
 - **bunvex source:** `main` after STUDY-156 (`6bc5beb2`). Paths are relative to `packages/`.
@@ -247,7 +247,9 @@ component, logs in its namespace. A cron's target is already checked against its
 - **Schema.** The refusals in `engine.ts` and `push.ts` go.
 - **Indexes.** The search and vector index workers build and serve each namespace's indexes. The engine's
   `SearchIndexes` / `VectorIndexes` are keyed by table id, so a component's table is its own key (to confirm in
-  PR 5).
+  PR 5). Confirmed: each namespace's tables are their own keys. The engine's declared tables cover every
+  component's schema, the segments restore after the component schemas load, and deleting a component drops its
+  indexes.
 - **Search.** A component's `withSearchIndex` and its actions' `ctx.vectorSearch` read its namespace.
 
 ## 5. Questions for the owner
@@ -277,7 +279,7 @@ component, logs in its namespace. A cron's target is already checked against its
    - Tests: Convex's two "File storage in component" cases, a missing component's 404.
 4. **HTTP mounts.** Built. The router as Convex's `route_http_action`. Tests: the Rust `http_action.rs` mount, prefix and
    grandchild cases, rewritten as bunvex tests.
-5. **Search and vector indexes in components (Q-3).** Tests: Convex's text and vector search component cases.
+5. **Search and vector indexes in components (Q-3).** Built. Tests: Convex's text and vector search component cases.
 
 ## Divergences
 

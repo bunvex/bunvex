@@ -2897,8 +2897,6 @@ export class Functions {
       presence: cutOffWithAction(r.presence as NonNullable<typeof r.presence>),
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
         checkActionAlive();
-        // A component has no vector index yet (STUDY-153 PR 2b refuses them): its search would read the app's.
-        if (component) throw new Error("`ctx.vectorSearch` in a component is not supported yet");
         // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
         const args = [tableName, indexName, query];
         const argNames = ["tableName", "indexName", "query"];
@@ -2922,6 +2920,8 @@ export class Functions {
             (bytes) => {
               if (r) r.io.vectorQueryBytes += bytes;
             },
+            // A component's action searches its own tables (Convex's `insert_component_id`, STUDY-157).
+            component?.id ?? null,
           );
         } catch (e) {
           throw unavailableToAction(e);
