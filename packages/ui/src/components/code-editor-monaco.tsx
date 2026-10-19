@@ -54,17 +54,66 @@ typescriptDefaults.setCompilerOptions({
 typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: true, noSyntaxValidation: false });
 
 /**
+ * Monaco's TypeScript worker restarts whenever the compiler or diagnostics options change (its `WorkerManager` drops
+ * the worker on `onDidChange`), and a request pending on the old worker never settles: a compile caught by a restart
+ * would hang for good (a run stuck in "Running…"). So the options change once, when the first types arrive; a
+ * request a restart overtakes is asked again (`untilSettled`). Extra libs change without a restart.
+ */
+const onRestart = new Set<() => void>();
+function restartWorker(change: () => void) {
+  change();
+  for (const f of [...onRestart]) f();
+}
+
+const RESTARTED = Symbol("restarted");
+/** `request`'s answer; asked again when the worker restarts meanwhile (at most a few times). */
+async function untilSettled<T>(request: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    let off = () => {};
+    const restarted = new Promise<typeof RESTARTED>((resolve) => {
+      const f = () => resolve(RESTARTED);
+      onRestart.add(f);
+      off = () => onRestart.delete(f);
+    });
+    try {
+      const r = await Promise.race([request(), restarted]);
+      if (r !== RESTARTED) return r;
+    } finally {
+      off();
+    }
+    if (attempt >= 3) throw new Error("The TypeScript worker kept restarting.");
+  }
+}
+
+/**
  * The files a typed editor is checked against (STUDY-162), as Convex's runner sets them up (`FunctionEditor.tsx`):
- * every one an extra lib, Convex's compiler options, and type errors underlined. Set again only when they change
- * (the deployment's schema).
+ * every one an extra lib, Convex's compiler options, and type errors underlined. The options are set once (the one
+ * restart); a new set of files (the deployment's schema changed) replaces the extra libs only, and the same files
+ * again change nothing.
  */
 let typeFiles: Record<string, string> | null = null;
+const sameFiles = (a: Record<string, string>, b: Record<string, string>) => {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((k) => a[k] === b[k]);
+};
 function installTypeFiles(files: Record<string, string> | undefined) {
-  if (!files || files === typeFiles) return;
+  if (!files || files === typeFiles || (typeFiles && sameFiles(files, typeFiles))) return;
+  const first = typeFiles === null;
   typeFiles = files;
-  typescriptDefaults.setCompilerOptions({ ...QUERY_COMPILER_OPTIONS, typeRoots: [] });
   typescriptDefaults.setExtraLibs(Object.entries(files).map(([filePath, content]) => ({ filePath, content })));
-  typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: false, noSyntaxValidation: false });
+  if (first)
+    restartWorker(() => {
+      typescriptDefaults.setCompilerOptions({ ...QUERY_COMPILER_OPTIONS, typeRoots: [] });
+      typescriptDefaults.setDiagnosticsOptions({ noSemanticValidation: false, noSyntaxValidation: false });
+    });
+}
+
+/** Whether the worker has `files` and has checked the model at `uri` once (the editor's readiness). */
+async function checkedOnce(uri: monaco.Uri): Promise<void> {
+  await untilSettled(async () => {
+    const client = await (await typeScriptWorker())(uri);
+    await client.getSemanticDiagnostics(uri.toString());
+  });
 }
 
 /**
@@ -88,8 +137,10 @@ export async function transpile(source: string): Promise<string> {
   const uri = monaco.Uri.parse(`file:///bunvex-transpile-${compiled++}.ts`);
   const model = monaco.editor.createModel(source, "typescript", uri);
   try {
-    const client = await (await typeScriptWorker())(uri);
-    const out = await client.getEmitOutput(uri.toString());
+    const out = await untilSettled(async () => {
+      const client = await (await typeScriptWorker())(uri);
+      return client.getEmitOutput(uri.toString());
+    });
     return out.outputFiles[0]?.text ?? "";
   } finally {
     model.dispose();
@@ -201,7 +252,27 @@ function useTheme(): string {
 
 export default function CodeEditorMonaco(props: CodeEditorProps) {
   const typed = props.language === "typescript" && props.typescript !== undefined;
-  installTypeFiles(typed ? props.typescript!.files : undefined);
+  const files = typed ? props.typescript!.files : undefined;
+  const path = typed ? props.typescript!.path : undefined;
+  installTypeFiles(files);
+  // ready once the worker has these files and has checked the text once (`data-types="checked"`): what waiting for
+  // its type errors and completions can wait on, however slow the worker is
+  const [checked, setChecked] = useState<Record<string, string> | null>(null);
+  useEffect(() => {
+    if (!files || !path) return;
+    let live = true;
+    const uri = monaco.Uri.parse(path);
+    void (async () => {
+      // the model exists once the editor has mounted with this path
+      while (live && !monaco.editor.getModel(uri)) await new Promise((r) => setTimeout(r, 50));
+      if (!live) return;
+      await checkedOnce(uri);
+      if (live) setChecked(files);
+    })().catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [files, path]);
   const theme = useTheme();
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const latest = useRef(props);
@@ -306,6 +377,7 @@ export default function CodeEditorMonaco(props: CodeEditorProps) {
   return (
     <div
       data-slot="code-editor"
+      data-types={typed ? (checked === files ? "checked" : "loading") : undefined}
       className={cn(
         "overflow-hidden border border-input bg-background focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/50",
         single && "h-7",

@@ -169,3 +169,43 @@ staged ones. So `withSearchIndex` completed nothing and accepted any name.
 `schemaCode` skips search indexes → 1 each in `schema-code.test.ts` and `editor-types.test.ts`; `staged` never
 written → 1.
 
+## 9. A run that hung: the worker restart (follow-up)
+
+`app.e2e.ts`'s custom-query test failed now and then under load: once in a merge round (its 30 s wait), once in
+CI (#704: "Succeeded in" never came, beside Bun's "timed out a request after 10 seconds" from the test's proxy).
+
+**Root cause.**
+- Monaco's TypeScript `WorkerManager` stops its worker on every `onDidChange` of the defaults (`setCompilerOptions`,
+  `setDiagnosticsOptions`).
+- A request pending on the stopped worker never settles: `webWorker.js` settles a reply only on the worker's answer,
+  and `dispose` terminates without rejecting.
+- `installTypeFiles` set both options at every new set of type files. That happened twice per page load, and again
+  whenever the runner's tables or schema query came back with new data: a table's document count changing is enough,
+  though the type files' content is the same.
+- A compile (`getEmitOutput`) in flight at that moment hung for good: the run stayed "Running…". Load widens the
+  window.
+
+**Reproduced deterministically** on a live deployment, with the run clicked right after a table's size changed and a
+focus refetch: the pre-fix code hangs, with the same Bun warning.
+
+**Fix** (`code-editor-monaco.tsx`), two independent defences:
+- The options change once, at the first types: the only restart. Later sets replace the extra libs only, which does
+  not restart, and the same content changes nothing.
+- A request the worker's restart overtakes is asked again (`untilSettled`, for the compile and for the readiness
+  check).
+
+**Readiness signal.** A typed editor says `data-types="checked"` once the worker has the files and has checked the
+text once (`getSemanticDiagnostics`). The test waits on it before looking for type errors and completions, instead of
+on a longer timeout.
+
+**Tests and loop.**
+- A regression test in `app.e2e.ts`: two runs, each clicked right after a table's size changed and the tables were
+  refetched; each run must answer.
+- Under 24 busy loops, two concurrent loops of the two tests passed 16 of 16 times; the pre-fix code hangs on the
+  regression test every time.
+
+**Sabotage.**
+- The pre-fix code (no retry, a restart at every install, no same-content check): the regression test hangs and fails.
+- Each defence alone (the retry alone; or the options once with the same-content check) keeps it passing, so both
+  are kept as defence in depth.
+
