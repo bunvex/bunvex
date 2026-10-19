@@ -12,6 +12,7 @@ import { bundleFunctions, entryPoints, usesNode } from "../src/bundle.ts";
 import { parseEnvFile, partitionModules } from "../src/deploy.ts";
 import { type Io, main, VERSION } from "../src/index.ts";
 import { memoryStore } from "./memory-store.ts";
+import { allowTsImports } from "./ts-imports.ts";
 
 const SECRET = "cd".repeat(32);
 const NAME = "deploy-test";
@@ -193,6 +194,7 @@ import { query } from "./_generated/server";
 export const q = query({ args: {}, returns: v.number(), handler: async (ctx) => (await ctx.db.query("t").collect()).length.toString() });`,
     });
     expect(await main(["codegen", "--init", "--typecheck=disable"], io(app).it)).toBe(0);
+    allowTsImports(app);
     const flags = ["--url", d.url, "--admin-key", KEY];
     const failed = io(app);
     expect(await main(["deploy", ...flags], failed.it)).toBe(1);
