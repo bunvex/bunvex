@@ -103,5 +103,5 @@ most of it). The packed size grows with `dist/` (gzip, all fifteen): 1.09 MB →
 Not done, recorded in the parity inventory: Convex's UMD `browser-bundle.js` (a `<script>` tag build of
 `convex/browser`); `engines.node` (the sync client needs Node 22's `WebSocket` unless one is passed, decided in
 STUDY-151 §5). Follow-up once a built release is on npm: `codegen --init` can stop writing
-`allowImportingTsExtensions` for apps on the published packages (DV-177), and the Next.js example's
-`transpilePackages` is then only for the workspace.
+`allowImportingTsExtensions` for apps on the published packages (DV-177; done in STUDY-167), and the Next.js
+example's `transpilePackages` is then only for the workspace.
