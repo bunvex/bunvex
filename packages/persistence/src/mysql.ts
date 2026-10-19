@@ -221,6 +221,10 @@ const LOST = new Set([
  *  connections. */
 const OPERATIONAL_ERRNO = new Set([1290, 2013, 1053, 1040]);
 
+/** InnoDB chose this transaction as a deadlock's victim and rolled it back (Convex's `DatabaseDeadlockError`). */
+const ER_LOCK_DEADLOCK = 1213;
+const deadlock = (e: unknown) => (e as { errno?: unknown } | null)?.errno === ER_LOCK_DEADLOCK;
+
 /**
  * An "operational" error, as Convex's `classify_mysql_error` (`crates/mysql/src/connection.rs`): the connection
  * is gone or the server is not serving. Transient: a flush that fails with one is retried, and so is a read,
@@ -259,6 +263,8 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
   private ttlMs = 5000;
   /** Leases taken by this handle, for `LeaseAcquire.epoch`. */
   private acquired = 0;
+  /** Opened with `allowReadOnly`: the lease is taken even while the store is marked read-only. */
+  private allowReadOnly = false;
   private constructor(
     private pool: mysqlDriver.Pool,
     /** The client-side timeout of one round trip (STUDY-25 L3). */
@@ -357,9 +363,15 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
     return retryN(() => this.call(fn), operational, MYSQL_MAX_QUERY_RETRIES);
   }
 
-  /** As Convex's `is_transient_db_error`: a timeout or an operational error (STUDY-25 L4). */
+  /**
+   * Whether the committer retries a failed flush (STUDY-25 L4): a timeout or an operational error, as Convex's
+   * `is_transient_db_error`, or a deadlock (1213 ER_LOCK_DEADLOCK), as Convex's write batcher since 1a9f5e1
+   * (`is_db_deadlock_error`). InnoDB rolls the victim's whole transaction back, so the retry writes the kept
+   * group again at the same timestamps (DV-124). A deadlock is not operational: its connection is kept and a
+   * read is not retried for it. A lock wait timeout (1205) is not transient, as in Convex.
+   */
   isTransient(e: unknown) {
-    return e instanceof DatabaseTimeoutError || operational(e);
+    return e instanceof DatabaseTimeoutError || operational(e) || deadlock(e);
   }
 
   /** The server and store checks (C10), then Convex's tables, created only when one is missing. */
@@ -382,6 +394,7 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
     )) as any;
     const have = new Set<string>(rows.map((r: any) => r.t as string));
     await this.checkStore(have, opts);
+    this.allowReadOnly = !!opts.allowReadOnly;
     // DDL only when a table is missing, as Convex's v5 driver does (a `create table if not exists` still
     // takes metadata locks: MySQL bug 63144); concurrent first opens are serialized by a named lock. Every
     // statement is idempotent: the whole step runs again after an operational error.
@@ -438,7 +451,9 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
   /**
    * Convex's `Lease::acquire` (`lease_acquire`): the lease row takes our start ts if it is newer than the one
    * there (the newest process wins at once, DV-413); otherwise another process started later, and holds it.
-   * There is no TTL.
+   * There is no TTL. Without `allowReadOnly`, the same statement requires the store not to be marked read-only
+   * (Convex 403c3e8): a flag set after the open's check refuses the lease with `ReadOnlyError`, and leaves the
+   * row as it was.
    *
    * A writer paused inside a flush holds the row (`FOR SHARE`, its last read) until it commits or its
    * connection ends. After a second's wait the sessions holding locks on `leases` are ended: the paused
@@ -454,7 +469,10 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
           try {
             await c.query(`set session innodb_lock_wait_timeout = 1`);
             progress();
-            const [r] = (await c.query(`update leases set ts = ? where ts < ? and id = 1`, [ts, ts])) as any;
+            const [r] = (await c.query(
+              `update leases set ts = ? where ts < ? and id = 1${this.allowReadOnly ? "" : " and not exists (select 1 from read_only)"}`,
+              [ts, ts],
+            )) as any;
             progress();
             return r.affectedRows === 1;
           } finally {
@@ -462,7 +480,10 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
           }
         });
         if (!won) {
-          const [l] = (await this.read((c) => c.query(`select ts from leases where id = 1`))) as any;
+          const [l] = (await this.read((c) =>
+            c.query(`select ts, exists (select 1 from read_only) as ro from leases where id = 1`),
+          )) as any;
+          if (Number(l[0]?.ro) && !this.allowReadOnly) throw new ReadOnlyError(STORE);
           return { heldBy: `a process that took the lease later (lease ts ${l[0]?.ts ?? "none"})`, expiresInMs: null };
         }
         this.leaseTs = ts;

@@ -2168,7 +2168,7 @@ export class Functions {
         kind === "query"
           ? this.systemQueryBody(name, args, false, undefined, true)
           : this.systemMutationBody(name, args, false, undefined, true);
-      return body(db);
+      return kind === "query" ? db.inQueryScope(() => body(db)) : body(db);
     }
     const f = this.fn(name, kind, false);
     // Convex's first nested call in a transaction (STUDY-161 §16.7, measured): two reads, one more from a component,
@@ -2213,9 +2213,11 @@ export class Functions {
     const sp = kind === "mutation" ? db.begin() : null;
     let value: unknown;
     const timer = this.newTimer();
+    // A query called from a mutation paginates in a scope of its own; from a query, in its caller's (Convex 8449d41).
+    const run = () => withUserTimer(timer, () => withSubFunction(sub, () => this.invoke(f, db, a, depth + 1)));
     try {
       value = await this.withLimits(db, opts?.transactionLimits, () =>
-        withUserTimer(timer, () => withSubFunction(sub, () => this.invoke(f, db, a, depth + 1))),
+        kind === "query" ? db.inQueryScope(run) : run(),
       );
       if (sp) mustBeValue(value);
     } catch (e) {

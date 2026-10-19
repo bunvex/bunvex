@@ -80,8 +80,9 @@ export interface Persistence {
   readonly driver?: string;
   /**
    * Whether an error of `flush()` is transient (STUDY-25 L4, as Convex's `is_transient_db_error`): a timeout
-   * or an "operational" error (a lost connection, a server shutting down). The committer retries a transient
-   * flush failure with backoff, so a driver that classifies anything as transient MUST keep the group a failed
+   * or an "operational" error (a lost connection, a server shutting down), and on MySQL a deadlock (Convex
+   * 1a9f5e1). The committer retries a transient flush failure with backoff, so a driver that classifies
+   * anything as transient MUST keep the group a failed
    * `flush()` did not make durable: the next `flush()` first checks whether an earlier attempt did commit it
    * (`retriedGroupLanded`: then it succeeds without writing), and otherwise writes the same rows at the same
    * timestamps behind the same fence (PERSIST-01 C9). Absent: nothing is transient, any flush failure is

@@ -55,7 +55,9 @@
   - "Requested too many items: N" (more than 32 000);
   - "maximumRowsRead and maximumBytesRead must be greater than 0";
   - on the JS side, "`options.numItems` must be a positive number.";
-  - only one paginated query per function ("…ran multiple paginated queries…").
+  - only one paginated query per query function, shared with the queries it calls ("This query function ran
+    multiple paginated queries…"); since Convex 8449d41 a mutation may paginate any number of times, and a query
+    it calls gets a limit of its own.
 - **Validators:** `paginationOptsValidator` and `paginationResultValidator` are exported from
   `convex/server`.
 

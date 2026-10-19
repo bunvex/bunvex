@@ -138,11 +138,14 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   /** The highest durable ts, once this handle writes: the document log's bound while a group sits
    *  uncommitted in this connection's open transaction (PERSIST-01 C12). Only the lock holder writes, so it stays exact. */
   private durableTs: bigint | null = null;
+  /** Opened with `allowReadOnly`: the lock is taken even while the store is marked read-only. */
+  private allowReadOnly: boolean;
 
   constructor(
     private path: string,
     opts: { durable: boolean } & OpenOptions,
   ) {
+    this.allowReadOnly = !!opts.allowReadOnly;
     if (!this.inMemory) this.lock = ProcessLock.tryTake(path);
     this.db = new Database(path, { create: true });
     try {
@@ -233,10 +236,19 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     else this.db.run(`delete from read_only`);
   }
 
+  /**
+   * The store's lock, if no other process holds it. Without `allowReadOnly`, a store marked read-only since the
+   * open's check is refused here, under the lock, with `ReadOnlyError`, and the lock let go (as Convex 403c3e8
+   * checks the flag in its SQL drivers' lease statement; Convex's SQLite store has no lease).
+   */
   async acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
     if (this.inMemory) return { epoch: 1 }; // nothing another process could share
     this.lock ??= ProcessLock.tryTake(this.path);
     if (!this.lock) return { heldBy: ProcessLock.holderOf(this.path), expiresInMs: null };
+    if (!this.allowReadOnly && this.db.query(`select 1 from read_only limit 1`).get()) {
+      await this.releaseLease();
+      throw new ReadOnlyError(`the SQLite store ${this.path}`);
+    }
     this.lock.recordHolder(opts.holder);
     return { epoch: this.lock.epoch };
   }
