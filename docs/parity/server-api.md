@@ -77,7 +77,7 @@ Key bunvex facts behind the statuses:
 | `endCursor` pins the page end so a reactive page keeps its boundaries on re-run (taken from the query journal) | pagination.ts; async_syscall.rs | done (#42) | See STUDY-17 §4. |
 | `maximumRowsRead` / `maximumBytesRead` (must be > 0) | pagination.ts; async_syscall.rs | done (#42) | See STUDY-17 §4. |
 | `splitCursor` + `pageStatus` (`"SplitRecommended"` / `"SplitRequired"`) | pagination.ts; async_syscall.rs (`read_page_from_query`); database query/index_range.rs | done (#42, STUDY-108) | As Convex: `SplitRequired` at `maximumRowsRead`/`maximumBytesRead` (not on a pinned page) and at a transaction read limit (the page so far, instead of the error); `SplitRecommended` past 3/4 of the page's or the transaction's limits or 6144 documents; `splitCursor` the middle document read on any page of more than two (DV-362). |
-| Only one paginated query per query or mutation (`MultiplePaginatedDatabaseQueries`) | async_syscall.rs | done (#42) | A second `paginate()` in one function throws Convex's message. |
+| Only one paginated query per query function (`MultiplePaginatedDatabaseQueries`); a mutation paginates any number of times | async_syscall.rs (`query_page`, `runUdf`; Convex 8449d41) | done (#42, #718) | A second `paginate()` in a query throws Convex's message, in bunvex's words. A query called from a query shares its caller's limit; one called from a mutation gets its own; a mutation is not limited (Convex 8449d41). |
 | `paginate()` isn't supported inside components | async_syscall.rs | missing (DV-55) | Nothing to enforce until components exist (STUDY-62). |
 | `paginationOptsValidator` and `paginationResultValidator(item)` helpers | server/pagination.ts | done (#42) | See STUDY-17 §4. |
 

@@ -124,7 +124,24 @@ describe(".paginate(), as Convex (STUDY-17)", () => {
         await db.query("items").paginate({ numItems: 1, cursor: null });
         return db.query("items").paginate({ numItems: 1, cursor: null });
       }),
-    ).rejects.toThrow("ran multiple paginated queries");
+    ).rejects.toThrow(
+      "This query function ran multiple paginated queries. Only a single paginated query is supported in each query function.",
+    );
+  });
+
+  test("a mutation may paginate any number of times, as Convex 8449d41", async () => {
+    const e = await engine(7);
+    const pages = await e.mutation(async (db) => {
+      const seen: unknown[][] = [];
+      let cursor: string | null = null;
+      for (;;) {
+        const r = await db.query("items").withIndex("by_n").paginate({ numItems: 3, cursor });
+        seen.push(ns(r.page));
+        if (r.isDone) return seen;
+        cursor = r.continueCursor;
+      }
+    });
+    expect(pages).toEqual([[0, 1, 2], [3, 4, 5], [6]]);
   });
 
   test("maximumRowsRead stops the page early with SplitRequired, and paging continues", async () => {
