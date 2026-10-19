@@ -11,8 +11,8 @@ import { Button } from "@bunvex/ui/components/button";
 import { ChoiceSelect } from "@bunvex/ui/components/choice-select";
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { cn } from "@bunvex/ui/lib/utils";
-import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useId, useRef } from "react";
+import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useId, useRef } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, dashboardKeys } from "../data/queries.ts";
 import { type RoomInfo, type RoomMember, toDataSourceError } from "../data-source.ts";
@@ -32,6 +32,9 @@ export const MEMBERS_PAGE = 100;
 /** What a deployment without rooms answers (`not_found`), said as the screen's empty state. */
 export const NO_ROOMS = "This deployment does not run rooms.";
 const ALL = "__all";
+
+/** The open rooms' query key. */
+const roomsKey = (scope: string) => [...dashboardKeys.all(scope), "rooms"] as const;
 
 export function RoomsScreen() {
   const { source } = useQueryScope();
@@ -53,7 +56,7 @@ function Rooms() {
   const allowed = caps?.operations.includes("viewMetrics") ?? true;
   const disconnected = useDisconnected();
   const list = useQuery({
-    queryKey: [...dashboardKeys.all(scope.scope), "rooms"] as const,
+    queryKey: roomsKey(scope.scope),
     queryFn: ({ signal }) => source.listRooms!({ signal }),
     enabled: allowed && !disconnected,
     refetchInterval: ROOMS_POLL_MS,
@@ -194,7 +197,7 @@ function Rooms() {
           {opened.state === "unknown" ? (
             <p className="text-sm text-muted-foreground">This room is not open: it closed, or the link is old.</p>
           ) : (
-            <RoomDetails room={opened.room} closed={opened.state === "closed"} />
+            <RoomDetails key={opened.room.key} room={opened.room} closed={opened.state === "closed"} />
           )}
         </Panel>
       )}
@@ -215,7 +218,18 @@ function RoomDetails({ room, closed }: { room: RoomInfo; closed: boolean }) {
     enabled: !closed && !disconnected && typeof scope.source.listRoomMembers === "function",
     refetchInterval: closed ? false : ROOMS_POLL_MS,
   });
-  const rows = members.data?.pages.flatMap((p) => p.page) ?? [];
+  const listed = members.data?.pages.flatMap((p) => p.page) ?? [];
+  // The members and the list are two polls, and either may hear first that the room closed: once it has, the
+  // members page is empty (a room with no member is not open). An empty page after members were shown is the room
+  // closing, not "nobody is in it": the members last shown stay, and the list is asked now to say it closed.
+  const shown = useRef<RoomMember[]>([]);
+  const emptied = listed.length === 0 && members.data !== undefined && shown.current.length > 0;
+  if (listed.length > 0) shown.current = listed;
+  const rows = closed || emptied ? shown.current : listed;
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (emptied && !closed) void queryClient.invalidateQueries({ queryKey: roomsKey(scope.scope), exact: true });
+  }, [emptied, closed, queryClient, scope.scope]);
   const scopeKind = room.kind === "presence";
   return (
     <div className="flex flex-col gap-4 text-sm">
@@ -253,7 +267,7 @@ function RoomDetails({ room, closed }: { room: RoomInfo; closed: boolean }) {
         ) : rows.length === 0 ? (
           <p className="text-muted-foreground">{closed ? "No member was listed." : "Nobody is in it now."}</p>
         ) : (
-          <ul className={cn("flex flex-col gap-2", closed && "opacity-60")}>
+          <ul className={cn("flex flex-col gap-2", (closed || emptied) && "opacity-60")}>
             {rows.map((m) => (
               <MemberItem key={m.memberId} m={m} scopeKind={scopeKind} />
             ))}
