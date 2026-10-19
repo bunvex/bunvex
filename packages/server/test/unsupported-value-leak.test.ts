@@ -84,18 +84,16 @@ describe("an unsupported value in a function's result, write or arguments", () =
       ["query", "m:instance", "Vault {…} is not a supported value type (present at path .v"],
       // A query object is refused before the validator, as Convex (its own message).
       ["query", "m:returnsQuery", "Return value is a Query."],
-      [
-        "query",
-        "m:returnsDb",
-        "ReturnsValidationError: Value does not match validator.\n\nValue: Tx {…}\nValidator: v.string()",
-      ],
-      ["query", "m:returnsInstance", "Value: Vault {…}\nValidator: v.string()"],
+      // Not a value, so not checked: the result is converted first, as Convex's `convexToJson` (STUDY-18 §9).
+      ["query", "m:returnsDb", "Uncaught Error: Tx {…} is not a supported value type."],
+      ["query", "m:returnsInstance", "Uncaught Error: Vault {…} is not a supported value type (present at path .a"],
       ["mutation", "m:insertDb", "Tx {…} is not a supported value type (present at path .db"],
       ["mutation", "m:insertInstance", "Vault {…} is not a supported value type (present at path .v"],
       [
         "mutation",
         "m:argsNotObject",
-        "Expected to receive an object as the function's argument. Instead received: Vault {…}",
+        // Convex's `parseArgs` in `runUdf`, before anything else (STUDY-18 §9)
+        "Uncaught Error: The arguments to a bunvex function must be an object. Received: [object Object]",
       ],
       ["query", "m:filterLiteral", "Vault {…} (type Object)"],
       [

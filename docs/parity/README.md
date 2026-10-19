@@ -194,6 +194,9 @@ gaps.
   system-field mismatch's display, a query on a missing table or index, a `$` field in a system function's
   arguments and a push's table numbers, matched to Convex (#664–#669); the analyzed line of a function (the
   dashboard's Functions tree) differs where esbuild and Bun print a bundle differently (DV-520, accepted).
+- A pushed function's `Set` or `Map` in a value error (STUDY-18 §9): Convex's `Set[1]` now, from any realm, with the
+  conversion first for results, scheduled and nested-call arguments, and `runAt` with the function's `Date`. Left:
+  the `process` executor's codec (STUDY-168 PR 3, #750) carries no entries, so it prints `Set {…}` there.
 - `bunvex-local-backend`'s command line (STUDY-172): its misuse is reported as clap reports Convex's binary's,
   checked against it; left, a `0x`-prefixed instance secret, which Convex accepts and bunvex refuses (Q1).
 - Operations:

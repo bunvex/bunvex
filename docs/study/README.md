@@ -57,7 +57,7 @@ to a spec.
 | [STUDY-15](STUDY-15-query-filter.md) | `.filter()` and the filter builder | implemented (#37) |
 | [STUDY-16](STUDY-16-query-chaining.md) | Query chaining, `unique()`, `fullTableScan()`, async iteration | implemented (#40) |
 | [STUDY-17](STUDY-17-paginate.md) | `.paginate()`, cursors, reactive page boundaries, the instance secret | implemented (#42) |
-| [STUDY-18](STUDY-18-value-model.md) | The value model: types, order, index keys, JSON | implemented (#15, #21) |
+| [STUDY-18](STUDY-18-value-model.md) | The value model: types, order, index keys, JSON; §9 a pushed function's `Set` / `Map` in a value error (`Set[1]`, any realm), the conversion before the result's checks and in scheduled and nested-call arguments, `runAt` with its `Date` | implemented (#15, #21; §9 this PR) |
 | [STUDY-20](STUDY-20-function-errors-and-logs.md) | Function errors, redaction and log lines | implemented; D1–D8 decided (owner, 2026-09-30 and 2026-10-01) |
 | [STUDY-21](STUDY-21-occ-error-and-retries.md) | The OCC error and mutation retries | implemented; D1, D2 decided (DV-81, DV-82); D3 a gap |
 | [STUDY-22](STUDY-22-ws-mutation-order.md) | Mutation order on one WebSocket connection | implemented; D1 decided (owner, 2026-10-01) |
