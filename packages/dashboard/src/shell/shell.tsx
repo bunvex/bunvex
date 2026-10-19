@@ -20,6 +20,7 @@ import {
   ScrollText,
   Search,
   Settings,
+  UsersRound,
   Waypoints,
 } from "lucide-react";
 import {
@@ -267,6 +268,9 @@ export function Shell() {
               </NavItem>
               <NavItem link={{ to: "/subscriptions" }} icon={Radio}>
                 Subscriptions
+              </NavItem>
+              <NavItem link={{ to: "/rooms" }} icon={UsersRound}>
+                Rooms
               </NavItem>
               <ExtensionNavItems group="observe" />
             </NavGroup>

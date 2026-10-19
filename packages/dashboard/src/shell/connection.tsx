@@ -17,10 +17,10 @@ export const ConnectionContext = createContext<{ status: ConnectionStatus; deplo
 
 /**
  * The reads polled over HTTP (their key's third part): the metrics, the inferred types (`/api/shapes2`), the
- * subscriptions inspector's live queries and query cache (`/api/debug/*`, STUDY-131 AD-25), and the topology
- * (`/api/debug/topology`, STUDY-131 §11).
+ * subscriptions inspector's live queries and query cache (`/api/debug/*`, STUDY-131 AD-25), the topology
+ * (`/api/debug/topology`, STUDY-131 §11), and the rooms with their members (`/api/debug/rooms*`, AD-43).
  */
-const POLLED = new Set(["metrics", "inferred", "subscriptions", "query-cache", "topology"]);
+const POLLED = new Set(["metrics", "inferred", "subscriptions", "query-cache", "topology", "rooms"]);
 
 /** True while the deployment is disconnected: polled reads wait (`enabled: !disconnected`). */
 export const useDisconnected = () => useContext(ConnectionContext).status === "disconnected";

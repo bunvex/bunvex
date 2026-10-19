@@ -48,6 +48,8 @@ const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
 /** The open function, and its log filters (as the Logs screen's `type` and `q`). */
 export type FunctionsSearch = {
   function?: string;
+  /** A room or presence definition open in place of a function (AD-43), by name. */
+  room?: string;
   tab?: "statistics" | "logs";
 } & Pick<LogsSearch, "type" | "q" | "range" | "from" | "to">;
 
@@ -57,7 +59,7 @@ export function validateFunctionsSearch(input: Record<string, unknown>): Functio
   const { type, q, range, from, to } = validateLogsSearch(input);
   // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
   const tab = input.tab === "statistics" || input.tab === "logs" ? input.tab : undefined;
-  return { function: fn, type, q, range, from, to, tab };
+  return { function: fn, room: str(input.room), type, q, range, from, to, tab };
 }
 
 /** Invalid options are dropped, not rejected: a hand-edited URL still opens the screen. */
@@ -167,6 +169,18 @@ export const validateSubscriptionsSearch = (input: Record<string, unknown>): Sub
   };
 };
 
+/**
+ * The Rooms screen (AD-43, STUDY-165 §5.1): a definition's rooms only (`name`), sorted by members (`sort`), and the
+ * room whose members are open (`room`, its key).
+ */
+export type RoomsSearch = { name?: string; sort?: "members"; room?: string };
+export const validateRoomsSearch = (input: Record<string, unknown>): RoomsSearch => ({
+  // every key, `undefined` when invalid: the router keeps a raw param the validator leaves out
+  name: str(input.name),
+  sort: input.sort === "members" ? "members" : undefined,
+  room: str(input.room),
+});
+
 /** Cron jobs: the job whose details are open. */
 export type CronsSearch = { cron?: string };
 export const validateCronsSearch = (input: Record<string, unknown>): CronsSearch => ({ cron: str(input.cron) });
@@ -188,6 +202,7 @@ const CronJobsScreen = lazyRouteComponent(() => import("./schedules/screen.tsx")
 const FilesScreen = lazyRouteComponent(() => import("./files/screen.tsx"), "FilesScreen");
 const HistoryScreen = lazyRouteComponent(() => import("./history/screen.tsx"), "HistoryScreen");
 const SubscriptionsScreen = lazyRouteComponent(() => import("./subscriptions/screen.tsx"), "SubscriptionsScreen");
+const RoomsScreen = lazyRouteComponent(() => import("./rooms/screen.tsx"), "RoomsScreen");
 const GeneralSettingsScreen = lazyRouteComponent(() => import("./settings/general.tsx"), "GeneralSettingsScreen");
 const AppsSettingsScreen = lazyRouteComponent(() => import("./settings/apps.tsx"), "AppsSettingsScreen");
 const SnapshotsSettingsScreen = lazyRouteComponent(() => import("./settings/snapshots.tsx"), "SnapshotsSettingsScreen");
@@ -299,6 +314,13 @@ export const subscriptionsRoute = createRoute({
   path: "subscriptions",
   validateSearch: validateSubscriptionsSearch,
   component: offeredOnly("/subscriptions", SubscriptionsScreen),
+});
+
+export const roomsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "rooms",
+  validateSearch: validateRoomsSearch,
+  component: offeredOnly("/rooms", RoomsScreen),
 });
 
 /** `/settings` opens General, its first page, as Convex's (UI-01 §17.1). */
@@ -472,6 +494,7 @@ const builtInRoutes = [
   cronsRoute,
   historyRoute,
   subscriptionsRoute,
+  roomsRoute,
   settingsRoute,
   generalSettingsRoute,
   envVarsRoute,
