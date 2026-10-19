@@ -300,7 +300,7 @@ describe("bunvex dev", () => {
     const w = dev(app, d.url);
     await w.until(() => w.err.some((l) => l.startsWith("bunvex deploy:")));
     expect(w.err.find((l) => l.startsWith("bunvex deploy:"))).toBe(
-      "bunvex deploy: Environment variable ISSUER_DOMAIN is used in auth config file but its value was not set.\nGo set it in the dashboard or using `bunvex env set`",
+      `bunvex deploy: Environment variable ISSUER_DOMAIN is used in auth config file but its value was not set.\nSet it with:\n\n    bunvex env set --url ${d.url} --admin-key <admin key> ISSUER_DOMAIN <value>\n`,
     );
     expect(w.ready()).toBe(0);
     // No file changes: setting the variable is what makes dev push again (Convex's env var watch).
@@ -313,6 +313,41 @@ describe("bunvex dev", () => {
     expect(set.status).toBe(200);
     await w.until(() => w.ready() === 1);
     expect((await d.query("hello:hi")).value).toBe("authed");
+    w.stop();
+    expect(await w.done).toBe(0);
+  }, 30_000);
+
+  test("required variables unset (bunvex.config.ts): Convex's message and commands, then a push once they are set", async () => {
+    const d = await deployment();
+    const app = tmp();
+    const values = ["bunvex", "values"].join("/");
+    write(app, {
+      "bunvex/hello.ts": hello("configured"),
+      "bunvex/bunvex.config.ts": `import { defineApp } from ${JSON.stringify(SERVER)};
+import { v } from ${JSON.stringify(values)};
+export default defineApp({ env: { API_KEY: v.string(), REGION: v.string() } });`,
+    });
+    const w = dev(app, d.url);
+    await w.until(() => w.err.some((l) => l.startsWith("bunvex deploy:")));
+    expect(w.err.find((l) => l.startsWith("bunvex deploy:"))).toBe(
+      `bunvex deploy: Environment variables API_KEY, REGION are declared as required in bunvex.config.ts but their values were not set.\nSet them with:\n\n    bunvex env set --url ${d.url} --admin-key <admin key> API_KEY <value>\n    bunvex env set --url ${d.url} --admin-key <admin key> REGION <value>\n`,
+    );
+    expect(w.ready()).toBe(0);
+    // No file changes: setting the variables is what makes dev push again (Convex's env var watch).
+    await Bun.sleep(300);
+    const set = await fetch(`${d.url}/api/update_environment_variables`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bunvex ${KEY}` },
+      body: JSON.stringify({
+        changes: [
+          { name: "API_KEY", value: "k" },
+          { name: "REGION", value: "eu" },
+        ],
+      }),
+    });
+    expect(set.status).toBe(200);
+    await w.until(() => w.ready() === 1);
+    expect((await d.query("hello:hi")).value).toBe("configured");
     w.stop();
     expect(await w.done).toBe(0);
   }, 30_000);

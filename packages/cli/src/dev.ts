@@ -513,6 +513,7 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
           codegen: flags.codegen,
           typecheck: flags.typecheck,
           dashboard: dashboardLink,
+          local: localPort !== null,
           liveComponentSources: flags.liveComponentSources,
           typecheckComponents: flags.typecheckComponents,
         },

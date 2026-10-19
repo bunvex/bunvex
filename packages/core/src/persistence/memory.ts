@@ -121,10 +121,17 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   /** A flush's write in flight (setGlobal appends after it). */
   private writing: Promise<void> | null = null;
   private durable: boolean;
+  /** Opened with `allowReadOnly`: the lock is taken even while the store is marked read-only. */
+  private allowReadOnly: boolean;
 
-  // Stryker disable next-line BlockStatement: `durable` only decides the fdatasyncs, which no test can observe.
-  private constructor(opts: { durable: boolean }) {
+  private constructor(opts: { durable: boolean } & OpenOptions) {
     this.durable = opts.durable;
+    this.allowReadOnly = !!opts.allowReadOnly;
+  }
+
+  /** Whether the store is marked read-only and this handle may not write to it. */
+  private refusedReadOnly() {
+    return !this.allowReadOnly && existsSync(`${this.logPath}.read-only`);
   }
 
   private lastTs = 0n;
@@ -205,6 +212,8 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     if (!lock) return false;
     this.lock = lock;
     try {
+      // The flag again, under the lock: it may have been set since the open's check (see acquireLease).
+      if (this.refusedReadOnly()) throw new ReadOnlyError(this.store);
       const stamped = await this.replay(this.logPath!);
       this.fh = await open(this.logPath!, "a");
       // PERSIST-01 C10 under the lock: a new log (or one whose torn first write replay cut off) starts with its
@@ -224,10 +233,19 @@ export class MemoryPersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return true;
   }
 
+  /**
+   * The log's lock, if no other process holds it. Without `allowReadOnly`, a store marked read-only since the
+   * open's check is refused here, under the lock, with `ReadOnlyError`, and the lock let go (as Convex 403c3e8
+   * checks the flag in its SQL drivers' lease statement).
+   */
   async acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
     if (!this.logPath) return { epoch: 1 }; // no log: nothing another process could share
     if (!this.lock && !(await this.takeAndLoad()))
       return { heldBy: ProcessLock.holderOf(this.logPath), expiresInMs: null };
+    if (this.refusedReadOnly()) {
+      await this.releaseLease();
+      throw new ReadOnlyError(this.store);
+    }
     this.lock!.recordHolder(opts.holder);
     return { epoch: this.lock!.epoch };
   }

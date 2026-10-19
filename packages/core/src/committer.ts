@@ -831,10 +831,10 @@ export class Committer {
   /**
    * Flush the group, retrying transient failures as Convex's write batcher does (STUDY-25 L4,
    * `crates/database/src/write_batcher.rs`): a failure the driver classifies as transient (`isTransient`: a
-   * timeout, a lost connection, a server shutting down) is retried with full-jitter exponential backoff from
-   * 100 ms up to 10 s, with no limit on the number of attempts; any other failure ends it. The driver keeps
-   * the group it failed to flush, so the retry writes the same rows at the same timestamps, behind the same
-   * fence (PERSIST-01 C7, C9). A retry whose earlier attempt did commit finds it through the lease record and
+   * timeout, a lost connection, a server shutting down, a MySQL deadlock) is retried with full-jitter
+   * exponential backoff from 100 ms up to 10 s, with no limit on the number of attempts; any other failure
+   * ends it. The driver keeps the group it failed to flush, so the retry writes the same rows at the same
+   * timestamps, behind the same fence (PERSIST-01 C7, C9). A retry whose earlier attempt did commit finds it through the lease record and
    * succeeds without writing (DV-124; Convex stops); one that lands while the retry writes fails as "unsure"
    * (a duplicate key, or MongoDB's fence), which is not transient: fail-stop, as Convex. The lease
    * bounds the retries in practice: renewals fail too while the store is unreachable, and the engine stops

@@ -342,6 +342,7 @@ export async function deployCommand(args: string[], io: Io): Promise<number> {
           largeIndexBackfillCheck: flags.skipLargeIndexesCheck ? "has confirmation" : "ask for confirmation",
           warnOnSlowSchemaValidation: true,
           dashboard: localDashboardLink(io, flags),
+          local: acquired.local,
         },
         io,
       )
@@ -407,6 +408,11 @@ export type DeployOptions = {
   warnOnSlowSchemaValidation?: boolean;
   /** The dashboard the push's messages link (DV-477); none by default. */
   dashboard?: DashboardLink;
+  /**
+   * The deployment is the project's local one, which `bunvex env set` reaches with no flag; otherwise it was named
+   * by its URL and admin key, which the printed `env set` commands repeat.
+   */
+  local?: boolean;
   /** Packages resolve to their components' sources (`"@bunvex/component-source"`, hidden as Convex's). */
   liveComponentSources?: boolean;
   /** Typecheck each local component's directory too, in `typecheck`'s mode (Convex's `--typecheck-components`). */
@@ -436,6 +442,41 @@ class DeploymentError extends Error {
   ) {
     super(message);
   }
+}
+
+/**
+ * How to set the variables a push is missing (Convex's `setEnvVarsInstructions`, 8917f16): one `bunvex env set`
+ * command per name (a `<NAME>` placeholder when none is known), naming the deployment by its URL unless it is the
+ * project's local one, with the admin key left as a placeholder so it never reaches the terminal; then the
+ * dashboard's page, when there is one to link (DV-477), with the variable's row only for a single name.
+ */
+export async function setEnvVarsInstructions(
+  names: string[],
+  url: string | null,
+  dashboard: DashboardLink,
+): Promise<string> {
+  const target = url === null ? "" : ` --url ${url} --admin-key <admin key>`;
+  const lines = (names.length === 0 ? ["<NAME>"] : names).map((n) => `    bunvex env set${target} ${n} <value>`);
+  const page = await dashboardPage(dashboard, names.length === 1 ? envVarPage(names[0]!) : ENV_VARS_PAGE);
+  const how = `Set ${names.length > 1 ? "them" : "it"} with:\n\n${lines.join("\n")}\n`;
+  return page === null ? how : `${how}\nor in the dashboard:\n\n    ${page}\n`;
+}
+
+/**
+ * The variables `bunvex.config.ts` requires and the deployment lacks, as Convex's CLI words them: the names come
+ * from the deployment's `MissingEnvironmentVariables` message (`… are not set: A, B.`); without them, that message.
+ */
+export function missingEnvVarsMessage(message: string): { names: string[]; text: string } {
+  const [, list] = message.match(/are not set: ([^.]+)\./) ?? [];
+  const names = list === undefined ? [] : list.split(", ");
+  if (names.length === 0) return { names, text: message };
+  return {
+    names,
+    text:
+      names.length === 1
+        ? `Environment variable ${names[0]} is declared as required in bunvex.config.ts but its value was not set.`
+        : `Environment variables ${names.join(", ")} are declared as required in bunvex.config.ts but their values were not set.`,
+  };
 }
 
 /** The dashboard's root, asked only when the diff has a staged index to link. */
@@ -705,19 +746,23 @@ async function deployOnce(
   } catch (e) {
     if (e instanceof PushCanceled) return { code: 1 };
     const message = (e as Error).message;
-    // Convex's `handlePushConfigError`: the variable named, and how to set it — the dashboard's environment
-    // variables page when there is a dashboard to link (DV-477), else Convex's own words for no link.
+    // Convex's `handlePushConfigError`: the variable or variables named, then how to set them (8917f16). `bunvex dev`
+    // pushes again once the deployment's variables change, as Convex's does after "invalid filesystem or env vars".
+    const envUrl = flags.local ? null : url;
     if (e instanceof DeploymentError && e.code === "AuthConfigMissingEnvironmentVariable") {
       const [, name] = message.match(/Environment variable (\S+)/i) ?? [];
-      // the page with a new row for the variable (Convex's `?var=`), when a name came
-      const page = await dashboardPage(dashboard, name === undefined ? ENV_VARS_PAGE : envVarPage(name));
       io.err(
-        `bunvex deploy: Environment variable ${name} is used in auth config file but its value was not set.\n${
-          page === null
-            ? "Go set it in the dashboard or using `bunvex env set`"
-            : `Go to:\n\n    ${page}\n\n  to set it up. `
-        }`,
+        `bunvex deploy: Environment variable ${name} is used in auth config file but its value was not set.\n${await setEnvVarsInstructions(
+          name === undefined ? [] : [name],
+          envUrl,
+          dashboard,
+        )}`,
       );
+      return { code: 1, envVars: true };
+    }
+    if (e instanceof DeploymentError && e.code === "MissingEnvironmentVariables") {
+      const missing = missingEnvVarsMessage(message);
+      io.err(`bunvex deploy: ${missing.text}\n${await setEnvVarsInstructions(missing.names, envUrl, dashboard)}`);
       return { code: 1, envVars: true };
     }
     io.err(`bunvex deploy: ${message}`);
