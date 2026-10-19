@@ -135,6 +135,7 @@ As Convex's dashboard ([STUDY-149 §1.2](study/STUDY-149-dashboard-real-data.md#
 | Subscriptions: live queries, query cache | every 5 s, slower when the deployment takes long to answer (at most 1 % of its time, at least once a minute) |
 | Subscriptions: followed invalidations | a long poll, from when you press "Follow invalidations" |
 | Topology | every 5 s (the server samples its counters every 5 s; a minute of history) |
+| Rooms: the open rooms, an open room's members, the Overview's Rooms section | every 1 s while shown, not while the tab is hidden |
 
 While the deployment cannot be reached, "Connection issue" covers the screens and the polls stop; when it comes
 back the polls ask again at once and the subscriptions resume.
@@ -153,7 +154,7 @@ back the polls ask again at once and the subscriptions resume.
   billing and usage. bunvex keeps its own additions that work on a deployment (the Overview's summary,
   Snapshots in Settings, the command palette, the Logs screen's histogram and export, the system tables,
   Subscriptions: which queries are live, what each read and why it ran again, with Logs' "why it ran" links to it,
-  and Topology).
+  Topology, and Rooms with the room definitions on the Functions screen and the rooms' counters on the Overview).
 - Some of bunvex's own screens open on the demo data only, and are hidden on a deployment (or say it does not
   offer them): Authentication's user management, the clients, Analytics, Feature flags and Workflows (no server
   side yet). The Files screen's storage used, views by type and size filters need sizes per kind,

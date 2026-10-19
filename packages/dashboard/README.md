@@ -1,7 +1,7 @@
 # @bunvex/dashboard
 
 The bunvex dashboard screens: Health, Topology, Database, Schema, Files, Functions (with the function
-runner), Schedules, Authentication, Logs, History, Subscriptions and Settings — the list, with where each is specified,
+runner), Schedules, Authentication, Logs, History, Subscriptions, Rooms and Settings — the list, with where each is specified,
 is [UI-01 §0](../../docs/specs/UI-01-ui-and-dashboard.md). It never talks to a server itself: a host passes a `DashboardDataSource`, so the same screens serve a self-hosted deployment and a
 cloud control plane. `MockDataSource` serves development and tests.
 
