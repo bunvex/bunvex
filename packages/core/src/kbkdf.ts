@@ -15,10 +15,19 @@ export function kbkdfCtrHmacSha256(secret: Uint8Array, info: Uint8Array | string
   return new Uint8Array(out);
 }
 
-/** The instance secret's bytes, as Convex reads it: 32 bytes written as 64 hex digits. Any other string (a
- *  secret given before keys needed its bytes) is taken as its UTF-8 bytes. */
+// 32 bytes as 64 hex digits, after one optional `0x` / `0X`: Convex's `DeploymentSecret::try_from` decodes with
+// `const_hex::decode`, which drops that prefix (crates/keybroker/src/secret.rs; STUDY-172 §7).
+const HEX_SECRET = /^(?:0[xX])?([0-9a-fA-F]{64})$/;
+
+/** The instance secret's bytes, as Convex reads it: 32 bytes written as 64 hex digits, `0x` allowed. Any other
+ *  string (a secret given before keys needed its bytes) is taken as its UTF-8 bytes. */
 export function instanceSecretBytes(secret: string): Uint8Array {
-  return /^[0-9a-fA-F]{64}$/.test(secret)
-    ? new Uint8Array(Buffer.from(secret, "hex"))
-    : new TextEncoder().encode(secret);
+  const hex = HEX_SECRET.exec(secret)?.[1];
+  return hex ? new Uint8Array(Buffer.from(hex, "hex")) : new TextEncoder().encode(secret);
+}
+
+/** One spelling per secret: a hex secret as its 64 lowercase digits without `0x` (as Convex's `Display` writes
+ *  its bytes back), so every spelling of the same bytes derives the same keys; any other string as it is. */
+export function canonicalInstanceSecret(secret: string): string {
+  return HEX_SECRET.exec(secret)?.[1]?.toLowerCase() ?? secret;
 }
