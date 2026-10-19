@@ -373,3 +373,29 @@ Each was restored from a saved copy and checked with `diff`/`cmp` before the nex
 - **A compiled `bunvex-local-backend`** (`bun build --compile`) has no `child.ts` on disk: the child must be the same
   executable started in a child mode (PR 9 or 11).
 - **Batching** (STUDY-168 §13.4) puts several values in one message; PR 3 splits a batch that would pass the frame cap.
+
+## 9. Three `vm` bugs the bridge's parity test found
+
+STUDY-168 PR 3's differential test (§8.9 on its branch, `packages/sandbox/test/bridge-parity.test.ts`: the same pushed
+module on a `vm` server and a `process` server, every answer and read set compared) showed three places where the
+default `vm` executor differs from Convex. They are fixed here, on their own, because they change the default path.
+No divergence is recorded: each was a bug against Convex's behaviour.
+
+| Bug | How Convex does it | Before | Now |
+|---|---|---|---|
+| `process.env.constructor` (any `Object.prototype` name) | one name at a time, `environmentVariables/get` (`npm-packages/udf-runtime/src/00_misc.ts:16-30`): unset unless set | the built-ins were a plain object read by name: `constructor` was `Object` (a function, not a value: the query failed), `__proto__` `{}`; an action's variables the same | unset (`ownVar`, functions.ts), in queries, mutations and actions; set, it reads as itself |
+| `db.vars.commitTs` inside a pushed function's objects | the placeholder is refused in scheduled arguments, resolved in a mutation's result (STUDY-53) | `hasCommitTs` and `resolveCommitTs` looked only into this realm's plain objects, and a pushed function's come from its context (STUDY-35): its scheduled arguments took the placeholder (the job was scheduled with it), and a mutation that returned it failed its answer (`reformat` met the `$commitTs` token) | a plain object of any realm (`isPlainObject`, commit-ts.ts): refused, resolved |
+| The query cache's expiry | a result expires after `MAX_CACHE_AGE_MS` only if the query read the time (`observe_time`) | `AppMetrics` took the deterministic `Date.now` (its default clock, read when `createServer` makes it) and recorded every query inside its execution, which marked every result as time-dependent: every cached result expired after 17 s | `AppMetrics` reads core's `wallClock`: a result that read no time stays cached |
+
+**Tests:** `push.test.ts` (the five prototype names unset in a query and an action, set as itself),
+`commit-ts.test.ts` in the server (a pushed mutation's result resolved, deep too; the placeholder refused in scheduled
+arguments, deep too) and in values (`hasCommitTs`, `resolveCommitTs` on another realm's objects), `meta.test.ts` (a
+query that reads no time stays cached past `MAX_CACHE_AGE_MS`, in-process and over HTTP).
+
+**Sabotage:** each fix undone alone fails its test: the built-ins' lookup (1), an action's (1), `hasCommitTs` (2),
+`resolveCommitTs` (2), `AppMetrics` on `Date.now` (1).
+
+**The cache, before and after** (a pushed query that reads no time, 120 calls over HTTP, the cache clock moved 1 s
+per call, no writes): before, 104 runs (13 % hits); now, 1 run (99 % hits). The skewed clock overstates the old
+miss rate (a result is stamped with the real time, so past 17 s of skew every check expires it); in real time, the
+old code ran a hot query again once every 17 s, where Convex (and now bunvex) runs it once.

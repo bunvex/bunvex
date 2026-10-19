@@ -232,15 +232,22 @@ export type ComponentRuntime = {
  * deployment's variable it names), then the built-ins, `BUNVEX_SITE_URL` with its HTTP prefix when it has one;
  * nothing else of the deployment's.
  */
+/**
+ * A variable of `vars` by name, never one of `Object.prototype`'s members (`process.env.constructor` is a name like
+ * any other, unset unless set: Convex reads the variables one name at a time).
+ */
+const ownVar = (vars: Record<string, string>, name: string): string | undefined =>
+  Object.hasOwn(vars, name) ? vars[name] : undefined;
+
 function componentEnv(c: ComponentRuntime, read: EnvReader, builtin: Record<string, string>): EnvReader {
   return (name) => {
     const b = c.env.get(name);
     const bound = b === undefined ? undefined : b.type === "value" ? b.value : read(b.name);
     if (bound !== undefined) return bound;
-    const site = builtin[name];
+    const site = ownVar(builtin, name);
     if (name === "BUNVEX_SITE_URL" && site !== undefined && c.httpPrefix !== null)
       return `${site}${c.httpPrefix.replace(/\/+$/, "")}`;
-    return builtin[name];
+    return site;
   };
 }
 
@@ -1014,7 +1021,7 @@ export class Functions {
     // The canonical URLs in place of the origins (STUDY-49), read here so a change re-runs what read them.
     const builtin = withCanonical(this.builtinEnv, await readCanonicalUrls(db));
     if (component) return componentEnv(component, read, builtin);
-    return (name) => read(name) ?? builtin[name];
+    return (name) => read(name) ?? ownVar(builtin, name);
   }
 
   /** An action's `process.env`: the variables at its start (Convex's `get_all`, no reactivity). */
@@ -1028,7 +1035,7 @@ export class Functions {
       all,
       read: (name) => {
         checkEnvVarName(name);
-        return all[name];
+        return ownVar(all, name);
       },
     };
   }

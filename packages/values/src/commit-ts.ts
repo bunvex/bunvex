@@ -40,6 +40,17 @@ export class CommitTsPlaceholder {
 /** The one placeholder: read back within the mutation, it is `===` to `db.vars.commitTs`. */
 export const commitTsPlaceholder = new CommitTsPlaceholder();
 
+/**
+ * A plain object of any realm (`value.ts`'s `isSimpleObject`, which imports this module): a pushed function's own
+ * objects come from its context, whose `Object.prototype` is not this one (STUDY-35). Only `Object.prototype` here
+ * missed the placeholder in a `vm` function's scheduled arguments (STUDY-171 §9).
+ */
+function isPlainObject(x: unknown): x is Record<string, unknown> {
+  if (x === null || typeof x !== "object") return false;
+  const proto = Object.getPrototypeOf(x);
+  return proto === null || proto === Object.prototype || proto?.constructor?.name === "Object";
+}
+
 export const isCommitTsPlaceholder = (x: unknown): x is CommitTsPlaceholder => x instanceof CommitTsPlaceholder;
 
 /** `x` with every placeholder in it replaced by `by` (a resolved timestamp), copied only where needed. */
@@ -54,13 +65,7 @@ export function resolveCommitTs<T>(x: T, by: bigint): T {
     });
     return (changed ? out : x) as T;
   }
-  if (
-    x !== null &&
-    // Stryker disable next-line ConditionalExpression: a primitive's prototype is never Object.prototype.
-    typeof x === "object" &&
-    !(x instanceof ArrayBuffer) &&
-    Object.getPrototypeOf(x) === Object.prototype
-  ) {
+  if (isPlainObject(x)) {
     let out: Record<string, unknown> | null = null;
     for (const [k, v] of Object.entries(x)) {
       const r = resolveCommitTs(v, by);
@@ -88,12 +93,6 @@ export function resolveCommitTsJson(json: string, ns: bigint): string {
 export function hasCommitTs(x: unknown): boolean {
   if (x instanceof CommitTsPlaceholder) return true;
   if (Array.isArray(x)) return x.some(hasCommitTs);
-  if (
-    x !== null &&
-    typeof x === "object" &&
-    !(x instanceof ArrayBuffer) &&
-    Object.getPrototypeOf(x) === Object.prototype
-  )
-    return Object.values(x).some(hasCommitTs);
+  if (isPlainObject(x)) return Object.values(x).some(hasCommitTs);
   return false;
 }
