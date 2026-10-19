@@ -43,7 +43,8 @@ export type TestQueryResult =
 export class TestQueryRequestError extends Error {}
 
 /** Run `source` (a module whose default export is a query) on the deployment, once. */
-export async function runTestQuery(target: Target, source: string): Promise<TestQueryResult> {
+/** `componentId`: run it in that component (STUDY-154 PR 3), as Convex's `--inline-query --component`. */
+export async function runTestQuery(target: Target, source: string, componentId?: string): Promise<TestQueryResult> {
   const url = `${target.url}/api/run_test_function`;
   let r: Response;
   try {
@@ -55,6 +56,7 @@ export async function runTestQuery(target: Target, source: string): Promise<Test
         args: {},
         bundle: { path: "testQuery.js", source },
         format: "encoded_json",
+        ...(componentId === undefined ? {} : { componentId }),
       }),
     });
   } catch (e) {

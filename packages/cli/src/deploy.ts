@@ -7,8 +7,8 @@
 // reads CONVEX_SELF_HOSTED_*).
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import { argumentError, invalidChoice, missingArgument, optionsIn, tooManyArguments, unknownOption } from "./args.ts";
 import { BundleError, bundleFunctions, type ModuleConfig } from "./bundle.ts";
 import {
@@ -64,6 +64,8 @@ ${TARGET_OPTIONS}
                        staging it instead so it backfills in the background)
   --codegen <mode>     enable (default) or disable: regenerate _generated/
   --typecheck <mode>   enable, try (default) or disable: typecheck the functions before finishing the push
+  --typecheck-components
+                       also typecheck the local components' directories with tsc
   --cmd <command>      a command to run first, as part of deploying your app (e.g. \`vite build\`), with the
                        deployment's URL in an environment variable (see --cmd-url-env-var-name)
   --cmd-url-env-var-name <name>
@@ -244,6 +246,7 @@ type Flags = TargetFlags & {
   cmd?: string;
   cmdUrlEnvVarName?: string;
   liveComponentSources?: boolean;
+  typecheckComponents?: boolean;
 };
 function parseFlags(all: string[]): Flags | string {
   const taken = takeTargetFlags(all);
@@ -263,6 +266,8 @@ function parseFlags(all: string[]): Flags | string {
     if (name === "--dry-run") f.dryRun = true;
     // Hidden, as Convex's: packages resolve to their components' sources.
     else if (name === "--live-component-sources") f.liveComponentSources = true;
+    // Convex's: the local components' directories are typechecked too.
+    else if (name === "--typecheck-components") f.typecheckComponents = true;
     else if (name === "--skip-large-indexes-check") f.skipLargeIndexesCheck = true;
     // Its predecessor, hidden as in Convex: it skips the deletion confirmation only.
     else if (name === "--allow-deleting-large-indexes") f.allowDeletingLargeIndexes = true;
@@ -404,6 +409,8 @@ export type DeployOptions = {
   dashboard?: DashboardLink;
   /** Packages resolve to their components' sources (`"@bunvex/component-source"`, hidden as Convex's). */
   liveComponentSources?: boolean;
+  /** Typecheck each local component's directory too, in `typecheck`'s mode (Convex's `--typecheck-components`). */
+  typecheckComponents?: boolean;
 };
 /**
  * The exit code; whether a failure is worth retrying (`bunvex dev`'s backoff); whether the deployment failed on
@@ -623,6 +630,16 @@ async function deployOnce(
     }
     if (checked.skipped && checked.skipped !== "disabled") io.err(checked.skipped);
     if (checked.warning) io.err(checked.warning);
+    if (flags.typecheckComponents)
+      for (const d of found.directories.filter((c) => c.local)) {
+        // The directory as the project names it (its real path may run through a symlink, as macOS's /var).
+        const at = join(io.cwd, relative(realpathSync(io.cwd), d.dir));
+        const c = await typecheck(at, io.cwd, flags.typecheck, typescriptCompilerOf(io.cwd));
+        if (!c.ok) {
+          printTypecheckFailure(io, c);
+          return { code: 1 };
+        }
+      }
     // Convex prints the diff from `start_push`'s answer, else `finish_push`'s.
     const startDiff = (start.schemaChange as { indexDiffs?: Record<string, IndexDiff> } | undefined)?.indexDiffs?.[""];
     if (flags.dryRun) {

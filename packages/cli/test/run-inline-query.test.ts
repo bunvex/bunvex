@@ -231,14 +231,7 @@ describe("bunvex run --inline-query", () => {
     expect((await run(dir, url, "--inline-query")).err[0]).toBe(
       "error: option '--inline-query <query>' argument missing",
     );
-    // Components (DV-391).
-    for (const flag of [["--component", "workflow"], ["--typecheck-components"], ["--live-component-sources"]])
-      expect(await run(dir, url, "--inline-query", "1", ...flag)).toEqual({
-        code: 2,
-        out: [],
-        err: [`bunvex run: ${flag[0]}: bunvex does not have components yet.`],
-      });
-    expect((await run(dir, url, "items:list", "--component=x")).code).toBe(2);
+    // `--component` with a deployment: STUDY-156 PR 3 (component-push.test.ts).
   });
 
   test("--push deploys first; --no-push undoes it", async () => {

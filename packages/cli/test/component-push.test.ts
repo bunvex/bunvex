@@ -11,6 +11,7 @@ import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
 import { adminKeyCipherKey, createServer, Functions, issueAdminKey } from "@bunvex/server";
 import { bundleComponents, findComponents } from "../src/components.ts";
 import { type Io, main } from "../src/index.ts";
+import { runCommand } from "../src/run.ts";
 import { memoryStore } from "./memory-store.ts";
 
 const SECRET = "ce".repeat(32);
@@ -332,4 +333,94 @@ describe("bunvex codegen", () => {
       readFileSync(join(root, "node_modules/@acme/limiter/src/component/_generated/component.ts"), "utf8"),
     ).toContain("ComponentApi<");
   });
+});
+
+describe("bunvex run --component (DV-391)", () => {
+  const run = (root: string, url: string, ...args: string[]) => {
+    const r = io(root);
+    return main(["run", "--url", url, "--admin-key", KEY, ...args], r.it).then((code) => ({ code, ...r }));
+  };
+
+  test("a component's function by its path; a missing one lists the component's functions", async () => {
+    const d = await deployment();
+    const root = app();
+    expect(await deploy(root, d.url)).toBe(0);
+    expect((await run(root, d.url, "--component", "counter", "lib:add", '{ body: "x" }')).code).toBe(0);
+    expect((await run(root, d.url, "--component=counter", "lib:count")).out).toEqual(["1"]);
+    expect((await run(root, d.url, "--component", "counter/limiter", "lib:count")).out).toEqual(["0"]);
+    const missing = await run(root, d.url, "--component", "counter", "lib:nope");
+    expect(missing.code).toBe(1);
+    expect(missing.err.join("\n")).toContain("Available functions:\n• lib:add\n• lib:count");
+  });
+
+  test("--inline-query in a component; Convex's messages for an empty or unknown path", async () => {
+    const d = await deployment();
+    const root = app();
+    expect(await deploy(root, d.url)).toBe(0);
+    await run(root, d.url, "--component", "counter", "lib:add", '{ body: "x" }');
+    const q = '(await ctx.db.query("messages").collect()).length';
+    const inline = await run(root, d.url, "--component", "counter", "--inline-query", q);
+    expect(inline.err).toEqual([]);
+    expect(inline.out).toEqual(["1"]);
+    expect((await run(root, d.url, "--component", " ", "--inline-query", q)).err).toEqual([
+      "`--component` must not be empty.",
+    ]);
+    expect((await run(root, d.url, "--component", "nope", "--inline-query", q)).err).toEqual([
+      'Component path "nope" was not found.\n\nAvailable components:\n• counter\n• counter/limiter\n• limiter\nOmit `--component` to target the app root.',
+    ]);
+  });
+
+  test("--watch subscribes in the component", async () => {
+    const d = await deployment();
+    const root = app();
+    expect(await deploy(root, d.url)).toBe(0);
+    const r = io(root);
+    const ctl = new AbortController();
+    const done = runCommand(
+      ["--url", d.url, "--admin-key", KEY, "--component", "counter", "--watch", "lib:count"],
+      r.it,
+      { signal: ctl.signal },
+    );
+    const until = async (pred: () => boolean) => {
+      const end = Date.now() + 10_000;
+      while (!pred()) {
+        if (Date.now() > end) throw new Error(`timed out: ${r.err.join("\n")}`);
+        await Bun.sleep(25);
+      }
+    };
+    await until(() => r.out.includes("0"));
+    await run(root, d.url, "--component", "counter", "lib:add", '{ body: "x" }');
+    await until(() => r.out.includes("1"));
+    ctl.abort();
+    expect(await done).toBe(0);
+  });
+
+  test("--typecheck-components: a type error in a local component stops the push", async () => {
+    const d = await deployment();
+    const root = app("app.use(counter);\n");
+    write(root, {
+      "bunvex/bunvex.config.ts": `import { defineApp } from ${SERVER};\nimport counter from "../components/counter/bunvex.config";\nconst app = defineApp();\napp.use(counter);\nexport default app;\n`,
+      "components/counter/bunvex.config.ts": component("counter")["bunvex.config.ts"]!,
+      "components/counter/tsconfig.json": JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          noEmit: true,
+          module: "ESNext",
+          moduleResolution: "Bundler",
+          target: "ESNext",
+          skipLibCheck: true,
+        },
+      }),
+      "components/counter/bad.ts": "export const n: number = 'not a number';\n",
+    });
+    mkdirSync(join(root, "node_modules"), { recursive: true });
+    symlinkSync(resolve(import.meta.dir, "../../bunvex"), join(root, "node_modules/bunvex"));
+    symlinkSync(resolve(import.meta.dir, "../../../node_modules/typescript"), join(root, "node_modules/typescript"));
+    const flags = ["deploy", "--url", d.url, "--admin-key", KEY, "--typecheck=enable"];
+    expect(await main(["codegen", "--init", "--typecheck=disable"], io(root).it)).toBe(0);
+    expect(await main(flags, io(root).it)).toBe(0);
+    const failed = io(root);
+    expect(await main([...flags, "--typecheck-components"], failed.it)).toBe(1);
+    expect(Bun.stripANSI(failed.out.join("\n"))).toContain("bad.ts");
+  }, 30_000);
 });

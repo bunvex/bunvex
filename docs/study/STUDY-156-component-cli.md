@@ -370,6 +370,32 @@ bunvex's codegen stays offline (DV-173), and builds a component's types from its
   - Sabotage: 7 of 7 caught. The seventh, removing `_componentPath`, was missed at first; the typecheck test now
     reads the field.
 
+### As built, PR 3 (`cli/src/run.ts`, `inline-query.ts`, `deploy.ts`, `dev.ts`; `server/src/functions.ts`, `system-functions.ts`)
+
+- **`run --component <path>`** adds `componentPath` to `/api/function`, so the server runs the component's
+  function (STUDY-154).
+  - A missing function lists the component's functions. `_system/cli/modules:apiSpec` now honours its
+    `componentId` argument, as Convex's `queryPrivateSystem` runs it in that component: the component's functions,
+    with no HTTP routes until step 7. The CLI resolves the path to the id through
+    `_system/frontend/components:list`.
+  - `--watch` subscribes with `componentPath`. It now uses the base client, as Convex's `subscribeAndLog`, since
+    `onUpdate` takes no component.
+  - `--inline-query` resolves the path as Convex's `resolveInlineQueryComponentId`: `_App` or no flag is the app.
+    An empty path gets "`--component` must not be empty.", and an unknown one gets "Component path "…" was not
+    found." with the mounted components, or "This deployment has no mounted components.". The id goes to
+    `run_test_function`.
+- **`--typecheck-components`** on `deploy`, `dev` and `run --push`: after the app's typecheck, each local
+  component's directory is typechecked in the same mode, and a failure stops the push. `--live-component-sources`
+  goes through to `run --push`.
+- **Tests.** `component-push.test.ts` has 4 more cases:
+  - a component's function, nested included, and the listing for a missing one;
+  - `--inline-query` and its two messages;
+  - `--watch`;
+  - `--typecheck-components`.
+
+  The old refusals are gone from `run-inline-query.test.ts`. Sabotage: 6 of 6 caught.
+- **Left for step 9:** `data --component` (DV-224), with the dashboard.
+
 ## Divergences
 
 | # | Divergence | Decision |

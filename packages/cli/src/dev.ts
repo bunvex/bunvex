@@ -61,6 +61,8 @@ ${TARGET_OPTIONS}
   --run <function>     after the first successful push, run this function
   --start <command>    after the first successful push, start this shell command
   --typecheck <mode>   enable, try (default) or disable
+  --typecheck-components
+                       also typecheck the local components' directories with tsc
   --codegen <mode>     enable (default) or disable
   --tail-logs [mode]   print the deployment's function logs: always, pause-on-deploy (the default: not during
                        a push) or disable
@@ -79,6 +81,7 @@ type Flags = {
   tailLogs: LogMode;
   local: LocalOptions;
   liveComponentSources?: boolean;
+  typecheckComponents?: boolean;
 };
 
 function parseFlags(args: string[]): Flags | string {
@@ -98,6 +101,7 @@ function parseFlags(args: string[]): Flags | string {
     else if (name === "--local-force-upgrade") f.local.forceUpgrade = true;
     // Hidden, as Convex's: packages resolve to their components' sources.
     else if (name === "--live-component-sources") f.liveComponentSources = true;
+    else if (name === "--typecheck-components") f.typecheckComponents = true;
     else if (
       [
         "--run",
@@ -510,6 +514,7 @@ export async function devCommand(args: string[], io: Io, opts: { signal?: AbortS
           typecheck: flags.typecheck,
           dashboard: dashboardLink,
           liveComponentSources: flags.liveComponentSources,
+          typecheckComponents: flags.typecheckComponents,
         },
         pushIo,
       );
