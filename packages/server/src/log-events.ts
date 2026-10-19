@@ -31,6 +31,8 @@ export const SUBSCRIBABLE_TOPICS: readonly LogTopic[] = LOG_TOPICS.filter(
 export type FunctionSource = {
   /** `module.js:function`, or an HTTP action's `METHOD /path`. */
   path: string;
+  /** Its component's path (STUDY-154), null or absent for the app's. */
+  componentPath?: string | null;
   udfType: "Query" | "Mutation" | "Action" | "HttpAction";
   cached: boolean | null;
   requestId: string;
@@ -155,6 +157,8 @@ export type LogEvent = { timestamp: number; event: StructuredLogEvent };
 
 const functionJson = (s: FunctionSource) => ({
   path: s.path,
+  // Convex's `component_path`, only for a component's function.
+  ...(s.componentPath ? { component_path: s.componentPath } : {}),
   type: { Query: "query", Mutation: "mutation", Action: "action", HttpAction: "http_action" }[s.udfType],
   cached: s.udfType === "Query" ? s.cached : null,
   request_id: s.requestId,
