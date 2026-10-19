@@ -3,10 +3,11 @@
 // `POST /api/function`; JSON5 arguments; `--identity` to act as a user; the function's log lines on stderr,
 // its result on stdout; the deployment's functions listed when the name is not one of them; `--push` deploys
 // first; `--watch` subscribes to a query over a WebSocket and prints each new result; `--inline-query` evaluates
-// a readonly query through the deployment's function tester (STUDY-119).
+// a readonly query through the deployment's function tester (STUDY-119); `--component <path>` runs a component's
+// function, as Convex's (STUDY-156 PR 3).
 import { existsSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { BunvexClient, type Logger } from "@bunvex/client";
+import { BaseBunvexClient, type Logger, type QueryToken } from "@bunvex/client";
 import { makeFunctionReference } from "@bunvex/protocol";
 import { fromJsonValue, type JSONValue, toJsonValue, type Value } from "@bunvex/values";
 import {
@@ -39,8 +40,11 @@ ${TARGET_OPTIONS}
   -w, --watch          a query: print its result, and again each time it changes (Ctrl-C to stop)
   --inline-query <query>
                        ${INLINE_QUERY_HELP}
+  --component <path>   the component the function is in (\`counter\`, \`parent/child\`); the app's by default
   --push               deploy the functions first (with --typecheck / --codegen as \`bunvex deploy\`)
   --typecheck <mode>   for --push: enable, try (default) or disable
+  --typecheck-components
+                       for --push: also typecheck the local components' directories
   --codegen <mode>     for --push: enable (default) or disable`;
 
 const EXTENSIONS = [".ts", ".js", ".tsx", ".jsx", ".mts", ".mjs", ".cts", ".cjs"];
@@ -102,12 +106,18 @@ function printLogLine(io: Io, path: string, line: string) {
 
 type Spec = { functionType: string; identifier?: string };
 
-async function availableFunctions(target: Target): Promise<string> {
+async function availableFunctions(target: Target, componentPath: string | undefined): Promise<string> {
   let specs: Spec[] = [];
   try {
-    const r = (await adminRequest(target, "/api/query", { path: "_system/cli/modules:apiSpec", args: {} })) as {
-      value?: Spec[];
-    };
+    // A component's: `apiSpec` in its namespace, by its id (Convex's `componentId` argument).
+    const componentId =
+      componentPath === undefined
+        ? undefined
+        : (await mountedComponents(target)).find((c) => c.path === componentPath)?.id;
+    const r = (await adminRequest(target, "/api/query", {
+      path: "_system/cli/modules:apiSpec",
+      args: componentId === undefined ? {} : { componentId },
+    })) as { value?: Spec[] };
     specs = r.value ?? [];
   } catch {
     // The list is a courtesy: without it, the error alone.
@@ -134,6 +144,7 @@ async function watchQuery(
   rawName: string,
   args: Record<string, Value>,
   identity: Record<string, unknown> | undefined,
+  componentPath: string | undefined,
   signal?: AbortSignal,
 ): Promise<number> {
   const logger: Logger = {
@@ -150,24 +161,31 @@ async function watchQuery(
     warn: (...a) => io.err(a.map(String).join(" ")),
     error: (...a) => io.err(a.map(String).join(" ")),
   };
-  const client = new BunvexClient(target.url, { logger });
-  client.client.setAdminAuth(target.adminKey, identity as never);
-  io.err(`✔ Watching query ${rawName} on ${target.url}...`);
   const stop = new AbortController();
+  let code = 0;
+  let token: QueryToken | undefined;
+  // The base client, as Convex's `subscribeAndLog`: it subscribes with a component's path.
+  const client = new BaseBunvexClient(
+    target.url,
+    (updated) => {
+      if (token === undefined || !updated.includes(token)) return;
+      try {
+        io.out(printValue(io, client.localQueryResultByToken(token) as Value));
+      } catch (e) {
+        io.err(`Failed to run function "${rawName}":\n${(e as Error).message.trim()}`);
+        code = 1;
+        stop.abort();
+      }
+    },
+    { logger },
+  );
+  client.setAdminAuth(target.adminKey, identity as never);
+  io.err(`✔ Watching query ${rawName} on ${target.url}...`);
   const onSigint = () => stop.abort();
   if (signal) signal.addEventListener("abort", onSigint, { once: true });
   else process.once("SIGINT", onSigint);
-  let code = 0;
-  const sub = client.onUpdate(
-    makeFunctionReference<"query">(path),
-    args,
-    (value) => io.out(printValue(io, value as Value)),
-    (e) => {
-      io.err(`Failed to run function "${rawName}":\n${e.message.trim()}`);
-      code = 1;
-      stop.abort();
-    },
-  );
+  const sub = client.subscribe(path, args, componentPath === undefined ? {} : { componentPath });
+  token = sub.queryToken;
   await new Promise<void>((done) => {
     if (stop.signal.aborted) return done();
     stop.signal.addEventListener("abort", () => done(), { once: true });
@@ -186,16 +204,54 @@ function printValue(io: Io, value: Value) {
     : JSON.stringify(toJsonValue(value), null, 2);
 }
 
+/** The deployment's components, by id and path (`_system/frontend/components:list`). */
+async function mountedComponents(target: Target): Promise<{ id: string; path: string }[]> {
+  const r = (await adminRequest(target, "/api/query", { path: "_system/frontend/components:list", args: {} })) as {
+    value?: { id: string; path: string }[];
+  };
+  return r.value ?? [];
+}
+
+/**
+ * Convex's `resolveInlineQueryComponentId`: `--component`'s path to its id (`_system/frontend/components:list`),
+ * none for the app (no flag, or `_App`); an empty or unknown path ends the run with Convex's message.
+ */
+async function inlineQueryComponentId(target: Target, componentPath: string | undefined) {
+  const path = componentPath?.trim();
+  if (path === undefined || path === "_App") return undefined;
+  if (path.length === 0) throw new RunFailure("`--component` must not be empty.");
+  const components = await mountedComponents(target);
+  const found = components.find((c) => c.path === path);
+  if (found) return found.id;
+  const available = components
+    .map((c) => c.path)
+    .filter((p) => p.length > 0)
+    .sort();
+  throw new RunFailure(
+    `Component path "${path}" was not found.\n\n${
+      available.length === 0
+        ? "This deployment has no mounted components."
+        : `Available components:\n${available.map((p) => `• ${p}`).join("\n")}`
+    }\nOmit \`--component\` to target the app root.`,
+  );
+}
+
 /**
  * `--inline-query` (STUDY-119, Convex's `runInlineQueryInDeployment`): the query's log lines on stderr as the
  * server wrote them, its value on stdout (nothing for null); a failed run is `Query failed: <response>`.
  */
-async function inlineQueryRun(io: Io, target: Target, inlineQuery: string): Promise<number> {
+async function inlineQueryRun(
+  io: Io,
+  target: Target,
+  inlineQuery: string,
+  componentPath: string | undefined,
+): Promise<number> {
   let result: Awaited<ReturnType<typeof runTestQuery>>;
   try {
-    result = await runTestQuery(target, inlineQuerySource(inlineQuery));
+    const componentId = await inlineQueryComponentId(target, componentPath);
+    result = await runTestQuery(target, inlineQuerySource(inlineQuery), componentId);
   } catch (e) {
-    if (!(e instanceof TestQueryRequestError)) throw e;
+    if (!(e instanceof TestQueryRequestError || e instanceof RunFailure)) throw e;
     io.err(e.message);
     return 1;
   }
@@ -221,6 +277,7 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
   let push = false;
   let watch = false;
   let inlineQuery: string | undefined;
+  let componentPath: string | undefined;
   const pushFlags: string[] = [];
   const positional: string[] = [];
   const r = taken.rest;
@@ -230,27 +287,34 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
     if (name === "--push") push = true;
     // Convex keeps `--no-push` (hidden) for old scripts: it undoes an earlier `--push`, nothing more.
     else if (name === "--no-push") push = false;
-    else if (name === "--identity" || name === "--typecheck" || name === "--codegen" || name === "--inline-query") {
+    else if (
+      name === "--identity" ||
+      name === "--typecheck" ||
+      name === "--codegen" ||
+      name === "--inline-query" ||
+      name === "--component"
+    ) {
       const v = inline ?? r[++i];
       const spec =
         name === "--identity"
           ? "--identity <identity>"
           : name === "--inline-query"
             ? "--inline-query <query>"
-            : `${name} <mode>`;
+            : name === "--component"
+              ? "--component <path>"
+              : `${name} <mode>`;
       if (v === undefined) return argumentError(io, missingArgument(spec), RUN_USAGE);
       const choices = name === "--typecheck" ? ["enable", "try", "disable"] : ["enable", "disable"];
       if ((name === "--typecheck" || name === "--codegen") && !choices.includes(v))
         return argumentError(io, invalidChoice(spec, v, choices), RUN_USAGE);
       if (name === "--identity") identity = v;
       else if (name === "--inline-query") inlineQuery = v;
+      else if (name === "--component") componentPath = v;
       else pushFlags.push(`${name}=${v}`);
     } else if (name === "--watch" || name === "-w") watch = true;
-    else if (name === "--component" || name === "--typecheck-components" || name === "--live-component-sources") {
-      // DV-391: no components yet.
-      io.err(`bunvex run: ${name}: bunvex does not have components yet.`);
-      return 2;
-    } else if (a.startsWith("-") && a !== "-")
+    // For `--push`, as `bunvex deploy`'s (`--typecheck-components` typechecks the local components too).
+    else if (name === "--typecheck-components" || name === "--live-component-sources") pushFlags.push(name);
+    else if (a.startsWith("-") && a !== "-")
       return argumentError(io, unknownOption(a, optionsIn(RUN_USAGE)), RUN_USAGE);
     else positional.push(a);
   }
@@ -289,7 +353,7 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
         const code = await deployCommand(["--url", target.url, "--admin-key", target.adminKey, ...pushFlags], io);
         if (code !== 0) return 1;
       }
-      return await inlineQueryRun(io, target, trimmed);
+      return await inlineQueryRun(io, target, trimmed, componentPath);
     } finally {
       await acquired.release();
     }
@@ -318,6 +382,7 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
         rawName,
         fromJsonValue(fnArgs as JSONValue) as Record<string, Value>,
         identity ? fakeIdentity(identity) : undefined,
+        componentPath,
         opts.signal,
       );
     let res: Response;
@@ -325,7 +390,12 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
       res = await fetch(`${target.url}/api/function`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bunvex ${auth}` },
-        body: JSON.stringify({ path, args: fnArgs, format: "encoded_json" }),
+        body: JSON.stringify({
+          path,
+          args: fnArgs,
+          format: "encoded_json",
+          ...(componentPath === undefined ? {} : { componentPath }),
+        }),
       });
     } catch (e) {
       throw new RunFailure(`could not reach ${target.url}: ${(e as Error).message}`);
@@ -340,7 +410,9 @@ export async function runCommand(args: string[], io: Io, opts: { signal?: AbortS
     for (const line of body.logLines ?? []) printLogLine(io, path, line);
     if (!res.ok || body.status !== "success") {
       const message = (body.errorMessage ?? body.message ?? `${res.status}`).trim();
-      const list = message.includes("Could not find function") ? `\n\n${await availableFunctions(target)}` : "";
+      const list = message.includes("Could not find function")
+        ? `\n\n${await availableFunctions(target, componentPath)}`
+        : "";
       throw new RunFailure(`Failed to run function "${rawName}":\n${message}${list}`);
     }
     if (body.value !== null && body.value !== undefined)

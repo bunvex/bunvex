@@ -30,7 +30,7 @@ import {
 export type ModuleConfig = { path: string; source: string; sourceMap?: string; environment: "isolate" | "node" };
 
 const EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".jsx"];
-const EXTERNAL = ["bunvex", "bunvex/*", "@bunvex/*"];
+export const EXTERNAL = ["bunvex", "bunvex/*", "@bunvex/*"];
 
 export class BundleError extends Error {
   constructor(message: string) {
@@ -39,7 +39,7 @@ export class BundleError extends Error {
   }
 }
 
-const posix = (p: string) => p.split(sep).join("/");
+export const posix = (p: string) => p.split(sep).join("/");
 
 /**
  * Convex's `serverOnlyPlugin` (STUDY-83): `server-only` resolves to an empty module, whether the package is
@@ -78,7 +78,7 @@ const wasm: BunPlugin = {
 };
 
 /** The plugins every bundle runs, in Convex's order: `server-only` first, `.wasm` after. */
-const PLUGINS = [serverOnly, wasm];
+export const PLUGINS = [serverOnly, wasm];
 
 /** Convex's `entryPoints`: the files of `dir` that are modules, sorted. */
 export function entryPoints(dir: string): string[] {
@@ -246,13 +246,24 @@ export async function bundleFunctions(
   {
     includeSourcesContent = false,
     externalPackages = [],
-  }: { includeSourcesContent?: boolean; externalPackages?: string[] } = {},
+    component = false,
+  }: {
+    includeSourcesContent?: boolean;
+    externalPackages?: string[];
+    /** A component's directory (STUDY-156): no `"use node"` module, no `auth.config`, as Convex's. */
+    component?: boolean;
+  } = {},
 ): Promise<Bundled> {
   if (!existsSync(dir)) throw new BundleError(`No functions directory at ${dir}.`);
   const entries = entryPoints(dir);
   const node: string[] = [];
   const isolate: string[] = [];
   for (const e of entries) (usesNode(readFileSync(e, "utf8")) ? node : isolate).push(e);
+  // Convex's `bundleImplementations`: a component runs in the isolate only.
+  if (component && node.length)
+    throw new BundleError(
+      `"use node" directive is not supported in components. Remove it from the component at: ${node[0]}.`,
+    );
   for (const e of node) {
     const rel = posix(relative(dir, e)).replace(/\.[^.]+$/, "");
     if (rel === "http" || rel === "crons")
@@ -284,7 +295,7 @@ export async function bundleFunctions(
     return { path: as, source, environment: "isolate" as const };
   };
   const schema = await single(["schema.ts", "schema.js"], "schema.js");
-  const auth = await single(["auth.config.ts", "auth.config.js"], "auth.config.js");
+  const auth = component ? null : await single(["auth.config.ts", "auth.config.js"], "auth.config.js");
   if (auth) modules.push(auth);
   return { modules, schema, nodeDependencies: externalPackageVersions(external.packages, external.used) };
 }

@@ -213,6 +213,27 @@ describe("bunvex dev", () => {
     // the default 5 s
   }, 30_000);
 
+  test("watching a local component outside the functions directory (STUDY-156)", async () => {
+    const d = await deployment();
+    const app = tmp();
+    const counter = (word: string) =>
+      `import { query } from ${JSON.stringify(SERVER)};\nexport const word = query(async () => ${JSON.stringify(word)});`;
+    write(app, {
+      "bunvex/hello.ts": hello("one"),
+      "bunvex/bunvex.config.ts": `import { defineApp } from ${JSON.stringify(SERVER)};\nimport counter from "../components/counter/bunvex.config";\nconst app = defineApp();\napp.use(counter);\nexport default app;\n`,
+      "components/counter/bunvex.config.ts": `import { defineComponent } from ${JSON.stringify(SERVER)};\nexport default defineComponent("counter");\n`,
+      "components/counter/lib.ts": counter("one"),
+    });
+    const w = dev(app, d.url);
+    await w.until(() => w.ready() === 1);
+    await Bun.sleep(1500); // the component's `_generated/` was written: no push follows
+    expect(w.ready()).toBe(1);
+    write(app, { "components/counter/lib.ts": counter("two") });
+    await w.until(() => w.ready() === 2);
+    w.stop();
+    expect(await w.done).toBe(0);
+  }, 30_000);
+
   test("--until-success: an app error waits for the change that fixes it", async () => {
     const d = await deployment();
     const app = tmp();

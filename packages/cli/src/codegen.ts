@@ -16,7 +16,8 @@
 // `_generated/` bundle; the final pass writes everything. A file is only rewritten when its content changes,
 // and entries of `_generated/` neither pass wrote are removed; `--dry-run` and `--debug` print instead of
 // writing (Convex's writeFormattedFile, STUDY-116). The layout is the generator's own, matching
-// what prettier makes of Convex's templates (G3); `components` is `{}` (G2); `env` is untyped (G4).
+// what prettier makes of Convex's templates (G3); `components` is `componentsGeneric()`, typed by each child's
+// `ComponentApi` (STUDY-156, `component-codegen.ts`); `env` is untyped (G4).
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { entryPoints } from "./bundle.ts";
@@ -35,12 +36,12 @@ const SERVER = ["bunvex", "server"].join("/");
 const VALUES = ["bunvex", "values"].join("/");
 type Imports = { server: string; values: string };
 /** The quoted specifiers the generated files import: `@bunvex/*` unless the app is on the aggregate `bunvex`. */
-const importsOf = (packages: CodegenConfig["packages"]): Imports =>
+export const importsOf = (packages: CodegenConfig["packages"]): Imports =>
   packages === "bunvex"
     ? { server: JSON.stringify(SERVER), values: JSON.stringify(VALUES) }
     : { server: JSON.stringify(`@${SERVER}`), values: JSON.stringify(`@${VALUES}`) };
 
-function header(description: string) {
+export function header(description: string) {
   return `/* eslint-disable */
 /**
  * ${description}
@@ -180,6 +181,8 @@ export function generatedFiles(
     fileType: CodegenConfig["fileType"];
     packages?: CodegenConfig["packages"];
     commonjs?: boolean;
+    /** The entries of `components`, one per child instance (STUDY-156): none when the app mounts none. */
+    components?: string[];
   },
 ): {
   dataModel: Record<string, string>;
@@ -189,6 +192,7 @@ export function generatedFiles(
 } {
   const q = importsOf(opts.packages);
   const ts = opts.fileType === "ts";
+  const componentsType = opts.components?.length ? `{\n${opts.components.join("\n")}\n}` : "{}";
   const dataModel = opts.hasSchema ? dataModelWithSchema(q) : dataModelWithoutSchema(q);
   const serverDts = `${header(SERVER_DESCRIPTION)}
 import type ${importList([...SERVER_TYPES, "SystemTableNames", "TableNamesInDataModel"])} from ${q.server};
@@ -256,15 +260,15 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {};
+export declare const components: ${componentsType};
 `;
   const apiJs = `${apiHeader}
-import { anyApi } from ${q.server};
+import { anyApi, componentsGeneric } from ${q.server};
 
 ${apiComment("api", null)}
 export const api = anyApi;
 export const internal = anyApi;
-export const components = {};
+export const components = componentsGeneric();
 `;
   const apiTs = `${apiHeader}
 ${imports}import type {
@@ -272,7 +276,7 @@ ${imports}import type {
   FilterApi,
   FunctionReference,
 } from ${q.server};
-import { anyApi } from ${q.server};
+import { anyApi, componentsGeneric } from ${q.server};
 
 const fullApi: ${fullApiType} = anyApi as any;
 
@@ -288,23 +292,23 @@ export const internal: FilterApi<
   FunctionReference<any, "internal">
 > = anyApi as any;
 
-export const components = {};
+export const components = componentsGeneric() as unknown as ${componentsType};
 `;
   // Before the modules can be read: any api, so that the modules (which import it) bundle.
   const apiStubDts = `${apiHeader}
-import type { AnyApi } from ${q.server};
+import type { AnyApi, AnyComponents } from ${q.server};
 
 export declare const api: AnyApi;
 export declare const internal: AnyApi;
-export declare const components: {};
+export declare const components: AnyComponents;
 `;
   const apiStubTs = `${apiHeader}
-import type { AnyApi } from ${q.server};
-import { anyApi } from ${q.server};
+import type { AnyApi, AnyComponents } from ${q.server};
+import { anyApi, componentsGeneric } from ${q.server};
 
 export const api: AnyApi = anyApi;
 export const internal: AnyApi = anyApi;
-export const components = {};
+export const components: AnyComponents = componentsGeneric();
 `;
   // The CommonJS api (Convex's `api_cjs`): the same declarations, and `anyApi` through `require()`.
   const apiCjs = `${apiHeader}
@@ -450,7 +454,14 @@ function removeEntry(path: string, mode?: WriteMode) {
 export function runCodegen(
   functionsDir: string,
   config: CodegenConfig,
-  opts: { initial?: boolean; mode?: WriteMode } = {},
+  opts: {
+    initial?: boolean;
+    mode?: WriteMode;
+    /** The entries of `components` (STUDY-156). */
+    components?: string[];
+    /** More files of `_generated/`, written in the final pass (a component's `component.ts`). */
+    extra?: Record<string, string>;
+  } = {},
 ) {
   const dir = join(functionsDir, "_generated");
   mkdirSync(dir, { recursive: true });
@@ -460,6 +471,7 @@ export function runCodegen(
     fileType: config.fileType,
     packages: config.packages,
     commonjs: config.commonjs,
+    components: opts.components,
   });
   const result: CodegenResult = { written: [], removed: [] };
   const keep = new Set<string>();
@@ -479,6 +491,7 @@ export function runCodegen(
         { files: files.dataModel, onlyIfMissing: false },
         { files: files.server, onlyIfMissing: false },
         { files: files.api, onlyIfMissing: false },
+        ...(opts.extra ? [{ files: opts.extra, onlyIfMissing: false }] : []),
       ];
   for (const g of groups) {
     const names = Object.keys(g.files);

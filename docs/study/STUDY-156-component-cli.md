@@ -281,6 +281,121 @@ bunvex's codegen stays offline (DV-173), and builds a component's types from its
      arguments fails `tsc`); `--component-dir` on a component without an app.
 3. **cli: `run --component` and `--typecheck-components`** (DV-391's CLI half, Q-4).
 
+### As built, PR 1 (`cli/src/components.ts`, `bundle.ts`, `deploy.ts`)
+
+- **Finding and bundling.**
+  - `bundleComponents` builds the app's `bunvex.config.ts` (or `.js`) once with a metafile, under the conditions
+    `["bunvex", "module"]`.
+  - Every non-external import whose specifier names `bunvex.config` is a child, walked breadth first.
+  - A child that resolves to a file other than `bunvex.config.ts` / `.js` is `Invalid component directory
+    (Component definition bunvex.config.ts isn't a file): <dir>`.
+  - Each definition is bundled on its own. A plugin maps each `(importer, specifier)` that the metafile resolved
+    to `./_componentDeps/<base64url(path)>`, external, so the server links it.
+  - Each component's functions and schema go through `bundleFunctions(dir, project, { component: true })`: no
+    `auth.config`, and a `"use node"` module is Convex's error.
+- **No config:** Convex's virtual `defineApp()`, sent as source (`bunvex/server` stays external, DV-495). This
+  closes DV-429: `get_config_hashes` and `_modules` now list `bunvex.config.js`.
+- **The push** sends the app's definition and dependencies, and each component with every module and the CLI's
+  version.
+  - It prints `Installed component <path>.`, `Unmounted component <path>.` and `Remounted component <path>.` for
+    each non-root `componentDiffs` entry, and nothing for `modify`.
+  - A component's failed schema prints `✖ Schema validation failed in component "<path>".` with the error.
+  - `--dry-run` is bunvex's, as before: it ends at `start_push` and prints no component lines. Convex's goes on
+    to `finish_push` with `dryRun`.
+- **Measured.** Bundling an app with no config costs nothing more: no build runs. An app with two components
+  (one local, one from a package, one nested) adds about 3.9 ms to the push's bundling, against 0.9 ms for the
+  app's own functions (10 runs, warm).
+- **Tests.** `cli/test/component-push.test.ts`, 7 cases:
+  - the graph and its paths;
+  - the `_componentDeps` imports;
+  - no config;
+  - `"use node"`;
+  - a push installing a local component, a package component and a nested one, whose functions then run;
+  - an unmount's line, and no line for a push that changes nothing;
+  - a component's schema failure;
+  - DV-429's `_modules` row.
+
+  Sabotage: 7 of 7 broken fixes were caught.
+- **Not yet.** `bunvex dev` watches only the functions directory, so a local component outside it is pushed
+  again only when a file in the functions directory changes. Watching the definitions' directories comes with
+  PR 2's codegen.
+
+### As built, PR 2 (`cli/src/component-codegen.ts`, `codegen.ts`, `codegen-command.ts`, `deploy.ts`, `dev.ts`; `server/src/push.ts`; `protocol/src/api.ts`)
+
+- **The analysis without a deployment.** `PushService`'s component evaluation is now the standalone
+  `evaluateComponents`, and `componentAnalysis(appDefinition, componentDefinitions)` in `@bunvex/server` returns
+  what `start_push` answers as `analysis`.
+  - It reuses the server's code: module analysis, definition evaluation and the tree check, `forCodegen`, with no
+    engine.
+  - `bunvex codegen` bundles the definitions as a push does and reads that analysis (DV-532).
+  - `deploy` and `dev` read the deployment's own `start_push` answer, as Convex's final codegen does.
+- **`components`.**
+  - `api.js` exports `componentsGeneric()`, the stubs `AnyComponents` (DV-174).
+  - `api.d.ts` / `api.ts` hold one entry per child instance: `import("<spec>/_generated/component.js")
+    .ComponentApi<"<name>">`.
+  - The spec is the package name the parent imported, else the child's directory relative to `_generated/`.
+    Convex writes `../<definitionPath>` even for a nested local child, which is wrong below the app; bunvex
+    computes the relative path from the importing `_generated/`.
+- **A local component's `_generated/`** (a `.ts` definition; a published `.js` one is left alone): always `.ts`
+  files.
+  - Before bundling, the stubs its modules need.
+  - After the analysis, `api.ts` with its own children's `components`, and `component.ts`.
+  - `component.ts`: `ComponentApi<Name>`, the exports in code-unit order, each a `FunctionReference<type,
+    "internal", Args, Returns, Name>` with Convex's `validatorToType` (ids as `string`, `any` without a validator).
+  - `server.ts` keeps bunvex's untyped `env` (G4), not Convex's typed one for a component.
+- **`FunctionReference`** has Convex's fifth parameter, `ComponentPath = string | undefined`, with
+  `_componentPath`.
+- **Flags.**
+  - `codegen --component-dir <dir>` mounts the component as `exampleComponentInstance` under an app the CLI writes
+    to a temporary directory, writes only that component's files and typechecks its directory. A directory without
+    a `bunvex.config.ts` is Convex's error.
+  - `--live-component-sources` is accepted by `codegen`, `dev` and `deploy` (hidden), adding the
+    `"@bunvex/component-source"` condition.
+- **`bunvex dev`** also watches each local component's directory outside the functions directory: `deploy`
+  returns them, and the watcher adds them.
+- **Measured.**
+  - `bunvex codegen` on an app with two components spends about 5.7 ms finding and bundling them and 2.6 ms on
+    the analysis (10 runs, warm).
+  - A push's codegen adds no evaluation, since it reads `start_push`'s answer.
+- **Tests.**
+  - `cli/test/component-push.test.ts` has 5 more cases:
+    - the generated `components` and `component.ts`;
+    - a typechecked call: the right arguments pass, wrong ones fail `tsc`, and the reference's `_componentPath`
+      is `"counter"`;
+    - `bunvex codegen` offline;
+    - `--component-dir` and its refusal;
+    - `--live-component-sources`.
+  - `cli/test/dev.test.ts`: a change in a component outside `bunvex/` is pushed.
+  - The goldens now have `componentsGeneric()`.
+  - Sabotage: 7 of 7 caught. The seventh, removing `_componentPath`, was missed at first; the typecheck test now
+    reads the field.
+
+### As built, PR 3 (`cli/src/run.ts`, `inline-query.ts`, `deploy.ts`, `dev.ts`; `server/src/functions.ts`, `system-functions.ts`)
+
+- **`run --component <path>`** adds `componentPath` to `/api/function`, so the server runs the component's
+  function (STUDY-154).
+  - A missing function lists the component's functions. `_system/cli/modules:apiSpec` now honours its
+    `componentId` argument, as Convex's `queryPrivateSystem` runs it in that component: the component's functions,
+    with no HTTP routes until step 7. The CLI resolves the path to the id through
+    `_system/frontend/components:list`.
+  - `--watch` subscribes with `componentPath`. It now uses the base client, as Convex's `subscribeAndLog`, since
+    `onUpdate` takes no component.
+  - `--inline-query` resolves the path as Convex's `resolveInlineQueryComponentId`: `_App` or no flag is the app.
+    An empty path gets "`--component` must not be empty.", and an unknown one gets "Component path "…" was not
+    found." with the mounted components, or "This deployment has no mounted components.". The id goes to
+    `run_test_function`.
+- **`--typecheck-components`** on `deploy`, `dev` and `run --push`: after the app's typecheck, each local
+  component's directory is typechecked in the same mode, and a failure stops the push. `--live-component-sources`
+  goes through to `run --push`.
+- **Tests.** `component-push.test.ts` has 4 more cases:
+  - a component's function, nested included, and the listing for a missing one;
+  - `--inline-query` and its two messages;
+  - `--watch`;
+  - `--typecheck-components`.
+
+  The old refusals are gone from `run-inline-query.test.ts`. Sabotage: 6 of 6 caught.
+- **Left for step 9:** `data --component` (DV-224), with the dashboard.
+
 ## Divergences
 
 | # | Divergence | Decision |
