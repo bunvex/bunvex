@@ -149,3 +149,47 @@ test("TypeScript reads the published declarations, for import and for require", 
   expect(tsc("esnext", "bundler", ["types.ts"], { types: ["node"] })).toBe("");
   expect(tsc("nodenext", "nodenext", ["types.ts", "types-cjs.cts"], { types: ["node"] })).toBe("");
 }, 60_000);
+
+test("an app's functions typecheck on the published declarations with the tsconfig `codegen --init` writes", async () => {
+  // As Convex's template (STUDY-167): no `allowImportingTsExtensions`, which only the sources would need.
+  writeFileSync(
+    join(app, "package.json"),
+    JSON.stringify({ name: "app", private: true, type: "module", dependencies: { "@bunvex/server": version } }),
+  );
+  linkFrom(ROOT, "typescript");
+  const fns = join(app, "bunvex");
+  mkdirSync(fns, { recursive: true });
+  writeFileSync(
+    join(fns, "schema.ts"),
+    `import { defineSchema, defineTable } from "@bunvex/server";
+import { v } from "@bunvex/values";
+export default defineSchema({ messages: defineTable({ body: v.string() }) });`,
+  );
+  writeFileSync(
+    join(fns, "messages.ts"),
+    `import { v } from "@bunvex/values";
+import type { Id } from "./_generated/dataModel";
+import { mutation, query } from "./_generated/server";
+export const list = query({ args: {}, handler: (ctx) => ctx.db.query("messages").collect() });
+export const send = mutation({
+  args: { body: v.string() },
+  handler: (ctx, args): Promise<Id<"messages">> => ctx.db.insert("messages", args),
+});`,
+  );
+  const codegen = (...args: string[]) =>
+    Bun.spawnSync(["bun", join(ROOT, "packages/cli/bin/bunvex.ts"), "codegen", ...args], { cwd: app });
+  const init = codegen("--init", "--typecheck", "enable");
+  expect(`${init.stdout}${init.stderr}`).not.toContain("error TS");
+  expect(init.exitCode).toBe(0);
+  expect(readFileSync(join(fns, "tsconfig.json"), "utf8")).not.toContain("allowImportingTsExtensions");
+  // The types are the declarations', not `any`: a table not in the schema fails.
+  writeFileSync(
+    join(fns, "bad.ts"),
+    `import { query } from "./_generated/server";
+export const bad = query({ args: {}, handler: (ctx) => ctx.db.query("nope").collect() });`,
+  );
+  const bad = codegen();
+  expect(bad.exitCode).toBe(1);
+  expect(`${bad.stdout}`).toContain(`'"nope"'`);
+  rmSync(join(fns, "bad.ts"));
+}, 120_000);
