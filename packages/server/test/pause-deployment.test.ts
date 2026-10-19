@@ -106,16 +106,20 @@ test("pause and unpause: 200 with no body, the state, one audit event per change
 test("the state check is a system read: out of the function's limits, as Convex's system_tx_size", async () => {
   const t = await setup();
   await t.call("mutation", "m:add", { tag: "a" });
-  // A stored state document (pause, unpause), read by the check before the function runs.
+  const usage = async () =>
+    Promise.all(
+      ["documentsRead", "databaseQueries"].map(async (limit) => (await t.call("query", "m:usage", { limit })).value),
+    );
+  // The caller's usage with no state document (its own reads only: Convex's constant reads, STUDY-161 §16)…
+  const before = await usage();
+  expect(before[0]).toStartWith("Uncaught Error: Too many documents read in a single function execution (limit: 0).");
+  expect(before[1]).toStartWith("Uncaught Error: Too many reads in a single function execution (limit: ");
+  // …is the same with a stored state document (pause, unpause), read by the check before the function runs. Twice:
+  // the scan, then the cached state.
   await t.post("/api/v1/pause_deployment");
   await t.post("/api/v1/unpause_deployment");
-  // Twice each: the scan, then the cached state.
-  for (const limit of ["documentsRead", "databaseQueries", "documentsRead", "databaseQueries"])
-    expect((await t.call("query", "m:usage", { limit })).value).toStartWith(
-      limit === "documentsRead"
-        ? "Uncaught Error: Too many documents read in a single function execution (limit: 0)."
-        : "Uncaught Error: Too many reads in a single function execution (limit: 0).",
-    );
+  expect(await usage()).toEqual(before);
+  expect(await usage()).toEqual(before);
 });
 
 test("a read-only key cannot pause, but reads the state (noPermissionRequired)", async () => {

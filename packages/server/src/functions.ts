@@ -898,12 +898,23 @@ export class Functions {
    * Install a component instance's code version (STUDY-154): its functions replace its previous ones, the app's and
    * the other components' untouched. Its modules were evaluated in its own contexts (C3, DV-492).
    */
-  installComponent(runtime: ComponentRuntime, fns: Map<string, FunctionDef>, moduleHashes: Map<string, string>) {
+  installComponent(
+    runtime: ComponentRuntime,
+    fns: Map<string, FunctionDef>,
+    moduleHashes: Map<string, string>,
+    moduleLoads: Map<string, string[]> = new Map(),
+  ) {
     this.removeComponent(runtime.id);
     for (const [key, f] of fns) {
       this.componentFns.set(componentFunctionName(runtime.id, key), f);
       this.componentOf.set(f, runtime);
       this.names.set(f, key);
+      // The component's modules are its namespace's `_modules` rows: never the app's (STUDY-161 §16.7).
+      const m = Functions.moduleOf(key);
+      this.moduleLoads.set(
+        f,
+        (moduleLoads.get(m) ?? [m]).map((p) => `${runtime.id}\0${p}`),
+      );
     }
     this.componentRuntimes.set(runtime.id, { runtime, hashes: new Map(moduleHashes) });
   }
@@ -950,6 +961,7 @@ export class Functions {
     fns: Map<string, FunctionDef>,
     moduleHashes: Map<string, string>,
     rooms: Map<string, AnyRoomDef> = new Map(),
+    moduleLoads: Map<string, string[]> = new Map(),
   ): Set<string> {
     const changed = new Set<string>();
     for (const [m, h] of moduleHashes) if (this.moduleHashes.get(m) !== h) changed.add(m);
@@ -959,8 +971,27 @@ export class Functions {
     this.fns = new Map(fns);
     this.rooms = new Map(rooms);
     this.moduleHashes = new Map(moduleHashes);
+    for (const [k, f] of fns) {
+      const m = Functions.moduleOf(k);
+      this.moduleLoads.set(f, moduleLoads.get(m) ?? [m]);
+    }
     this.deployed = true;
     return changed;
+  }
+
+  /**
+   * The modules each function's module loads (`CodeVersion.moduleLoads`), by function (the app's and every
+   * component's); its own when not known.
+   */
+  private moduleLoads = new WeakMap<FunctionDef, string[]>();
+  /**
+   * Convex's reads before a function's code (STUDY-161 §16.3, §16.7): its configuration, its environment, the `_modules`
+   * row of each module it loads (its own and the chunks it imports), and for a component's function one more
+   * (`load_component_args`).
+   */
+  private countStartReads(db: Tx, f: FunctionDef) {
+    db.countConstantReads(this.componentOf.has(f) ? 3 : 2);
+    db.countModuleLoads(this.moduleLoads.get(f) ?? ["\0unknown"]);
   }
 
   /** Whether the functions are pushed code, which sees the deployment's variables (STUDY-37 E3). */
@@ -1422,7 +1453,10 @@ export class Functions {
   register(module: string, fns: Record<string, FunctionDef | AnyRoomDef>) {
     for (const [n, f] of Object.entries(fns))
       if (isRoomDef(f)) this.rooms.set(`${module}:${n}`, f);
-      else this.fns.set(`${module}:${n}`, f);
+      else {
+        this.fns.set(`${module}:${n}`, f);
+        this.moduleLoads.set(f, [module]);
+      }
     return this;
   }
 
@@ -1685,6 +1719,7 @@ export class Functions {
       await this.failWhileNotRunning(db);
       const f = resolved();
       const a = this.checkArgs(f, args);
+      this.countStartReads(db, f);
       const env = await this.txEnv(db, this.componentOf.get(f));
       // A permit for the run, once it is validated (STUDY-68); a cached result never gets here.
       return this.limits.query.run(async () => {
@@ -1711,6 +1746,7 @@ export class Functions {
       await this.failWhileNotRunning(db);
       const f = resolved();
       const a = this.checkArgs(f, args);
+      this.countStartReads(db, f);
       const env = await this.txEnv(db, this.componentOf.get(f));
       // A permit per attempt (STUDY-68), with the timeout even for a scheduled mutation, as in Convex.
       return this.limits.mutation.run(async () => {
@@ -1984,6 +2020,8 @@ export class Functions {
       throw new Error(`Invalid argument \`args\` for \`runUdf\`: ${TOO_NESTED_MESSAGE}`);
     if (measured.tooBig !== undefined) throw new Error(`Invalid argument \`args\` for \`runUdf\`: ${measured.tooBig}`);
     const name = registryKey(await functionNameOf(ref, db, this.engine));
+    // Convex's first nested call reads two more things into the transaction (STUDY-161 §16.3).
+    db.countNestedCall();
     // A `_system/` function, as Convex's (checked against its local backend): not found to anyone but an admin
     // or the system; for them it runs, in this transaction.
     if (isSystemPath(name)) {
@@ -1999,6 +2037,8 @@ export class Functions {
       return body(db);
     }
     const f = this.fn(component ? componentFunctionName(component.id, name) : name, kind, false);
+    // The callee's modules, those not loaded yet in this transaction (Convex reads each `_modules` row once).
+    db.countModuleLoads(this.moduleLoads.get(f) ?? ["\0unknown"]);
     const a = acrossArgs(this.checkArgs(f, args === undefined ? {} : args, measured)) as AnyArgs;
     if (depth >= MAX_NESTED_CALL_DEPTH)
       throw new Error("Cross component call depth limit exceeded. Do you have an infinite loop in your app?");
@@ -2188,6 +2228,9 @@ export class Functions {
     const a = this.systemArgs(args, q!.args);
     return (db: Tx) => {
       noteTx(db); // metered as Convex's system functions' bandwidth (STUDY-71)
+      // Convex's reads before a system function's code: its configuration and environment (STUDY-161 §16.3); a call
+      // from function code counts as a nested call's.
+      if (!inProcess) db.countConstantReads(2);
       // Convex warns for system functions too (their clients get the lines; STUDY-76). They have no time
       // budget in bunvex: a timer that never fails measures their user time against Convex's 1 s.
       const timer = newUserTimer(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, this.engine.runtime.monotonicNow);
@@ -2216,6 +2259,9 @@ export class Functions {
     const a = this.systemArgs(args, m!.args);
     return (db: Tx) => {
       noteTx(db); // metered as Convex's system functions' bandwidth (STUDY-71)
+      // Convex's reads before a system function's code: its configuration and environment (STUDY-161 §16.3); a call
+      // from function code counts as a nested call's.
+      if (!inProcess) db.countConstantReads(2);
       // Convex warns for system functions too (their clients get the lines; STUDY-76). They have no time
       // budget in bunvex: a timer that never fails measures their user time against Convex's 1 s.
       const timer = newUserTimer(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, this.engine.runtime.monotonicNow);
@@ -2318,8 +2364,21 @@ export class Functions {
    * A query that is not deployed, as JSON (STUDY-119): Convex's `execute_standalone_module` runs the function
    * tester's query with `run_query_without_caching`, so it never reads or fills the cache. It runs as `name`.
    */
-  async runStandaloneQueryJson(f: QueryDef, name: string, args: unknown, caller?: Caller): Promise<string> {
+  async runStandaloneQueryJson(
+    f: QueryDef,
+    name: string,
+    args: unknown,
+    caller?: Caller,
+    /** The component it runs in (the dashboard's custom query in a component, STUDY-154), else the app. */
+    componentId: string | null = null,
+  ): Promise<string> {
     this.names.set(f, registryKey(name));
+    if (componentId !== null) {
+      // Convex's `must_component_path`: an id with no mounted component is a system error.
+      const runtime = this.componentRuntimes.get(componentId)?.runtime;
+      if (!runtime) throw new Error(`Component ${componentId} not found`);
+      this.componentOf.set(f, runtime);
+    }
     return this.logged(
       "Query",
       name,

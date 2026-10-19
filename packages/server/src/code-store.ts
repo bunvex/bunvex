@@ -344,6 +344,22 @@ export async function peekUdfConfig(engine: Engine): Promise<UdfConfig> {
 }
 
 /**
+ * A component's import seed and time for a module that is not deployed (the dashboard's custom query in a component,
+ * STUDY-154), as `peekUdfConfig` for the app's: its own `_udf_config`, read, never written.
+ */
+export async function peekComponentUdfConfig(engine: Engine, namespace: string): Promise<UdfConfig> {
+  const row = (await engine.query((db) =>
+    db.asSystem(() => db.inComponent(namespace, () => db.query(UDF_CONFIG_TABLE).first())),
+  )) as Record<string, unknown> | null;
+  if (!row) throw new Error(`component ${namespace} has no _udf_config`);
+  return {
+    serverVersion: row.serverVersion as string,
+    seed: new Uint32Array(row.importPhaseRngSeed as ArrayBuffer),
+    timestamp: msOfNs(row.importPhaseUnixTimestamp as bigint),
+  };
+}
+
+/**
  * The root component's rows for a deploy that is not a push (`deployCode`: the dev loop, tests), as a push leaves
  * them in Convex with no components (STUDY-133 §12 M2): the default app definition in `_component_definitions` and
  * its instance in `_components`, written once. A push writes them from the evaluated tree (STUDY-153 PR 4).

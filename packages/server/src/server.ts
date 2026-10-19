@@ -76,6 +76,7 @@ import {
   ensureRootComponent,
   loadComponentCode,
   loadLatestCode,
+  peekComponentUdfConfig,
   peekUdfConfig,
   type SourcePackage,
   udfConfig,
@@ -1545,17 +1546,24 @@ export function createServer(opts: ServerOptions) {
       if (r) return r;
       throw e;
     }
-    // bunvex has no components (STUDY-62): its own refusal, as `/api/shapes2` and `/api/delete_tables`.
-    if (body.componentId !== undefined && body.componentId !== null && body.componentId !== "")
-      return requestError(400, "ComponentsNotSupported", "bunvex does not have components yet.");
+    // In a component (STUDY-154): its own `_udf_config`, no deployment variable at import, run in its namespace
+    // (Convex's `run_test_function` with a `componentId`). An id with no component is Convex's system error.
+    const componentId = typeof body.componentId === "string" && body.componentId !== "" ? body.componentId : null;
     let found: Awaited<ReturnType<typeof standaloneQuery>>;
     try {
       // Read, never written: Convex sets them in a transaction it does not commit.
-      const config = await peekUdfConfig(engine);
+      let config: Awaited<ReturnType<typeof peekUdfConfig>>;
+      try {
+        config = componentId === null ? await peekUdfConfig(engine) : await peekComponentUdfConfig(engine, componentId);
+      } catch (e) {
+        // An id that names no component's namespace: Convex's `must_component_path`, a system error.
+        if (componentId === null) throw e;
+        return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+      }
       found = await standaloneQuery(bundle, {
         seed: config.seed,
         timestamp: config.timestamp,
-        env: await deploymentEnv(),
+        env: componentId === null ? await deploymentEnv() : {},
       });
     } catch (e) {
       if (e instanceof TestFunctionError) return requestError(e.status, e.code, e.message);
@@ -1564,7 +1572,7 @@ export function createServer(opts: ServerOptions) {
     const tester = { ...caller, source: "Tester" } as SourcedCaller;
     return udfResponse(
       await collectLogs(async () =>
-        functions.runStandaloneQueryJson(found.query, found.name, fromWire(body.args, found.name), tester),
+        functions.runStandaloneQueryJson(found.query, found.name, fromWire(body.args, found.name), tester, componentId),
       ),
       "query",
       { format: body.format, client: req.headers.get("bunvex-client") },
@@ -2256,7 +2264,7 @@ export function createServer(opts: ServerOptions) {
     });
 
   const installCodeVersion = async (version: CodeVersion, o: { crons?: boolean; auth?: AuthInfo[] } = {}) => {
-    const changed = functions.install(version.functions, version.moduleHashes, version.rooms);
+    const changed = functions.install(version.functions, version.moduleHashes, version.rooms, version.moduleLoads);
     // The functions' handles (STUDY-50): a row per function, tombstones for the ones gone.
     await engine.mutation((db) => syncFunctionHandles(db, functions.functionPaths()), "_system/function_handles");
     httpOptions.router = version.router;
@@ -2305,6 +2313,7 @@ export function createServer(opts: ServerOptions) {
         { id: meta._id, path: path.join("/"), env: new Map(meta.env), httpPrefix: meta.httpPrefix },
         version.functions,
         version.moduleHashes,
+        version.moduleLoads,
       );
       for (const key of version.functions.keys()) changed.add(Functions.moduleOf(componentFunctionName(meta._id, key)));
     }
