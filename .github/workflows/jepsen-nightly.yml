@@ -39,6 +39,7 @@ jobs:
       # the service containers have no verifiable TLS; bunvex requires it by default (STUDY-25 L8)
       DO_NOT_REQUIRE_SSL: "1"
     steps:
+      - uses: actions/checkout@v4
       - name: Start ${{ matrix.store }}
         run: |
           case "${{ matrix.store }}" in
@@ -51,14 +52,9 @@ jobs:
               for i in $(seq 1 90); do docker exec db mysqladmin ping -uroot -pbunvex --silent && break; sleep 2; done
               echo "PERSISTENCE_URL=mysql://root:bunvex@127.0.0.1:3306/bunvex" >> "$GITHUB_ENV" ;;
             mongodb)
-              # a flush is a transaction: MongoDB must be a replica set (PERSIST-01 C7)
-              docker run -d --name db -p 27017:27017 mongo:8 --replSet rs0 --bind_ip_all
-              for i in $(seq 1 60); do docker exec db mongosh --quiet --eval 'db.runCommand({ping:1}).ok' && break; sleep 2; done
-              docker exec db mongosh --quiet --eval 'rs.initiate({_id: "rs0", members: [{_id: 0, host: "127.0.0.1:27017"}]})'
-              for i in $(seq 1 60); do docker exec db mongosh --quiet --eval 'db.hello().isWritablePrimary' | grep -q true && break; sleep 1; done
+              bash scripts/ci-mongo.sh db
               echo "PERSISTENCE_URL=mongodb://127.0.0.1:27017/bunvex?replicaSet=rs0" >> "$GITHUB_ENV" ;;
           esac
-      - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2

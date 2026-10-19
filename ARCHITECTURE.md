@@ -160,6 +160,13 @@ bunvex/
 │   │
 │   ├── testing/                     @bunvex/testing  the REAL engine in memory, to test functions M
 │   │
+│   ├── sandbox/                     @bunvex/sandbox (private for now)  the function sandbox (AD-44,
+│   │   │                            STUDY-168): app code in a separate process
+│   │   ├── child                    loads and analyzes a push with the server's own loader (STUDY-171 §7) ✅
+│   │   ├── protocol, frames         length-prefixed JSON on the child's socket, handshake, size cap   ✅
+│   │   └── host                     spawn, crash / bad message / oversize / time-out handling          ✅
+│   │                                calls over the bridge, OS isolation, the pool: STUDY-168 PRs 3–12   ·
+│   │
 │   ├── sync-e2e/, jepsen/,          tests only, never published: end-to-end sync (STUDY-26),
 │   │   differential/                consistency runs (STUDY-57), against Convex's backend (STUDY-122) ✅
 │   │
@@ -236,6 +243,7 @@ auth ──► values            file-storage (no bunvex dependency)
 client ──► protocol, values                    react ──► client, values
 nextjs, react-query ──► react, client, values  react-clerk, react-auth0 ──► react
 cli ──► server, core, values, client, protocol testing ──► server, core, values
+sandbox ──► server, core, values (its child runs the server's loader; the server never imports it)
 bunvex ──► the packages it re-exports, plus core and persistence for bin/local-backend
 examples/* ──► bunvex, react-query (a user's app, STUDY-90)
 

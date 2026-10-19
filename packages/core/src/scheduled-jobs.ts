@@ -11,6 +11,8 @@
 // - Apps read jobs through the virtual table `_scheduled_functions` (virtual-tables.ts): `virtualJob` builds
 //   Convex's public document `{_id, _creationTime, name, args, scheduledTime, completedTime?, state: {kind, …}}`,
 //   joining the arguments in.
+// - A job lives in the namespace of the function that scheduled it, whatever component it runs in (STUDY-157):
+//   `component` is its target's component path (`""` the root), as Convex's `ScheduledJob`.
 import { fromJsonValue, type JSONValue, jsonText, rawValueSize, toJsonValue, type Value } from "@bunvex/values";
 import { SCHEDULED_JOB_ARGS_TABLE, SCHEDULED_JOBS_TABLE } from "./catalog.ts";
 import type { Doc } from "./schema.ts";
@@ -48,8 +50,8 @@ export type StoredJobState =
 export type ScheduledJobDoc = {
   _id: string;
   _creationTime: number;
-  /** The component that scheduled it: "" for the root (bunvex has no components). */
-  component: string;
+  /** The path of the component its function is in (`a/b`): "" for the root. Absent in old rows: the root. */
+  component?: string | null;
   /** The canonical path, `module.js:function`. */
   udfPath: string;
   /** Arguments kept inline: no longer written (Convex keeps reading them for old jobs). */
@@ -70,6 +72,8 @@ export type JobDoc = {
   _id: string;
   _creationTime: number;
   name: string;
+  /** Its function's component path: "" for the root. */
+  component: string;
   argsId: string | null;
   udfArgs: ArrayBuffer | null;
   /** When it was asked to run (ms). */
@@ -90,6 +94,8 @@ export type PublicJob = {
   args: Value[];
   scheduledTime: number;
   completedTime?: number;
+  /** A child component's job: its function's component path (AD-33). */
+  component?: string;
   state: JobState;
 };
 
@@ -124,6 +130,7 @@ export function parseJob(d: ScheduledJobDoc): JobDoc {
     _id: d._id,
     _creationTime: d._creationTime,
     name: d.udfPath,
+    component: d.component ?? "",
     argsId: d.argsId,
     udfArgs: d.udfArgs,
     scheduledTime: nsToMs(d.originalScheduledTs),
@@ -149,7 +156,15 @@ export const argsFromBytes = (bytes: ArrayBuffer): Value[] =>
  */
 export async function insertJob(
   db: Tx,
-  job: { name: string; args: Value[]; scheduledTime: number; now: number; canceled?: boolean },
+  job: {
+    name: string;
+    /** Its function's component path; the root's when absent. */
+    component?: string;
+    args: Value[];
+    scheduledTime: number;
+    now: number;
+    canceled?: boolean;
+  },
 ): Promise<string> {
   // Convex's `check_scheduling_limits`, against the transaction's limits (a nested call's are lowered).
   const size = rawValueSize(job.args as Value);
@@ -167,7 +182,7 @@ export async function insertJob(
     const now = msToNs(job.now);
     const scheduled = msToNs(job.scheduledTime);
     const doc: Omit<ScheduledJobDoc, "_id" | "_creationTime"> = {
-      component: "",
+      component: job.component ?? "",
       udfPath: job.name,
       udfArgs: null,
       argsId,
@@ -213,6 +228,8 @@ export async function virtualJob(db: Tx, d: Doc): Promise<Doc> {
   // Keys in Convex's order (its documents are sorted maps).
   const out: Record<string, unknown> = { _creationTime: job._creationTime, _id: job._id, args };
   if (job.completedTime !== undefined) out.completedTime = job.completedTime;
+  // A child component's job names it (AD-33); the root's documents are Convex's.
+  if (job.component !== "") out.component = job.component;
   out.name = job.name;
   out.scheduledTime = job.scheduledTime;
   out.state = job.state;

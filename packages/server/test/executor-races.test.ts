@@ -72,10 +72,11 @@ describe("scheduled jobs", () => {
     // Not started: the test hands jobs to the executor, as Convex's `test_one_off_scheduled_job_executor_run`.
     const executor = new ScheduledJobExecutor(s.engine, s.functions, fast);
     stops.push(() => executor.stop());
-    // With its arguments, as the executor reads them (`_scheduled_job_args`) when it picks the job.
+    // With its arguments, as the executor reads them (`_scheduled_job_args`) when it picks the job, and its namespace
+    // (the app's).
     const execute = async (job: JobDoc) =>
-      (executor as unknown as { execute(j: JobDoc, args: Value[]): Promise<void> }).execute(
-        job,
+      (executor as unknown as { execute(j: JobDoc & { ns: null }, args: Value[]): Promise<void> }).execute(
+        { ...job, ns: null },
         await s.engine.query((db) => jobArgs(db, job)),
       );
     const read = (id: string) => s.engine.query((db) => getJob(db, id));
@@ -141,7 +142,9 @@ describe("cron jobs", () => {
     const executor = new CronJobExecutor(s.engine, s.functions, declare(true), { cronSplaySeconds: 0, ...fast });
     stops.push(() => executor.stop());
     await executor.push(declare(true));
-    const execute = (job: CronJob) => (executor as unknown as { execute(j: CronJob): Promise<void> }).execute(job);
+    // With its namespace (the app's).
+    const execute = (job: CronJob) =>
+      (executor as unknown as { execute(j: CronJob & { ns: null }): Promise<void> }).execute({ ...job, ns: null });
     const [picked] = await s.engine.query((db) => dueCrons(db, Date.now() + 1000, 10));
     expect(picked?.name).toBe("tick");
     const logs = () => s.engine.query(async (db) => db.asSystem(() => db.query(CRON_JOB_LOGS_TABLE).collect()));

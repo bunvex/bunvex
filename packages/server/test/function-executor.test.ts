@@ -198,4 +198,13 @@ describe("loadCode", () => {
     const callers = files.filter((f) => /\bloadCode\(/.test(readFileSync(join(src, f), "utf8"))).sort();
     expect(callers).toEqual(["code-store.ts", "push.ts", "server.ts", "test-function.ts"]);
   });
+
+  test("a module's namespace is read in the executor only (STUDY-171 §7.3b)", () => {
+    // A remote version has no `vm` module: a default export goes through `evaluateDefault`. `bunvex.config` keeps its
+    // own `vm` module (definition-eval.ts, STUDY-168 §12.2's later work).
+    const src = join(import.meta.dir, "../src");
+    const files = readdirSync(src, { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".ts"));
+    const readers = files.filter((f) => /\.module\.namespace\b/.test(readFileSync(join(src, f), "utf8"))).sort();
+    expect(readers).toEqual(["code-version.ts", "function-executor.ts"]);
+  });
 });

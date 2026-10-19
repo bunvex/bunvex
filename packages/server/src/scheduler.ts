@@ -10,6 +10,9 @@
 //     found in progress that this process is not running was cut short (a crash), so it fails with
 //     "Transient error while executing action" and never runs again.
 // - Jobs live in `_scheduled_jobs`, their arguments in `_scheduled_job_args` (STUDY-125); the executor reads both.
+// - Each component has its own (STUDY-157): a job lives in the namespace of the function that scheduled it and runs
+//   its target in the target's component. One executor serves every namespace, due jobs merged by `nextTs`, as
+//   Convex's `stream_jobs_to_run`; a job's state, arguments and garbage collection stay in its namespace.
 // - Completed jobs are deleted with their arguments after the retention window (7 days).
 import {
   BACKEND_STATE_TABLE,
@@ -47,7 +50,6 @@ import {
   type FunctionReference,
   getFunctionName,
   type OptionalRestArgs,
-  toReferencePath,
 } from "@bunvex/protocol";
 import {
   type GenericId,
@@ -62,8 +64,8 @@ import {
   type Value,
 } from "@bunvex/values";
 import { describeUncaught, newRequestId } from "./errors.ts";
-import { functionAddress, functionNameOf, splitComponentFunctionName } from "./function-handles.ts";
-import { type Functions, type SourcedCaller, THROTTLED } from "./functions.ts";
+import { functionAddress } from "./function-handles.ts";
+import { type ComponentRuntime, type Functions, type SourcedCaller, THROTTLED } from "./functions.ts";
 
 /** A function to schedule: a reference (`api.module.fn`) or its name (`"module:fn"`). */
 export type SchedulableFunction = AnyFunctionReference | string;
@@ -109,12 +111,24 @@ function parseScheduleArgs(args: unknown): Record<string, Value> {
   return args as Record<string, Value>;
 }
 
-/** Where a scheduler writes: a mutation's transaction, or (an action) one transaction per call. */
-type Target = { db: Tx; job?: string } | { engine: Engine; job?: string; systemIdentity?: boolean; requestId?: string };
+/**
+ * Where a scheduler writes: a mutation's transaction, or (an action) one transaction per call; in the namespace of
+ * `component`, the scheduling function's (the app's when absent). `job`: the scheduled job the function runs under,
+ * in the namespace of `jobComponent`.
+ */
+type Target = { component?: ComponentRuntime; job?: string; jobComponent?: string | null } & (
+  | { db: Tx }
+  | { engine: Engine; systemIdentity?: boolean; requestId?: string }
+);
 
 export function makeScheduler(functions: Functions, target: Target): Scheduler {
+  // As Convex's `VirtualSchedulerModel::new(tx, scheduling_component)`: the caller's namespace, for an action's
+  // cancel too (DV-536).
+  const namespace = target.component?.id ?? null;
   const write = <T>(f: (db: Tx) => Promise<T>): Promise<T> =>
-    "db" in target ? f(target.db) : target.engine.mutation((db) => f(db), "_system/scheduler");
+    "db" in target
+      ? inNamespace(target.db, namespace, () => f(target.db))
+      : target.engine.mutation((db) => inNamespace(db, namespace, () => f(db)), "_system/scheduler");
 
   const schedule = async (tsMs: number, fn: SchedulableFunction, args: Record<string, Value>) => {
     // Convex's `schedule` text (scheduler_impl.ts): an action's request id, the function's address, the time
@@ -139,17 +153,14 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
       throw new Error(`${unixTimestampDebug(tsMs / 1000)} is more than 5 years in the future`);
     if (tsMs - now < -FIVE_YEARS_MS)
       throw new Error(`${unixTimestampDebug(tsMs / 1000)} is more than 5 years in the past`);
-    // A component's function (`components.counter.lib.add`) is scheduled from STUDY-152 step 7 on (STUDY-155 Q-4).
-    if (typeof fn === "object" && fn !== null && (fn as Record<symbol, unknown>)[toReferencePath] !== undefined)
-      throw new Error("Scheduling a function of a component is not supported yet");
-    // A function handle (STUDY-50) names its function by its row, read in the scheduling transaction.
-    const resolved = await functionNameOf(fn, "db" in target ? target.db : null, functions.engineOf());
-    // A handle to a component's function too (STUDY-155 Q-4).
-    if (splitComponentFunctionName(resolved))
-      throw new Error("Scheduling a function of a component is not supported yet");
-    const name = functions.scheduledTarget(
-      resolved,
+    // Resolved as the caller's calls are (STUDY-155): a name in its component, a child's export (by reference), a
+    // handle, read in the scheduling transaction.
+    const { component, udfPath: name } = await functions.scheduleTarget(
+      fn,
+      target.component,
+      "db" in target ? target.db : null,
       "db" in target ? target.db.systemIdentity : target.systemIdentity === true,
+      !("db" in target),
     );
     // As Convex's `validate_schedule_args`: the positional args, `[args]`, are parsed as a value, so they nest
     // at most 63 levels (STUDY-109); they travel as plain values, so a commit timestamp placeholder cannot
@@ -161,10 +172,12 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
     if (hasCommitTs(args))
       throw new Error(`Invalid arguments for ${name}: Field name $commitTs starts with '$', which is reserved.`);
     return write(async (db) => {
-      // What a canceled running action schedules is born canceled (Convex's parent check).
-      const parent = target.job ? await getJob(db, target.job) : null;
+      // What a canceled running action schedules is born canceled (Convex's parent check): its job looked up in its
+      // namespace, then in this one, as Convex's.
+      const parent = target.job ? await parentJob(db, target.job, target.jobComponent ?? null) : null;
       return insertJob(db, {
         name,
+        component,
         args: [args],
         scheduledTime: tsMs,
         now,
@@ -198,6 +211,15 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
       });
     },
   } as Scheduler;
+}
+
+/**
+ * The job `id` in namespace `ns` (a `_components` id; null the app's), else in `db`'s current one (Convex tries both,
+ * for version skew); null in neither.
+ */
+async function parentJob(db: Tx, id: string, ns: string | null): Promise<JobDoc | null> {
+  const here = async () => (isJobId(db, id) ? getJob(db, id) : null);
+  return (await inNamespace(db, ns, here)) ?? here();
 }
 
 /** Convex's knobs, from the environment where Convex reads them. */
@@ -244,11 +266,27 @@ const backoff = (failures: number, initialMs: number, maxMs: number) =>
 
 const NO_ONE: Caller = { identity: null, key: "" };
 /** A scheduled function runs with no identity, for a request of its own that names it (STUDY-44). */
-const asJob = (jobId: string): SourcedCaller => ({
+const asJob = (job: Queued): SourcedCaller => ({
   ...NO_ONE,
   source: "Scheduler",
-  request: { ip: null, userAgent: null, requestId: newRequestId(), authToken: null, scheduledFunctionId: jobId },
+  request: {
+    ip: null,
+    userAgent: null,
+    requestId: newRequestId(),
+    authToken: null,
+    scheduledFunctionId: job._id,
+    scheduledFunctionComponent: job.ns,
+  },
 });
+
+/** `fn` in namespace `ns` (a `_components` id; null the app's): at once when `db` is already in it. */
+export const inNamespace = <T>(db: Tx, ns: string | null, fn: () => Promise<T>): Promise<T> =>
+  db.componentId === ns ? fn() : db.inComponent(ns, fn);
+
+/** A job as the executor holds it: with the namespace it lives in (a `_components` id; null the app's). */
+type Queued = JobDoc & { ns: string | null };
+/** A running job's key: ids of different namespaces may share a table number. */
+const runningKey = (job: Queued) => `${job.ns ?? ""}\u0000${job._id}`;
 const randomId = () => crypto.randomUUID().replaceAll("-", "");
 
 export class ScheduledJobExecutor {
@@ -285,26 +323,46 @@ export class ScheduledJobExecutor {
   start() {
     // Started late (a deployable server starts it once its code is loaded) after a stop: nothing to run.
     if (this.stopped) return;
-    // Woken by commits that touch the queue (a job scheduled, canceled or rescheduled): no polling.
-    let jobs = this.engine.catalog.table(SCHEDULED_JOBS_TABLE);
-    let byNextTs = jobs.indexes.get(SCHEDULED_BY_NEXT_TS)!.id;
+    // Woken by commits that touch a queue (a job scheduled, canceled or rescheduled), any namespace's: no polling.
     // And by a pause or unpause (STUDY-63), as Convex's executors subscribe to `_backend_state`.
     const backendState = this.engine.catalog.table(BACKEND_STATE_TABLE).byId.id;
+    let catalog = this.engine.catalog;
+    let watched = this.queueIndexes();
     this.engine.committer.onCommit((entries) => {
-      // The table replaced with an empty one (`/api/delete_scheduled_functions_table`, STUDY-113; the catalog
-      // changes before the listeners run): its new index from now on, and the sleep until a job that is gone
-      // dropped. A job running meanwhile finds its document gone, and records nothing.
-      const now = this.engine.catalog.table(SCHEDULED_JOBS_TABLE);
-      if (now.id !== jobs.id) {
-        jobs = now;
-        byNextTs = now.indexes.get(SCHEDULED_BY_NEXT_TS)!.id;
-        this.poke();
-        return;
+      // A new catalog (the catalog changes before the listeners run): a push added a component's namespace, or a
+      // queue was replaced with an empty one (`/api/delete_scheduled_functions_table`, STUDY-113). Its indexes from
+      // now on, and a sleep until a job that is gone dropped; a job running meanwhile finds its document gone, and
+      // records nothing.
+      if (this.engine.catalog !== catalog) {
+        catalog = this.engine.catalog;
+        const now = this.queueIndexes();
+        const changed = now.size !== watched.size || [...now].some((id) => !watched.has(id));
+        watched = now;
+        if (changed) {
+          this.poke();
+          return;
+        }
       }
-      if (entries.some((e) => e.writes.some((w) => w.index === byNextTs || w.index === backendState))) this.poke();
+      if (entries.some((e) => e.writes.some((w) => watched.has(w.index) || w.index === backendState))) this.poke();
     }, "scheduler");
     this.loop = this.run();
     this.scheduleGc(1000);
+  }
+
+  /** The namespaces that have a queue: the app's (null) and each component's, by `_components` id. */
+  private namespaces(): (string | null)[] {
+    return [null, ...this.engine.catalog.components.keys()];
+  }
+
+  /** Each namespace's `by_next_ts` index, the queues the executor watches. */
+  private queueIndexes(): Set<string> {
+    const catalog = this.engine.catalog;
+    const ids = new Set<string>();
+    for (const c of [catalog, ...catalog.components.values()]) {
+      const index = c.tables.get(SCHEDULED_JOBS_TABLE)?.indexes.get(SCHEDULED_BY_NEXT_TS);
+      if (index) ids.add(index.id);
+    }
+    return ids;
   }
 
   async stop() {
@@ -320,6 +378,41 @@ export class ScheduledJobExecutor {
     const w = this.wake;
     this.wake = null;
     w?.();
+  }
+
+  /**
+   * The first `limit` jobs due at `now` across the namespaces, by `(nextTs, namespace)` (Convex's
+   * `stream_jobs_to_run`), each with its arguments read at the same snapshot; a job whose arguments cannot be read
+   * fails its attempt as a system error.
+   */
+  private async dueJobs(db: Tx, now: number, limit: number) {
+    const order = new Map(this.namespaces().map((ns, i) => [ns, i]));
+    const all: Queued[] = [];
+    for (const ns of order.keys())
+      if (ns === null || this.engine.catalog.components.get(ns)?.tables.has(SCHEDULED_JOBS_TABLE))
+        for (const job of await inNamespace(db, ns, () => dueJobs(db, now, limit))) all.push({ ...job, ns });
+    all.sort((a, b) => a.nextTs! - b.nextTs! || order.get(a.ns)! - order.get(b.ns)!);
+    return Promise.all(
+      all.slice(0, limit).map(async (job) => ({
+        job,
+        args: this.running.has(runningKey(job))
+          ? []
+          : await inNamespace(db, job.ns, () => jobArgs(db, job)).catch((e: unknown) => ({
+              error: (e as Error).message,
+            })),
+      })),
+    );
+  }
+
+  /** The earliest `nextTs` after `now` (ms) across the namespaces, if any. */
+  private async nextJobTs(db: Tx, now: number): Promise<number | null> {
+    let next: number | null = null;
+    for (const ns of this.namespaces()) {
+      if (ns !== null && !this.engine.catalog.components.get(ns)?.tables.has(SCHEDULED_JOBS_TABLE)) continue;
+      const t = await inNamespace(db, ns, () => nextJobTs(db, now));
+      if (t !== null && (next === null || t < next)) next = t;
+    }
+    return next;
   }
 
   private async run() {
@@ -341,33 +434,22 @@ export class ScheduledJobExecutor {
         // The next job ready to start, for the app metrics' lag: a due job left waiting, else the next one.
         let ready: number | null | undefined;
         if (free > 0) {
-          // Each job with its arguments (`_scheduled_job_args`), read at the same snapshot; a job whose arguments
-          // cannot be read fails its attempt as a system error.
-          const due = await this.engine.query(async (db) => {
-            const jobs = await dueJobs(db, now, free + this.running.size);
-            return Promise.all(
-              jobs.map(async (job) => ({
-                job,
-                args: this.running.has(job._id)
-                  ? []
-                  : await jobArgs(db, job).catch((e: unknown) => ({ error: (e as Error).message })),
-              })),
-            );
-          });
+          const due = await this.engine.query((db) => this.dueJobs(db, now, free + this.running.size));
           for (const { job, args } of due) {
+            const key = runningKey(job);
             if (this.running.size >= this.o.parallelism) {
-              if (!this.running.has(job._id)) ready = job.nextTs;
+              if (!this.running.has(key)) ready = job.nextTs;
               break;
             }
-            if (this.running.has(job._id)) continue;
+            if (this.running.has(key)) continue;
             const p = this.execute(job, args).finally(() => {
-              this.running.delete(job._id);
+              this.running.delete(key);
               this.poke();
             });
-            this.running.set(job._id, p);
+            this.running.set(key, p);
           }
         }
-        nextAt = await this.engine.query((db) => nextJobTs(db, now));
+        nextAt = await this.engine.query((db) => this.nextJobTs(db, now));
         // At full capacity Convex keeps the time it had.
         const oldest = free > 0 ? (ready === undefined ? nextAt : ready) : this.lastReady;
         this.oldestReady = oldest;
@@ -439,17 +521,18 @@ export class ScheduledJobExecutor {
     }
   }
 
-  /** Re-read the job: an attempt goes ahead only if nothing changed it since it was picked (Convex). */
-  private async unchanged(db: Tx, job: JobDoc) {
-    const now = await getJob(db, job._id);
-    return now !== null && stringifyValue(now) === stringifyValue(job);
+  /** Re-read the job in its namespace: an attempt goes ahead only if nothing changed it since it was picked (Convex). */
+  private async unchanged(db: Tx, job: Queued) {
+    const { ns, ...doc } = job;
+    const now = await inNamespace(db, ns, () => getJob(db, job._id));
+    return now !== null && stringifyValue(now) === stringifyValue(doc);
   }
 
   /**
    * Traced (STUDY-131 AD-26), each run is a `scheduler/run` trace of its own, with the function's execution
    * under it (Convex's scheduler opens a root span per job too).
    */
-  private execute(job: JobDoc, args: Value[] | { error: string }): Promise<void> {
+  private execute(job: Queued, args: Value[] | { error: string }): Promise<void> {
     const tracer = this.engine.tracer;
     if (!tracer.on) return this.executeJob(job, args);
     const span = tracer.root("scheduler/run", SPAN_KIND.consumer);
@@ -457,9 +540,10 @@ export class ScheduledJobExecutor {
     return tracer.within(span, () => this.executeJob(job, args)).finally(() => span?.finish());
   }
 
-  private async executeJob(job: JobDoc, args: Value[] | { error: string }) {
+  private async executeJob(job: Queued, args: Value[] | { error: string }) {
     this.stats.started++;
-    const target = this.functions.scheduledKind(job.name);
+    // Its function in its component (STUDY-157), which may be gone since it was scheduled.
+    const target = this.functions.scheduledKind(job.name, job.component);
     try {
       if (!Array.isArray(args)) throw new Error(args.error);
       if (job.state.kind === "inProgress") {
@@ -472,9 +556,9 @@ export class ScheduledJobExecutor {
       } else if ("error" in target) {
         await this.finish(job, { kind: "failed", error: target.error }, "_system/scheduled_job_bad_udf");
       } else if (target.kind === "mutation") {
-        await this.runMutation(job, args[0]);
+        await this.runMutation(job, target.key, args[0]);
       } else {
-        await this.runAction(job, args[0]);
+        await this.runAction(job, target.key, args[0]);
       }
     } catch (e) {
       if (e instanceof CommitterStoppedError) return;
@@ -484,7 +568,9 @@ export class ScheduledJobExecutor {
       await this.engine
         .mutation(async (db) => {
           if (await this.unchanged(db, job))
-            await patchJob(db, job._id, { systemErrors: failures, nextTs: wallClock() + delay });
+            await inNamespace(db, job.ns, () =>
+              patchJob(db, job._id, { systemErrors: failures, nextTs: wallClock() + delay }),
+            );
         }, "_system/scheduled_job_system_error")
         .catch(() => {});
       this.stats.systemErrors++;
@@ -492,34 +578,39 @@ export class ScheduledJobExecutor {
   }
 
   /** Records a job's end; `source` is the commit's write source, as Convex names it (app metrics, OCC). */
-  private async finish(job: JobDoc, state: JobDoc["state"], source: string) {
+  private async finish(job: Queued, state: JobDoc["state"], source: string) {
     await this.engine.mutation(async (db) => {
-      if (await this.unchanged(db, job)) await completeJob(db, job._id, state, Date.now());
+      if (await this.unchanged(db, job))
+        await inNamespace(db, job.ns, () => completeJob(db, job._id, state, Date.now()));
     }, source);
     if (state.kind === "failed") this.stats.failed++;
   }
 
-  private async runMutation(job: JobDoc, args: Value | undefined) {
-    const body = this.functions.scheduledMutationBody(job.name, args, job._id);
+  /** `name`: what to run it by (`scheduledKind`'s `key`). */
+  private async runMutation(job: Queued, name: string, args: Value | undefined) {
+    const body = this.functions.scheduledMutationBody(name, args, job._id);
     const retries = { n: 0 };
     for (let occFailures = 0; ; ) {
       try {
-        // Exactly once: the job is finished in the transaction that commits the mutation's writes.
-        const caller: SourcedCaller = { ...asJob(job._id), retries, retriesOcc: true };
+        // Exactly once: the job is finished in the transaction that commits the mutation's writes, in its namespace;
+        // the function runs in its own.
+        const caller: SourcedCaller = { ...asJob(job), retries, retriesOcc: true };
         let value: unknown;
         const ran = await this.functions.logged(
           "Mutation",
-          job.name,
+          name,
           caller,
           () =>
             this.engine.mutation(
               async (db) => {
                 if (!(await this.unchanged(db, job))) return false;
-                await patchJob(db, job._id, {
-                  state: { kind: "inProgress", requestId: randomId(), executionId: randomId() },
-                });
+                await inNamespace(db, job.ns, () =>
+                  patchJob(db, job._id, {
+                    state: { kind: "inProgress", requestId: randomId(), executionId: randomId() },
+                  }),
+                );
                 value = await body(db);
-                await completeJob(db, job._id, { kind: "success" }, Date.now());
+                await inNamespace(db, job.ns, () => completeJob(db, job._id, { kind: "success" }, Date.now()));
                 return true;
               },
               job.name,
@@ -553,18 +644,21 @@ export class ScheduledJobExecutor {
     }
   }
 
-  private async runAction(job: JobDoc, args: Value | undefined) {
+  /** `name`: what to run it by (`scheduledKind`'s `key`). */
+  private async runAction(job: Queued, name: string, args: Value | undefined) {
     const requestId = randomId();
     const executionId = randomId();
     const started = await this.engine.mutation(async (db) => {
-      if (!(await this.unchanged(db, job))) return null;
-      await patchJob(db, job._id, { state: { kind: "inProgress", requestId, executionId } });
-      return getJob(db, job._id);
+      if (!(await this.unchanged(db, job))) return false;
+      await inNamespace(db, job.ns, () =>
+        patchJob(db, job._id, { state: { kind: "inProgress", requestId, executionId } }),
+      );
+      return true;
     }, "_system/scheduled_job_progress");
     if (!started) return;
     let state: JobDoc["state"];
     try {
-      await this.functions.runAction(job.name, args, asJob(job._id), {
+      await this.functions.runAction(name, args, asJob(job), {
         job: job._id,
         internal: true,
         waitForPermit: true,
@@ -577,7 +671,7 @@ export class ScheduledJobExecutor {
     for (let n = 1; ; n++) {
       try {
         await this.engine.mutation(
-          (db) => completeJob(db, job._id, state, Date.now()),
+          (db) => inNamespace(db, job.ns, () => completeJob(db, job._id, state, Date.now())),
           "_system/scheduled_job_complete_action",
         );
         break;
@@ -595,7 +689,7 @@ export class ScheduledJobExecutor {
    * `ScheduledJobGarbageCollector`: after a batch, the next one `gcDelayMs` later; with none to delete, when the
    * oldest completed job leaves the window. With none completed, Convex waits for one to be: here a window from
    * now (at least `gcDelayMs`), as no job completing meanwhile leaves it sooner. After an error, a backoff that a
-   * success resets.
+   * success resets. Every namespace's, in turn (Convex's loop over `namespaces_for_name`).
    */
   private scheduleGc(delayMs: number, failures = 0) {
     if (this.stopped) return;
@@ -604,10 +698,18 @@ export class ScheduledJobExecutor {
       let next: number;
       try {
         const now = wallClock();
-        const { deleted, nextCompleted } = await this.engine.mutation(
-          (db) => deleteCompletedJobs(db, now - retentionMs, this.o.gcBatchSize),
-          "_system/scheduled_job_gc",
-        );
+        let deleted = 0;
+        let nextCompleted: number | null = null;
+        for (const ns of this.namespaces()) {
+          if (ns !== null && !this.engine.catalog.components.get(ns)?.tables.has(SCHEDULED_JOBS_TABLE)) continue;
+          const r = await this.engine.mutation(
+            (db) => inNamespace(db, ns, () => deleteCompletedJobs(db, now - retentionMs, this.o.gcBatchSize)),
+            "_system/scheduled_job_gc",
+          );
+          deleted += r.deleted;
+          if (r.nextCompleted !== null && (nextCompleted === null || r.nextCompleted < nextCompleted))
+            nextCompleted = r.nextCompleted;
+        }
         next =
           deleted > 0
             ? this.o.gcDelayMs
