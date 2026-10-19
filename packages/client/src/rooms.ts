@@ -107,6 +107,9 @@ export function canonical(x: v1.JSONValue): string {
   return JSON.stringify(sorted(x));
 }
 
+/** Ended by the dashboard (RoomLeft `removed`): rejoined neither on Authenticate nor on a new socket. */
+const removed = (m: Membership) => m.status === "error" && m.error?.code === "removed";
+
 const toMember = (m: v1.RoomMember): Member => ({
   memberId: m.memberId,
   userId: m.userId,
@@ -135,13 +138,21 @@ export class RoomManager {
     return this.presenceHandle<S>(this.join("presence", name, args));
   }
 
-  /** A new socket: every membership gets a fresh room id, and joins again with its last presence. */
+  /**
+   * A new socket: every membership gets a fresh room id, and joins again with its last presence, except one the
+   * dashboard removed (it stays ended until the app joins the room again).
+   */
   onOpen() {
     this.byId.clear();
     this.pendingLeaves = [];
     for (const m of this.byKey.values()) {
       if (m.timer !== undefined) this.clock.clearTimeout(m.timer);
       m.timer = undefined;
+      if (removed(m)) {
+        // its room id was the old socket's: a later leave has nothing to tell the new one
+        m.sent = false;
+        continue;
+      }
       m.roomId = this.nextRoomId++;
       this.byId.set(m.roomId, m);
       m.sent = false;
@@ -158,12 +169,14 @@ export class RoomManager {
   /**
    * A new Authenticate went out (sign-in, sign-out or a token refresh): a membership refused or ended by the
    * server joins again under a fresh room id, and one whose join is still unanswered is retried if refused
-   * (it was judged under the previous identity). The server runs the gates of joined rooms itself.
+   * (it was judged under the previous identity). The server runs the gates of joined rooms itself. A membership
+   * the dashboard removed is not rejoined: a new token is no reason to undo an operator's removal.
    */
   onAuthenticate() {
     for (const m of this.byKey.values()) {
-      if (m.status === "error") this.rejoin(m);
-      else if (m.status === "joining" && m.sent) m.retryOnRefusal = true;
+      if (m.status === "error") {
+        if (!removed(m)) this.rejoin(m);
+      } else if (m.status === "joining" && m.sent) m.retryOnRefusal = true;
     }
     this.flush();
   }
@@ -248,7 +261,8 @@ export class RoomManager {
         return;
       }
       case "RoomLeft": {
-        // The server ended a joined membership (a new identity refused): terminal until the next Authenticate.
+        // The server ended a joined membership: a new identity refused, terminal until the next Authenticate; or
+        // the dashboard removed it (`removed`), terminal until the app joins the room again.
         const m = this.byId.get(msg.roomId);
         if (!m) return;
         if (m.timer !== undefined) this.clock.clearTimeout(m.timer);

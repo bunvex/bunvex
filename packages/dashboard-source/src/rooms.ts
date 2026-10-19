@@ -5,6 +5,10 @@
 // (`$integer` and `$bytes` for what JSON cannot carry), so they pass as they are. A server without rooms answers 404:
 // the methods say so with `not_found`, which the screen shows as "this deployment does not run rooms".
 //
+// The actions (STUDY-165 §3.4) POST to `/api/debug/rooms/broadcast`, `/remove` and `/close` with the admin key; the
+// server refuses a key that may not write (403, `unauthorized` here), and answers 404 `RoomNotOpen` to a broadcast
+// to a room that is not open, which is `not_found` with its words (an older server's 404 is still "no rooms").
+//
 // The event tap, `/api/debug/rooms/events`, is followed as the inspector follows the invalidations (inspector.ts): a
 // first request without a cursor starts the tap, then a long poll from each answer's `newCursor`. A transient failure
 // (the network, a 5xx, a disconnection) is retried with a backoff and starts the tap again, the next batch saying
@@ -15,14 +19,17 @@ import {
   DataSourceError,
   type Page,
   type PageRequest,
+  type RoomClosed,
   type RoomDefinition,
   type RoomEvent,
   type RoomEventsInfo,
   type RoomInfo,
   type RoomMember,
+  type RoomMemberRemoved,
   type RoomRef,
   type RoomStats,
   type Unsubscribe,
+  type Value,
 } from "@bunvex/dashboard/data-source";
 import { type AdminHttp, ResponseError } from "./admin-http.ts";
 import { type After, FOLLOW_MS } from "./inspector.ts";
@@ -51,12 +58,12 @@ export function roomStatsOf(s: RoomStats): RoomStats {
   };
 }
 
-/** A server that has no rooms routes answers 404 to them. */
+/** A server that has no rooms routes answers 404 to them (a room not open is a 404 of its own, kept as it is). */
 async function orNoRooms<T>(read: Promise<T>): Promise<T> {
   try {
     return await read;
   } catch (e) {
-    if (e instanceof ResponseError && e.status === 404)
+    if (e instanceof ResponseError && e.status === 404 && e.serverCode !== "RoomNotOpen")
       throw new DataSourceError("not_found", "This deployment does not run rooms.");
     throw e;
   }
@@ -313,6 +320,29 @@ export function roomsReads(http: AdminHttp, opts: RoomsOptions = {}) {
         isDone: res.isDone,
         continueCursor: res.continueCursor,
       };
+    },
+    async broadcastRoomEvent(room: RoomRef, event: string, data: Value, o?: CallOptions): Promise<void> {
+      await orNoRooms(
+        http.request("/api/debug/rooms/broadcast", { body: { key: room.key, event, data }, signal: o?.signal }),
+      );
+    },
+    async removeRoomMember(room: RoomRef, memberId: string, o?: CallOptions): Promise<RoomMemberRemoved | null> {
+      const { removed } = await orNoRooms(
+        http.json<{ removed: RoomMemberRemoved | null }>("/api/debug/rooms/remove", {
+          body: { key: room.key, memberId },
+          signal: o?.signal,
+        }),
+      );
+      return removed === null ? null : { connections: removed.connections };
+    },
+    async closeRoom(room: RoomRef, o?: CallOptions): Promise<RoomClosed | null> {
+      const { closed } = await orNoRooms(
+        http.json<{ closed: RoomClosed | null }>("/api/debug/rooms/close", {
+          body: { key: room.key },
+          signal: o?.signal,
+        }),
+      );
+      return closed === null ? null : { members: closed.members, connections: closed.connections };
     },
     async listRoomDefinitions(o?: CallOptions): Promise<RoomDefinition[]> {
       const { definitions } = await orNoRooms(

@@ -89,7 +89,15 @@ import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
 import { activeSync, cursorFromDeltas, DATA_SYNC_ROUTE, dataSync, listActiveSyncs } from "./data-sync.ts";
 import { applicationIndexes } from "./data-system-functions.ts";
-import { DEBUG_ROUTE, debugRoute, ROOMS_ROUTE, roomsRoute, TOPOLOGY_ROUTE, topologyRoute } from "./debug-routes.ts";
+import {
+  DEBUG_ROUTE,
+  debugRoute,
+  ROOMS_ACTION_ROUTE,
+  ROOMS_ROUTE,
+  roomsRoute,
+  TOPOLOGY_ROUTE,
+  topologyRoute,
+} from "./debug-routes.ts";
 import { tooDeepToStringify } from "./deep-values.ts";
 import {
   clientError,
@@ -1272,8 +1280,8 @@ export function createServer(opts: ServerOptions) {
     // The deployment's topology (STUDY-131 §11, AD-04): ViewMetrics.
     const topo = topologyRoute({ functions, topology }, url, req, caller);
     if (topo) return topo;
-    // The rooms in memory and their definitions (AD-43): ViewMetrics.
-    const roomsDebug = await roomsRoute({ functions, sync }, url, req, caller);
+    // The rooms in memory and their definitions (AD-43): ViewMetrics; the dashboard's actions on them: WriteData.
+    const roomsDebug = await roomsRoute({ engine, functions, sync }, url, req, caller);
     if (roomsDebug) return roomsDebug;
     if (url.pathname === "/api/v1/list_audit_log_events" && req.method === "GET")
       return listAuditLogEvents(url, caller);
@@ -1705,6 +1713,7 @@ export function createServer(opts: ServerOptions) {
         DEBUG_ROUTE.test(url.pathname) ||
         url.pathname === TOPOLOGY_ROUTE ||
         ROOMS_ROUTE.test(url.pathname) ||
+        ROOMS_ACTION_ROUTE.test(url.pathname) ||
         STREAMING_EXPORT_ROUTE.test(url.pathname) ||
         STREAMING_IMPORT_ROUTE.test(url.pathname) ||
         DATA_SYNC_ROUTE.test(url.pathname) ||

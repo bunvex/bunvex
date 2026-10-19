@@ -83,6 +83,16 @@ export const auditEvents = {
   createIntegration: (id: string, type: string) => event("create_integration", { id, type }),
   updateIntegration: (id: string, type: string) => event("update_integration", { id, type }),
   deleteIntegration: (id: string, type: string) => event("delete_integration", { id, type }),
+  /**
+   * The dashboard's actions on a room in memory (AD-43, bunvex's own: Convex has no rooms): the room's function and
+   * its canonical args as JSON text (wire JSON may hold `$`-keys no stored object may), then what was done.
+   */
+  broadcastRoomEvent: (room: string, args: string, eventName: string) =>
+    event("broadcast_room_event", { room, args, event: eventName }),
+  removeRoomMember: (room: string, args: string, memberId: string, connections: number) =>
+    event("remove_room_member", { room, args, member_id: memberId, connections }),
+  closeRoom: (room: string, args: string, members: number, connections: number) =>
+    event("close_room", { room, args, members, connections }),
   pauseDeployment: () => event("pause_deployment", {}),
   unpauseDeployment: () => event("unpause_deployment", {}),
 };

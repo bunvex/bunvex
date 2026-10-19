@@ -57,11 +57,13 @@ import {
   type Page,
   type PageRequest,
   type QueryCacheSnapshot,
+  type RoomClosed,
   type RoomDefinition,
   type RoomEvent,
   type RoomEventsInfo,
   type RoomInfo,
   type RoomMember,
+  type RoomMemberRemoved,
   type RoomRef,
   type RunOptions,
   type ScheduledFunction,
@@ -1585,6 +1587,52 @@ export class MockDataSource implements DashboardDataSource {
     return this.call(opts?.signal, () => {
       this.canViewRooms();
       return this.rooms.definitions();
+    });
+  }
+
+  // the actions (STUDY-165 §3.4): writes, recorded in the audit log as the server records them
+
+  private canActOnRooms() {
+    const c = this.opts.capabilities;
+    if (c.readOnly || !c.operations.includes("writeData"))
+      throw new DataSourceError("unauthorized", "this credential cannot act on the deployment's rooms");
+  }
+
+  /** The room's function and its args' JSON text, as the server's audit events name a room. */
+  private roomAudit(key: string) {
+    const i = key.indexOf("|");
+    const j = key.indexOf("|", i + 1);
+    return { room: key.slice(i + 1, j), args: key.slice(j + 1) };
+  }
+
+  broadcastRoomEvent(room: RoomRef, event: string, data: Value, opts?: CallOptions): Promise<void> {
+    return this.call(opts?.signal, () => {
+      this.canActOnRooms();
+      this.rooms.broadcast(room.key, event, data);
+      this.record("broadcast_room_event", { ...this.roomAudit(room.key), event });
+    });
+  }
+
+  removeRoomMember(room: RoomRef, memberId: string, opts?: CallOptions): Promise<RoomMemberRemoved | null> {
+    return this.call(opts?.signal, () => {
+      this.canActOnRooms();
+      const removed = this.rooms.removeMember(room.key, memberId);
+      if (removed)
+        this.record("remove_room_member", {
+          ...this.roomAudit(room.key),
+          member_id: memberId,
+          connections: removed.connections,
+        });
+      return removed;
+    });
+  }
+
+  closeRoom(room: RoomRef, opts?: CallOptions): Promise<RoomClosed | null> {
+    return this.call(opts?.signal, () => {
+      this.canActOnRooms();
+      const closed = this.rooms.closeRoom(room.key);
+      if (closed) this.record("close_room", { ...this.roomAudit(room.key), ...closed });
+      return closed;
     });
   }
 

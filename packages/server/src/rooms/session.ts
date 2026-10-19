@@ -69,6 +69,11 @@ export class RoomConnection implements RoomSink {
   resync() {
     this.io.close("room frames too far behind");
   }
+  /** The dashboard removed the membership (the hub let it go): the client is told, and the room forgotten. */
+  evict(roomId: number, code: "removed", message: string) {
+    this.joined.delete(roomId);
+    this.left(roomId, code, message);
+  }
 
   async handle(m: RoomMessage): Promise<void> {
     switch (m.type) {
@@ -146,7 +151,7 @@ export class RoomConnection implements RoomSink {
   }
 
   /** A joined membership the server ended on its own: the client's handle ends too (it is not a join error). */
-  private left(roomId: number, code: "no_access" | "limit", message: string) {
+  private left(roomId: number, code: v1.RoomLeftCode, message: string) {
     this.deps.hub.countRoomLeft();
     this.send({ type: "RoomLeft", roomId, code, message });
   }

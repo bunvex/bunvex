@@ -1,6 +1,8 @@
 // The rooms (AD-43, STUDY-165) on a live bunvex server: the contract's rooms area with rooms opened by real
 // clients, then what it does not pin down — the values as clients sent them, a user on two tabs, a room that
-// closes dropping out of the list, the stats' counters, and a read-only key.
+// closes dropping out of the list, the stats' counters, and a read-only key. The dashboard's actions: the
+// contract's tests with real clients, a removed client staying out across a token refresh, and a scope's user
+// removed with every tab.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { anyApi, BunvexClient } from "@bunvex/client";
 import { describeDataSourceContract } from "@bunvex/dashboard/contract";
@@ -106,9 +108,42 @@ const tapRoom = async (src: { listRooms?: () => Promise<{ key: string; args: unk
   };
 };
 
+let actionRooms = 0;
+/** A room of its own for one actions test: two clients, each recording the notes it got and how it was ended. */
+const actionRoom = async (src: { listRooms?: () => Promise<{ key: string; args: unknown }[]> }) => {
+  const id = `act-${++actionRooms}`;
+  const members = [0, 1].map(() => {
+    const h = client().client.joinRoom<{ id: string }, unknown, { note: { text: string } }>(api.rooms.doc as never, {
+      id,
+    });
+    const received: { event: string; from: string | null; data: unknown }[] = [];
+    h.on("note", (from, data) => received.push({ event: "note", from, data }));
+    return { h, received };
+  });
+  await until(() => members.every((m) => m.h.status === "joined"), `${id} joined`);
+  const key = await until(
+    async () => (await src.listRooms!()).find((r) => (r.args as { id?: string }).id === id)?.key,
+    `${id} listed`,
+  );
+  return {
+    key,
+    event: { name: "note", data: { text: "hello" }, badData: { text: 1 }, bigData: { text: "x".repeat(5000) } },
+    clients: members.map(({ h, received }) => ({
+      memberId: h.self!,
+      received: () => received as never,
+      ended: () => (h.status === "error" ? h.error : null),
+    })),
+    dispose: async () => {
+      for (const m of members) m.h.leave();
+      await until(async () => !(await src.listRooms!()).some((r) => r.key === key), `${id} gone`);
+    },
+  };
+};
+
 describeDataSourceContract("@bunvex/dashboard-source on a live server (rooms)", () => open(), {
   only: ["rooms"],
   roomEvents: { open: (src) => tapRoom(src) },
+  roomActions: { open: (src) => actionRoom(src), readOnly: () => open(READ_ONLY_KEY) },
 });
 
 describe("the open rooms", () => {
@@ -231,5 +266,53 @@ describe("the open rooms", () => {
 
   test("a read-only key may look (ViewMetrics)", async () => {
     expect((await open(READ_ONLY_KEY).listRooms!()).length).toBeGreaterThan(0);
+  });
+});
+
+describe("the dashboard's actions on live clients", () => {
+  test("a removed client sees status error, code removed, and stays out across a token refresh", async () => {
+    const src = open();
+    const c = await signedIn("eve");
+    const h = c.client.joinRoom<{ id: string }, unknown, Record<string, unknown>>(api.rooms.doc as never, {
+      id: "removed",
+    });
+    await until(() => h.status === "joined", "eve joined");
+    const key = await until(
+      async () => (await src.listRooms!()).find((r) => (r.args as { id?: string }).id === "removed")?.key,
+      "the room listed",
+    );
+    expect(await src.removeRoomMember!({ key }, h.self!)).toEqual({ connections: 1 });
+    await until(() => h.status === "error", "the removal at the client");
+    expect(h.error).toEqual({ code: "removed", message: "Removed from the dashboard." });
+    // a token refresh: a new Authenticate, which rejoins memberships a refused identity ended, not this one
+    let refreshed = false;
+    c.setAuth(
+      async () => issuer.sign({ sub: "eve", n: 2 }),
+      (ok) => {
+        refreshed = ok;
+      },
+    );
+    await until(() => refreshed, "the new token accepted");
+    await Bun.sleep(300);
+    expect(h.status).toBe("error");
+    expect(h.error?.code).toBe("removed");
+    expect((await src.listRooms!()).some((r) => r.key === key)).toBe(false);
+    h.leave();
+  });
+
+  test("a scope's user is removed with both tabs", async () => {
+    const src = open();
+    const scope = (await src.listRooms!()).find((r) => r.kind === "presence")!;
+    const ada = (await src.listRoomMembers!({ key: scope.key }, { numItems: 10, cursor: null })).page.find(
+      (m) => m.connections === 2,
+    )!;
+    expect(await src.removeRoomMember!({ key: scope.key }, ada.memberId)).toEqual({ connections: 2 });
+    // handles: [doc×3, closing, ada1, ada2, bob]
+    const [ada1, ada2, bob] = handles.slice(4) as (Handle & { error: { code: string } | null })[];
+    await until(() => ada1!.status === "error" && ada2!.status === "error", "both of ada's tabs removed");
+    expect([ada1!.error?.code, ada2!.error?.code]).toEqual(["removed", "removed"]);
+    expect(bob!.status).toBe("joined");
+    const left = (await src.listRoomMembers!({ key: scope.key }, { numItems: 10, cursor: null })).page;
+    expect(left.map((m) => m.userId)).toEqual(["bob"]);
   });
 });

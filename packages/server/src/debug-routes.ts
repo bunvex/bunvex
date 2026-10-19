@@ -14,17 +14,21 @@
 //
 // Everything is decoded here, when asked; the sync hub only keeps bytes (sync-inspector.ts).
 import {
+  type AuditLogEvent,
   boundText,
   type CacheEntry,
   type Caller,
   describeBound,
   type Engine,
   type Interval,
+  insertAuditLogEvents,
   type KeyBound,
   type KeyValue,
 } from "@bunvex/core";
-import { type JSONValue, toJsonValue, type Value } from "@bunvex/values";
+import { fromJsonValue, type JSONValue, toJsonValue, type Value } from "@bunvex/values";
+import { auditActor, auditEvents } from "./audit-log.ts";
 import { type Functions, registryKey } from "./functions.ts";
+import { checkedRoomEvent, roomDefNamed } from "./rooms/ctx.ts";
 import { MEMBERS_PAGE_MAX, type RoomKey } from "./rooms/hub.ts";
 import { canonicalJson } from "./rooms/session.ts";
 import type { Execution, SyncHub } from "./sync.ts";
@@ -259,22 +263,35 @@ export function topologyRoute(
 // /api/debug/rooms/events?key=&cursor=[&timeoutMs=]`: the room's event tap, a long poll from a cursor as the
 // invalidations feed (no cursor starts the tap and answers its seq at once). Admin only, with ViewMetrics, as the
 // topology; read from the hub's memory, no store read.
+//
+// The dashboard's actions (STUDY-165 §3.4), POST with a JSON body, with WriteData (the dashboard's data writes'
+// operation, which a read-only key lacks), each one done recorded in the audit log as the admin key's member:
+// `/api/debug/rooms/broadcast {key, event, data}` sends a test event from the server (`from: null`), checked as
+// `ctx.rooms.broadcast` checks it (400 in its words; 404 `RoomNotOpen` when the room is not open, nothing sent);
+// `/remove {key, memberId}` ends a member at once (`{removed: {connections} | null}`); `/close {key}` removes every
+// member (`{closed: {members, connections} | null}`). Their clients are sent RoomLeft `removed`.
 
 export const ROOMS_ROUTE = /^\/api\/debug\/rooms(?:\/(members|definitions|events))?$/;
+export const ROOMS_ACTION_ROUTE = /^\/api\/debug\/rooms\/(broadcast|remove|close)$/;
 const ROOM_KINDS = new Set(["room", "presence"]);
 
 const badRequest = (message: string) => jsonResponse({ code: "BadRequest", message }, 400);
 
+const NOT_A_KEY = "`key` is not a room key from the list.";
+
+/** A room key from the list (`kind|name|args`), or why it is none. */
+function parseRoomKey(key: string): RoomKey | string {
+  const i = key.indexOf("|");
+  const j = key.indexOf("|", i + 1);
+  const kind = key.slice(0, i);
+  if (i < 0 || j < 0 || !ROOM_KINDS.has(kind)) return NOT_A_KEY;
+  return { kind: kind as RoomKey["kind"], name: key.slice(i + 1, j), argsJson: key.slice(j + 1) };
+}
+
 /** The room a members request names, or why it names none. */
 function roomKeyOf(params: URLSearchParams): RoomKey | string {
   const key = params.get("key");
-  if (key !== null) {
-    const i = key.indexOf("|");
-    const j = key.indexOf("|", i + 1);
-    const kind = key.slice(0, i);
-    if (i < 0 || j < 0 || !ROOM_KINDS.has(kind)) return "`key` is not a room key from the list.";
-    return { kind: kind as RoomKey["kind"], name: key.slice(i + 1, j), argsJson: key.slice(j + 1) };
-  }
+  if (key !== null) return parseRoomKey(key);
   const kind = params.get("kind");
   if (kind === null || !ROOM_KINDS.has(kind)) return "`kind` must be `room` or `presence` (or pass `key`).";
   const name = params.get("name");
@@ -293,11 +310,13 @@ function roomKeyOf(params: URLSearchParams): RoomKey | string {
 
 /** The rooms routes; `null` when `url` is none of them. Throws the caller's access error. */
 export async function roomsRoute(
-  ctx: { functions: Functions; sync: SyncHub },
+  ctx: { engine: Engine; functions: Functions; sync: SyncHub },
   url: URL,
   req: Request,
   caller: Caller,
 ): Promise<Response | null> {
+  const action = ROOMS_ACTION_ROUTE.exec(url.pathname);
+  if (action && req.method === "POST") return roomAction(ctx, action[1] as RoomAction, req, caller);
   const m = ROOMS_ROUTE.exec(url.pathname);
   if (!m || req.method !== "GET") return null;
   ctx.functions.requireOperation(caller, "ViewMetrics");
@@ -319,6 +338,70 @@ export async function roomsRoute(
   const numItems = rawCount === null ? MEMBERS_PAGE_MAX : Number(rawCount);
   if (!Number.isInteger(numItems) || numItems < 1) return badRequest("`numItems` must be a positive integer.");
   return jsonResponse(hub.membersPage(key, url.searchParams.get("cursor"), Math.min(numItems, MEMBERS_PAGE_MAX)));
+}
+
+type RoomAction = "broadcast" | "remove" | "close";
+
+/** Records one dashboard action in the audit log, as the caller (the admin key's member). */
+const recordAction = (engine: Engine, caller: Caller, e: AuditLogEvent) =>
+  engine.mutation((db) => insertAuditLogEvents(db, [e], auditActor(caller)), "_system/rooms_action");
+
+/** The dashboard's actions on a room (AD-43): WriteData, then the body, then the act, then its audit event. */
+async function roomAction(
+  ctx: { engine: Engine; functions: Functions; sync: SyncHub },
+  action: RoomAction,
+  req: Request,
+  caller: Caller,
+): Promise<Response> {
+  ctx.functions.requireOperation(caller, "WriteData");
+  let body: Record<string, unknown>;
+  try {
+    body = (await req.json()) as Record<string, unknown>;
+  } catch {
+    return badRequest("The body is not valid JSON.");
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body))
+    return badRequest("The body must be an object.");
+  if (typeof body.key !== "string") return badRequest(NOT_A_KEY);
+  const key = parseRoomKey(body.key);
+  if (typeof key === "string") return badRequest(key);
+  const hub = ctx.sync.rooms.hub;
+  if (action === "broadcast") {
+    if (typeof body.event !== "string") return badRequest("`event` must be a string.");
+    let wire: JSONValue;
+    try {
+      // the room's checks first, in the words `ctx.rooms.broadcast` throws to app code
+      if (key.kind !== "room") roomDefNamed(ctx.functions, key.name, "room");
+      const def = roomDefNamed(ctx.functions, key.name, key.kind);
+      wire = checkedRoomEvent(ctx.functions, def, body.event, fromJsonValue((body.data ?? null) as JSONValue));
+    } catch (e) {
+      return badRequest((e as Error).message.trimEnd());
+    }
+    if (!hub.list().some((r) => r.key === body.key))
+      return jsonResponse({ code: "RoomNotOpen", message: "The room is not open." }, 404);
+    hub.broadcast(key, body.event, wire);
+    await recordAction(ctx.engine, caller, auditEvents.broadcastRoomEvent(key.name, key.argsJson, body.event));
+    return jsonResponse({});
+  }
+  if (action === "remove") {
+    if (typeof body.memberId !== "string") return badRequest("`memberId` must be a string.");
+    const removed = hub.removeMember(key, body.memberId);
+    if (removed)
+      await recordAction(
+        ctx.engine,
+        caller,
+        auditEvents.removeRoomMember(key.name, key.argsJson, body.memberId, removed.connections),
+      );
+    return jsonResponse({ removed });
+  }
+  const closed = hub.closeRoom(key);
+  if (closed)
+    await recordAction(
+      ctx.engine,
+      caller,
+      auditEvents.closeRoom(key.name, key.argsJson, closed.members, closed.connections),
+    );
+  return jsonResponse({ closed });
 }
 
 /** The deployed rooms and scopes by name, with their validators as the function metadata gives them. */

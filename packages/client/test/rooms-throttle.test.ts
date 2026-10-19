@@ -288,6 +288,57 @@ describe("memberships the server ends, a new identity, and idle per handle", () 
     expect(h.status).toBe("joining");
   });
 
+  /** A joined room the server then ends with RoomLeft `code`. */
+  const endedBy = (code: "no_access" | "removed") => {
+    const s = setup();
+    const h = s.rooms.joinRoom<{ x: number }, { wave: number }>("rooms:doc", {});
+    const roomId = joinOf(s.sent).roomId;
+    s.rooms.onMessage({ type: "RoomSync", roomId, self: "me", canPublish: true, members: [] });
+    s.rooms.onMessage({ type: "RoomLeft", roomId, code, message: "Removed from the dashboard." });
+    s.sent.length = 0;
+    return { ...s, h };
+  };
+
+  test("a membership removed by the dashboard is not rejoined on a new Authenticate", () => {
+    const { rooms, sent, h } = endedBy("removed");
+    expect(h.error).toEqual({ code: "removed", message: "Removed from the dashboard." });
+    rooms.onAuthenticate();
+    expect(sent).toEqual([]);
+    expect(h.status).toBe("error");
+    expect(h.error?.code).toBe("removed");
+  });
+
+  test("a membership removed by the dashboard is not rejoined on a new socket", () => {
+    const { rooms, sent, h } = endedBy("removed");
+    rooms.onOpen();
+    expect(sent).toEqual([]);
+    expect(h.status).toBe("error");
+    expect(h.error?.code).toBe("removed");
+  });
+
+  test("no_access is still retried on a new Authenticate and on a new socket", () => {
+    const a = endedBy("no_access");
+    a.rooms.onAuthenticate();
+    expect(a.sent.map((m) => m.type)).toEqual(["RoomJoin"]);
+    const b = endedBy("no_access");
+    b.rooms.onOpen();
+    expect(b.sent.map((m) => m.type)).toEqual(["RoomJoin"]);
+    expect(b.h.status).toBe("joining");
+  });
+
+  test("a removed membership joins again only when the app joins after its last handle left", () => {
+    const { rooms, sent, h } = endedBy("removed");
+    const second = rooms.joinRoom("rooms:doc", {});
+    expect(sent.filter((m) => m.type === "RoomJoin")).toEqual([]);
+    expect(second.status).toBe("error");
+    h.leave();
+    second.leave();
+    sent.length = 0;
+    const again = rooms.joinRoom("rooms:doc", {});
+    expect(sent.map((m) => m.type)).toEqual(["RoomJoin"]);
+    expect(again.status).toBe("joining");
+  });
+
   test("args differing only by a __proto__ key are separate client keys", async () => {
     const { canonical } = await import("../src/rooms.ts");
     expect(canonical(JSON.parse('{"x":1,"__proto__":{"y":2}}'))).not.toBe(canonical({ x: 1 }));

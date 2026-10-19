@@ -30,6 +30,8 @@ export class ResponseError extends DataSourceError {
   constructor(
     readonly status: number,
     message: string,
+    /** The server's `code` in its error body, when it sent one (e.g. `RoomNotOpen`). */
+    readonly serverCode: string | null = null,
   ) {
     super(codeOfStatus(status), message);
   }
@@ -39,13 +41,15 @@ export class ResponseError extends DataSourceError {
 export async function responseError(res: Response): Promise<ResponseError> {
   const text = await res.text().catch(() => "");
   let message = text || `${res.status} ${res.statusText}`;
+  let code: string | null = null;
   try {
-    const body = JSON.parse(text) as { message?: unknown };
+    const body = JSON.parse(text) as { message?: unknown; code?: unknown };
     if (typeof body.message === "string") message = body.message;
+    if (typeof body.code === "string") code = body.code;
   } catch {
     // not JSON: the text as it is
   }
-  return new ResponseError(res.status, message);
+  return new ResponseError(res.status, message, code);
 }
 
 /** The `fetch` the source calls: the global one by default, or a host's (tests pass their own). */

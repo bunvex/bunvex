@@ -3,13 +3,38 @@
 
 import { parseValue } from "@bunvex/core";
 import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
-import { checkValue, toJsonValue, type Value } from "@bunvex/values";
+import { checkValue, type JSONValue, toJsonValue, type Value } from "@bunvex/values";
 import { ValidatorError } from "../errors.ts";
 import { type Functions, registryKey } from "../functions.ts";
+import type { AnyRoomDef } from "./define.ts";
 import type { RoomKey } from "./hub.ts";
 import { canonicalJson } from "./session.ts";
 
 type Ref = AnyFunctionReference | string;
+
+/** The room or scope named `name`, or the error app code is thrown for a name that is none. */
+export function roomDefNamed(functions: Functions, name: string, kind: "room" | "presence"): AnyRoomDef {
+  const def = functions.roomDef(name);
+  if (!def || def.kind !== kind) throw new Error(`No ${kind} named "${name}".`);
+  return def;
+}
+
+/**
+ * A server broadcast's event, checked as `ctx.rooms.broadcast` and the dashboard's test event both check it: declared
+ * by the room, its data valid for the event's validator, its JSON within the client events' limit (measured as
+ * session.ts measures it). Its wire JSON, or a throw in the words app code sees.
+ */
+export function checkedRoomEvent(functions: Functions, def: AnyRoomDef, event: string, value: Value): JSONValue {
+  const validator = def.kind === "room" && Object.hasOwn(def.events, event) ? def.events[event] : undefined;
+  if (!validator) throw new Error(`This room has no event "${event}".`);
+  const why = checkValue(validator, value);
+  if (why) throw ValidatorError.args(why);
+  const wire = toJsonValue(value);
+  const limit = functions.roomHub?.limits.payloadBytes;
+  if (limit !== undefined && Buffer.byteLength(JSON.stringify(wire)) > limit)
+    throw new Error("The event is too large.");
+  return wire;
+}
 
 /**
  * `onCommit` runs a broadcast once the mutation committed (absent: an action, which sends at once); `canRead`
@@ -18,8 +43,7 @@ type Ref = AnyFunctionReference | string;
 export function roomsCtx(functions: Functions, onCommit: ((fn: () => void) => void) | null, canRead: boolean) {
   const resolve = (ref: Ref, kind: "room" | "presence", args: unknown) => {
     const name = getFunctionName(ref);
-    const def = functions.roomDef(name);
-    if (!def || def.kind !== kind) throw new Error(`No ${kind} named "${name}".`);
+    const def = roomDefNamed(functions, name, kind);
     const value = (args ?? {}) as Value;
     if (def.args) {
       const why = checkValue(def.args, value);
@@ -32,16 +56,7 @@ export function roomsCtx(functions: Functions, onCommit: ((fn: () => void) => vo
   const rooms = {
     async broadcast(ref: Ref, args: unknown, event: string, data: unknown) {
       const { def, key } = resolve(ref, "room", args);
-      const validator = def.kind === "room" && Object.hasOwn(def.events, event) ? def.events[event] : undefined;
-      if (!validator) throw new Error(`This room has no event "${event}".`);
-      const value = data as Value;
-      const why = checkValue(validator, value);
-      if (why) throw ValidatorError.args(why);
-      const wire = toJsonValue(value);
-      // The client events' limit, measured the same way (session.ts).
-      const limit = functions.roomHub?.limits.payloadBytes;
-      if (limit !== undefined && Buffer.byteLength(JSON.stringify(wire)) > limit)
-        throw new Error("The event is too large.");
+      const wire = checkedRoomEvent(functions, def, event, data as Value);
       const send = () => functions.roomHub?.broadcast(key, event, wire);
       if (onCommit) onCommit(send);
       else send();

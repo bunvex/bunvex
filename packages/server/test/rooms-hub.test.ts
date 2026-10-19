@@ -900,3 +900,115 @@ describe("rooms: the event tap (AD-43)", () => {
     expect(await hub.tapEvents(ONLINE, null, 0)).toEqual({ events: [], newCursor: 0, epoch: expect.any(String) });
   });
 });
+
+describe("rooms: the dashboard's removals (AD-43)", () => {
+  /** A sink that records evictions, as RoomConnection sends RoomLeft for them. */
+  const evicting = (sessionId: string) => {
+    const s = sink(sessionId);
+    const evicted: { roomId: number; code: string; message: string }[] = [];
+    return Object.assign(s, {
+      evicted,
+      evict: (roomId: number, code: "removed", message: string) => void evicted.push({ roomId, code, message }),
+    });
+  };
+  const REMOVED = { code: "removed", message: "Removed from the dashboard." } as const;
+  const memberOf = (hub: RoomHub, key: RoomKey, userId: string) =>
+    hub.membersPage(key, null, 100).page.find((m) => m.userId === userId)!.memberId;
+
+  test("removeMember ends the member at once: its sink evicts it, the others see it leave", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const a = evicting("A"),
+      b = evicting("B");
+    hub.join(a, 7, DOC, { userId: "u1", canPublish: true });
+    hub.join(b, 1, DOC, { userId: "u2", canPublish: true });
+    t.advance(30);
+    const id = memberOf(hub, DOC, "u1");
+    expect(hub.removeMember(DOC, id)).toEqual({ connections: 1 });
+    expect(a.evicted).toEqual([{ roomId: 7, ...REMOVED }]);
+    expect(b.evicted).toEqual([]);
+    expect(hub.membersPage(DOC, null, 100).page.map((m) => m.userId)).toEqual(["u2"]);
+    a.frames.length = 0;
+    t.advance(30);
+    expect(last(b)).toEqual({ type: "RoomMembers", roomId: 1, set: [], left: [id] });
+    // the removed sink hears nothing more of the room
+    expect(a.frames).toEqual([]);
+    hub.broadcast(DOC, "ping", { n: 1 });
+    expect(a.frames).toEqual([]);
+    // and its later leave of the old room id is a no-op
+    hub.leave(a, 7);
+    expect(hub.stats()).toMatchObject({ members: 1, leaves: 1 });
+  });
+
+  test("a scope user is removed with every tab, on every connection", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const tab1 = evicting("S1"),
+      tab2 = evicting("S2"),
+      other = evicting("S3");
+    hub.join(tab1, 1, ONLINE, { userId: "ada", canPublish: true });
+    hub.join(tab2, 4, ONLINE, { userId: "ada", canPublish: true });
+    hub.join(other, 1, ONLINE, { userId: "bob", canPublish: true });
+    expect(hub.removeMember(ONLINE, "ada")).toEqual({ connections: 2 });
+    expect(tab1.evicted).toEqual([{ roomId: 1, ...REMOVED }]);
+    expect(tab2.evicted).toEqual([{ roomId: 4, ...REMOVED }]);
+    expect(other.evicted).toEqual([]);
+    expect(hub.list()[0]).toMatchObject({ members: 1, connections: 1 });
+  });
+
+  test("an attachment in its grace just leaves: no eviction, no timer left to fire", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const a = evicting("A"),
+      b = evicting("B");
+    hub.join(a, 1, DOC, { userId: "u1", canPublish: true });
+    hub.join(b, 1, DOC, { userId: "u2", canPublish: true });
+    hub.detach(a);
+    expect(hub.removeMember(DOC, memberOf(hub, DOC, "u1"))).toEqual({ connections: 1 });
+    expect(a.evicted).toEqual([]);
+    // a reconnect within what was the grace is a fresh join, not the removed member back
+    const a2 = evicting("A");
+    hub.join(a2, 1, DOC, { userId: "u1", canPublish: true });
+    t.advance(LIMITS.graceMs * 2);
+    expect(hub.stats()).toMatchObject({ members: 2, leaves: 1, graceExpiries: 0 });
+  });
+
+  test("removeMember of no such member, or of a room not open, is null", () => {
+    const hub = new RoomHub(LIMITS, fakeTimers());
+    expect(hub.removeMember(DOC, "nobody")).toBeNull();
+    hub.join(evicting("A"), 1, DOC, { userId: "u1", canPublish: true });
+    expect(hub.removeMember(DOC, "nobody")).toBeNull();
+  });
+
+  test("closeRoom removes everyone: every sink evicted, the room gone from the list, its tap ended", async () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const a = evicting("A"),
+      b = evicting("B"),
+      c = evicting("C");
+    hub.join(a, 1, DOC, { userId: "u1", canPublish: true });
+    hub.join(b, 2, DOC, { userId: "u2", canPublish: true });
+    hub.join(c, 1, ONLINE, { userId: "ada", canPublish: true });
+    await hub.tapEvents(DOC, null, 0);
+    const waiting = hub.tapEvents(DOC, 0, 60_000);
+    expect(hub.closeRoom(DOC)).toEqual({ members: 2, connections: 2 });
+    expect(a.evicted).toEqual([{ roomId: 1, ...REMOVED }]);
+    expect(b.evicted).toEqual([{ roomId: 2, ...REMOVED }]);
+    expect(c.evicted).toEqual([]);
+    expect(hub.list().map((r) => r.kind)).toEqual(["presence"]);
+    expect(await waiting).toEqual({ events: [], newCursor: 0, closed: true });
+    expect(hub.tapped).toBe(0);
+    expect(hub.closeRoom(DOC)).toBeNull();
+    t.advance(LIMITS.tickMs);
+    expect(hub.stats()).toMatchObject({ rooms: 1, members: 1, leaves: 2 });
+  });
+
+  test("a sink without evict is sent RoomLeft by the hub, and it is counted", () => {
+    const hub = new RoomHub(LIMITS, fakeTimers());
+    const a = sink("A");
+    hub.join(a, 3, DOC, { userId: "u1", canPublish: true });
+    hub.closeRoom(DOC);
+    expect(last(a)).toEqual({ type: "RoomLeft", roomId: 3, ...REMOVED });
+    expect(hub.stats().roomLeft).toBe(1);
+  });
+});
