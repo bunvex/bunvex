@@ -591,7 +591,26 @@ namespace), and a component's function starts with 3 rather than 2. Core's mount
 twice: each function's count, after a read and after a write). Sabotage (each restored): no component read, the module
 loads not passed, the component's modules not loaded, the mounted check counted: each fails it.
 
-*Left for the calls across components (STUDY-155):* the nested-call rule above. Today bunvex counts its +2 at the first
-nested call and then each callee's new modules at every call; Convex counts the callee's start (its new modules, and
-the component's read) at the first call only, and nothing at later ones. The difference is a read or a few, in a
-function that calls several modules or components near the limit.
+**Nested calls** (measured again on 2026-10-19 with STUDY-155's calls across components and handles; the root with
+two modules, so 4 before any call):
+
+| first nested call | Convex |
+|---|---|
+| app → its own module; another root module | +2; +3 |
+| app → a component (two modules; one) | +5; +4 |
+| component → its own module; its other module | +3; +4 |
+| component → another component (one module) | +5 |
+| component → the app, by a handle (two root modules) | +6 |
+| any later nested call | +0 |
+
+So the first nested call reads two, one more from a component, one more into another namespace (the callee's, by
+its registry name: a handle from a component may lead back to the app), and the callee's modules not loaded yet; later
+nested calls read nothing more. Resolving the reference (bunvex's scans of `_components`) is the engine's own read, as
+Convex's component registry: not counted.
+
+*Built:* `Tx.countNestedCall(extra, modules)` at the first nested call only, called by `runNested` after it resolves
+the callee (resolution not counted). Tests: `server/test/component-nested-read-count.test.ts` (21 shapes, each
+Convex's measured count: from the app to its modules and to components, in several orders, and from a component by
+handles to itself, another component and the app); `core/test/read-count.test.ts` (the first call only). Sabotage
+(each restored): every nested call counted, no extra from a component, the namespace taken from the caller rather
+than the callee, the modules counted at every call, the resolution counted: each fails them.
