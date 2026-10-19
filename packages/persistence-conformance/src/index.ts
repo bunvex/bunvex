@@ -6,7 +6,7 @@
 // and, for drivers with a lease (PERSIST-01 C7, single writer), K10–K19; for remote stores, K20 (a store that
 // stops answering: calls fail within the timeout) and K21 (transient errors are retried, ambiguous commits
 // stop the committer); for drivers that check their layout (PERSIST-01 C10), K22 (a layout version record, or
-// the reference layout's tables) and K23 (read-only flag); K24 (a background index backfill under concurrent writers, STUDY-29) runs on every
+// the reference layout's tables) and K23 (read-only flag; K23b: the flag set between an open and its lease); K24 (a background index backfill under concurrent writers, STUDY-29) runs on every
 // driver; K26 (bounded flushes: a group written
 // in write batches of whole commits, DV-62) on every driver; for drivers with retention (C12–C14: the document
 // log, pruning, globals), K27–K29; K30 (index references to a missing or deleted document are not hidden),
@@ -34,6 +34,7 @@ import {
   type KeyValue,
   LAYOUT_VERSION,
   LayoutError,
+  type Lease,
   LeaseHeldError,
   LeaseLostError,
   OccError,
@@ -1216,6 +1217,51 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     await mod.open(true).then((st) => st.close());
   }
 
+  // K23b — the read-only flag set between a writer's open and its lease (Convex 403c3e8, bunvex #717): the
+  // open's check passed, but the lease is refused with ReadOnlyError and left as it was (the holder before
+  // keeps it); a handle opened with `allowReadOnly` still takes it. For a "process" lease the holder before
+  // lets go first, so the refused handle could otherwise have taken the lock.
+  async function k23Lease() {
+    await mod.open(true).then((st) => st.close());
+    const holder = await mod.open(false);
+    if (!hasLease(holder)) {
+      await holder.close();
+      return;
+    }
+    const process = holder.leaseScope === "process";
+    const opened: Persistence[] = [holder];
+    try {
+      const first = await holder.acquireLease({ holder: "k23b-holder", ttlMs: 60_000 });
+      const b = (await mod.open(false)) as Persistence & Lease;
+      opened.push(b);
+      const flag = (await mod.open(false, { allowReadOnly: true })) as Persistence & Lease & ReadOnlyFlag;
+      opened.push(flag);
+      await flag.setReadOnly(true);
+      if (process) await holder.releaseLease();
+      const refused = await b.acquireLease({ holder: "k23b-writer", ttlMs: 60_000 }).catch((e: Error) => e);
+      // The lease row unchanged: the holder before still holds it ("newest": its next check passes).
+      const kept = process
+        ? "released"
+        : await holder.renewLease().then(
+            () => "kept",
+            (e: Error) => e.name,
+          );
+      const reader = await flag.acquireLease({ holder: "k23b-reader", ttlMs: 60_000 }).catch((e: Error) => e);
+      await flag.setReadOnly(false);
+      check(
+        "epoch" in first &&
+          refused instanceof ReadOnlyError &&
+          (kept === "kept" || kept === "released") &&
+          !(reader instanceof Error) &&
+          "epoch" in reader,
+        `K23b the read-only flag set after a writer's open refuses its lease (${refused instanceof Error ? refused.name : JSON.stringify(refused)}), the lease stays the holder's (${kept}), and an allowReadOnly handle still takes it (${reader instanceof Error ? reader.message : JSON.stringify(reader)})`,
+      );
+    } finally {
+      for (const st of opened) await Promise.resolve(st.close()).catch(() => {});
+      await mod.open(true).then((st) => st.close());
+    }
+  }
+
   // K20 — a store that stops answering (STUDY-25 L3). A TCP proxy between the driver and the store stops
   // forwarding in both directions without closing anything (a frozen server, a black-holed network). Every
   // call must fail within its timeout instead of hanging (a lease renewal within a quarter of the TTL), the
@@ -1555,7 +1601,10 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     else if (opts.requireLayout)
       check(false, "K22 the driver claims PERSIST-01 C10 but its module has no layout hooks");
   }
-  if (want("K23") && (layoutHooks || opts.requireLayout)) await k23().catch((e) => check(false, `K23 threw: ${e}`));
+  if (want("K23") && (layoutHooks || opts.requireLayout)) {
+    await k23().catch((e) => check(false, `K23 threw: ${e}`));
+    await k23Lease().catch((e) => check(false, `K23b threw: ${e}`));
+  }
   if (want("K20")) {
     if (mod.target && mod.openThrough) await k20();
     else if (opts.requireTimeouts)

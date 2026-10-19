@@ -138,10 +138,10 @@ describe("bunvex-local-backend", () => {
     expect(flags("--function-sandbox", "vm").functionSandbox).toBe("vm");
     expect(flags("--function-sandbox=process").functionSandbox).toBe("process");
     expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--function-sandbox", "jail"])).toBe(
-      "invalid value 'jail' for '--function-sandbox <FUNCTION_SANDBOX>': possible values: vm, process",
+      "error: invalid value 'jail' for '--function-sandbox <FUNCTION_SANDBOX>'\n  [possible values: vm, process]\n\nFor more information, try '--help'.",
     );
     expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--function-sandbox"])).toBe(
-      "a value is required for '--function-sandbox <FUNCTION-SANDBOX>' but none was supplied",
+      "error: a value is required for '--function-sandbox <FUNCTION_SANDBOX>' but none was supplied\n  [possible values: vm, process]\n\nFor more information, try '--help'.",
     );
   });
 
@@ -155,14 +155,14 @@ describe("bunvex-local-backend", () => {
       const cwd = tempDir();
       const r = io(cwd, env);
       expect(await localBackendMain(["--instance-secret", SECRET, ...args], r.it, "v1")).toBe(1);
-      expect(r.err).toEqual([`error: ${processIsolationUnavailable("auto")}`]);
+      expect(r.err).toEqual([`Error: ${processIsolationUnavailable("auto")}`]);
       expect(existsSync(join(cwd, "bunvex_local_backend.sqlite3"))).toBe(false);
     }
     // With its isolation, and no executor provided (`bin/local-backend.ts` provides it): refused before the store.
     const cwd = tempDir();
     const r = io(cwd, { BUNVEX_FUNCTION_SANDBOX: "process", BUNVEX_FUNCTION_SANDBOX_ISOLATION: "none" });
     expect(await localBackendMain(["--instance-secret", SECRET], r.it, "v1")).toBe(1);
-    expect(r.err).toEqual([`error: ${PROCESS_SANDBOX_NOT_PROVIDED}`]);
+    expect(r.err).toEqual([`Error: ${PROCESS_SANDBOX_NOT_PROVIDED}`]);
     expect(existsSync(join(cwd, "bunvex_local_backend.sqlite3"))).toBe(false);
   });
 

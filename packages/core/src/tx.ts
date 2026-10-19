@@ -481,7 +481,27 @@ export class Tx {
    */
   prevEndCursor: string | null = null;
   nextEndCursor: string | null = null;
-  private paginated = false;
+  /**
+   * The running query function's pagination scope, as Convex's query journal since 8449d41: one paginated query
+   * per query function, shared with the queries it calls; `null` in a mutation, which may paginate any number of
+   * times and records no end cursor. Set in the constructor (a query's transaction starts with one).
+   */
+  private pageScope: { paginated: boolean } | null;
+  /**
+   * Run `fn`, a query called from here: from a mutation (no scope) it gets a fresh scope of its own, as Convex's
+   * `runUdf` gives a query called from a mutation a new journal; from a query it shares the caller's.
+   */
+  async inQueryScope<T>(fn: () => T): Promise<Awaited<T>> {
+    if (this.pageScope !== null) return await fn();
+    const savedEnd = this.nextEndCursor;
+    this.pageScope = { paginated: false };
+    try {
+      return await fn();
+    } finally {
+      this.pageScope = null;
+      this.nextEndCursor = savedEnd;
+    }
+  }
   /**
    * The store's retention window (STUDY-33): every read from the store is checked against it before and
    * after (Convex's optimistic and final `validate_snapshot`), so a read that raced a prune fails too.
@@ -715,6 +735,7 @@ export class Tx {
     private readonly systemTx = false,
   ) {
     this.day = Math.floor(nextCreationTime / 86_400_000);
+    this.pageScope = writable ? null : { paginated: false };
   }
   /** Days since the Unix epoch at the transaction's start: the last two bytes of every id it creates. */
   private readonly day: number;
@@ -1554,11 +1575,13 @@ export class Tx {
     if (pageSize > TRANSACTION_MAX_READ_SIZE_ROWS) throw new Error(`Requested too many items: ${pageSize}`);
     if (opts.maximumRowsRead === 0 || opts.maximumBytesRead === 0)
       throw new Error("maximumRowsRead and maximumBytesRead must be greater than 0");
-    if (this.paginated)
+    // Convex's `MultiplePaginatedDatabaseQueries`, for a query only (8449d41): a mutation may page through a range.
+    const scope = this.pageScope;
+    if (scope?.paginated)
       throw new Error(
-        "This query or mutation function ran multiple paginated queries. Only a single paginated query is supported in each function.",
+        "This query function ran multiple paginated queries. Only a single paginated query is supported in each query function.",
       );
-    this.paginated = true;
+    if (scope) scope.paginated = true;
     const pipe = new Pipeline(st.ops);
     const fp = queryFingerprint({
       // Stryker disable next-line LogicalOperator,StringLiteral: the index id is unique across tables, so it names the table already
@@ -1590,7 +1613,7 @@ export class Tx {
     }
     const done = (page: Doc[], pos: CursorPosition, status: PaginationResult["pageStatus"], split: string | null) => {
       const continueCursor = encodeCursor(secret, pos, fp);
-      this.nextEndCursor = continueCursor;
+      if (scope) this.nextEndCursor = continueCursor;
       return { page, isDone: pos === "end", continueCursor, splitCursor: split, pageStatus: status };
     };
     if (st.search) {

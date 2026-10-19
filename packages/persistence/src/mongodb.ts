@@ -82,7 +82,7 @@ import {
   wallClockNs,
   withTimeout,
 } from "@bunvex/core/persistence";
-import type { Collection, Db, MongoClient } from "mongodb";
+import type { ClientSession, Collection, Db, MongoClient } from "mongodb";
 import { loadPeer } from "./peer.ts";
 
 /** A 16-byte id as stored (BinData, subtype 0); the driver accepts a Buffer and returns a `Binary`. */
@@ -187,6 +187,8 @@ export class MongoPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
   private leaseTs = 0n;
   /** Leases taken by this handle, for `LeaseAcquire.epoch`. */
   private acquired = 0;
+  /** Opened with `allowReadOnly`: the lease is taken even while the store is marked read-only. */
+  private allowReadOnly = false;
   /** The TTL the engine renews by (TTL/3): a lease check is bounded by a quarter of it (C8). */
   private ttlMs = 5000;
   private constructor(
@@ -271,7 +273,7 @@ export class MongoPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
           }
           progress();
           const majority = { readConcern: { level: "majority" as const } };
-          return new MongoPersistence(
+          const store = new MongoPersistence(
             client,
             db,
             docs,
@@ -283,6 +285,8 @@ export class MongoPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
             db.collection<DocRow>("documents", majority),
             db.collection<{ _id: string; json_value: string }>("persistence_globals", majority),
           );
+          store.allowReadOnly = !!opts.allowReadOnly;
+          return store;
         });
       return await retryOnce(init, (e) => e instanceof DatabaseTimeoutError);
     } catch (e) {
@@ -352,8 +356,12 @@ export class MongoPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
   /**
    * Convex's `Lease::acquire`, by analogy: the lease document takes our start ts if it is newer than the one there
    * (the newest process wins at once); otherwise another process started later, and holds it. There is no TTL.
+   * Without `allowReadOnly`, the store must not be marked read-only (as Convex 403c3e8 does in its SQL drivers'
+   * lease statement): the flag is read and the lease written in one transaction, so a flag set after the
+   * open's check refuses the lease with `ReadOnlyError` and leaves the document as it was.
    *
-   * A writer inside a flush has written the lease document in its open transaction: our update waits for it.
+   * A writer inside a flush has written the lease document in its open transaction: our update waits for it
+   * (in a transaction of ours, it fails at once with a write conflict, and is tried again for about a second).
    * A writer paused there (stopped, frozen) keeps it open until the server's transaction lifetime runs out, so
    * after a short wait the open transactions of other bunvex processes are ended: the paused writer's group
    * aborts, and it was never acknowledged.
@@ -361,19 +369,22 @@ export class MongoPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
   acquireLease(opts: { holder: string; ttlMs: number }): Promise<LeaseAcquire> {
     this.ttlMs = opts.ttlMs;
     return this.call(async (progress) => {
-      for (let attempt = 0; ; attempt++) {
+      for (let attempt = 0, conflicts = 0; ; ) {
         const ts = wallClockNs();
         let won: boolean;
         try {
-          const r = await this.leases.updateOne(
-            { _id: 1, ts: { $lt: ts } },
-            { $set: { ts } },
-            { maxTimeMS: 1000, writeConcern: { w: "majority" } },
-          );
+          won = await this.takeLease(ts);
           progress();
-          won = r.matchedCount === 1;
         } catch (e) {
-          if ((e as { code?: number }).code !== 50 || attempt >= 3) throw e; // 50: MaxTimeMSExpired
+          const code = (e as { code?: number }).code;
+          // 112: WriteConflict, our transaction met a writer's open one; 50: MaxTimeMSExpired.
+          if (code === 112 && ++conflicts < 20) {
+            await new Promise((ok) => setTimeout(ok, 50));
+            progress();
+            continue;
+          }
+          if ((code !== 50 && code !== 112) || attempt++ >= 3) throw e;
+          conflicts = 0;
           await this.killOtherWriters();
           progress();
           continue;
@@ -386,6 +397,33 @@ export class MongoPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
         return { epoch: ++this.acquired };
       }
     });
+  }
+
+  /** The lease document takes `ts` if it is older, and, without `allowReadOnly`, only while the store is not
+   *  marked read-only: both in one transaction. `ReadOnlyError` if it is. */
+  private async takeLease(ts: bigint) {
+    const update = (session?: ClientSession) =>
+      this.leases.updateOne(
+        { _id: 1, ts: { $lt: ts } },
+        { $set: { ts } },
+        { maxTimeMS: 1000, writeConcern: session ? undefined : { w: "majority" }, session },
+      );
+    if (this.allowReadOnly) return (await update()).matchedCount === 1;
+    const session = this.client.startSession();
+    try {
+      session.startTransaction({ readConcern: { level: "snapshot" }, writeConcern: { w: "majority" } });
+      try {
+        if (await this.readOnly.findOne({}, { session })) throw new ReadOnlyError(STORE);
+        const won = (await update(session)).matchedCount === 1;
+        await session.commitTransaction();
+        return won;
+      } catch (e) {
+        await session.abortTransaction().catch(() => {});
+        throw e;
+      }
+    } finally {
+      await session.endSession().catch(() => {});
+    }
   }
 
   /** End the open transactions of other bunvex processes (a writer paused inside its flush). */

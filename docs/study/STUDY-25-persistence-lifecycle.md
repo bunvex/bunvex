@@ -131,6 +131,16 @@ out, retry, or shut down. Several of the bugs STUDY-24 found (S1, S3) lived in e
     a write is a plain error.
   - Serialization failures, deadlocks and lock-wait timeouts are not classified anywhere; with one writer they
     are not expected.
+  - **Update (2026-10-19, Convex 1a9f5e1, #59615; bunvex #711):** Convex's write batcher now also retries a
+    batch that fails with `DatabaseDeadlockError` (`is_db_deadlock_error`, `crates/database/src/write_batcher.rs`),
+    which only MySQL's errno 1213 produces (`crates/mysql/src/connection.rs`). It is deliberately not an
+    operational error, so it is not retried per statement and the connection is kept. Postgres 40P01/40001 and
+    MySQL 1205 are unchanged. A single-writer process can still deadlock on MySQL: bunvex's flush (DV-152, one
+    at a time) runs beside retention's `DELETE` (next-key and gap locks) and the index worker's
+    `INSERT ... ON DUPLICATE KEY UPDATE`. bunvex matches it: MySQL's `isTransient` is a timeout, an
+    operational error or 1213, and `operational` stays as it was. The retry is safe: InnoDB rolled the
+    victim's whole transaction back, and the driver keeps the group and checks `landed(top)` first (DV-124),
+    so the retry writes the same rows at the same timestamps.
   - `LeaseLostError` is an operational *internal server error* (`:833-837`), but not a
     `DatabaseOperationalError`: it is not transient.
 - **Retries of reads and init (once, on a fresh connection):**

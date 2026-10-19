@@ -6,12 +6,10 @@ get-convex/convex-backend, and the process that keeps it there. The process is d
 
 ## Where we stand
 
-- **Reference commit:** `d8bdde0`, the commit of the release `precompiled-2026-10-07-d8bdde0` (2026-10-07). The parity
+- **Reference commit:** `72ce13c`, the commit of the release `precompiled-2026-10-10-72ce13c` (2026-10-09). The parity
   files cite `4577b9031` brought up to this commit.
-- **Differential oracle:** `precompiled-2026-10-07-d8bdde0` (`packages/differential/scripts/download-convex-backend.sh`).
-- **Last weekly bump:** [STUDY-137](../study/STUDY-137-convex-reference-2026-10-07.md) (#512, 2026-10-08), from
-  `4577b90`.
-- **Decisions waiting on the owner from the bumps:** DV-435–DV-439 (STUDY-137 §4).
+- **Differential oracle:** `precompiled-2026-10-10-72ce13c` (`packages/differential/scripts/download-convex-backend.sh`).
+- **Last weekly bump:** [STUDY-173](../study/STUDY-173-convex-reference-2026-10-10.md) (2026-10-19), from `d8bdde0`.
 
 ## The process
 
@@ -40,18 +38,18 @@ own PR (CLAUDE.md).
 
 ## Carried to the next bump
 
-Commits after the reference that the last bump did not cover:
+Commits up to the reference that the last bump did not cover: none. STUDY-173 resolved the 11 that STUDY-137 carried;
+`f9b2d83` (components, DV-55) is on [STUDY-62 §7.6](../study/STUDY-62-components.md#76-convex-commits-to-take-with-components).
 
-| Commit | Subject | Note |
+## After the reference
+
+82 commits on Convex's `main` follow `72ce13c` (up to `95d8719`, 2026-10-16). They are not triaged yet: the daily
+digest issue (#549) tracks them, and the next bump takes them up to its release. The four urgent ones were studied at
+once ([STUDY-173 §5](../study/STUDY-173-convex-reference-2026-10-10.md#5-after-the-reference-the-urgent-commits)):
+
+| Commit | Subject | bunvex |
 |---|---|---|
-| `f9b2d83` | component-scoped custom-role statements | Components (DV-55) |
-| `900fe2c` | database: check writes against staged validators, recording into validation progress | Staged validators (DV-438) |
-| `e748f4c` | Fix FormData non-string values and set() with repeated names | Web API, Bun's (DV-164) |
-| `a4ad353` | docs: Update function bundle size limits | Docs only (its limits taken in #539) |
-| `e049178` | schema worker: validate staged validators in the background | Staged validators (DV-438) |
-| `7236c10` | staged validated validators replace the walk at promotion; table deletion invalidates references | Staged validators (DV-438); first in `precompiled-2026-10-08-076c52c` |
-| `02fe59b` | docs: AI Gateway model list | Docs only |
-| `56a59a9` | docs: AI gateway voice | Docs only |
-| `5b65aed` | evaluate_schema: staged validator state, promotion skip and discard prediction | Staged validators (DV-438 PR 6); the CLI consumer is not released yet |
-| `c178e47` | Require published MySQL v6 buckets before index displacement | Convex's MySQL v6 writer only: nothing an app or bunvex's store observes |
-| `076c52c` | dashboard: schema validation and index backfill progress on the health page | Dashboard, behind a flag: taken when bunvex's dashboard runs on a real deployment (DV-189, closed by STUDY-149 PR 7) |
+| `8449d41` | allow repeated pagination in mutations | affected; fixed in #747 (#718) |
+| `403c3e8` | races around acquiring the lease | part (b), the read-only check, affected; fixed in #748 (the refusal stays `ReadOnlyError`: DV-505, owner 2026-10-19) (#717) |
+| `1a9f5e1` | retry deadlocked commit batches | affected on MySQL; fixed in #746 (#711) |
+| `d62e1c7` | comments around data sync | comments only: no change (#712) |
