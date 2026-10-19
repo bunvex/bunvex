@@ -1,6 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import type { v1 } from "@bunvex/protocol";
-import { RoomHub, type RoomKey, type RoomSink, roomKeyString, type Timers } from "../src/rooms/hub.ts";
+import {
+  RoomHub,
+  type RoomKey,
+  type RoomSink,
+  roomKeyString,
+  TAP_DATA_MAX_BYTES,
+  TAP_EVENTS_MAX,
+  TAP_IDLE_MS,
+  type Timers,
+} from "../src/rooms/hub.ts";
 import type { RoomLimits } from "../src/rooms/limits.ts";
 
 const LIMITS: RoomLimits = {
@@ -15,7 +24,7 @@ const LIMITS: RoomLimits = {
   maxBufferedBytes: 1 << 20,
 };
 /** A clock the test advances; due timers run in order. */
-function fakeTimers(): Timers & { advance(ms: number): void } {
+function fakeTimers(): Timers & { advance(ms: number): void; pending(h: unknown): boolean } {
   let now = 0;
   let seq = 0;
   const EPOCH = 1_700_000_000_000;
@@ -28,6 +37,7 @@ function fakeTimers(): Timers & { advance(ms: number): void } {
       return seq;
     },
     clear: (h) => void due.delete(h as number),
+    pending: (h) => due.has(h as number),
     advance(ms) {
       const end = now + ms;
       for (;;) {
@@ -626,5 +636,267 @@ describe("rooms: the counters (AD-43)", () => {
     const hub = new RoomHub(LIMITS, fakeTimers());
     hub.countRoomLeft();
     moved(hub, { roomLeft: 1 });
+  });
+});
+
+describe("rooms: the event tap (AD-43)", () => {
+  /** A hub with one room of two members (a sends, b listens), and its clock. */
+  const tapped = () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const a = sink("A"),
+      b = sink("B");
+    hub.join(a, 1, DOC, who("u1"));
+    hub.join(b, 1, DOC, who("u2"));
+    return { t, hub, a, b };
+  };
+  /** Sends `n` events from `a`, spaced to the rate limit. */
+  const send = (x: ReturnType<typeof tapped>, n: number, event = "wave") => {
+    for (let i = 0; i < n; i++) {
+      x.t.advance(100);
+      expect(x.hub.event(x.a, 1, event, { i })).toBe("ok");
+    }
+  };
+
+  test("no tap until the first poll: events before it are not recorded, and none is kept", async () => {
+    const x = tapped();
+    send(x, 2);
+    expect(x.hub.tapped).toBe(0);
+    expect(await x.hub.tapEvents(DOC, null, 0)).toEqual({ events: [], newCursor: 0, epoch: expect.any(String) });
+    expect(x.hub.tapped).toBe(1);
+    expect(await x.hub.tapEvents(DOC, 0, 0)).toEqual({ events: [], newCursor: 0, epoch: expect.any(String) });
+  });
+
+  test("a member's events and the server's broadcasts, in seq order, with time, sender and size", async () => {
+    const x = tapped();
+    const start = await x.hub.tapEvents(DOC, null, 0);
+    send(x, 1);
+    x.hub.broadcast(DOC, "notice", { text: "hé" });
+    const memberId = (x.b.frames.find((f) => f.type === "RoomEvent") as v1.RoomServerEvent).from;
+    const got = await x.hub.tapEvents(DOC, start.newCursor, 0);
+    expect(got).toEqual({
+      events: [
+        { seq: 1, at: 1_700_000_000_100, event: "wave", from: memberId, size: 7, data: { i: 0 } },
+        { seq: 2, at: 1_700_000_000_100, event: "notice", from: null, size: 14, data: { text: "hé" } },
+      ],
+      newCursor: 2,
+      epoch: expect.any(String),
+    });
+    expect(memberId).toBeString();
+    // from a cursor: only what came after it
+    expect((await x.hub.tapEvents(DOC, 1, 0)).events.map((e) => e.seq)).toEqual([2]);
+  });
+
+  test("presence changes are not recorded", async () => {
+    const x = tapped();
+    await x.hub.tapEvents(DOC, null, 0);
+    x.hub.setPresence(x.a, 1, { x: 1 });
+    x.t.advance(100);
+    x.hub.setPresence(x.b, 1, { x: 2 });
+    x.t.advance(100);
+    expect(await x.hub.tapEvents(DOC, 0, 0)).toEqual({ events: [], newCursor: 0, epoch: expect.any(String) });
+  });
+
+  test("at most 200 events: the oldest dropped, and a cursor behind them told how many were lost", async () => {
+    const x = tapped();
+    await x.hub.tapEvents(DOC, null, 0);
+    send(x, TAP_EVENTS_MAX + 5);
+    const got = await x.hub.tapEvents(DOC, 0, 0);
+    expect(got.events).toHaveLength(TAP_EVENTS_MAX);
+    expect(got.events[0]!.seq).toBe(6);
+    expect(got.dropped).toBe(5);
+    expect(got.newCursor).toBe(TAP_EVENTS_MAX + 5);
+    // a cursor inside the buffer lost nothing
+    const inside = await x.hub.tapEvents(DOC, 100, 0);
+    expect(inside.dropped).toBeUndefined();
+    expect(inside.events[0]!.seq).toBe(101);
+  });
+
+  test("data over 16 KiB of JSON is omitted, with its real size", async () => {
+    const x = tapped();
+    await x.hub.tapEvents(DOC, null, 0);
+    const big = "y".repeat(TAP_DATA_MAX_BYTES);
+    x.hub.broadcast(DOC, "big", big);
+    x.hub.broadcast(DOC, "fits", "y".repeat(TAP_DATA_MAX_BYTES - 2));
+    const [b, f] = (await x.hub.tapEvents(DOC, 0, 0)).events;
+    expect(b).toMatchObject({ event: "big", data: null, dataOmitted: true, size: TAP_DATA_MAX_BYTES + 2 });
+    expect(f!.dataOmitted).toBeUndefined();
+    expect(f!.size).toBe(TAP_DATA_MAX_BYTES);
+  });
+
+  test("a tap expires 30 s after its last poll; a poll keeps it; a later cursor is answered reset", async () => {
+    const x = tapped();
+    await x.hub.tapEvents(DOC, null, 0);
+    x.t.advance(TAP_IDLE_MS - 1000);
+    await x.hub.tapEvents(DOC, 0, 0);
+    x.t.advance(TAP_IDLE_MS - 1000);
+    expect(x.hub.tapped).toBe(1);
+    x.t.advance(1000);
+    expect(x.hub.tapped).toBe(0);
+    // gone: its events are no longer recorded (the room costs nothing extra)
+    send(x, 1);
+    // the follower's cursor names a tap that is gone: a new one starts, at 0, and says so
+    expect(await x.hub.tapEvents(DOC, 3, 0)).toEqual({
+      events: [],
+      newCursor: 0,
+      reset: true,
+      epoch: expect.any(String),
+    });
+    send(x, 1);
+    expect((await x.hub.tapEvents(DOC, 0, 0)).events.map((e) => e.seq)).toEqual([1]);
+  });
+
+  test("a cursor ahead of the tap (a server that restarted) is answered reset, at the tap's seq", async () => {
+    const x = tapped();
+    await x.hub.tapEvents(DOC, null, 0);
+    send(x, 2);
+    expect(await x.hub.tapEvents(DOC, 9, 0)).toEqual({
+      events: [],
+      newCursor: 2,
+      reset: true,
+      epoch: expect.any(String),
+    });
+  });
+
+  test("no timer is left when there are no taps", async () => {
+    const t = fakeTimers();
+    let live = 0;
+    const counted: Timers = {
+      ...t,
+      set: (fn, ms) => {
+        live++;
+        return t.set(() => {
+          live--;
+          fn();
+        }, ms);
+      },
+      clear: (h) => {
+        if (h !== null && h !== undefined) live--;
+        t.clear(h);
+      },
+    };
+    const hub = new RoomHub(LIMITS, counted);
+    hub.join(sink("A"), 1, DOC, who("u1"));
+    t.advance(1000);
+    expect(live).toBe(0);
+    await hub.tapEvents(DOC, null, 0);
+    await hub.tapEvents(DOC, 0, 0);
+    t.advance(TAP_IDLE_MS);
+    expect(hub.tapped).toBe(0);
+    expect(live).toBe(0);
+  });
+
+  test("the long poll answers when an event arrives, not at its timeout", async () => {
+    const x = tapped();
+    await x.hub.tapEvents(DOC, null, 0);
+    let answer: Awaited<ReturnType<RoomHub["tapEvents"]>> | null = null;
+    void x.hub.tapEvents(DOC, 0, 60_000).then((a) => {
+      answer = a;
+    });
+    await Promise.resolve();
+    expect(answer).toBeNull();
+    x.hub.broadcast(DOC, "now", 1);
+    await Bun.sleep(0);
+    expect(answer).toMatchObject({ events: [{ seq: 1, event: "now" }], newCursor: 1 });
+  });
+
+  test("the long poll times out with no events and the same cursor; a waiting poll keeps the tap", async () => {
+    const x = tapped();
+    await x.hub.tapEvents(DOC, null, 0);
+    let answer: unknown = null;
+    void x.hub.tapEvents(DOC, 0, 45_000).then((a) => {
+      answer = a;
+    });
+    x.t.advance(TAP_IDLE_MS + 1000);
+    expect(x.hub.tapped).toBe(1);
+    x.t.advance(45_000 - TAP_IDLE_MS - 1000);
+    await Bun.sleep(0);
+    expect(answer).toEqual({ events: [], newCursor: 0, epoch: expect.any(String) });
+    x.t.advance(TAP_IDLE_MS - 1);
+    expect(x.hub.tapped).toBe(1);
+    x.t.advance(1);
+    expect(x.hub.tapped).toBe(0);
+  });
+
+  test("an aborted long poll answers at once", async () => {
+    const x = tapped();
+    await x.hub.tapEvents(DOC, null, 0);
+    const stop = new AbortController();
+    const p = x.hub.tapEvents(DOC, 0, 60_000, stop.signal);
+    stop.abort();
+    expect(await p).toEqual({ events: [], newCursor: 0, epoch: expect.any(String) });
+  });
+
+  test("a room that is not open: closed, no tap; a room that closes ends its tap and wakes the poll", async () => {
+    const x = tapped();
+    const OTHER: RoomKey = { ...DOC, argsJson: '{"id":"zzz"}' };
+    expect(await x.hub.tapEvents(OTHER, null, 0)).toEqual({ events: [], newCursor: 0, closed: true });
+    expect(await x.hub.tapEvents(OTHER, 4, 0)).toEqual({ events: [], newCursor: 4, closed: true });
+    expect(x.hub.tapped).toBe(0);
+    await x.hub.tapEvents(DOC, null, 0);
+    const waiting = x.hub.tapEvents(DOC, 0, 60_000);
+    x.hub.leave(x.a, 1);
+    x.hub.leave(x.b, 1);
+    x.t.advance(LIMITS.tickMs);
+    expect(await waiting).toEqual({ events: [], newCursor: 0, closed: true });
+    expect(x.hub.tapped).toBe(0);
+  });
+
+  test("each tap has an epoch: the same in every answer, another once the tap is made again", async () => {
+    const x = tapped();
+    const first = await x.hub.tapEvents(DOC, null, 0);
+    expect(first.epoch).toBeString();
+    send(x, 1);
+    expect((await x.hub.tapEvents(DOC, 0, 0)).epoch).toBe(first.epoch!);
+    x.t.advance(TAP_IDLE_MS);
+    // this viewer stalls; another makes the tap again, and its seq passes the old cursor
+    expect(x.hub.tapped).toBe(0);
+    const other = await x.hub.tapEvents(DOC, null, 0);
+    send(x, 3);
+    const late = await x.hub.tapEvents(DOC, 1, 0);
+    // not a reset by the cursor (it is behind the seq), but another tap, told by its epoch
+    expect(late.reset).toBeUndefined();
+    expect(late.epoch).toBe(other.epoch!);
+    expect(late.epoch).not.toBe(first.epoch!);
+  });
+
+  test("several polls waiting on one tap are all answered by one event, and leave no timer", async () => {
+    const t = fakeTimers();
+    let live = 0;
+    const counted: Timers = {
+      ...t,
+      set: (fn, ms) => {
+        live++;
+        return t.set(() => {
+          live--;
+          fn();
+        }, ms);
+      },
+      clear: (h) => {
+        if (h !== null && h !== undefined && t.pending(h)) live--;
+        t.clear(h);
+      },
+    };
+    const hub = new RoomHub(LIMITS, counted);
+    hub.join(sink("A"), 1, DOC, who("u1"));
+    t.advance(LIMITS.tickMs);
+    await hub.tapEvents(DOC, null, 0);
+    const polls = [hub.tapEvents(DOC, 0, 60_000), hub.tapEvents(DOC, 0, 60_000), hub.tapEvents(DOC, 0, 60_000)];
+    // the tap's expiry and the three polls' timeouts
+    expect(live).toBe(4);
+    hub.broadcast(DOC, "now", 1);
+    const answers = await Promise.all(polls);
+    expect(answers.map((a) => a.events.map((e) => e.seq))).toEqual([[1], [1], [1]]);
+    // only the tap's expiry is left
+    expect(live).toBe(1);
+    t.advance(TAP_IDLE_MS);
+    expect(live).toBe(0);
+  });
+
+  test("a scope can be tapped (it has no events)", async () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    hub.join(sink("A"), 1, ONLINE, who("u1"));
+    expect(await hub.tapEvents(ONLINE, null, 0)).toEqual({ events: [], newCursor: 0, epoch: expect.any(String) });
   });
 });

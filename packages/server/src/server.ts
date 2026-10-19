@@ -1273,7 +1273,7 @@ export function createServer(opts: ServerOptions) {
     const topo = topologyRoute({ functions, topology }, url, req, caller);
     if (topo) return topo;
     // The rooms in memory and their definitions (AD-43): ViewMetrics.
-    const roomsDebug = roomsRoute({ functions, sync }, url, req, caller);
+    const roomsDebug = await roomsRoute({ functions, sync }, url, req, caller);
     if (roomsDebug) return roomsDebug;
     if (url.pathname === "/api/v1/list_audit_log_events" && req.method === "GET")
       return listAuditLogEvents(url, caller);

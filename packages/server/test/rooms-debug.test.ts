@@ -1,6 +1,6 @@
 // The rooms in the dashboard (AD-43, STUDY-165): `/api/debug/rooms`, `/members` and `/definitions`, the `rooms`
 // counters in `/stats`, and the rooms' series in `/metrics`. Admin only, with ViewMetrics, as the topology.
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { v } from "@bunvex/values";
@@ -65,6 +65,7 @@ test("the endpoints need the admin key", async () => {
     "/api/debug/rooms",
     "/api/debug/rooms/members?kind=room&name=rooms:doc",
     "/api/debug/rooms/definitions",
+    "/api/debug/rooms/events?kind=room&name=rooms:doc",
   ]) {
     expect([401, 403]).toContain((await get(p, null)).status);
     expect((await get(p)).status).not.toBe(401);
@@ -116,6 +117,11 @@ test("bad parameters are 400 with a message", async () => {
     "/api/debug/rooms/members?kind=room&name=rooms:doc&numItems=0",
     "/api/debug/rooms/members?kind=room&name=rooms:doc&numItems=abc",
     "/api/debug/rooms/members?key=garbage",
+    "/api/debug/rooms/events",
+    "/api/debug/rooms/events?key=garbage",
+    "/api/debug/rooms/events?kind=room&name=rooms:doc&cursor=-1",
+    "/api/debug/rooms/events?kind=room&name=rooms:doc&cursor=1.5",
+    "/api/debug/rooms/events?kind=room&name=rooms:doc&cursor=abc",
   ];
   for (const p of bad) {
     const r = await get(p);
@@ -144,7 +150,12 @@ test("numItems is capped at 100: a page of 100 with a cursor", async () => {
 
 test("a preflight on the rooms routes is answered by the CORS layer", async () => {
   const { api } = await setup();
-  for (const p of ["/api/debug/rooms", "/api/debug/rooms/members", "/api/debug/rooms/definitions"]) {
+  for (const p of [
+    "/api/debug/rooms",
+    "/api/debug/rooms/members",
+    "/api/debug/rooms/definitions",
+    "/api/debug/rooms/events",
+  ]) {
     const r = await fetch(`${api}${p}`, {
       method: "OPTIONS",
       headers: {
@@ -206,4 +217,100 @@ test("definitions: the deployed rooms and scopes with validators and events, sor
   expect(lobby.args).toBeNull();
   const online = definitions.find((d: { name: string }) => d.name === "rooms:online");
   expect(online).toMatchObject({ kind: "presence", state: { type: "object" }, events: [] });
+});
+
+describe("the event tap: /api/debug/rooms/events (AD-43)", () => {
+  /** A room with two members over the wire: `a` sends, `b` listens. */
+  async function room() {
+    const x = await setup();
+    const a = await x.client();
+    const b = await x.client();
+    a.join(1, "rooms:doc", { id: "t" });
+    await a.synced(1);
+    b.join(1, "rooms:doc", { id: "t" });
+    await b.synced(1);
+    const key = (await x.get("/api/debug/rooms")).body.rooms[0].key as string;
+    const events = (q: string) => x.get(`/api/debug/rooms/events?key=${encodeURIComponent(key)}${q}`);
+    return { ...x, a, b, key, events };
+  }
+
+  test("no cursor starts the tap at once; an event sent before it is not seen, one after it is", async () => {
+    const r = await room();
+    r.a.send({ type: "RoomEvent", roomId: 1, event: "ping", data: { n: 1 } });
+    await r.b.until(() => r.b.got.find((m) => m.type === "RoomEvent"));
+    const start = await r.events("");
+    expect(start.status).toBe(200);
+    expect(start.body).toEqual({ events: [], newCursor: 0, epoch: expect.any(String) });
+    r.a.send({ type: "RoomEvent", roomId: 1, event: "ping", data: { n: 2 } });
+    const got = (await r.events("&cursor=0")).body;
+    expect(got).toEqual({
+      events: [{ seq: 1, at: expect.any(Number), event: "ping", from: expect.any(String), size: 7, data: { n: 2 } }],
+      newCursor: 1,
+      epoch: expect.any(String),
+    });
+  });
+
+  test("the long poll answers when an event arrives, not at its timeout", async () => {
+    const r = await room();
+    await r.events("");
+    const t0 = performance.now();
+    const waiting = r.events("&cursor=0&timeoutMs=30000");
+    await Bun.sleep(50);
+    r.hub.broadcast({ kind: "room", name: "rooms:doc", argsJson: '{"id":"t"}' }, "notice", { hi: 1 });
+    const got = (await waiting).body;
+    expect(performance.now() - t0).toBeLessThan(5000);
+    expect(got.events).toEqual([expect.objectContaining({ seq: 1, event: "notice", from: null, data: { hi: 1 } })]);
+  });
+
+  test("a long poll with nothing times out with the same cursor", async () => {
+    const r = await room();
+    await r.events("");
+    expect((await r.events("&cursor=0&timeoutMs=50")).body).toEqual({
+      events: [],
+      newCursor: 0,
+      epoch: expect.any(String),
+    });
+  });
+
+  test("an overflowed buffer answers how many were dropped; a cursor of a gone tap is reset", async () => {
+    const r = await room();
+    const KEY = { kind: "room" as const, name: "rooms:doc", argsJson: '{"id":"t"}' };
+    await r.events("");
+    for (let i = 0; i < 205; i++) r.hub.broadcast(KEY, "n", i);
+    const got = (await r.events("&cursor=0")).body;
+    expect(got.events).toHaveLength(200);
+    expect(got.dropped).toBe(5);
+    expect(got.newCursor).toBe(205);
+    expect((await r.events("&cursor=999")).body).toEqual({
+      events: [],
+      newCursor: 205,
+      reset: true,
+      epoch: expect.any(String),
+    });
+  });
+
+  test("timeoutMs is capped at 60 000 ms, and defaults to it", async () => {
+    const r = await room();
+    const asked: number[] = [];
+    const tapEvents = r.hub.tapEvents.bind(r.hub);
+    r.hub.tapEvents = (key, cursor, timeoutMs, signal) => {
+      asked.push(timeoutMs);
+      return tapEvents(key, cursor, 0, signal);
+    };
+    await r.events("&cursor=0&timeoutMs=999999");
+    await r.events("&cursor=0");
+    await r.events("&cursor=0&timeoutMs=20");
+    expect(asked).toEqual([60_000, 60_000, 20]);
+  });
+
+  test("a room that is not open is closed, whatever the cursor", async () => {
+    const { get } = await setup();
+    const q = `kind=room&name=rooms:doc&args=${encodeURIComponent('{"id":"none"}')}`;
+    expect((await get(`/api/debug/rooms/events?${q}`)).body).toEqual({ events: [], newCursor: 0, closed: true });
+    expect((await get(`/api/debug/rooms/events?${q}&cursor=7`)).body).toEqual({
+      events: [],
+      newCursor: 7,
+      closed: true,
+    });
+  });
 });
