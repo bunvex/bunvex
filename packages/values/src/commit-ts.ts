@@ -43,7 +43,7 @@ export const commitTsPlaceholder = new CommitTsPlaceholder();
 /**
  * A plain object of any realm (`value.ts`'s `isSimpleObject`, which imports this module): a pushed function's own
  * objects come from its context, whose `Object.prototype` is not this one (STUDY-35). Only `Object.prototype` here
- * missed the placeholder in a `vm` function's scheduled arguments (STUDY-171 §8.9).
+ * missed the placeholder in a `vm` function's scheduled arguments (STUDY-171 §9).
  */
 function isPlainObject(x: unknown): x is Record<string, unknown> {
   if (x === null || typeof x !== "object") return false;

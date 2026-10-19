@@ -452,7 +452,7 @@ export class AppMetrics {
     /**
      * The real clock, whether or not a function runs (core's `wallClock`): the deterministic `Date.now` would read a
      * running query's frozen time and mark its result as time-dependent, so every cached result expired after
-     * MAX_CACHE_AGE_MS (STUDY-171 §8.9).
+     * MAX_CACHE_AGE_MS (STUDY-171 §9).
      */
     private readonly now: () => number = wallClock,
   ) {}

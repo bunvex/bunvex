@@ -90,7 +90,7 @@ test("resolveCommitTsJson writes the int64 tokens, little-endian base64", () => 
   );
 });
 
-describe("objects of another realm (a pushed function's own, STUDY-171 §8.9)", () => {
+describe("objects of another realm (a pushed function's own, STUDY-171 §9)", () => {
   const theirs = vm.runInContext("(p) => ({ args: { at: p, list: [{ deep: p }] } })", vm.createContext({})) as (
     p: unknown,
   ) => { args: Record<string, unknown> };

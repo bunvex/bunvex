@@ -379,7 +379,7 @@ Each was restored from a saved copy and checked with `diff`/`cmp` before the nex
 
 STUDY-168 §12.3's PR 3: `BUNVEX_FUNCTION_SANDBOX=process` runs pushed queries and mutations in a child, every `ctx`
 operation answered on the host's own transaction. **The default does not change**: `vm` stays the default, and
-under it nothing runs differently (two `vm` bugs the parity test found are fixed, §8.9).
+under it nothing runs differently. The three `vm` bugs its parity test found are fixed on their own (§9, #751).
 
 ### 8.1 How Convex does it (re-read at `d8bdde0`)
 
@@ -543,23 +543,15 @@ decided with the pool (PR 9). AD-44 is updated: queries and mutations run under 
 `vm` server and a `process` server, and for every case what the client gets compared (the value, or the error's
 first line and its data; ids, creation times and request ids normalized): 106 query cases, 53 mutation cases, 6 of
 the validators', and 18 read sets (the intervals each query read, by `table.index`, ids and times normalized: so a
-result is invalidated by the same writes). Every one matches. It found, and this PR fixes:
+result is invalidated by the same writes). Every one matches. It found:
 - in the child (PR 2's): the deterministic globals were not installed before the first load, so a code version's
-  contexts copied the real `setTimeout` and `fetch` (in a function, and at import);
-- in `vm`: `process.env.constructor` (any `Object.prototype` name) read the built-ins' prototype (`Object`), now
-  unset, as Convex's per-name read gives; and the commit timestamp placeholder in a `vm` function's scheduled
-  arguments was not seen (`hasCommitTs` only looked into this realm's plain objects), so a job was scheduled with
-  it; now refused with the scheduler's message, as STUDY-53 and Convex require (`resolveCommitTs` had the same
-  realm check and has the same fix); and the server's app metrics read the deterministic `Date.now` inside every
-  query (`recordOutstanding`), which marked every result as time-dependent: every cached query result expired after
-  `MAX_CACHE_AGE_MS` (17 s), where Convex expires only one that read the time (`AppMetrics` now reads core's
-  `wallClock`);
+  contexts copied the real `setTimeout` and `fetch` (in a function, and at import); fixed here;
+- in `vm`: `Object.prototype` names in `process.env`, the commit timestamp placeholder in a pushed function's
+  objects, and every cached query result expiring after 17 s; fixed on their own (§9, #751), which this branch
+  merges;
 - in the bridge itself: the user timer not paused during the call, a child's start counted as user time, an env
   read reported once per name instead of once per read, and `db.query` / `withIndex` reads recorded only when the
   query ran.
-
-It found one bug it does not fix, outside this PR: a mutation that returns `db.vars.commitTs` over `/api/mutation`
-fails the request (`reformat` of the result's `$commitTs` token), under `vm` too.
 
 **The suites under both executors** (`BUNVEX_FUNCTION_SANDBOX=process BUNVEX_FUNCTION_SANDBOX_ISOLATION=none`, with
 `test/process-preload.ts` providing the executor for in-process servers):
@@ -665,10 +657,34 @@ before the next.
   executors a `Set` or `Map` written as a value prints as `Set {…}` (its realm is the app's context, so the values
   package's `instanceof Set` misses it), where Convex prints `Set[1]`; a realm-independent check in `toJson` would
   match Convex (and change `value-error-frames.test.ts`'s expectation).
-- **A bug found, not fixed here:** a mutation that returns `db.vars.commitTs` over `/api/mutation` fails the request
-  (`value-format.ts` `reformat` refuses the `$commitTs` token), under `vm` too.
 - **The pool (PR 9)**: one-call processes, so a timeout or a crash fails only its call; replacing a child off the
   call's path (a warm spare); the child's memory baseline (§7.5) against the 96 MiB cap.
 - **Logs and stacks (PR 4)**: console lines and audit lines as operations; a value error thrown in a write's
   synchronous part keeps the app's frame (the host can tell the error was synchronous).
 - **Batching** (§8.10) of the child's concurrent operations, and the iterator's start checks at the call (§8.4).
+
+## 9. Three `vm` bugs the bridge's parity test found
+
+STUDY-168 PR 3's differential test (§8.9, `packages/sandbox/test/bridge-parity.test.ts`: the same pushed
+module on a `vm` server and a `process` server, every answer and read set compared) showed three places where the
+default `vm` executor differs from Convex. They are fixed here, on their own, because they change the default path.
+No divergence is recorded: each was a bug against Convex's behaviour.
+
+| Bug | How Convex does it | Before | Now |
+|---|---|---|---|
+| `process.env.constructor` (any `Object.prototype` name) | one name at a time, `environmentVariables/get` (`npm-packages/udf-runtime/src/00_misc.ts:16-30`): unset unless set | the built-ins were a plain object read by name: `constructor` was `Object` (a function, not a value: the query failed), `__proto__` `{}`; an action's variables the same | unset (`ownVar`, functions.ts), in queries, mutations and actions; set, it reads as itself |
+| `db.vars.commitTs` inside a pushed function's objects | the placeholder is refused in scheduled arguments, resolved in a mutation's result (STUDY-53) | `hasCommitTs` and `resolveCommitTs` looked only into this realm's plain objects, and a pushed function's come from its context (STUDY-35): its scheduled arguments took the placeholder (the job was scheduled with it), and a mutation that returned it failed its answer (`reformat` met the `$commitTs` token) | a plain object of any realm (`isPlainObject`, commit-ts.ts): refused, resolved |
+| The query cache's expiry | a result expires after `MAX_CACHE_AGE_MS` only if the query read the time (`observe_time`) | `AppMetrics` took the deterministic `Date.now` (its default clock, read when `createServer` makes it) and recorded every query inside its execution, which marked every result as time-dependent: every cached result expired after 17 s | `AppMetrics` reads core's `wallClock`: a result that read no time stays cached |
+
+**Tests:** `push.test.ts` (the five prototype names unset in a query and an action, set as itself),
+`commit-ts.test.ts` in the server (a pushed mutation's result resolved, deep too; the placeholder refused in scheduled
+arguments, deep too) and in values (`hasCommitTs`, `resolveCommitTs` on another realm's objects), `meta.test.ts` (a
+query that reads no time stays cached past `MAX_CACHE_AGE_MS`, in-process and over HTTP).
+
+**Sabotage:** each fix undone alone fails its test: the built-ins' lookup (1), an action's (1), `hasCommitTs` (2),
+`resolveCommitTs` (2), `AppMetrics` on `Date.now` (1).
+
+**The cache, before and after** (a pushed query that reads no time, 120 calls over HTTP, the cache clock moved 1 s
+per call, no writes): before, 104 runs (13 % hits); now, 1 run (99 % hits). The skewed clock overstates the old
+miss rate (a result is stamped with the real time, so past 17 s of skew every check expires it); in real time, the
+old code ran a hot query again once every 17 s, where Convex (and now bunvex) runs it once.
