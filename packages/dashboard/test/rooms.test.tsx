@@ -178,6 +178,50 @@ describe("the Rooms screen", () => {
     await expectAccessible();
   });
 
+  test("the members' poll hears first that the room closed: the members stay, and the list is asked at once", async () => {
+    const src = source();
+    // the list answers as before the close until let go: the members' poll comes back empty first
+    let stale: RoomInfo[] | undefined;
+    let asked = 0;
+    const listRooms = src.listRooms.bind(src);
+    src.listRooms = async (o) => {
+      asked++;
+      if (emptyAt && !askedAfterAt) askedAfterAt = performance.now() - emptyAt;
+      return stale ?? listRooms(o);
+    };
+    let emptyPages = 0;
+    let askedAtEmpty = 0;
+    let emptyAt = 0;
+    let askedAfterAt = 0;
+    const listRoomMembers = src.listRoomMembers.bind(src);
+    src.listRoomMembers = async (r, p, o) => {
+      const page = await listRoomMembers(r, p, o);
+      if (page.page.length === 0 && emptyPages++ === 0) {
+        askedAtEmpty = asked;
+        emptyAt = performance.now();
+      }
+      return page;
+    };
+    mount(`/rooms?room=${encodeURIComponent(DOC)}`, src);
+    const panel = await screen.findByRole("complementary", { name: "rooms:doc" });
+    await waitFor(() => expect(within(panel).getAllByRole("listitem")).toHaveLength(5));
+    stale = await listRooms();
+    src.rooms.close(DOC);
+    await waitFor(() => expect(emptyPages).toBeGreaterThan(0), { timeout: ROOMS_POLL_MS * 3 });
+    // not "nobody is in it": the members last shown, and no closed status until the list says so
+    expect(within(panel).getAllByRole("listitem")).toHaveLength(5);
+    expect(within(panel).queryByText("Nobody is in it now.")).toBeNull();
+    expect(within(panel).queryByRole("status")).toBeNull();
+    // the empty page asks the list again at once, not on its next poll
+    await waitFor(() => expect(asked).toBeGreaterThan(askedAtEmpty));
+    expect(askedAfterAt).toBeLessThan(ROOMS_POLL_MS / 2);
+    stale = undefined;
+    const status = await within(panel).findByRole("status", {}, { timeout: ROOMS_POLL_MS * 3 });
+    expect(status.textContent).toContain("Closed");
+    expect(within(panel).getAllByRole("listitem")).toHaveLength(5);
+    expect(within(panel).queryByText("No member was listed.")).toBeNull();
+  });
+
   test("a link to a room that is not open says so", async () => {
     mount(`/rooms?room=${encodeURIComponent('room|rooms:doc|{"id":"gone"}')}`);
     const panel = await screen.findByRole("complementary", { name: "Room" });

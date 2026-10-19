@@ -160,6 +160,10 @@ and in the command palette.
   "Closed — its last member left. This is what it showed last." in a status line, dims the members and stops asking
   for them; no error is shown. A link to a room that was never seen open in this visit says "This room is not open:
   it closed, or the link is old."
+- The members and the list are two polls, and either may hear first that the room closed. Once it has, the members
+  page is empty (a room with no member is not open), so an empty page after members were shown is the room closing:
+  the members last shown stay (dimmed), and the list is asked at once to say it closed. Without this, a members poll
+  landing just before the list's showed "No member was listed." under "Closed" (the flaky test fixed in #724).
 - No `viewMetrics`: "This credential cannot view the deployment's rooms.", as the Subscriptions screen.
 
 **The definitions on the Functions screen** (`packages/dashboard/src/functions/rooms.tsx`). The function tree stays
@@ -208,6 +212,8 @@ at once when it comes back (`connection.tsx`). Nothing is read for rooms while n
 | The definitions inside the function tree's navigation | the Functions tree test, the definitions test |
 | An open room's members not polled | polls test |
 | A closed room's members still polled | closing test (the members stay after a second poll) |
+| An empty members page shown as "nobody is in it" before the list says closed | the members-poll-first test |
+| The list not asked at once after an empty members page | the members-poll-first test |
 
 ## 6. Questions for the owner
 
