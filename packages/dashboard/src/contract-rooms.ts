@@ -42,7 +42,7 @@ export function describeRoomsContract({ make, test }: Ctx) {
     }
     // by name, then key, as the server sorts (keys are unique, so strictly)
     expect(
-      rooms.every((r, i) => i === 0 || byText(rooms[i - 1]!.name, r.name) || byText(rooms[i - 1]!.key, r.key) < 0),
+      rooms.every((r, i) => i === 0 || (byText(rooms[i - 1]!.name, r.name) || byText(rooms[i - 1]!.key, r.key)) < 0),
     ).toBe(true);
   });
 
