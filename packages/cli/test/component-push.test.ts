@@ -293,6 +293,22 @@ describe("bunvex codegen", () => {
     );
   });
 
+  test("a local component mounting a local one imports it from its own `_generated/` (DV-535)", async () => {
+    const root = app("app.use(counter);\n");
+    write(root, {
+      "bunvex/bunvex.config.ts": `import { defineApp } from ${SERVER};\nimport counter from "../components/counter/bunvex.config";\nconst app = defineApp();\napp.use(counter);\nexport default app;\n`,
+      ...under(
+        "components/counter",
+        component("counter", `import inner from "../inner/bunvex.config";\nc.use(inner);\n`),
+      ),
+      ...under("components/inner", component("inner")),
+    });
+    expect(await main(["codegen", "--typecheck=disable"], io(root).it)).toBe(0);
+    expect(readFileSync(join(root, "components/counter/_generated/api.ts"), "utf8")).toContain(
+      `inner: ${imp("../../inner/_generated/component.js")}.ComponentApi<"inner">;`,
+    );
+  });
+
   test("--component-dir: one component's `_generated/` alone; a directory without a definition is refused", async () => {
     const root = app();
     const r = io(root);
