@@ -43,6 +43,7 @@ const SECTION_TITLE = "text-sm font-medium";
 // budget, UI-01 §14.1)
 const HealthMetrics = lazy(() => import("../metrics/health.tsx").then((m) => ({ default: m.HealthMetrics })));
 const Engine = lazy(() => import("./engine.tsx").then((m) => ({ default: m.Engine })));
+const RoomCounters = lazy(() => import("./room-counters.tsx").then((m) => ({ default: m.RoomCounters })));
 const ClientsBlock = lazy(() => import("./overview-clients.tsx").then((m) => ({ default: m.ClientsBlock })));
 
 export function Overview() {
@@ -78,6 +79,7 @@ export function Overview() {
               </section>
               <RecentActivity />
             </div>
+            <RoomsSection />
             <EngineSection />
           </div>
         </div>
@@ -528,6 +530,40 @@ function EngineSection() {
           <Suspense fallback={<p className="text-sm text-muted-foreground">Loading…</p>}>
             <Engine />
           </Suspense>
+        </div>
+      )}
+    </details>
+  );
+}
+
+/**
+ * The rooms' counters (AD-43), collapsed as the Engine's: only for a deployment whose stats have them (one that
+ * runs rooms), read every second while open. The summary line says the gauges from the Overview's own samples.
+ */
+function RoomsSection() {
+  const { history } = useStatsHistory();
+  const [open, setOpen] = useState(false);
+  const rooms = history.at(-1)?.rooms;
+  if (!rooms) return null;
+  return (
+    <details className="border" onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
+      <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+        Rooms{" "}
+        <span className="font-normal text-muted-foreground tabular-nums">
+          — {formatCount(rooms.rooms)} open, {formatCount(rooms.members)} members, {formatCount(rooms.connections)}{" "}
+          connections
+        </span>
+      </summary>
+      {open && (
+        <div className="border-t p-4 md:p-6">
+          <Suspense fallback={<p className="text-sm text-muted-foreground">Loading…</p>}>
+            <RoomCounters />
+          </Suspense>
+          <p className="mt-3 text-sm">
+            <DashLink link={{ to: "/rooms" }} className="underline-offset-4 hover:underline">
+              See the open rooms
+            </DashLink>
+          </p>
         </div>
       )}
     </details>
