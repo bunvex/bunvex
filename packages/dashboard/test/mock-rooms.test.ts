@@ -98,3 +98,19 @@ describe("MockDataSource rooms", () => {
     expect(p.isDone).toBe(true);
   });
 });
+
+test("a test can close a room: it leaves the list, its members count as leaves, its members page is empty", async () => {
+  const src = new MockDataSource({ seed: 3 });
+  const before = await src.listRooms!();
+  const room = before[0]!;
+  const leaves = (await src.getStats()).rooms!.leaves;
+  expect(src.rooms.close(room.key)).toBe(true);
+  expect((await src.listRooms!()).map((r) => r.key)).not.toContain(room.key);
+  expect((await src.getStats()).rooms!.leaves).toBe(leaves + room.members);
+  expect(await src.listRoomMembers!({ key: room.key }, { numItems: 10, cursor: null })).toEqual({
+    page: [],
+    isDone: true,
+    continueCursor: "",
+  });
+  expect(src.rooms.close(room.key)).toBe(false);
+});

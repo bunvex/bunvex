@@ -25,7 +25,7 @@ const num = { type: "number" as const };
 const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 export class MockRooms {
-  private readonly open: OpenRoom[];
+  private open: OpenRoom[];
   private readonly rnd: Random;
   private counters: Omit<RoomStats, "rooms" | "members" | "connections">;
 
@@ -180,6 +180,18 @@ export class MockRooms {
     const members = this.open.reduce((n, r) => n + r.info.members, 0);
     const connections = this.open.reduce((n, r) => n + r.info.connections, 0);
     return { rooms: this.open.length, members, connections, ...this.counters };
+  }
+
+  /**
+   * Close a room, as the last member leaving would: gone from `list`, its members counted as leaves. For tests of
+   * the "closed" state; not part of the contract. False when no open room has that key.
+   */
+  close(key: string): boolean {
+    const r = this.open.find((o) => o.info.key === key);
+    if (!r) return false;
+    this.open = this.open.filter((o) => o !== r);
+    this.counters = { ...this.counters, leaves: this.counters.leaves + r.info.members };
+    return true;
   }
 
   /** The counters on, as a busy deployment would between two samples. */

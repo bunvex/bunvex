@@ -318,7 +318,8 @@ export class MockDataSource implements DashboardDataSource {
   readonly audit: MockAudit;
   private readonly snapshots: MockSnapshots;
   private readonly topology: MockTopology;
-  private readonly roomsState: MockRooms;
+  /** The open rooms (AD-43). Not part of the contract: tests drive it (`rooms.close(key)`). */
+  readonly rooms: MockRooms;
   /** Live queries and the query cache (STUDY-131 AD-25). Not part of the contract: tests drive it. */
   readonly subscriptions: MockSubscriptions;
   private readonly systemTables: MockSystemTables;
@@ -422,7 +423,7 @@ export class MockDataSource implements DashboardDataSource {
     const docs = fixture.tables.reduce((n, t) => n + t.documents.length, 0);
     this.subscriptions = new MockSubscriptions(this.rnd, () => this.scheduler.now(), docs * 3);
     this.rerunRnd = createRandom((opts.seed ?? 1) ^ 0x7ace);
-    this.roomsState = new MockRooms(opts.seed ?? 1, () => this.scheduler.now(), opts.now ?? Date.now());
+    this.rooms = new MockRooms(opts.seed ?? 1, () => this.scheduler.now(), opts.now ?? Date.now());
     this.stats = {
       at: opts.now ?? Date.now(),
       commitTs: docs * 3,
@@ -545,7 +546,7 @@ export class MockDataSource implements DashboardDataSource {
 
   /** The latest sample, with the rooms' gauges and counters as they stand. */
   private statsNow(): DeploymentStats {
-    return { ...this.stats, rooms: this.roomsState.stats() };
+    return { ...this.stats, rooms: this.rooms.stats() };
   }
 
   /** Moves the counters on, as a busy deployment would between two samples. */
@@ -555,7 +556,7 @@ export class MockDataSource implements DashboardDataSource {
     const conflicts = this.rnd.chance(0.2) ? 1 : 0;
     const hits = this.rnd.int(50, 400);
     const reruns = this.rnd.int(0, 30);
-    this.roomsState.step();
+    this.rooms.step();
     this.stats = {
       at: this.now(),
       commitTs: s.commitTs + commits,
@@ -1560,21 +1561,21 @@ export class MockDataSource implements DashboardDataSource {
   listRooms(opts?: CallOptions): Promise<RoomInfo[]> {
     return this.call(opts?.signal, () => {
       this.canViewRooms();
-      return this.roomsState.list();
+      return this.rooms.list();
     });
   }
 
   listRoomMembers(room: RoomRef, page: PageRequest, opts?: CallOptions): Promise<Page<RoomMember>> {
     return this.call(opts?.signal, () => {
       this.canViewRooms();
-      return this.roomsState.members(room, page);
+      return this.rooms.members(room, page);
     });
   }
 
   listRoomDefinitions(opts?: CallOptions): Promise<RoomDefinition[]> {
     return this.call(opts?.signal, () => {
       this.canViewRooms();
-      return this.roomsState.definitions();
+      return this.rooms.definitions();
     });
   }
 
