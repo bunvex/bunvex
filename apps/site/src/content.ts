@@ -272,9 +272,9 @@ export const MIGRATE = {
 /** docs/parity/README.md's summary table: done, partial and missing rows per area. */
 export const PARITY = {
   areas: [
-    { name: "Function and database API", done: 239, partial: 6, missing: 2 },
+    { name: "Function and database API", done: 244, partial: 3, missing: 0 },
     { name: "Clients, sync protocol, React", done: 163, partial: 2, missing: 1 },
-    { name: "Platform: auth, storage, scheduler, CLI…", done: 230, partial: 21, missing: 12 },
+    { name: "Platform: auth, storage, scheduler, CLI…", done: 237, partial: 20, missing: 6 },
   ],
   link: blob("docs/parity/README.md"),
 } as const;
