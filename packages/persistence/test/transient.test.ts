@@ -47,8 +47,17 @@ describe("MySQL (as Convex's classify_mysql_error)", () => {
     expect(mysqlOperational(err({ errno: 1105 }, "vttablet: primary is not serving"))).toBe(true);
     expect(mysqlOperational(err({}, "Can't add new command when connection is in closed state"))).toBe(true);
   });
-  test("deadlocks, lock waits, duplicate keys and other errors are not", () => {
-    for (const errno of [1213, 1205, 1062, 1064, 1105]) expect(mysqlTransient(err({ errno }))).toBe(false);
+  test("a deadlock (1213) is transient for a flush, but not operational (Convex 1a9f5e1)", () => {
+    const deadlock = err(
+      { errno: 1213, code: "ER_LOCK_DEADLOCK", sqlState: "40001" },
+      "Deadlock found when trying to get lock; try restarting transaction",
+    );
+    expect(mysqlTransient(deadlock)).toBe(true);
+    // Not operational: the connection is kept and a read is not retried for it.
+    expect(mysqlOperational(deadlock)).toBe(false);
+  });
+  test("lock waits, duplicate keys and other errors are not", () => {
+    for (const errno of [1205, 1062, 1064, 1105]) expect(mysqlTransient(err({ errno }))).toBe(false);
     for (const e of never) expect(mysqlTransient(e)).toBe(false);
   });
 });
