@@ -13,6 +13,7 @@ import { bundleComponents, findComponents } from "../src/components.ts";
 import { type Io, main } from "../src/index.ts";
 import { runCommand } from "../src/run.ts";
 import { memoryStore } from "./memory-store.ts";
+import { allowTsImports } from "./ts-imports.ts";
 
 const SECRET = "ce".repeat(32);
 const NAME = "component-push-test";
@@ -269,6 +270,7 @@ describe("codegen", () => {
     });
     write(root, call('"x"'));
     expect(await main(["codegen", "--init", "--typecheck=disable"], io(root).it)).toBe(0);
+    allowTsImports(root);
     // The first push writes the types; the second checks the code against them.
     expect(await main(["deploy", "--url", d.url, "--admin-key", KEY, "--typecheck=disable"], io(root).it)).toBe(0);
     const ok = io(root);
@@ -418,6 +420,7 @@ describe("bunvex run --component (DV-391)", () => {
     symlinkSync(resolve(import.meta.dir, "../../../node_modules/typescript"), join(root, "node_modules/typescript"));
     const flags = ["deploy", "--url", d.url, "--admin-key", KEY, "--typecheck=enable"];
     expect(await main(["codegen", "--init", "--typecheck=disable"], io(root).it)).toBe(0);
+    allowTsImports(root);
     expect(await main(flags, io(root).it)).toBe(0);
     const failed = io(root);
     expect(await main([...flags, "--typecheck-components"], failed.it)).toBe(1);

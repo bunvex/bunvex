@@ -18,6 +18,7 @@ import { join, resolve } from "node:path";
 import { generatedFiles, importPath, moduleIdentifier, modulePaths, runCodegen } from "../src/codegen.ts";
 import { codegenConfig, readProjectConfig } from "../src/deploy.ts";
 import { main } from "../src/index.ts";
+import { allowTsImports } from "./ts-imports.ts";
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -166,18 +167,11 @@ function appWithPackages(files: Record<string, string>) {
   return app;
 }
 
-/**
- * `codegen --init` in an app on the workspace's packages, which export their TypeScript sources: those import
- * each other by `.ts` paths, so the app's tsconfig needs `allowImportingTsExtensions` here. The published
- * packages ship `.d.ts` files and need nothing added (sync-e2e/node/npm-packages.node.ts).
- */
+/** `codegen --init` in an app on the workspace's packages (see `allowTsImports`). */
 async function initOnSources(app: string) {
   const r = io(app);
   expect(await main(["codegen", "--init", "--typecheck", "disable"], r.it)).toBe(0);
-  const path = join(app, "bunvex/tsconfig.json");
-  const text = readFileSync(path, "utf8");
-  expect(text).toContain('"noEmit": true\n');
-  writeFileSync(path, text.replace('"noEmit": true\n', '"noEmit": true,\n    "allowImportingTsExtensions": true\n'));
+  allowTsImports(app);
   return r;
 }
 
