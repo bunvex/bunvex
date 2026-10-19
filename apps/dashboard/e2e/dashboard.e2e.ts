@@ -467,7 +467,7 @@ describe("the dashboard in a browser", () => {
     await still.close();
   });
 
-  test("Rooms (AD-43): the list, a room's members, its definition and the Overview's counters; axe in both themes", async () => {
+  test("Rooms (AD-43): the list, a room's members, its event tap and actions, its definition and the Overview's counters; axe in both themes", async () => {
     const axeOn = async (page: Page) => {
       await page.addScriptTag({ content: AXE });
       return page.evaluate(async () => {
@@ -496,6 +496,45 @@ describe("the dashboard in a browser", () => {
       await first.click();
       await members.getByRole("listitem").first().locator("pre").waitFor();
       expect(await axeOn(page)).toEqual([]);
+      // the event tap (step 5): the mock's waves arrive, newest first
+      const tap = panel.getByRole("grid", { name: "Room events" });
+      await tap
+        .getByRole("gridcell")
+        .filter({ hasText: /^wave$/ })
+        .first()
+        .waitFor({ timeout: 10_000 });
+      // a test event (step 6), confirmed in a dialog: it shows in the tap, from the server
+      await panel.getByRole("button", { name: "Send test event" }).click();
+      const dialog = page.getByRole("alertdialog", { name: "Send a test event to rooms:doc?" });
+      await dialog.getByRole("combobox", { name: "Event" }).fill("reaction");
+      await dialog.getByRole("textbox", { name: "Data (JSON)" }).fill('{"emoji": "tada"}');
+      // once the dialog has faded in: mid-fade, its colours are not yet its own
+      await page.evaluate(() =>
+        // the finite ones: the Live dot pulses forever
+        Promise.all(
+          document
+            .getAnimations()
+            .filter((a) => a.effect?.getTiming().iterations !== Number.POSITIVE_INFINITY)
+            .map((a) => a.finished),
+        ),
+      );
+      expect(await axeOn(page)).toEqual([]);
+      await dialog.getByRole("button", { name: "Send event" }).click();
+      await dialog.waitFor({ state: "hidden" });
+      await tap
+        .getByRole("gridcell")
+        .filter({ hasText: /^reaction$/ })
+        .first()
+        .waitFor();
+      expect(await panel.getByTestId("room-outcome").textContent()).toBe(
+        "Sent reaction to 5 members, from the server.",
+      );
+      // closing asks first, with the counts: kept open here
+      await panel.getByRole("button", { name: "Close room" }).click();
+      const closing = page.getByRole("alertdialog", { name: "Close rooms:doc?" });
+      await closing.getByText(/Its 5 members and their 5 connections end now/).waitFor();
+      await closing.getByRole("button", { name: "Keep it open" }).click();
+      await closing.waitFor({ state: "hidden" });
       // its definition on the Functions screen, apart from the function tree
       await page.goto(url("/functions?room=rooms:doc"));
       await heading(page, "rooms:doc");

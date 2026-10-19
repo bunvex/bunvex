@@ -7,6 +7,11 @@ import { formatCount } from "../screens/stats.ts";
 const n = (v: Json | undefined, one: string, many = `${one}s`) =>
   typeof v === "number" ? `${formatCount(v)} ${v === 1 ? one : many}` : many;
 const str = (v: Json | undefined) => (typeof v === "string" ? v : "");
+/** A room as its audit event names it: the function, then its args' JSON text unless there are none. */
+const roomOf = (m: Record<string, Json>) => {
+  const args = str(m.args);
+  return `${str(m.room)}${args === "" || args === "{}" ? "" : ` ${args}`}`;
+};
 /** A list's length (Convex's events carry the ids: `document_ids`, `storage_ids`), else a count. */
 const len = (list: Json | undefined, count?: Json) => (Array.isArray(list) ? list.length : count);
 
@@ -45,6 +50,15 @@ export const ACTION_AREAS: readonly { area: string; actions: Record<string, stri
       create_client_app: "App registered",
       update_client_app: "App changed",
       delete_client_app: "App removed",
+    },
+  },
+  // the dashboard's actions on a room (AD-43): bunvex's own events, Convex has no rooms
+  {
+    area: "Rooms",
+    actions: {
+      broadcast_room_event: "Test event sent",
+      remove_room_member: "Member removed",
+      close_room: "Room closed",
     },
   },
 ];
@@ -100,6 +114,16 @@ export function describeEvent(e: AuditEvent): string {
       return `Imported ${typeof m.count === "number" ? n(m.count, "document") : "a snapshot"}${
         Array.isArray(m.table_names) && m.table_names.length > 0 ? ` into ${m.table_names.join(", ")}` : ""
       }${m.import_mode === "replace" || m.import_mode === "replaceAll" ? " (replacing)" : ""}`;
+    case "broadcast_room_event":
+      return `Sent the test event ${str(m.event)} to ${roomOf(m)}`;
+    case "remove_room_member":
+      return `Removed member ${str(m.member_id)} from ${roomOf(m)}${
+        typeof m.connections === "number" ? ` (${n(m.connections, "connection")})` : ""
+      }`;
+    case "close_room":
+      return `Closed ${roomOf(m)}${
+        typeof m.members === "number" ? `: ${n(m.members, "member")}, ${n(m.connections, "connection")}` : ""
+      }`;
     case "pause_deployment":
       return "Paused the deployment";
     case "unpause_deployment":

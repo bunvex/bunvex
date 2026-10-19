@@ -5,14 +5,15 @@
 // the screen is open (D5), not while the tab is hidden (TanStack Query's default for an interval) nor while the
 // deployment is disconnected (STUDY-149 PR 6's rule for polled reads). A room that leaves the list has closed (its
 // last member left): the panel says so and keeps what it last showed. A deployment without rooms answers
-// `not_found`, which is an empty state, not an error.
+// `not_found`, which is an empty state, not an error. A room's panel also taps its events (event-tap.tsx, AD-43 step
+// 5) and holds its actions (actions.tsx, step 6): send a test event, remove a member, close the room.
 import { Badge } from "@bunvex/ui/components/badge";
 import { Button } from "@bunvex/ui/components/button";
 import { ChoiceSelect } from "@bunvex/ui/components/choice-select";
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
 import { cn } from "@bunvex/ui/lib/utils";
 import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useRef } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, dashboardKeys } from "../data/queries.ts";
 import { type RoomInfo, type RoomMember, toDataSourceError } from "../data-source.ts";
@@ -25,6 +26,8 @@ import { ErrorState } from "../shell/error-state.tsx";
 import { NotOffered } from "../shell/not-offered.tsx";
 import { Panel } from "../shell/panel.tsx";
 import { formatTime, RelativeTime } from "../shell/time.tsx";
+import { CloseRoomButton, ReadOnlyNote, RemoveMemberButton, SendEventButton, useRoomActions } from "./actions.tsx";
+import { EventTap } from "./event-tap.tsx";
 import { KIND_LABEL, openedRoom, ROOMS_POLL_MS, roomNames, roomsSummary, shortValue, shownRooms } from "./words.ts";
 
 /** A members page: the most the server returns in one. */
@@ -231,6 +234,15 @@ function RoomDetails({ room, closed }: { room: RoomInfo; closed: boolean }) {
     if (emptied && !closed) void queryClient.invalidateQueries({ queryKey: roomsKey(scope.scope), exact: true });
   }, [emptied, closed, queryClient, scope.scope]);
   const scopeKind = room.kind === "presence";
+  const can = useRoomActions();
+  const [outcome, setOutcome] = useState<string>();
+  const [closedHere, setClosedHere] = useState(false);
+  // an action done: what it did said, and the list and members asked again at once
+  const done = (message: string) => {
+    setOutcome(message);
+    void queryClient.invalidateQueries({ queryKey: roomsKey(scope.scope) });
+  };
+  const askList = () => void queryClient.invalidateQueries({ queryKey: roomsKey(scope.scope), exact: true });
   return (
     <div className="flex flex-col gap-4 text-sm">
       {closed && (
@@ -238,7 +250,7 @@ function RoomDetails({ room, closed }: { room: RoomInfo; closed: boolean }) {
           <Badge variant="outline" className="mr-2">
             Closed
           </Badge>
-          Its last member left. This is what it showed last.
+          {closedHere ? "Closed from the dashboard." : "Its last member left."} This is what it showed last.
         </p>
       )}
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
@@ -258,6 +270,26 @@ function RoomDetails({ room, closed }: { room: RoomInfo; closed: boolean }) {
           <span className="text-muted-foreground">({formatTime(room.openedAt)})</span>
         </dd>
       </dl>
+      {!closed && (can.broadcast || can.close) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {can.broadcast && !scopeKind && <SendEventButton room={room} onDone={done} />}
+          {can.close && (
+            <CloseRoomButton
+              room={room}
+              onDone={(message, didClose) => {
+                if (didClose) setClosedHere(true);
+                done(message);
+              }}
+            />
+          )}
+        </div>
+      )}
+      {!closed && can.readOnly && <ReadOnlyNote />}
+      <p aria-live="polite" className="text-xs text-muted-foreground empty:hidden" data-testid="room-outcome">
+        {outcome ?? ""}
+      </p>
+      {/* a scope has no events: its users' state is what changes */}
+      {!scopeKind && <EventTap room={room} closed={closed} onClosed={askList} />}
       <section aria-label="Members">
         <h3 className="mb-2 font-medium">{scopeKind ? "Users" : "Members"}</h3>
         {members.error ? (
@@ -269,7 +301,16 @@ function RoomDetails({ room, closed }: { room: RoomInfo; closed: boolean }) {
         ) : (
           <ul className={cn("flex flex-col gap-2", (closed || emptied) && "opacity-60")}>
             {rows.map((m) => (
-              <MemberItem key={m.memberId} m={m} scopeKind={scopeKind} />
+              <MemberItem
+                key={m.memberId}
+                m={m}
+                scopeKind={scopeKind}
+                action={
+                  can.remove && !closed && !emptied ? (
+                    <RemoveMemberButton room={room} member={m} onDone={done} />
+                  ) : undefined
+                }
+              />
             ))}
           </ul>
         )}
@@ -290,7 +331,7 @@ function RoomDetails({ room, closed }: { room: RoomInfo; closed: boolean }) {
 }
 
 /** One member: who, the flags that explain what they can do, their presence (a scope's: state), and when. */
-function MemberItem({ m, scopeKind }: { m: RoomMember; scopeKind: boolean }) {
+function MemberItem({ m, scopeKind, action }: { m: RoomMember; scopeKind: boolean; action?: ReactNode }) {
   const what = scopeKind ? "State" : "Presence";
   const who = m.userId ?? "Signed out";
   return (
@@ -301,6 +342,7 @@ function MemberItem({ m, scopeKind }: { m: RoomMember; scopeKind: boolean }) {
         {m.idle && <Badge variant="outline">Idle</Badge>}
         {!scopeKind && !m.canPublish && <Badge variant="outline">Cannot publish</Badge>}
         {m.graced && <Badge variant="outline">Reconnecting</Badge>}
+        {action && <span className="ml-auto">{action}</span>}
       </div>
       <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 text-xs">
         <dt className="text-muted-foreground">{scopeKind ? "Tabs" : "Connections"}</dt>
