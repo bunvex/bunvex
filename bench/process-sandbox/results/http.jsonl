@@ -1,0 +1,4 @@
+{"phase":"http","mode":"vm","concurrency":8,"perSec":1861,"errors":0,"p50Ms":3.448,"p99Ms":13.846}
+{"phase":"http","mode":"vm","concurrency":32,"perSec":1965,"errors":0,"p50Ms":13.705,"p99Ms":46.095}
+{"phase":"http","mode":"bwrap","concurrency":8,"perSec":1579,"errors":0,"p50Ms":4.507,"p99Ms":14.802}
+{"phase":"http","mode":"bwrap","concurrency":32,"perSec":1945,"errors":0,"p50Ms":15.103,"p99Ms":37.758}

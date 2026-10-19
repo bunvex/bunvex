@@ -1,0 +1,43 @@
+# STUDY-168 sabotage runs on the VPS: SANDBOX_SABOTAGE=<x> SANDBOX_STUDY=1 bun test bench/process-sandbox
+# The first 'memory' run passed: the test then checked only the message. memory.peak <= cap was added, and the second 'memory' run (last block) fails as it should.
+== none
+ 7 pass
+ 0 fail
+== net
+ 7 pass
+ 0 fail
+== seccomp
+ 7 pass
+ 0 fail
+== net,seccomp
+(fail) sandboxed process (bwrap + seccomp + cgroup) > every escape is blocked [232.30ms]
+ 6 pass
+ 1 fail
+== fs
+(fail) sandboxed process (bwrap + seccomp + cgroup) > every escape is blocked [301.93ms]
+ 6 pass
+ 1 fail
+== env
+(fail) sandboxed process (bwrap + seccomp + cgroup) > every escape is blocked [266.44ms]
+ 6 pass
+ 1 fail
+== cgroup
+(fail) sandboxed process (bwrap + seccomp + cgroup) > every escape is blocked [489.65ms]
+(fail) sandboxed process (bwrap + seccomp + cgroup) > an allocating loop is stopped at the memory cap, reported, and the host survives [10060.15ms]
+ 5 pass
+ 2 fail
+== timeout
+(fail) sandboxed process (bwrap + seccomp + cgroup) > an infinite loop is killed at the user timeout and the deployment recovers [20000.42ms]
+ 6 pass
+ 1 fail
+== memory
+ 7 pass
+ 0 fail
+== none
+ 7 pass
+ 0 fail
+== memory
+Received: 2048
+(fail) sandboxed process (bwrap + seccomp + cgroup) > an allocating loop is stopped at the memory cap, reported, and the host survives [4826.23ms]
+ 6 pass
+ 1 fail
