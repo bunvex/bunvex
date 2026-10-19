@@ -173,11 +173,17 @@ export type {
   UpperBoundIndexRangeBuilder,
 } from "./database-types.ts";
 export {
+  chargeUserTime,
   checkUserTime,
+  currentExecution,
+  currentUserTimer,
   directFetch,
+  type ExecutionClock,
   type ExecutionKind,
+  executionFromClock,
   failExecution,
   formatDuration,
+  installDeterminism,
   installDeterminismIn,
   monotonicNow,
   newUserTimer,
@@ -186,6 +192,7 @@ export {
   PersistenceReadError,
   pausingUserTime,
   runImportPhase,
+  runInExecution,
   SYSTEM_TIMEOUT_MESSAGE,
   setFetchMeter,
   setFetchSender,
@@ -243,7 +250,7 @@ export {
   type EnvVarChange,
   orderEnvVarChanges,
 } from "./environment-variables.ts";
-export { Expression, type ExpressionOrValue, filterBuilder } from "./filter.ts";
+export { Expression, type ExpressionOrValue, expressionFromJson, expressionJson, filterBuilder } from "./filter.ts";
 export { INDEX_CACHE_MAX_BYTES, IndexCache, IndexCacheMismatchError, type IndexCacheStats } from "./index-cache.ts";
 export { opaqueToInspect } from "./inspect.ts";
 export {
@@ -305,7 +312,7 @@ export {
   QUERY_CACHE_MAX_BYTES,
   QueryCache,
 } from "./query-cache.ts";
-export { MAX_QUERY_OPERATORS } from "./query-ops.ts";
+export { MAX_QUERY_OPERATORS, TOO_MANY_OPERATORS } from "./query-ops.ts";
 export { type IndexPoint, ReadSetIndex } from "./read-set-index.ts";
 export { RETENTION_GLOBALS, Retention, type RetentionOptions } from "./retention.ts";
 export { type Runtime, type RuntimeTimer, realRuntime } from "./runtime.ts";
@@ -431,8 +438,10 @@ export {
   unixNanos,
 } from "./tracing.ts";
 export {
+  compileRange,
   formatBytes,
   ImportIdError,
+  IndexRangeBuilder as TxIndexRangeBuilder,
   isQueryObject,
   MAX_DOCUMENT_NESTING,
   MAX_USER_SIZE,
@@ -441,6 +450,7 @@ export {
   type PaginationResult,
   QueryCursorError,
   type Savepoint,
+  SearchFilterBuilder as TxSearchFilterBuilder,
   TRANSACTION_MAX_NUM_USER_WRITES,
   TRANSACTION_MAX_READ_SET_INTERVALS,
   TRANSACTION_MAX_READ_SIZE_BYTES,
@@ -454,6 +464,7 @@ export {
 export { isSubset as validatorIsSubset } from "./validator-subset.ts";
 export {
   type FileStorageDoc,
+  VIRTUAL_INDEXES,
   VIRTUAL_TABLES,
   type VirtualTable,
   virtualFile,

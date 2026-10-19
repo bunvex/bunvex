@@ -3,15 +3,21 @@
 //
 // - `vm` (the default): this process's `node:vm` contexts, one pair per code version (`CodeVersion.load`,
 //   DV-164). Its own globals, not a security boundary.
-// - `process`: app code in a separate, OS-sandboxed process, one call per process (STUDY-168). Not built yet:
-//   asking for it fails at start, never a silent `vm`.
+// - `process`: app code in a separate process (STUDY-168, `@bunvex/sandbox`): its queries and mutations run there,
+//   each `ctx` operation answered on the host's transaction (STUDY-171 §8). Without OS isolation yet (PR 8): it
+//   starts only with `BUNVEX_FUNCTION_SANDBOX_ISOLATION=none`, and says so. The server cannot import the sandbox
+//   (the sandbox's child runs the server's loader): its entry point provides it (`provideProcessExecutor`), and a
+//   start that asks for `process` without one fails.
 //
 // Chosen by `BUNVEX_FUNCTION_SANDBOX` (`--function-sandbox` on `bunvex-local-backend` wins over it), the
 // isolation layers of `process` by `BUNVEX_FUNCTION_SANDBOX_ISOLATION`. Both are read once, at start, and checked
 // strictly, as `--deny-addresses` is: a security setting does not fall back to the default on a typo.
 import type { SchemaDefinition } from "@bunvex/core";
-import { CodeVersion, type LoadOptions, type ModuleSource } from "./code-version.ts";
+import { CodeVersion, type LoadedCode, type LoadOptions, type ModuleSource } from "./code-version.ts";
 
+// What the child's calls and the host's stand-ins use (STUDY-171 §8).
+export { appContext } from "./app-errors.ts";
+export { type FunctionDef, REMOTE_FUNCTIONS, type RemoteRunner, type SandboxCall } from "./builders.ts";
 // What the `process` executor's child runtime (`@bunvex/sandbox`) loads through this module: the same loader, so
 // a child analyzes a push exactly as this process does (STUDY-171 §7).
 export {
@@ -21,11 +27,18 @@ export {
   FunctionExportError,
   IMPORT_TIMEOUT_MS,
   InvalidModulesError,
+  type LoadedCode,
   type LoadOptions,
   MAX_USER_MODULES,
   type ModuleSource,
+  moduleHash,
 } from "./code-version.ts";
+export { Crons } from "./cron.ts";
+export { currentEnvReader, type EnvReader, withEnv } from "./env-scope.ts";
+export { ExecutorFailure } from "./errors.ts";
+export { createFunctionHandle, inHandleScope } from "./function-handles.ts";
 export { NODE_FUNCTIONS } from "./functions.ts";
+export { HttpRouter, httpActionGeneric } from "./router.ts";
 
 export type FunctionSandbox = "vm" | "process";
 export const FUNCTION_SANDBOXES: readonly FunctionSandbox[] = ["vm", "process"];
@@ -76,18 +89,43 @@ export class MissingEnvironmentVariableError extends Error {
 const missingEnvMessage = (name: string) =>
   `Environment variable ${name} is used in auth config file but its value was not set`;
 
+/**
+ * An auth config `JSON.stringify` refuses (a bigint, a cycle): Convex's `AuthConfigUnserializableError`
+ * (crates/isolate/src/environment/auth_config.rs:286-290), its docs link left out (DV-04). Only an executor that
+ * sends the config as its JSON throws it (the sandbox's); `vm` hands the live value to `parseAuthConfig`.
+ */
+export class UnserializableAuthConfigError extends Error {
+  constructor() {
+    super("auth config file can only contain strings");
+    this.name = "UnserializableAuthConfigError";
+  }
+}
+
+/** What a function cannot use under the process sandbox yet (STUDY-171 §8.7), and how to run it. */
+export const sandboxNotYet = (what: string) =>
+  `${what} are not available yet under the function sandbox 'process' (BUNVEX_FUNCTION_SANDBOX=process): ` +
+  "unset BUNVEX_FUNCTION_SANDBOX to run them in 'vm'";
+
 /** An executor: loads a code version's modules, analyzed, their functions ready to run. */
 export type Executor = {
-  load(sources: ModuleSource[], opts: LoadOptions): Promise<CodeVersion>;
+  readonly kind: FunctionSandbox;
+  load(sources: ModuleSource[], opts: LoadOptions): Promise<LoadedCode>;
   /**
    * A standalone module's default export, evaluated as the push's import phase evaluates modules (the auth config,
    * a schema). Throws what `load` throws, or `MissingEnvironmentVariableError`.
    */
   evaluateDefault(source: ModuleSource, opts: EvaluateOptions, use: DefaultExportUse): Promise<unknown>;
+  /** `version` serves now; what this executor holds for any other version it loaded may go once it is idle. */
+  installed?(version: LoadedCode): void;
+  /** `version` will not be called again (the function tester's). */
+  release?(version: LoadedCode): void;
+  /** Stops whatever the executor runs (the server's shutdown). */
+  close?(): Promise<void>;
 };
 
 /** Today's: `node:vm` contexts in this process. The live export is handed back, whatever its use. */
 export const vmExecutor: Executor = {
+  kind: "vm",
   load: (sources, opts) => CodeVersion.load(sources, opts),
   async evaluateDefault(source, opts) {
     let missing: string | null = null;
@@ -114,13 +152,55 @@ export const vmExecutor: Executor = {
   },
 };
 
-/** Load code in the executor. Every load of an app's modules goes through here; `vm` is the only one so far. */
-export const loadCode = (sources: ModuleSource[], opts: LoadOptions): Promise<CodeVersion> =>
-  vmExecutor.load(sources, opts);
+/** Load code in `executor` (the server's; `vm` by default). Every load of an app's modules goes through here. */
+export const loadCode = (
+  sources: ModuleSource[],
+  opts: LoadOptions,
+  executor: Executor = vmExecutor,
+): Promise<LoadedCode> => executor.load(sources, opts);
 
-/** Evaluate a standalone module's default export in the executor (`Executor.evaluateDefault`). */
-export const evaluateDefault = (source: ModuleSource, opts: EvaluateOptions, use: DefaultExportUse) =>
-  vmExecutor.evaluateDefault(source, opts, use);
+/** Evaluate a standalone module's default export in `executor` (`Executor.evaluateDefault`). */
+export const evaluateDefault = (
+  source: ModuleSource,
+  opts: EvaluateOptions,
+  use: DefaultExportUse,
+  executor: Executor = vmExecutor,
+) => executor.evaluateDefault(source, opts, use);
+
+/** Makes a server's `process` executor: each server gets its own (its children are its own). */
+export type ProcessExecutorFactory = () => Executor;
+let processExecutorFactory: ProcessExecutorFactory | null = null;
+/**
+ * Provide the `process` executor (`@bunvex/sandbox`'s `createProcessExecutor`): the server cannot import it, so the
+ * entry point that starts a server does (`bunvex-local-backend`), as it provides the persistence drivers.
+ */
+export function provideProcessExecutor(factory: ProcessExecutorFactory | null) {
+  processExecutorFactory = factory;
+}
+
+/** Throws unless the `process` executor was provided (a start checks it before its store opens). */
+export function requireProcessExecutor() {
+  if (!processExecutorFactory) throw new Error(PROCESS_SANDBOX_NOT_PROVIDED);
+}
+
+/** Why `process` cannot start without its executor, and the fix. */
+export const PROCESS_SANDBOX_NOT_PROVIDED =
+  "the function sandbox 'process' needs its executor, which this server was not given: call " +
+  "provideProcessExecutor(createProcessExecutor) from @bunvex/sandbox before createServer, or unset " +
+  "BUNVEX_FUNCTION_SANDBOX";
+
+/** The executor a server runs functions in (`functionSandboxConfig` checked the choice). */
+export function executorFor(sandbox: FunctionSandbox): Executor {
+  if (sandbox === "vm") return vmExecutor;
+  requireProcessExecutor();
+  return processExecutorFactory!();
+}
+
+/** What a start under `process` logs: the isolation it runs with (STUDY-171 §8.8). */
+export const PROCESS_SANDBOX_WARNING =
+  "the function sandbox 'process' runs queries and mutations in a separate process, with no OS isolation " +
+  "(BUNVEX_FUNCTION_SANDBOX_ISOLATION=none): it is not a security boundary yet. Actions, HTTP actions, " +
+  "components and rooms are not available under it yet";
 
 function oneOf<T extends string>(value: string | undefined, values: readonly T[], def: T, what: string): T {
   if (value === undefined || value === "") return def;
@@ -142,10 +222,11 @@ export const sandboxIsolation = (value: string | undefined): SandboxIsolation =>
     "the function sandbox's isolation (BUNVEX_FUNCTION_SANDBOX_ISOLATION)",
   );
 
-/** Why `process` refuses to start, and the fix. */
-export const PROCESS_SANDBOX_UNAVAILABLE =
-  "the function sandbox 'process' is not available yet in this release: functions run in 'vm' only. " +
-  "Unset BUNVEX_FUNCTION_SANDBOX and --function-sandbox, or set them to 'vm'";
+/** Why `process` refuses to start with an isolation it does not have yet, and the fix. */
+export const processIsolationUnavailable = (isolation: SandboxIsolation) =>
+  `the function sandbox's isolation '${isolation}' is not available yet in this release: the only one is 'none', ` +
+  "which runs functions in a separate process with no OS isolation (not a security boundary). Set " +
+  "BUNVEX_FUNCTION_SANDBOX_ISOLATION=none, or unset BUNVEX_FUNCTION_SANDBOX and --function-sandbox to run them in 'vm'";
 
 /**
  * The executor a start asks for, checked before anything starts: both values valid, and the executor available
@@ -156,6 +237,11 @@ export function functionSandboxConfig(
   isolation: string | undefined,
 ): { sandbox: FunctionSandbox; isolation: SandboxIsolation } {
   const config = { sandbox: functionSandbox(sandbox), isolation: sandboxIsolation(isolation) };
-  if (config.sandbox === "process") throw new Error(PROCESS_SANDBOX_UNAVAILABLE);
+  // No OS layer exists yet (STUDY-168 PR 8): an operator who asked for one (`auto` included) never silently runs
+  // without it; `none` is the explicit downgrade (owner, 2026-10-19: fail at start). No Windows (AD-44).
+  if (config.sandbox === "process" && config.isolation !== "none")
+    throw new Error(processIsolationUnavailable(config.isolation));
+  if (config.sandbox === "process" && process.platform === "win32")
+    throw new Error("the function sandbox 'process' is not supported on Windows: unset BUNVEX_FUNCTION_SANDBOX");
   return config;
 }

@@ -1,0 +1,331 @@
+// A query's or mutation's call in the child (STUDY-171 §8): the function's own handler, run as the `vm` executor
+// runs it, with a `ctx` whose every operation is the host's.
+//
+// - **Determinism.** The call runs in an execution made from the host's (`executionFromClock`): the same frozen
+//   time, `performance.now()` from the same start, its own seeded `Math.random` and `crypto.getRandomValues`
+//   drawn on first use, timers and `fetch` refused, by core's own code (`determinism.ts`). A nested call of the
+//   same host execution joins the same one, so a mutation and the query it runs share their clock and random
+//   stream as under `vm`. What the host must know comes back with every message: whether the function read the
+//   time (`ctx.meta.getSnapshotTs()`, `Date.now()`).
+// - **User time** is counted here, by core's timer (`withUserTimer`), each operation's wait paused as a store call
+//   is (`pausingUserTime`): the 1 s limit counts the function's JavaScript, not the round trips (STUDY-168 §13.1).
+//   Its timeout and its refusals (a timer in a query) throw here, at the next operation or when the handler ends,
+//   as under `vm`; each message reports the time run since the last (`ran`), which the host charges to its own
+//   timer.
+// - **`process.env`** reads the variables the call carries, after checking the name as the engine's reader does;
+//   the names read are reported, and the host reads them on its transaction (the read set).
+// - **Errors.** An operation's error is rebuilt here with its class, name and message, and remembered: if it
+//   leaves the handler as it came, the host throws its own original.
+import {
+  checkEnvVarName,
+  checkUserTime,
+  type ExecutionClock,
+  executionFromClock,
+  newUserTimer,
+  observeTime,
+  pausingUserTime,
+  runInExecution,
+  type UserTimer,
+  userTimeMs,
+  withUserTimer,
+} from "@bunvex/core";
+import { appContext, type CodeVersion, inHandleScope, sandboxNotYet, withEnv } from "@bunvex/server/executor";
+import { BunvexError, isBunvexError } from "@bunvex/values";
+import { type DbHost, QueryImpl, readerOf, Tx, VirtualQuery } from "./child-db.ts";
+import {
+  EPOCHS_KEPT,
+  type ToHost,
+  type WireCall,
+  type WireLink,
+  type WireReply,
+  type WireTable,
+  type WireThrown,
+} from "./protocol.ts";
+import { decode, encode } from "./wire.ts";
+
+type Send = (m: ToHost) => void;
+
+/** What a child keeps between calls: the catalogs and variables by epoch, the executions by the host's id. */
+export class CallRuntime {
+  private readonly catalogs = new Map<number, Map<string, WireTable>>();
+  private readonly envs = new Map<number, Map<string, string>>();
+  private readonly executions = new Map<number, { execution: object; observed: { time: boolean }; calls: number }>();
+  private readonly calls = new Map<number, ChildCall>();
+
+  constructor(
+    private readonly send: Send,
+    private readonly versions: Map<number, CodeVersion>,
+  ) {}
+
+  /** A call from the host: run it, and answer with `done`. */
+  async call(m: WireCall) {
+    // The last `EPOCHS_KEPT` of each, as the host counts them (`host-call.ts`, `EpochWindow`): it sends again one
+    // that fell out.
+    if (m.catalog.tables) {
+      this.catalogs.set(m.catalog.epoch, new Map(m.catalog.tables.map((t) => [t.name, t])));
+      if (this.catalogs.size > EPOCHS_KEPT) this.catalogs.delete(this.catalogs.keys().next().value!);
+    }
+    if (m.env?.vars) {
+      this.envs.set(m.env.epoch, new Map(m.env.vars));
+      if (this.envs.size > EPOCHS_KEPT) this.envs.delete(this.envs.keys().next().value!);
+    }
+    let exec = this.executions.get(m.exec.id);
+    if (!exec) {
+      const observed = { time: false };
+      exec = { execution: executionFromClock(m.exec as ExecutionClock, observed), observed, calls: 0 };
+      this.executions.set(m.exec.id, exec);
+    }
+    exec.calls++;
+    const call = new ChildCall(m, this.send, this.catalogs.get(m.catalog.epoch)!, exec.observed);
+    this.calls.set(m.id, call);
+    try {
+      const version = this.versions.get(m.version);
+      const f = version?.functions.get(m.fn);
+      if (!f || (f.kind !== "query" && f.kind !== "mutation"))
+        throw new Error(`the function ${m.fn} is not a query or mutation of this version`);
+      const env = m.env ? this.envs.get(m.env.epoch)! : null;
+      await call.run(f.handler as (ctx: unknown, args: unknown) => unknown, env, exec.execution);
+    } finally {
+      this.calls.delete(m.id);
+      if (--exec.calls === 0) this.executions.delete(m.exec.id);
+    }
+  }
+
+  /** The host's answer to an operation; one for a call that has ended is dropped. */
+  reply(m: WireReply) {
+    this.calls.get(m.id)?.reply(m);
+  }
+}
+
+/** The error classes an operation's error is rebuilt with (the engine's are these, or `BunvexError`). */
+const ERRORS: Record<string, ErrorConstructor> = {
+  Error,
+  TypeError,
+  RangeError,
+  SyntaxError,
+  ReferenceError,
+  EvalError,
+  URIError,
+};
+
+/** Which call's operation an error came from, and which operation. */
+const fromOp = new WeakMap<object, { call: number; op: number }>();
+
+const stackOf = (e: Error): string | null => {
+  try {
+    const s = e.stack;
+    return typeof s === "string" ? s : null;
+  } catch {
+    return null;
+  }
+};
+
+class ChildCall implements DbHost {
+  private seq = 0;
+  private readonly waiting = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
+  private created: Map<string, WireTable>;
+  /** Each read, in order: the engine records an interval per read, the same name's included. */
+  private readonly envReads: string[] = [];
+  private readonly links: WireLink[] = [];
+  private nextLink = 0;
+  private reported = 0;
+  private timer!: UserTimer;
+  readonly snapshot: bigint;
+
+  constructor(
+    private readonly m: WireCall,
+    private readonly send: Send,
+    private readonly catalog: Map<string, WireTable>,
+    private readonly observed: { time: boolean },
+  ) {
+    this.snapshot = BigInt(m.snapshot);
+    this.created = new Map(m.created.map((t) => [t.name, t]));
+  }
+
+  table(name: string): WireTable | undefined {
+    return this.catalog.get(name) ?? this.created.get(name);
+  }
+
+  link(kind: string, from: number | null, args: unknown[]): number {
+    const id = ++this.nextLink;
+    // Serialized at the call, as an operation's arguments are.
+    this.links.push([kind, id, from, encode(args)]);
+    return id;
+  }
+
+  /** What the host charges, records and opens since the last message. */
+  private report() {
+    const ran = userTimeMs(this.timer);
+    const out = {
+      ran: Math.max(0, ran - this.reported),
+      time: this.observed.time,
+      env: this.envReads.splice(0),
+      links: this.links.splice(0),
+    };
+    this.reported = ran;
+    return out;
+  }
+
+  /** An operation, run by the host: paused while it waits, as a store call (`storeCall`), its budget checked around. */
+  op(name: string, args: unknown[]): Promise<unknown> {
+    checkUserTime();
+    // Serialized here, at the call, as the engine copies what it is given (a getter's throw is the app's).
+    const encoded = args.map(encode);
+    const op = ++this.seq;
+    const answer = pausingUserTime(
+      () =>
+        new Promise<unknown>((resolve, reject) => {
+          this.waiting.set(op, { resolve, reject });
+          this.send({ t: "op", id: this.m.id, op, name, args: encoded, report: this.report() });
+        }),
+    );
+    return answer.then(
+      (v) => {
+        checkUserTime();
+        return v;
+      },
+      (e) => {
+        throw e;
+      },
+    );
+  }
+
+  reply(m: WireReply) {
+    const w = this.waiting.get(m.op);
+    if (!w) return;
+    this.waiting.delete(m.op);
+    if (m.created) {
+      this.created = new Map(m.created.map((t) => [t.name, t]));
+    }
+    if (m.ok) w.resolve(decode(m.value, false));
+    else w.reject(this.rebuilt(m.error, m.op));
+  }
+
+  /** An operation's error as the app sees it: the engine's class and words. */
+  private rebuilt(w: WireThrown, op: number): unknown {
+    if (w.k === "value") return decode(w.v, false);
+    if (w.k !== "error") return new Error("the host answered with an error the child cannot read");
+    let e: Error;
+    if (w.bunvex) {
+      e = new BunvexError(decode(w.data ?? null, false) as never);
+      Object.defineProperty(e, "message", { value: w.message, writable: true, configurable: true });
+    } else e = new (ERRORS[w.cls] ?? Error)(w.message);
+    if (e.name !== w.name) Object.defineProperty(e, "name", { value: w.name, writable: true, configurable: true });
+    fromOp.set(e, { call: this.m.id, op });
+    return e;
+  }
+
+  /** How a thrown value leaves the handler. */
+  private thrown(e: unknown): WireThrown {
+    if (e !== null && typeof e === "object") {
+      const origin = fromOp.get(e);
+      if (origin?.call === this.m.id) return { k: "op", op: origin.op, stack: stackOf(e as Error) };
+    }
+    const isError = e instanceof Error || Object.prototype.toString.call(e) === "[object Error]";
+    if (!isError) return { k: "value", v: encode(e) };
+    const err = e as Error;
+    const bunvex = isBunvexError(err);
+    return {
+      k: "error",
+      cls: Object.getPrototypeOf(err)?.constructor?.name ?? "Error",
+      name: String(err.name),
+      message: String(err.message),
+      stack: stackOf(err),
+      bunvex,
+      ...(bunvex ? { data: encode((err as BunvexError<never>).data) } : {}),
+    };
+  }
+
+  private ctx(kind: "query" | "mutation") {
+    const tx = new Tx(this, this.m.db);
+    const db = this.m.db === "reader" ? readerOf(tx) : tx;
+    const auth = { getUserIdentity: async () => this.op("auth.getUserIdentity", []) };
+    const methods = (prefix: string, names: string[]) =>
+      Object.fromEntries(names.map((n) => [n, (...args: unknown[]) => this.op(prefix, [n, ...args])]));
+    const nested =
+      (name: "runQuery" | "runMutation") => (ref: unknown, args?: unknown, opts?: { useStaleSnapshot?: boolean }) => {
+        if (opts?.useStaleSnapshot && kind === "query")
+          throw new Error("`useStaleSnapshot` is only supported in mutations, not queries.");
+        return this.op(name, [ref, args, opts]);
+      };
+    const snapshot = this.snapshot;
+    const meta = {
+      getFunctionMetadata: () => this.op("meta", ["getFunctionMetadata"]),
+      getTransactionMetrics: () => this.op("meta", ["getTransactionMetrics"]),
+      getDeploymentMetadata: () => this.op("meta", ["getDeploymentMetadata"]),
+      // The snapshot the call carries; reading it makes the result time-dependent, as `Date.now()` does.
+      getSnapshotTs: () => {
+        observeTime();
+        return snapshot;
+      },
+    };
+    if (kind === "query")
+      return {
+        db,
+        auth,
+        storage: methods("storage", this.m.storage),
+        runQuery: nested("runQuery"),
+        meta,
+      };
+    return {
+      db,
+      auth,
+      scheduler: methods("scheduler", ["runAfter", "runAt", "cancel"]),
+      // Rooms (AD-42) are not available yet: any use of `ctx.rooms` says so.
+      rooms: new Proxy(
+        {},
+        {
+          get() {
+            throw new Error(sandboxNotYet("Rooms (`ctx.rooms`)"));
+          },
+        },
+      ),
+      storage: methods("storage", this.m.storage),
+      runQuery: nested("runQuery"),
+      runMutation: nested("runMutation"),
+      meta: { ...meta, getRequestMetadata: () => this.op("meta", ["getRequestMetadata"]) },
+    };
+  }
+
+  async run(handler: (ctx: unknown, args: unknown) => unknown, env: Map<string, string> | null, execution: object) {
+    const kind = this.m.kind;
+    this.timer = newUserTimer(this.m.userMs, this.m.systemMs);
+    const args = decode(this.m.args, false);
+    const ctx = this.ctx(kind);
+    const read = env
+      ? (name: string) => {
+          checkEnvVarName(name);
+          this.envReads.push(name);
+          return env.get(name);
+        }
+      : null;
+    const body = () =>
+      withUserTimer(this.timer, async () => {
+        const call = () => handler(appContext(handler, ctx), args);
+        return read ? withEnv(read, call) : call();
+      });
+    let message: ToHost;
+    try {
+      const value = await runInExecution(execution, () =>
+        inHandleScope({ create: (ref: unknown) => this.op("createFunctionHandle", [ref]) } as never, body),
+      );
+      // The engine checks this on what the handler returned (`notAQuery`); the object cannot cross.
+      if (value instanceof QueryImpl || value instanceof VirtualQuery)
+        message = {
+          t: "done",
+          id: this.m.id,
+          ok: false,
+          error: { k: "host", message: RETURNED_A_QUERY },
+          report: this.report(),
+        };
+      else message = { t: "done", id: this.m.id, ok: true, value: encode(value), report: this.report() };
+    } catch (e) {
+      message = { t: "done", id: this.m.id, ok: false, error: this.thrown(e), report: this.report() };
+    }
+    this.send(message);
+  }
+}
+
+/** The engine's error for a query or mutation that returns a query object (`notAQuery`, functions.ts). */
+const RETURNED_A_QUERY =
+  "Return value is a Query. Results must be retrieved with `.collect()`, `.take(n), `.unique()`, or `.first()`.";

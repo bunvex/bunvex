@@ -3,7 +3,7 @@
 // `JSON.stringify` (crates/isolate/src/environment/auth_config.rs:286), a schema as its export
 // (environment/schema.rs:271-293). The host turns that back into what the push reads.
 import { schemaFromJson, schemaToJson } from "@bunvex/core";
-import { type DefaultExportUse, isSchemaDefinition } from "@bunvex/server/executor";
+import { type DefaultExportUse, isSchemaDefinition, UnserializableAuthConfigError } from "@bunvex/server/executor";
 import type { EvaluatedDefault } from "./protocol.ts";
 
 /** The child's side: a default export, in the form its use takes. */
@@ -33,14 +33,6 @@ export function exportDefault(value: unknown, use: DefaultExportUse): EvaluatedD
  * (`schemaExport`, then `checkIndexReferences`).
  */
 export const NOT_A_SCHEMA: unknown = Object.freeze({});
-
-/** An auth config `JSON.stringify` refuses (a bigint, a cycle): Convex's `AuthConfigUnserializableError`. */
-export class UnserializableAuthConfigError extends Error {
-  constructor() {
-    super("auth config file can only contain strings");
-    this.name = "UnserializableAuthConfigError";
-  }
-}
 
 /** The host's side: what the push reads of a default export the child sent. */
 export function evaluatedValue(e: EvaluatedDefault): unknown {

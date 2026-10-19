@@ -7,7 +7,7 @@
 // `floor(width / n)` wide; a sample is placed by the start of its store bucket; histograms are
 // HdrHistogram's (by default 1 ms – 15 min, 2 significant figures, 8-bit counts that saturate), merged as its
 // `add`.
-import { knob, secondsKnob } from "@bunvex/core";
+import { knob, secondsKnob, wallClock } from "@bunvex/core";
 
 /** Convex's knobs (`UDF_METRICS_*`): bucket width, number of buckets kept, the histograms' range. */
 export const BUCKET_WIDTH_MS = secondsKnob("UDF_METRICS_BUCKET_WIDTH_SECS", 60);
@@ -449,7 +449,12 @@ export class AppMetrics {
 
   constructor(
     readonly store = new MetricStore(),
-    private readonly now: () => number = Date.now,
+    /**
+     * The real clock, whether or not a function runs (core's `wallClock`): the deterministic `Date.now` would read a
+     * running query's frozen time and mark its result as time-dependent, so every cached result expired after
+     * MAX_CACHE_AGE_MS (STUDY-171 §8.9).
+     */
+    private readonly now: () => number = wallClock,
   ) {}
 
   /** Metric names, built once per function and table (bounded: names come from code and the schema). */

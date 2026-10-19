@@ -1,7 +1,8 @@
 // The commit timestamp placeholder (STUDY-53), as Convex's `CommitTsPlaceholder`: unusable as a number or
 // as JSON before the commit (a clear error, not a silent NaN or "{}"), printable, branded; and
 // `resolveCommitTs` replaces it everywhere in a value, copying only the containers on the way.
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import vm from "node:vm";
 import {
   CommitTsPlaceholder,
   commitTsPlaceholder,
@@ -87,4 +88,20 @@ test("resolveCommitTsJson writes the int64 tokens, little-endian base64", () => 
   expect(resolveCommitTsJson('[{"$commitTs":null},{"$commitTs":null}]', 1n)).toBe(
     '[{"$integer":"AQAAAAAAAAA="},{"$integer":"AQAAAAAAAAA="}]',
   );
+});
+
+describe("objects of another realm (a pushed function's own, STUDY-171 §8.9)", () => {
+  const theirs = vm.runInContext("(p) => ({ args: { at: p, list: [{ deep: p }] } })", vm.createContext({})) as (
+    p: unknown,
+  ) => { args: Record<string, unknown> };
+
+  test("hasCommitTs looks into them", () => {
+    expect(hasCommitTs(theirs(commitTsPlaceholder).args)).toBe(true);
+    expect(hasCommitTs(theirs(1).args)).toBe(false);
+  });
+
+  test("resolveCommitTs resolves inside them", () => {
+    const r = resolveCommitTs(theirs(commitTsPlaceholder).args, 5n) as { at: bigint; list: { deep: bigint }[] };
+    expect([r.at, r.list[0]!.deep]).toEqual([5n, 5n]);
+  });
 });

@@ -5,7 +5,9 @@ import { provideBundledModules } from "@bunvex/core";
 import * as mongodbPersistence from "@bunvex/persistence/mongodb";
 import * as mysqlPersistence from "@bunvex/persistence/mysql";
 import * as postgresPersistence from "@bunvex/persistence/postgres";
+import { createProcessExecutor } from "@bunvex/sandbox";
 import { localBackendMain } from "@bunvex/server";
+import { provideProcessExecutor } from "@bunvex/server/executor";
 import * as mongodb from "mongodb";
 import * as mysql2 from "mysql2/promise";
 import postgres from "postgres";
@@ -18,6 +20,10 @@ provideBundledModules({
   "mysql2/promise": mysql2,
   mongodb,
 });
+
+// The function sandbox (AD-44, STUDY-171 §8): `BUNVEX_FUNCTION_SANDBOX=process` runs queries and mutations in its
+// children. The server cannot import it (its child runs the server's loader), so it is provided here.
+provideProcessExecutor(createProcessExecutor);
 
 // The version is the release's (set at build), else the package's.
 declare const BUNVEX_BUILD_VERSION: string | undefined;
