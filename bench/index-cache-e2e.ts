@@ -34,8 +34,8 @@ const secret = randomBytes(32).toString("hex");
 const port = 20_000 + Math.floor(Math.random() * 10_000);
 const url = `http://127.0.0.1:${port}`;
 
-async function run(cmd: string[], cwd: string): Promise<string> {
-  const p = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
+async function run(cmd: string[], cwd: string, env: Record<string, string> = {}): Promise<string> {
+  const p = Bun.spawn(cmd, { cwd, env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
   const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
   if ((await p.exited) !== 0) throw new Error(`${cmd.join(" ")} failed:\n${out}\n${err}`);
   return out;
@@ -53,6 +53,8 @@ async function start(indexCache: boolean) {
     INDEX_CACHE_SIZE: indexCache ? undefined : "0",
     // A capacity measurement, as bench/server.ts: Convex's 4 MiB/s write limit (STUDY-78) lifted unless set.
     MAX_BYTES_WRITTEN_PER_SECOND: process.env.MAX_BYTES_WRITTEN_PER_SECOND || String(Number.MAX_SAFE_INTEGER),
+    // The secret in the environment, as `bunvex dev` gives it (DV-525).
+    INSTANCE_SECRET: secret,
   };
   backend = Bun.spawn(
     [
@@ -67,8 +69,6 @@ async function start(indexCache: boolean) {
       String(port + 1),
       "--instance-name",
       name,
-      "--instance-secret",
-      secret,
       "--local-storage",
       join(state, "storage"),
       PG_URL!,
@@ -93,10 +93,9 @@ async function stop() {
 }
 
 const adminKey = (
-  await run(
-    [process.execPath, BACKEND, "keygen", "admin-key", "--instance-name", name, "--instance-secret", secret],
-    state,
-  )
+  await run([process.execPath, BACKEND, "keygen", "admin-key", "--instance-name", name], state, {
+    INSTANCE_SECRET: secret,
+  })
 ).trim();
 const debug = async (path: string) =>
   (await fetch(`${url}${path}`, { headers: { authorization: `Bunvex ${adminKey}` } })).json() as Promise<any>;

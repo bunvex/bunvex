@@ -191,6 +191,7 @@ to a spec.
 | [STUDY-164](STUDY-164-ephemeral-rooms.md) | Ephemeral state: rooms with presence and broadcast held in memory beside the database (Convex keeps it in tables; its presence component, its peers, minivex's lessons) | built (v1): AD-42 (two concepts, relay through the leader) |
 | [STUDY-165](STUDY-165-rooms-in-the-dashboard.md) | Rooms in the dashboard: reading the in-memory hub through polled `/api/debug/rooms*` endpoints, a Rooms screen with members and presence, definitions on the Functions screen, counters on Health, an event tap and admin actions | decided (owner, 2026-10-16): AD-43 accepted, every recommendation; steps 1–4 built (the read and the counters) |
 | [STUDY-166](STUDY-166-rooms-tap-and-actions-screens.md) | The Rooms screen's event tap and actions (AD-43 steps 5 and 6): a live event panel on `watchRoomEvents`, and confirmed controls to send a test event, remove a member and close a room, with their History words | implemented (this PR) |
+| [STUDY-170](STUDY-170-instance-secret-off-the-command-line.md) | The instance secret off the command line: Convex's binary takes `--instance-secret` only and its image and CLI put it on argv, readable by every local user; bunvex's executable reads `INSTANCE_SECRET` too (the flag wins), and `bunvex dev` and the Docker scripts pass it there (STUDY-168 Q11) | implemented (this PR); DV-525 (owner, 2026-10-19) |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

@@ -3,4 +3,5 @@
 #   docker compose exec backend ./generate_admin_key.sh
 set -e
 source ./read_credentials.sh
-./bunvex-local-backend keygen admin-key --instance-name "$INSTANCE_NAME" --instance-secret "$INSTANCE_SECRET"
+# The secret in INSTANCE_SECRET (exported by read_credentials.sh), off the command line (DV-525).
+./bunvex-local-backend keygen admin-key --instance-name "$INSTANCE_NAME"

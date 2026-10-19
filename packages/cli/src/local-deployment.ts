@@ -10,7 +10,9 @@
 // - as a child of the command (SIGTERM when it ends), on the saved ports or the first free ones from 3210,
 //   ready once `/instance_name` answers its name (500 ms polls, 30 s or
 //   BUNVEX_LOCAL_BACKEND_STARTUP_TIMEOUT_SECS);
-// - its admin key from the executable's `keygen admin-key`, its secret 32 random bytes;
+// - its admin key from the executable's `keygen admin-key`, its secret 32 random bytes, given to both in
+//   INSTANCE_SECRET rather than on the command line, where any user of the machine reads it (DV-525; Convex's
+//   CLI passes `--instance-secret`); an executable from before that variable still gets the flag;
 // - `.env.local` names it (`BUNVEX_DEPLOYMENT=local:<name>`) and gives the client its URL.
 import { randomBytes } from "node:crypto";
 import {
@@ -206,6 +208,29 @@ async function customVersion(bin: string): Promise<string> {
   return out.replace(/^bunvex-local-backend /, "") || "custom";
 }
 
+/**
+ * Whether the executable reads its secret from INSTANCE_SECRET (DV-525): its `--help` names the variable. Releases
+ * before it take `--instance-secret` only, and an existing deployment may stay on one (or `--backend-version` pick
+ * one), so those still get the flag.
+ */
+async function readsSecretFromEnv(bin: string): Promise<boolean> {
+  try {
+    const p = Bun.spawn([bin, "--help"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+    const out = await new Response(p.stdout).text();
+    await p.exited;
+    return out.includes("INSTANCE_SECRET");
+  } catch {
+    return false;
+  }
+}
+
+/** The secret for a child: in its environment when it reads it there, else as the flag (DV-525). */
+function secretFor(byEnv: boolean, secret: string): { args: string[]; env: Record<string, string | undefined> } {
+  return byEnv
+    ? { args: [], env: { ...process.env, INSTANCE_SECRET: secret } }
+    : { args: ["--instance-secret", secret], env: { ...process.env } };
+}
+
 async function portFree(port: number): Promise<boolean> {
   try {
     const s = Bun.listen({ hostname: "0.0.0.0", port, socket: { data() {} } });
@@ -330,9 +355,11 @@ export async function startLocalDeployment(io: Io, opts: LocalOptions = {}): Pro
   const cloud = await choosePort(opts.cloudPort, existing?.ports.cloud, 3210, []);
   const site = await choosePort(opts.sitePort, existing?.ports.site, cloud + 1, [cloud]);
   const instanceSecret = existing?.instanceSecret ?? randomBytes(32).toString("hex");
+  const secret = secretFor(await readsSecretFromEnv(bin), instanceSecret);
   let adminKey = existing?.adminKey;
   if (!adminKey) {
-    const k = Bun.spawn([bin, "keygen", "admin-key", "--instance-name", name, "--instance-secret", instanceSecret], {
+    const k = Bun.spawn([bin, "keygen", "admin-key", "--instance-name", name, ...secret.args], {
+      env: secret.env,
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -352,13 +379,12 @@ export async function startLocalDeployment(io: Io, opts: LocalOptions = {}): Pro
       String(site),
       "--instance-name",
       name,
-      "--instance-secret",
-      instanceSecret,
+      ...secret.args,
       "--local-storage",
       join(dir, "bunvex_local_storage"),
       join(dir, "bunvex_local_backend.sqlite3"),
     ],
-    { cwd: dir, stdout: log, stderr: log },
+    { cwd: dir, env: secret.env, stdout: log, stderr: log },
   );
   closeSync(log); // the child holds its own copy
   const stop = async () => {

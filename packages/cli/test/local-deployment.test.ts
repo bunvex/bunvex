@@ -223,6 +223,74 @@ describe("the local backend's log (DV-340)", () => {
     expect(log).toContain(`instance ${readLocalConfig(dir)!.deploymentName}`);
   }, 60_000);
 
+  test("the secret reaches keygen and the backend in INSTANCE_SECRET, never on a command line (DV-525)", async () => {
+    // The stand-in records each run's arguments and INSTANCE_SECRET but `--help`'s (the probe for the variable),
+    // and the backend's pid (exec keeps it).
+    const rec = tmp();
+    const recorder = (help: string) => {
+      const p = join(tmp(), EXE);
+      writeFileSync(
+        p,
+        `#!/bin/sh
+[ "$1" = --version ] && echo "bunvex-local-backend test-1" && exit 0
+${help}
+[ "$1" = --help ] && exec ${JSON.stringify(process.execPath)} ${JSON.stringify(ENTRY)} --help
+printf '%s\\n' "$*" >>${JSON.stringify(join(rec, "argv"))}
+printf '%s\\n' "\${INSTANCE_SECRET:-}" >>${JSON.stringify(join(rec, "env"))}
+[ "$1" = keygen ] || echo $$ >${JSON.stringify(join(rec, "pid"))}
+exec ${JSON.stringify(process.execPath)} ${JSON.stringify(ENTRY)} "$@"
+`,
+      );
+      chmodSync(p, 0o755);
+      return p;
+    };
+    const dir = app();
+    // A stray INSTANCE_SECRET in the user's shell is not the deployment's.
+    process.env.INSTANCE_SECRET = "ef".repeat(32);
+    let running: Awaited<ReturnType<typeof startLocalDeployment>>;
+    try {
+      running = await startLocalDeployment(io(dir, { BUNVEX_LOCAL_BACKEND_BINARY: recorder(""), HOME: tmp() }).it, {
+        cloudPort: freePort(),
+      });
+    } finally {
+      delete process.env.INSTANCE_SECRET;
+    }
+    stops.push(running.stop);
+    const secret = running.config.instanceSecret;
+    const lines = (f: string) => readFileSync(join(rec, f), "utf8").trimEnd().split("\n");
+    // keygen, then the backend: both given the secret in their environment, neither on the command line.
+    expect(lines("argv")).toHaveLength(2);
+    expect(lines("argv")[0]).toStartWith("keygen admin-key --instance-name ");
+    for (const l of lines("argv")) expect(l).not.toContain(secret);
+    expect(lines("env")).toEqual([secret, secret]);
+    // The running backend's command line, as any user of the machine reads it.
+    const pid = readFileSync(join(rec, "pid"), "utf8").trim();
+    const ps = Bun.spawn(["ps", "-o", "args=", "-p", pid], { stdout: "pipe", stderr: "ignore" });
+    const args = (await new Response(ps.stdout).text()).trim();
+    expect(args).toContain("--instance-name");
+    expect(args).not.toContain(secret);
+    // The key keygen made opens the backend: the secret it read is the backend's.
+    const ok = await fetch(`${running.target.url}/api/check_admin_key`, {
+      headers: { authorization: `Bunvex ${running.config.adminKey}` },
+    });
+    expect(ok.status).toBe(200);
+    await running.stop();
+    stops.pop();
+
+    // An executable from before the variable (its --help does not name it) still gets the flag.
+    for (const f of ["argv", "env"]) rmSync(join(rec, f));
+    rmSync(join(dir, ".bunvex/local/default/config.json"));
+    const old = recorder(`[ "$1" = --help ] && echo "Usage: bunvex-local-backend [options]" && exit 0`);
+    const again = await startLocalDeployment(io(dir, { BUNVEX_LOCAL_BACKEND_BINARY: old, HOME: tmp() }).it, {
+      cloudPort: running.config.ports.cloud,
+    });
+    stops.push(again.stop);
+    expect(lines("argv").map((l) => l.includes(`--instance-secret ${again.config.instanceSecret}`))).toEqual([
+      true,
+      true,
+    ]);
+  }, 60_000);
+
   test("a backend that exits before it is ready: the error names the log and shows its end", async () => {
     const dir = app();
     const bin = join(tmp(), EXE);

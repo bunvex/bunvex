@@ -28,17 +28,24 @@ want=sqlite
 if [ -n "${SMOKE_POSTGRES_URL:-}" ]; then DB=(--db postgres --do-not-require-ssl "$SMOKE_POSTGRES_URL"); want=postgres; fi
 
 [[ "$("$BIN" --version)" == "bunvex-local-backend "* ]] || fail "--version"
-NOSECRET=$("$BIN" --port "$PORT" 2>&1 || true)
+NOSECRET=$(env -u INSTANCE_SECRET "$BIN" --port "$PORT" 2>&1 || true)
 [[ "$NOSECRET" == *"--instance-secret is required"* ]] || fail "a missing secret is not refused"
 KEY=$("$BIN" keygen admin-key --instance-name "$NAME" --instance-secret "$SECRET") || fail "keygen failed"
+# The secret in INSTANCE_SECRET instead of the flag (DV-525): the same key material, nothing on the command line.
+[ "$(INSTANCE_SECRET="$SECRET" "$BIN" keygen admin-key --instance-name "$NAME" | cut -d'|' -f1)" = "$NAME" ] ||
+  fail "keygen does not read INSTANCE_SECRET"
 
 start() {
-  (cd "$WORK" && exec "$BIN" --instance-name "$NAME" --instance-secret "$SECRET" --port "$PORT" --site-proxy-port $((PORT + 1)) ${DB[@]+"${DB[@]}"} >"$WORK/backend.log" 2>&1) &
+  (cd "$WORK" && INSTANCE_SECRET="$SECRET" exec "$BIN" --instance-name "$NAME" --port "$PORT" --site-proxy-port $((PORT + 1)) ${DB[@]+"${DB[@]}"} >"$WORK/backend.log" 2>&1) &
   PID=$!
   for _ in $(seq 1 50); do curl -sf "http://127.0.0.1:$PORT/instance_name" >/dev/null && return; sleep 0.2; done
   fail "the backend did not come up"
 }
 start
+# Started with INSTANCE_SECRET: its command line, which every user of the machine can read, has no secret.
+ARGS=$(ps -o args= -p "$PID")
+[[ "$ARGS" == *"--instance-name $NAME"* ]] || fail "unexpected backend command line: $ARGS"
+[[ "$ARGS" != *"$SECRET"* ]] || fail "the instance secret is on the backend's command line"
 # the backend prints its instance line after it starts listening, so the API can answer first
 for _ in $(seq 1 25); do grep -q "instance $NAME, " "$WORK/backend.log" && break; sleep 0.2; done
 [[ "$(cat "$WORK/backend.log")" == *"instance $NAME, $want"* ]] || fail "not on $want"

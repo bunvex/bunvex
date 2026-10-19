@@ -214,7 +214,7 @@ import { BunvexProvider, useQuery } from "@bunvex/react";
 
 // an external database: install its native driver and point at it
 //   bun add postgres
-//   bunvex-local-backend --db postgres postgres://…/<database> --instance-secret …
+//   INSTANCE_SECRET=… bunvex-local-backend --db postgres postgres://…/<database>
 // or, when embedding the engine in your own code:
 import { PostgresPersistence } from "@bunvex/persistence/postgres";
 ```

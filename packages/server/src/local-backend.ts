@@ -9,7 +9,10 @@
 // - `--port` 3210 and `--site-proxy-port` 3211 on `--interface` (0.0.0.0); `--cloud-origin` / `--site-origin`
 //   (a pair; Convex's `--convex-origin` / `--convex-site`) are the public URLs;
 // - `--instance-name` (default bunvex-self-hosted) and `--instance-secret` (required; 32 hex bytes): the
-//   executable never generates a secret — the Docker scripts and `bunvex dev` do;
+//   executable never generates a secret — the Docker scripts and `bunvex dev` do. The secret may come from
+//   INSTANCE_SECRET instead, the flag winning (DV-525: Convex's binary takes the flag only, which any user of
+//   the machine can read in `/proc/<pid>/cmdline` or `ps`); the variable is then removed from the process's
+//   environment, so nothing the backend starts inherits it;
 // - files and pushed code under `--local-storage` (default `bunvex_local_storage`), or S3 (`--s3-storage`,
 //   from the environment's S3 variables, for each use case whose bucket is set: STUDY-38 K4);
 // - `--do-not-require-ssl`, `--redact-logs-to-client`;
@@ -53,7 +56,8 @@ Options:
       --cloud-origin <url>   the API's public URL (with --site-origin; default http://127.0.0.1:<port>)
       --site-origin <url>    the HTTP actions' public URL (default http://127.0.0.1:<site-proxy-port>)
       --instance-name <name> default ${DEFAULT_INSTANCE_NAME}; requires --instance-secret
-      --instance-secret <hex> required: 32 bytes, hex-encoded (\`openssl rand -hex 32\`)
+      --instance-secret <hex> required: 32 bytes, hex-encoded (\`openssl rand -hex 32\`);
+                             [env: INSTANCE_SECRET], which keeps it off the command line
       --local-storage <dir>  where files and pushed code live (default bunvex_local_storage)
       --s3-storage           keep them in S3 instead (S3_STORAGE_<USE CASE>_BUCKET, AWS_*)
       --do-not-require-ssl   allow an unencrypted database connection
@@ -110,8 +114,18 @@ export function instanceSecretError(secret: string): string | null {
   return n === 32 ? null : `Hex-decoded key was ${n} bytes, not 32`;
 }
 
-/** The flags, checked as Convex's clap definitions check them; a message on misuse. */
-export function parseLocalBackendFlags(args: string[]): LocalBackendFlags | string {
+/**
+ * The instance secret's variable (DV-525), read as clap reads an `env =` argument: when the flag is absent, and
+ * an empty value is no value. The name is the one Convex's Docker image takes (`docker-compose.yml`).
+ */
+export const INSTANCE_SECRET_ENV = "INSTANCE_SECRET";
+const secretFromEnv = (env: LocalBackendIo["env"]) => env[INSTANCE_SECRET_ENV] || undefined;
+
+/**
+ * The flags, checked as Convex's clap definitions check them; a message on misuse. `env` gives INSTANCE_SECRET
+ * when `--instance-secret` is absent (DV-525).
+ */
+export function parseLocalBackendFlags(args: string[], env: LocalBackendIo["env"] = {}): LocalBackendFlags | string {
   const f: LocalBackendFlags = {
     dbSpec: "bunvex_local_backend.sqlite3",
     db: "sqlite",
@@ -180,6 +194,7 @@ export function parseLocalBackendFlags(args: string[]): LocalBackendFlags | stri
   else if (f.db !== "sqlite") return `--db ${f.db} needs the database's URL as the db_spec argument`;
   if (f.s3 && localStorageGiven)
     return "the argument '--s3-storage' cannot be used with '--local-storage <LOCAL_STORAGE>'";
+  f.instanceSecret ??= secretFromEnv(env);
   if (named && f.instanceSecret === undefined)
     return "the following required arguments were not provided:\n  --instance-secret <INSTANCE_SECRET>";
   if (f.instanceSecret === undefined) return "--instance-secret is required. Generate one with `openssl rand -hex 32`";
@@ -322,6 +337,7 @@ export async function localBackendMain(args: string[], io: LocalBackendIo, versi
         return 2;
       }
     }
+    secret ??= secretFromEnv(io.env);
     if (!name || !secret) {
       io.err(
         "the following required arguments were not provided:\n  --instance-name <INSTANCE_NAME>\n  --instance-secret <INSTANCE_SECRET>",
@@ -336,7 +352,9 @@ export async function localBackendMain(args: string[], io: LocalBackendIo, versi
     io.out(issueAdminKey({ instanceName: name, cipherKey: adminKeyCipherKey(secret) }));
     return 0;
   }
-  const flags = parseLocalBackendFlags(args);
+  const flags = parseLocalBackendFlags(args, io.env);
+  // Read once: what the backend starts (an external package's `bun install`, STUDY-148) never inherits it.
+  delete io.env[INSTANCE_SECRET_ENV];
   if (typeof flags === "string") {
     io.err(`error: ${flags}\n\n${LOCAL_BACKEND_USAGE}`);
     return 2;
