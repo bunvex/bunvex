@@ -1,7 +1,7 @@
 // The Rooms screen (AD-43, STUDY-165 §5.1): the open rooms and presence scopes by definition then args, a filter and
 // a sort in the URL, a room's members a page at a time, a room that closes said as closed (not an error), a
 // deployment without rooms as an empty state, no data without `viewMetrics`, and the polls' pace.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { Dashboard } from "@bunvex/dashboard";
 import {
   type ConnectionStatus,
@@ -40,7 +40,10 @@ const rowsOf = (grid: HTMLElement) =>
         .map((c) => c.textContent ?? ""),
     );
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  setSystemTime(); // back to the real clock after a test that fixed it
+});
 
 const room = (over: Partial<RoomInfo>): RoomInfo => ({
   key: "k",
@@ -94,6 +97,8 @@ describe("the Rooms screen's words", () => {
 
 describe("the Rooms screen", () => {
   test("lists the open rooms and scopes by definition, then args, with members, connections and when they opened", async () => {
+    // the viewer's clock at the mock's, so "when they opened" does not depend on the day the test runs
+    setSystemTime(NOW);
     mount("/rooms");
     await screen.findByRole("heading", { level: 1, name: "Rooms" });
     const grid = await screen.findByRole("grid", { name: "Open rooms" });
@@ -102,7 +107,7 @@ describe("the Rooms screen", () => {
     expect(scope!.slice(0, 5)).toEqual(["presence:online", "Presence scope", '{ team: "acme" }', "3", "4"]);
     expect(doc!.slice(0, 5)).toEqual(["rooms:doc", "Room", '{ id: "design-review" }', "5", "5"]);
     // the mock opened it 3 hours before its clock (the screen says it against the viewer's clock)
-    expect(doc![5]).toMatch(/^\d+ hours ago$/);
+    expect(doc![5]).toBe("3 hours ago");
     expect(screen.getByTestId("rooms-summary").textContent).toBe(
       "2 open (1 room, 1 presence scope) · 8 members · 9 connections",
     );
