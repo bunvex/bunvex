@@ -45,6 +45,8 @@ export type CodeEditorProps = {
    * Monaco completes it (STUDY-162); absent, it is checked for syntax only.
    */
   typescript?: { path: string; files: Record<string, string> };
+  // (Monaco only) the editor's element says `data-types="loading"` until the worker has the files and has checked the
+  // text once, then `data-types="checked"`: what a test waits on before looking for type errors or completions.
   className?: string;
 };
 
