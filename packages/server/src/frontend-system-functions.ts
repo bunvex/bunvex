@@ -4,8 +4,8 @@
 // deployment's URLs (`convexCloudUrl.ts`, `convexSiteUrl.ts`, renamed by rule 5: DV-474), the environment
 // variables (`listEnvironmentVariables.ts`), the latest snapshot export (`latestExport.ts`) and the snapshot
 // imports (`snapshotImport.ts`). Same names (but the two URLs), arguments, permissions and result shapes; the
-// rows they read are Convex's (`_modules`, `_components`, `_udf_config`, STUDY-134). `componentId` is accepted and
-// ignored, as bunvex has only the root component (DV-55).
+// rows they read are Convex's (`_modules`, `_components`, `_udf_config`, STUDY-134). A `componentId` runs the modules'
+// reads in that component's namespace (Convex's `currentSystemUdfInComponent`, STUDY-154).
 import {
   ENVIRONMENT_VARIABLES_TABLE,
   EXPORTS_TABLE,
@@ -84,35 +84,45 @@ type ComponentDoc = {
   httpPrefix?: string | null;
 };
 
+/**
+ * Run `fn` in component `componentId`'s namespace (Convex's `queryWithComponent`: the system function again in that
+ * component), or the app's when there is none. An id with no namespace is a system error, as Convex's.
+ */
+const inComponentOf = <T>(db: Tx, componentId: string | null | undefined, fn: () => Promise<T>): Promise<T> =>
+  componentId === null || componentId === undefined ? fn() : db.inComponent(componentId, fn);
+
 export const FRONTEND_SYSTEM_QUERIES: Record<string, SystemQuery> = {
-  // Convex's `modules:listForAllComponents`: the root's modules, then each child component's (none in bunvex,
-  // DV-55), as `[componentId | null, [path, module][]]`.
+  // Convex's `modules:listForAllComponents`: the app's modules, then each other component's (an unmounted one's are
+  // none), as `[componentId | null, [path, module][]]`, in `_components`' order.
   "_system/frontend/modules:listForAllComponents": {
     args: {},
     handler: async (db) => {
       const result: [string | null, unknown][] = [[null, await listModules(db)]];
-      // read as Convex's, which recurses into each child; bunvex writes the root's row only
-      await db.asSystem(() => db.query(COMPONENTS_TABLE).collect());
+      const docs = (await db.asSystem(() => db.query(COMPONENTS_TABLE).collect())) as unknown as ComponentDoc[];
+      for (const doc of docs)
+        if (doc.parent) result.push([doc._id, await db.inComponent(doc._id, () => listModules(db))]);
       return result;
     },
   },
   // Convex's `modules:list`: one component's modules.
   "_system/frontend/modules:list": {
     args: { componentId },
-    handler: (db) => listModules(db),
+    handler: (db, a: { componentId?: string | null }) => inComponentOf(db, a.componentId, () => listModules(db)),
   },
   // Convex's `modules:argsValidator`: a function's arguments validator, by its display name (`dir/file:name`), as
   // the JSON text the push stored; null when the module, its analysis or the function is not there.
   "_system/frontend/modules:argsValidator": {
     args: { componentId, function: v.string() },
-    handler: async (db, { function: fn }: { function: string }) => {
+    handler: async (db, { function: fn, componentId: id }: { function: string; componentId?: string | null }) => {
       // Convex's `split(":")`: the first two parts, the name `default` when there is none
       const [path, name] = fn.split(":");
-      const module = (await db.asSystem(() =>
-        db
-          .query(MODULES_TABLE)
-          .withIndex("by_path", (q) => q.eq("path", `${path}.js`))
-          .unique(),
+      const module = (await inComponentOf(db, id, () =>
+        db.asSystem(() =>
+          db
+            .query(MODULES_TABLE)
+            .withIndex("by_path", (q) => q.eq("path", `${path}.js`))
+            .unique(),
+        ),
       )) as unknown as ModuleDoc | null;
       const found = module?.analyzeResult?.functions.find((f) => f.name === (name ?? "default"));
       if (!found) return null;
