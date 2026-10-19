@@ -198,15 +198,40 @@ export default defineSchema({ notes: defineTable({ a: v.string() }).index("by_a"
     const refused = io(app);
     expect(await main(["deploy", "--typecheck=disable", "--codegen=disable"], refused.it)).toBe(1);
     expect(refused.err.at(-1)).toBe(
-      `bunvex deploy: Environment variable ISSUER_DOMAIN is used in auth config file but its value was not set.\nGo to:\n\n    ${dash.url}settings/environment-variables?var=ISSUER_DOMAIN\n\n  to set it up. `,
+      `bunvex deploy: Environment variable ISSUER_DOMAIN is used in auth config file but its value was not set.\nSet it with:\n\n    bunvex env set ISSUER_DOMAIN <value>\n\nor in the dashboard:\n\n    ${dash.url}settings/environment-variables?var=ISSUER_DOMAIN\n`,
     );
-    // the same deployment as self-hosted: Convex's words for no link
+    // Two required variables (Convex 8917f16): "them", one command each, and the page with no `?var=`.
+    write({
+      "bunvex/auth.config.ts": `export default { providers: [] };`,
+      "bunvex/bunvex.config.ts": `import { defineApp } from ${JSON.stringify(SERVER)};
+import { v } from ${JSON.stringify(VALUES)};
+export default defineApp({ env: { API_KEY: v.string(), REGION: v.string() } });`,
+    });
+    const required = io(app);
+    expect(await main(["deploy", "--typecheck=disable", "--codegen=disable"], required.it)).toBe(1);
+    expect(required.err.at(-1)).toBe(
+      `bunvex deploy: Environment variables API_KEY, REGION are declared as required in bunvex.config.ts but their values were not set.\nSet them with:\n\n    bunvex env set API_KEY <value>\n    bunvex env set REGION <value>\n\nor in the dashboard:\n\n    ${dash.url}settings/environment-variables\n`,
+    );
+    // the same deployment by its URL: the command names it, the admin key a placeholder; no dashboard to link
+    write({
+      "bunvex/auth.config.ts": `export default { providers: [{ domain: process.env.ISSUER_DOMAIN, applicationID: "app" }] };`,
+    });
+    rmSync(join(app, "bunvex/bunvex.config.ts"));
     writeFileSync(join(app, ".env.local"), "");
     const selfHosted = io(app, { BUNVEX_SELF_HOSTED_URL: d.url, BUNVEX_SELF_HOSTED_ADMIN_KEY: KEY });
     expect(await main(["deploy", "--typecheck=disable", "--codegen=disable"], selfHosted.it)).toBe(1);
     expect(selfHosted.err.at(-1)).toBe(
-      "bunvex deploy: Environment variable ISSUER_DOMAIN is used in auth config file but its value was not set.\nGo set it in the dashboard or using `bunvex env set`",
+      `bunvex deploy: Environment variable ISSUER_DOMAIN is used in auth config file but its value was not set.\nSet it with:\n\n    bunvex env set --url ${d.url} --admin-key <admin key> ISSUER_DOMAIN <value>\n`,
     );
+    // given by flags, the same
+    const flagged = io(app);
+    expect(
+      await main(
+        ["deploy", "--typecheck=disable", "--codegen=disable", "--url", d.url, "--admin-key", KEY],
+        flagged.it,
+      ),
+    ).toBe(1);
+    expect(flagged.err.at(-1)).toBe(selfHosted.err.at(-1));
   }, 60_000);
 });
 

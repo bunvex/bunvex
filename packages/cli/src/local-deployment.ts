@@ -573,14 +573,18 @@ export function removeLocalDeployment(cwd: string) {
 export async function acquireTarget(
   flags: TargetFlags,
   io: Io,
-): Promise<{ target: Target; release: () => Promise<void> } | null> {
+): Promise<{ target: Target; release: () => Promise<void>; local: boolean } | null> {
   const t = resolveTarget(flags, io);
-  if (t) return { target: t, release: async () => {} };
+  if (t) return { target: t, release: async () => {}, local: false };
   if (configuredDeployment(io, flags)?.type !== "local") return null;
   const c = readLocalConfig(io.cwd);
   if (!c) return null;
   if ((await instanceNameAt(c.ports.cloud)) === c.deploymentName)
-    return { target: { url: `http://127.0.0.1:${c.ports.cloud}`, adminKey: c.adminKey }, release: async () => {} };
+    return {
+      target: { url: `http://127.0.0.1:${c.ports.cloud}`, adminKey: c.adminKey },
+      release: async () => {},
+      local: true,
+    };
   const r = await startLocalDeployment(io, { backendVersion: c.backendVersion });
-  return { target: r.target, release: r.stop };
+  return { target: r.target, release: r.stop, local: true };
 }
