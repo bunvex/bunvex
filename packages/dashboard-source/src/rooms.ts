@@ -80,9 +80,18 @@ export type RoomsOptions = {
  * room again only once its members have reconnected (within their reconnect grace).
  */
 export const ROOM_CLOSED_RETRY_MS = 10_000;
+/** The wait between two asks of a room found closed in that window. */
+export const ROOM_CLOSED_RETRY_DELAY_MS = 1000;
 
 /** The tap's answer, as the server sends it. */
-type TapJson = { events: RoomEvent[]; newCursor: number; dropped?: number; reset?: true; closed?: true };
+type TapJson = {
+  events: RoomEvent[];
+  newCursor: number;
+  epoch?: string;
+  dropped?: number;
+  reset?: true;
+  closed?: true;
+};
 
 const afterTimeout: After = (fn, ms) => {
   const timer = setTimeout(fn, ms);
@@ -163,18 +172,21 @@ export function roomsReads(http: AdminHttp, opts: RoomsOptions = {}) {
     };
 
     const loop = async () => {
-      // the last seq seen of the current tap; null until it is started (again)
+      // the last seq seen of the current tap, and that tap's epoch; null until it is started (again)
       let cursor: number | null = null;
+      let epoch: string | null = null;
       // the source lost track since the last batch: the next one says so
       let gap = false;
       let failures = 0;
-      // when the source lost track (a failure or a disconnection), until an answer finds the room open
-      let lostAt: number | null = null;
+      // lost track (a failure or a disconnection) and not yet found the room open again
+      let recovering = false;
+      // the first answer after that which found the room closed: the window of `ROOM_CLOSED_RETRY_MS` starts there
+      let closedSince: number | null = null;
       const now = opts.now ?? Date.now;
       const lost = () => {
         cursor = null;
         gap = true;
-        lostAt ??= now();
+        recovering = true;
       };
       while (!stop.signal.aborted) {
         if (!connected) {
@@ -182,33 +194,9 @@ export function roomsReads(http: AdminHttp, opts: RoomsOptions = {}) {
           lost();
           continue;
         }
+        let a: TapJson;
         try {
-          const a = await ask(cursor);
-          if (stop.signal.aborted) return;
-          if (a.closed) {
-            // just after a failure the room may only be waiting for its members to reconnect: asked again a while
-            if (lostAt !== null && now() - lostAt < ROOM_CLOSED_RETRY_MS) {
-              failures++;
-              await wait((opts.backoff ?? backoffWithJitter)(failures));
-              continue;
-            }
-            end();
-            onClosed?.();
-            return;
-          }
-          failures = 0;
-          lostAt = null;
-          const started = cursor === null;
-          cursor = a.newCursor;
-          const events = a.events.map(eventOf);
-          const dropped = a.dropped ?? 0;
-          if (a.reset) gap = true;
-          // a fresh tap holds nothing from before it: its first answer only carries a gap, if there is one
-          if (events.length > 0 || dropped > 0 || gap) {
-            const info = { dropped, gap };
-            gap = false;
-            onEvents(events, info);
-          } else if (started) continue;
+          a = await ask(cursor);
         } catch (e) {
           if (stop.signal.aborted) return;
           // aborted by a disconnection: the loop's top waits for the connection, then starts the tap again
@@ -226,7 +214,47 @@ export function roomsReads(http: AdminHttp, opts: RoomsOptions = {}) {
           failures++;
           lost();
           await wait((opts.backoff ?? backoffWithJitter)(failures));
+          continue;
         }
+        // the callbacks run outside the request's try: a consumer's exception is its own, not a failure to retry
+        if (stop.signal.aborted) return;
+        if (a.closed) {
+          // just after a recovery the room may only be waiting for its members to reconnect: asked again a while,
+          // from the first answer that found it closed, at a short fixed pace
+          if (recovering) {
+            closedSince ??= now();
+            if (now() - closedSince < ROOM_CLOSED_RETRY_MS) {
+              await wait(ROOM_CLOSED_RETRY_DELAY_MS);
+              continue;
+            }
+          }
+          end();
+          onClosed?.();
+          return;
+        }
+        failures = 0;
+        recovering = false;
+        closedSince = null;
+        const started = cursor === null;
+        // another tap than the cursor's (it expired and was made again since): what passed between is unknown
+        if (!started && a.epoch !== undefined && epoch !== null && a.epoch !== epoch) gap = true;
+        if (a.epoch !== undefined) epoch = a.epoch;
+        cursor = a.newCursor;
+        const events = a.events.map(eventOf);
+        const dropped = a.dropped ?? 0;
+        if (a.reset) gap = true;
+        // a fresh tap holds nothing from before it: its first answer only carries a gap, if there is one
+        if (events.length > 0 || dropped > 0 || gap) {
+          const info = { dropped, gap };
+          gap = false;
+          try {
+            onEvents(events, info);
+          } catch (e) {
+            // the consumer's bug ends the tap and surfaces (an unhandled rejection), rather than being retried
+            end();
+            throw e;
+          }
+        } else if (started) continue;
       }
     };
     // never synchronously: the first request goes out on a later tick

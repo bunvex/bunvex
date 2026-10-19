@@ -105,12 +105,21 @@ export type TappedEvent = {
   dataOmitted?: true;
 };
 /**
- * A tap poll's answer. `dropped`: events lost between the cursor and the oldest held (the buffer overflowed);
- * `reset`: the cursor names a tap that is gone (expired, or another server's), and the tap starts again at
- * `newCursor`; `closed`: the room is not open, and no tap is kept.
+ * A tap poll's answer. `epoch`: the tap's id, made with it (absent when `closed`): a follower that sees it change
+ * is following another tap than its cursor's, even when the cursor is behind the new tap's seq. `dropped`: events
+ * lost between the cursor and the oldest held (the buffer overflowed); `reset`: the cursor names a tap that is gone
+ * (expired, or another server's), and the tap starts again at `newCursor`; `closed`: the room is not open, and no tap
+ * is kept.
  */
-export type TapAnswer = { events: TappedEvent[]; newCursor: number; dropped?: number; reset?: true; closed?: true };
-type Tap = { events: TappedEvent[]; seq: number; expiry: unknown; waiters: Set<() => void> };
+export type TapAnswer = {
+  events: TappedEvent[];
+  newCursor: number;
+  epoch?: string;
+  dropped?: number;
+  reset?: true;
+  closed?: true;
+};
+type Tap = { epoch: string; events: TappedEvent[]; seq: number; expiry: unknown; waiters: Set<() => void> };
 
 export type RoomKey = { kind: v1.RoomKind; name: string; argsJson: string };
 export const roomKeyString = (k: RoomKey) => `${k.kind}|${k.name}|${k.argsJson}`;
@@ -308,14 +317,15 @@ export class RoomHub {
     let tap = this.taps.get(ks);
     const fresh = !tap;
     if (!tap) {
-      tap = { events: [], seq: 0, expiry: null, waiters: new Set() };
+      tap = { epoch: randomUUID(), events: [], seq: 0, expiry: null, waiters: new Set() };
       this.taps.set(ks, tap);
       this.rooms.get(ks)!.tap = tap;
     }
     this.keepTap(ks, tap);
-    if (cursor === null) return { events: [], newCursor: tap.seq };
+    const { epoch } = tap;
+    if (cursor === null) return { events: [], newCursor: tap.seq, epoch };
     // a cursor of a tap that is gone (expired, or before a restart): this one starts over, and says so
-    if (fresh || cursor > tap.seq) return { events: [], newCursor: tap.seq, reset: true };
+    if (fresh || cursor > tap.seq) return { events: [], newCursor: tap.seq, epoch, reset: true };
     if (tap.seq === cursor && timeoutMs > 0 && !signal?.aborted) {
       const waiting = tap;
       await new Promise<void>((resolve) => {
@@ -338,7 +348,7 @@ export class RoomHub {
       }
     }
     const events = tap.events.filter((e) => e.seq > cursor);
-    const answer: TapAnswer = { events, newCursor: events.at(-1)?.seq ?? cursor };
+    const answer: TapAnswer = { events, newCursor: events.at(-1)?.seq ?? cursor, epoch };
     const lost = (events[0]?.seq ?? cursor + 1) - cursor - 1;
     if (lost > 0) answer.dropped = lost;
     return answer;

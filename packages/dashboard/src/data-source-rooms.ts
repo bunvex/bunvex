@@ -96,8 +96,9 @@ export type RoomStats = {
 export type RoomEvent = {
   /**
    * Per tap, increasing by one. A tap starts again at 0 whenever it is created: its first poll, after it expired
-   * (30 s without a poll), after the server restarted. The source turns such a restart into `gap: true`, so the
-   * screen never compares seqs across a gap.
+   * (30 s without a poll), after the server restarted. Each tap also has an epoch (an id made with it) in every
+   * answer, so a tap made again is told apart even when its seq has passed the follower's cursor. The source turns
+   * any such restart into `gap: true`, so the screen never compares seqs across a gap.
    */
   seq: number;
   /** Wall-clock ms the server saw it. */
@@ -116,7 +117,8 @@ export type RoomEvent = {
 /**
  * What `watchRoomEvents` says beside a batch. `dropped`: events lost since the batch before, because the tap's buffer
  * (200 events) overflowed between two polls (0 otherwise). `gap`: the source lost track and cannot count what was
- * missed — the tap expired or the server restarted (its seq started again at 0), or a transient error was retried.
+ * missed — the tap expired or the server restarted (its seq started again at 0, or its epoch changed), or a transient
+ * error was retried.
  */
 export type RoomEventsInfo = { dropped: number; gap: boolean };
 
@@ -149,8 +151,10 @@ export interface RoomsFeatures {
    * - `onError` only for a terminal error — `not_found` on a deployment without rooms, `unauthorized`, or
    *   `invalid_request` for a malformed key — and then no more calls.
    * - `onClosed` when the room is not open (the last member left), and then no more calls. Just after a recovery, a
-   *   room found closed is asked again for a while (10 s): a server that restarted has it again only once its members
-   *   have reconnected.
+   *   room found closed is asked again (every second) for 10 s from the first answer that found it so: a server that
+   *   restarted has it again only once its members have reconnected.
+   * - An exception thrown by `onEvents` or `onClosed` is the consumer's: it ends the tap and surfaces, it is not
+   *   retried as a failure.
    *
    * The returned function stops it: no calls after it.
    */

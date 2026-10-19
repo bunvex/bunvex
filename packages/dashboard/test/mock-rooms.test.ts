@@ -131,19 +131,53 @@ describe("MockDataSource rooms: the event tap", () => {
   };
   const docKey = async (src: MockDataSource) => (await src.listRooms!()).find((r) => r.kind === "room")!.key;
 
-  test("the document room waves every few seconds, the same waves for the same seed", async () => {
-    const waves = async () => {
-      const src = make({ roomEventIntervalMs: 10 });
-      const t = tap(src, await docKey(src));
-      await until(() => t.events().length >= 3);
-      t.off();
-      return t.events().slice(0, 3);
-    };
-    const [a, b] = [await waves(), await waves()];
-    expect(a.map((e) => e.seq)).toEqual([1, 2, 3]);
-    expect(a.every((e) => e.event === "wave" && typeof e.from === "string")).toBe(true);
-    expect(a.map((e) => [e.event, e.from, e.data, e.size])).toEqual(b.map((e) => [e.event, e.from, e.data, e.size]));
-    expect(a[0]!.size).toBe(JSON.stringify(a[0]!.data).length);
+  test("the document room waves on the mock's clock: one per interval it passes, none while it stands still", async () => {
+    let t = NOW;
+    const src = make({ roomEventIntervalMs: 3000 });
+    src.scheduler.now = () => t;
+    const w = tap(src, await docKey(src));
+    await Bun.sleep(150);
+    expect(w.events()).toEqual([]);
+    t += 3000 * 3;
+    await until(() => w.events().length === 3);
+    await Bun.sleep(150);
+    expect(w.events()).toHaveLength(3);
+    const first = Math.floor(NOW / 3000) + 1;
+    expect(w.events().map((e) => e.at)).toEqual([first, first + 1, first + 2].map((k) => k * 3000));
+    expect(w.events().every((e) => e.event === "wave" && typeof e.from === "string")).toBe(true);
+    expect(w.events()[0]!.size).toBe(JSON.stringify(w.events()[0]!.data).length);
+    w.off();
+  });
+
+  test("a wave is the same for the same seed and mock time, whenever its tap started", async () => {
+    let t = NOW;
+    const a = make({ roomEventIntervalMs: 3000 });
+    const b = make({ roomEventIntervalMs: 3000 });
+    a.scheduler.now = () => t;
+    b.scheduler.now = () => t;
+    const wa = tap(a, await docKey(a));
+    t += 3000;
+    await until(() => wa.events().length === 1);
+    const wb = tap(b, await docKey(b));
+    t += 3000 * 2;
+    await until(() => wa.events().length === 3 && wb.events().length === 2);
+    const view = (e: RoomEvent) => [e.at, e.from, e.data];
+    expect(wb.events().map(view)).toEqual(wa.events().slice(1).map(view));
+    wa.off();
+    wb.off();
+  });
+
+  test("a document room with no member who may publish waves from the server", async () => {
+    let t = NOW;
+    const src = make({ roomEventIntervalMs: 3000 });
+    src.scheduler.now = () => t;
+    const internals = src.rooms as unknown as { open: { seats: { member: { canPublish: boolean } }[] }[] };
+    for (const r of internals.open) for (const s of r.seats) s.member.canPublish = false;
+    const w = tap(src, await docKey(src));
+    t += 3000;
+    await until(() => w.events().length === 1);
+    expect(w.events()[0]!.from).toBeNull();
+    w.off();
   });
 
   test("a test pushes an event; a tap sees only what came after it, never synchronously", async () => {
@@ -186,12 +220,16 @@ describe("MockDataSource rooms: the event tap", () => {
   });
 
   test("a stopped tap is called no more", async () => {
-    const src = make({ roomEventIntervalMs: 5 });
+    let now = NOW;
+    const src = make({ roomEventIntervalMs: 3000 });
+    src.scheduler.now = () => now;
     const t = tap(src, await docKey(src));
+    now += 3000;
     await until(() => t.batches.length > 0);
     t.off();
     const n = t.batches.length;
-    await Bun.sleep(40);
+    now += 3000 * 5;
+    await Bun.sleep(150);
     expect(t.batches).toHaveLength(n);
   });
 

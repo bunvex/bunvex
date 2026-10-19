@@ -240,12 +240,13 @@ describe("the event tap: /api/debug/rooms/events (AD-43)", () => {
     await r.b.until(() => r.b.got.find((m) => m.type === "RoomEvent"));
     const start = await r.events("");
     expect(start.status).toBe(200);
-    expect(start.body).toEqual({ events: [], newCursor: 0 });
+    expect(start.body).toEqual({ events: [], newCursor: 0, epoch: expect.any(String) });
     r.a.send({ type: "RoomEvent", roomId: 1, event: "ping", data: { n: 2 } });
     const got = (await r.events("&cursor=0")).body;
     expect(got).toEqual({
       events: [{ seq: 1, at: expect.any(Number), event: "ping", from: expect.any(String), size: 7, data: { n: 2 } }],
       newCursor: 1,
+      epoch: expect.any(String),
     });
   });
 
@@ -264,7 +265,11 @@ describe("the event tap: /api/debug/rooms/events (AD-43)", () => {
   test("a long poll with nothing times out with the same cursor", async () => {
     const r = await room();
     await r.events("");
-    expect((await r.events("&cursor=0&timeoutMs=50")).body).toEqual({ events: [], newCursor: 0 });
+    expect((await r.events("&cursor=0&timeoutMs=50")).body).toEqual({
+      events: [],
+      newCursor: 0,
+      epoch: expect.any(String),
+    });
   });
 
   test("an overflowed buffer answers how many were dropped; a cursor of a gone tap is reset", async () => {
@@ -276,7 +281,26 @@ describe("the event tap: /api/debug/rooms/events (AD-43)", () => {
     expect(got.events).toHaveLength(200);
     expect(got.dropped).toBe(5);
     expect(got.newCursor).toBe(205);
-    expect((await r.events("&cursor=999")).body).toEqual({ events: [], newCursor: 205, reset: true });
+    expect((await r.events("&cursor=999")).body).toEqual({
+      events: [],
+      newCursor: 205,
+      reset: true,
+      epoch: expect.any(String),
+    });
+  });
+
+  test("timeoutMs is capped at 60 000 ms, and defaults to it", async () => {
+    const r = await room();
+    const asked: number[] = [];
+    const tapEvents = r.hub.tapEvents.bind(r.hub);
+    r.hub.tapEvents = (key, cursor, timeoutMs, signal) => {
+      asked.push(timeoutMs);
+      return tapEvents(key, cursor, 0, signal);
+    };
+    await r.events("&cursor=0&timeoutMs=999999");
+    await r.events("&cursor=0");
+    await r.events("&cursor=0&timeoutMs=20");
+    expect(asked).toEqual([60_000, 60_000, 20]);
   });
 
   test("a room that is not open is closed, whatever the cursor", async () => {

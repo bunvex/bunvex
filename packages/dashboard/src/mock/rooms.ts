@@ -2,8 +2,8 @@
 // clock, and a `presence:online` scope with three users (one on two tabs, one idle), with the definitions that
 // describe them and counters that keep growing. A member's cursor is a function of the clock and the member, not
 // of a timer, so a screenshot or a test at a given clock sees the same picture. The event tap: while tapped, the
-// document room sends a `wave` from one of its members every few seconds (the same waves for a seed), and a test
-// pushes its own (`emit`). Not part of the contract: the source wraps it.
+// document room sends a `wave` from one of its members at every multiple of the interval on the mock clock (a wave is
+// a function of the seed and its time, so the same at the same mock time), and a test pushes its own (`emit`). Not part of the contract: the source wraps it.
 
 import { DataSourceError, type Page, type PageRequest, type Value } from "../data-source.ts";
 import type {
@@ -26,10 +26,16 @@ const BAD_KEY = "`key` is not a room key from the list.";
 /** An event's data above this many bytes of JSON is omitted, as the server's tap does. */
 const TAP_DATA_MAX_BYTES = 16 * 1024;
 const NO_LOSS: RoomEventsInfo = { dropped: 0, gap: false };
+/** How often a tapped document room looks at the mock clock for a wave due. */
+const WAVE_CHECK_MS = 50;
+/** The most waves sent at once when the mock clock jumped. */
+const WAVES_MAX_AT_ONCE = 20;
 
 type Seat = { member: RoomMember; phase: number };
 type MockTap = {
   key: string;
+  /** The mock time it started: a wave due before it is not its. */
+  since: number;
   seq: number;
   pending: RoomEvent[];
   flushing: boolean;
@@ -58,19 +64,19 @@ export class MockRooms {
   private readonly rnd: Random;
   private counters: Omit<RoomStats, "rooms" | "members" | "connections">;
   private readonly taps = new Set<MockTap>();
-  /** The waves' own stream, so that tapping changes none of the rest. */
-  private readonly waves: Random;
+  /** Checks the mock clock for waves due while the document room is tapped. */
   private waveTimer: ReturnType<typeof setInterval> | null = null;
+  /** The last wave sent (its index: its mock time over the interval). */
+  private lastWave = 0;
 
   constructor(
-    seed: number,
+    private readonly seed: number,
     private readonly now: () => number,
     start: number,
     private readonly waveEveryMs = 3000,
   ) {
     // its own stream: the mock's other data stays what it was
     this.rnd = createRandom(seed ^ 0x400d);
-    this.waves = createRandom(seed ^ 0x3a7e);
     const ids = Array.from({ length: 8 }, () => this.rnd.id()).sort(byText);
     const people = [
       ["user_ana", "Ana"],
@@ -234,7 +240,7 @@ export class MockRooms {
    */
   tap(key: string, onEvents: MockTap["onEvents"], onClosed: () => void): () => void {
     checkKey(key);
-    const t: MockTap = { key, seq: 0, pending: [], flushing: false, onEvents, onClosed };
+    const t: MockTap = { key, since: this.now(), seq: 0, pending: [], flushing: false, onEvents, onClosed };
     this.taps.add(t);
     if (!this.open.some((o) => o.info.key === key)) this.endTap(t);
     else this.wavesOn();
@@ -249,12 +255,16 @@ export class MockRooms {
    * tap on the room sees it. For tests; not part of the contract. False when no open room has that key.
    */
   emit(key: string, event: string, data: Value, from: string | null = null): boolean {
+    return this.emitAt(key, event, data, from, this.now());
+  }
+
+  private emitAt(key: string, event: string, data: Value, from: string | null, at: number): boolean {
     if (!this.open.some((o) => o.info.key === key)) return false;
     const json = JSON.stringify(data);
     const size = new TextEncoder().encode(json).length;
     for (const t of this.taps) {
-      if (t.key !== key) continue;
-      const e: RoomEvent = { seq: ++t.seq, at: this.now(), event, from, size, data: structuredClone(data) };
+      if (t.key !== key || at < t.since) continue;
+      const e: RoomEvent = { seq: ++t.seq, at, event, from, size, data: structuredClone(data) };
       if (size > TAP_DATA_MAX_BYTES) {
         e.data = null;
         e.dataOmitted = true;
@@ -283,20 +293,36 @@ export class MockRooms {
     this.flushLater(t, () => t.onClosed());
   }
 
-  /** The document room's waves run while it is tapped. */
+  /** The document room's waves run while it is tapped: a check of the mock clock, every `WAVE_CHECK_MS`. */
   private wavesOn() {
-    const doc = this.open.find((o) => o.info.name === "rooms:doc");
-    const tapped = doc !== undefined && [...this.taps].some((t) => t.key === doc.info.key);
-    if (tapped && this.waveTimer === null)
-      this.waveTimer = setInterval(() => {
-        const publishers = doc.seats.filter((s) => s.member.canPublish);
-        const who = publishers[this.waves.int(0, publishers.length - 1)]!.member.memberId;
-        this.emit(doc.info.key, "wave", { x: this.waves.int(0, 100), y: this.waves.int(0, 100) }, who);
-      }, this.waveEveryMs);
-    else if (!tapped && this.waveTimer !== null) {
+    const tapped = [...this.taps].some((t) => t.key === this.docRoom()?.info.key);
+    if (tapped && this.waveTimer === null) {
+      this.lastWave = Math.floor(this.now() / this.waveEveryMs);
+      this.waveTimer = setInterval(() => this.waveDue(), WAVE_CHECK_MS);
+    } else if (!tapped && this.waveTimer !== null) {
       clearInterval(this.waveTimer);
       this.waveTimer = null;
     }
+  }
+
+  private docRoom() {
+    return this.open.find((o) => o.info.name === "rooms:doc");
+  }
+
+  /** The waves the mock clock has passed since the last (the latest few, after a jump). */
+  private waveDue() {
+    const doc = this.docRoom();
+    if (!doc) return;
+    const due = Math.floor(this.now() / this.waveEveryMs);
+    for (let k = Math.max(this.lastWave + 1, due - WAVES_MAX_AT_ONCE + 1); k <= due; k++) {
+      // a function of the seed and the wave's time: the same wave at the same mock time
+      const r = createRandom((this.seed ^ 0x3a7e) + k * 0x9e3779b1);
+      const publishers = doc.seats.filter((s) => s.member.canPublish);
+      const pick = r.int(0, Math.max(0, publishers.length - 1));
+      const from = publishers[pick]?.member.memberId ?? null;
+      this.emitAt(doc.info.key, "wave", { x: r.int(0, 100), y: r.int(0, 100) }, from, k * this.waveEveryMs);
+    }
+    this.lastWave = Math.max(this.lastWave, due);
   }
 
   /** The counters on, as a busy deployment would between two samples. */

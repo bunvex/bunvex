@@ -224,13 +224,14 @@ taps costs one field check per event.
 
 **The endpoint** `GET /api/debug/rooms/events?key=&cursor=[&timeoutMs=]`, with the other rooms routes' guard
 (the admin key, ViewMetrics) and CORS:
-- no cursor: starts the tap (if no one did) and answers `{ events: [], newCursor: <seq> }` at once;
+- every answer of a tap carries its `epoch`, a random id made with the tap;
+- no cursor: starts the tap (if no one did) and answers `{ events: [], newCursor: <seq>, epoch }` at once;
 - a cursor: the events after it, or a long poll (as the invalidations feed: up to 60 s, a waiter woken by the next
   event, never holding the hub) answered `{ events: [], newCursor: cursor }` at its end. A cursor behind the oldest
   event held adds `dropped: <oldest seq − cursor − 1>`. A cursor for a tap that is gone (it expired; the server
   restarted, so the cursor is ahead of the tap's seq) is answered `{ events: [], newCursor: <seq>, reset: true }` and
-  the tap starts again. (A tap that expired and was re-created by another viewer since, with a seq past the cursor,
-  is not told apart.)
+  the tap starts again. A tap that expired and was made again by another viewer since, with a seq past the cursor,
+  is told apart by its epoch: the source turns an epoch change into a gap.
 - a room that is not open: `{ events: [], newCursor: cursor ?? 0, closed: true }`, no tap kept;
 - a malformed key or cursor: 400.
 
@@ -238,20 +239,23 @@ taps costs one field check per event.
 the call on, in seq order, never synchronously. `dropped` passes the server's count; `gap` says the source lost
 track (a reset, or a transient failure retried), and the screen never compares seqs across it. Transient failures
 (network, 5xx, a disconnection) are retried with the inspector's backoff, the tap started again without a cursor,
-and the first batch after says `gap: true` (it may be empty). `onError` only for a terminal error (`not_found`,
-`unauthorized`, `invalid_request`), then nothing more; `onClosed` when the room is not open, then nothing more —
-except just after a recovery, when a room found closed is asked again for up to 10 s (`ROOM_CLOSED_RETRY_MS`): a
-server that restarted has the room again only once its members reconnect.
+and the first batch after says `gap: true` (it may be empty); so does an epoch that changed. `onError` only for a
+terminal error (`not_found`, `unauthorized`, `invalid_request`), then nothing more; `onClosed` when the room is not
+open, then nothing more — except just after a recovery, when a room found closed is asked again every second
+(`ROOM_CLOSED_RETRY_DELAY_MS`) for 10 s from the first answer that found it so (`ROOM_CLOSED_RETRY_MS`): a server
+that restarted has the room again only once its members reconnect, however long it took to come back. The
+callbacks run outside the request's error handling: a consumer's exception ends the tap and surfaces.
 
 **The mock** (`packages/dashboard/src/mock/rooms.ts`): while tapped, the document room sends a `wave` from one of
-its members every 3 s (`roomEventIntervalMs`; the same waves for a seed); `rooms.emit(key, event, data)` lets a test
+its members at every multiple of 3 s on the mock clock (`roomEventIntervalMs`), each a function of the seed and its
+mock time, so a screenshot at a given mock time is reproducible (from the server, `null`, if no member may publish); `rooms.emit(key, event, data)` lets a test
 push one and `rooms.close(key)` ends a tap with `onClosed`. The contract suite's tap tests run on the mock and on a
 live server (`roomEvents` in the contract options, a room of their own driven by a real client).
 
 **Measured** (`bench/rooms-tap.ts`, 100 members, 20 000 events a run through `RoomHub.broadcast`, sinks that only
-count, median of 9 interleaved runs, two rounds, an Apple M1 Pro): untapped 1.16–1.17 M events/s against 1.12–1.13 M
-with main's hub (no change within the noise); tapped 0.93–0.94 M events/s, about 80 % of untapped, some 200 ns more
-per event (the data's JSON for its size, the record). The sinks do no I/O here; with sockets the fan-out costs far
+count, timers that never fire so that no run leaves an expiry behind, median of 9 interleaved runs, two rounds, an
+Apple M1 Pro): untapped 1.22–1.24 M events/s against 1.17–1.20 M with main's hub (no change within the noise); tapped
+0.99–1.00 M events/s, about 81 % of untapped, some 200 ns more per event (the data's JSON for its size, the record). The sinks do no I/O here; with sockets the fan-out costs far
 more per event, and the tap's share is smaller.
 
 ## 6. Questions for the owner

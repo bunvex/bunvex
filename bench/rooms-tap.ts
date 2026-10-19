@@ -30,8 +30,10 @@ const KEY = { kind: "room" as const, name: "rooms:doc", argsJson: '{"id":"bench"
 const DATA = { x: 512.5, y: 301.25, tool: "pen", color: "#ff8800" };
 
 let frames = 0;
+/** Timers that never fire: no 30 s expiry or tick is left behind a run, so the runs stay independent. */
+const inert = { now: () => performance.now(), set: () => null, clear() {} };
 function hubWithRoom(): Hub {
-  const hub = new RoomHub(LIMITS);
+  const hub = new RoomHub(LIMITS, inert);
   for (let i = 0; i < MEMBERS; i++)
     hub.join(
       {
