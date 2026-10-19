@@ -288,8 +288,10 @@ test("a nested error reaches the caller as Convex's JsError display: the uncaugh
 
 test("transactionLimits budgets database queries, scheduled functions and their argument bytes (N3)", async () => {
   const { engine, fns } = await setup();
+  // The caller's usage, then the budget: Convex's three reads at the function's start and two at its first nested
+  // call (STUDY-161 §16.3), then one.
   expect(await fns.runQuery("m:queriesLimited", {})).toStartWith(
-    "Uncaught Error: Too many reads in a single function execution (limit: 1).",
+    "Uncaught Error: Too many reads in a single function execution (limit: 6).",
   );
   expect(await fns.runMutation("m:schedulingLimited", {})).toEqual([
     "Uncaught Error: Too many functions scheduled by this mutation (limit: 1)",

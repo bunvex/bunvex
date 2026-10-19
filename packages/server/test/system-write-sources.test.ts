@@ -8,8 +8,9 @@ import { join } from "node:path";
 const roots = [join(import.meta.dir, "../src"), join(import.meta.dir, "../../core/src")];
 // `engine.mutation(body, "label")`, `host.system(body, "label")` and `runMutation(body, true, "label")`.
 const patterns = [/\},\s*"([a-z][a-z0-9_]*)"\s*\)/g, /\b(?:true|false),\s*"([a-z][a-z0-9_]*)",?\s*\)/g];
-// Literals the patterns catch that are not write sources: index orders, and a commit listener's name.
-const notSources = new Set(["asc", "desc", "scheduler"]);
+// Literals the patterns catch that are not write sources: index orders, a commit listener's name, and how a read counts
+// (`Tx.recordInterval`, STUDY-161 §16).
+const notSources = new Set(["asc", "desc", "scheduler", "direct", "derived", "none"]);
 
 test("every internal write source is under `_system/` (DV-435)", () => {
   const bare: string[] = [];

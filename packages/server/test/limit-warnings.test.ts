@@ -5,7 +5,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
-import { v } from "@bunvex/values";
+import { encodeId, idTableNumber, v } from "@bunvex/values";
 import { action, Functions, mutation, NODE_FUNCTIONS, query } from "../src/functions.ts";
 import { eventJsonV2, type LogEvent } from "../src/log-events.ts";
 import { collectLogs } from "../src/logs.ts";
@@ -38,7 +38,14 @@ async function setup() {
       return db.query("items").collect();
     }),
     gets: query(async ({ db }, { n }: { n: number }) => {
-      for (let i = 0; i < n; i++) await db.get(ids[i % ids.length] as never);
+      // n distinct ids (a document read again is no new read, STUDY-161 §16): the items', then ids of none
+      const number = idTableNumber(ids[0]!)!;
+      for (let i = 0; i < n; i++)
+        await db.get(
+          (i < ids.length
+            ? ids[i]
+            : encodeId(number, Uint8Array.of(i & 255, i >> 8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14))) as never,
+        );
       return null;
     }),
     write: mutation(async ({ db, scheduler }) => {
@@ -112,8 +119,9 @@ test("the threshold: past the ratio's floor, never at it, never past the limit",
   ratio(0.5); // 4096 read intervals: 2048 is not past it, 2049 is
   const reads = (n: number) =>
     t.lines(() => t.functions.runQuery("m:gets", { n })).then((w) => w.filter((l) => l.includes("Many reads")));
-  expect(await reads(2047)).toEqual([]); // 2047 gets + 1 table read = 2048 intervals
-  expect(await reads(2048)).toEqual([
+  // gets + Convex's 3 reads at the function's start (its configuration, environment and module; STUDY-161 §16.3)
+  expect(await reads(2045)).toEqual([]); // 2048 intervals
+  expect(await reads(2046)).toEqual([
     `[WARN] Many reads in a single function execution (actual: 2049, limit: 4096). ${HELP}`,
   ]);
 });

@@ -76,6 +76,7 @@ import {
   serializeOps,
   TOO_MANY_OPERATORS,
 } from "./query-ops.ts";
+import { ReadCounter } from "./read-count.ts";
 import {
   checkDocument,
   type Doc,
@@ -445,16 +446,28 @@ export class Tx {
   /** Callbacks to run once this transaction has committed (STUDY-164 §3.4: a mutation's broadcasts). */
   afterCommitCallbacks: (() => void)[] = [];
   private readList: Interval[] = [];
-  /** Intervals in `readList` that do not count against `databaseQueries` (`uncountedRead`). */
-  private uncountedReads = 0;
+  /**
+   * The reads counted against `databaseQueries`, as Convex counts them (STUDY-161 §16): `readList` is what
+   * subscriptions and OCC see, this only the count.
+   */
+  private readCount = new ReadCounter();
+  /** While positive, reads are recorded but not counted (`notCounted`, `unrecorded`). */
+  private notCounting = 0;
+  /** Whether this transaction already counted the read of a table's creation (Convex's: one, however many). */
+  private countedTableCreation = false;
+  /** Whether this transaction already counted a nested call's reads (Convex's: two, at the first call). */
+  private countedNestedCall = false;
   /** @internal (ScanReads) Scans that reached documents since their read-set was last brought up to date. */
   readonly unsettled: ScanReads[] = [];
+  /** @internal (ScanReads) The same scans by the index they read, each until it settles: what a counted read settles. */
+  readonly unsettledByIndex = new Map<IndexId, Set<ScanReads>>();
   /** The read-set: the intervals of every read so far, as the committer and the invalidation index see them. */
   get reads(): Interval[] {
     // Stryker disable next-line ConditionalExpression: with none unsettled the loop does nothing and the length stays 0
     if (this.unsettled.length) {
       for (const s of this.unsettled) s.settle();
       this.unsettled.length = 0;
+      this.unsettledByIndex.clear();
     }
     return this.readList;
   }
@@ -616,15 +629,28 @@ export class Tx {
 
   /** What has been read, written and scheduled so far, against the limits. */
   get usage(): TxLimits {
+    const tx = this;
     return {
       documentsRead: this.docsRead,
       bytesRead: this.bytesRead,
       documentsWritten: this.docsWritten,
       bytesWritten: this.bytesWritten,
-      databaseQueries: this.readList.length - this.uncountedReads,
+      // The exact count only when asked (a nested call's budget, `ctx.meta`): it replays the log (STUDY-161 §16.6).
+      get databaseQueries() {
+        return tx.countedReads();
+      },
       functionsScheduled: this.scheduledCount,
       scheduledFunctionArgsBytes: this.scheduledBytes,
     };
+  }
+
+  /**
+   * The reads counted so far where they are above `floor` (exactly), else a number not above it (the bound): what a
+   * warning past `floor` needs, without the exact count when it cannot be past it (STUDY-161 §16.6).
+   */
+  countedReadsUpTo(floor: number): number {
+    void this.reads;
+    return this.readCount.upTo(floor);
   }
   private writes = new Map<
     string,
@@ -771,7 +797,8 @@ export class Tx {
     if (this.systemTx || t.metaId === undefined || this.dependedOn.has(t.id)) return;
     this.dependedOn.add(t.id);
     const k = encodeKey([t.metaId]);
-    this.recordInterval({ index: this.catalog.table(TABLES_TABLE).byId.id, lo: k, hi: prefixEnd(k) });
+    // Convex's table mapping is a read the engine takes (`take_table_mapping_dep`): not counted.
+    this.recordInterval({ index: this.catalog.table(TABLES_TABLE).byId.id, lo: k, hi: prefixEnd(k) }, "derived");
   }
 
   /** The tables whose `_index` rows this transaction writes (an index created, changed or dropped). */
@@ -867,13 +894,25 @@ export class Tx {
    * query or a subscription re-runs when the table is created.
    */
   private readMissingTable() {
-    this.recordInterval({ index: defaultIndex(this.catalog.table(TABLES_TABLE)).id, lo: FULL.lo, hi: FULL.hi });
+    this.recordInterval(
+      { index: defaultIndex(this.catalog.table(TABLES_TABLE)).id, lo: FULL.lo, hi: FULL.hi },
+      // the table mapping, not counted (Convex's `take_table_mapping_dep`)
+      "derived",
+    );
   }
 
   /** Create table `name` in this transaction: the next free Convex number, a fresh tablet, system indexes. */
   private async createTable(name: string): Promise<TableDef> {
     if (name.startsWith("_")) throw new Error(`Invalid table name "${name}": names starting with "_" are reserved.`);
+    // Convex's creation reads the tables once, as the function's read (one, however many tables it creates); the
+    // catalog reads below are the engine's own (not counted).
+    if (this.counting && !this.countedTableCreation) {
+      this.countedTableCreation = true;
+      this.readCount.constant(1);
+      this.checkReadCount();
+    }
     this.systemDepth++;
+    this.notCounting++;
     try {
       const tables = (await this.query(TABLES_TABLE).collect()).map(tableMeta);
       const indexes = databaseIndexRows(await this.query(INDEX_TABLE).collect());
@@ -899,6 +938,7 @@ export class Tx {
       this.createdTables.set(this.createdKey(name), { def });
       return def;
     } finally {
+      this.notCounting--;
       this.systemDepth--;
     }
   }
@@ -935,7 +975,8 @@ export class Tx {
       const k = encodeKey([ix.metaId!]);
       ix.metaRead = { index: this.catalog.table(INDEX_TABLE).byId.id, lo: k, hi: prefixEnd(k) };
     }
-    this.recordInterval(ix.metaRead);
+    // Convex's index registry's dependency (`TransactionIndex::record_interval`): not counted.
+    this.recordInterval(ix.metaRead, "derived");
   }
 
   /**
@@ -944,21 +985,122 @@ export class Tx {
    */
   async unrecorded<T>(fn: () => Promise<T>): Promise<T> {
     const n = this.reads.length;
+    this.notCounting++;
     try {
       return await fn();
     } finally {
+      this.notCounting--;
       void this.reads; // settle the scans it made
       this.readList.length = n;
     }
   }
 
-  /** @internal (ScanReads) */
-  recordInterval(i: Interval) {
+  /**
+   * @internal Run `fn` with its reads recorded (for subscriptions and OCC) but not counted against
+   * `databaseQueries`: what Convex reads outside the function's transaction, or not as the function's read (the
+   * default system variables' canonical URLs, a table's creation).
+   */
+  async notCounted<T>(fn: () => Promise<T>): Promise<T> {
+    this.notCounting++;
+    try {
+      return await fn();
+    } finally {
+      this.notCounting--;
+    }
+  }
+
+  /** Whether reads recorded now count against `databaseQueries`. */
+  get counting(): boolean {
+    return !this.systemTx && this.notCounting === 0;
+  }
+
+  /**
+   * @internal (ScanReads) Record a read: kept for subscriptions and OCC, and counted as Convex counts it (STUDY-161
+   * §16) — `direct`, a read the function made (by the change of its index's merged intervals); `derived`, a read the
+   * engine takes on its own behalf (never counted); `none`, counted otherwise by the caller (a scan once it settles,
+   * a count).
+   */
+  recordInterval(i: Interval, how: "direct" | "derived" | "none" = "direct") {
     this.readList.push(i);
-    if (!this.systemTx && this.readList.length - this.uncountedReads > this.limits.databaseQueries)
+    if (how === "none" || !this.counting) return;
+    if (how === "derived") this.readCount.derived(i);
+    else this.countDirect(i);
+  }
+
+  /** @internal (ScanReads) Whether the count is exact by now (else a bound and a log, STUDY-161 §16.6). */
+  get countsExactly(): boolean {
+    return this.readCount.isExact;
+  }
+
+  /** @internal (ScanReads) A scan's first read, its interval resolved when the exact count needs it. */
+  countScanFirst(resolve: () => Interval) {
+    this.readCount.scan(resolve);
+    this.checkReadCount();
+  }
+
+  /** @internal (ScanReads) Count a read the function made, and fail past the limit. */
+  countDirect(i: Interval) {
+    // A scan of the same index still running reached further than its counted interval: count that first.
+    const scans = this.unsettledByIndex.get(i.index);
+    if (scans) for (const s of scans) s.settle();
+    this.readCount.direct(i);
+    this.checkReadCount();
+  }
+
+  /**
+   * Count `n` reads Convex makes on indexes a function cannot reach (STUDY-161 §16.3): at a function's start, its
+   * configuration, its environment and its modules.
+   */
+  countConstantReads(n: number) {
+    if (!this.counting) return;
+    this.readCount.constant(n);
+    this.checkReadCount();
+  }
+
+  /** The modules whose `_modules` row this transaction counted (`countModuleLoads`). */
+  private loadedModules = new Set<string>();
+
+  /**
+   * Count the modules a function loads, each once per transaction (STUDY-161 §16.3: Convex reads a module's
+   * `_modules` row as the function's read, by path, so a module loaded again merges).
+   */
+  countModuleLoads(modules: readonly string[]) {
+    if (!this.counting) return;
+    let n = 0;
+    for (const m of modules)
+      if (!this.loadedModules.has(m)) {
+        this.loadedModules.add(m);
+        n++;
+      }
+    this.countConstantReads(n);
+  }
+
+  /** Convex's first nested call in a transaction reads two more things (STUDY-161 §16.3); later ones, nothing. */
+  countNestedCall() {
+    if (!this.counting || this.countedNestedCall) return;
+    this.countedNestedCall = true;
+    this.readCount.constant(2);
+    this.checkReadCount();
+  }
+
+  private checkReadCount() {
+    if (this.readCount.over(this.limits.databaseQueries))
       throw paginationLimit(
         `Too many reads in a single function execution (limit: ${this.limits.databaseQueries}). ${OVER_LIMIT_HELP}`,
       );
+  }
+
+  /** The reads counted against `databaseQueries` so far, every scan settled: exactly (the log replayed if need be). */
+  private countedReads(): number {
+    void this.reads;
+    return this.readCount.count();
+  }
+
+  /** Whether the reads counted so far are past `n`, every scan settled: the bound answers while it is not past it. */
+  private readsOver(n: number): boolean {
+    if (!this.readCount.isExact && this.readCount.bound <= n) return false;
+    void this.reads;
+    return this.readCount.count() > n;
   }
 
   /**
@@ -980,7 +1122,6 @@ export class Tx {
   recordUncounted(index: IndexId | undefined) {
     if (index === undefined) return; // a table that does not exist yet: nothing to read
     this.readList.push({ index, lo: FULL.lo, hi: FULL.hi });
-    this.uncountedReads++;
   }
 
   /**
@@ -1494,7 +1635,7 @@ export class Tx {
     const maxBytes = end ? null : opts.maximumBytesRead;
     // Convex records the page's read with its first document (or, with none, at the end of the range); at the
     // read-interval limit, that is where the page fails.
-    const readsFull = !this.systemTx && this.readList.length - this.uncountedReads >= this.limits.databaseQueries;
+    const readsFull = this.counting && this.readsOver(this.limits.databaseQueries - 1);
     let recorded = false;
     const recordPage = () => {
       recorded = true;
@@ -1878,6 +2019,12 @@ export class Tx {
     internal[14] = this.day >> 8;
     internal[15] = this.day & 0xff;
     const id = encodeId(t.number, internal);
+    // Convex's `register_new_id`: the new id joins the read-set's intervals as the engine's read, so reading the
+    // document back counts nothing. In the count only (subscriptions and OCC see no read).
+    if (this.counting) {
+      const k = encodeKey([id]);
+      this.readCount.derived({ index: t.byId.id, lo: k, hi: prefixEnd(k) });
+    }
     // As in Convex: each insert takes the next float, so a transaction's inserts sort in insert order.
     const creationTime = this.nextCreationTime;
     this.nextCreationTime = nextUp(creationTime);
@@ -2113,7 +2260,10 @@ export class Tx {
       return 0;
     }
     const ix = defaultIndex(t);
-    this.recordInterval({ index: ix.id, lo: FULL.lo, hi: FULL.hi });
+    // Counted as Convex's (`add_dependency_on_tablet`): all of the table's `by_id`, which covers every document read
+    // by id before.
+    this.recordInterval({ index: ix.id, lo: FULL.lo, hi: FULL.hi }, "none");
+    if (this.counting) this.countDirect({ index: t.byId.id, lo: FULL.lo, hi: FULL.hi });
     let n = 0;
     try {
       n = this.tableCount ? this.tableCount(t.id, this.snapshot) : 0;
@@ -2207,7 +2357,8 @@ export class Tx {
     // The read-set (Convex's `QueryReads`): each query term — the last also as a prefix — and each filter.
     const terms = tokens.map((term, i) => ({ term, prefix: i === tokens.length - 1 }));
     if (this.writable) this.searchReads.push({ index: e.readIndex, terms, filters: eqs });
-    else for (const i of searchReadIntervals(e.readIndex, terms, eqs)) this.recordInterval(i);
+    // Convex keeps a search's terms apart from the intervals (`record_search`): not counted.
+    else for (const i of searchReadIntervals(e.readIndex, terms, eqs)) this.recordInterval(i, "derived");
     const pending = new Map<string, Doc | null>();
     for (const [id, w] of this.writes) if (w.table.id === t.id) pending.set(id, w.next);
     // Convex charges a search its whole index's bytes (DV-317: bunvex's indexed bytes for its segments');
@@ -2265,10 +2416,20 @@ function searchKey(h: { id: string; score: number; creationTime: number }): Uint
  */
 class ScanReads {
   private iv: Interval | null = null;
+  /** Whether its reads count against `databaseQueries` (decided when it opens: `Tx.counting`). */
+  private counts = false;
   /** The last document reached, while the app does not hold it. */
   private last: Doc | null = null;
   /** Or: the key values of the last document reached, taken when it was handed to the app. */
   private vals: KeyValue[] | null = null;
+  /**
+   * Its first document, while the count is a bound (STUDY-161 §16.6): the first read's interval ends there, worked out
+   * only if the exact count is needed — from its key, or its key values taken when it was handed out, or the document
+   * itself (never handed out, so unchanged).
+   */
+  private first: { doc: Doc; vals: KeyValue[] | null; key: Uint8Array | null } | null = null;
+  /** Whether it reached a document after its first (from then on it grows as the exact count would see it). */
+  private moved = false;
   constructor(
     private readonly tx: Tx,
     private readonly st: QState,
@@ -2276,11 +2437,50 @@ class ScanReads {
 
   /** The scan reached `doc` (in its order). */
   reached(doc: Doc) {
-    if (!this.iv) this.open();
+    if (!this.iv) {
+      this.open();
+      // Convex counts a page's read as it fetches it: the scan counts at its first document (and fails there past
+      // the limit); what it reads further only widens that interval.
+      if (this.counts) {
+        if (this.tx.countsExactly) {
+          this.last = doc;
+          this.vals = null;
+          this.settle();
+          return;
+        }
+        const first = { doc, vals: null, key: null };
+        this.first = first;
+        this.tx.countScanFirst(() => this.firstInterval(first));
+      }
+    } else if (this.first) this.moved = true;
     // Stryker disable next-line LogicalOperator: a second entry in `unsettled` only settles it again, a no-op
-    if (this.last === null && this.vals === null) this.tx.unsettled.push(this);
+    if (this.last === null && this.vals === null) {
+      this.tx.unsettled.push(this);
+      // Only what grows past a counted interval needs settling before another read of the index is counted.
+      if (this.counts && (this.moved || !this.first)) {
+        const by = this.tx.unsettledByIndex;
+        const index = this.iv!.index;
+        const scans = by.get(index);
+        if (scans) scans.add(this);
+        else by.set(index, new Set([this]));
+      }
+    }
     this.last = doc;
     this.vals = null;
+  }
+
+  /** The first read's interval: from the start of the range to its first document (or from it, descending). */
+  private firstInterval(first: { doc: Doc; vals: KeyValue[] | null; key: Uint8Array | null }): Interval {
+    const key = first.key ?? (first.vals ? encodeKey(first.vals) : indexKey(this.st.ix!, first.doc));
+    const r = this.st.range;
+    return this.st.desc
+      ? { index: this.st.ix!.id, lo: key, hi: r.hi }
+      : { index: this.st.ix!.id, lo: r.lo, hi: readEndAfter(key, r.hi) };
+  }
+
+  /** The index it reads. */
+  get index(): IndexId | undefined {
+    return this.iv?.index;
   }
 
   /**
@@ -2297,6 +2497,7 @@ class ScanReads {
         this.settle();
         return;
       }
+    if (this.first && !this.moved) this.first.vals = vals;
     this.vals = vals;
     this.last = null;
   }
@@ -2309,6 +2510,7 @@ class ScanReads {
     iv.hi = this.st.range.hi;
     this.last = null;
     this.vals = null;
+    if (this.counts) this.tx.countDirect(iv);
   }
 
   /** @internal (Tx.reads) End the interval at the last document reached. */
@@ -2320,6 +2522,7 @@ class ScanReads {
     this.last = null;
     this.vals = null;
     const iv = this.iv!;
+    if (this.counts) this.tx.unsettledByIndex.get(iv.index)?.delete(this);
     if (this.st.desc) {
       iv.lo = key;
       iv.hi = this.st.range.hi;
@@ -2327,12 +2530,17 @@ class ScanReads {
       iv.lo = this.st.range.lo;
       iv.hi = readEndAfter(key, this.st.range.hi);
     }
+    if (!this.counts) return;
+    // Still at its first document: that is the first read, already counted (its key kept for the exact count).
+    if (this.first && !this.moved) this.first.key = key;
+    else this.tx.countDirect(iv);
   }
 
   private open() {
-    // The whole range until settled; never seen as such (`Tx.reads` settles first).
+    // The whole range until settled; never seen as such (`Tx.reads` settles first). Counted once settled.
     this.iv = { index: this.st.ix!.id, lo: this.st.range.lo, hi: this.st.range.hi };
-    this.tx.recordInterval(this.iv);
+    this.counts = this.tx.counting;
+    this.tx.recordInterval(this.iv, "none");
   }
 }
 

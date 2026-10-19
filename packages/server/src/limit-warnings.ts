@@ -76,7 +76,8 @@ export function functionWarnings(o: {
     { suffix: OVER_LIMIT_HELP },
   );
   approaching(
-    used.databaseQueries,
+    // Exactly only past the warning's floor (the count is a bound until then, STUDY-161 §16.6).
+    o.tx.countedReadsUpTo(Math.floor(ratio() * TRANSACTION_MAX_READ_SET_INTERVALS)),
     TRANSACTION_MAX_READ_SET_INTERVALS,
     "TooManyReads",
     "Many reads in a single function execution",
