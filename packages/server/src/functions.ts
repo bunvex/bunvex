@@ -1564,10 +1564,21 @@ export class Functions {
    * `exportArgs()` / `exportReturns()` give, as the push stored them: `{ type: "any" }` arguments and a `null`
    * result validator when the function declares none.
    */
-  apiSpec() {
+  apiSpec(componentId?: string | null) {
     const kind = { query: "Query", mutation: "Mutation", action: "Action" } as const;
-    const routes = this.httpRoutes().map(([method, path]) => ({ functionType: "HttpAction", method, path }));
-    const fns = [...this.fns].map(([key, f]) => {
+    // A component's (`componentId`, as Convex's `queryPrivateSystem` reads it): its functions, no routes yet (its
+    // HTTP mounts are STUDY-152 step 7).
+    const routes = componentId
+      ? []
+      : this.httpRoutes().map(([method, path]) => ({ functionType: "HttpAction", method, path }));
+    const prefix = componentId ? componentFunctionName(componentId, "x:x").slice(0, -"x:x".length) : null;
+    const entries: [string, FunctionDef][] =
+      prefix === null
+        ? [...this.fns]
+        : [...this.componentFns]
+            .filter(([key]) => key.startsWith(prefix))
+            .map(([key, f]) => [key.slice(prefix.length), f]);
+    const fns = entries.map(([key, f]) => {
       const i = key.lastIndexOf(":");
       const identifier = `${key.slice(0, i)}.js:${key.slice(i + 1)}`;
       const exported = (method: ValidatorExport) => {

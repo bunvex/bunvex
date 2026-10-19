@@ -8,7 +8,7 @@
  * @module
  */
 
-import { anyApi } from "bunvex/server";
+import { anyApi, componentsGeneric } from "bunvex/server";
 
 /**
  * A utility for referencing bunvex functions in your app's API.
@@ -20,4 +20,4 @@ import { anyApi } from "bunvex/server";
  */
 export const api = anyApi;
 export const internal = anyApi;
-export const components = {};
+export const components = componentsGeneric();

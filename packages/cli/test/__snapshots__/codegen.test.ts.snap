@@ -72,7 +72,7 @@ export declare const components: {};
  * @module
  */
 
-import { anyApi } from "@bunvex/server";
+import { anyApi, componentsGeneric } from "@bunvex/server";
 
 /**
  * A utility for referencing bunvex functions in your app's API.
@@ -84,7 +84,7 @@ import { anyApi } from "@bunvex/server";
  */
 export const api = anyApi;
 export const internal = anyApi;
-export const components = {};
+export const components = componentsGeneric();
 "
 ,
   },
@@ -100,11 +100,11 @@ export const components = {};
  * @module
  */
 
-import type { AnyApi } from "@bunvex/server";
+import type { AnyApi, AnyComponents } from "@bunvex/server";
 
 export declare const api: AnyApi;
 export declare const internal: AnyApi;
-export declare const components: {};
+export declare const components: AnyComponents;
 "
 ,
     "api.js": 
@@ -118,7 +118,7 @@ export declare const components: {};
  * @module
  */
 
-import { anyApi } from "@bunvex/server";
+import { anyApi, componentsGeneric } from "@bunvex/server";
 
 /**
  * A utility for referencing bunvex functions in your app's API.
@@ -130,7 +130,7 @@ import { anyApi } from "@bunvex/server";
  */
 export const api = anyApi;
 export const internal = anyApi;
-export const components = {};
+export const components = componentsGeneric();
 "
 ,
   },
@@ -396,7 +396,7 @@ import type {
   FilterApi,
   FunctionReference,
 } from "@bunvex/server";
-import { anyApi } from "@bunvex/server";
+import { anyApi, componentsGeneric } from "@bunvex/server";
 
 const fullApi: ApiFromModules<{
   messages: typeof messages;
@@ -431,7 +431,7 @@ export const internal: FilterApi<
   FunctionReference<any, "internal">
 > = anyApi as any;
 
-export const components = {};
+export const components = componentsGeneric() as unknown as {};
 "
 ,
   },
@@ -447,12 +447,12 @@ export const components = {};
  * @module
  */
 
-import type { AnyApi } from "@bunvex/server";
-import { anyApi } from "@bunvex/server";
+import type { AnyApi, AnyComponents } from "@bunvex/server";
+import { anyApi, componentsGeneric } from "@bunvex/server";
 
 export const api: AnyApi = anyApi;
 export const internal: AnyApi = anyApi;
-export const components = {};
+export const components: AnyComponents = componentsGeneric();
 "
 ,
   },

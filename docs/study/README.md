@@ -190,6 +190,7 @@ to a spec.
 | [STUDY-162](STUDY-162-custom-query-types.md) | The custom test query's types and completions: Convex's bundled `convex/server` and `convex/values` declarations, its editor's globals, generated data model and schema; bunvex's declarations as a lazy chunk made at build, the query's files from the deployment's schema, Monaco's type checking and suggestions; search and vector index names (§8) | implemented (owner, 2026-10-15: match Convex) |
 | [STUDY-164](STUDY-164-ephemeral-rooms.md) | Ephemeral state: rooms with presence and broadcast held in memory beside the database (Convex keeps it in tables; its presence component, its peers, minivex's lessons) | built (v1): AD-42 (two concepts, relay through the leader) |
 | [STUDY-165](STUDY-165-rooms-in-the-dashboard.md) | Rooms in the dashboard: reading the in-memory hub through polled `/api/debug/rooms*` endpoints, a Rooms screen with members and presence, definitions on the Functions screen, counters on Health, an event tap and admin actions | decided (owner, 2026-10-16): AD-43 accepted, every recommendation; steps 1–4 built (the read and the counters) |
+| [STUDY-166](STUDY-166-rooms-tap-and-actions-screens.md) | The Rooms screen's event tap and actions (AD-43 steps 5 and 6): a live event panel on `watchRoomEvents`, and confirmed controls to send a test event, remove a member and close a room, with their History words | implemented (this PR) |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 

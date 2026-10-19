@@ -3,8 +3,8 @@
 - **Status:** decided. The owner accepted AD-43 on 2026-10-16 with every recommendation of §6: polled `/api/debug/rooms*`
   endpoints, the Rooms screen and the definitions on the Functions screen, the counters, a 1 s period, then the
   event tap, then the actions. This session builds the server side and the data source, with the dashboard session
-  building the screens. Steps 1–4 (§5) are built: the read and the counters (#714, #719, #722); the event tap
-  and the actions are to come.
+  building the screens. Steps 1–4 (§5) are built: the read and the counters (#714, #719, #722); steps 5 and 6, the event tap
+  and the actions, are built too: their server and sources here (§5.2, §5.3), their screens in STUDY-166.
 - **Convex source read:** nothing to read. Convex has no rooms (STUDY-164 §1), so its dashboard has no screen for them.
 - **Related:**
   - [STUDY-164](STUDY-164-ephemeral-rooms.md): rooms and presence scopes, AD-42, built.
@@ -130,9 +130,9 @@ The parts can ship in this order, one PR each:
 4. **Health.** The room counters on the Health screen. Built: #722, with step 3 (§5.1), on the Overview (the screen
    that was Health).
 5. **Event tap.** The ring buffer and the long poll on the server, and the panel on the screen. The server, the
-   contract's `watchRoomEvents`, the server source and the mock: built (§5.2); the panel to come.
+   contract's `watchRoomEvents`, the server source and the mock: built (§5.2); the panel: built (STUDY-166).
 6. **Actions.** Send a test event, remove a member, close a room, with the audit log. The server, the contract, the
-   server source and the mock: built (§5.3); the screen's controls to come.
+   server source and the mock: built (§5.3); the screen's controls: built (STUDY-166).
 
 Parts 1–4 are the read and observability base. Parts 5 and 6 can wait for the owner's go-ahead (D6, D7). The
 dashboard is the other session's area (sandbox-86), so the screen PRs would be coordinated with it.
