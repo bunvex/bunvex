@@ -236,7 +236,7 @@ each step writes its own tests and checks against these):
 | 3 | Server push of definitions; `defineApp` / `defineComponent` / `componentsGeneric` | every test (all push a `convex.config.ts`) |
 | 4 | Running a function inside a component; admin `componentPath` | A13–A15, B4/B5, frame paths in B1–B3 |
 | 5 | Calls across components (references, handles, identity, subtransaction) | A1–A3, A5–A12, A13–A17, B1–B3, and every test's cleanup |
-| 6 | CLI push and codegen (DV-174, DV-385) | every test |
+| 6 | CLI push and codegen (DV-174, DV-385, DV-429; STUDY-156) | every test |
 | 7 | Scheduler, crons, storage, HTTP mounts, env per component | B4–B8, A4, A16, A17 |
 | 8 | bunvex's own components (C1, C7) | each against its Convex package's behaviour |
 | 9 | Dashboard and CLI flags (DV-224, DV-391), with sandbox-86 | — |
