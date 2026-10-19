@@ -8,7 +8,7 @@ import { ValidatorError } from "../errors.ts";
 import { type Functions, registryKey } from "../functions.ts";
 import type { AnyRoomDef } from "./define.ts";
 import type { RoomKey } from "./hub.ts";
-import { canonicalJson } from "./session.ts";
+import { canonicalJson, eventTooLarge } from "./session.ts";
 
 type Ref = AnyFunctionReference | string;
 
@@ -31,8 +31,8 @@ export function checkedRoomEvent(functions: Functions, def: AnyRoomDef, event: s
   if (why) throw ValidatorError.args(why);
   const wire = toJsonValue(value);
   const limit = functions.roomHub?.limits.payloadBytes;
-  if (limit !== undefined && Buffer.byteLength(JSON.stringify(wire)) > limit)
-    throw new Error("The event is too large.");
+  const size = Buffer.byteLength(JSON.stringify(wire));
+  if (limit !== undefined && size > limit) throw new Error(eventTooLarge(size, limit));
   return wire;
 }
 

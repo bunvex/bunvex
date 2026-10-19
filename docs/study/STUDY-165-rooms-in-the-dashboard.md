@@ -272,14 +272,18 @@ more per event, and the tap's share is smaller.
 sink is told to evict it (`RoomSink.evict`, which `RoomConnection` implements by sending `RoomLeft` through the
 same path as an identity's refusal, counting `roomLeft`, and forgetting the room); an attachment in its grace just
 leaves, its timer cleared. The others see the member leave on the next tick. A scope's member is its user, so every
-tab on every connection ends. It answers `{ connections }`, or null when the room is not open or has no such member.
+tab on every connection ends. A member removed in its grace is remembered for what was left of it (`graceMs`): that
+session's reconnect is answered with `RoomLeft` `removed` instead of the member back (once; another session, or a
+join after the window, joins). A removal that lands while a new identity's gates run stands: their verdict is not
+applied to a room evicted meanwhile. It answers `{ connections }`, or null when the room is not open or has no such member.
 `closeRoom(key)` removes every member, answers `{ members, connections }` (null when not open), and ends a tap on the
 room at once.
 
 **The endpoints**, POST with a JSON body, beside the other rooms routes and under the same CORS layer:
 - `/api/debug/rooms/broadcast {key, event, data}`: `data` in the wire's JSON form. Checked by the code
   `ctx.rooms.broadcast` uses (`checkedRoomEvent` in `rooms/ctx.ts`): an event the room does not declare, data its
-  validator refuses, or JSON over the client events' limit are 400 with the words app code is thrown. A room that
+  validator refuses, or JSON over the client events' limit ("The event is 5123 bytes (limit 4096).", the words a
+  client's own event is refused with too) are 400 with the words app code is thrown. A room that
   is not open is 404 `{ code: "RoomNotOpen" }`, nothing sent. Otherwise the event goes out from the server
   (`from: null`), and the tap records it. 200 `{}`.
 - `/api/debug/rooms/remove {key, memberId}`: `{ removed: { connections } | null }`.
@@ -290,13 +294,13 @@ They need `WriteData`, the operation of the dashboard's other data writes, which
 other writes are, `insertAuditLogEvents` with `auditActor(caller)`: the admin key's member (`member_id`), the request's
 IP and user agent. The events are bunvex's own (Convex has no rooms): `broadcast_room_event { room, args, event }`,
 `remove_room_member { room, args, member_id, connections }` and `close_room { room, args, members, connections }`,
-`args` the room's canonical args as JSON text.
+`args` the room's canonical args as JSON text. The action happens in memory before its record: a failed audit write
+is logged and the answer still given, so that a retry does not act twice.
 
 **The protocol and the client.** `RoomLeft`'s code gains `removed`. The client keeps a membership ended with
 `removed` ended across a new Authenticate (a token refresh) and a reconnect, where `no_access` and `limit` are retried
 as before; the app joining the room again (a new `joinRoom` or `useRoom` after the last handle left) joins it. A
-removal is an eviction, not a ban. A member in its grace when removed is told nothing (it has no socket), and its
-client rejoins when it reconnects.
+removal is an eviction, not a ban. A member in its grace when removed is told on its reconnect (above).
 
 **The contract**: `broadcastRoomEvent(room, event, data)`, `removeRoomMember(room, memberId) → { connections } | null`
 and `closeRoom(room) → { members, connections } | null`. A credential that may not write is refused with

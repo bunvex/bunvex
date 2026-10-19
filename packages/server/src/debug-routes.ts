@@ -342,9 +342,18 @@ export async function roomsRoute(
 
 type RoomAction = "broadcast" | "remove" | "close";
 
-/** Records one dashboard action in the audit log, as the caller (the admin key's member). */
-const recordAction = (engine: Engine, caller: Caller, e: AuditLogEvent) =>
-  engine.mutation((db) => insertAuditLogEvents(db, [e], auditActor(caller)), "_system/rooms_action");
+/**
+ * Records one dashboard action in the audit log, as the caller (the admin key's member). The action has already
+ * happened in memory and cannot be undone: a failed write is logged and the action's answer still given, since an
+ * error would invite a retry that sends the event, or ends a member who rejoined, a second time.
+ */
+async function recordAction(engine: Engine, caller: Caller, e: AuditLogEvent) {
+  try {
+    await engine.mutation((db) => insertAuditLogEvents(db, [e], auditActor(caller)), "_system/rooms_action");
+  } catch (err) {
+    console.error(`bunvex: recording the audit event ${e.action} failed:`, err);
+  }
+}
 
 /** The dashboard's actions on a room (AD-43): WriteData, then the body, then the act, then its audit event. */
 async function roomAction(
@@ -377,8 +386,7 @@ async function roomAction(
     } catch (e) {
       return badRequest((e as Error).message.trimEnd());
     }
-    if (!hub.list().some((r) => r.key === body.key))
-      return jsonResponse({ code: "RoomNotOpen", message: "The room is not open." }, 404);
+    if (!hub.isOpen(body.key)) return jsonResponse({ code: "RoomNotOpen", message: "The room is not open." }, 404);
     hub.broadcast(key, body.event, wire);
     await recordAction(ctx.engine, caller, auditEvents.broadcastRoomEvent(key.name, key.argsJson, body.event));
     return jsonResponse({});

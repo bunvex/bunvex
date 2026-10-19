@@ -72,7 +72,7 @@ async function setup() {
     engine.query((db) => db.asSystem(() => db.query(DEPLOYMENT_AUDIT_LOG_TABLE).collect())) as Promise<
       Record<string, any>[]
     >;
-  return { get, post, audit, client, api, hub };
+  return { get, post, audit, client, api, hub, engine };
 }
 
 test("the endpoints need the admin key", async () => {
@@ -379,7 +379,8 @@ describe("the dashboard's actions: broadcast, remove, close (AD-43)", () => {
     const cases: [unknown, number, string | RegExp][] = [
       [{ key: r.key, event: "nope", data: {} }, 400, 'This room has no event "nope".'],
       [{ key: r.key, event: "ping", data: { n: "x" } }, 400, /^ArgumentValidationError: .*n/s],
-      [{ key: r.key, event: "ping", data: { n: 1, pad: "x".repeat(5000) } }, 400, /^ArgumentValidationError/],
+      // a field the event's validator does not declare
+      [{ key: r.key, event: "ping", data: { n: 1, extra: true } }, 400, /^ArgumentValidationError/],
       [{ key: "garbage", event: "ping", data: {} }, 400, "`key` is not a room key from the list."],
       [{ key: r.key, data: {} }, 400, "`event` must be a string."],
       ["{not json", 400, "The body is not valid JSON."],
@@ -412,7 +413,7 @@ describe("the dashboard's actions: broadcast, remove, close (AD-43)", () => {
       data: { s: "x".repeat(5000) },
     });
     expect(res.status).toBe(400);
-    expect(res.body.message).toBe("The event is too large.");
+    expect(res.body.message).toMatch(/^The event is 50\d\d bytes \(limit 4096\)\.$/);
   });
 
   test("broadcast to a room that is not open is 404, nothing sent", async () => {
@@ -469,6 +470,41 @@ describe("the dashboard's actions: broadcast, remove, close (AD-43)", () => {
     ]);
     expect((await r.post("/api/debug/rooms/close", { key: r.key })).body).toEqual({ closed: null });
     expect(await r.audit()).toHaveLength(1);
+  });
+
+  test("close counts a member in its reconnect grace", async () => {
+    const r = await rooms();
+    r.b.ws.close();
+    const graced = async () =>
+      (await r.get(`/api/debug/rooms/members?key=${encodeURIComponent(r.key)}`)).body.page.some(
+        (m: { graced: boolean }) => m.graced,
+      );
+    for (let i = 0; !(await graced()); i++) {
+      if (i > 200) throw new Error("the member never went into its grace");
+      await Bun.sleep(10);
+    }
+    expect((await r.post("/api/debug/rooms/close", { key: r.key })).body).toEqual({
+      closed: { members: 2, connections: 2 },
+    });
+    expect((await r.get("/api/debug/rooms")).body.rooms).toEqual([]);
+  });
+
+  test("a failing audit write is logged, and the action's answer still given", async () => {
+    const r = await rooms();
+    const errors: unknown[][] = [];
+    const real = console.error;
+    console.error = (...a: unknown[]) => void errors.push(a);
+    const mutation = r.engine.mutation.bind(r.engine);
+    r.engine.mutation = (() => Promise.reject(new Error("store down"))) as typeof r.engine.mutation;
+    try {
+      const res = await r.post("/api/debug/rooms/close", { key: r.key });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ closed: { members: 2, connections: 2 } });
+      expect(String(errors[0]?.[0])).toContain("audit");
+    } finally {
+      console.error = real;
+      r.engine.mutation = mutation;
+    }
   });
 
   test("a read-only key, or none, may not act: nothing done, nothing recorded", async () => {

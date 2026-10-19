@@ -65,6 +65,13 @@ const num = { type: "number" as const };
 
 const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
+/** A room key's function name and args' JSON text (`kind|name|args`), as the server's audit events name a room. */
+export function roomKeyParts(key: string): { room: string; args: string } {
+  const i = key.indexOf("|");
+  const j = key.indexOf("|", i + 1);
+  return { room: key.slice(i + 1, j), args: key.slice(j + 1) };
+}
+
 /** As the server refuses a key that is not `kind|name|args` of a room or a scope. */
 function checkKey(key: string) {
   const i = key.indexOf("|");
@@ -268,15 +275,16 @@ export class MockRooms {
    */
   broadcast(key: string, event: string, data: Value) {
     checkKey(key);
-    const name = key.slice(key.indexOf("|") + 1, key.indexOf("|", key.indexOf("|") + 1));
+    const name = roomKeyParts(key).room;
     const def = this.definitions().find((d) => d.name === name && d.kind === "room");
     if (!def) throw new DataSourceError("invalid_request", `No room named "${name}".`);
     const declared = def.events.find((e) => e.name === event);
     if (!declared) throw new DataSourceError("invalid_request", `This room has no event "${event}".`);
     const issue = declared.payload ? validateValue(declared.payload, data)[0] : undefined;
     if (issue) throw new DataSourceError("invalid_request", `ArgumentValidationError: ${issue.message}`);
-    if (new TextEncoder().encode(JSON.stringify(data)).length > EVENT_MAX_BYTES)
-      throw new DataSourceError("invalid_request", "The event is too large.");
+    const size = new TextEncoder().encode(JSON.stringify(data)).length;
+    if (size > EVENT_MAX_BYTES)
+      throw new DataSourceError("invalid_request", `The event is ${size} bytes (limit ${EVENT_MAX_BYTES}).`);
     const r = this.open.find((o) => o.info.key === key);
     if (!r) throw new DataSourceError("not_found", "The room is not open.");
     for (const s of r.seats)

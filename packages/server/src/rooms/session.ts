@@ -5,7 +5,7 @@ import type { v1 } from "@bunvex/protocol";
 import { checkValue, type Value } from "@bunvex/values";
 import { type Functions, registryKey } from "../functions.ts";
 import type { AnyRoomDef, RoomGate } from "./define.ts";
-import { type RoomHub, type RoomKey, type RoomSink, roomKeyString } from "./hub.ts";
+import { REMOVED_MESSAGE, type RoomHub, type RoomKey, type RoomSink, roomKeyString } from "./hub.ts";
 import type { RoomLimits } from "./limits.ts";
 
 type JSONValue = v1.JSONValue;
@@ -43,6 +43,9 @@ function sorted(x: JSONValue): JSONValue {
 }
 
 const bytes = (x: JSONValue) => Buffer.byteLength(JSON.stringify(x));
+
+/** An event over the size limit, for a client's event and a server broadcast alike: its size and the limit. */
+export const eventTooLarge = (size: number, limit: number) => `The event is ${size} bytes (limit ${limit}).`;
 
 type Joined = { def: AnyRoomDef; key: RoomKey; args: Value; userId: string | null };
 
@@ -138,16 +141,22 @@ export class RoomConnection implements RoomSink {
     }
     // One room whatever the spelling of its name (`rooms:doc`, `rooms.js:doc`) or the order of its args' keys.
     const key: RoomKey = { kind: def.kind, name: room.key.name, argsJson: canonicalJson(m.args) };
-    if (!this.attach(m.roomId, { def, key, args, userId }, canPublish)) this.error(m.roomId, "limit", FULL);
+    if (this.attach(m.roomId, { def, key, args, userId }, canPublish) === "limit") this.error(m.roomId, "limit", FULL);
   }
 
-  /** Join the hub (false: over a cap); the hub ends any other attachment of this connection to the same room. */
-  private attach(roomId: number, j: Joined, canPublish: boolean): boolean {
+  /**
+   * Join the hub; the hub ends any other attachment of this connection to the same room. `limit`: over a cap (the
+   * caller says so). `removed`: the dashboard removed this session's member while it was in its reconnect grace;
+   * the client is told with RoomLeft `removed` here, as a live member is, and nothing else is sent.
+   */
+  private attach(roomId: number, j: Joined, canPublish: boolean): "ok" | "limit" | "removed" {
     const ks = roomKeyString(j.key);
     for (const [id, other] of this.joined) if (roomKeyString(other.key) === ks) this.joined.delete(id);
-    if (this.deps.hub.join(this, roomId, j.key, { userId: j.userId, canPublish }) === "limit") return false;
+    const r = this.deps.hub.join(this, roomId, j.key, { userId: j.userId, canPublish });
+    if (r === "removed") this.left(roomId, "removed", REMOVED_MESSAGE);
+    if (r !== "ok") return r;
     this.joined.set(roomId, j);
-    return true;
+    return "ok";
   }
 
   /** A joined membership the server ended on its own: the client's handle ends too (it is not a join error). */
@@ -191,7 +200,9 @@ export class RoomConnection implements RoomSink {
     if (!j || j.def.kind !== "room") return this.error(m.roomId, "not_found", NOT_JOINED);
     const validator = Object.hasOwn(j.def.events, m.event) ? j.def.events[m.event] : undefined;
     if (!validator) return this.error(m.roomId, "validation", `This room has no event "${m.event}".`);
-    if (bytes(m.data) > this.deps.limits.payloadBytes) return this.error(m.roomId, "limit", "The event is too large.");
+    const size = bytes(m.data);
+    if (size > this.deps.limits.payloadBytes)
+      return this.error(m.roomId, "limit", eventTooLarge(size, this.deps.limits.payloadBytes));
     const parsed = this.parse(m.data);
     if ("error" in parsed) return this.error(m.roomId, "validation", parsed.error);
     const why = checkValue(validator, parsed.value);
@@ -226,6 +237,8 @@ export class RoomConnection implements RoomSink {
     if (this.closedFlag) return;
     // Applied in the rooms' order.
     rooms.forEach(([roomId, j], i) => {
+      // removed from the dashboard while the gates ran (evict dropped it): the removal stands, whatever they said
+      if (this.joined.get(roomId) !== j) return;
       const { ok, canPublish } = verdicts[i]!;
       if (ok && userId === j.userId) {
         if (j.def.kind === "room") this.deps.hub.setCanPublish(this, roomId, canPublish);
@@ -235,7 +248,7 @@ export class RoomConnection implements RoomSink {
       this.joined.delete(roomId);
       this.deps.hub.leave(this, roomId);
       if (!ok) this.left(roomId, "no_access", NO_ACCESS);
-      else if (!this.attach(roomId, { ...j, userId }, canPublish)) this.left(roomId, "limit", FULL);
+      else if (this.attach(roomId, { ...j, userId }, canPublish) === "limit") this.left(roomId, "limit", FULL);
     });
   }
 

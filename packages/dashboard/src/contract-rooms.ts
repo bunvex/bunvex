@@ -411,7 +411,7 @@ function describeRoomActionsContract({ make, test, watchTimeoutMs, opts }: Ctx) 
       expect(bad.message.length).toBeGreaterThan(0);
       const big = await rejection(src.broadcastRoomEvent!({ key: room.key }, room.event.name, room.event.bigData));
       expect(big.code).toBe("invalid_request");
-      expect(big.message).toBe("The event is too large.");
+      expect(big.message).toMatch(/^The event is \d+ bytes \(limit \d+\)\.$/);
       await sleep(100);
       for (const c of room.clients) expect(c.received()).toEqual([]);
     } finally {

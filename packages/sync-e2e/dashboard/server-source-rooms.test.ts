@@ -300,6 +300,46 @@ describe("the dashboard's actions on live clients", () => {
     h.leave();
   });
 
+  test("a member removed while its socket is down is refused as removed when it reconnects", async () => {
+    const src = open();
+    const mine: WebSocket[] = [];
+    class Tracked extends WebSocket {
+      constructor(...a: ConstructorParameters<typeof WebSocket>) {
+        super(...a);
+        mine.push(this);
+      }
+    }
+    // a slow reconnect, so that the removal lands while the member is in its grace
+    const c = new BunvexClient(srv.url, {
+      logger: quiet,
+      webSocketConstructor: Tracked as unknown as typeof WebSocket,
+      webSocket: { defaultInitialBackoffMs: 1500, maxBackoffMs: 1500 },
+    });
+    clients.push(c);
+    const h = c.client.joinRoom<{ id: string }, unknown, Record<string, unknown>>(api.rooms.doc as never, {
+      id: "graced",
+    });
+    await until(() => h.status === "joined", "joined");
+    const self = h.self!;
+    const key = await until(
+      async () => (await src.listRooms!()).find((r) => (r.args as { id?: string }).id === "graced")?.key,
+      "the room listed",
+    );
+    mine.at(-1)!.close(); // the connection drops
+    await until(
+      async () => (await src.listRoomMembers!({ key }, { numItems: 10, cursor: null })).page.some((m) => m.graced),
+      "the member in its grace",
+    );
+    expect(await src.removeRoomMember!({ key }, self)).toEqual({ connections: 1 });
+    await until(() => mine.length > 1, "the reconnect");
+    await until(() => h.status === "error", "the removal at the client");
+    expect(h.error).toEqual({ code: "removed", message: "Removed from the dashboard." });
+    await Bun.sleep(300);
+    expect(h.status).toBe("error");
+    expect((await src.listRooms!()).some((r) => r.key === key)).toBe(false);
+    h.leave();
+  });
+
   test("a scope's user is removed with both tabs", async () => {
     const src = open();
     const scope = (await src.listRooms!()).find((r) => r.kind === "presence")!;

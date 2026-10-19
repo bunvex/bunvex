@@ -956,7 +956,7 @@ describe("rooms: the dashboard's removals (AD-43)", () => {
     expect(hub.list()[0]).toMatchObject({ members: 1, connections: 1 });
   });
 
-  test("an attachment in its grace just leaves: no eviction, no timer left to fire", () => {
+  test("an attachment in its grace leaves; its reconnect within the window is refused as removed", () => {
     const t = fakeTimers();
     const hub = new RoomHub(LIMITS, t);
     const a = evicting("A"),
@@ -966,11 +966,30 @@ describe("rooms: the dashboard's removals (AD-43)", () => {
     hub.detach(a);
     expect(hub.removeMember(DOC, memberOf(hub, DOC, "u1"))).toEqual({ connections: 1 });
     expect(a.evicted).toEqual([]);
-    // a reconnect within what was the grace is a fresh join, not the removed member back
+    // the same session reconnecting within the window: refused, nothing attached, nothing sent
     const a2 = evicting("A");
-    hub.join(a2, 1, DOC, { userId: "u1", canPublish: true });
-    t.advance(LIMITS.graceMs * 2);
-    expect(hub.stats()).toMatchObject({ members: 2, leaves: 1, graceExpiries: 0 });
+    expect(hub.join(a2, 1, DOC, { userId: "u1", canPublish: true })).toBe("removed");
+    expect(a2.frames).toEqual([]);
+    expect(hub.stats()).toMatchObject({ members: 1, leaves: 1, graceExpiries: 0 });
+    // asked once: a second join of that session is a fresh member
+    expect(hub.join(a2, 2, DOC, { userId: "u1", canPublish: true })).toBe("ok");
+    expect(hub.stats().members).toBe(2);
+  });
+
+  test("a removal in the grace refuses only that session, and only within the window", () => {
+    const t = fakeTimers();
+    const hub = new RoomHub(LIMITS, t);
+    const a = evicting("A");
+    hub.join(a, 1, DOC, { userId: "u1", canPublish: true });
+    hub.join(evicting("B"), 1, DOC, { userId: "u2", canPublish: true });
+    hub.detach(a);
+    hub.removeMember(DOC, memberOf(hub, DOC, "u1"));
+    // another session as the same user joins
+    expect(hub.join(evicting("C"), 1, DOC, { userId: "u1", canPublish: true })).toBe("ok");
+    // past the window the removed session joins again
+    t.advance(LIMITS.graceMs);
+    expect(hub.join(evicting("A"), 1, DOC, { userId: "u1", canPublish: true })).toBe("ok");
+    expect(hub.stats().members).toBe(3);
   });
 
   test("removeMember of no such member, or of a room not open, is null", () => {

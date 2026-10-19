@@ -114,7 +114,7 @@ import { MOCK_DOCUMENT_TYPES } from "./function-validators.ts";
 import { inferDocumentType } from "./infer.ts";
 import * as metrics from "./metrics.ts";
 import { createRandom, type Random } from "./random.ts";
-import { MockRooms } from "./rooms.ts";
+import { MockRooms, roomKeyParts } from "./rooms.ts";
 import { MockScheduler } from "./schedules.ts";
 import { searchDocuments } from "./search.ts";
 import { MockSnapshots } from "./snapshots.ts";
@@ -1598,18 +1598,11 @@ export class MockDataSource implements DashboardDataSource {
       throw new DataSourceError("unauthorized", "this credential cannot act on the deployment's rooms");
   }
 
-  /** The room's function and its args' JSON text, as the server's audit events name a room. */
-  private roomAudit(key: string) {
-    const i = key.indexOf("|");
-    const j = key.indexOf("|", i + 1);
-    return { room: key.slice(i + 1, j), args: key.slice(j + 1) };
-  }
-
   broadcastRoomEvent(room: RoomRef, event: string, data: Value, opts?: CallOptions): Promise<void> {
     return this.call(opts?.signal, () => {
       this.canActOnRooms();
       this.rooms.broadcast(room.key, event, data);
-      this.record("broadcast_room_event", { ...this.roomAudit(room.key), event });
+      this.record("broadcast_room_event", { ...roomKeyParts(room.key), event });
     });
   }
 
@@ -1619,7 +1612,7 @@ export class MockDataSource implements DashboardDataSource {
       const removed = this.rooms.removeMember(room.key, memberId);
       if (removed)
         this.record("remove_room_member", {
-          ...this.roomAudit(room.key),
+          ...roomKeyParts(room.key),
           member_id: memberId,
           connections: removed.connections,
         });
@@ -1631,7 +1624,7 @@ export class MockDataSource implements DashboardDataSource {
     return this.call(opts?.signal, () => {
       this.canActOnRooms();
       const closed = this.rooms.closeRoom(room.key);
-      if (closed) this.record("close_room", { ...this.roomAudit(room.key), ...closed });
+      if (closed) this.record("close_room", { ...roomKeyParts(room.key), ...closed });
       return closed;
     });
   }

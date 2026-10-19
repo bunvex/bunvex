@@ -196,6 +196,11 @@ export class RoomHub {
   private readonly bySink = new Map<RoomSink, Map<number, Attachment>>();
   /** Attachments in their grace, by `${sessionId}|${room key}`, then by member key. */
   private readonly graced = new Map<string, Map<string, Attachment>>();
+  /**
+   * Members the dashboard removed while in their grace, by `${sessionId}|${room key}\0${member key}`, each with the
+   * timer that forgets it once the grace would have ended: that session's reconnect within it is refused as removed.
+   */
+  private readonly removedInGrace = new Map<string, unknown>();
   private tick: unknown | null = null;
   /** The event taps (AD-43), by room key: only rooms someone polled in the last `TAP_IDLE_MS`. */
   private readonly taps = new Map<string, Tap>();
@@ -361,7 +366,8 @@ export class RoomHub {
     return answer;
   }
 
-  private isOpen(ks: string) {
+  /** Whether the room with this key (`roomKeyString`) has a member. */
+  isOpen(ks: string) {
     return (this.rooms.get(ks)?.members.size ?? 0) > 0;
   }
 
@@ -408,7 +414,7 @@ export class RoomHub {
     roomId: number,
     key: RoomKey,
     who: { userId: string | null; canPublish: boolean },
-  ): "ok" | "limit" {
+  ): "ok" | "limit" | "removed" {
     const ks = roomKeyString(key);
     const mine = this.bySink.get(sink) ?? new Map<number, Attachment>();
     // One attachment per (sink, roomId) and per (sink, room key): a join that reuses either first ends the old one.
@@ -426,6 +432,13 @@ export class RoomHub {
     const gk = `${sink.sessionId}|${ks}`;
     const inGrace = this.graced.get(gk);
     const kept = inGrace?.get(memberKey);
+    // removed by the dashboard in its grace: the reconnect is told of the removal, not given the member back (once)
+    const removedKey = `${gk}\u0000${memberKey}`;
+    if (!kept && this.removedInGrace.has(removedKey)) {
+      this.timers.clear(this.removedInGrace.get(removedKey));
+      this.removedInGrace.delete(removedKey);
+      return "removed";
+    }
     // A rejoin within the grace as another user: the old member ends at once, and this is a fresh join.
     for (const [k, other] of inGrace ?? [])
       if (k !== memberKey) {
@@ -590,6 +603,12 @@ export class RoomHub {
         this.timers.clear(a.grace);
         const gk = `${a.sink.sessionId}|${ks}`;
         if (this.graced.get(gk)?.get(member.memberKey) === a) this.ungrace(gk, member.memberKey);
+        const removedKey = `${gk}\u0000${member.memberKey}`;
+        this.timers.clear(this.removedInGrace.get(removedKey));
+        this.removedInGrace.set(
+          removedKey,
+          this.timers.set(() => this.removedInGrace.delete(removedKey), this.limits.graceMs),
+        );
       } else {
         const mine = this.bySink.get(a.sink);
         mine?.delete(a.roomId);

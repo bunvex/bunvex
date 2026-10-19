@@ -202,7 +202,9 @@ describe("ctx.rooms in mutations", () => {
     const { functions, client } = await setup();
     const a = await client();
     await a.join(1, "rooms:doc", { id: "a" });
-    await expect(functions.runMutation("m:big", {}, false)).rejects.toThrow("The event is too large.");
+    await expect(functions.runMutation("m:big", {}, false)).rejects.toThrow(
+      /^The event is \d+ bytes \(limit 4096\)\.$/,
+    );
     await settle();
     expect(a.events()).toEqual([]);
   });
