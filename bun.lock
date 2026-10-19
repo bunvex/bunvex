@@ -729,6 +729,15 @@
         "@tanstack/react-query": "^5.0.0",
       },
     },
+    "packages/sandbox": {
+      "name": "@bunvex/sandbox",
+      "version": "0.1.0-alpha.1",
+      "dependencies": {
+        "@bunvex/core": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
+      },
+    },
     "packages/search": {
       "name": "@bunvex/search",
       "version": "0.1.0-alpha.1",
@@ -983,6 +992,8 @@
     "@bunvex/react-clerk": ["@bunvex/react-clerk@workspace:packages/react-clerk"],
 
     "@bunvex/react-query": ["@bunvex/react-query@workspace:packages/react-query"],
+
+    "@bunvex/sandbox": ["@bunvex/sandbox@workspace:packages/sandbox"],
 
     "@bunvex/search": ["@bunvex/search@workspace:packages/search"],
 

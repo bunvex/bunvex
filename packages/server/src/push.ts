@@ -80,7 +80,12 @@ import {
   externalDepsPath,
   type NodeDependency,
 } from "./external-deps.ts";
-import { loadCode } from "./function-executor.ts";
+import {
+  evaluateDefault as evaluateDefaultExport,
+  isSchemaDefinition,
+  loadCode,
+  MissingEnvironmentVariableError,
+} from "./function-executor.ts";
 import { indexAuditDiff, indexDiffJson } from "./push-audit.ts";
 import {
   analysisAnswer,
@@ -116,24 +121,13 @@ const invalidSchemaExport = () =>
  * schema.rs): none, `null` or `undefined` is `MissingSchemaExportError`; anything that is not a schema (made by
  * `defineSchema`) is `InvalidSchemaExport`. Convex's messages without its docs link (DV-356).
  */
-/** A schema module's default export as `defineSchema` makes it: its tables a record of table definitions. */
-function isSchema(value: unknown): value is SchemaDefinition {
-  const tables = (value as SchemaDefinition | null)?.tables;
-  return (
-    typeof tables === "object" &&
-    tables !== null &&
-    !(tables instanceof Map) &&
-    typeof (value as SchemaDefinition).schemaValidation === "boolean"
-  );
-}
-
 function schemaExport(value: unknown): SchemaDefinition {
   if (value === undefined || value === null)
     throw new PushError(
       "MissingSchemaExportError",
       "Hit an error while evaluating your schema:\nSchema file missing default export.",
     );
-  if (!isSchema(value)) throw invalidSchemaExport();
+  if (!isSchemaDefinition(value)) throw invalidSchemaExport();
   return value as SchemaDefinition;
 }
 
@@ -330,25 +324,16 @@ export async function evaluateAuthConfig(
   explanation = "Hit an error while evaluating your auth config",
 ): Promise<unknown[]> {
   const config = await udfConfig(engine);
-  let missing: string | null = null;
   let c: unknown;
   try {
-    const v = await loadCode([m], {
-      seed: config.seed,
-      timestamp: config.timestamp,
-      env,
-      onMissingEnv: (name) => {
-        missing = name;
-        throw new Error(`Environment variable ${name} is used in auth config file but its value was not set`);
-      },
-    });
-    c = (v.modules.get(m.path)!.module.namespace as { default?: unknown }).default;
+    c = await evaluateDefaultExport(
+      m,
+      { seed: config.seed, timestamp: config.timestamp, env, failOnMissingEnv: true },
+      "authConfig",
+    );
   } catch (e) {
-    if (missing !== null)
-      throw new PushError(
-        "AuthConfigMissingEnvironmentVariable",
-        `Environment variable ${missing} is used in auth config file but its value was not set`,
-      );
+    if (e instanceof MissingEnvironmentVariableError)
+      throw new PushError("AuthConfigMissingEnvironmentVariable", e.message);
     const message =
       e instanceof InvalidModulesError ? e.message.split("\n").slice(1).join("\n") : describeUncaught(e).message;
     throw new PushError("InvalidAuthConfig", `${explanation}:\n${message.trimEnd()}`);
@@ -371,8 +356,8 @@ async function evaluateDefault(
   bare = false,
 ) {
   try {
-    const v = await loadCode([{ ...m, path: m.path }], { seed: config.seed, timestamp: config.timestamp, env });
-    return (v.modules.get(m.path)!.module.namespace as { default?: unknown }).default;
+    const options = { seed: config.seed, timestamp: config.timestamp, env };
+    return await evaluateDefaultExport(m, options, "schema");
   } catch (e) {
     const message =
       e instanceof InvalidModulesError ? e.message.split("\n").slice(1).join("\n") : describeUncaught(e).message;
