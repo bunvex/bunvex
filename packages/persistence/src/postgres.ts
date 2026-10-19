@@ -268,6 +268,8 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
   private ttlMs = 5000;
   /** Leases taken by this handle, for `LeaseAcquire.epoch`. */
   private acquired = 0;
+  /** Opened with `allowReadOnly`: the lease is taken even while the store is marked read-only. */
+  private allowReadOnly = false;
   /** The current pool; replaced when a call times out (see `call`). */
   private sql: postgresDriver.Sql;
   /** Retired pools, still ending (closed with the store). */
@@ -401,6 +403,7 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
         to_regclass('indexes_by_index_id_key_prefix_key_sha256') is not null as key_idx`,
     );
     await this.checkStore(have, opts);
+    this.allowReadOnly = !!opts.allowReadOnly;
     // DDL only when something is missing, as Convex's `init_sql` guards each statement: a `create … if not
     // exists` still waits for locks another process holds, so a paused process must not wedge every later open
     // (STUDY-24 S3). Concurrent first opens are serialized by an advisory lock (two concurrent `create table`
@@ -461,6 +464,8 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
   /**
    * Convex's `Lease::acquire`: the lease row takes our start ts if it is newer than the one there (the newest
    * process wins at once, DV-413); otherwise another process started later, and holds it. There is no TTL.
+   * Without `allowReadOnly`, the same statement requires the store not to be marked read-only (Convex 403c3e8):
+   * a flag set after the open's check refuses the lease with `ReadOnlyError`, and leaves the row as it was.
    *
    * A writer paused inside a flush holds the row (`FOR SHARE`, its last statement) until it commits or the
    * server aborts it; Postgres aborts only an idle transaction (`idle_in_transaction_session_timeout`), not one
@@ -478,15 +483,19 @@ export class PostgresPersistence implements Persistence, Lease, ReadOnlyFlag, Re
             progress();
             await tx.unsafe(`set local lock_timeout = '1s'`);
             progress();
-            const rows = await tx.unsafe(`update leases set ts = $1 where id = 1 and ts < $1 returning ts`, [
-              String(ts),
-            ] as any);
+            const rows = await tx.unsafe(
+              `update leases set ts = $1 where id = 1 and ts < $1${this.allowReadOnly ? "" : " and not exists (select 1 from read_only)"} returning ts`,
+              [String(ts)] as any,
+            );
             progress(); // COMMIT
             return rows.length === 1;
           }),
         );
         if (!won) {
-          const [l] = await this.read((sql) => sql`select ts from leases where id = 1`);
+          const [l] = await this.read(
+            (sql) => sql`select ts, exists (select 1 from read_only) as ro from leases where id = 1`,
+          );
+          if (l?.ro && !this.allowReadOnly) throw new ReadOnlyError(STORE);
           return { heldBy: `a process that took the lease later (lease ts ${l?.ts ?? "none"})`, expiresInMs: null };
         }
         this.leaseTs = ts;

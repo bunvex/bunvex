@@ -6,9 +6,9 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 240 | 5 | 2 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 244 | 3 | 0 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 163 | 2 | 1 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 230 | 21 | 12 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 237 | 20 | 6 |
 
 Beyond Convex, [additions.md](additions.md) lists 35 additions: 30 built (5 of them dashboard screens on the
 mock), 1 being built (AD-44), 2 accepted, 2 deferred, none proposed (recounted on 2026-10-19, STUDY-173; before that 2026-10-15, the dashboard audit after STUDY-149; AD-41 deferred; then
@@ -17,7 +17,7 @@ accepted in STUDY-164 and built the same day, STUDY-164 §7; AD-43, rooms in the
 the event tap's server and data source, §5.2, the actions' server and data source, §5.3, and the tap's panel and the
 actions' controls, STUDY-166).
 
-These counts were recounted on 2026-10-19 (STUDY-173; the docs audit of 2026-10-12 re-marked cloud-only and decided no-build rows *n/a*) from each row's status column: a row counts as done,
+These counts were recounted on 2026-10-19 (STUDY-173, after the components rows' update of the same day, STUDY-152 steps 1–7; the docs audit of 2026-10-12 re-marked cloud-only and decided no-build rows *n/a*) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
 are not counted: 1 in server-api.md, 1 in client-sync.md, 6 in platform.md.
 
@@ -169,10 +169,13 @@ gaps.
 **High: an app that uses it does not run**
 
 1. **Components** (DV-55, decided to match Convex; plan in [STUDY-62](../study/STUDY-62-components.md), revised in
-   [STUDY-152](../study/STUDY-152-components-restudy.md); steps 1–2 built: namespaced tables, the registry):
-   `convex.config.ts`, `defineApp` / `defineComponent`, table and function namespaces, `components.*`
-   references and their codegen, component HTTP mounts and env. Any app on `@convex-dev/*` components
-   (rate limiter, aggregate, workpool, auth, …) cannot run.
+   [STUDY-152](../study/STUDY-152-components-restudy.md)). Built (steps 1–7 so far, STUDY-152 to STUDY-157):
+   namespaced tables and the registry, `bunvex.config.ts` with `defineApp` / `defineComponent` pushed by the CLI,
+   a component's functions run and called across components (references, handles), its env, codegen, its
+   scheduler and crons. Left: its storage and HTTP mounts (STUDY-157 PRs 3–4), search and vector indexes in
+   components (PR 5), bunvex's own components (step 8), the dashboard (step 9) and export/import (step 10). Until
+   step 8, an app on `@convex-dev/*` components (rate limiter, aggregate, workpool, auth, …) has no package to
+   install.
 
 **Medium: an app hits it in normal use of a feature**
 
@@ -191,6 +194,8 @@ gaps.
   system-field mismatch's display, a query on a missing table or index, a `$` field in a system function's
   arguments and a push's table numbers, matched to Convex (#664–#669); the analyzed line of a function (the
   dashboard's Functions tree) differs where esbuild and Bun print a bundle differently (DV-520, accepted).
+- `bunvex-local-backend`'s command line (STUDY-172): its misuse is reported as clap reports Convex's binary's,
+  checked against it; left, a `0x`-prefixed instance secret, which Convex accepts and bunvex refuses (Q1).
 - Operations:
   - streaming import past `clear_tables` (built with its audit event, STUDY-141 PR 1): Airbyte records,
     Fivetran operations and primary-key indexes (PRs 2–4, future work by the owner's choice, 2026-10-11). The

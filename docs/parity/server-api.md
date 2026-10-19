@@ -77,8 +77,8 @@ Key bunvex facts behind the statuses:
 | `endCursor` pins the page end so a reactive page keeps its boundaries on re-run (taken from the query journal) | pagination.ts; async_syscall.rs | done (#42) | See STUDY-17 §4. |
 | `maximumRowsRead` / `maximumBytesRead` (must be > 0) | pagination.ts; async_syscall.rs | done (#42) | See STUDY-17 §4. |
 | `splitCursor` + `pageStatus` (`"SplitRecommended"` / `"SplitRequired"`) | pagination.ts; async_syscall.rs (`read_page_from_query`); database query/index_range.rs | done (#42, STUDY-108) | As Convex: `SplitRequired` at `maximumRowsRead`/`maximumBytesRead` (not on a pinned page) and at a transaction read limit (the page so far, instead of the error); `SplitRecommended` past 3/4 of the page's or the transaction's limits or 6144 documents; `splitCursor` the middle document read on any page of more than two (DV-362). |
-| Only one paginated query per query or mutation (`MultiplePaginatedDatabaseQueries`) | async_syscall.rs | done (#42) | A second `paginate()` in one function throws Convex's message. |
-| `paginate()` isn't supported inside components | async_syscall.rs | missing (DV-55) | Nothing to enforce until components exist (STUDY-62). |
+| Only one paginated query per query function (`MultiplePaginatedDatabaseQueries`); a mutation paginates any number of times | async_syscall.rs (`query_page`, `runUdf`; Convex 8449d41) | done (#42, #718) | A second `paginate()` in a query throws Convex's message, in bunvex's words. A query called from a query shares its caller's limit; one called from a mutation gets its own; a mutation is not limited (Convex 8449d41). |
+| `paginate()` isn't supported inside components | async_syscall.rs | done (STUDY-154) | "paginate() is only supported in the app.", as Convex's. |
 | `paginationOptsValidator` and `paginationResultValidator(item)` helpers | server/pagination.ts | done (#42) | See STUDY-17 §4. |
 
 ### 4. Database writer: `ctx.db` in mutations
@@ -137,7 +137,7 @@ Key bunvex facts behind the statuses:
 | `runQuery` option `useStaleSnapshot` (mutations only) | server/registration.ts (`AdvancedRunQueryOptions`) | done (STUDY-41) | A query at the transaction's snapshot, without its pending writes, its reads discarded; refused from a query with Convex's message. |
 | `transactionLimits` option on `runQuery` / `runMutation` (bytesRead, documentsRead/Written, databaseQueries, functionsScheduled, files…) | server/meta.ts, registration.ts | done (STUDY-41) | Documents and bytes read and written, database queries (read-set intervals), functions scheduled and their argument bytes, as Convex (usage so far plus the budget, never above the current limit; restored after; scheduling usage not given back by a rollback, as Convex). The file limits are accepted and never reached, as in Convex, which does not count them (DV-206 resolved). |
 | Maximum nesting of `runQuery`/`runMutation` calls (`MAX_REACTOR_CALL_DEPTH` = 8) | knobs.rs | done (STUDY-41) | 8 levels below the top function; Convex's message. |
-| `ctx.meta.getFunctionMetadata()` (name, componentPath, type, visibility) | server/meta.ts | done (STUDY-44) | The stripped path (`dir/module:fn`, a default export `dir/module`), `componentPath` `""`, the kind and visibility; an HTTP action is `http`, public, as Convex's `http.js:default`. |
+| `ctx.meta.getFunctionMetadata()` (name, componentPath, type, visibility) | server/meta.ts | done (STUDY-44) | The stripped path (`dir/module:fn`, a default export `dir/module`), `componentPath` `""` (in a component too: Convex gives its path there, a gap of STUDY-154 to close), the kind and visibility; an HTTP action is `http`, public, as Convex's `http.js:default`. |
 | `ctx.meta.getTransactionMetrics()` (used/remaining per limit) | server/meta.ts | done (STUDY-44) | Queries and mutations; `remaining` against the current (a nested call's lowered) limit; the internal file metrics `used: 0` and Convex's defaults, as Convex never counts them. |
 | `ctx.meta.getDeploymentMetadata()` | server/meta.ts | done (STUDY-44) | As self-hosted Convex: the instance name, `region: null`, `class: "s16"`. |
 | `ctx.meta.getRequestMetadata()` (ip, userAgent, requestId, scheduledFunctionId, authToken) | server/meta.ts | done (STUDY-44) | Mutations and actions (HTTP actions too), not queries; `ip` the first `x-forwarded-for` entry else the connection's address, over HTTP and the sync protocol; a new request id per call, shared with the functions it calls; a scheduled function's id down its call tree; the user's raw token (null for an admin key). |
@@ -316,12 +316,12 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `defineComponent(name, { env })` in `convex.config.ts` | server/components/index.ts | partial (STUDY-153 PR 1) | In `bunvex/server`, as Convex's: its env validators, `env` references, `use`, and `export()` the same as Convex's package for the same calls (compared in packages/differential); the file is `bunvex.config.ts` (DV-494). The server's push of definitions: STUDY-153 PRs 3–4. |
-| `defineApp({ httpPrefix, env })` + `app.use(component, { name, httpPrefix, env })` | server/components/index.ts | partial (STUDY-153 PR 1) | In `bunvex/server`, as Convex's (names, prefixes normalized, env bindings, the errors); the server evaluates `bunvex.config.js` as Convex evaluates its definitions (STUDY-153 PR 3a, `definition-eval.ts`); a push calls it from PR 3c on. |
+| `defineComponent(name, { env })` in `convex.config.ts` | server/components/index.ts | done (STUDY-153, STUDY-156 PR 1) | In `bunvex/server`, as Convex's: its env validators, `env` references, `use`, and `export()` the same as Convex's package for the same calls (compared in packages/differential); the file is `bunvex.config.ts` (DV-494). Pushed by the CLI (STUDY-156 PR 1) and evaluated and written by the server (STUDY-153 PRs 3–4). |
+| `defineApp({ httpPrefix, env })` + `app.use(component, { name, httpPrefix, env })` | server/components/index.ts | done (STUDY-153, STUDY-156 PR 1) | In `bunvex/server`, as Convex's (names, prefixes normalized, env bindings, the errors); the server evaluates `bunvex.config.js` as Convex evaluates its definitions (STUDY-153 PR 3a, `definition-eval.ts`) at every push (PR 3c); the CLI pushes it (STUDY-156 PR 1). The app's `httpPrefix` and the mounts route HTTP requests from STUDY-157 PR 4. |
 | `components.<name>.<module>.<fn>` references (`componentsGeneric`) | server/components/index.ts | done (STUDY-153 PR 1, STUDY-156 PR 2) | `componentsGeneric` is in `bunvex/server`, its references Convex's (`_reference/childComponent/…`, compared in packages/differential); codegen types `components` with each child's `ComponentApi`, `FunctionReference`'s fifth parameter the component's path, as Convex's (DV-174 closed). The server resolves them in `ctx.runQuery` / `runMutation` / `runAction` among the caller's direct children, public exports only, with Convex's texts (STUDY-155 PR 1, DV-531). |
-| Component env definitions with validators and env refs | server/components/index.ts (`EnvDefinition`) | missing (DV-55, DV-186) | With components (STUDY-62). |
+| Component env definitions with validators and env refs | server/components/index.ts (`EnvDefinition`) | done (STUDY-153, STUDY-154) | Declared with validators and bound by the parent (STUDY-153 PR 1), checked at push (PR 3b); a component's `process.env` its bindings, a value or the deployment's variable, then the built-ins, `BUNVEX_SITE_URL` with its HTTP prefix (STUDY-154). |
 | `createFunctionHandle(fnRef)` returns a string handle usable in `runX` / scheduler | server/components/index.ts | done (STUDY-50) | In queries, mutations and actions; Convex's errors. Across components (STUDY-155 PR 2): `createFunctionHandle(components.…)`, a child's handle called by the app and the app's by a child, each in its own namespace; an unmounted component's handles are not found; scheduled by the app or a component (STUDY-157 PR 1). |
-| Isolated per-component tables, functions and data | crates (component registry) | partial (STUDY-152 steps 1–2) | Tables: each component's in its own namespace, as Convex stores them; a store the Convex binary wrote with components opens with them apart (step 1). The registry: `_components` rows in Convex's shape, paths resolved through the tree in the transaction, a new component's namespace with its twelve system tables (step 2). Functions inside a component: run by an admin (STUDY-154) and called from the app or a parent component, in the callee's namespace (STUDY-155 PR 1); its scheduler (STUDY-157 PR 1); its storage: step 7. |
+| Isolated per-component tables, functions and data | crates (component registry) | partial (STUDY-152 steps 1–7) | Tables: each component's in its own namespace, as Convex stores them; a store the Convex binary wrote with components opens with them apart (step 1). The registry: `_components` rows in Convex's shape, paths resolved through the tree in the transaction, a new component's namespace with its twelve system tables (step 2). Functions inside a component: run by an admin (STUDY-154) and called from the app or a parent component, in the callee's namespace (STUDY-155 PR 1); its scheduler (STUDY-157 PR 1, #740) and crons (PR 2, #744). Still to build: its storage and HTTP mounts (STUDY-157 PRs 3–4), search and vector indexes (PR 5), export and import by component (STUDY-152 step 10, DV-215). |
 
 ### 18. Errors surfaced to apps
 
@@ -364,8 +364,8 @@ Key bunvex facts behind the statuses:
 
 | Status | Count |
 |---|---|
-| done | 240 |
-| partial | 5 |
-| missing | 2 |
+| done | 244 |
+| partial | 3 |
+| missing | 0 |
 | n/a (a decided divergence) | 1 |
 | **total** | **248** |
