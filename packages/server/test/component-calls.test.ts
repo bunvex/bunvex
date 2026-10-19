@@ -65,13 +65,11 @@ const APP = mod("app.js", [
   "export const idAcross = mutation({ args: { table: v.string() }, handler: async (ctx, { table }) => { const id = table === 'messages' ? await ctx.db.insert('messages', { text: 't' }) : await ctx.db.insert('items', { n: 1 }); try { return await ctx.runQuery(c.takesId, { id }); } catch (e) { return e.message; } } });",
   "export const errorAcross = mutation({ args: {}, handler: async (ctx) => { try { await ctx.runMutation(c.boom, {}); } catch (e) { return { name: e.name, data: e.data, message: e.message.split('\\n')[0] }; } } });",
   "export const deep = mutation({ args: { n: v.number() }, handler: async (ctx, { n }) => { try { return await ctx.runMutation(c.recurse, { n }); } catch (e) { return e.message; } } });",
-  "export const scheduleIt = mutation({ args: {}, handler: async (ctx) => { try { await ctx.scheduler.runAfter(0, c.add, { body: 'later' }); return null; } catch (e) { return e.message; } } });",
   "export const viaHandle = mutation({ args: {}, handler: async (ctx) => { const h = await createFunctionHandle(c.add); await ctx.runMutation(h, { body: 'by handle' }); return { h, count: await ctx.runQuery(c.count, {}) }; } });",
   "export const callHandle = mutation({ args: { h: v.string() }, handler: async (ctx, { h }) => { try { return await ctx.runQuery(h, {}); } catch (e) { return e.message; } } });",
   "export const record = mutation({ args: { text: v.string() }, handler: async (ctx, a) => { await ctx.db.insert('messages', a); return (await ctx.db.query('messages').collect()).length; } });",
   "export const callBack = mutation({ args: {}, handler: async (ctx) => { const h = await createFunctionHandle('app:record'); return ctx.runMutation(c.callBack, { h }); } });",
   "export const internalByHandle = mutation({ args: {}, handler: async (ctx) => ctx.runQuery(await ctx.runMutation(c.secretHandle, {}), {}) });",
-  "export const scheduleHandle = mutation({ args: {}, handler: async (ctx) => { try { await ctx.scheduler.runAfter(0, await createFunctionHandle(c.add), { body: 'x' }); return null; } catch (e) { return e.message; } } });",
   "export const logged = mutation({ args: {}, handler: async (ctx) => { console.log('app line'); await ctx.runMutation(c.logIt, {}); } });",
 ]);
 const COUNTER = {
@@ -266,13 +264,6 @@ describe("the app calling a child component", () => {
         .some((t) => t.modifications.some((m) => m.type === "QueryUpdated" && (m as { value: unknown }).value === 1)),
     );
   });
-
-  test("scheduling a component's function: not yet (Q-4)", async () => {
-    const d = await deployment();
-    expect((await d.call("mutation", "app:scheduleIt")).value).toBe(
-      "Scheduling a function of a component is not supported yet",
-    );
-  });
 });
 
 describe("function handles across components (PR 2)", () => {
@@ -298,12 +289,5 @@ describe("function handles across components (PR 2)", () => {
     const { h } = (await d.call("mutation", "app:viaHandle")).value;
     await d.push(false);
     expect((await d.call("mutation", "app:callHandle", { h })).value).toContain("Function handle not found");
-  });
-
-  test("scheduling a component's function through a handle: not yet (Q-4)", async () => {
-    const d = await deployment();
-    expect((await d.call("mutation", "app:scheduleHandle")).value).toBe(
-      "Scheduling a function of a component is not supported yet",
-    );
   });
 });

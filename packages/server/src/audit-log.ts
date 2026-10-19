@@ -9,6 +9,8 @@ const event = (action: string, metadata: Record<string, Value>): AuditLogEvent =
 
 /** The root component, as Convex serializes it (`component_id`, `component`: null). */
 const ROOT = { component_id: null, component: null };
+/** A component as Convex serializes it: its `_components` id and its path; the root's when null. */
+export type AuditComponent = { component_id: string | null; component: string | null };
 
 /** A component's push diff (Convex's `SerializedComponentDiff`): in the audit event and `finish_push`'s answer. */
 export type ComponentDiff = {
@@ -29,9 +31,10 @@ export const auditEvents = {
   deleteComponent: (id: string, path: string) => event("delete_component", { component_id: id, component: path }),
   /** Streaming import's `clear_tables` (STUDY-141): no metadata, as Convex's ("consider adding table names"). */
   clearTables: () => event("clear_tables", {}),
-  cancelScheduledFunction: (id: string, functionPath: string | null) =>
-    event("cancel_scheduled_function", { ...ROOT, scheduled_function_id: id, function_path: functionPath }),
-  cancelAllScheduledFunctions: () => event("cancel_all_scheduled_functions", { ...ROOT }),
+  cancelScheduledFunction: (id: string, functionPath: string | null, component: AuditComponent = ROOT) =>
+    event("cancel_scheduled_function", { ...component, scheduled_function_id: id, function_path: functionPath }),
+  cancelAllScheduledFunctions: (component: AuditComponent = ROOT) =>
+    event("cancel_all_scheduled_functions", { ...component }),
   deleteScheduledJobsTable: () => event("delete_scheduled_jobs_table", { ...ROOT }),
   requestExport: (id: string, includeStorage: boolean) =>
     event("request_export", {
