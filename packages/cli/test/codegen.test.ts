@@ -334,7 +334,7 @@ export const byId = query({ args: { id: v.id("anything"), file: v.id("_storage")
 
 // STUDY-116: Convex's other codegen flags. `--dry-run` and `--debug` print what Convex's `writeFormattedFile`
 // prints (lib/codegen.ts), `--commonjs` adds `api_cjs`, the deployment's flags are ignored (DV-384), the
-// components' refused (DV-385) and `--system-udfs` is not an option (DV-386).
+// components' work since STUDY-156 (DV-385 closed) and `--system-udfs` is not an option (DV-386).
 describe("bunvex codegen --dry-run, --debug, --commonjs and the other flags (STUDY-116)", () => {
   const ALL = ["dataModel.d.ts", "server.js", "server.d.ts", "api.js", "api.d.ts"];
   /** Every file under `dir`, with its content: what a run must leave alone. */
@@ -456,14 +456,11 @@ describe("bunvex codegen --dry-run, --debug, --commonjs and the other flags (STU
     expect(missing.err).toEqual(["error: option '--url <url>' argument missing"]);
   });
 
-  test("--component-dir and --live-component-sources are refused; --system-udfs is not an option", async () => {
+  test("--component-dir needs its path (STUDY-156 tests the rest); --system-udfs is not an option", async () => {
     const app = tmp();
-    for (const args of [["--component-dir", "x"], ["--component-dir=x"], ["--live-component-sources"]]) {
-      const r = io(app);
-      expect(await main(["codegen", ...args], r.it)).toBe(2);
-      const flag = args[0]!.split("=")[0];
-      expect(r.err).toEqual([`bunvex codegen: ${flag}: bunvex does not have components yet.`]);
-    }
+    const missing = io(app);
+    expect(await main(["codegen", "--component-dir"], missing.it)).toBe(1);
+    expect(missing.err).toEqual(["error: option '--component-dir <path>' argument missing"]);
     const udfs = io(app);
     expect(await main(["codegen", "--system-udfs"], udfs.it)).toBe(1);
     expect(udfs.err[0]).toStartWith("error: unknown option '--system-udfs'");

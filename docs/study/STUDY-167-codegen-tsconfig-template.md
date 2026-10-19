@@ -1,6 +1,6 @@
 # STUDY-167 — The tsconfig.json that `codegen --init` writes
 
-- **Status:** implemented (draft PR; one owner question on release timing, §6)
+- **Status:** implemented (owner, 2026-10-19: both §6 recommendations accepted)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
 - **Related:** [STUDY-36](STUDY-36-codegen.md) G5 (DV-177), [STUDY-160](STUDY-160-client-on-node.md) (the
   published `.d.ts` builds), [STUDY-116](STUDY-116-codegen-flags.md) (`--init`, `--dry-run`)
@@ -74,12 +74,12 @@ Sabotage (each restored, checked with `cmp` and `git status`):
 | S3: `skipLibCheck` dropped from the template | the template test |
 | S4: the staged packages' `types` pointed at the sources (as `0.1.0-alpha.1`) | the `npm-packages.node.ts` test (TS5097) |
 
-## 6. Open questions
+## 6. Decisions
 
-- **Release timing (owner).** An app on the `0.1.0-alpha.1` packages that runs `codegen --init` with a CLI
+- **Release timing (owner, 2026-10-19: accepted).** An app on the `0.1.0-alpha.1` packages that runs `codegen --init` with a CLI
   built from this change gets a tsconfig whose typecheck fails (TS5097 in the packages' sources). That needs a
   newer CLI with older packages, since releases are published together; existing tsconfigs are never
-  rewritten. Recommendation: merge, and let the next release (the first built one) ship it.
-- **The examples (owner).** They keep `allowImportingTsExtensions` because the workspace links the sources.
-  They could instead link built packages, which needs a build in the workspace. Recommendation: keep them as
+  rewritten. Decided: merge, and let the next release (the first built one) ship it.
+- **The examples (owner, 2026-10-19: accepted).** They keep `allowImportingTsExtensions` because the workspace links the sources.
+  They could instead link built packages, which needs a build in the workspace. Decided: keep them as
   they are.

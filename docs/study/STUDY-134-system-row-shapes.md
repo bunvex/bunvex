@@ -212,7 +212,7 @@ How each group does it, and what else it changed to keep the same behaviour:
 | S6 | Retention globals and `table_summary_v2` in bunvex's encoding | Ainda não fizemos | match Convex: resolved, DV-426 |
 | S7 | No `_backend_state` row until a state changes | Ainda não fizemos | match Convex: resolved, DV-427 |
 | S8 | Identity fields (`tablet`, `name`; integer tablet keys) | Ainda não fizemos: the persistence layout decides them (STUDY-133) | waiting on STUDY-133, DV-428 |
-| S9 | No app definition module row (`convex.config.js`) | Ainda não fizemos: components (STUDY-62) | waiting on components, DV-429 |
+| S9 | No app definition module row (`convex.config.js`) | Ainda não fizemos: components (STUDY-62) | resolved: the CLI pushes it (STUDY-156 PR 1, DV-429) |
 | S10 | An import's copied indexes started `Enabled`; staged ones were copied; a backfilling table could be replaced | Ainda não fizemos | match Convex (owner, 2026-10-05): resolved, DV-430 (#482) |
 
 ## 4b. Additions (beyond Convex)

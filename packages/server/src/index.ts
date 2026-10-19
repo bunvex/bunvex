@@ -149,6 +149,8 @@ export type {
 } from "./meta.ts";
 export { paginationOptsValidator, paginationResultValidator } from "./pagination.ts";
 export { openPersistence, type PersistenceConfig, persistenceConfigFromEnv } from "./persistence.ts";
+// The analysis a push of components gets, without a deployment: the CLI's codegen (STUDY-156, DV-532).
+export { componentAnalysis, PushError } from "./push.ts";
 export type {
   ActionBuilder,
   AdvancedRunQueryOptions,

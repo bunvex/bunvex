@@ -3,14 +3,7 @@
 //     (crates/model/src/source_packages/upload_download.rs; DV-166);
 //   `_modules` — one row per module: `{ path, sourcePackageId, environment, sha256, analyzeResult }`;
 //   `_udf_config` — the import phase's seed and time (Convex's `UdfConfig`), so a version imports the same way
-//     every time it is loaded.
-// The rows have Convex's shapes (STUDY-134, DV-424): crates/model/src/source_packages/types.rs
-// `SerializedSourcePackage` (`sha256` as bytes, `packageSize` as int64 sizes, `externalPackageId` the push's
-// `_external_deps_packages` row or null, STUDY-148; `nodeVersion` the push's or null, STUDY-145) and crates/model/src/modules/types.rs `SerializedModuleMetadata` (`sha256` in base64,
-// `analyzeResult` as `SerializedAnalyzedModule`, positions as int64). Code in memory keeps its own types: rows are
-// encoded when written and decoded when read, here. As in Convex, the schema and the auth config are modules too.
-// The modules store is its own use case (`modules`), apart from user files, whose orphan sweep would
-// otherwise delete packages (F3).
+
 import {
   type Engine,
   formatBytes,
@@ -25,6 +18,15 @@ import type { BlobStore } from "@bunvex/file-storage";
 import type { Value } from "@bunvex/values";
 import { type AnalyzedModule, CodeVersion, type ModuleSource, moduleHash, moduleName } from "./code-version.ts";
 import { cronSpecOf, cronSpecsRow, msOfNs, nsOfMs } from "./cron-rows.ts";
+//     every time it is loaded.
+// The rows have Convex's shapes (STUDY-134, DV-424): crates/model/src/source_packages/types.rs
+// `SerializedSourcePackage` (`sha256` as bytes, `packageSize` as int64 sizes, `externalPackageId` the push's
+// `_external_deps_packages` row or null, STUDY-148; `nodeVersion` the push's or null, STUDY-145) and crates/model/src/modules/types.rs `SerializedModuleMetadata` (`sha256` in base64,
+// `analyzeResult` as `SerializedAnalyzedModule`, positions as int64). Code in memory keeps its own types: rows are
+// encoded when written and decoded when read, here. As in Convex, the schema and the auth config are modules too.
+// The modules store is its own use case (`modules`), apart from user files, whose orphan sweep would
+// otherwise delete packages (F3).
+import { DEFINITION_MODULE } from "./definition-eval.ts";
 import { externalDepsPath, externalDepsRow } from "./external-deps.ts";
 import { SERVER_VERSION } from "./server-version.ts";
 import type { SourcePosition } from "./source-position.ts";
@@ -416,7 +418,14 @@ export async function writeCodeRows(
           hash: l.hash,
           a: version.analysis[path],
         })),
-        ...other.map((m) => ({ path: m.path, source: m, hash: moduleHash(m), a: NOTHING })),
+        // The definition module has no analysis, as Convex stores `convex.config.js`: its dashboard lists only
+        // analyzed modules (`modules:list`), so it never shows there (STUDY-156).
+        ...other.map((m) => ({
+          path: m.path,
+          source: m,
+          hash: moduleHash(m),
+          a: m.path === DEFINITION_MODULE ? null : NOTHING,
+        })),
       ];
       for (const { path, source, hash, a } of modules) {
         const row = {

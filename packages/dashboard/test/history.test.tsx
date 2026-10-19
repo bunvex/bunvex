@@ -4,7 +4,7 @@ import { MockDataSource } from "@bunvex/dashboard/mock";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describeEvent } from "../src/history/describe.ts";
+import { ACTION_LABELS, areaOf, describeEvent } from "../src/history/describe.ts";
 import { expectAccessible } from "./axe.ts";
 
 const NOW = Date.UTC(2026, 8, 29, 12);
@@ -59,6 +59,19 @@ test("events in words", () => {
     "Canceled 2 scheduled runs of tasks:toggle",
   );
   expect(e("something_new", {})).toBe("Something new");
+  // the dashboard's actions on a room (AD-43): the room's function, then its args unless it has none
+  const room = { room: "rooms:doc", args: '{"id":"design-review"}' };
+  expect(e("broadcast_room_event", { ...room, event: "wave" })).toBe(
+    'Sent the test event wave to rooms:doc {"id":"design-review"}',
+  );
+  expect(e("remove_room_member", { ...room, member_id: "m_ab12", connections: 2 })).toBe(
+    'Removed member m_ab12 from rooms:doc {"id":"design-review"} (2 connections)',
+  );
+  expect(e("close_room", { room: "presence:online", args: "{}", members: 1, connections: 1 })).toBe(
+    "Closed presence:online: 1 member, 1 connection",
+  );
+  expect(areaOf("close_room")).toBe("Rooms");
+  expect(ACTION_LABELS.remove_room_member).toBe("Member removed");
 });
 
 describe("the History screen", () => {
