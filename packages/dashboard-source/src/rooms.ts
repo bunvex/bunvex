@@ -187,6 +187,8 @@ export function roomsReads(http: AdminHttp, opts: RoomsOptions = {}) {
         cursor = null;
         gap = true;
         recovering = true;
+        // A failure inside the closed window starts it again from the next closed answer.
+        closedSince = null;
       };
       while (!stop.signal.aborted) {
         if (!connected) {
