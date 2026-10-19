@@ -11,6 +11,24 @@ import { trackedOperation } from "./pending-ops.ts";
 
 export const FUNCTION_HANDLE_PREFIX = "function://";
 
+/** A function name as the registry keys it: `module:function`, `.js` stripped, `default` when unnamed. */
+const registryName = (name: string) => {
+  const i = name.lastIndexOf(":");
+  const [module, fn] = i === -1 ? [name, "default"] : [name.slice(0, i), name.slice(i + 1)];
+  return `${module.endsWith(".js") ? module.slice(0, -3) : module}:${fn}`;
+};
+
+const COMPONENT_MARK = "\u0000component\u0000";
+/** The registry's name of component `id`'s function `name` (`module:fn`): no app's function name can collide. */
+export const componentFunctionName = (id: string, name: string) => `${COMPONENT_MARK}${id}\u0000${registryName(name)}`;
+/** A registry name's component and function, or null for the app's. */
+export function splitComponentFunctionName(name: string): { id: string; name: string } | null {
+  if (!name.startsWith(COMPONENT_MARK)) return null;
+  const rest = name.slice(COMPONENT_MARK.length);
+  const i = rest.indexOf("\u0000");
+  return { id: rest.slice(0, i), name: rest.slice(i + 1) };
+}
+
 /** A handle to a function of type `Type` (Convex's `FunctionHandle`): a string, opaque to apps. */
 export type FunctionHandle<
   _Type extends "query" | "mutation" | "action" = "query" | "mutation" | "action",
@@ -20,7 +38,8 @@ export type FunctionHandle<
 
 export const isFunctionHandle = (s: unknown): boolean => typeof s === "string" && s.startsWith(FUNCTION_HANDLE_PREFIX);
 
-type Row = { _id: string; component: null; path: string; deletedTs?: bigint | null };
+/** A `_function_handles` row (global): its component's `_components` id, null for the app's (STUDY-155). */
+type Row = { _id: string; component: string | null; path: string; deletedTs?: bigint | null };
 
 /** Convex's `function_handle_not_found()`. */
 const notFound = () => new Error("Function handle not found");
@@ -34,11 +53,11 @@ export function canonicalPath(name: string): string {
 /** Convex's stripped path, a handle's advisory fragment: no `.js`, no `:default`. */
 const stripped = (path: string) => path.replace(/\.js(?=:|$)/, "").replace(/:default$/, "");
 
-const byPath = (db: Tx, path: string) =>
+const byPath = (db: Tx, path: string, component: string | null) =>
   db.asSystem(() =>
     db
       .query(FUNCTION_HANDLES_TABLE)
-      .withIndex("by_component_path", (q) => q.eq("component", null).eq("path", path))
+      .withIndex("by_component_path", (q) => q.eq("component", component).eq("path", path))
       .unique(),
   ) as unknown as Promise<Row | null>;
 
@@ -46,13 +65,18 @@ const byPath = (db: Tx, path: string) =>
  * Convex's `apply_config_diff`: after a push, a row for every function (a new one, or a revived tombstone),
  * and a tombstone (`deletedTs`, the transaction's snapshot) for each row whose function is gone.
  */
-export async function syncFunctionHandles(db: Tx, paths: Iterable<string>) {
+export async function syncFunctionHandles(
+  db: Tx,
+  paths: Iterable<string>,
+  /** A component's `_components` id: its rows (STUDY-155); null for the app's. */
+  component: string | null = null,
+) {
   const existing = new Map(
     (
       (await db.asSystem(() =>
         db
           .query(FUNCTION_HANDLES_TABLE)
-          .withIndex("by_component_path", (q) => q.eq("component", null))
+          .withIndex("by_component_path", (q) => q.eq("component", component))
           .collect(),
       )) as unknown as Row[]
     ).map((r) => [r.path, r]),
@@ -60,7 +84,7 @@ export async function syncFunctionHandles(db: Tx, paths: Iterable<string>) {
   for (const path of paths) {
     const row = existing.get(path);
     existing.delete(path);
-    if (!row) await db.asSystem(() => db.insert(FUNCTION_HANDLES_TABLE, { component: null, path, deletedTs: null }));
+    if (!row) await db.asSystem(() => db.insert(FUNCTION_HANDLES_TABLE, { component, path, deletedTs: null }));
     else if (row.deletedTs !== null && row.deletedTs !== undefined)
       await db.asSystem(() => db.patch(FUNCTION_HANDLES_TABLE, row._id, { deletedTs: null }));
   }
@@ -70,24 +94,37 @@ export async function syncFunctionHandles(db: Tx, paths: Iterable<string>) {
 }
 
 /** The handle of the function at canonical `path` (Convex's `FunctionHandlesModel::get`). */
-export async function handleOf(db: Tx, path: string): Promise<string> {
-  const row = await byPath(db, path);
+export async function handleOf(db: Tx, path: string, component: string | null = null): Promise<string> {
+  const row = await byPath(db, path, component);
   if (!row || (row.deletedTs !== null && row.deletedTs !== undefined)) throw notFound();
   return `${FUNCTION_HANDLE_PREFIX}${row._id}#${stripped(path)}`;
 }
 
 /** The canonical path a handle names (Convex's `FunctionHandlesModel::lookup`); read in `db`. */
 export async function resolveHandle(db: Tx, handle: string): Promise<string> {
+  // `_function_handles` is global: read in the app's namespace, whichever component calls (STUDY-155).
+  if (db.componentId !== null) return db.inComponent(null, () => resolveHandle(db, handle));
   const id = handle.slice(FUNCTION_HANDLE_PREFIX.length).split("#")[0]!;
   const docId = db.asSystemSync(() => db.normalizeId(FUNCTION_HANDLES_TABLE, id));
   if (!docId) throw new Error(`Invalid function handle ${handle}`);
   const row = (await db.asSystem(() => db.get(FUNCTION_HANDLES_TABLE, docId))) as unknown as Row | null;
   if (!row || (row.deletedTs !== null && row.deletedTs !== undefined)) throw notFound();
-  return row.path;
+  // A component's function is named as the registry names it (STUDY-155).
+  return row.component === null || row.component === undefined
+    ? row.path
+    : componentFunctionName(row.component, row.path);
 }
 
 /** The running function, for `createFunctionHandle`: its transaction (null in an action) and the engine. */
-type Scope = { db: Tx | null; engine: Engine };
+type Scope = {
+  db: Tx | null;
+  engine: Engine;
+  /**
+   * The registry name of a function reference, as the running function's calls resolve it (its own component's
+   * names, its children's exports; STUDY-155). Without one, a name of the app's.
+   */
+  resolve?: (ref: unknown) => Promise<string>;
+};
 const scope = new AsyncLocalStorage<Scope>();
 /** Run a function's handler where `createFunctionHandle` can find it. */
 export const inHandleScope = <T>(s: Scope, fn: () => T): T => scope.run(s, fn);
@@ -134,16 +171,19 @@ async function handleFor<Type extends "query" | "mutation" | "action", Args, Ret
 ): Promise<FunctionHandle<Type, Args, Return>> {
   const s = scope.getStore();
   if (!s) throw new Error("createFunctionHandle can only be called from a query, mutation or action");
-  const name =
-    typeof functionReference === "string"
+  if (isFunctionHandle(functionReference)) return functionReference as FunctionHandle<Type, Args, Return>;
+  const name = s.resolve
+    ? await s.resolve(functionReference)
+    : typeof functionReference === "string"
       ? functionReference
       : getFunctionName(functionReference as AnyFunctionReference);
   if (isFunctionHandle(name)) return name as FunctionHandle<Type, Args, Return>;
   if (name.startsWith("_system/")) throw new Error("Cannot create function handle for system UDF");
-  const path = canonicalPath(name);
-  return (await (s.db ? handleOf(s.db, path) : s.engine.query((db) => handleOf(db, path)))) as FunctionHandle<
-    Type,
-    Args,
-    Return
-  >;
+  // A component's function: its row in its component (`components.counter.lib.add`, STUDY-155).
+  const inComponent = splitComponentFunctionName(name);
+  const path = canonicalPath(inComponent ? inComponent.name : name);
+  const component = inComponent?.id ?? null;
+  return (await (s.db
+    ? handleOf(s.db, path, component)
+    : s.engine.query((db) => handleOf(db, path, component)))) as FunctionHandle<Type, Args, Return>;
 }

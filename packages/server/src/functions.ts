@@ -9,6 +9,7 @@ import {
   type Caller,
   type CallRequest,
   checkEnvVarName,
+  componentInParent,
   directFetch,
   type Engine,
   failExecution,
@@ -23,6 +24,7 @@ import {
   opaqueToInspect,
   outsideExecution,
   pausingUserTime,
+  rootComponent,
   type SessionRequestId,
   type SessionRequestOutcome,
   type Span,
@@ -37,7 +39,7 @@ import {
   wallClock,
   withUserTimer,
 } from "@bunvex/core";
-import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
+import { type AnyFunctionReference, getFunctionAddress, getFunctionName } from "@bunvex/protocol";
 import {
   BunvexError,
   checkJsonValue,
@@ -145,7 +147,18 @@ import {
   newRequestId,
   ValidatorError,
 } from "./errors.ts";
-import { canonicalPath, functionAddress, functionNameOf, inActionScope, inHandleScope } from "./function-handles.ts";
+import {
+  canonicalPath,
+  componentFunctionName,
+  functionAddress,
+  functionNameOf,
+  inActionScope,
+  inHandleScope,
+  splitComponentFunctionName,
+} from "./function-handles.ts";
+
+export { componentFunctionName, splitComponentFunctionName };
+
 import {
   type CallerName,
   type Completion,
@@ -172,6 +185,7 @@ import {
   logSystemLine,
   perAttempt,
   withOwner,
+  withSubFunction,
 } from "./logs.ts";
 import { withNodeProcessErrors } from "./node-process-errors.ts";
 import { setOperationTracker } from "./pending-ops.ts";
@@ -212,17 +226,6 @@ export type ComponentRuntime = {
   env: ReadonlyMap<string, { type: "value"; value: string } | { type: "envVar"; name: string }>;
   httpPrefix: string | null;
 };
-
-const COMPONENT_MARK = "\u0000component\u0000";
-/** The registry's name of component `id`'s function `name` (`module:fn`): no app's function name can collide. */
-export const componentFunctionName = (id: string, name: string) => `${COMPONENT_MARK}${id}\u0000${registryKey(name)}`;
-/** A registry name's component and function, or null for the app's. */
-export function splitComponentFunctionName(name: string): { id: string; name: string } | null {
-  if (!name.startsWith(COMPONENT_MARK)) return null;
-  const rest = name.slice(COMPONENT_MARK.length);
-  const i = rest.indexOf("\u0000");
-  return { id: rest.slice(0, i), name: rest.slice(i + 1) };
-}
 
 /**
  * A component's `process.env` (Convex's `udf/src/environment.rs`, STUDY-154): its bindings first (a value, or the
@@ -1238,6 +1241,7 @@ export class Functions {
   private eventSource(r: Running, cached: boolean | null, identifier = r.identifier): FunctionSource {
     return {
       path: r.udfType === "HttpAction" ? identifier : this.metricsNameOf(identifier),
+      componentPath: r.componentPath,
       udfType: r.udfType,
       cached,
       requestId: r.requestId,
@@ -1270,7 +1274,21 @@ export class Functions {
     const events: LogEvent[] = [];
     if (c.udfType !== "Action" && c.udfType !== "HttpAction")
       for (const line of c.logLines)
-        events.push({ timestamp: line.timestamp, event: { topic: "console", source, line } });
+        events.push({
+          timestamp: line.timestamp,
+          event: {
+            topic: "console",
+            // A nested call's line names its function and component, as Convex's `SubFunction` (STUDY-155).
+            source: line.subFunction
+              ? {
+                  ...source,
+                  path: this.metricsNameOf(line.subFunction.path),
+                  componentPath: line.subFunction.componentPath,
+                }
+              : source,
+            line,
+          },
+        });
     events.push({
       timestamp: at,
       event: {
@@ -1503,9 +1521,12 @@ export class Functions {
     else if (!f) throw this.notFound(name);
     if (!f) throw this.notFound(name);
     if (f.kind !== kind) {
-      const i = name.lastIndexOf(":");
+      // A component's function names itself and its component (Convex's `in_component_str`, STUDY-155).
+      const shown = c ? c.name : name;
+      const where = c ? ` in '${this.componentRuntimes.get(c.id)?.runtime.path ?? ""}'` : "";
+      const i = shown.lastIndexOf(":");
       const kindName = (k: string) => k[0].toUpperCase() + k.slice(1);
-      const message = `Trying to execute ${name.slice(0, i)}.js${name.slice(i)} as ${kindName(kind)}, but it is defined as ${kindName(f.kind)}.`;
+      const message = `Trying to execute ${shown.slice(0, i)}.js${shown.slice(i)}${where} as ${kindName(kind)}, but it is defined as ${kindName(f.kind)}.`;
       throw this.udf404OnBadPath
         ? new FunctionPathNotFoundError("FunctionPathWrongType", message)
         : new FunctionPathError(message);
@@ -1874,7 +1895,14 @@ export class Functions {
           };
     const run = () => (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(appContext(f.handler, ctx), args);
     return notAQuery(
-      inHandleScope({ db, engine: this.engine }, () => (component ? this.inComponentRun(db, component, run) : run())),
+      inHandleScope({ db, engine: this.engine, resolve: (ref) => this.resolveCall(ref, component, db, false) }, () =>
+        component
+          ? this.inComponentRun(db, component, run)
+          : // The app's function called from a component (through a handle, STUDY-155): back in the app's namespace.
+            db.componentId !== null
+            ? this.inAppRun(db, run)
+            : run(),
+      ),
     );
   }
 
@@ -1882,6 +1910,16 @@ export class Functions {
    * A component's function run in its namespace (STUDY-154): `ctx.db` its tables and schema, what Convex refuses in
    * a component refused (`Tx.componentFunction`).
    */
+  private async inAppRun(db: Tx, run: () => unknown): Promise<unknown> {
+    const was = db.componentFunction;
+    db.componentFunction = false;
+    try {
+      return await db.inComponent(null, async () => run());
+    } finally {
+      db.componentFunction = was;
+    }
+  }
+
   private async inComponentRun(db: Tx, component: ComponentRuntime, run: () => unknown): Promise<unknown> {
     const was = db.componentFunction;
     db.componentFunction = true;
@@ -2003,6 +2041,74 @@ export class Functions {
     };
   }
 
+  /**
+   * The registry name of the function a call names (Convex's `ComponentsModel::resolve`, STUDY-155): a name in the
+   * caller's own component, any visibility; a reference to a public export of one of the caller's direct children; a
+   * handle. `action`: an action's call, whose misses read as Convex's preloaded map's, "Couldn't resolve …".
+   */
+  private async resolveCall(
+    ref: unknown,
+    caller: ComponentRuntime | undefined,
+    db: Tx | null,
+    action: boolean,
+  ): Promise<string> {
+    let address: ReturnType<typeof getFunctionAddress> | null = null;
+    try {
+      address = getFunctionAddress(ref);
+    } catch {}
+    if (address && "reference" in address) return this.resolveReference(address.reference, caller, db, action);
+    const name = await functionNameOf(ref, db, this.engine);
+    // A handle names its function (the app's until STUDY-155 PR 2); a name is the caller's component's.
+    if (address && "functionHandle" in address) return name;
+    return caller && !isSystemPath(name) ? componentFunctionName(caller.id, name) : name;
+  }
+
+  /** A `_reference/…` path resolved from `caller`'s component (Convex's `resolve` and `resolve_export`). */
+  private async resolveReference(
+    reference: string,
+    caller: ComponentRuntime | undefined,
+    db: Tx | null,
+    action: boolean,
+  ): Promise<string> {
+    const parts = reference.split("/");
+    if (parts[0] !== "_reference") throw new Error(`Invalid reference: ${reference}`);
+    const [kind, first, ...rest] = parts.slice(1);
+    if (kind === "function" && first !== undefined) {
+      const name = [first, ...rest].join("/");
+      return caller ? componentFunctionName(caller.id, name) : name;
+    }
+    if (kind === "componentArgument")
+      throw new Error(
+        caller ? `Component argument '${first}' not found` : "Can't use an argument reference in the app",
+      );
+    if (kind === "currentSystemUdfInComponent")
+      throw new Error(
+        caller
+          ? "CurrentSystemUdfInComponent only available in root component"
+          : "CurrentSystemUdfInComponent must be called from a system UDF",
+      );
+    if (kind !== "childComponent" || first === undefined) throw new Error(`Invalid reference ${reference}`);
+    const child = first;
+    const attributes = rest;
+    // An action's misses all read the same (Convex's preloaded map); a query's and a mutation's name the child or the
+    // export. A branch, not a function, is a 400 from either (DV-531).
+    const miss = (message: string) =>
+      new Error(action ? `Couldn't resolve ${[child, ...attributes].join(".")}` : message);
+    const read = <T>(fn: (tx: Tx) => Promise<T>) => (db ? fn(db) : this.engine.query(fn));
+    const row = await read(async (tx) => {
+      const parent = caller ? caller.id : (await rootComponent(tx))?._id;
+      return parent === undefined ? null : componentInParent(tx, parent, child);
+    });
+    if (!row) throw miss(`Child component '${child}' not found`);
+    const exportPath = attributes.join(".");
+    const notExported = () => miss(`Child component '${child}' does not export '${exportPath}'`);
+    if (attributes.length < 2) throw notExported();
+    const key = componentFunctionName(row._id, `${attributes.slice(0, -1).join("/")}:${attributes.at(-1)}`);
+    // Only a public function is exported (Convex's `file_based_exports`); an unmounted child exports nothing.
+    if (this.lookup(key)?.visibility !== "public") throw notExported();
+    return key;
+  }
+
   private async runNested(
     db: Tx,
     kind: "query" | "mutation",
@@ -2019,7 +2125,8 @@ export class Functions {
     if (measured.nesting > MAX_VALUE_NESTING + 1)
       throw new Error(`Invalid argument \`args\` for \`runUdf\`: ${TOO_NESTED_MESSAGE}`);
     if (measured.tooBig !== undefined) throw new Error(`Invalid argument \`args\` for \`runUdf\`: ${measured.tooBig}`);
-    const name = registryKey(await functionNameOf(ref, db, this.engine));
+    const target = await this.resolveCall(ref, component, db, false);
+    const name = splitComponentFunctionName(target) ? target : registryKey(target);
     // Convex's first nested call reads two more things into the transaction (STUDY-161 §16.3).
     db.countNestedCall();
     // A `_system/` function, as Convex's (checked against its local backend): not found to anyone but an admin
@@ -2036,10 +2143,16 @@ export class Functions {
           : this.systemMutationBody(name, args, false, undefined, true);
       return body(db);
     }
-    const f = this.fn(component ? componentFunctionName(component.id, name) : name, kind, false);
+    const f = this.fn(name, kind, false);
     // The callee's modules, those not loaded yet in this transaction (Convex reads each `_modules` row once).
     db.countModuleLoads(this.moduleLoads.get(f) ?? ["\0unknown"]);
     const a = acrossArgs(this.checkArgs(f, args === undefined ? {} : args, measured)) as AnyArgs;
+    // Its lines name it (Convex's `SubFunction`): its own name and its component's path.
+    const inner = splitComponentFunctionName(name);
+    const sub = {
+      componentPath: inner ? (this.componentRuntimes.get(inner.id)?.runtime.path ?? null) : null,
+      path: strippedPath(inner ? inner.name : name),
+    };
     if (depth >= MAX_NESTED_CALL_DEPTH)
       throw new Error("Cross component call depth limit exceeded. Do you have an infinite loop in your app?");
     if (opts?.useStaleSnapshot) {
@@ -2051,7 +2164,7 @@ export class Functions {
           (stale) => {
             stale.identity = db.identity;
             return this.withLimits(stale, opts.transactionLimits, () =>
-              withUserTimer(timer, () => this.invoke(f, stale, a, depth + 1)),
+              withUserTimer(timer, () => withSubFunction(sub, () => this.invoke(f, stale, a, depth + 1))),
             );
           },
           undefined,
@@ -2069,7 +2182,7 @@ export class Functions {
     const timer = this.newTimer();
     try {
       value = await this.withLimits(db, opts?.transactionLimits, () =>
-        withUserTimer(timer, () => this.invoke(f, db, a, depth + 1)),
+        withUserTimer(timer, () => withSubFunction(sub, () => this.invoke(f, db, a, depth + 1))),
       );
       if (sp) mustBeValue(value);
     } catch (e) {
@@ -2543,7 +2656,15 @@ export class Functions {
                 await withActionTimeout(ms, timeout, () => {
                   const run = () =>
                     this.inActionEnv(
-                      () => inHandleScope({ db: null, engine: this.engine }, () => f.handler(ctx, a)),
+                      () =>
+                        inHandleScope(
+                          {
+                            db: null,
+                            engine: this.engine,
+                            resolve: (ref) => this.resolveCall(ref, this.componentOf.get(f), null, true),
+                          },
+                          () => f.handler(ctx, a),
+                        ),
                       this.componentOf.get(f),
                     );
                   // A Node action's uncaught callback exception or `process.exit` fails it at once (platform §9).
@@ -2580,9 +2701,17 @@ export class Functions {
     const identity = (caller?.identity ?? null) as UserIdentity | null;
     // A component's action calls its own component's functions by name (STUDY-154); other components are step 5.
     const component = f ? this.componentOf.get(f) : undefined;
-    const target = (name: string) => {
-      const t = actionTarget(name);
-      return component && !isSystemPath(t) ? componentFunctionName(component.id, t) : t;
+    // What the action calls (STUDY-155): its own component's functions by name, its children's public exports by
+    // reference, a handle's function.
+    const target = async (ref: FunctionRef) => {
+      const t = await this.resolveCall(ref, component, null, true);
+      return splitComponentFunctionName(t) ? t : actionTarget(t);
+    };
+    // Convex's `propagate_component_auth`: a user's identity crosses only from the app to the app (an admin has none,
+    // and one acting as a user is that user there); its admin access stays.
+    const callerOf = (t: string): Caller | undefined => {
+      const crossing = component !== undefined || splitComponentFunctionName(t) !== null;
+      return crossing && caller ? { ...caller, identity: null } : caller;
     };
     // Pushed code's handler: its context's wrapper for nested calls (`installNestedCalls`).
     const nestedCalls = (handler as { [NESTED_CALLS]?: NestedCalls } | undefined)?.[NESTED_CALLS];
@@ -2599,29 +2728,22 @@ export class Functions {
       runQuery: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
         checkActionCallArgs(n, a);
-        return acrossCall(
-          await asActionCaller(
-            this.runQuery(target(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
-            inContext,
-          ),
-        );
+        const t = await target(n);
+        return acrossCall(await asActionCaller(this.runQuery(t, acrossArgs(a), false, callerOf(t)), inContext));
       },
       runMutation: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
         checkActionCallArgs(n, a);
-        return acrossCall(
-          await asActionCaller(
-            this.runMutation(target(await functionNameOf(n, null, this.engine)), acrossArgs(a), false, caller),
-            inContext,
-          ),
-        );
+        const t = await target(n);
+        return acrossCall(await asActionCaller(this.runMutation(t, acrossArgs(a), false, callerOf(t)), inContext));
       },
       runAction: async (n: FunctionRef, a?: unknown) => {
         checkActionAlive();
         checkActionCallArgs(n, a);
+        const t = await target(n);
         return acrossCall(
           await asActionCaller(
-            this.runAction(target(await functionNameOf(n, null, this.engine)), acrossArgs(a), caller, {
+            this.runAction(t, acrossArgs(a), callerOf(t), {
               internal: true,
               authError,
             }),
