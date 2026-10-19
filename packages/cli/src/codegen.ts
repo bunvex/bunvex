@@ -511,12 +511,14 @@ export function runCodegen(
   return result;
 }
 
+// Convex's template (`cli/codegen_templates/tsconfig.ts`) as its prettier pass writes it, in bunvex's name.
 const TSCONFIG = `{
-  /* How bunvex typechecks the functions in this directory (\`bunvex deploy\`, \`bunvex codegen\`).
-   * You can change it, but bunvex needs the settings in the second group.
+  /* This TypeScript project config describes the environment that
+   * bunvex functions run in and is used to typecheck them.
+   * You can modify it, but some settings are required to use bunvex.
    */
   "compilerOptions": {
-    /* Settings bunvex does not need: change them freely. */
+    /* These settings are not required by bunvex and can be modified. */
     "allowJs": true,
     "strict": true,
     "moduleResolution": "Bundler",
@@ -524,15 +526,13 @@ const TSCONFIG = `{
     "skipLibCheck": true,
     "allowSyntheticDefaultImports": true,
 
-    /* Settings bunvex needs. */
+    /* These compiler options are required by bunvex */
     "target": "ESNext",
     "lib": ["ES2023", "dom"],
     "forceConsistentCasingInFileNames": true,
     "module": "ESNext",
     "isolatedModules": true,
-    "noEmit": true,
-    /* bunvex's packages are TypeScript sources, which import each other by \`.ts\` paths. */
-    "allowImportingTsExtensions": true
+    "noEmit": true
   },
   "include": ["./**/*"],
   "exclude": ["./_generated"]

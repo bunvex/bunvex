@@ -1,0 +1,17 @@
+Overriding MAX_BYTES_WRITTEN_PER_SECOND to 9007199254740991 from environment
+Overriding MAX_ROWS_WRITTEN_PER_SECOND to 9007199254740991 from environment
+{"part":"usertime","mode":"bwrap","variant":"vm","inserts":1000,"result":"ok","wallMs":93.8}
+{"part":"usertime","mode":"bwrap","variant":"vm","inserts":2000,"result":"ok","wallMs":102.8}
+{"part":"usertime","mode":"bwrap","variant":"vm","inserts":5000,"result":"ok","wallMs":244.7}
+{"part":"usertime","mode":"bwrap","variant":"vm","inserts":10000,"result":"ok","wallMs":560.8}
+{"part":"usertime","mode":"bwrap","variant":"vm","inserts":15000,"result":"ok","wallMs":614.5}
+{"part":"usertime","mode":"bwrap","variant":"host accounting (round 1)","inserts":1000,"result":"ok","wallMs":97.5}
+{"part":"usertime","mode":"bwrap","variant":"host accounting (round 1)","inserts":2000,"result":"ok","wallMs":178}
+{"part":"usertime","mode":"bwrap","variant":"host accounting (round 1)","inserts":5000,"result":"Function execution timed out (maximum duration: 1s)","wallMs":1045.2}
+{"part":"usertime","mode":"bwrap","variant":"host accounting (round 1)","inserts":10000,"result":"Function execution timed out (maximum duration: 1s)","wallMs":1560.1}
+{"part":"usertime","mode":"bwrap","variant":"host accounting (round 1)","inserts":15000,"result":"Function execution timed out (maximum duration: 1s)","wallMs":1792.8}
+{"part":"usertime","mode":"bwrap","variant":"child accounting","inserts":1000,"result":"ok","wallMs":203.6}
+{"part":"usertime","mode":"bwrap","variant":"child accounting","inserts":2000,"result":"ok","wallMs":168.8}
+{"part":"usertime","mode":"bwrap","variant":"child accounting","inserts":5000,"result":"ok","wallMs":622.1}
+{"part":"usertime","mode":"bwrap","variant":"child accounting","inserts":10000,"result":"ok","wallMs":1815.9}
+{"part":"usertime","mode":"bwrap","variant":"child accounting","inserts":15000,"result":"ok","wallMs":2633.1}

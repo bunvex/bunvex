@@ -1,0 +1,15 @@
+default | bwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces. See <https://deb.li/bubblewrap> or <file:///usr/share/doc/bubblewrap/README.Debian.gz>. 
+seccomp=unconfined | bwrap: Failed to make / slave: Permission denied 
+apparmor=unconfined | bwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces. See <https://deb.li/bubblewrap> or <file:///usr/share/doc/bubblewrap/README.Debian.gz>. 
+seccomp+apparmor unconfined | bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted 
+cap SYS_ADMIN | bwrap: Failed to make / slave: Permission denied 
+cap SYS_ADMIN + apparmor=unconfined | bwrap: pivot_root: Operation not permitted 
+privileged | uid=65534 gid=65534 groups=65534 
+bwrap seccomp profile only | bwrap: Failed to make / slave: Permission denied 
+bwrap seccomp + bunvex-sandbox apparmor | bwrap: Can't mount proc on /newroot/proc: Operation not permitted 
+  ... without /proc in the sandbox | uid=65534 gid=65534 groups=65534 
+  ... + systempaths=unconfined | uid=65534 gid=65534 groups=65534 
+  ... + systempaths=unconfined, --user 1000 | uid=65534 gid=65534 groups=65534 
+cgroup writable? default | mkdir: cannot create directory '/sys/fs/cgroup/t': Read-only file system 
+cgroup writable? writable-cgroups=true | writable 
+cgroup writable? cap SYS_ADMIN | mkdir: cannot create directory '/sys/fs/cgroup/t': Read-only file system 

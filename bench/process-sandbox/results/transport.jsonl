@@ -1,0 +1,7 @@
+{"transport":"in-process call","n":20000,"meanUs":0.23,"p50Us":0.07,"p99Us":0.39,"bytes":99}
+{"transport":"vm context call","n":20000,"meanUs":0.41,"p50Us":0.27,"p99Us":1.14,"bytes":99}
+{"transport":"worker postMessage","n":20000,"meanUs":168.63,"p50Us":178.92,"p99Us":827.41,"bytes":99}
+{"transport":"process ipc (json)","n":20000,"meanUs":125.22,"p50Us":45.49,"p99Us":726.36,"bytes":99}
+{"transport":"process ipc (advanced)","n":20000,"meanUs":158.34,"p50Us":93.52,"p99Us":871.59,"bytes":99}
+{"transport":"process stdio frames","n":20000,"meanUs":252.78,"p50Us":245.11,"p99Us":1102.29,"bytes":99}
+{"transport":"process unix socket frames","n":20000,"meanUs":157.54,"p50Us":79.23,"p99Us":909.17,"bytes":99}
