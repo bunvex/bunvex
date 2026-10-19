@@ -173,6 +173,8 @@ const CASES: string[][] = [
   ["keygen", "admin-key", "--instance-name", "a", "--instance-name", "b"],
   ["keygen", "admin-key", "--instance-name", "n", "--instance-secret", "xyz"],
   ["keygen", "admin-key", "--instance-name", "n", "--instance-secret", "abcd"],
+  ["help", "foo"],
+  ["keygen", "help", "foo"],
 ];
 
 describe.skipIf(!ready)("the backend's command-line errors on Convex and on bunvex", () => {

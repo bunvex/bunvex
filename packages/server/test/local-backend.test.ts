@@ -6,6 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { adminKeyCipherKey, checkAdminKey } from "../src/admin-keys.ts";
 import {
+  ADMIN_KEY_USAGE,
+  KEYGEN_USAGE,
+  LOCAL_BACKEND_USAGE,
   localBackendDatabaseEnv,
   localBackendFlagsError,
   localBackendMain,
@@ -303,6 +306,36 @@ describe("bunvex-local-backend", () => {
     expect(await run(["admin-key", "--instance-name", "n", "--instance-secret", "xyz"])).toEqual({
       code: 1,
       err: "Error: Couldn't hexdecode key",
+    });
+  });
+
+  // As Convex's binary answers them (STUDY-172 §1.2): the helps on stdout, exit 0; an unknown subcommand, exit 2.
+  test("help and keygen help: the helps of each command, clap's error for an unknown one", async () => {
+    const run = async (args: string[]) => {
+      const r = io();
+      return { code: await localBackendMain(args, r.it, "v1"), out: r.out.join("\n"), err: r.err.join("\n") };
+    };
+    for (const [args, help] of [
+      [["help"], LOCAL_BACKEND_USAGE],
+      [["help", "keygen"], KEYGEN_USAGE],
+      [["help", "keygen", "admin-key"], ADMIN_KEY_USAGE],
+      [["keygen", "help"], KEYGEN_USAGE],
+      [["keygen", "-h"], KEYGEN_USAGE],
+      [["keygen", "--help"], KEYGEN_USAGE],
+      [["keygen", "help", "admin-key"], ADMIN_KEY_USAGE],
+      [["keygen", "admin-key", "-h"], ADMIN_KEY_USAGE],
+      [["keygen", "admin-key", "--instance-name", "n", "--help"], ADMIN_KEY_USAGE],
+    ] as const)
+      expect(await run([...args])).toEqual({ code: 0, out: help, err: "" });
+    expect(await run(["help", "foo"])).toEqual({
+      code: 2,
+      out: "",
+      err: clap("unrecognized subcommand 'foo'", HELP_USAGE),
+    });
+    expect(await run(["keygen", "help", "foo"])).toEqual({
+      code: 2,
+      out: "",
+      err: clap("unrecognized subcommand 'foo'", "Usage: bunvex-local-backend keygen <COMMAND>"),
     });
   });
 
