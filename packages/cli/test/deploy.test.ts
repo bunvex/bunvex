@@ -162,7 +162,9 @@ describe("bunvex deploy", () => {
       })
     ).json()) as { moduleHashes: { path: string }[] };
     const paths = hashes.moduleHashes.map((h) => h.path).filter((p) => !p.startsWith("_deps/"));
+    // The app's definition too, a `defineApp()` of the CLI's when the app has none (DV-429, STUDY-156).
     expect(paths.sort()).toEqual([
+      "bunvex.config.js",
       "crons.js",
       "files.js",
       "http.js",

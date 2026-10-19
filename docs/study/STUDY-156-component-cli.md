@@ -281,6 +281,45 @@ bunvex's codegen stays offline (DV-173), and builds a component's types from its
      arguments fails `tsc`); `--component-dir` on a component without an app.
 3. **cli: `run --component` and `--typecheck-components`** (DV-391's CLI half, Q-4).
 
+### As built, PR 1 (`cli/src/components.ts`, `bundle.ts`, `deploy.ts`)
+
+- **Finding and bundling.**
+  - `bundleComponents` builds the app's `bunvex.config.ts` (or `.js`) once with a metafile, under the conditions
+    `["bunvex", "module"]`.
+  - Every non-external import whose specifier names `bunvex.config` is a child, walked breadth first.
+  - A child that resolves to a file other than `bunvex.config.ts` / `.js` is `Invalid component directory
+    (Component definition bunvex.config.ts isn't a file): <dir>`.
+  - Each definition is bundled on its own. A plugin maps each `(importer, specifier)` that the metafile resolved
+    to `./_componentDeps/<base64url(path)>`, external, so the server links it.
+  - Each component's functions and schema go through `bundleFunctions(dir, project, { component: true })`: no
+    `auth.config`, and a `"use node"` module is Convex's error.
+- **No config:** Convex's virtual `defineApp()`, sent as source (`bunvex/server` stays external, DV-495). This
+  closes DV-429: `get_config_hashes` and `_modules` now list `bunvex.config.js`.
+- **The push** sends the app's definition and dependencies, and each component with every module and the CLI's
+  version.
+  - It prints `Installed component <path>.`, `Unmounted component <path>.` and `Remounted component <path>.` for
+    each non-root `componentDiffs` entry, and nothing for `modify`.
+  - A component's failed schema prints `✖ Schema validation failed in component "<path>".` with the error.
+  - `--dry-run` is bunvex's, as before: it ends at `start_push` and prints no component lines. Convex's goes on
+    to `finish_push` with `dryRun`.
+- **Measured.** Bundling an app with no config costs nothing more: no build runs. An app with two components
+  (one local, one from a package, one nested) adds about 3.9 ms to the push's bundling, against 0.9 ms for the
+  app's own functions (10 runs, warm).
+- **Tests.** `cli/test/component-push.test.ts`, 7 cases:
+  - the graph and its paths;
+  - the `_componentDeps` imports;
+  - no config;
+  - `"use node"`;
+  - a push installing a local component, a package component and a nested one, whose functions then run;
+  - an unmount's line, and no line for a push that changes nothing;
+  - a component's schema failure;
+  - DV-429's `_modules` row.
+
+  Sabotage: 7 of 7 broken fixes were caught.
+- **Not yet.** `bunvex dev` watches only the functions directory, so a local component outside it is pushed
+  again only when a file in the functions directory changes. Watching the definitions' directories comes with
+  PR 2's codegen.
+
 ## Divergences
 
 | # | Divergence | Decision |

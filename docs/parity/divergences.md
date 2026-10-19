@@ -314,6 +314,7 @@ Kept so the history is in one place.
 
 | ID | What differed | Now | Observable | Decided | Source |
 |---|---|---|---|---|---|
+| DV-429 | No `_modules` row for the app definition module (`convex.config.js`): bunvex's CLI pushed `definition: null` | As Convex's: `bunvex deploy` and `dev` push the app's `bunvex.config.ts` bundled, or a `defineApp()` of their own when the app has none (Convex's virtual config), and the server stores it as `bunvex.config.js` (DV-494) | yes (`_modules`, `get_config_hashes`) | owner, 2026-10-01 (match Convex) | [STUDY-134 S9](../study/STUDY-134-system-row-shapes.md#4-divergences); [STUDY-156 PR 1](../study/STUDY-156-component-cli.md) |
 | DV-189 | No `dashboard` service in docker-compose (until item 12) | As Convex's: a `dashboard` service from its own image (`ghcr.io/bunvex/bunvex-dashboard`, DV-475) on `${DASHBOARD_PORT:-6791}`, the backend's URL prefilled (`BUNVEX_DEPLOYMENT_URL`, Convex's `NEXT_PUBLIC_DEPLOYMENT_URL`), no admin key passed, started once the backend is healthy; `docker/smoke-dashboard.sh` signs in to it in Chromium, in CI | operational | owner, 2026-10-12: Q1 B (STUDY-149) | [STUDY-149 PR 7](../study/STUDY-149-dashboard-real-data.md#pr-7-as-built) |
 | DV-194 | No `dashboard.zip` in the release (until item 12) | As Convex's: `dashboard.zip`, the static build made for the local dashboard (`VITE_BUNVEX_USE_CURRENT_DEPLOYMENT=1`, Convex's `NEXT_PUBLIC_USE_CURRENT_DEPLOYMENT_API`), the files at its root, in every `precompiled-*` release (`scripts/build-dashboard.ts`); `promote-binaries.yml` requires it | no (a release asset) | owner, 2026-10-12 (STUDY-149 §3.3) | [STUDY-149 PR 7](../study/STUDY-149-dashboard-real-data.md#pr-7-as-built) |
 | DV-202 | No local dashboard (until item 12) | As Convex's: a long-running `bunvex dev` on a local deployment serves the release's `dashboard.zip` (cached per version in `~/.cache/bunvex/dashboard`) on the first free port from 6790, saved in `.bunvex/local/default/dashboard.json`, with `/api/current_deployment` (and DV-476's `Host` check); `bunvex dashboard` opens it once that route names the deployment | yes (CLI) | owner, 2026-10-12 (STUDY-149 §3.3, Q5) | [STUDY-149 PR 7](../study/STUDY-149-dashboard-real-data.md#pr-7-as-built) |
@@ -471,7 +472,6 @@ classed as bugs by their study; they are listed here because they change what op
 | ID | Gap | Convex | Source |
 |---|---|---|---|
 | DV-55 | No namespaces (components). (`Backfilled` and staged indexes are built: STUDY-29, #115) | has them | [STUDY-04 D4](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
-| DV-429 | No `_modules` row for the app definition module (`convex.config.js`): bunvex's CLI pushes `definition: null` | stores the app definition the CLI pushes | [STUDY-134 S9](../study/STUDY-134-system-row-shapes.md#4-divergences); the server stores it when sent (STUDY-153 PR 4a); closes when bunvex's CLI sends it (STUDY-152 step 6) |
 
 ## Pending owner decisions
 
@@ -578,7 +578,7 @@ here and close each row (moving it to [Resolved to match Convex](#resolved-to-ma
 
 | Waiting on | Rows | What to do then |
 |---|---|---|
-| **Components** (Phase 4) | DV-55, DV-429, DV-174, DV-186 (declared/required env vars, `run --component`), DV-215, DV-224, DV-385 | namespaces; `components` in `_generated/api`; declared env vars and `run --component`; `_components/…` in export and import; `data --component`; `codegen --component-dir` / `--live-component-sources` |
+| **Components** (Phase 4) | DV-55, DV-174, DV-186 (declared/required env vars, `run --component`), DV-215, DV-224, DV-385 | namespaces; `components` in `_generated/api`; declared env vars and `run --component`; `_components/…` in export and import; `data --component`; `codegen --component-dir` / `--live-component-sources` |
 | **Features bunvex lacks** (audit log, STUDY-48) | — | their audit-log events with them: system stop state, `delete_scheduled_jobs_table`, data sync, the dashboard's document edits (`add_documents`, `update_documents`, `delete_documents`, `create_table`) |
 | **Nothing (can be built any time)** | DV-195 (Windows smoke run), DV-219 (legacy ZIP encoding), DV-229 (check the tokenizer against Convex), DV-10 (transition chunks) | see each row |
 

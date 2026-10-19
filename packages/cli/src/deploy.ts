@@ -19,6 +19,7 @@ import {
   type TypescriptCompiler,
   typecheck,
 } from "./codegen.ts";
+import { type BundledComponents, bundleComponents } from "./components.ts";
 import {
   type DashboardLink,
   dashboardPage,
@@ -459,6 +460,13 @@ export async function waitMessage(
   return ifSlow("Checking that documents match your schema...");
 }
 
+/** Convex's line for a component a push installed, unmounted or remounted. */
+const COMPONENT_DIFF_LINES: Record<string, string> = {
+  create: "Installed component",
+  unmount: "Unmounted component",
+  remount: "Remounted component",
+};
+
 /** One deploy (`bunvex deploy`, each push of `bunvex dev`). */
 /**
  * `evaluate_schema` (STUDY-56), or null when the deployment has no such route. While the deployment is still
@@ -487,6 +495,7 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
   const { url, adminKey } = target;
   const dashboard = flags.dashboard ?? NO_DASHBOARD;
   let bundled: Awaited<ReturnType<typeof bundleFunctions>>;
+  let components: BundledComponents;
   let dir: string;
   let codegen: CodegenConfig;
   let project: ProjectConfig;
@@ -499,6 +508,9 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     bundled = await bundleFunctions(dir, io.cwd, {
       includeSourcesContent: project.bundler?.includeSourcesContent ?? false,
       externalPackages: project.node?.externalPackages ?? [],
+    });
+    components = await bundleComponents(dir, io.cwd, {
+      includeSourcesContent: project.bundler?.includeSourcesContent ?? false,
     });
   } catch (e) {
     io.err(`bunvex deploy: ${e instanceof BundleError ? e.message : (e as Error).message}`);
@@ -541,14 +553,15 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
       // As Convex's: the directory as configured, and `node.nodeVersion` when set (the deployment checks it).
       functions: project.functions ?? "bunvex/",
       appDefinition: {
-        definition: null,
-        dependencies: [],
+        definition: components.app.definition,
+        dependencies: components.app.dependencies,
         schema: bundled.schema,
         changedModules,
         unchangedModuleHashes,
         udfServerVersion: VERSION,
       },
-      componentDefinitions: [],
+      // Each component's every module, none by hash, as Convex's CLI sends them.
+      componentDefinitions: components.components.map((c) => ({ ...c, udfServerVersion: VERSION })),
       // The packages the deployment installs for the "use node" modules (STUDY-148).
       nodeDependencies: bundled.nodeDependencies,
       ...(project.node?.nodeVersion === undefined ? {} : { nodeVersion: project.node.nodeVersion }),
@@ -599,7 +612,11 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
       if (s.type === "failed") {
         // Convex's words (deploy2.ts `waitForSchema`): the failure, then the error, which names the table and
         // document. The table is what `bunvex dev` waits on before it pushes again (STUDY-120).
-        io.err(`✖ Schema validation failed.\n${s.error}`);
+        io.err(
+          typeof s.componentPath === "string" && s.componentPath !== ""
+            ? `✖ Schema validation failed in component "${s.componentPath}".\n${s.error}`
+            : `✖ Schema validation failed.\n${s.error}`,
+        );
         return typeof s.tableName === "string" ? { code: 1, table: s.tableName } : { code: 1 };
       }
       if (s.type === "raceDetected") {
@@ -616,6 +633,7 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
       componentDiffs: Record<
         string,
         {
+          diffType?: { type: string };
           moduleDiff: { added: string[]; removed: string[] };
           cronDiff: { added: string[]; updated: string[]; deleted: string[] };
           indexDiff: IndexDiff;
@@ -629,6 +647,11 @@ export async function deploy(target: Target, flags: DeployOptions, io: Io): Prom
     if (d) {
       for (const c of d.cronDiff.added) io.err(`  [+] cron ${c}`);
       for (const c of d.cronDiff.deleted) io.err(`  [-] cron ${c}`);
+    }
+    // Convex's lines for the other components (`printDiff`): nothing for one that only changed.
+    for (const [path, c] of Object.entries(diff.componentDiffs)) {
+      const line = path === "" ? undefined : COMPONENT_DIFF_LINES[c.diffType?.type ?? ""];
+      if (line) io.err(`${line} ${path}.`);
     }
     io.out(`✔ Deployed functions to ${url}`);
     return { code: 0 };
