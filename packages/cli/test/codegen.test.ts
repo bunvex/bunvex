@@ -166,6 +166,21 @@ function appWithPackages(files: Record<string, string>) {
   return app;
 }
 
+/**
+ * `codegen --init` in an app on the workspace's packages, which export their TypeScript sources: those import
+ * each other by `.ts` paths, so the app's tsconfig needs `allowImportingTsExtensions` here. The published
+ * packages ship `.d.ts` files and need nothing added (sync-e2e/node/npm-packages.node.ts).
+ */
+async function initOnSources(app: string) {
+  const r = io(app);
+  expect(await main(["codegen", "--init", "--typecheck", "disable"], r.it)).toBe(0);
+  const path = join(app, "bunvex/tsconfig.json");
+  const text = readFileSync(path, "utf8");
+  expect(text).toContain('"noEmit": true\n');
+  writeFileSync(path, text.replace('"noEmit": true\n', '"noEmit": true,\n    "allowImportingTsExtensions": true\n'));
+  return r;
+}
+
 const TYPED_APP = {
   "bunvex/schema.ts": `import { defineSchema, defineTable } from ${JSON.stringify(SERVER)};
 import { v } from ${JSON.stringify(VALUES)};
@@ -202,10 +217,10 @@ export const relay = action({
 describe("bunvex codegen, end to end", () => {
   test("--init, then the app typechecks against its _generated/; a type error fails it", async () => {
     const app = appWithPackages(TYPED_APP);
-    const r = io(app);
-    expect(await main(["codegen", "--init", "--typecheck", "enable"], r.it)).toBe(0);
+    const r = await initOnSources(app);
     expect(r.err).toContain("Wrote bunvex/tsconfig.json");
     expect(r.out[0]).toMatch(/^✔ Generated bunvex\/_generated/);
+    expect(await main(["codegen", "--typecheck", "enable"], io(app).it)).toBe(0);
     // A table that is not in the schema, and the wrong arguments to a mutation.
     write(app, {
       "bunvex/bad.ts": `import { api } from "./_generated/api";
@@ -245,7 +260,8 @@ export const plain = query({
   handler: async (ctx, { file }): Promise<string | null> => ctx.storage.getUrl(file),
 });`,
     });
-    expect(await main(["codegen", "--init", "--typecheck", "enable"], io(app).it)).toBe(0);
+    await initOnSources(app);
+    expect(await main(["codegen", "--typecheck", "enable"], io(app).it)).toBe(0);
     // What an editor completes in `v.id("`: TypeScript's language service, the one editors run.
     write(app, {
       "bunvex/complete.ts": `import { v as plainV } from ${JSON.stringify(VALUES)};
@@ -289,7 +305,8 @@ console.log(JSON.stringify({ plain: at('plainV.id("'), generated: at('\\nv.id("'
       "bunvex/ids.ts": `import { query, v } from "./_generated/server";
 export const byId = query({ args: { id: v.id("anything"), file: v.id("_storage") }, handler: async () => null });`,
     });
-    expect(await main(["codegen", "--init", "--typecheck", "enable"], io(app).it)).toBe(0);
+    await initOnSources(app);
+    expect(await main(["codegen", "--typecheck", "enable"], io(app).it)).toBe(0);
   }, 120_000);
 
   test("without a tsconfig, try skips the typecheck and enable fails", async () => {
@@ -358,6 +375,45 @@ describe("bunvex codegen --dry-run, --debug, --commonjs and the other flags (STU
     expect(await main(["codegen", "--dry-run", "--typecheck", "disable"], changed.it)).toBe(0);
     expect(changed.out).toEqual(["Command would write file: bunvex/_generated/api.d.ts"]);
     expect(snapshot(app)).toEqual(after);
+  });
+
+  // Convex's `convex/tsconfig.json` (npm-packages/convex/src/cli/codegen_templates/tsconfig.ts, after its prettier
+  // pass: no trailing comma, a final newline), with bunvex for Convex. No `allowImportingTsExtensions`: the
+  // published packages ship `.d.ts` files (STUDY-167).
+  test("--init writes Convex's tsconfig.json, in bunvex's name, and keeps one that exists", async () => {
+    const app = tmp();
+    expect(await main(["codegen", "--init", "--typecheck", "disable"], io(app).it)).toBe(0);
+    expect(readFileSync(join(app, "bunvex/tsconfig.json"), "utf8")).toBe(`{
+  /* This TypeScript project config describes the environment that
+   * bunvex functions run in and is used to typecheck them.
+   * You can modify it, but some settings are required to use bunvex.
+   */
+  "compilerOptions": {
+    /* These settings are not required by bunvex and can be modified. */
+    "allowJs": true,
+    "strict": true,
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
+
+    /* These compiler options are required by bunvex */
+    "target": "ESNext",
+    "lib": ["ES2023", "dom"],
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "isolatedModules": true,
+    "noEmit": true
+  },
+  "include": ["./**/*"],
+  "exclude": ["./_generated"]
+}
+`);
+    write(app, { "bunvex/tsconfig.json": "{}" });
+    const again = io(app);
+    expect(await main(["codegen", "--init", "--typecheck", "disable"], again.it)).toBe(0);
+    expect(again.err).not.toContain("Wrote bunvex/tsconfig.json");
+    expect(readFileSync(join(app, "bunvex/tsconfig.json"), "utf8")).toBe("{}");
   });
 
   test("--init --dry-run lists README.md and tsconfig.json without writing them", async () => {
