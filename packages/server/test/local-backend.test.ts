@@ -6,7 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { adminKeyCipherKey, checkAdminKey } from "../src/admin-keys.ts";
 import {
+  ADMIN_KEY_USAGE,
+  KEYGEN_USAGE,
+  LOCAL_BACKEND_USAGE,
   localBackendDatabaseEnv,
+  localBackendFlagsError,
   localBackendMain,
   parseLocalBackendFlags,
   startLocalBackend,
@@ -19,6 +23,16 @@ afterEach(async () => {
   for (const s of stops.splice(0)) await s();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
+/** clap's error text: the message, then its trailer (STUDY-172). */
+const clap = (message: string, usage?: string) =>
+  `error: ${message}\n\n${usage ? `${usage}\n\n` : ""}For more information, try '--help'.`;
+const HELP_USAGE = "Usage: bunvex-local-backend [OPTIONS] [DB_SPEC] [COMMAND]";
+/** What Convex refuses once the flags parse, checked as the program checks it. */
+const refused = (args: string[], env: Record<string, string | undefined> = {}) => {
+  const f = parseLocalBackendFlags(args, env);
+  if (typeof f === "string") throw new Error(f);
+  return localBackendFlagsError(f);
+};
 const io = (cwd = ".") => {
   const out: string[] = [];
   const err: string[] = [];
@@ -50,25 +64,176 @@ describe("bunvex-local-backend", () => {
   });
 
   test("Convex's checks and messages", () => {
-    expect(parseLocalBackendFlags([])).toBe("--instance-secret is required. Generate one with `openssl rand -hex 32`");
-    expect(parseLocalBackendFlags(["--instance-name", "x"])).toContain("--instance-secret <INSTANCE_SECRET>");
-    expect(parseLocalBackendFlags(["--instance-secret", "abcd"])).toBe("Hex-decoded key was 2 bytes, not 32");
-    expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--cloud-origin", "http://a"])).toContain(
-      "--site-origin",
+    expect(refused([])).toBe("--instance-secret is required. Generate one with `openssl rand -hex 32`");
+    expect(parseLocalBackendFlags(["--instance-name", "x"])).toBe(
+      clap(
+        "the following required arguments were not provided:\n  --instance-secret <INSTANCE_SECRET>",
+        "Usage: bunvex-local-backend --instance-secret <INSTANCE_SECRET> --instance-name <INSTANCE_NAME> [DB_SPEC]",
+      ),
     );
-    expect(
-      parseLocalBackendFlags(["--instance-secret", SECRET, "--cloud-origin", "ftp://a", "--site-origin", "http://b"]),
-    ).toBe("Origin url should start with https:// or http:// but got 'ftp://a'");
-    expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--s3-storage", "--local-storage", "d"])).toContain(
-      "cannot be used with",
+    expect(refused(["--instance-secret", "abcd"])).toBe("Hex-decoded key was 2 bytes, not 32");
+    expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--cloud-origin", "http://a"])).toBe(
+      clap(
+        "the following required arguments were not provided:\n  --site-origin <SITE_ORIGIN>",
+        "Usage: bunvex-local-backend --cloud-origin <CLOUD_ORIGIN> --site-origin <SITE_ORIGIN> --instance-secret <INSTANCE_SECRET> [DB_SPEC]",
+      ),
     );
-    expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--db", "postgres"])).toContain(
-      "needs the database's URL",
+    expect(refused(["--instance-secret", SECRET, "--cloud-origin", "ftp://a", "--site-origin", "http://b"])).toBe(
+      "Origin url should start with https:// or http:// but got 'ftp://a'",
     );
-    expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--db", "oracle"])).toContain("possible values");
+    expect(refused(["--instance-secret", SECRET, "--cloud-origin", "http://a", "--site-origin", "ftp://b"])).toBe(
+      "Site url should start with https:// or http:// but got 'ftp://b'",
+    );
+    // Empty origins are allowed, as Convex's: present, so the pair is complete.
+    expect(refused(["--instance-secret", SECRET, "--cloud-origin=", "--site-origin="])).toBeNull();
+    expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--s3-storage", "--local-storage", "d"])).toBe(
+      clap(
+        "the argument '--s3-storage' cannot be used with '--local-storage <LOCAL_STORAGE>'",
+        "Usage: bunvex-local-backend --instance-secret <INSTANCE_SECRET> --s3-storage [DB_SPEC]",
+      ),
+    );
+    expect(refused(["--instance-secret", SECRET, "--db", "postgres"])).toBe(
+      "--db postgres needs the database's URL as the db_spec argument",
+    );
+    expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--db", "oracle"])).toBe(
+      "error: invalid value 'oracle' for '--db <DB>'\n  [possible values: sqlite, postgres, mysql, mongodb]\n\nFor more information, try '--help'.",
+    );
     expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--bogus"])).toBe(
-      "unexpected argument '--bogus' found",
+      clap(
+        "unexpected argument '--bogus' found\n\n  tip: to pass '--bogus' as a value, use '-- --bogus'",
+        "Usage: bunvex-local-backend <DB_SPEC|--db <DB>|--interface <INTERFACE>|--port <PORT>|--site-proxy-port <SITE_PROXY_PORT>|--cloud-origin <CLOUD_ORIGIN>|--site-origin <SITE_ORIGIN>|--http-proxy <HTTP_PROXY>|--deny-addresses <DENY_ADDRESSES>|--instance-name <INSTANCE_NAME>|--instance-secret <INSTANCE_SECRET>|--local-storage <LOCAL_STORAGE>|--s3-storage|--do-not-require-ssl|--redact-logs-to-client|--function-sandbox <FUNCTION_SANDBOX>>",
+      ),
     );
+  });
+
+  // Captured from Convex's binary (precompiled-2026-10-07-d8bdde0) in STUDY-172 §1; checked against it by
+  // differential/test/backend-flags.test.ts when it is there.
+  test("a value missing: clap's value names, the field's name uppercased with underscores", () => {
+    for (const [flag, shown] of [
+      ["--db", "--db <DB>"],
+      ["-d", "--db <DB>"],
+      ["--interface", "--interface <INTERFACE>"],
+      ["-i", "--interface <INTERFACE>"],
+      ["--port", "--port <PORT>"],
+      ["-p", "--port <PORT>"],
+      ["--site-proxy-port", "--site-proxy-port <SITE_PROXY_PORT>"],
+      ["--cloud-origin", "--cloud-origin <CLOUD_ORIGIN>"],
+      ["--site-origin", "--site-origin <SITE_ORIGIN>"],
+      ["--http-proxy", "--http-proxy <HTTP_PROXY>"],
+      ["--deny-addresses", "--deny-addresses <DENY_ADDRESSES>"],
+      ["--instance-name", "--instance-name <INSTANCE_NAME>"],
+      ["--instance-secret", "--instance-secret <INSTANCE_SECRET>"],
+      ["--local-storage", "--local-storage <LOCAL_STORAGE>"],
+      ["--function-sandbox", "--function-sandbox <FUNCTION_SANDBOX>"],
+    ]) {
+      const possible = {
+        "--db <DB>": "sqlite, postgres, mysql, mongodb",
+        "--deny-addresses <DENY_ADDRESSES>": "none, metadata, private",
+        "--function-sandbox <FUNCTION_SANDBOX>": "vm, process",
+      }[shown!];
+      const want = `error: a value is required for '${shown}' but none was supplied${possible ? `\n  [possible values: ${possible}]` : ""}\n\nFor more information, try '--help'.`;
+      // At the end, before another flag, before `--`.
+      expect(parseLocalBackendFlags(["--instance-secret", SECRET, flag!])).toBe(want);
+      expect(parseLocalBackendFlags([flag!, "--do-not-require-ssl", "--instance-secret", SECRET])).toBe(want);
+      expect(parseLocalBackendFlags([flag!, "--", "x"])).toBe(want);
+    }
+    // An empty value is no value for a list of values only.
+    expect(parseLocalBackendFlags(["--db="])).toBe(
+      "error: a value is required for '--db <DB>' but none was supplied\n  [possible values: sqlite, postgres, mysql, mongodb]\n\nFor more information, try '--help'.",
+    );
+    expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--local-storage="])).toMatchObject({
+      localStorage: "",
+    });
+  });
+
+  test("invalid values: clap's and Rust's reasons", () => {
+    const bad = (args: string[]) => parseLocalBackendFlags(["--instance-secret", SECRET, ...args]);
+    expect(bad(["--port", "nope"])).toBe(
+      clap("invalid value 'nope' for '--port <PORT>': invalid digit found in string"),
+    );
+    expect(bad(["-pz"])).toBe(clap("invalid value 'z' for '--port <PORT>': invalid digit found in string"));
+    expect(bad(["--port", "1e3"])).toBe(clap("invalid value '1e3' for '--port <PORT>': invalid digit found in string"));
+    expect(bad(["--port="])).toBe(clap("invalid value '' for '--port <PORT>': cannot parse integer from empty string"));
+    expect(bad(["--site-proxy-port", "70000"])).toBe(
+      clap("invalid value '70000' for '--site-proxy-port <SITE_PROXY_PORT>': 70000 is not in 0..=65535"),
+    );
+    expect(bad(["--port=-1"])).toBe(clap("invalid value '-1' for '--port <PORT>': -1 is not in 0..=65535"));
+    expect(bad(["--port", "99999999999999999999"])).toBe(
+      clap("invalid value '99999999999999999999' for '--port <PORT>': number too large to fit in target type"),
+    );
+    expect(bad(["--port", "+5"])).toMatchObject({ port: 5 });
+    expect(bad(["-p=4000"])).toMatchObject({ port: 4000 });
+    expect(bad(["-p4000"])).toMatchObject({ port: 4000 });
+    for (const v of ["localhost", "::", "01.2.3.4", "1.2.3", "256.1.1.1", ""])
+      expect(bad([`--interface=${v}`])).toBe(
+        clap(`invalid value '${v}' for '--interface <INTERFACE>': invalid IPv4 address syntax`),
+      );
+    expect(bad(["-i", "127.0.0.1"])).toMatchObject({ hostname: "127.0.0.1" });
+    expect(bad(["--db", "postgresql"])).toBe(
+      "error: invalid value 'postgresql' for '--db <DB>'\n  [possible values: sqlite, postgres, mysql, mongodb]\n\n  tip: a similar value exists: 'postgres'\n\nFor more information, try '--help'.",
+    );
+  });
+
+  test("unknown arguments, repeated ones, `--`: clap's tips and usage lines", () => {
+    expect(parseLocalBackendFlags(["-z"])).toBe(
+      clap("unexpected argument '-z' found\n\n  tip: to pass '-z' as a value, use '-- -z'", HELP_USAGE),
+    );
+    // A negative number is a short flag, as clap reads it.
+    expect(parseLocalBackendFlags(["--port", "-1"])).toBe(
+      clap("unexpected argument '-1' found\n\n  tip: to pass '-1' as a value, use '-- -1'", HELP_USAGE),
+    );
+    expect(parseLocalBackendFlags(["--prot", "1"])).toBe(
+      clap(
+        "unexpected argument '--prot' found\n\n  tip: a similar argument exists: '--port'",
+        "Usage: bunvex-local-backend <DB_SPEC|--db <DB>|--interface <INTERFACE>|--port <PORT>|--site-proxy-port <SITE_PROXY_PORT>|--cloud-origin <CLOUD_ORIGIN>|--site-origin <SITE_ORIGIN>|--http-proxy <HTTP_PROXY>|--deny-addresses <DENY_ADDRESSES>|--instance-name <INSTANCE_NAME>|--instance-secret <INSTANCE_SECRET>|--local-storage <LOCAL_STORAGE>|--s3-storage|--do-not-require-ssl|--redact-logs-to-client|--function-sandbox <FUNCTION_SANDBOX>>",
+      ),
+    );
+    // bunvex's names suggest bunvex's flags (DV-197): Convex suggests `--site-proxy-port`, its `--convex-site` is far.
+    expect(parseLocalBackendFlags(["--site", "1"])).toContain("tip: a similar argument exists: '--site-origin'");
+    expect(parseLocalBackendFlags(["--function-sandbx", "vm"])).toContain(
+      "tip: a similar argument exists: '--function-sandbox'",
+    );
+    expect(parseLocalBackendFlags(["a", "b"])).toBe(clap("unexpected argument 'b' found", HELP_USAGE));
+    expect(parseLocalBackendFlags(["a", "kegen"])).toBe(
+      clap("unrecognized subcommand 'kegen'\n\n  tip: a similar subcommand exists: 'keygen'", HELP_USAGE),
+    );
+    expect(parseLocalBackendFlags(["--port", "1", "-p", "2"])).toBe(
+      clap("the argument '--port <PORT>' cannot be used multiple times", HELP_USAGE),
+    );
+    expect(parseLocalBackendFlags(["--s3-storage=1"])).toBe(
+      clap(
+        "unexpected value '1' for '--s3-storage' found; no more were expected",
+        "Usage: bunvex-local-backend --s3-storage [DB_SPEC]",
+      ),
+    );
+    // After `--`, a word that looks like a flag is the db_spec.
+    expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--", "--bogus"])).toMatchObject({ dbSpec: "--bogus" });
+    expect(parseLocalBackendFlags(["--instance-secret", SECRET, "--port", "-"])).toBe(
+      clap("invalid value '-' for '--port <PORT>': invalid digit found in string"),
+    );
+  });
+
+  test("the program prints clap's message (exit 2), or Convex's `Error:` once the flags parse (exit 1)", async () => {
+    const run = async (args: string[]) => {
+      const r = io();
+      return { code: await localBackendMain(args, r.it, "v1"), err: r.err.join("\n"), out: r.out.join("\n") };
+    };
+    expect(await run(["--function-sandbox"])).toEqual({
+      code: 2,
+      err: "error: a value is required for '--function-sandbox <FUNCTION_SANDBOX>' but none was supplied\n  [possible values: vm, process]\n\nFor more information, try '--help'.",
+      out: "",
+    });
+    expect(await run([])).toEqual({
+      code: 1,
+      err: "Error: --instance-secret is required. Generate one with `openssl rand -hex 32`",
+      out: "",
+    });
+    expect(await run(["--instance-secret", "zz"])).toEqual({ code: 1, err: "Error: Couldn't hexdecode key", out: "" });
+    // clap acts on --help and --version where they come: a mistake before them wins.
+    expect((await run(["--port", "1", "--help", "--bogus"])).code).toBe(0);
+    expect((await run(["--bogus", "--help"])).code).toBe(2);
+    expect(await run(["--port", "1", "-V"])).toEqual({ code: 0, err: "", out: "bunvex-local-backend v1" });
+    expect((await run(["help"])).out).toStartWith("The bunvex backend.\n\nUsage: bunvex-local-backend [OPTIONS]");
   });
 
   test("keygen admin-key prints a key; --version; a usage error exits 2", async () => {
@@ -81,8 +246,8 @@ describe("bunvex-local-backend", () => {
     expect(await localBackendMain(["--version"], v.it, "v1")).toBe(0);
     expect(v.out).toEqual(["bunvex-local-backend v1"]);
     const bad = io();
-    expect(await localBackendMain([], bad.it, "v1")).toBe(2);
-    expect(bad.err[0]).toStartWith("error: --instance-secret is required.");
+    expect(await localBackendMain([], bad.it, "v1")).toBe(1);
+    expect(bad.err[0]).toStartWith("Error: --instance-secret is required.");
   });
 
   test("runs on SQLite in the working directory, storage beside it; the key works", async () => {
@@ -112,20 +277,66 @@ describe("bunvex-local-backend", () => {
       const r = io();
       return { code: await localBackendMain(["keygen", ...args], r.it, "v1"), err: r.err.join("\n") };
     };
+    const ADMIN_USAGE =
+      "Usage: bunvex-local-backend keygen admin-key --instance-name <INSTANCE_NAME> --instance-secret <INSTANCE_SECRET>";
     expect(await run(["other"])).toEqual({
       code: 2,
-      err: "Usage: bunvex-local-backend keygen admin-key --instance-name <name> --instance-secret <hex>",
+      err: clap("unrecognized subcommand 'other'", "Usage: bunvex-local-backend keygen <COMMAND>"),
     });
+    expect((await run([])).code).toBe(2);
+    expect((await run([])).err).toStartWith("Generate keys without starting the server\n\nUsage:");
     expect(await run(["admin-key", "--instance-name", "n", "--bogus"])).toEqual({
       code: 2,
-      err: "unexpected argument '--bogus' found",
+      err: clap(
+        "unexpected argument '--bogus' found",
+        "Usage: bunvex-local-backend keygen admin-key <--instance-name <INSTANCE_NAME>|--instance-secret <INSTANCE_SECRET>>",
+      ),
     });
-    const missing = await run(["admin-key", "--instance-name", "n"]);
-    expect(missing.code).toBe(2);
-    expect(missing.err).toContain("--instance-secret <INSTANCE_SECRET>");
-    const bad = await run(["admin-key", "--instance-name", "n", "--instance-secret", "xyz"]);
-    expect(bad.code).toBe(2);
-    expect(bad.err).toBe(parseLocalBackendFlags(["--instance-secret", "xyz"]) as string);
+    expect(await run(["admin-key", "--instance-name", "n"])).toEqual({
+      code: 2,
+      err: clap(
+        "the following required arguments were not provided:\n  --instance-secret <INSTANCE_SECRET>",
+        ADMIN_USAGE,
+      ),
+    });
+    expect(await run(["admin-key", "--instance-name"])).toEqual({
+      code: 2,
+      err: clap("a value is required for '--instance-name <INSTANCE_NAME>' but none was supplied"),
+    });
+    expect(await run(["admin-key", "--instance-name", "n", "--instance-secret", "xyz"])).toEqual({
+      code: 1,
+      err: "Error: Couldn't hexdecode key",
+    });
+  });
+
+  // As Convex's binary answers them (STUDY-172 §1.2): the helps on stdout, exit 0; an unknown subcommand, exit 2.
+  test("help and keygen help: the helps of each command, clap's error for an unknown one", async () => {
+    const run = async (args: string[]) => {
+      const r = io();
+      return { code: await localBackendMain(args, r.it, "v1"), out: r.out.join("\n"), err: r.err.join("\n") };
+    };
+    for (const [args, help] of [
+      [["help"], LOCAL_BACKEND_USAGE],
+      [["help", "keygen"], KEYGEN_USAGE],
+      [["help", "keygen", "admin-key"], ADMIN_KEY_USAGE],
+      [["keygen", "help"], KEYGEN_USAGE],
+      [["keygen", "-h"], KEYGEN_USAGE],
+      [["keygen", "--help"], KEYGEN_USAGE],
+      [["keygen", "help", "admin-key"], ADMIN_KEY_USAGE],
+      [["keygen", "admin-key", "-h"], ADMIN_KEY_USAGE],
+      [["keygen", "admin-key", "--instance-name", "n", "--help"], ADMIN_KEY_USAGE],
+    ] as const)
+      expect(await run([...args])).toEqual({ code: 0, out: help, err: "" });
+    expect(await run(["help", "foo"])).toEqual({
+      code: 2,
+      out: "",
+      err: clap("unrecognized subcommand 'foo'", HELP_USAGE),
+    });
+    expect(await run(["keygen", "help", "foo"])).toEqual({
+      code: 2,
+      out: "",
+      err: clap("unrecognized subcommand 'foo'", "Usage: bunvex-local-backend keygen <COMMAND>"),
+    });
   });
 
   test("the secret from INSTANCE_SECRET (DV-525): read without the flag, the flag winning, Convex's messages", () => {
@@ -145,22 +356,18 @@ describe("bunvex-local-backend", () => {
     });
     // Neither (an empty variable is none, as clap's): the messages without the variable.
     for (const env of [{}, { INSTANCE_SECRET: "" }]) {
-      expect(parseLocalBackendFlags([], env)).toBe(
-        "--instance-secret is required. Generate one with `openssl rand -hex 32`",
-      );
-      expect(parseLocalBackendFlags(["--instance-name", "x"], env)).toBe(
-        "the following required arguments were not provided:\n  --instance-secret <INSTANCE_SECRET>",
+      expect(refused([], env)).toBe("--instance-secret is required. Generate one with `openssl rand -hex 32`");
+      expect(parseLocalBackendFlags(["--instance-name", "x"], env)).toStartWith(
+        "error: the following required arguments were not provided:\n  --instance-secret <INSTANCE_SECRET>\n",
       );
     }
     // The variable's value is checked as the flag's.
-    expect(parseLocalBackendFlags([], { INSTANCE_SECRET: "abcd" })).toBe("Hex-decoded key was 2 bytes, not 32");
-    expect(parseLocalBackendFlags([], { INSTANCE_SECRET: "xyz" })).toBe("--instance-secret must be hex-encoded");
+    expect(refused([], { INSTANCE_SECRET: "abcd" })).toBe("Hex-decoded key was 2 bytes, not 32");
+    expect(refused([], { INSTANCE_SECRET: "xyz" })).toBe("Couldn't hexdecode key");
     // Not read from the process unless given.
     process.env.INSTANCE_SECRET = SECRET;
     try {
-      expect(parseLocalBackendFlags([])).toBe(
-        "--instance-secret is required. Generate one with `openssl rand -hex 32`",
-      );
+      expect(refused([])).toBe("--instance-secret is required. Generate one with `openssl rand -hex 32`");
     } finally {
       delete process.env.INSTANCE_SECRET;
     }
@@ -186,9 +393,12 @@ describe("bunvex-local-backend", () => {
     const none = await keygen([], { INSTANCE_SECRET: "" });
     expect({ code: none.code, err: none.err }).toEqual({
       code: 2,
-      err: "the following required arguments were not provided:\n  --instance-name <INSTANCE_NAME>\n  --instance-secret <INSTANCE_SECRET>",
+      err: clap(
+        "the following required arguments were not provided:\n  --instance-secret <INSTANCE_SECRET>",
+        "Usage: bunvex-local-backend keygen admin-key --instance-name <INSTANCE_NAME> --instance-secret <INSTANCE_SECRET>",
+      ),
     });
-    expect((await keygen([], { INSTANCE_SECRET: "xyz" })).err).toBe("--instance-secret must be hex-encoded");
+    expect((await keygen([], { INSTANCE_SECRET: "xyz" })).err).toBe("Error: Couldn't hexdecode key");
   });
 
   test("the program takes INSTANCE_SECRET from its environment and removes it there (DV-525)", async () => {
@@ -197,7 +407,7 @@ describe("bunvex-local-backend", () => {
     const args = ["--db", "postgres", "postgres://u@127.0.0.1:1"];
     // Past the flags (the secret was found) to the start, which fails on the connection.
     expect(await localBackendMain(args, { ...r.it, env }, "v1")).toBe(1);
-    expect(r.err).toEqual([expect.stringMatching(/^error: (?!--instance-secret)/)]);
+    expect(r.err).toEqual([expect.stringMatching(/^Error: (?!--instance-secret)/)]);
     // What the backend starts never inherits it.
     expect(env).toEqual({ OTHER: "kept" });
     const help = io();
@@ -211,7 +421,7 @@ describe("bunvex-local-backend", () => {
     const args = ["--instance-secret", SECRET, "--db", "postgres", "postgres://u@127.0.0.1:1"];
     expect(await localBackendMain(args, r.it, "v1")).toBe(1);
     // The URL names no database: the instance's is used (DV-417), and the start fails on the connection.
-    expect(r.err).toEqual([expect.stringMatching(/^error: /)]);
+    expect(r.err).toEqual([expect.stringMatching(/^Error: /)]);
     expect(r.err.join("\n")).not.toMatch(/names no database/);
   });
 
