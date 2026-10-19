@@ -1075,11 +1075,15 @@ export class Tx {
     this.countConstantReads(n);
   }
 
-  /** Convex's first nested call in a transaction reads two more things (STUDY-161 §16.3); later ones, nothing. */
-  countNestedCall() {
+  /**
+   * Convex's first nested call in a transaction (STUDY-161 §16.3, §16.7): two reads, `extra` more across or from a
+   * component, and the callee's modules not loaded yet; later nested calls read nothing more.
+   */
+  countNestedCall(extra = 0, modules: readonly string[] = []) {
     if (!this.counting || this.countedNestedCall) return;
     this.countedNestedCall = true;
-    this.readCount.constant(2);
+    this.readCount.constant(2 + extra);
+    this.countModuleLoads(modules);
     this.checkReadCount();
   }
 
