@@ -246,3 +246,18 @@ describe("a transaction's count (the engine's own reads not counted)", () => {
     });
   });
 });
+
+describe("a nested call's reads (Convex's first nested call only, STUDY-161 §16.7)", () => {
+  test("two, the extra, and the callee's modules not loaded yet, at the first call; nothing at later ones", async () => {
+    const { e } = await setup();
+    await e.query(async (db) => {
+      db.countModuleLoads(["app"]);
+      const at = counted(db);
+      db.countNestedCall(1, ["app", "lib", "chunk"]);
+      // 2 + 1, and lib and chunk (app was loaded)
+      expect(counted(db) - at).toBe(5);
+      db.countNestedCall(2, ["other"]);
+      expect(counted(db) - at).toBe(5);
+    });
+  });
+});

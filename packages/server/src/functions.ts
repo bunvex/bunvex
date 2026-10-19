@@ -2125,10 +2125,10 @@ export class Functions {
     if (measured.nesting > MAX_VALUE_NESTING + 1)
       throw new Error(`Invalid argument \`args\` for \`runUdf\`: ${TOO_NESTED_MESSAGE}`);
     if (measured.tooBig !== undefined) throw new Error(`Invalid argument \`args\` for \`runUdf\`: ${measured.tooBig}`);
-    const target = await this.resolveCall(ref, component, db, false);
+    // Resolving the reference reads the component tree (Convex's component registry, the engine's own reads): not
+    // counted (STUDY-161 §16.7).
+    const target = await db.notCounted(() => this.resolveCall(ref, component, db, false));
     const name = splitComponentFunctionName(target) ? target : registryKey(target);
-    // Convex's first nested call reads two more things into the transaction (STUDY-161 §16.3).
-    db.countNestedCall();
     // A `_system/` function, as Convex's (checked against its local backend): not found to anyone but an admin
     // or the system; for them it runs, in this transaction.
     if (isSystemPath(name)) {
@@ -2137,6 +2137,8 @@ export class Functions {
       if (!db.systemIdentity) throw this.notFound(name);
       if (depth >= MAX_NESTED_CALL_DEPTH)
         throw new Error("Cross component call depth limit exceeded. Do you have an infinite loop in your app?");
+      // Convex's first nested call reads two more things into the transaction (STUDY-161 §16.3).
+      db.countNestedCall();
       const body =
         kind === "query"
           ? this.systemQueryBody(name, args, false, undefined, true)
@@ -2144,8 +2146,14 @@ export class Functions {
       return body(db);
     }
     const f = this.fn(name, kind, false);
-    // The callee's modules, those not loaded yet in this transaction (Convex reads each `_modules` row once).
-    db.countModuleLoads(this.moduleLoads.get(f) ?? ["\0unknown"]);
+    // Convex's first nested call in a transaction (STUDY-161 §16.7, measured): two reads, one more from a component,
+    // one more into another namespace (the callee's, by its registry name: a handle may lead back to the app), and
+    // the callee's modules not loaded yet; later nested calls count nothing more.
+    const callee = splitComponentFunctionName(name)?.id ?? null;
+    db.countNestedCall(
+      (component ? 1 : 0) + (callee !== (component?.id ?? null) ? 1 : 0),
+      this.moduleLoads.get(f) ?? ["\0unknown"],
+    );
     const a = acrossArgs(this.checkArgs(f, args === undefined ? {} : args, measured)) as AnyArgs;
     // Its lines name it (Convex's `SubFunction`): its own name and its component's path.
     const inner = splitComponentFunctionName(name);
