@@ -1,0 +1,27 @@
+{"mode":"process","phase":"load","spawnToReadyMs":60.081649,"hostRssDeltaMiB":26.25}
+{"mode":"process","phase":"memory-idle","rssMiB":34.543,"pssMiB":19.926,"cgroupMiB":null,"pids":[16547],"hostRssMiB":108.977}
+{"mode":"process","phase":"latency","fn":"empty query","unit":"us","n":3000,"mean":265.287,"p50":244.637,"p99":1304.697}
+{"mode":"process","phase":"latency","fn":"1 x db.get","unit":"us","n":3000,"mean":337.347,"p50":164.995,"p99":1947.195}
+{"mode":"process","phase":"latency","fn":"10 x db.get","unit":"us","n":3000,"mean":2339.494,"p50":2659.145,"p99":6526.342}
+{"mode":"process","phase":"latency","fn":"100 x db.get","unit":"us","n":3000,"mean":24794.029,"p50":25981.341,"p99":44990.605}
+{"mode":"process","phase":"latency","fn":"page of 1","unit":"us","n":3000,"mean":465.902,"p50":363.79,"p99":1772.499}
+{"mode":"process","phase":"latency","fn":"page of 10","unit":"us","n":3000,"mean":437.762,"p50":252.637,"p99":1926.244}
+{"mode":"process","phase":"latency","fn":"page of 100","unit":"us","n":3000,"mean":1140.008,"p50":1018.989,"p99":3537.15}
+{"mode":"process","phase":"latency","fn":"insert mutation","unit":"us","n":3000,"mean":489.985,"p50":401.752,"p99":2357.406}
+{"mode":"process","phase":"latency","fn":"increment mutation","unit":"us","n":3000,"mean":774.165,"p50":738.141,"p99":2739.957}
+{"mode":"process","phase":"throughput","fn":"listByTenant","concurrency":1,"perSec":1083,"unit":"ms","mean":0.923,"p50":0.846,"p99":2.921,"childPeak":{"rssMiB":41.5,"pssMiB":25.987,"cgroupMiB":null},"hostRssMiB":354.258}
+{"mode":"process","phase":"throughput","fn":"listByTenant","concurrency":8,"perSec":2444,"unit":"ms","mean":3.277,"p50":2.846,"p99":10.005,"childPeak":{"rssMiB":54.875,"pssMiB":39.362,"cgroupMiB":null},"hostRssMiB":600.23}
+{"mode":"process","phase":"throughput","fn":"listByTenant","concurrency":32,"perSec":2856,"unit":"ms","mean":11.22,"p50":10.139,"p99":28.114,"childPeak":{"rssMiB":53.289,"pssMiB":37.776,"cgroupMiB":null},"hostRssMiB":546.789}
+{"mode":"process","phase":"throughput","fn":"listByTenant","concurrency":64,"perSec":2601,"unit":"ms","mean":24.671,"p50":22.669,"p99":55.936,"childPeak":{"rssMiB":54.852,"pssMiB":39.308,"cgroupMiB":null},"hostRssMiB":532.441}
+{"mode":"process","phase":"throughput","fn":"insertItem","concurrency":1,"perSec":1862,"unit":"ms","mean":0.537,"p50":0.517,"p99":2.157,"childPeak":{"rssMiB":46.938,"pssMiB":31.394,"cgroupMiB":null},"hostRssMiB":434.727}
+{"mode":"process","phase":"throughput","fn":"insertItem","concurrency":8,"perSec":4850,"unit":"ms","mean":1.652,"p50":1.238,"p99":8.84,"childPeak":{"rssMiB":46.012,"pssMiB":30.374,"cgroupMiB":null},"hostRssMiB":614.313}
+{"mode":"process","phase":"throughput","fn":"insertItem","concurrency":32,"perSec":4245,"unit":"ms","mean":7.539,"p50":5.611,"p99":32.928,"childPeak":{"rssMiB":47.676,"pssMiB":32.038,"cgroupMiB":null},"hostRssMiB":673.082}
+{"mode":"process","phase":"throughput","fn":"insertItem","concurrency":64,"perSec":5345,"unit":"ms","mean":11.979,"p50":9.254,"p99":50.859,"childPeak":{"rssMiB":47.672,"pssMiB":32.034,"cgroupMiB":null},"hostRssMiB":823.754}
+{"mode":"process","phase":"memory-after-load","rssMiB":42.836,"pssMiB":27.198,"cgroupMiB":null,"pids":[16547]}
+{"mode":"process","phase":"push","unit":"ms","n":20,"mean":24.392,"p50":24.196,"p99":34.256}
+{"mode":"process","phase":"first-call-after-push","unit":"ms","ms":8.28}
+{"mode":"process","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1017.043,"killToExitMs":2.375,"killToReadyMs":23.553,"nextCallMs":25.068}
+{"mode":"process","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1006.574,"killToExitMs":2.808,"killToReadyMs":22.041,"nextCallMs":21.43}
+{"mode":"process","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1001.8,"killToExitMs":6.419,"killToReadyMs":29.838,"nextCallMs":31.174}
+{"mode":"process","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1010.217,"killToExitMs":3.067,"killToReadyMs":30.909,"nextCallMs":31.837}
+{"mode":"process","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1000.931,"killToExitMs":2.183,"killToReadyMs":25.666,"nextCallMs":28.67}

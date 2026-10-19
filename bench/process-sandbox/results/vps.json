@@ -1,0 +1,9 @@
+{
+  "cpu": "AMD EPYC 9354P 32-Core Processor",
+  "vcpus": 2,
+  "memMiB": 7940,
+  "kernel": "6.8.0-147-generic",
+  "os": "Ubuntu 24.04.5 LTS",
+  "bun": "1.4.3",
+  "bwrap": "bubblewrap 0.9.0"
+}

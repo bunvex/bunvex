@@ -83,7 +83,7 @@ import {
   writeCodeRows,
   writePackage,
 } from "./code-store.ts";
-import { CodeVersion, type ModuleSource } from "./code-version.ts";
+import type { CodeVersion, ModuleSource } from "./code-version.ts";
 import { withApiCors } from "./cors.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
@@ -111,6 +111,7 @@ import {
 } from "./errors.ts";
 import { EXECUTOR_SOURCES, ExecutorInvalidations } from "./executor-invalidations.ts";
 import { ExportError, ExportService } from "./exports.ts";
+import { type FunctionSandbox, functionSandboxConfig, loadCode, type SandboxIsolation } from "./function-executor.ts";
 import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import {
   FunctionLog,
@@ -258,6 +259,14 @@ export type ServerOptions = {
    * else `metadata`.
    */
   denyAddresses?: AddressScreen;
+  /**
+   * Where pushed code runs (STUDY-171, AD-44; beyond Convex): `vm`, this process's `node:vm` contexts, or
+   * `process`, a sandboxed process (not available yet: the server refuses to start). Default:
+   * `BUNVEX_FUNCTION_SANDBOX`, else `vm`.
+   */
+  functionSandbox?: FunctionSandbox;
+  /** The isolation layers of `process` (STUDY-168 §10.2). Default: `BUNVEX_FUNCTION_SANDBOX_ISOLATION`, else `auto`. */
+  functionSandboxIsolation?: SandboxIsolation;
   /**
    * Scheduled functions (STUDY-30): the executor's knobs. Default: Convex's, overridden by
    * `SCHEDULED_JOB_EXECUTION_PARALLELISM` / `SCHEDULED_JOB_RETENTION`.
@@ -582,6 +591,12 @@ const PAUSE_ROUTE = /^\/api\/v1\/(pause|unpause)_deployment$/;
 
 export function createServer(opts: ServerOptions) {
   const { engine, functions } = opts;
+  // The executor pushed code runs in (STUDY-171, AD-44), checked before anything starts: one the host cannot
+  // give fails here, never falls back to `vm`.
+  functionSandboxConfig(
+    opts.functionSandbox ?? process.env.BUNVEX_FUNCTION_SANDBOX,
+    opts.functionSandboxIsolation ?? process.env.BUNVEX_FUNCTION_SANDBOX_ISOLATION,
+  );
   // Traces (STUDY-131 AD-26): spans go to the OTLP exporter when an endpoint is configured.
   const tracingConfig =
     opts.tracing === null
@@ -2228,7 +2243,7 @@ export function createServer(opts: ServerOptions) {
    */
   const deployCode = async (modules: ModuleSource[]) => {
     const config = await udfConfig(engine);
-    const version = await CodeVersion.load(modules, { seed: config.seed, timestamp: config.timestamp });
+    const version = await loadCode(modules, { seed: config.seed, timestamp: config.timestamp });
     const pkg = await writePackage(modulesStore, modules);
     let unused: SourcePackage[];
     try {

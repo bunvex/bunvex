@@ -21,13 +21,17 @@
 //   connection code), read as an embedded server reads them (`persistenceConfigFromEnv`);
 // - `--http-proxy <url>` (Convex's `--convex-http-proxy`, STUDY-80): the proxy actions' `fetch`, OIDC
 //   discovery and JWKS, and the log sinks go through; without it, `--deny-addresses` (bunvex's own screen,
-//   STUDY-80 P1, DV-325: `metadata` by default), and Convex's warning at start when that is `none`.
+//   STUDY-80 P1, DV-325: `metadata` by default), and Convex's warning at start when that is `none`;
+// - `--function-sandbox <vm|process>` (bunvex's own, AD-44): where pushed code runs. It wins over
+//   `BUNVEX_FUNCTION_SANDBOX`; `BUNVEX_FUNCTION_SANDBOX_ISOLATION` picks `process`'s layers. Only `vm` exists so
+//   far: `process` fails at start (STUDY-171).
 // SIGINT / SIGTERM stop it.
 import { resolve } from "node:path";
 import { DEFAULT_INSTANCE_NAME, defineSchema, Engine, type Persistence, type StorageType } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv, LocalBlobStore, s3OptionsFromEnv } from "@bunvex/file-storage";
 import { ADDRESS_SCREENS, type AddressScreen, DEFAULT_ADDRESS_SCREEN } from "./address-screen.ts";
 import { adminKeyCipherKey, issueAdminKey } from "./admin-keys.ts";
+import { FUNCTION_SANDBOXES, type FunctionSandbox, functionSandboxConfig } from "./function-executor.ts";
 import { Functions } from "./functions.ts";
 import { openPersistence, type PersistenceConfig, persistenceConfigFromEnv } from "./persistence.ts";
 import { searchSegmentStore } from "./search-storage.ts";
@@ -65,6 +69,8 @@ Options:
       --http-proxy <url>     send actions' fetch requests through this proxy, to screen them for SSRF
       --deny-addresses <set> without --http-proxy, refuse them to: metadata (default; link-local and cloud
                              metadata), private (also loopback and private networks) or none
+      --function-sandbox <s> where functions run: vm (default; in this process) or process (a sandboxed
+                             process: not available yet); default BUNVEX_FUNCTION_SANDBOX
   -V, --version              print the version
   -h, --help                 print this help`;
 
@@ -88,6 +94,7 @@ export type LocalBackendFlags = {
   redact: boolean;
   httpProxy?: string;
   denyAddresses?: AddressScreen;
+  functionSandbox?: FunctionSandbox;
 };
 
 const VALUED: Record<string, string> = {
@@ -105,6 +112,7 @@ const VALUED: Record<string, string> = {
   "--local-storage": "--local-storage",
   "--http-proxy": "--http-proxy",
   "--deny-addresses": "--deny-addresses",
+  "--function-sandbox": "--function-sandbox",
 };
 
 /** Convex's instance secret check: 32 bytes, hex-encoded. */
@@ -182,6 +190,10 @@ export function parseLocalBackendFlags(args: string[], env: LocalBackendIo["env"
         if (!(ADDRESS_SCREENS as readonly string[]).includes(v))
           return `invalid value '${v}' for '--deny-addresses <DENY_ADDRESSES>': possible values: ${ADDRESS_SCREENS.join(", ")}`;
         f.denyAddresses = v as AddressScreen;
+      } else if (name === "--function-sandbox") {
+        if (!(FUNCTION_SANDBOXES as readonly string[]).includes(v))
+          return `invalid value '${v}' for '--function-sandbox <FUNCTION_SANDBOX>': possible values: ${FUNCTION_SANDBOXES.join(", ")}`;
+        f.functionSandbox = v as FunctionSandbox;
       } else {
         f.localStorage = v;
         localStorageGiven = true;
@@ -234,6 +246,11 @@ export type RunningLocalBackend = { url: string; siteUrl: string | null; stop: (
 
 /** Start the backend (the program waits on it; tests and `bunvex dev` stop it). */
 export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo): Promise<RunningLocalBackend> {
+  // The executor (AD-44), checked before the store opens: the flag, else the environment, else `vm`.
+  const sandbox = functionSandboxConfig(
+    f.functionSandbox ?? io.env.BUNVEX_FUNCTION_SANDBOX,
+    io.env.BUNVEX_FUNCTION_SANDBOX_ISOLATION,
+  );
   let persistence: Persistence;
   if (f.db === "sqlite") {
     const { SqlitePersistence } = await import("@bunvex/core/persistence/sqlite");
@@ -293,6 +310,8 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
     // A flag only, as Convex's: not BUNVEX_HTTP_PROXY.
     httpProxy: f.httpProxy ?? null,
     denyAddresses: f.denyAddresses ?? DEFAULT_ADDRESS_SCREEN,
+    functionSandbox: sandbox.sandbox,
+    functionSandboxIsolation: sandbox.isolation,
     fileStorage: storage("files"),
     moduleStorage: storage("modules"),
     exportStorage: storage("exports"),

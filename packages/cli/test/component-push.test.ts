@@ -13,6 +13,7 @@ import { bundleComponents, findComponents } from "../src/components.ts";
 import { type Io, main } from "../src/index.ts";
 import { runCommand } from "../src/run.ts";
 import { memoryStore } from "./memory-store.ts";
+import { allowTsImports } from "./ts-imports.ts";
 
 const SECRET = "ce".repeat(32);
 const NAME = "component-push-test";
@@ -269,6 +270,7 @@ describe("codegen", () => {
     });
     write(root, call('"x"'));
     expect(await main(["codegen", "--init", "--typecheck=disable"], io(root).it)).toBe(0);
+    allowTsImports(root);
     // The first push writes the types; the second checks the code against them.
     expect(await main(["deploy", "--url", d.url, "--admin-key", KEY, "--typecheck=disable"], io(root).it)).toBe(0);
     const ok = io(root);
@@ -290,6 +292,22 @@ describe("bunvex codegen", () => {
     );
     expect(readFileSync(join(root, "components/counter/_generated/component.ts"), "utf8")).toContain(
       'add: FunctionReference<"mutation", "internal", { body: string }, any, Name>;',
+    );
+  });
+
+  test("a local component mounting a local one imports it from its own `_generated/` (DV-535)", async () => {
+    const root = app("app.use(counter);\n");
+    write(root, {
+      "bunvex/bunvex.config.ts": `import { defineApp } from ${SERVER};\nimport counter from "../components/counter/bunvex.config";\nconst app = defineApp();\napp.use(counter);\nexport default app;\n`,
+      ...under(
+        "components/counter",
+        component("counter", `import inner from "../inner/bunvex.config";\nc.use(inner);\n`),
+      ),
+      ...under("components/inner", component("inner")),
+    });
+    expect(await main(["codegen", "--typecheck=disable"], io(root).it)).toBe(0);
+    expect(readFileSync(join(root, "components/counter/_generated/api.ts"), "utf8")).toContain(
+      `inner: ${imp("../../inner/_generated/component.js")}.ComponentApi<"inner">;`,
     );
   });
 
@@ -418,6 +436,7 @@ describe("bunvex run --component (DV-391)", () => {
     symlinkSync(resolve(import.meta.dir, "../../../node_modules/typescript"), join(root, "node_modules/typescript"));
     const flags = ["deploy", "--url", d.url, "--admin-key", KEY, "--typecheck=enable"];
     expect(await main(["codegen", "--init", "--typecheck=disable"], io(root).it)).toBe(0);
+    allowTsImports(root);
     expect(await main(flags, io(root).it)).toBe(0);
     const failed = io(root);
     expect(await main([...flags, "--typecheck-components"], failed.it)).toBe(1);

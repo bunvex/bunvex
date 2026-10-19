@@ -101,6 +101,19 @@ proxy such as [Smokescreen](https://github.com/stripe/smokescreen), which refuse
 loopback and private networks, `none` nothing, as Convex — DV-325;
 [STUDY-80](../docs/study/STUDY-80-outbound-requests.md)).
 
+**Where functions run (the function sandbox).** `BUNVEX_FUNCTION_SANDBOX` chooses the executor, and
+`--function-sandbox` on the command line wins over it (a bunvex addition, AD-44):
+- `vm` (the default): functions run in the backend's own process, in `node:vm` contexts. They get their own
+  globals, but this is not a security boundary: run only code you trust.
+- `process` (**coming**): each call in its own OS-sandboxed process, with a real timeout and a 96 MiB memory
+  cap per call (`ISOLATE_MAX_USER_HEAP_SIZE` + `ISOLATE_MAX_HEAP_EXTRA_SIZE`). `BUNVEX_FUNCTION_SANDBOX_ISOLATION`
+  (`auto`, `namespaces`, `landlock` or `none`) will pick its layers. Linux only; not on Windows. This release
+  refuses to start with it, saying it is not available yet
+  ([STUDY-168](../docs/study/STUDY-168-process-sandbox.md), [STUDY-171](../docs/study/STUDY-171-function-sandbox-seam.md)).
+
+A value outside these lists stops the backend at start. `bunvex dev` passes its environment to the local
+backend it starts, and never sets the variable itself.
+
 ## Observability and tuning
 
 Each variable below is read by the backend in the container; add the ones you set to the service's

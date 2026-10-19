@@ -16,7 +16,7 @@ import {
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
 import type { Value } from "@bunvex/values";
-import { type AnalyzedModule, CodeVersion, type ModuleSource, moduleHash, moduleName } from "./code-version.ts";
+import { type AnalyzedModule, type CodeVersion, type ModuleSource, moduleHash, moduleName } from "./code-version.ts";
 import { cronSpecOf, cronSpecsRow, msOfNs, nsOfMs } from "./cron-rows.ts";
 //     every time it is loaded.
 // The rows have Convex's shapes (STUDY-134, DV-424): crates/model/src/source_packages/types.rs
@@ -28,6 +28,7 @@ import { cronSpecOf, cronSpecsRow, msOfNs, nsOfMs } from "./cron-rows.ts";
 // otherwise delete packages (F3).
 import { DEFINITION_MODULE } from "./definition-eval.ts";
 import { externalDepsPath, externalDepsRow } from "./external-deps.ts";
+import { loadCode } from "./function-executor.ts";
 import { SERVER_VERSION } from "./server-version.ts";
 import type { SourcePosition } from "./source-position.ts";
 import { bytesSource, entryBytes, ZipReader } from "./zip-reader.ts";
@@ -557,7 +558,7 @@ export async function loadComponentCode(
     db.asSystem(() => db.inComponent(namespace, () => db.query(UDF_CONFIG_TABLE).first())),
   )) as Record<string, unknown> | null;
   if (!row) throw new Error(`component ${namespace} has code but no _udf_config`);
-  return CodeVersion.load(
+  return loadCode(
     sources.filter((m) => m.path !== SCHEMA_MODULE && isFunctionModule(m.path)),
     {
       seed: new Uint32Array(row.importPhaseRngSeed as ArrayBuffer),
@@ -594,7 +595,7 @@ export async function loadLatestCode(
     if (!row) throw new Error(`the external packages ${stored.pkg.externalPackageId} of the deployed code are missing`);
     nodeModules = await externalDepsPath(store, row);
   }
-  const version = await CodeVersion.load(
+  const version = await loadCode(
     sources.filter((m) => m.path !== AUTH_CONFIG_MODULE && m.path !== SCHEMA_MODULE && isFunctionModule(m.path)),
     { seed: config.seed, timestamp: config.timestamp, env, ...(nodeModules ? { nodeModules } : {}) },
   );

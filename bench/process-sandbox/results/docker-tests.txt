@@ -1,0 +1,161 @@
+== bwrap, minimum options
+(pass) today: the vm executor is not a boundary (DV-164) > app code reaches the host's process, secrets, files, network and other processes [497.33ms]
+(pass) today: the vm executor is not a boundary (DV-164) > a synchronous loop is never interrupted (DV-208) [4018.33ms]
+(pass) sandboxed process (bwrap) > every escape is blocked [248.41ms]
+(pass) sandboxed process (bwrap) > an infinite loop is killed at the user timeout and the deployment recovers [1182.06ms]
+(pass) sandboxed process (bwrap) > an allocating loop is stopped at the memory cap, reported, and the host survives [241.88ms]
+(pass) sandboxed process (bwrap) > the host refuses ops a function's kind does not allow, whatever the child sends [598.15ms]
+(pass) sandboxed process (bwrap) > results match the vm executor [167.20ms]
+(pass) fixes (bwrap) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [2485.93ms]
+(pass) fixes (bwrap) > a pool of one-call processes: a timeout fails only the guilty call [1158.21ms]
+(pass) fixes (bwrap) > batched ops give the same results [117.90ms]
+ 10 pass
+ 0 fail
+== bwrap, --privileged
+(pass) today: the vm executor is not a boundary (DV-164) > app code reaches the host's process, secrets, files, network and other processes [468.51ms]
+(pass) today: the vm executor is not a boundary (DV-164) > a synchronous loop is never interrupted (DV-208) [4013.28ms]
+(pass) sandboxed process (bwrap) > every escape is blocked [264.56ms]
+(pass) sandboxed process (bwrap) > an infinite loop is killed at the user timeout and the deployment recovers [1204.35ms]
+(pass) sandboxed process (bwrap) > an allocating loop is stopped at the memory cap, reported, and the host survives [412.33ms]
+(pass) sandboxed process (bwrap) > the host refuses ops a function's kind does not allow, whatever the child sends [621.70ms]
+(pass) sandboxed process (bwrap) > results match the vm executor [311.32ms]
+(pass) fixes (bwrap) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [4145.46ms]
+(pass) fixes (bwrap) > a pool of one-call processes: a timeout fails only the guilty call [1162.67ms]
+(pass) fixes (bwrap) > batched ops give the same results [163.11ms]
+ 10 pass
+ 0 fail
+== confine, default docker run
+(pass) today: the vm executor is not a boundary (DV-164) > app code reaches the host's process, secrets, files, network and other processes [403.43ms]
+(pass) today: the vm executor is not a boundary (DV-164) > a synchronous loop is never interrupted (DV-208) [4015.64ms]
+(pass) sandboxed process (confine) > every escape is blocked [196.04ms]
+(pass) sandboxed process (confine) > an infinite loop is killed at the user timeout and the deployment recovers [1136.93ms]
+(skip) sandboxed process (confine) > an allocating loop is stopped at the memory cap, reported, and the host survives
+(pass) sandboxed process (confine) > the host refuses ops a function's kind does not allow, whatever the child sends [572.07ms]
+(pass) sandboxed process (confine) > results match the vm executor [147.56ms]
+(pass) fixes (confine) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [2364.82ms]
+(pass) fixes (confine) > a pool of one-call processes: a timeout fails only the guilty call [1153.89ms]
+(pass) fixes (confine) > batched ops give the same results [127.71ms]
+ 9 pass
+ 0 fail
+== confine, sabotage seccomp
+(pass) today: the vm executor is not a boundary (DV-164) > app code reaches the host's process, secrets, files, network and other processes [495.59ms]
+(pass) today: the vm executor is not a boundary (DV-164) > a synchronous loop is never interrupted (DV-208) [4015.53ms]
+(pass) sandboxed process (confine) > every escape is blocked [184.69ms]
+(pass) sandboxed process (confine) > an infinite loop is killed at the user timeout and the deployment recovers [1153.12ms]
+(skip) sandboxed process (confine) > an allocating loop is stopped at the memory cap, reported, and the host survives
+(pass) sandboxed process (confine) > the host refuses ops a function's kind does not allow, whatever the child sends [568.59ms]
+(pass) sandboxed process (confine) > results match the vm executor [153.73ms]
+(pass) fixes (confine) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [2152.01ms]
+(pass) fixes (confine) > a pool of one-call processes: a timeout fails only the guilty call [1155.11ms]
+(pass) fixes (confine) > batched ops give the same results [120.85ms]
+ 9 pass
+ 0 fail
+== confine, sabotage landlock
+(pass) today: the vm executor is not a boundary (DV-164) > app code reaches the host's process, secrets, files, network and other processes [478.53ms]
+(pass) today: the vm executor is not a boundary (DV-164) > a synchronous loop is never interrupted (DV-208) [4015.44ms]
+(fail) sandboxed process (confine) > every escape is blocked [205.74ms]
+(pass) sandboxed process (confine) > an infinite loop is killed at the user timeout and the deployment recovers [1146.44ms]
+(skip) sandboxed process (confine) > an allocating loop is stopped at the memory cap, reported, and the host survives
+(pass) sandboxed process (confine) > the host refuses ops a function's kind does not allow, whatever the child sends [600.96ms]
+(pass) sandboxed process (confine) > results match the vm executor [146.55ms]
+(pass) fixes (confine) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [2125.82ms]
+(pass) fixes (confine) > a pool of one-call processes: a timeout fails only the guilty call [1147.57ms]
+(pass) fixes (confine) > batched ops give the same results [117.45ms]
+ 8 pass
+ 1 fail
+== confine, sabotage seccomp,landlock
+(pass) today: the vm executor is not a boundary (DV-164) > app code reaches the host's process, secrets, files, network and other processes [462.88ms]
+(pass) today: the vm executor is not a boundary (DV-164) > a synchronous loop is never interrupted (DV-208) [4019.93ms]
+(fail) sandboxed process (confine) > every escape is blocked [194.63ms]
+(pass) sandboxed process (confine) > an infinite loop is killed at the user timeout and the deployment recovers [1140.99ms]
+(skip) sandboxed process (confine) > an allocating loop is stopped at the memory cap, reported, and the host survives
+(pass) sandboxed process (confine) > the host refuses ops a function's kind does not allow, whatever the child sends [577.93ms]
+(pass) sandboxed process (confine) > results match the vm executor [137.64ms]
+(pass) fixes (confine) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [1970.31ms]
+(pass) fixes (confine) > a pool of one-call processes: a timeout fails only the guilty call [1129.41ms]
+(pass) fixes (confine) > batched ops give the same results [122.29ms]
+ 8 pass
+ 1 fail
+== confine, sabotage uid
+(pass) today: the vm executor is not a boundary (DV-164) > app code reaches the host's process, secrets, files, network and other processes [479.25ms]
+(pass) today: the vm executor is not a boundary (DV-164) > a synchronous loop is never interrupted (DV-208) [4013.47ms]
+(fail) sandboxed process (confine) > every escape is blocked [260.60ms]
+(pass) sandboxed process (confine) > an infinite loop is killed at the user timeout and the deployment recovers [1146.88ms]
+(skip) sandboxed process (confine) > an allocating loop is stopped at the memory cap, reported, and the host survives
+(pass) sandboxed process (confine) > the host refuses ops a function's kind does not allow, whatever the child sends [569.11ms]
+(pass) sandboxed process (confine) > results match the vm executor [153.73ms]
+(pass) fixes (confine) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [2484.69ms]
+(pass) fixes (confine) > a pool of one-call processes: a timeout fails only the guilty call [1149.90ms]
+(pass) fixes (confine) > batched ops give the same results [251.34ms]
+ 8 pass
+ 1 fail
+== confine, sabotage fs
+(pass) today: the vm executor is not a boundary (DV-164) > app code reaches the host's process, secrets, files, network and other processes [501.07ms]
+(pass) today: the vm executor is not a boundary (DV-164) > a synchronous loop is never interrupted (DV-208) [4009.71ms]
+(fail) sandboxed process (confine) > every escape is blocked [211.80ms]
+(pass) sandboxed process (confine) > an infinite loop is killed at the user timeout and the deployment recovers [1220.60ms]
+(skip) sandboxed process (confine) > an allocating loop is stopped at the memory cap, reported, and the host survives
+(pass) sandboxed process (confine) > the host refuses ops a function's kind does not allow, whatever the child sends [651.30ms]
+(pass) sandboxed process (confine) > results match the vm executor [364.84ms]
+(pass) fixes (confine) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [2507.77ms]
+(pass) fixes (confine) > a pool of one-call processes: a timeout fails only the guilty call [1137.22ms]
+(pass) fixes (confine) > batched ops give the same results [115.76ms]
+ 8 pass
+ 1 fail
+== confine, sabotage env
+(pass) today: the vm executor is not a boundary (DV-164) > app code reaches the host's process, secrets, files, network and other processes [538.70ms]
+(pass) today: the vm executor is not a boundary (DV-164) > a synchronous loop is never interrupted (DV-208) [4015.46ms]
+(fail) sandboxed process (confine) > every escape is blocked [204.49ms]
+(pass) sandboxed process (confine) > an infinite loop is killed at the user timeout and the deployment recovers [1151.04ms]
+(skip) sandboxed process (confine) > an allocating loop is stopped at the memory cap, reported, and the host survives
+(pass) sandboxed process (confine) > the host refuses ops a function's kind does not allow, whatever the child sends [573.32ms]
+(pass) sandboxed process (confine) > results match the vm executor [156.73ms]
+(pass) fixes (confine) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [2145.95ms]
+(pass) fixes (confine) > a pool of one-call processes: a timeout fails only the guilty call [1157.05ms]
+(pass) fixes (confine) > batched ops give the same results [115.18ms]
+ 8 pass
+ 1 fail
+== confine, sabotage cgroup
+(pass) today: the vm executor is not a boundary (DV-164) > app code reaches the host's process, secrets, files, network and other processes [484.29ms]
+(pass) today: the vm executor is not a boundary (DV-164) > a synchronous loop is never interrupted (DV-208) [4018.95ms]
+(fail) sandboxed process (confine) > every escape is blocked [273.46ms]
+(pass) sandboxed process (confine) > an infinite loop is killed at the user timeout and the deployment recovers [1179.75ms]
+(skip) sandboxed process (confine) > an allocating loop is stopped at the memory cap, reported, and the host survives
+(pass) sandboxed process (confine) > the host refuses ops a function's kind does not allow, whatever the child sends [573.97ms]
+(pass) sandboxed process (confine) > results match the vm executor [167.97ms]
+(pass) fixes (confine) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [2473.39ms]
+(pass) fixes (confine) > a pool of one-call processes: a timeout fails only the guilty call [1144.23ms]
+(pass) fixes (confine) > batched ops give the same results [109.74ms]
+ 8 pass
+ 1 fail
+== confine, sabotage timeout
+(pass) today: the vm executor is not a boundary (DV-164) > app code reaches the host's process, secrets, files, network and other processes [478.54ms]
+(pass) today: the vm executor is not a boundary (DV-164) > a synchronous loop is never interrupted (DV-208) [4013.46ms]
+(pass) sandboxed process (confine) > every escape is blocked [173.00ms]
+(fail) sandboxed process (confine) > an infinite loop is killed at the user timeout and the deployment recovers [20000.81ms]
+(skip) sandboxed process (confine) > an allocating loop is stopped at the memory cap, reported, and the host survives
+(pass) sandboxed process (confine) > the host refuses ops a function's kind does not allow, whatever the child sends [637.79ms]
+(pass) sandboxed process (confine) > results match the vm executor [281.59ms]
+(fail) fixes (confine) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [60001.20ms]
+(fail) fixes (confine) > a pool of one-call processes: a timeout fails only the guilty call [30003.24ms]
+(pass) fixes (confine) > batched ops give the same results [115.80ms]
+ 6 pass
+ 3 fail
+== escape probes
+{"mode":"vm","sabotage":"","process":"ESCAPED: process 8","env":"ESCAPED: s3cr3t-admin-key","hostEnviron":"ESCAPED: read the host's environ (171 bytes)","hostCmdline":"ESCAPED: read the host's command line: bun bench/process-sandbox/escapes-report","fsRead":"ESCAPED: s3cr3t-admin-key","fsWrite":"ESCAPED: wrote next to the secret","network":"ESCAPED: connected to 127.0.0.1:43779","signalHost":"ESCAPED: could signal pid 8","processes":"blocked: sees only 3 processes","forkBomb":"ESCAPED: spawned 100 processes"}
+{"mode":"bwrap","sabotage":"","process":"ESCAPED: process 2","env":"blocked: not set","hostEnviron":"blocked: pid 8 here is not the host","hostCmdline":"blocked: pid 8 here is the sandboxed process","fsRead":"blocked: ENOENT: no such file or directory, open '/root/bunvex-study-secret-8/admin-key.t","fsWrite":"blocked: ENOENT: no such file or directory, open '/root/bunvex-study-secret-8/admin-key.t","network":"blocked: connect ECONNREFUSED 127.0.0.1:43779","signalHost":"blocked: pid 8 here is a thread of the sandboxed process","processes":"blocked: sees only 2 processes","forkBomb":"blocked: stopped after 33 processes"}
+{"mode":"confine","sabotage":"","process":"ESCAPED: process 277","env":"blocked: not set","hostEnviron":"blocked: EACCES: permission denied, open '/proc/8/environ'","hostCmdline":"blocked: EACCES: permission denied, open '/proc/8/cmdline'","fsRead":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-8/admin-key.txt'","fsWrite":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-8/admin-key.txt.pwned","network":"blocked: connect ECONNREFUSED 127.0.0.1:43779","signalHost":"blocked: kill() failed: EPERM: Operation not permitted","processes":"blocked: EACCES: permission denied, scandir '/proc'","forkBomb":"blocked: stopped after 56 processes"}
+== escape probes, confine, sabotage seccomp
+{"mode":"confine","sabotage":"seccomp","process":"ESCAPED: process 16","env":"blocked: not set","hostEnviron":"blocked: EACCES: permission denied, open '/proc/8/environ'","hostCmdline":"blocked: EACCES: permission denied, open '/proc/8/cmdline'","fsRead":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-8/admin-key.txt'","fsWrite":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-8/admin-key.txt.pwned","network":"blocked: connect EACCES 127.0.0.1:34915","signalHost":"blocked: kill() failed: EPERM: Operation not permitted","processes":"blocked: EACCES: permission denied, scandir '/proc'","forkBomb":"blocked: stopped after 56 processes"}
+== escape probes, confine, sabotage landlock
+{"mode":"confine","sabotage":"landlock","process":"ESCAPED: process 15","env":"blocked: not set","hostEnviron":"blocked: EACCES: permission denied, open '/proc/7/environ'","hostCmdline":"ESCAPED: read the host's command line: bun bench/process-sandbox/escapes-report","fsRead":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-7/admin-key.txt'","fsWrite":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-7/admin-key.txt.pwned","network":"blocked: connect ECONNREFUSED 127.0.0.1:41927","signalHost":"blocked: kill() failed: EPERM: Operation not permitted","processes":"blocked: sees only 4 processes","forkBomb":"blocked: stopped after 34 processes"}
+== escape probes, confine, sabotage seccomp,landlock
+{"mode":"confine","sabotage":"seccomp,landlock","process":"ESCAPED: process 16","env":"blocked: not set","hostEnviron":"blocked: EACCES: permission denied, open '/proc/8/environ'","hostCmdline":"ESCAPED: read the host's command line: bun bench/process-sandbox/escapes-report","fsRead":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-8/admin-key.txt'","fsWrite":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-8/admin-key.txt.pwned","network":"ESCAPED: connected to 127.0.0.1:41833","signalHost":"blocked: kill() failed: EPERM: Operation not permitted","processes":"blocked: sees only 4 processes","forkBomb":"blocked: stopped after 31 processes"}
+== escape probes, confine, sabotage uid
+{"mode":"confine","sabotage":"uid","process":"ESCAPED: process 16","env":"blocked: not set","hostEnviron":"blocked: EACCES: permission denied, open '/proc/8/environ'","hostCmdline":"blocked: EACCES: permission denied, open '/proc/8/cmdline'","fsRead":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-8/admin-key.txt'","fsWrite":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-8/admin-key.txt.pwned","network":"blocked: connect ECONNREFUSED 127.0.0.1:34403","signalHost":"ESCAPED: could signal pid 8","processes":"blocked: EACCES: permission denied, scandir '/proc'","forkBomb":"ESCAPED: spawned 100 processes"}
+== escape probes, confine, sabotage fs
+{"mode":"confine","sabotage":"fs","process":"ESCAPED: process 16","env":"blocked: not set","hostEnviron":"blocked: EACCES: permission denied, open '/proc/8/environ'","hostCmdline":"ESCAPED: read the host's command line: bun bench/process-sandbox/escapes-report","fsRead":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-8/admin-key.txt'","fsWrite":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-8/admin-key.txt.pwned","network":"blocked: connect ECONNREFUSED 127.0.0.1:39245","signalHost":"blocked: kill() failed: EPERM: Operation not permitted","processes":"blocked: sees only 4 processes","forkBomb":"blocked: stopped after 32 processes"}
+== escape probes, confine, sabotage env
+{"mode":"confine","sabotage":"env","process":"ESCAPED: process 16","env":"ESCAPED: s3cr3t-admin-key","hostEnviron":"blocked: EACCES: permission denied, open '/proc/8/environ'","hostCmdline":"blocked: EACCES: permission denied, open '/proc/8/cmdline'","fsRead":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-8/admin-key.txt'","fsWrite":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-8/admin-key.txt.pwned","network":"blocked: connect ECONNREFUSED 127.0.0.1:37721","signalHost":"blocked: kill() failed: EPERM: Operation not permitted","processes":"blocked: EACCES: permission denied, scandir '/proc'","forkBomb":"blocked: stopped after 56 processes"}
+== escape probes, confine, sabotage cgroup
+{"mode":"confine","sabotage":"cgroup","process":"ESCAPED: process 16","env":"blocked: not set","hostEnviron":"blocked: EACCES: permission denied, open '/proc/8/environ'","hostCmdline":"blocked: EACCES: permission denied, open '/proc/8/cmdline'","fsRead":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-8/admin-key.txt'","fsWrite":"blocked: EACCES: permission denied, open '/root/bunvex-study-secret-8/admin-key.txt.pwned","network":"blocked: connect ECONNREFUSED 127.0.0.1:45747","signalHost":"blocked: kill() failed: EPERM: Operation not permitted","processes":"blocked: EACCES: permission denied, scandir '/proc'","forkBomb":"ESCAPED: spawned 100 processes"}

@@ -1,0 +1,3 @@
+{"phase":"density","n":10,"allReadyMs":222.4,"spawnToReadyMs":{"min":88.4,"max":199.3},"memAvailableDropMiB":68,"perChildMiB":6.8,"perChildPssMiB":6.1,"perChildCgroupMiB":5.17,"childrenPerGiB":150}
+{"phase":"density","n":50,"allReadyMs":1010.1,"spawnToReadyMs":{"min":302.7,"max":824.5},"memAvailableDropMiB":292.2,"perChildMiB":5.84,"perChildPssMiB":4.58,"perChildCgroupMiB":5.15,"childrenPerGiB":175}
+{"phase":"density","n":100,"allReadyMs":2128.9,"spawnToReadyMs":{"min":378.4,"max":1647.6},"memAvailableDropMiB":547.5,"perChildMiB":5.48,"perChildPssMiB":4.38,"perChildCgroupMiB":5.17,"childrenPerGiB":187}
