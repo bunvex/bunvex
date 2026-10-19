@@ -1,7 +1,7 @@
 ## Platform features around the core (parity inventory)
 
 Scope: everything a self-hosted Convex deployment provides beyond the function/database API and client sync.
-Reference: Convex `convex-backend` at commit `4577b9031`, brought up to the release `precompiled-2026-10-07-d8bdde0` by [STUDY-137](../study/STUDY-137-convex-reference-2026-10-07.md). Paths are relative to that repo; `crates/x` means `crates/x/src/…`, and `npm/convex` means `npm-packages/convex/src`.
+Reference: Convex `convex-backend` at commit `4577b9031`, brought up to the release `precompiled-2026-10-10-72ce13c` by [STUDY-173](../study/STUDY-173-convex-reference-2026-10-10.md). Paths are relative to that repo; `crates/x` means `crates/x/src/…`, and `npm/convex` means `npm-packages/convex/src`.
 
 **Historical starting point** (where bunvex stood when this inventory was first written, 2026-09-29, from
 ARCHITECTURE.md and `packages/*`; kept for the record and long out of date: the rows below are the current status):
@@ -437,14 +437,14 @@ bunvex enforces most of these with Convex's values and messages. Matching them m
 
 ### Summary counts
 
-Recounted on 2026-10-12 from the rows' status column, as [the README](README.md)'s table.
+Recounted on 2026-10-19 from the rows' status column, as [the README](README.md)'s table.
 
 | Status | Count |
 |---|---|
-| done | 222 |
-| partial | 24 |
-| missing | 13 |
+| done | 230 |
+| partial | 21 |
+| missing | 12 |
 | n/a (cloud-only or a decided divergence) | 6 |
-| **total** | **265** |
+| **total** | **269** |
 
 The gaps, ranked by what an app would notice, are in [the README](README.md#gaps-by-impact).
