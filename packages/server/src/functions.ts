@@ -2013,9 +2013,13 @@ export class Functions {
    * syscalls: a query's has no request metadata, an action's no transaction metrics nor snapshot.
    */
   private meta(f: FunctionDef, db: Tx | null, caller: Caller | undefined) {
-    const key = f === HTTP_ACTION ? "http:default" : (this.names.get(f) ?? "");
+    // A component's function is registered under its component's id: its own name is the part after it.
+    const registered = f === HTTP_ACTION ? "http:default" : (this.names.get(f) ?? "");
+    const key = splitComponentFunctionName(registered)?.name ?? registered;
     const name = key.endsWith(":default") ? key.slice(0, -":default".length) : key;
-    const getFunctionMetadata = async () => ({ name, componentPath: "", type: f.kind, visibility: f.visibility });
+    // A component's function names its component's path (`a/b`), as Convex's `function_metadata`; the app's "".
+    const componentPath = this.componentOf.get(f)?.path ?? "";
+    const getFunctionMetadata = async () => ({ name, componentPath, type: f.kind, visibility: f.visibility });
     // Self-hosted Convex: the instance name, no region, the smallest class.
     const getDeploymentMetadata = async () => ({ name: this.engine.instanceName, region: null, class: "s16" });
     const request = (): CallRequest => db?.request ?? caller?.request ?? REQUESTLESS();
