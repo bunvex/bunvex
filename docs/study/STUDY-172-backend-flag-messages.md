@@ -177,8 +177,8 @@ None new. What still differs is decided elsewhere and follows from it:
   requires `--instance-name`. Run through clap's rules, that relation puts `--instance-secret` before
   `--instance-name` in the usage line of a missing secret.
 - DV-525: the secret may come from `INSTANCE_SECRET`, as clap's `env =` would take it.
-- Found, not changed here (§6): Convex's secret check takes a `0x` / `0X` prefix (`const_hex::decode`; the
-  oracle accepts `0x<64 hex>`), bunvex's refuses it ("Couldn't hexdecode key").
+- Found, not changed in that PR (§6 Q1): Convex's secret check takes a `0x` / `0X` prefix (`const_hex::decode`;
+  the oracle accepts `0x<64 hex>`). Matched in a follow-up (§7).
 - Logging: Convex's `keygen` logs a failed key as two `ERROR` lines before `Error: …`, and the backend logs
   `INFO` lines on stdout before its runtime errors; bunvex prints the `Error:` line only.
 
@@ -203,8 +203,93 @@ None new. What still differs is decided elsewhere and follows from it:
 
 ## 6. Open questions
 
-- **Q1 (for a follow-up, not this PR):** a `0x`-prefixed instance secret. Convex's `DeploymentSecret::try_from`
+- **Q1 (resolved, §7; owner, 2026-10-19: match Convex):** a `0x`-prefixed instance secret. Convex's `DeploymentSecret::try_from`
   decodes with `const_hex::decode`, which drops a leading `0x` or `0X`: the oracle issues an admin key for
   `--instance-secret 0x<64 hex>` (and refuses `0x0x…`). bunvex refuses it. Matching it means reading the prefix
   in `instanceSecretError` and in core's `instanceSecretBytes` (and the engine's other uses of the secret's
   text), so it is a change of its own.
+
+## 7. Follow-up: a `0x`-prefixed instance secret (Q1)
+
+The owner approved matching Convex on 2026-10-19. Convex source read at `d8bdde0` and again at `72ce13c` (the
+paths below are the same at both); oracles `precompiled-2026-10-07-d8bdde0` (sha256 `4958145b…d4450d9b`) and
+`precompiled-2026-10-10-72ce13c` (sha256 `ddcb9772…9bd20db6`, the one `packages/differential` pins now). The
+two binaries answered every case below the same way.
+
+### 7.1 How Convex reads the secret
+
+- `crates/keybroker/src/secret.rs` L17–25: `Secret::try_from(&str)` is `const_hex::decode`, then exactly 32
+  bytes ("Couldn't hexdecode key", "Hex-decoded key was N bytes, not 32"). The `Secret` keeps the 32 bytes
+  only; its `Display` (L52–54) writes them back as lowercase hex without a prefix. The backend's start
+  (`local_backend/src/config.rs` L244–251), `keygen admin-key` (`local_backend/src/main.rs` L120–126) and the
+  `generate_key` tool (`keybroker/src/bin/generate_key.rs` L42) all go through it.
+- `const_hex::decode` (const-hex 1.19.1, Convex's `Cargo.lock` at both commits, `src/lib.rs` L523–545 and
+  `strip_prefix` L702–707): an odd length is refused first, then one leading `0x` or `0X` is dropped, then the
+  rest must be hex digits of either case. So `0x0x…` is refused (the second `x` is not hex), `0x` alone is 0
+  bytes, `0x` + 63 digits is an odd length.
+- Everything is derived from the 32 bytes, never from the text: `KeyBroker::new` (`keybroker/src/broker.rs`
+  L915–947) builds the legacy encryptor from `secret.as_bytes()` (`legacy_encryptor.rs` L13–18) and every
+  purpose's encryptor (admin keys, action callbacks, cursors, data sync, export downloads, journals, store
+  files) with `derive_from_secret`, KBKDF over `secret.as_bytes()` (`encryptor.rs` L57–69). The text is
+  neither stored nor hashed. So any spelling of the same bytes (`0x`, `0X`, upper or lower case) is the same
+  secret.
+
+### 7.2 Captured from the oracle
+
+`keygen admin-key --instance-name n --instance-secret <s>` (a key is `n|01…`, random each time):
+
+```
+<64 hex>                  a key, exit 0
+0x<64 hex>, 0X<64 hex>    a key, exit 0
+0x<mixed-case 64 hex>     a key, exit 0
+0x0x<64 hex>              Error: Couldn't hexdecode key, exit 1
+x<64 hex>                 Error: Couldn't hexdecode key, exit 1
+0x<65 hex>, 0x<63 hex>    Error: Couldn't hexdecode key, exit 1
+0x                        Error: Hex-decoded key was 0 bytes, not 32, exit 1
+0xab                      Error: Hex-decoded key was 1 bytes, not 32, exit 1
+```
+
+The backend started with `0x0x<64 hex>`, `0x` or `0x<65 hex>` exits 1 with the same lines. Started (with
+`--disable-beacon`) on one store under `0x<64 hex>`, then `<64 hex>`, then `0X<64 hex>`, each time
+`/api/check_admin_key` answered 200 to the keys `keygen` issued for all three spellings, and 401
+`BadAdminKey` to another secret's key. Keys are interchangeable across spellings because the bytes are the same.
+
+### 7.3 What bunvex changes
+
+- `server/src/local-backend.ts` `instanceSecretError` checks the secret as `const_hex::decode` does: one
+  `0x` / `0X` dropped, then hex of an even length, then 32 bytes. It covers `--instance-secret`,
+  `INSTANCE_SECRET` (DV-525) and `keygen admin-key`.
+- `core/src/kbkdf.ts` `instanceSecretBytes` reads `0x`/`0X` + 64 hex digits as those 32 bytes. Every admin key
+  (`adminKeyCipherKey`, the server's `derivedKey("admin key")`, `bunvex admin-key`), cursor and data-sync key
+  goes through it.
+- The engine keeps its secret in one spelling (`canonicalInstanceSecret`: a hex secret as its 64 lowercase
+  digits without the prefix, as Convex's `Display` writes it). `secretKey(purpose)` hashes the secret's text
+  (the storage, export and import tokens), so without that step a `0x` or uppercase spelling would give other
+  tokens. With it, they don't, and an uppercase secret now derives the same tokens as its lowercase spelling.
+  Any other string (a library caller's secret that is not hex) is kept as it is.
+
+There is nothing to measure: the secret is read once per start.
+
+### 7.4 Divergences
+
+None. DV-526 stays unused.
+
+### 7.5 Tests
+
+- `core/test/instance-secret.test.ts`: every spelling gives the same bytes and canonical text. Non-hex strings
+  (`0x0x…`, `0x` + 66 digits, `0x`) keep their own. An engine restarted on one store under each spelling
+  derives the same `secretKey` and `derivedKey` and reads the first one's cursor. `0x0x…` does neither.
+- `server/test/local-backend.test.ts`: the §7.2 messages without the oracle, by flag and by `INSTANCE_SECRET`.
+  Keys from `keygen` under four spellings (one through the variable) check out with the bare secret's cipher
+  and on a backend started on one store under `0x`, bare and `0X` + uppercase in turn. Another secret's key
+  gets 401.
+- `differential/test/backend-flags.test.ts` (oracle): the refusals (`0x0x…`, `0x`, `0Xab`, `0x` + 65 digits,
+  `x…`) at the start and in `keygen`, compared, plus `keygen`'s exit 0 for `0x` and `0X` + uppercase.
+- `differential/test/instance-secret-0x.test.ts` (oracle): Convex's backend is started, and Convex's CLI
+  deploys, under `0x<hex>`. bunvex's is started, and bunvex's CLI deploys, under `0X<HEX>` through
+  `INSTANCE_SECRET`. Each accepts the keys both binaries' `keygen` issued under four spellings, and refuses
+  another secret's.
+- **Sabotage** (each restored, `git diff` clean after; failures in core / server / oracle-flags / oracle-0x):
+  the check drops no prefix (0 / 2 / 4 / 1); it drops every `0x`, so `0x0x…` passes (0 / 1 / 2 / 0); it drops
+  a lowercase `0x` only (0 / 2 / 2 / 1); the bytes ignore the prefix (1 / 1 / 0 / 1); the engine keeps the raw
+  text (1 / 0 / 0 / 0); the canonical text keeps the case (1 / 0 / 0 / 0).
