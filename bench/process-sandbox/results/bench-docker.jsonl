@@ -1,0 +1,135 @@
+Overriding MAX_BYTES_WRITTEN_PER_SECOND to 9007199254740991 from environment
+Overriding MAX_ROWS_WRITTEN_PER_SECOND to 9007199254740991 from environment
+{"where":"host","mode":"vm","phase":"load","spawnToReadyMs":null,"hostRssDeltaMiB":30.875}
+{"where":"host","mode":"vm","phase":"latency","fn":"empty query","unit":"us","n":3000,"mean":23.986,"p50":16.55,"p99":81.822}
+{"where":"host","mode":"vm","phase":"latency","fn":"1 x db.get","unit":"us","n":3000,"mean":50.293,"p50":37.651,"p99":159.985}
+{"where":"host","mode":"vm","phase":"latency","fn":"10 x db.get","unit":"us","n":3000,"mean":153.566,"p50":140.205,"p99":299.408}
+{"where":"host","mode":"vm","phase":"latency","fn":"100 x db.get","unit":"us","n":3000,"mean":1209.303,"p50":1151.163,"p99":3871.718}
+{"where":"host","mode":"vm","phase":"latency","fn":"page of 1","unit":"us","n":3000,"mean":68.048,"p50":48.113,"p99":165.524}
+{"where":"host","mode":"vm","phase":"latency","fn":"page of 10","unit":"us","n":3000,"mean":85.422,"p50":72.462,"p99":250.428}
+{"where":"host","mode":"vm","phase":"latency","fn":"page of 100","unit":"us","n":3000,"mean":351.486,"p50":351.099,"p99":554.005}
+{"where":"host","mode":"vm","phase":"latency","fn":"insert mutation","unit":"us","n":3000,"mean":96.271,"p50":75.971,"p99":182.365}
+{"where":"host","mode":"vm","phase":"latency","fn":"increment mutation","unit":"us","n":3000,"mean":132.016,"p50":110.012,"p99":277.748}
+{"where":"host","mode":"vm","phase":"throughput","fn":"listByTenant","concurrency":1,"perSec":4097,"unit":"ms","mean":0.244,"p50":0.236,"p99":0.41,"hostRssMiB":535.844}
+{"where":"host","mode":"vm","phase":"throughput","fn":"listByTenant","concurrency":8,"perSec":4200,"unit":"ms","mean":1.905,"p50":1.907,"p99":3.195,"hostRssMiB":621.957}
+{"where":"host","mode":"vm","phase":"throughput","fn":"listByTenant","concurrency":32,"perSec":4262,"unit":"ms","mean":7.511,"p50":7.212,"p99":16.688,"hostRssMiB":623.742}
+{"where":"host","mode":"vm","phase":"throughput","fn":"listByTenant","concurrency":64,"perSec":3984,"unit":"ms","mean":16.087,"p50":15.939,"p99":32.381,"hostRssMiB":622.121}
+{"where":"host","mode":"vm","phase":"throughput","fn":"insertItem","concurrency":1,"perSec":10209,"unit":"ms","mean":0.098,"p50":0.076,"p99":0.286,"hostRssMiB":627.684}
+{"where":"host","mode":"vm","phase":"throughput","fn":"insertItem","concurrency":8,"perSec":9003,"unit":"ms","mean":0.888,"p50":0.584,"p99":7.748,"hostRssMiB":815.137}
+{"where":"host","mode":"vm","phase":"throughput","fn":"insertItem","concurrency":32,"perSec":10189,"unit":"ms","mean":3.141,"p50":2.251,"p99":20.106,"hostRssMiB":977.566}
+{"where":"host","mode":"vm","phase":"throughput","fn":"insertItem","concurrency":64,"perSec":10074,"unit":"ms","mean":6.354,"p50":4.757,"p99":28.303,"hostRssMiB":1294.848}
+{"where":"host","mode":"vm","phase":"push","unit":"ms","n":20,"note":"CodeVersion.load of the bundled module","mean":5.715,"p50":4.942,"p99":29.021}
+Overriding MAX_BYTES_WRITTEN_PER_SECOND to 9007199254740991 from environment
+Overriding MAX_ROWS_WRITTEN_PER_SECOND to 9007199254740991 from environment
+{"where":"host","mode":"bwrap","phase":"load","spawnToReadyMs":52.530677,"hostRssDeltaMiB":24.223}
+{"where":"host","mode":"bwrap","phase":"memory-idle","rssMiB":38.391,"pssMiB":20.499,"cgroupMiB":8.293,"pids":[49871,49872,49873],"hostRssMiB":105.879}
+{"where":"host","mode":"bwrap","phase":"latency","fn":"empty query","unit":"us","n":3000,"mean":127.29,"p50":77.282,"p99":792.632}
+{"where":"host","mode":"bwrap","phase":"latency","fn":"1 x db.get","unit":"us","n":3000,"mean":381.975,"p50":222.977,"p99":1974.446}
+{"where":"host","mode":"bwrap","phase":"latency","fn":"10 x db.get","unit":"us","n":3000,"mean":1754.54,"p50":1266.895,"p99":5677.389}
+{"where":"host","mode":"bwrap","phase":"latency","fn":"100 x db.get","unit":"us","n":3000,"mean":18846.751,"p50":18292.602,"p99":41881.792}
+{"where":"host","mode":"bwrap","phase":"latency","fn":"page of 1","unit":"us","n":3000,"mean":404.446,"p50":274.157,"p99":1648.586}
+{"where":"host","mode":"bwrap","phase":"latency","fn":"page of 10","unit":"us","n":3000,"mean":424.337,"p50":291.377,"p99":1958.955}
+{"where":"host","mode":"bwrap","phase":"latency","fn":"page of 100","unit":"us","n":3000,"mean":1002.775,"p50":899.374,"p99":2964.553}
+{"where":"host","mode":"bwrap","phase":"latency","fn":"insert mutation","unit":"us","n":3000,"mean":272.988,"p50":202.275,"p99":1295.566}
+{"where":"host","mode":"bwrap","phase":"latency","fn":"increment mutation","unit":"us","n":3000,"mean":579.563,"p50":383.881,"p99":2135.739}
+{"where":"host","mode":"bwrap","phase":"throughput","fn":"listByTenant","concurrency":1,"perSec":1211,"unit":"ms","mean":0.825,"p50":0.752,"p99":2.662,"childPeak":{"rssMiB":49.379,"pssMiB":30.591,"cgroupMiB":17.563},"hostRssMiB":382.992}
+{"where":"host","mode":"bwrap","phase":"throughput","fn":"listByTenant","concurrency":8,"perSec":2882,"unit":"ms","mean":2.776,"p50":2.397,"p99":8.424,"childPeak":{"rssMiB":56.949,"pssMiB":38.161,"cgroupMiB":25.379},"hostRssMiB":607}
+{"where":"host","mode":"bwrap","phase":"throughput","fn":"listByTenant","concurrency":32,"perSec":2770,"unit":"ms","mean":11.56,"p50":10.722,"p99":26.467,"childPeak":{"rssMiB":57.434,"pssMiB":38.646,"cgroupMiB":25.867},"hostRssMiB":509.203}
+{"where":"host","mode":"bwrap","phase":"throughput","fn":"listByTenant","concurrency":64,"perSec":2718,"unit":"ms","mean":23.598,"p50":22.336,"p99":42.652,"childPeak":{"rssMiB":58.273,"pssMiB":39.485,"cgroupMiB":26.703},"hostRssMiB":546.602}
+{"where":"host","mode":"bwrap","phase":"throughput","fn":"insertItem","concurrency":1,"perSec":2117,"unit":"ms","mean":0.472,"p50":0.295,"p99":2.4,"childPeak":{"rssMiB":50.449,"pssMiB":31.567,"cgroupMiB":18.672},"hostRssMiB":407.711}
+{"where":"host","mode":"bwrap","phase":"throughput","fn":"insertItem","concurrency":8,"perSec":3025,"unit":"ms","mean":2.644,"p50":1.679,"p99":14.482,"childPeak":{"rssMiB":50.219,"pssMiB":31.337,"cgroupMiB":18.441},"hostRssMiB":457.613}
+{"where":"host","mode":"bwrap","phase":"throughput","fn":"insertItem","concurrency":32,"perSec":5149,"unit":"ms","mean":6.216,"p50":5.023,"p99":29.912,"childPeak":{"rssMiB":55.938,"pssMiB":37.056,"cgroupMiB":24.137},"hostRssMiB":596.668}
+{"where":"host","mode":"bwrap","phase":"throughput","fn":"insertItem","concurrency":64,"perSec":6558,"unit":"ms","mean":9.781,"p50":7.965,"p99":31.632,"childPeak":{"rssMiB":51.078,"pssMiB":32.196,"cgroupMiB":19.281},"hostRssMiB":807.93}
+{"where":"host","mode":"bwrap","phase":"memory-after-load","rssMiB":48.434,"pssMiB":29.552,"cgroupMiB":16.621,"pids":[49871,49872,49873]}
+{"where":"host","mode":"bwrap","phase":"push","unit":"ms","n":20,"mean":37.737,"p50":36.687,"p99":44.624}
+{"where":"host","mode":"bwrap","phase":"first-call-after-push","unit":"ms","ms":6.955}
+{"where":"host","mode":"bwrap","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1005.413,"killToExitMs":1.28,"killToReadyMs":47.8,"nextCallMs":48.837}
+{"where":"host","mode":"bwrap","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1005.86,"killToExitMs":0.81,"killToReadyMs":50.851,"nextCallMs":51.362}
+{"where":"host","mode":"bwrap","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1000.508,"killToExitMs":0.834,"killToReadyMs":39.725,"nextCallMs":41.324}
+{"where":"host","mode":"bwrap","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1000.511,"killToExitMs":0.74,"killToReadyMs":41.389,"nextCallMs":43.042}
+{"where":"host","mode":"bwrap","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1000.588,"killToExitMs":1.499,"killToReadyMs":43.013,"nextCallMs":44.871}
+{"where":"host","mode":"bwrap","phase":"kill-oom","error":"JavaScript execution ran out of memory (maximum memory usage: 128 MB)","failedAfterMs":132.756,"nextCallOk":true,"nextCallMs":39.239}
+{"where":"host","mode":"bwrap","phase":"kill-oom","error":"JavaScript execution ran out of memory (maximum memory usage: 128 MB)","failedAfterMs":151.297,"nextCallOk":true,"nextCallMs":30.519}
+{"where":"host","mode":"bwrap","phase":"kill-oom","error":"JavaScript execution ran out of memory (maximum memory usage: 128 MB)","failedAfterMs":120.78,"nextCallOk":true,"nextCallMs":35.38}
+Overriding MAX_BYTES_WRITTEN_PER_SECOND to 9007199254740991 from environment
+Overriding MAX_ROWS_WRITTEN_PER_SECOND to 9007199254740991 from environment
+{"where":"docker","mode":"vm","phase":"load","spawnToReadyMs":null,"hostRssDeltaMiB":29.262}
+{"where":"docker","mode":"vm","phase":"latency","fn":"empty query","unit":"us","n":3000,"mean":29.627,"p50":18.51,"p99":104.844}
+{"where":"docker","mode":"vm","phase":"latency","fn":"1 x db.get","unit":"us","n":3000,"mean":40.353,"p50":29.07,"p99":123.223}
+{"where":"docker","mode":"vm","phase":"latency","fn":"10 x db.get","unit":"us","n":3000,"mean":158.868,"p50":144.294,"p99":337.75}
+{"where":"docker","mode":"vm","phase":"latency","fn":"100 x db.get","unit":"us","n":3000,"mean":1183.306,"p50":1130.623,"p99":3890.488}
+{"where":"docker","mode":"vm","phase":"latency","fn":"page of 1","unit":"us","n":3000,"mean":65.301,"p50":49.351,"p99":267.407}
+{"where":"docker","mode":"vm","phase":"latency","fn":"page of 10","unit":"us","n":3000,"mean":88.72,"p50":79.883,"p99":198.865}
+{"where":"docker","mode":"vm","phase":"latency","fn":"page of 100","unit":"us","n":3000,"mean":360.696,"p50":348.589,"p99":1355.049}
+{"where":"docker","mode":"vm","phase":"latency","fn":"insert mutation","unit":"us","n":3000,"mean":104.443,"p50":83.652,"p99":213.976}
+{"where":"docker","mode":"vm","phase":"latency","fn":"increment mutation","unit":"us","n":3000,"mean":117.213,"p50":103.712,"p99":224.066}
+{"where":"docker","mode":"vm","phase":"throughput","fn":"listByTenant","concurrency":1,"perSec":4541,"unit":"ms","mean":0.22,"p50":0.216,"p99":0.356,"hostRssMiB":542.766}
+{"where":"docker","mode":"vm","phase":"throughput","fn":"listByTenant","concurrency":8,"perSec":4256,"unit":"ms","mean":1.88,"p50":1.909,"p99":3.175,"hostRssMiB":628.883}
+{"where":"docker","mode":"vm","phase":"throughput","fn":"listByTenant","concurrency":32,"perSec":4310,"unit":"ms","mean":7.428,"p50":7.195,"p99":15.985,"hostRssMiB":626.379}
+{"where":"docker","mode":"vm","phase":"throughput","fn":"listByTenant","concurrency":64,"perSec":4141,"unit":"ms","mean":15.473,"p50":15.314,"p99":28.809,"hostRssMiB":618.777}
+{"where":"docker","mode":"vm","phase":"throughput","fn":"insertItem","concurrency":1,"perSec":10217,"unit":"ms","mean":0.098,"p50":0.074,"p99":0.3,"hostRssMiB":566.563}
+{"where":"docker","mode":"vm","phase":"throughput","fn":"insertItem","concurrency":8,"perSec":10646,"unit":"ms","mean":0.751,"p50":0.554,"p99":7.088,"hostRssMiB":809.363}
+{"where":"docker","mode":"vm","phase":"throughput","fn":"insertItem","concurrency":32,"perSec":8550,"unit":"ms","mean":3.743,"p50":2.645,"p99":22.458,"hostRssMiB":999.906}
+{"where":"docker","mode":"vm","phase":"throughput","fn":"insertItem","concurrency":64,"perSec":10445,"unit":"ms","mean":6.174,"p50":4.949,"p99":33.311,"hostRssMiB":1259.641}
+{"where":"docker","mode":"vm","phase":"push","unit":"ms","n":20,"note":"CodeVersion.load of the bundled module","mean":2.613,"p50":1.801,"p99":11.992}
+Overriding MAX_BYTES_WRITTEN_PER_SECOND to 9007199254740991 from environment
+Overriding MAX_ROWS_WRITTEN_PER_SECOND to 9007199254740991 from environment
+{"where":"docker","mode":"bwrap","phase":"load","spawnToReadyMs":60.849943999999994,"hostRssDeltaMiB":21.867}
+{"where":"docker","mode":"bwrap","phase":"memory-idle","rssMiB":40.289,"pssMiB":24.302,"cgroupMiB":10.684,"pids":[15,16,17],"hostRssMiB":111.793}
+{"where":"docker","mode":"bwrap","phase":"latency","fn":"empty query","unit":"us","n":3000,"mean":123.393,"p50":67.922,"p99":989.778}
+{"where":"docker","mode":"bwrap","phase":"latency","fn":"1 x db.get","unit":"us","n":3000,"mean":412.606,"p50":273.027,"p99":2008.106}
+{"where":"docker","mode":"bwrap","phase":"latency","fn":"10 x db.get","unit":"us","n":3000,"mean":1907.775,"p50":1551.523,"p99":5503.594}
+{"where":"docker","mode":"bwrap","phase":"latency","fn":"100 x db.get","unit":"us","n":3000,"mean":14096.082,"p50":11516.543,"p99":38166.759}
+{"where":"docker","mode":"bwrap","phase":"latency","fn":"page of 1","unit":"us","n":3000,"mean":362.114,"p50":246.456,"p99":1864.802}
+{"where":"docker","mode":"bwrap","phase":"latency","fn":"page of 10","unit":"us","n":3000,"mean":306.851,"p50":223.056,"p99":1554.273}
+{"where":"docker","mode":"bwrap","phase":"latency","fn":"page of 100","unit":"us","n":3000,"mean":1016.773,"p50":923.926,"p99":3275.182}
+{"where":"docker","mode":"bwrap","phase":"latency","fn":"insert mutation","unit":"us","n":3000,"mean":344.724,"p50":240.996,"p99":2061.007}
+{"where":"docker","mode":"bwrap","phase":"latency","fn":"increment mutation","unit":"us","n":3000,"mean":609.425,"p50":432.152,"p99":2446.129}
+{"where":"docker","mode":"bwrap","phase":"throughput","fn":"listByTenant","concurrency":1,"perSec":1403,"unit":"ms","mean":0.713,"p50":0.588,"p99":2.315,"childPeak":{"rssMiB":47.488,"pssMiB":30.649,"cgroupMiB":16.348},"hostRssMiB":361.227}
+{"where":"docker","mode":"bwrap","phase":"throughput","fn":"listByTenant","concurrency":8,"perSec":2973,"unit":"ms","mean":2.691,"p50":2.388,"p99":7.676,"childPeak":{"rssMiB":56.629,"pssMiB":39.79,"cgroupMiB":25.492},"hostRssMiB":461.074}
+{"where":"docker","mode":"bwrap","phase":"throughput","fn":"listByTenant","concurrency":32,"perSec":2920,"unit":"ms","mean":10.971,"p50":10.136,"p99":24.471,"childPeak":{"rssMiB":61.574,"pssMiB":44.735,"cgroupMiB":30.406},"hostRssMiB":537.867}
+{"where":"docker","mode":"bwrap","phase":"throughput","fn":"listByTenant","concurrency":64,"perSec":2713,"unit":"ms","mean":23.649,"p50":22.284,"p99":49.956,"childPeak":{"rssMiB":57.996,"pssMiB":41.126,"cgroupMiB":26.879},"hostRssMiB":593.973}
+{"where":"docker","mode":"bwrap","phase":"throughput","fn":"insertItem","concurrency":1,"perSec":2271,"unit":"ms","mean":0.44,"p50":0.314,"p99":1.859,"childPeak":{"rssMiB":49.832,"pssMiB":32.962,"cgroupMiB":18.656},"hostRssMiB":452.91}
+{"where":"docker","mode":"bwrap","phase":"throughput","fn":"insertItem","concurrency":8,"perSec":6316,"unit":"ms","mean":1.267,"p50":0.969,"p99":7.16,"childPeak":{"rssMiB":49.805,"pssMiB":32.841,"cgroupMiB":18.469},"hostRssMiB":593.352}
+{"where":"docker","mode":"bwrap","phase":"throughput","fn":"insertItem","concurrency":32,"perSec":7606,"unit":"ms","mean":4.21,"p50":3.201,"p99":16.632,"childPeak":{"rssMiB":49.422,"pssMiB":32.458,"cgroupMiB":18.098},"hostRssMiB":806.078}
+{"where":"docker","mode":"bwrap","phase":"throughput","fn":"insertItem","concurrency":64,"perSec":7036,"unit":"ms","mean":9.135,"p50":6.347,"p99":37.102,"childPeak":{"rssMiB":50.652,"pssMiB":33.688,"cgroupMiB":19.297},"hostRssMiB":1049.824}
+{"where":"docker","mode":"bwrap","phase":"memory-after-load","rssMiB":45.734,"pssMiB":28.771,"cgroupMiB":14.121,"pids":[15,16,17]}
+{"where":"docker","mode":"bwrap","phase":"push","unit":"ms","n":20,"mean":83.254,"p50":74.404,"p99":152.838}
+{"where":"docker","mode":"bwrap","phase":"first-call-after-push","unit":"ms","ms":6.141}
+{"where":"docker","mode":"bwrap","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1002.523,"killToExitMs":2.628,"killToReadyMs":57.838,"nextCallMs":62.791}
+{"where":"docker","mode":"bwrap","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1009.961,"killToExitMs":3.126,"killToReadyMs":44.768,"nextCallMs":44.281}
+{"where":"docker","mode":"bwrap","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1006.122,"killToExitMs":7.186,"killToReadyMs":53.086,"nextCallMs":55.005}
+{"where":"docker","mode":"bwrap","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1007.487,"killToExitMs":1.178,"killToReadyMs":45.165,"nextCallMs":46.949}
+{"where":"docker","mode":"bwrap","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1000.666,"killToExitMs":1.17,"killToReadyMs":50.049,"nextCallMs":51.329}
+{"where":"docker","mode":"bwrap","phase":"kill-oom","error":"JavaScript execution ran out of memory (maximum memory usage: 128 MB)","failedAfterMs":145.966,"nextCallOk":true,"nextCallMs":40.668}
+{"where":"docker","mode":"bwrap","phase":"kill-oom","error":"JavaScript execution ran out of memory (maximum memory usage: 128 MB)","failedAfterMs":142.808,"nextCallOk":true,"nextCallMs":38.513}
+{"where":"docker","mode":"bwrap","phase":"kill-oom","error":"JavaScript execution ran out of memory (maximum memory usage: 128 MB)","failedAfterMs":156.821,"nextCallOk":true,"nextCallMs":45.422}
+Overriding MAX_BYTES_WRITTEN_PER_SECOND to 9007199254740991 from environment
+Overriding MAX_ROWS_WRITTEN_PER_SECOND to 9007199254740991 from environment
+{"where":"docker","mode":"confine","phase":"load","spawnToReadyMs":48.99520199999998,"hostRssDeltaMiB":22.828}
+{"where":"docker","mode":"confine","phase":"memory-idle","rssMiB":0,"pssMiB":0,"cgroupMiB":null,"pids":[15],"hostRssMiB":111.602}
+{"where":"docker","mode":"confine","phase":"latency","fn":"empty query","unit":"us","n":3000,"mean":77.567,"p50":58.572,"p99":369.251}
+{"where":"docker","mode":"confine","phase":"latency","fn":"1 x db.get","unit":"us","n":3000,"mean":203.675,"p50":130.694,"p99":1203.874}
+{"where":"docker","mode":"confine","phase":"latency","fn":"10 x db.get","unit":"us","n":3000,"mean":1524.683,"p50":1086.111,"p99":4698.982}
+{"where":"docker","mode":"confine","phase":"latency","fn":"100 x db.get","unit":"us","n":3000,"mean":13091.202,"p50":10940.416,"p99":32450.169}
+{"where":"docker","mode":"confine","phase":"latency","fn":"page of 1","unit":"us","n":3000,"mean":549.247,"p50":530.485,"p99":2032.457}
+{"where":"docker","mode":"confine","phase":"latency","fn":"page of 10","unit":"us","n":3000,"mean":449.832,"p50":284.158,"p99":2005.876}
+{"where":"docker","mode":"confine","phase":"latency","fn":"page of 100","unit":"us","n":3000,"mean":1068.892,"p50":967.707,"p99":3112.457}
+{"where":"docker","mode":"confine","phase":"latency","fn":"insert mutation","unit":"us","n":3000,"mean":337.27,"p50":217.886,"p99":1526.413}
+{"where":"docker","mode":"confine","phase":"latency","fn":"increment mutation","unit":"us","n":3000,"mean":561.844,"p50":387.26,"p99":2274.204}
+{"where":"docker","mode":"confine","phase":"throughput","fn":"listByTenant","concurrency":1,"perSec":1425,"unit":"ms","mean":0.701,"p50":0.584,"p99":2.135,"childPeak":{"rssMiB":0,"pssMiB":0,"cgroupMiB":0},"hostRssMiB":405.309}
+{"where":"docker","mode":"confine","phase":"throughput","fn":"listByTenant","concurrency":8,"perSec":2823,"unit":"ms","mean":2.835,"p50":2.454,"p99":8.176,"childPeak":{"rssMiB":0,"pssMiB":0,"cgroupMiB":0},"hostRssMiB":596.941}
+{"where":"docker","mode":"confine","phase":"throughput","fn":"listByTenant","concurrency":32,"perSec":2965,"unit":"ms","mean":10.806,"p50":9.897,"p99":24.76,"childPeak":{"rssMiB":0,"pssMiB":0,"cgroupMiB":0},"hostRssMiB":525.113}
+{"where":"docker","mode":"confine","phase":"throughput","fn":"listByTenant","concurrency":64,"perSec":2750,"unit":"ms","mean":23.345,"p50":21.885,"p99":47.54,"childPeak":{"rssMiB":0,"pssMiB":0,"cgroupMiB":0},"hostRssMiB":583.293}
+{"where":"docker","mode":"confine","phase":"throughput","fn":"insertItem","concurrency":1,"perSec":2015,"unit":"ms","mean":0.496,"p50":0.424,"p99":1.883,"childPeak":{"rssMiB":0,"pssMiB":0,"cgroupMiB":0},"hostRssMiB":440.652}
+{"where":"docker","mode":"confine","phase":"throughput","fn":"insertItem","concurrency":8,"perSec":6278,"unit":"ms","mean":1.274,"p50":0.976,"p99":7.231,"childPeak":{"rssMiB":0,"pssMiB":0,"cgroupMiB":0},"hostRssMiB":671.043}
+{"where":"docker","mode":"confine","phase":"throughput","fn":"insertItem","concurrency":32,"perSec":7613,"unit":"ms","mean":4.203,"p50":3.271,"p99":16.454,"childPeak":{"rssMiB":0,"pssMiB":0,"cgroupMiB":0},"hostRssMiB":781.742}
+{"where":"docker","mode":"confine","phase":"throughput","fn":"insertItem","concurrency":64,"perSec":6266,"unit":"ms","mean":10.22,"p50":7.929,"p99":39.896,"childPeak":{"rssMiB":0,"pssMiB":0,"cgroupMiB":0},"hostRssMiB":865.746}
+{"where":"docker","mode":"confine","phase":"memory-after-load","rssMiB":0,"pssMiB":0,"cgroupMiB":null,"pids":[15]}
+{"where":"docker","mode":"confine","phase":"push","unit":"ms","n":20,"mean":24.469,"p50":25.139,"p99":26.646}
+{"where":"docker","mode":"confine","phase":"first-call-after-push","unit":"ms","ms":5.156}
+{"where":"docker","mode":"confine","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1003.319,"killToExitMs":3.585,"killToReadyMs":26.888,"nextCallMs":27.42}
+{"where":"docker","mode":"confine","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1001.329,"killToExitMs":2.338,"killToReadyMs":26.026,"nextCallMs":26.712}
+{"where":"docker","mode":"confine","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1003.247,"killToExitMs":3.015,"killToReadyMs":25.092,"nextCallMs":25.991}
+{"where":"docker","mode":"confine","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1001.038,"killToExitMs":2.438,"killToReadyMs":27.597,"nextCallMs":28.761}
+{"where":"docker","mode":"confine","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1001.606,"killToExitMs":3.621,"killToReadyMs":26.065,"nextCallMs":27.507}

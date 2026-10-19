@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { adminKeyCipherKey, checkAdminKey } from "../src/admin-keys.ts";
 import {
   localBackendDatabaseEnv,
   localBackendMain,
@@ -125,6 +126,84 @@ describe("bunvex-local-backend", () => {
     const bad = await run(["admin-key", "--instance-name", "n", "--instance-secret", "xyz"]);
     expect(bad.code).toBe(2);
     expect(bad.err).toBe(parseLocalBackendFlags(["--instance-secret", "xyz"]) as string);
+  });
+
+  test("the secret from INSTANCE_SECRET (DV-525): read without the flag, the flag winning, Convex's messages", () => {
+    const OTHER = "cd".repeat(32);
+    expect(parseLocalBackendFlags([], { INSTANCE_SECRET: SECRET })).toMatchObject({ instanceSecret: SECRET });
+    // clap's precedence for an `env =` argument: the flag, then the variable.
+    expect(parseLocalBackendFlags(["--instance-secret", OTHER], { INSTANCE_SECRET: SECRET })).toMatchObject({
+      instanceSecret: OTHER,
+    });
+    expect(parseLocalBackendFlags([`--instance-secret=${OTHER}`], { INSTANCE_SECRET: SECRET })).toMatchObject({
+      instanceSecret: OTHER,
+    });
+    // `--instance-name` requires a secret: the variable's counts.
+    expect(parseLocalBackendFlags(["--instance-name", "x"], { INSTANCE_SECRET: SECRET })).toMatchObject({
+      instanceName: "x",
+      instanceSecret: SECRET,
+    });
+    // Neither (an empty variable is none, as clap's): the messages without the variable.
+    for (const env of [{}, { INSTANCE_SECRET: "" }]) {
+      expect(parseLocalBackendFlags([], env)).toBe(
+        "--instance-secret is required. Generate one with `openssl rand -hex 32`",
+      );
+      expect(parseLocalBackendFlags(["--instance-name", "x"], env)).toBe(
+        "the following required arguments were not provided:\n  --instance-secret <INSTANCE_SECRET>",
+      );
+    }
+    // The variable's value is checked as the flag's.
+    expect(parseLocalBackendFlags([], { INSTANCE_SECRET: "abcd" })).toBe("Hex-decoded key was 2 bytes, not 32");
+    expect(parseLocalBackendFlags([], { INSTANCE_SECRET: "xyz" })).toBe("--instance-secret must be hex-encoded");
+    // Not read from the process unless given.
+    process.env.INSTANCE_SECRET = SECRET;
+    try {
+      expect(parseLocalBackendFlags([])).toBe(
+        "--instance-secret is required. Generate one with `openssl rand -hex 32`",
+      );
+    } finally {
+      delete process.env.INSTANCE_SECRET;
+    }
+  });
+
+  test("keygen admin-key reads INSTANCE_SECRET too, the flag winning (DV-525)", async () => {
+    const OTHER = "cd".repeat(32);
+    const keygen = async (args: string[], env: Record<string, string>) => {
+      const r = io();
+      const code = await localBackendMain(
+        ["keygen", "admin-key", "--instance-name", "n1", ...args],
+        { ...r.it, env },
+        "v",
+      );
+      return { code, key: r.out[0], err: r.err.join("\n") };
+    };
+    const byEnv = await keygen([], { INSTANCE_SECRET: SECRET });
+    expect(byEnv.code).toBe(0);
+    expect(checkAdminKey(byEnv.key!, "n1", adminKeyCipherKey(SECRET))).toBeTruthy();
+    const both = await keygen(["--instance-secret", OTHER], { INSTANCE_SECRET: SECRET });
+    expect(checkAdminKey(both.key!, "n1", adminKeyCipherKey(OTHER))).toBeTruthy();
+    expect(() => checkAdminKey(both.key!, "n1", adminKeyCipherKey(SECRET))).toThrow();
+    const none = await keygen([], { INSTANCE_SECRET: "" });
+    expect({ code: none.code, err: none.err }).toEqual({
+      code: 2,
+      err: "the following required arguments were not provided:\n  --instance-name <INSTANCE_NAME>\n  --instance-secret <INSTANCE_SECRET>",
+    });
+    expect((await keygen([], { INSTANCE_SECRET: "xyz" })).err).toBe("--instance-secret must be hex-encoded");
+  });
+
+  test("the program takes INSTANCE_SECRET from its environment and removes it there (DV-525)", async () => {
+    const r = io();
+    const env: Record<string, string | undefined> = { INSTANCE_SECRET: SECRET, OTHER: "kept" };
+    const args = ["--db", "postgres", "postgres://u@127.0.0.1:1"];
+    // Past the flags (the secret was found) to the start, which fails on the connection.
+    expect(await localBackendMain(args, { ...r.it, env }, "v1")).toBe(1);
+    expect(r.err).toEqual([expect.stringMatching(/^error: (?!--instance-secret)/)]);
+    // What the backend starts never inherits it.
+    expect(env).toEqual({ OTHER: "kept" });
+    const help = io();
+    await localBackendMain(["--help"], help.it, "v1");
+    // `bunvex dev` looks for the variable's name in the help to give the secret there (local-deployment.ts).
+    expect(help.out[0]).toContain("[env: INSTANCE_SECRET]");
   });
 
   test("a backend that cannot start exits 1 with the reason", async () => {

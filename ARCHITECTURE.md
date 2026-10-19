@@ -214,7 +214,7 @@ import { BunvexProvider, useQuery } from "@bunvex/react";
 
 // an external database: install its native driver and point at it
 //   bun add postgres
-//   bunvex-local-backend --db postgres postgres://…/<database> --instance-secret …
+//   INSTANCE_SECRET=… bunvex-local-backend --db postgres postgres://…/<database>
 // or, when embedding the engine in your own code:
 import { PostgresPersistence } from "@bunvex/persistence/postgres";
 ```
@@ -284,7 +284,8 @@ Recorded in ARCH-01 §6, to be settled in their own specs:
 1. ~~Types: code generation or type inference~~ — decided: code generation as Convex (STUDY-36, owner,
    2026-10-02).
 2. ~~Deploying functions~~ — decided: hot swap, a `vm` context per code version (STUDY-35, DV-164).
-3. Sandboxing functions — in-process `vm` contexts now, not a security boundary (DV-164); a real sandbox
-   is still open.
+3. Sandboxing functions — decided (owner, 2026-10-19; STUDY-168, AD-44): in-process `vm` contexts stay the
+   default, not a security boundary (DV-164); a sandboxed process per call is an opt-in executor
+   (`BUNVEX_FUNCTION_SANDBOX=process`), being built: the seam and its knobs first (STUDY-171).
 4. ~~Text and vector search: inside `core`, or a package of their own~~ — decided: a package of their own,
    `@bunvex/search` (the tokenizer, index and ranking), wired into transactions by `core` (owner, 2026-10-02).

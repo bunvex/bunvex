@@ -81,13 +81,12 @@ export async function deploy(dir: string, options: { env?: Record<string, string
       String(sitePort),
       "--instance-name",
       name,
-      "--instance-secret",
-      secret,
       "--local-storage",
       join(state, "storage"),
       join(state, "backend.sqlite3"),
     ],
-    { cwd: state, stdout: "ignore", stderr: "pipe" },
+    // The secret in the environment, as `bunvex dev` gives it (DV-525).
+    { cwd: state, env: { ...process.env, INSTANCE_SECRET: secret }, stdout: "ignore", stderr: "pipe" },
   );
   const clients: BunvexClient[] = [];
   const stop = async () => {
@@ -108,10 +107,9 @@ export async function deploy(dir: string, options: { env?: Record<string, string
       await Bun.sleep(100);
     }
     const adminKey = (
-      await run(
-        [process.execPath, BACKEND, "keygen", "admin-key", "--instance-name", name, "--instance-secret", secret],
-        state,
-      )
+      await run([process.execPath, BACKEND, "keygen", "admin-key", "--instance-name", name], state, {
+        INSTANCE_SECRET: secret,
+      })
     ).trim();
     // The deployment through `--env-file` alone, so the example's own `.env.local` (a `bun run dev` leaves
     // `BUNVEX_DEPLOYMENT` there) and the shell's variables never pick another one.

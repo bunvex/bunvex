@@ -78,7 +78,7 @@ Set these in the shell or in a `.env` file next to `docker-compose.yml`:
 | `S3_STORAGE_FILES_BUCKET`, `S3_STORAGE_MODULES_BUCKET`, `S3_STORAGE_EXPORTS_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `S3_ENDPOINT_URL`, `AWS_S3_FORCE_PATH_STYLE` | Keep files, pushed code and exports in S3 (each use case whose bucket is set). |
 | `S3_STORAGE_SEARCH_BUCKET`, `S3_STORAGE_SNAPSHOT_IMPORTS_BUCKET` | The search and vector index segments ([STUDY-111](../docs/study/STUDY-111-search-segments.md)) and uploaded snapshot imports in S3, as Convex's buckets of the same names. Setting any of the five buckets turns S3 on (DV-190); a use case without its bucket stays in the volume (`storage/search`, `storage/snapshot_imports`). |
 | `AWS_S3_DISABLE_SSE`, `AWS_S3_DISABLE_CHECKSUMS` | `true` for an S3-compatible store that refuses them: uploads ask for server-side encryption (`AES256`) and CRC32 part checksums by default, as Convex's. Only the exact value `true` turns one on. |
-| `INSTANCE_NAME`, `INSTANCE_SECRET` | The instance's name and secret (32 bytes, hex). By default, generated on the first start and kept in the volume. |
+| `INSTANCE_NAME`, `INSTANCE_SECRET` | The instance's name and secret (32 bytes, hex). By default, generated on the first start and kept in the volume. The backend reads the secret from its environment, never from its command line, which every user of the host can read (DV-525). |
 | `REDACT_LOGS_TO_CLIENT` | Keep functions' log lines and errors' details from clients. |
 | `DOCUMENT_RETENTION_DELAY` | How long old document versions are kept, in seconds (default here: 2 days). |
 | `DASHBOARD_PORT`, `BUNVEX_DEPLOYMENT_URL` | The dashboard's host port (default 6791) and the backend URL its sign-in page is filled in with (Convex's `NEXT_PUBLIC_DEPLOYMENT_URL`). `BUNVEX_ADMIN_KEY` on the `dashboard` service would fill in the key too (Convex's `NEXT_PUBLIC_ADMIN_KEY`): only on a machine nobody else reaches. |
@@ -100,6 +100,19 @@ proxy such as [Smokescreen](https://github.com/stripe/smokescreen), which refuse
 (`--deny-addresses`: `metadata` by default refuses link-local and cloud metadata addresses, `private` also
 loopback and private networks, `none` nothing, as Convex — DV-325;
 [STUDY-80](../docs/study/STUDY-80-outbound-requests.md)).
+
+**Where functions run (the function sandbox).** `BUNVEX_FUNCTION_SANDBOX` chooses the executor, and
+`--function-sandbox` on the command line wins over it (a bunvex addition, AD-44):
+- `vm` (the default): functions run in the backend's own process, in `node:vm` contexts. They get their own
+  globals, but this is not a security boundary: run only code you trust.
+- `process` (**coming**): each call in its own OS-sandboxed process, with a real timeout and a 96 MiB memory
+  cap per call (`ISOLATE_MAX_USER_HEAP_SIZE` + `ISOLATE_MAX_HEAP_EXTRA_SIZE`). `BUNVEX_FUNCTION_SANDBOX_ISOLATION`
+  (`auto`, `namespaces`, `landlock` or `none`) will pick its layers. Linux only; not on Windows. This release
+  refuses to start with it, saying it is not available yet
+  ([STUDY-168](../docs/study/STUDY-168-process-sandbox.md), [STUDY-171](../docs/study/STUDY-171-function-sandbox-seam.md)).
+
+A value outside these lists stops the backend at start. `bunvex dev` passes its environment to the local
+backend it starts, and never sets the variable itself.
 
 ## Observability and tuning
 
@@ -153,9 +166,13 @@ Convex's "running the binary directly" guide:
 
 ```sh
 export INSTANCE_SECRET=$(openssl rand -hex 32)
-./bunvex-local-backend keygen admin-key --instance-name bunvex-self-hosted --instance-secret "$INSTANCE_SECRET"
-./bunvex-local-backend --instance-name bunvex-self-hosted --instance-secret "$INSTANCE_SECRET"
+./bunvex-local-backend keygen admin-key --instance-name bunvex-self-hosted
+./bunvex-local-backend --instance-name bunvex-self-hosted
 ```
+
+Both read the secret from `INSTANCE_SECRET`. `--instance-secret <hex>` works too, and wins over the variable,
+but puts the secret on the command line, where any user of the machine reads it (`ps`, `/proc/<pid>/cmdline`);
+Convex's executable takes the flag only (DV-525).
 
 The database is `bunvex_local_backend.sqlite3` in the current directory; for Postgres,
 `--db postgres postgres://…` (without a database in the URL, the instance name's, `-` replaced by `_`). `--help` lists the other options (ports,

@@ -1,7 +1,8 @@
 # STUDY-156 — Components: the CLI's push and codegen (STUDY-152 step 6)
 
 - **Status:** decided (owner, 2026-10-19): Q-1 codegen offline from the validators (DV-532), Q-2 bunvex's
-  resolution conditions (DV-533), Q-3 no `legacyComponentApi` (DV-534), Q-4 `run --component` in step 6 (§5).
+  resolution conditions (DV-533), Q-3 no `legacyComponentApi` (DV-534), Q-4 `run --component` in step 6 (§5); DV-535
+  (a nested local component's import, found while building PR 2).
 - **Convex source read:** `d8bdde0`, the reference commit (docs/parity/upstream.md). Paths are relative to
   `npm-packages/convex/src/cli/`.
 - **bunvex source:** `main` after STUDY-155 (`b6bc9ecc`). Paths are relative to `packages/`.
@@ -335,7 +336,7 @@ bunvex's codegen stays offline (DV-173), and builds a component's types from its
     .ComponentApi<"<name>">`.
   - The spec is the package name the parent imported, else the child's directory relative to `_generated/`.
     Convex writes `../<definitionPath>` even for a nested local child, which is wrong below the app; bunvex
-    computes the relative path from the importing `_generated/`.
+    computes the relative path from the importing `_generated/` (DV-535, owner 2026-10-19).
 - **A local component's `_generated/`** (a `.ts` definition; a published `.js` one is left alone): always `.ts`
   files.
   - Before bundling, the stubs its modules need.
@@ -403,3 +404,4 @@ bunvex's codegen stays offline (DV-173), and builds a component's types from its
 | DV-532 | `bunvex codegen` writes a component's `component.ts` and the app's `components` without a deployment: the CLI evaluates the bundled definitions and reads the functions' validators itself; the file is Convex's | owner, 2026-10-19 |
 | DV-533 | Component packages resolve with the conditions `"bunvex"` and, for `--live-component-sources`, `"@bunvex/component-source"` | owner, 2026-10-19 |
 | DV-534 | `codegen.legacyComponentApi` is not built: `components` always imports each child's `ComponentApi` | owner, 2026-10-19 |
+| DV-535 | A local component's `api.ts` imports a local child's `ComponentApi` by the path relative to its own `_generated/`; Convex writes `../<definition path>`, a module that does not exist below the app (As built, PR 2) | owner, 2026-10-19 |

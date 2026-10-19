@@ -35,7 +35,7 @@ export const INSTALL = [
   {
     id: "binary",
     label: "binary",
-    lines: ['./bunvex-local-backend --instance-name bunvex-self-hosted --instance-secret "$INSTANCE_SECRET"'],
+    lines: ["./bunvex-local-backend --instance-name bunvex-self-hosted"],
   },
 ] as const;
 

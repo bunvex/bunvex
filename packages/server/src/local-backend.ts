@@ -9,7 +9,10 @@
 // - `--port` 3210 and `--site-proxy-port` 3211 on `--interface` (0.0.0.0); `--cloud-origin` / `--site-origin`
 //   (a pair; Convex's `--convex-origin` / `--convex-site`) are the public URLs;
 // - `--instance-name` (default bunvex-self-hosted) and `--instance-secret` (required; 32 hex bytes): the
-//   executable never generates a secret — the Docker scripts and `bunvex dev` do;
+//   executable never generates a secret — the Docker scripts and `bunvex dev` do. The secret may come from
+//   INSTANCE_SECRET instead, the flag winning (DV-525: Convex's binary takes the flag only, which any user of
+//   the machine can read in `/proc/<pid>/cmdline` or `ps`); the variable is then removed from the process's
+//   environment, so nothing the backend starts inherits it;
 // - files and pushed code under `--local-storage` (default `bunvex_local_storage`), or S3 (`--s3-storage`,
 //   from the environment's S3 variables, for each use case whose bucket is set: STUDY-38 K4);
 // - `--do-not-require-ssl`, `--redact-logs-to-client`;
@@ -18,13 +21,17 @@
 //   connection code), read as an embedded server reads them (`persistenceConfigFromEnv`);
 // - `--http-proxy <url>` (Convex's `--convex-http-proxy`, STUDY-80): the proxy actions' `fetch`, OIDC
 //   discovery and JWKS, and the log sinks go through; without it, `--deny-addresses` (bunvex's own screen,
-//   STUDY-80 P1, DV-325: `metadata` by default), and Convex's warning at start when that is `none`.
+//   STUDY-80 P1, DV-325: `metadata` by default), and Convex's warning at start when that is `none`;
+// - `--function-sandbox <vm|process>` (bunvex's own, AD-44): where pushed code runs. It wins over
+//   `BUNVEX_FUNCTION_SANDBOX`; `BUNVEX_FUNCTION_SANDBOX_ISOLATION` picks `process`'s layers. Only `vm` exists so
+//   far: `process` fails at start (STUDY-171).
 // SIGINT / SIGTERM stop it.
 import { resolve } from "node:path";
 import { DEFAULT_INSTANCE_NAME, defineSchema, Engine, type Persistence, type StorageType } from "@bunvex/core";
 import { type BlobStore, blobStoreFromEnv, LocalBlobStore, s3OptionsFromEnv } from "@bunvex/file-storage";
 import { ADDRESS_SCREENS, type AddressScreen, DEFAULT_ADDRESS_SCREEN } from "./address-screen.ts";
 import { adminKeyCipherKey, issueAdminKey } from "./admin-keys.ts";
+import { FUNCTION_SANDBOXES, type FunctionSandbox, functionSandboxConfig } from "./function-executor.ts";
 import { Functions } from "./functions.ts";
 import { openPersistence, type PersistenceConfig, persistenceConfigFromEnv } from "./persistence.ts";
 import { searchSegmentStore } from "./search-storage.ts";
@@ -53,7 +60,8 @@ Options:
       --cloud-origin <url>   the API's public URL (with --site-origin; default http://127.0.0.1:<port>)
       --site-origin <url>    the HTTP actions' public URL (default http://127.0.0.1:<site-proxy-port>)
       --instance-name <name> default ${DEFAULT_INSTANCE_NAME}; requires --instance-secret
-      --instance-secret <hex> required: 32 bytes, hex-encoded (\`openssl rand -hex 32\`)
+      --instance-secret <hex> required: 32 bytes, hex-encoded (\`openssl rand -hex 32\`);
+                             [env: INSTANCE_SECRET], which keeps it off the command line
       --local-storage <dir>  where files and pushed code live (default bunvex_local_storage)
       --s3-storage           keep them in S3 instead (S3_STORAGE_<USE CASE>_BUCKET, AWS_*)
       --do-not-require-ssl   allow an unencrypted database connection
@@ -61,6 +69,8 @@ Options:
       --http-proxy <url>     send actions' fetch requests through this proxy, to screen them for SSRF
       --deny-addresses <set> without --http-proxy, refuse them to: metadata (default; link-local and cloud
                              metadata), private (also loopback and private networks) or none
+      --function-sandbox <s> where functions run: vm (default; in this process) or process (a sandboxed
+                             process: not available yet); default BUNVEX_FUNCTION_SANDBOX
   -V, --version              print the version
   -h, --help                 print this help`;
 
@@ -84,6 +94,7 @@ export type LocalBackendFlags = {
   redact: boolean;
   httpProxy?: string;
   denyAddresses?: AddressScreen;
+  functionSandbox?: FunctionSandbox;
 };
 
 const VALUED: Record<string, string> = {
@@ -101,6 +112,7 @@ const VALUED: Record<string, string> = {
   "--local-storage": "--local-storage",
   "--http-proxy": "--http-proxy",
   "--deny-addresses": "--deny-addresses",
+  "--function-sandbox": "--function-sandbox",
 };
 
 /** Convex's instance secret check: 32 bytes, hex-encoded. */
@@ -110,8 +122,18 @@ export function instanceSecretError(secret: string): string | null {
   return n === 32 ? null : `Hex-decoded key was ${n} bytes, not 32`;
 }
 
-/** The flags, checked as Convex's clap definitions check them; a message on misuse. */
-export function parseLocalBackendFlags(args: string[]): LocalBackendFlags | string {
+/**
+ * The instance secret's variable (DV-525), read as clap reads an `env =` argument: when the flag is absent, and
+ * an empty value is no value. The name is the one Convex's Docker image takes (`docker-compose.yml`).
+ */
+export const INSTANCE_SECRET_ENV = "INSTANCE_SECRET";
+const secretFromEnv = (env: LocalBackendIo["env"]) => env[INSTANCE_SECRET_ENV] || undefined;
+
+/**
+ * The flags, checked as Convex's clap definitions check them; a message on misuse. `env` gives INSTANCE_SECRET
+ * when `--instance-secret` is absent (DV-525).
+ */
+export function parseLocalBackendFlags(args: string[], env: LocalBackendIo["env"] = {}): LocalBackendFlags | string {
   const f: LocalBackendFlags = {
     dbSpec: "bunvex_local_backend.sqlite3",
     db: "sqlite",
@@ -168,6 +190,10 @@ export function parseLocalBackendFlags(args: string[]): LocalBackendFlags | stri
         if (!(ADDRESS_SCREENS as readonly string[]).includes(v))
           return `invalid value '${v}' for '--deny-addresses <DENY_ADDRESSES>': possible values: ${ADDRESS_SCREENS.join(", ")}`;
         f.denyAddresses = v as AddressScreen;
+      } else if (name === "--function-sandbox") {
+        if (!(FUNCTION_SANDBOXES as readonly string[]).includes(v))
+          return `invalid value '${v}' for '--function-sandbox <FUNCTION_SANDBOX>': possible values: ${FUNCTION_SANDBOXES.join(", ")}`;
+        f.functionSandbox = v as FunctionSandbox;
       } else {
         f.localStorage = v;
         localStorageGiven = true;
@@ -180,6 +206,7 @@ export function parseLocalBackendFlags(args: string[]): LocalBackendFlags | stri
   else if (f.db !== "sqlite") return `--db ${f.db} needs the database's URL as the db_spec argument`;
   if (f.s3 && localStorageGiven)
     return "the argument '--s3-storage' cannot be used with '--local-storage <LOCAL_STORAGE>'";
+  f.instanceSecret ??= secretFromEnv(env);
   if (named && f.instanceSecret === undefined)
     return "the following required arguments were not provided:\n  --instance-secret <INSTANCE_SECRET>";
   if (f.instanceSecret === undefined) return "--instance-secret is required. Generate one with `openssl rand -hex 32`";
@@ -219,6 +246,11 @@ export type RunningLocalBackend = { url: string; siteUrl: string | null; stop: (
 
 /** Start the backend (the program waits on it; tests and `bunvex dev` stop it). */
 export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo): Promise<RunningLocalBackend> {
+  // The executor (AD-44), checked before the store opens: the flag, else the environment, else `vm`.
+  const sandbox = functionSandboxConfig(
+    f.functionSandbox ?? io.env.BUNVEX_FUNCTION_SANDBOX,
+    io.env.BUNVEX_FUNCTION_SANDBOX_ISOLATION,
+  );
   let persistence: Persistence;
   if (f.db === "sqlite") {
     const { SqlitePersistence } = await import("@bunvex/core/persistence/sqlite");
@@ -278,6 +310,8 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
     // A flag only, as Convex's: not BUNVEX_HTTP_PROXY.
     httpProxy: f.httpProxy ?? null,
     denyAddresses: f.denyAddresses ?? DEFAULT_ADDRESS_SCREEN,
+    functionSandbox: sandbox.sandbox,
+    functionSandboxIsolation: sandbox.isolation,
     fileStorage: storage("files"),
     moduleStorage: storage("modules"),
     exportStorage: storage("exports"),
@@ -322,6 +356,7 @@ export async function localBackendMain(args: string[], io: LocalBackendIo, versi
         return 2;
       }
     }
+    secret ??= secretFromEnv(io.env);
     if (!name || !secret) {
       io.err(
         "the following required arguments were not provided:\n  --instance-name <INSTANCE_NAME>\n  --instance-secret <INSTANCE_SECRET>",
@@ -336,7 +371,9 @@ export async function localBackendMain(args: string[], io: LocalBackendIo, versi
     io.out(issueAdminKey({ instanceName: name, cipherKey: adminKeyCipherKey(secret) }));
     return 0;
   }
-  const flags = parseLocalBackendFlags(args);
+  const flags = parseLocalBackendFlags(args, io.env);
+  // Read once: what the backend starts (an external package's `bun install`, STUDY-148) never inherits it.
+  delete io.env[INSTANCE_SECRET_ENV];
   if (typeof flags === "string") {
     io.err(`error: ${flags}\n\n${LOCAL_BACKEND_USAGE}`);
     return 2;

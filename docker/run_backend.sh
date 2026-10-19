@@ -37,10 +37,11 @@ else
 fi
 
 # --port and --site-proxy-port are the container's own; the origins are how the outside world reaches it
-# (file URLs, BUNVEX_CLOUD_URL / BUNVEX_SITE_URL).
+# (file URLs, BUNVEX_CLOUD_URL / BUNVEX_SITE_URL). The secret goes in INSTANCE_SECRET, exported by
+# read_credentials.sh, not as --instance-secret: a command line is readable by every user of the host
+# (/proc/<pid>/cmdline, ps), the environment by its owner only (DV-525; Convex's script passes the flag).
 exec ./bunvex-local-backend "$@" \
   --instance-name "$INSTANCE_NAME" \
-  --instance-secret "$INSTANCE_SECRET" \
   --port 3210 \
   --site-proxy-port 3211 \
   --cloud-origin "${BUNVEX_CLOUD_ORIGIN:-http://127.0.0.1:3210}" \

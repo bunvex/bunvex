@@ -280,31 +280,20 @@ export async function startBunvex(opts: StartOptions = {}): Promise<Backend> {
           String(sitePort),
           "--instance-name",
           name,
-          "--instance-secret",
-          secret,
           "--local-storage",
           files.storage,
           files.db,
         ],
         state,
-        opts.env,
+        // The secret in the environment, as `bunvex dev` gives it (DV-525); Convex's binary takes the flag only.
+        { ...opts.env, INSTANCE_SECRET: secret },
       );
     });
     proc = up.launched.proc;
     const adminKey = (
-      await run(
-        [
-          process.execPath,
-          BUNVEX_BACKEND,
-          "keygen",
-          "admin-key",
-          "--instance-name",
-          up.name,
-          "--instance-secret",
-          secret,
-        ],
-        state,
-      )
+      await run([process.execPath, BUNVEX_BACKEND, "keygen", "admin-key", "--instance-name", up.name], state, {
+        INSTANCE_SECRET: secret,
+      })
     ).trim();
     const proj = project(state, "bunvex", opts.app, opts.prepare);
     const envFile = join(state, "deployment.env");

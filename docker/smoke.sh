@@ -22,6 +22,10 @@ fail() { echo "smoke: $*" >&2; compose logs backend >&2 || true; exit 1; }
 compose up -d --build --wait backend >/dev/null || fail "the deployment did not come up healthy"
 KEY=$(compose exec -T backend ./generate_admin_key.sh 2>/dev/null) || fail "generate_admin_key.sh failed"
 SECRET=$(compose exec -T backend cat /bunvex/data/credentials/instance_secret)
+# The secret reaches the backend in its environment, never on its command line (DV-525).
+CMDLINE=$(compose exec -T backend sh -c 'tr "\0" " " </proc/1/cmdline')
+[[ "$CMDLINE" == *bunvex-local-backend* ]] || fail "the container's first process is not the backend: $CMDLINE"
+[[ "$CMDLINE" != *"$SECRET"* ]] || fail "the instance secret is on the backend's command line"
 [[ "$KEY" == bunvex-self-hosted\|* ]] || fail "unexpected admin key: $KEY"
 want=sqlite
 [ -n "${SMOKE_POSTGRES:-}" ] && want=postgres

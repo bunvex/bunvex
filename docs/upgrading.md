@@ -31,7 +31,7 @@ with what is different in bunvex.
 4. **Keep the instance's name and secret.** The admin keys and the signed pagination cursors are derived from the
    secret, and an S3 key prefix belongs to the instance name (a start with another name is refused: "Cannot use s3
    storage path … with …", [STUDY-126](study/STUDY-126-db-globals.md)). The Docker image keeps both in its volume
-   (`credentials/`); with the executable, pass the same `--instance-name` and `--instance-secret` again.
+   (`credentials/`); with the executable, pass the same `--instance-name` and `INSTANCE_SECRET` (or `--instance-secret`) again.
 
 ## 2. Upgrade the packages and the server together
 

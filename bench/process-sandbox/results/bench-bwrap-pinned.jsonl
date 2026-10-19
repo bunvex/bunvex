@@ -1,0 +1,30 @@
+{"mode":"bwrap","phase":"load","spawnToReadyMs":125.86483400000003,"hostRssDeltaMiB":25.965}
+{"mode":"bwrap","phase":"memory-idle","rssMiB":37.832,"pssMiB":19.956,"cgroupMiB":7.684,"pids":[17262,17263,17264],"hostRssMiB":112.145}
+{"mode":"bwrap","phase":"latency","fn":"empty query","unit":"us","n":3000,"mean":87.23,"p50":58.712,"p99":959.697}
+{"mode":"bwrap","phase":"latency","fn":"1 x db.get","unit":"us","n":3000,"mean":183.073,"p50":128.293,"p99":1831.802}
+{"mode":"bwrap","phase":"latency","fn":"10 x db.get","unit":"us","n":3000,"mean":668.763,"p50":574.136,"p99":2849.729}
+{"mode":"bwrap","phase":"latency","fn":"100 x db.get","unit":"us","n":3000,"mean":5468.623,"p50":5186.517,"p99":12053.82}
+{"mode":"bwrap","phase":"latency","fn":"page of 1","unit":"us","n":3000,"mean":231.168,"p50":169.824,"p99":1921.264}
+{"mode":"bwrap","phase":"latency","fn":"page of 10","unit":"us","n":3000,"mean":310.935,"p50":218.706,"p99":2362.567}
+{"mode":"bwrap","phase":"latency","fn":"page of 100","unit":"us","n":3000,"mean":783.703,"p50":683.63,"p99":3018.014}
+{"mode":"bwrap","phase":"latency","fn":"insert mutation","unit":"us","n":3000,"mean":312.641,"p50":206.826,"p99":2373.557}
+{"mode":"bwrap","phase":"latency","fn":"increment mutation","unit":"us","n":3000,"mean":447.854,"p50":307.078,"p99":2610.643}
+{"mode":"bwrap","phase":"throughput","fn":"listByTenant","concurrency":1,"perSec":1744,"unit":"ms","mean":0.574,"p50":0.463,"p99":2.625,"childPeak":{"rssMiB":46.043,"pssMiB":27.333,"cgroupMiB":13.969},"hostRssMiB":438.906}
+{"mode":"bwrap","phase":"throughput","fn":"listByTenant","concurrency":8,"perSec":1931,"unit":"ms","mean":4.142,"p50":3.418,"p99":14.18,"childPeak":{"rssMiB":55.125,"pssMiB":36.415,"cgroupMiB":23.297},"hostRssMiB":479.309}
+{"mode":"bwrap","phase":"throughput","fn":"listByTenant","concurrency":32,"perSec":2090,"unit":"ms","mean":15.35,"p50":13.595,"p99":38.247,"childPeak":{"rssMiB":52.93,"pssMiB":34.188,"cgroupMiB":21.098},"hostRssMiB":462.441}
+{"mode":"bwrap","phase":"throughput","fn":"listByTenant","concurrency":64,"perSec":2022,"unit":"ms","mean":31.764,"p50":29.016,"p99":75.636,"childPeak":{"rssMiB":54.105,"pssMiB":35.333,"cgroupMiB":22.234},"hostRssMiB":492.379}
+{"mode":"bwrap","phase":"throughput","fn":"insertItem","concurrency":1,"perSec":3977,"unit":"ms","mean":0.251,"p50":0.191,"p99":1.89,"childPeak":{"rssMiB":48.156,"pssMiB":29.321,"cgroupMiB":16.102},"hostRssMiB":566.973}
+{"mode":"bwrap","phase":"throughput","fn":"insertItem","concurrency":8,"perSec":4741,"unit":"ms","mean":1.687,"p50":1.226,"p99":9.646,"childPeak":{"rssMiB":48.566,"pssMiB":29.731,"cgroupMiB":16.512},"hostRssMiB":633.684}
+{"mode":"bwrap","phase":"throughput","fn":"insertItem","concurrency":32,"perSec":4358,"unit":"ms","mean":7.344,"p50":5.154,"p99":29.387,"childPeak":{"rssMiB":51.102,"pssMiB":32.267,"cgroupMiB":19.059},"hostRssMiB":690.512}
+{"mode":"bwrap","phase":"throughput","fn":"insertItem","concurrency":64,"perSec":4195,"unit":"ms","mean":15.268,"p50":10.152,"p99":84.382,"childPeak":{"rssMiB":48.125,"pssMiB":29.29,"cgroupMiB":16.074},"hostRssMiB":896.969}
+{"mode":"bwrap","phase":"memory-after-load","rssMiB":46.617,"pssMiB":27.782,"cgroupMiB":14.563,"pids":[17262,17263,17264]}
+{"mode":"bwrap","phase":"push","unit":"ms","n":20,"mean":43.324,"p50":42.024,"p99":64.951}
+{"mode":"bwrap","phase":"first-call-after-push","unit":"ms","ms":12.337}
+{"mode":"bwrap","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1001.569,"killToExitMs":3.999,"killToReadyMs":40.582,"nextCallMs":42.007}
+{"mode":"bwrap","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1000.888,"killToExitMs":2.671,"killToReadyMs":50.728,"nextCallMs":51.878}
+{"mode":"bwrap","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1000.585,"killToExitMs":3.95,"killToReadyMs":43.915,"nextCallMs":46.113}
+{"mode":"bwrap","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1001.364,"killToExitMs":3.305,"killToReadyMs":48.418,"nextCallMs":49.94}
+{"mode":"bwrap","phase":"kill-loop","error":"Function execution timed out (maximum duration: 1s)","failedAfterMs":1000.97,"killToExitMs":4.06,"killToReadyMs":45.02,"nextCallMs":46.217}
+{"mode":"bwrap","phase":"kill-oom","error":"JavaScript execution ran out of memory (maximum memory usage: 128 MB)","failedAfterMs":133.827,"nextCallOk":true,"nextCallMs":38.828}
+{"mode":"bwrap","phase":"kill-oom","error":"JavaScript execution ran out of memory (maximum memory usage: 128 MB)","failedAfterMs":124.425,"nextCallOk":true,"nextCallMs":37.687}
+{"mode":"bwrap","phase":"kill-oom","error":"JavaScript execution ran out of memory (maximum memory usage: 128 MB)","failedAfterMs":140.761,"nextCallOk":true,"nextCallMs":40.767}

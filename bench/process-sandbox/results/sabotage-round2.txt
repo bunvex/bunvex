@@ -1,0 +1,22 @@
+== accounting
+error: Function execution timed out (maximum duration: 1s)
+(fail) fixes (bwrap) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [1261.07ms]
+(pass) fixes (bwrap) > a pool of one-call processes: a timeout fails only the guilty call [1136.10ms]
+(pass) fixes (bwrap) > batched ops give the same results [141.64ms]
+ 2 pass
+ 1 fail
+== pool
+(pass) fixes (bwrap) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [2221.12ms]
+error: expect(received).toBe(expected)
+(fail) fixes (bwrap) > a pool of one-call processes: a timeout fails only the guilty call [1126.11ms]
+(pass) fixes (bwrap) > batched ops give the same results [153.56ms]
+ 2 pass
+ 1 fail
+== slack
+(fail) fixes (bwrap) > user time is the child's own JS time: 10 000 sequential inserts fit in the 1 s budget [60000.49ms]
+error: expect(received).toContain(expected)
+(fail) fixes (bwrap) > a pool of one-call processes: a timeout fails only the guilty call [30000.42ms]
+error: expect(received).toContain(expected)
+(pass) fixes (bwrap) > batched ops give the same results [154.57ms]
+ 1 pass
+ 2 fail

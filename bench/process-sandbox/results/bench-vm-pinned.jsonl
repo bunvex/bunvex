@@ -1,0 +1,19 @@
+{"mode":"vm","phase":"load","spawnToReadyMs":null,"hostRssDeltaMiB":30.996}
+{"mode":"vm","phase":"latency","fn":"empty query","unit":"us","n":3000,"mean":45.863,"p50":15.531,"p99":1562.484}
+{"mode":"vm","phase":"latency","fn":"1 x db.get","unit":"us","n":3000,"mean":80.848,"p50":43.391,"p99":1948.894}
+{"mode":"vm","phase":"latency","fn":"10 x db.get","unit":"us","n":3000,"mean":243.507,"p50":159.275,"p99":2281.364}
+{"mode":"vm","phase":"latency","fn":"100 x db.get","unit":"us","n":3000,"mean":1436.929,"p50":1219.134,"p99":6306.018}
+{"mode":"vm","phase":"latency","fn":"page of 1","unit":"us","n":3000,"mean":118.647,"p50":47.901,"p99":2204.522}
+{"mode":"vm","phase":"latency","fn":"page of 10","unit":"us","n":3000,"mean":136.783,"p50":74.962,"p99":2195.261}
+{"mode":"vm","phase":"latency","fn":"page of 100","unit":"us","n":3000,"mean":385.167,"p50":342.179,"p99":2427.068}
+{"mode":"vm","phase":"latency","fn":"insert mutation","unit":"us","n":3000,"mean":179.351,"p50":100.103,"p99":2364.347}
+{"mode":"vm","phase":"latency","fn":"increment mutation","unit":"us","n":3000,"mean":231.978,"p50":134.955,"p99":2256.204}
+{"mode":"vm","phase":"throughput","fn":"listByTenant","concurrency":1,"perSec":3872,"unit":"ms","mean":0.258,"p50":0.234,"p99":1.325,"hostRssMiB":531.77}
+{"mode":"vm","phase":"throughput","fn":"listByTenant","concurrency":8,"perSec":3845,"unit":"ms","mean":2.08,"p50":1.956,"p99":7.16,"hostRssMiB":605.695}
+{"mode":"vm","phase":"throughput","fn":"listByTenant","concurrency":32,"perSec":3482,"unit":"ms","mean":9.2,"p50":8.767,"p99":27.823,"hostRssMiB":593.277}
+{"mode":"vm","phase":"throughput","fn":"listByTenant","concurrency":64,"perSec":3619,"unit":"ms","mean":17.702,"p50":16.555,"p99":34.556,"hostRssMiB":628.938}
+{"mode":"vm","phase":"throughput","fn":"insertItem","concurrency":1,"perSec":6812,"unit":"ms","mean":0.147,"p50":0.088,"p99":1.359,"hostRssMiB":553.996}
+{"mode":"vm","phase":"throughput","fn":"insertItem","concurrency":8,"perSec":9094,"unit":"ms","mean":0.88,"p50":0.578,"p99":7.864,"hostRssMiB":725.105}
+{"mode":"vm","phase":"throughput","fn":"insertItem","concurrency":32,"perSec":9267,"unit":"ms","mean":3.453,"p50":2.412,"p99":19.682,"hostRssMiB":907.813}
+{"mode":"vm","phase":"throughput","fn":"insertItem","concurrency":64,"perSec":9587,"unit":"ms","mean":6.687,"p50":5.003,"p99":43.331,"hostRssMiB":1106.203}
+{"mode":"vm","phase":"push","unit":"ms","n":20,"note":"CodeVersion.load of the bundled module","mean":5.796,"p50":3.106,"p99":52.967}
