@@ -49,7 +49,7 @@ once ([STUDY-173 §5](../study/STUDY-173-convex-reference-2026-10-10.md#5-after-
 
 | Commit | Subject | bunvex |
 |---|---|---|
-| `8449d41` | allow repeated pagination in mutations | affected; fix on `fix/paginate-in-mutations` (#718) |
-| `403c3e8` | races around acquiring the lease | part (b), the read-only check, affected; fix on `fix/lease-read-only-race` (#717) |
-| `1a9f5e1` | retry deadlocked commit batches | affected on MySQL; fix on `fix/mysql-deadlock-retry` (#711) |
+| `8449d41` | allow repeated pagination in mutations | affected; fixed in #747 (#718) |
+| `403c3e8` | races around acquiring the lease | part (b), the read-only check, affected; fixed in #748 (the refusal stays `ReadOnlyError`: DV-505, owner 2026-10-19) (#717) |
+| `1a9f5e1` | retry deadlocked commit batches | affected on MySQL; fixed in #746 (#711) |
 | `d62e1c7` | comments around data sync | comments only: no change (#712) |
