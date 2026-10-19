@@ -1,14 +1,47 @@
 // The contract suite's part for the rooms (AD-43, data-source-rooms.ts). Read-only, so it runs whenever the source
 // offers the screen and the credential may see metrics: the open rooms in order, a room's members paged by
 // `memberId` with the cursor passed through and `numItems` capped at 100, a room that is not open an empty done
-// page, the definitions, and the rooms' counters in the stats. A live run opens the rooms before it asserts.
+// page, the definitions, and the rooms' counters in the stats. A live run opens the rooms before it asserts. The
+// event tap: a room that is not open is closed at once; with `roomEvents`, a tap sees what is sent after it starts
+// and not before, in seq order, until it is stopped, and a room that closes under it ends it.
 import { expect } from "bun:test";
-import { type DashboardDataSource, DataSourceError, type Page, type RoomMember } from "./data-source.ts";
+import {
+  type DashboardDataSource,
+  DataSourceError,
+  type Page,
+  type RoomEvent,
+  type RoomEventsInfo,
+  type RoomMember,
+  type Value,
+} from "./data-source.ts";
+
+/** An open room the suite may send events into (as a member or the server would) and close. */
+export type ContractRoom = {
+  key: string;
+  emit(event: string, data: Value): Promise<void>;
+  /** Ends the room, as its last member leaving would. */
+  close(): Promise<void>;
+};
+
+export type RoomsContractOptions = {
+  /** Enables the event tap's tests: opens a room for one test (the suite closes it at the end). */
+  roomEvents?: { open(src: DashboardDataSource): Promise<ContractRoom> };
+};
 
 type Ctx = {
   make: () => DashboardDataSource | Promise<DashboardDataSource>;
   test: (name: string, fn: () => Promise<void>) => void;
+  watchTimeoutMs: number;
+  opts: RoomsContractOptions;
 };
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Polls `done` every 20 ms until it holds, or fails after `ms`. */
+async function until(done: () => boolean, ms: number, what: string) {
+  for (const end = Date.now() + ms; !done(); await sleep(20))
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+}
 
 const canSee = async (src: DashboardDataSource) => (await src.getCapabilities()).operations.includes("viewMetrics");
 const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -26,7 +59,110 @@ export function expectRoomMember(m: RoomMember, kind: "room" | "presence") {
   else expect(m.idle).toBeUndefined();
 }
 
-export function describeRoomsContract({ make, test }: Ctx) {
+export function describeRoomsContract({ make, test, watchTimeoutMs, opts }: Ctx) {
+  test("rooms (when offered): a tap on a room that is not open is closed, never synchronously", async () => {
+    const src = await make();
+    if (!src.watchRoomEvents || !(await canSee(src))) return;
+    let closed = 0;
+    let other = 0;
+    const off = src.watchRoomEvents(
+      { key: "room|no/such:room|{}" },
+      () => other++,
+      () => other++,
+      () => closed++,
+    );
+    expect(closed).toBe(0);
+    await until(() => closed > 0, watchTimeoutMs, "onClosed");
+    await sleep(50);
+    off();
+    expect(closed).toBe(1);
+    expect(other).toBe(0);
+  });
+
+  test("rooms (when offered): a tap sees what is sent after it starts, not before, in seq order, until stopped", async () => {
+    const src = await make();
+    if (!src.watchRoomEvents || !opts.roomEvents || !(await canSee(src))) return;
+    const room = await opts.roomEvents.open(src);
+    try {
+      await room.emit("wave", { mark: "before" });
+      const seen: RoomEvent[] = [];
+      const infos: RoomEventsInfo[] = [];
+      const errors: DataSourceError[] = [];
+      let calls = 0;
+      const off = src.watchRoomEvents(
+        { key: room.key },
+        (events, info) => {
+          calls++;
+          seen.push(...events);
+          infos.push(info);
+        },
+        (e) => errors.push(e),
+      );
+      expect(calls).toBe(0);
+      const marks = () => seen.map((e) => (e.data as { mark?: unknown } | null)?.mark).filter((m) => m !== undefined);
+      // the tap starts when the source's first request lands: send until one is seen
+      for (let i = 0, end = Date.now() + watchTimeoutMs; !marks().some((m) => typeof m === "number"); i++) {
+        if (Date.now() > end) throw new Error("no event reached the tap");
+        await room.emit("wave", { mark: i });
+        // under a room's default rate limit (10 events a second)
+        await sleep(150);
+      }
+      await room.emit("wave", { mark: "x1" });
+      await sleep(150);
+      await room.emit("wave", { mark: "x2" });
+      await until(() => marks().includes("x2"), watchTimeoutMs, "the events after the start");
+      expect(marks()).not.toContain("before");
+      // in the order sent, and in seq order
+      expect(marks().slice(-2)).toEqual(["x1", "x2"]);
+      for (let i = 1; i < seen.length; i++) expect(seen[i]!.seq).toBeGreaterThan(seen[i - 1]!.seq);
+      for (const e of seen) {
+        expect(typeof e.event).toBe("string");
+        expect(e.from === null || typeof e.from === "string").toBe(true);
+        expect(e.size).toBeGreaterThan(0);
+        expect(e.at).toBeGreaterThan(0);
+      }
+      expect(seen.find((e) => (e.data as { mark?: unknown })?.mark === "x2")!.event).toBe("wave");
+      expect(infos.every((x) => x.dropped === 0 && x.gap === false)).toBe(true);
+      expect(errors).toEqual([]);
+      off();
+      const before = calls;
+      await room.emit("wave", { mark: "after-stop" });
+      await sleep(300);
+      expect(calls).toBe(before);
+    } finally {
+      await room.close();
+    }
+  });
+
+  test("rooms (when offered): a room that closes under a tap ends it with onClosed", async () => {
+    const src = await make();
+    if (!src.watchRoomEvents || !opts.roomEvents || !(await canSee(src))) return;
+    const room = await opts.roomEvents.open(src);
+    let closed = 0;
+    let errors = 0;
+    let gaps = 0;
+    const off = src.watchRoomEvents(
+      { key: room.key },
+      (_events, info) => {
+        if (info.gap) gaps++;
+      },
+      () => errors++,
+      () => closed++,
+    );
+    try {
+      // let the tap start, then end the room
+      await sleep(200);
+      await room.close();
+      await until(() => closed > 0, watchTimeoutMs, "onClosed");
+      await sleep(100);
+      expect(closed).toBe(1);
+      expect(errors).toBe(0);
+      expect(gaps).toBe(0);
+    } finally {
+      off();
+    }
+  });
+
   test("rooms (when offered): the open rooms, by name then key, each with members", async () => {
     const src = await make();
     if (!src.listRooms || !(await canSee(src))) return;

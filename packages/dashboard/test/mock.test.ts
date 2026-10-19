@@ -9,7 +9,20 @@ const fast = { seed: 7, now: NOW, statsIntervalMs: 5, logIntervalMs: 5 };
 // the contract walks every page of every table many times: keep the tables small
 const small = { ...fast, documents: { tasks: 80, messages: 30, users: 12, imports: 12 }, executions: 60 };
 
-describeDataSourceContract("MockDataSource", () => new MockDataSource(small));
+describeDataSourceContract("MockDataSource", () => new MockDataSource(small), {
+  // the document room, driven by the mock's test hooks
+  roomEvents: {
+    open: async (src) => {
+      const mock = src as MockDataSource;
+      const key = (await mock.listRooms()).find((r) => r.kind === "room")!.key;
+      return {
+        key,
+        emit: async (event, data) => void mock.rooms.emit(key, event, data),
+        close: async () => void mock.rooms.close(key),
+      };
+    },
+  },
+});
 describeDataSourceContract("MockDataSource with latency", () => new MockDataSource({ ...small, latencyMs: 2 }));
 describeDataSourceContract(
   "MockDataSource, four nodes",

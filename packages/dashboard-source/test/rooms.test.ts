@@ -2,9 +2,14 @@
 // the admin key, the key and the cursor passed through, `numItems` capped at 100, the values as the contract's —
 // and what a server without rooms answers.
 import { describe, expect, test } from "bun:test";
-import { DataSourceError, type RoomDefinition } from "@bunvex/dashboard/data-source";
+import {
+  DataSourceError,
+  type RoomDefinition,
+  type RoomEvent,
+  type RoomEventsInfo,
+} from "@bunvex/dashboard/data-source";
 import { AdminHttp } from "../src/admin-http.ts";
-import { roomStatsOf, roomsReads } from "../src/rooms.ts";
+import { ROOM_CLOSED_RETRY_DELAY_MS, type RoomsOptions, roomStatsOf, roomsReads } from "../src/rooms.ts";
 
 function answering(respond: (url: URL) => Response) {
   const asked: Request[] = [];
@@ -155,5 +160,365 @@ describe("listRoomDefinitions and the stats", () => {
       roomLeft: 14,
     };
     expect(roomStatsOf({ ...wire, other: 1 } as never)).toEqual(wire);
+  });
+});
+
+// ------------------------------------------------------------------ the event tap
+
+type TapJson = {
+  events: unknown[];
+  newCursor: number;
+  epoch?: string;
+  dropped?: number;
+  reset?: true;
+  closed?: true;
+};
+
+/** A room's tap as the server keeps it: no cursor starts it, a cursor waits for the next event (held here). */
+class FakeTap {
+  asked: string[] = [];
+  aborted = 0;
+  seq = 0;
+  epoch = "A";
+  events: { seq: number; [k: string]: unknown }[] = [];
+  closed = false;
+  /** Answers for the next requests, before the tap logic (a failure, a reset). */
+  script: (() => Response)[] = [];
+  private held: (() => void)[] = [];
+  get waiting() {
+    return this.held.length;
+  }
+  readonly http = new AdminHttp({
+    url: "http://x",
+    adminKey: "k",
+    fetch: (async (input: string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      this.asked.push(`${url.pathname}${url.search}`);
+      const scripted = this.script.shift();
+      if (scripted) return scripted();
+      const raw = url.searchParams.get("cursor");
+      const cursor = raw === null ? null : Number(raw);
+      if (this.closed) return Response.json({ events: [], newCursor: cursor ?? 0, closed: true });
+      if (cursor === null) return Response.json({ events: [], newCursor: this.seq, epoch: this.epoch });
+      if (cursor >= this.seq)
+        await new Promise<void>((resolve, reject) => {
+          const done = () => {
+            this.held = this.held.filter((h) => h !== done);
+            resolve();
+          };
+          this.held.push(done);
+          init?.signal?.addEventListener("abort", () => {
+            this.aborted++;
+            this.held = this.held.filter((h) => h !== done);
+            reject(init.signal!.reason);
+          });
+        });
+      if (this.closed) return Response.json({ events: [], newCursor: cursor, closed: true });
+      const events = this.events.filter((e) => e.seq > cursor);
+      return Response.json({ events, newCursor: events.at(-1)?.seq ?? cursor, epoch: this.epoch } satisfies TapJson);
+    }) as typeof fetch,
+  });
+  push(over: Record<string, unknown> = {}) {
+    this.seq++;
+    this.events.push({ seq: this.seq, at: 1000 + this.seq, event: "wave", from: "m1", size: 2, data: {}, ...over });
+    for (const h of [...this.held]) h();
+  }
+  close() {
+    this.closed = true;
+    for (const h of [...this.held]) h();
+  }
+}
+
+const settle = () => Bun.sleep(10);
+/** The loop's timers, every wait cut to a tick. */
+const fast: RoomsOptions["after"] = (fn) => {
+  const h = setTimeout(fn, 0);
+  return () => clearTimeout(h);
+};
+async function until(done: () => boolean, what: string) {
+  for (let i = 0; !done(); i++) {
+    if (i > 300) throw new Error(`timed out waiting for ${what}`);
+    await Bun.sleep(2);
+  }
+}
+const KEY = "room|rooms:doc|{}";
+const evPath = (cursor: number | null, timeoutMs?: number) =>
+  `/api/debug/rooms/events?key=${encodeURIComponent(KEY)}${cursor === null ? "" : `&cursor=${cursor}&timeoutMs=${timeoutMs ?? 60000}`}`;
+
+function tapper(tap: FakeTap, opts: RoomsOptions = {}) {
+  const batches: { events: RoomEvent[]; info: RoomEventsInfo }[] = [];
+  const errors: DataSourceError[] = [];
+  let closed = 0;
+  const rooms = roomsReads(tap.http, { backoff: () => 1, ...opts });
+  const off = rooms.watchRoomEvents(
+    { key: KEY },
+    (events, info) => batches.push({ events, info }),
+    (e) => errors.push(e),
+    () => closed++,
+  );
+  return {
+    rooms,
+    off,
+    batches,
+    errors,
+    closed: () => closed,
+    seqs: () => batches.flatMap((b) => b.events.map((e) => e.seq)),
+  };
+}
+
+describe("watchRoomEvents", () => {
+  test("starts without a cursor, then follows from newCursor; never synchronously; the events as the contract's", async () => {
+    const tap = new FakeTap();
+    tap.push(); // before the call: not seen
+    const t = tapper(tap);
+    expect(tap.asked).toEqual([]);
+    await until(() => tap.waiting === 1, "the follow request");
+    expect(tap.asked).toEqual([evPath(null), evPath(1)]);
+    tap.push({ data: { $integer: "BQAAAAAAAAA=" }, extra: 1 });
+    tap.push({ from: null, data: null, dataOmitted: true, size: 20_000 });
+    await until(() => t.seqs().length === 2 && tap.waiting === 1, "the events");
+    expect(t.batches.flatMap((b) => b.events)).toEqual([
+      { seq: 2, at: 1002, event: "wave", from: "m1", size: 2, data: { $integer: "BQAAAAAAAAA=" } },
+      { seq: 3, at: 1003, event: "wave", from: null, size: 20_000, data: null, dataOmitted: true },
+    ]);
+    expect(t.batches.every((b) => b.info.dropped === 0 && !b.info.gap)).toBe(true);
+    expect(tap.asked.at(-1)).toBe(evPath(3));
+    expect(tap.asked.every((p) => p.startsWith("/api/debug/rooms/events?"))).toBe(true);
+    t.off();
+    expect(t.errors).toEqual([]);
+  });
+
+  test("dropped is passed on with its batch", async () => {
+    const tap = new FakeTap();
+    const t = tapper(tap);
+    await until(() => tap.waiting === 1, "the follow request");
+    tap.script.push(() =>
+      Response.json({
+        events: [{ seq: 9, at: 1, event: "e", from: null, size: 1, data: 1 }],
+        newCursor: 9,
+        dropped: 8,
+      }),
+    );
+    tap.push(); // answers the held request (seq 1)
+    await until(() => t.batches.length === 2, "two batches");
+    expect(t.batches.map((b) => [b.events.map((e) => e.seq), b.info])).toEqual([
+      [[1], { dropped: 0, gap: false }],
+      [[9], { dropped: 8, gap: false }],
+    ]);
+    t.off();
+  });
+
+  test("a reset (the tap expired, or the server restarted) is a gap, and the follow goes on from its seq", async () => {
+    const tap = new FakeTap();
+    const t = tapper(tap);
+    await until(() => tap.waiting === 1, "the follow request");
+    // the next request finds the tap gone: the server started a new one, at 0
+    tap.script.push(() => {
+      tap.seq = 0;
+      tap.events = [];
+      return Response.json({ events: [], newCursor: 0, reset: true });
+    });
+    tap.push();
+    await until(() => t.batches.length === 2 && tap.waiting === 1, "the gap, then following again");
+    expect(t.batches[1]).toEqual({ events: [], info: { dropped: 0, gap: true } });
+    expect(tap.asked.at(-1)).toBe(evPath(0));
+    tap.push();
+    await until(() => t.batches.length === 3, "after the gap");
+    expect(t.batches[2]!.info).toEqual({ dropped: 0, gap: false });
+    expect(t.errors).toEqual([]);
+    t.off();
+  });
+
+  test("a transient failure is retried with a backoff, restarts the tap without a cursor, and says gap; no onError", async () => {
+    const tap = new FakeTap();
+    const backoffs: number[] = [];
+    const t = tapper(tap, {
+      backoff: (n) => {
+        backoffs.push(n);
+        return 1;
+      },
+    });
+    await until(() => tap.waiting === 1, "the follow request");
+    for (let i = 0; i < 7; i++) tap.script.push(() => new Response("down", { status: 503 }));
+    tap.push(); // seq 1 delivered; the next seven requests fail
+    await until(() => backoffs.length === 7 && tap.waiting === 1, "the retries, then following again");
+    expect(backoffs).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(t.errors).toEqual([]);
+    // after the failures: the tap again without a cursor, a gap, then the follow
+    expect(tap.asked.slice(-2)).toEqual([evPath(null), evPath(1)]);
+    expect(t.batches.map((b) => b.info)).toEqual([
+      { dropped: 0, gap: false },
+      { dropped: 0, gap: true },
+    ]);
+    expect(t.batches[1]!.events).toEqual([]);
+    t.off();
+  });
+
+  test("after a failure, a room found closed is asked again for a while (its members may still be reconnecting)", async () => {
+    let now = 0;
+    const tap = new FakeTap();
+    const t = tapper(tap, { now: () => now, after: fast });
+    await until(() => tap.waiting === 1, "the follow request");
+    // a restart: the request fails, then the room is not open yet, then it is again
+    tap.script.push(() => new Response("down", { status: 502 }));
+    tap.script.push(() => Response.json({ events: [], newCursor: 0, closed: true }));
+    tap.script.push(() => {
+      now += 4000;
+      return Response.json({ events: [], newCursor: 0, closed: true });
+    });
+    tap.push();
+    await until(() => tap.waiting === 1 && t.batches.length === 2, "following again");
+    expect(t.closed()).toBe(0);
+    expect(t.batches[1]).toEqual({ events: [], info: { dropped: 0, gap: true } });
+    // and once following, a closed room is closed at once
+    tap.close();
+    await until(() => t.closed() === 1, "onClosed");
+  });
+
+  test("after an outage longer than the window, a room found closed is asked again for the window from that answer", async () => {
+    let now = 0;
+    const waits: number[] = [];
+    const tap = new FakeTap();
+    const t = tapper(tap, {
+      now: () => now,
+      backoff: () => 7,
+      after: (fn, ms) => {
+        if (ms > 0) waits.push(ms);
+        const h = setTimeout(fn, 0);
+        return () => clearTimeout(h);
+      },
+    });
+    await until(() => tap.waiting === 1, "the follow request");
+    // a slow restart: 11 s of failures
+    tap.script.push(() => new Response("down", { status: 502 }));
+    tap.script.push(() => {
+      now += 11_000;
+      return new Response("down", { status: 502 });
+    });
+    // then the room is not open yet, answer after answer, 3 s apart
+    let closedAnswers = 0;
+    for (let i = 0; i < 6; i++)
+      tap.script.push(() => {
+        if (closedAnswers++ > 0) now += 3000;
+        return Response.json({ events: [], newCursor: 0, closed: true });
+      });
+    tap.push();
+    await until(() => t.closed() === 1, "onClosed");
+    // the window starts at the first closed answer (11 000), and ends 10 s later: answers at 11, 14, 17, 20 s are
+    // asked again, the one at 23 s is closed
+    expect(closedAnswers).toBe(5);
+    // the outage's backoff, then a short fixed delay between the closed answers
+    expect(waits).toEqual([
+      7,
+      7,
+      ROOM_CLOSED_RETRY_DELAY_MS,
+      ROOM_CLOSED_RETRY_DELAY_MS,
+      ROOM_CLOSED_RETRY_DELAY_MS,
+      ROOM_CLOSED_RETRY_DELAY_MS,
+    ]);
+    expect(t.errors).toEqual([]);
+  });
+
+  test("a new tap behind the same cursor (expired, then made again by another viewer) is a gap, told by its epoch", async () => {
+    const tap = new FakeTap();
+    const t = tapper(tap);
+    await until(() => tap.waiting === 1, "the follow request");
+    tap.push(); // seq 1 of tap A
+    await until(() => t.batches.length === 1 && tap.waiting === 1, "following from 1");
+    // while this viewer stalls, tap A expires and another viewer makes tap B, whose seq passes 1
+    tap.epoch = "B";
+    tap.seq = 0;
+    tap.events = [];
+    tap.push();
+    tap.push();
+    tap.push();
+    await until(() => t.batches.length === 2, "the batch of the new tap");
+    expect(t.batches[1]!.info).toEqual({ dropped: 0, gap: true });
+    expect(t.batches[1]!.events.map((e) => e.seq)).toEqual([2, 3]);
+    tap.push();
+    await until(() => t.batches.length === 3, "after the gap");
+    expect(t.batches[2]!.info.gap).toBe(false);
+    t.off();
+  });
+
+  test("a consumer that throws is not taken for a failure: the error surfaces, nothing is retried", async () => {
+    // in a process of its own: the error must surface (the test runner would take it for this test's)
+    const src = new URL("../src/rooms.ts", import.meta.url).pathname;
+    const http = new URL("../src/admin-http.ts", import.meta.url).pathname;
+    const script = `
+      import { roomsReads } from ${JSON.stringify(src)};
+      import { AdminHttp } from ${JSON.stringify(http)};
+      let asked = 0;
+      const fetch = async (input) => {
+        asked++;
+        const cursor = new URL(String(input)).searchParams.get("cursor");
+        if (cursor === null) return Response.json({ events: [], newCursor: 0, epoch: "A" });
+        if (asked > 2) return new Promise(() => {});
+        return Response.json({ events: [{ seq: 1, at: 1, event: "e", from: null, size: 1, data: 1 }], newCursor: 1, epoch: "A" });
+      };
+      process.on("exit", () => console.log("asked=" + asked));
+      roomsReads(new AdminHttp({ url: "http://x", adminKey: "k", fetch }), { backoff: () => 1 }).watchRoomEvents(
+        { key: "room|a:b|{}" },
+        () => { throw new Error("consumer bug"); },
+        (e) => console.log("onError " + e.code),
+      );
+      setTimeout(() => {}, 300);
+      // never left running, whatever happens
+      setTimeout(() => process.exit(3), 3000).unref();
+    `;
+    const p = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" });
+    const [out, err, code] = [await new Response(p.stdout).text(), await new Response(p.stderr).text(), await p.exited];
+    expect(err).toContain("consumer bug");
+    expect(code).not.toBe(0);
+    expect(out).not.toContain("onError");
+    // the first two requests only: nothing retried after the throw
+    expect(out).toContain("asked=2");
+  });
+
+  test("a closed room: onClosed, and nothing more is asked", async () => {
+    const tap = new FakeTap();
+    const t = tapper(tap);
+    await until(() => tap.waiting === 1, "the follow request");
+    tap.close();
+    await until(() => t.closed() === 1, "onClosed");
+    const n = tap.asked.length;
+    await settle();
+    expect(tap.asked).toHaveLength(n);
+    expect([t.closed(), t.errors.length, t.batches.length]).toEqual([1, 0, 0]);
+  });
+
+  test("terminal errors: 404 is not_found (no rooms), 403 unauthorized, 400 invalid_request; then no more calls", async () => {
+    for (const [status, code] of [
+      [404, "not_found"],
+      [403, "unauthorized"],
+      [400, "invalid_request"],
+    ] as const) {
+      const tap = new FakeTap();
+      tap.script.push(() => new Response("no", { status }));
+      const t = tapper(tap);
+      await until(() => t.errors.length === 1, "the error");
+      await settle();
+      expect(t.errors.map((e) => e.code)).toEqual([code]);
+      if (status === 404) expect(t.errors[0]!.message).toMatch(/does not run rooms/);
+      expect(tap.asked).toHaveLength(1);
+      expect(t.batches).toEqual([]);
+    }
+  });
+
+  test("stopping aborts the request in flight; nothing is asked or delivered after; close stops every tap", async () => {
+    const tap = new FakeTap();
+    const t = tapper(tap);
+    await until(() => tap.waiting === 1, "the follow request");
+    const n = tap.asked.length;
+    t.off();
+    await until(() => tap.aborted === 1, "the abort");
+    tap.push();
+    await settle();
+    expect([tap.asked.length, t.batches.length, t.errors.length]).toEqual([n, 0, 0]);
+    // close(): every tap of the reads stops
+    const t2 = tapper(tap);
+    await until(() => tap.waiting === 1, "the second follow request");
+    t2.rooms.close();
+    await until(() => tap.aborted === 2, "the second abort");
   });
 });
