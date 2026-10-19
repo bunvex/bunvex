@@ -200,7 +200,7 @@ import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearc
 import { roomsCtx } from "./rooms/ctx.ts";
 import { type AnyRoomDef, isRoomDef, type RoomGate } from "./rooms/define.ts";
 import type { RoomHub } from "./rooms/hub.ts";
-import type { RoutableMethod } from "./router.ts";
+import type { HttpRouter, RoutableMethod } from "./router.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { ServerMetrics } from "./server-metrics.ts";
 import { setServiceCallContext } from "./service-tokens.ts";
@@ -899,7 +899,10 @@ export class Functions {
   /** Each mounted component's functions (STUDY-154), by `componentFunctionName`. */
   private componentFns = new Map<string, FunctionDef>();
   /** Each mounted component's runtime and module hashes, by its `_components` id. */
-  private componentRuntimes = new Map<string, { runtime: ComponentRuntime; hashes: Map<string, string> }>();
+  private componentRuntimes = new Map<
+    string,
+    { runtime: ComponentRuntime; hashes: Map<string, string>; router: HttpRouter | undefined }
+  >();
   /** The component each of its functions belongs to. */
   private componentOf = new WeakMap<FunctionDef, ComponentRuntime>();
 
@@ -912,6 +915,8 @@ export class Functions {
     fns: Map<string, FunctionDef>,
     moduleHashes: Map<string, string>,
     moduleLoads: Map<string, string[]> = new Map(),
+    /** Its `http.js` router, mounted where its parent's definition says (STUDY-157). */
+    router?: HttpRouter,
   ) {
     this.removeComponent(runtime.id);
     for (const [key, f] of fns) {
@@ -925,7 +930,7 @@ export class Functions {
         (moduleLoads.get(m) ?? [m]).map((p) => `${runtime.id}\0${p}`),
       );
     }
-    this.componentRuntimes.set(runtime.id, { runtime, hashes: new Map(moduleHashes) });
+    this.componentRuntimes.set(runtime.id, { runtime, hashes: new Map(moduleHashes), router });
   }
 
   /** Remove a component's functions (unmounted or deleted): calling one is "not found", as on Convex. */
@@ -933,6 +938,11 @@ export class Functions {
     const prefix = componentFunctionName(id, "x:x").slice(0, -"x:x".length);
     for (const key of [...this.componentFns.keys()]) if (key.startsWith(prefix)) this.componentFns.delete(key);
     this.componentRuntimes.delete(id);
+  }
+
+  /** An installed component's runtime and router, or undefined. */
+  componentRuntime(id: string): { runtime: ComponentRuntime; router: HttpRouter | undefined } | undefined {
+    return this.componentRuntimes.get(id);
   }
 
   /** The components whose code is installed, by id. */
@@ -1574,11 +1584,13 @@ export class Functions {
    */
   apiSpec(componentId?: string | null) {
     const kind = { query: "Query", mutation: "Mutation", action: "Action" } as const;
-    // A component's (`componentId`, as Convex's `queryPrivateSystem` reads it): its functions, no routes yet (its
-    // HTTP mounts are STUDY-152 step 7).
-    const routes = componentId
-      ? []
-      : this.httpRoutes().map(([method, path]) => ({ functionType: "HttpAction", method, path }));
+    // A component's (`componentId`, as Convex's `queryPrivateSystem` reads it): its functions and its own `http.js`
+    // routes (STUDY-157).
+    const routes = (
+      componentId
+        ? (this.componentRuntimes.get(componentId)?.router?.getRoutes() ?? []).map(([path, method]) => [method, path])
+        : this.httpRoutes()
+    ).map(([method, path]) => ({ functionType: "HttpAction", method, path }));
     const prefix = componentId ? componentFunctionName(componentId, "x:x").slice(0, -"x:x".length) : null;
     const entries: [string, FunctionDef][] =
       prefix === null
@@ -2780,10 +2792,12 @@ export class Functions {
     job?: string,
     f?: FunctionDef,
     handler: unknown = f?.handler,
+    /** An HTTP action's component (STUDY-157): the one its route reached. */
+    httpComponent?: ComponentRuntime,
   ): ActionCtx {
     const identity = (caller?.identity ?? null) as UserIdentity | null;
     // A component's action calls its own component's functions by name (STUDY-154); other components are step 5.
-    const component = f ? this.componentOf.get(f) : undefined;
+    const component = httpComponent ?? (f ? this.componentOf.get(f) : undefined);
     // What the action calls (STUDY-155): its own component's functions by name, its children's public exports by
     // reference, a handle's function.
     const target = async (ref: FunctionRef) => {
@@ -2903,8 +2917,16 @@ export class Functions {
     authError: Error | null,
     /** The route the router matched (a prefix route's path ends in `*`); null for none. */
     route: { method: RoutableMethod; path: string } | null = null,
+    /** The component the request was routed to (STUDY-157); the app's when absent. */
+    component?: ComponentRuntime,
   ): Promise<Response> {
-    const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION, handler);
+    // In a component, a user's identity does not cross (Convex's `propagate_component_auth`, the component both
+    // caller and callee): no identity, and no token error to throw; an admin's stays.
+    if (component && !isSystemIdentity(caller)) {
+      caller = { ...caller, identity: null };
+      authError = null;
+    }
+    const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION, handler, component);
     let t0 = 0;
     let running: Running | null = null;
     let body: { sent: Promise<SentBody> } | null = null;
@@ -2937,8 +2959,18 @@ export class Functions {
               ms,
               () => actionTimeoutError(ms),
               () =>
-                this.inActionEnv(() =>
-                  inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, trackedFormData(request))),
+                this.inActionEnv(
+                  () =>
+                    inHandleScope(
+                      {
+                        db: null,
+                        engine: this.engine,
+                        // A component's handles resolve from it (STUDY-155).
+                        ...(component && { resolve: (ref: unknown) => this.resolveCall(ref, component, null, true) }),
+                      },
+                      () => handler(ctx, trackedFormData(request)),
+                    ),
+                  component,
                 ),
             );
             // Convex's router checks the result (`convexJsonFromResponse`): a failure before the head, logged with

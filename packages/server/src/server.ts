@@ -15,6 +15,7 @@ import {
   ComponentDeletionError,
   type ComponentMeta,
   checkIdentifier,
+  componentDefinitionMeta,
   componentMeta,
   componentPath,
   DEFAULT_SAMPLER,
@@ -139,7 +140,7 @@ import {
   type SourcedCaller,
 } from "./functions.ts";
 import { healthRoute, maxEchoBytesFromEnv, SERVER_VERSION, versionRoute } from "./health.ts";
-import { httpActionServer } from "./http-actions.ts";
+import { type AppRouting, type HttpNode, httpActionServer, NO_ROUTING } from "./http-actions.ts";
 import { type HttpProxy, httpProxyUrl, proxiedFetch } from "./http-proxy.ts";
 import type { ImportFormat } from "./import-parse.ts";
 import { ImportError, type ImportOptions, ImportRequestError, ImportService, MODE_ARGS } from "./imports.ts";
@@ -823,6 +824,7 @@ export function createServer(opts: ServerOptions) {
   const httpOptions = {
     functions,
     router,
+    routing: NO_ROUTING as AppRouting,
     identify: async (req: Request) => {
       const r = await identifyHttpAction(req);
       return { ...r, caller: withRequest(r.caller, req) };
@@ -2367,6 +2369,7 @@ export function createServer(opts: ServerOptions) {
         version.functions,
         version.moduleHashes,
         version.moduleLoads,
+        version.router,
       );
       // A handle row per function of the component, any visibility (Convex's `FunctionHandlesModel`, STUDY-155).
       const paths = [...version.functions.keys()].map(canonicalPath);
@@ -2374,6 +2377,50 @@ export function createServer(opts: ServerOptions) {
       for (const key of version.functions.keys()) changed.add(Functions.moduleOf(componentFunctionName(meta._id, key)));
     }
     if (changed.size) sync.invalidateModules(changed);
+    httpOptions.routing = await httpRouting();
+  };
+  /**
+   * The app's HTTP routing below its router (STUDY-157 PR 4): its prefix, and each definition's mounts with the
+   * installed components' routers, as Convex's `route_http_action` reads them.
+   */
+  const httpRouting = async (): Promise<AppRouting> => {
+    const { rows, definitions } = await engine.query((db) =>
+      db.asSystem(async () => ({
+        rows: (await db.query("_components").collect()).map((r) => componentMeta(r as Record<string, unknown>)),
+        definitions: new Map(
+          (await db.query("_component_definitions").collect()).map((r) => {
+            const d = componentDefinitionMeta(r as Record<string, unknown>);
+            return [d._id, d] as const;
+          }),
+        ),
+      })),
+    );
+    const root = rows.find((r) => r.parent === null);
+    if (!root) return NO_ROUTING;
+    // A definition's mounts, each naming a direct child (`_reference/childComponent/<name>`), in key order.
+    const mountsOf = (definitionId: string): [string, string][] =>
+      Object.entries(definitions.get(definitionId)?.httpMounts ?? {})
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .flatMap(([mount, reference]) => {
+          const parts = reference.split("/");
+          return parts[1] === "childComponent" && parts.length === 3 ? [[mount, parts[2]!] as [string, string]] : [];
+        });
+    const node = (id: string): Map<string, HttpNode> => {
+      const children = new Map<string, HttpNode>();
+      for (const r of rows) {
+        if (r.parent !== id || r.state !== "active") continue;
+        const installed = functions.componentRuntime(r._id);
+        if (!installed) continue;
+        children.set(r.name, {
+          router: installed.router,
+          mounts: mountsOf(r.definitionId),
+          children: node(r._id),
+          component: installed.runtime,
+        });
+      }
+      return children;
+    };
+    return { prefix: root.httpPrefix, mounts: mountsOf(root.definitionId), children: node(root._id) };
   };
   /** Pushes over HTTP (Convex's deploy2 protocol), for a deployable server. */
   const push = new PushService({
