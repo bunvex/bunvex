@@ -8,7 +8,13 @@ import type { RoomLimits } from "./limits.ts";
 
 type JSONValue = v1.JSONValue;
 
-export type Timers = { now(): number; set(fn: () => void, ms: number): unknown; clear(handle: unknown): void };
+export type Timers = {
+  now(): number;
+  /** Wall-clock ms (`Date.now()`), for what the dashboard shows; absent: the real one. */
+  wall?(): number;
+  set(fn: () => void, ms: number): unknown;
+  clear(handle: unknown): void;
+};
 const realTimers: Timers = {
   now: () => performance.now(),
   set: (fn, ms) => {
@@ -27,6 +33,57 @@ export interface RoomSink {
   /** Close the connection: the client reconnects and rejoins. */
   resync(): void;
 }
+/** One open room or scope, as the dashboard lists it (AD-43). */
+export type RoomSummary = {
+  /** The hub's room key (`roomKeyString`): stable across polls. */
+  key: string;
+  kind: v1.RoomKind;
+  name: string;
+  /** The wire args the room key was made from. */
+  args: JSONValue;
+  members: number;
+  /** Attachments, the ones in their grace included. */
+  connections: number;
+  openedAt: number;
+};
+export type RoomMemberInfo = {
+  memberId: string;
+  userId: string | null;
+  presence: JSONValue | null;
+  /** Scopes only. */
+  idle?: boolean;
+  canPublish: boolean;
+  /** Every attachment of the member is in its grace. */
+  graced: boolean;
+  connections: number;
+  joinedAt: number;
+  lastActivityAt: number;
+};
+/**
+ * `rooms`, `members` and `connections` are gauges; every other field is a counter, monotonic since the hub was
+ * made. `joins` counts every successful join, a re-join within the grace included. `leaves` counts members that
+ * left, grace expiries included (`graceExpiries` counts those again); an identity change or a re-join of the same
+ * roomId on a live connection counts a leave and a join, a reconnect within the grace a join only.
+ */
+export type RoomStats = {
+  rooms: number;
+  members: number;
+  connections: number;
+  joins: number;
+  joinsRefusedByGate: number;
+  joinsRefusedByLimit: number;
+  leaves: number;
+  graceExpiries: number;
+  presenceAccepted: number;
+  presenceDropped: number;
+  eventsAccepted: number;
+  eventsDropped: number;
+  resyncs: number;
+  roomLeft: number;
+};
+/** The most members one `membersPage` returns. */
+export const MEMBERS_PAGE_MAX = 100;
+
 export type RoomKey = { kind: v1.RoomKind; name: string; argsJson: string };
 export const roomKeyString = (k: RoomKey) => `${k.kind}|${k.name}|${k.argsJson}`;
 
@@ -56,6 +113,8 @@ type Member = {
   userId: string | null;
   presence: JSONValue | null;
   attachments: Set<Attachment>;
+  joinedAt: number;
+  lastActivityAt: number;
 };
 type Attachment = {
   sink: RoomSink;
@@ -68,7 +127,7 @@ type Attachment = {
   eventBucket: Bucket;
   grace: unknown | null;
 };
-type Room = { key: RoomKey; members: Map<string, Member>; changed: Set<Member>; left: string[] };
+type Room = { key: RoomKey; openedAt: number; members: Map<string, Member>; changed: Set<Member>; left: string[] };
 
 /**
  * A member's key: a scope's member is its user; a room's is the session's connection as one user, so two live
@@ -86,6 +145,19 @@ export class RoomHub {
   /** Attachments in their grace, by `${sessionId}|${room key}`, then by member key. */
   private readonly graced = new Map<string, Map<string, Attachment>>();
   private tick: unknown | null = null;
+  private readonly counters = {
+    joins: 0,
+    joinsRefusedByGate: 0,
+    joinsRefusedByLimit: 0,
+    leaves: 0,
+    graceExpiries: 0,
+    presenceAccepted: 0,
+    presenceDropped: 0,
+    eventsAccepted: 0,
+    eventsDropped: 0,
+    resyncs: 0,
+    roomLeft: 0,
+  };
 
   constructor(
     readonly limits: RoomLimits,
@@ -96,6 +168,86 @@ export class RoomHub {
     let members = 0;
     for (const r of this.rooms.values()) members += r.members.size;
     return { rooms: this.rooms.size, members };
+  }
+
+  private wall() {
+    return this.timers.wall?.() ?? Date.now();
+  }
+
+  /** A join a gate (or an anonymous scope join) refused, counted for `stats` (the session runs the gates). */
+  countGateRefusal() {
+    this.counters.joinsRefusedByGate++;
+  }
+
+  /** A RoomLeft frame sent (the session ends a membership the server ended on its own). */
+  countRoomLeft() {
+    this.counters.roomLeft++;
+  }
+
+  /** The gauges now and the counters since the hub was made; a few integers, nothing per viewer. */
+  stats(): RoomStats {
+    let rooms = 0;
+    let members = 0;
+    let connections = 0;
+    for (const r of this.rooms.values()) {
+      if (r.members.size === 0) continue;
+      rooms++;
+      members += r.members.size;
+      for (const m of r.members.values()) connections += m.attachments.size;
+    }
+    return { rooms, members, connections, ...this.counters };
+  }
+
+  /** Every open room and scope, by name, then args: a snapshot built per call. */
+  list(): RoomSummary[] {
+    const out: RoomSummary[] = [];
+    for (const [key, r] of this.rooms) {
+      if (r.members.size === 0) continue;
+      let connections = 0;
+      for (const m of r.members.values()) connections += m.attachments.size;
+      out.push({
+        key,
+        kind: r.key.kind,
+        name: r.key.name,
+        args: JSON.parse(r.key.argsJson) as JSONValue,
+        members: r.members.size,
+        connections,
+        openedAt: r.openedAt,
+      });
+    }
+    const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+    return out.sort((a, b) => byText(a.name, b.name) || byText(a.key, b.key));
+  }
+
+  /** One page of a room's members by memberId: the cursor is the last memberId returned, "" when done. */
+  membersPage(
+    key: RoomKey,
+    cursor: string | null,
+    numItems: number,
+  ): { page: RoomMemberInfo[]; isDone: boolean; continueCursor: string } {
+    const room = this.rooms.get(roomKeyString(key));
+    if (!room) return { page: [], isDone: true, continueCursor: "" };
+    const size = Math.max(1, Math.min(Math.floor(numItems), MEMBERS_PAGE_MAX));
+    const sorted = [...room.members.values()]
+      .filter((m) => cursor === null || cursor === "" || m.memberId > cursor)
+      .sort((a, b) => (a.memberId < b.memberId ? -1 : a.memberId > b.memberId ? 1 : 0));
+    const page = sorted.slice(0, size).map((m): RoomMemberInfo => {
+      const atts = [...m.attachments];
+      const info: RoomMemberInfo = {
+        memberId: m.memberId,
+        userId: m.userId,
+        presence: m.presence,
+        canPublish: atts.some((x) => x.canPublish),
+        graced: atts.length > 0 && atts.every((x) => x.grace !== null),
+        connections: atts.length,
+        joinedAt: m.joinedAt,
+        lastActivityAt: m.lastActivityAt,
+      };
+      if (room.key.kind === "presence") info.idle = idleOf(m);
+      return info;
+    });
+    const isDone = sorted.length <= size;
+    return { page, isDone, continueCursor: isDone ? "" : page[page.length - 1]!.memberId };
   }
 
   join(
@@ -113,7 +265,10 @@ export class RoomHub {
         this.detachOne(old);
       }
     }
-    if (mine.size >= this.limits.roomsPerConnection) return "limit";
+    if (mine.size >= this.limits.roomsPerConnection) {
+      this.counters.joinsRefusedByLimit++;
+      return "limit";
+    }
     const memberKey = memberKeyOf(key.kind, sink.sessionId, who.userId);
     const gk = `${sink.sessionId}|${ks}`;
     const inGrace = this.graced.get(gk);
@@ -136,13 +291,17 @@ export class RoomHub {
       mine.set(roomId, kept);
       this.bySink.set(sink, mine);
       this.sendSync(kept);
+      this.counters.joins++;
       return "ok";
     }
     let room = this.rooms.get(ks);
     const existing = room?.members.get(memberKey);
-    if (!existing && (room?.members.size ?? 0) >= this.limits.memberCap) return "limit";
+    if (!existing && (room?.members.size ?? 0) >= this.limits.memberCap) {
+      this.counters.joinsRefusedByLimit++;
+      return "limit";
+    }
     if (!room) {
-      room = { key, members: new Map(), changed: new Set(), left: [] };
+      room = { key, openedAt: this.wall(), members: new Map(), changed: new Set(), left: [] };
       this.rooms.set(ks, room);
     }
     const member: Member = existing ?? {
@@ -151,6 +310,8 @@ export class RoomHub {
       userId: who.userId,
       presence: null,
       attachments: new Set(),
+      joinedAt: this.wall(),
+      lastActivityAt: this.wall(),
     };
     const now = this.timers.now();
     const a: Attachment = {
@@ -178,6 +339,7 @@ export class RoomHub {
       this.scheduleTick();
     } // only a visible change
     this.sendSync(a);
+    this.counters.joins++;
     return "ok";
   }
 
@@ -212,7 +374,7 @@ export class RoomHub {
       a.grace = this.timers.set(() => {
         if (this.graced.get(gk)?.get(mk) !== a) return;
         this.ungrace(gk, mk);
-        this.detachOne(a);
+        if (this.detachOne(a)) this.counters.graceExpiries++;
       }, this.limits.graceMs);
     }
   }
@@ -225,7 +387,12 @@ export class RoomHub {
   ): "ok" | "forbidden" | "rate_limited" {
     const a = this.bySink.get(sink)?.get(roomId);
     if (!a || !a.canPublish) return "forbidden";
-    if (!a.presenceBucket.take(this.timers.now())) return "rate_limited";
+    if (!a.presenceBucket.take(this.timers.now())) {
+      this.counters.presenceDropped++;
+      return "rate_limited";
+    }
+    this.counters.presenceAccepted++;
+    a.member.lastActivityAt = this.wall();
     a.member.presence = presence;
     if (idle !== undefined) a.idle = idle;
     a.room.changed.add(a.member);
@@ -236,7 +403,12 @@ export class RoomHub {
   event(sink: RoomSink, roomId: number, event: string, data: JSONValue): "ok" | "forbidden" | "rate_limited" {
     const a = this.bySink.get(sink)?.get(roomId);
     if (!a || !a.canPublish || a.room.key.kind !== "room") return "forbidden";
-    if (!a.eventBucket.take(this.timers.now())) return "rate_limited";
+    if (!a.eventBucket.take(this.timers.now())) {
+      this.counters.eventsDropped++;
+      return "rate_limited";
+    }
+    this.counters.eventsAccepted++;
+    a.member.lastActivityAt = this.wall();
     this.fanOutEvent(a.room, a.member.memberId, event, data, a);
     return "ok";
   }
@@ -270,7 +442,8 @@ export class RoomHub {
     if (inGrace.size === 0) this.graced.delete(gk);
   }
 
-  private detachOne(a: Attachment) {
+  /** End an attachment; true when that ended its member (the last attachment). */
+  private detachOne(a: Attachment): boolean {
     const { room, member } = a;
     const idleBefore = idleOf(member);
     member.attachments.delete(a);
@@ -280,12 +453,14 @@ export class RoomHub {
         room.changed.add(member);
         this.scheduleTick();
       }
-      return;
+      return false;
     }
+    this.counters.leaves++;
     room.members.delete(member.memberKey);
     room.changed.delete(member);
     room.left.push(member.memberId);
     this.scheduleTick();
+    return true;
   }
 
   private view(room: Room, m: Member): v1.RoomMember {
@@ -343,6 +518,7 @@ export class RoomHub {
   /** Membership frames are never dropped: a connection too far behind is closed, and re-syncs on reconnect. */
   private deliver(sink: RoomSink, frame: v1.ServerMessage) {
     if (sink.behind() > this.limits.maxBufferedBytes) {
+      this.counters.resyncs++;
       sink.resync();
       return;
     }

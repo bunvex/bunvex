@@ -215,6 +215,97 @@ describe("a component's functions, run by an admin", () => {
   });
 });
 
+describe("the dashboard's reads and its custom query in a component (PR 3)", () => {
+  const systemQuery = (d: Awaited<ReturnType<typeof deployment>>, path: string, args: object = {}) =>
+    d.post("/api/query", { path, args, format: "json" });
+
+  test("modules of every component, of one, a function's validator, and the components", async () => {
+    const d = await deployment();
+    const ids = await d.push();
+    const all = (await systemQuery(d, "_system/frontend/modules:listForAllComponents")).body!.value as [
+      string | null,
+      [string, { functions: { name: string }[] }][],
+    ][];
+    // The app's first, then each component's, in `_components`' order.
+    expect(all[0]![0]).toBeNull();
+    expect(
+      all
+        .slice(1)
+        .map(([id]) => id)
+        .sort(),
+    ).toEqual([ids.counter, ids.second].sort());
+    const counterModules = all.find(([id]) => id === ids.counter)![1];
+    expect(counterModules.find(([p]) => p === "lib.js")![1].functions.map((f) => f.name)).toContain("add");
+    expect(all[0]![1].map(([p]) => p)).toContain("app.js");
+    const one = (await systemQuery(d, "_system/frontend/modules:list", { componentId: ids.second })).body!.value as [
+      string,
+      unknown,
+    ][];
+    expect(one.map(([p]) => p)).toContain("lib.js");
+    const validator = (
+      await systemQuery(d, "_system/frontend/modules:argsValidator", { componentId: ids.counter, function: "lib:add" })
+    ).body!.value as string;
+    expect(JSON.parse(validator)).toMatchObject({ type: "object", value: { body: { fieldType: { type: "string" } } } });
+    // The app's own: no `lib.js` there.
+    expect(
+      (await systemQuery(d, "_system/frontend/modules:argsValidator", { function: "lib:add" })).body!.value,
+    ).toBeNull();
+    const components = (await systemQuery(d, "_system/frontend/components:list")).body!.value as { path: string }[];
+    expect(components.map((c) => c.path).sort()).toEqual(["", "counter", "second"]);
+  });
+
+  test("the custom query runs in the component given by id, with its data", async () => {
+    const d = await deployment();
+    const ids = await d.push();
+    await d.run("counter", "lib:add", { body: "a" });
+    const tester = (componentId?: string) =>
+      d.post(
+        "/api/run_test_function",
+        {
+          adminKey: KEY,
+          args: {},
+          bundle: {
+            path: "testQuery.js",
+            source:
+              'import { query } from "bunvex:/_system/repl/wrappers.js";\nexport default query({ handler: async (ctx) => (await ctx.db.query("messages").collect()).length });',
+          },
+          format: "json",
+          ...(componentId ? { componentId } : {}),
+        },
+        null,
+      );
+    expect((await tester(ids.counter)).body).toEqual({ status: "success", value: 1 });
+    expect((await tester(ids.second)).body).toEqual({ status: "success", value: 0 });
+    // The app has no `messages`: none read.
+    expect((await tester()).body).toEqual({ status: "success", value: 0 });
+    expect((await tester("nope")).status).toBe(500);
+  });
+
+  test("in a component, the custom query's import sees no deployment variable", async () => {
+    const d = await deployment();
+    await d.engine.mutation((db) => d.engine.environment.update(db, [{ name: "APPX", value: "x" }]));
+    const ids = await d.push();
+    const atImport = (componentId?: string) =>
+      d.post(
+        "/api/run_test_function",
+        {
+          adminKey: KEY,
+          args: {},
+          bundle: {
+            path: "testQuery.js",
+            source:
+              'import { query } from "bunvex:/_system/repl/wrappers.js";\nconst seen = process.env.APPX ?? null;\nexport default query({ handler: async () => seen });',
+          },
+          format: "json",
+          ...(componentId ? { componentId } : {}),
+        },
+        null,
+      );
+    expect((await atImport()).body).toEqual({ status: "success", value: "x" });
+    expect((await atImport(ids.counter)).body).toEqual({ status: "success", value: null });
+  });
+});
+
 describe("logs", () => {
   test("a component's run is logged by its own name, with its component's path", async () => {
     const d = await deployment();

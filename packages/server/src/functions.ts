@@ -898,12 +898,23 @@ export class Functions {
    * Install a component instance's code version (STUDY-154): its functions replace its previous ones, the app's and
    * the other components' untouched. Its modules were evaluated in its own contexts (C3, DV-492).
    */
-  installComponent(runtime: ComponentRuntime, fns: Map<string, FunctionDef>, moduleHashes: Map<string, string>) {
+  installComponent(
+    runtime: ComponentRuntime,
+    fns: Map<string, FunctionDef>,
+    moduleHashes: Map<string, string>,
+    moduleLoads: Map<string, string[]> = new Map(),
+  ) {
     this.removeComponent(runtime.id);
     for (const [key, f] of fns) {
       this.componentFns.set(componentFunctionName(runtime.id, key), f);
       this.componentOf.set(f, runtime);
       this.names.set(f, key);
+      // The component's modules are its namespace's `_modules` rows: never the app's (STUDY-161 §16.7).
+      const m = Functions.moduleOf(key);
+      this.moduleLoads.set(
+        f,
+        (moduleLoads.get(m) ?? [m]).map((p) => `${runtime.id}\0${p}`),
+      );
     }
     this.componentRuntimes.set(runtime.id, { runtime, hashes: new Map(moduleHashes) });
   }
@@ -960,7 +971,6 @@ export class Functions {
     this.fns = new Map(fns);
     this.rooms = new Map(rooms);
     this.moduleHashes = new Map(moduleHashes);
-    this.moduleLoads = new Map();
     for (const [k, f] of fns) {
       const m = Functions.moduleOf(k);
       this.moduleLoads.set(f, moduleLoads.get(m) ?? [m]);
@@ -969,14 +979,18 @@ export class Functions {
     return changed;
   }
 
-  /** The modules each function's module loads (`CodeVersion.moduleLoads`), by function; its own when not known. */
-  private moduleLoads = new Map<FunctionDef, string[]>();
   /**
-   * Convex's reads before a function's code (STUDY-161 §16.3): its configuration, its environment, and the `_modules`
-   * row of each module it loads (its own and the chunks it imports).
+   * The modules each function's module loads (`CodeVersion.moduleLoads`), by function (the app's and every
+   * component's); its own when not known.
+   */
+  private moduleLoads = new WeakMap<FunctionDef, string[]>();
+  /**
+   * Convex's reads before a function's code (STUDY-161 §16.3, §16.7): its configuration, its environment, the `_modules`
+   * row of each module it loads (its own and the chunks it imports), and for a component's function one more
+   * (`load_component_args`).
    */
   private countStartReads(db: Tx, f: FunctionDef) {
-    db.countConstantReads(2);
+    db.countConstantReads(this.componentOf.has(f) ? 3 : 2);
     db.countModuleLoads(this.moduleLoads.get(f) ?? ["\0unknown"]);
   }
 
@@ -2350,8 +2364,21 @@ export class Functions {
    * A query that is not deployed, as JSON (STUDY-119): Convex's `execute_standalone_module` runs the function
    * tester's query with `run_query_without_caching`, so it never reads or fills the cache. It runs as `name`.
    */
-  async runStandaloneQueryJson(f: QueryDef, name: string, args: unknown, caller?: Caller): Promise<string> {
+  async runStandaloneQueryJson(
+    f: QueryDef,
+    name: string,
+    args: unknown,
+    caller?: Caller,
+    /** The component it runs in (the dashboard's custom query in a component, STUDY-154), else the app. */
+    componentId: string | null = null,
+  ): Promise<string> {
     this.names.set(f, registryKey(name));
+    if (componentId !== null) {
+      // Convex's `must_component_path`: an id with no mounted component is a system error.
+      const runtime = this.componentRuntimes.get(componentId)?.runtime;
+      if (!runtime) throw new Error(`Component ${componentId} not found`);
+      this.componentOf.set(f, runtime);
+    }
     return this.logged(
       "Query",
       name,
