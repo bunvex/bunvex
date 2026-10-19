@@ -70,7 +70,7 @@ for (const [what, state] of stopped)
         await setState(db, state);
         const now = Date.now();
         return insertJob(db, {
-          name: functions.scheduledTarget("m:insertObject"),
+          name: "m.js:insertObject",
           args: [{ tag: "job" }],
           scheduledTime: now,
           now,

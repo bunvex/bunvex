@@ -244,7 +244,10 @@ function componentEnv(c: ComponentRuntime, read: EnvReader, builtin: Record<stri
   };
 }
 
-/** What a component's function may not use yet (STUDY-154 P-2): its scheduler and storage come in step 7. */
+/** Convex's `ComponentPath::in_component_str`: ` in '<path>'`, nothing for the app. */
+const inComponentStr = (path: string) => (path === "" ? "" : ` in '${path}'`);
+
+/** What a component's function may not use yet (STUDY-154 P-2): its storage comes in step 7. */
 const notYetInComponents = (what: string) =>
   new Proxy(
     {},
@@ -1890,9 +1893,13 @@ export class Functions {
             // The scheduled job this runs under, also when an action it ran called it (Convex propagates
             // `parent_scheduled_job` down the call tree): what it schedules after that job is canceled is
             // born canceled, and it may not cancel that job.
-            scheduler: component
-              ? notYetInComponents("scheduler")
-              : makeScheduler(this, { db, job: job ?? db.request?.scheduledFunctionId ?? undefined }),
+            // In a component, its jobs are its namespace's (STUDY-157).
+            scheduler: makeScheduler(this, {
+              db,
+              component,
+              job: job ?? db.request?.scheduledFunctionId ?? undefined,
+              jobComponent: db.request?.scheduledFunctionComponent ?? null,
+            }),
             // Sent once the mutation committed; dropped if it throws or retries (AD-42). Built on first use:
             // most mutations broadcast nothing.
             get rooms() {
@@ -1941,7 +1948,7 @@ export class Functions {
     }
   }
 
-  /** @internal The engine the functions run on (the scheduler resolves function handles with it). */
+  /** @internal The engine the functions run on. */
   engineOf(): Engine {
     return this.engine;
   }
@@ -2251,23 +2258,54 @@ export class Functions {
   }
 
   /**
-   * The canonical name (`module.js:function`) of a function to schedule, which must exist, of any kind or
-   * visibility (Convex's `validate_schedule_args`; the kind is checked when the job runs).
+   * The function a scheduler names (Convex's `schedule` and `validate_schedule_args`, STUDY-157): resolved from the
+   * caller's component as its calls are (STUDY-155: a name in its own component, a child's export, a handle), then
+   * checked to exist, of any kind or visibility (the kind is checked when the job runs). Its component path and
+   * canonical path (`module.js:function`), as the job stores them.
    */
-  scheduledTarget(name: string, systemIdentity = false): string {
+  async scheduleTarget(
+    ref: unknown,
+    caller: ComponentRuntime | undefined,
+    db: Tx | null,
+    systemIdentity: boolean,
+    action: boolean,
+  ): Promise<{ component: string; udfPath: string }> {
+    const resolved = await this.resolveCall(ref, caller, db, action);
+    const c = splitComponentFunctionName(resolved);
+    const name = c ? c.name : resolved;
     // Convex reads the target's module first (`ModuleModel::get_metadata`), which refuses a `_system/` module
     // to anyone but an admin or the system.
-    if (isSystemPath(name) && !systemIdentity) throw new SystemIdentityRequiredError("get_module");
+    if (!c && isSystemPath(name) && !systemIdentity) throw new SystemIdentityRequiredError("get_module");
     const key = registryKey(name);
     const i = key.lastIndexOf(":");
     const [module, fn] = [key.slice(0, i), key.slice(i + 1)];
-    if (![...this.fns.keys()].some((k) => k.slice(0, k.lastIndexOf(":")) === module))
-      throw new Error(`Attempted to schedule function at nonexistent path: ${module}.js`);
-    if (!this.fns.has(key))
+    const component = c ? (this.componentRuntimes.get(c.id)?.runtime.path ?? "") : "";
+    const fns = this.functionsIn(c ? c.id : null);
+    if (![...fns.keys()].some((k) => k.slice(0, k.lastIndexOf(":")) === module))
       throw new Error(
-        `Attempted to schedule function, but no exported function ${fn} found in the file: ${module}.js. Did you forget to export it?`,
+        `Attempted to schedule function at nonexistent path: ${component === "" ? "" : `${component} `}${module}.js`,
       );
-    return `${module}.js:${fn}`;
+    if (!fns.has(key))
+      throw new Error(
+        `Attempted to schedule function, but no exported function ${fn} found in the file: ${module}.js${inComponentStr(component)}. Did you forget to export it?`,
+      );
+    return { component, udfPath: `${module}.js:${fn}` };
+  }
+
+  /** The functions of component `id` (the app's for null), by `module:fn`. */
+  private functionsIn(id: string | null): Map<string, FunctionDef> {
+    if (id === null) return this.fns;
+    const prefix = componentFunctionName(id, "x:x").slice(0, -"x:x".length);
+    const out = new Map<string, FunctionDef>();
+    for (const [key, f] of this.componentFns) if (key.startsWith(prefix)) out.set(key.slice(prefix.length), f);
+    return out;
+  }
+
+  /** The id of the component at `path` whose code is installed (`""`: the app, null), or undefined. */
+  private componentAt(path: string): string | null | undefined {
+    if (path === "") return null;
+    for (const [id, { runtime }] of this.componentRuntimes) if (runtime.path === path) return id;
+    return undefined;
   }
 
   /**
@@ -2433,28 +2471,37 @@ export class Functions {
     return canonical;
   }
 
-  /** What a scheduled job runs, or why it cannot run (Convex's run-time check: the module may have changed). */
-  scheduledKind(canonical: string): { kind: "mutation" | "action" } | { error: string } {
+  /**
+   * What a scheduled job runs (its kind, and the name to run it by: the app's canonical path, a component's registry
+   * name), or why it cannot run (Convex's run-time check: the module may have changed, or its component gone).
+   */
+  scheduledKind(canonical: string, component = ""): { kind: "mutation" | "action"; key: string } | { error: string } {
     const key = registryKey(canonical);
     const i = key.lastIndexOf(":");
     const [module, fn] = [key.slice(0, i), key.slice(i + 1)];
-    const f = this.fns.get(key);
+    const id = this.componentAt(component);
+    const fns = id === undefined ? new Map<string, FunctionDef>() : this.functionsIn(id);
+    const f = fns.get(key);
     if (!f) {
-      if (![...this.fns.keys()].some((k) => k.slice(0, k.lastIndexOf(":")) === module))
+      if (![...fns.keys()].some((k) => k.slice(0, k.lastIndexOf(":")) === module))
         return { error: `Couldn't find JavaScript module '${module}.js'.` };
       return { error: `Couldn't find "${fn}" in module "${module}.js".` };
     }
-    if (f.kind === "mutation" || f.kind === "action") return { kind: f.kind };
+    if (f.kind === "mutation" || f.kind === "action")
+      return { kind: f.kind, key: id ? componentFunctionName(id, key) : canonical };
     // Convex's message, its stray quotes and line break included.
     const kind = f.kind[0].toUpperCase() + f.kind.slice(1);
     return {
-      error: `Unsupported function type. FunctionName("${fn}") in module "${module}.js" is defined as a ${kind}. "\n                            "Only Mutation and Action can be scheduled.`,
+      error: `Unsupported function type. FunctionName("${fn}") in module "${module}.js"${inComponentStr(component)} is defined as a ${kind}. "\n                            "Only Mutation and Action can be scheduled.`,
     };
   }
 
-  /** @internal The body of a scheduled mutation or cron, for an executor to run in its own transaction. */
-  scheduledMutationBody(canonical: string, args: unknown, job?: string) {
-    const f = this.fn(registryKey(canonical), "mutation", false);
+  /**
+   * @internal The body of a scheduled mutation or cron, for an executor to run in its own transaction: `name` a
+   * canonical path of the app's, or a registry name (`scheduledKind`'s `key`).
+   */
+  scheduledMutationBody(name: string, args: unknown, job?: string) {
+    const f = this.fn(splitComponentFunctionName(name) ? name : registryKey(name), "mutation", false);
     return this.mutationBody(() => f, args, job);
   }
 
@@ -2771,17 +2818,17 @@ export class Functions {
         );
       },
       // As a mutation's: the job also reaches an action that a scheduled action ran.
-      scheduler: component
-        ? (notYetInComponents("scheduler") as never)
-        : cutOffWithAction(
-            makeScheduler(this, {
-              engine: this.engine,
-              // Convex's action scheduler sends its request id first (an HTTP action's is "").
-              requestId: f === HTTP_ACTION ? "" : (caller?.request?.requestId ?? ""),
-              systemIdentity: isSystemIdentity(caller),
-              job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
-            }),
-          ),
+      scheduler: cutOffWithAction(
+        makeScheduler(this, {
+          engine: this.engine,
+          component,
+          // Convex's action scheduler sends its request id first (an HTTP action's is "").
+          requestId: f === HTTP_ACTION ? "" : (caller?.request?.requestId ?? ""),
+          systemIdentity: isSystemIdentity(caller),
+          job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
+          jobComponent: caller?.request?.scheduledFunctionComponent ?? null,
+        }),
+      ),
       storage: component
         ? (notYetInComponents("storage") as never)
         : cutOffWithAction(this.fileStorage?.actionWriter(storageMeter) ?? noStorage),

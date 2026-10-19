@@ -341,6 +341,11 @@ export type CallRequest = {
   authToken: string | null;
   /** The scheduled function this execution belongs to, if any. */
   scheduledFunctionId: string | null;
+  /**
+   * The component whose namespace that job lives in (its `_components` id; null or absent for the app's), as
+   * Convex's `parent_scheduled_job` pairs it with the id. Not part of `getRequestMetadata()`.
+   */
+  scheduledFunctionComponent?: string | null;
 };
 /**
  * Who runs a transaction. `systemIdentity`: an admin or the system acting as itself, not as a user (Convex's

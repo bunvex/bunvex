@@ -5,6 +5,8 @@
   - Q-2: `_scheduled_functions` names a child component's job target (AD-33, "if simple");
   - Q-3: search in components as step 7's last PR;
   - Q-4: the order of §6.
+
+  Built: PR 1, the scheduler (`packages/server/test/component-scheduler.test.ts`).
 - **Convex source read:** `d8bdde0`, the reference commit (docs/parity/upstream.md). Paths are relative to its
   root. Tests: js-integration-tests at `c358201e1`, Rust tests at `bea52bde0` (memory: Convex test snapshots).
 - **bunvex source:** `main` after STUDY-156 (`6bc5beb2`). Paths are relative to `packages/`.
@@ -257,7 +259,7 @@ component, logs in its namespace. A cron's target is already checked against its
 
 ## 6. Proposed PRs
 
-1. **Scheduler in components.**
+1. **Scheduler in components.** Built.
    - Jobs written in the caller's namespace with the target's path.
    - The executor over every namespace.
    - Cancel (Q-1), the cascade, `/api/cancel_job` with `componentId`.
