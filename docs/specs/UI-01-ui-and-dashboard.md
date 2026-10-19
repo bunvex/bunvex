@@ -1875,7 +1875,8 @@ with Database (it describes the data) and Files is stored data; Schedules run fu
 what happened. **Manage** (Authentication) joins with §25.
 
 **Screens a source does not offer** (STUDY-149 follow-up, `shell/offered-screens.tsx`): bunvex's own screens —
-Topology (`getTopology`), Authentication (`listAuthUsers`) and Subscriptions (`getSubscriptions`) — follow the
+Topology (`getTopology`), Authentication (`listAuthUsers`), Subscriptions (`getSubscriptions`) and Rooms (`listRooms`,
+AD-43) — follow the
 extensions' rule (§26): listed in the sidebar and the command palette only when the source has the methods they
 need, a group left with no entry is not shown, and a typed URL says "This deployment does not offer … yet". The
 rule is keyed on methods, so a source that gains them shows the screen. Convex's own screens stay listed whatever

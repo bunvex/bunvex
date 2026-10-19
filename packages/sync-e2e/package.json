@@ -42,6 +42,6 @@
   },
   "scripts": {
     "test:react": "bun test --preload ../../scripts/test-loopback.ts --preload ./react/dom.ts ./react",
-    "e2e:dashboard": "bun test ./dashboard/app.e2e.ts ./dashboard/local-dashboard.e2e.ts ./dashboard/cross-origin.e2e.ts ./dashboard/topology.e2e.ts --timeout 90000"
+    "e2e:dashboard": "bun test ./dashboard/app.e2e.ts ./dashboard/local-dashboard.e2e.ts ./dashboard/cross-origin.e2e.ts ./dashboard/topology.e2e.ts ./dashboard/rooms.e2e.ts --timeout 90000"
   }
 }

@@ -118,7 +118,8 @@ function Counters({ latest, prev }: { latest: DeploymentStats; prev: DeploymentS
   );
 }
 
-function Counter({
+/** One counter: its name, its value, what explains it, and a warning when it moved. Also the Rooms section's. */
+export function Counter({
   label,
   value,
   detail,

@@ -55,7 +55,12 @@ import {
   type MetricsWindow,
   OPERATIONS,
   type Page,
+  type PageRequest,
   type QueryCacheSnapshot,
+  type RoomDefinition,
+  type RoomInfo,
+  type RoomMember,
+  type RoomRef,
   type RunOptions,
   type ScheduledFunction,
   type ScheduledFunctionQuery,
@@ -105,6 +110,7 @@ import { MOCK_DOCUMENT_TYPES } from "./function-validators.ts";
 import { inferDocumentType } from "./infer.ts";
 import * as metrics from "./metrics.ts";
 import { createRandom, type Random } from "./random.ts";
+import { MockRooms } from "./rooms.ts";
 import { MockScheduler } from "./schedules.ts";
 import { searchDocuments } from "./search.ts";
 import { MockSnapshots } from "./snapshots.ts";
@@ -312,6 +318,8 @@ export class MockDataSource implements DashboardDataSource {
   readonly audit: MockAudit;
   private readonly snapshots: MockSnapshots;
   private readonly topology: MockTopology;
+  /** The open rooms (AD-43). Not part of the contract: tests drive it (`rooms.close(key)`). */
+  readonly rooms: MockRooms;
   /** Live queries and the query cache (STUDY-131 AD-25). Not part of the contract: tests drive it. */
   readonly subscriptions: MockSubscriptions;
   private readonly systemTables: MockSystemTables;
@@ -415,6 +423,7 @@ export class MockDataSource implements DashboardDataSource {
     const docs = fixture.tables.reduce((n, t) => n + t.documents.length, 0);
     this.subscriptions = new MockSubscriptions(this.rnd, () => this.scheduler.now(), docs * 3);
     this.rerunRnd = createRandom((opts.seed ?? 1) ^ 0x7ace);
+    this.rooms = new MockRooms(opts.seed ?? 1, () => this.scheduler.now(), opts.now ?? Date.now());
     this.stats = {
       at: opts.now ?? Date.now(),
       commitTs: docs * 3,
@@ -532,7 +541,12 @@ export class MockDataSource implements DashboardDataSource {
   }
 
   getStats(opts?: CallOptions): Promise<DeploymentStats> {
-    return this.call(opts?.signal, () => ({ ...this.stats }));
+    return this.call(opts?.signal, () => this.statsNow());
+  }
+
+  /** The latest sample, with the rooms' gauges and counters as they stand. */
+  private statsNow(): DeploymentStats {
+    return { ...this.stats, rooms: this.rooms.stats() };
   }
 
   /** Moves the counters on, as a busy deployment would between two samples. */
@@ -542,6 +556,7 @@ export class MockDataSource implements DashboardDataSource {
     const conflicts = this.rnd.chance(0.2) ? 1 : 0;
     const hits = this.rnd.int(50, 400);
     const reruns = this.rnd.int(0, 30);
+    this.rooms.step();
     this.stats = {
       at: this.now(),
       commitTs: s.commitTs + commits,
@@ -554,13 +569,13 @@ export class MockDataSource implements DashboardDataSource {
       subscriptionReruns: s.subscriptionReruns + reruns,
       subscriptionUpdates: s.subscriptionUpdates + reruns * 2,
     };
-    return this.stats;
+    return this.statsNow();
   }
 
   watchStats(onStats: (s: DeploymentStats) => void, _onError?: (e: DataSourceError) => void): Unsubscribe {
     let live = true;
-    const first = setTimeout(() => live && onStats({ ...this.stats }), 0);
-    const timer = setInterval(() => live && onStats({ ...this.advanceStats() }), this.opts.statsIntervalMs ?? 1000);
+    const first = setTimeout(() => live && onStats(this.statsNow()), 0);
+    const timer = setInterval(() => live && onStats(this.advanceStats()), this.opts.statsIntervalMs ?? 1000);
     return () => {
       live = false;
       clearTimeout(first);
@@ -1533,6 +1548,34 @@ export class MockDataSource implements DashboardDataSource {
     return this.call(opts?.signal, () => {
       this.canViewTopology();
       return this.topology.snapshot();
+    });
+  }
+
+  // ---------------------------------------------------------------- rooms (AD-43), simulated
+
+  private canViewRooms() {
+    if (!this.opts.capabilities.operations.includes("viewMetrics"))
+      throw new DataSourceError("unauthorized", "this credential cannot view the deployment's rooms");
+  }
+
+  listRooms(opts?: CallOptions): Promise<RoomInfo[]> {
+    return this.call(opts?.signal, () => {
+      this.canViewRooms();
+      return this.rooms.list();
+    });
+  }
+
+  listRoomMembers(room: RoomRef, page: PageRequest, opts?: CallOptions): Promise<Page<RoomMember>> {
+    return this.call(opts?.signal, () => {
+      this.canViewRooms();
+      return this.rooms.members(room, page);
+    });
+  }
+
+  listRoomDefinitions(opts?: CallOptions): Promise<RoomDefinition[]> {
+    return this.call(opts?.signal, () => {
+      this.canViewRooms();
+      return this.rooms.definitions();
     });
   }
 

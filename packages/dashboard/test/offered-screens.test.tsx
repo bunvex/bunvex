@@ -28,7 +28,7 @@ function without(...methods: (keyof DashboardDataSource)[]) {
   for (const m of methods) (src as any)[m] = undefined;
   return src;
 }
-const NONE = ["getTopology", "listAuthUsers", "getSubscriptions"] as const;
+const NONE = ["getTopology", "listAuthUsers", "getSubscriptions", "listRooms"] as const;
 
 function mount(path: string, src: DashboardDataSource) {
   const history = createMemoryHistory({ initialEntries: [path] });
@@ -64,11 +64,19 @@ async function paletteTitles(query: string) {
 
 describe("screenOffered", () => {
   test("a listed screen needs every method; its pages are its own; any other screen is always offered", () => {
-    expect(Object.keys(OFFERED_SCREENS).sort()).toEqual(["/auth", "/subscriptions", "/topology"]);
+    expect(Object.keys(OFFERED_SCREENS).sort()).toEqual(["/auth", "/rooms", "/subscriptions", "/topology"]);
     const all = mock();
     for (const path of Object.keys(OFFERED_SCREENS)) expect(screenOffered(all, path)).toBe(true);
     const none = without(...NONE);
-    for (const to of ["/topology", "/auth", "/auth/users", "/subscriptions", "/subscriptions?path=a"])
+    for (const to of [
+      "/topology",
+      "/auth",
+      "/auth/users",
+      "/subscriptions",
+      "/subscriptions?path=a",
+      "/rooms",
+      "/rooms?room=k",
+    ])
       expect(screenOffered(none, to)).toBe(false);
     for (const to of ["/", "/database", "/files", "/schedules/functions", "/history", "/logs", "/settings"])
       expect(screenOffered(none, to)).toBe(true);
@@ -110,7 +118,7 @@ describe("the sidebar", () => {
   test("the mock offers them all: Topology, Authentication (under Manage) and Subscriptions are listed", async () => {
     mount("/", mock());
     await screen.findByRole("heading", { level: 1, name: "Overview" });
-    expect(navLinks()).toEqual(expect.arrayContaining(["Topology", "Authentication", "Subscriptions"]));
+    expect(navLinks()).toEqual(expect.arrayContaining(["Topology", "Authentication", "Subscriptions", "Rooms"]));
     expect(within(nav()).getByText("Manage")).toBeDefined();
   });
 
@@ -118,7 +126,7 @@ describe("the sidebar", () => {
     mount("/", without(...NONE));
     await screen.findByRole("heading", { level: 1, name: "Overview" });
     const links = navLinks();
-    for (const name of ["Topology", "Authentication", "Subscriptions"]) expect(links).not.toContain(name);
+    for (const name of ["Topology", "Authentication", "Subscriptions", "Rooms"]) expect(links).not.toContain(name);
     expect(links).toEqual(
       expect.arrayContaining(["Overview", "Database", "Schema", "Files", "Functions", "Schedules", "Logs", "History"]),
     );
@@ -153,6 +161,15 @@ describe("the sidebar", () => {
     expect(links).toContain("Topology");
     expect(links).toContain("Authentication");
     expect(links).not.toContain("Subscriptions");
+    expect(links).toContain("Rooms");
+  });
+
+  test("without listRooms only Rooms goes", async () => {
+    mount("/", without("listRooms"));
+    await screen.findByRole("heading", { level: 1, name: "Overview" });
+    const links = navLinks();
+    expect(links).toContain("Subscriptions");
+    expect(links).not.toContain("Rooms");
   });
 });
 
@@ -166,6 +183,7 @@ describe("deep links to a screen not offered", () => {
       "Subscriptions",
       "This deployment does not offer a view of its live queries yet.",
     ],
+    ["/rooms?name=rooms:doc", "Rooms", "This deployment does not offer a view of its rooms and presence scopes yet."],
   ] as const)
     test(`${path} says the deployment does not offer it`, async () => {
       mount(path, without(...NONE));

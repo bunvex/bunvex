@@ -11,6 +11,7 @@ import { describeAuthAdminContract } from "./contract-auth-admin.ts";
 import { describeClientsContract } from "./contract-clients.ts";
 import { type DeploymentContractOptions, describeDeploymentContract } from "./contract-deployment.ts";
 import { describeMetricsContract } from "./contract-metrics.ts";
+import { describeRoomsContract } from "./contract-rooms.ts";
 import { describeSnapshotContract, type SnapshotContractOptions } from "./contract-snapshot.ts";
 import { type DeploymentStateContractOptions, describeDeploymentStateContract } from "./contract-state.ts";
 import { describeSubscriptionsContract, expectExecutionLinks } from "./contract-subscriptions.ts";
@@ -76,6 +77,7 @@ export type ContractArea =
   | "state"
   | "metrics"
   | "topology"
+  | "rooms"
   | "subscriptions"
   | "systemTables"
   | "clients"
@@ -167,7 +169,7 @@ export function describeDataSourceContract(
       expect(typeof c.readOnly).toBe("boolean");
       for (const op of c.operations) expect(OPERATIONS).toContain(op);
       const s = await src.getStats();
-      for (const v of Object.values(s)) expect(Number.isFinite(v)).toBe(true);
+      for (const [k, v] of Object.entries(s)) if (k !== "rooms") expect(Number.isFinite(v)).toBe(true);
     });
 
     // -------------------------------------------------------------- tables and schema
@@ -756,6 +758,8 @@ export function describeDataSourceContract(
     describeMetricsContract({ make, test });
     area = "topology";
     describeTopologyContract({ make, test, watchTimeoutMs });
+    area = "rooms";
+    describeRoomsContract({ make, test });
     area = "subscriptions";
     describeSubscriptionsContract({ make, test, watchTimeoutMs });
     area = "systemTables";

@@ -3,7 +3,8 @@
 - **Status:** decided. The owner accepted AD-43 on 2026-10-16 with every recommendation of §6: polled `/api/debug/rooms*`
   endpoints, the Rooms screen and the definitions on the Functions screen, the counters, a 1 s period, then the
   event tap, then the actions. This session builds the server side and the data source, with the dashboard session
-  building the screens.
+  building the screens. Steps 1–4 (§5) are built: the read and the counters (#714, #719, #722); the event tap
+  and the actions are to come.
 - **Convex source read:** nothing to read. Convex has no rooms (STUDY-164 §1), so its dashboard has no screen for them.
 - **Related:**
   - [STUDY-164](STUDY-164-ephemeral-rooms.md): rooms and presence scopes, AD-42, built.
@@ -120,17 +121,93 @@ Both are logged in the audit log, as the dashboard's other writes are, and both 
 
 The parts can ship in this order, one PR each:
 1. **Server side.** The hub's room list, members page and counters, and the `/api/debug/rooms*` endpoints. Tests,
-   and a measurement.
+   and a measurement. Built: #714.
 2. **Data source.** The contract (`listRooms`, `listRoomMembers`, `watchRoomEvents`, `getStats` with the new
-   counters), the server source and the mock.
+   counters), the server source and the mock. Built: #719.
 3. **Screens.** The Rooms screen with its detail, and the definitions on the Functions screen, with Playwright e2e
-   tests.
-4. **Health.** The room counters on the Health screen.
+   tests. Built: #722 (§5.1).
+4. **Health.** The room counters on the Health screen. Built: #722, with step 3 (§5.1), on the Overview (the screen
+   that was Health).
 5. **Event tap.** The ring buffer and the long poll on the server, and the panel on the screen.
 6. **Actions.** Send a test event, remove a member, close a room, with the audit log.
 
 Parts 1–4 are the read and observability base. Parts 5 and 6 can wait for the owner's go-ahead (D6, D7). The
 dashboard is the other session's area (sandbox-86), so the screen PRs would be coordinated with it.
+
+### 5.1 Screens (step 3)
+
+Built in PR #722, on the data source of step 2 (`listRooms`, `listRoomMembers`, `listRoomDefinitions`,
+`getStats().rooms`). Steps 3 and 4 of the plan ship together: the counters are small.
+
+**The Rooms screen** (`/rooms`, `packages/dashboard/src/rooms/`), in the sidebar's Observe group after Subscriptions
+and in the command palette.
+- It is gated as STUDY-149's other optional screens (`offered-screens.tsx`): listed only for a source with
+  `listRooms`; a typed URL on a source without it says "This deployment does not offer a view of its rooms and
+  presence scopes yet." A deployment that has the method but no rooms (an older bunvex) answers `not_found`, shown
+  as the empty state "This deployment does not run rooms.", not as an error.
+- The list is a data grid: definition, kind (Room or Presence scope), args (the dashboard's literal notation on one
+  line, shortened past 80 characters), members, connections, opened (relative, the absolute time in its tooltip).
+  Its order is the source's, by name then key, whose last part is the args; "Sort by Members" puts the most members
+  first, keeping that order on ties. A definition filter keeps one definition's rooms. Filter, sort and the open room
+  are in the URL (`?name=`, `?sort=members`, `?room=<key>`).
+- A room opens in the docked side panel (UI-01 §22.1): kind, args (the literal view the document panel uses),
+  members, connections, opened, then the members as a list, a page of 100 at a time ("Load 100 more"). A room's
+  member shows memberId, userId ("Signed out" for `null`), "Cannot publish" and "Reconnecting" (`graced`) badges,
+  connections, joined, last activity and the presence; a scope's user shows userId, "Idle", tabs (connections),
+  "Reconnecting", joined, last activity and the state. A presence or state shows on one line and opens, in place, to
+  the whole value. A list, not a grid: the panel is 416 px wide by default and a member has eight facts.
+- A room that leaves the list has closed (its last member left). The panel keeps the room as last listed, says
+  "Closed — its last member left. This is what it showed last." in a status line, dims the members and stops asking
+  for them; no error is shown. A link to a room that was never seen open in this visit says "This room is not open:
+  it closed, or the link is old."
+- No `viewMetrics`: "This credential cannot view the deployment's rooms.", as the Subscriptions screen.
+
+**The definitions on the Functions screen** (`packages/dashboard/src/functions/rooms.tsx`). The function tree stays
+Convex's, built from `listFunctions` alone; the definitions are a second navigation, "Rooms and presence", under it
+in the same column, filtered by the same search. One opens as `/functions?room=<name>`: its kind and module, the
+args validator, the presence (a room's) or state (a scope's) validator as `v.*` code (the function view's
+`ValidatorCode`), the events with their payloads, and "Open rooms", a link to the Rooms screen filtered to it. They
+are read under the function list's query key, so a push heard by `watchFunctions` lists them again; a deployment
+without rooms (`not_found`) shows no list and no error.
+
+**The counters on the Overview** (the screen that was Health, UI-01 §27; `packages/dashboard/src/screens/room-
+counters.tsx`). A collapsed "Rooms" section, beside the Engine one, present only when the stats carry `rooms`. Its
+summary line says the gauges from the Overview's own stats samples ("2 open, 8 members, 9 connections"); opened, it
+shows the three gauges as they are and each counter's total with its rate per second between the last two samples
+(0 across a restart, when a counter goes back): joins with the refusals by a gate and by a limit, leaves with the
+grace expiries, presence updates and events with the ones dropped by the rate limit (a warning line when more were
+dropped since the last sample), resyncs, and memberships ended (`RoomLeft`).
+
+**Polling (D5).** The list, an open room's members and the open Rooms section are read every second
+(`ROOMS_POLL_MS`) through TanStack Query's `refetchInterval`, which does not run while the tab is hidden. While the
+deployment is disconnected nothing is asked (STUDY-149 PR 6); `rooms` joined the polled reads that are asked again
+at once when it comes back (`connection.tsx`). Nothing is read for rooms while no rooms view is shown.
+
+**Tests.**
+- Unit (happy-dom, axe without contrast): `test/rooms.test.tsx` (the words; the list, filter, sort; a room's and a
+  scope's members; closing; a stale link; paging; `not_found`; another error with retry; no `viewMetrics`; the
+  1 s polls; disconnection), `test/functions-rooms.test.tsx`, `test/overview-rooms.test.tsx`, and the offered-screens
+  and sidebar tests extended for Rooms.
+- E2E in Chromium on the mock (`apps/dashboard/e2e/dashboard.e2e.ts`): the list, a room's members polled (a cursor
+  moves), a presence opened, the definition, the Overview's section; axe with contrast in both themes.
+- E2E in Chromium on a live server (`packages/sync-e2e/dashboard/rooms.e2e.ts`): no room at first; a client joins and
+  sets its presence; the room and its member show within a poll; the definitions; the Overview's counters; the
+  client leaves and the panel says closed with no alert; axe.
+
+**Sabotage** (each restored, `git diff` clean after each):
+
+| Broken | Caught by |
+|---|---|
+| A room missing from the list shown as "unknown" instead of "closed" | words test, closing test |
+| The list not polled | closing test, polls test |
+| `not_found` handled as an error | the empty-state test |
+| Rooms not gated on `listRooms` | four offered-screens tests |
+| `rooms` not asked again on reconnection | disconnection test |
+| The Overview section shown without `rooms` | "stats without rooms" test |
+| A rate taken across a restart | rates test |
+| The definitions inside the function tree's navigation | the Functions tree test, the definitions test |
+| An open room's members not polled | polls test |
+| A closed room's members still polled | closing test (the members stay after a second poll) |
 
 ## 6. Questions for the owner
 

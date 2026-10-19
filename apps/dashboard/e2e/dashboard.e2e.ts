@@ -467,6 +467,57 @@ describe("the dashboard in a browser", () => {
     await still.close();
   });
 
+  test("Rooms (AD-43): the list, a room's members, its definition and the Overview's counters; axe in both themes", async () => {
+    const axeOn = async (page: Page) => {
+      await page.addScriptTag({ content: AXE });
+      return page.evaluate(async () => {
+        // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
+        const r = await (window as any).axe.run(document, { resultTypes: ["violations"] });
+        return r.violations.map((v: { id: string; nodes: unknown[] }) => `${v.id} (${v.nodes.length})`);
+      });
+    };
+    for (const colorScheme of ["light", "dark"] as const) {
+      const { page, errors, external, close } = await open("/rooms", { colorScheme });
+      await heading(page, "Rooms");
+      const grid = page.getByRole("grid", { name: "Open rooms" });
+      await cellOf(page, /^rooms:doc$/).waitFor();
+      expect(await page.getByTestId("rooms-summary").textContent()).toBe(
+        "2 open (1 room, 1 presence scope) · 8 members · 9 connections",
+      );
+      expect(await grid.getByRole("row").count()).toBe(3);
+      // a room opens in the docked panel, its members polled: a cursor moves within a few seconds
+      await cellOf(page, /^rooms:doc$/).click();
+      const panel = page.getByRole("complementary", { name: "rooms:doc" });
+      const members = panel.getByRole("region", { name: "Members" });
+      await members.getByRole("listitem").nth(4).waitFor();
+      const first = members.getByRole("listitem").first().locator("summary");
+      const before = await first.textContent();
+      await expect_(async () => expect(await first.textContent()).not.toBe(before), 5000);
+      await first.click();
+      await members.getByRole("listitem").first().locator("pre").waitFor();
+      expect(await axeOn(page)).toEqual([]);
+      // its definition on the Functions screen, apart from the function tree
+      await page.goto(url("/functions?room=rooms:doc"));
+      await heading(page, "rooms:doc");
+      await page.getByRole("navigation", { name: "Rooms and presence" }).waitFor();
+      await page.getByRole("region", { name: "Events" }).getByText("reaction").waitFor();
+      expect(await axeOn(page)).toEqual([]);
+      // the Overview's Rooms section, open
+      await page.goto(url("/"));
+      await heading(page, "Overview");
+      await page.getByText(/— 2 open, 8 members, 9 connections/).click();
+      await page.getByRole("region", { name: "Rooms now, and counters since the server started" }).waitFor();
+      await page
+        .getByText(/^[\d.]+\/s · [\d,]+ dropped by the rate limit$/)
+        .first()
+        .waitFor({ timeout: 10_000 });
+      expect(await axeOn(page)).toEqual([]);
+      expect(errors).toEqual([]);
+      expect(external).toEqual([]);
+      await close();
+    }
+  });
+
   test("Topology: clients by platform, by app on request; a group's panel says which SDKs are outdated", async () => {
     const { page, errors, close } = await open("/topology?nodes=4");
     await heading(page, "Topology");

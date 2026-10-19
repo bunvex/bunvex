@@ -33,6 +33,7 @@ const SCREENS: [string, string, string[]?][] = [
   ["Logs", "/logs"],
   ["History", "/history", ["audit"]],
   ["Subscriptions", "/subscriptions", ["live queries", "invalidations"]],
+  ["Rooms", "/rooms", ["presence", "members"]],
 ];
 const SETTINGS: [string, string][] = [
   ["General", "/settings/general"],

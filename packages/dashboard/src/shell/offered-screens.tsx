@@ -24,6 +24,8 @@ export const OFFERED_SCREENS: Readonly<Record<string, OfferedScreen>> = {
   "/topology": { title: "Topology", what: "its topology", requires: ["getTopology"] },
   "/auth": { title: "Authentication", what: "user management", requires: ["listAuthUsers"] },
   "/subscriptions": { title: "Subscriptions", what: "a view of its live queries", requires: ["getSubscriptions"] },
+  // AD-43: a deployment without rooms still has the method (it answers `not_found`, and the screen says so)
+  "/rooms": { title: "Rooms", what: "a view of its rooms and presence scopes", requires: ["listRooms"] },
 };
 
 /** The entry `to` falls under (`/auth/users` under `/auth`), if any. */
