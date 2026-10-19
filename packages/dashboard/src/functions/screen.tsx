@@ -21,6 +21,7 @@ import { DashLink, type FunctionsSearch, functionsRoute } from "../router.tsx";
 import { useRunner } from "../runner/context.tsx";
 import { BAR1 } from "../shell/bars.ts";
 import { displayValidator } from "../validators.ts";
+import { matchDefinitions, RoomDefinitionsList, RoomDefinitionView, useRoomDefinitions } from "./rooms.tsx";
 import {
   buildFunctionTree,
   describeFunction,
@@ -102,52 +103,66 @@ function Branch(props: {
   );
 }
 
-function FunctionsSidebar({ functions, current }: { functions: FunctionInfo[]; current?: string }) {
+function FunctionsSidebar({
+  functions,
+  current,
+  currentRoom,
+}: {
+  functions: FunctionInfo[];
+  current?: string;
+  currentRoom?: string;
+}) {
   const [query, setQuery] = useState("");
   const searchId = useId();
   const tree = useMemo(() => buildFunctionTree(matchFunctions(functions, query)), [functions, query]);
+  // the room and presence definitions (AD-43): their own list under the tree, which stays the functions' alone
+  const definitions = matchDefinitions(useRoomDefinitions(), query);
   // the open function in view inside the tree: stacked on a phone, the tree is short, and the open row
   // otherwise showed as a sliver at its bottom edge (UX-19)
-  const list = useRef<HTMLUListElement>(null);
+  const column = useRef<HTMLDivElement>(null);
   // a block body: scrollIntoView returns a Promise in recent browsers, and an effect may only return a cleanup
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll when the open function changes
   useEffect(() => {
-    list.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest" });
-  }, [current]);
+    column.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest" });
+  }, [current, currentRoom]);
   return (
-    <nav
-      aria-label="Functions"
+    // the function tree (Convex's) and, below it, the room and presence definitions (AD-43), each its own nav
+    <div
+      ref={column}
       className="flex max-h-72 shrink-0 flex-col border-b lg:max-h-none lg:w-64 lg:border-r lg:border-b-0"
     >
-      {/* on Bar 1's line (44 px), as the filter columns' headers */}
-      <div className="flex min-h-11 items-center border-b px-3">
-        <label htmlFor={searchId} className="sr-only">
-          Search functions
-        </label>
-        <Input
-          id={searchId}
-          type="search"
-          className="h-7"
-          placeholder="Search functions"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </div>
-      <ul ref={list} className="flex-1 overflow-y-auto py-2">
-        {tree.map((n) => (
-          <Branch
-            key={n.kind === "folder" ? n.path : n.module}
-            node={n}
-            depth={0}
-            current={current}
-            forceOpen={query.trim() !== ""}
+      <nav aria-label="Functions" className="flex min-h-0 flex-1 flex-col">
+        {/* on Bar 1's line (44 px), as the filter columns' headers */}
+        <div className="flex min-h-11 items-center border-b px-3">
+          <label htmlFor={searchId} className="sr-only">
+            Search functions
+          </label>
+          <Input
+            id={searchId}
+            type="search"
+            className="h-7"
+            placeholder="Search functions"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
           />
-        ))}
-        {tree.length === 0 && (
-          <li className="px-3 py-2 text-sm text-muted-foreground">No function matches “{query}”.</li>
-        )}
-      </ul>
-    </nav>
+        </div>
+        <ul className="flex-1 overflow-y-auto py-2">
+          {tree.map((n) => (
+            <Branch
+              key={n.kind === "folder" ? n.path : n.module}
+              node={n}
+              depth={0}
+              current={current}
+              forceOpen={query.trim() !== ""}
+            />
+          ))}
+          {tree.length === 0 && (
+            <li className="px-3 py-2 text-sm text-muted-foreground">No function matches “{query}”.</li>
+          )}
+        </ul>
+      </nav>
+      <RoomDefinitionsList definitions={definitions} current={currentRoom} className={LINK} />
+    </div>
   );
 }
 
@@ -303,13 +318,17 @@ export function FunctionsScreen() {
   useLiveFunctions();
   const search = functionsRoute.useSearch();
   const fn = functions.find((f) => f.path === search.function);
+  const definitions = useRoomDefinitions();
+  const def = fn ? undefined : definitions.find((d) => d.name === search.room);
   return (
     // full-bleed inside <main>: the sidebar and the details panel run to its edges
     // from lg a screen's height: the tree and the function scroll inside, as the Database screen's
     <div className="-m-4 flex min-h-[calc(100svh-3rem)] flex-col md:-m-6 lg:h-[calc(100svh-3rem)] lg:flex-row">
-      <FunctionsSidebar functions={functions} current={fn?.path} />
+      <FunctionsSidebar functions={functions} current={fn?.path} currentRoom={def?.name} />
       {fn ? (
         <FunctionView key={fn.path} fn={fn} />
+      ) : def ? (
+        <RoomDefinitionView key={def.name} def={def} ValidatorCode={ValidatorCode} />
       ) : (
         <div className="flex-1 p-4 md:p-6">
           <h1 className="text-xl font-semibold tracking-tight">Functions</h1>
@@ -318,7 +337,9 @@ export function FunctionsScreen() {
               ? "This deployment has no functions yet. They appear once code is pushed."
               : search.function
                 ? `There is no function ${search.function}. Pick one on the left.`
-                : "Pick a function on the left to see its details and its logs."}
+                : search.room
+                  ? `There is no room or presence definition ${search.room}. Pick one on the left.`
+                  : "Pick a function on the left to see its details and its logs."}
           </p>
         </div>
       )}
