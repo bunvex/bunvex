@@ -295,7 +295,7 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
   // The CLI's `run` lists them when a function is missing (Convex's `_system/cli/modules:apiSpec`).
   "_system/cli/modules:apiSpec": {
     args: { componentId },
-    handler: async (_db, _args, env) => env.functions?.apiSpec() ?? [],
+    handler: async (_db, a: { componentId?: string | null }, env) => env.functions?.apiSpec(a.componentId) ?? [],
   },
   // The CLI's (STUDY-37, Convex's `_system/cli/queryEnvironmentVariables`): every variable, by name.
   "_system/cli/queryEnvironmentVariables": {

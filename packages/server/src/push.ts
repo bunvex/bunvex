@@ -360,6 +360,95 @@ export async function evaluateAuthConfig(
   return (c as { providers: unknown[] }).providers;
 }
 
+/** A module's default export, evaluated with `config`'s seed and time; its error as a `PushError` (`code`). */
+async function evaluateDefault(
+  config: { seed: Uint32Array; timestamp: number },
+  m: ModuleSource,
+  env: Record<string, string>,
+  code: string,
+  what: string,
+  bare = false,
+) {
+  try {
+    const v = await CodeVersion.load([{ ...m, path: m.path }], { seed: config.seed, timestamp: config.timestamp, env });
+    return (v.modules.get(m.path)!.module.namespace as { default?: unknown }).default;
+  } catch (e) {
+    const message =
+      e instanceof InvalidModulesError ? e.message.split("\n").slice(1).join("\n") : describeUncaught(e).message;
+    if (bare) throw new PushError(code, message.replace(/^Failed to analyze [^:]*: /, ""));
+    throw new PushError(code, `Hit an error while evaluating your ${what}:\n${message.trimEnd()}`);
+  }
+}
+
+/**
+ * Convex's `evaluate_components` and the tree's check after it: each component definition's modules analyzed
+ * (the app's import seed and time, no user variables: "User env vars are root-only") and its schema evaluated;
+ * the definitions evaluated from the app's (`definition-eval.ts`), or Convex's default app when the push sends
+ * none; the declarations checked and the tree instantiated (`component-tree.ts`).
+ */
+export async function evaluateComponents(
+  pushed: PushedComponents,
+  config: { seed: Uint32Array; timestamp: number },
+  env: Record<string, string>,
+  rootFunctions: Record<string, AnalyzedModule>,
+  rootSchema: SchemaDefinition | null,
+  forCodegen: boolean,
+) {
+  const versions = new Map<string, CodeVersion>();
+  const schemas = new Map<string, SchemaDefinition | null>();
+  for (const c of pushed.components) {
+    // Convex's `ensure!`: a system error.
+    if (versions.has(c.definitionPath)) throw new Error(`Component definition ${c.definitionPath} pushed twice`);
+    try {
+      versions.set(c.definitionPath, await CodeVersion.load(c.functions, { ...config, env: {} }));
+    } catch (e) {
+      throw loadError(e);
+    }
+    let schema: SchemaDefinition | null = null;
+    if (c.schema) {
+      schema = schemaExport(await evaluateDefault(config, c.schema, {}, "InvalidSchema", "schema", true));
+      checkIndexReferences(schema);
+    }
+    schemas.set(c.definitionPath, schema);
+  }
+  let evaluated: Map<string, NewComponentDefinition>;
+  if (pushed.definition) {
+    try {
+      evaluated = await evaluateDefinitions({
+        app: { definition: pushed.definition, dependencies: pushed.dependencies },
+        components: new Map(
+          pushed.components.map((c) => [c.definitionPath, { definition: c.definition, dependencies: c.dependencies }]),
+        ),
+        env,
+      });
+    } catch (e) {
+      if (e instanceof DefinitionError) throw new PushError(e.code, e.message);
+      throw e;
+    }
+  } else evaluated = new Map([["", DEFAULT_ROOT]]);
+  const udfServerVersions = new Map(pushed.components.map((c) => [c.definitionPath, c.udfServerVersion]));
+  const definitions = new Map(
+    [...evaluated].map(([path, definition]) => [
+      path,
+      {
+        definition,
+        schema: path === "" ? rootSchema : (schemas.get(path) ?? null),
+        functions: path === "" ? rootFunctions : versions.get(path)!.analysis,
+        udfServerVersion: path === "" ? null : (udfServerVersions.get(path) ?? null),
+      },
+    ]),
+  );
+  let tree: CheckedComponent;
+  try {
+    checkEnvVarDeclarations(definitions);
+    tree = instantiateRoot(definitions, { validateEnvVars: !forCodegen });
+  } catch (e) {
+    if (e instanceof ComponentTreeError) throw new PushError(e.code, e.message);
+    throw e;
+  }
+  return { tree, definitions, versions };
+}
+
 export class PushService {
   private pending = new Map<string, Pending>();
   constructor(private deps: PushDeps) {}
@@ -420,20 +509,7 @@ export class PushService {
     /** A component's schema: Convex answers its exception alone (`evaluate_components`), with no preamble. */
     bare = false,
   ) {
-    const config = await udfConfig(this.deps.engine);
-    try {
-      const v = await CodeVersion.load([{ ...m, path: m.path }], {
-        seed: config.seed,
-        timestamp: config.timestamp,
-        env,
-      });
-      return (v.modules.get(m.path)!.module.namespace as { default?: unknown }).default;
-    } catch (e) {
-      const message =
-        e instanceof InvalidModulesError ? e.message.split("\n").slice(1).join("\n") : describeUncaught(e).message;
-      if (bare) throw new PushError(code, message.replace(/^Failed to analyze [^:]*: /, ""));
-      throw new PushError(code, `Hit an error while evaluating your ${what}:\n${message.trimEnd()}`);
-    }
+    return evaluateDefault(await udfConfig(this.deps.engine), m, env, code, what, bare);
   }
 
   /**
@@ -607,7 +683,7 @@ export class PushService {
       schema = s;
     }
     const auth = authModule ? await evaluateAuthConfig(this.deps.engine, authModule, env) : null;
-    const components = await this.evaluateComponents(
+    const components = await evaluateComponents(
       pushed,
       config,
       env,
@@ -652,78 +728,6 @@ export class PushService {
       components: { ...components, change, configs: new Map(pushed.components.map((c) => [c.definitionPath, c])) },
     });
     return this.response(auth, components, change, externalDepsId);
-  }
-
-  /**
-   * Convex's `evaluate_components` and the tree's check after it: each component definition's modules analyzed
-   * (the app's import seed and time, no user variables: "User env vars are root-only") and its schema evaluated;
-   * the definitions evaluated from the app's (`definition-eval.ts`), or Convex's default app when the push sends
-   * none; the declarations checked and the tree instantiated (`component-tree.ts`).
-   */
-  private async evaluateComponents(
-    pushed: PushedComponents,
-    config: { seed: Uint32Array; timestamp: number },
-    env: Record<string, string>,
-    rootFunctions: Record<string, AnalyzedModule>,
-    rootSchema: SchemaDefinition | null,
-    forCodegen: boolean,
-  ) {
-    const versions = new Map<string, CodeVersion>();
-    const schemas = new Map<string, SchemaDefinition | null>();
-    for (const c of pushed.components) {
-      // Convex's `ensure!`: a system error.
-      if (versions.has(c.definitionPath)) throw new Error(`Component definition ${c.definitionPath} pushed twice`);
-      try {
-        versions.set(c.definitionPath, await CodeVersion.load(c.functions, { ...config, env: {} }));
-      } catch (e) {
-        throw loadError(e);
-      }
-      let schema: SchemaDefinition | null = null;
-      if (c.schema) {
-        schema = schemaExport(await this.evaluateDefault(c.schema, {}, "InvalidSchema", "schema", true));
-        checkIndexReferences(schema);
-      }
-      schemas.set(c.definitionPath, schema);
-    }
-    let evaluated: Map<string, NewComponentDefinition>;
-    if (pushed.definition) {
-      try {
-        evaluated = await evaluateDefinitions({
-          app: { definition: pushed.definition, dependencies: pushed.dependencies },
-          components: new Map(
-            pushed.components.map((c) => [
-              c.definitionPath,
-              { definition: c.definition, dependencies: c.dependencies },
-            ]),
-          ),
-          env,
-        });
-      } catch (e) {
-        if (e instanceof DefinitionError) throw new PushError(e.code, e.message);
-        throw e;
-      }
-    } else evaluated = new Map([["", DEFAULT_ROOT]]);
-    const udfServerVersions = new Map(pushed.components.map((c) => [c.definitionPath, c.udfServerVersion]));
-    const definitions = new Map(
-      [...evaluated].map(([path, definition]) => [
-        path,
-        {
-          definition,
-          schema: path === "" ? rootSchema : (schemas.get(path) ?? null),
-          functions: path === "" ? rootFunctions : versions.get(path)!.analysis,
-          udfServerVersion: path === "" ? null : (udfServerVersions.get(path) ?? null),
-        },
-      ]),
-    );
-    let tree: CheckedComponent;
-    try {
-      checkEnvVarDeclarations(definitions);
-      tree = instantiateRoot(definitions, { validateEnvVars: !forCodegen });
-    } catch (e) {
-      if (e instanceof ComponentTreeError) throw new PushError(e.code, e.message);
-      throw e;
-    }
-    return { tree, definitions, versions };
   }
 
   private response(
@@ -1001,3 +1005,18 @@ function checkAppEnv(app: NewComponentDefinition, vars: Map<string, string>) {
 
 type CronDiff = { added: string[]; updated: string[]; deleted: string[] };
 const emptyCronDiff = (): CronDiff => ({ added: [], updated: [], deleted: [] });
+
+/**
+ * What `start_push` answers as `analysis` for a push's definitions, without a deployment (STUDY-156 Q-1, DV-532):
+ * the CLI's codegen reads each definition's children, exports and validators from it, as Convex's reads its
+ * `forCodegen` push. The app's own functions are left out (its `api` is typed from its code).
+ */
+export async function componentAnalysis(
+  appDefinition: { definition?: ModuleSource | null; dependencies?: unknown },
+  componentDefinitions: unknown,
+) {
+  const pushed = parsePushedComponents(appDefinition, componentDefinitions);
+  const config = { seed: crypto.getRandomValues(new Uint32Array(8)), timestamp: Date.now() };
+  const { definitions } = await evaluateComponents(pushed, config, {}, {}, null, true);
+  return analysisAnswer(definitions);
+}
