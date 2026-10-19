@@ -3,7 +3,8 @@
 // A single module the caller sends, loaded and analyzed alone (it may import only the server's modules, the
 // function tester's builders `bunvex:/_system/repl/wrappers.js` among them), whose default export, a query,
 // runs once, uncached; nothing of it is kept. `bunvex run --inline-query` and the MCP server use it.
-import { CodeVersion, InvalidModulesError, type LoadOptions, moduleName } from "./code-version.ts";
+import { type CodeVersion, InvalidModulesError, type LoadOptions, moduleName } from "./code-version.ts";
+import { loadCode } from "./function-executor.ts";
 import { badModulePath } from "./function-path.ts";
 import type { FunctionDef, QueryDef } from "./functions.ts";
 
@@ -45,7 +46,7 @@ export async function standaloneQuery(
   const path = canonical(bundle.path);
   let version: CodeVersion;
   try {
-    version = await CodeVersion.load(
+    version = await loadCode(
       [{ path, source: bundle.source, environment, ...(bundle.sourceMap ? { sourceMap: bundle.sourceMap } : {}) }],
       load,
     );

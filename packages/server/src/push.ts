@@ -55,7 +55,7 @@ import {
 } from "./code-store.ts";
 import {
   type AnalyzedModule,
-  CodeVersion,
+  type CodeVersion,
   FunctionExportError,
   InvalidModulesError,
   type ModuleSource,
@@ -80,6 +80,7 @@ import {
   externalDepsPath,
   type NodeDependency,
 } from "./external-deps.ts";
+import { loadCode } from "./function-executor.ts";
 import { indexAuditDiff, indexDiffJson } from "./push-audit.ts";
 import {
   analysisAnswer,
@@ -332,7 +333,7 @@ export async function evaluateAuthConfig(
   let missing: string | null = null;
   let c: unknown;
   try {
-    const v = await CodeVersion.load([m], {
+    const v = await loadCode([m], {
       seed: config.seed,
       timestamp: config.timestamp,
       env,
@@ -370,7 +371,7 @@ async function evaluateDefault(
   bare = false,
 ) {
   try {
-    const v = await CodeVersion.load([{ ...m, path: m.path }], { seed: config.seed, timestamp: config.timestamp, env });
+    const v = await loadCode([{ ...m, path: m.path }], { seed: config.seed, timestamp: config.timestamp, env });
     return (v.modules.get(m.path)!.module.namespace as { default?: unknown }).default;
   } catch (e) {
     const message =
@@ -400,7 +401,7 @@ export async function evaluateComponents(
     // Convex's `ensure!`: a system error.
     if (versions.has(c.definitionPath)) throw new Error(`Component definition ${c.definitionPath} pushed twice`);
     try {
-      versions.set(c.definitionPath, await CodeVersion.load(c.functions, { ...config, env: {} }));
+      versions.set(c.definitionPath, await loadCode(c.functions, { ...config, env: {} }));
     } catch (e) {
       throw loadError(e);
     }
@@ -666,7 +667,7 @@ export class PushService {
     const env = await this.deps.deploymentEnv();
     let version: CodeVersion;
     try {
-      version = await CodeVersion.load(modules, {
+      version = await loadCode(modules, {
         seed: config.seed,
         timestamp: config.timestamp,
         env,
