@@ -194,6 +194,8 @@ gaps.
   system-field mismatch's display, a query on a missing table or index, a `$` field in a system function's
   arguments and a push's table numbers, matched to Convex (#664–#669); the analyzed line of a function (the
   dashboard's Functions tree) differs where esbuild and Bun print a bundle differently (DV-520, accepted).
+- `bunvex-local-backend`'s command line (STUDY-172): its misuse is reported as clap reports Convex's binary's,
+  checked against it; left, a `0x`-prefixed instance secret, which Convex accepts and bunvex refuses (Q1).
 - Operations:
   - streaming import past `clear_tables` (built with its audit event, STUDY-141 PR 1): Airbyte records,
     Fivetran operations and primary-key indexes (PRs 2–4, future work by the owner's choice, 2026-10-11). The

@@ -272,13 +272,13 @@ test("bunvex-local-backend --http-proxy: checked as clap checks a URL; without a
   const flags = (extra: string[]) => parseLocalBackendFlags(["--instance-secret", SECRET, ...extra]);
   expect(flags(["--http-proxy", "http://proxy:4750"])).toMatchObject({ httpProxy: "http://proxy:4750" });
   expect(flags(["--http-proxy", "notaurl"])).toBe(
-    "invalid value 'notaurl' for '--http-proxy <HTTP_PROXY>': relative URL without a base",
+    "error: invalid value 'notaurl' for '--http-proxy <HTTP_PROXY>': relative URL without a base\n\nFor more information, try '--help'.",
   );
   expect(flags(["--http-proxy", "socks5://p:1"])).toContain("the proxy's scheme must be http or https");
   expect(flags([])).not.toHaveProperty("httpProxy");
   expect(flags(["--deny-addresses", "private"])).toMatchObject({ denyAddresses: "private" });
   expect(flags(["--deny-addresses", "all"])).toBe(
-    "invalid value 'all' for '--deny-addresses <DENY_ADDRESSES>': possible values: none, metadata, private",
+    "error: invalid value 'all' for '--deny-addresses <DENY_ADDRESSES>'\n  [possible values: none, metadata, private]\n\nFor more information, try '--help'.",
   );
   // Running: the warning without a proxy and without bunvex's screen (DV-325), none otherwise.
   for (const proxy of [["--deny-addresses", "none"], [], ["--http-proxy", "http://127.0.0.1:9"]]) {
