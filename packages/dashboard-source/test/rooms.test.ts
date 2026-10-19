@@ -522,3 +522,75 @@ describe("watchRoomEvents", () => {
     await until(() => tap.aborted === 2, "the second abort");
   });
 });
+
+describe("the actions (STUDY-165 §3.4)", () => {
+  /** A source whose server answers `respond`, recording each request's method, path and JSON body. */
+  function posting(respond: (path: string) => Response) {
+    const asked: { method: string; path: string; body: unknown; auth: string | null }[] = [];
+    const http = new AdminHttp({
+      url: "http://x",
+      adminKey: "k",
+      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const req = new Request(String(input), init);
+        const path = new URL(req.url).pathname;
+        asked.push({ method: req.method, path, body: await req.json(), auth: req.headers.get("authorization") });
+        return respond(path);
+      }) as typeof fetch,
+    });
+    return { rooms: roomsReads(http), asked };
+  }
+  const KEY = { key: 'room|rooms:doc|{"id":"a"}' };
+
+  test("each POSTs its body with the admin key, and answers what the server counted", async () => {
+    const { rooms, asked } = posting((path) =>
+      path.endsWith("/broadcast")
+        ? Response.json({})
+        : path.endsWith("/remove")
+          ? Response.json({ removed: { connections: 2, extra: 1 } })
+          : Response.json({ closed: { members: 3, connections: 4 } }),
+    );
+    expect(await rooms.broadcastRoomEvent(KEY, "ping", { n: { $integer: "AQAAAAAAAAA=" } })).toBeUndefined();
+    expect(await rooms.removeRoomMember(KEY, "m1")).toEqual({ connections: 2 });
+    expect(await rooms.closeRoom(KEY)).toEqual({ members: 3, connections: 4 });
+    expect(asked).toEqual([
+      {
+        method: "POST",
+        path: "/api/debug/rooms/broadcast",
+        body: { key: KEY.key, event: "ping", data: { n: { $integer: "AQAAAAAAAAA=" } } },
+        auth: "Bunvex k",
+      },
+      { method: "POST", path: "/api/debug/rooms/remove", body: { key: KEY.key, memberId: "m1" }, auth: "Bunvex k" },
+      { method: "POST", path: "/api/debug/rooms/close", body: { key: KEY.key }, auth: "Bunvex k" },
+    ]);
+  });
+
+  test("null when there was nothing to remove or close", async () => {
+    const { rooms } = posting((path) =>
+      path.endsWith("/remove") ? Response.json({ removed: null }) : Response.json({ closed: null }),
+    );
+    expect(await rooms.removeRoomMember(KEY, "m1")).toBeNull();
+    expect(await rooms.closeRoom(KEY)).toBeNull();
+  });
+
+  test("errors: a refused key is unauthorized, a 400 invalid_request in the server's words, a room not open not_found", async () => {
+    const code = async (status: number, body: unknown) => {
+      const { rooms } = posting(() => Response.json(body, { status }));
+      const e = (await rooms.broadcastRoomEvent(KEY, "ping", {}).catch((x: unknown) => x)) as DataSourceError;
+      expect(e).toBeInstanceOf(DataSourceError);
+      return [e.code, e.message];
+    };
+    expect(await code(403, { code: "OperationNotPermitted", message: "no" })).toEqual(["unauthorized", "no"]);
+    expect(await code(400, { code: "BadRequest", message: 'This room has no event "ping".' })).toEqual([
+      "invalid_request",
+      'This room has no event "ping".',
+    ]);
+    expect(await code(404, { code: "RoomNotOpen", message: "The room is not open." })).toEqual([
+      "not_found",
+      "The room is not open.",
+    ]);
+    // an older server, without the routes
+    const [c, m] = await code(404, { code: "NotFound", message: "no route" });
+    expect(c).toBe("not_found");
+    expect(m).toMatch(/does not run rooms/);
+  });
+});

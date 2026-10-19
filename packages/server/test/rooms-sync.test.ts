@@ -30,7 +30,7 @@ async function setup() {
    * (a scope's canJoin): each says when it started, and waits until the test releases it.
    */
   const held = () => ({ entered: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() });
-  const waiting = { canJoin: held(), canPublish: held(), scope: held() };
+  const waiting = { canJoin: held(), canPublish: held(), scope: held(), relogin: held() };
   /** The names the shared gate ran as, as `ctx.meta.getFunctionMetadata()` gave them. */
   const gateNames: string[] = [];
   /** The shared gate's runs in flight now, and the most at once. */
@@ -82,6 +82,18 @@ async function setup() {
         state: { status: v.string() },
       }),
       lobby: room({ presence: v.any() }),
+      /** Ada may join at once; bob (let in) and carol (refused) wait for the test, as a new identity's gate. */
+      relogin: room({
+        canJoin: async (ctx: { auth: { getUserIdentity(): Promise<{ subject: string } | null> } }) => {
+          const me = (await ctx.auth.getUserIdentity())?.subject;
+          if (me === "bob" || me === "carol") {
+            waiting.relogin.entered.resolve();
+            await waiting.relogin.release.promise;
+          }
+          return me !== "carol";
+        },
+        presence: v.any(),
+      }),
       /** Publish: a signed-in user listed in `editors`. */
       board: room({
         canPublish: async (ctx: {
@@ -266,7 +278,7 @@ describe("rooms over the sync protocol", () => {
     expect(await a.error(1)).toMatchObject({ code: "limit" });
     a.event(1, "ping", { n: 1, pad: "y".repeat(5000) });
     await a.until(() => a.of("RoomError").length === 2);
-    expect(a.of("RoomError")[1]).toMatchObject({ code: "limit" });
+    expect(a.of("RoomError")[1]).toMatchObject({ code: "limit", message: "The event is 5016 bytes (limit 4096)." });
     a.join(3, "rooms:doc", { id: "y".repeat(5000) });
     await a.until(() => a.of("RoomError").length === 3);
     expect(a.of("RoomError")[2]).toMatchObject({ roomId: 3, code: "limit" });
@@ -483,6 +495,30 @@ describe("rooms over the sync protocol", () => {
     // The room the new user may still join is kept (as a new member, for a new user).
     expect(a.of("RoomError").filter((e) => e.roomId === 2)).toEqual([]);
   });
+
+  for (const next of ["bob", "carol"] as const)
+    test(`a dashboard removal while a new identity's gates run stays a removal (${next})`, async () => {
+      const { url, issuer, rooms, waiting } = await setup();
+      const a = await client(url);
+      a.authenticate(await issuer.sign({ sub: "ada" }));
+      a.join(1, "rooms:relogin", {});
+      const self = (await a.synced(1)).self;
+      a.authenticate(await issuer.sign({ sub: next }));
+      await waiting.relogin.entered.promise;
+      expect(rooms.removeMember({ kind: "room", name: "rooms:relogin", argsJson: "{}" }, self)).toEqual({
+        connections: 1,
+      });
+      const syncs = a.of("RoomSync").length;
+      waiting.relogin.release.resolve();
+      await a.until(() => a.of("RoomLeft").find((m) => m.roomId === 1));
+      // the identity's verdict lands after the removal: it must not rejoin (bob) nor overwrite it (carol)
+      await Bun.sleep(100);
+      expect(a.of("RoomLeft")).toEqual([
+        { type: "RoomLeft", roomId: 1, code: "removed", message: "Removed from the dashboard." },
+      ]);
+      expect(a.of("RoomSync").length).toBe(syncs);
+      expect(rooms.size.members).toBe(0);
+    });
 
   for (const [gate, name, args] of [
     ["canJoin", "rooms:doc", { id: "wait" }],

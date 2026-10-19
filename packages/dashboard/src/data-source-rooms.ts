@@ -1,7 +1,8 @@
 // The rooms and presence scopes in the dashboard contract (AD-43, STUDY-165) — a bunvex addition: Convex has no
 // rooms. What the hub keeps in memory (STUDY-164 §3.5), read once per call and polled by the Rooms screen. Every
-// method is optional — a source offers the screen by having them (detected with `typeof`) — and needs the
-// `viewMetrics` operation. Re-exported by `data-source.ts`.
+// method is optional — a source offers the screen by having them (detected with `typeof`). The reads need the
+// `viewMetrics` operation; the actions (send a test event, remove a member, close a room) are writes: they need
+// `writeData` and a credential that is not read-only. Re-exported by `data-source.ts`.
 import type {
   CallOptions,
   DataSourceError,
@@ -122,6 +123,11 @@ export type RoomEvent = {
  */
 export type RoomEventsInfo = { dropped: number; gap: boolean };
 
+/** What a removal ended: the member's connections (a scope's user may have several tabs). */
+export type RoomMemberRemoved = { connections: number };
+/** What closing a room ended: its members, and their connections. */
+export type RoomClosed = { members: number; connections: number };
+
 /**
  * A source offers the Rooms screen by having `listRooms`. A deployment without rooms rejects all three methods with
  * a `DataSourceError` of code `not_found` ("This deployment does not run rooms."): the screen shows an empty state,
@@ -164,4 +170,27 @@ export interface RoomsFeatures {
     onError: (error: DataSourceError) => void,
     onClosed?: () => void,
   ): Unsubscribe;
+
+  // The actions (STUDY-165 §3.4): writes, each recorded in the deployment's audit log. A credential that may not
+  // write (read-only, or without `writeData`) is refused with `unauthorized`, and nothing is done.
+
+  /**
+   * Sends `event` with `data` (in the wire's form) to every member of the room, from the server (`from: null`), as
+   * `ctx.rooms.broadcast` would; an event tap sees it. Rejects `invalid_request` for an event the room does not
+   * declare, data its validator refuses, or data over the client events' size limit (4 KB by default), with the
+   * words app code is thrown for each; `not_found` when the room is not open (nothing is sent).
+   */
+  broadcastRoomEvent?(room: RoomRef, event: string, data: Value, opts?: CallOptions): Promise<void>;
+  /**
+   * Ends a member at once (no reconnect grace): each of its live clients is told it was removed (RoomLeft `removed`,
+   * "Removed from the dashboard.", which the client does not retry), and the others see it leave. A scope's member
+   * is a user: every tab of theirs ends. An eviction, not a ban: the app may join again. Null when the room has no
+   * such member (or is not open).
+   */
+  removeRoomMember?(room: RoomRef, memberId: string, opts?: CallOptions): Promise<RoomMemberRemoved | null>;
+  /**
+   * Removes every member (as `removeRoomMember`): the room leaves `listRooms`, and an event tap on it ends with
+   * `onClosed`. Null when the room is not open.
+   */
+  closeRoom?(room: RoomRef, opts?: CallOptions): Promise<RoomClosed | null>;
 }

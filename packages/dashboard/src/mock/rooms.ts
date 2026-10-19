@@ -3,18 +3,24 @@
 // describe them and counters that keep growing. A member's cursor is a function of the clock and the member, not
 // of a timer, so a screenshot or a test at a given clock sees the same picture. The event tap: while tapped, the
 // document room sends a `wave` from one of its members at every multiple of the interval on the mock clock (a wave is
-// a function of the seed and its time, so the same at the same mock time), and a test pushes its own (`emit`). Not part of the contract: the source wraps it.
+// a function of the seed and its time, so the same at the same mock time), and a test pushes its own (`emit`). The
+// dashboard's actions (send a test event, remove a member, close a room) act on these rooms, refusing what the
+// server refuses (DV-479): each member has a simulated client that records what it received and how it was ended
+// (`client`). Not part of the contract: the source wraps it.
 
 import { DataSourceError, type Page, type PageRequest, type Value } from "../data-source.ts";
 import type {
+  RoomClosed,
   RoomDefinition,
   RoomEvent,
   RoomEventsInfo,
   RoomInfo,
   RoomMember,
+  RoomMemberRemoved,
   RoomRef,
   RoomStats,
 } from "../data-source-rooms.ts";
+import { validateValue } from "../validators.ts";
 import { createRandom, type Random } from "./random.ts";
 
 /** The most members one page holds, as the server's. */
@@ -32,6 +38,14 @@ const WAVE_CHECK_MS = 50;
 const WAVES_MAX_AT_ONCE = 20;
 
 type Seat = { member: RoomMember; phase: number };
+/** A member's simulated client: what it received, and the RoomLeft that ended it. */
+type MockClient = {
+  received: { event: string; from: string | null; data: Value }[];
+  ended: { code: string; message: string } | null;
+};
+/** The client events' size limit, as the server's default (`BUNVEX_ROOM_PAYLOAD_BYTES`). */
+const EVENT_MAX_BYTES = 4096;
+const REMOVED = { code: "removed", message: "Removed from the dashboard." };
 type MockTap = {
   key: string;
   /** The mock time it started: a wave due before it is not its. */
@@ -51,6 +65,13 @@ const num = { type: "number" as const };
 
 const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
+/** A room key's function name and args' JSON text (`kind|name|args`), as the server's audit events name a room. */
+export function roomKeyParts(key: string): { room: string; args: string } {
+  const i = key.indexOf("|");
+  const j = key.indexOf("|", i + 1);
+  return { room: key.slice(i + 1, j), args: key.slice(j + 1) };
+}
+
 /** As the server refuses a key that is not `kind|name|args` of a room or a scope. */
 function checkKey(key: string) {
   const i = key.indexOf("|");
@@ -68,6 +89,8 @@ export class MockRooms {
   private waveTimer: ReturnType<typeof setInterval> | null = null;
   /** The last wave sent (its index: its mock time over the interval). */
   private lastWave = 0;
+  /** Each member's simulated client, by `${room key}\u0000${memberId}`. */
+  private readonly clients = new Map<string, MockClient>();
 
   constructor(
     private readonly seed: number,
@@ -232,6 +255,76 @@ export class MockRooms {
     // its taps end, after what they had not delivered yet
     for (const t of [...this.taps]) if (t.key === key) this.endTap(t);
     return true;
+  }
+
+  /** A member's simulated client (made on first ask), or null when the room never had that member. */
+  client(key: string, memberId: string): MockClient | null {
+    const id = `${key}\u0000${memberId}`;
+    const known = this.clients.get(id);
+    if (known) return known;
+    const r = this.open.find((o) => o.info.key === key);
+    if (!r?.seats.some((s) => s.member.memberId === memberId)) return null;
+    const made: MockClient = { received: [], ended: null };
+    this.clients.set(id, made);
+    return made;
+  }
+
+  /**
+   * The dashboard's test event, checked as the server checks it (the room declares it, its validator, the size
+   * limit), then sent from the server to every member's client and every tap.
+   */
+  broadcast(key: string, event: string, data: Value) {
+    checkKey(key);
+    const name = roomKeyParts(key).room;
+    const def = this.definitions().find((d) => d.name === name && d.kind === "room");
+    if (!def) throw new DataSourceError("invalid_request", `No room named "${name}".`);
+    const declared = def.events.find((e) => e.name === event);
+    if (!declared) throw new DataSourceError("invalid_request", `This room has no event "${event}".`);
+    const issue = declared.payload ? validateValue(declared.payload, data)[0] : undefined;
+    if (issue) throw new DataSourceError("invalid_request", `ArgumentValidationError: ${issue.message}`);
+    const size = new TextEncoder().encode(JSON.stringify(data)).length;
+    if (size > EVENT_MAX_BYTES)
+      throw new DataSourceError("invalid_request", `The event is ${size} bytes (limit ${EVENT_MAX_BYTES}).`);
+    const r = this.open.find((o) => o.info.key === key);
+    if (!r) throw new DataSourceError("not_found", "The room is not open.");
+    for (const s of r.seats)
+      if (!s.member.graced)
+        this.client(key, s.member.memberId)!.received.push({ event, from: null, data: structuredClone(data) });
+    this.emit(key, event, data, null);
+  }
+
+  /** The dashboard removes a member: its client is ended (RoomLeft `removed`); the last one out closes the room. */
+  removeMember(key: string, memberId: string): RoomMemberRemoved | null {
+    checkKey(key);
+    const r = this.open.find((o) => o.info.key === key);
+    const seat = r?.seats.find((s) => s.member.memberId === memberId);
+    if (!r || !seat) return null;
+    const { connections } = seat.member;
+    if (!seat.member.graced) this.client(key, memberId)!.ended = { ...REMOVED };
+    r.seats = r.seats.filter((s) => s !== seat);
+    r.info = { ...r.info, members: r.info.members - 1, connections: r.info.connections - connections };
+    const c = this.counters;
+    this.counters = {
+      ...c,
+      leaves: c.leaves + 1,
+      roomLeft: c.roomLeft + (seat.member.graced ? 0 : connections),
+    };
+    if (r.seats.length === 0) {
+      this.open = this.open.filter((o) => o !== r);
+      for (const t of [...this.taps]) if (t.key === key) this.endTap(t);
+    }
+    return { connections };
+  }
+
+  /** The dashboard closes a room: every member removed. */
+  closeRoom(key: string): RoomClosed | null {
+    checkKey(key);
+    const r = this.open.find((o) => o.info.key === key);
+    if (!r) return null;
+    const ids = r.seats.map((s) => s.member.memberId);
+    let connections = 0;
+    for (const id of ids) connections += this.removeMember(key, id)?.connections ?? 0;
+    return { members: ids.length, connections };
   }
 
   /**

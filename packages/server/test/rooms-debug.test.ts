@@ -1,7 +1,7 @@
 // The rooms in the dashboard (AD-43, STUDY-165): `/api/debug/rooms`, `/members` and `/definitions`, the `rooms`
 // counters in `/stats`, and the rooms' series in `/metrics`. Admin only, with ViewMetrics, as the topology.
 import { afterEach, describe, expect, test } from "bun:test";
-import { defineSchema, defineTable, Engine } from "@bunvex/core";
+import { DEPLOYMENT_AUDIT_LOG_TABLE, defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { v } from "@bunvex/values";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
@@ -12,7 +12,8 @@ import { syncUrl, v1Client } from "./v1-client.ts";
 
 const SECRET = "5e".repeat(32);
 const NAME = "rooms-debug-test";
-const KEY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET) });
+const KEY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET), memberId: 42 });
+const READ_ONLY_KEY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET), readOnly: true });
 
 const stops: (() => unknown)[] = [];
 afterEach(async () => {
@@ -36,6 +37,7 @@ async function setup() {
       lobby: room({ presence: v.any() }),
       online: presence({ args: { team: v.string() }, state: { status: v.string() } }),
       closed: room({ canJoin: async () => false, presence: v.any() }),
+      big: room({ presence: v.any(), events: { blob: { s: v.string() } } }),
     });
   const s = createServer({ engine, functions, port: 0, onFatal: () => {} });
   const hub = s.rooms;
@@ -56,7 +58,21 @@ async function setup() {
       synced: (roomId: number) => c.until(() => c.got.find((m) => m.type === "RoomSync" && m.roomId === roomId)),
     };
   };
-  return { get, client, api, hub };
+  const post = async (path: string, body: unknown, key: string | null = KEY) => {
+    const r = await fetch(`${api}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(key ? { authorization: `Bunvex ${key}` } : {}) },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+    const text = await r.text();
+    return { status: r.status, text, body: r.headers.get("content-type")?.includes("json") ? JSON.parse(text) : null };
+  };
+  /** The audit log's events, oldest first. */
+  const audit = () =>
+    engine.query((db) => db.asSystem(() => db.query(DEPLOYMENT_AUDIT_LOG_TABLE).collect())) as Promise<
+      Record<string, any>[]
+    >;
+  return { get, post, audit, client, api, hub, engine };
 }
 
 test("the endpoints need the admin key", async () => {
@@ -200,6 +216,7 @@ test("definitions: the deployed rooms and scopes with validators and events, sor
   const { get } = await setup();
   const { definitions } = (await get("/api/debug/rooms/definitions")).body;
   expect(definitions.map((d: { name: string }) => d.name)).toEqual([
+    "rooms:big",
     "rooms:closed",
     "rooms:doc",
     "rooms:lobby",
@@ -312,5 +329,216 @@ describe("the event tap: /api/debug/rooms/events (AD-43)", () => {
       newCursor: 7,
       closed: true,
     });
+  });
+});
+
+describe("the dashboard's actions: broadcast, remove, close (AD-43)", () => {
+  /** Two clients in one room, one more in a scope on two sockets as one user. */
+  async function rooms() {
+    const x = await setup();
+    const a = await x.client();
+    const b = await x.client();
+    a.join(1, "rooms:doc", { id: "t" });
+    await a.synced(1);
+    b.join(5, "rooms:doc", { id: "t" });
+    await b.synced(5);
+    const key = (await x.get("/api/debug/rooms")).body.rooms[0].key as string;
+    const members = async (k = key) =>
+      (await x.get(`/api/debug/rooms/members?key=${encodeURIComponent(k)}`)).body.page as { memberId: string }[];
+    const selfOf = (c: typeof a, roomId: number) =>
+      (c.got.find((m) => m.type === "RoomSync" && m.roomId === roomId) as { self: string }).self;
+    return { ...x, a, b, key, members, selfOf };
+  }
+  const leftOf = (c: { got: any[] }) => c.got.filter((m) => m.type === "RoomLeft");
+
+  test("broadcast: every member gets the event from the server, the tap sees it, the audit log has it", async () => {
+    const r = await rooms();
+    await r.get(`/api/debug/rooms/events?key=${encodeURIComponent(r.key)}`);
+    const sent = await r.post("/api/debug/rooms/broadcast", { key: r.key, event: "ping", data: { n: 3 } });
+    expect(sent.status).toBe(200);
+    expect(sent.body).toEqual({});
+    for (const [c, roomId] of [
+      [r.a, 1],
+      [r.b, 5],
+    ] as const) {
+      const e = await c.until(() => c.got.find((m) => m.type === "RoomEvent"));
+      expect(e).toEqual({ type: "RoomEvent", roomId, from: null, event: "ping", data: { n: 3 } });
+    }
+    const tap = (await r.get(`/api/debug/rooms/events?key=${encodeURIComponent(r.key)}&cursor=0&timeoutMs=0`)).body;
+    expect(tap.events).toEqual([expect.objectContaining({ event: "ping", from: null, data: { n: 3 } })]);
+    const [entry] = await r.audit();
+    expect(entry).toMatchObject({
+      action: "broadcast_room_event",
+      member_id: 42n,
+      metadata: { room: "rooms:doc", args: '{"id":"t"}', event: "ping" },
+    });
+  });
+
+  test("broadcast refuses what ctx.rooms.broadcast refuses, in its words, and sends nothing", async () => {
+    const r = await rooms();
+    const cases: [unknown, number, string | RegExp][] = [
+      [{ key: r.key, event: "nope", data: {} }, 400, 'This room has no event "nope".'],
+      [{ key: r.key, event: "ping", data: { n: "x" } }, 400, /^ArgumentValidationError: .*n/s],
+      // a field the event's validator does not declare
+      [{ key: r.key, event: "ping", data: { n: 1, extra: true } }, 400, /^ArgumentValidationError/],
+      [{ key: "garbage", event: "ping", data: {} }, 400, "`key` is not a room key from the list."],
+      [{ key: r.key, data: {} }, 400, "`event` must be a string."],
+      ["{not json", 400, "The body is not valid JSON."],
+    ];
+    for (const [body, status, message] of cases) {
+      const res = await r.post("/api/debug/rooms/broadcast", body);
+      expect(res.status).toBe(status);
+      if (typeof message === "string") expect(res.body.message).toBe(message);
+      else expect(res.body.message).toMatch(message);
+    }
+    const lobbyKey = `room|rooms:lobby|{}`;
+    const c = await r.client();
+    c.join(1, "rooms:lobby", {});
+    await c.synced(1);
+    // the lobby declares no event: the room's events, not a size limit, refuse it
+    expect((await r.post("/api/debug/rooms/broadcast", { key: lobbyKey, event: "x", data: 1 })).status).toBe(400);
+    await Bun.sleep(50);
+    expect([...r.a.got, ...r.b.got].some((m) => m.type === "RoomEvent")).toBe(false);
+    expect(await r.audit()).toEqual([]);
+  });
+
+  test("broadcast over the event size limit is refused with ctx.rooms.broadcast's message", async () => {
+    const { post, client } = await setup();
+    const c = await client();
+    c.join(1, "rooms:big", {});
+    await c.synced(1);
+    const res = await post("/api/debug/rooms/broadcast", {
+      key: "room|rooms:big|{}",
+      event: "blob",
+      data: { s: "x".repeat(5000) },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/^The event is 50\d\d bytes \(limit 4096\)\.$/);
+  });
+
+  test("broadcast to a room that is not open is 404, nothing sent", async () => {
+    const r = await rooms();
+    const res = await r.post("/api/debug/rooms/broadcast", {
+      key: `room|rooms:doc|{"id":"none"}`,
+      event: "ping",
+      data: { n: 1 },
+    });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ code: "RoomNotOpen", message: "The room is not open." });
+    expect(await r.audit()).toEqual([]);
+  });
+
+  test("remove: the client is sent RoomLeft removed, the member leaves the list, the others see it leave", async () => {
+    const r = await rooms();
+    const id = r.selfOf(r.a, 1);
+    const res = await r.post("/api/debug/rooms/remove", { key: r.key, memberId: id });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ removed: { connections: 1 } });
+    expect(await r.a.until(() => leftOf(r.a)[0])).toEqual({
+      type: "RoomLeft",
+      roomId: 1,
+      code: "removed",
+      message: "Removed from the dashboard.",
+    });
+    expect((await r.members()).map((m) => m.memberId)).toEqual([r.selfOf(r.b, 5)]);
+    await r.b.until(() => r.b.got.find((m) => m.type === "RoomMembers" && m.left.includes(id)));
+    expect(leftOf(r.b)).toEqual([]);
+    const [entry] = await r.audit();
+    expect(entry).toMatchObject({
+      action: "remove_room_member",
+      member_id: 42n,
+      metadata: { room: "rooms:doc", args: '{"id":"t"}', member_id: id, connections: 1 },
+    });
+    expect((await r.get("/stats")).body.rooms).toMatchObject({ roomLeft: 1, leaves: 1 });
+    // no such member now: null, and nothing recorded
+    expect((await r.post("/api/debug/rooms/remove", { key: r.key, memberId: id })).body).toEqual({ removed: null });
+    expect(await r.audit()).toHaveLength(1);
+  });
+
+  test("close: every client is sent RoomLeft, the room leaves the list, the counts answered", async () => {
+    const r = await rooms();
+    const res = await r.post("/api/debug/rooms/close", { key: r.key });
+    expect(res.body).toEqual({ closed: { members: 2, connections: 2 } });
+    for (const [c, roomId] of [
+      [r.a, 1],
+      [r.b, 5],
+    ] as const)
+      expect(await c.until(() => leftOf(c)[0])).toMatchObject({ roomId, code: "removed" });
+    expect((await r.get("/api/debug/rooms")).body.rooms).toEqual([]);
+    expect((await r.audit()).map((e) => [e.action, e.metadata])).toEqual([
+      ["close_room", { room: "rooms:doc", args: '{"id":"t"}', members: 2, connections: 2 }],
+    ]);
+    expect((await r.post("/api/debug/rooms/close", { key: r.key })).body).toEqual({ closed: null });
+    expect(await r.audit()).toHaveLength(1);
+  });
+
+  test("close counts a member in its reconnect grace", async () => {
+    const r = await rooms();
+    r.b.ws.close();
+    const graced = async () =>
+      (await r.get(`/api/debug/rooms/members?key=${encodeURIComponent(r.key)}`)).body.page.some(
+        (m: { graced: boolean }) => m.graced,
+      );
+    for (let i = 0; !(await graced()); i++) {
+      if (i > 200) throw new Error("the member never went into its grace");
+      await Bun.sleep(10);
+    }
+    expect((await r.post("/api/debug/rooms/close", { key: r.key })).body).toEqual({
+      closed: { members: 2, connections: 2 },
+    });
+    expect((await r.get("/api/debug/rooms")).body.rooms).toEqual([]);
+  });
+
+  test("a failing audit write is logged, and the action's answer still given", async () => {
+    const r = await rooms();
+    const errors: unknown[][] = [];
+    const real = console.error;
+    console.error = (...a: unknown[]) => void errors.push(a);
+    const mutation = r.engine.mutation.bind(r.engine);
+    r.engine.mutation = (() => Promise.reject(new Error("store down"))) as typeof r.engine.mutation;
+    try {
+      const res = await r.post("/api/debug/rooms/close", { key: r.key });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ closed: { members: 2, connections: 2 } });
+      expect(String(errors[0]?.[0])).toContain("audit");
+    } finally {
+      console.error = real;
+      r.engine.mutation = mutation;
+    }
+  });
+
+  test("a read-only key, or none, may not act: nothing done, nothing recorded", async () => {
+    const r = await rooms();
+    const id = r.selfOf(r.a, 1);
+    for (const key of [READ_ONLY_KEY, null]) {
+      const calls = [
+        r.post("/api/debug/rooms/broadcast", { key: r.key, event: "ping", data: { n: 1 } }, key),
+        r.post("/api/debug/rooms/remove", { key: r.key, memberId: id }, key),
+        r.post("/api/debug/rooms/close", { key: r.key }, key),
+      ];
+      for (const res of await Promise.all(calls)) {
+        if (key) {
+          expect(res.status).toBe(403);
+          expect(res.body.code).toBe("OperationNotPermitted");
+        } else expect([401, 403]).toContain(res.status);
+      }
+    }
+    expect((await r.members()).length).toBe(2);
+    expect(await r.audit()).toEqual([]);
+    await Bun.sleep(50);
+    expect([...r.a.got, ...r.b.got].some((m) => m.type === "RoomEvent" || m.type === "RoomLeft")).toBe(false);
+  });
+
+  test("the actions are POST only, with a preflight answered", async () => {
+    const r = await rooms();
+    for (const p of ["broadcast", "remove", "close"]) {
+      expect((await r.get(`/api/debug/rooms/${p}`)).status).toBe(404);
+      const pre = await fetch(`${r.api}/api/debug/rooms/${p}`, {
+        method: "OPTIONS",
+        headers: { origin: "http://localhost:6791", "access-control-request-method": "POST" },
+      });
+      expect(pre.status).toBe(200);
+      expect(pre.headers.get("access-control-allow-methods")).toContain("POST");
+    }
   });
 });

@@ -88,7 +88,7 @@ export async function startServer(opts: Partial<ServerOptions> = {}) {
     }),
   });
   functions.register("rooms", {
-    doc: room({ args: { id: v.string() }, presence: v.any(), events: { wave: v.any() } }),
+    doc: room({ args: { id: v.string() }, presence: v.any(), events: { wave: v.any(), note: { text: v.string() } } }),
     locked: room({ canJoin: () => false, presence: v.any() }),
     /** Ada's room: anyone else, or no one signed in, is refused. */
     staff: room({

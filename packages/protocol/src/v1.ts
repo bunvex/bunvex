@@ -158,11 +158,13 @@ export type RoomServerEvent = {
 export type RoomErrorCode = "no_access" | "forbidden" | "validation" | "rate_limited" | "limit" | "not_found";
 export type RoomError = { type: "RoomError"; roomId: number; code: RoomErrorCode; message: string };
 /**
- * The server removed a joined membership on its own: a new identity its gates refuse (`no_access`), or a
- * rejoin as the new user over a cap (`limit`). The room id is free again; the client rejoins only on a new
- * Authenticate.
+ * The server removed a joined membership on its own: a new identity its gates refuse (`no_access`), a rejoin as
+ * the new user over a cap (`limit`), or an operator's removal from the dashboard (`removed`, AD-43). The room id
+ * is free again. The client rejoins `no_access` and `limit` on a new Authenticate; `removed` only when the app
+ * joins the room again.
  */
-export type RoomLeft = { type: "RoomLeft"; roomId: number; code: "no_access" | "limit"; message: string };
+export type RoomLeftCode = "no_access" | "limit" | "removed";
+export type RoomLeft = { type: "RoomLeft"; roomId: number; code: RoomLeftCode; message: string };
 
 export type ServerMessage =
   | Transition

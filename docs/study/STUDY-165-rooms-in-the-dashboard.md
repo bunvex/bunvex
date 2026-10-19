@@ -93,12 +93,13 @@ and only while someone taps it. Presence changes are not in the tap. The member 
 - **Send a test event.** The detail screen gets a form that picks a declared event, edits its data (validated
   against the event's validator, as the function runner validates args) and broadcasts it from the server
   (`from: null`), the same as `ctx.rooms.broadcast`.
-- **Remove a member, or close a room.** The server ends the membership with `RoomLeft` (code `no_access`, message
-  "Removed from the dashboard."), which the client already treats as final. Removing a scope user ends all of
-  their tabs. Closing a room removes everyone.
+- **Remove a member, or close a room.** The server ends the membership with `RoomLeft` (code `removed`, message
+  "Removed from the dashboard."). The client does not rejoin a `removed` membership on a new token or a reconnect,
+  only when the app joins the room again (§5.3). Removing a scope user ends all of their tabs. Closing a room
+  removes everyone.
 
 Both are logged in the audit log, as the dashboard's other writes are, and both need a write-capable admin key
-(`Capabilities.readOnly` refuses them).
+(`Capabilities.readOnly` refuses them). Built as §5.3 says.
 
 ## 4. Constraints
 
@@ -130,7 +131,8 @@ The parts can ship in this order, one PR each:
    that was Health).
 5. **Event tap.** The ring buffer and the long poll on the server, and the panel on the screen. The server, the
    contract's `watchRoomEvents`, the server source and the mock: built (§5.2); the panel to come.
-6. **Actions.** Send a test event, remove a member, close a room, with the audit log.
+6. **Actions.** Send a test event, remove a member, close a room, with the audit log. The server, the contract, the
+   server source and the mock: built (§5.3); the screen's controls to come.
 
 Parts 1–4 are the read and observability base. Parts 5 and 6 can wait for the owner's go-ahead (D6, D7). The
 dashboard is the other session's area (sandbox-86), so the screen PRs would be coordinated with it.
@@ -263,6 +265,52 @@ count, timers that never fire so that no run leaves an expiry behind, median of 
 Apple M1 Pro): untapped 1.22–1.24 M events/s against 1.17–1.20 M with main's hub (no change within the noise); tapped
 0.99–1.00 M events/s, about 81 % of untapped, some 200 ns more per event (the data's JSON for its size, the record). The sinks do no I/O here; with sockets the fan-out costs far
 more per event, and the tap's share is smaller.
+
+### 5.3 The actions (step 6: server, contract, sources)
+
+**The hub.** `removeMember(key, memberId)` ends a member at once, without the reconnect grace: each live attachment's
+sink is told to evict it (`RoomSink.evict`, which `RoomConnection` implements by sending `RoomLeft` through the
+same path as an identity's refusal, counting `roomLeft`, and forgetting the room); an attachment in its grace just
+leaves, its timer cleared. The others see the member leave on the next tick. A scope's member is its user, so every
+tab on every connection ends. A member removed in its grace is remembered for what was left of it (`graceMs`): that
+session's reconnect is answered with `RoomLeft` `removed` instead of the member back (once; another session, or a
+join after the window, joins). A removal that lands while a new identity's gates run stands: their verdict is not
+applied to a room evicted meanwhile. It answers `{ connections }`, or null when the room is not open or has no such member.
+`closeRoom(key)` removes every member, answers `{ members, connections }` (null when not open), and ends a tap on the
+room at once.
+
+**The endpoints**, POST with a JSON body, beside the other rooms routes and under the same CORS layer:
+- `/api/debug/rooms/broadcast {key, event, data}`: `data` in the wire's JSON form. Checked by the code
+  `ctx.rooms.broadcast` uses (`checkedRoomEvent` in `rooms/ctx.ts`): an event the room does not declare, data its
+  validator refuses, or JSON over the client events' limit ("The event is 5123 bytes (limit 4096).", the words a
+  client's own event is refused with too) are 400 with the words app code is thrown. A room that
+  is not open is 404 `{ code: "RoomNotOpen" }`, nothing sent. Otherwise the event goes out from the server
+  (`from: null`), and the tap records it. 200 `{}`.
+- `/api/debug/rooms/remove {key, memberId}`: `{ removed: { connections } | null }`.
+- `/api/debug/rooms/close {key}`: `{ closed: { members, connections } | null }`.
+
+They need `WriteData`, the operation of the dashboard's other data writes, which a read-only key lacks (403
+`OperationNotPermitted`). Each action that did something is recorded in the deployment audit log as the dashboard's
+other writes are, `insertAuditLogEvents` with `auditActor(caller)`: the admin key's member (`member_id`), the request's
+IP and user agent. The events are bunvex's own (Convex has no rooms): `broadcast_room_event { room, args, event }`,
+`remove_room_member { room, args, member_id, connections }` and `close_room { room, args, members, connections }`,
+`args` the room's canonical args as JSON text. The action happens in memory before its record: a failed audit write
+is logged and the answer still given, so that a retry does not act twice.
+
+**The protocol and the client.** `RoomLeft`'s code gains `removed`. The client keeps a membership ended with
+`removed` ended across a new Authenticate (a token refresh) and a reconnect, where `no_access` and `limit` are retried
+as before; the app joining the room again (a new `joinRoom` or `useRoom` after the last handle left) joins it. A
+removal is an eviction, not a ban. A member in its grace when removed is told on its reconnect (above).
+
+**The contract**: `broadcastRoomEvent(room, event, data)`, `removeRoomMember(room, memberId) → { connections } | null`
+and `closeRoom(room) → { members, connections } | null`. A credential that may not write is refused with
+`unauthorized` (the contract's code for every refused write; it has no `forbidden`); a broadcast's refusals are
+`invalid_request` with the server's words, and a room not open `not_found`. The server source POSTs with the admin
+key. The mock acts on its fake rooms, refusing what the server refuses (DV-479): each member has a simulated client
+that records the events it got and the RoomLeft that ended it, the counters move (`leaves`, `roomLeft`), a tap sees
+the broadcast, and closing ends the taps. The contract suite's actions tests run on the mock and on a live server
+(`roomActions` in the contract options, with real clients), with a live test that a removed client stays out across
+a token refresh.
 
 ## 6. Questions for the owner
 

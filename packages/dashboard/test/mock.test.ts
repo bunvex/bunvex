@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { describeDataSourceContract } from "@bunvex/dashboard/contract";
-import { DataSourceError, type LogEntry } from "@bunvex/dashboard/data-source";
+import { DataSourceError, type LogEntry, OPERATIONS } from "@bunvex/dashboard/data-source";
 import { createFixture, MockDataSource } from "@bunvex/dashboard/mock";
 
 const NOW = Date.UTC(2026, 8, 29, 12);
@@ -21,6 +21,36 @@ describeDataSourceContract("MockDataSource", () => new MockDataSource(small), {
         close: async () => void mock.rooms.close(key),
       };
     },
+  },
+  // the document room's first two publishers, with their simulated clients
+  roomActions: {
+    open: async (src) => {
+      const mock = src as MockDataSource;
+      const key = (await mock.listRooms()).find((r) => r.kind === "room")!.key;
+      const { page } = await mock.listRoomMembers({ key }, { numItems: 100, cursor: null });
+      const clients = page
+        .filter((m) => m.canPublish)
+        .slice(0, 2)
+        .map((m) => {
+          const c = mock.rooms.client(key, m.memberId)!;
+          return { memberId: m.memberId, received: () => c.received, ended: () => c.ended };
+        });
+      // the room's other members are not the suite's: it starts with only these two
+      for (const m of page)
+        if (!clients.some((c) => c.memberId === m.memberId)) mock.rooms.removeMember(key, m.memberId);
+      return {
+        key,
+        event: {
+          name: "reaction",
+          data: { emoji: "wave" },
+          badData: { emoji: 1 },
+          bigData: { emoji: "x".repeat(5000) },
+        },
+        clients,
+        dispose: async () => {},
+      };
+    },
+    readOnly: () => new MockDataSource({ ...small, capabilities: { operations: [...OPERATIONS], readOnly: true } }),
   },
 });
 describeDataSourceContract("MockDataSource with latency", () => new MockDataSource({ ...small, latencyMs: 2 }));

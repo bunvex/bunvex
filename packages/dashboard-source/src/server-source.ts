@@ -381,6 +381,9 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
   source.listRoomMembers = rooms.listRoomMembers;
   source.listRoomDefinitions = rooms.listRoomDefinitions;
   source.watchRoomEvents = rooms.watchRoomEvents;
+  source.broadcastRoomEvent = rooms.broadcastRoomEvent;
+  source.removeRoomMember = rooms.removeRoomMember;
+  source.closeRoom = rooms.closeRoom;
   const closeBeforeRooms = source.close;
   source.close = () => {
     rooms.close();

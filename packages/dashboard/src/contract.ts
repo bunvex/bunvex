@@ -13,7 +13,12 @@ import { type DeploymentContractOptions, describeDeploymentContract } from "./co
 import { describeMetricsContract } from "./contract-metrics.ts";
 import { describeRoomsContract, type RoomsContractOptions } from "./contract-rooms.ts";
 
-export type { ContractRoom, RoomsContractOptions } from "./contract-rooms.ts";
+export type {
+  ContractActionRoom,
+  ContractRoom,
+  ContractRoomClient,
+  RoomsContractOptions,
+} from "./contract-rooms.ts";
 
 import { describeSnapshotContract, type SnapshotContractOptions } from "./contract-snapshot.ts";
 import { type DeploymentStateContractOptions, describeDeploymentStateContract } from "./contract-state.ts";

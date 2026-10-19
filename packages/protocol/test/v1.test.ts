@@ -144,6 +144,7 @@ describe("room messages (AD-42, STUDY-164 §3.6)", () => {
       { type: "RoomError", roomId: 1, code: "no_access", message: "You cannot join this room." },
       { type: "RoomLeft", roomId: 1, code: "no_access", message: "You cannot join this room." },
       { type: "RoomLeft", roomId: 2, code: "limit", message: "This room is full." },
+      { type: "RoomLeft", roomId: 3, code: "removed", message: "Removed from the dashboard." },
     ];
     for (const f of frames) expect(v1.parseServerMessage(v1.encodeServerMessage(f))).toEqual(f);
   });
