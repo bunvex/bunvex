@@ -1,8 +1,8 @@
 # STUDY-168 — Running app code in a sandboxed process (exploratory)
 
-- **Status:** exploratory. It is research with a prototype and measurements, and nothing in it is for merge. Default
-  code paths are unchanged. The prototype lives in `bench/process-sandbox/` and is reached only by its own scripts
-  and opt-in tests.
+- **Status:** decided (owner, 2026-10-19: every recommendation accepted, the knob named `BUNVEX_FUNCTION_SANDBOX`;
+  AD-44). Being built as STUDY-171. The prototype and its measurements stay in `bench/process-sandbox/` as the
+  reference: no default code path reaches them, and their tests run only with `SANDBOX_STUDY=1`.
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend, the reference commit
   ([upstream.md](../parity/upstream.md)). The first round read `4577b903`; every citation was re-checked at
   `d8bdde0` in round 2, and the line numbers below are `d8bdde0`'s.
@@ -729,6 +729,9 @@ None decided. Shipping C as a mode is an addition, AD-NN, to be numbered when it
 choice at all: the local backend always runs functions in-process (§10.1). See Q2 and Q7.
 
 ## 9. Open questions for the owner
+
+**Decided (owner, 2026-10-19): every recommendation below is accepted, Windows is out of scope, and the knob is
+`BUNVEX_FUNCTION_SANDBOX` (Q7). Q11 is built in STUDY-170; the implementation is STUDY-171 (AD-44).**
 
 Each question uses the decision format. The owner has already agreed that the self-hosted default stays `vm`, that
 a cloud runs app code in C, and that self-hosters may opt in. Q1 and Q2 record that. Q7 to Q11 are new in round 2.
