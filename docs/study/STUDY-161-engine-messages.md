@@ -484,4 +484,114 @@ every repeat; and nothing merges.
 6. **Measurement**: the read path gains a sorted-set insert per read; the PR stays a draft until the owner's
    before/after run (`bench/`), prepared in the PR.
 
-*Built:* not yet.
+*Built* (#704):
+- `core/src/read-count.ts`, Convex's per-index merged sets and `num_intervals` (its saturating update included). `Tx`
+  keeps one beside `readList`: `recordInterval(i, "direct" | "derived" | "none")`. Derived: `dependOn`, `readMissingTable`,
+  `recordIndexMeta`, the environment variables' per-name reads, a search's terms, and (in the count only) a new
+  document's id. Not counted: `unrecorded`, the new `notCounted` (the canonical URLs of the default system variables;
+  a table's creation, which counts one, once). A scan counts at its first document and widens as it settles (a counted
+  read on the same index settles it first); `count` counts all of the table's `by_id`.
+- **The modules.** Convex reads a `_modules` row for each module a function loads: its own and every chunk it imports.
+  esbuild puts Convex's library into a chunk of its own once two or more function modules use it; bunvex links its
+  library, so `CodeVersion` counts that chunk where Convex's would be (unless one of the app's own chunks has the same
+  importers), each module once per transaction (a nested call to another module counts its new ones).
+- Function starts count 2 plus the modules (a `_system/` function, 2); the first nested call 2.
+- Tests: `core/test/read-count.test.ts` (`ReadCount`: merging, adjacency on either side, bridging, empty intervals,
+  derived intervals, saturation; a transaction's count per shape; the limit at the read that passes it);
+  `core/test/read-set-unchanged.test.ts` (17 shapes' read-sets equal to those main recorded before the change,
+  `fixtures/read-sets.json`); `differential/test/read-count.test.ts` (app `read-count-app/`, both backends at a limit
+  of 60: 52 shapes' counts, 6 shapes at 4 bases around the limit, a nested call's budget, the bulk edit at 54–58
+  documents: the error inside the rewrap with its data on both). Updated to the new count: `tx-b-edges`,
+  `paginate-limits` (a page from an `end` cursor reads an empty interval: done, no split), `read-limits`,
+  `limit-warnings`, `nested-calls`, `pause-deployment` (the caller's usage includes the start's reads).
+- Sabotage (each restored, `git diff` clean): no merging (7 unit and 2 differential tests fail); adjacency on one side
+  only (1 unit); derived reads counted (3 unit, 4 differential); no start reads (3 differential); no library chunk (3
+  differential); no nested reads (3 differential); a new id not in the set (1 differential); the count on the default
+  index (1 unit, 1 differential).
+- Bytes and documents read keep their own counters (Convex's `record_read_document`), unchanged.
+- **The first measurement** (2026-10-15, interleaved, 4 runs each) showed regressions: 4 000 distinct gets +29 %,
+  1 000 index ranges +97 % (every counted read looped over all the transaction's unsettled scans), 100 gets +12 %,
+  a scan with a get per document +13 %, one document 4 000 times +7 %. A second, after grouping the unsettled scans by
+  index and ordering the sets in O(log n) (sorted chunks beat a B-tree on every shape), still showed +7 % to +19 %.
+  A third, with points as a hash set and the last interval kept (owner, option (b)): 100 gets +11 %, 4 000 gets +9 %,
+  one document 4 000 times +12 %, a scan with a get per document +9 %, 1 000 index ranges +22 % — a cost on every
+  counted read, near the limit or not.
+
+- **Q2 (DV-521), accepted (owner, 2026-10-15):** the module count is esbuild's chunking as bunvex can predict it.
+
+**Q2 (DV-521) — the modules a function loads.** Accepted (owner, 2026-10-15).
+
+- *Convex:* one read per module the function loads; how many depends on how esbuild chunked the push (its library in a
+  chunk once two function modules use it; the app's shared code in chunks per set of importers).
+- *bunvex:* the same count from its own bundle (Bun.build's chunks of the app's code) plus Convex's library chunk where
+  esbuild would make one; matched on every app the sweep tried (one module; two or more modules).
+- *Same?* Yes on the apps tried; possibly not where esbuild and Bun.build chunk the app's own shared code differently.
+- *Why:* "Não dá pra fazer" exactly without esbuild's chunking (as DV-520).
+- *App impact:* a function within one or two reads of the 4 096 limit, in an app whose shared code chunks differently,
+  could pass on one backend and fail on the other.
+- *Recommendation:* accept (a): the prediction as built.
+- *Decision:* accepted, the prediction as built (owner, 2026-10-15); DV-521 in [divergences.md](../parity/divergences.md).
+
+### 16.6 Counting exactly only when it can matter (owner, option (c))
+
+The shortcuts are gone; sorted chunks are the only exact set (`ReadCount`). `ReadCounter`, which `Tx` keeps, has two
+modes:
+
+- **A bound and a log** (from the start): `bound` is one per interval added (direct or derived) plus the constants, and
+  the log keeps each addition in order (a scan's first read as a reference to its first document, resolved later).
+- **The bound is never below the exact count.** A direct addition moves the exact count to `max(0, count − before) +
+  after`: with `count ≥ before` that is at most one more, since an addition grows its set by at most one; with `count
+  < before` it is `after`, the set's size, which is at most the intervals ever added to it, so at most the bound. A
+  derived addition does not move it, and a constant moves both alike.
+- **Each consumer compares the bound to its own point**, so there is no fixed threshold: the limit check (on every
+  counted read: past the limit by the bound, then exactly) and `paginate`'s full-reads check; the warning (`Many
+  reads`, past its floor `⌊ratio × 4 096⌋`: under it by the bound there is no warning and no number); a nested call's
+  budget and `ctx.meta` (`usage.databaseQueries`, exact when read). The first exact answer replays the log in order into
+  `ReadCount`, so Convex's order-dependent, saturating arithmetic comes out the same; the count is exact from then on.
+- **A scan** counts its first read at its first document without working out the key: the interval is resolved from
+  the document (its key, or its key values taken when it was handed out, or the document itself, which the app never
+  held) only if the exact count is ever needed. What it grows by later is counted when it settles, as before.
+
+*Tests:* `core/test/read-count.property.test.ts`: random direct, derived and scan reads and constants over three
+indexes against the plain sorted array, read after read: `ReadCount` exact; the bound never below the reference; the
+exact count right from any first ask on; a limit's answer and a warning's number right, with limits of 0 to 12 so the
+bound crosses them at random points. Sabotage (each restored): the bound short of derived reads, short by one on
+constants, a replay without the derived reads, a reordered replay, the warning's number taken past its floor + 1, no
+replay at all, a scan's first read resolved at once: each fails it; the warning taking the bound alone fails
+`limit-warnings`. The read-set-unchanged, unit and differential tests (the at-limit and nested-budget shapes included)
+pass unchanged.
+
+*Measured* (2026-10-16, interleaved, 4 × main and branch): every shape of `bench/read-count.ts` within 3 % of main
+(100 gets +2.3 %, 4 000 gets +2.4 %, one document 4 000 times +1.8 %, a scan with a get per document +2.6 %, collect
+−0.2 %, 1 000 index ranges +3.0 %, a page +2.0 %), inside or near the runs' own spread (2–11 %).
+
+### 16.7 Components (the follow-up)
+
+Measured on Convex's binary (an app with components `probe` — two function modules, mounted twice — `probe2` and
+`probe3`, one module each; the read limit at 60, so the "Many reads" warning shows each count; the root's count before
+any call is 3, or 4 once the root has two modules):
+
+| shape | Convex |
+|---|---|
+| a component's function, called directly (two modules) | 5: 2 + its two modules (the library chunk) + 1 |
+| the same, writing a document | 5: the write adds nothing |
+| the first nested call into a component (two modules; one module) | +5; +4: 2 + its modules + 1 |
+| a second nested call, into any component or the app (even a new module) | +0 |
+| a first nested call into the app (its own module; another module) | +2; +3 |
+| a first nested call into the app, then one into a component | +2 |
+
+So a component's function starts like the app's (its configuration and environment, then each module it loads, from its
+namespace's own `_modules`) plus one read (`load_component_args`); and only the **first** nested call in a transaction
+reads its callee's start, whatever the later ones call.
+
+*Built (this PR):* a component's code version's module loads reach `Functions.installComponent` (keyed in its
+namespace), and a component's function starts with 3 rather than 2. Core's mounted check on a component's writes
+(`Tx.checkMounted`, #709) is the engine's read, as Convex's component registry: recorded, not counted. Test:
+`server/test/component-read-count.test.ts` (an app with a one-module and a two-module component, the latter mounted
+twice: each function's count, after a read and after a write). Sabotage (each restored): no component read, the module
+loads not passed, the component's modules not loaded, the mounted check counted: each fails it.
+
+*Left for the calls across components (STUDY-155):* the nested-call rule above. Today bunvex counts its +2 at the first
+nested call and then each callee's new modules at every call; Convex counts the callee's start (its new modules, and
+the component's read) at the first call only, and nothing at later ones. The difference is a read or a few, in a
+function that calls several modules or components near the limit.

@@ -13,7 +13,9 @@ export type CanonicalUrls = { cloud: string | null; site: string | null };
 
 type Row = { _id: string; requestDestination: RequestDestination; url: string };
 
-const rows = (db: Tx) => db.asSystem(() => db.query(CANONICAL_URLS_TABLE).collect()) as unknown as Promise<Row[]>;
+// Convex's default system variables are not read in the function's transaction: not counted (STUDY-161 §16).
+const rows = (db: Tx) =>
+  db.notCounted(() => db.asSystem(() => db.query(CANONICAL_URLS_TABLE).collect())) as unknown as Promise<Row[]>;
 
 /** The canonical URLs set, read in `db`'s transaction (its read set). */
 export async function readCanonicalUrls(db: Tx): Promise<CanonicalUrls> {
