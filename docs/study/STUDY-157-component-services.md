@@ -6,7 +6,8 @@
   - Q-3: search in components as step 7's last PR;
   - Q-4: the order of §6.
 
-  Built: PR 1, the scheduler (`packages/server/test/component-scheduler.test.ts`).
+  Built: PR 1, the scheduler (`packages/server/test/component-scheduler.test.ts`); PR 2, the crons
+  (`component-crons.test.ts`).
 - **Convex source read:** `d8bdde0`, the reference commit (docs/parity/upstream.md). Paths are relative to its
   root. Tests: js-integration-tests at `c358201e1`, Rust tests at `bea52bde0` (memory: Convex test snapshots).
 - **bunvex source:** `main` after STUDY-156 (`6bc5beb2`). Paths are relative to `packages/`.
@@ -266,7 +267,7 @@ component, logs in its namespace. A cron's target is already checked against its
    - `_scheduled_functions`' `component` for a child's job (AD-33).
    - Tests: Convex's three "Scheduler in component" cases, a handle, a component action's schedule and cancel,
      limits across nested calls, a job in an unmounted component.
-2. **Crons in components.** The cron executor over every namespace. Tests: a component's cron runs in it; an
+2. **Crons in components.** Built. The cron executor over every namespace. Tests: a component's cron runs in it; an
    unmount stops it.
 3. **Storage in components.**
    - The token with the component.

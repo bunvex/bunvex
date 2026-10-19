@@ -490,7 +490,11 @@ test("a cron deleted with its function after the executor picked it is dropped, 
   const consoleError = console.error;
   console.error = (...a: unknown[]) => errors.push(a);
   try {
-    const execute = (after as unknown as { execute(j: CronJob): Promise<void> }).execute(picked!);
+    // With its namespace (the app's), as the executor holds it.
+    const execute = (after as unknown as { execute(j: CronJob & { ns: null }): Promise<void> }).execute({
+      ...picked!,
+      ns: null,
+    });
     const outcome = await Promise.race([execute.then(() => "done"), Bun.sleep(500).then(() => "still retrying")]);
     expect(outcome).toBe("done");
   } finally {

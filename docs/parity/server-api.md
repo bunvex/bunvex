@@ -291,7 +291,7 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `cronJobs()` + `export default crons` in `crons.ts` | server/cron.ts | done (STUDY-35) | The default export of the pushed `crons.ts`, as Convex (checked at push); or `createServer({ crons })`. |
+| `cronJobs()` + `export default crons` in `crons.ts` | server/cron.ts | done (STUDY-35) | The default export of the pushed `crons.ts`, as Convex (checked at push); or `createServer({ crons })`. A component's `crons.ts` runs its own functions, its next runs and logs in its namespace; an unmount deletes them (STUDY-157 PR 2). |
 | `crons.interval(id, { seconds \| minutes \| hours }, fn, args)` | server/cron.ts | done (STUDY-30) | |
 | `crons.hourly(id, { minuteUTC }?, fn, args)` | server/cron.ts | done (STUDY-30) | |
 | `crons.daily(id, { hourUTC, minuteUTC }?, …)` | server/cron.ts | done (STUDY-30) | |
