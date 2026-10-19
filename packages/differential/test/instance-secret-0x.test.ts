@@ -54,8 +54,10 @@ describe.skipIf(!ready)("a 0x-prefixed instance secret on Convex and on bunvex",
     stores.push(convexStore.dir, bunvexStore.dir);
     const backends: Backend[] = [];
     try {
-      // Each deploys with its CLI, under the key its own keygen issued for the prefixed spelling.
-      backends.push(await startConvex({ store: convexStore }), await startBunvex({ store: bunvexStore }));
+      // Each deploys with its CLI, under the key its own keygen issued for the prefixed spelling. One at a time, so
+      // the first is stopped when the second fails to start.
+      backends.push(await startConvex({ store: convexStore }));
+      backends.push(await startBunvex({ store: bunvexStore }));
       const name = convexStore.name;
       const keys = [
         ...SPELLINGS.map((s) => convexKey(name, s)),
