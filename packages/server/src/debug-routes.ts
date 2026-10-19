@@ -255,10 +255,12 @@ export function topologyRoute(
 // ---------------------------------------------------------------- the rooms (AD-43, STUDY-165)
 // `GET /api/debug/rooms`: the open rooms and scopes; `GET /api/debug/rooms/members`: one room's members, a page at
 // a time (`?key=` from the list, or `?kind=&name=&args=`; `cursor`, `numItems` up to 100); `GET
-// /api/debug/rooms/definitions`: the deployed rooms and scopes with their validators. Admin only, with
-// ViewMetrics, as the topology; read from the hub's memory, no store read.
+// /api/debug/rooms/definitions`: the deployed rooms and scopes with their validators; `GET
+// /api/debug/rooms/events?key=&cursor=[&timeoutMs=]`: the room's event tap, a long poll from a cursor as the
+// invalidations feed (no cursor starts the tap and answers its seq at once). Admin only, with ViewMetrics, as the
+// topology; read from the hub's memory, no store read.
 
-export const ROOMS_ROUTE = /^\/api\/debug\/rooms(?:\/(members|definitions))?$/;
+export const ROOMS_ROUTE = /^\/api\/debug\/rooms(?:\/(members|definitions|events))?$/;
 const ROOM_KINDS = new Set(["room", "presence"]);
 
 const badRequest = (message: string) => jsonResponse({ code: "BadRequest", message }, 400);
@@ -290,12 +292,12 @@ function roomKeyOf(params: URLSearchParams): RoomKey | string {
 }
 
 /** The rooms routes; `null` when `url` is none of them. Throws the caller's access error. */
-export function roomsRoute(
+export async function roomsRoute(
   ctx: { functions: Functions; sync: SyncHub },
   url: URL,
   req: Request,
   caller: Caller,
-): Response | null {
+): Promise<Response | null> {
   const m = ROOMS_ROUTE.exec(url.pathname);
   if (!m || req.method !== "GET") return null;
   ctx.functions.requireOperation(caller, "ViewMetrics");
@@ -304,6 +306,15 @@ export function roomsRoute(
   if (m[1] === "definitions") return jsonResponse({ definitions: roomDefinitions(ctx.functions) });
   const key = roomKeyOf(url.searchParams);
   if (typeof key === "string") return badRequest(key);
+  if (m[1] === "events") {
+    const raw = url.searchParams.get("cursor");
+    const cursor = raw === null || raw === "" ? null : Number(raw);
+    if (cursor !== null && (!Number.isInteger(cursor) || cursor < 0))
+      return badRequest("`cursor` must be a non-negative integer.");
+    const t = url.searchParams.get("timeoutMs");
+    const timeoutMs = t === null ? FOLLOW_MAX_MS : Math.max(0, Math.min(FOLLOW_MAX_MS, Number(t) || 0));
+    return jsonResponse(await hub.tapEvents(key, cursor, timeoutMs, req.signal));
+  }
   const rawCount = url.searchParams.get("numItems");
   const numItems = rawCount === null ? MEMBERS_PAGE_MAX : Number(rawCount);
   if (!Number.isInteger(numItems) || numItems < 1) return badRequest("`numItems` must be a positive integer.");

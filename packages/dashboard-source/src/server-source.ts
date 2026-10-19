@@ -374,11 +374,19 @@ export function createServerDataSource(opts: ServerDataSourceOptions): ServerDat
   source[Symbol.dispose] = () => void source.close();
 
   // ---------------------------------------------------------------- the rooms (AD-43, STUDY-165)
-  // `/api/debug/rooms`, read once per call (the screen polls). A server without rooms answers `not_found`.
-  const rooms = roomsReads(http);
+  // `/api/debug/rooms`, read once per call (the screen polls). A server without rooms answers `not_found`. The
+  // event tap is followed while watched; its loops stop while the deployment is disconnected, and with the source.
+  const rooms = roomsReads(http, { connection: (onStatus) => source.watchConnection!(onStatus) });
   source.listRooms = rooms.listRooms;
   source.listRoomMembers = rooms.listRoomMembers;
   source.listRoomDefinitions = rooms.listRoomDefinitions;
+  source.watchRoomEvents = rooms.watchRoomEvents;
+  const closeBeforeRooms = source.close;
+  source.close = () => {
+    rooms.close();
+    return closeBeforeRooms();
+  };
+  source[Symbol.dispose] = () => void source.close();
 
   return source;
 }

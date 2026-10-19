@@ -84,6 +84,34 @@ export type RoomStats = {
 /** The most members one `membersPage` returns. */
 export const MEMBERS_PAGE_MAX = 100;
 
+/** The most events one tap holds; older ones are dropped (AD-43, STUDY-165 §3.3). */
+export const TAP_EVENTS_MAX = 200;
+/** A tap ends this long after its last poll (a poll still waiting keeps it). */
+export const TAP_IDLE_MS = 30_000;
+/** An event's data above this many bytes of JSON is recorded as `null`, with `dataOmitted` and its real size. */
+export const TAP_DATA_MAX_BYTES = 16 * 1024;
+/** One event a tap saw: from a member (its memberId) or from the server (`from: null`). */
+export type TappedEvent = {
+  /** Per tap, from 1; a new tap starts again at 0. */
+  seq: number;
+  /** Wall-clock ms. */
+  at: number;
+  event: string;
+  from: string | null;
+  /** Bytes of the data's JSON. */
+  size: number;
+  /** The wire JSON, or `null` with `dataOmitted` above `TAP_DATA_MAX_BYTES`. */
+  data: JSONValue;
+  dataOmitted?: true;
+};
+/**
+ * A tap poll's answer. `dropped`: events lost between the cursor and the oldest held (the buffer overflowed);
+ * `reset`: the cursor names a tap that is gone (expired, or another server's), and the tap starts again at
+ * `newCursor`; `closed`: the room is not open, and no tap is kept.
+ */
+export type TapAnswer = { events: TappedEvent[]; newCursor: number; dropped?: number; reset?: true; closed?: true };
+type Tap = { events: TappedEvent[]; seq: number; expiry: unknown; waiters: Set<() => void> };
+
 export type RoomKey = { kind: v1.RoomKind; name: string; argsJson: string };
 export const roomKeyString = (k: RoomKey) => `${k.kind}|${k.name}|${k.argsJson}`;
 
@@ -127,7 +155,15 @@ type Attachment = {
   eventBucket: Bucket;
   grace: unknown | null;
 };
-type Room = { key: RoomKey; openedAt: number; members: Map<string, Member>; changed: Set<Member>; left: string[] };
+type Room = {
+  key: RoomKey;
+  openedAt: number;
+  members: Map<string, Member>;
+  changed: Set<Member>;
+  left: string[];
+  /** Its event tap while there is one (the same as in `taps`), found without building the key. */
+  tap: Tap | null;
+};
 
 /**
  * A member's key: a scope's member is its user; a room's is the session's connection as one user, so two live
@@ -145,6 +181,8 @@ export class RoomHub {
   /** Attachments in their grace, by `${sessionId}|${room key}`, then by member key. */
   private readonly graced = new Map<string, Map<string, Attachment>>();
   private tick: unknown | null = null;
+  /** The event taps (AD-43), by room key: only rooms someone polled in the last `TAP_IDLE_MS`. */
+  private readonly taps = new Map<string, Tap>();
   private readonly counters = {
     joins: 0,
     joinsRefusedByGate: 0,
@@ -250,6 +288,104 @@ export class RoomHub {
     return { page, isDone, continueCursor: isDone ? "" : page[page.length - 1]!.memberId };
   }
 
+  /** Taps kept now (for tests and the measurement). */
+  get tapped(): number {
+    return this.taps.size;
+  }
+
+  /**
+   * A dashboard's poll of a room's events (AD-43, STUDY-165 §3.3). No cursor starts the tap (if no one did) and
+   * answers its seq at once: no past events, as a new member sees none. A cursor answers the events after it, or
+   * waits up to `timeoutMs` for one (on a promise, never holding the hub). Each poll keeps the tap for
+   * `TAP_IDLE_MS` more.
+   */
+  async tapEvents(key: RoomKey, cursor: number | null, timeoutMs: number, signal?: AbortSignal): Promise<TapAnswer> {
+    const ks = roomKeyString(key);
+    if (!this.isOpen(ks)) {
+      this.endTap(ks);
+      return { events: [], newCursor: cursor ?? 0, closed: true };
+    }
+    let tap = this.taps.get(ks);
+    const fresh = !tap;
+    if (!tap) {
+      tap = { events: [], seq: 0, expiry: null, waiters: new Set() };
+      this.taps.set(ks, tap);
+      this.rooms.get(ks)!.tap = tap;
+    }
+    this.keepTap(ks, tap);
+    if (cursor === null) return { events: [], newCursor: tap.seq };
+    // a cursor of a tap that is gone (expired, or before a restart): this one starts over, and says so
+    if (fresh || cursor > tap.seq) return { events: [], newCursor: tap.seq, reset: true };
+    if (tap.seq === cursor && timeoutMs > 0 && !signal?.aborted) {
+      const waiting = tap;
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          this.timers.clear(timer);
+          waiting.waiters.delete(done);
+          signal?.removeEventListener("abort", done);
+          // the poll answers now: the tap is kept from here (not from when it waited)
+          if (this.taps.get(ks) === waiting) this.keepTap(ks, waiting);
+          resolve();
+        };
+        const timer = this.timers.set(done, timeoutMs);
+        waiting.waiters.add(done);
+        signal?.addEventListener("abort", done, { once: true });
+      });
+      if (this.taps.get(ks) !== waiting) {
+        if (!this.isOpen(ks)) return { events: [], newCursor: cursor, closed: true };
+        // expired while the answer was on its way: a new tap, said so
+        return { ...(await this.tapEvents(key, null, 0)), reset: true };
+      }
+    }
+    const events = tap.events.filter((e) => e.seq > cursor);
+    const answer: TapAnswer = { events, newCursor: events.at(-1)?.seq ?? cursor };
+    const lost = (events[0]?.seq ?? cursor + 1) - cursor - 1;
+    if (lost > 0) answer.dropped = lost;
+    return answer;
+  }
+
+  private isOpen(ks: string) {
+    return (this.rooms.get(ks)?.members.size ?? 0) > 0;
+  }
+
+  /** The tap's expiry moved to `TAP_IDLE_MS` from now; a poll still waiting then keeps it again. */
+  private keepTap(ks: string, tap: Tap) {
+    this.timers.clear(tap.expiry);
+    tap.expiry = this.timers.set(() => {
+      if (this.taps.get(ks) !== tap) return;
+      if (tap.waiters.size > 0) this.keepTap(ks, tap);
+      else this.dropTap(ks);
+    }, TAP_IDLE_MS);
+  }
+
+  /** The room closed (or was found closed): its tap ends, and a poll waiting on it answers. */
+  private endTap(ks: string) {
+    const tap = this.taps.get(ks);
+    if (!tap) return;
+    this.dropTap(ks);
+    this.timers.clear(tap.expiry);
+    for (const w of [...tap.waiters]) w();
+  }
+
+  private dropTap(ks: string) {
+    this.taps.delete(ks);
+    const room = this.rooms.get(ks);
+    if (room) room.tap = null;
+  }
+
+  private record(tap: Tap, from: string | null, event: string, data: JSONValue) {
+    const json = JSON.stringify(data);
+    const size = json.length === 0 ? 0 : Buffer.byteLength(json);
+    const e: TappedEvent = { seq: ++tap.seq, at: this.wall(), event, from, size, data };
+    if (size > TAP_DATA_MAX_BYTES) {
+      e.data = null;
+      e.dataOmitted = true;
+    }
+    tap.events.push(e);
+    if (tap.events.length > TAP_EVENTS_MAX) tap.events.shift();
+    if (tap.waiters.size > 0) for (const w of [...tap.waiters]) w();
+  }
+
   join(
     sink: RoomSink,
     roomId: number,
@@ -301,7 +437,7 @@ export class RoomHub {
       return "limit";
     }
     if (!room) {
-      room = { key, openedAt: this.wall(), members: new Map(), changed: new Set(), left: [] };
+      room = { key, openedAt: this.wall(), members: new Map(), changed: new Set(), left: [], tap: null };
       this.rooms.set(ks, room);
     }
     const member: Member = existing ?? {
@@ -480,6 +616,8 @@ export class RoomHub {
   }
 
   private fanOutEvent(room: Room, from: string | null, event: string, data: JSONValue, sender: Attachment | null) {
+    // a room no one taps costs one field check
+    if (room.tap !== null) this.record(room.tap, from, event, data);
     for (const m of room.members.values())
       for (const x of m.attachments)
         if (x !== sender && x.grace === null && !(sender && x.member === sender.member))
@@ -498,7 +636,7 @@ export class RoomHub {
   private flush() {
     for (const [ks, room] of this.rooms) {
       if (room.changed.size === 0 && room.left.length === 0) {
-        if (room.members.size === 0) this.rooms.delete(ks);
+        if (room.members.size === 0) this.closeRoom(ks);
         continue;
       }
       const changed = [...room.changed];
@@ -511,8 +649,13 @@ export class RoomHub {
           const set = changed.filter((c) => c !== m).map((c) => this.view(room, c));
           if (set.length || left.length) this.deliver(x.sink, { type: "RoomMembers", roomId: x.roomId, set, left });
         }
-      if (room.members.size === 0) this.rooms.delete(ks);
+      if (room.members.size === 0) this.closeRoom(ks);
     }
+  }
+
+  private closeRoom(ks: string) {
+    this.rooms.delete(ks);
+    this.endTap(ks);
   }
 
   /** Membership frames are never dropped: a connection too far behind is closed, and re-syncs on reconnect. */

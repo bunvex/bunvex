@@ -58,6 +58,8 @@ import {
   type PageRequest,
   type QueryCacheSnapshot,
   type RoomDefinition,
+  type RoomEvent,
+  type RoomEventsInfo,
   type RoomInfo,
   type RoomMember,
   type RoomRef,
@@ -156,6 +158,8 @@ export type MockDataSourceOptions = FixtureOptions & {
   topologyIntervalMs?: number;
   /** How often an invalidation lands while someone follows them (STUDY-131 AD-25). Default 2 000 ms. */
   invalidationIntervalMs?: number;
+  /** How often the document room sends a `wave` while its events are tapped (AD-43). Default 3 000 ms. */
+  roomEventIntervalMs?: number;
 };
 
 /** At most this many documents per insert or delete call, as a server bounds a transaction. */
@@ -423,7 +427,12 @@ export class MockDataSource implements DashboardDataSource {
     const docs = fixture.tables.reduce((n, t) => n + t.documents.length, 0);
     this.subscriptions = new MockSubscriptions(this.rnd, () => this.scheduler.now(), docs * 3);
     this.rerunRnd = createRandom((opts.seed ?? 1) ^ 0x7ace);
-    this.rooms = new MockRooms(opts.seed ?? 1, () => this.scheduler.now(), opts.now ?? Date.now());
+    this.rooms = new MockRooms(
+      opts.seed ?? 1,
+      () => this.scheduler.now(),
+      opts.now ?? Date.now(),
+      opts.roomEventIntervalMs,
+    );
     this.stats = {
       at: opts.now ?? Date.now(),
       commitTs: docs * 3,
@@ -1577,6 +1586,38 @@ export class MockDataSource implements DashboardDataSource {
       this.canViewRooms();
       return this.rooms.definitions();
     });
+  }
+
+  watchRoomEvents(
+    room: RoomRef,
+    onEvents: (events: RoomEvent[], info: RoomEventsInfo) => void,
+    onError: (error: DataSourceError) => void,
+    onClosed?: () => void,
+  ): Unsubscribe {
+    let live = true;
+    let off = () => {};
+    try {
+      this.canViewRooms();
+      // tapped now (an event sent right after the call is seen), delivered on a later tick
+      off = this.rooms.tap(
+        room.key,
+        (events, info) => live && onEvents(events, info),
+        () => {
+          if (live) onClosed?.();
+          live = false;
+        },
+      );
+    } catch (e) {
+      const error = toDataSourceError(e);
+      setTimeout(() => {
+        if (live) onError(error);
+        live = false;
+      }, 0);
+    }
+    return () => {
+      live = false;
+      off();
+    };
   }
 
   // ---------------------------------------------------------------- subscriptions (STUDY-131 AD-25), simulated

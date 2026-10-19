@@ -128,7 +128,8 @@ The parts can ship in this order, one PR each:
    tests. Built: #722 (§5.1).
 4. **Health.** The room counters on the Health screen. Built: #722, with step 3 (§5.1), on the Overview (the screen
    that was Health).
-5. **Event tap.** The ring buffer and the long poll on the server, and the panel on the screen.
+5. **Event tap.** The ring buffer and the long poll on the server, and the panel on the screen. The server, the
+   contract's `watchRoomEvents`, the server source and the mock: built (§5.2); the panel to come.
 6. **Actions.** Send a test event, remove a member, close a room, with the audit log.
 
 Parts 1–4 are the read and observability base. Parts 5 and 6 can wait for the owner's go-ahead (D6, D7). The
@@ -208,6 +209,50 @@ at once when it comes back (`connection.tsx`). Nothing is read for rooms while n
 | The definitions inside the function tree's navigation | the Functions tree test, the definitions test |
 | An open room's members not polled | polls test |
 | A closed room's members still polled | closing test (the members stay after a second poll) |
+
+### 5.2 The event tap (step 5: server, contract, sources)
+
+**The hub** (`packages/server/src/rooms/hub.ts`) keeps a tap per room someone polls (`taps`, by room key; the room
+holds a reference too, so that recording does not build the key). A tap holds at most 200 events (`TAP_EVENTS_MAX`,
+the oldest dropped) and a `seq` that starts at 0 when the tap is created and grows by one per event. It ends 30 s
+after its last poll (`TAP_IDLE_MS`, on the hub's timers; a poll still waiting keeps it; no timer without taps), and
+when its room closes. Every event fanned out is recorded — a member's (`from`: its memberId) and the server's
+(`ctx.rooms.broadcast`, `from: null`) — as `{ seq, at, event, from, size, data }`, `size` the bytes of the data's
+JSON. Data over 16 KiB of JSON (`TAP_DATA_MAX_BYTES`; room payloads are 4 KB by default, but that is a knob) is
+recorded as `data: null, dataOmitted: true` with the real size. Presence changes are not recorded. A room no one
+taps costs one field check per event.
+
+**The endpoint** `GET /api/debug/rooms/events?key=&cursor=[&timeoutMs=]`, with the other rooms routes' guard
+(the admin key, ViewMetrics) and CORS:
+- no cursor: starts the tap (if no one did) and answers `{ events: [], newCursor: <seq> }` at once;
+- a cursor: the events after it, or a long poll (as the invalidations feed: up to 60 s, a waiter woken by the next
+  event, never holding the hub) answered `{ events: [], newCursor: cursor }` at its end. A cursor behind the oldest
+  event held adds `dropped: <oldest seq − cursor − 1>`. A cursor for a tap that is gone (it expired; the server
+  restarted, so the cursor is ahead of the tap's seq) is answered `{ events: [], newCursor: <seq>, reset: true }` and
+  the tap starts again. (A tap that expired and was re-created by another viewer since, with a seq past the cursor,
+  is not told apart.)
+- a room that is not open: `{ events: [], newCursor: cursor ?? 0, closed: true }`, no tap kept;
+- a malformed key or cursor: 400.
+
+**The contract** (`watchRoomEvents(room, onEvents(events, { dropped, gap }), onError, onClosed)`): a live tail from
+the call on, in seq order, never synchronously. `dropped` passes the server's count; `gap` says the source lost
+track (a reset, or a transient failure retried), and the screen never compares seqs across it. Transient failures
+(network, 5xx, a disconnection) are retried with the inspector's backoff, the tap started again without a cursor,
+and the first batch after says `gap: true` (it may be empty). `onError` only for a terminal error (`not_found`,
+`unauthorized`, `invalid_request`), then nothing more; `onClosed` when the room is not open, then nothing more —
+except just after a recovery, when a room found closed is asked again for up to 10 s (`ROOM_CLOSED_RETRY_MS`): a
+server that restarted has the room again only once its members reconnect.
+
+**The mock** (`packages/dashboard/src/mock/rooms.ts`): while tapped, the document room sends a `wave` from one of
+its members every 3 s (`roomEventIntervalMs`; the same waves for a seed); `rooms.emit(key, event, data)` lets a test
+push one and `rooms.close(key)` ends a tap with `onClosed`. The contract suite's tap tests run on the mock and on a
+live server (`roomEvents` in the contract options, a room of their own driven by a real client).
+
+**Measured** (`bench/rooms-tap.ts`, 100 members, 20 000 events a run through `RoomHub.broadcast`, sinks that only
+count, median of 9 interleaved runs, two rounds, an Apple M1 Pro): untapped 1.16–1.17 M events/s against 1.12–1.13 M
+with main's hub (no change within the noise); tapped 0.93–0.94 M events/s, about 80 % of untapped, some 200 ns more
+per event (the data's JSON for its size, the record). The sinks do no I/O here; with sockets the fan-out costs far
+more per event, and the tap's share is smaller.
 
 ## 6. Questions for the owner
 

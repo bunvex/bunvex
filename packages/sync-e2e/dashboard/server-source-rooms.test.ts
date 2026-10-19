@@ -4,6 +4,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { anyApi, BunvexClient } from "@bunvex/client";
 import { describeDataSourceContract } from "@bunvex/dashboard/contract";
+import type { RoomEvent, RoomEventsInfo } from "@bunvex/dashboard/data-source";
 import { createServerDataSource, type ServerDataSource } from "@bunvex/dashboard-source";
 import { adminKeyCipherKey, issueAdminKey } from "@bunvex/server";
 import { startServer } from "../test/harness.ts";
@@ -84,7 +85,31 @@ afterAll(async () => {
   issuer.stop();
 });
 
-describeDataSourceContract("@bunvex/dashboard-source on a live server (rooms)", () => open(), { only: ["rooms"] });
+let tapRooms = 0;
+/** A room of its own for one event tap test: one member that broadcasts, and leaves to close it. */
+const tapRoom = async (src: { listRooms?: () => Promise<{ key: string; args: unknown }[]> }) => {
+  const id = `tap-${++tapRooms}`;
+  const h = client().client.joinRoom<{ id: string }, unknown, { wave: unknown }>(api.rooms.doc as never, { id });
+  await until(() => h.status === "joined", `${id} joined`);
+  const key = await until(
+    async () => (await src.listRooms!()).find((r) => (r.args as { id?: string }).id === id)?.key,
+    `${id} listed`,
+  );
+  return {
+    key,
+    handle: h,
+    emit: async (event: string, data: unknown) => h.broadcast(event as "wave", data),
+    close: async () => {
+      h.leave();
+      await until(async () => !(await src.listRooms!()).some((r) => r.key === key), `${id} closed`);
+    },
+  };
+};
+
+describeDataSourceContract("@bunvex/dashboard-source on a live server (rooms)", () => open(), {
+  only: ["rooms"],
+  roomEvents: { open: (src) => tapRoom(src) },
+});
 
 describe("the open rooms", () => {
   test("two rooms and a scope, the scope's user on two tabs one member with two connections", async () => {
@@ -140,6 +165,69 @@ describe("the open rooms", () => {
     const rooms = (await src.getStats()).rooms!;
     expect(rooms.leaves).toBeGreaterThanOrEqual(1);
   });
+
+  test("the tap: a member's events and the server's, with sender, size and data in the contract's form", async () => {
+    const src = open();
+    const room = await tapRoom(src);
+    const seen: RoomEvent[] = [];
+    const errors: unknown[] = [];
+    const off = src.watchRoomEvents!(
+      { key: room.key },
+      (events) => seen.push(...events),
+      (e) => errors.push(e),
+    );
+    try {
+      for (let i = 0; !seen.some((e) => (e.data as { n?: number }).n === 5); i++) {
+        if (i > 40) throw new Error("no event reached the tap");
+        room.handle.broadcast("wave", { n: 5, big: 7n });
+        await Bun.sleep(150);
+      }
+      const e = seen.find((x) => (x.data as { n?: number }).n === 5)!;
+      expect(e).toMatchObject({ event: "wave", data: { n: 5, big: { $integer: "BwAAAAAAAAA=" } } });
+      expect(e.from).toBeString();
+      expect(e.size).toBe(JSON.stringify(e.data).length);
+      expect(errors).toEqual([]);
+    } finally {
+      off();
+      await room.close();
+    }
+  });
+
+  test("the tap across a server restart: a gap, then the events again; no onError", async () => {
+    const src = open();
+    const room = await tapRoom(src);
+    const batches: { events: RoomEvent[]; info: RoomEventsInfo }[] = [];
+    const errors: unknown[] = [];
+    const off = src.watchRoomEvents!(
+      { key: room.key },
+      (events, info) => batches.push({ events, info }),
+      (e) => errors.push(e),
+      // a room whose members are still reconnecting is not closed
+      () => errors.push("closed"),
+    );
+    const marks = () => batches.flatMap((b) => b.events.map((e) => (e.data as { m?: string }).m));
+    const sendUntilSeen = async (m: string) => {
+      for (let i = 0; !marks().includes(m); i++) {
+        if (i > 200) throw new Error(`${m} never reached the tap`);
+        if (room.handle.status === "joined") room.handle.broadcast("wave", { m });
+        await Bun.sleep(150);
+      }
+    };
+    try {
+      await sendUntilSeen("before");
+      srv.restart();
+      await sendUntilSeen("after");
+      expect(batches.some((b) => b.info.gap)).toBe(true);
+      // the gap comes before the events of the new tap
+      const gapAt = batches.findIndex((b) => b.info.gap);
+      const afterAt = batches.findIndex((b) => b.events.some((e) => (e.data as { m?: string }).m === "after"));
+      expect(gapAt).toBeLessThanOrEqual(afterAt);
+      expect(errors).toEqual([]);
+    } finally {
+      off();
+      await room.close();
+    }
+  }, 60_000);
 
   test("a read-only key may look (ViewMetrics)", async () => {
     expect((await open(READ_ONLY_KEY).listRooms!()).length).toBeGreaterThan(0);

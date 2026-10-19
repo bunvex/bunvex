@@ -11,7 +11,10 @@ import { describeAuthAdminContract } from "./contract-auth-admin.ts";
 import { describeClientsContract } from "./contract-clients.ts";
 import { type DeploymentContractOptions, describeDeploymentContract } from "./contract-deployment.ts";
 import { describeMetricsContract } from "./contract-metrics.ts";
-import { describeRoomsContract } from "./contract-rooms.ts";
+import { describeRoomsContract, type RoomsContractOptions } from "./contract-rooms.ts";
+
+export type { ContractRoom, RoomsContractOptions } from "./contract-rooms.ts";
+
 import { describeSnapshotContract, type SnapshotContractOptions } from "./contract-snapshot.ts";
 import { type DeploymentStateContractOptions, describeDeploymentStateContract } from "./contract-state.ts";
 import { describeSubscriptionsContract, expectExecutionLinks } from "./contract-subscriptions.ts";
@@ -39,6 +42,7 @@ import { isValidatorJson, validateValue } from "./validators.ts";
 
 export type ContractOptions = DeploymentContractOptions &
   DeploymentStateContractOptions &
+  RoomsContractOptions &
   SnapshotContractOptions & {
     /** How long to wait for a watcher's first delivery. Default 5 000 ms. */
     watchTimeoutMs?: number;
@@ -759,7 +763,7 @@ export function describeDataSourceContract(
     area = "topology";
     describeTopologyContract({ make, test, watchTimeoutMs });
     area = "rooms";
-    describeRoomsContract({ make, test });
+    describeRoomsContract({ make, test, watchTimeoutMs, opts });
     area = "subscriptions";
     describeSubscriptionsContract({ make, test, watchTimeoutMs });
     area = "systemTables";

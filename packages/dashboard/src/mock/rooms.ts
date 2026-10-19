@@ -1,11 +1,20 @@
 // The mock's rooms (AD-43, STUDY-165): a `rooms:doc` room with five members whose cursors move with the mock
 // clock, and a `presence:online` scope with three users (one on two tabs, one idle), with the definitions that
 // describe them and counters that keep growing. A member's cursor is a function of the clock and the member, not
-// of a timer, so a screenshot or a test at a given clock sees the same picture. Not part of the contract: the
-// source wraps it.
+// of a timer, so a screenshot or a test at a given clock sees the same picture. The event tap: while tapped, the
+// document room sends a `wave` from one of its members every few seconds (the same waves for a seed), and a test
+// pushes its own (`emit`). Not part of the contract: the source wraps it.
 
-import { DataSourceError, type Page, type PageRequest } from "../data-source.ts";
-import type { RoomDefinition, RoomInfo, RoomMember, RoomRef, RoomStats } from "../data-source-rooms.ts";
+import { DataSourceError, type Page, type PageRequest, type Value } from "../data-source.ts";
+import type {
+  RoomDefinition,
+  RoomEvent,
+  RoomEventsInfo,
+  RoomInfo,
+  RoomMember,
+  RoomRef,
+  RoomStats,
+} from "../data-source-rooms.ts";
 import { createRandom, type Random } from "./random.ts";
 
 /** The most members one page holds, as the server's. */
@@ -14,7 +23,19 @@ const HOUR = 3_600_000;
 /** The server's refusal of a malformed key (400 BadRequest). */
 const BAD_KEY = "`key` is not a room key from the list.";
 
+/** An event's data above this many bytes of JSON is omitted, as the server's tap does. */
+const TAP_DATA_MAX_BYTES = 16 * 1024;
+const NO_LOSS: RoomEventsInfo = { dropped: 0, gap: false };
+
 type Seat = { member: RoomMember; phase: number };
+type MockTap = {
+  key: string;
+  seq: number;
+  pending: RoomEvent[];
+  flushing: boolean;
+  onEvents: (events: RoomEvent[], info: RoomEventsInfo) => void;
+  onClosed: () => void;
+};
 type OpenRoom = { info: RoomInfo; seats: Seat[] };
 
 const field = (fieldType: RoomDefinition["args"] & object) => ({ fieldType, optional: false });
@@ -24,18 +45,32 @@ const num = { type: "number" as const };
 
 const byText = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
+/** As the server refuses a key that is not `kind|name|args` of a room or a scope. */
+function checkKey(key: string) {
+  const i = key.indexOf("|");
+  const j = key.indexOf("|", i + 1);
+  if (i < 0 || j < 0 || !["room", "presence"].includes(key.slice(0, i)))
+    throw new DataSourceError("invalid_request", BAD_KEY);
+}
+
 export class MockRooms {
   private open: OpenRoom[];
   private readonly rnd: Random;
   private counters: Omit<RoomStats, "rooms" | "members" | "connections">;
+  private readonly taps = new Set<MockTap>();
+  /** The waves' own stream, so that tapping changes none of the rest. */
+  private readonly waves: Random;
+  private waveTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     seed: number,
     private readonly now: () => number,
     start: number,
+    private readonly waveEveryMs = 3000,
   ) {
     // its own stream: the mock's other data stays what it was
     this.rnd = createRandom(seed ^ 0x400d);
+    this.waves = createRandom(seed ^ 0x3a7e);
     const ids = Array.from({ length: 8 }, () => this.rnd.id()).sort(byText);
     const people = [
       ["user_ana", "Ana"],
@@ -133,11 +168,7 @@ export class MockRooms {
   }
 
   members(room: RoomRef, page: PageRequest): Page<RoomMember> {
-    // as the server refuses a key that is not `kind|name|args` of a room or a scope
-    const i = room.key.indexOf("|");
-    const j = room.key.indexOf("|", i + 1);
-    if (i < 0 || j < 0 || !["room", "presence"].includes(room.key.slice(0, i)))
-      throw new DataSourceError("invalid_request", BAD_KEY);
+    checkKey(room.key);
     const r = this.open.find((o) => o.info.key === room.key);
     if (!r) return { page: [], isDone: true, continueCursor: "" };
     const size = Number.isFinite(page.numItems)
@@ -171,6 +202,7 @@ export class MockRooms {
         events: [
           { name: "ping", payload: obj({ at: field(num) }) },
           { name: "reaction", payload: obj({ emoji: field(text) }) },
+          { name: "wave", payload: obj({ x: field(num), y: field(num) }) },
         ],
       },
     ];
@@ -191,7 +223,80 @@ export class MockRooms {
     if (!r) return false;
     this.open = this.open.filter((o) => o !== r);
     this.counters = { ...this.counters, leaves: this.counters.leaves + r.info.members };
+    // its taps end, after what they had not delivered yet
+    for (const t of [...this.taps]) if (t.key === key) this.endTap(t);
     return true;
+  }
+
+  /**
+   * Tap a room's events from now on: delivered on a later tick, in seq order from 1; `onClosed` (on a later tick)
+   * when the room is not open or closes. Throws `invalid_request` for a malformed key. Returns the stop.
+   */
+  tap(key: string, onEvents: MockTap["onEvents"], onClosed: () => void): () => void {
+    checkKey(key);
+    const t: MockTap = { key, seq: 0, pending: [], flushing: false, onEvents, onClosed };
+    this.taps.add(t);
+    if (!this.open.some((o) => o.info.key === key)) this.endTap(t);
+    else this.wavesOn();
+    return () => {
+      this.taps.delete(t);
+      this.wavesOn();
+    };
+  }
+
+  /**
+   * An event in an open room, as a member (`from`, its memberId) or the server (`from: null`) would send it: every
+   * tap on the room sees it. For tests; not part of the contract. False when no open room has that key.
+   */
+  emit(key: string, event: string, data: Value, from: string | null = null): boolean {
+    if (!this.open.some((o) => o.info.key === key)) return false;
+    const json = JSON.stringify(data);
+    const size = new TextEncoder().encode(json).length;
+    for (const t of this.taps) {
+      if (t.key !== key) continue;
+      const e: RoomEvent = { seq: ++t.seq, at: this.now(), event, from, size, data: structuredClone(data) };
+      if (size > TAP_DATA_MAX_BYTES) {
+        e.data = null;
+        e.dataOmitted = true;
+      }
+      t.pending.push(e);
+      this.flushLater(t);
+    }
+    return true;
+  }
+
+  private flushLater(t: MockTap, then?: () => void) {
+    if (t.flushing && !then) return;
+    t.flushing = true;
+    setTimeout(() => {
+      t.flushing = false;
+      if (!this.taps.has(t) && !then) return;
+      const events = t.pending.splice(0);
+      if (events.length > 0) t.onEvents(events, NO_LOSS);
+      then?.();
+    }, 0);
+  }
+
+  private endTap(t: MockTap) {
+    this.taps.delete(t);
+    this.wavesOn();
+    this.flushLater(t, () => t.onClosed());
+  }
+
+  /** The document room's waves run while it is tapped. */
+  private wavesOn() {
+    const doc = this.open.find((o) => o.info.name === "rooms:doc");
+    const tapped = doc !== undefined && [...this.taps].some((t) => t.key === doc.info.key);
+    if (tapped && this.waveTimer === null)
+      this.waveTimer = setInterval(() => {
+        const publishers = doc.seats.filter((s) => s.member.canPublish);
+        const who = publishers[this.waves.int(0, publishers.length - 1)]!.member.memberId;
+        this.emit(doc.info.key, "wave", { x: this.waves.int(0, 100), y: this.waves.int(0, 100) }, who);
+      }, this.waveEveryMs);
+    else if (!tapped && this.waveTimer !== null) {
+      clearInterval(this.waveTimer);
+      this.waveTimer = null;
+    }
   }
 
   /** The counters on, as a busy deployment would between two samples. */
