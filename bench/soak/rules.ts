@@ -42,6 +42,12 @@ export type RunData = {
    * grows by design.
    */
   indexCacheBudgetBytes: number;
+  /**
+   * When the soak's read of its ballast (more than SQLite's 256 MiB page cache, DV-550) finished, in seconds from the
+   * start: the page cache is full from then on, so memory is judged no earlier (STUDY-174 Q6, §10.3). `null`: a fill
+   * was asked for and did not finish (memory is then not judged); absent: no fill (`--page-cache-fill-mib 0`).
+   */
+  pageCacheFilledSeconds?: number | null;
   samples: Sample[];
   /** After the workload stopped and every client closed (the drain). */
   final: { sessions: number; subscriptions: number; roomMembers: number; fds: number };
@@ -117,9 +123,26 @@ export function growthRule(
 /** The write log's longest retention (`WRITE_LOG_MAX_RETENTION_SECS`): it grows until then. */
 const WRITE_LOG_MAX_RETENTION_S = 300;
 
-/** When memory is at its steady state: past the warm-up and the write log's retention, the index cache 90 % full. */
+/**
+ * Memory is judged no earlier than this share of the run. The JS heap warms up for ~12 minutes under the soak's
+ * workload: on main's 45-minute runs its slope was 0.35–0.46 MB/min judged from 541 s, 0.10–0.20 from 751 s, and
+ * −0.13–0.14 from 900 s (STUDY-174 §10.3). The index cache used to hold the judgement back that long, filling with
+ * the workload; the ballast read fills it in seconds, so the bound is explicit now.
+ */
+export const MEMORY_WARMUP_MIN_SHARE = 1 / 3;
+
+/**
+ * When memory is at its steady state: past the warm-up, the write log's retention, the page cache's fill and a third
+ * of the run, the index cache 90 % full.
+ */
 export function memoryWarmup(run: RunData): number | null {
-  const from = Math.max(run.warmupSeconds, WRITE_LOG_MAX_RETENTION_S);
+  if (run.pageCacheFilledSeconds === null) return null;
+  const from = Math.max(
+    run.warmupSeconds,
+    WRITE_LOG_MAX_RETENTION_S,
+    run.pageCacheFilledSeconds ?? 0,
+    run.durationSeconds * MEMORY_WARMUP_MIN_SHARE,
+  );
   const s = run.samples.find((s) => s.t >= from && s.indexCacheBytes >= 0.9 * run.indexCacheBudgetBytes);
   return s ? s.t : null;
 }
@@ -143,7 +166,10 @@ export function judge(run: RunData): RuleResult[] {
       out.push({
         rule,
         pass: true,
-        detail: "not judged: the index cache never filled (a longer run, or a smaller cache)",
+        detail:
+          run.pageCacheFilledSeconds === null
+            ? "not judged: the page cache's fill (the ballast read) did not finish"
+            : "not judged: the index cache never filled (a longer run, or a smaller cache)",
       });
   else {
     const steady = run.samples.filter((s) => s.t >= full);
@@ -350,7 +376,7 @@ export function parseReportOnly(list: string): Set<string> {
 
 /**
  * Marks the report-only rules. They are still judged, printed and kept in the report; only the exit code
- * (`exitCode`) ignores them. The nightly uses it for R1 until STUDY-174 Q6 is decided (§10.3).
+ * (`exitCode`) ignores them. The nightly used it for R1 until STUDY-174 Q6 was decided (§10.3); it lists none now.
  */
 export function withReportOnly(results: RuleResult[], reportOnly: Set<string>): Verdict[] {
   return results.map((r) => ({ ...r, reportOnly: reportOnly.has(ruleId(r)) }));
