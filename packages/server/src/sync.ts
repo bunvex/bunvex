@@ -65,7 +65,7 @@ import {
   type SourcedCaller,
 } from "./functions.ts";
 import type { RunReason } from "./log-events.ts";
-import { cachedQueryLogs, collectLogs, type LogLine, type WithLogLines } from "./logs.ts";
+import { type CachedRun, cachedQueryLogs, collectLogs, type WithLogLines } from "./logs.ts";
 import { RoomHub } from "./rooms/hub.ts";
 import { type RoomLimits, roomLimitsFromEnv } from "./rooms/limits.ts";
 import { RoomConnection } from "./rooms/session.ts";
@@ -349,9 +349,10 @@ export type Execution = {
   bytesRead: number;
   /**
    * What a session that reuses it logs (STUDY-75, Convex's query cache hit): the lines the run logged and its
-   * result's bytes; a failed run's error, which Convex never serves from its cache.
+   * figures (STUDY-174 F4), and its result's bytes; a failed run's error, which Convex never serves from its
+   * cache.
    */
-  logged: { lines: LogLine[]; returnBytes: number | null; error?: unknown };
+  logged: { kept: CachedRun; returnBytes: number | null; error?: unknown };
 };
 
 export type SessionQuery = {
@@ -696,14 +697,14 @@ export class SyncHub {
     } catch {
       args = undefined;
     }
-    const { lines, returnBytes, error } = exec.logged;
+    const { kept, returnBytes, error } = exec.logged;
     await collectLogs(() =>
       functions.logged(
         "Query",
         q.udfPath,
         this.syncCaller(q, caller),
         async () => {
-          cachedQueryLogs.replay(lines, error === undefined);
+          cachedQueryLogs.replay(kept, error === undefined);
           if (error !== undefined) throw error;
           return null;
         },
@@ -821,8 +822,9 @@ export class SyncHub {
     } catch {
       args = undefined; // the run reports it
     }
-    // The run's own lines, kept for the sessions that reuse its result (as the query cache keeps them).
-    let lines: LogLine[] = [];
+    // The run's own lines and figures, kept for the sessions that reuse its result (as the query cache keeps
+    // them).
+    let kept: CachedRun = { lines: [], run: null };
     let returnBytes: number | null = null;
     const r = await collectLogs(() =>
       functions.logged(
@@ -848,11 +850,11 @@ export class SyncHub {
               )(db);
             };
           }
-          const kept = cachedQueryLogs.wrap(body!);
+          const wrapped = cachedQueryLogs.wrap(body!);
           try {
-            return await engine.queryTracked(kept.body, parseJournal(q.journal), ts, caller);
+            return await engine.queryTracked(wrapped.body, parseJournal(q.journal), ts, caller);
           } finally {
-            lines = kept.capture();
+            kept = wrapped.capture();
           }
         },
         (run) => {
@@ -879,7 +881,7 @@ export class SyncHub {
         documentsRead: 0,
         bytesRead: 0,
         // A session that joined this run logs it as the failure it was (STUDY-75).
-        logged: { lines: [], returnBytes: null, error: failure },
+        logged: { kept: { lines: [], run: null }, returnBytes: null, error: failure },
       };
     // A system error is no result: the connection closes and the client resubscribes (Convex's sync worker
     // fails with it; STUDY-20 D8).
@@ -901,7 +903,7 @@ export class SyncHub {
     // No permit (STUDY-68): not the query's result; the session ends with "try again", as Convex's.
     if (!run.ok && run.error instanceof TooManyConcurrentRequestsError) throw run.error;
     const journal = r.ok ? serializeJournal(run.journal.endCursor) : q.journal;
-    const logged = run.ok ? { lines, returnBytes } : { lines, returnBytes: null, error: run.error };
+    const logged = run.ok ? { kept, returnBytes } : { kept, returnBytes: null, error: run.error };
     const linesJson = this.deps.redact ? "[]" : JSON.stringify(r.logLines);
     const tail = `,"logLines":${linesJson},"journal":${JSON.stringify(journal)}`;
     if (run.ok) {

@@ -1,6 +1,7 @@
 # STUDY-174 — Catching silent bugs: invariants, a soak test, metadata differentials
 
-- **Status:** draft (study and scaffolding; the findings of §3.3 are listed, not fixed; the questions of §8 are the owner's).
+- **Status:** decided (owner, 2026-10-19: §8 Q1–Q5 as recommended, §10). F4 is fixed (§10.2); the other findings of
+  §3.3 are listed, not fixed.
 - **Why now:** [#751](https://github.com/bunvex/bunvex/pull/751) found that since 2026-10-03 every cached query result
   expired after 17 s. [STUDY-58](STUDY-58-app-metrics.md)'s `AppMetrics` read the deterministic `Date.now` inside each
   query's execution, which marked every result as having read the clock. Every answer stayed correct, the tests and
@@ -126,7 +127,7 @@ bounds (§3, §4).
 | I-28 | Handles | `pumpHashing` cancels the body reader when a write throws | `file-storage/src/store.ts:37–47` | none | suspected S3 (code read) |
 | I-29 | OCC | A mutation runs at most 1 + `UDF_EXECUTOR_OCC_MAX_RETRIES` (4) times. Each lost attempt is logged with `willRetry` and `occInfo.retryCount` | `engine.ts:283–294, 4029–4044`; `functions.ts:1211–1219` | `core/test/occ.test.ts:21, 65`; `function-log.test.ts:233` | — |
 | I-30 | Counters | Read and write counts (`usageStats`, the read limit) equal Convex's | `core/src/tx.ts:518–651`, `read-count.ts` | `usage-database-io.test.ts`; `differential/test/read-count.test.ts` (local only) | §5 |
-| I-31 | Counters / log | A cache hit's log entry matches Convex's: `cachedResult`, zero usage, and the user time, memory and timestamp of the run it reused | `functions.ts:1400–1447` | none | P09 **VIOLATED** (F4) |
+| I-31 | Counters / log | A cache hit's log entry matches Convex's: `cachedResult`, zero usage, and the user time, memory and timestamp of the run it reused | `functions.ts:1400–1447` | `cache-hit-log-fields.test.ts`; `differential/test/cache-metadata.test.ts` | P09 **VIOLATED** (F4), fixed (§10.2) |
 | I-32 | Process | An idle backend uses (almost) no CPU | every loop | none | soak R11 (catches F2) |
 
 How a test asserts each class:
@@ -169,8 +170,8 @@ scratchpad, not in this PR. Each one prints `HOLDS` or `VIOLATED`.
 
 ### 3.3 Findings: invariants that do not hold on main
 
-None of these is fixed in this PR. Each is a bug against Convex's behaviour (§1), so none needs a DV unless the
-owner decides otherwise (F4 is the exception, see §8).
+None of these was fixed by the PR of this study (#755). Each is a bug against Convex's behaviour (§1), so none needs a DV
+unless the owner decides otherwise (F4 was the exception, see §8). F4 is now fixed (§10.2).
 
 **F1. Every cached query result expires after 17 s** (I-01). This is #751's finding. #751 has since merged
 (`7683a19a`), so F1 is **fixed on main**. It is reproduced here, on the pre-#751 build, as the baseline the new layers
@@ -214,7 +215,8 @@ Both fixes are one line each: cap the delay at 2^31−1 ms and let the loop look
 woken. But they land on a default path, so they belong in a fix PR, with a test per loop (inject the clock, schedule
 past the cap, count the queries).
 
-**F4. A cache hit's log entry does not describe the run it reused** (I-31, found by the §5.3 prototype). In the
+**F4. A cache hit's log entry does not describe the run it reused** (I-31, found by the §5.3 prototype; **fixed**,
+§10.2). In the
 function log stream (`/api/stream_function_logs`) and the log sinks, Convex logs a hit with the cached outcome's
 `userExecutionTime`, `usageStats.memoryUsedMb` (64) and `executionTimestamp`. bunvex logs `userExecutionTime: 0`,
 `memoryUsedMb: 0` and the hit's own time (`functions.ts:1428, 1447`). Both agree on `cachedResult: true` and zero
@@ -587,7 +589,7 @@ backend expose the same admin routes, and the harness already holds an admin key
 |---|---|---|---|
 | Cache hit or miss per call | `/api/stream_function_logs` `cachedResult` | no | §5.3 prototype; extend to sync subscriptions (a second client reusing a run: STUDY-75) |
 | Time-dependence (expiry at 17 s) | the same, across a 19 s wait | no | §5.3 (the 19 s case) |
-| User time, memory, timestamp of a hit | the same entry | no | §5.3 `test.todo` (F4) |
+| User time, memory, timestamp of a hit | the same entry | yes (§10.2) | §5.3 case 3 (F4) |
 | Usage per call (`usageStats`: documents and bytes read and written, index rows) | the same entry | no (STUDY-71's tests are bunvex-only) | compare `usageStats` per call over the generated programs (below) |
 | Read-limit counting | the "Many reads" warning, the limit error | `read-count.test.ts` (local only) | add to the nightly list |
 | OCC: `occInfo`, `willRetry`, `mutation_retry_count` | log stream entries | no | a fixed scenario: two clients race one document, then compare the sequence of entries (kinds, `willRetry`, retry counts); timing makes the count itself racy, so compare the shape |
@@ -620,7 +622,7 @@ only, and skipped with a note without the binary, like its neighbours. Three cas
 1. A repeated query hits. A write outside its read set keeps it cached; a write into it invalidates it. A query that
    read the clock hits within 17 s. Expected `[miss, hit, hit, miss, clock:miss, clock:hit]`, the same on both.
 2. Past 17 s (a real 19 s wait), the query that read no time still hits and the clock one misses.
-3. `test.todo` (F4): a hit's user time, memory and timestamp are its miss's.
+3. `test.todo` (F4): a hit's user time, memory and timestamp are its miss's. A test since the fix (§10.2).
 
 Results:
 - **Pre-#751 main (`016dfccb`):** case 1 passes; **case 2 fails**: bunvex `plain:miss`, Convex `plain:hit`. That is
@@ -766,3 +768,136 @@ confirmed.
 | 10 | Jepsen post-run `/metrics` check (R6 + fds per run) | 0.5 day | freed state under faults |
 | 11 | Coverage floors: each step's PR adds the files its new tests cover to `scripts/coverage-floors.ts` in the same PR (not as a separate step) | in each PR | keeps the tests |
 | 12 | The per-connection memory bench (Q4); the soak on Postgres; a monthly 6 h VPS run (Q2) | 1–2 days | slow leaks, drivers |
+
+## 10. The owner's decisions (2026-10-19) and the F4 fix
+
+### 10.1 Decisions
+
+The owner approved every recommendation of §8 on 2026-10-19:
+
+| Question | Decision | Who does it, when |
+|---|---|---|
+| Q1 | A nightly soak in CI: `soak-nightly.yml`, 45 minutes, SQLite, never a required merge check; a red night opens or comments on an issue | §9 step 5 |
+| Q2 | A monthly 6-hour soak on the VPS, once Q1 has been green for a week | §9 step 12 |
+| Q3 | F4 matches Convex: a cache hit's log entry carries the reused run's user time, memory and execution timestamp | done, §10.2 |
+| Q4 | Measure the per-connection memory first, publish it in the parity notes, assert it only if it regresses (no budget yet) | §9 step 12 |
+| Q5 | The metadata tests go in the differential nightly (`scripts/nightly.sh`), done by bunvex-9f | §9 step 7 |
+
+None of them is a divergence, so none takes a DV number. DV-527, reserved for F4 in case something could not match,
+is unused.
+
+### 10.2 F4: a cache hit is logged as the run it reused
+
+**Convex, at `72ce13c`.** One function logs every query the cache answers, ran or not: `_log_query`
+(`crates/application/src/function_log.rs:684`, called from `log_query` at `:623`). The cache calls it at step 5 of
+`CacheManager::_get` (`crates/application/src/cache/mod.rs:528–538`) with:
+- the outcome it served: the run's own, kept in the cache entry;
+- `is_cache_hit`, true for `CacheOp::Ready` and for `CacheOp::Wait` (`:462–470`);
+- `start.elapsed()`, this call's time;
+- this call's `caller` and `context`, which carries the request id and a new execution id (`ExecutionContext::new`,
+  `:404`);
+- on a hit, empty `tables_touched` (`perform_cache_op`, `:621` and `:654`).
+
+The `FunctionExecution` it logs (`function_log.rs:726–758`) therefore mixes the run's fields with the hit's:
+
+| Field (stream JSON, `crates/local_backend/src/logs.rs:202–245`) | On a hit | Source |
+|---|---|---|
+| `userExecutionTime` | the run's | `outcome.user_execution_time`, `:742` |
+| `usageStats.memoryUsedMb` | the run's (64) | `outcome.memory_in_mb`, `:747` |
+| `executionTimestamp` | the run's start | `outcome.unix_timestamp`, `:735` |
+| `identityType` | the run's identity | `outcome.identity`, `:751`; `UdfOutcome.identity` is the running transaction's (`crates/udf/src/udf_outcome.rs:46`) |
+| `logLines`, `returnBytes` | the run's | `:738`, `:725` |
+| `cachedResult` | true | `was_cached`, `:740` |
+| `timestamp` | the hit's log time | `self.rt.unix_timestamp()`, `:734` |
+| `executionTime` | the hit's own | `execution_time`, `:741` |
+| `requestId`, `executionId`, `caller`, `parentExecutionId` | the hit's own | `caller` and `context`, `:743`, `:752` |
+| `usageStats` reads and writes | none | the hit's usage tracker |
+
+The log sinks' `function_execution` event takes the same `FunctionExecution` (`udf_execution_record_log_events`,
+`function_log.rs:272–330`): its `timestamp` is the hit's, its user time and memory are the run's. Usage is metered
+apart, before the log entry is built: a hit is a `CallType::CachedQuery` (`:705`), with no duration, user time or
+memory, while a run is an `UncachedQuery` with all three (`:706–711`).
+
+The identity is the one field the study's §1 and Q3 did not name. It shows only when the run read no identity: its
+result is stored for every caller (`cache/mod.rs:209–218`), so a hit by another caller shows the run's identity type.
+
+**What apps observe.** `/api/stream_function_logs` (the CLI's `logs`, the dashboard's Logs page, which reads the
+same entries) and every log sink show a cached query with the user time and memory of the run that computed it, and
+that run's start time and identity type. A hit is no longer shown as free of user time and memory.
+
+**bunvex.** A cached result already kept its run's lines (the query cache's `CacheCompanion`, STUDY-20 D2; the sync
+hub's `Execution.logged`, STUDY-75). It now keeps the run's figures with them:
+- `RunFigures` (`packages/server/src/logs.ts`): user time, memory, execution timestamp and identity type. The kept
+  value is a `CachedRun`: the lines and the figures.
+- `Running.ran()` (`function-log.ts:232`) gives the run's figures and fixes them, the first time the result is
+  kept for the cache. `cachedQueryLogs.wrap`'s `capture` (`logs.ts:186`) calls it. Its own entry then gives the
+  same figures (`figuresAt`, `:238`), so a hit equals its miss exactly, even when the hit is served (a caller that
+  waited for the run) before the run's own entry is logged.
+- On a hit, `cachedQueryLogs.replay` (`logs.ts:196`) hands the kept figures to the hit's `Running` (`reused`), and
+  `Functions.completion` (`functions.ts:1411`) logs them instead of its own. That covers the HTTP API's queries
+  through the engine's cache, a caller that waited for another's run, and the sync hub's reuse and joins
+  (`sync.ts:707`, `:857`).
+- The function log, the log streams (`/api/stream_function_logs`, `stream_udf_execution`), the dashboard and the
+  log sinks all read that one `Completion`, so they all change together.
+- The meter is given nothing of the run for a hit: no time, user time or memory (`functions.ts:1370–1373`), as
+  Convex's `CachedQuery`. A query's compute was already 0 on a hit (its time is 0); the user time and memory are now
+  zeroed for the meter explicitly, since the entry carries the run's.
+
+A hit whose run kept no figures (a run outside a logged execution; none of the paths above) logs its own, with no
+memory, as before.
+
+**Divergences.** None. DV-527 is unused.
+
+**Tests.**
+- `packages/server/test/cache-hit-log-fields.test.ts` (new, on the test runtime's virtual clock, STUDY-132):
+  - a hit logs the run's user time (exactly `BUSY_MS`), memory, execution timestamp and identity type (a user's
+    run, an anonymous hit), and its own log time, wall time, request and execution ids, with the run's lines and no
+    reads;
+  - the log streams' `function_execution` of a hit has the same user time and memory, at the hit's time;
+  - a caller that waited for another's run (`CacheOp::Wait`) logs the run's figures;
+  - metering: a hit counts one call, adds no compute and no database I/O, and the meter is given no time, user time
+    or memory for it, while its hit takes 40 ms of its own.
+- `packages/server/test/sync-cache-hits.test.ts`: a session reusing another's result logs the run's user time,
+  memory and start, in its own request; a new case where an anonymous session reuses an admin's run of a query that
+  read no identity, and logs `instance_admin`.
+- `packages/differential/test/cache-metadata.test.ts`, case 3, against the pinned binary
+  (`precompiled-2026-10-10-72ce13c`), the former `test.todo`. It compares, per backend, a miss and its hit:
+  - the flags;
+  - whether the user time, memory, execution timestamp and identity type are the miss's;
+  - the memory itself;
+  - whether the hit is logged no earlier than the miss;
+  - whether the request and execution ids differ;
+  - the caller;
+  - the hit's reads.
+
+  Both backends give the same projection. Convex gives `true` for the four "same" fields and 64 MB, and different
+  ids. A first version asserted that the hit is logged strictly later. On bunvex both can fall in the same
+  millisecond, so it was flaky (2 runs in 6) and is now "no earlier".
+
+**Sabotage.** Each change made alone, then restored. `shasum` of the sources and the `git diff` were compared after
+the run.
+
+| Sabotage | Fails |
+|---|---|
+| a hit logs its own figures (`ran = r.figuresAt(end)`) | 5 unit tests (HTTP, stream, wait, sync reuse, sync identity); the oracle case (`sameUserTime`, `sameTimestamp`) |
+| `capture` keeps no figures | the same 5 unit tests |
+| `replay` does not hand them to the hit | the same 5 unit tests; the oracle case (also `memoryUsedMb` 0) |
+| the hit's identity type is its own | 2 (HTTP, sync identity) |
+| the sync hub replays the lines only | 2 (sync reuse, sync identity) |
+| the meter is given a hit's memory | 1 (metering) |
+| the meter is given a hit's user time | 1 (metering) |
+| the meter is given a hit's wall time | 1 (metering; it survived until the hit was made to take time of its own) |
+
+Not sabotaged separately: a run's own entry reusing its kept figures. On the test clock a run's user time does not
+change between the capture and the entry. It matters only when the user time is clamped to a wall time read before
+the entry.
+
+**Checks.**
+- `bun run typecheck`, `bun run check:deps` and `bunx biome ci` on the changed files pass, with no new warning.
+- The log-stream suites pass: 19 server files, 137 tests; 8 differential files against the binary, 20 tests.
+  `cache-metadata.test.ts` alone: 3 pass, 0 todo.
+- The full `bun test --isolate --timeout 30000`: 4 339 pass, 0 fail, 587 skipped.
+
+**Measurements.** None. A cached miss allocates one more small object (its figures) and a hit one field
+assignment. The rule of this round is no benchmarks while other sessions run them.
+
