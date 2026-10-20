@@ -3,7 +3,7 @@
 //
 // - The candidates are the project's `package.json` dependencies (all four kinds, the first occurrence of a name
 //   winning) that the list names, or all of them under `"*"`; never `bunvex`, `bunvex/*` or `@bunvex/*` (linked to
-//   the server's own modules, as Convex always bundles `convex`), nor a local, URL or git version; and only if the
+//   the server's own modules or bundled, as Convex always bundles `convex`), nor a local, URL or git version; and only if the
 //   project's top-level `node_modules` has them.
 // - The plugin leaves an import external only when it resolves to that top-level copy (a nested copy is bundled).
 // - The versions are the installed ones (its `package.json`), with the peer and optional dependencies that are also
