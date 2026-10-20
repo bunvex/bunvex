@@ -1,6 +1,7 @@
 # STUDY-181 — `@bunvex/helpers`, part 1: custom functions, streams and pagination, triggers, validators
 
-- **Status:** study; questions H-1–H-8 open for the owner (§7).
+- **Status:** decided (owner, 2026-10-20): H-1–H-8 as recommended (§7); DV-545 decided. To build in §3.4's
+  order, with H-5 (`TableDefinition.indexes` in Convex's runtime shape) first, as a platform PR.
 - **Convex source read:** get-convex/convex-helpers at `e48f9df` (0.1.128), pinned in
   [upstream.md](../parity/upstream.md#other-repositories). Paths are relative to `packages/convex-helpers/`.
 - **bunvex source:** `main` and the STUDY-180 branch (`fix/api-exports-parity`, the public names). Paths are
@@ -156,7 +157,7 @@ Every PR ports its module's tests as bunvex tests: the same scenarios, written f
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | DV-544 | Rule 5 in `@bunvex/helpers`: "Unknown validator type: " for convex-helpers' "Unknown Convex validator type: "; `isValidator` for `isConvexValidator` | Rule 5 | rule 5 (no owner choice) |
-| DV-545 | Triggers' locks and queue per transaction, not per module | bunvex evaluates modules once per code version (DV-492); per module, concurrent mutations would share them | pending (H-4) |
+| DV-545 | Triggers' locks and queue per transaction, not per module | bunvex evaluates modules once per code version (DV-492); per module, concurrent mutations would share them | owner, 2026-10-20 (H-4) |
 
 ## 4b. Additions (beyond Convex)
 
@@ -174,6 +175,8 @@ None new. AD-23 (`typedV`, `doc`) is accepted and built here.
 - Whether a trigger that calls `ctx.runMutation` while the outer write holds the lock deadlocks under per-module locks. That is moot under H-4's per-transaction locks.
 
 ## 7. Questions for the owner
+
+All decided by the owner on 2026-10-20, as recommended.
 
 | # | Question | Recommendation |
 |---|---|---|
