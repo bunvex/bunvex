@@ -101,9 +101,14 @@ export function untrack(id: number) {
 /** `resume`, in a checkpoint of call `id` once its last checkpoint was checked: at once if it was. */
 export function later(id: number, resume: () => void) {
   if (REPORTS_AT_DRAIN || !lastMarker.has(id)) return void setImmediate(() => checkpoint(id, resume));
-  let q = queued.get(id);
-  if (!q) queued.set(id, (q = []));
-  q.push(() => checkpoint(id, resume));
+  enqueue(id, () => checkpoint(id, resume));
+}
+
+/** `resume`, run once call `id`'s last marker is reported. */
+function enqueue(id: number, resume: () => void) {
+  const q = queued.get(id);
+  if (q) q.push(resume);
+  else queued.set(id, [resume]);
 }
 
 /** The loads and evaluations running (their code is no call's): while one runs, no rejection falls to the one call. */
@@ -130,9 +135,7 @@ export const checkpointOf = (): number | null => (inCheckpoint ? current : null)
 export function checkpoint(id: number | null, resume: () => void, drainBefore = true) {
   // Bun reports at the end of the turn: what this call's last checkpoint left is not known yet; this one runs after.
   if (!REPORTS_AT_DRAIN && !inCheckpoint && id !== null && lastMarker.has(id)) {
-    let q = queued.get(id);
-    if (!q) queued.set(id, (q = []));
-    q.push(() => checkpoint(id, resume, drainBefore));
+    enqueue(id, () => checkpoint(id, resume, drainBefore));
     return;
   }
   if (inCheckpoint) {
