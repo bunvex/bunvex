@@ -197,7 +197,7 @@ bunvex/
 │
 ├── .github/                         workflows (CI: lint, typecheck, dependency rules, tests, examples,
 │                                    dashboard e2e, conformance against Postgres, MySQL, MongoDB;
-│                                    nightly differential and Jepsen runs; binaries, Docker image),
+│                                    nightly differential, Jepsen and soak runs; binaries, Docker image),
 │                                    issue and PR templates
 ├── .changeset/                      per-package versions and changelogs
 ├── README.md · ARCHITECTURE.md · CONTRIBUTING.md · CODE_OF_CONDUCT.md · SECURITY.md · LICENSE

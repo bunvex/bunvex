@@ -1,7 +1,8 @@
 # STUDY-174 — Catching silent bugs: invariants, a soak test, metadata differentials
 
 - **Status:** decided (owner, 2026-10-19: §8 Q1–Q5 as recommended, §10). F4 is fixed (§10.2); the other findings of
-  §3.3 are listed, not fixed.
+  §3.3 are listed, not fixed. The soak nightly (Q1, §9 step 5) is `.github/workflows/soak-nightly.yml`, with R1
+  report-only until Q6 is decided (§10.3).
 - **Why now:** [#751](https://github.com/bunvex/bunvex/pull/751) found that since 2026-10-03 every cached query result
   expired after 17 s. [STUDY-58](STUDY-58-app-metrics.md)'s `AppMetrics` read the deterministic `Date.now` inside each
   query's execution, which marked every result as having read the clock. Every answer stayed correct, the tests and
@@ -387,8 +388,8 @@ Sabotage: the rules were broken six ways, and each made `rules.test.ts` fail (§
 
 ### 4.3 Where it runs, how long, what it costs
 
-**The recommendation: a nightly job beside the Jepsen and differential nightlies.** Call it
-`.github/workflows/soak-nightly.yml`:
+**The recommendation: a nightly job beside the Jepsen and differential nightlies.** Built as
+`.github/workflows/soak-nightly.yml` (§10.3):
 - `ubuntu-latest`, Bun 1.4.2;
 - `bun bench/soak/soak.ts --minutes 45`, `timeout-minutes: 60`;
 - on failure, upload `report.json` and open or comment on an issue with `report.md`, as `jepsen-nightly.yml` does.
@@ -760,7 +761,7 @@ confirmed.
 | 2 | Fix F2 and F3 with one capped `timerDelay` helper in core, a test per loop with an injected clock, and the I-25 rule in `check:deps` (rule 6, §3.1) in the same PR, so a new uncapped delay fails CI | 0.5 day | F2, F3, S8, and new ones |
 | 3 | ~~Attribute F6~~ done (§4.7): SQLite's 256 MiB page cache, a plateau. What is left is Q6 | — | F6 |
 | 4 | The server suites' `afterEach` "hub empty, cache consistent, no session left" helper (I-03, I-05, I-11, I-19, I-23) | 0.5–1 day | freed state across ~40 suites |
-| 5 | The soak nightly workflow (Q1) | 0.5 day + a week of watching for flakes | trends, R1–R12 |
+| 5 | ~~The soak nightly workflow (Q1)~~ done (§10.3), R1 report-only until Q6; then a week of watching for flakes | 0.5 day + a week of watching | trends, R1–R12 |
 | 6 | Fix F5: a stopping scheduler stops retrying and waits a bounded time. Test: shutdown under contention within 1 s | 0.5 day | F5, S4 |
 | 7 | The metadata files in the differential nightly; the runner's log tail (Q5, bunvex-9f) | 1–2 days | F4-class, usage, OCC shape |
 | 8 | F4 fix (Q3) | 0.5 day | F4 |
@@ -901,3 +902,45 @@ the entry.
 **Measurements.** None. A cached miss allocates one more small object (its figures) and a hit one field
 assignment. The rule of this round is no benchmarks while other sessions run them.
 
+
+### 10.3 The soak nightly (§9 step 5, Q1)
+
+**The job.** `.github/workflows/soak-nightly.yml`, as §4.3 proposed:
+- every night at 04:07 UTC, after the Jepsen (03:17) and differential (03:41) nightlies, and by hand
+  (`workflow_dispatch`, with `minutes` and `report_only` inputs);
+- `ubuntu-latest`, Bun 1.4.2, SQLite, no services: `bun bench/soak/soak.ts --minutes 45 --out .data/soak
+  --report-only "$REPORT_ONLY"`, `timeout-minutes: 60`;
+- every run uploads `.data/soak/` as the `soak-report` artifact: `report.json` (every sample, re-judgeable),
+  `report.md`, `backend.stderr` and the driver's log (`soak.log`). `report.md` is also the run's summary page;
+- exit 1 (a rule failed) or 2 (the run broke) fails the job. A failed night opens, or comments on, the issue "Soak
+  nightly: a rule failed" with `report.md`, as the Jepsen nightly does;
+- never a required merge check (Q1);
+- a pull request that changes the workflow or `bench/soak/**` runs a 5-minute smoke. It judges nothing (too few
+  samples past the warm-up), so only exit 2 fails it; a failed rule there is a notice.
+
+**R1 is report-only until Q6 is decided.** At the soak's write rate SQLite's 256 MiB page cache needs ~70 minutes
+to fill (§4.7), longer than the run, so R1 would fail every night for a known, bounded reason. Rather than drop
+the rule, the soak has a switch:
+- `soak.ts --report-only <ids>` (comma-separated rule ids, `parseReportOnly` in `rules.ts`). The listed rules are
+  still judged, printed and kept in `report.json` (`reportOnly: true`) and `report.md` ("fail (report-only)"); only
+  the exit code (`exitCode`) leaves them out. An unknown id is exit 2, so a typo cannot silence a rule. Ids are exact:
+  `R1` is not R10, R11 or R12. Empty by default: a local run judges every rule.
+- The workflow's `SOAK_REPORT_ONLY: R1` sets it. A failed report-only rule also shows as a warning on the run.
+  The dispatch input `report_only` overrides it for one run (`none`: every rule fails the job).
+- **Once Q6 is decided, empty `SOAK_REPORT_ONLY`**, in the same PR as the decision: dropping the pragma (the
+  recommendation) makes R1 pass in 30 minutes (§4.7, `f6-sqlite-cache-2mib`); keeping 256 MiB needs the memory
+  warm-up to see the page cache first (Q6).
+- Every other rule, R2–R12, fails the job.
+
+`rules.test.ts` (18 tests now) covers the switch: a leaking run with R1 report-only exits 0 and still reports R1
+failed; with no report-only rule it exits 1; R3, R10, R11 and R12 failing still exit 1 with R1 report-only; an
+unknown or lower-case id throws; the ids are exactly the rules `judge` gives.
+
+**Proof on the test VPS** (2 vCPU, 8 GB, Ubuntu; Bun 1.4.2 as in CI; this branch; under
+`/root/bunvex-soak-nightly`). The workflow's `soak` step was extracted from the YAML verbatim and run under
+`bash -e`, with `GITHUB_ENV` and `GITHUB_STEP_SUMMARY` as files and the event `schedule`:
+
+RESULTS_PLACEHOLDER
+
+**Not here.** The monthly 6-hour VPS soak (Q2) is §9 step 12, once this job has been green for a week; nothing in CI
+schedules anything against the VPS.

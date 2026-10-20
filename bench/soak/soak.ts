@@ -568,12 +568,7 @@ const md = [
     (r) => `| ${r.rule} | ${r.pass ? "pass" : r.reportOnly ? "fail (report-only)" : "**FAIL**"} | ${r.detail} |`,
   ),
   "",
-  ...(REPORT_ONLY.size
-    ? [
-        `Report-only (judged, not in the exit code): ${[...REPORT_ONLY].join(", ")}.`,
-        "",
-      ]
-    : []),
+  ...(REPORT_ONLY.size ? [`Report-only (judged, not in the exit code): ${[...REPORT_ONLY].join(", ")}.`, ""] : []),
   ...(errorSamples.length ? ["Errors (first 20):", "", ...errorSamples.map((e) => `- ${e}`), ""] : []),
 ].join("\n");
 writeFileSync(join(OUT, "report.md"), md);

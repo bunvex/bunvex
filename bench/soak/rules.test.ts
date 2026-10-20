@@ -199,7 +199,9 @@ describe("report-only rules (--report-only, the nightly's R1 until Q6)", () => {
     expect(exitCode(withReportOnly(judge(runOf(() => ({}), { idleCpu: 0.26 })), only))).toBe(1);
     expect(exitCode(withReportOnly(judge(runOf(() => ({ eventLoopLagSeconds: 0.5 }))), only))).toBe(1);
     expect(exitCode(withReportOnly(judge(runOf(() => ({}), { unexpectedErrors: 1 })), only))).toBe(1);
-    expect(exitCode(withReportOnly(judge(runOf(() => ({}), { canary: { misses: 88, writes: 5, calls: 1 } })), only))).toBe(1);
+    expect(
+      exitCode(withReportOnly(judge(runOf(() => ({}), { canary: { misses: 88, writes: 5, calls: 1 } })), only)),
+    ).toBe(1);
     expect(exitCode(withReportOnly(judge(runOf()), only))).toBe(0);
   });
 
