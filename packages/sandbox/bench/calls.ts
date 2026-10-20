@@ -2,16 +2,17 @@
 // code deployed to a server per executor, called in-process through `Functions` (no HTTP), one call at a time, each
 // with its own argument so no result comes from the query cache. Short: about 20 s at the defaults.
 //
-//   bun packages/sandbox/bench/calls.ts [calls=2000] [warmup=300]
+//   bun packages/sandbox/bench/calls.ts [calls=2000] [warmup=300] [only=<part of a line's name>]
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { createServer, Functions } from "@bunvex/server";
-import { provideProcessExecutor } from "@bunvex/server/executor";
+import { collectLogs, provideProcessExecutor } from "@bunvex/server/executor";
 import { v } from "@bunvex/values";
 import { createProcessExecutor } from "../src/executor.ts";
 
 const CALLS = Number(process.argv[2] ?? 2000);
 const WARMUP = Number(process.argv[3] ?? 300);
+const ONLY = process.argv[4];
 provideProcessExecutor(createProcessExecutor);
 
 // The pushed module's import, built so the dependency rules do not read it as this package's own.
@@ -22,6 +23,7 @@ export const empty = query(async (ctx, { i }) => i);
 export const gets = query(async (ctx, { i, ids }) => { let n = 0; for (const id of ids) if (await ctx.db.get(id)) n++; return n + i * 0; });
 export const page = query(async (ctx, { i }) => (await ctx.db.query("items").withIndex("by_k").paginate({ numItems: 100, cursor: null })).page.length + i * 0);
 export const insert = mutation(async (ctx, { i }) => ctx.db.insert("writes", { i }));
+export const logs = query(async (ctx, { i, n }) => { for (let k = 0; k < n; k++) console.log("line", k, { i }); return i; });
 `;
 
 const q = (xs: number[], p: number) =>
@@ -58,6 +60,10 @@ const lines: [name: string, run: (f: Functions, i: number, ids: string[]) => Pro
   ["100 x db.get", (f, i, ids) => f.runQuery("b:gets", { i, ids: ids.slice(0, 100) })],
   ["page of 100", (f, i) => f.runQuery("b:page", { i })],
   ["insert mutation", (f, i) => f.runMutation("b:insert", { i })],
+  // Under an invocation that collects its lines, as an HTTP or WebSocket call is (STUDY-171 §11).
+  ["empty query, lines collected", (f, i) => collectLogs(() => f.runQuery("b:empty", { i }))],
+  ["1 console.log", (f, i) => collectLogs(() => f.runQuery("b:logs", { i, n: 1 }))],
+  ["10 console.log", (f, i) => collectLogs(() => f.runQuery("b:logs", { i, n: 10 }))],
 ];
 
 const results: Record<string, Record<string, string>> = {};
@@ -65,6 +71,7 @@ for (const sandbox of ["vm", "process"] as const) {
   const d = await deployment(sandbox);
   let i = 0;
   for (const [name, run] of lines) {
+    if (ONLY && !name.includes(ONLY)) continue;
     const n = name.startsWith("100") ? Math.ceil(CALLS / 4) : CALLS;
     for (let w = 0; w < WARMUP; w++) await run(d.functions, i++, d.ids);
     const us: number[] = [];
@@ -82,5 +89,6 @@ for (const sandbox of ["vm", "process"] as const) {
 console.log(`p50 / mean / p99 µs, ${CALLS} sequential calls per line after ${WARMUP} (100 x db.get: a quarter)`);
 console.log("| Function | vm | process |");
 console.log("|---|---|---|");
-for (const [name] of lines) console.log(`| ${name} | ${results[name]!.vm} | ${results[name]!.process} |`);
+for (const [name] of lines)
+  if (results[name]) console.log(`| ${name} | ${results[name]!.vm} | ${results[name]!.process} |`);
 process.exit(0);

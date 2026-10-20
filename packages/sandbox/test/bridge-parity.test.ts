@@ -1,7 +1,6 @@
-// Queries and mutations over the bridge (STUDY-171 §8.9): the same pushed code deployed to a server running it in
-// `vm` and to one running it in `process`, every case called on both, and what the client gets compared: the value,
-// or the error's first line (`Uncaught Error: …`) and its data. The frames under it are PR 4's (stacks): only their
-// first lines are compared here.
+// Queries and mutations over the bridge (STUDY-171 §8.9, §11.5): the same pushed code deployed to a server running it
+// in `vm` and to one running it in `process`, every case called on both, and what the client gets compared: the
+// value, or the error's whole message (its frames, mapped to the module) and its data, and the log lines.
 //
 // The cases cover what a query or mutation reaches of `ctx`: `db` (reads, the query chain and its synchronous
 // errors, writes and their value checks, `normalizeId`, `db.system`, `db.table`, `db.vars`), `auth`, `meta`,
@@ -17,8 +16,12 @@ import { v } from "@bunvex/values";
 import { createProcessExecutor } from "../src/executor.ts";
 
 provideProcessExecutor(createProcessExecutor);
+// Functions run in UTC, as `bunvex-local-backend` sets it (STUDY-171 §10); the child's is always UTC.
+process.env.TZ = "UTC";
 
 const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+/** An event of the log stream, as a sink gets it (log-events.ts). */
+type LogEvent = { timestamp: number; event: { topic: string } & Record<string, unknown> };
 const VALUES = JSON.stringify(["bunvex", "values"].join("/"));
 
 /** Query cases: `ctx` is a query's, `a` the call's argument. */
@@ -133,6 +136,45 @@ const QUERY_CASES = `{
   concurrentMixed: async (ctx) => { const [a, b, c] = await Promise.all([ctx.db.query("items").first(), ctx.runQuery("cases:q", { c: "env" }), ctx.meta.getFunctionMetadata()]); return [a.k, b, c.name]; },
   builtNotRun: async (ctx) => { ctx.db.query("never"); ctx.db.query("items").withIndex("by_k"); return 1; },
   partialIteration: async (ctx) => { for await (const d of ctx.db.query("items").withIndex("by_k")) return d.k; },
+  logLevels: async () => { console.log("log", 1); console.info("info"); console.warn("warn"); console.error("error"); console.debug("debug"); return 1; },
+  logValues: async () => { console.log("s", 'q"uote', 1.5, -0, NaN, 2n, true, null, undefined, Symbol("sym"), "é ☃ 𝄞"); return 1; },
+  logObjects: async () => { class Point { constructor() { this.x = 1; } } console.log({ a: 1, nested: { b: [1, { c: 2 }] } }, [1, [2, [3]]], new Point(), Object.create(null), () => 1, function named() {}); return 1; },
+  logCollections: async () => { console.log(new Set([1, "a"]), new Map([["k", { v: 1 }]]), new Date(0), new Uint8Array([1, 2]), new ArrayBuffer(2), /re/g); return 1; },
+  logErrors: async () => { console.log(new Error("logged")); console.error(new TypeError("typed"), { e: new RangeError("inner") }); return 1; },
+  logOpError: async (ctx) => { try { await ctx.db.get("nope"); } catch (e) { console.log(e); console.log(e.message, e.stack); } return 1; },
+  logDoc: async (ctx, a) => { const d = await ctx.db.get(a); console.log(d, [d], { doc: d }); console.log(await ctx.db.query("items").take(2)); return 1; },
+  logNone: async () => { console.log(); return 1; },
+  logLoneSurrogate: async () => { console.log("a\uD800b", "\uDC00"); return 1; },
+  logLong: async () => { console.log("x".repeat(40000)); return 1; },
+  logLongArgs: async () => { console.log("a".repeat(20000), "b".repeat(20000), "c"); return 1; },
+  logLongMultibyte: async () => { console.log("é".repeat(20000)); console.log("𝄞".repeat(9000)); return 1; },
+  logLongObject: async () => { console.log({ s: "y".repeat(40000) }); return 1; },
+  logMany: async () => { for (let i = 0; i < 300; i++) console.log("line", i); return 1; },
+  logExactlyMax: async () => { for (let i = 0; i < 256; i++) console.log(i); return 1; },
+  logJustUnder: async () => { for (let i = 0; i < 255; i++) console.log(i); return 1; },
+  logTimers: async () => { console.time(); console.time(); console.timeLog(); console.timeLog("x", 1, { a: 1 }); console.time("t"); console.timeLog("t", "more"); console.timeEnd("t"); console.timeEnd("t"); console.timeEnd(); return 1; },
+  logTrace: async () => { console.trace("traced", { a: 1 }); return 1; },
+  logThenThrow: async () => { console.log("before"); throw new Error("after logging"); },
+  logThenThrowBunvex: async () => { console.warn("data next"); throw new BunvexError({ code: 1 }); },
+  logNested: async (ctx) => { console.log("outer 1"); const r = await ctx.runQuery("cases:q", { c: "logLevels" }); console.log("outer 2", r); await ctx.runQuery("cases:q", { c: "logValues" }); console.log("outer 3"); return r; },
+  logNestedThrows: async (ctx) => { console.log("calling"); try { await ctx.runQuery("cases:q", { c: "logThenThrow" }); } catch (e) { console.log("caught", e.message); } return 1; },
+  logNestedUncaught: async (ctx) => { console.log("calling"); await ctx.runQuery("cases:q", { c: "logThenThrow" }); },
+  logNestedMany: async (ctx) => { for (let i = 0; i < 200; i++) console.log("outer", i); await ctx.runQuery("cases:q", { c: "logMany" }); console.log("after"); return 1; },
+  logConcurrent: async (ctx) => { const all = await Promise.all([1, 2, 3].map(async (i) => { console.log("start", i); const d = await ctx.db.query("items").first(); console.log("end", i); return d.k; })); return all; },
+  logBetweenOps: async (ctx) => { console.log("a"); await ctx.db.query("items").first(); console.log("b"); await ctx.db.query("items").first(); console.log("c"); return 1; },
+  logGetterThrows: async () => { console.log({ get x() { throw new Error("getter"); } }); return 1; },
+  logOther: async () => { console.assert(false, "asserted"); console.count(); console.dir({ a: 1 }); console.table([{ a: 1 }]); console.group("g"); console.groupEnd(); return 1; },
+  nestedUncaughtFrames: async (ctx) => ctx.runQuery("cases:q", { c: "throwError" }),
+  deepThrow: async () => { const f = (n) => { if (n === 0) throw new Error("deep"); return f(n - 1) + 1; }; return f(20); },
+  throwFromHelper: async () => { function helper() { throw new RangeError("from helper"); } helper(); },
+  throwCaughtStack: async () => { try { null.x; } catch (e) { return e.stack; } },
+  opErrorStack: async (ctx) => { try { await ctx.db.get("nope"); } catch (e) { return e.stack; } },
+  linkErrorStack: async (ctx) => { try { await ctx.db.query("items").withIndex("nope").collect(); } catch (e) { return e.stack; } },
+  audit: async () => { await log.audit({ a: 1, who: log.vars.requestId, nested: [{ at: log.vars.now }] }); return 1; },
+  auditDollar: async () => log.audit({ $bad: 1 }),
+  auditDollarCaught: async () => { try { await log.audit({ ok: { $bad: 1 } }); } catch (e) { return [e.message, e.stack]; } },
+  auditUnknownVar: async () => log.audit({ v: Symbol("nope") }),
+  auditNested: async (ctx) => { await log.audit({ outer: 1 }); await ctx.runQuery("cases:q", { c: "audit" }); return 1; },
 }`;
 
 /** Mutation cases. */
@@ -205,15 +247,36 @@ const MUTATION_CASES = `{
   rooms: async (ctx) => { try { return typeof ctx.rooms; } catch (e) { return "throws"; } },
   manyInserts: async (ctx, a) => { for (let i = 0; i < a; i++) await ctx.db.insert("bulk", { i }); return (await ctx.db.query("bulk").collect()).length; },
   throwAfterWrite: async (ctx) => { await ctx.db.insert("other", { k: 3 }); throw new Error("after write"); },
+  logInMutation: async (ctx) => { console.log("m1"); await ctx.db.insert("other", { k: 4 }); console.info("m2"); return 1; },
+  logNestedMutation: async (ctx) => { console.log("outer"); await ctx.runMutation("cases:m", { c: "logInMutation" }); await ctx.runQuery("cases:q", { c: "logLevels" }); console.log("outer end"); return 1; },
+  logNestedRollback: async (ctx) => { try { await ctx.runMutation("cases:m", { c: "logThenRollback" }); } catch (e) { console.log("rolled back:", e.message); } return 1; },
+  logThenRollback: async (ctx) => { console.log("inside"); await ctx.db.insert("other", { k: 5 }); throw new Error("undo"); },
+  insertSetStack: async (ctx) => { try { await ctx.db.insert("items", { v: new Set([1]) }); } catch (e) { return e.stack; } },
+  insertSetUncaught: async (ctx) => { await ctx.db.insert("items", { v: new Set([1]) }); },
+  patchFunctionUncaught: async (ctx, a) => { await ctx.db.patch(a, { f: () => 1 }); },
+  scheduleSetUncaught: async (ctx) => { await ctx.scheduler.runAfter(0, "cases:m", { v: new Set() }); },
+  nestedArgsSetUncaught: async (ctx) => { await ctx.runQuery("cases:q", { c: "empty", a: new Map() }); },
+  auditInMutation: async (ctx) => { await log.audit({ m: 1 }); await ctx.runMutation("cases:m", { c: "auditOnly" }); return 1; },
+  auditOnly: async () => { await log.audit({ inner: 1 }); return 1; },
+}`;
+
+// Run under `process` only: in `vm` they reject in this process, which `bun test` counts as a failure of the test
+// that runs. Under `vm` (`bunvex-local-backend`) each is printed to the server's stderr and the call succeeds with 1;
+// in the child the same, on the child's stderr (the server's).
+const UNHANDLED = `{
+  unhandledRejection: async () => { Promise.reject(new Error("never handled")); return 1; },
+  unhandledOp: async (ctx) => { ctx.db.get("nope"); return 1; },
+  unhandledAfterOp: async (ctx) => { const p = ctx.db.get("nope"); await ctx.db.query("items").first(); p.catch(() => {}); return 1; },
 }`;
 
 const CASES_MODULE = `
-import { query, mutation, createFunctionHandle } from ${SERVER};
+import { query, mutation, createFunctionHandle, log } from ${SERVER};
 import { anyApi as api } from ${SERVER};
 import { v, BunvexError } from ${VALUES};
 const qcases = ${QUERY_CASES};
 qcases.otherCount = async (ctx) => (await ctx.db.query("other").collect()).length;
 qcases.nowValue = async () => [Date.now()];
+Object.assign(qcases, ${UNHANDLED});
 const mcases = ${MUTATION_CASES};
 export const q = query({ args: { c: v.string(), a: v.optional(v.any()) }, handler: (ctx, { c, a }) => qcases[c](ctx, a) });
 export const m = mutation({ args: { c: v.string(), a: v.optional(v.any()), v: v.optional(v.any()) }, handler: (ctx, { c, a }) => mcases[c](ctx, a) });
@@ -222,19 +285,24 @@ export const raw = query(async (ctx, args) => args);
 export const QUERY_NAMES = ${"Object.keys(qcases)"};
 `;
 
-type Outcome = { status: string; value?: unknown; errorMessage?: string; errorData?: unknown };
-
-/** Ids and creation times: each deployment's own. */
-const own = (t: string) => t.replace(/\b[0-9a-z]{31,37}\b/g, "<id>").replace(/\b1\d{12}(?:\.\d+)?\b/g, "<time>");
+type Outcome = { status: string; value?: unknown; errorMessage?: string; errorData?: unknown; logLines?: string[] };
 
 /**
- * What the client gets, without what differs between two deployments: the request id, ids and times, the frames
- * (PR 4's).
+ * Ids, creation times, request ids and a console timer's milliseconds: each deployment's own (or its machine's).
  */
+const own = (t: string) =>
+  t
+    .replace(/\b[0-9a-z]{31,37}\b/g, "<id>")
+    .replace(/\b1\d{12}(?:\.\d+)?\b/g, "<time>")
+    .replace(/\b[0-9a-f]{16}\b/g, "<request>")
+    .replace(/: \d+ms\b/g, ": <n>ms");
+
+/** What the client gets, without what differs between two deployments: the request id, ids and times. */
 function normalized(o: Outcome) {
-  if (o.status === "success") return { value: JSON.parse(own(JSON.stringify(o.value ?? null))) };
+  const logLines = JSON.parse(own(JSON.stringify(o.logLines ?? [])));
+  if (o.status === "success") return { value: JSON.parse(own(JSON.stringify(o.value ?? null))), logLines };
   const message = (o.errorMessage ?? "").replace(/^\[Request ID: [0-9a-f]+\] Server Error\n/, "");
-  return { error: own(message.split("\n")[0]!), data: o.errorData };
+  return { error: own(message), data: o.errorData, logLines };
 }
 
 async function deployment(sandbox: "vm" | "process") {
@@ -264,6 +332,9 @@ async function deployment(sandbox: "vm" | "process") {
       await db.insert("items", { k, s: str });
   });
   const { version } = await s.deployCode([{ path: "cases.js", source: CASES_MODULE, environment: "isolate" }]);
+  // The log stream's events, as a sink gets them (a stand-in for the sinks, always active).
+  const streamed: LogEvent[] = [];
+  functions.logManager = { active: true, send: (events: LogEvent[]) => streamed.push(...events) } as never;
   await engine.mutation(async (db) =>
     engine.environment.update(db, [{ name: "ENV_SET", value: "yes" }], Object.keys(functions.builtinEnv)),
   );
@@ -277,7 +348,7 @@ async function deployment(sandbox: "vm" | "process") {
     ).json()) as Outcome;
   const firstId = async () =>
     (await engine.query(async (db) => (await db.query("items").withIndex("by_k").first())!._id)) as string;
-  return { s, engine, functions, call, firstId, version };
+  return { s, engine, functions, call, firstId, version, streamed };
 }
 
 let vm: Awaited<ReturnType<typeof deployment>>;
@@ -304,6 +375,123 @@ describe("a query's outcome is the same in vm and in process", () => {
         proc.call("query", "cases:q", { c, a: ARGS[c] ?? b }),
       ]);
       expect(normalized(y)).toEqual(normalized(x));
+    });
+});
+
+// What the function log (`bunvex logs`, the dashboard) and the log stream (the sinks) get of a call's lines: the same
+// structured lines, in the same order, each named by the nested call that wrote it, stamped by the wall clock while
+// the call ran.
+describe("a call's lines reach the function log and the log stream as under vm", () => {
+  type Line = { level: string; messages: string[]; isTruncated: boolean; timestamp: number; subFunction?: unknown };
+  let fresh = 0;
+  const lines = (l: Line[]) => l.map(({ timestamp: _, ...rest }) => JSON.parse(own(JSON.stringify(rest))));
+  const run = async (d: Awaited<ReturnType<typeof deployment>>, kind: "query" | "mutation", c: string, a: unknown) => {
+    const cursor = d.functions.functionLog!.headCursor;
+    d.streamed.length = 0;
+    const before = Date.now();
+    await d.call(kind, `cases:${kind === "query" ? "q" : "m"}`, { c, a });
+    const after = Date.now();
+    const parts = (await d.functions.functionLog!.after(cursor, 0)).parts as {
+      kind: string;
+      identifier: string;
+      logLines: Line[];
+    }[];
+    const completions = parts.filter((p) => p.kind === "Completion");
+    const all = completions.flatMap((p) => p.logLines);
+    for (const l of all) {
+      expect(l.timestamp).toBeGreaterThanOrEqual(before);
+      expect(l.timestamp).toBeLessThanOrEqual(after);
+    }
+    const console = d.streamed.filter((e) => e.event.topic === "console");
+    return {
+      log: completions.map((p) => [p.identifier, lines(p.logLines)]),
+      stream: console.map((e) =>
+        JSON.parse(
+          own(
+            JSON.stringify({
+              ...e,
+              timestamp: 0,
+              event: { ...e.event, line: lines([(e.event as unknown as { line: Line }).line])[0] },
+            }),
+          ),
+        ),
+      ),
+      ordered: all.every((l, i) => i === 0 || l.timestamp >= all[i - 1]!.timestamp),
+    };
+  };
+  for (const [kind, c] of [
+    ["query", "logLevels"],
+    ["query", "logNested"],
+    ["query", "logNestedThrows"],
+    ["query", "logNestedUncaught"],
+    ["query", "logThenThrow"],
+    ["query", "logMany"],
+    ["query", "logNestedMany"],
+    ["query", "logLong"],
+    ["query", "logTrace"],
+    ["query", "logTimers"],
+    ["mutation", "logInMutation"],
+    ["mutation", "logNestedMutation"],
+    ["mutation", "logNestedRollback"],
+  ] as const)
+    test(`${kind} ${c}`, async () => {
+      // An argument of its own: a result from the query cache would bring back an earlier run's lines and times.
+      const a = `fresh ${++fresh}`;
+      const x = await run(vm, kind, c, a);
+      const y = await run(proc, kind, c, a);
+      expect(y).toEqual(x);
+      expect(y.ordered).toBe(true);
+      expect(y.log.length).toBeGreaterThan(0);
+      expect(y.stream.length).toBeGreaterThan(0);
+    });
+
+  test("a cached query's lines come back with its result, on a hit too", async () => {
+    for (const d of [vm, proc]) {
+      const first = await d.call("query", "cases:q", { c: "logLevels", a: "cached" });
+      const again = await d.call("query", "cases:q", { c: "logLevels", a: "cached" });
+      expect(normalized(again)).toEqual(normalized(first));
+      expect(first.logLines!.length).toBe(5);
+    }
+  });
+});
+
+// A module that fails at import (Convex's analysis, at the push): the same error, its message and its frames, mapped
+// to the module's source.
+describe("an error at import fails the push as under vm", () => {
+  const IMPORTS: Record<string, string> = {
+    throws: `import { query } from ${SERVER};\nconst f = () => { throw new Error("at import"); };\nf();\nexport const q = query(async () => 1);`,
+    typeError: `import { query } from ${SERVER};\nnull.x;\nexport const q = query(async () => 1);`,
+    bunvex: `import { BunvexError } from ${VALUES};\nthrow new BunvexError({ at: "import" });`,
+    value: `throw "a string at import";`,
+    loggedFirst: `console.log("importing");\nthrow new RangeError("after a line");`,
+    deep: `const f = (n) => { if (n === 0) throw new Error("deep at import"); return f(n - 1) + 1; };\nf(15);`,
+    syntax: `export const q = ;`,
+    missing: `import { nope } from "./nowhere.js";\nexport const q = nope;`,
+    awaited: `await Promise.reject(new Error("top-level await"));`,
+  };
+  const pushed = async (d: Awaited<ReturnType<typeof deployment>>, source: string) => {
+    try {
+      await d.s.deployCode([{ path: "bad.js", source, environment: "isolate" }]);
+      return { ok: true };
+    } catch (e) {
+      return { name: (e as Error).name, message: own((e as Error).message) };
+    }
+  };
+  for (const [name, source] of Object.entries(IMPORTS))
+    test(name, async () => {
+      const [x, y] = await Promise.all([pushed(vm, source), pushed(proc, source)]);
+      expect(y).toEqual(x);
+      expect(x.ok).toBeUndefined();
+    });
+});
+
+describe("a rejection nothing handles leaves the call as under vm", () => {
+  for (const c of [...UNHANDLED.matchAll(/^ {2}(\w+):/gm)].map((m) => m[1]!))
+    test(c, async () => {
+      const y = await proc.call("query", "cases:q", { c, a: await proc.firstId() });
+      expect(normalized(y)).toEqual({ value: 1, logLines: [] });
+      // The child still serves.
+      expect(normalized(await proc.call("query", "cases:q", { c: "empty" }))).toEqual({ value: null, logLines: [] });
     });
 });
 

@@ -108,6 +108,28 @@ export async function withOwner<T>(
   }
 }
 
+/**
+ * Run `fn` with its console lines handed to `onLine` as they are logged, each made as any function's (rendered, cut,
+ * stamped), and kept nowhere else: the function sandbox's child (STUDY-171 §11), whose host logs them.
+ */
+export function captureLines<T>(onLine: (line: LogLine) => void, fn: () => T): T {
+  installLogCapture();
+  return current.run(newExecution({ onLine, cached: false, tx: null }), fn);
+}
+
+/**
+ * A line a sandboxed function logged in its child (`captureLines`), logged here as the console would have logged it
+ * at that point: in the current execution, naming the nested call that runs, seen by the owner.
+ */
+export function logChildLine(line: LogLine) {
+  const e = current.getStore();
+  if (!e) return;
+  const sub = subFunctions.getStore();
+  if (sub) line.subFunction = sub;
+  e.entries.push(line);
+  e.owner?.onLine?.(line);
+}
+
 /** The owner of the current execution, if it runs under a logged one. */
 export const currentOwner = (): LogOwner | null => current.getStore()?.owner ?? null;
 

@@ -1,6 +1,6 @@
-# STUDY-171 — The function executor seam and its knobs (STUDY-168 PR 1), the wire and the child runtime (PR 2), queries and mutations over the bridge (PR 3), two `vm` bugs (§10)
+# STUDY-171 — The function executor seam and its knobs (STUDY-168 PR 1), the wire and the child runtime (PR 2), queries and mutations over the bridge (PR 3), two `vm` bugs (§10), logs and errors (PR 4)
 
-- **Status:** PR 1 implemented (#738); PR 2 (§7) implemented (#743); PR 3 (§8) implemented (#750); §9 (#751) and §10 (this PR) fixed; AD-44 accepted
+- **Status:** PR 1 implemented (#738); PR 2 (§7) implemented (#743); PR 3 (§8) implemented (#750); §9 (#751) and §10 (#759) fixed; PR 4 (§11) implemented (this PR); AD-44 accepted
   (owner, 2026-10-19)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend, the reference commit
   ([upstream.md](../parity/upstream.md))
@@ -524,8 +524,8 @@ at the first `next()`, not at the call; a `for await` fails at the same statemen
 | HTTP actions | each analyzed route answers with the same words for "HTTP actions" (the router keeps its routes: a wrong path is still a 404) | 6 |
 | Components | the push fails (`InvalidModules`, "Components are not available yet …"); a start with components installed fails to load the code, saying so | 7 |
 | Rooms (AD-42) | the push fails ("Rooms …"); `ctx.rooms` in a mutation throws on use | later |
-| Log lines (`console.*` in a function) | the child prints them to the server's stdout; the client and the log streams get none | 4 |
-| Source-mapped stacks | the child formats them in the app's context (its frame maps), so most frames already read as the app's; a value error thrown in a write's synchronous part shows `at async` (STUDY-150's `fix` cannot see it was synchronous) | 4 |
+| Log lines (`console.*` in a function) | done in PR 4 (§11): the client, the function log and the log stream get them as under `vm` | 4 |
+| Source-mapped stacks | done in PR 4 (§11.3): an error the engine makes at the app's call keeps the app's frames, as under `vm` | 4 |
 
 Actions and HTTP actions fail when called, not at the push: a push of an app that has some still serves its queries
 and mutations, which is what this PR makes testable; components and rooms change what the push installs, so they
@@ -714,3 +714,212 @@ query and an action is the app's frames alone; `log.vars` reads as itself throug
 
 **Sabotage:** `TZ` not set at start (1 failing test); the refusal removed (1); `log` not wrapped (1: the caught
 stacks).
+
+## 11. PR 4: logs and errors under `process`
+
+STUDY-168 §12.3's PR 4: a sandboxed query's or mutation's console lines reach the caller, the function log and the
+log stream exactly as under `vm`, and its errors carry the same stacks. **The default does not change**: `vm` stays
+the default. The two `vm` bugs its parity test found are fixed on their own (§10, #759), which this branch merges.
+
+### 11.1 How Convex does it (re-read at `d8bdde0`)
+
+- **The console is an op per line.** `npm-packages/udf-runtime/src/02_console.ts` renders each argument in the
+  isolate with object-inspect (`maxStringLength: 32768`, `indent: 2`, `customInspect: true`) and sends the strings
+  with the level (`console/message`); `console.trace` sends its frames (`console/trace`), source-mapped and put under
+  the message on a line of their own (`crates/isolate/src/ops/console.rs:27-40`); `time`, `timeLog` and `timeEnd` are
+  ops of their own. The host stamps the line with the wall clock when the op runs (`environment/udf/mod.rs:264-272`:
+  "accessing the current time here is still deterministic since we don't externalize the time to the function").
+- **Limits are the host's.** A line is cut at `MAX_LOG_LINE_LENGTH` (32 KiB of UTF-8) with " (truncated due to
+  length)" (`crates/common/src/log_lines.rs:47-48`, `new_developer_log_line`); a function keeps `MAX_LOG_LINES - 1`
+  lines and spends the last on "Log overflow (maximum 256). Remaining log lines omitted.", dropping the rest
+  (`emit_log_line`, `environment/udf/mod.rs:1326-1345`). A nested call's lines join its caller's in place
+  (`emit_sub_function_log_lines`).
+- **Stacks** are the isolate's frames mapped through the module's source map, the runtime's trimmed
+  (`udf-runtime/src/errors.ts` `setupSourceMapping`, `JsError::from_frames`); a syscall's error is made again in the
+  app's code where it awaited it (`performAsyncSyscall`), a check of Convex's JS library throws at the app's call.
+- **`log.audit`** is the async syscall `1.0/auditLog` (`environment/udf/async_syscall.rs:774`, `:1287`): the body is
+  checked in JS, the line held by the host, bounded as it is added.
+- **An unhandled rejection** fails the function once the microtask queue has drained
+  (`execution_scope.rs:90-110`, `request_scope.rs:504-540`). bunvex's `vm` does not: Bun prints it to the server's
+  stderr and the call goes on (its result unchanged). `process` keeps `vm`'s behaviour (§11.6).
+
+### 11.2 Logs
+
+```
+ child                                                         host
+ console.log(…) ─ the server's console capture (logs.ts) ─►  line {level, messages, cut, wall-clock time}
+                  rendered and cut as in-process              queued on the call
+ next op / done ─────── report.lines ─────────────────────►  logged in the call's execution (logChildLine), in
+                                                              order, before the op runs or the result is read
+```
+
+- **The child runs the server's own console capture.** `captureLines` (logs.ts) runs the handler in an execution of
+  its own whose owner hands each line on: the same `render` (object-inspect, patched), the same `makeLogLine` (the cut
+  at 32 KiB of UTF-8, lone surrogates as U+FFFD), the same timers (`time`, `timeLog`, `timeEnd` and their warnings),
+  the same `console.trace` (the frames mapped with the child's own source maps, `mapStack`). So every console
+  method `vm` supports renders the same text, by construction; the others (`assert`, `count`, `dir`, `table`,
+  `group`) print to the process's stdout, as under `vm` (the child's stdout is the server's).
+- **Sent with the call's next message** (`WireReport.lines`: level, messages, cut, timestamp), not one message per
+  line nor all at the end. The host logs a message's lines before it runs the message's operation or reads its
+  result, so the order relative to nested calls (whose lines are logged when they run, on the host) and to errors is
+  `vm`'s: a line logged before a `runQuery` comes before the callee's lines, one logged after it after them, and
+  every line before the error that ends the call. Batching costs nothing per line: a line rides on a message the
+  call sends anyway.
+- **Timestamps** are the child's wall clock (core's `wallClock`, not the function's frozen `Date.now()`), read when
+  the line is logged, as `vm` and Convex stamp it.
+- **The host logs them where the console would have** (`logChildLine`): into the current execution, so the caller's
+  `logLines`, a cached query's stored lines (replayed on a hit), a mutation's attempt (`perAttempt`), the function
+  log's Completion (`bunvex logs`, the dashboard) and the log stream's `console` events (the sinks) all get them as
+  they get `vm`'s. A nested call's lines are named by it (`subFunction`), on the host.
+- **Limits.** The host keeps applying the 256-line cap (`capped`); the child sends at most `MAX_LOG_LINES` lines of
+  one call (the first 256 are the only ones that can be shown: a query's or mutation's lines are not streamed), which
+  bounds what a logging loop costs the wire. A line the child says is within the cut is not measured again unless it
+  might not be (3 bytes per UTF-16 unit): a broken child's longer line is cut again, as the console cuts it.
+- **Checked as every message is**: a level outside the five, a message that is not text, a timestamp that is not a
+  finite number kills the child (`parseChildMessage`).
+
+### 11.3 Errors and stacks
+
+What PR 3 left (§8.7): the app's errors already crossed with their class, name, message and data, and their stacks
+were made in the child's app context (its `Error.prepareStackTrace`, its source maps), so most frames read as
+`vm`'s. What differed was an error the engine made **at the app's call**:
+
+- Under `vm` an engine method runs synchronously until its first `await`, in the app's call stack, so an error it
+  makes there (a value that is not a value, written: `copyFields`; a bad id; an index not found, made when
+  `withIndex` was) holds the app's frames, and `installAppErrors`'s `fix` keeps them (no `at async` frame). Under
+  `process` the engine runs that code on the host, in no app frame, so the child gave the error the frames of the
+  app's `await` (`at async …`).
+- **Now the host tells.** It runs each operation through a function of its own name (`atTheAppsCall`) and makes each
+  chain link through one named for it (`atTheAppsLink<id>`); an error whose own frames include one was made at the
+  app's call (or at that link's), and the reply says so (`sync`, `link`). The child takes a stack at each operation
+  and each link (`new Error()`: about 0.1 µs, measured) and gives such an error those frames, which its context then
+  maps exactly as `vm` maps the engine's (`fix`, `mapStack`). JavaScriptCore drops a frame in a tail call (a module
+  is strict code), so the named functions return from inside a `try`.
+- **`log.audit`** was refused in the child (its scope was unset: "not yet supported in actions"). It is an operation
+  now (`log.audit`): the child clones and checks the body as `vm` does (its errors the same, at the same place), the
+  host adds the line to the call's scope (`addAuditLine`), shared with the nested calls, its heap limit checked
+  there. A line that is not a JSON object kills the child.
+- **Errors at import** (push) were already the loader's in the child (§7.4, the 557 corpus entries); the parity test
+  now compares the push's whole message, frames included, for nine kinds of failure.
+
+### 11.4 Time zone
+
+A child's environment holds no `TZ` (§7.3), so its `Date` was UTC while a `vm` server's followed the machine's
+zone. Convex's is always UTC (§10): the child now gets `TZ=UTC` explicitly, and `bunvex-local-backend` sets it for
+`vm` (#759).
+
+### 11.5 Parity
+
+**`bridge-parity.test.ts`** now compares, for every case, the client's whole answer: the value or the error's whole
+message (frames included) and its data, **and the log lines**. Of 273 tests:
+
+- 106 → 148 query cases, 53 → 79 mutation cases (with #754's): every console method; strings, numbers, `-0`,
+  `NaN`, bigints, symbols, `undefined`, Unicode and lone surrogates; objects, arrays, classes, null-prototype objects,
+  functions, `Set`, `Map`, `Date`, typed arrays, `RegExp`, errors (`console.log(new Error(…))`, an engine's error,
+  its stack), a document and query results; a line over 32 KiB, several messages over it, multi-byte characters at
+  the cut, a long string inside an object; 255, 256 and 300 lines; timers and their warnings; `console.trace`;
+  lines then a throw (an error, a `BunvexError`); lines around nested queries and mutations (caught, uncaught, rolled
+  back, 200 + 300 lines across a nested call), concurrent operations, a getter that throws while rendering;
+  `log.audit` (variables, a `$` key caught and uncaught, an unknown variable, nested, in a mutation); stacks of
+  values written that are not values (insert, patch, the scheduler, a nested call's arguments), of a chain's link,
+  a deep throw, a helper's throw;
+- 13 checks that the function log and the log stream get the same structured lines (levels, messages, cut,
+  sub-function, order), each stamped within the call;
+- a cached query's lines on a hit; 9 errors at import (the push's whole message); 3 unhandled rejections under
+  `process` (below), 18 read sets, 6 validator cases.
+
+Every one matches. What it found: the time zone and `log.audit`'s server frames in `vm` (§10, #759).
+
+**The suites under `process`** (`BUNVEX_FUNCTION_SANDBOX=process BUNVEX_FUNCTION_SANDBOX_ISOLATION=none`). PR 3's
+counts were taken on an older main; the "before" column is PR 3's code on today's main (`9254fa5c`), the "after"
+this branch:
+
+| Suite | PR 3 (§8.9) | Before | After | Every remaining failure |
+|---|---|---|---|---|
+| Server pushed-code suites (21 files) | 117 / 186 | 116 / 187 | 121 / 187 | 47 components, 12 actions (`"use node"` ones too, and the `process.env` tests' action steps), 7 HTTP actions |
+| `examples/` end to end | 58 / 73 | 58 / 73 | 58 / 73 | 8 actions, 6 HTTP actions, rooms-cursors's push refused |
+| CLI suites that push (10 files) | 86 / 107 | 87 / 108 | 93 / 108 | 10 components (`component-push`, `dev`'s local component), 4 `"use node"` actions (`external-packages`, `deploy`'s), 1 action (`run`) |
+| `packages/differential` against Convex's binary (`d8bdde0`) | 120 / 176 | 238 / 294 | 239 / 294 | actions, `"use node"` actions, HTTP actions and components only |
+
+- **The log lines are gone from the failures**: the function tester's lines and its function log entry
+  (`run-test-function`), objects logged from either realm (`log-realms`), the dashboard runner's test query and its
+  lines (`dashboard-functions`), and the CLI's (`run`'s, `dev`'s). The `examples/` suite reads no log line.
+- **The frame lines are gone**: `value-error-frames`' "written or passed to a nested call: its frame alone", and in
+  the differential suite the value errors' `at async <anonymous> (../bunvex/values.ts:N:N)` for `values:insert`
+  (now `at <anonymous> (…)`, as Convex's) and the engine errors' mutation cases. What still differs there is an
+  action's (`values:runQueryWith`, `frames:actionUncaught`), which runs in `vm` only until PR 5.
+- Each remaining failure was read: it fails at the step that calls an action, an HTTP action or a component, with
+  §8.7's message (or a push refused for its components).
+
+### 11.6 What is left
+
+| What | Under `process` | Its PR |
+|---|---|---|
+| Actions' lines (streamed as they come, `onLine`), `"use node"`'s `util.inspect` rendering | actions do not run yet | 5, 10 |
+| An unhandled rejection in a query or mutation | as `vm`: printed to the server's stderr (the child's), the call goes on; an unawaited operation's failure reaches the child after the call ends, as it reaches `vm`'s promise (the call's answers are awaited before the child forgets it) | Convex fails the function (§11.1); `vm` and `process` both differ, a question below |
+| Import-time `console.log` | printed to the server's stdout, as under `vm` (no function's lines) | — |
+
+### 11.7 Measurements
+
+`bench/calls.ts` gains three lines, each call under `collectLogs` as an HTTP or WebSocket call is: an empty query,
+and a query that logs 1 and 10 lines (`console.log("line", k, { i })`). p50 / mean / p99, µs, 2000 calls per line after
+300, the Mac (8 cores, shared; load average 5–7 during these runs, and much noisier at times):
+
+| Function | vm, before | process, before | vm, after | process, after |
+|---|---|---|---|---|
+| empty query | 20 / 27 / 90 | 65 / 72 / 135 | 19 / 24 / 61 | 68 / 84 / 330 |
+| 1 × `db.get` | 28 / 36 / 106 | 128 / 161 / 970 | 26 / 33 / 108 | 119 / 134 / 276 |
+| 10 × `db.get` | 55 / 65 / 156 | 526 / 555 / 1449 | 54 / 64 / 173 | 509 / 570 / 1940 |
+| 100 × `db.get` | 339 / 375 / 2448 | 4514 / 4754 / 10180 | 338 / 372 / 2298 | 4736 / 5067 / 12196 |
+| page of 100 | 235 / 253 / 431 | 450 / 496 / 1794 | 240 / 259 / 436 | 565 / 716 / 2922 |
+| insert mutation | 44 / 56 / 183 | 137 / 170 / 810 | 43 / 53 / 120 | 129 / 142 / 267 |
+| empty query, lines collected | 17 / 19 / 39 | 63 / 70 / 123 | 17 / 21 / 43 | 61 / 68 / 142 |
+| 1 `console.log` | 31 / 35 / 67 | 74 / 83 / 156 (printed, not captured) | 31 / 37 / 129 | 75 / 82 / 178 |
+| 10 `console.log` | 104 / 112 / 217 | 105 / 120 / 269 (printed, not captured) | 109 / 122 / 310 | 142 / 156 / 375 |
+
+(The second of two rounds, each "before" run right before its "after"; in the first, the after column's 10-line p50
+was 212 µs, the machine's noise.)
+
+- **A line costs about what it costs under `vm`**: about 14 µs for the first (the capture's execution, the line) and
+  8–9 µs for each more, in both; rendering it (object-inspect) is most of it, in the child as in-process. The wire
+  adds little (the line's JSON on a message the call sends anyway, its parse and logging on the host): `process`
+  stays `vm` plus its constant per-call cost (about 45 µs here). Before this PR the child printed its lines to stdout instead, which is what the
+  "before" column measures.
+- **No cost per operation** that the noise shows: a stack per operation and per link (0.1 µs), the `sync` check
+  only on an error, the empty `lines` of each report.
+- Not measured on Linux: the test VPS was running another session's soak test.
+
+### 11.8 Tests and sabotage
+
+`packages/sandbox/test/`:
+- `bridge-parity.test.ts` (273): §11.5;
+- `bridge-limits.test.ts` (15): forged lines (a level that is not one; a line past the cut said not to be cut, cut
+  again) and a forged audit line that is not JSON;
+- `wire.test.ts`: the report's lines checked (their level, text, cut flag and time); `host.test.ts`: the child's
+  environment has `TZ`.
+
+| Break | Failing tests |
+|---|---|
+| The child sends no lines | 44 |
+| The host drops them | 45 |
+| Lines sent only with `done` | 10 (the nested calls' order, in the answer and in the function log) |
+| The child stops at 255 lines | 3 (`logMany`, `logExactlyMax`, the function log's `logMany`) |
+| No "made at the app's call" (`sync` never set) | 47 (every stack of an engine error made at the call) |
+| A link's error given the operation's frames | 2 (`indexMissing`, `linkErrorStack`) |
+| The link made without its named frame | 2 (the same) |
+| `log.audit` left to the child's own scope | 4 (the audit cases) |
+| The host trusts a long line's length | 1 (the forged long line) |
+| A nested call's lines not named on the host | 6 (the function log's nested cases) |
+| The child's `TZ` not set | 2 (`logCollections`, the child's environment) |
+
+Each was applied to the file, the three test files run, and the file restored from a saved copy; `git diff` was
+compared with the one before the break after each (`scratchpad` script).
+
+### 11.9 Open questions
+
+- **No new divergence from `vm`.** One finding against Convex for the owner, not this PR's: an unhandled rejection in a
+  query or mutation fails the function in Convex (§11.1); both bunvex executors print it and go on. `process` could
+  match Convex (the child sees the rejection, in the call's context, and can fail it); `vm` cannot tell which call a
+  rejection belongs to (as DV-500 found for `"use node"` actions), so matching it there needs more.
+- Actions (PR 5): their lines stream as they come (`onLine`), so the child must send them as they come too, not with
+  the next message; the per-call cap does not apply to them.

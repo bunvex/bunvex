@@ -169,13 +169,20 @@ describe("a child that forges operations is killed", () => {
   const items = (d: Awaited<ReturnType<typeof deployment>>) =>
     d.engine.query(async (db) => (await db.query("items").collect()).length);
 
-  for (const mode of ["unknownOp", "otherCall", "badTag", "tooManyArgs"])
+  for (const mode of ["unknownOp", "otherCall", "badTag", "tooManyArgs", "badLevel", "auditNotJson"])
     test(mode, async () => {
       const d = await forging(mode);
       expect(await d.call("query", "m:who")).toEqual(INTERNAL);
       // The next call gets a new child.
       expect(await d.call("query", "m:read")).toMatchObject({ status: "success", value: 0 });
     });
+
+  test("a line past the console's cut is cut again, as the console cuts it (STUDY-171 §11)", async () => {
+    const d = await forging("longLine");
+    const r = (await d.call("query", "m:who")) as { status: string; logLines?: string[] };
+    expect(r.status).toBe("success");
+    expect(r.logLines).toEqual([`[LOG] ${"z".repeat(32768)} (truncated due to length)`]);
+  });
 
   test("a write from a query run by a mutation (its `db` a reader, with no writes): killed, nothing written", async () => {
     const d = await forging("insert");
