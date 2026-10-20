@@ -56,6 +56,7 @@ const UDF = `{
   unawaitedOpHandledLater: async (ctx) => { const p = ctx.db.get("nope"); await ctx.db.query("items").first(); p.catch(() => {}); return 1; },
   nestedHandledAfterRead: async (ctx) => { const p = ctx.runQuery("cases:q", { c: "throws" }); await ctx.db.query("items").first(); p.catch(() => {}); return 1; },
   throws: async () => { throw new Error("thrown"); },
+  threeReads: async (ctx) => (await Promise.all([1, 2, 3].map(() => ctx.db.query("items").first()))).length,
   slow: async (ctx, a) => { for (let k = 0; k < a.k; k++) await ctx.db.query("items").first(); if (a.fail) Promise.reject(new Error("r" + a.i)); return a.i; },
 }`;
 
@@ -273,7 +274,7 @@ describe("each case on its own", () => {
     ...KINDS.flatMap((k) => names(OWN).map((c) => [k, c] as [Kind, string])),
     ...(["query", "mutation"] as const).flatMap((k) =>
       names(UDF)
-        .filter((c) => c !== "throws" && c !== "slow")
+        .filter((c) => c !== "throws" && c !== "slow" && c !== "threeReads")
         .map((c) => [k, c] as [Kind, string]),
     ),
     ...names(MUTATION).map((c) => ["mutation", c] as [Kind, string]),
@@ -339,6 +340,12 @@ describe("each rejection fails its own call when many run at once in the child",
   test("actions, each failing in its own timer", () => many("action", 30));
   test("actions, each failing once its fetch's body is read", () => many("action", 20, "afterBody"));
   test("all three at once", () => Promise.all([many("query", 20), many("mutation", 20), many("action", 20)]));
+  // Each answer waits for its call's last marker: where Bun reports at the end of the turn, a child waiting on its host
+  // alone hears it only because it forces that turn (`mark`).
+  test("300 queries one after the other, each with three reads at once: none waits forever", async () => {
+    // Each with its own argument, so that none comes from the query cache.
+    for (let i = 0; i < 300; i++) expect((await proc.run("query", "threeReads", { a: i })).value).toBe(3);
+  }, 60_000);
   test("the child still serves", async () => {
     expect(normalized(await proc.run("query", "handledInTime"))).toEqual({ value: 1, logLines: [] });
   });

@@ -1284,8 +1284,9 @@ are out of scope (PRs 6 and 10).
   callee failed so throws in the caller, which can catch it. Nothing more of the terminated function runs: a
   mutation's writes are rolled back, an action's later calls never happen, and the syscalls an action had not taken
   the answer of are its unawaited operations (the warning). A syscall an action starts in the same turn as the
-  rejection never runs: `rejections:a stopsBeforeOp`'s `runMutation` writes nothing and `stopsBeforeFetch`'s `fetch`
-  reaches no server, each listed unawaited (Convex's binary).
+  rejection has already started as a task (`task_executor.rs`) and is listed unawaited; whether it finishes is a race:
+  `rejections:a stopsBeforeOp`'s `runMutation` wrote nothing on the Mac and once on the test VPS, and
+  `stopsBeforeFetch`'s `fetch` reached its server on some runs only (Convex's binary).
 
 What an app sees, from Convex's binary (`precompiled-2026-10-10-72ce13c`, `packages/differential`'s
 `rejections-app`): the same error as if the value were thrown, at the end of the checkpoint where it was left
@@ -1300,7 +1301,7 @@ unhandled: queries, mutations and actions alike.
                   drainMicrotasks(); mark(id)    ──►    unhandledRejection, in the order the rejections happened:
                                                           r1, r2, Marker(id)  ⇒  r1 and r2 are id's
  call id:         unhandled(r) ──► done {r, as thrown}, no more of its code, what it held never sent
-                  checked()    ──► (its marker reported) it may answer, an action may send what it started
+                  checked()    ──► (its marker reported) it may answer
 ```
 
 - **Attribution by checkpoint and marker** (`packages/sandbox/src/rejections.ts`). Bun's `unhandledRejection` carries
@@ -1327,14 +1328,14 @@ unhandled: queries, mutations and actions alike.
   last checkpoint checked (`settled`, `checked`), so an unawaited operation that fails fails the call. Before this
   PR the child answered at once and an unawaited failure came after the answer.
 - **An action answers once the checkpoint it settled in was checked**, so a rejection made in the same turn as its
-  `return` fails it. **What an action starts in a checkpoint is held until that checkpoint was checked**
-  (`ChildActionCall.sendOp`, `held`): an operation started in the turn of the rejection that fails it is never sent,
-  as Convex never runs it, and its `done` names it (`unsent`), so the host counts it unawaited under the engine's name
-  (`danglingName`, the unawaited-operations warning, as on Convex). Its later timers are cleared at its end (§12.6): a
-  rejection there never happens, as on Convex.
+  `return` fails it. An operation it started in the turn of the rejection that fails it was sent as it was started,
+  so it runs, one of Convex's two outcomes (§13.1), and the warning lists it unawaited, as there. (Holding each
+  operation until its checkpoint was checked was built and dropped: stricter than Convex, a turn per operation.) Its
+  later timers are cleared at its end (§12.6): a rejection there never happens, as on Convex.
 - **Failing.** `unhandled(reason)` answers the call at once with the value as thrown (`rejected`: a `BunvexError`
   made a plain error, its data dropped, as Convex's), and marks it terminated: its later operations are never sent and
-  never settle, the answers still in flight are dropped, so its code stops at its next operation. The host runs a
+  never settle, the answers still in flight are dropped, so its code stops at its next operation (nothing a client
+  can observe depends on that: it keeps the child from running the call's code for nothing). The host runs a
   query's or mutation's in-flight operations to their end after `done`, as before (a failed mutation's writes are
   rolled back), and a nested call's failure is an error its caller can catch.
 - **Outside any checkpoint** (code Bun resumed itself) a rejection is the running call's when exactly one call is
@@ -1342,15 +1343,15 @@ unhandled: queries, mutations and actions alike.
   call can be found for: …`), as before.
 - **A stream the host stopped** (a request body its `fetch` gave up on) may still get the chunks the child had in
   flight: the host now drops them within the credit it gave (`streams.ts`, `stopped`). It used to call that a broken
-  child and kill it, an internal error the client saw about once in 40 runs of `fetchRedirect307Stream` on `main`'s
-  code, and about once in 4 once actions' operations were held.
+  child and kill it, an internal error the client saw in 1 of 40 runs of `fetchRedirect307Stream` on the base
+  branch's code (0 of 40 since), and in 9 of 40 while this PR held actions' operations a turn.
 
 ### 13.3 Limits
 
-- **Bun 1.4.3 and later report at the end of the turn**: a rejection handled by the same call's code in a later
-  checkpoint of the same turn is not reported, so the call succeeds where Convex fails it. The gate above keeps one
-  checkpoint per call per turn for the frames the child resumes; what a batch's answers or a timer resume within one
-  checkpoint is one checkpoint here as there. Under Bun 1.4.2 none of this applies.
+- **Bun 1.4.3 and later report at the end of the turn**, and drop a rejection handled before then. The gate keeps one
+  checkpoint per call per turn for everything the child resumes (frames, batches, timers), so this matters only for
+  the next limit's code, which Bun resumes in the same turn without a checkpoint: a rejection it handles late is
+  missed there. Under Bun 1.4.2 (CI's) a drain's rejections are reported before it returns.
 - **Code resumed by Bun, not by the child**, with several calls running in the same child: a native completion
   (`crypto.subtle`, reading a `Blob` or a `Response` the app made itself, a `ReadableStream` with no host behind it).
   A rejection that code leaves is printed, not failed, unless that call is the only one running. PR 9 (one call per
@@ -1361,44 +1362,88 @@ unhandled: queries, mutations and actions alike.
 - **Batches are approximate where the operations differ**: bunvex's `db.query` with a terminal (`collect`, `first`,
   `take`) is one operation where Convex's library makes a `queryStreamNext` per page. Both are reads, so a page and a
   `db.get` share a batch on both; a `collect` of several pages is one answer here, several batches there.
-- **A query's or mutation's operations are not held**: one started in the turn of its rejection still reaches the
-  host and runs (a read, or a write rolled back with the failed mutation), where Convex never runs it. Nothing of it
-  outlives the failed call.
+- **An operation started in the turn of the rejection** reaches the host and runs. For a query or mutation nothing of it
+  outlives the failed call (a read, or a write rolled back with it), where Convex never runs it (its syscalls wait in
+  `pending_syscalls`); for an action it is one of Convex's two outcomes (§13.1).
 
 ### 13.4 Parity
 
-**`packages/differential/test/unhandled-rejections.test.ts`** (59 cases and the writes left), the app of
+**`packages/differential/test/unhandled-rejections.test.ts`** (61 cases and the writes left), the app of
 `rejections-app/`, against Convex's binary (`precompiled-2026-10-10-72ce13c`) with bunvex under `process`: 21 query
-cases, 24 mutation cases, 14 action cases (a rejection before and after an operation, handled in time, handled too
+cases, 24 mutation cases, 16 action cases (a rejection before and after an operation, handled in time, handled too
 late, in a helper, of every kind of value, an application error, an unawaited operation and nested call, reads in one
 batch and a nested call between, a nested call's failure caught, a throw after a handled rejection; a write then a
 rejection, an unawaited write; an action's rejection before a timer, in a timer, in a timer after its answer, one that
-stops it before a write, a nested mutation's rolled back). Compared: the status, the error's first line, its data, the
-value, the log lines, whether the error has the app's frames, and what the writes left. **All match.** What is
+stops it before a write, one that starts a mutation or a `fetch` in the turn of its rejection, a nested mutation's
+rolled back). Compared: the status, the error's first line, its data, the
+value, the log lines, whether the error has the app's frames, and what the writes left (but for the two racy cases of
+§13.1). **All match**, on the test VPS under Bun 1.4.2 and 1.4.3, three runs each. What is
 rewritten: `ConvexError` / `BunvexError` (DV-03), the docs link of the unawaited-operations warning (DV-04); the frames'
 names and positions are not compared (DV-345, DV-346; the same as a thrown error's). Five cases are a known frame
 difference (STUDY-150 §6): an id that does not parse is refused at the app's call, so bunvex's error has the app's
 frame and Convex's none.
 
-**`packages/sandbox/test/rejection-parity.test.ts`** (66): `vm` (a server in a process of its own,
+**`packages/sandbox/test/rejection-parity.test.ts`** (68): `vm` (a server in a process of its own,
 `fixtures/vm-server.ts`, since `bun test` fails a test on a rejection in its own process) against `process`:
 
 - DV-528 stated: 21 cases (7 shapes × query, mutation, action) where `vm` answers 1 and its server's
   `unhandledRejection` hears the value, while `process` answers what the same value **thrown** gives on `vm`, frames
   included;
-- 37 cases on their own, each with Convex's outcome (above), and `vm`'s; a mutation's writes rolled back under
-  `process` and kept under `vm`; an action stopped before a write;
+- 38 cases on their own, each with Convex's outcome (above), and `vm`'s; a mutation's writes rolled back under
+  `process` and kept under `vm`; an action stopped before a write; an operation started in the turn of the rejection
+  listed unawaited;
 - **attribution under concurrency**: 30 queries, 30 mutations, 30 actions failing in their own timers, 20 actions
   failing once their `fetch`'s body is read (chunks of 300 000 bytes interleaved), and the three kinds at once, every
   third call rejecting: each fails with its own value, the others answer their own; then the child still serves.
 
 `bridge-parity.test.ts`: its three "a rejection nothing handles leaves the call as under vm" cases (PR 4's) moved
 here, as failures; two cases stay (an unawaited operation handled later, one whose answer logs a line).
+`rejections.test.ts` (1, its scenarios in `fixtures/rejections-scenarios.ts`, a process of their own): the late path
+(`asIfReportedLate`) on any Bun: interleaved checkpoints, the gate, a rejection handled in time, an idle child's last
+marker. `streams.test.ts` (+1): a stopped stream's chunks in flight dropped within the credit.
+
+The whole `packages/sandbox` suite: 1165 tests, all passing under Bun 1.4.2 and 1.4.3 on the test VPS (the base
+branch: 1096).
 
 ### 13.5 Measurements
 
-See §13.6's table; measured on the test VPS.
+On the test VPS (2 vCPUs, idle but for the runs, checked with `ps` first), the base branch
+(`feat/function-sandbox-actions`, `7ad3cd6d`) against this one, `bench/calls.ts 3000 500` and `bench/actions.ts 1000
+100`, alternated. The `process` column's p50, µs, of three rounds each under Bun 1.4.2 (CI's); the actions under
+1.4.3, two rounds:
+
+| Function | base | this PR |
+|---|---|---|
+| empty query | 229, 216, 196 | 249, 227, 244 |
+| empty query, six more rounds of 4000 | 219, 210, 200, 226, 214, 220 | 214, 212, 218, 212, 217, 199 |
+| 1 × `db.get` | 392, 409, 358 | 392, 371, 395 |
+| 10 × `db.get` | 2202, 1932, 1595 | 1715, 1566, 1943 |
+| 100 × `db.get` | 16000, 14714, 17749 | 15172, 17205, 15350 |
+| insert mutation | 460, 420, 428 | 428, 443, 491 |
+| empty action | 221, 201 | 209, 214 |
+| action, 1 `runQuery` | 514, 506 | 541, 550 |
+| `fetch` GET, empty body | 1116, 1207 | 1037, 1095 |
+
+**No cost per call shows above the machine's noise** (the base branch alone spans 196–229 µs on the empty query). What
+a call adds: two `drainMicrotasks()` per frame (23 ns each when empty), two markers per frame (0.4 µs each, a promise
+rejected and its event) and the answer's wait for the last marker's report (2.4 µs p50, 17 µs p99, measured alone).
+The `vm` column is unchanged (no `vm` code changed but the timer hook, a null check).
 
 ### 13.6 Tests and sabotage
 
 ### 13.7 Open questions
+
+No new divergence from Convex in what the parity suites compare. One owner question, on what they cannot reach:
+
+- **Q-PR4b-1. A rejection left by code Bun resumes itself, while several calls run in one child** (§13.3).
+  - Convex: the function fails, whatever resumed the code (one isolate per call).
+  - bunvex `process`: the same when the child resumed the code (every frame, batch and timer); when Bun did (a native
+    completion: `crypto.subtle`, reading a `Blob` or `Response` the app made itself) the rejection fails the call only
+    if it is the one call running in the child, and is printed to the server's stderr otherwise.
+  - Same: no, in that case only.
+  - Why: not built yet. PR 9's one call per process makes every rejection its process's call's, with nothing to
+    attribute; until then a native completion carries no async context the child can read.
+  - App impact: a query, mutation or action that leaves such a rejection unhandled succeeds under load instead of
+    failing (as it always does under `vm`, DV-528).
+  - Recommendation: accept until PR 9 (record as DV-TBD, or as a note in DV-528's row), and add the case to PR 9's
+    parity list.

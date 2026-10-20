@@ -59,13 +59,15 @@ const out: Record<string, unknown> = {};
   await until(() => d.checked > 0);
   out.inTime = { failed: d.failed, checked: d.checked > 0 };
 }
-// An idle child still hears its last marker: nothing else turns the loop before the timer.
+// An idle child still hears its last marker: it waits on I/O alone (the end of a process that lives 300 ms), as the
+// child waits on its host's socket.
 {
   let heard!: () => void;
   const checked = new Promise<string>((r) => (heard = () => r("checked")));
   track(5, { unhandled: () => {}, checked: () => heard() });
+  const other = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 300)"], { stdout: "ignore" });
   checkpoint(5, () => {});
-  out.idle = await Promise.race([checked, new Promise<string>((r) => setTimeout(() => r("timer"), 300))]);
+  out.idle = await Promise.race([checked, other.exited.then(() => "the other process ended first")]);
 }
 process.stdout.write(`${JSON.stringify(out)}\n`);
 process.exit(0);
