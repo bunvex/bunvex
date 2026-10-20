@@ -210,6 +210,26 @@ describe("the next run", () => {
 });
 
 describe("the executor", () => {
+  test("idle with its next cron more than 24.8 days away, it sleeps instead of polling (STUDY-174 F3)", async () => {
+    // A yearly cron about six months ahead, whatever today is: past Bun's 2^31-1 ms timer limit.
+    const month = ((new Date().getUTCMonth() + 6) % 12) + 1;
+    const c = cronJobs();
+    c.cron("yearly", `0 0 1 ${month} *`, "m:tick");
+    const { engine, nextRuns, ran } = await setup(c);
+    await until(async () => (await nextRuns()).length === 1, "the cron is registered");
+    await Bun.sleep(50);
+    let queries = 0;
+    const query = engine.query.bind(engine);
+    engine.query = ((...a: Parameters<typeof query>) => {
+      queries++;
+      return query(...a);
+    }) as typeof engine.query;
+    await Bun.sleep(1500);
+    engine.query = query;
+    expect(queries).toBeLessThan(20);
+    expect(ran).toEqual([]);
+  });
+
   test("a new interval cron runs at once, as no one; success and error runs are logged; the cron moves on", async () => {
     const c = cronJobs();
     c.interval("tick", { hours: 1 }, "m:tick", { tag: "t" });

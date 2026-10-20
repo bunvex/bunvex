@@ -318,12 +318,29 @@ export class SandboxProcess {
 
   private async readMessages() {
     const reader = new FrameReader(this.opts.maxMessageBytes);
+    const chunks = Bun.file(this.fd).stream()[Symbol.asyncIterator]();
     try {
-      for await (const chunk of Bun.file(this.fd).stream()) {
-        if (this.dead) break;
-        for (const text of reader.push(chunk)) {
+      for (;;) {
+        let next: IteratorResult<Uint8Array>;
+        try {
+          next = await chunks.next();
+        } catch {
+          // The socket broke under the read: on Linux, a child that exits (or closes it) with frames of the host's
+          // unread resets it (ECONNRESET), and the host can see that before the exit. No message of the child's is
+          // at fault: handled as the end of the stream below.
+          next = { done: true, value: undefined };
+        }
+        if (this.dead) return;
+        if (next.done) {
+          // The child's end of the socket is gone. The verdict is its exit's (`watchExit`: a crash, with its code and
+          // stderr), whichever of the two the host sees first. A child still alive behind it is of no use: killed,
+          // it exits too. One that already exited keeps its exit code.
+          this.proc.kill("SIGKILL");
+          return;
+        }
+        for (const text of reader.push(next.value)) {
           this.onMessage(parseChildMessage(text));
-          if (this.dead) break;
+          if (this.dead) return;
         }
       }
     } catch (e) {
@@ -331,6 +348,8 @@ export class SandboxProcess {
       else if (e instanceof SandboxError) {
         // Already failed.
       } else this.fail("badMessage", `sent a message that is not valid: ${(e as Error).message}`);
+    } finally {
+      await chunks.return?.().catch(() => {});
     }
   }
 

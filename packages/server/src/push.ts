@@ -165,8 +165,8 @@ function loadError(e: unknown): unknown {
 }
 
 /**
- * What a component's schema may not have yet (STUDY-153 PR 2b, the engine refuses it too): a staged validator, a
- * search or vector index. Refused before anything is allocated, as a 400.
+ * What a component's schema may not have yet (STUDY-153 PR 2b, the engine refuses it too): a staged validator (its
+ * search and vector indexes are built since STUDY-157 PR 5). Refused before anything is allocated, as a 400.
  */
 function checkComponentSchemas(definitions: ReadonlyMap<string, { schema: SchemaDefinition | null }>) {
   for (const [path, d] of definitions) {
@@ -178,8 +178,6 @@ function checkComponentSchemas(definitions: ReadonlyMap<string, { schema: Schema
           `Table "${t.name}" of component definition ${path}: ${what} in a component's schema are not supported yet`,
         );
       if (t.stagedDocument !== undefined) throw refuse("staged validators");
-      if (Object.keys(t.searchIndexes ?? {}).length + Object.keys(t.vectorIndexes ?? {}).length > 0)
-        throw refuse("search and vector indexes");
     }
   }
 }

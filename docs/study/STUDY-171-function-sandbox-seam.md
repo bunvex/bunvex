@@ -87,10 +87,12 @@ lists, fails with a message.
 
 ## 4. Divergences
 
-None. Convex has no executor choice; the default behaves as before.
+Convex has no executor choice; the default behaves as before. Found later (§10):
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
+| DV-527 | An embedded server (`createServer`) leaves the process's time zone alone: its pushed functions' `Date` follows the host's zone, not UTC | the zone is the whole process's; a library setting it would change the host app's dates, and it cannot refuse a process it does not own | owner, 2026-10-20 |
+| DV-537 | `bunvex dev` starts the local backend with `TZ=UTC`, whatever the shell's `TZ` | Convex's CLI passes the shell's `TZ` through, so its backend refuses to start; bunvex's user is not blocked | owner, 2026-10-20 |
 
 ## 4b. Additions (beyond Convex)
 
@@ -705,15 +707,31 @@ a bug against Convex's behaviour.
 
 **What is left as it was.** An embedded server (`createServer` in an app's own process) does not set the process's
 time zone: it is the host app's, and a server library changing it would change the app's own dates. Its pushed
-functions keep the host's zone (a question for the owner, in the PR).
+functions keep the host's zone (DV-527).
+
+**`bunvex dev`** starts its local deployment's backend with `TZ=UTC` in its environment, whatever the user's shell
+holds, so a `TZ` there does not stop it (DV-537). Convex's CLI passes the shell's environment through
+(`npm-packages/convex/src/cli/lib/localDeployment/run.ts`, `env: { ...process.env, … }`), so on Convex a `TZ` other
+than `UTC` in the shell makes the local backend panic at start ("Failed to setup timezone").
+
+**Owner decisions (2026-10-20).**
+- Refuse a `TZ` other than `UTC` at start, as Convex does, rather than overriding it with a warning: accepted (built
+  here).
+- `bunvex dev` passes `TZ=UTC` to the backend it spawns, so a user with `TZ` set in their shell is not blocked:
+  DV-537.
+- An embedded `createServer` cannot refuse, since it does not own the process: it keeps the host's zone, DV-527
+  ("Não dá pra fazer": JavaScriptCore has no per-realm zone, and setting the process's would change the host
+  app's own dates).
 
 **Tests:** `local-backend.test.ts` (a `TZ` of `America/Sao_Paulo`, empty or `utc` refuses the start with the
 message and exit code 1; unset or `UTC`, the start makes a context's `new Date(0).toString()` UTC);
+`local-deployment.test.ts` (with `TZ=America/Sao_Paulo` in the CLI's environment, the local deployment starts and
+its backend was given `TZ=UTC`);
 `audit-error-frames.test.ts` (uncaught, the client's message ends with the app's frames; caught, `error.stack` in a
 query and an action is the app's frames alone; `log.vars` reads as itself through the wrapper).
 
 **Sabotage:** `TZ` not set at start (1 failing test); the refusal removed (1); `log` not wrapped (1: the caught
-stacks).
+stacks); `bunvex dev` passing the shell's `TZ` through (1: the backend exits with the refusal).
 
 ## 11. PR 4: logs and errors under `process`
 

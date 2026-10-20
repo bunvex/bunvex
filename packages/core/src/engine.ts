@@ -115,6 +115,7 @@ import {
   preciseClock,
   runDeterministic,
   settled,
+  timerDelay,
   wallClock,
 } from "./determinism.ts";
 import { EnvironmentVariables } from "./environment-variables.ts";
@@ -599,6 +600,9 @@ export class Engine {
       }
     }
     const backfilling = await this.reconcileCatalog();
+    // Each component's schemas too, before the search indexes: its search and vector indexes restore with the
+    // app's (STUDY-157 PR 5).
+    if (this.opts.storedSchema) await this.loadComponentSchemas();
     // The search and vector indexes of the schema the process starts on existed before it: each loads its
     // segments and replays the log since (STUDY-111), or is read from its table, and searches meanwhile are
     // Convex's bootstrapping answer (STUDY-79).
@@ -617,7 +621,6 @@ export class Engine {
     await this.loadDatabaseGlobals();
     if (this.opts.storedSchema) {
       await this.resumePendingSchema();
-      await this.loadComponentSchemas();
       this.kickStagedWalk();
     }
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
@@ -686,7 +689,7 @@ export class Engine {
       const r = await store.acquireLease({ holder, ttlMs });
       if ("epoch" in r) break;
       if (Date.now() >= deadline) throw new LeaseHeldError(r.heldBy, r.expiresInMs);
-      await new Promise((ok) => setTimeout(ok, Math.min(250, Math.max(10, deadline - Date.now()))));
+      await new Promise((ok) => setTimeout(ok, timerDelay(Math.min(250, Math.max(10, deadline - Date.now())))));
     }
     const state = {
       holder,
@@ -983,6 +986,9 @@ export class Engine {
           this.catalog = next;
           this.cache.clear();
           this.cacheEpoch++;
+          // Its search and vector indexes go with its schema (STUDY-157 PR 5).
+          this.reconcileSearch();
+          this.reconcileVector();
         };
       },
       true,
@@ -1247,14 +1253,32 @@ export class Engine {
   }
 
   /**
+   * Each active table with its declaration in its namespace's active schema: the app's, then each component's
+   * (STUDY-157 PR 5), whose search and vector indexes are built and served as the app's.
+   */
+  private *declaredActiveTables(): Iterable<[TableDef, DeclaredTable]> {
+    for (const [name, declared] of declaredTables(this.schema)) {
+      const t = this.catalog.tables.get(name);
+      if (t) yield [t, declared];
+    }
+    for (const [id, c] of this.componentSchemas) {
+      const space = this.catalog.components.get(id);
+      if (!space) continue;
+      for (const [name, declared] of declaredTables(c.schema)) {
+        const t = space.tables.get(name);
+        if (t) yield [t, declared];
+      }
+    }
+  }
+
+  /**
    * Make the search indexes the active schema's (STUDY-45): after the schema or the tables change. A new
    * index is backfilled from its table at one snapshot; commits meanwhile are applied as they land.
    */
   private reconcileSearch(bootstrapping = false) {
     const wanted = [];
-    for (const [name, declared] of declaredTables(this.schema)) {
-      const t = this.catalog.tables.get(name);
-      if (!t || !declared.searchIndexes) continue;
+    for (const [t, declared] of this.declaredActiveTables()) {
+      if (!declared.searchIndexes) continue;
       const staged = new Set(declared.stagedSearch ?? []);
       for (const [index, def] of Object.entries(declared.searchIndexes))
         wanted.push({ table: t, name: index, def, staged: staged.has(index) });
@@ -1272,9 +1296,8 @@ export class Engine {
   /** Make the vector indexes the active schema's (STUDY-51), as `reconcileSearch` does for search ones. */
   private reconcileVector(bootstrapping = false) {
     const wanted = [];
-    for (const [name, declared] of declaredTables(this.schema)) {
-      const t = this.catalog.tables.get(name);
-      if (!t || !declared.vectorIndexes) continue;
+    for (const [t, declared] of this.declaredActiveTables()) {
+      if (!declared.vectorIndexes) continue;
       const staged = new Set(declared.stagedVector ?? []);
       for (const [index, def] of Object.entries(declared.vectorIndexes))
         wanted.push({ table: t, name: index, def, staged: staged.has(index) });
@@ -1361,7 +1384,7 @@ export class Engine {
       oldest.set(s.tablet, o !== undefined && o < ts ? o : ts);
     }
     this.segmentReplay = new SegmentReplay(store, this.committer.visibleTs, decodeDoc, oldest, (tablet) => {
-      const t = this.catalog.byTablet(tablet);
+      const t = this.catalog.anyTablet(tablet);
       if (!t) throw new Error(`no table has tablet ${tablet}`);
       return t.number;
     });
@@ -1545,7 +1568,7 @@ export class Engine {
 
   /** Whether `e` is still the index of its table and name (not dropped or replaced by a push). */
   private isCurrent(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry): boolean {
-    const t = this.catalog.byTablet(e.tablet);
+    const t = this.catalog.anyTablet(e.tablet);
     if (!t) return false;
     return (kind === "text" ? this.searchIndexes.get(t, e.name) : this.vectorIndexes.get(t, e.name)) === e;
   }
@@ -1782,7 +1805,7 @@ export class Engine {
     sizeOf: (doc: Doc) => number,
   ): Promise<boolean> {
     const state = this.searchSegments!;
-    const t = this.catalog.byTablet(e.tablet);
+    const t = this.catalog.anyTablet(e.tablet);
     if (!t) return false;
     const index = e.index as unknown as {
       load(parts: NonNullable<Awaited<ReturnType<SearchSegmentsState["fetch"]>>>): void;
@@ -2120,7 +2143,7 @@ export class Engine {
   }
 
   private async backfillVector(e: VectorIndexEntry) {
-    const t = this.catalog.byTablet(e.tablet);
+    const t = this.catalog.anyTablet(e.tablet);
     if (!t) return;
     if (
       await this.restoreFromSegments<Doc>(
@@ -2182,7 +2205,7 @@ export class Engine {
    * Convex's vector search (`Database::vector_search`, STUDY-51): the `limit` (default 10, at most 256)
    * documents of `table` nearest `vector` in index `index`, among those matching `filter` (an OR of `q.eq`s on
    * the index's filter fields), as `{_id, _score}`, best first. Against the latest visible state; a missing
-   * table has no results.
+   * table has no results. In the app's namespace, or a component's.
    */
   vectorSearch(
     table: string,
@@ -2190,11 +2213,13 @@ export class Engine {
     query: { vector: number[]; limit?: number; filter?: unknown },
     /** Told what the search was charged, as Convex's `bytes_searched`: its vectors × dimensions × 4 (STUDY-71). */
     charge?: (bytesSearched: number) => void,
+    /** The namespace `table` is in: a component's `_components` id (STUDY-157 PR 5), null the app's. */
+    namespace: string | null = null,
   ): { _id: string; _score: number }[] {
-    const t = this.catalog.tables.get(table);
+    const t = this.catalogIn(namespace).tables.get(table);
     if (!t) return [];
     const name = `${table}.${index}`;
-    const declared = declaredTables(this.schema).get(table);
+    const declared = declaredTables(namespace === null ? this.schema : this.componentSchema(namespace)).get(table);
     const e = this.vectorIndexes.get(t, index);
     if (!e) {
       if (t.indexes.has(index) || declared?.searchIndexes?.[index])
@@ -2233,7 +2258,7 @@ export class Engine {
   }
 
   private async backfillSearch(e: SearchIndexEntry) {
-    const t = this.catalog.byTablet(e.tablet);
+    const t = this.catalog.anyTablet(e.tablet);
     if (!t) return;
     if (
       await this.restoreFromSegments<Doc>(
@@ -2420,11 +2445,9 @@ export class Engine {
             searchField: d.searchField,
             filterFields: [...d.filterFields].sort(),
           }),
-          // A component has no search index yet (STUDY-153 PR 2b refuses them).
+          // A component's too (STUDY-157 PR 5): indexes are keyed by tablet.
           ready: (n: string) =>
-            tablet === undefined || namespace !== null
-              ? false
-              : !!this.searchIndexes.get(this.catalog.byTablet(tablet)!, n)?.ready,
+            tablet === undefined ? false : !!this.searchIndexes.get(this.catalog.anyTablet(tablet)!, n)?.ready,
         },
         {
           now: before?.vectorIndexes ?? {},
@@ -2438,9 +2461,7 @@ export class Engine {
             filterFields: [...d.filterFields].sort(),
           }),
           ready: (n: string) =>
-            tablet === undefined || namespace !== null
-              ? false
-              : !!this.vectorIndexes.get(this.catalog.byTablet(tablet)!, n)?.ready,
+            tablet === undefined ? false : !!this.vectorIndexes.get(this.catalog.anyTablet(tablet)!, n)?.ready,
         },
       ] as const;
       for (const k of kinds) {
@@ -4314,8 +4335,6 @@ function checkComponentSchema(schema: SchemaDefinition) {
   for (const t of declaredTables(schema).values()) {
     if (t.stagedDocument !== undefined)
       throw new Error(`Table "${t.name}": staged validators in a component's schema are not supported yet`);
-    if (Object.keys(t.searchIndexes ?? {}).length + Object.keys(t.vectorIndexes ?? {}).length > 0)
-      throw new Error(`Table "${t.name}": search and vector indexes in a component's schema are not supported yet`);
   }
 }
 

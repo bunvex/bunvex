@@ -384,7 +384,9 @@ export async function startLocalDeployment(io: Io, opts: LocalOptions = {}): Pro
       join(dir, "bunvex_local_storage"),
       join(dir, "bunvex_local_backend.sqlite3"),
     ],
-    { cwd: dir, env: secret.env, stdout: log, stderr: log },
+    // UTC whatever the user's shell says: the backend refuses another `TZ` (Convex's `ensure_utc`), which
+    // Convex's CLI passes through (DV-537).
+    { cwd: dir, env: { ...secret.env, TZ: "UTC" }, stdout: log, stderr: log },
   );
   closeSync(log); // the child holds its own copy
   const stop = async () => {

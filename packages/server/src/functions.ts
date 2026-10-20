@@ -200,14 +200,14 @@ import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearc
 import { roomsCtx } from "./rooms/ctx.ts";
 import { type AnyRoomDef, isRoomDef, type RoomGate } from "./rooms/define.ts";
 import type { RoomHub } from "./rooms/hub.ts";
-import type { RoutableMethod } from "./router.ts";
+import type { HttpRouter, RoutableMethod } from "./router.ts";
 import { makeScheduler, type Scheduler } from "./scheduler.ts";
 import type { ServerMetrics } from "./server-metrics.ts";
 import { setServiceCallContext } from "./service-tokens.ts";
 import type { FileStorage, StorageMeter } from "./storage.ts";
 import { UnparsedSystemArgs } from "./system-args.ts";
 import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
-import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB, type UsageMeter } from "./usage-limits.ts";
+import type { UsageMeter } from "./usage-limits.ts";
 import { bodyLength } from "./web-response.ts";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe), and the
@@ -906,7 +906,10 @@ export class Functions {
   /** Each mounted component's functions (STUDY-154), by `componentFunctionName`. */
   private componentFns = new Map<string, FunctionDef>();
   /** Each mounted component's runtime and module hashes, by its `_components` id. */
-  private componentRuntimes = new Map<string, { runtime: ComponentRuntime; hashes: Map<string, string> }>();
+  private componentRuntimes = new Map<
+    string,
+    { runtime: ComponentRuntime; hashes: Map<string, string>; router: HttpRouter | undefined }
+  >();
   /** The component each of its functions belongs to. */
   private componentOf = new WeakMap<FunctionDef, ComponentRuntime>();
 
@@ -919,6 +922,8 @@ export class Functions {
     fns: Map<string, FunctionDef>,
     moduleHashes: Map<string, string>,
     moduleLoads: Map<string, string[]> = new Map(),
+    /** Its `http.js` router, mounted where its parent's definition says (STUDY-157). */
+    router?: HttpRouter,
   ) {
     this.removeComponent(runtime.id);
     for (const [key, f] of fns) {
@@ -932,7 +937,7 @@ export class Functions {
         (moduleLoads.get(m) ?? [m]).map((p) => `${runtime.id}\0${p}`),
       );
     }
-    this.componentRuntimes.set(runtime.id, { runtime, hashes: new Map(moduleHashes) });
+    this.componentRuntimes.set(runtime.id, { runtime, hashes: new Map(moduleHashes), router });
   }
 
   /** Remove a component's functions (unmounted or deleted): calling one is "not found", as on Convex. */
@@ -940,6 +945,11 @@ export class Functions {
     const prefix = componentFunctionName(id, "x:x").slice(0, -"x:x".length);
     for (const key of [...this.componentFns.keys()]) if (key.startsWith(prefix)) this.componentFns.delete(key);
     this.componentRuntimes.delete(id);
+  }
+
+  /** An installed component's runtime and router, or undefined. */
+  componentRuntime(id: string): { runtime: ComponentRuntime; router: HttpRouter | undefined } | undefined {
+    return this.componentRuntimes.get(id);
   }
 
   /** The components whose code is installed, by id. */
@@ -1143,6 +1153,7 @@ export class Functions {
       this.engine.runtime.now(),
       udfType === "Action" && this.isNodeAction(name) ? "node" : "isolate",
     );
+    r.clock = this.engine.runtime;
     if (inComponent) r.componentPath = this.componentRuntimes.get(inComponent.id)?.runtime.path ?? null;
     r.tokenIdentifier = ((caller?.identity as { tokenIdentifier?: unknown } | null)?.tokenIdentifier as string) ?? null;
     r.ip = caller?.request?.ip ?? null;
@@ -1365,9 +1376,11 @@ export class Functions {
     this.usageMeter?.recordExecution({
       udfType: c.udfType,
       environment: c.environment,
+      // A cache hit meters no compute, as Convex's `CallType::CachedQuery`: its entry's user time and memory
+      // are its run's, already metered (STUDY-174 F4).
       executionTime: c.cachedResult ? 0 : c.executionTime,
-      userExecutionTime: c.userExecutionTime,
-      memoryMb: c.usageStats.memoryUsedMb,
+      userExecutionTime: c.cachedResult ? null : c.userExecutionTime,
+      memoryMb: c.cachedResult ? 0 : c.usageStats.memoryUsedMb,
       databaseIoBytes: c.usageStats.databaseIoReadBytes + c.usageStats.databaseIoWriteBytes,
       dataEgressBytes: r.io.networkEgressBytes + r.io.storageReadBytes,
       searchQueryBytes: c.usageStats.textIndexQueryBytes + c.usageStats.vectorIndexReadQueryBytes,
@@ -1402,6 +1415,10 @@ export class Functions {
     const seconds = (end - r.start) / 1000;
     // An HTTP action that ran to the end is named, and measured, by its route.
     if (o.route) r.metricsName = o.route.metricsName;
+    // A cache hit gives the user time, memory, start and identity of the run it reused, as Convex's `log_query`
+    // logs the cached outcome's (STUDY-174 F4); its own are its wall time, timestamp, request and caller.
+    // A hit whose run kept none (never in practice) gives its own, with no memory.
+    const ran = r.cached ? r.reused : r.figuresAt(end);
     return {
       kind: "Completion",
       udfType: r.udfType,
@@ -1413,10 +1430,8 @@ export class Functions {
       caller: r.caller,
       parentExecutionId: r.parent?.executionId ?? null,
       executionTime: seconds,
-      // A query's or mutation's user time excludes its store and nested calls, as Convex's; an action's is its
-      // wall time, as Convex pauses an action's clock only while its isolate starts (STUDY-71).
-      // Never above the wall time, which bunvex reads from a coarser clock.
-      userExecutionTime: r.timer ? Math.min(userTimeMs(r.timer as UserTimer) / 1000, seconds) : seconds,
+      // How it is measured: `Running.figuresAt` (STUDY-71).
+      userExecutionTime: ran?.userExecutionTime ?? seconds,
       success: e === undefined ? (o.success ?? null) : null,
       // An attempt that lost an OCC conflict and runs again has no error, as Convex logs it before it fails
       // the outcome (only `occInfo` and `willRetry` tell it apart; STUDY-74).
@@ -1435,9 +1450,8 @@ export class Functions {
         ...(r.io.vectorReadBytes > 0 && {
           databaseReadBytes: (used?.readBytes ?? 0) + r.io.vectorReadBytes,
         }),
-        // Convex's memory per execution: its isolate heap (64 MiB), a Node action's 512 MB; none for a
-        // cached query (STUDY-61).
-        memoryUsedMb: r.cached ? 0 : r.environment === "node" ? NODE_MEMORY_MB : ISOLATE_MEMORY_MB,
+        // Convex's memory per execution (STUDY-61); a cache hit's is its run's.
+        memoryUsedMb: ran?.memoryUsedMb ?? 0,
       },
       returnBytes:
         e === undefined
@@ -1456,8 +1470,8 @@ export class Functions {
             }
           : null,
       willRetry,
-      executionTimestamp: r.start / 1000,
-      identityType: r.identityType,
+      executionTimestamp: ran?.executionTimestamp ?? r.start / 1000,
+      identityType: (ran?.identityType as IdentityType | undefined) ?? r.identityType,
       environment: r.environment,
       ...(r.links && { links: r.links }),
     };
@@ -1581,11 +1595,13 @@ export class Functions {
    */
   apiSpec(componentId?: string | null) {
     const kind = { query: "Query", mutation: "Mutation", action: "Action" } as const;
-    // A component's (`componentId`, as Convex's `queryPrivateSystem` reads it): its functions, no routes yet (its
-    // HTTP mounts are STUDY-152 step 7).
-    const routes = componentId
-      ? []
-      : this.httpRoutes().map(([method, path]) => ({ functionType: "HttpAction", method, path }));
+    // A component's (`componentId`, as Convex's `queryPrivateSystem` reads it): its functions and its own `http.js`
+    // routes (STUDY-157).
+    const routes = (
+      componentId
+        ? (this.componentRuntimes.get(componentId)?.router?.getRoutes() ?? []).map(([path, method]) => [method, path])
+        : this.httpRoutes()
+    ).map(([method, path]) => ({ functionType: "HttpAction", method, path }));
     const prefix = componentId ? componentFunctionName(componentId, "x:x").slice(0, -"x:x".length) : null;
     const entries: [string, FunctionDef][] =
       prefix === null
@@ -2001,9 +2017,13 @@ export class Functions {
    * syscalls: a query's has no request metadata, an action's no transaction metrics nor snapshot.
    */
   private meta(f: FunctionDef, db: Tx | null, caller: Caller | undefined) {
-    const key = f === HTTP_ACTION ? "http:default" : (this.names.get(f) ?? "");
+    // A component's function is registered under its component's id: its own name is the part after it.
+    const registered = f === HTTP_ACTION ? "http:default" : (this.names.get(f) ?? "");
+    const key = splitComponentFunctionName(registered)?.name ?? registered;
     const name = key.endsWith(":default") ? key.slice(0, -":default".length) : key;
-    const getFunctionMetadata = async () => ({ name, componentPath: "", type: f.kind, visibility: f.visibility });
+    // A component's function names its component's path (`a/b`), as Convex's `function_metadata`; the app's "".
+    const componentPath = this.componentOf.get(f)?.path ?? "";
+    const getFunctionMetadata = async () => ({ name, componentPath, type: f.kind, visibility: f.visibility });
     // Self-hosted Convex: the instance name, no region, the smallest class.
     const getDeploymentMetadata = async () => ({ name: this.engine.instanceName, region: null, class: "s16" });
     const request = (): CallRequest => db?.request ?? caller?.request ?? REQUESTLESS();
@@ -2812,10 +2832,12 @@ export class Functions {
     job?: string,
     f?: FunctionDef,
     handler: unknown = f?.handler,
+    /** An HTTP action's component (STUDY-157): the one its route reached. */
+    httpComponent?: ComponentRuntime,
   ): ActionCtx {
     const identity = (caller?.identity ?? null) as UserIdentity | null;
     // A component's action calls its own component's functions by name (STUDY-154); other components are step 5.
-    const component = f ? this.componentOf.get(f) : undefined;
+    const component = httpComponent ?? (f ? this.componentOf.get(f) : undefined);
     // What the action calls (STUDY-155): its own component's functions by name, its children's public exports by
     // reference, a handle's function.
     const target = async (ref: FunctionRef) => {
@@ -2883,8 +2905,6 @@ export class Functions {
       presence: cutOffWithAction(r.presence as NonNullable<typeof r.presence>),
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
         checkActionAlive();
-        // A component has no vector index yet (STUDY-153 PR 2b refuses them): its search would read the app's.
-        if (component) throw new Error("`ctx.vectorSearch` in a component is not supported yet");
         // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
         const args = [tableName, indexName, query];
         const argNames = ["tableName", "indexName", "query"];
@@ -2908,6 +2928,8 @@ export class Functions {
             (bytes) => {
               if (r) r.io.vectorQueryBytes += bytes;
             },
+            // A component's action searches its own tables (Convex's `insert_component_id`, STUDY-157).
+            component?.id ?? null,
           );
         } catch (e) {
           throw unavailableToAction(e);
@@ -2935,8 +2957,16 @@ export class Functions {
     authError: Error | null,
     /** The route the router matched (a prefix route's path ends in `*`); null for none. */
     route: { method: RoutableMethod; path: string } | null = null,
+    /** The component the request was routed to (STUDY-157); the app's when absent. */
+    component?: ComponentRuntime,
   ): Promise<Response> {
-    const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION, handler);
+    // In a component, a user's identity does not cross (Convex's `propagate_component_auth`, the component both
+    // caller and callee): no identity, and no token error to throw; an admin's stays.
+    if (component && !isSystemIdentity(caller)) {
+      caller = { ...caller, identity: null };
+      authError = null;
+    }
+    const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION, handler, component);
     let t0 = 0;
     let running: Running | null = null;
     let body: { sent: Promise<SentBody> } | null = null;
@@ -2969,8 +2999,18 @@ export class Functions {
               ms,
               () => actionTimeoutError(ms),
               () =>
-                this.inActionEnv(() =>
-                  inHandleScope({ db: null, engine: this.engine }, () => handler(ctx, trackedFormData(request))),
+                this.inActionEnv(
+                  () =>
+                    inHandleScope(
+                      {
+                        db: null,
+                        engine: this.engine,
+                        // A component's handles resolve from it (STUDY-155).
+                        ...(component && { resolve: (ref: unknown) => this.resolveCall(ref, component, null, true) }),
+                      },
+                      () => handler(ctx, trackedFormData(request)),
+                    ),
+                  component,
                 ),
             );
             // Convex's router checks the result (`convexJsonFromResponse`): a failure before the head, logged with

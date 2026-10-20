@@ -271,6 +271,8 @@ ui ◄── apps/site
 - No `convex` in shipped code (`packages/*/src`) outside comments: identifiers, strings and messages use
   bunvex's own words (STUDY-18 D1).
 - No source file starts with `// @bun…` (Bun's "already transpiled" pragma).
+- In shipped code, a `setTimeout` whose delay subtracts a time (a sleep towards a timestamp) passes it
+  through core's `timerDelay`, capped at 2^31−1 ms: past that Bun fires the timer at once (STUDY-174 I-25).
 
 `bun run check:deps` (`scripts/check-deps.ts`) enforces all of the above.
 

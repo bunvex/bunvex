@@ -2,7 +2,8 @@
 // each query call was answered from the cache, read from the function log stream (`/api/stream_function_logs`,
 // `cachedResult`). A query that reads no time stays cached until a commit writes into what it read; a write
 // elsewhere leaves it; one that read the clock is served for 17 s at most (Convex's MAX_CACHE_AGE). Results alone
-// cannot show any of this: a miss answers the same value as a hit. Local only: skipped, with a note, when Convex's
+// cannot show any of this: a miss answers the same value as a hit. A hit's entry also gives the user time, memory,
+// execution timestamp and identity of the run it reused (STUDY-174 §10.2). Local only: skipped, with a note, when Convex's
 // backend is not there (scripts/download-convex-backend.sh, or CONVEX_BACKEND_BIN).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
@@ -35,7 +36,12 @@ type Entry = {
   cachedResult?: boolean;
   userExecutionTime?: number;
   executionTimestamp?: number;
-  usageStats?: { memoryUsedMb?: number };
+  timestamp?: number;
+  identityType?: string;
+  requestId?: string;
+  executionId?: string;
+  caller?: string;
+  usageStats?: { memoryUsedMb?: number; databaseReadDocuments?: number };
 };
 
 /** The query entries the last `observe` read, in order. */
@@ -107,10 +113,10 @@ describe.skipIf(!ready)("the query cache's observable behaviour, against Convex'
     ).toEqual(["plain:hit", "clock:miss"]);
   }, 60_000);
 
-  // STUDY-174 finding F4: a hit's entry describes the run it reused on Convex (`log_query` in
-  // crates/application/src/function_log.rs logs the cached outcome's user time, memory and execution timestamp);
-  // bunvex logs 0 user time, 0 MB and the hit's own time. A todo until the owner decides (run with `--todo`).
-  test.todo("a hit's log entry carries the user time, memory and timestamp of the run it reused", async () => {
+  // STUDY-174 finding F4: a hit's entry describes the run it reused, as Convex's `log_query`
+  // (crates/application/src/function_log.rs) logs the cached outcome's user time, memory, execution timestamp and
+  // identity, with the hit's own log time, request, execution id and caller, and no reads.
+  test("a hit's log entry carries the user time, memory and timestamp of the run it reused", async () => {
     const shape = async (b: Backend) => {
       await b.call("mutation", "cache:add", {});
       await observe(b, [
@@ -119,13 +125,23 @@ describe.skipIf(!ready)("the query cache's observable behaviour, against Convex'
       ]);
       const [miss, hit] = lastEntries;
       return {
+        flags: [miss?.cachedResult, hit?.cachedResult],
         sameUserTime: hit?.userExecutionTime === miss?.userExecutionTime,
         sameMemory: hit?.usageStats?.memoryUsedMb === miss?.usageStats?.memoryUsedMb,
+        memoryUsedMb: hit?.usageStats?.memoryUsedMb,
         sameTimestamp: hit?.executionTimestamp === miss?.executionTimestamp,
+        sameIdentityType: hit?.identityType === miss?.identityType,
+        // The hit's own: logged no earlier than its run (both clocks are coarse), in its own request and execution,
+        // by its own caller.
+        loggedAtOrAfterRun: (hit?.timestamp ?? 0) >= (miss?.timestamp ?? 0),
+        sameRequestId: hit?.requestId === miss?.requestId,
+        sameExecutionId: hit?.executionId === miss?.executionId,
+        caller: hit?.caller,
+        hitReads: hit?.usageStats?.databaseReadDocuments,
       };
     };
     const c = await shape(convex);
-    expect(c).toEqual({ sameUserTime: true, sameMemory: true, sameTimestamp: true });
+    expect(c).toMatchObject({ flags: [false, true], sameUserTime: true, sameMemory: true, sameTimestamp: true });
     expect(await shape(bunvex)).toEqual(c);
   });
 });

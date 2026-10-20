@@ -1,0 +1,24 @@
+cache_size=262144 file=20 MB rss +34 MB heap 0 MB
+cache_size=262144 file=39 MB rss +59 MB heap 0 MB
+cache_size=262144 file=59 MB rss +83 MB heap 0 MB
+cache_size=262144 file=78 MB rss +108 MB heap 0 MB
+cache_size=262144 file=98 MB rss +133 MB heap 0 MB
+cache_size=262144 file=117 MB rss +157 MB heap 0 MB
+cache_size=262144 file=137 MB rss +182 MB heap 0 MB
+cache_size=262144 file=157 MB rss +206 MB heap 0 MB
+cache_size=262144 file=176 MB rss +231 MB heap 0 MB
+cache_size=262144 file=196 MB rss +256 MB heap 0 MB
+  bin S   33  :   244.6 MiB   249.5 MiB   244.6 MiB     5.0 KiB    51.1 K    not all freed
+  total       :   252.4 MiB   333.2 MiB   249.3 Mi                473.3 K    
+cache_size=default file=20 MB rss +11 MB heap 0 MB
+cache_size=default file=39 MB rss +11 MB heap 0 MB
+cache_size=default file=59 MB rss +11 MB heap 0 MB
+cache_size=default file=78 MB rss +11 MB heap 0 MB
+cache_size=default file=98 MB rss +12 MB heap 0 MB
+cache_size=default file=117 MB rss +11 MB heap 0 MB
+cache_size=default file=137 MB rss +11 MB heap 0 MB
+cache_size=default file=157 MB rss +11 MB heap 0 MB
+cache_size=default file=176 MB rss +11 MB heap 0 MB
+cache_size=default file=196 MB rss +11 MB heap 0 MB
+  bin S   33  :     2.7 MiB     7.1 MiB     2.2 MiB     5.0 KiB     1.4 K    not all freed
+  total       :     8.1 MiB    75.6 MiB    -1.0 Mi                422.7 K    
