@@ -12,11 +12,11 @@
 //   they left; then the resumption runs, `drainMicrotasks()` runs every microtask it queued to the end, and a marker of
 //   call `id` closes what that left;
 // - Bun reports rejections in the order they happened, each marker among them: what comes before a call's marker, and
-//   after the marker before it, is that call's. Bun 1.4.2 reports them at the end of the drain itself, while `current`
-//   names the call; later versions at the end of the event loop's turn (§13.3).
+//   after the marker before it, is that call's. Bun 1.4.2 reports them at the end of the drain itself, later versions
+//   at the end of the event loop's turn (§13.3).
 // - A call learns its checkpoint was checked when its marker is reported (`checked`): only then may it answer, or
 //   send what an action started in it (Convex runs neither once the checkpoint found a rejection).
-// - Where Bun reports at the end of the turn (`REPORTS_AT_DRAIN` false), a call's next resumption waits for its last
+// - Where Bun reports at the end of the turn (`reportsAtDrain` false), a call's next resumption waits for its last
 //   marker's report (`later`), so each checkpoint of a call is checked before the next one runs, as Convex's are.
 //
 // The limits (STUDY-171 §13.3): code resumed by Bun itself rather than by the child (a native completion: `crypto.
@@ -63,7 +63,7 @@ const queued = new Map<number, (() => void)[]>();
  * Whether Bun reports what a `drainMicrotasks()` left rejected with no handler before it returns (Bun 1.4.2), rather
  * than at the end of the event loop's turn (later versions). Found once, at start.
  */
-export const REPORTS_AT_DRAIN = (() => {
+let reportsAtDrain = (() => {
   let seen = false;
   const listen = () => {
     seen = true;
@@ -76,13 +76,21 @@ export const REPORTS_AT_DRAIN = (() => {
   return seen;
 })();
 
+/** Whether Bun reports a drain's rejections before `drainMicrotasks()` returns (see `reportsAtDrain`). */
+export const REPORTS_AT_DRAIN = () => reportsAtDrain;
+
+/** Tests: run as where Bun reports at the end of the turn (that path is right on every Bun, only slower). */
+export function asIfReportedLate() {
+  reportsAtDrain = false;
+}
+
 /** Closes the rejections made so far: those reported before this marker are `id`'s (null: no call's). */
 function mark(id: number | null) {
   const marker = new Marker(id, ++seq);
   if (id !== null) lastMarker.set(id, marker.seq);
   void Promise.reject(marker);
   // Bun reports at the end of a turn of the event loop: one more turn, so a child left idle still hears it.
-  if (!REPORTS_AT_DRAIN) setImmediate(() => {});
+  if (!reportsAtDrain) setImmediate(() => {});
 }
 
 /** `call` runs from now until it answers (`untrack`). */
@@ -100,7 +108,7 @@ export function untrack(id: number) {
 
 /** `resume`, in a checkpoint of call `id` once its last checkpoint was checked: at once if it was. */
 export function later(id: number, resume: () => void) {
-  if (REPORTS_AT_DRAIN || !lastMarker.has(id)) return void setImmediate(() => checkpoint(id, resume));
+  if (reportsAtDrain || !lastMarker.has(id)) return void setImmediate(() => checkpoint(id, resume));
   enqueue(id, () => checkpoint(id, resume));
 }
 
@@ -134,7 +142,7 @@ export const checkpointOf = (): number | null => (inCheckpoint ? current : null)
  */
 export function checkpoint(id: number | null, resume: () => void, drainBefore = true) {
   // Bun reports at the end of the turn: what this call's last checkpoint left is not known yet; this one runs after.
-  if (!REPORTS_AT_DRAIN && !inCheckpoint && id !== null && lastMarker.has(id)) {
+  if (!reportsAtDrain && !inCheckpoint && id !== null && lastMarker.has(id)) {
     enqueue(id, () => checkpoint(id, resume, drainBefore));
     return;
   }
@@ -203,7 +211,7 @@ process.on("unhandledRejection", (reason) => {
     }
     return;
   }
-  // Reported at the end of a checkpoint's drain (Bun 1.4.2): the call it names.
-  if (current !== null) attribute(current, reason);
-  else unmarked.push(reason);
+  // Whose it is, the next marker says (Bun 1.4.2 reports it at the end of the drain itself, later ones at the end of the
+  // turn: before that marker either way).
+  unmarked.push(reason);
 });

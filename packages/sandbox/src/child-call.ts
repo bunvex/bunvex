@@ -475,7 +475,7 @@ class ChildCall extends ChildCallBase implements DbHost {
       this.fifo.splice(0, batch.length);
       this.batch = null;
       for (const e of batch) super.reply(e.answer!);
-      if (!REPORTS_AT_DRAIN) {
+      if (!REPORTS_AT_DRAIN()) {
         // Bun reports this checkpoint's rejections at the end of the turn: the next batch, in a checkpoint after.
         if (this.ready() !== null) {
           this.releasing = true;

@@ -1283,7 +1283,9 @@ are out of scope (PRs 6 and 10).
   running subfunction, and can be caught by the parent function" (`termination.rs:42-48`): a `ctx.runQuery` whose
   callee failed so throws in the caller, which can catch it. Nothing more of the terminated function runs: a
   mutation's writes are rolled back, an action's later calls never happen, and the syscalls an action had not taken
-  the answer of are its unawaited operations (the warning).
+  the answer of are its unawaited operations (the warning). A syscall an action starts in the same turn as the
+  rejection never runs: `rejections:a stopsBeforeOp`'s `runMutation` writes nothing and `stopsBeforeFetch`'s `fetch`
+  reaches no server, each listed unawaited (Convex's binary).
 
 What an app sees, from Convex's binary (`precompiled-2026-10-10-72ce13c`, `packages/differential`'s
 `rejections-app`): the same error as if the value were thrown, at the end of the checkpoint where it was left
@@ -1292,45 +1294,63 @@ unhandled: queries, mutations and actions alike.
 ### 13.2 How bunvex does it
 
 ```
- child: every frame that resumes a call's code            Bun
- checkpoint(id):  drainMicrotasks()   (what ran before: no call's)
-                  current = id
-                  resume()            (a start, an answer, a chunk, an end; an action's timer callback)
-                  drainMicrotasks()  ──► unhandledRejection(reason)  ──► calls[current].unhandled(reason)
-                  current = null                                         done {thrown reason}, no more of its code
-                  calls[id].checkpointed()  ──► a settled call answers once nothing it started is pending
+ child: every frame that resumes a call's code                        Bun
+ checkpoint(id):  drainMicrotasks(); mark(no call)      what ran before is no call's
+                  resume()                              a start, an answer, a chunk, an end; an action's timer callback
+                  drainMicrotasks(); mark(id)    ──►    unhandledRejection, in the order the rejections happened:
+                                                          r1, r2, Marker(id)  ⇒  r1 and r2 are id's
+ call id:         unhandled(r) ──► done {r, as thrown}, no more of its code, what it held never sent
+                  checked()    ──► (its marker reported) it may answer, an action may send what it started
 ```
 
-- **Attribution by checkpoint** (`packages/sandbox/src/rejections.ts`). Bun's `unhandledRejection` carries no async
-  context (the reason for DV-528), and a child runs several calls at once (one child per code version until PR 9's
-  pool). But `drainMicrotasks()` (`bun:jsc`) runs the queue to the end and reports what it left rejected with no
-  handler, synchronously, before it returns. So the child resumes a call's code only inside a checkpoint of that call
-  (`child.ts`'s frame loop: a call's or action's start, an answer, a stream's chunk or message by the call that owns
-  the stream; an action's timer callbacks through `setActionTimerCallback`): the queue is drained first (what Bun
-  itself resumed is not this call's), then the resumption runs, then the drain whose reports name the call. This is
-  Convex's checkpoint, made where the child resumes the app.
+- **Attribution by checkpoint and marker** (`packages/sandbox/src/rejections.ts`). Bun's `unhandledRejection` carries
+  no async context (the reason for DV-528), and a child runs several calls at once (one child per code version until
+  PR 9's pool). So the child resumes a call's code only inside a checkpoint of that call (`child.ts`'s frame loop: a
+  call's or action's start, an answer, a stream's chunk or message by the call that owns the stream; an action's
+  timer callbacks through `setActionTimerCallback`). A checkpoint drains what was queued before and closes it with a
+  marker of no call (a promise rejected with a `Marker`), runs the resumption, drains (`bun:jsc` `drainMicrotasks()`)
+  and closes it with a marker of the call. Bun reports rejections in the order they happened, markers among them, so
+  what comes before a call's marker, and after the marker before it, is that call's. This is Convex's microtask
+  checkpoint, made where the child resumes the app.
+- **When Bun reports.** Bun 1.4.2 (the version CI pins) reports a drain's rejections before `drainMicrotasks()`
+  returns: the attribution is exact. Bun 1.4.3 reports at the end of the event loop's turn
+  (`REPORTS_AT_DRAIN`, found at start): there a call's next checkpoint waits for its last marker's report (its frames
+  queue, `later`), so each checkpoint of one call is checked before the next runs, as Convex's are; other calls' go
+  on. A marker forces one more turn, so a child left idle still hears it.
 - **A query's or mutation's answers reach its code in Convex's order** (`ChildCall.reply`). The host still runs each
   operation as it comes; the child gives the answers to the app in the order the operations were started, a batch at a
   time (`batchOf`: `db.get`, `db.system.get`, `db.query`, `db.next` are reads; `storage.getUrl` its own; every other
-  one alone; at most 16), and drains between batches. So `const p = ctx.db.get(bad); await ctx.db.query(t).first();
-  p.catch()` succeeds, as on Convex (one batch); with `ctx.runQuery` in place of `db.get` it fails, as there.
-- **A query's or mutation's `done` waits** for every operation it started to be answered and its code drained
-  (`settled`, `checkpointed`), so an unawaited operation that fails fails the call. Before this PR the child answered
-  at once and an unawaited failure came after the answer.
-- **An action answers at the end of the checkpoint it settled in**, so a rejection made in the same turn as its
-  `return` fails it. Its later timers are cleared at its end (§12.6): a rejection there never happens, as on Convex.
+  one alone; at most 16), each drained and checked before the next. So `const p = ctx.db.get(bad); await
+  ctx.db.query(t).first(); p.catch()` succeeds, as on Convex (one batch); with `ctx.runQuery` in place of `db.get`
+  it fails, as there.
+- **A query's or mutation's `done` waits** for every operation it started to be answered, its code drained and the
+  last checkpoint checked (`settled`, `checked`), so an unawaited operation that fails fails the call. Before this
+  PR the child answered at once and an unawaited failure came after the answer.
+- **An action answers once the checkpoint it settled in was checked**, so a rejection made in the same turn as its
+  `return` fails it. **What an action starts in a checkpoint is held until that checkpoint was checked**
+  (`ChildActionCall.sendOp`, `held`): an operation started in the turn of the rejection that fails it is never sent,
+  as Convex never runs it, and its `done` names it (`unsent`), so the host counts it unawaited under the engine's name
+  (`danglingName`, the unawaited-operations warning, as on Convex). Its later timers are cleared at its end (§12.6): a
+  rejection there never happens, as on Convex.
 - **Failing.** `unhandled(reason)` answers the call at once with the value as thrown (`rejected`: a `BunvexError`
   made a plain error, its data dropped, as Convex's), and marks it terminated: its later operations are never sent and
-  never settle, the answers still in flight are dropped, so its code stops at its next operation. An action's `done`
-  lists the operations it had not taken the answer of (the unawaited-operations warning, as on Convex). The host needs
-  no change: it already runs a query's or mutation's in-flight operations to their end after `done` (a failed
-  mutation's writes are rolled back), and a nested call's failure is an error its caller can catch.
+  never settle, the answers still in flight are dropped, so its code stops at its next operation. The host runs a
+  query's or mutation's in-flight operations to their end after `done`, as before (a failed mutation's writes are
+  rolled back), and a nested call's failure is an error its caller can catch.
 - **Outside any checkpoint** (code Bun resumed itself) a rejection is the running call's when exactly one call is
   running and no load is; otherwise it is printed to the server's stderr (`bunvex sandbox: an unhandled rejection no
   call can be found for: …`), as before.
+- **A stream the host stopped** (a request body its `fetch` gave up on) may still get the chunks the child had in
+  flight: the host now drops them within the credit it gave (`streams.ts`, `stopped`). It used to call that a broken
+  child and kill it, an internal error the client saw about once in 40 runs of `fetchRedirect307Stream` on `main`'s
+  code, and about once in 4 once actions' operations were held.
 
 ### 13.3 Limits
 
+- **Bun 1.4.3 and later report at the end of the turn**: a rejection handled by the same call's code in a later
+  checkpoint of the same turn is not reported, so the call succeeds where Convex fails it. The gate above keeps one
+  checkpoint per call per turn for the frames the child resumes; what a batch's answers or a timer resume within one
+  checkpoint is one checkpoint here as there. Under Bun 1.4.2 none of this applies.
 - **Code resumed by Bun, not by the child**, with several calls running in the same child: a native completion
   (`crypto.subtle`, reading a `Blob` or a `Response` the app made itself, a `ReadableStream` with no host behind it).
   A rejection that code leaves is printed, not failed, unless that call is the only one running. PR 9 (one call per
@@ -1341,6 +1361,9 @@ unhandled: queries, mutations and actions alike.
 - **Batches are approximate where the operations differ**: bunvex's `db.query` with a terminal (`collect`, `first`,
   `take`) is one operation where Convex's library makes a `queryStreamNext` per page. Both are reads, so a page and a
   `db.get` share a batch on both; a `collect` of several pages is one answer here, several batches there.
+- **A query's or mutation's operations are not held**: one started in the turn of its rejection still reaches the
+  host and runs (a read, or a write rolled back with the failed mutation), where Convex never runs it. Nothing of it
+  outlives the failed call.
 
 ### 13.4 Parity
 
