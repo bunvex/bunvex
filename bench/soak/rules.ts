@@ -290,3 +290,58 @@ export function judge(run: RunData): RuleResult[] {
   });
   return out;
 }
+
+// ---- Report-only rules -----------------------------------------------------------------------------------------
+
+/** Every rule's id: the first word of its name (R8 is one id for every operation's latency). */
+export const RULE_IDS = [
+  "R1",
+  "R2",
+  "R3",
+  "R4",
+  "R5",
+  "R6",
+  "R7a",
+  "R7b",
+  "R8",
+  "R9a",
+  "R9b",
+  "R10",
+  "R11",
+  "R12",
+] as const;
+
+export const ruleId = (r: RuleResult): string => r.rule.split(" ", 1)[0]!;
+
+/** A rule's result, and whether the run's exit code ignores it (`--report-only`). */
+export type Verdict = RuleResult & { reportOnly: boolean };
+
+/**
+ * Parses `--report-only` (comma-separated rule ids, e.g. "R1"). An unknown id throws, so a typo cannot make a
+ * failing rule pass silently. Exact ids: "R1" is not R10, R11 or R12.
+ */
+export function parseReportOnly(list: string): Set<string> {
+  const ids = new Set(
+    list
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  for (const id of ids)
+    if (!(RULE_IDS as readonly string[]).includes(id))
+      throw new Error(`--report-only: unknown rule "${id}" (one of ${RULE_IDS.join(", ")})`);
+  return ids;
+}
+
+/**
+ * Marks the report-only rules. They are still judged, printed and kept in the report; only the exit code
+ * (`exitCode`) ignores them. The nightly uses it for R1 until STUDY-174 Q6 is decided (§10.3).
+ */
+export function withReportOnly(results: RuleResult[], reportOnly: Set<string>): Verdict[] {
+  return results.map((r) => ({ ...r, reportOnly: reportOnly.has(ruleId(r)) }));
+}
+
+/** 0 when every rule that counts passed, 1 otherwise. */
+export function exitCode(verdicts: Verdict[]): 0 | 1 {
+  return verdicts.every((v) => v.pass || v.reportOnly) ? 0 : 1;
+}
