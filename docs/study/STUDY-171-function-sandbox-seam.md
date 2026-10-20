@@ -1,6 +1,6 @@
 # STUDY-171 — The function executor seam and its knobs (STUDY-168 PR 1), the wire and the child runtime (PR 2), queries and mutations over the bridge (PR 3), two `vm` bugs (§10), logs and errors (PR 4), actions (PR 5)
 
-- **Status:** PR 1 implemented (#738); PR 2 (§7) implemented (#743); PR 3 (§8) implemented (#750); §9 (#751) and §10 (#759) fixed; PR 4 (§11) implemented (#760); PR 5 (§12) implemented (this PR, two owner questions open: §12.11); AD-44 accepted
+- **Status:** PR 1 implemented (#738); PR 2 (§7) implemented (#743); PR 3 (§8) implemented (#750); §9 (#751) and §10 (#759) fixed; PR 4 (§11) implemented (#760); PR 5 (§12) implemented (this PR; the owner's decisions of 2026-10-21 in §12.11); AD-44 accepted
   (owner, 2026-10-19)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend, the reference commit
   ([upstream.md](../parity/upstream.md))
@@ -1090,10 +1090,10 @@ STUDY-168 §10.3: "the cut-off, then a kill of the process if it ignores it".
   blocks the server's event loop for good.
 - **What it does not stop**: an action that heard the cut-off (its loop yields: a timer, a `fetch` it did not await)
   keeps its child, and its JavaScript keeps running there, cut off from everything but its own module state: owner
-  question Q-PR5-1 (§12.11).
+  decision Q-PR5-1 (§12.11): kept until PR 9.
 - **After its answer** an action's leftover JavaScript (a timer it set) still runs in the child, but every `ctx`
   call and `fetch` it makes is refused ("the action has ended …"), where under `vm` it still reaches the database:
-  owner question Q-PR5-2 (§12.11).
+  owner decision Q-PR5-2 (§12.11): accepted, and `vm` made to match in a PR of its own.
 
 ### 12.7 Parity
 
@@ -1146,7 +1146,7 @@ cases fail were also run with those cases left out: their V8 action cases all pa
 - In the child: an `ArrayBuffer` body told by `instanceof` (the app's is its context's); a response's reads not
   failing as the host's (`asActionResponse`); `blob()` untyped; `ctx.meta` left unawaited missing from the warning;
   an unawaited `store` sent after the action's answer (the child was killed).
-- In `vm`: nothing new. One difference between the executors, kept as Convex's: §12.6's last point (Q-PR5-2).
+- In `vm`: nothing new. One difference between the executors, kept as Convex's: §12.6's last point (Q-PR5-2, decided: `vm` is made to match Convex in its own PR).
 
 ### 12.9 Measurements
 
@@ -1219,43 +1219,19 @@ byte for byte before the next (a `scratchpad` script). One break first caught no
 added: making a nested call's error at the reply instead of at the app's `await` gave the same frames (the app's
 context view already gives them), so that mechanism was removed instead.
 
-### 12.11 Owner questions
+### 12.11 Owner decisions (2026-10-21)
 
-No new divergence between the executors except Q-PR5-2's, and no DV or AD number taken: the two questions below are
-the owner's (decision format). Until they are decided the code does what each "today" line says.
+No DV or AD number: both are recorded here.
 
-**Q-PR5-1. An action past its timeout under `process`: cut it off, or kill its child?**
-- **Convex:** the timeout terminates the isolate (`environment/action/mod.rs`): nothing the action started runs any
-  further, its JavaScript included.
-- **bunvex:** `vm` cuts the handler off (STUDY-77, its divergence A1, accepted): it can reach nothing (`ctx`, `fetch`)
-  but its JavaScript goes on, and a loop that never yields blocks the server. `process` (today, §12.6): the same
-  cut-off, the child told so, and **killed if it does not hear it within 1 s** (a loop that never yields is stopped).
-  An action that hears it (its loop yields) keeps running its JavaScript in the child, cut off from everything but its
-  own module's state.
-- **Same?** No. Closer than `vm`: only JavaScript that keeps yielding goes on.
-- **Why:** "Ainda não fizemos." Killing at every timeout is easy, but with one child per code version (until STUDY-168
-  PR 9's pool of one-call processes) it fails every other call that child is running, which Convex never does.
-- **App impact:** a timed-out action with a timer or a loop that yields can still burn CPU in the child and change
-  module-level state the version's later calls see (DV-165's territory); it cannot write, read, schedule, store or
-  fetch. Nothing else differs.
-- **Recommendation:** keep "cut off, then kill if it does not hear it" until PR 9; with the pool, end the timed-out
-  call's own process at the timeout (no grace), exactly Convex's.
-
-**Q-PR5-2. What an action leaves running after its answer (a timer it set and did not await)**
-- **Convex:** the isolate ends with the action's answer: a timer it left never fires, and the tasks still running are
-  shut down (`environment/action/mod.rs:1226-1233`), which is why the warning says they "might not run".
-- **bunvex:** `vm` (the default): the timer fires later in the server, and its `ctx` calls and `fetch`es still run (an
-  action that returns after `setTimeout(() => ctx.runMutation(...), 100)` writes 100 ms later; checked on this branch).
-  `process` (today): the timer fires in the child, but every `ctx` call and `fetch` it makes is refused ("the action
-  has ended: its operations can no longer run") and its lines are dropped, so it reaches nothing outside its module.
-- **Same?** No, for both, and the two executors differ from each other here (the only place this PR's tests found).
-- **Why:** `vm`: "Ainda não fizemos" (the server could clear the timers an action set when it ends, by its async
-  context, but does not); `process`: the same, in the child, and PR 9's one-call processes make it free (the call's
-  process ends with its answer).
-- **App impact:** an app that does work in a timer after its action returned: on Convex it never happens; on `vm` it
-  does; on `process` the timer's own JavaScript runs but its effects on the deployment do not.
-  (Both executors also let an operation the action started and did not await run to its end, where Convex shuts it
-  down: not this PR's, and the same in both, so not counted as a difference here.)
-- **Recommendation:** accept `process`'s behaviour (the nearest to Convex short of PR 9); record `vm`'s as a divergence
-  (a number from the owner, DV-TBD) or have `vm` clear an ended action's timers (a small change, its own PR, with a
-  differential test against Convex's binary).
+- **Q-PR5-1. An action past its timeout under `process`: cut it off, or kill its child?** Convex terminates the
+  isolate at the timeout. **Decided: keep this PR's cut-off, then the kill after 1 s, until STUDY-168 PR 9**; in PR 9
+  (one call per process) the timed-out call's own process ends at the timeout, as Convex's isolate does (added to PR
+  9's row in STUDY-168 §12.3). Until then it is "not built yet", not a divergence: an action that hears its cut-off
+  keeps running JavaScript in its child, cut off from `ctx` and `fetch`; one that never yields is killed after 1 s,
+  with the version's other calls in that child.
+- **Q-PR5-2. What an action leaves running after its answer (a timer it did not await).** Convex ends the isolate with
+  the answer: its timers never fire and its tasks still running are shut down (`environment/action/mod.rs:1226-1233`).
+  **Decided: `process`'s behaviour is accepted** (§12.6: a leftover timer's `ctx` calls and `fetch`es are refused,
+  "the action has ended: its operations can no longer run", its lines dropped). **`vm` is made to match Convex in a
+  PR of its own**: when an action ends, the timers it created are cleared, and a `ctx` call or `fetch` made after its
+  end is refused with the same words. No DV for either.

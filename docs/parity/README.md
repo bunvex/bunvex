@@ -189,7 +189,7 @@ gaps.
 - The function sandbox (AD-44, opt-in): under `BUNVEX_FUNCTION_SANDBOX=process`, queries, mutations and actions run
   with no OS isolation yet, one child per code version, with their log lines and stacks as under `vm` (STUDY-171 §11,
   §12); `"use node"` actions, HTTP actions and components are not available there yet (STUDY-171 §8.7; STUDY-168
-  PRs 6, 7, 10). Two owner questions on what an action leaves running (STUDY-171 §12.11). The default `vm` is
+  PRs 6, 7, 10). An action past its timeout is cut off, then killed after 1 s if it does not hear it, until STUDY-168 PR 9 ends its own process at the timeout (owner, 2026-10-21, STUDY-171 §12.11). The default `vm` is
   unaffected.
 
 - Error text (STUDY-150 §6): a missing function in `ctx.runQuery` / the scheduler is worded and framed as
