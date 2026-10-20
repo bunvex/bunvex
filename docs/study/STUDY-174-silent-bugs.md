@@ -2,7 +2,9 @@
 
 - **Status:** decided (owner, 2026-10-19: §8 Q1–Q5 as recommended, §10). F4 is fixed (§10.2); the other findings of
   §3.3 are listed, not fixed. The soak nightly (Q1, §9 step 5) is `.github/workflows/soak-nightly.yml`, with R1
-  report-only until Q6 is decided (§10.3). Q7 (R8 on low-rate operations) is decided and done (§10.3).
+  report-only until Q6 is decided (§10.3). Q7 (R8 on low-rate operations) is decided and done (§10.3). The suspects
+  S1–S8 are confirmed or dismissed in §11: S1–S7 are bugs, each fixed in its own PR; S8 is a divergence, Q8, for the
+  owner.
 - **Why now:** [#751](https://github.com/bunvex/bunvex/pull/751) found that since 2026-10-03 every cached query result
   expired after 17 s. [STUDY-58](STUDY-58-app-metrics.md)'s `AppMetrics` read the deterministic `Date.now` inside each
   query's execution, which marked every result as having read the clock. Every answer stayed correct, the tests and
@@ -114,7 +116,7 @@ bounds (§3, §4).
 | I-14 | Crons | An idle cron executor sleeps until its next run, however far away | `cron-executor.ts:285` | none | P07 **VIOLATED** (F3) |
 | I-15 | Scheduler | `shutdown()` finishes promptly, whatever the running jobs are doing | `scheduler.ts:368–374, 633–636, 671–682` | `shutdown.test.ts` (store access only) | P10 **VIOLATED** (F5) |
 | I-16 | Scheduler | Lag (ran − due) stays bounded under load and does not trend up | `scheduler.ts` `logStats` (501) | none | soak R9b |
-| I-17 | Index backfill | `numDocsIndexed ≤ totalDocs`; a restart from the start resets the count | `core/src/index-worker.ts:229, 267–272` | none | suspected S1 (code read) |
+| I-17 | Index backfill | `numDocsIndexed ≤ totalDocs`; a restart from the start resets the count | `core/src/index-worker.ts:229, 267–272` | `index-backfill-restart.test.ts`, `differential/test/backfill-progress.test.ts` (#788) | S1 **confirmed**, and a second case (§11) |
 | I-18 | Index backfill | Once backfilled, the index holds exactly the table's documents | `index-worker.ts` | `core/test/index-backfill.test.ts:109, 167` | — |
 | I-19 | Buffers | The function log keeps at most `MAX_UDF_EXECUTION` (1000) parts, and no waiter after its poll | `server/src/function-log.ts:233–248` | `function-log.test.ts:310` | P08 holds |
 | I-20 | Buffers | Log streams: the buffer stays ≤ `bufferSize` (4096) and each sink queue ≤ its capacity; drops are counted | `log-sinks.ts:405–426` | none | not probed |
@@ -124,8 +126,8 @@ bounds (§3, §4).
 | I-24 | Timers | After `shutdown()`, nothing keeps the event loop alive: the process exits by itself | `server.ts:2620–2643` | none | P05 holds (bare, busy, socket left open) |
 | I-25 | Timers | No `setTimeout` is given more than 2^31−1 ms; Bun fires it after about 1 ms | `scheduler.ts:468`, `cron-executor.ts:285` (`executor-invalidations.ts:174` caps) | none | F2/F3 |
 | I-26 | Handles | File descriptors return to the baseline after uploads, downloads and closed clients | storage, sqlite, sockets | none | soak R7 |
-| I-27 | Handles | `LocalSink.send` closes its file when `sync()` throws (otherwise each retry leaks an fd) | `log-sinks.ts:266–271` | none | suspected S2 (code read) |
-| I-28 | Handles | `pumpHashing` cancels the body reader when a write throws | `file-storage/src/store.ts:37–47` | none | suspected S3 (code read) |
+| I-27 | Handles | `LocalSink.send` closes its file when `sync()` throws (otherwise each retry leaks an fd) | `log-sinks.ts:266–271` | `log-sink-local-close.test.ts` (#789) | S2 **confirmed** (§11) |
+| I-28 | Handles | `pumpHashing` cancels the body reader when a write throws | `file-storage/src/store.ts:37–47` | `file-storage/test/pump-hashing.test.ts` (#795) | S3 **confirmed**, small (§11) |
 | I-29 | OCC | A mutation runs at most 1 + `UDF_EXECUTOR_OCC_MAX_RETRIES` (4) times. Each lost attempt is logged with `willRetry` and `occInfo.retryCount` | `engine.ts:283–294, 4029–4044`; `functions.ts:1211–1219` | `core/test/occ.test.ts:21, 65`; `function-log.test.ts:233` | — |
 | I-30 | Counters | Read and write counts (`usageStats`, the read limit) equal Convex's | `core/src/tx.ts:518–651`, `read-count.ts` | `usage-database-io.test.ts`; `differential/test/read-count.test.ts` (local only) | §5 |
 | I-31 | Counters / log | A cache hit's log entry matches Convex's: `cachedResult`, zero usage, and the user time, memory and timestamp of the run it reused | `functions.ts:1400–1447` | `cache-hit-log-fields.test.ts`; `differential/test/cache-metadata.test.ts` | P09 **VIOLATED** (F4), fixed (§10.2) |
@@ -269,7 +271,7 @@ persistence,sandbox,search}/src`. Each delay's source was checked for an uncappe
   `SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY`, the usage-gauge period, the table-summary interval, and the request and
   action timeouts. No default comes close; the helper above would cover these too.
 
-**Suspected, from reading the code, not probed** (for the fix PRs to confirm or dismiss):
+**Suspected, from reading the code, not probed** (for the fix PRs to confirm or dismiss; each verdict is in §11):
 - **S1.** `index-worker.ts:267–272`: a backfill that restarts from the beginning, because its checkpoint snapshot is
   older than `minSnapshotTs`, keeps its `done[]` count. Its progress can then pass 100 % (I-17).
 - **S2.** `log-sinks.ts:268–271`: `LocalSink.send` opens, syncs and closes the file without `finally`. A throwing
@@ -765,7 +767,7 @@ confirmed.
 | 6 | Fix F5: a stopping scheduler stops retrying and waits a bounded time. Test: shutdown under contention within 1 s | 0.5 day | F5, S4 |
 | 7 | The metadata files in the differential nightly (done: `cache-metadata`, `read-count`, `unawaited-operations`, `http-action-log-route` in `scripts/nightly.sh`, about 40 s a night); the runner's log tail (Q5, bunvex-9f, next) | 1–2 days | F4-class, usage, OCC shape |
 | 8 | F4 fix (Q3) | 0.5 day | F4 |
-| 9 | Confirm or dismiss S1–S7, one test each | 1 day | handles, backfill |
+| 9 | ~~Confirm or dismiss S1–S7, one test each~~ done (§11): S1–S7 confirmed and fixed, one PR each; S8 is Q8 | 1 day | handles, backfill |
 | 10 | Jepsen post-run `/metrics` check (R6 + fds per run) | 0.5 day | freed state under faults |
 | 11 | Coverage floors: each step's PR adds the files its new tests cover to `scripts/coverage-floors.ts` in the same PR (not as a separate step) | in each PR | keeps the tests |
 | 12 | The per-connection memory bench (Q4); the soak on Postgres; a monthly 6 h VPS run (Q2) | 1–2 days | slow leaks, drivers |
@@ -1011,3 +1013,49 @@ what fails next, look at that limit first.
 
 **Not here.** The monthly 6-hour VPS soak (Q2) is §9 step 12, once this job has been green for a week; nothing in CI
 schedules anything against the VPS.
+
+## 11. The suspects S1–S8, confirmed or dismissed (2026-10-20)
+
+Each suspect of §3.3 was read on both sides (bunvex on `main` at `ab13e2d2`, Convex at `72ce13c`) and given a test that
+fails if the bug is real. Seven are bugs, each fixed in its own PR with that test, a sabotage check, and a measurement
+where the path is hot. None was dismissed. S8 behaves differently from Convex without corrupting anything, so it is a
+question for the owner (Q8).
+
+| # | Verdict | Evidence (the test, and what it saw on `main`) | PR |
+|---|---|---|---|
+| S1 | **Bug**, and a second case | `index-backfill-restart.test.ts`: a backfill that starts over because its checkpoint's snapshot fell out of retention ends with `numDocsIndexed` 4 200 for 3 000 documents (140 %). The oracle found the commoner case: a pass shorter than the 1 s progress interval never records its count. On Convex, after a push adds an index over 300 documents, the row is `{300, 300, cursor: <id>}`; on bunvex it is `{0, 300, null}` (`differential/test/backfill-progress.test.ts`). Convex flushes its last progress after the walk (`index_writer.rs:676–689`) and resets the count on a fresh start (`index_backfills/mod.rs:116–150`). | #788 |
+| S2 | **Bug** | `log-sink-local-close.test.ts`: fsync fails 5 times, then succeeds; 7 handles opened, 1 closed. Convex's `LocalSink::process_events` drops (closes) its file with each attempt (`local_sink.rs`). Retrying forever and appending the batch again on a retry are the same on both. | #789 |
+| S3 | **Bug**, small | `pump-hashing.test.ts`: a write that throws never cancels the body (`cancel` not called), so an async generator behind it never runs its cleanup. The import's file stream (`imports.ts` `streamFrom` over a zip entry's `read()`) is such a source: on a failed write its inflater and its range read are left suspended until collected. A probe found no fd leak for `Bun.file` bodies (300 failed writes: 5 → 6 fds), and a request body stops either way once the response is sent. Convex drops the stream with the failed write. | #795 |
+| S4 | **Bug** (the half #756 left) | `index-worker-close.test.ts`: a push whose commit lands during `close()` starts the worker after the close stopped it; the worker indexes a chunk, fails with `LeaseLostError`, and is still running after `close()` resolved. Convex's worker is a task the shutdown aborts (`lib.rs:3938`, `runtime/mod.rs:176–177`); nothing restarts it. | #790 |
+| S5 | **Bug**, minor | `executor-invalidations.test.ts`, "after the server's stop()": the stopped server still reads the queue when its next run falls due (1 `engine.query`), and still counts commits into the executors' reads. `observe()` never checked `stopped`, after `shutdown()` either (the engine is closed there, so it never showed). Convex has no stop that keeps the store open. | #791 |
+| S6 | **Bug** | `external-deps-timeout.test.ts`: against a registry that never answers, `buildExternalDeps` is still waiting after 15 s. Convex's `build_deps` request times out after NODE_ACTION_USER_TIMEOUT + 5 s (`local_backend/src/lib.rs:206`, `node_executor/src/local.rs:285`), and the push fails with `InvalidExternalModules`: "Function execution unexpectedly timed out. …". The fix uses the same deadline and message, and kills the install (Convex's `execSync` keeps running; an app cannot tell). | #792 |
+| S7 | **Bug** | `sqlite-open-lock.test.ts`: a directory as the path, or a new read-only file, throws after the lock was taken; the lock stays held in the process. Convex's SQLite store has no lock (STUDY-25 §1.5); the lock is bunvex's. | #793 |
+| S8 | **Divergence** (Q8) | `knob-timer-cap.test.ts` (a `test.todo`): with USAGE_TRACKING_PERIOD_SECS at 60 days, the gauges ran 152 times in 200 ms. Convex's knob is a `Duration` that tokio sleeps for its whole length (`usage_gauges_tracking_worker/src/lib.rs:71`). | this PR |
+
+**Q8. S8: a delay from an operator's knob past 2^31−1 ms (24.8 days).**
+- Convex: every such knob is a `Duration` (`crates/common/src/knobs.rs`, `env_config`). Its loop sleeps for the whole
+  length, however long.
+- bunvex: some loops pass a knob's value straight to `setTimeout`, which fires after about 1 ms past 2^31−1 ms.
+  Checked in the code:
+  - USAGE_TRACKING_PERIOD_SECS (`usage-gauges.ts:91`): the gauges then run and send their storage totals to the log
+    streams every millisecond (the test).
+  - SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY (`sync.ts:1613`): the retry is at once instead of after the delay.
+  - RETENTION_DELETE_FREQUENCY and DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS (`retention.ts:193–194`, the failure
+    backoff's ceiling): a failing pass retries every millisecond once the backoff reaches it.
+  - V8_ACTION_USER_TIMEOUT_SECS and NODE_ACTION_USER_TIMEOUT_SECS (`action-timeout.ts:113`): every action times
+    out at once.
+  - ROOM_RECONNECT_GRACE_SECS (`rooms/hub.ts:544`), an addition (AD-42): the grace ends at once.
+
+  MAX_REPEATABLE_TIMESTAMP_IDLE_FREQUENCY is already capped (#757). §3.3's list also names others, such as the
+  table-summary checkpoint, whose knob is compared, not slept on.
+- Same: no.
+- Why: not built yet. #757's `timerDelay` capped the delays that subtract a clock (rule 6). These take the knob as
+  is, so rule 6 does not see them.
+- App impact: none with the defaults; the largest is 1 h. Only an operator who sets one of these knobs past 24.8 days
+  sees it: a busy loop (CPU, and repeated gauges, log events or retries), or a timeout or grace that ends at once
+  (every action fails as timed out).
+- **Recommendation:** match Convex. Pass each of these delays through `timerDelay`. A loop that wakes early then
+  sleeps again for what is left, as the scheduler's does since #757. Then widen rule 6 to flag a timer whose delay is
+  a knob's value. The test above then loses its `.todo`. Rejecting such knob values at parse time would be a
+  divergence of its own: Convex accepts them.
+
