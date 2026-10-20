@@ -214,6 +214,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | `deployment usage [--json]`, `deployment usage-limits list [--json] \| set \| remove` | `cli/usageLimits.ts`; `lib/usageLimits.ts` | done (STUDY-118, STUDY-137) | `--metric aiGatewayCostDollars` ("AI Gateway") since Convex b11a570. `bunvex deployment usage` and `bunvex deployment usage-limits list\|set\|remove` (`rm`, `delete`), on the deployment's `/api/v1/*usage*` routes (STUDY-61): Convex's box-drawn tables, compact amounts, order, seed-status message, `--json`, messages ("Created/Updated/No changes to/Deleted … usage limit on … per …", "--limit must be a positive integer", "No <type> usage limit on <metric> per <window>") and fetch errors; `set` creates or updates by (metric, window, type). The metric choices follow DV-308 (`actionComputeIsolateGbHours`). |
 | `deployment create/select/token`, `login`, `project` | `cli/deployment.ts` etc. | n/a (cloud-only) | Cloud-only. |
 | Self-hosted selection via `CONVEX_SELF_HOSTED_URL` / `CONVEX_SELF_HOSTED_ADMIN_KEY`, `--url`, `--admin-key`, `--env-file` | `cli/lib/command.ts`, `lib/deployment.ts` | done (STUDY-35, STUDY-37) | `BUNVEX_SELF_HOSTED_URL` / `BUNVEX_SELF_HOSTED_ADMIN_KEY` (DV-171) from the environment, `.env.local`, `.env`, or `--url` / `--admin-key` / `--env-file`, for `deploy`, `env` and `run`. |
+| Testing functions (`convex-test`: `convexTest`, `t.query/mutation/action/run/fetch`, `withIdentity`, scheduled functions, `registerComponent`) | get-convex/convex-test `index.ts` | partial (STUDY-159) | `@bunvex/testing`'s `bunvexTest` (PR 2): the real engine in the test's process, the app pushed as `bunvex deploy` bundles it, convex-test's API renamed for rule 5. Built: calls by reference or inline (internal functions callable), `t.run`, `withIdentity` with convex-test's defaults (issuer `https://bunvex.test`), `t.fetch` to the app's HTTP actions, scheduled functions on a virtual clock (`finishInProgressScheduledFunctions`, `finishAllScheduledFunctions`), the deployment's env (AD-34). It behaves as the real backend, not as convex-test's mock (DV-540–542). Left: `t.fetch` with `withIdentity`'s identity, `withRequestMetadata`, crons in tests (AD-35), `registerComponent` and `defineTestApp` (PR 3), the ported example (PR 4). |
 
 ### 13. Codegen (`convex/_generated`)
 
@@ -437,14 +438,14 @@ bunvex enforces most of these with Convex's values and messages. Matching them m
 
 ### Summary counts
 
-Recounted on 2026-10-19 from the rows' status column, as [the README](README.md)'s table (STUDY-173, after the components rows' update).
+Recounted on 2026-10-19 from the rows' status column, as [the README](README.md)'s table (STUDY-173, after the components rows' update); the testing row (STUDY-159) added on 2026-10-20.
 
 | Status | Count |
 |---|---|
 | done | 237 |
-| partial | 20 |
+| partial | 21 |
 | missing | 6 |
 | n/a (cloud-only or a decided divergence) | 6 |
-| **total** | **269** |
+| **total** | **270** |
 
 The gaps, ranked by what an app would notice, are in [the README](README.md#gaps-by-impact).

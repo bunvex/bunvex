@@ -138,6 +138,7 @@ export {
 export { type CronJob, Crons, cronJobs, type DayOfWeek, type Schedule } from "./cron.ts";
 // Function handles (STUDY-50), as Convex's `createFunctionHandle` / `FunctionHandle`.
 export { createFunctionHandle, type FunctionHandle } from "./function-handles.ts";
+// Who calls, as `@bunvex/testing` calls a function as a user (STUDY-159).
 export {
   type ActionCtx,
   type ArgsOf,
@@ -145,6 +146,7 @@ export {
   type Auth,
   action,
   actionGeneric,
+  callerOf,
   type FunctionDef,
   Functions,
   internalAction,

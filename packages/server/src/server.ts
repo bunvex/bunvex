@@ -2644,6 +2644,8 @@ export function createServer(opts: ServerOptions) {
   return {
     installCodeVersion,
     deployCode,
+    /** Convex's deploy2 protocol in-process (`startPush`, `waitForSchema`, `finishPush`); `@bunvex/testing` pushes with it. */
+    push,
     codeReady,
     server,
     /** The site port's server (HTTP actions), if any. */

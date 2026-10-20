@@ -808,6 +808,13 @@
     "packages/testing": {
       "name": "@bunvex/testing",
       "version": "0.0.0",
+      "dependencies": {
+        "@bunvex/cli": "workspace:*",
+        "@bunvex/core": "workspace:*",
+        "@bunvex/file-storage": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
+      },
     },
     "packages/ui": {
       "name": "@bunvex/ui",

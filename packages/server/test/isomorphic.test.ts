@@ -13,6 +13,7 @@ const RUNTIME_ONLY = [
   "AdminKeys",
   "adminKeyCipherKey",
   "BadAdminKeyError",
+  "callerOf",
   "checkAdminKey",
   "componentAnalysis",
   "createServer",

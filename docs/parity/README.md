@@ -8,7 +8,7 @@ item. It is the project's to-do list at the scale of the whole product.
 |---|---|--:|--:|--:|
 | Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 244 | 3 | 0 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 163 | 2 | 1 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 237 | 20 | 6 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 237 | 21 | 6 |
 
 Beyond Convex, [additions.md](additions.md) lists 35 additions: 30 built (5 of them dashboard screens on the
 mock), 1 being built (AD-44), 2 accepted, 2 deferred, none proposed (recounted on 2026-10-19, STUDY-173; before that 2026-10-15, the dashboard audit after STUDY-149; AD-41 deferred; then
