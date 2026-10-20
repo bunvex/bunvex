@@ -19,7 +19,15 @@ import {
   type TabletId,
   UnionBuilder,
 } from "@bunvex/core";
-import { compareUtf8, encodeId, formatExportFloat, fromJsonValue, type JSONValue, type Value } from "@bunvex/values";
+import {
+  compareUtf8,
+  encodeId,
+  formatExportFloat,
+  fromJsonValue,
+  isBytes,
+  type JSONValue,
+  type Value,
+} from "@bunvex/values";
 import { type BodyShape, checkJsonBody } from "./json-body.ts";
 import { intError, QueryArgsError, queryArgs } from "./query-args.ts";
 
@@ -104,7 +112,7 @@ export function writeValue(v: Value, f: Format): string {
   }
   if (typeof v === "boolean") return v ? "true" : "false";
   if (typeof v === "string") return JSON.stringify(v);
-  if (v instanceof ArrayBuffer) {
+  if (isBytes(v)) {
     const s = b64(new Uint8Array(v));
     return f === "clean" ? `"${s}"` : `{"$bytes":"${s}"}`;
   }
