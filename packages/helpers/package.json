@@ -8,6 +8,7 @@
     ".": "./src/index.ts",
     "./validators": "./src/validators.ts",
     "./server/customFunctions": "./src/server/customFunctions.ts",
+    "./server/triggers": "./src/server/triggers.ts",
     "./server/compare": "./src/server/compare.ts"
   },
   "peerDependencies": {

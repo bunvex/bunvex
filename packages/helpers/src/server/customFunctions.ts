@@ -39,6 +39,7 @@ import type {
 import type { GenericValidator, ObjectType, PropertyValidators, Validator } from "@bunvex/values";
 import { type Expand, omit, pick } from "../index.ts";
 import { addFieldsToValidator } from "../validators.ts";
+import { overlay } from "./overlay.ts";
 
 /** What `onSuccess` is called with: the function's original `ctx`, its args without the customization's, its result. */
 type OnSuccess<Ctx> = (obj: { ctx: Ctx; args: Record<string, unknown>; result: unknown }) => void | Promise<void>;
@@ -299,40 +300,6 @@ function customFnBuilder(builder: (definition: any) => any, customization: Custo
     // Without `args`, `input` sees all of the function's arguments.
     return builder({ returns: definition.returns, handler: (ctx: any, allArgs: any) => run(ctx, allArgs, allArgs) });
   };
-}
-
-/**
- * `{ ...base, ...patch }`, except that `base`'s getters stay getters (read from `base` when the handler reads them),
- * so a lazy member of `ctx` such as a mutation's `rooms` is not built by the merge. Assigning to one of them makes it
- * a plain property, as on a spread copy.
- */
-function overlay(base: object, patch: object | undefined): Record<PropertyKey, unknown> {
-  const out: Record<PropertyKey, unknown> = {};
-  for (const key of Reflect.ownKeys(base)) {
-    const d = Object.getOwnPropertyDescriptor(base, key);
-    if (!d?.enumerable) continue;
-    const get = d.get;
-    if (get) {
-      Object.defineProperty(out, key, {
-        enumerable: true,
-        configurable: true,
-        get: () => get.call(base),
-        set(value: unknown) {
-          Object.defineProperty(this, key, { value, writable: true, enumerable: true, configurable: true });
-        },
-      });
-    } else {
-      Object.defineProperty(out, key, { value: d.value, writable: true, enumerable: true, configurable: true });
-    }
-  }
-  if (patch !== null && patch !== undefined) {
-    for (const key of Reflect.ownKeys(patch)) {
-      if (!Object.getOwnPropertyDescriptor(patch, key)?.enumerable) continue;
-      const value = (patch as Record<PropertyKey, unknown>)[key];
-      Object.defineProperty(out, key, { value, writable: true, enumerable: true, configurable: true });
-    }
-  }
-  return out;
 }
 
 /** The registered function a custom builder of each kind makes: `RegisteredQuery`, `RegisteredMutation` or `RegisteredAction`. */

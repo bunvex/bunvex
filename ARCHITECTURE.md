@@ -165,8 +165,9 @@ bunvex/
 │   │   ├── validators               literals, nullable, partial, doc, typedV, validate, parse… ✅
 │   │   ├── server/compare           compareValues (deprecated upstream)                         ✅
 │   │   ├── server/customFunctions   customQuery, customMutation, customAction, customCtx, NoOp… ✅
-│   │   └── server/stream,           streams and pagination, triggers (STUDY-181 PRs 3–5)        ·
-│   │       pagination, triggers
+│   │   ├── server/triggers          Triggers, writerWithTriggers, locks per transaction (DV-545) ✅
+│   │   └── server/stream,           streams and pagination (STUDY-181 PRs 3–4)                  ·
+│   │       pagination
 │   │
 │   ├── sandbox/                     @bunvex/sandbox (private for now)  the function sandbox (AD-44,
 │   │   │                            STUDY-168): app code in a separate process
