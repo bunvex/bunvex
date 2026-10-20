@@ -1390,7 +1390,7 @@ The host sends `size` bytes to the child, which acks (`bytes-bench.ts`, `results
   length with its top bit set, the stream's id, the bytes), so their order with the messages around them is kept for
   free, and a credit window (4 MiB, by half) keeps a reader that does not read from filling memory. The reader hands a
   chunk's bytes over as they arrive, without joining them, and a writer sends a chunk's header then its bytes, so the
-  bytes are not copied on the way. Measured: STORAGE_RESULT. No file descriptors were needed.
+  bytes are not copied on the way. Measured on the VPS (STUDY-171 §12.9): a 16 MiB + 1 byte store, get and delete moves 32 MiB at 216 MiB/s under `process` against 553 MiB/s under `vm` (+90 ms), 154 MiB/s before the copies were removed; a 1 MiB `fetch` body streams at 120–160 MiB/s. No file descriptors were needed.
 
 ### 14.2 Noisy neighbour: CPU fairness between two deployments
 

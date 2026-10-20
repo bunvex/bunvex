@@ -1150,7 +1150,40 @@ cases fail were also run with those cases left out: their V8 action cases all pa
 
 ### 12.9 Measurements
 
-MEASUREMENTS
+`packages/sandbox/bench/actions.ts`: pushed code, each action run in-process through `Functions.runAction` (no
+HTTP), one at a time; the `fetch` target is a Bun server in a process of its own. p50 / mean / p99 µs per action
+(MiB/s from the p50). **Linux VPS** (AMD EPYC 9354P, 2 vCPUs, Ubuntu 24.04, Bun 1.4.3), idle (no other process of
+any session), the second of two unpinned runs; raw output and the runner in
+`bench/process-sandbox/results/pr5-actions/`:
+
+| Action | vm | process | process − vm, p50 |
+|---|---|---|---|
+| empty action | 71 / 92 / 196 | 211 / 255 / 1476 | +140 |
+| action, 1 `runQuery` | 166 / 214 / 1878 | 536 / 606 / 1907 | +370 |
+| `fetch` GET, empty body | 810 / 1056 / 3459 | 1946 / 2612 / 7826 | +1136 |
+| 10 × `fetch` GET, empty body | 6721 / 7709 / 18895 | 15111 / 16389 / 34347 | +8390 |
+| `fetch` GET, 64 KiB | 845 / 1082 / 3828 (74 MiB/s) | 2643 / 3109 / 7966 (24 MiB/s) | +1798 |
+| `fetch` GET, 1 MiB | 2794 / 3060 / 9144 (358 MiB/s) | 6232 / 6700 / 14280 (160 MiB/s) | +3438 |
+| `fetch` POST, 1 MiB | 2978 / 3625 / 14003 (336 MiB/s) | 8415 / 9196 / 23777 (119 MiB/s) | +5437 |
+| `storage.store`, 1 KiB | 286 / 388 / 2386 | 770 / 1101 / 5061 | +485 |
+| `storage.get`, 1 KiB | 140 / 163 / 947 | 711 / 978 / 3470 | +571 |
+| store + get + delete, 1 MiB | 2016 / 3628 / 11533 (992 MiB/s) | 9309 / 10062 / 20592 (215 MiB/s) | +7293 |
+| store + get + delete, 16 MiB + 1 | 57891 / 57837 / 89870 (553 MiB/s) | 147912 / 153423 / 243204 (216 MiB/s) | +90022 |
+
+- **A simple action** costs about +140 µs under `process` (p50 211 µs against 71 µs), the same constant as a query
+  (§8.10: +140 µs); a `runQuery` from it about +370 µs, a round trip plus the nested query's own call.
+- **Per `fetch`** the bridge adds about 0.8–1.1 ms on this 2-vCPU guest with three busy processes (host, child, target):
+  the 10-fetch line gives 0.84 ms per fetch. The first run had `process` *faster* on the empty fetch (1133 µs against
+  1275 µs): the fetch lines are dominated by the target and the scheduler, and vary by ±50 % between runs. Pinned to
+  one vCPU (`taskset -c 0`): +329 µs per empty fetch, +263 µs each in the 10-fetch line.
+- **Per storage call** about +0.5 ms (1 KiB, its bytes inline: one round trip and the engine's own work on the host).
+- **Bytes**: the 16 MiB + 1 round trip (stored, read back, deleted: 32 MiB moved) runs at **216 MiB/s** under
+  `process`, 553 MiB/s under `vm` (+90 ms). Before the second commit (no joins, no copies) it was 154 MiB/s
+  (207 ms p50, `c1-bytes.txt`): +40 %. A 1 MiB `fetch` body streams at 120–160 MiB/s, a 1 MiB round trip at 215
+  MiB/s. STUDY-168 §14.1 predicted 60–100 ms more for 16 MiB; measured: +90 ms for 32 MiB moved.
+- **`vm` unchanged**: main (with PR 4) under `vm` measured in the same session gives 89 / 116 / 460 µs for the empty
+  action, 2288 µs for the 1 MiB GET and 605 MiB/s for the 16 MiB round trip (`base-vm.txt`), within the runs' noise
+  of this branch's `vm` column.
 
 ### 12.10 Tests and sabotage
 
