@@ -149,7 +149,15 @@ test("a push's index on a table with documents: the rows, its backfill's count, 
   const backfills = await system<Row[]>(e, INDEX_BACKFILLS_TABLE);
   const progress = backfills.find((r) => r.indexId === meta[0]!._id)!;
   expect(progress.totalDocs).toBe(30n);
-  expect(shapeDiff(stored(progress), convexRows("_index_backfills")[1])).toEqual([]);
+  // Every document counted and the cursor at one of them (the last in id order), as Convex's last progress flush leaves the row (STUDY-174
+  // S1, `differential/test/backfill-progress.test.ts`); the fixture's table was empty, so its cursor is null.
+  expect(progress.numDocsIndexed).toBe(30n);
+  const ids = ((await e.query((db) => db.query("things").collect())) as { _id: string }[]).map((d) => d._id);
+  const cursor = (progress.cursor as Row).cursor as string;
+  expect(ids).toContain(cursor);
+  const fixture = structuredClone(convexRows("_index_backfills")[1]) as Row;
+  (fixture.cursor as Row).cursor = cursor;
+  expect(shapeDiff(stored(progress), fixture)).toEqual([]);
   const searchId = (await system<Row[]>(e, INDEX_TABLE)).find((r) => r.descriptor === "search_s")!._id;
   const searchProgress = backfills.find((r) => r.indexId === searchId)!;
   expect([searchProgress.totalDocs, searchProgress.numDocsIndexed]).toEqual([30n, 30n]);

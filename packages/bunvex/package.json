@@ -13,7 +13,8 @@
     "./react": "./src/react.ts",
     "./nextjs": "./src/nextjs.ts",
     "./react-clerk": "./src/react-clerk.ts",
-    "./react-auth0": "./src/react-auth0.ts"
+    "./react-auth0": "./src/react-auth0.ts",
+    "./testing": "./src/testing.ts"
   },
   "dependencies": {
     "@bunvex/sandbox": "workspace:*",
@@ -24,7 +25,8 @@
     "@bunvex/nextjs": "workspace:*",
     "@bunvex/react-clerk": "workspace:*",
     "@bunvex/react-auth0": "workspace:*",
-    "@bunvex/cli": "workspace:*"
+    "@bunvex/cli": "workspace:*",
+    "@bunvex/testing": "workspace:*"
   },
   "peerDependencies": {
     "react": "^19.3.0",

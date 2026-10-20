@@ -57,6 +57,10 @@ const { values: flags } = parseArgs({
     // filling up (the defaults, 512 MiB and 100 MiB, take longer than a run to fill).
     "index-cache-mib": { type: "string", default: "32" },
     "query-cache-mib": { type: "string", default: "16" },
+    // SQLite's page cache (256 MiB, DV-550) fills with the store, ~70 minutes at the workload's write rate: this many
+    // MiB of ballast are written before the workload and read once at its start, so the cache is full before R1 and
+    // R2 judge (STUDY-174 Q6, §10.3). 0: none.
+    "page-cache-fill-mib": { type: "string", default: "320" },
     // Workload parts to leave out, comma-separated: subs, rooms, reconnects, sync-mutations, hot, httpq,
     // canary, search, scheduler, storage, crons, logtail, clients (no sync clients at all).
     off: { type: "string", default: "" },
@@ -299,7 +303,15 @@ async function tailLogs() {
   for (const e of body.entries) {
     if (e.kind !== "Completion") continue;
     // A hot counter's lost OCC attempts are logged as their own completions, with an error: expected.
-    if (e.error && !/OptimisticConcurrency|conflict/i.test(e.error) && !OCC.test(e.error) && logTail.failures++ < 20)
+    // So is a ballast write the write-rate limit refused: the fill waits and writes it again.
+    const throttledFill = e.identifier?.startsWith("ballast") && /TooManyWrites/.test(e.error ?? "");
+    if (
+      e.error &&
+      !/OptimisticConcurrency|conflict/i.test(e.error) &&
+      !OCC.test(e.error) &&
+      !throttledFill &&
+      logTail.failures++ < 20
+    )
       errorSamples.push(`${e.identifier}: ${e.error.split("\n")[0]}`);
     if (e.identifier?.startsWith("config") && e.udfType === "Query" && canaryCounting) {
       logTail.canaryCalls++;
@@ -330,6 +342,37 @@ function every(ms: number, f: () => Promise<unknown>, max = 4) {
 }
 
 const http = new BunvexHttpClient(url, { logger: false });
+
+// ---- The page cache's ballast ------------------------------------------------------------------------------------
+
+const FILL_MIB = Number(flags["page-cache-fill-mib"]);
+const BALLAST_DOC = 8000; // bytes of body: overflow pages, so few rows hold many pages
+const BALLAST_BATCH = 64; // ~512 KB a mutation
+// Paced at ~2 MiB a second, half the deployment's write-rate limit (MAX_BYTES_WRITTEN_PER_SECOND, 4 MiB), so the
+// crons that run meanwhile keep their share and the limit refuses nothing (a refusal is retried, not an error).
+const BALLAST_BATCH_MS = (BALLAST_BATCH * BALLAST_DOC * 1000) / (2 * 2 ** 20);
+if (FILL_MIB > 0) {
+  const docs = Math.ceil((FILL_MIB * 2 ** 20) / BALLAST_DOC);
+  const t0 = performance.now();
+  for (let from = 0, batch = 0; from < docs; ) {
+    const count = Math.min(BALLAST_BATCH, docs - from);
+    const wait = t0 + batch * BALLAST_BATCH_MS - performance.now();
+    if (wait > 0) await Bun.sleep(wait);
+    try {
+      await http.mutation(api.ballast.fill, { from, count, size: BALLAST_DOC });
+      from += count;
+      batch++;
+    } catch (e) {
+      // The write-rate limit (TooManyWrites, as Convex's): wait and write the same batch again.
+      if (!/TooManyWrites|Too many writes/.test(e instanceof Error ? e.message : String(e))) throw e;
+      await Bun.sleep(250);
+    }
+  }
+  console.log(`soak: ${FILL_MIB} MiB of ballast written in ${((performance.now() - t0) / 1000).toFixed(0)} s`);
+}
+/** When the ballast's read finished (seconds from the start), `null` until then. */
+let pageCacheFilledSeconds: number | null = null;
+
 const CHANNELS = Array.from({ length: 10 }, (_, i) => `c${i}`);
 const WORDS = ["apple", "river", "stone", "cloud", "ember", "maple", "orbit", "quartz", "tiger", "violet"];
 const pick = <T>(xs: T[]) => xs[Math.floor(Math.random() * xs.length)]!;
@@ -408,6 +451,24 @@ async function closeClient(d: Driven) {
 
 const tStart = Date.now();
 const elapsed = () => (Date.now() - tStart) / 1000;
+// The ballast, read once at the start of the warm-up, beside the workload: the page cache fills to its budget.
+if (FILL_MIB > 0)
+  void (async () => {
+    let cursor: string | null = null;
+    let n = 0;
+    for (;;) {
+      const page = (await http.query(api.ballast.read, { paginationOpts: { numItems: 128, cursor } })) as {
+        n: number;
+        isDone: boolean;
+        continueCursor: string;
+      };
+      n += page.n;
+      if (page.isDone) break;
+      cursor = page.continueCursor;
+    }
+    pageCacheFilledSeconds = elapsed();
+    console.log(`soak: the ballast read (${n} documents) finished at t=${Math.round(pageCacheFilledSeconds)}s`);
+  })().catch((e) => failed("ballast read", e));
 if (on("clients")) for (let i = 0; i < CLIENTS; i++) openClient(i);
 // HTTP queries: a channel's list (invalidated often), the canary (written every 5 min), a search.
 if (on("httpq"))
@@ -542,6 +603,7 @@ const data: RunData = {
   durationSeconds: MINUTES * 60,
   warmupSeconds: WARMUP_S,
   indexCacheBudgetBytes: Number(flags["index-cache-mib"]) * 2 ** 20,
+  ...(FILL_MIB > 0 ? { pageCacheFilledSeconds } : {}),
   samples,
   final,
   baselineFds,

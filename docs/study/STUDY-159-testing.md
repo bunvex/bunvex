@@ -1,7 +1,10 @@
 # STUDY-159 — `@bunvex/testing`, the equivalent of convex-test
 
 - **Status:** decided (owner, 2026-10-20): T-1–T-8 as recommended (§7); DV-540–542 decided, AD-34 and AD-35
-  accepted. To build in §3.4's four PRs.
+  accepted. Built: PR 1, the clocks and executors on `engine.runtime` (#774); PR 2, `bunvexTest` (#776); PR 3,
+  components (#780); PR 4, `examples/testing` (#781). AD-34 and AD-35 built. Beyond the plan: `t.advanceTime(ms)`
+  (the virtual clock moved by hand, where convex-test moves Vitest's timers) and `bunvex/testing` in the umbrella
+  package. Not built: convex-test 0.0.61's `defineTestApp` (in-process modules), the owner's decision pending (T-9).
 - **Convex source read:** get-convex/convex-test at `8fe3dda` (0.0.62), pinned in
   [upstream.md](../parity/upstream.md#other-repositories). Paths are relative to its root. `index.ts` is one file of
   about 4,000 lines; line numbers are from it.
@@ -250,4 +253,5 @@ All decided by the owner on 2026-10-20, as recommended.
 | T-5 | Env (DV-541, AD-34) | The deployment's env given to `bunvexTest` plus `t.setEnv`; or the host's `process.env` as convex-test | **The deployment's env.** It matches a deployment, and `bun test` has no `vi.stubEnv` |
 | T-6 | Crons in tests (AD-35) | Run due crons in `finishAllScheduledFunctions` and add `t.runCron`; or never run them, as convex-test | **Run them.** The engine has the executor, and an app's crons are otherwise untestable |
 | T-7 | Time | The engine on a virtual clock that `finishAllScheduledFunctions` drives (still accepting `vi.runAllTimers`); or Bun's fake timers | **The virtual clock.** Bun's fake timers also fake the engine's internals. Moving the executors to `engine.runtime` also speeds up the server's own tests |
+| T-9 | convex-test 0.0.61's `defineTestApp({schema, components})` → `defineModules(modules)` → `createTest()`: modules already evaluated in the test's process (asked after PR 3) | Build it; or not, a test using it moving to `bunvexTest` (DV-546) | **Not now (DV-546).** The harness pushes the app as a deployment does; modules evaluated in the test's realm would run outside it. Decided (owner, 2026-10-20) |
 | T-8 | Scope of v1 | §3.4's four PRs; additions such as `t.subscribe` (reactivity) or rooms later, each as its own AD | **§3.4.** The additions come after the port matches |

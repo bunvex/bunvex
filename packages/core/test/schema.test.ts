@@ -3,7 +3,7 @@ import { v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { defineSchema, defineTable, documentTypeError, type EngineSchema } from "../src/schema.ts";
-import { schemaToJson } from "../src/schema-json.ts";
+import { schemaFromJson, schemaToJson } from "../src/schema-json.ts";
 
 const schema = defineSchema({
   users: defineTable({ name: v.string(), age: v.optional(v.number()) }).index("by_name", ["name"]),
@@ -93,5 +93,86 @@ describe("defineSchema / defineTable: documents are validated on write (STUDY-14
     expect(() => schemaToJson(defineSchema({ t: defineTable(broken as never) }))).toThrow(
       new Error("Invalid validator: please make sure that the parameter of `defineTable` is valid"),
     );
+  });
+});
+
+// STUDY-181 H-5: a table definition carries Convex's six index lists at run time, filled as Convex's `defineTable`
+// fills them (libraries such as convex-helpers read `schema.tables[t].indexes`).
+describe("a table definition's index lists, Convex's runtime shape", () => {
+  const declare = () =>
+    defineTable({ a: v.string(), b: v.number(), c: v.string(), e: v.array(v.float64()) })
+      .index("by_a", ["a"])
+      .index("by_b_staged", { fields: ["b"], staged: true })
+      .index("by_ab", { fields: ["a", "b"] })
+      .index("by_a", ["c"])
+      .index("by_c_staged", { fields: ["c"], staged: true })
+      .searchIndex("search_c", { searchField: "c" })
+      .searchIndex("search_a", { searchField: "a", filterFields: ["b", "b"] })
+      .searchIndex("search_staged", { searchField: "c", filterFields: ["a"], staged: true })
+      .vectorIndex("vec", { vectorField: "e", dimensions: 3, filterFields: ["a"] })
+      .vectorIndex("vec_bare", { vectorField: "e", dimensions: 4 })
+      .vectorIndex("vec_staged", { vectorField: "e", dimensions: 5, staged: true });
+
+  test("each list in declaration order, a staged index only in its staged list, a name declared twice listed twice", () => {
+    const t = declare();
+    expect(t.indexes).toEqual([
+      { indexDescriptor: "by_a", fields: ["a"] },
+      { indexDescriptor: "by_ab", fields: ["a", "b"] },
+      { indexDescriptor: "by_a", fields: ["c"] },
+    ]);
+    expect(t.stagedDbIndexes).toEqual([
+      { indexDescriptor: "by_b_staged", fields: ["b"] },
+      { indexDescriptor: "by_c_staged", fields: ["c"] },
+    ]);
+    // `filterFields` as given (Convex keeps the repeat), `[]` when absent.
+    expect(t.searchIndexes).toEqual([
+      { indexDescriptor: "search_c", searchField: "c", filterFields: [] },
+      { indexDescriptor: "search_a", searchField: "a", filterFields: ["b", "b"] },
+    ]);
+    expect(t.stagedSearchIndexes).toEqual([
+      { indexDescriptor: "search_staged", searchField: "c", filterFields: ["a"] },
+    ]);
+    expect(t.vectorIndexes).toEqual([
+      { indexDescriptor: "vec", vectorField: "e", dimensions: 3, filterFields: ["a"] },
+      { indexDescriptor: "vec_bare", vectorField: "e", dimensions: 4, filterFields: [] },
+    ]);
+    expect(t.stagedVectorIndexes).toEqual([
+      { indexDescriptor: "vec_staged", vectorField: "e", dimensions: 5, filterFields: [] },
+    ]);
+    // The experimental `" indexes"()` is the same array.
+    expect(t[" indexes"]()).toBe(t.indexes);
+    // bunvex's own name-keyed view is unchanged: the first declaration, the duplicate refused at push.
+    expect(t.indexFields).toEqual({ by_a: ["a"], by_b_staged: ["b"], by_ab: ["a", "b"], by_c_staged: ["c"] });
+    expect(t.duplicateIndexes).toEqual(["by_a"]);
+    expect(t.stagedIndexes).toEqual(["by_b_staged", "by_c_staged"]);
+    expect(() => defineSchema({ t })).toThrow('Table "t" has two or more definitions of index "by_a".');
+  });
+
+  test("a table read back from a pushed schema has the same lists", () => {
+    const back = schemaFromJson(
+      schemaToJson(
+        defineSchema({
+          t: defineTable({ a: v.string(), b: v.number(), e: v.array(v.float64()) })
+            .index("by_a", ["a"])
+            .index("by_b", { fields: ["b"], staged: true })
+            .searchIndex("search_a", { searchField: "a", filterFields: ["b"] })
+            .searchIndex("search_staged", { searchField: "a", staged: true })
+            .vectorIndex("vec", { vectorField: "e", dimensions: 3 })
+            .vectorIndex("vec_staged", { vectorField: "e", dimensions: 4, filterFields: ["a"], staged: true }),
+        }),
+      ),
+    ).tables.t!;
+    expect(back.indexes).toEqual([{ indexDescriptor: "by_a", fields: ["a"] }]);
+    expect(back.stagedDbIndexes).toEqual([{ indexDescriptor: "by_b", fields: ["b"] }]);
+    expect(back.searchIndexes).toEqual([{ indexDescriptor: "search_a", searchField: "a", filterFields: ["b"] }]);
+    expect(back.stagedSearchIndexes).toEqual([
+      { indexDescriptor: "search_staged", searchField: "a", filterFields: [] },
+    ]);
+    expect(back.vectorIndexes).toEqual([{ indexDescriptor: "vec", vectorField: "e", dimensions: 3, filterFields: [] }]);
+    expect(back.stagedVectorIndexes).toEqual([
+      { indexDescriptor: "vec_staged", vectorField: "e", dimensions: 4, filterFields: ["a"] },
+    ]);
+    expect(back.stagedSearch).toEqual(["search_staged"]);
+    expect(back.stagedVector).toEqual(["vec_staged"]);
   });
 });
