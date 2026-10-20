@@ -165,7 +165,8 @@ export class SandboxProcess {
 
   /** Spawns a child and waits for its handshake. */
   static async start(options: SandboxProcessOptions = {}): Promise<SandboxProcess> {
-    const env: Record<string, string> = {};
+    // A function's `Date` is UTC, as Convex's (`ensure_utc`) and `bunvex-local-backend`'s (STUDY-171 §10).
+    const env: Record<string, string> = { TZ: "UTC" };
     for (const k of CHILD_KNOBS) if (process.env[k] !== undefined) env[k] = process.env[k]!;
     const spawnedAt = realRuntime.monotonicNow();
     const proc = Bun.spawn([process.execPath, options.entry ?? CHILD_ENTRY], {

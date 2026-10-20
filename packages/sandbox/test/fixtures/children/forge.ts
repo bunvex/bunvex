@@ -1,6 +1,14 @@
 // The real child, with its operations forged as a compromised child would send them (STUDY-171 §8.3): in place of
 // each `ctx.auth.getUserIdentity()`, what `mode` says (each `forge-<mode>.ts` starts one). The host must refuse each.
-export type ForgeMode = "insert" | "unknownOp" | "otherCall" | "badTag" | "tooManyArgs";
+export type ForgeMode =
+  | "insert"
+  | "unknownOp"
+  | "otherCall"
+  | "badTag"
+  | "tooManyArgs"
+  | "longLine"
+  | "badLevel"
+  | "auditNotJson";
 
 export async function forge(mode: ForgeMode) {
   const realFile = Bun.file;
@@ -11,6 +19,12 @@ export async function forge(mode: ForgeMode) {
     if (mode === "otherCall") return { ...m, id: 999_999 };
     if (mode === "badTag") return { ...m, name: "db.get", args: [{ $evil: 1 }] };
     if (mode === "tooManyArgs") return { ...m, name: "db.get", args: [1, 2, 3, 4, 5] };
+    const report = m.report as Record<string, unknown>;
+    // A line past the cut the console makes, said not to be cut.
+    if (mode === "longLine")
+      return { ...m, report: { ...report, lines: [["LOG", ["z".repeat(100_000)], false, Date.now()]] } };
+    if (mode === "badLevel") return { ...m, report: { ...report, lines: [["TRACE", ["x"], false, Date.now()]] } };
+    if (mode === "auditNotJson") return { ...m, name: "log.audit", args: ["not json"] };
     return m;
   };
   (Bun as { file: unknown }).file = (fd: number, ...rest: unknown[]) => {

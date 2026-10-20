@@ -24,7 +24,18 @@ import {
   type Tx,
   userTimeMs,
 } from "@bunvex/core";
-import { createFunctionHandle, currentEnvReader, ExecutorFailure, type SandboxCall } from "@bunvex/server/executor";
+import {
+  addAuditLine,
+  createFunctionHandle,
+  currentEnvReader,
+  ExecutorFailure,
+  type LogLevel,
+  type LogLine,
+  logChildLine,
+  MAX_LOG_LINE_LENGTH,
+  makeLogLine,
+  type SandboxCall,
+} from "@bunvex/server/executor";
 import { BunvexError, isBunvexError, type JSONValue } from "@bunvex/values";
 import type { SandboxError, SandboxProcess } from "./host.ts";
 import {
@@ -33,6 +44,7 @@ import {
   type ToHost,
   type WireCall,
   type WireLink,
+  type WireLogLine,
   type WireReport,
   type WireTable,
   type WireTerminal,
@@ -69,6 +81,7 @@ const OPS: Record<string, { kinds: readonly Kind[]; writes?: boolean }> = {
   runMutation: { kinds: ["mutation"] },
   meta: { kinds: ["query", "mutation"] },
   createFunctionHandle: { kinds: ["query", "mutation"] },
+  "log.audit": { kinds: ["query", "mutation"] },
 };
 
 /** `ctx.storage`'s methods (`FileStorage.reader` / `.writer`), `ctx.meta`'s and `ctx.scheduler`'s, by kind. */
@@ -362,6 +375,7 @@ export class HostCall {
   private charge(r: WireReport) {
     chargeUserTime(r.ran);
     if (r.time) observeTime();
+    for (const line of r.lines) this.logLine(line);
     for (const link of r.links) this.link(link);
     if (r.env.length) {
       if (!this.env) bad("an environment read without variables");
@@ -393,11 +407,28 @@ export class HostCall {
       source = prev!.q;
     }
     try {
-      this.links.set(id, { q: makeLink(this.ctx.db as Chain, source, kind, a) });
+      this.links.set(id, { q: atTheAppsLink(id, () => makeLink(this.ctx.db as Chain, source, kind, a)) });
     } catch (error) {
       if (error instanceof BadMessageError) throw error;
       this.links.set(id, { error });
     }
+  }
+
+  /**
+   * A console line the child logged, logged here where the console would have logged it in-process: in the call's
+   * execution, after the operations before it. The child made it as the console does (rendered, cut, stamped); one
+   * that may be past the cut (only a broken child sends one) is cut again.
+   */
+  private logLine([level, messages, isTruncated, timestamp]: WireLogLine) {
+    let units = messages.length;
+    for (const m of messages) units += m.length;
+    // A UTF-16 unit is at most 3 bytes of UTF-8: a line that short is within the cut.
+    const line: LogLine =
+      units * 3 <= MAX_LOG_LINE_LENGTH
+        ? { level: level as LogLevel, messages, isTruncated, timestamp }
+        : makeLogLine(level as LogLevel, messages, timestamp);
+    if (isTruncated) line.isTruncated = true;
+    logChildLine(line);
   }
 
   private result(m: DoneMessage): unknown {
@@ -442,7 +473,7 @@ export class HostCall {
     let reply: Record<string, unknown>;
     try {
       const args = m.args.map((a) => decode(a as JSONValue, true));
-      const value = await this.dispatch(m.name, args);
+      const value = await atTheAppsCall(this, m.name, args);
       reply = { t: "reply", id: this.id, op: m.op, ok: true, value: encode(value) };
     } catch (e) {
       if (e instanceof BadMessageError) {
@@ -451,6 +482,11 @@ export class HostCall {
       }
       this.opErrors.set(m.op, e);
       reply = { t: "reply", id: this.id, op: m.op, ok: false, error: thrownToChild(e) };
+      const made = madeAt(e);
+      if (made !== null) {
+        reply.sync = true;
+        if (made > 0) reply.link = made;
+      }
     }
     const created = this.createdTables();
     if (created) reply.created = created;
@@ -463,7 +499,7 @@ export class HostCall {
     return name as string;
   }
 
-  private dispatch(name: string, args: unknown[]): unknown {
+  dispatch(name: string, args: unknown[]): unknown {
     const ctx = this.ctx as Record<string, Record<string, (...a: unknown[]) => unknown>>;
     const db = ctx.db as unknown as Record<string, (...a: unknown[]) => unknown> & {
       system: Record<string, (...a: unknown[]) => unknown>;
@@ -512,6 +548,17 @@ export class HostCall {
         return (ctx.runMutation as unknown as (...a: unknown[]) => unknown)(...args);
       case "createFunctionHandle":
         return createFunctionHandle(args[0]);
+      case "log.audit": {
+        const json = args[0];
+        if (typeof json !== "string") return bad("an audit line that is not text");
+        try {
+          const body = JSON.parse(json);
+          if (body === null || typeof body !== "object" || Array.isArray(body)) throw new Error();
+        } catch {
+          return bad("an audit line that is not a JSON object");
+        }
+        return addAuditLine(json);
+      }
     }
     return bad(`no operation ${name}`);
   }
@@ -543,6 +590,52 @@ export class HostCall {
     }
     return bad("a query terminal that is not one");
   }
+}
+
+/**
+ * An operation run on the engine, by a function of its own name: an error made while it is on the stack (the
+ * synchronous part of an engine's method, before its first `await`) was, under `vm`, made while the app's call was,
+ * and holds the app's frames, which the app sees (`installAppErrors` keeps them, with no `at async` frame). Under
+ * `process` the child gives such an error the frames of its own call (`sync`).
+ */
+function atTheAppsCall(call: HostCall, name: string, args: unknown[]): unknown {
+  // Not in a tail position, where JavaScriptCore takes the frame off the stack (a module is strict code).
+  try {
+    return call.dispatch(name, args);
+  } finally {
+  }
+}
+
+/**
+ * A query chain's link made on the engine, by a function named for it (`atTheAppsLink<id>`): an error made while
+ * making it (an index not found, thrown when the query starts) was, under `vm`, made at the app's call of that link.
+ */
+function atTheAppsLink<T>(id: number, make: () => T): T {
+  const name = `atTheAppsLink${id}`;
+  const named = {
+    [name]: () => {
+      try {
+        return make();
+      } finally {
+      }
+    },
+  }[name]!;
+  return named();
+}
+
+const MADE_AT = /\n\s+at atTheApps(?:Call|Link(\d+)) \(/;
+
+/** Where `e` was made: at an operation's call (0), at a link's (its id), or neither (null, after an `await`). */
+function madeAt(e: unknown): number | null {
+  if (!(e instanceof Error)) return null;
+  let stack: string;
+  try {
+    stack = String(e.stack);
+  } catch {
+    return null;
+  }
+  const m = MADE_AT.exec(stack);
+  return m ? Number(m[1] ?? 0) : null;
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: the engine's query builders and its `db`, driven as the app drove the child's

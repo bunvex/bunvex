@@ -38,6 +38,17 @@ export { currentEnvReader, type EnvReader, withEnv } from "./env-scope.ts";
 export { ExecutorFailure } from "./errors.ts";
 export { createFunctionHandle, inHandleScope } from "./function-handles.ts";
 export { NODE_FUNCTIONS } from "./functions.ts";
+export { addAuditLine, setAuditScope } from "./log.ts";
+export {
+  captureLines,
+  collectLogs,
+  type LogLevel,
+  type LogLine,
+  logChildLine,
+  MAX_LOG_LINE_LENGTH,
+  MAX_LOG_LINES,
+  makeLogLine,
+} from "./logs.ts";
 export { HttpRouter, httpActionGeneric } from "./router.ts";
 
 export type FunctionSandbox = "vm" | "process";

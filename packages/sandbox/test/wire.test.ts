@@ -187,12 +187,13 @@ describe("the host refuses what a child never sends", () => {
       expect(() => decode(wire, true)).toThrow(BadMessageError);
     });
 
-  test("an operation and an answer: their shape checked, their report a finite time", () => {
+  test("an operation and an answer: their shape checked, their report a finite time and log lines", () => {
     const report = {
       ran: 0.5,
       time: false,
       env: ["X"],
       links: [["open", 1, null, ["items", false]]] as [string, number, number | null, unknown][],
+      lines: [["LOG", ["'hi'", "2"], false, 1792460056895.5]] as [string, string[], boolean, number][],
     };
     expect(parseChildMessage(JSON.stringify({ t: "op", id: 1, op: 2, name: "db.get", args: ["x"], report }))).toEqual({
       t: "op",
@@ -209,6 +210,12 @@ describe("the host refuses what a child never sends", () => {
       { t: "op", id: 1, op: 2, name: "db.get", args: [], report: { ...report, env: [1] } },
       { t: "op", id: 1, op: 2, name: "db.get", args: [], report: { ...report, links: [["open", 1, null]] } },
       { t: "op", id: 1, op: 2, name: "db.get", args: [], report: { ...report, links: [["open", -1, null, []]] } },
+      { t: "op", id: 1, op: 2, name: "db.get", args: [], report: { ...report, lines: undefined } },
+      { t: "op", id: 1, op: 2, name: "db.get", args: [], report: { ...report, lines: [["TRACE", ["x"], false, 1]] } },
+      { t: "op", id: 1, op: 2, name: "db.get", args: [], report: { ...report, lines: [["LOG", [1], false, 1]] } },
+      { t: "op", id: 1, op: 2, name: "db.get", args: [], report: { ...report, lines: [["LOG", ["x"], 0, 1]] } },
+      { t: "op", id: 1, op: 2, name: "db.get", args: [], report: { ...report, lines: [["LOG", ["x"], false]] } },
+      { t: "op", id: 1, op: 2, name: "db.get", args: [], report: { ...report, lines: [["LOG", ["x"], false, null]] } },
       { t: "done", id: 1, ok: true, report },
       { t: "done", id: 1, ok: false, error: { k: "mystery" }, report },
       { t: "done", id: 1, ok: false, error: { k: "op", op: -1, stack: null }, report },
