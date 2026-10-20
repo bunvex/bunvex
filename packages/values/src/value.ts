@@ -58,13 +58,36 @@ export function validateObjectField(k: string) {
   }
 }
 
+// The getters that read an ArrayBuffer's, a Set's or a Map's internal slot: they throw for anything else, whatever
+// its realm (a tag or a prototype can be anyone's).
+const BYTE_LENGTH = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength")!.get!;
+const SET_SIZE = Object.getOwnPropertyDescriptor(Set.prototype, "size")!.get!;
+const MAP_SIZE = Object.getOwnPropertyDescriptor(Map.prototype, "size")!.get!;
+const branded = (get: () => number, v: unknown) => {
+  try {
+    get.call(v);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /**
  * An ArrayBuffer (a bytes value), from this realm or another: a function's code runs in its own context
- * (STUDY-35), whose `ArrayBuffer` is not this one, so `instanceof` would miss it.
+ * (STUDY-35), whose `ArrayBuffer` is not this one, so `instanceof` would miss it. The tag, which any object can
+ * claim, only picks the candidates: `{ [Symbol.toStringTag]: "ArrayBuffer" }` is an object, as in Convex (STUDY-18 §9).
  */
 export function isBytes(v: unknown): v is ArrayBuffer {
-  return v instanceof ArrayBuffer || Object.prototype.toString.call(v) === "[object ArrayBuffer]";
+  return (
+    v instanceof ArrayBuffer ||
+    (Object.prototype.toString.call(v) === "[object ArrayBuffer]" && branded(BYTE_LENGTH, v))
+  );
 }
+
+/** A `Set` (or a subclass's instance) of this realm or another: what `instanceof Set` is within one realm. */
+const isSet = (v: unknown): v is Set<unknown> => branded(SET_SIZE, v);
+/** A `Map` (or a subclass's instance) of this realm or another. */
+const isMap = (v: unknown): v is Map<unknown, unknown> => branded(MAP_SIZE, v);
 
 /** A plain object: `{}` / `Object.create(null)` / an object literal, not a class instance (of any realm). */
 export function isSimpleObject(v: unknown): v is Record<string, unknown> {
@@ -242,9 +265,11 @@ function toJson(value: unknown, original: unknown, context: string): JSONValue {
   if (typeof value === "boolean" || typeof value === "string") return value;
   if (isBytes(value)) return { $bytes: b64(new Uint8Array(value)) };
   if (Array.isArray(value)) return value.map((v, i) => toJson(v, original, `${context}[${i}]`));
-  if (value instanceof Set) throw new Error(unsupported(context, "Set", [...value], original));
-  if (value instanceof Map) throw new Error(unsupported(context, "Map", [...value], original));
   if (!isSimpleObject(value)) {
+    // Convex's `instanceof Set` / `instanceof Map` print their entries (`Set[1]`, `Map[["a",1]]`). By brand, not
+    // by `instanceof`: a pushed function's `Set` is its own context's (STUDY-35), and printed as `Set {…}`.
+    if (isSet(value)) throw new Error(unsupported(context, "Set", [...value], original));
+    if (isMap(value)) throw new Error(unsupported(context, "Map", [...value], original));
     // An object prints as `Name {…}` (stringifyValueForError); a function or a symbol as its kind's name and
     // `"[Function]"` or its description, as Convex's message does since aab5a04.
     const name = typeof value === "object" ? "" : className(value);

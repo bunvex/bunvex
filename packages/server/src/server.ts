@@ -1115,13 +1115,19 @@ export function createServer(opts: ServerOptions) {
         return r;
       }
       if (req.method === "GET" || req.method === "HEAD") {
-        const r = await fs.download(req, decodeURIComponent(url.pathname.slice("/api/storage/".length)), {
-          chunk: (bytes) => usageMeter.record("dataEgressGb", bytes),
-          done: (storageId, egressBytes) =>
-            logManager.send([
-              { timestamp: Date.now(), event: { topic: "storage_api_bandwidth", storageId, egressBytes } },
-            ]),
-        });
+        const r = await fs.download(
+          req,
+          decodeURIComponent(url.pathname.slice("/api/storage/".length)),
+          {
+            chunk: (bytes) => usageMeter.record("dataEgressGb", bytes),
+            done: (storageId, egressBytes) =>
+              logManager.send([
+                { timestamp: Date.now(), event: { topic: "storage_api_bandwidth", storageId, egressBytes } },
+              ]),
+          },
+          // A component's file (`?component=<id>`, STUDY-157).
+          url.searchParams.get("component"),
+        );
         usageMeter.record("functionCalls", 1);
         return r;
       }

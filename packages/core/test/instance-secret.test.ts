@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
+import { canonicalInstanceSecret, instanceSecretBytes } from "../src/kbkdf.ts";
 import type { Persistence } from "../src/persistence/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
@@ -56,6 +57,38 @@ describe("the instance secret, as Convex's self-hosted image (STUDY-17 D2 → op
     await expect(next(configured, storedCursor)).rejects.toThrow(/^Failed to parse cursor$/);
     const own = (await firstPage(configured)).continueCursor;
     expect((await next(configured, own)).isDone).toBe(true);
+  });
+
+  // Convex reads the secret with `const_hex::decode`, which drops one `0x` / `0X` (STUDY-172 §7).
+  test("a secret's spellings (0x, 0X, case) are its 32 bytes: the same bytes, the same keys", async () => {
+    const hex = "0123456789abcdef".repeat(4);
+    const spellings = [hex, `0x${hex}`, `0X${hex}`, hex.toUpperCase(), `0x${hex.toUpperCase()}`];
+    for (const s of spellings) {
+      expect(instanceSecretBytes(s)).toEqual(new Uint8Array(Buffer.from(hex, "hex")));
+      expect(canonicalInstanceSecret(s)).toBe(hex);
+    }
+    // Not 32 bytes after one prefix: not hex, the string's own bytes (and its own spelling).
+    for (const s of [`0x0x${hex}`, `0x${hex}ab`, "0x", "s1"]) {
+      expect(instanceSecretBytes(s)).toEqual(new TextEncoder().encode(s));
+      expect(canonicalInstanceSecret(s)).toBe(s);
+    }
+    // Every key the engine derives, and a cursor, read the same under each spelling.
+    const path = logPath();
+    const a = await engine(path, hex);
+    for (let i = 0; i < 5; i++) await a.mutation((db) => db.insert("items", { i }));
+    const cursor = (await firstPage(a)).continueCursor;
+    const keys = (e: Engine) => [e.secretKey("store file authorization"), e.derivedKey("admin key")];
+    const expected = keys(a);
+    await open.pop()!.close();
+    for (const s of spellings.slice(1)) {
+      const b = await engine(path, s);
+      expect(keys(b)).toEqual(expected);
+      expect((await next(b, cursor)).page.map((d) => d.i)).toEqual([2, 3]);
+      await open.pop()!.close();
+    }
+    const other = await engine(path, `0x0x${hex}`);
+    expect(keys(other)[0]).not.toEqual(expected[0]);
+    await expect(next(other, cursor)).rejects.toThrow(/^Failed to parse cursor$/);
   });
 
   test("app code cannot read _instance", async () => {

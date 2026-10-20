@@ -122,7 +122,7 @@ import { INDEX_CACHE_MAX_BYTES, IndexCache } from "./index-cache.ts";
 import { readNextIndexId } from "./index-ids.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
 import { opaqueToInspect } from "./inspect.ts";
-import { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
+import { canonicalInstanceSecret, instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 import { knob } from "./knobs.ts";
 import {
   hasLease,
@@ -768,20 +768,22 @@ export class Engine {
    * The secret that signs pagination cursors, as Convex's self-hosted image does it
    * (self-hosted/docker-build/read_credentials.sh): the configured INSTANCE_SECRET wins; otherwise the one
    * stored with the data; otherwise a random one, generated once and stored (in `_instance`, since the data
-   * may live in a remote database rather than a directory).
+   * may live in a remote database rather than a directory). It is kept in one spelling (`0x`-prefixed or
+   * uppercase hex as the bare lowercase digits, STUDY-172 §7): `secretKey` hashes its text.
    */
   private async loadInstanceSecret() {
     if (this.opts.instanceSecret) {
-      this.instanceSecret = this.opts.instanceSecret;
+      this.instanceSecret = canonicalInstanceSecret(this.opts.instanceSecret);
       return;
     }
-    this.instanceSecret = await this.runMutation(async (db) => {
+    const stored = await this.runMutation(async (db) => {
       const stored = (await db.query(INSTANCE_TABLE).first()) as { instanceSecret?: string } | null;
       if (stored?.instanceSecret) return stored.instanceSecret;
       const secret = Buffer.from(outsideExecution(() => crypto.getRandomValues(new Uint8Array(32)))).toString("hex");
       await db.insert(INSTANCE_TABLE, { instanceSecret: secret });
       return secret;
     }, true);
+    this.instanceSecret = canonicalInstanceSecret(stored);
   }
 
   /**

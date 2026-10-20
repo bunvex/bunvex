@@ -261,25 +261,17 @@ function componentEnv(c: ComponentRuntime, read: EnvReader, builtin: Record<stri
 /** Convex's `ComponentPath::in_component_str`: ` in '<path>'`, nothing for the app. */
 const inComponentStr = (path: string) => (path === "" ? "" : ` in '${path}'`);
 
-/** What a component's function may not use yet (STUDY-154 P-2): its storage comes in step 7. */
-const notYetInComponents = (what: string) =>
-  new Proxy(
-    {},
-    {
-      get(_t, prop) {
-        if (prop === "then") return undefined;
-        return () => {
-          throw new Error("`ctx." + what + "` in a component is not supported yet");
-        };
-      },
-    },
-  );
-
 /**
  * An index still being rebuilt after a start (STUDY-79), as an action sees it: Convex rejects the action's
  * syscall promise with a plain `Error` carrying the message, which the action may catch.
  */
 const unavailableToAction = (e: unknown) => (e instanceof IndexesUnavailableError ? new Error(e.message) : e);
+
+/** Convex's `parseArgs` (common/index.ts), first in a nested call's `runUdf` and an action's calls: an object, or none. */
+function parseCallArgs(args: unknown) {
+  if (args !== undefined && !isSimpleObject(args))
+    throw new Error(`The arguments to a bunvex function must be an object. Received: ${args as unknown}`);
+}
 
 /**
  * An action's `runQuery` / `runMutation` / `runAction` arguments, checked at the call as Convex's `syscallArgs`
@@ -288,6 +280,7 @@ const unavailableToAction = (e: unknown) => (e instanceof IndexesUnavailableErro
  * a lone surrogate (STUDY-135): the `actions/*` text (the function's address, then the arguments) fails in serde.
  */
 function checkActionCallArgs(ref: unknown, args: unknown) {
+  parseCallArgs(args);
   try {
     checkJsonValue((args ?? {}) as Value);
   } catch (e) {
@@ -1690,17 +1683,33 @@ export class Functions {
         throw new FunctionPathError(`Function ${this.pathOf(f)} failed. Could not parse return value as json: ${e}`);
     }
     // Convex's order: the value is parsed (its 64-level nesting limit), then measured — one walk here.
+    // Convex converts the result in the app's code (`convexToJson`) before Rust parses, measures or checks it: a
+    // result that is too deep, too large or fails `returns` because it is not a value (a `Set`, `undefined` in an
+    // array) fails as one. Converted only then, so a result that passes costs no extra walk.
+    const notAValue = () => checkJsonValue((value ?? null) as Value);
     const { size, nesting } = measureRawValue((value ?? null) as Value);
-    if (nesting > MAX_VALUE_NESTING)
+    if (nesting > MAX_VALUE_NESTING) {
+      try {
+        notAValue();
+      } catch (e) {
+        // Deeper than the stack: the nesting limit's message, as before (STUDY-109).
+        if (!(e instanceof RangeError)) throw e;
+      }
       throw new FunctionPathError(`Function ${this.pathOf(f)} return value invalid: ${TOO_NESTED_MESSAGE}`);
+    }
     if (typeof value === "object" && value !== null) resultSizes.set(value, size);
-    if (size > this.maxResultSize)
+    if (size > this.maxResultSize) {
+      notAValue();
       throw new FunctionPathError(
         `Function ${this.pathOf(f)} return value is too large (actual: ${formatBytes(size)}, limit: ${formatBytes(this.maxResultSize)})`,
       );
+    }
     if (f.returns) {
       const msg = checkValue(f.returns, (value ?? null) as Value, this.tableOf);
-      if (msg) throw ValidatorError.returns(msg);
+      if (msg) {
+        notAValue();
+        throw ValidatorError.returns(msg);
+      }
     }
     return value;
   }
@@ -1902,7 +1911,8 @@ export class Functions {
         ? {
             db: (db.vars ? readerView(db) : db) as unknown as QueryCtx["db"],
             auth: txAuth(db),
-            storage: component ? notYetInComponents("storage") : (this.fileStorage?.reader(db) ?? noStorage),
+            // A component's files are its namespace's, its URLs `?component=` (STUDY-157).
+            storage: this.fileStorage?.reader(db, component?.id ?? null) ?? noStorage,
             runQuery: nested.runQuery,
             meta: this.meta(f, db, undefined),
           }
@@ -1925,7 +1935,7 @@ export class Functions {
               rooms ??= roomsCtx(functions, (fn) => db.afterCommit(fn), false).rooms;
               return rooms;
             },
-            storage: component ? notYetInComponents("storage") : (this.fileStorage?.writer(db) ?? noStorage),
+            storage: this.fileStorage?.writer(db, component?.id ?? null) ?? noStorage,
             runQuery: nested.runQuery,
             runMutation: nested.runMutation,
             meta: this.meta(f, db, undefined),
@@ -2160,6 +2170,15 @@ export class Functions {
     /** The calling component's: a name resolves among its functions (STUDY-154); other components are step 5. */
     component?: ComponentRuntime,
   ): Promise<unknown> {
+    // Convex's `runUdf` (registration_impl.ts) takes an object (`parseArgs`) and converts it in the app's code first
+    // (`convexToJson`): what is not a value fails before anything else, its original object in the app's own field
+    // order. Deeper than the stack, the nesting checks below answer (DV-363).
+    parseCallArgs(args);
+    try {
+      checkJsonValue((args ?? {}) as Value);
+    } catch (e) {
+      if (!(e instanceof RangeError)) throw e;
+    }
     // Convex's `runUdf` syscall parses `args` as a value of its own before it resolves the function, so past
     // 64 levels its check speaks; at 64, the callee's (`[args]` is 65).
     const measured = measureArgs(args);
@@ -2859,9 +2878,7 @@ export class Functions {
           jobComponent: caller?.request?.scheduledFunctionComponent ?? null,
         }),
       ),
-      storage: component
-        ? (notYetInComponents("storage") as never)
-        : cutOffWithAction(this.fileStorage?.actionWriter(storageMeter) ?? noStorage),
+      storage: cutOffWithAction(this.fileStorage?.actionWriter(storageMeter, component?.id ?? null) ?? noStorage),
       rooms: cutOffWithAction(r.rooms),
       presence: cutOffWithAction(r.presence as NonNullable<typeof r.presence>),
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {

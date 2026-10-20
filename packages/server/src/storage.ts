@@ -9,6 +9,9 @@
 //   (STUDY-130; a reader at an earlier snapshot, an export, can still read it).
 // - Uploads: a token valid for an hour (reusable), `POST /api/storage/upload?token=`, the body streamed to the
 //   backend and hashed. Downloads: `GET /api/storage/<uuid>`, Convex's headers and single-range rule.
+// - Each component has its own `_file_storage` (STUDY-157 PR 3): `ctx.storage` works in the function's namespace,
+//   an upload token seals the component, and a component's file URL carries `?component=<id>`, which the download
+//   reads (Convex's `get_url_batch`, `storage_upload`, `storage_get`).
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import {
   BackendIsNotRunningError,
@@ -23,6 +26,8 @@ import {
 import type { BlobStore } from "@bunvex/file-storage";
 import { decodeId, type GenericId } from "@bunvex/values";
 import { readCanonicalUrls } from "./canonical-urls.ts";
+import { INTERNAL_SERVER_ERROR_MESSAGE } from "./errors.ts";
+import { inNamespace } from "./scheduler.ts";
 import { SpecBlob } from "./web-blob.ts";
 
 /** The end of Convex's message for an id that does not parse, its line break and indentation included. */
@@ -90,22 +95,23 @@ export class FileStorage {
 
   // ---------------------------------------------------------------- upload tokens
 
-  /** An upload token: hex(version 1 ‖ 12-byte nonce ‖ AES-256-GCM(issued seconds) ‖ tag), the version as AAD. */
-  uploadToken(): string {
+  /**
+   * An upload token: hex(version 1 ‖ 12-byte nonce ‖ AES-256-GCM({issued seconds, component}) ‖ tag), the version as
+   * AAD. `component`: the namespace the file goes to (a `_components` id), absent for the app's, as Convex's token.
+   */
+  uploadToken(component: string | null = null): string {
     const version = Buffer.from([1]);
     const nonce = randomBytes(12);
     const cipher = createCipheriv("aes-256-gcm", this.tokenKey, nonce);
     cipher.setAAD(version);
-    const body = Buffer.concat([
-      cipher.update(JSON.stringify({ issued: Math.floor(this.now() / 1000) })),
-      cipher.final(),
-    ]);
+    const sealed = { issued: Math.floor(this.now() / 1000), ...(component === null ? {} : { component }) };
+    const body = Buffer.concat([cipher.update(JSON.stringify(sealed)), cipher.final()]);
     return Buffer.concat([version, nonce, body, cipher.getAuthTag()]).toString("hex");
   }
 
-  /** An upload URL under `origin` (the canonical cloud URL, if set; else the server's). */
-  uploadUrl(origin = this.origin): string {
-    return `${origin}/api/storage/upload?token=${this.uploadToken()}`;
+  /** An upload URL under `origin` (the canonical cloud URL, if set; else the server's), into `component`'s files. */
+  uploadUrl(origin = this.origin, component: string | null = null): string {
+    return `${origin}/api/storage/upload?token=${this.uploadToken(component)}`;
   }
 
   /**
@@ -116,28 +122,31 @@ export class FileStorage {
     return (await readCanonicalUrls(db)).cloud?.replace(/\/$/, "") ?? this.origin;
   }
 
-  /** Convex's checks of a token: it decodes, and was issued less than an hour ago. Not single-use. */
-  checkToken(token: string | null) {
+  /**
+   * Convex's checks of a token: it decodes, and was issued less than an hour ago. Not single-use. The component it
+   * seals (null: the app's); one that is not an id is Convex's `InvalidStorageToken`.
+   */
+  checkToken(token: string | null): string | null {
     const invalid = () =>
       new StorageError(401, "StorageTokenInvalid", "Couldn't decode the StoreFileAuthorization token");
     if (!token || !/^[0-9a-f]+$/i.test(token)) throw invalid();
     const raw = Buffer.from(token, "hex");
     if (raw.length < 1 + 12 + 16 || raw[0] !== 1) throw invalid();
-    let issued: number;
+    let sealed: { issued: number; component?: unknown };
     try {
       const d = createDecipheriv("aes-256-gcm", this.tokenKey, raw.subarray(1, 13));
       d.setAAD(raw.subarray(0, 1));
       d.setAuthTag(raw.subarray(raw.length - 16));
-      issued = (
-        JSON.parse(Buffer.concat([d.update(raw.subarray(13, raw.length - 16)), d.final()]).toString()) as {
-          issued: number;
-        }
-      ).issued;
+      sealed = JSON.parse(Buffer.concat([d.update(raw.subarray(13, raw.length - 16)), d.final()]).toString());
     } catch {
       throw invalid();
     }
-    if (issued * 1000 + UPLOAD_TOKEN_VALIDITY_MS <= this.now())
+    if (sealed.issued * 1000 + UPLOAD_TOKEN_VALIDITY_MS <= this.now())
       throw new StorageError(401, "StorageTokenExpired", "Store File Authorization expired");
+    if (sealed.component === undefined) return null;
+    if (typeof sealed.component !== "string" || !isId(sealed.component))
+      throw new StorageError(401, "InvalidStorageToken", "Invalid component ID");
+    return sealed.component;
   }
 
   // ---------------------------------------------------------------- ids and rows
@@ -178,25 +187,32 @@ export class FileStorage {
     );
   }
 
-  urlOf(row: StorageRow, origin = this.origin) {
-    return `${origin}/api/storage/${row.storageId}`;
+  /** A file's URL; a component's (`component`, its `_components` id) carries `?component=<id>`, as Convex's. */
+  urlOf(row: StorageRow, origin = this.origin, component: string | null = null) {
+    return `${origin}/api/storage/${row.storageId}${component === null ? "" : `?component=${component}`}`;
   }
 
-  /** The row of a stored blob, committed after the upload, in its own transaction (Convex: "to avoid OCC risk"). */
+  /**
+   * The row of a stored blob, committed after the upload, in its own transaction (Convex: "to avoid OCC risk"), in
+   * `component`'s namespace (the app's for null).
+   */
   async addRow(
     written: { key: string; size: number; sha256: Uint8Array },
     contentType: string | null,
+    component: string | null = null,
   ): Promise<string> {
     return this.engine.mutation(
       (db) =>
-        db.asSystem(() =>
-          db.insert(FILE_STORAGE_TABLE, {
-            storageId: crypto.randomUUID(),
-            storageKey: written.key,
-            sha256: written.sha256.slice().buffer as ArrayBuffer,
-            size: BigInt(written.size),
-            contentType,
-          }),
+        inNamespace(db, component, () =>
+          db.asSystem(() =>
+            db.insert(FILE_STORAGE_TABLE, {
+              storageId: crypto.randomUUID(),
+              storageKey: written.key,
+              sha256: written.sha256.slice().buffer as ArrayBuffer,
+              size: BigInt(written.size),
+              contentType,
+            }),
+          ),
         ),
       "_system/storage",
     );
@@ -222,6 +238,7 @@ export class FileStorage {
     body: ReadableStream<Uint8Array> | Blob,
     contentType: string | null,
     expectedSha256?: string,
+    component: string | null = null,
   ): Promise<string> {
     const written = await this.blobs.put(body);
     if (expectedSha256 !== undefined && expectedSha256 !== b64(written.sha256)) {
@@ -232,18 +249,21 @@ export class FileStorage {
         `Sha256 mismatch. Expected: ${expectedSha256} Actual: ${b64(written.sha256)}`,
       );
     }
-    return this.addRow(written, contentType);
+    return this.addRow(written, contentType, component);
   }
 
   // ---------------------------------------------------------------- ctx.storage
 
-  /** `ctx.storage` in a query: getUrl, getMetadata (deprecated). */
-  reader(db: Tx) {
+  /**
+   * `ctx.storage` in a query: getUrl, getMetadata (deprecated). `component`: the function's (its `_components` id;
+   * null the app's), whose namespace `db` reads in.
+   */
+  reader(db: Tx, component: string | null = null) {
     return {
       getUrl: async (storageId: string) => {
         if (storageId === undefined) throw new TypeError("Must provide arg 1 `storageId` to `getUrl`");
         const row = await this.resolve(db, storageId, "storage.getUrl");
-        return row ? this.urlOf(row, await this.originIn(db)) : null;
+        return row ? this.urlOf(row, await this.originIn(db), component) : null;
       },
       getMetadata: async (storageId: string) => {
         const row = await this.resolve(db, storageId, "storage.getMetadata");
@@ -255,10 +275,10 @@ export class FileStorage {
   }
 
   /** `ctx.storage` in a mutation: the reader, generateUploadUrl, delete; `store` refused as in Convex. */
-  writer(db: Tx) {
+  writer(db: Tx, component: string | null = null) {
     return {
-      ...this.reader(db),
-      generateUploadUrl: async () => this.uploadUrl(await this.originIn(db)),
+      ...this.reader(db, component),
+      generateUploadUrl: async () => this.uploadUrl(await this.originIn(db), component),
       delete: async (storageId: string) => this.deleteIn(db, storageId),
       store: async (_blob: Blob, _opts?: { sha256?: string }): Promise<string> => {
         throw new Error(
@@ -272,8 +292,9 @@ export class FileStorage {
    * `ctx.storage` in an action (and an HTTP action): each call its own transaction; get and store, metered
    * through `meter` as Convex's action storage calls (STUDY-71): a call and the bytes stored or read.
    */
-  actionWriter(meter?: StorageMeter) {
-    const q = <T>(f: (db: Tx) => Promise<T>) => this.engine.query(f);
+  actionWriter(meter?: StorageMeter, component: string | null = null) {
+    // In the action's component's namespace (STUDY-157); the canonical URLs read are global.
+    const q = <T>(f: (db: Tx) => Promise<T>) => this.engine.query((db) => inNamespace(db, component, () => f(db)));
     // Convex's action storage callbacks (all but generateUploadUrl) refuse while the deployment is stopped.
     const running = <T>(f: (db: Tx) => Promise<T>) =>
       q(async (db) => {
@@ -281,13 +302,13 @@ export class FileStorage {
         return f(db);
       });
     return {
-      getUrl: (storageId: string) => running((db) => this.reader(db).getUrl(storageId)),
-      getMetadata: (storageId: string) => running((db) => this.reader(db).getMetadata(storageId)),
-      generateUploadUrl: async () => this.uploadUrl(await q((db) => this.originIn(db))),
+      getUrl: (storageId: string) => running((db) => this.reader(db, component).getUrl(storageId)),
+      getMetadata: (storageId: string) => running((db) => this.reader(db, component).getMetadata(storageId)),
+      generateUploadUrl: async () => this.uploadUrl(await q((db) => this.originIn(db)), component),
       delete: (storageId: string) =>
         this.engine.mutation(async (db) => {
           await this.ensureRunningIn(db);
-          return this.deleteIn(db, storageId);
+          return inNamespace(db, component, () => this.deleteIn(db, storageId));
         }, "_system/storage"),
       get: async (storageId: string): Promise<Blob | null> => {
         if (typeof storageId !== "string")
@@ -308,7 +329,7 @@ export class FileStorage {
             "store() expects a Blob. If you are trying to store a Request, `await request.blob()` will give you the correct input.",
           );
         await this.ensureRunning();
-        const id = await this.store(blob, blob.type === "" ? null : blob.type, opts?.sha256);
+        const id = await this.store(blob, blob.type === "" ? null : blob.type, opts?.sha256, component);
         meter?.({ written: blob.size });
         return id as GenericId<"_storage">;
       },
@@ -326,9 +347,9 @@ export class FileStorage {
 
   // ---------------------------------------------------------------- HTTP
 
-  /** `POST /api/storage/upload?token=`: the body to the backend, hashed; `{storageId}`. */
+  /** `POST /api/storage/upload?token=`: the body to the backend, hashed, in the token's component; `{storageId}`. */
   async upload(req: Request, url: URL): Promise<Response> {
-    this.checkToken(url.searchParams.get("token"));
+    const component = this.checkToken(url.searchParams.get("token"));
     await this.ensureRunning();
     let expected: string | undefined;
     const digest = req.headers.get("digest");
@@ -343,7 +364,7 @@ export class FileStorage {
       expected = m[1];
     }
     const contentType = req.headers.get("content-type");
-    const id = await this.store(req.body ?? new Blob([]), contentType, expected);
+    const id = await this.store(req.body ?? new Blob([]), contentType, expected, component);
     return Response.json({ storageId: id });
   }
 
@@ -352,18 +373,23 @@ export class FileStorage {
    * body is metered as it is sent (Convex's `track_storage_egress` per chunk, `add_on_complete` once it ends
    * or the client leaves): `sent.chunk` per chunk, `sent.done` once with the file's id and the bytes sent.
    */
-  async download(req: Request, uuid: string, sent?: DownloadMeter): Promise<Response> {
+  async download(req: Request, uuid: string, sent?: DownloadMeter, component: string | null = null): Promise<Response> {
     if (!UUID.test(uuid))
       throw new StorageError(
         400,
         "InvalidStoragePath",
         `Invalid storage path: "${uuid}". Please use \`storage.getUrl(storageId: Id<"_storage">)\` to generate a valid URL to retrieve files.`,
       );
+    // `?component=<id>` (Convex's `ComponentId::deserialize_from_string`): one that is not an id is Convex's internal
+    // error (its parse fails unhandled); a component with no namespace has no such file.
+    if (component !== null && !isId(component))
+      throw new StorageError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
+    const missing = () => new StorageError(404, "FileNotFound", `File ${uuid} not found`);
+    if (component !== null && !this.engine.catalog.components.has(component)) throw missing();
     const row = await this.engine.query(async (db) => {
       await this.ensureRunningIn(db);
-      return this.byUuid(db, uuid.toLowerCase());
+      return inNamespace(db, component, () => this.byUuid(db, uuid.toLowerCase()));
     });
-    const missing = () => new StorageError(404, "FileNotFound", `File ${uuid} not found`);
     if (!row) throw missing();
     const headers: Record<string, string> = { "cache-control": CACHE_CONTROL, "accept-ranges": "bytes" };
     if (row.contentType) headers["content-type"] = row.contentType;
@@ -459,6 +485,16 @@ export function parseRange(header: string, size: number): { start: number; end: 
     if (start < size) ranges.push({ start, end });
   }
   return ranges.length === 1 ? ranges[0] : "unsatisfiable";
+}
+
+/** Whether `s` is a document id (a `_components` id, as a component's is). */
+function isId(s: string): boolean {
+  try {
+    decodeId(s);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
