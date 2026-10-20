@@ -3,4 +3,5 @@ import { v } from "@bunvex/values";
 
 export default defineSchema({
   messages: defineTable({ body: v.string(), author: v.string() }).index("by_author", ["author"]),
+  ticks: defineTable({ at: v.number() }),
 });

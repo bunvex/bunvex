@@ -13,11 +13,12 @@
 // URLs, deterministic `Date` and `Math.random`. Functions see the env given to `bunvexTest` (DV-541, AD-34).
 
 import { bundleProject, pushRequest } from "@bunvex/cli/push-request";
-import { defineSchema, Engine, SCHEDULED_JOBS_TABLE } from "@bunvex/core";
+import { CRON_JOBS_TABLE, defineSchema, Engine, SCHEDULED_JOBS_TABLE } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { TestRuntime } from "@bunvex/core/test-runtime";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import {
+  adminKeyCipherKey,
   callerOf,
   createServer,
   type FunctionArgs,
@@ -28,10 +29,14 @@ import {
   internalAction,
   internalMutation,
   internalQuery,
+  issueAdminKey,
 } from "@bunvex/server";
+import { fromJsonValue } from "@bunvex/values";
 
 const INSTANCE_NAME = "bunvex-test";
 const INSTANCE_SECRET = "7e57".repeat(16);
+/** The test deployment's admin key: `t.fetch` acts as `withIdentity`'s user with it. */
+const ADMIN_KEY = issueAdminKey({ instanceName: INSTANCE_NAME, cipherKey: adminKeyCipherKey(INSTANCE_SECRET) });
 /** convex-test's default issuer, in bunvex's words (rule 5, DV-538). */
 const TEST_ISSUER = "https://bunvex.test";
 /** The module inline functions are registered under: a name no pushed module can have. */
@@ -136,6 +141,21 @@ class Backend {
     )) as unknown as Job[];
   }
 
+  /** A cron job's function and arguments, by its name in `crons.ts`. */
+  async cron(name: string): Promise<{ udfPath: string; args: Record<string, unknown> }> {
+    const { engine } = await this.start();
+    const rows = (await engine.query((db) => db.asSystem(() => db.query(CRON_JOBS_TABLE).collect()))) as unknown as {
+      name: string;
+      cronSpec: { udfPath: string; udfArgs: ArrayBuffer };
+    }[];
+    const row = rows.find((r) => r.name === name);
+    if (!row) throw new Error(`bunvexTest: no cron job named ${JSON.stringify(name)}`);
+    const [args] = fromJsonValue(JSON.parse(new TextDecoder().decode(row.cronSpec.udfArgs))) as [
+      Record<string, unknown>,
+    ];
+    return { udfPath: row.cronSpec.udfPath, args: args ?? {} };
+  }
+
   async close() {
     if (!this.ready) return;
     const r = await this.ready.catch(() => null);
@@ -164,12 +184,24 @@ export class TestBunvex {
   constructor(
     private readonly backend: Backend,
     private readonly identity: Identity | null = null,
+    private readonly request: { ip?: string; userAgent?: string } | null = null,
   ) {}
 
   private async call(kind: "query" | "mutation" | "action", ref: AnyReference, args: unknown) {
     const { functions } = await this.backend.start();
     const name = typeof ref === "function" ? await this.backend.registerInline(kind, ref) : getFunctionName(ref);
-    const caller = callerOf(this.identity as never);
+    const caller = {
+      ...callerOf(this.identity as never),
+      ...(this.request && {
+        request: {
+          ip: this.request.ip ?? null,
+          userAgent: this.request.userAgent ?? null,
+          requestId: crypto.randomUUID().replaceAll("-", "").slice(0, 16),
+          authToken: null,
+          scheduledFunctionId: null,
+        },
+      }),
+    };
     const a = typeof ref === "function" ? {} : (args ?? {});
     if (kind === "query") return functions.runQuery(name, a, false, caller);
     if (kind === "mutation") return functions.runMutation(name, a, false, caller);
@@ -223,17 +255,29 @@ export class TestBunvex {
     const subject = (identity.subject as string | undefined) ?? defaultSubject(identity);
     const issuer = (identity.issuer as string | undefined) ?? TEST_ISSUER;
     const full = { ...identity, subject, issuer, tokenIdentifier: identity.tokenIdentifier ?? `${issuer}|${subject}` };
-    return new TestBunvex(this.backend, full);
+    return new TestBunvex(this.backend, full, this.request);
+  }
+
+  /** The same deployment, calling with a client's address and user agent (`ctx.meta.getRequestMetadata()`). */
+  withRequestMetadata(request: { ip?: string; userAgent?: string }): TestBunvex {
+    return new TestBunvex(this.backend, this.identity, request);
   }
 
   /**
-   * convex-test's `t.fetch`: a request to the app's HTTP actions (`http.ts`), `path` starting with `/`. The request
-   * is anonymous unless it carries its own `Authorization` header.
+   * convex-test's `t.fetch`: a request to the app's HTTP actions (`http.ts`), `path` starting with `/`. With
+   * `withIdentity`, the action runs as that user (an admin key acting as the user, as the dashboard's runner does);
+   * a request's own `Authorization` header wins.
    */
   async fetch(path: string, init?: RequestInit): Promise<Response> {
     if (!path.startsWith("/")) throw new Error(`bunvexTest: the path must start with "/": ${path}`);
     const { siteUrl } = await this.backend.start();
-    return fetch(`${siteUrl}${path}`, init);
+    const headers = new Headers(init?.headers);
+    if (this.identity && !headers.has("authorization"))
+      headers.set(
+        "authorization",
+        `Bunvex ${ADMIN_KEY}:${Buffer.from(JSON.stringify(this.identity)).toString("base64")}`,
+      );
+    return fetch(`${siteUrl}${path}`, { ...init, headers });
   }
 
   /** The deployment's virtual clock (ms since the epoch); it moves only when scheduled functions are finished. */
@@ -264,6 +308,19 @@ export class TestBunvex {
     throw new Error(
       `bunvexTest: scheduled functions still pending after ${maxIterations} iterations (one that keeps scheduling itself?)`,
     );
+  }
+
+  /**
+   * Run a cron job of `crons.ts` now, by its name, as the cron executor runs it: its function with its arguments and
+   * no identity (AD-35). Due crons also run as `finishAllScheduledFunctions` moves the clock.
+   */
+  async runCron(name: string): Promise<unknown> {
+    const { functions } = await this.backend.start();
+    const { udfPath, args } = await this.backend.cron(name);
+    const caller = callerOf(null);
+    return functions.kindOf(udfPath) === "action"
+      ? functions.runAction(udfPath, args, caller, { internal: true })
+      : functions.runMutation(udfPath, args, false, caller);
   }
 
   /** Stop the deployment. A test that ends without it leaves nothing that keeps the process alive. */

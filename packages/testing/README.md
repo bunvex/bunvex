@@ -23,5 +23,9 @@ test("sending a message", async () => {
 - **It behaves as a deployment**, not as convex-test's mock: write conflicts and retries, Convex's limits, real ids and
   storage URLs, deterministic `Date` and `Math.random` in queries and mutations.
 - **Env**: functions see `bunvexTest({ env: { … } })`, not the test's `process.env`.
+- **Time**: scheduled functions and crons run on the test's virtual clock as `finishAllScheduledFunctions()` moves
+  it; `t.runCron(name)` runs a cron now.
+- **Callers**: `withIdentity({ … })` and `withRequestMetadata({ ip, userAgent })`; `t.fetch(path)` calls the app's
+  HTTP actions as that user.
 - **Options**: `cwd`, the project's directory (default: the working directory).
 - **Runner**: `bun test` (Vitest only under Bun: `bunx --bun vitest`).

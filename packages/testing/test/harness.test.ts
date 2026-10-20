@@ -47,6 +47,13 @@ describe("bunvexTest", () => {
     });
   });
 
+  test("withRequestMetadata: a mutation sees the client's address and user agent", async () => {
+    const t = make();
+    expect(await t.mutation(api.messages.requestMeta)).toEqual({ ip: null, userAgent: null });
+    const r = t.withIdentity({ name: "Ada" }).withRequestMetadata({ ip: "203.0.113.7", userAgent: "tests/1.0" });
+    expect(await r.mutation(api.messages.requestMeta)).toEqual({ ip: "203.0.113.7", userAgent: "tests/1.0" });
+  });
+
   test("internal functions may be called, as in convex-test", async () => {
     const t = make();
     await t.mutation(api.messages.send, { body: "x" });
@@ -101,6 +108,12 @@ describe("bunvexTest", () => {
     expect((await t.fetch("/nope")).status).toBe(404);
   });
 
+  test("t.fetch runs as withIdentity's user, as convex-test", async () => {
+    const t = make();
+    expect(await (await t.fetch("/whoami")).json()).toBeNull();
+    expect(await (await t.withIdentity({ name: "Ada" }).fetch("/whoami")).json()).toBe("Ada");
+  });
+
   test("scheduled functions run on the virtual clock, when finished", async () => {
     const t = make();
     const start = t.now();
@@ -111,5 +124,17 @@ describe("bunvexTest", () => {
     expect(await t.query(api.messages.list)).toEqual(["anonymous: later"]);
     expect(t.now() - start).toBeGreaterThanOrEqual(3600_000);
     expect(t.now() - start).toBeLessThan(3600_000 + 1000);
+  });
+
+  test("crons (AD-35): runCron runs one now; due crons run as the clock moves", async () => {
+    const t = make();
+    expect(await t.query(api.messages.ticks)).toBe(0);
+    await t.runCron("tick");
+    expect(await t.query(api.messages.ticks)).toBe(1);
+    expect(await t.runCron("nope").catch((e: Error) => e.message)).toBe('bunvexTest: no cron job named "nope"');
+    // An interval cron runs at once, then every hour: moving the clock two hours runs it three more times.
+    await t.mutation(api.messages.sendLater, { body: "later", delayMs: 2 * 3600_000 });
+    await t.finishAllScheduledFunctions();
+    expect(await t.query(api.messages.ticks)).toBe(4);
   });
 });

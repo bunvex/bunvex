@@ -46,3 +46,20 @@ export const reject = mutation({
     throw new Error("rejected on purpose");
   },
 });
+
+export const requestMeta = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const { ip, userAgent } = await ctx.meta.getRequestMetadata();
+    return { ip, userAgent };
+  },
+});
+
+export const tick = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.db.insert("ticks", { at: Date.now() });
+  },
+});
+
+export const ticks = query({ args: {}, handler: async (ctx) => (await ctx.db.query("ticks").collect()).length });
