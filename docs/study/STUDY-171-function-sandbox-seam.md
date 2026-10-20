@@ -1402,8 +1402,9 @@ here, as failures; two cases stay (an unawaited operation handled later, one who
 (`asIfReportedLate`) on any Bun: interleaved checkpoints, the gate, a rejection handled in time, an idle child's last
 marker. `streams.test.ts` (+1): a stopped stream's chunks in flight dropped within the credit.
 
-The whole `packages/sandbox` suite: 1165 tests, all passing under Bun 1.4.2 and 1.4.3 on the test VPS (the base
-branch: 1096).
+The whole `packages/sandbox` suite, this branch merged with `main`: 1161 tests, all passing under Bun 1.4.2 and 1.4.3
+on the test VPS. The repository's `bun test --isolate` under Bun 1.4.2 there: 4695 pass, the same 5 failures as the base
+branch's (4625 pass), none of them the sandbox's (the release-download and ZIP tests, failing the same way on the base branch there).
 
 ### 13.5 Measurements
 
