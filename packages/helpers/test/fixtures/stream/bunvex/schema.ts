@@ -1,4 +1,5 @@
-// The app of the `server/stream` tests (test/server/stream.test.ts, stream.flatmap.test.ts): the tables of
+// The app of the `server/stream` and `server/pagination` tests (test/server/stream.test.ts, stream.flatmap.test.ts,
+// pagination.test.ts, whose `foo` is upstream's): the tables of
 // convex-helpers' `stream.test.ts` and `stream.flatmap.test.ts` in one schema. Upstream defines a schema per test;
 // here the tables of each have names of their own (`undefinedNumbers` and `undefinedStrings` are its two `foo`s with
 // an optional field).

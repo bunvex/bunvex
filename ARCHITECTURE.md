@@ -167,7 +167,7 @@ bunvex/
 │   │   ├── server/customFunctions   customQuery, customMutation, customAction, customCtx, NoOp… ✅
 │   │   ├── server/triggers          Triggers, writerWithTriggers, locks per transaction (DV-545) ✅
 │   │   ├── server/stream            stream, mergedStream, filterWith, flatMap, distinct…        ✅
-│   │   └── server/pagination        getPage, paginator (STUDY-181 PR 4)                         ·
+│   │   └── server/pagination        getPage, streamQuery, paginator                             ✅
 │   │
 │   ├── sandbox/                     @bunvex/sandbox (private for now)  the function sandbox (AD-44,
 │   │   │                            STUDY-168): app code in a separate process

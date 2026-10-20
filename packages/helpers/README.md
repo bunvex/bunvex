@@ -66,7 +66,9 @@ What is there (convex-helpers 0.1.128):
 - `@bunvex/helpers/server/stream`: `stream`, `StreamDatabaseReader`, `QueryStream` (`filterWith`, `map`, `flatMap`,
   `distinct`, `paginate` with `endCursor`, `maximumRowsRead`, `maximumBytesRead`, `pageStatus` and `splitCursor`,
   `collect`, `take`, `first`, `unique`), `mergedStream`, `streamIndexRange`, `getIndexFields`, `SingletonStream`,
-  `EmptyStream`, and the types.
+  `EmptyStream`, and the types;
+- `@bunvex/helpers/server/pagination`: `getPage` (`PageRequest`, `PageResponse`), `streamQuery`, `paginator`, and
+  `IndexKey`.
 
 ```ts
 import { mergedStream, stream } from "@bunvex/helpers/server/stream";
@@ -83,7 +85,29 @@ const page = await mergedStream(authors.map(byAuthor), ["_creationTime"])
 A stream's cursors are convex-helpers' own, byte for byte (STUDY-181 H-2): the value JSON of an index key, `undefined`
 as `"undefined"`, and `"[]"` at the end. A cursor stored by an app or a component on Convex keeps working.
 
-Pagination (`getPage`, `paginator`) comes next (STUDY-181 §3.4).
+```ts
+import { getPage, paginator } from "@bunvex/helpers/server/pagination";
+
+// Pages an app stitches together: each starts after the last one's last key, and ends at its own when re-read.
+const { page, hasMore, indexKeys } = await getPage(ctx, {
+  table: "messages",
+  index: "by_author",
+  schema,
+  startIndexKey: previousPage?.indexKeys.at(-1),
+  targetMaxRows: 50,
+});
+
+// A `ctx.db` whose `paginate` runs anywhere, in a component too; pass `endCursor` to keep a page's end on reruns.
+const result = await paginator(ctx.db, schema)
+  .query("messages")
+  .withIndex("by_author", (q) => q.eq("author", author))
+  .paginate({ cursor, numItems: 20 });
+```
+
+`getPage` returns each document's raw index key (`indexKeys`), not a cursor; it reads one row past its limit to set
+`hasMore`. `PageRequest.indexFields` is accepted and not read, as upstream: a named index needs `schema`.
+
+That completes part 1 (STUDY-181). The other parts of convex-helpers come later (STUDY-158 §3.4).
 
 Where it differs from convex-helpers (rule 5, DV-544): a validator's `isConvexValidator` is bunvex's
 `isValidator`, and `vRequired` refuses an unknown kind with "Unknown validator type: ". `server/stream` uses

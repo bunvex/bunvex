@@ -5,6 +5,9 @@
 // budgets, each page read again up to its own end; then single pages from fabricated cursors, from each
 // backend's own document cursors fed to other streams, and the error cases. Pages and cursors must match byte for
 // byte, but for each backend's ids and creation times, which the app replaces by labels (`<id n>`, `<ct n>`).
+// Then convex-helpers' pagination (PR 4): `getPage` walked to the end of each index and each page read again up to
+// its last key, single pages between given keys with every inclusivity, its two refusals, and `paginator`'s pages
+// with `endCursor`: the same documents, `hasMore` and raw index keys.
 // Local only: skipped, with a note, when Convex's backend is not there (scripts/download-convex-backend.sh, or
 // CONVEX_BACKEND_BIN).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -27,7 +30,12 @@ function prepare(project: string, dir: "convex" | "bunvex") {
   for (const name of readdirSync(functions)) {
     const file = join(functions, name);
     const source = readFileSync(file, "utf8");
-    writeFileSync(file, source.replaceAll('"convex-helpers/server/stream"', '"@bunvex/helpers/server/stream"'));
+    writeFileSync(
+      file,
+      source
+        .replaceAll('"convex-helpers/server/stream"', '"@bunvex/helpers/server/stream"')
+        .replaceAll('"convex-helpers/server/pagination"', '"@bunvex/helpers/server/pagination"'),
+    );
   }
 }
 
@@ -214,5 +222,73 @@ describe.skipIf(!ready)(
         { error: "Error: Cannot use eq on field 'g'" },
       ]);
     }, 60_000);
+
+    test("getPage walked to the end of each index: the same pages, hasMore and index keys", async () => {
+      const differences: unknown[] = [];
+      let pages = 0;
+      for (const index of ["creation", "k_g", "g_k"])
+        for (const order of ORDERS)
+          for (const limits of [{ targetMaxRows: 1 }, { targetMaxRows: 7 }, { targetMaxRows: 7, absoluteMaxRows: 3 }]) {
+            const args = { index, order, ...limits };
+            const [c, b] = (await both("pages:walk", args)) as unknown[][];
+            pages += c!.length;
+            if (JSON.stringify(c) !== JSON.stringify(b)) differences.push({ args, convex: c, bunvex: b });
+          }
+      expect(differences).toEqual([]);
+      expect(pages).toBeGreaterThan(100);
+    }, 300_000);
+
+    test("getPage between given keys, every inclusivity, and its refusals", async () => {
+      const KEYS = [
+        undefined,
+        [],
+        ["$undefined"],
+        [null],
+        [false],
+        [-1],
+        [1.5],
+        ["a"],
+        ["undefined"],
+        [1.5, 1],
+        ["a", 2],
+      ];
+      const differences: unknown[] = [];
+      for (const order of ORDERS)
+        for (const start of KEYS)
+          for (const end of KEYS)
+            for (const startInclusive of [undefined, true, false])
+              for (const endInclusive of [undefined, true, false]) {
+                const args = { index: "k_g", order, start, end, startInclusive, endInclusive, targetMaxRows: 5 };
+                const [c, b] = await both("pages:page", args);
+                if (JSON.stringify(c) !== JSON.stringify(b)) differences.push({ args, convex: c, bunvex: b });
+              }
+      expect(differences).toEqual([]);
+      const refusals = [
+        { index: "creation", order: "asc", start: [1, "x", 3] },
+        { index: "g_k", order: "desc", end: [1, 2, 3, 4, 5] },
+        { index: "noSchema", order: "asc" },
+      ];
+      const answers = [];
+      for (const args of refusals) {
+        const [c, b] = await both("pages:page", args);
+        expect({ args, answer: b }).toEqual({ args, answer: c });
+        answers.push(c);
+      }
+      expect(answers).toEqual([
+        { error: "Error: Index key length exceeds index fields length" },
+        { error: "Error: Index key length exceeds index fields length" },
+        { error: "Error: schema is required to infer index fields" },
+      ]);
+    }, 300_000);
+
+    test("paginator's pages and endCursor", async () => {
+      const differences: unknown[] = [];
+      for (const order of ORDERS)
+        for (const numItems of [1, 4]) {
+          const [c, b] = await both("pages:paginate", { order, numItems });
+          if (JSON.stringify(c) !== JSON.stringify(b)) differences.push({ order, numItems, convex: c, bunvex: b });
+        }
+      expect(differences).toEqual([]);
+    }, 300_000);
   },
 );
