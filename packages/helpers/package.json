@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./validators": "./src/validators.ts",
+    "./server/customFunctions": "./src/server/customFunctions.ts",
     "./server/compare": "./src/server/compare.ts"
   },
   "peerDependencies": {
@@ -14,7 +15,8 @@
     "@bunvex/values": "workspace:^"
   },
   "devDependencies": {
-    "@bunvex/core": "workspace:*"
+    "@bunvex/core": "workspace:*",
+    "@bunvex/testing": "workspace:*"
   },
   "repository": {
     "type": "git",

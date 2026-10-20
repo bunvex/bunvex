@@ -445,18 +445,19 @@ at `e48f9df` (0.1.128); paths are relative to its `packages/convex-helpers/`.
 |---|---|---|---|
 | convex-helpers' root module: `asyncMap`, `pruneNull`, `nullThrows` / `NullDocumentError`, `pick`, `omit`, `withoutSystemFields`, `assert`, the type helpers | `index.ts` | done (STUDY-181 PR 1) | `@bunvex/helpers`, its own version outside the fixed group (STUDY-158 Q-1). Upstream's tests ported. |
 | convex-helpers' validators: `literals`, `nullable`, `partial`, `systemFields`, `withSystemFields`, `addFieldsToValidator`, `doc`, `typedV`, `brandedString`, `deprecated`, `pretend`, `pretendRequired`, `ValidationError`, `validate`, `parse`, `vRequired` | `validators.ts` | done (STUDY-181 PR 1) | `@bunvex/helpers/validators`. `nullable` puts null first (H-6); `typedV` and `doc` are AD-23. Rule 5: `isValidator` for `isConvexValidator`, "Unknown validator type: " (DV-544). Upstream's tests ported, its function tests on bunvex's engine. |
+| convex-helpers' custom functions: `customQuery`, `customMutation`, `customAction`, `customCtx`, `customCtxAndArgs`, `NoOp`, the `Customization`, `CustomBuilder`, `CustomCtx`, `Registration` and (deprecated) `Mod` types | `server/customFunctions.ts` | done (STUDY-181 PR 2) | `@bunvex/helpers/server/customFunctions`. The function's args are its own with the customization's added, validated by the engine; `input` gets the customization's args and the definition's extra keys; `onSuccess` runs only after a handler that returned. The merged `ctx` keeps `ctx`'s getters as getters, where upstream spreads it, so a mutation's lazy `rooms` (AD-42) is not built by the merge: what the handler reads is the same. Upstream's tests ported, run on `@bunvex/testing` against a pushed project. |
 | convex-helpers' `compareValues` (deprecated) | `server/compare.ts` | done (STUDY-181 PR 1) | `@bunvex/helpers/server/compare`, `@bunvex/values`' `compareValues` (H-3). |
 
 ### Summary counts
 
-Recounted on 2026-10-20 from the rows' status column, as [the README](README.md)'s table (STUDY-181 PR 1, the libraries rows; the testing row, STUDY-159; before that 2026-10-19, STUDY-173, after the components rows' update).
+Recounted on 2026-10-20 from the rows' status column, as [the README](README.md)'s table (STUDY-181 PR 2, the custom functions row; PR 1, the libraries rows; the testing row, STUDY-159; before that 2026-10-19, STUDY-173, after the components rows' update).
 
 | Status | Count |
 |---|---|
-| done | 240 |
+| done | 241 |
 | partial | 21 |
 | missing | 6 |
 | n/a (cloud-only or a decided divergence) | 6 |
-| **total** | **273** |
+| **total** | **274** |
 
 The gaps, ranked by what an app would notice, are in [the README](README.md#gaps-by-impact).

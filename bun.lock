@@ -626,6 +626,7 @@
       "version": "0.0.1",
       "devDependencies": {
         "@bunvex/core": "workspace:*",
+        "@bunvex/testing": "workspace:*",
       },
       "peerDependencies": {
         "@bunvex/server": "workspace:^",
