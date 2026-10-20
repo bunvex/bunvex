@@ -1,7 +1,7 @@
 # STUDY-18 — The value model: types, order, index keys, JSON
 
-- **Status:** implemented (#15 values, #21 core and wire); supersedes STUDY-05 D4/D6–D8 and STUDY-10 D1/D2/D10
-- **Convex source read:** commit `4577b9031` of get-convex/convex-backend
+- **Status:** implemented (#15 values, #21 core and wire; §9 a pushed function's `Set` / `Map`); supersedes STUDY-05 D4/D6–D8 and STUDY-10 D1/D2/D10
+- **Convex source read:** commit `4577b9031` of get-convex/convex-backend (§9: `d8bdde0`)
 - **Related:** [STUDY-05](STUDY-05-index-keys-and-ordering.md), [STUDY-10](STUDY-10-documents-and-values.md),
   [PERSIST-01](../specs/PERSIST-01-contract.md)
 
@@ -108,7 +108,7 @@
 - **Error messages** (`stringifyValueForError`, `displayValue`): plain data prints exactly as Convex prints
   it; a class instance, `Map`, `Set`, `Date` or function prints as `Name {…}` and is never opened (no
   field, getter or `toJSON` read), a cycle as `"[Circular]"`, and the walk stops at the 16384-character
-  limit. bunvex's engine objects live in the same process as function code: `ctx.db` is the transaction,
+  limit. The `Set` or `Map` that is refused prints its entries (`Set[1]`), as Convex's, from any realm (§9). bunvex's engine objects live in the same process as function code: `ctx.db` is the transaction,
   whose fields reach the catalog, the store and its recent writes, so opening it put them in a message the
   client receives (D2).
 - **`@bunvex/server`:** decodes arguments with `fromJsonValue` and encodes results with `toJsonValue`.
@@ -202,3 +202,189 @@ None.
 - **Measurement.** `floatDebugText` costs about 540 ns per float on random 16–17-digit doubles, against 70–90 ns
   for the old `String`. This is only on the error-message path. `formatExportFloat`'s hot path did not change
   beyond one condition in its rare scientific branch.
+
+## 9. A `Set` or `Map` from a pushed function, and the other realm checks (2026-10-19)
+
+Found by STUDY-171 §8's vm-vs-process parity test: under both executors, a pushed function's `Set` or `Map` written
+as a value printed as `Set {…}`, where Convex prints `Set[1]`. The owner approved matching Convex.
+
+### 9.1 How Convex does it (re-read at `d8bdde0`)
+
+- `convexToJsonInternal` (npm-packages/convex/src/values/value.ts:386-414) checks, in order:
+  - `instanceof ArrayBuffer` (bytes);
+  - `Array.isArray`;
+  - `instanceof Set` and `instanceof Map`, which throw `errorMessageForUnsupportedType(context, "Set", [...value],
+    originalValue)` (and `"Map"`): the type name glued to the JSON of the entries;
+  - then `!isSimpleObject(value)` (common/index.ts:66, which accepts another realm's plain object by its
+    prototype's `constructor.name`), with the class name, a space, and the object's JSON.
+- `errorMessageForUnsupportedType` (value.ts:435-452) adds the path and the original object
+  (`stringifyValueForError`, value.ts:311) when there is a path.
+- Everything runs in the app's own isolate, on the app's own objects: the `convex` library is bundled with the app,
+  so `instanceof Set` always sees the app's `Set`.
+- Where the conversion runs, always in the app's code and before any syscall:
+  - a result: `JSON.stringify(convexToJson(result === undefined ? null : result))` (registration_impl.ts:72, 352,
+    514). Rust parses it only after (nesting), then measures it and checks `returns`
+    (`crates/isolate/src/helpers.rs`);
+  - `db.insert` / `patch` / `replace`: `convexToJson(value)` / `patchValueToJson(value)` (database_impl.ts:104, 115, 125);
+  - the scheduler: `args: convexToJson(functionArgs)` (scheduler_impl.ts:103, 128), on the arguments object (paths
+    `.v`). `runAt` takes a `Date` by `instanceof Date` (scheduler_impl.ts:114);
+  - a nested call from a query or mutation: `runUdf`'s `parseArgs(args)` (an object, or `The arguments to a Convex
+    function must be an object. Received: [object Set]`), then `args: convexToJson(queryArgs)`
+    (registration_impl.ts:761-764), before the function is resolved; from an action: `convexToJson(parseArgs(args))`
+    (actions_impl.ts:20).
+
+The oracle (`precompiled-2026-10-10-72ce13c`, `packages/differential/test/value-errors.test.ts`) and the `convex`
+npm package (1.46.0, `packages/sync-e2e/test/set-map-display-oracle.test.ts`) give, after `Uncaught Error: `:
+
+| Value | Convex's message |
+|---|---|
+| `new Set()` | `Set[] is not a supported Convex type.` |
+| `new Set([1])` | `Set[1] is not a supported Convex type.` |
+| `new Set([1, "two", null, [3], { four: 4n }])` | `Set[1,"two",null,[3],{"four":"4n"}] is not a supported Convex type.` |
+| `new Map()` | `Map[] is not a supported Convex type.` |
+| `new Map([["a", 1]])` | `Map[["a",1]] is not a supported Convex type.` |
+| `new Map([["a", 1], [2, [true]], [null, { b: "c" }]])` | `Map[["a",1],[2,[true]],[null,{"b":"c"}]] is not a supported Convex type.` |
+| `new Set([new Set([1]), new Map([[1, 2]])])` | `Set[{},{}] is not a supported Convex type.` |
+| `{ x: 1, m: new Map([["k", 1]]) }` returned | `Map[["k",1]] is not a supported Convex type (present at path .m in original object {"x":1,"m":{}}). To learn about Convex's supported types, see https://docs.convex.dev/using/types.` |
+| `[0, [new Set(["s"])]]` returned | `Set["s"] is not a supported Convex type (present at path [1][0] in original object [0,[{}]]). …` |
+| `{ v: new Set([1]) }` inserted, patched, replaced, scheduled, passed to `runQuery` / `runMutation` | `Set[1] is not a supported Convex type (present at path .v in original object {"v":{}}). …` |
+
+The same text for a query, a mutation, a V8 or a `"use node"` action, and with a `returns` validator (`v.string()`):
+the conversion fails before the validator runs. A result over the size limit, or nested past 64 levels, that holds a
+`Set` also gets the `Set` message.
+
+### 9.2 What bunvex did
+
+- `toJson` (packages/values/src/value.ts) checked `value instanceof Set` / `instanceof Map`. A pushed function runs
+  in its own context (STUDY-35), whose `Set` is not the server's. Its `Set` missed the check and fell to the
+  generic branch: `Set {…} is not a supported value type.`, for every case of the table. In-process functions
+  already printed `Set[1]`.
+- Order, where the display decides the message:
+  - a result with a `returns` validator was checked before it was converted: `ReturnsValidationError … Value: Set
+    {…}`;
+  - a result over the size limit or past 64 levels gave the limit's message;
+  - scheduled arguments were first converted inside the stored `[args]`: path `[0].v`, original object
+    `[{"v":…}]`;
+  - a query's or mutation's nested call converted its arguments after sorting their fields: original object
+    `{"m":…,"x":1}`, not the app's `{"x":1,"m":…}`;
+  - a nested call's arguments that were not an object (a `Set`, a class instance) failed the callee's validator
+    (`Expected to receive an object …`) or the conversion, not `parseArgs`.
+- **`runAt(new Date(…))` failed in every pushed function** ("The invoke time must a Date or a timestamp"): the
+  scheduler checked `timestamp instanceof Date`, and the function's `Date` is its context's.
+
+### 9.3 What bunvex does now
+
+- `isSet` / `isMap` (value.ts) test the internal slot through `Set.prototype.size`'s and `Map.prototype.size`'s
+  getters, which throw for anything else, whatever its realm. A subclass's instance is a `Set` (as `instanceof`). A
+  class of the app's named `Set`, an object with a forged `Symbol.toStringTag`, or `Object.create(Set.prototype)`
+  is not one. These checks run only for an object that is not plain, so a value's walk costs the same.
+- The entries print as any value does, so a `Set` or `Map` inside is `Set {…}` (DV-316; Convex's `JSON.stringify`
+  prints `{}`), as is the original object's.
+- The conversion comes first where Convex's does:
+  - `checkReturns` (server/src/functions.ts) converts the result before it throws the size, the nesting or the
+    `returns` error. This happens only on those error paths, so a result that passes costs no extra walk. Past the
+    stack, the nesting message stays (DV-363);
+  - the scheduler converts the arguments object before anything else;
+  - `runNested` (a query's or mutation's `runQuery` / `runMutation`) does the same, before it resolves the function,
+    after `parseCallArgs` (Convex's `parseArgs`, in bunvex's words as the scheduler's already were), which an
+    action's calls check first too.
+- The scheduler's `isDate` is a slot check too (`Date.prototype.getTime`).
+
+The other realm checks on the same path:
+
+| Check | Realm | Display or result vs Convex | Change |
+|---|---|---|---|
+| `instanceof Set` / `Map` (`toJson`) | missed a pushed function's | `Set {…}` vs `Set[1]` | slot check |
+| `isBytes` (`instanceof ArrayBuffer`, or the `[object ArrayBuffer]` tag) | either | a plain object with `Symbol.toStringTag: "ArrayBuffer"` was stored as empty bytes, where Convex's `instanceof` misses it and stores the object | the tag only picks candidates; the `byteLength` getter decides |
+| `instanceof Date` (`runAt`) | missed a pushed function's | the call failed | slot check |
+| `isSimpleObject` | either (prototype's `constructor.name`, as Convex's) | same | none |
+| `Array.isArray` | either | same | none |
+| `isCommitTsPlaceholder` (`instanceof`) | the server's own object | same | none |
+| `Date`, `RegExp`, typed arrays, `WeakSet`, class instances | named by `constructor.name` in both realms | `Date {…}`, `RegExp {…}`, `Uint8Array {…}`, `WeakSet {…}` vs Convex's JSON (`Date "1970-…"`, `RegExp {}`, `Uint8Array {"0":1}`, `WeakSet {}`) | none: DV-316 |
+
+### 9.4 The `process` executor
+
+The bridge's codec (`packages/sandbox/src/wire.ts`, STUDY-171 §8.3) carried what is not a value as its kind and class
+name only (`{"$x":{k,c}}`). So under `process` a `Set` reached the host without its entries, and a `Date` without its
+time, so `runAt(new Date(…))` failed there too. The codec now carries three kinds with more:
+- `{"$x":{"k":"set","c":…,"e":[…]}}` and `{"$x":{"k":"map","c":…,"e":[[k,v],…]}}`: the class name and the entries,
+  encoded as any value (cycles too, a Map's pair counted as the array it is). The engine shows a Set's entries only
+  in a message, cut at 16384 characters, where each takes at least two, so at most `MAX_WIRE_ENTRIES` (16384)
+  cross. The host refuses more, a list that is not one, or a Map entry that is not a pair;
+- `{"$x":{"k":"date","c":…,"t":…}}`: the time (`getTime`, `NaN` as `{"$f":"NaN"}`).
+
+The host builds a real `Set`, `Map` or `Date` of its own. A subclass gets a prototype, between the instance and its
+kind's, that names the app's class (`Tags {…}`, as `vm` prints it), so its kind's methods still work. The forged
+`ArrayBuffer` tag needs nothing: the child's `isBytes` is the values package's, so the object crosses as a plain
+object and is stored as one.
+
+Tests:
+- `sandbox/test/wire.test.ts`: the engine's message for each kind, across the codec and under `vm`, equal (sizes,
+  nesting, subclasses, self-references, past the cap, a subclass of `Date`, the forged tag); a real host `Set`, `Map`
+  and `Date` with the entries, cycles, time and class name; the refusals.
+- `sandbox/test/bridge-parity.test.ts`: under `vm` and `process`, writes of every size and nesting, subclasses,
+  cycles, 20 000 entries, the forged tag, a scheduled `Map`, `runAt` with a `Date` and with a subclass of `Date`, a
+  nested call's `Set` argument, and returned `Set` / `Map`.
+
+Sabotage, each caught, the file restored and `git diff` clean after each:
+
+| Break (wire.ts) | Caught by |
+|---|---|
+| Set / Map back to a named object, no entries | wire (11), bridge-parity (10) |
+| a Map read as a plain named object | wire (5), bridge-parity (4) |
+| the Date's time not carried | wire (2), bridge-parity (3) |
+| a subclass's name dropped | wire (3), bridge-parity (1) |
+| no cap when encoding | wire (2), bridge-parity (1) |
+| the host takes more entries than the cap | wire (1) |
+| a Map's pair not counted as a `$c` level | wire (1) |
+
+### 9.5 Divergences
+
+None new. DV-316 (the entries' and the original object's `Set {…}`) and DV-363 (the nesting message past the
+stack) stay as decided. One pathological difference: a `Set` whose prototype was replaced, or an
+`Object.create(Set.prototype)`. Convex's `instanceof` follows the prototype, and its spread throws a `TypeError`
+for the second. bunvex follows the slot. No app is expected to do either.
+
+### 9.6 Tests
+
+- `values/test/value-edges.test.ts`: every size of the table, from this realm and another (`vm.runInNewContext`),
+  through `toJsonValue` and `copyValue`, nested in objects and arrays, subclasses; the lookalikes (a class named
+  `Set` or `Map`, a forged tag, a bare prototype); the forged `ArrayBuffer` tag.
+- `server/test/set-map-display.test.ts`, with pushed code under `vm`:
+  - returned by a query (with and without `returns`), a mutation, an action, or a nested validated query;
+  - too large and too deep;
+  - written by `insert` / `patch` / `replace`;
+  - scheduled from a mutation and from an action;
+  - passed to `runQuery` / `runMutation` from an action and from a mutation, to a validated callee too;
+  - arguments that are not an object, from a mutation and from an action;
+  - `runAt` with the function's `Date`.
+
+  `value-error-frames.test.ts` and `unsupported-value-leak.test.ts` now expect Convex's order and text.
+- **Oracles:**
+  - `sync-e2e/test/set-map-display-oracle.test.ts`: `convexToJson` from the `convex` package against `toJsonValue`
+    for 13 values, from both realms;
+  - `differential/test/value-errors.test.ts`: the pinned binary against bunvex, for 17 paths × 12 kinds, too large
+    and too deep, arguments that are not an object, and `runAt` with a `Date`. `compare.ts` gains the DV-04
+    rewrites of "is not a supported Convex type" and "The arguments to a Convex function".
+- **Sabotage.** Each break was applied, the four test files above were run, and the file was restored (`git diff`
+  clean after each one):
+
+| Break | Caught by |
+|---|---|
+| `isSet` back to `instanceof Set` | values, server, npm oracle, binary oracle |
+| no Set/Map branch | values, server, npm oracle, binary oracle |
+| `isMap` checks the Set's slot | values, server, npm oracle, binary oracle |
+| `isBytes` trusts the tag | values, server, npm oracle |
+| scheduler arguments not converted first | server, binary oracle |
+| `runAt` by `instanceof Date` | server, binary oracle |
+| `returns` checked before the conversion | server, binary oracle |
+| size checked before the conversion | server, binary oracle |
+| nesting checked before the conversion | server, binary oracle |
+| a nested call's arguments not converted first | server, binary oracle |
+| the scheduler's conversion without the stack guard | server (`value-nesting.test.ts`: 100 000 levels) |
+| `runNested` without `parseArgs` | server, binary oracle |
+| an action's calls without `parseArgs` | server, binary oracle |
+
+- **Measurement:** none taken (no benchmarks on the shared machine). The `Set` / `Map` checks run only for an object
+  that is not plain. The `isBytes` slot check runs only for an object tagged `ArrayBuffer` that is not this realm's.
+  The added conversions run only on error paths, or once per scheduled or nested call where Convex converts too.

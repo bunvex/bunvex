@@ -1,0 +1,674 @@
+# STUDY-174 — Catching silent bugs: invariants, a soak test, metadata differentials
+
+- **Status:** draft (study and scaffolding; the findings of §3.3 are listed, not fixed; the questions of §8 are the owner's).
+- **Why now:** [#751](https://github.com/bunvex/bunvex/pull/751) found that since 2026-10-03 every cached query result
+  expired after 17 s. [STUDY-58](STUDY-58-app-metrics.md)'s `AppMetrics` read the deterministic `Date.now` inside each
+  query's execution, which marked every result as having read the clock. Every answer stayed correct, the tests and
+  benchmarks ran for seconds, and nothing asserted how the cache behaves over time. The vm-vs-process parity test of
+  #750 ([STUDY-171](STUDY-171-function-sandbox-seam.md) §8–9) found it because it compares more than values: the
+  read set and `ctx.meta`'s transaction metrics. This study asks how to catch that class on purpose: bugs that give
+  correct answers but degrade the system over time or under load.
+- **Convex source read:** get-convex/convex-backend at `72ce13c`, the reference since
+  [STUDY-173](STUDY-173-convex-reference-2026-10-10.md) (`precompiled-2026-10-10-72ce13c`, also the differential's
+  oracle binary). Every line below is cited at that commit (`git -C ../convex-backend show 72ce13c:<path>`).
+- **bunvex code read:** `main` at `016dfccb` (after #749), before #751 merged. Every probe, prototype run and soak
+  pilot below ran on that pre-#751 build. #751 (with #750) is now on main at `7683a19a`, which fixes F1. This branch
+  was then merged with main, and the prototype re-run there: it passes (§5.3).
+- **Related:**
+  - the differential: [STUDY-122](STUDY-122-differential-testing.md);
+  - the Jepsen nightly: [STUDY-57](STUDY-57-linearizability-testing.md), `.github/workflows/jepsen-nightly.yml`;
+  - the coverage floors: `scripts/coverage-floors.ts`;
+  - the cache: [STUDY-08](STUDY-08-cache-and-subscriptions.md), [STUDY-75](STUDY-75-sync-cache-hit-logs.md);
+  - the function log: [STUDY-47](STUDY-47-log-streaming.md); read counting: [STUDY-161](STUDY-161-engine-messages.md) §16 (#704).
+  - Test hardening is another session's track (bunvex-9f). Every proposal here that touches the differential, the
+    Jepsen nightly or the coverage floors is framed as an extension of them, not a replacement.
+
+**In one paragraph.** bunvex's test layers check answers: values, errors, histories, final data, lines covered,
+mutants killed. None of them checks how a resource behaves over time. We found no RSS or heap trend, no count of
+timers or handles, and no cache hit rate in any CI or nightly job. This study proposes three cheap layers to close
+that gap:
+- **(1) Invariant assertions.** §3 lists 32 of them by subsystem. Ten were probed against main before #751 merged.
+  Five did not hold; F1 is now fixed by #751, the other four still stand:
+  - F1: #751's cache expiry (fixed on main by #751 since these probes ran).
+  - F2: an idle scheduler runs about 2 000 queue queries a second when its next job is more than 24.8 days away.
+  - F3: the same for a cron, such as a monthly or yearly one.
+  - F4: a cache hit's log entry does not describe the run it reused, as Convex's does.
+  - F5: `shutdown()` hangs while a scheduled mutation keeps losing OCC races.
+- **(2) A soak test.** `bench/soak/` has a 45-minute mixed workload judged on trends by twelve written rules. Its
+  pilots on the test VPS (12, 12, 30 and 25 minutes) flagged F1 and F2 on their own, with no knowledge of either. They
+  also found a sixth, F6: resident memory grows about 5 MB a minute under steady load while the JS heap stays flat
+  (§4.6).
+- **(3) Metadata differentials against Convex's binary.** A prototype in `packages/differential` compares the query
+  cache's hits and misses as the function log stream shows them on both backends. It failed on the pre-#751 main
+  exactly where #751 says, and passes on main now that #751 is merged (§5.3).
+
+## 1. How Convex does it
+
+Convex has no soak or invariant suite in the open repository either. Its protections against this class are
+structural, and they say what bunvex must match:
+
+- **Time-dependence is recorded, not assumed.** The isolate records whether a query read the clock
+  (`observed_time` on the outcome, `crates/isolate/src/client.rs:1115`). Only those results expire: `MAX_CACHE_AGE`,
+  `crates/application/src/cache/mod.rs:121`, checked at `:797` and `:807`. A result that read no time stays valid
+  until a commit writes into its read set.
+- **A cache hit is logged as the run it reused.** In `log_query` (`crates/application/src/function_log.rs:623`), the
+  cached outcome's fields are logged as they were: `execution_timestamp: outcome.unix_timestamp` (`:735`),
+  `user_execution_time` (`:742`) and `memory_used_mb: outcome.memory_in_mb` (`:747`). `cached_result: was_cached`
+  (`:740`) marks the hit. The usage it meters is a `CallType::CachedQuery` (`:705`): no reads, no compute.
+- **Long waits are durations.** The scheduler waits until the next job with `rt.wait(next_job_ts − now)`
+  (`crates/application/src/scheduled_jobs/mod.rs:315–321`). If it is behind, it re-runs its loop every 5 s. The cron
+  executor does the same (`crates/application/src/cron_jobs/mod.rs:185–199`). A tokio sleep takes any `Duration`, so
+  a job five years away costs nothing.
+- **Shutdown aborts workers.** The scheduler's executor is a spawned task (`rt.spawn("scheduled_job_executor", …)`,
+  `crates/application/src/scheduled_jobs/mod.rs:157`). The shutdown chain is:
+  - `Application::shutdown` (`crates/application/src/lib.rs:3938`) first calls `self.workers.shutdown()`;
+  - that calls `scheduled_job_runner.shutdown()` (`crates/application/src/worker_handles.rs:62`);
+  - which shuts down the executor's handle (`scheduled_jobs/mod.rs:169–171`);
+  - a tokio handle's `shutdown` is `abort()` (`crates/common/src/runtime/mod.rs:176–177`).
+
+  Nothing waits for a job to win its OCC race.
+- **Everything that grows has a knob.** Examples: `UDF_CACHE_MAX_SIZE`, `WRITE_LOG_*_RETENTION`, the function log's
+  `MAX_UDF_EXECUTION`, the log sinks' buffers, and `UDF_METRICS_MAX_BUCKETS` (`crates/common/src/knobs.rs`). bunvex
+  already copies them (DV-63, DV-128, STUDY-47, STUDY-58).
+
+## 2. What an app can observe
+
+A silent bug changes none of an app's answers. It shows up only as:
+- **Cost and latency.** Queries rerun, CPU burns while idle, the p99 drifts.
+- **Resources.** RSS, file descriptors, sessions kept after their clients leave.
+- **Metadata.** Anything an app, a dashboard or a log sink reads besides the value:
+  - whether a call was a cache hit (`cachedResult` in the function log and the log streams);
+  - its usage (`usageStats`: documents and bytes read and written) and its user time and memory;
+  - its OCC info (`occInfo`, `willRetry`, `mutation_retry_count`);
+  - which writes woke which subscriptions (the dashboard's `subscription_invalidations_top_k`);
+  - the app metrics (`/api/app_metrics/*`: cache hit percentage, rates, latencies, scheduler lag).
+
+The metadata is the part we can compare with Convex directly (§5). The rest can only be judged against bunvex's own
+bounds (§3, §4).
+
+## 3. Invariants inside tests (part 1)
+
+### 3.1 The list
+
+**Where** is the state or the code. **Test today** is the existing test that asserts the invariant, or "none".
+**Probe** is the throwaway check run against main for this study (§3.2): **holds** or **VIOLATED**.
+
+| # | Subsystem | Invariant | Where | Test today | Probe |
+|---|---|---|---|---|---|
+| I-01 | Query cache | A query that reads no time stays cached until a commit writes into its read set | `core/src/engine.ts` `stillValid` (787–802); `server/src/app-metrics.ts:452` | `meta.test.ts` (#751, now on main) | P01 **VIOLATED** on the pre-#751 build (F1, fixed by #751) |
+| I-02 | Query cache | A result that read the clock expires after 17 s, and only such a result | `core/src/query-cache.ts:15`, `engine.ts:792` | `core/test/query-cache.test.ts:215` (engine only, not through `createServer`) | P01, P09 |
+| I-03 | Query cache | `bytes` equals the sum of entry sizes and stays ≤ `maxBytes`; no `waiting` entry outlives its calls | `query-cache.ts` `set`/`enforceLimit` | `core/test/query-cache-store.test.ts` (unit) | P08 holds |
+| I-04 | Query cache | An index, table or component change empties the cache; a run that straddles it stores nothing (`cacheEpoch`) | `engine.ts:757, 982, 3392, 3561` | none | not probed |
+| I-05 | Sync | Once every client has closed, the hub is empty: `sessions`, `watchers`, `latest`, `inflight`, `reads`, the inspector's rings | `server/src/sync.ts` `SyncHub` (405–939), `unwatch` (627) | `sync.test.ts:404` (`reads` only) | P02, P08 hold |
+| I-06 | Sync | `/metrics` sessions and subscriptions equal what the clients hold, at any time | `server.ts:1033`, `sync.ts:418` | none | soak R5 |
+| I-07 | Sync | A silent client is closed after `CLIENT_TIMEOUT_MS`, which frees its session | `sync.ts:1146` | `ws-heartbeat.test.ts:150` | — |
+| I-08 | Sync | A resend after a reconnect runs nothing twice | `engine.ts` `sessionMutation` (893–916) | `sync.test.ts:334, 355` | — |
+| I-09 | Sync | Memory per idle connection and per subscription stays under a measured budget | `SyncSession` (958) | none | soak (measured, not asserted) |
+| I-10 | Sync | A write wakes exactly the subscriptions whose read set it intersects | `ReadSetIndex`, `sync.ts` `onCommit` | `sync.test.ts:404`; `differential/test/dashboard-ops.test.ts` (top_k counts, local only) | §5 |
+| I-11 | Rooms | After leave, close and the grace: `rooms`, `bySink`, `graced`, `removedInGrace` and `taps` are empty, and the tick is stopped | `server/src/rooms/hub.ts:195–206` | `rooms-hub.test.ts:228` (one room) | P03 holds (120 churned connections) |
+| I-12 | Scheduler | Every job runs exactly once: a mutation exactly once, an action at most once, none lost under contention | `server/src/scheduler.ts` (525, 604–657) | `scheduler.test.ts:283, 312, 437, 443` | P04 holds (200 jobs, half via actions) |
+| I-13 | Scheduler | An idle scheduler sleeps until its next job is due, however far away | `scheduler.ts:468` | none | P06 **VIOLATED** (F2) |
+| I-14 | Crons | An idle cron executor sleeps until its next run, however far away | `cron-executor.ts:285` | none | P07 **VIOLATED** (F3) |
+| I-15 | Scheduler | `shutdown()` finishes promptly, whatever the running jobs are doing | `scheduler.ts:368–374, 633–636, 671–682` | `shutdown.test.ts` (store access only) | P10 **VIOLATED** (F5) |
+| I-16 | Scheduler | Lag (ran − due) stays bounded under load and does not trend up | `scheduler.ts` `logStats` (501) | none | soak R9b |
+| I-17 | Index backfill | `numDocsIndexed ≤ totalDocs`; a restart from the start resets the count | `core/src/index-worker.ts:229, 267–272` | none | suspected S1 (code read) |
+| I-18 | Index backfill | Once backfilled, the index holds exactly the table's documents | `index-worker.ts` | `core/test/index-backfill.test.ts:109, 167` | — |
+| I-19 | Buffers | The function log keeps at most `MAX_UDF_EXECUTION` (1000) parts, and no waiter after its poll | `server/src/function-log.ts:233–248` | `function-log.test.ts:310` | P08 holds |
+| I-20 | Buffers | Log streams: the buffer stays ≤ `bufferSize` (4096) and each sink queue ≤ its capacity; drops are counted | `log-sinks.ts:405–426` | none | not probed |
+| I-21 | Buffers | App metrics: at most 60 buckets per metric, and the name caches stay ≤ 10 000 | `app-metrics.ts:197–204, 464, 482` | `app-metrics.test.ts:68` | — |
+| I-22 | Buffers | The write log stays within its retention (30–300 s) and byte bounds | `core/src/committer.ts:95–102, 348` | committer tests (unit) | P08 (660 entries) |
+| I-23 | Buffers | The sync inspector forgets an unwatched key; its feed stays ≤ 1024 | `sync-inspector.ts:57, 77` | `invalidation-inspector.test.ts:136` | P08 holds |
+| I-24 | Timers | After `shutdown()`, nothing keeps the event loop alive: the process exits by itself | `server.ts:2620–2643` | none | P05 holds (bare, busy, socket left open) |
+| I-25 | Timers | No `setTimeout` is given more than 2^31−1 ms; Bun fires it after about 1 ms | `scheduler.ts:468`, `cron-executor.ts:285` (`executor-invalidations.ts:174` caps) | none | F2/F3 |
+| I-26 | Handles | File descriptors return to the baseline after uploads, downloads and closed clients | storage, sqlite, sockets | none | soak R7 |
+| I-27 | Handles | `LocalSink.send` closes its file when `sync()` throws (otherwise each retry leaks an fd) | `log-sinks.ts:266–271` | none | suspected S2 (code read) |
+| I-28 | Handles | `pumpHashing` cancels the body reader when a write throws | `file-storage/src/store.ts:37–47` | none | suspected S3 (code read) |
+| I-29 | OCC | A mutation runs at most 1 + `UDF_EXECUTOR_OCC_MAX_RETRIES` (4) times. Each lost attempt is logged with `willRetry` and `occInfo.retryCount` | `engine.ts:283–294, 4029–4044`; `functions.ts:1211–1219` | `core/test/occ.test.ts:21, 65`; `function-log.test.ts:233` | — |
+| I-30 | Counters | Read and write counts (`usageStats`, the read limit) equal Convex's | `core/src/tx.ts:518–651`, `read-count.ts` | `usage-database-io.test.ts`; `differential/test/read-count.test.ts` (local only) | §5 |
+| I-31 | Counters / log | A cache hit's log entry matches Convex's: `cachedResult`, zero usage, and the user time, memory and timestamp of the run it reused | `functions.ts:1400–1447` | none | P09 **VIOLATED** (F4) |
+| I-32 | Process | An idle backend uses (almost) no CPU | every loop | none | soak R11 (catches F2) |
+
+How a test asserts each class:
+- **Freed state (I-03, I-05, I-11, I-19, I-23).** Read the sizes after the scenario (`hub.sessions.size`,
+  `cache.bytes`, `rooms.size`, `functionLog` parts). Unit tests already reach into internals this way, e.g.
+  `sync.test.ts:404` reads `sync.reads.size`. A cheaper, more general form for the server's tests: an `afterEach` in
+  the server suites that asserts a closed server's hub is empty. That is one helper next to `v1-client.ts`, used by
+  every suite that opens sessions.
+- **Over-time behaviour (I-01, I-02, I-13, I-14, I-16).** Inject the clock. The engine has `cacheClock`
+  (`meta.test.ts` skews it by 17 s). The scheduler and crons take `wallClock()` from core's runtime (STUDY-132).
+  Then assert counts: runs of a query, engine queries per second while idle.
+- **Process-level (I-24, I-26, I-32).** Run in a child process. Assert it exits by itself, its CPU over an idle
+  window, and its `/proc/<pid>/fd` count. These are what the soak (§4) measures. A short form fits a test:
+  `server/test/idle-cpu.test.ts` could spawn a backend with a far-future job and a yearly cron, and assert under
+  5 % CPU over 2 s.
+- **Static (I-25).** A rule in `scripts/check-deps.ts`, rule 6 next to rule 5's comment-stripping scan, so CI's
+  `check:deps` fails on a new one. The rule: in `packages/*/src`, a `setTimeout(`, `Bun.sleep(` or `timers.set(`
+  whose delay subtracts a clock (`- wallClock()`, `- Date.now()`, `- performance.now()`, `- now`) must take it from
+  one capped helper, e.g. `timerDelay(at)` in core, which clamps to 2^31−1 ms (the loop re-arms when it fires
+  early). It would fail today on `scheduler.ts:468` and `cron-executor.ts:285`, so it lands in the F2/F3 fix PR, not
+  here. The scan of §3.3 (S8) found no other site that matches.
+
+### 3.2 The probes
+
+The probes were throwaway scripts that imported the worktree by absolute path. They live in the session's
+scratchpad, not in this PR. Each one prints `HOLDS` or `VIOLATED`.
+
+| Probe | Invariants | What it ran | Result |
+|---|---|---|---|
+| P01 | I-01 | `createServer`, a query over a table, called over HTTP twice, then the cache clock moved 18 s, then a write | **VIOLATED**: 2 runs before the write (expected 1) |
+| P02 | I-05 | 200 sync connections, half of them reusing one session id. Each subscribes two queries; some write, remove a query, or are torn down | holds: every hub map is 0 |
+| P03 | I-11 | 120 connections join two rooms, set presence, send events; half leave, all close; a third reuse a session id. Grace 1 s | holds: all 0 once the grace passed |
+| P04 | I-12 | 40 concurrent mutations schedule 200 jobs (0–50 ms) on one hot counter, half through an action | holds: 200 ran once each, counter 200 |
+| P05 | I-24 | sync, rooms, an action, a job an hour away; `shutdown()`; no `process.exit` | holds: the process exits within 4 ms |
+| P06 | I-13, I-25 | one job 30 days away, then 2 s idle | **VIOLATED**: 4 085 engine queries and 0.52 s of CPU in 2 s (with 1 day: 2 queries) |
+| P07 | I-14, I-25 | one cron due in ~300 days, then 2 s idle | **VIOLATED**: 4 584 engine queries and 0.26 s of CPU in 2 s |
+| P08 | I-03, I-19, I-22, I-23 | 3 000 rounds of HTTP queries (400 keys, every other one throwing), writes, and 50 sync subscriptions; cache 256 KiB | holds: bytes = Σ sizes ≤ budget; 1 000 log parts; 0 rings |
+| P09 | I-31, I-01, I-02 | the differential prototype of §5.3, on Convex's binary and bunvex's backend | **VIOLATED** (F4); F1 seen as well |
+| P10 | I-15 | a scheduled mutation that keeps losing OCC races to a writer loop; `shutdown()` | **VIOLATED**: not done after 4 s; it finishes only once the writer stops |
+
+### 3.3 Findings: invariants that do not hold on main
+
+None of these is fixed in this PR. Each is a bug against Convex's behaviour (§1), so none needs a DV unless the
+owner decides otherwise (F4 is the exception, see §8).
+
+**F1. Every cached query result expires after 17 s** (I-01). This is #751's finding. #751 has since merged
+(`7683a19a`), so F1 is **fixed on main**. It is reproduced here, on the pre-#751 build, as the baseline the new layers
+must catch:
+
+```ts
+const skew = { ms: 0 };
+const engine = await new Engine(schema, store, { cacheClock: () => Date.now() + skew.ms }).init();
+const s = createServer({ engine, functions, port: 0 });      // AppMetrics records inside the query
+await post("query", "m:list"); await post("query", "m:list");  // 1 run
+skew.ms = MAX_CACHE_AGE_MS + 1000;
+await post("query", "m:list");                                 // main: 2 runs; Convex and #751: still 1
+```
+
+**F2. An idle scheduler busy-polls when its next job is more than 24.8 days away** (I-13, I-25). The loop's sleep
+(`scheduler.ts:468`) is `setTimeout(poke, nextAt − now)` with no cap. Past 2^31−1 ms Bun fires it after about 1 ms,
+with a one-time `TimeoutOverflowWarning`. So the loop reads the queue (three queries) about every millisecond, until
+the job is less than 24.8 days away. Apps can trigger this: `runAfter` and `runAt` accept up to five years
+(`FIVE_YEARS_MS`), and "remind me in a month" is a normal job. The GC timer next to it is capped (`MAX_TIMER_MS`,
+`scheduler.ts:261`). `executor-invalidations.ts:174` caps too.
+
+```ts
+const s = createServer({ engine, functions, port: 0 });
+await functions.runMutation("m:later", { ms: 30 * 86_400_000 });  // scheduler.runAfter(30 days, …)
+// over the next 2 s: 4 085 engine queries, 0.52 s CPU (1 day: 2 queries, 17 ms)
+```
+
+**F3. The same in the cron executor** (I-14, I-25). `cron-executor.ts:285` has the same uncapped `setTimeout`. Any
+cron executor whose *nearest* cron is more than 24.8 days away does it. That covers an app whose crons are all
+yearly, or all monthly in the days after their run (31 days); a weekly cron never triggers it. The soak cannot see
+F3: its trim cron runs every 10 s, so a far cron is never the next run. F3 needs the unit test below.
+
+```ts
+const crons = cronJobs();
+crons.cron("yearly", "0 0 1 1 *", "m:add", {});   // next run > 24.8 days away
+createServer({ engine, functions, port: 0, crons });
+// idle: 4 584 engine queries in 2 s
+```
+
+Both fixes are one line each: cap the delay at 2^31−1 ms and let the loop look again, which it already does when
+woken. But they land on a default path, so they belong in a fix PR, with a test per loop (inject the clock, schedule
+past the cap, count the queries).
+
+**F4. A cache hit's log entry does not describe the run it reused** (I-31, found by the §5.3 prototype). In the
+function log stream (`/api/stream_function_logs`) and the log sinks, Convex logs a hit with the cached outcome's
+`userExecutionTime`, `usageStats.memoryUsedMb` (64) and `executionTimestamp`. bunvex logs `userExecutionTime: 0`,
+`memoryUsedMb: 0` and the hit's own time (`functions.ts:1428, 1447`). Both agree on `cachedResult: true` and zero
+reads. Who sees it: log sinks such as Datadog and Axiom (a cached call looks free of user time and memory on bunvex),
+and the dashboard's logs page. The usage meter is right on both: a cached query meters no compute (STUDY-71).
+Repro: `bun test --todo packages/differential/test/cache-metadata.test.ts` with `CONVEX_BACKEND_BIN` set. The
+third case is a `test.todo` that prints `{sameUserTime, sameMemory, sameTimestamp}`: Convex gives
+`true, true, true`, bunvex `false, false, false`.
+
+**F5. `shutdown()` waits for a scheduled mutation that keeps losing OCC** (I-15). The scheduler's `stop()` waits for
+its running jobs. A job's OCC retry loop (`scheduler.ts:633–636`, backoff up to 60 s, no limit) never checks
+`stopped`. During `shutdown()` the engine and the HTTP server are still open: the scheduler stops at step 5, the
+server at step 7. So writers can keep a hot key contended and the shutdown waits on them. Under Docker or systemd
+the backend is then SIGKILLed after the grace period instead of closing its store cleanly. Convex aborts the
+executor task. The chain at `72ce13c` is §1's:
+- `lib.rs:3938`;
+- `worker_handles.rs:62`;
+- `scheduled_jobs/mod.rs:169–171`;
+- `common/src/runtime/mod.rs:177`, `abort()`.
+
+```ts
+// engine maxRetries 0, scheduler backoff 5–20 ms, a job that reads, sleeps 20 ms, writes one doc;
+// a writer loop patches the same doc every 1 ms
+await functions.runMutation("m:sched", {}); await Bun.sleep(300);
+await s.shutdown();   // not done after 4 s (134 attempts); done 48 ms after the writer stops
+```
+
+The probe is harsher than production: the conflicting writer runs in-process and the job sleeps while holding its
+read. In production, the conflicting writes come from requests that the still-open HTTP server keeps accepting. The
+same unbounded wait applies to an action's `completeJob` retry (`scheduler.ts:671–682`, up to 2 h), which only exits
+on `CommitterStoppedError`.
+
+**The other timers (bunvex-9f's review).** `git grep -n "setTimeout(" packages/server/src packages/core/src`,
+widened to `Bun.sleep(`, `setInterval(`, the runtime's and the rooms' `timers.set(`, and `packages/{file-storage,
+persistence,sandbox,search}/src`. Each delay's source was checked for an uncapped `x − now`:
+- **App-driven, `x − now`, uncapped:** only F2 and F3.
+- **`x − now`, but capped:**
+  - `scheduler.ts:718` (the GC: `MAX_TIMER_MS`, `:726`);
+  - `executor-invalidations.ts:174`;
+  - `engine.ts:689` (≤ 250 ms);
+  - `log-sink-http.ts:83` (≤ 50 ms);
+  - `otlp.ts:412` (≤ 60 s).
+- **`x − now`, bounded by a knob:** `committer.ts:927`, bounded by `MAX_REPEATABLE_TIMESTAMP_IDLE_FREQUENCY`
+  (1 h).
+- **Fixed constants, long polls, or backoffs capped by their max:** everything else.
+- **S8 (minor, not a finding).** About ten delays come straight from operator knobs, and the knob parsers do not cap
+  them. Setting one past 24.8 days would make its loop spin like F2. The knobs are
+  `MAX_REPEATABLE_TIMESTAMP_IDLE_FREQUENCY`, the retention intervals, `ROOM_RECONNECT_GRACE_SECS`,
+  `SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY`, the usage-gauge period, the table-summary interval, and the request and
+  action timeouts. No default comes close; the helper above would cover these too.
+
+**Suspected, from reading the code, not probed** (for the fix PRs to confirm or dismiss):
+- **S1.** `index-worker.ts:267–272`: a backfill that restarts from the beginning, because its checkpoint snapshot is
+  older than `minSnapshotTs`, keeps its `done[]` count. Its progress can then pass 100 % (I-17).
+- **S2.** `log-sinks.ts:268–271`: `LocalSink.send` opens, syncs and closes the file without `finally`. A throwing
+  `sync()` leaks the handle, and the send is retried forever (I-27).
+- **S3.** `file-storage/src/store.ts:37–47`: `pumpHashing` never cancels the request body's reader when a write
+  throws (I-28).
+- **S4.** `index-worker.ts:175–177`: its failure backoff (up to 30 s) cannot be interrupted, so `stop()` can wait for
+  it. `start()` (119–124) can restart the worker after `engine.close()` began.
+- **S5.** `server.ts:2600–2617`: the synchronous `stop()` skips `executorInvalidations.stop()`, which `shutdown()`
+  calls. Its timer is unref'd, so the effect is work after stop, not a hang.
+- **S6.** `external-deps.ts:84`: the push-time `bun install` has no timeout and no kill.
+- **S7.** `core/src/persistence/sqlite.ts:149–150`: the process lock is taken before `new Database`, outside the
+  `try`. A throwing open keeps the lock until the process exits.
+
+## 4. A soak test (part 2)
+
+### 4.1 What it is
+
+`bench/soak/soak.ts` (scaffolding in this PR; it changes no default code path). It runs:
+- **The backend:** this repository's `bunvex-local-backend` (the program the release compiles, run by Bun) on SQLite,
+  started the way `examples/_harness` starts it.
+- **The app:** `bench/soak/app/`, deployed with the CLI as a self-hosted user would.
+- **The workload:** mixed, for `--minutes` (default 45). The default 20 clients cover:
+  - **Sync clients.** Each subscribes to its channel's latest messages and to a hot counter. It sends a message every
+    ~1 s and bumps the shared counter every ~2 s, so mutations conflict and retry. It holds a room presence updated
+    every 0.5 s, and is replaced by a new client after 30–90 s (reconnect churn: rooms' grace, session ids,
+    re-subscription).
+  - **HTTP:**
+    - `messages:list` for a random channel, 10/s, invalidated often;
+    - **the cache canary** `config:get`, 10/s. It reads a row written every 5 minutes, so past the warm-up each of
+      its misses must follow a write (#751's detector);
+    - a full-text search, 2/s.
+  - **Scheduler:** 2 jobs/s, due within 0–2 s. Each records `dueAt` and `ranAt`, so lag, and exactly-once, are
+    checked from the data.
+  - **Storage:** every 5 s, upload 16 KiB, save, get the URL, download, compare, delete.
+  - **Crons:** the trim every 10 s keeps `messages` at 2 000 rows, so the data does not grow and memory has no
+    reason to.
+  - **A job 30 days away** (`--far-future-days`). Once the workload has stopped it is the scheduler's next job, and
+    the idle tail must cost nothing (F2).
+- **The caches** run with small budgets: 32 MiB of index cache and 16 MiB of query cache (flags). They fill during the
+  warm-up, so later growth is not a cache filling up. With the defaults, 512 MiB and 100 MiB, a 45-minute run on this
+  workload would still be filling them and R1 would be meaningless.
+
+Every 15 s it samples:
+- `/metrics`:
+  - RSS and heap;
+  - index cache bytes;
+  - query cache hits and misses (deltas);
+  - sync sessions and subscriptions;
+  - room members;
+  - event-loop lag;
+  - scheduler backlog.
+- File descriptors: `/proc/<pid>/fd` on Linux, `lsof` elsewhere.
+- What the driver itself holds open.
+- Per-operation p50 and p99 over the window.
+
+Once a second it tails the function log stream to count the canary's calls and misses, and any failure the workload
+did not ask for. A hot counter's lost OCC attempts are expected and not counted.
+
+At the end it:
+1. closes every client;
+2. drains the scheduler;
+3. waits past the rooms' grace;
+4. reads the final gauges;
+5. sleeps 30 s, then measures the backend's CPU over a 60 s idle tail.
+
+### 4.2 Pass/fail rules (`bench/soak/rules.ts`, tested by `rules.test.ts`)
+
+Each rule is judged on the samples after the warm-up: by default max(3 min, 20 % of the run). Memory (R1, R2) waits
+longer. It is judged from the first sample where the index cache is 90 % full and the write log has reached its
+longest retention (300 s). Before that, memory grows by design. A run where the cache never fills reports R1 and R2
+as "not judged" rather than passing them silently. The pilots taught this: §4.6. Trends use the
+Theil–Sen slope (the median of pairwise slopes), which a GC sawtooth or one slow window does not move. Wherever a
+rule says "trend", it requires **both** a slope over its limit **and** a level shift between the first and last
+thirds. The slope alone can be one step (a cache filling); the shift alone can be noise.
+
+| Rule | Fails when |
+|---|---|
+| R1 RSS (from the memory warm-up) | the slope is over 0.5 MB/min **and** the last third's median is 10 MB over the first's |
+| R2 heap (from the memory warm-up) | the slope is over 0.3 MB/min **and** the shift is over 8 MB |
+| R3 cache canary | its misses past the warm-up exceed the writes into its read set + 1 (a strict count) |
+| R4 hit rate | the windowed hit rate is projected to fall more than 10 points **and** the thirds differ by more than 10 points |
+| R5 gauges | at any sample, sessions, subscriptions or room members differ from what the driver holds by more than 3 + the clients replaced in the last 10 s |
+| R6 freed | after the drain, sessions, subscriptions or room members are not 0 |
+| R7a fds | the slope is over 0.2/min **and** the shift is over 4 |
+| R7b fds | after the drain, more than the baseline + 8 |
+| R8 latency (per operation) | the last third's p99 is over 1.5× the first's (and 20 ms more), **or** its p50 is over 1.3× (and 10 ms more), **or** its p99 is ≥ 1 s |
+| R9a scheduler | jobs recorded ≠ jobs scheduled, a job did not run, or a job ran twice |
+| R9b scheduler lag | a minute's p99 lag is over 2 s, **or** the p99 is projected to grow more than 1 s over the run |
+| R10 event loop | more than 5 % of samples show over 200 ms of lag (one GC pause on one sample does not fail it) |
+| R11 idle | the backend uses 3 % or more of a core over the idle tail |
+| R12 errors | any unexpected failure (function, request, subscription). A hot-counter mutation that lost every OCC retry is expected (Convex's budget is the same 4 retries): it is counted in the report, not failed |
+
+Exit code 0 means every rule passed, 1 means one failed, 2 means the run itself broke (the backend died or did not
+start). `report.json` keeps every sample, so a run can be judged again after a rule changes. `report.md` is a summary
+fit for an issue.
+
+`rules.test.ts` (15 tests, in the root `bun test`, about 20 ms):
+- A flat run passes.
+- Noise does not fail: a sawtooth heap, one 900 ms window, a reconnect burst.
+- Each degradation fails its own rule and only that one:
+  - a 1 MB/min leak;
+  - an early cache-filling step (passes), and a cache filling for 20 minutes (passes, judged once full);
+  - #751's canary pattern;
+  - a falling hit rate;
+  - kept sessions;
+  - an fd leak;
+  - doubling latency;
+  - a lost job, and a job run twice;
+  - growing lag;
+  - a busy loop;
+  - idle CPU;
+  - errors.
+
+Sabotage: the rules were broken six ways, and each made `rules.test.ts` fail (§7).
+
+### 4.3 Where it runs, how long, what it costs
+
+**The recommendation: a nightly job beside the Jepsen and differential nightlies.** Call it
+`.github/workflows/soak-nightly.yml`:
+- `ubuntu-latest`, Bun 1.4.2;
+- `bun bench/soak/soak.ts --minutes 45`, `timeout-minutes: 60`;
+- on failure, upload `report.json` and open or comment on an issue with `report.md`, as `jepsen-nightly.yml` does.
+
+Cost and placement:
+- The repository is public, so standard runners cost nothing but queue time. The run takes about 50 minutes: 45 of
+  workload, 2 to drain, 1.5 of idle tail, and the start.
+- A nightly needs no other services, no Docker and no store.
+- The SQLite backend is the right first target: it is what `bunvex dev` and the examples run. Postgres is a later
+  matrix entry, as in Jepsen.
+- It should not run on PRs. At 1 minute it judges nothing (too few samples past a warm-up), and the rules' unit test
+  already guards the judging code. A PR touching `bench/soak/**` can run a 5-minute smoke that only checks exit code
+  ≠ 2.
+
+**The VPS:**
+- It is useful for runs longer than CI allows, e.g. a monthly 6-hour run. Longer runs see slower leaks: at 0.5 MB/min
+  R1 needs about 20 minutes past the warm-up to separate a leak from noise, and 6 hours sees 0.05 MB/min.
+- It is the place to bisect a soak failure.
+- It is also less noisy than a shared runner, although the pilot found the 2-core VPS adequate (§4.6).
+
+**Why not in Jepsen.** Jepsen's runs are 20 s on a fresh process and database each, by design (each history is
+checked against a fresh store). The soak needs one long-lived process. They can share the workflow pattern but not the
+runner. A cheap extension of Jepsen *does* fit: after each of its runs, read `/metrics` once and assert R6 (sessions,
+subscriptions and room members back to 0 once its clients closed) and an fd count. That is the "freed after the run"
+part of the soak, at no extra time.
+
+### 4.4 What it does not cover
+
+These are left for later, in order of value:
+- **Postgres and MySQL.** Pool exhaustion and connection leaks over time live in the drivers.
+- **Actions with `fetch`, and the process sandbox** (STUDY-168, once built): child-process reaping and IPC buffers.
+- **Auth:** token refresh over long sessions, and presence scopes, which need signed-in users.
+- **Pushes during the run:** code-version collection. `bench/code-versions.ts` measures this by hand today.
+- **Pagination subscriptions:** journals and page splits under churn.
+- **Exports and imports.**
+
+### 4.5 Per-connection memory (I-09)
+
+The soak's RSS divided by its clients is not a per-connection figure: the caches and the data dominate it. A
+per-connection budget is a separate, short measurement:
+- open N idle connections, each with K subscriptions to a shared query;
+- compare `heapUsed` after a forced GC with the same before;
+- report bytes per connection and bytes per subscription.
+
+It belongs in `bench/`, next to `rooms.ts`, as a number in the parity notes. It is not an assertion until the owner
+sets a budget (§8, Q4).
+
+### 4.6 The pilot
+
+Four runs on the test VPS (2 vCPU, 8 GB, Ubuntu, Bun 1.4.3), under `/root/bunvex-soak-study` (`pilot-N/report.json`
+and `pilot-N.log` there). Each had 20 clients, and the backend and the driver shared the machine. The asked-for
+10–15 minute pilot came first. What it could not settle (memory) led to the longer two, and each run changed the
+design a little. All four were judged again with the final rules (`report.json` keeps every sample). All four ran on the
+pre-#751 build (`016dfccb` plus this branch), so F1 shows in every one of them. On main today the canary (R3) should
+pass; the other results do not depend on #751.
+
+| Run | Setup | R1 RSS | R2 heap | R3 canary | R11 idle | Other |
+|---|---|---|---|---|---|---|
+| 1 | 12 min, default caches (512 MiB index, 100 MiB query) | fail: 15.9 MB/min | fail | **fail**: 32 misses, 1 write | **fail**: 65 % of a core | R10 failed on one 207 ms sample, then the rule was changed |
+| 2 | 12 min, caches 32 MiB / 16 MiB | not enough steady samples | flat | **fail**: 32 / 1 | **fail**: 66 % | 1 hot-counter OCC failure, then classed as expected |
+| 3 | 30 min, the same | **fail**: 5.5 MB/min, +72 MB | pass: 0.6 MB/min | **fail**: 88 / 6 | **fail**: 67 % | everything else passed |
+| 4 | 25 min, the same, **no far-future job**, memory detail | **fail**: 5.0 MB/min, +41 MB | pass: −0.2 MB/min | **fail**: 74 / 5 | **pass: 1.3 %** | everything else passed |
+
+What the pilots show:
+- **F1 is caught from outside.** The canary missed every ~17 s in every run (32 misses in 9 minutes; 88 in 24). It
+  stays cached only between writes on Convex and on #751. R3 is a count, not a trend, so even the 12-minute run is
+  conclusive.
+- **F2 is caught, and attributed.** Runs 1–3 had a job 30 days ahead, and their idle backend burned 65–67 % of a core.
+  Run 4 had none and used 1.3 %. That is F2, the scheduler's timer overflow, alone. During the load itself it costs
+  ~25 % of a core that no latency rule sees.
+- **The design changed twice because of the pilots:**
+  - **Memory needs a memory warm-up.** With the default caches, RSS grew for the whole of run 1. The index cache's
+    512 MiB alone takes longer than a run to fill, so R1 there says nothing. With 32 MiB, the cache fills in 10–13
+    minutes at this load. R1 and R2 now start from the first sample where it is 90 % full and the write log has reached
+    300 s, and are "not judged" before.
+  - **One sample is not a trend.** R10 failed on a single 207 ms sample out of 37, so it now counts samples. A
+    hot-counter mutation that loses all 4 OCC retries is Convex's behaviour too, so it is reported, not failed.
+- **Everything about resources and freeing passed:**
+  - the sessions, subscriptions and room-member gauges matched the clients at every sample, through about 600
+    reconnects in run 3;
+  - all were 0 after the drain;
+  - file descriptors flat (38–46) and back below the baseline;
+  - every one of 1 424–3 603 jobs ran exactly once, with lag p99 ≤ 351 ms and flat;
+  - no latency trend in runs 3 and 4 (run 2's search p99 36 → 72 ms did not repeat);
+  - the hit rate was flat at ~57 %.
+
+**F6: resident memory grows ~5 MB a minute under steady load, outside the JS heap.**
+
+| | from (t = 781 s) | to (t = 1 502 s) | slope |
+|---|---|---|---|
+| RSS | 357 MB | 406 MB | |
+| anonymous memory (`smaps_rollup`) | 311 MB | 360 MB | **4.95 MB/min** |
+| file-backed | 46 MB | 46 MB | 0.00 |
+| JS heap (`heapUsed`) | 154 MB | 130 MB | −0.14 MB/min |
+| SQLite WAL | 6 MB | 6 MB | |
+| SQLite database file | 55 MB | 101 MB | on disk, not resident |
+
+- The measurements are from run 4, past its memory warm-up (index cache full). Run 3 had the same slope, 5.5 MB/min.
+- This rules out the JS heap, the index cache (full, at its budget), the write log (past its retention), and mapped
+  files (SQLite's pages). What is left is native memory: JSC's out-of-heap backing stores (strings and
+  `ArrayBuffer`s, which `heapUsed` does not count), Bun's native WebSocket and HTTP buffers, `bun:sqlite`'s
+  statements and rows, or the allocator keeping freed pages.
+- It is a real trend over two runs. It is **not yet known to be unbounded**: 20 minutes of steady state cannot tell a
+  leak from a slow plateau.
+- **Next step, not done here** (§9, step 3): a 2-hour run on the VPS. It would sample `process.memoryUsage()`'s
+  `external` and `arrayBuffers` (a `/metrics` gauge, or a debug route), with a forced GC every 10 minutes (does RSS
+  come back?), and bisect the workload by turning off one part at a time: rooms, storage, search, reconnects.
+- The database file grew 46 MB in 12 minutes although the trim keeps 2 000 messages. That is the document log
+  keeping every version until retention prunes it ([STUDY-33](STUDY-33-retention.md)'s retention runs on its own schedule). It is on disk, not
+  in memory; a longer run should check that it levels off.
+
+## 5. Metadata differentials against Convex (part 3)
+
+### 5.1 What both sides expose
+
+The oracle is the pinned binary, run by `packages/differential/harness/backends.ts` as `startConvex`. It and bunvex's
+backend expose the same admin routes, and the harness already holds an admin key for each.
+
+| Metadata | Where to read it | Compared today | Proposal |
+|---|---|---|---|
+| Cache hit or miss per call | `/api/stream_function_logs` `cachedResult` | no | §5.3 prototype; extend to sync subscriptions (a second client reusing a run: STUDY-75) |
+| Time-dependence (expiry at 17 s) | the same, across a 19 s wait | no | §5.3 (the 19 s case) |
+| User time, memory, timestamp of a hit | the same entry | no | §5.3 `test.todo` (F4) |
+| Usage per call (`usageStats`: documents and bytes read and written, index rows) | the same entry | no (STUDY-71's tests are bunvex-only) | compare `usageStats` per call over the generated programs (below) |
+| Read-limit counting | the "Many reads" warning, the limit error | `read-count.test.ts` (local only) | add to the nightly list |
+| OCC: `occInfo`, `willRetry`, `mutation_retry_count` | log stream entries | no | a fixed scenario: two clients race one document, then compare the sequence of entries (kinds, `willRetry`, retry counts); timing makes the count itself racy, so compare the shape |
+| Subscription invalidation set | `/api/app_metrics/subscription_invalidations_top_k`; per subscription, the transitions a client receives | `dashboard-ops.test.ts` (names, count deltas; local only) | per write, the set of subscriptions that got a new transition (WebSocket clients on both) |
+| Log line fields | log stream entries: every key, its type, which are null | partly (`logLines`, kinds) | a schema diff: the key set and value types of each entry kind, after normalizing ids, times and durations |
+| App metrics (rates, cache hit percentage, latency buckets) | `/api/app_metrics/*` | `udf_rate` in the http tests | the cache hit percentage after a fixed sequence |
+| Scheduler lag, running jobs | `/metrics`, app metrics `scheduled_jobs` | no | not comparable at once (the timings differ); judged by the soak |
+
+### 5.2 How to compare
+
+This extends STUDY-122, so its harness is reused as it is:
+- **Fixed scenarios, one test file each, local first** (the pattern of `unawaited-operations.test.ts` and
+  `read-count.test.ts`). Each runs the same calls on both backends and reads the log stream after each step, from a
+  cursor kept per backend. It compares one normalized projection per entry: `[identifier, cachedResult]`,
+  `[identifier, usageStats]`, `[kind, willRetry, occInfo?.retryCount]`, and so on. Durations and timestamps are not
+  compared as values, only as relations to other entries ("the hit's user time equals its miss's").
+- **The generated programs, a cheap extension.** `harness/runner.ts` already calls each program step over HTTP. If it
+  also tails the log stream, each step's entries can be compared as `[udfType, identifier, cachedResult, usageStats]`
+  with the same normalizer (ids by rank). That puts usage and cache metadata into the nightly's ~20 000 programs at
+  the cost of one log read per step. A program that repeats a query with no write between would then check the cache
+  too. The generator emits such pairs often already.
+- **The nightly list.** `scripts/nightly.sh` runs only `fixed`, `generated` and the component tests. Adding the
+  metadata files (the cache file costs ~25 s, most of it the 19 s wait) is a one-line change there. It is bunvex-9f's
+  file, so this study proposes it rather than doing it.
+
+### 5.3 The prototype: the cache, as the log stream shows it
+
+`packages/differential/test/cache-metadata.test.ts`, with its app in `packages/differential/cache-app/`. It is local
+only, and skipped with a note without the binary, like its neighbours. Three cases:
+1. A repeated query hits. A write outside its read set keeps it cached; a write into it invalidates it. A query that
+   read the clock hits within 17 s. Expected `[miss, hit, hit, miss, clock:miss, clock:hit]`, the same on both.
+2. Past 17 s (a real 19 s wait), the query that read no time still hits and the clock one misses.
+3. `test.todo` (F4): a hit's user time, memory and timestamp are its miss's.
+
+Results:
+- **Pre-#751 main (`016dfccb`):** case 1 passes; **case 2 fails**: bunvex `plain:miss`, Convex `plain:hit`. That is
+  #751, found from outside with no knowledge of the cause.
+- **#751's branch** (`fix/vm-parity-from-bridge`, in a throwaway worktree): cases 1 and 2 pass.
+- **This branch merged with main after #751 (`7683a19a`):** 2 pass, 1 todo, 0 fail.
+- **`--todo`:** Convex gives `{sameUserTime, sameMemory, sameTimestamp}` = `true, true, true`; bunvex gives
+  `false, false, false` (F4).
+
+Run: `CONVEX_BACKEND_BIN=… bun test packages/differential/test/cache-metadata.test.ts` (about 21 s).
+
+## 6. Mapping: which layer should catch what
+
+| Class | Example | The layer that should catch it | Today |
+|---|---|---|---|
+| Cache behaviour over time | F1 | the metadata differential (§5.3), the soak's canary (R3), a unit test with an injected clock | #751's `meta.test.ts` (on main) |
+| Busy loops and timer overflow | F2, F3 | a unit test with an injected clock; the soak's idle rule (R11, F2 only); a static check (I-25) | none |
+| State not freed after clients go | I-05, I-11 | an `afterEach` "hub is empty" helper in the server suites; a Jepsen post-run `/metrics` check; soak R5–R6 | partial (`reads` only) |
+| Unbounded buffers | I-19–I-23 | unit tests at the bound (most exist); soak R1–R2 for what nobody listed | mostly covered |
+| Leaked handles | I-26–I-28 | soak R7; unit tests with a failing store (`faulty-store.ts` exists) | none |
+| Exactly-once and lag | I-12, I-16 | unit tests (exist); Jepsen's set and log checks; soak R9 | covered except lag |
+| Shutdown that hangs or leaves work | F5, I-24, S4 | a "shutdown finishes within N ms under load" test; the process-exits test | partial |
+| Metadata parity | F4, I-10, I-30 | the differential's metadata files, then the generated programs with the log tail | read-count only (local) |
+| Lost tests | any of the above deleted later | coverage floors: e.g. `function-log.ts`, `app-metrics.ts` and `rooms/hub.ts`, each added in the PR whose tests cover it | 23 files |
+| Performance drift | p99 creep | soak R8; benches (manual) | manual only |
+
+Coverage floors and mutation testing cannot catch this class: a line counts as covered even if its timer is never
+cleared. A mutant that removes a cache store also survives every value test. What they *can* do is keep the new
+invariant tests from being deleted, so the floors list should gain the files those tests cover.
+
+## 7. Tests, sabotage, measurements
+
+**In this PR:**
+- `bench/soak/rules.test.ts`: 15 tests, run in the root `bun test`.
+- `packages/differential/test/cache-metadata.test.ts`: 2 tests and 1 todo, local only.
+- The soak itself: `bench/soak/soak.ts` and its app.
+
+**Sabotage of the rules.** Each line is one change to `rules.ts`, made alone. Each made `rules.test.ts` fail, and the
+file was restored and compared after each.
+
+| Sabotage | `rules.test.ts` |
+|---|---|
+| a trend needs a slope **or** a shift (`&&` → `\|\|`) | 1 fails (noise) |
+| the canary allows 100 extra misses | 1 fails (#751 pattern) |
+| R5's allowance 30 instead of 3 | 1 fails (kept sessions) |
+| R9a ignores jobs run twice | 1 fails |
+| R11's limit 30 % instead of 3 % | 1 fails |
+| memory judged from the warm-up, not from the caches being full | 1 fails (the cache filling) |
+
+**The differential prototype** is its own sabotage: it failed on the pre-#751 main (F1 present) and passes on #751 and
+on main after it (F1 fixed).
+
+**The soak** is checked by its pilots (§4.6). Their failures were F1 and F2, the two load-visible bugs known to be on
+main. Removing the far-future job made R11 pass (1.3 % against 66 %). They also found F6.
+
+**Measurements:** none on default paths (nothing default changed).
+
+**Checks:**
+- `bun run typecheck`, `bun run check:deps` and `bunx biome ci` on the changed files pass.
+- The full `bun test --isolate --timeout 30000`, after merging main with #751: 4 283 pass, 0 fail, 587 skipped.
+- `rules.test.ts`: 15 pass. `cache-metadata.test.ts` against the oracle: 2 pass, 1 todo, 0 fail.
+
+## 8. Owner questions
+
+Each question gives what Convex does, what bunvex does, whether they are the same, why ("not built yet" vs
+"impossible"), the impact on apps, and a recommendation.
+
+**Q1. A nightly soak job in CI, and its budget.**
+- Convex: no public soak; it relies on production telemetry.
+- bunvex: none.
+- Same: n/a, an addition to the test suite, not to the product.
+- Why: not built yet.
+- App impact: none directly. It catches F1-class bugs in a day instead of two weeks.
+- **Recommendation:** add `soak-nightly.yml`: 45 minutes, SQLite, `ubuntu-latest`. On failure it opens or comments on
+  an issue, as Jepsen does. It is **never a required merge check**: like the Jepsen and differential nightlies, it
+  reports, and a red night blocks no PR. That is about 50 runner-minutes a night, free on a public repository.
+  Postgres later as a matrix entry.
+
+**Q2. A monthly long soak on the VPS (6 h).**
+- Same answers as Q1.
+- **Recommendation:** yes, by hand or by a cron on the VPS once Q1 has run green for a week. It is the only way to
+  see leaks under 0.5 MB/min.
+
+**Q3. F4: should a cache hit's log entry carry the reused run's user time, memory and timestamp, as Convex's does?**
+- Convex: yes (`log_query`).
+- bunvex: 0, 0, and the hit's own time.
+- Same: no.
+- Why: not built yet. STUDY-75 matched `cachedResult` and the lines, not these fields.
+- App impact: log sinks and the dashboard's logs page show a cached call as free of user time and memory, and timed
+  at the hit. Metering is unaffected.
+- **Recommendation:** match Convex. A small fix in `functions.ts` (keep the run's user time and memory with the
+  cached result, `extra` already holds its lines). The test is the prototype's todo case, made a test.
+
+**Q4. A per-connection memory budget (I-09).**
+- Convex: none published.
+- bunvex: none.
+- Same: yes (none on either).
+- Why: not built yet.
+- App impact: capacity planning for self-hosters.
+- **Recommendation:** measure first (§4.5), publish the number in the parity notes, and assert it only if it
+  regresses.
+
+**Q5. The metadata differential files in the nightly list.**
+- Convex: n/a.
+- bunvex: local only.
+- Same: n/a.
+- Why: not built yet.
+- **Recommendation:** bunvex-9f will add `cache-metadata.test.ts`, `read-count.test.ts` and the log-stream files to
+  `scripts/nightly.sh` after #755 merges, for about 2 minutes a night more. The runner's per-step log tail (§5.2)
+  follows on the same track.
+
+Not questions, because each matches Convex: the fixes for F1 (done, #751), F2, F3 and F5, and the suspected S1–S7 once
+confirmed.
+
+## 9. Recommended order and effort
+
+| Step | What | Effort | Catches |
+|---|---|---|---|
+| 1 | This PR (the rules, the soak, the prototype); #751 already fixed F1 | — | F1 (regression guard) |
+| 2 | Fix F2 and F3 with one capped `timerDelay` helper in core, a test per loop with an injected clock, and the I-25 rule in `check:deps` (rule 6, §3.1) in the same PR, so a new uncapped delay fails CI | 0.5 day | F2, F3, S8, and new ones |
+| 3 | Attribute F6: a 2 h VPS run with `external` and `arrayBuffers` sampled, a periodic forced GC, and the workload bisected (§4.6) | 1 day | F6 |
+| 4 | The server suites' `afterEach` "hub empty, cache consistent, no session left" helper (I-03, I-05, I-11, I-19, I-23) | 0.5–1 day | freed state across ~40 suites |
+| 5 | The soak nightly workflow (Q1) | 0.5 day + a week of watching for flakes | trends, R1–R12 |
+| 6 | Fix F5: a stopping scheduler stops retrying and waits a bounded time. Test: shutdown under contention within 1 s | 0.5 day | F5, S4 |
+| 7 | The metadata files in the differential nightly; the runner's log tail (Q5, bunvex-9f) | 1–2 days | F4-class, usage, OCC shape |
+| 8 | F4 fix (Q3) | 0.5 day | F4 |
+| 9 | Confirm or dismiss S1–S7, one test each | 1 day | handles, backfill |
+| 10 | Jepsen post-run `/metrics` check (R6 + fds per run) | 0.5 day | freed state under faults |
+| 11 | Coverage floors: each step's PR adds the files its new tests cover to `scripts/coverage-floors.ts` in the same PR (not as a separate step) | in each PR | keeps the tests |
+| 12 | The per-connection memory bench (Q4); the soak on Postgres; a monthly 6 h VPS run (Q2) | 1–2 days | slow leaks, drivers |
