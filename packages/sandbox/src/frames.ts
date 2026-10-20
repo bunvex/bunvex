@@ -28,10 +28,17 @@ export function frame(message: unknown): Uint8Array {
 /** A chunk of byte stream `s` as a frame. */
 export function chunkFrame(s: number, bytes: Uint8Array): Uint8Array {
   const out = new Uint8Array(HEADER + STREAM_ID + bytes.byteLength);
-  const view = new DataView(out.buffer);
-  view.setUint32(0, (CHUNK_FLAG | (STREAM_ID + bytes.byteLength)) >>> 0, true);
-  view.setUint32(HEADER, s, true);
+  out.set(chunkHeader(s, bytes.byteLength), 0);
   out.set(bytes, HEADER + STREAM_ID);
+  return out;
+}
+
+/** What comes before a chunk's `n` bytes in its frame (a writer sends the bytes after it, not copied into a frame). */
+export function chunkHeader(s: number, n: number): Uint8Array {
+  const out = new Uint8Array(HEADER + STREAM_ID);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, (CHUNK_FLAG | (STREAM_ID + n)) >>> 0, true);
+  view.setUint32(HEADER, s, true);
   return out;
 }
 
@@ -50,8 +57,10 @@ export class FrameEncodingError extends Error {}
 
 /**
  * Splits a byte stream into frames, in order: a message's text, or a stream's chunk. What arrives is kept as it
- * arrives and joined once a frame is complete, so a large frame costs one copy (none when it arrived in one piece).
- * A frame over `limit` throws from `push` as soon as its header is in.
+ * arrives and joined once a message is complete, so a large message costs one copy (none when it arrived in one
+ * piece). A chunk's bytes are never joined: each piece of it is handed over as it arrives, a view of what was read
+ * (so one chunk frame may come out as several `Chunk`s of the same stream). A frame over `limit` throws from `push`
+ * as soon as its header is in.
  */
 export class FrameReader {
   private chunks: Uint8Array[] = [];
@@ -60,8 +69,14 @@ export class FrameReader {
   private expected: number | null = null;
   /** Whether the frame being read is a chunk. */
   private chunk = false;
+  /** The chunk frame whose bytes are being handed over: its stream, and how many of its bytes are still to come. */
+  private streaming: { s: number; left: number } | null = null;
 
-  constructor(private readonly limit: number = 0xffff_ffff) {}
+  /** `limit`: the largest message; `chunkLimit`: the most bytes one chunk may carry. */
+  constructor(
+    private readonly limit: number = 0xffff_ffff,
+    private readonly chunkLimit: number = 0x7fff_ffff,
+  ) {}
 
   /** The frames `chunk` completes: each message's text, each stream chunk. */
   push(chunk: Uint8Array): (string | Chunk)[] {
@@ -70,6 +85,17 @@ export class FrameReader {
     this.chunks.push(chunk);
     this.buffered += chunk.byteLength;
     for (;;) {
+      if (this.streaming !== null) {
+        const st = this.streaming;
+        while (st.left > 0 && this.buffered > 0) {
+          const piece = this.takeSome(st.left);
+          st.left -= piece.byteLength;
+          out.push({ s: st.s, bytes: piece });
+        }
+        if (st.left > 0) break;
+        this.streaming = null;
+        continue;
+      }
       if (this.expected === null) {
         if (this.buffered < HEADER) break;
         const header = this.take(HEADER);
@@ -78,16 +104,24 @@ export class FrameReader {
         const bytes = word & ~CHUNK_FLAG;
         if (bytes > this.limit) throw new FrameTooLargeError(bytes, this.limit);
         if (this.chunk && bytes < STREAM_ID) throw new FrameEncodingError("a chunk without its stream");
+        if (this.chunk && bytes - STREAM_ID > this.chunkLimit)
+          throw new FrameTooLargeError(bytes - STREAM_ID, this.chunkLimit);
         this.expected = bytes;
+      }
+      if (this.chunk) {
+        // Its stream's id, then its bytes as they come.
+        if (this.buffered < STREAM_ID) break;
+        const id = this.take(STREAM_ID);
+        this.streaming = {
+          s: new DataView(id.buffer, id.byteOffset, STREAM_ID).getUint32(0, true),
+          left: this.expected - STREAM_ID,
+        };
+        this.expected = null;
+        continue;
       }
       if (this.buffered < this.expected) break;
       const body = this.take(this.expected);
       this.expected = null;
-      if (this.chunk) {
-        const s = new DataView(body.buffer, body.byteOffset, STREAM_ID).getUint32(0, true);
-        out.push({ s, bytes: body.subarray(STREAM_ID) });
-        continue;
-      }
       try {
         out.push(decoder.decode(body));
       } catch {
@@ -99,7 +133,20 @@ export class FrameReader {
 
   /** The bytes of a frame still being read (a stream that ends mid-frame). */
   get pending(): number {
-    return this.buffered;
+    return this.buffered + (this.streaming?.left ?? 0);
+  }
+
+  /** Up to `n` of the first buffered bytes, removed, as they were read (no copy). */
+  private takeSome(n: number): Uint8Array {
+    const first = this.chunks[0]!;
+    if (first.byteLength <= n) {
+      this.chunks.shift();
+      this.buffered -= first.byteLength;
+      return first;
+    }
+    this.chunks[0] = first.subarray(n);
+    this.buffered -= n;
+    return first.subarray(0, n);
   }
 
   /** The first `n` buffered bytes, removed. */

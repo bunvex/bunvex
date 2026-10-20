@@ -69,15 +69,36 @@ describe("frames", () => {
     for (const size of [1, 3, 7, 100, stream.length]) {
       const reader = new FrameReader(1 << 20);
       const out: unknown[] = [];
+      let got: number[] = [];
       for (let i = 0; i < stream.length; i += size)
-        for (const f of reader.push(stream.subarray(i, i + size)))
-          out.push(
-            typeof f === "string"
-              ? JSON.parse(f)
-              : { s: f.s, n: f.bytes.length, same: f.bytes.every((x, j) => x === bytes[j]) },
-          );
-      expect(out).toEqual([{ t: "a" }, { s: 9, n: 1000, same: true }, { t: "b" }]);
+        for (const f of reader.push(stream.subarray(i, i + size))) {
+          if (typeof f !== "string") {
+            // A chunk's bytes come as they arrive, in pieces: never joined.
+            expect(f.s).toBe(9);
+            got.push(...f.bytes);
+            continue;
+          }
+          if (got.length) out.push({ n: got.length, same: got.every((x, j) => x === bytes[j]) });
+          got = [];
+          out.push(JSON.parse(f));
+        }
+      expect(out).toEqual([{ t: "a" }, { n: 1000, same: true }, { t: "b" }]);
+      expect(reader.pending).toBe(0);
     }
+  });
+
+  test("a chunk's piece is a view of what was read, not a copy", () => {
+    const framed = chunkFrame(3, pattern(100));
+    const pieces = new FrameReader().push(framed).filter((f) => typeof f !== "string");
+    expect(pieces).toHaveLength(1);
+    expect((pieces[0] as { bytes: Uint8Array }).bytes.buffer).toBe(framed.buffer);
+  });
+
+  test("a chunk over the chunk cap is refused from its header", () => {
+    expect(() => new FrameReader(1 << 20, 64).push(chunkFrame(1, new Uint8Array(65)).subarray(0, 4))).toThrow(
+      "over the limit of 64",
+    );
+    expect(new FrameReader(1 << 20, 64).push(chunkFrame(1, new Uint8Array(64)))).toHaveLength(1);
   });
 
   test("a chunk over the cap is refused from its header", () => {

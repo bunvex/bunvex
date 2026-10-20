@@ -254,31 +254,31 @@ export class HostActionCall extends HostCallBase {
   }
 
   private async storageStore(file: unknown, opts: unknown, op: number): Promise<unknown> {
-    const bytes = await this.fileBytes(file);
+    const parts = await this.fileBytes(file);
     const f = file as WireFile;
-    return this.engineCall(op, () => this.ctx.storage.store(new SpecBlob([bytes], { type: f.type }), opts));
+    return this.engineCall(op, () => this.ctx.storage.store(new SpecBlob(parts, { type: f.type }), opts));
   }
 
-  /** A file the child sent: its bytes, checked against the size it said. */
-  private async fileBytes(file: unknown): Promise<ArrayBuffer | Uint8Array> {
+  /** A file the child sent: its bytes (as they came, not joined), checked against the size it said. */
+  private async fileBytes(file: unknown): Promise<(ArrayBuffer | Uint8Array)[]> {
     if (file === null || typeof file !== "object") return bad("a file that is not one");
     const f = file as Partial<WireFile>;
     if (typeof f.type !== "string" || !Number.isSafeInteger(f.size) || (f.size as number) < 0)
       return bad("a file without its type and size");
-    let bytes: ArrayBuffer | Uint8Array;
-    if (f.b instanceof ArrayBuffer && f.s === undefined) bytes = f.b;
-    else if (typeof f.s === "number" && f.b === undefined) {
-      const parts: Uint8Array[] = [];
-      let n = 0;
+    const parts: (ArrayBuffer | Uint8Array)[] = [];
+    let n = 0;
+    if (f.b instanceof ArrayBuffer && f.s === undefined) {
+      parts.push(f.b);
+      n = f.b.byteLength;
+    } else if (typeof f.s === "number" && f.b === undefined) {
       for await (const c of this.child.streams.receive(f.s)) {
         n += c.byteLength;
         if (n > (f.size as number)) return bad("a file longer than it said");
         parts.push(c);
       }
-      bytes = Buffer.concat(parts);
     } else return bad("a file without its bytes");
-    if (bytes.byteLength !== f.size) return bad("a file of another size than it said");
-    return bytes;
+    if (n !== f.size) return bad("a file of another size than it said");
+    return parts;
   }
 
   // ------------------------------------------------------------------ fetch
@@ -364,10 +364,10 @@ export class HostActionCall extends HostCallBase {
       case "stream":
         return typeof b.s === "number" ? this.child.streams.receive(b.s) : bad("a stream body without its stream");
       case "bytes":
-        return new Uint8Array(await this.fileBytes(b.file));
+        return new Uint8Array(await new Blob(await this.fileBytes(b.file)).arrayBuffer());
       case "blob": {
         const f = b.file as WireFile;
-        return new Blob([await this.fileBytes(f)], { type: f.type });
+        return new Blob(await this.fileBytes(f), { type: f.type });
       }
       case "form": {
         if (!Array.isArray(b.entries)) return bad("a form without its entries");
@@ -381,7 +381,7 @@ export class HostActionCall extends HostCallBase {
             if (typeof v?.name !== "string" || typeof v.lastModified !== "number") return bad("a form's file");
             form.append(
               name,
-              new File([await this.fileBytes(v.file)], v.name, { type: v.file!.type, lastModified: v.lastModified }),
+              new File(await this.fileBytes(v.file), v.name, { type: v.file!.type, lastModified: v.lastModified }),
             );
           }
         }

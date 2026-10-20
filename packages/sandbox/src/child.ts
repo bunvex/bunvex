@@ -20,7 +20,7 @@ import {
 import { ActionRuntime } from "./child-action.ts";
 import { CallRuntime } from "./child-call.ts";
 import { exportDefault } from "./default-export.ts";
-import { chunkFrame, FrameReader, frame } from "./frames.ts";
+import { chunkHeader, FrameReader, frame } from "./frames.ts";
 import { PROTOCOL_VERSION, type ToChild, type ToHost, type WireError, type WireLoadOptions } from "./protocol.ts";
 import { describeVersion } from "./version.ts";
 
@@ -31,16 +31,23 @@ const CHANNEL = 3;
 export const EXIT_BAD_STREAM = 70;
 
 const out = Bun.file(CHANNEL).writer();
-const write = (bytes: Uint8Array) => {
+const write = (bytes: Uint8Array, flush = true) => {
   out.write(bytes);
-  void out.flush();
+  if (flush) void out.flush();
 };
 const send = (m: ToHost) => write(frame(m));
 
 /** The versions this child loaded, by request id: the calls name the one whose function they run. */
 const versions = new Map<number, CodeVersion>();
 const calls = new CallRuntime(send, versions);
-const actions = new ActionRuntime(send, (s, bytes) => write(chunkFrame(s, bytes)), versions);
+const actions = new ActionRuntime(
+  send,
+  (s, bytes) => {
+    write(chunkHeader(s, bytes.byteLength), false);
+    write(bytes);
+  },
+  versions,
+);
 
 const loadOptions = (o: WireLoadOptions): LoadOptions => ({
   seed: Uint32Array.from(o.seed),

@@ -23,7 +23,7 @@ import {
 } from "@bunvex/server/executor";
 import type { Subprocess } from "bun";
 import { evaluatedValue } from "./default-export.ts";
-import { chunkFrame, FrameReader, FrameTooLargeError, frame } from "./frames.ts";
+import { chunkHeader, FrameReader, FrameTooLargeError, frame } from "./frames.ts";
 import {
   BadMessageError,
   type EvaluatedDefault,
@@ -36,7 +36,7 @@ import {
   type WireLoadOptions,
   type WireThrown,
 } from "./protocol.ts";
-import { Streams, WINDOW_BYTES } from "./streams.ts";
+import { CHUNK_BYTES, Streams, WINDOW_BYTES } from "./streams.ts";
 import { type LoadedVersion, loadedVersion } from "./version.ts";
 
 /** The child's entry: this package's `child.ts`, on disk (a compiled executable has none yet: STUDY-171 §7.9). */
@@ -164,7 +164,10 @@ export class SandboxProcess {
     this.streams = new Streams(
       {
         message: (m) => this.send(m),
-        chunk: (id, bytes) => this.write(chunkFrame(id, bytes)),
+        chunk: (id, bytes) => {
+          this.write(chunkHeader(id, bytes.byteLength), false);
+          this.write(bytes);
+        },
       },
       {
         strict: true,
@@ -286,11 +289,11 @@ export class SandboxProcess {
     this.write(frame(m));
   }
 
-  private write(bytes: Uint8Array) {
+  private write(bytes: Uint8Array, flush = true) {
     if (this.dead) return;
     try {
       this.sink.write(bytes);
-      Promise.resolve(this.sink.flush()).catch(() => {});
+      if (flush) Promise.resolve(this.sink.flush()).catch(() => {});
     } catch {}
   }
 
@@ -364,7 +367,7 @@ export class SandboxProcess {
   }
 
   private async readMessages() {
-    const reader = new FrameReader(this.opts.maxMessageBytes);
+    const reader = new FrameReader(this.opts.maxMessageBytes, CHUNK_BYTES);
     const chunks = Bun.file(this.fd).stream()[Symbol.asyncIterator]();
     try {
       for (;;) {
