@@ -6,12 +6,21 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { checkEnvVarName } from "@bunvex/core";
 
-export type EnvReader = (name: string) => string | undefined;
+export type EnvReader = ((name: string) => string | undefined) & {
+  /**
+   * What a query's or mutation's reader reads from, for the function sandbox's child (STUDY-171 §8.5): the
+   * deployment's variables (the same object while none changes), then the built-ins.
+   */
+  variables?: { deployment: ReadonlyMap<string, string>; builtin: Record<string, string> };
+};
 
 const scope = new AsyncLocalStorage<EnvReader>();
 
 /** Run `fn` with `read` behind `process.env`. */
 export const withEnv = <T>(read: EnvReader, fn: () => T): T => scope.run(read, fn);
+
+/** The reader behind `process.env` now (the function sandbox's host ships its variables to the child). */
+export const currentEnvReader = (): EnvReader | null => scope.getStore() ?? null;
 
 /** Convex's isolate `process.env`: reads one name at a time, lists nothing, `inspect` for printing. */
 export function isolateProcessEnv(

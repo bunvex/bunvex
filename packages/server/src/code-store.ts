@@ -16,7 +16,7 @@ import {
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
 import type { Value } from "@bunvex/values";
-import { type AnalyzedModule, type CodeVersion, type ModuleSource, moduleHash, moduleName } from "./code-version.ts";
+import { type AnalyzedModule, type LoadedCode, type ModuleSource, moduleHash, moduleName } from "./code-version.ts";
 import { cronSpecOf, cronSpecsRow, msOfNs, nsOfMs } from "./cron-rows.ts";
 //     every time it is loaded.
 // The rows have Convex's shapes (STUDY-134, DV-424): crates/model/src/source_packages/types.rs
@@ -28,7 +28,7 @@ import { cronSpecOf, cronSpecsRow, msOfNs, nsOfMs } from "./cron-rows.ts";
 // otherwise delete packages (F3).
 import { DEFINITION_MODULE } from "./definition-eval.ts";
 import { externalDepsPath, externalDepsRow } from "./external-deps.ts";
-import { loadCode } from "./function-executor.ts";
+import { type Executor, loadCode, sandboxNotYet, vmExecutor } from "./function-executor.ts";
 import { SERVER_VERSION } from "./server-version.ts";
 import type { SourcePosition } from "./source-position.ts";
 import { bytesSource, entryBytes, ZipReader } from "./zip-reader.ts";
@@ -401,7 +401,7 @@ export async function ensureRootComponent(db: Tx) {
 export async function writeCodeRows(
   db: Tx,
   pkg: SourcePackageFields,
-  version: CodeVersion,
+  version: LoadedCode,
   /** The package's modules that define no function (the schema, the auth config): rows analyzed to nothing. */
   other: ModuleSource[] = [],
   /** The component whose code it is (its `_components` id), or null for the app's (STUDY-153 PR 4). */
@@ -549,9 +549,12 @@ export async function loadComponentCode(
   engine: Engine,
   store: BlobStore,
   namespace: string,
-): Promise<CodeVersion | null> {
+  executor: Executor = vmExecutor,
+): Promise<LoadedCode | null> {
   const stored = await storedModules(engine, namespace);
   if (!stored) return null;
+  // Components under the process sandbox are STUDY-168's PR 7: a start with one fails to load the code, saying so.
+  if (executor.kind === "process") throw new Error(sandboxNotYet("Components"));
   const sources = await readablePackage(store, stored.pkg.storageKey);
   if (!sources) return null;
   const row = (await engine.query((db) =>
@@ -565,6 +568,7 @@ export async function loadComponentCode(
       timestamp: msOfNs(row.importPhaseUnixTimestamp as bigint),
       env: {},
     },
+    executor,
   );
 }
 
@@ -582,7 +586,8 @@ export async function loadLatestCode(
   engine: Engine,
   store: BlobStore,
   env: Record<string, string> = {},
-): Promise<{ version: CodeVersion; authConfig: ModuleSource | null } | null> {
+  executor: Executor = vmExecutor,
+): Promise<{ version: LoadedCode; authConfig: ModuleSource | null } | null> {
   const stored = await storedModules(engine);
   if (!stored) return null;
   const sources = await readablePackage(store, stored.pkg.storageKey);
@@ -598,6 +603,7 @@ export async function loadLatestCode(
   const version = await loadCode(
     sources.filter((m) => m.path !== AUTH_CONFIG_MODULE && m.path !== SCHEMA_MODULE && isFunctionModule(m.path)),
     { seed: config.seed, timestamp: config.timestamp, env, ...(nodeModules ? { nodeModules } : {}) },
+    executor,
   );
   return { version, authConfig: sources.find((m) => m.path === AUTH_CONFIG_MODULE) ?? null };
 }
@@ -614,8 +620,9 @@ export async function loadLatestCodeVersion(
   engine: Engine,
   store: BlobStore,
   env: Record<string, string> = {},
-): Promise<CodeVersion | null> {
-  return (await loadLatestCode(engine, store, env))?.version ?? null;
+  executor: Executor = vmExecutor,
+): Promise<LoadedCode | null> {
+  return (await loadLatestCode(engine, store, env, executor))?.version ?? null;
 }
 
 export { moduleName };

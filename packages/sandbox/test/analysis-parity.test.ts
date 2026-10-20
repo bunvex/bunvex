@@ -67,7 +67,17 @@ const inProcessView = (v: CodeVersion) => ({
   moduleHashes: v.moduleHashes,
   moduleLoads: v.moduleLoads,
   functions: new Map(
-    [...v.functions].map(([k, f]) => [k, { kind: f.kind, visibility: f.visibility, node: NODE_FUNCTIONS.has(f) }]),
+    [...v.functions].map(([k, f]) => [
+      k,
+      {
+        kind: f.kind,
+        visibility: f.visibility,
+        node: NODE_FUNCTIONS.has(f),
+        // The validators the stand-ins check with (STUDY-171 §8): each one's JSON, or none.
+        args: f.args ? JSON.stringify(f.args.json) : null,
+        returns: f.returns ? JSON.stringify(f.returns.json) : null,
+      },
+    ]),
   ),
   rooms: new Map([...v.rooms].map(([k, r]) => [k, r.kind])),
 });
@@ -127,7 +137,7 @@ describe("a child analyzes as CodeVersion.load", () => {
         const [here, there] = [
           await outcome(async () => inProcessView(await CodeVersion.load(e.sources, opts))),
           await outcome(async () => {
-            const { loadMs: _, ...version } = await child.load(e.sources, opts);
+            const { loadMs: _, versionId: __, ...version } = await child.load(e.sources, opts);
             return version;
           }),
         ];
