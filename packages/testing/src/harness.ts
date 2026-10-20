@@ -12,20 +12,25 @@
 // It behaves as the real backend, not as convex-test's mock (DV-540): OCC, Convex's limits, real ids and storage
 // URLs, deterministic `Date` and `Math.random`. Functions see the env given to `bunvexTest` (DV-541, AD-34).
 
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { bundleProject, pushRequest } from "@bunvex/cli/push-request";
-import { CRON_JOBS_TABLE, defineSchema, Engine, SCHEDULED_JOBS_TABLE } from "@bunvex/core";
+import { CRON_JOBS_TABLE, defineSchema, Engine, resolveComponentPath, SCHEDULED_JOBS_TABLE } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { TestRuntime } from "@bunvex/core/test-runtime";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import {
   adminKeyCipherKey,
   callerOf,
+  componentFunctionName,
+  componentsGeneric,
   createServer,
   type FunctionArgs,
   type FunctionReference,
   type FunctionReturnType,
   Functions,
-  getFunctionName,
+  getFunctionAddress,
   internalAction,
   internalMutation,
   internalQuery,
@@ -39,6 +44,8 @@ const INSTANCE_SECRET = "7e57".repeat(16);
 const ADMIN_KEY = issueAdminKey({ instanceName: INSTANCE_NAME, cipherKey: adminKeyCipherKey(INSTANCE_SECRET) });
 /** convex-test's default issuer, in bunvex's words (rule 5, DV-538). */
 const TEST_ISSUER = "https://bunvex.test";
+/** A reference to a child component's function, as `components.<name>` gives it. */
+const CHILD_REFERENCE = "_reference/childComponent/";
 /** The module inline functions are registered under: a name no pushed module can have. */
 const INLINE_MODULE = "_bunvexTest";
 
@@ -66,12 +73,36 @@ class Backend {
   private ready: Promise<{ functions: Functions; engine: Engine; siteUrl: string; stop: () => Promise<void> }> | null =
     null;
   private inline = 0;
+  /** Components a package's own tests mount (`registerComponent`): name and definition file. */
+  readonly registered: [string, string][] = [];
+  private tmp: string | null = null;
 
   constructor(private readonly opts: BunvexTestOptions) {}
+
+  /**
+   * The project to push: the one at `cwd`, or, with registered components, an app of its own that mounts each of
+   * them (`app.use(definition, { name })`), written to a temporary directory.
+   */
+  private project(): string {
+    if (!this.registered.length) return this.opts.cwd ?? process.cwd();
+    this.tmp = mkdtempSync(join(tmpdir(), "bunvex-test-"));
+    const imports = this.registered.map(([, file], i) => `import c${i} from ${JSON.stringify(file)};`).join("\n");
+    const uses = this.registered.map(([name], i) => `app.use(c${i}, { name: ${JSON.stringify(name)} });`).join("\n");
+    mkdirSync(join(this.tmp, "bunvex"));
+    writeFileSync(
+      join(this.tmp, "bunvex", "bunvex.config.ts"),
+      `import { defineApp } from "@bunvex/server";\n${imports}\nconst app = defineApp();\n${uses}\nexport default app;\n`,
+    );
+    return this.tmp;
+  }
 
   start() {
     this.ready ??= this.boot();
     return this.ready;
+  }
+
+  get started(): boolean {
+    return this.ready !== null;
   }
 
   private async boot() {
@@ -104,7 +135,7 @@ class Backend {
             env.map(([name, value]) => ({ name, value })),
           ),
         );
-      const bundled = await bundleProject(this.opts.cwd ?? process.cwd());
+      const bundled = await bundleProject(this.project());
       const start = (await server.push.startPush(pushRequest(bundled, bundled.bundled.modules, []) as never)) as {
         schemaChange: Parameters<typeof server.push.waitForSchema>[0]["schemaChange"];
       };
@@ -133,12 +164,30 @@ class Backend {
     return `${INLINE_MODULE}:${name}`;
   }
 
-  /** Every scheduled job of the app. */
+  /** Every scheduled job: the app's and each component's (each lives in its caller's namespace, STUDY-157). */
   async jobs(): Promise<Job[]> {
     const { engine } = await this.start();
-    return (await engine.query((db) =>
-      db.asSystem(() => db.query(SCHEDULED_JOBS_TABLE).collect()),
-    )) as unknown as Job[];
+    const namespaces = [
+      null,
+      ...[...engine.catalog.components].filter(([, c]) => c.tables.has(SCHEDULED_JOBS_TABLE)).map(([id]) => id),
+    ];
+    return (await engine.query(async (db) => {
+      const out: unknown[] = [];
+      for (const ns of namespaces)
+        out.push(...(await db.asSystem(() => db.inComponent(ns, () => db.query(SCHEDULED_JOBS_TABLE).collect()))));
+      return out;
+    })) as Job[];
+  }
+
+  /** A component's function by its reference (`components.<name>.<module>.<fn>`): its registry name. */
+  async componentFunction(reference: string): Promise<string> {
+    const { engine } = await this.start();
+    const parts = reference.slice(CHILD_REFERENCE.length).split("/");
+    const [component, ...path] = parts;
+    const fn = path.pop();
+    const found = await engine.query((db) => resolveComponentPath(db, [component!]));
+    if (!found || !fn || !path.length) throw new Error(`bunvexTest: no component function ${reference}`);
+    return componentFunctionName(found._id, `${path.join("/")}:${fn}`);
   }
 
   /** A cron job's function and arguments, by its name in `crons.ts`. */
@@ -161,6 +210,7 @@ class Backend {
     const r = await this.ready.catch(() => null);
     this.ready = null;
     await r?.stop();
+    if (this.tmp) rmSync(this.tmp, { recursive: true, force: true });
   }
 }
 
@@ -189,7 +239,7 @@ export class TestBunvex {
 
   private async call(kind: "query" | "mutation" | "action", ref: AnyReference, args: unknown) {
     const { functions } = await this.backend.start();
-    const name = typeof ref === "function" ? await this.backend.registerInline(kind, ref) : getFunctionName(ref);
+    const name = typeof ref === "function" ? await this.backend.registerInline(kind, ref) : await this.nameOf(ref);
     const caller = {
       ...callerOf(this.identity as never),
       ...(this.request && {
@@ -206,6 +256,14 @@ export class TestBunvex {
     if (kind === "query") return functions.runQuery(name, a, false, caller);
     if (kind === "mutation") return functions.runMutation(name, a, false, caller);
     return functions.runAction(name, a, caller, { internal: true });
+  }
+
+  /** A reference's function: the app's by name, or a component's (`components.<name>.<module>.<fn>`). */
+  private async nameOf(ref: AnyReference): Promise<string> {
+    const address = getFunctionAddress(ref) as { name?: string; reference?: string };
+    if (address.name !== undefined) return address.name;
+    if (address.reference?.startsWith(CHILD_REFERENCE)) return this.backend.componentFunction(address.reference);
+    throw new Error(`bunvexTest: not a function reference: ${String(ref)}`);
   }
 
   /** Run a query by reference, or an inline `(ctx) => …` as a query. Internal functions may be called. */
@@ -321,6 +379,19 @@ export class TestBunvex {
     return functions.kindOf(udfPath) === "action"
       ? functions.runAction(udfPath, args, caller, { internal: true })
       : functions.runMutation(udfPath, args, false, caller);
+  }
+
+  /**
+   * convex-test's `registerComponent`, for a component package's own tests: mount the component whose definition
+   * is `definition` (its `bunvex.config.ts`, or the directory holding it) as `name`, in an app of the test's own;
+   * call it before the first call. Its functions are called through the reference this returns
+   * (`componentsGeneric()[name]`). A project with an app of its own mounts its components in its `bunvex.config.ts`.
+   */
+  registerComponent(name: string, definition: string): AnyReference {
+    if (this.backend.started) throw new Error("bunvexTest: registerComponent must come before the first call");
+    const file = statSync(definition).isDirectory() ? join(definition, "bunvex.config.ts") : definition;
+    this.backend.registered.push([name, resolve(file)]);
+    return (componentsGeneric() as Record<string, unknown>)[name];
   }
 
   /** Stop the deployment. A test that ends without it leaves nothing that keeps the process alive. */

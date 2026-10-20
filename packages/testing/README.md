@@ -27,5 +27,8 @@ test("sending a message", async () => {
   it; `t.runCron(name)` runs a cron now.
 - **Callers**: `withIdentity({ … })` and `withRequestMetadata({ ip, userAgent })`; `t.fetch(path)` calls the app's
   HTTP actions as that user.
+- **Components**: an app's are installed as its push installs them; call one directly through
+  `componentsGeneric().<name>`. A component package's own tests mount it with
+  `t.registerComponent(name, "path/to/its/dir")`, which returns its reference.
 - **Options**: `cwd`, the project's directory (default: the working directory).
 - **Runner**: `bun test` (Vitest only under Bun: `bunx --bun vitest`).
