@@ -3,6 +3,8 @@
 // return; the server evaluates it and reads one thing: `export()`, the definition as Convex serializes it
 // (`AppDefinitionAnalysis` / `ComponentDefinitionAnalysis`). Inside that evaluation an imported child definition is
 // a stand-in `{componentDefinitionPath, defaultName}` the server makes (STUDY-153 §1.3).
+
+import type { Expand } from "@bunvex/core";
 import { toReferencePath } from "@bunvex/protocol";
 import type { GenericValidator, Infer } from "@bunvex/values";
 
@@ -12,8 +14,18 @@ export type EnvRef = { __envVarRef: string };
 export type EnvDefinition = Record<string, GenericValidator>;
 /** What `app.env` / `component.env` gives: a reference per declared variable. */
 export type EnvRefs<Env extends EnvDefinition> = { [K in keyof Env]: EnvRef };
+/**
+ * The values of declared variables (Convex's `EnvFromDefinition`): a required one's validator type, an optional
+ * one's or `undefined`.
+ */
+export type EnvFromDefinition<E extends EnvDefinition> = Expand<
+  { [K in keyof E as E[K] extends { isOptional: "optional" } ? never : K]: Infer<E[K]> } & {
+    [K in keyof E as E[K] extends { isOptional: "optional" } ? K : never]?: Infer<E[K]> | undefined;
+  }
+>;
 /** The values of an app's declared variables (Convex's `EnvFromAppDefinition`). */
-export type EnvFromAppDefinition<D> = D extends AppDefinition<infer Env> ? { [K in keyof Env]: Infer<Env[K]> } : never;
+export type EnvFromAppDefinition<D> =
+  D extends AppDefinition<infer Env> ? EnvFromDefinition<Env> : Record<string, never>;
 
 /** The options of `use` (Convex's): the instance's name, the prefix its HTTP routes mount at, its variables. */
 export type UseOptions = { name?: string; httpPrefix?: string; env?: Record<string, string | EnvRef | undefined> };
@@ -233,8 +245,10 @@ export function defineApp<Env extends EnvDefinition = EnvDefinition>(options?: {
 /** A reference to a component's function, or to a module of it (Convex's `AnyComponentReference`). */
 // biome-ignore lint/suspicious/noExplicitAny: references below a component are any path, as Convex's
 export type AnyComponentReference = Record<string, any>;
+/** A definition's mounted children by name (Convex's `AnyChildComponents`). */
+export type AnyChildComponents = Record<string, AnyComponentReference>;
 /** The app's mounted components, as `_generated/api`'s `components` (Convex's `AnyComponents`). */
-export type AnyComponents = Record<string, AnyComponentReference>;
+export type AnyComponents = AnyChildComponents;
 
 function childComponents(parts: readonly string[]): AnyComponents {
   return new Proxy(
