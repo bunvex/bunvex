@@ -271,7 +271,7 @@ const REGEXP_STATICS = [
 /** `set` (`setTimeout`, `setInterval`), each timer it makes during an action handed to that action (`trackActionTimer`). */
 function actionTimer<F extends typeof setTimeout | typeof setInterval>(set: F): F {
   return Object.assign((...args: Parameters<F>) => {
-    const t = (set as (...a: unknown[]) => ReturnType<typeof setTimeout>)(...args);
+    const t = (set as unknown as (...a: unknown[]) => unknown)(...args);
     trackActionTimer(t);
     return t;
   }, set) as unknown as F;

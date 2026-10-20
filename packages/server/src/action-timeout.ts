@@ -37,7 +37,7 @@ export const nodeActionTimeoutError = (exportName: string, ms: number) =>
  * `environment/action/mod.rs:1226-1233`); and the timers its code set, cleared when it ends (null: an action whose run
  * outlives its answer, an HTTP action whose body still streams, a `"use node"` action).
  */
-type Run = { signal: AbortSignal; life: ActionLife; timers: Set<ReturnType<typeof setTimeout>> | null };
+type Run = { signal: AbortSignal; life: ActionLife; timers: Set<unknown> | null };
 
 /**
  * Whether an action has ended, shared by its run and its `ctx`: a `ctx` kept past its action's end (in module state)
@@ -68,7 +68,7 @@ setFetchSignal(() => {
 function end(run: Run) {
   run.life.ended = true;
   if (!run.timers) return;
-  for (const t of run.timers) clearTimeout(t);
+  for (const t of run.timers) clearTimeout(t as Parameters<typeof clearTimeout>[0]);
   run.timers.clear();
 }
 
@@ -77,10 +77,10 @@ function end(run: Run) {
  * as Convex's sleeps never resolve once its isolate is gone. Set after the end (an operation in flight then, whose
  * answer the code still awaited), it is cleared at once.
  */
-export function trackActionTimer(t: ReturnType<typeof setTimeout>) {
+export function trackActionTimer(t: unknown) {
   const r = runs.getStore();
   if (!r?.timers) return;
-  if (r.life.ended) clearTimeout(t);
+  if (r.life.ended) clearTimeout(t as Parameters<typeof clearTimeout>[0]);
   else r.timers.add(t);
 }
 
