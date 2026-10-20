@@ -91,6 +91,8 @@ const ACTION_CASES = `{
   unawaitedAfterAwait: async (ctx) => { const p = ctx.meta.getFunctionMetadata(); await new Promise((r) => setTimeout(r, 50)); ctx.runQuery("cases:q", { n: 1 }); await p; return 1; },
   unawaitedBigStore: async (ctx) => { ctx.storage.store(new Blob([new Uint8Array(3 * 1024 * 1024)])); ctx.storage.store(new Blob(["small"])); return 1; },
   unawaitedFetchBlob: async (ctx, T) => { fetch(T + "/echo", { method: "POST", body: new Blob([new Uint8Array(200000)]) }); return 1; },
+  unawaitedFetchForm: async (ctx, T) => { const f = new FormData(); for (let i = 0; i < 6; i++) f.append("f" + i, new Blob(["file " + i]), "f" + i + ".txt"); fetch(T + "/echo", { method: "POST", body: f }); return 1; },
+  unawaitedStores: async (ctx) => { for (let i = 0; i < 5; i++) ctx.storage.store(new Blob(["small " + i])); return 1; },
   awaitedAll: async (ctx) => { await ctx.meta.getFunctionMetadata(); await ctx.runQuery("cases:q", { n: 1 }); await ctx.storage.generateUploadUrl(); return 1; },
   // fetch
   fetchText: async (ctx, T) => { const r = await fetch(T + "/text"); return [r.status, r.statusText, r.ok, await r.text(), r.headers.get("x-mine"), r.url === T + "/text", r.redirected, r.type]; },

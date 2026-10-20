@@ -4,7 +4,9 @@
 // not share the host's event loop), and `ctx.storage` round trips up to 16 MiB + 1 byte (STUDY-168 §14.1), whose
 // throughput is the bytes stored and read back over the time.
 //
-//   bun packages/sandbox/bench/actions.ts [calls=1000] [warmup=100] [only=<part of a line's name>] [--json]
+//   bun packages/sandbox/bench/actions.ts [calls=1000] [warmup=100] [only=<part of a line's name>] [--json] [--vm]
+//
+// `--vm`: the `vm` executor only (to compare a branch whose `process` runs no actions).
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { createServer, Functions } from "@bunvex/server";
@@ -14,6 +16,7 @@ import { createProcessExecutor } from "../src/executor.ts";
 
 const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const JSON_OUT = process.argv.includes("--json");
+const VM_ONLY = process.argv.includes("--vm");
 const CALLS = Number(args[0] ?? 1000);
 const WARMUP = Number(args[1] ?? 100);
 const ONLY = args[2];
@@ -175,7 +178,7 @@ type Result = {
   mibPerS?: number;
 };
 const results: Result[] = [];
-for (const sandbox of ["vm", "process"] as const) {
+for (const sandbox of VM_ONLY ? (["vm"] as const) : (["vm", "process"] as const)) {
   const d = await deployment(sandbox);
   let i = 0;
   for (const line of lines) {
@@ -209,6 +212,6 @@ console.log("|---|---|---|---|");
 for (const line of lines) {
   const a = results.find((r) => r.line === line.name && r.sandbox === "vm");
   const b = results.find((r) => r.line === line.name && r.sandbox === "process");
-  if (a && b) console.log(`| ${line.name} (${a.calls}) | ${fmt(a)} | ${fmt(b)} | ${(b.p50 - a.p50).toFixed(0)} |`);
+  if (a) console.log(`| ${line.name} (${a.calls}) | ${fmt(a)} | ${fmt(b)} | ${b ? (b.p50 - a.p50).toFixed(0) : ""} |`);
 }
 process.exit(0);
