@@ -137,6 +137,12 @@ export function withActionTimeout<T>(
 }
 
 /**
+ * The running action's signal, aborted with its timeout once it timed out (or its caller did): what the function
+ * sandbox's host hears to cut the action off in its child (STUDY-171 §12). Null outside an action.
+ */
+export const currentActionSignal = (): AbortSignal | null => runs.getStore()?.signal ?? null;
+
+/**
  * `fn` run as an action whose code's timers are tracked, for a runtime that runs actions outside `withActionTimeout`
  * (the function sandbox's child, whose host keeps the timeout): `end()` clears them once the action has ended.
  */

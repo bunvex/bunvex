@@ -1,0 +1,3 @@
+bunvex-local-backend 0.1.0-alpha.1: instance bunvex-soak, sqlite
+the API at http://127.0.0.1:23844, HTTP actions at http://127.0.0.1:23845
+bunvex-local-backend: stopping
