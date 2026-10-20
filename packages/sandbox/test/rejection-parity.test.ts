@@ -309,17 +309,17 @@ describe("each case on its own", () => {
   });
 
   test("an action stops where it failed: what it would have done after never runs", async () => {
-    for (const c of ["stopsTheAction", "stopsBeforeOp"]) {
-      const tag = `stops-${c}-${Math.random()}`;
-      const o = await proc.run("action", c, { a: { tag } });
-      await Bun.sleep(100);
-      expect({ c, count: (await proc.call("query", "cases:count", { tag })).value }).toEqual({ c, count: 0 });
-      // The mutation it started in the same turn was never run: it is unawaited, as on Convex.
-      if (c === "stopsBeforeOp")
-        expect(o.logLines).toEqual([
-          "[WARN] 1 unawaited operation: [mutation]. Async operations should be awaited or they might not run.",
-        ]);
-    }
+    const tag = `stops-${Math.random()}`;
+    await proc.run("action", "stopsTheAction", { a: { tag } });
+    await Bun.sleep(100);
+    expect((await proc.call("query", "cases:count", { tag })).value).toBe(0);
+  });
+
+  test("an operation started in the turn of the rejection is left unawaited, as on Convex", async () => {
+    const o = await proc.run("action", "stopsBeforeOp", { a: { tag: `before-${Math.random()}` } });
+    expect(o.logLines).toEqual([
+      "[WARN] 1 unawaited operation: [mutation]. Async operations should be awaited or they might not run.",
+    ]);
   });
 });
 

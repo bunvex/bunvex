@@ -83,11 +83,6 @@ export type ToHost =
       report: WireReport;
       /** An action's operations whose answer it had not taken when it returned (they are its unawaited ones). */
       pending?: number[];
-      /**
-       * An action's operations it started in the turn a rejection failed it, never sent (Convex never ran them): each
-       * operation's name and its namespace's method, counted as unawaited too.
-       */
-      unsent?: [name: string, method: string | null][];
     } & ({ ok: true; value: unknown } | { ok: false; error: WireThrown }))
   /** An action's console lines, sent as they come (a query's or mutation's go with its next message). */
   | { t: "lines"; id: number; lines: WireLogLine[] }
@@ -551,11 +546,10 @@ export function parseChildMessage(text: string): ToHost {
   if (t === "done") {
     const ok = bool(m.ok, "done.ok");
     const r = report(m.report, "done.report");
-    const pending: { pending?: number[]; unsent?: [string, string | null][] } =
+    const pending =
       m.pending === undefined
         ? {}
         : { pending: arr(m.pending, "done.pending").map((p, i) => int(p, `done.pending[${i}]`)) };
-    if (m.unsent !== undefined) pending.unsent = pairs(m.unsent, (x, w) => nullable(x, str, w), "done.unsent");
     if (ok) return { t, id, ok, value: "value" in m ? m.value : fail("done.value", "a value"), report: r, ...pending };
     return { t, id, ok, error: thrown(m.error, "done.error"), report: r, ...pending };
   }

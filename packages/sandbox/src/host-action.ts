@@ -54,50 +54,6 @@ const ACTION_OPS = new Set([
   "createFunctionHandle",
   "fetch",
 ]);
-/**
- * The name the engine's `ctx` counts an action's operation by while it is pending (`trackedCtx`, functions.ts:
- * Convex's `name_when_dangling`): an operation's, or its namespace's method's. Null for one that is not.
- */
-function danglingName(name: string, method: string | null): string | null {
-  switch (name) {
-    case "runQuery":
-      return "query";
-    case "runMutation":
-      return "mutation";
-    case "runAction":
-      return "action";
-    case "auth.getUserIdentity":
-      return "getUserIdentity";
-    case "fetch":
-    case "vectorSearch":
-    case "createFunctionHandle":
-    case "storage.get":
-    case "storage.store":
-      return name;
-    case "scheduler":
-      return method === "runAfter" || method === "runAt" ? "schedule" : method === "cancel" ? "cancel_job" : null;
-    case "storage": {
-      const names: Record<string, string> = {
-        getUrl: "storageGetUrl",
-        getMetadata: "storageGetMetadata",
-        generateUploadUrl: "storageGenerateUploadUrl",
-        delete: "storageDelete",
-        store: "storage.store",
-      };
-      return method !== null && Object.hasOwn(names, method) ? names[method]! : null;
-    }
-    case "rooms":
-      return method === "broadcast" || method === "members" ? `rooms.${method}` : null;
-    case "presence":
-      return method === "list" ? "presence.list" : null;
-    case "meta":
-      return method === "getFunctionMetadata" || method === "getDeploymentMetadata" || method === "getRequestMetadata"
-        ? method
-        : null;
-    default:
-      return null;
-  }
-}
 const SCHEDULER_METHODS = ["runAfter", "runAt", "cancel"];
 const STORAGE_METHODS = ["getUrl", "getMetadata", "generateUploadUrl", "delete", "store"];
 const ROOMS_METHODS = ["broadcast", "members"];
@@ -185,7 +141,6 @@ export class HostActionCall extends HostCallBase {
           case "done":
             for (const line of item.report.lines) this.logLine(line);
             await this.stillPending(item.pending ?? []);
-            this.neverRan(item.unsent ?? []);
             // An operation the action did not await goes on, pending (the unawaited-operations warning), as under
             // `vm`: the action's answer does not wait for it.
             return this.checked(() => this.result(item));
@@ -221,20 +176,6 @@ export class HostActionCall extends HostCallBase {
       const c = this.counted.get(op);
       if (!c?.settled) continue;
       for (const name of c.names) pending.set(name, (pending.get(name) ?? 0) + 1);
-    }
-  }
-
-  /**
-   * The operations the action started in the turn a rejection failed it, which its child never sent: unawaited, as for
-   * Convex (its isolate ended before running them), under the names the engine's `ctx` counts them by.
-   */
-  private neverRan(unsent: [string, string | null][]) {
-    const pending = currentPendingOps();
-    if (!pending) return;
-    for (const [name, method] of unsent) {
-      const counted = danglingName(name, method);
-      if (counted === null) this.checked(() => bad(`an operation that is not one never sent (${name})`));
-      else pending.set(counted, (pending.get(counted) ?? 0) + 1);
     }
   }
 
