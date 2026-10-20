@@ -8,10 +8,10 @@ item. It is the project's to-do list at the scale of the whole product.
 |---|---|--:|--:|--:|
 | Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 244 | 3 | 0 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 163 | 2 | 1 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 237 | 20 | 6 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 237 | 21 | 6 |
 
-Beyond Convex, [additions.md](additions.md) lists 35 additions: 30 built (5 of them dashboard screens on the
-mock), 1 being built (AD-44), 2 accepted, 2 deferred, none proposed (recounted on 2026-10-19, STUDY-173; before that 2026-10-15, the dashboard audit after STUDY-149; AD-41 deferred; then
+Beyond Convex, [additions.md](additions.md) lists 37 additions: 32 built (5 of them dashboard screens on the
+mock), 1 being built (AD-44), 2 accepted, 2 deferred, none proposed (recounted on 2026-10-20 after AD-34 and AD-35, built in STUDY-159; before that 2026-10-19, STUDY-173; before that 2026-10-15, the dashboard audit after STUDY-149; AD-41 deferred; then
 AD-24 and AD-25's screens on a deployment, and AD-04's Topology, STUDY-131 §11; AD-42, rooms and presence scopes,
 accepted in STUDY-164 and built the same day, STUDY-164 §7; AD-43, rooms in the dashboard, accepted in STUDY-165 and built: the read and the counters, STUDY-165 §5.1,
 the event tap's server and data source, §5.2, the actions' server and data source, §5.3, and the tap's panel and the
@@ -186,10 +186,11 @@ gaps.
 
 **Low: rare, ops-only, or a missing nicety**
 
-- The function sandbox (AD-44, opt-in): under `BUNVEX_FUNCTION_SANDBOX=process`, queries and mutations run with no OS
-  isolation yet, one child per code version, with their log lines and stacks as under `vm` (STUDY-171 §11); actions,
-  HTTP actions, components and rooms are not available there yet (STUDY-171 §8.7; STUDY-168 PRs 5–9). The default
-  `vm` is unaffected.
+- The function sandbox (AD-44, opt-in): under `BUNVEX_FUNCTION_SANDBOX=process`, queries, mutations and actions run
+  with no OS isolation yet, one child per code version, with their log lines and stacks as under `vm` (STUDY-171 §11,
+  §12); `"use node"` actions, HTTP actions and components are not available there yet (STUDY-171 §8.7; STUDY-168
+  PRs 6, 7, 10). An action past its timeout is cut off, then killed after 1 s if it does not hear it, until STUDY-168 PR 9 ends its own process at the timeout (owner, 2026-10-21, STUDY-171 §12.11). The default `vm` is
+  unaffected.
 
 - Error text (STUDY-150 §6): a missing function in `ctx.runQuery` / the scheduler is worded and framed as
   bunvex's server words it, not as Convex's app-side library (`Couldn't resolve api.nope.x`); a bad id fails before

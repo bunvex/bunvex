@@ -42,7 +42,6 @@ import {
   inHandleScope,
   type LogLine,
   MAX_LOG_LINES,
-  sandboxNotYet,
   setAuditScope,
   withEnv,
 } from "@bunvex/server/executor";
@@ -55,17 +54,20 @@ import {
   type WireLink,
   type WireLogLine,
   type WireReply,
+  type WireReport,
   type WireTable,
   type WireThrown,
 } from "./protocol.ts";
 import { decode, encode } from "./wire.ts";
 
-type Send = (m: ToHost) => void;
+export type Send = (m: ToHost) => void;
 
-/** The call whose handler runs: its `log.audit` lines go to the host. */
-const running = new AsyncLocalStorage<ChildCall>();
+/** The call whose handler runs (a query's, a mutation's or an action's): its `log.audit` lines go to the host. */
+export const running = new AsyncLocalStorage<ChildCallBase>();
 setAuditScope(() => {
   const call = running.getStore();
+  // An action has no audit lines (null), as in-process: `log.audit` refuses there with the server's own words.
+  if (call && !(call instanceof ChildCall)) return null;
   return call ? (json: string) => call.op("log.audit", [json]).then(() => {}) : undefined;
 });
 
@@ -104,11 +106,10 @@ export class CallRuntime {
     this.calls.set(m.id, call);
     try {
       const version = this.versions.get(m.version);
-      const f = version?.functions.get(m.fn);
-      if (!f || (f.kind !== "query" && f.kind !== "mutation"))
-        throw new Error(`the function ${m.fn} is not a query or mutation of this version`);
+      const handler = version ? handlerOf(version, m.fn) : null;
+      if (!handler) throw new Error(`the function ${m.fn} is not a query or mutation of this version`);
       const env = m.env ? this.envs.get(m.env.epoch)! : null;
-      await call.run(f.handler as (ctx: unknown, args: unknown) => unknown, env, exec.execution);
+      await call.run(handler, env, exec.execution);
     } finally {
       // The answers to operations it did not await still reach it (an unawaited write that fails is an unhandled
       // rejection, as in-process); the host sends them before it ends the call.
@@ -121,6 +122,22 @@ export class CallRuntime {
   reply(m: WireReply) {
     this.calls.get(m.id)?.reply(m);
   }
+}
+
+/**
+ * What a call names: a query or mutation (`dir/file:name`), or a room's gate (`dir/file:name#canJoin`, AD-42), run
+ * as a query.
+ */
+function handlerOf(version: CodeVersion, fn: string): ((ctx: unknown, args: unknown) => unknown) | null {
+  const gate = /^(.*)#(canJoin|canPublish)$/.exec(fn);
+  if (gate) {
+    const def = version.rooms.get(gate[1]!) as Record<string, unknown> | undefined;
+    const g = def?.[gate[2]!];
+    return typeof g === "function" ? (ctx, args) => (g as (c: unknown, a: unknown) => unknown)(ctx, args) : null;
+  }
+  const f = version.functions.get(fn);
+  if (!f || (f.kind !== "query" && f.kind !== "mutation")) return null;
+  return f.handler as (ctx: unknown, args: unknown) => unknown;
 }
 
 /** The error classes an operation's error is rebuilt with (the engine's are these, or `BunvexError`). */
@@ -146,17 +163,156 @@ const stackOf = (e: Error): string | null => {
   }
 };
 
-class ChildCall implements DbHost {
+/**
+ * What a call of either kind (`ChildCall`, `ChildActionCall`) does with its operations: each sent to the host with
+ * what the call reported since its last message, its answer awaited, its error made again with the engine's class
+ * and words; and how a thrown value leaves the handler.
+ */
+export abstract class ChildCallBase {
   private seq = 0;
-  private readonly waiting = new Map<
+  protected readonly waiting = new Map<
     number,
     { resolve: (v: unknown) => void; reject: (e: unknown) => void; site: Error }
   >();
+  private answered: (() => void) | null = null;
+
+  constructor(
+    readonly id: number,
+    protected readonly send: Send,
+  ) {}
+
+  /** What the host charges, records and logs since the last message. */
+  protected abstract report(): WireReport;
+
+  /** Before an operation: a query's or mutation's budget checked. */
+  protected before() {}
+
+  /** Around an operation's wait: a query's or mutation's paused, its budget checked after. */
+  protected around<T>(wait: () => Promise<T>): Promise<T> {
+    return wait();
+  }
+
+  /** The frames of an error the engine made at the app's call: where the app called (or made a chain's link). */
+  protected siteOf(m: WireReply & { ok: false }, opSite: Error): Error | null {
+    return m.sync ? opSite : null;
+  }
+
+  /** Runs `then` once no operation of the call waits for its answer. */
+  whenAnswered(then: () => void) {
+    if (this.waiting.size === 0) then();
+    else this.answered = then;
+  }
+
+  /** An operation, run by the host: its answer, or its error made again with the engine's class and words. */
+  op(name: string, args: unknown[]): Promise<unknown> {
+    this.before();
+    // Where the app called it, for an error the engine throws at once (a stack is cheap to take: about 0.1 µs).
+    const site = new Error();
+    // Serialized here, at the call, as the engine copies what it is given (a getter's throw is the app's).
+    const encoded = args.map(encode);
+    const op = ++this.seq;
+    return this.around(
+      () =>
+        new Promise<unknown>((resolve, reject) => {
+          this.waiting.set(op, { resolve, reject, site });
+          this.sendOp(op, name, encoded);
+        }),
+    );
+  }
+
+  /** Sends operation `op` (an action cut off sends nothing). */
+  protected sendOp(op: number, name: string, args: unknown[]) {
+    this.send({ t: "op", id: this.id, op, name, args, report: this.report() });
+  }
+
+  /** What the reply's value stands for (an action's `fetch` and `storage.get` make a `Response` and a `Blob`). */
+  protected value(_op: number, v: unknown): unknown {
+    return v;
+  }
+
+  reply(m: WireReply) {
+    const w = this.waiting.get(m.op);
+    if (!w) return;
+    this.waiting.delete(m.op);
+    this.replied(m);
+    if (m.ok) {
+      try {
+        w.resolve(this.value(m.op, decode(m.value, false)));
+      } catch (e) {
+        w.reject(e);
+      }
+    } else {
+      const e = this.rebuilt(m.error, m.op);
+      // Thrown at the app's call under `vm`: the error holds the frames of that call (or of the link that failed),
+      // which the app's context maps (`installAppErrors`), and no `at async` frame.
+      const site = this.siteOf(m, w.site);
+      if (site && e instanceof Error) {
+        const stack = stackOf(site) ?? "";
+        const frames = stack.includes("\n") ? stack.slice(stack.indexOf("\n")) : "";
+        const header = e.message ? `${e.name}: ${e.message}` : e.name;
+        Object.defineProperty(e, "stack", { value: header + frames, writable: true, configurable: true });
+      }
+      w.reject(e);
+    }
+    if (this.waiting.size === 0 && this.answered) this.answered();
+  }
+
+  /** What else a reply tells the call (the transaction's created tables). */
+  protected replied(_m: WireReply) {}
+
+  /** An operation's error as the app sees it: the engine's class and words. */
+  protected rebuilt(w: WireThrown, op: number): unknown {
+    if (w.k === "value") return decode(w.v, false);
+    if (w.k !== "error") return new Error("the host answered with an error the child cannot read");
+    const e = rebuiltError(w);
+    fromOp.set(e, { call: this.id, op });
+    return e;
+  }
+
+  /** How a thrown value leaves the handler. */
+  protected thrown(e: unknown): WireThrown {
+    if (e !== null && typeof e === "object") {
+      const origin = fromOp.get(e);
+      if (origin?.call === this.id) return { k: "op", op: origin.op, stack: stackOf(e as Error) };
+    }
+    return thrownValue(e);
+  }
+}
+
+/** An error the host described, made again here with its class (the engine's, a `DOMException`, a `BunvexError`). */
+export function rebuiltError(w: Extract<WireThrown, { k: "error" }>): Error {
+  let e: Error;
+  if (w.bunvex) {
+    e = new BunvexError(decode(w.data ?? null, false) as never);
+    Object.defineProperty(e, "message", { value: w.message, writable: true, configurable: true });
+  } else if (w.cls === "DOMException") e = new DOMException(w.message, w.name);
+  else e = new (ERRORS[w.cls] ?? Error)(w.message);
+  if (e.name !== w.name) Object.defineProperty(e, "name", { value: w.name, writable: true, configurable: true });
+  return e;
+}
+
+/** A thrown value for the host: an error with its class, name, message, stack and a `BunvexError`'s data. */
+export function thrownValue(e: unknown): WireThrown {
+  const isError = e instanceof Error || Object.prototype.toString.call(e) === "[object Error]";
+  if (!isError) return { k: "value", v: encode(e) };
+  const err = e as Error;
+  const bunvex = isBunvexError(err);
+  return {
+    k: "error",
+    cls: Object.getPrototypeOf(err)?.constructor?.name ?? "Error",
+    name: String(err.name),
+    message: String(err.message),
+    stack: stackOf(err),
+    bunvex,
+    ...(bunvex ? { data: encode((err as BunvexError<never>).data) } : {}),
+  };
+}
+
+class ChildCall extends ChildCallBase implements DbHost {
   /** Where the app made each link of its chains: an error the engine throws making one is thrown there. */
   private readonly linkSites = new Map<number, Error>();
   private readonly lines: WireLogLine[] = [];
   private logged = 0;
-  private answered: (() => void) | null = null;
   private created: Map<string, WireTable>;
   /** Each read, in order: the engine records an interval per read, the same name's included. */
   private readonly envReads: string[] = [];
@@ -168,10 +324,11 @@ class ChildCall implements DbHost {
 
   constructor(
     private readonly m: WireCall,
-    private readonly send: Send,
+    send: Send,
     private readonly catalog: Map<string, WireTable>,
     private readonly observed: { time: boolean },
   ) {
+    super(m.id, send);
     this.snapshot = BigInt(m.snapshot);
     this.created = new Map(m.created.map((t) => [t.name, t]));
   }
@@ -189,7 +346,7 @@ class ChildCall implements DbHost {
   }
 
   /** What the host charges, records and opens since the last message. */
-  private report() {
+  protected report() {
     const ran = userTimeMs(this.timer);
     const out = {
       ran: Math.max(0, ran - this.reported),
@@ -211,28 +368,12 @@ class ChildCall implements DbHost {
     if (this.logged++ < MAX_LOG_LINES) this.lines.push([l.level, l.messages, l.isTruncated, l.timestamp]);
   }
 
-  /** Runs `then` once no operation of the call waits for its answer. */
-  whenAnswered(then: () => void) {
-    if (this.waiting.size === 0) then();
-    else this.answered = then;
+  protected override before() {
+    checkUserTime();
   }
 
-  /** An operation, run by the host: paused while it waits, as a store call (`storeCall`), its budget checked around. */
-  op(name: string, args: unknown[]): Promise<unknown> {
-    checkUserTime();
-    // Where the app called it, for an error the engine throws at once (a stack is cheap to take: about 0.1 µs).
-    const site = new Error();
-    // Serialized here, at the call, as the engine copies what it is given (a getter's throw is the app's).
-    const encoded = args.map(encode);
-    const op = ++this.seq;
-    const answer = pausingUserTime(
-      () =>
-        new Promise<unknown>((resolve, reject) => {
-          this.waiting.set(op, { resolve, reject, site });
-          this.send({ t: "op", id: this.m.id, op, name, args: encoded, report: this.report() });
-        }),
-    );
-    return answer.then(
+  protected override around<T>(wait: () => Promise<T>): Promise<T> {
+    return pausingUserTime(wait).then(
       (v) => {
         checkUserTime();
         return v;
@@ -243,63 +384,13 @@ class ChildCall implements DbHost {
     );
   }
 
-  reply(m: WireReply) {
-    const w = this.waiting.get(m.op);
-    if (!w) return;
-    this.waiting.delete(m.op);
-    if (m.created) {
-      this.created = new Map(m.created.map((t) => [t.name, t]));
-    }
-    if (m.ok) w.resolve(decode(m.value, false));
-    else {
-      const e = this.rebuilt(m.error, m.op);
-      // Thrown at the app's call under `vm`: the error holds the frames of that call (or of the link that failed),
-      // which the app's context maps (`installAppErrors`), and no `at async` frame.
-      const site = m.sync ? (m.link !== undefined && this.linkSites.get(m.link)) || w.site : null;
-      if (site && e instanceof Error) {
-        const stack = stackOf(site) ?? "";
-        const frames = stack.includes("\n") ? stack.slice(stack.indexOf("\n")) : "";
-        const header = e.message ? `${e.name}: ${e.message}` : e.name;
-        Object.defineProperty(e, "stack", { value: header + frames, writable: true, configurable: true });
-      }
-      w.reject(e);
-    }
-    if (this.waiting.size === 0 && this.answered) this.answered();
+  protected override siteOf(m: WireReply & { ok: false }, opSite: Error): Error | null {
+    if (!m.sync) return null;
+    return (m.link !== undefined && this.linkSites.get(m.link)) || opSite;
   }
 
-  /** An operation's error as the app sees it: the engine's class and words. */
-  private rebuilt(w: WireThrown, op: number): unknown {
-    if (w.k === "value") return decode(w.v, false);
-    if (w.k !== "error") return new Error("the host answered with an error the child cannot read");
-    let e: Error;
-    if (w.bunvex) {
-      e = new BunvexError(decode(w.data ?? null, false) as never);
-      Object.defineProperty(e, "message", { value: w.message, writable: true, configurable: true });
-    } else e = new (ERRORS[w.cls] ?? Error)(w.message);
-    if (e.name !== w.name) Object.defineProperty(e, "name", { value: w.name, writable: true, configurable: true });
-    fromOp.set(e, { call: this.m.id, op });
-    return e;
-  }
-
-  /** How a thrown value leaves the handler. */
-  private thrown(e: unknown): WireThrown {
-    if (e !== null && typeof e === "object") {
-      const origin = fromOp.get(e);
-      if (origin?.call === this.m.id) return { k: "op", op: origin.op, stack: stackOf(e as Error) };
-    }
-    const isError = e instanceof Error || Object.prototype.toString.call(e) === "[object Error]";
-    if (!isError) return { k: "value", v: encode(e) };
-    const err = e as Error;
-    const bunvex = isBunvexError(err);
-    return {
-      k: "error",
-      cls: Object.getPrototypeOf(err)?.constructor?.name ?? "Error",
-      name: String(err.name),
-      message: String(err.message),
-      stack: stackOf(err),
-      bunvex,
-      ...(bunvex ? { data: encode((err as BunvexError<never>).data) } : {}),
-    };
+  protected override replied(m: WireReply) {
+    if (m.created) this.created = new Map(m.created.map((t) => [t.name, t]));
   }
 
   private ctx(kind: "query" | "mutation") {
@@ -337,15 +428,8 @@ class ChildCall implements DbHost {
       db,
       auth,
       scheduler: methods("scheduler", ["runAfter", "runAt", "cancel"]),
-      // Rooms (AD-42) are not available yet: any use of `ctx.rooms` says so.
-      rooms: new Proxy(
-        {},
-        {
-          get() {
-            throw new Error(sandboxNotYet("Rooms (`ctx.rooms`)"));
-          },
-        },
-      ),
+      // Rooms (AD-42): a broadcast is sent once the mutation commits, by the host.
+      rooms: methods("rooms", ["broadcast"]),
       storage: methods("storage", this.m.storage),
       runQuery: nested("runQuery"),
       runMutation: nested("runMutation"),
