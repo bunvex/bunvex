@@ -2,7 +2,8 @@
 
 - **Status:** decided (owner, 2026-10-19: §8 Q1–Q5 as recommended, §10). F4 is fixed (§10.2); the other findings of
   §3.3 are listed, not fixed. The soak nightly (Q1, §9 step 5) is `.github/workflows/soak-nightly.yml`, with R1
-  report-only until Q6 is decided (§10.3). Q7 (R8 on low-rate operations) is decided and done (§10.3).
+  report-only until Q6 is decided (§10.3). Q7 (R8 on low-rate operations) is decided and done (§10.3). Q6 is
+  decided (owner, 2026-10-21): bunvex keeps its 256 MiB page cache (DV-550), with a setting for it (AD-46).
 - **Why now:** [#751](https://github.com/bunvex/bunvex/pull/751) found that since 2026-10-03 every cached query result
   expired after 17 s. [STUDY-58](STUDY-58-app-metrics.md)'s `AppMetrics` read the deterministic `Date.now` inside each
   query's execution, which marked every result as having read the clock. Every answer stayed correct, the tests and
@@ -42,7 +43,7 @@ that gap:
   (§4.6). F6 is now attributed (§4.7): a plateau, not a leak. It is SQLite's page cache, which bunvex sizes at
   256 MiB, filling as the database file grows; it levels off at that budget. §4.8 measures what SQLite's default,
   Convex's, would cost in read speed: ~20 % on reads whose working set is past 2 MiB but in memory, nothing when
-  the disk is the bottleneck. Q6 is open again, with the numbers.
+  the disk is the bottleneck. The owner decided Q6 on 2026-10-21: keep 256 MiB, as DV-550.
 - **(3) Metadata differentials against Convex's binary.** A prototype in `packages/differential` compares the query
   cache's hits and misses as the function log stream shows them on both backends. It failed on the pre-#751 main
   exactly where #751 says, and passes on main now that #751 is merged (§5.3).
@@ -590,7 +591,8 @@ logtail,clients`) are in `soak.ts` for the next trend, but these runs did not ne
 The owner's decision (2026-10-20): measure first, then match Convex if the default is not meaningfully slower
 (p99 within ~10 % and throughput within ~5 %). **It is meaningfully slower** wherever reads are CPU-bound and their
 working set is past 2 MiB: 15–22 % fewer calls a second, and p99 up to 22 % higher. It is not slower when the disk
-is the bottleneck, or when the working set is tiny. So this PR changes no product code, and Q6 goes back to the owner.
+is the bottleneck, or when the working set is tiny. So the measurement changed no product code, and Q6 went back
+to the owner, who decided on 2026-10-21 to keep 256 MiB (DV-550; Q6 below).
 
 **How.** `bench/sqlite-cache/` (results in `results/`, the table in `results/summary.txt`):
 - **Machine.** The test VPS: 2 vCPU, 8 GB, Ubuntu 24.04, cgroup v2, a cloud disk. No other backend ran during any run
@@ -844,12 +846,14 @@ Each question gives what Convex does, what bunvex does, whether they are the sam
     fails for the first ~70 minutes at its write rate.
   - Matching Convex: read-heavy apps whose working set does not fit in 2 MiB lose ~15–22 % of throughput on a small
     machine. Answers and memory are otherwise unchanged, and the index and query caches still serve repeated reads.
-- **Recommendation:** keep 256 MiB, and record it as a DV (performance) in DV-411's row or a new one. A 20 %
-  read-throughput loss is worse for apps than a bounded, documented ~300 MiB. Then fix the soak without a setting:
-  seed a store of more than 256 MiB before the measured window and read it once in the warm-up, so the page cache is
-  full before R1 judges. If the owner still prefers Convex's default, the change is one line, plus a test that the store's
-  connection has a fresh connection's `cache_size` (not a constant: §4.8, "Seen on the way"). A middle size (32–64 MiB, roughly the interior pages of a 10 GB file) was
-  not measured; it would need its own run before it is offered.
+- **Recommendation:** keep 256 MiB and record it as a DV (performance). A 20 % read-throughput loss is worse for
+  apps than a bounded, documented ~300 MiB. Then fix the soak without a setting: seed a store of more than 256 MiB
+  before the measured window and read it once in the warm-up, so the page cache is full before R1 judges. A middle
+  size (32–64 MiB, roughly the interior pages of a 10 GB file) was not measured.
+- **Decided (owner, 2026-10-21):**
+  - keep 256 MiB as the default, recorded as **DV-550** (performance);
+  - add a setting for it, `BUNVEX_SQLITE_CACHE_SIZE` (bytes), as an addition (AD-46), in its own PR;
+  - the soak makes R1 see the page cache as recommended, and R1 leaves `SOAK_REPORT_ONLY`, in its own PR (§10.3).
 
 Not questions, because each matches Convex: the fixes for F1 (done, #751), F2, F3 and F5, and the suspected S1–S7 once
 confirmed.
@@ -885,8 +889,9 @@ The owner approved every recommendation of §8 on 2026-10-19:
 | Q4 | Measure the per-connection memory first, publish it in the parity notes, assert it only if it regresses (no budget yet) | §9 step 12 |
 | Q5 | The metadata tests go in the differential nightly (`scripts/nightly.sh`), done by bunvex-9f | §9 step 7 |
 | Q7 (2026-10-20) | R8 judges the p99 only on windows of at least 100 calls, the p50 alone below that (option (a)) | done, §10.3 |
+| Q6 (2026-10-21) | Keep SQLite's 256 MiB page cache (DV-550), measured in §4.8; a setting for it (AD-46); the soak's R1 made to see the page cache, then judged | three PRs: this record, the setting, the soak (§10.3) |
 
-None of them is a divergence, so none takes a DV number. DV-527, reserved for F4 in case something could not match,
+None of Q1–Q5 and Q7 is a divergence, so none takes a DV number; Q6 is DV-550. DV-527, reserved for F4 in case something could not match,
 is unused.
 
 ### 10.2 F4: a cache hit is logged as the run it reused
