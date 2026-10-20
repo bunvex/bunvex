@@ -266,9 +266,13 @@ export class LocalSink implements Sink {
     for (let n = 0; !this.stopped; n++) {
       try {
         await appendFile(this.path, text);
+        // Closed whatever the sync does, as Convex's file is dropped with its attempt (STUDY-174 S2).
         const f = await open(this.path, "r");
-        await f.sync();
-        await f.close();
+        try {
+          await f.sync();
+        } finally {
+          await f.close();
+        }
         return;
       } catch (e) {
         console.error(`log stream (local): writing ${this.path} failed, retrying: ${(e as Error).message}`);

@@ -134,16 +134,42 @@ export class TableDefinition<
   // biome-ignore lint/correctness/noUnusedVariables: kept for the data model's types
   VectorIndexes extends GenericTableVectorIndexes = {},
 > {
-  readonly indexes: Record<string, string[]> = {};
+  /** @internal Convex's runtime shape, read by libraries (STUDY-181 H-5): the database indexes, not staged, in order. */
+  readonly indexes: { indexDescriptor: string; fields: string[] }[] = [];
+  /** @internal Convex's runtime shape (STUDY-181 H-5): the database indexes declared `staged: true`, in order. */
+  readonly stagedDbIndexes: { indexDescriptor: string; fields: string[] }[] = [];
+  /** @internal Convex's runtime shape (STUDY-181 H-5): the search indexes, not staged, in order. */
+  readonly searchIndexes: { indexDescriptor: string; searchField: string; filterFields: string[] }[] = [];
+  /** @internal Convex's runtime shape (STUDY-181 H-5): the search indexes declared `staged: true`, in order. */
+  readonly stagedSearchIndexes: { indexDescriptor: string; searchField: string; filterFields: string[] }[] = [];
+  /** @internal Convex's runtime shape (STUDY-181 H-5): the vector indexes, not staged, in order. */
+  readonly vectorIndexes: {
+    indexDescriptor: string;
+    vectorField: string;
+    dimensions: number;
+    filterFields: string[];
+  }[] = [];
+  /** @internal Convex's runtime shape (STUDY-181 H-5): the vector indexes declared `staged: true`, in order. */
+  readonly stagedVectorIndexes: {
+    indexDescriptor: string;
+    vectorField: string;
+    dimensions: number;
+    filterFields: string[];
+  }[] = [];
+  /**
+   * bunvex's own view of the database indexes, by name (the first declaration of a name), staged ones included: what
+   * `defineSchema` checks and the engine declares. A name declared twice is in `duplicateIndexes`.
+   */
+  readonly indexFields: Record<string, string[]> = {};
   /** Index names declared more than once (Convex refuses them at push, naming the table: see `defineSchema`). */
   readonly duplicateIndexes: string[] = [];
   /** The indexes declared `staged: true`: built in the background, never enabled until un-staged. */
   readonly stagedIndexes: string[] = [];
-  /** Full-text search indexes (STUDY-45), and those declared `staged: true`. */
-  readonly searchIndexes: Record<string, SearchIndexDef> = {};
+  /** Full-text search indexes by name (STUDY-45), and those declared `staged: true`. */
+  readonly searchIndexDefs: Record<string, SearchIndexDef> = {};
   readonly stagedSearch: string[] = [];
-  /** Vector indexes (STUDY-51), and those declared `staged: true`. */
-  readonly vectorIndexes: Record<string, VectorIndexDef> = {};
+  /** Vector indexes by name (STUDY-51), and those declared `staged: true`. */
+  readonly vectorIndexDefs: Record<string, VectorIndexDef> = {};
   readonly stagedVector: string[] = [];
   readonly document: GenericValidator;
   /** Convex's name for the table's document validator (`schema.tables.x.validator`, `docValidator`). */
@@ -162,9 +188,8 @@ export class TableDefinition<
    * order declared, as `{ indexDescriptor, fields }` (the fields as given, without `_creationTime`).
    */
   " indexes"(): { indexDescriptor: string; fields: string[] }[] {
-    return this.listedIndexes;
+    return this.indexes;
   }
-  private readonly listedIndexes: { indexDescriptor: string; fields: string[] }[] = [];
 
   /**
    * Declare an index on `fields` (Convex appends `_creationTime` and `_id`). As Convex's, the second
@@ -185,15 +210,16 @@ export class TableDefinition<
     const fields = Array.isArray(config) ? config : config?.fields;
     if (!Array.isArray(fields)) throw new Error(`Index "${name}" must be declared with an array of fields.`);
     checkIdentifier("index", name);
-    // Convex's list, a name declared twice included (the push refuses it).
-    if (Array.isArray(config) || config.staged !== true) this.listedIndexes.push({ indexDescriptor: name, fields });
+    const staged = !Array.isArray(config) && config.staged === true;
+    // Convex's lists, a name declared twice included (the push refuses it), the fields as given.
+    (staged ? this.stagedDbIndexes : this.indexes).push({ indexDescriptor: name, fields });
     // The other checks need the table's name and run in `defineSchema`, as Convex runs them at push.
-    if (name in this.indexes) {
+    if (name in this.indexFields) {
       this.duplicateIndexes.push(name);
       return this;
     }
-    this.indexes[name] = [...fields];
-    if (!Array.isArray(config) && config.staged === true) this.stagedIndexes.push(name);
+    this.indexFields[name] = [...fields];
+    if (staged) this.stagedIndexes.push(name);
     return this;
   }
 
@@ -224,7 +250,13 @@ export class TableDefinition<
     checkIdentifier("index", name);
     if (typeof config?.searchField !== "string")
       throw new Error(`Search index "${name}" must be declared with a \`searchField\`.`);
-    this.searchIndexes[name] = {
+    // Convex's lists: the filter fields as given (`[]` when absent), a name declared twice listed twice.
+    (config.staged === true ? this.stagedSearchIndexes : this.searchIndexes).push({
+      indexDescriptor: name,
+      searchField: config.searchField,
+      filterFields: config.filterFields || [],
+    });
+    this.searchIndexDefs[name] = {
       searchField: config.searchField,
       // A set, as Convex's: duplicates are dropped.
       filterFields: [...new Set(config.filterFields ?? [])],
@@ -269,7 +301,13 @@ export class TableDefinition<
     if (typeof config?.vectorField !== "string")
       throw new Error(`Vector index "${name}" must be declared with a \`vectorField\`.`);
     if (config.dimensions === undefined) throw new Error("Missing dimensions field");
-    this.vectorIndexes[name] = {
+    (config.staged === true ? this.stagedVectorIndexes : this.vectorIndexes).push({
+      indexDescriptor: name,
+      vectorField: config.vectorField,
+      dimensions: config.dimensions,
+      filterFields: config.filterFields || [],
+    });
+    this.vectorIndexDefs[name] = {
       vectorField: config.vectorField,
       dimensions: config.dimensions,
       filterFields: [...new Set(config.filterFields ?? [])],
@@ -311,14 +349,14 @@ const reservedIndexName = (table: string, n: string) =>
  */
 function checkDatabaseIndexes(table: string, t: TableDefinition) {
   const count =
-    Object.keys(t.indexes).length +
+    Object.keys(t.indexFields).length +
     t.duplicateIndexes.length +
-    Object.keys(t.searchIndexes).length +
-    Object.keys(t.vectorIndexes).length;
+    Object.keys(t.searchIndexDefs).length +
+    Object.keys(t.vectorIndexDefs).length;
   if (count > MAX_INDEXES_PER_TABLE)
     throw new Error(`Table "${table}" cannot have more than ${MAX_INDEXES_PER_TABLE} indexes.`);
   const staged = new Set(t.stagedIndexes);
-  const entries = Object.entries(t.indexes);
+  const entries = Object.entries(t.indexFields);
   for (const group of [false, true]) {
     const mine = entries.filter(([n]) => staged.has(n) === group);
     for (const [n, fields] of mine) {
@@ -382,7 +420,7 @@ export function stagedDocumentError(schema: EngineSchema): string | null {
 
 /** Convex's name checks for database indexes: reserved names, and a name declared twice. */
 function checkIndexNames(table: string, t: TableDefinition) {
-  for (const n of Object.keys(t.indexes))
+  for (const n of Object.keys(t.indexFields))
     if (n.startsWith("_") || n in SYSTEM_INDEXES) throw reservedIndexName(table, n);
   for (const n of t.duplicateIndexes) throw new Error(`Table "${table}" has two or more definitions of index "${n}".`);
 }
@@ -395,7 +433,7 @@ function checkIndexNames(table: string, t: TableDefinition) {
 function checkIndexSystemFields(t: TableDefinition) {
   const staged = new Set(t.stagedIndexes);
   const sorted = (group: boolean) =>
-    Object.entries(t.indexes)
+    Object.entries(t.indexFields)
       .filter(([n]) => staged.has(n) === group)
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   for (const [, fields] of [...sorted(false), ...sorted(true)]) {
@@ -411,9 +449,9 @@ function checkIndexSystemFields(t: TableDefinition) {
 
 /** Convex's push-time checks of a table's vector indexes (`schemas/json.rs`, `dimensions.rs`). */
 function checkVectorIndexes(table: string, t: TableDefinition) {
-  const others = new Set([...Object.keys(t.indexes), ...Object.keys(t.searchIndexes)]);
+  const others = new Set([...Object.keys(t.indexFields), ...Object.keys(t.searchIndexDefs)]);
   const seen = new Map<string, string>();
-  for (const [n, d] of Object.entries(t.vectorIndexes)) {
+  for (const [n, d] of Object.entries(t.vectorIndexDefs)) {
     if (n.startsWith("_") || n in SYSTEM_INDEXES)
       throw new Error(
         `In table "${table}" cannot name an index "${n}" because the name is reserved. Indexes may not start with an underscore or be named "by_id" or "by_creation_time".`,
@@ -443,15 +481,15 @@ const FIELD_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 
 /** Convex's push-time checks of a table's search indexes (`schemas/json.rs`, `index_validation_error.rs`). */
 function checkSearchIndexes(table: string, t: TableDefinition) {
-  for (const n of Object.keys(t.searchIndexes)) {
+  for (const n of Object.keys(t.searchIndexDefs)) {
     if (n.startsWith("_") || n in SYSTEM_INDEXES)
       throw new Error(
         `In table "${table}" cannot name an index "${n}" because the name is reserved. Indexes may not start with an underscore or be named "by_id" or "by_creation_time".`,
       );
-    if (n in t.indexes) throw new Error(`Table "${table}" has two or more definitions of index "${n}".`);
+    if (n in t.indexFields) throw new Error(`Table "${table}" has two or more definitions of index "${n}".`);
   }
   const seen = new Map<string, string>();
-  for (const [n, d] of Object.entries(t.searchIndexes)) {
+  for (const [n, d] of Object.entries(t.searchIndexDefs)) {
     for (const f of [d.searchField, ...d.filterFields])
       if (!FIELD_PATH.test(f)) throw new Error(`In index "${n}": Invalid index field: "${f}"`);
     if (d.filterFields.length > MAX_SEARCH_FILTER_FIELDS)
@@ -634,14 +672,14 @@ function declareTables(tables: GenericSchema): Map<string, DeclaredTable> {
     checkIndexNames(name, t);
     out.set(name, {
       name,
-      indexes: { ...t.indexes },
+      indexes: { ...t.indexFields },
       document: t.document,
       staged: [...t.stagedIndexes],
-      ...(Object.keys(t.searchIndexes).length
-        ? { searchIndexes: structuredClone(t.searchIndexes), stagedSearch: [...t.stagedSearch] }
+      ...(Object.keys(t.searchIndexDefs).length
+        ? { searchIndexes: structuredClone(t.searchIndexDefs), stagedSearch: [...t.stagedSearch] }
         : {}),
-      ...(Object.keys(t.vectorIndexes).length
-        ? { vectorIndexes: structuredClone(t.vectorIndexes), stagedVector: [...t.stagedVector] }
+      ...(Object.keys(t.vectorIndexDefs).length
+        ? { vectorIndexes: structuredClone(t.vectorIndexDefs), stagedVector: [...t.stagedVector] }
         : {}),
       ...(t.stagedDocument === undefined ? {} : { stagedDocument: t.stagedDocument }),
     });
@@ -673,10 +711,14 @@ function tableDefinitionOf(table: DeclaredTable): TableDefinition {
   const staged = new Set(table.staged ?? []);
   for (const [name, fields] of Object.entries(table.indexes))
     t.index(name, staged.has(name) ? { fields: [...fields], staged: true } : [...fields]);
-  Object.assign(t.searchIndexes, structuredClone(table.searchIndexes ?? {}));
-  t.stagedSearch.push(...(table.stagedSearch ?? []));
-  Object.assign(t.vectorIndexes, structuredClone(table.vectorIndexes ?? {}));
-  t.stagedVector.push(...(table.stagedVector ?? []));
+  const stagedSearch = new Set(table.stagedSearch ?? []);
+  for (const [name, d] of Object.entries(structuredClone(table.searchIndexes ?? {})))
+    if (stagedSearch.has(name)) t.searchIndex(name, { ...d, staged: true });
+    else t.searchIndex(name, d);
+  const stagedVector = new Set(table.stagedVector ?? []);
+  for (const [name, d] of Object.entries(structuredClone(table.vectorIndexes ?? {})))
+    if (stagedVector.has(name)) t.vectorIndex(name, { ...d, staged: true });
+    else t.vectorIndex(name, d);
   if (table.stagedDocument !== undefined) t.stagedDocument = table.stagedDocument;
   return t;
 }
