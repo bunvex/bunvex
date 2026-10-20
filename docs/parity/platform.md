@@ -436,16 +436,27 @@ bunvex enforces most of these with Convex's values and messages. Matching them m
 
 ---
 
+### 25. Libraries (convex-helpers)
+
+Libraries apps import beside `convex`, ported as bunvex packages with the same API. Reference: get-convex/convex-helpers
+at `e48f9df` (0.1.128); paths are relative to its `packages/convex-helpers/`.
+
+| Feature | Convex source | bunvex status | Notes |
+|---|---|---|---|
+| convex-helpers' root module: `asyncMap`, `pruneNull`, `nullThrows` / `NullDocumentError`, `pick`, `omit`, `withoutSystemFields`, `assert`, the type helpers | `index.ts` | done (STUDY-181 PR 1) | `@bunvex/helpers`, its own version outside the fixed group (STUDY-158 Q-1). Upstream's tests ported. |
+| convex-helpers' validators: `literals`, `nullable`, `partial`, `systemFields`, `withSystemFields`, `addFieldsToValidator`, `doc`, `typedV`, `brandedString`, `deprecated`, `pretend`, `pretendRequired`, `ValidationError`, `validate`, `parse`, `vRequired` | `validators.ts` | done (STUDY-181 PR 1) | `@bunvex/helpers/validators`. `nullable` puts null first (H-6); `typedV` and `doc` are AD-23. Rule 5: `isValidator` for `isConvexValidator`, "Unknown validator type: " (DV-544). Upstream's tests ported, its function tests on bunvex's engine. |
+| convex-helpers' `compareValues` (deprecated) | `server/compare.ts` | done (STUDY-181 PR 1) | `@bunvex/helpers/server/compare`, `@bunvex/values`' `compareValues` (H-3). |
+
 ### Summary counts
 
-Recounted on 2026-10-19 from the rows' status column, as [the README](README.md)'s table (STUDY-173, after the components rows' update); the testing row (STUDY-159) added on 2026-10-20.
+Recounted on 2026-10-20 from the rows' status column, as [the README](README.md)'s table (STUDY-181 PR 1, the libraries rows; the testing row, STUDY-159; before that 2026-10-19, STUDY-173, after the components rows' update).
 
 | Status | Count |
 |---|---|
-| done | 237 |
+| done | 240 |
 | partial | 21 |
 | missing | 6 |
 | n/a (cloud-only or a decided divergence) | 6 |
-| **total** | **270** |
+| **total** | **273** |
 
 The gaps, ranked by what an app would notice, are in [the README](README.md#gaps-by-impact).
