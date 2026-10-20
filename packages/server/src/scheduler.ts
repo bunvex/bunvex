@@ -53,6 +53,7 @@ import {
   type OptionalRestArgs,
 } from "@bunvex/protocol";
 import {
+  checkJsonValue,
   type GenericId,
   hasCommitTs,
   isSimpleObject,
@@ -105,6 +106,19 @@ function unixTimestampDebug(secs: number): string {
   return `UnixTimestamp(${whole}${frac}s)`;
 }
 
+/**
+ * A `Date` of this realm or another, by its internal slot (`getTime` throws for anything else): Convex's `instanceof
+ * Date`, within the app's one realm. A pushed function's `Date` is its context's (STUDY-35, STUDY-18 §9).
+ */
+function isDate(v: unknown): v is Date {
+  try {
+    Date.prototype.getTime.call(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function parseScheduleArgs(args: unknown): Record<string, Value> {
   if (args === undefined) return {};
   if (!isSimpleObject(args))
@@ -132,6 +146,14 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
       : target.engine.mutation((db) => inNamespace(db, namespace, () => f(db)), "_system/scheduler");
 
   const schedule = async (tsMs: number, fn: SchedulableFunction, args: Record<string, Value>) => {
+    // Convex's `convexToJson(functionArgs)` runs in the app's code, before the syscall: what is not a value fails
+    // first, with the arguments object's paths (`.v`, not the stored `[args]`'s `[0].v`). Deeper than the stack,
+    // the nesting check below answers (DV-363).
+    try {
+      checkJsonValue(args);
+    } catch (e) {
+      if (!(e instanceof RangeError)) throw e;
+    }
     // Convex's `schedule` text (scheduler_impl.ts): an action's request id, the function's address, the time
     // in seconds, then the arguments; serde reads it before anything is checked (STUDY-135).
     refuseLoneSurrogates(args, () =>
@@ -196,7 +218,7 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
     },
     async runAt(timestamp: number | Date, fn: SchedulableFunction, args?: Record<string, unknown>) {
       let ms: number;
-      if (timestamp instanceof Date) ms = timestamp.valueOf();
+      if (isDate(timestamp)) ms = timestamp.valueOf();
       else if (typeof timestamp === "number") ms = timestamp;
       else throw new Error("The invoke time must a Date or a timestamp");
       return schedule(ms, fn, parseScheduleArgs(args));
@@ -296,6 +318,8 @@ export class ScheduledJobExecutor {
   private pokes = 0;
   private loop: Promise<void> | null = null;
   private gcTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Aborted by `stop()`: cuts short the retry backoffs of running jobs. */
+  private readonly stopping = new AbortController();
   private readonly o: Required<SchedulerOptions>;
   /** For tests and benchmarks. */
   readonly stats = { started: 0, succeeded: 0, failed: 0, systemErrors: 0, occRetries: 0 };
@@ -366,10 +390,26 @@ export class ScheduledJobExecutor {
 
   async stop() {
     this.stopped = true;
+    this.stopping.abort();
     this.poke();
     if (this.gcTimer) clearTimeout(this.gcTimer);
     await this.loop;
     await Promise.allSettled(this.running.values());
+  }
+
+  /** A sleep of `ms` that `stop()` cuts short. */
+  private pause(ms: number): Promise<void> {
+    const signal = this.stopping.signal;
+    if (signal.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(t);
+        signal.removeEventListener("abort", done);
+        resolve();
+      };
+      const t = setTimeout(done, ms);
+      signal.addEventListener("abort", done);
+    });
   }
 
   private poke() {
@@ -630,9 +670,14 @@ export class ScheduledJobExecutor {
       } catch (e) {
         // A lost conflict, or the write throughput limit (STUDY-78): the job stays pending and runs again
         // later, as long as it takes (Convex retries both without limit).
+        // Unless the executor is stopping (STUDY-174 F5): it gives up the attempt, as Convex's shutdown aborts the
+        // executor's task (crates/application/src/scheduled_jobs/mod.rs `ScheduledJobRunner::shutdown`). Nothing of
+        // the attempt committed, so the job is still pending, and the next start runs it, as after a crash.
         if (e instanceof OccError || e instanceof TooManyWritesError) {
           this.stats.occRetries++;
-          await Bun.sleep(backoff(++occFailures, this.o.occInitialBackoffMs, this.o.occMaxBackoffMs));
+          if (this.stopped) return;
+          await this.pause(backoff(++occFailures, this.o.occInitialBackoffMs, this.o.occMaxBackoffMs));
+          if (this.stopped) return;
           continue;
         }
         if (isSystemFailure(e)) throw e;
@@ -668,6 +713,9 @@ export class ScheduledJobExecutor {
       state = { kind: "failed", error: describeUncaught(e).message };
     }
     // Recorded until it sticks; a job canceled meanwhile stays canceled (`completeJob` is a no-op then).
+    // A stopping executor (STUDY-174 F5) makes one last attempt without waiting, then gives up: the job stays in
+    // progress, and the next start fails it as an action cut short, exactly as after a crash here. The action never
+    // runs twice, and its result is recorded at most once (a failed commit records nothing).
     for (let n = 1; ; n++) {
       try {
         await this.engine.mutation(
@@ -676,8 +724,8 @@ export class ScheduledJobExecutor {
         );
         break;
       } catch (e) {
-        if (e instanceof CommitterStoppedError) return;
-        await Bun.sleep(backoff(n, this.o.errorInitialBackoffMs, this.o.errorMaxBackoffMs));
+        if (e instanceof CommitterStoppedError || this.stopped) return;
+        await this.pause(backoff(n, this.o.errorInitialBackoffMs, this.o.errorMaxBackoffMs));
       }
     }
     if (state.kind === "success") this.stats.succeeded++;

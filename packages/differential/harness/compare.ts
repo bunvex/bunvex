@@ -65,6 +65,8 @@ const WORDING: [RegExp, string][] = [
   // DV-04
   [/ To learn about Convex's supported types, see https:\/\/docs\.convex\.dev\/using\/types\./g, ""],
   [/ is not a valid Convex value/g, " is not a valid value"],
+  [/ is not a supported Convex type/g, " is not a supported value type"],
+  [/The arguments to a Convex function /g, "The arguments to a bunvex function "],
   // DV-04: the sentences that only point at Convex's docs.
   [/\n?For more information see https:\/\/docs\.convex\.dev\/\S*/g, ""],
   [/ See https:\/\/docs\.convex\.dev\/\S*( for (more )?details)?\.?/g, ""],

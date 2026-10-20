@@ -9,10 +9,13 @@
 //   timestamp placeholder `{"$t":0}`.
 // - **A plain object** as a JSON object; one with a key that starts with `$` as `{"$o":[[key, value], …]}`, so
 //   no field is ever read as a tag.
-// - **What is not a value** (a class instance, a `Map`, a function, a symbol) as `{"$x":{…}}`: its kind and the
-//   name of its class, which is all the engine's messages print of it (`stringifyValueForError`: `Point {…}`,
-//   `"[Function]"`). The host builds an object of the same kind and class name, not of its own realm (as the app's
-//   objects are not, under `vm`: a `Set` prints as `Set {…}`), so the same check fails with the same words.
+// - **What is not a value** (a class instance, a function, a symbol) as `{"$x":{…}}`: its kind and the name of its
+//   class, which is all the engine's messages print of it (`stringifyValueForError`: `Point {…}`, `"[Function]"`).
+//   The host builds an object of the same kind and class name, not of its own realm (as the app's objects are not,
+//   under `vm`), so the same check fails with the same words. Three kinds carry more, because the engine reads
+//   more of them (STUDY-18 §9): a `Set` or `Map` its entries (`Set[1]`, `Map[["a",1]]`), at most
+//   `MAX_WIRE_ENTRIES`; a `Date` its time (`scheduler.runAt`). The host builds a real one of its own, with the
+//   app's class name.
 // - **A function reference** (`api.messages.list`) as `{"$r":{…}}`: its name or component path, or the error
 //   reading it threw (`anyApi.messages`).
 // - **A cycle** as `{"$c":n}`, the ancestor `n` levels up: the engine's checks see the same cycle.
@@ -25,6 +28,43 @@ import { BadMessageError } from "./protocol.ts";
 
 /** How deep the codec follows a value: far past the engine's limit (64), short of the stack's. */
 export const MAX_WIRE_DEPTH = 4096;
+
+/**
+ * How many of a `Set`'s or `Map`'s entries the codec carries. The engine prints them only in a message, cut at
+ * 16384 characters, and each entry takes at least two (a digit and a comma): past 8192 none shows.
+ */
+export const MAX_WIRE_ENTRIES = 16384;
+
+// The getters that read a Set's, a Map's or a Date's internal slot: they throw for anything else, whatever its
+// realm (as `@bunvex/values`'s `isSet` / `isMap` and the scheduler's `isDate`).
+const SET_SIZE = Object.getOwnPropertyDescriptor(Set.prototype, "size")!.get!;
+const MAP_SIZE = Object.getOwnPropertyDescriptor(Map.prototype, "size")!.get!;
+const branded = (read: (this: unknown) => unknown, x: unknown) => {
+  try {
+    read.call(x);
+    return true;
+  } catch {
+    return false;
+  }
+};
+/** The time of a `Date` of any realm, or undefined for anything else. */
+function timeOf(x: unknown): number | undefined {
+  try {
+    return Date.prototype.getTime.call(x);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A Set's or Map's entries as the engine spreads them (`[...value]`), the first `MAX_WIRE_ENTRIES` only. */
+function entriesOf(o: Iterable<unknown>, ancestors: object[], depth: number): Json[] {
+  const out: Json[] = [];
+  for (const e of o) {
+    if (out.length === MAX_WIRE_ENTRIES) break;
+    out.push(enc(e, ancestors, depth + 1));
+  }
+  return out;
+}
 
 /** A wire value: JSON. */
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
@@ -99,7 +139,15 @@ function enc(x: unknown, ancestors: object[], depth: number): Json {
     }
     const ref = referenceOf(o);
     if (ref !== undefined) return { $r: ref };
-    if (!isSimpleObject(o)) return { $x: { k: "object", c: classNameOf(o) } };
+    if (!isSimpleObject(o)) {
+      if (branded(SET_SIZE, o))
+        return { $x: { k: "set", c: classNameOf(o), e: entriesOf(o as Set<unknown>, ancestors, depth) } };
+      if (branded(MAP_SIZE, o))
+        return { $x: { k: "map", c: classNameOf(o), e: entriesOf(o as Map<unknown, unknown>, ancestors, depth) } };
+      const t = timeOf(o);
+      if (t !== undefined) return { $x: { k: "date", c: classNameOf(o), t: enc(t, ancestors, depth + 1) } };
+      return { $x: { k: "object", c: classNameOf(o) } };
+    }
     let escaped = false;
     const keys = Object.keys(o);
     for (const k of keys)
@@ -124,6 +172,13 @@ function enc(x: unknown, ancestors: object[], depth: number): Json {
 /** An object whose class the engine's messages name `name` (its prototype's `constructor.name`). */
 function namedInstance(name: string): object {
   return Object.create({ constructor: { name } });
+}
+
+/** `real` (a host `Set`, `Map` or `Date`), named `name` as the app's subclass was: its methods are still its kind's. */
+function named<T extends object>(real: T, kind: string, name: string): T {
+  if (name !== kind)
+    Object.setPrototypeOf(real, Object.create(Object.getPrototypeOf(real), { constructor: { value: { name } } }));
+  return real;
 }
 
 const FUNCTION_KINDS: Record<string, () => unknown> = {
@@ -250,6 +305,35 @@ function dec(x: Json, strict: boolean, ancestors: object[]): unknown {
       }
       if (k === "function") return typeof body.c === "string" ? namedFunction(body.c) : bad("$x function");
       if (k === "object") return typeof body.c === "string" ? namedInstance(body.c) : bad("$x object");
+      if (k === "set" || k === "map") {
+        const { c, e } = body;
+        if (typeof c !== "string" || !Array.isArray(e) || e.length > MAX_WIRE_ENTRIES) return bad(`$x ${k}`);
+        const out = named(
+          k === "set" ? new Set<unknown>() : new Map<unknown, unknown>(),
+          k === "set" ? "Set" : "Map",
+          c,
+        );
+        ancestors.push(out);
+        for (const entry of e) {
+          if (out instanceof Set) out.add(dec(entry, strict, ancestors));
+          else {
+            if (!Array.isArray(entry) || entry.length !== 2) return bad("$x map entry");
+            // the entry's pair was an array on the child's side: one level of `$c`
+            ancestors.push([]);
+            const key = dec(entry[0]!, strict, ancestors);
+            const value = dec(entry[1]!, strict, ancestors);
+            ancestors.pop();
+            (out as Map<unknown, unknown>).set(key, value);
+          }
+        }
+        ancestors.pop();
+        return out;
+      }
+      if (k === "date") {
+        const t = body.t === undefined ? undefined : dec(body.t, strict, ancestors);
+        if (typeof body.c !== "string" || typeof t !== "number") return bad("$x date");
+        return named(new Date(t), "Date", body.c);
+      }
       return bad("$x");
     }
   }
