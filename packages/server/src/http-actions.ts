@@ -7,19 +7,84 @@
 // - the answer: the handler's response streamed (HEAD without its body, cut past 100 MiB), or Convex's 404
 //   (a request no route matches, logged as Convex logs it; STUDY-31 §7), 405 and 500 (`{code, trace?, data?}`)
 //   answers; the 408 past 300 s is the server's, for every route (`request-timeout.ts`).
+// - Components' routers (STUDY-157 PR 4): the request is routed from the app as Convex's `route_http_action`
+//   (crates/application/src/application_function_runner/http_routing.rs) — the app's `http.js` after its own
+//   `httpPrefix`, an exact route first, else the longest prefix among its prefix routes and its mounts, a mount
+//   descending into its child with the rest of the path — and the handler runs in the component it reached, with the
+//   original request.
 import type { Caller } from "@bunvex/core";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { describeUncaught, newRequestId } from "./errors.ts";
-import type { Functions } from "./functions.ts";
+import type { ComponentRuntime, Functions } from "./functions.ts";
 import { type HttpRouter, ROUTABLE_HTTP_METHODS, type RoutableMethod } from "./router.ts";
 import { SpecBlob } from "./web-blob.ts";
 
 export { HTTP_ACTION_RESPONSE_LIMIT } from "./http-body.ts";
 export const REQUEST_ID_HEADER = "bunvex-request-id";
 
+/** A component's HTTP routing (what Convex's `route_http_action` reads of each): its router and its mounts. */
+export type HttpNode = {
+  router: HttpRouter | undefined;
+  /** Its definition's mounts, by mount path in key order (`/c/`): the child instance each names. */
+  mounts: [string, string][];
+  /** Its children's nodes (installed and active), by instance name. */
+  children: Map<string, HttpNode>;
+  /** The component its handlers run in; absent for the app. */
+  component?: ComponentRuntime;
+};
+
+/** The app's routing beside its router: its `httpPrefix`, its mounts and its children's nodes. */
+export type AppRouting = { prefix: string | null } & Omit<HttpNode, "router" | "component">;
+
+export const NO_ROUTING: AppRouting = { prefix: null, mounts: [], children: new Map() };
+
+/**
+ * The component and the path a request reaches (Convex's `route_http_action`), with the route its router matched
+ * there (null: its 404), or null when none can answer (no
+ * router and no mounts where it stands, a prefix that does not match): Convex's "does not have HTTP actions" 404.
+ */
+export function routeHttp(
+  app: HttpNode & { prefix: string | null },
+  path: string,
+  method: RoutableMethod | "HEAD",
+): { node: HttpNode; path: string; match: ReturnType<HttpRouter["lookup"]> } | null {
+  const m = method === "HEAD" ? "GET" : method;
+  let node: HttpNode = app;
+  let routed = path;
+  for (let atApp = true; ; atApp = false) {
+    if (!node.router && node.mounts.length === 0) return null;
+    // The app's `http.js` is matched after its own prefix is stripped; mounts always match the path as routed.
+    const prefix = atApp ? app.prefix : null;
+    const httpJs = prefix === null ? routed : routed.startsWith(prefix) ? `/${routed.slice(prefix.length)}` : null;
+    const hit = httpJs !== null && node.router ? node.router.lookup(httpJs, m) : null;
+    // An exact route of `http.js` is the most specific match.
+    if (hit && !hit[2].endsWith("*")) return { node, path: httpJs!, match: hit };
+    // Else the longest prefix among its prefix routes and its mounts, compared as Convex compares them: a match's
+    // suffix with its leading `/` against a new one's without, a tie going to the later.
+    let best: { suffix: string; child?: string } | null = hit
+      ? { suffix: `/${httpJs!.slice(hit[2].length - 1)}` }
+      : null;
+    for (const [mount, child] of node.mounts) {
+      if (!routed.startsWith(mount)) continue;
+      const rest = routed.slice(mount.length);
+      if (best && best.suffix.length < rest.length) continue;
+      best = { suffix: `/${rest}`, child };
+    }
+    // No match: the current `http.js` answers its own 404, if there is one.
+    if (!best) return httpJs !== null && node.router ? { node, path: httpJs, match: null } : null;
+    if (best.child === undefined) return { node, path: httpJs!, match: hit };
+    const next = node.children.get(best.child);
+    if (!next) return null;
+    node = next;
+    routed = best.suffix;
+  }
+}
+
 export type HttpActionOptions = {
   functions: Functions;
   router: HttpRouter | undefined;
+  /** The app's prefix, mounts and children (STUDY-157); set once the components' code is installed. */
+  routing: AppRouting;
   /** The caller from `Authorization`, or the error its verification gave. */
   identify: (req: Request) => Promise<{ caller: Caller; error: Error | null }>;
   redact: boolean;
@@ -78,13 +143,16 @@ export function httpActionServer(o: HttpActionOptions) {
 
   /** Answer one request; `path` is what the router sees (the `/http` prefix stripped), `search` its query. */
   return async function serve(req: Request, path: string, search: string): Promise<Response> {
-    if (!o.router) return text(404, "This bunvex deployment does not have HTTP actions enabled.");
+    const disabled = () => text(404, "This bunvex deployment does not have HTTP actions enabled.");
+    if (!o.router && o.routing.mounts.length === 0) return disabled();
     const method = req.method.toUpperCase();
     if (method !== "HEAD" && !ROUTABLE_HTTP_METHODS.includes(method as RoutableMethod))
       return new Response(null, { status: 405 });
+    const routed = routeHttp({ router: o.router, ...o.routing }, path, method as RoutableMethod | "HEAD");
+    if (!routed) return disabled();
     // No route still runs (Convex runs its isolate to look the route up): logged under the request's path,
-    // answered 404.
-    const match = o.router.lookup(path, method as RoutableMethod | "HEAD");
+    // answered 404. The router looks up the path as routed; the handler gets the original request.
+    const match = routed.match;
 
     const headers = new Headers(req.headers);
     if (!headers.has(REQUEST_ID_HEADER)) headers.set(REQUEST_ID_HEADER, newRequestId());
@@ -108,6 +176,7 @@ export function httpActionServer(o: HttpActionOptions) {
         caller,
         error,
         match && { method: match[1], path: match[2] },
+        routed.node.component,
       )
       .then(
         (r) => ({ ok: true as const, r }),

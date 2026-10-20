@@ -172,7 +172,7 @@ gaps.
    [STUDY-152](../study/STUDY-152-components-restudy.md)). Built (steps 1–7 so far, STUDY-152 to STUDY-157):
    namespaced tables and the registry, `bunvex.config.ts` with `defineApp` / `defineComponent` pushed by the CLI,
    a component's functions run and called across components (references, handles), its env, codegen, its
-   scheduler, crons and storage. Left: its HTTP mounts (STUDY-157 PR 4), search and vector indexes in
+   scheduler, crons, storage and HTTP mounts. Left: search and vector indexes in
    components (PR 5), bunvex's own components (step 8), the dashboard (step 9) and export/import (step 10). Until
    step 8, an app on `@convex-dev/*` components (rate limiter, aggregate, workpool, auth, …) has no package to
    install.
@@ -198,6 +198,9 @@ gaps.
   system-field mismatch's display, a query on a missing table or index, a `$` field in a system function's
   arguments and a push's table numbers, matched to Convex (#664–#669); the analyzed line of a function (the
   dashboard's Functions tree) differs where esbuild and Bun print a bundle differently (DV-520, accepted).
+- A pushed function's `Set` or `Map` in a value error (STUDY-18 §9): Convex's `Set[1]` now, from any realm, with the
+  conversion first for results, scheduled and nested-call arguments, and `runAt` with the function's `Date`, under
+  `vm` and `process` (the bridge's codec carries a Set's or Map's entries and a Date's time).
 - `bunvex-local-backend`'s command line (STUDY-172): its misuse is reported as clap reports Convex's binary's,
   checked against it, a `0x`-prefixed instance secret included (§7).
 - Operations:

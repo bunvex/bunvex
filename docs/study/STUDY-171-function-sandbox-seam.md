@@ -450,9 +450,11 @@ Under `vm` the engine gets the app's own objects and checks them in its own orde
 - values with tags of their own (`{"$n":"5"}` an int64 of any size, `{"$f":"NaN"}`, `{"$b":…}` bytes, `{"$u":0}`
   `undefined`, `{"$t":0}` the commit timestamp placeholder); a plain object with a `$` key as entries, so no field
   is read as a tag; `__proto__` a key like any other;
-- **what is not a value** (a class instance, a `Date`, a `Set`, a function, a symbol) as its kind and class name: the
-  host builds an object of that class name from no realm of its own, as the app's objects are under `vm` (its
-  context's realm), so `Set {…} is not a supported value type (present at path .v …)` comes out the same;
+- **what is not a value** (a class instance, a function, a symbol) as its kind and class name: the host builds an
+  object of that class name from no realm of its own, as the app's objects are under `vm` (its context's realm), so
+  `Point {…} is not a supported value type (present at path .v …)` comes out the same. A `Set` or `Map` also carries
+  its entries (at most `MAX_WIRE_ENTRIES`, 16384), and a `Date` its time; the host builds a real one with the app's
+  class name, so `Set[1] …` and `scheduler.runAt(new Date(…))` come out the same too (STUDY-18 §9);
 - function references by their name or path, or the error reading them threw; cycles as cycles.
 
 Errors:
@@ -655,8 +657,8 @@ before the next.
 
 - **No new divergence**, so no question for the owner from this PR. One finding for later, not this PR's: under both
   executors a `Set` or `Map` written as a value prints as `Set {…}` (its realm is the app's context, so the values
-  package's `instanceof Set` misses it), where Convex prints `Set[1]`; a realm-independent check in `toJson` would
-  match Convex (and change `value-error-frames.test.ts`'s expectation).
+  package's `instanceof Set` misses it), where Convex prints `Set[1]`. Fixed by STUDY-18 §9 (#754), for both
+  executors.
 - **The pool (PR 9)**: one-call processes, so a timeout or a crash fails only its call; replacing a child off the
   call's path (a warm spare); the child's memory baseline (§7.5) against the 96 MiB cap.
 - **Logs and stacks (PR 4)**: console lines and audit lines as operations; a value error thrown in a write's

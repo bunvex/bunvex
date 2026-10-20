@@ -322,13 +322,14 @@ describe("refused, as Convex's push refuses them", () => {
     expect(badModule.code).toBe("InvalidModules");
   });
 
-  test("a component's staged validator or search index: not yet (ComponentsNotSupported), nothing allocated", async () => {
+  test("a component's staged validator: not yet (ComponentsNotSupported), nothing allocated", async () => {
     const d = await deployment();
-    const search = mod(
+    // (Its search and vector indexes are built since STUDY-157 PR 5.)
+    const staged = mod(
       "schema.js",
-      `import { defineSchema, defineTable } from "bunvex/server";\nimport { v } from "bunvex/values";\nexport default defineSchema({ messages: defineTable({ body: v.string() }).searchIndex("s", { searchField: "body" }) });`,
+      `import { defineSchema, defineTable } from "bunvex/server";\nimport { v } from "bunvex/values";\nexport default defineSchema({ messages: defineTable(v.object({ body: v.string() })).staged(v.any()) });`,
     );
-    const r = await d.start({ components: [{ ...COUNTER, schema: search }] });
+    const r = await d.start({ components: [{ ...COUNTER, schema: staged }] });
     expect(r.status).toBe(400);
     expect(r.body.code).toBe("ComponentsNotSupported");
     expect(d.engine.catalog.components.size).toBe(0);

@@ -1,0 +1,327 @@
+bunvex-local-backend 0.1.0-alpha.1: instance bunvex-soak, sqlite
+the API at http://127.0.0.1:24658, HTTP actions at http://127.0.0.1:24659
+---- mimalloc at t=1215.248s ----
+subproc 0
+ blocks            peak       total     current       block      total#   
+  bin S    1  :   611.1 KiB    16.2 MiB   541.2 KiB     8   B       2.1 M    not all freed
+  bin S    2  :   744.6 KiB   143.4 MiB   398.9 KiB    16   B       9.3 M    not all freed
+  bin S    4  :     5.7 MiB     1.1 GiB     4.1 MiB    32   B      37.3 M    not all freed
+  bin S    6  :     6.5 MiB   598.7 MiB     3.1 MiB    48   B      13.0 M    not all freed
+  bin S    8  :     8.1 MiB   243.2 MiB     5.8 MiB    64   B       3.9 M    not all freed
+  bin S    9  :     4.7 MiB   313.5 MiB     2.2 MiB    80   B       4.1 M    not all freed
+  bin S   10  :     6.8 MiB     3.7 GiB     3.0 MiB    96   B      42.4 M    not all freed
+  bin S   11  :     4.0 MiB     1.0 GiB     1.9 MiB   112   B      10.4 M    not all freed
+  bin S   12  :     3.6 MiB   674.6 MiB     1.9 MiB   128   B       5.5 M    not all freed
+  bin S   13  :    11.3 MiB   386.9 MiB     7.2 MiB   160   B       2.5 M    not all freed
+  bin S   14  :     2.3 MiB   219.3 MiB   797.5 KiB   192   B       1.1 M    not all freed
+  bin S   15  :     1.1 MiB   136.7 MiB   485.3 KiB   224   B     640.0 K    not all freed
+  bin S   16  :     8.6 MiB   308.9 MiB   637.9 KiB   256   B       1.2 M    not all freed
+  bin S   17  :     2.7 MiB   512.6 MiB  1006.4 KiB   320   B       1.6 M    not all freed
+  bin S   18  :     2.1 MiB   205.1 MiB   777.4 KiB   384   B     560.2 K    not all freed
+  bin S   19  :     9.2 MiB   160.0 MiB     8.2 MiB   448   B     374.5 K    not all freed
+  bin S   20  :    10.4 MiB   736.7 MiB   706.7 KiB   512   B       1.5 M    not all freed
+  bin S   21  :     2.6 MiB   297.7 MiB  1000.7 KiB   640   B     487.7 K    not all freed
+  bin S   22  :     1.4 MiB   131.7 MiB   607.6 KiB   768   B     179.9 K    not all freed
+  bin S   23  :     1.1 MiB   137.5 MiB   507.7 KiB   896   B     160.9 K    not all freed
+  bin S   24  :     3.4 MiB   817.0 MiB  1015.9 KiB     1.0 KiB   836.6 K    not all freed
+  bin S   25  :     2.4 MiB   561.7 MiB  1016.4 KiB     1.2 KiB   460.1 K    not all freed
+  bin S   26  :     3.4 MiB     1.3 GiB   629.4 KiB     1.5 KiB   953.8 K    not all freed
+  bin S   27  :     3.2 MiB   616.5 MiB   929.3 KiB     1.7 KiB   360.7 K    not all freed
+  bin S   28  :     3.1 MiB   636.7 MiB   524.0 KiB     2.0 KiB   326.0 K    not all freed
+  bin S   29  :     2.6 MiB   881.2 MiB   978.8 KiB     2.5 KiB   360.9 K    not all freed
+  bin S   30  :     6.8 MiB   587.9 MiB   566.2 KiB     3.0 KiB   200.6 K    not all freed
+  bin S   31  :     4.1 MiB   147.3 MiB     1.1 MiB     3.5 KiB    43.1 K    not all freed
+  bin S   32  :     3.3 MiB     1.2 GiB   586.2 KiB     4.0 KiB   317.5 K    not all freed
+  bin S   33  :   103.7 MiB   672.4 MiB   103.5 MiB     5.0 KiB   137.7 K    not all freed
+  bin S   34  :     3.5 MiB   422.0 MiB   487.9 KiB     6.0 KiB    72.0 K    not all freed
+  bin S   35  :   934.6 KiB   188.0 MiB   513.0 KiB     7.0 KiB    27.5 K    not all freed
+  bin S   36  :     6.6 MiB   124.0 MiB   489.9 KiB     8.0 KiB    15.8 K    not all freed
+  bin S   37  :     1.4 MiB    89.8 MiB   833.2 KiB    10.0 KiB     9.2 K    not all freed
+  bin M   38  :     1.4 MiB    76.2 MiB   939.6 KiB    12.0 KiB     6.5 K    not all freed
+  bin M   39  :   604.3 KiB    31.8 MiB   309.2 KiB    14.0 KiB     2.3 K    not all freed
+  bin M   40  :   142.8 MiB     2.5 GiB   125.3 MiB    16.0 KiB   167.9 K    not all freed
+  bin M   41  :     1.7 MiB   100.3 MiB   722.8 KiB    20.0 KiB     5.1 K    not all freed
+  bin M   42  :   795.1 KiB    40.6 MiB   433.6 KiB    24.0 KiB     1.7 K    not all freed
+  bin M   43  :     1.3 MiB    61.0 MiB   477.8 KiB    28.1 KiB     2.2 K    not all freed
+  bin M   44  :   674.6 KiB    90.2 MiB   224.8 KiB    32.1 KiB     2.8 K    not all freed
+  bin M   45  :     1.7 MiB   168.1 MiB     1.0 MiB    40.1 KiB     4.3 K    not all freed
+  bin M   46  :     1.1 MiB    48.0 MiB   481.8 KiB    48.1 KiB     1.0 K    not all freed
+  bin M   47  :  1011.9 KiB    47.3 MiB   168.6 KiB    56.2 KiB   865        not all freed
+  bin M   48  :     1.5 MiB   105.3 MiB   128.5 KiB    64.2 KiB     1.6 K    not all freed
+  bin M   49  :     2.0 MiB   132.0 MiB   803.1 KiB    80.3 KiB     1.6 K    not all freed
+  bin L   50  :     1.8 MiB    44.8 MiB   385.5 KiB    96.3 KiB   478        not all freed
+  bin L   51  :     1.2 MiB    39.4 MiB   899.5 KiB   112.4 KiB   361        not all freed
+  bin L   52  :     2.0 MiB   186.8 MiB     1.1 MiB   128.5 KiB     1.4 K    not all freed
+  bin L   53  :     3.4 MiB    45.3 MiB   642.5 KiB   160.6 KiB   290        not all freed
+  bin L   54  :     2.8 MiB    57.0 MiB   578.2 KiB   192.7 KiB   304        not all freed
+  bin L   55  :     3.2 MiB    34.1 MiB     1.5 MiB   224.8 KiB   156        not all freed
+  bin L   56  :     2.0 MiB   376.7 MiB   771.0 KiB   257.0 KiB     1.5 K    not all freed
+  bin L   57  :     3.4 MiB    30.6 MiB     2.8 MiB   321.2 KiB    98        not all freed
+  bin L   58  :     6.3 MiB    30.3 MiB     0         385.5 KiB    81        ok
+  bin L   59  :     1.7 MiB    10.5 MiB   449.7 KiB   449.7 KiB    24        not all freed
+  bin L   60  :     2.0 MiB   363.0 MiB     0         514.0 KiB   726        ok
+
+  binned      :   321.8 MiB    23.9 GiB   298.2 Mi                143.3 M    not all freed
+  huge        :   236.2 MiB     1.3 GiB   236.2 Mi                137        not all freed
+  total       :   534.4 MiB    25.3 GiB   534.4 Mi                143.3 M    
+  malloc req~ :                25.3 GiB
+
+ pages             peak       total     current       block      total#   
+  touched     :     2.9 GiB     2.9 GiB     2.9 GiB                          
+  pages       :     3.6 K      33.7 K       3.6 K  
+  abandoned   :     2.4 K      79.7 K       2.2 K  
+  os abandoned:     0           0           0      
+  os allocated:     0           0           0      
+  reclaima    :    16.0 K  
+  reclaimf    :    61.1 K  
+  reabandon   :    14.7 K  
+  waits       :     0      
+  extended    :   137.4 K  
+  retire      :    14.5 K  
+  stat updates:     1.1 M  
+  stat avg    :   259.2 avg
+  searches    :     3.0 avg
+  prof samples:     0      
+
+ arenas            peak       total     current       block      total#   
+  reserved    :     2.0 GiB     2.0 GiB     2.0 GiB                          
+  committed   :     6.3 GiB     6.3 GiB     6.3 GiB                          
+  reset       :     0      
+  purged      :     9.7 GiB
+  arenas      :     3      
+  rollback    :     0      
+  mmaps       :     7      
+  commits     :     6      
+  resets      :     0      
+  purges      :   203.2 K  
+  guarded     :     0      
+  theaps      :     9         617           8      
+  heaps       :     5         556           4      
+  heap waits  :     0      
+
+ process           peak       total     current       block      total#   
+  threads     :     9          65           8      
+  numa nodes  :     1
+  elapsed     :  1219.458 s
+  process     : user: 304.813 s, system: 46.416 s, faults: 0, peak rss: 768.4 MiB, peak commit: 6.3 GiB
+
+holes: 56254464 bytes / 49347 blocks discarded now, 3788664832 bytes total, 194189 discards, 194822 reuses, 3358 pages freed by the sweep
+holes: 0 ineligible pages in the last sweep (0 bytes, of which 0 bytes are free)
+holes: the sweeps walked 175400657 free blocks and skipped 8133490 unchanged pages
+---- mimalloc at t=3602.429s ----
+subproc 0
+ blocks            peak       total     current       block      total#   
+  bin S    1  :   648.7 KiB    33.3 MiB   591.7 KiB     8   B       4.3 M    not all freed
+  bin S    2  :   938.8 KiB   405.3 MiB   434.9 KiB    16   B      26.5 M    not all freed
+  bin S    4  :     7.2 MiB     3.1 GiB     4.2 MiB    32   B     106.2 M    not all freed
+  bin S    6  :     7.9 MiB     1.6 GiB     3.2 MiB    48   B      36.6 M    not all freed
+  bin S    8  :    12.2 MiB   671.6 MiB     8.7 MiB    64   B      11.0 M    not all freed
+  bin S    9  :     4.7 MiB   777.1 MiB     2.3 MiB    80   B      10.1 M    not all freed
+  bin S   10  :     7.9 MiB    10.9 GiB     3.2 MiB    96   B     123.0 M    not all freed
+  bin S   11  :     4.0 MiB     2.5 GiB     1.9 MiB   112   B      24.7 M    not all freed
+  bin S   12  :     4.7 MiB     1.6 GiB     2.1 MiB   128   B      13.7 M    not all freed
+  bin S   13  :    15.8 MiB   974.1 MiB     7.4 MiB   160   B       6.3 M    not all freed
+  bin S   14  :     2.5 MiB   585.5 MiB   790.0 KiB   192   B       3.1 M    not all freed
+  bin S   15  :     1.1 MiB   292.0 MiB   501.8 KiB   224   B       1.3 M    not all freed
+  bin S   16  :     8.6 MiB   531.5 MiB   666.6 KiB   256   B       2.1 M    not all freed
+  bin S   17  :     2.7 MiB     1.1 GiB     1.0 MiB   320   B       3.8 M    not all freed
+  bin S   18  :     2.2 MiB   322.4 MiB   768.0 KiB   384   B     880.3 K    not all freed
+  bin S   19  :    10.0 MiB   293.9 MiB     8.3 MiB   448   B     688.0 K    not all freed
+  bin S   20  :    10.4 MiB     2.2 GiB   756.4 KiB   512   B       4.7 M    not all freed
+  bin S   21  :     2.6 MiB   458.4 MiB     1.0 MiB   640   B     751.0 K    not all freed
+  bin S   22  :     1.4 MiB   203.1 MiB   611.3 KiB   768   B     277.3 K    not all freed
+  bin S   23  :     1.2 MiB   275.6 MiB   478.7 KiB   896   B     322.5 K    not all freed
+  bin S   24  :     3.6 MiB     1.8 GiB     1.2 MiB     1.0 KiB     1.9 M    not all freed
+  bin S   25  :     2.4 MiB     1.2 GiB     1.0 MiB     1.2 KiB     1.0 M    not all freed
+  bin S   26  :     4.0 MiB     3.5 GiB   621.9 KiB     1.5 KiB     2.5 M    not all freed
+  bin S   27  :     3.3 MiB     1.5 GiB     1.7 MiB     1.7 KiB   903.6 K    not all freed
+  bin S   28  :     3.1 MiB     1.6 GiB   546.1 KiB     2.0 KiB   854.8 K    not all freed
+  bin S   29  :     2.8 MiB     2.1 GiB  1013.9 KiB     2.5 KiB   895.1 K    not all freed
+  bin S   30  :    11.4 MiB     1.4 GiB   590.3 KiB     3.0 KiB   505.0 K    not all freed
+  bin S   31  :     4.2 MiB   226.5 MiB     1.1 MiB     3.5 KiB    66.2 K    not all freed
+  bin S   32  :     3.5 MiB     3.4 GiB   598.3 KiB     4.0 KiB   897.9 K    not all freed
+  bin S   33  :   293.4 MiB     1.7 GiB   292.2 MiB     5.0 KiB   372.0 K    not all freed
+  bin S   34  :     3.5 MiB     1.1 GiB   505.9 KiB     6.0 KiB   196.8 K    not all freed
+  bin S   35  :   990.8 KiB   500.8 MiB   505.9 KiB     7.0 KiB    73.2 K    not all freed
+  bin S   36  :     6.6 MiB   209.0 MiB   514.0 KiB     8.0 KiB    26.7 K    not all freed
+  bin S   37  :     1.4 MiB   172.7 MiB   833.2 KiB    10.0 KiB    17.6 K    not all freed
+  bin M   38  :     1.7 MiB   132.0 MiB   951.7 KiB    12.0 KiB    11.2 K    not all freed
+  bin M   39  :   604.3 KiB    45.8 MiB   309.2 KiB    14.0 KiB     3.3 K    not all freed
+  bin M   40  :   183.2 MiB     7.4 GiB   154.4 MiB    16.0 KiB   489.0 K    not all freed
+  bin M   41  :     1.7 MiB   187.6 MiB   742.9 KiB    20.0 KiB     9.6 K    not all freed
+  bin M   42  :   963.7 KiB    64.1 MiB   554.1 KiB    24.0 KiB     2.7 K    not all freed
+  bin M   43  :     1.3 MiB   105.7 MiB   505.9 KiB    28.1 KiB     3.8 K    not all freed
+  bin M   44  :   674.6 KiB   234.6 MiB   417.6 KiB    32.1 KiB     7.5 K    not all freed
+  bin M   45  :     1.8 MiB   418.7 MiB     1.0 MiB    40.1 KiB    10.7 K    not all freed
+  bin M   46  :     1.1 MiB    90.9 MiB   433.6 KiB    48.1 KiB     1.9 K    not all freed
+  bin M   47  :  1011.9 KiB    72.9 MiB   224.8 KiB    56.2 KiB     1.3 K    not all freed
+  bin M   48  :     1.5 MiB   268.7 MiB   128.5 KiB    64.2 KiB     4.3 K    not all freed
+  bin M   49  :     2.0 MiB   200.6 MiB   883.4 KiB    80.3 KiB     2.5 K    not all freed
+  bin L   50  :     1.8 MiB    75.2 MiB   481.8 KiB    96.3 KiB   803        not all freed
+  bin L   51  :     1.2 MiB    65.1 MiB   899.5 KiB   112.4 KiB   596        not all freed
+  bin L   52  :     2.0 MiB   506.8 MiB   899.5 KiB   128.5 KiB     4.0 K    not all freed
+  bin L   53  :     3.4 MiB    85.7 MiB   642.5 KiB   160.6 KiB   549        not all freed
+  bin L   54  :     3.3 MiB   119.0 MiB   771.0 KiB   192.7 KiB   635        not all freed
+  bin L   55  :     3.2 MiB    52.9 MiB     1.5 MiB   224.8 KiB   242        not all freed
+  bin L   56  :     2.2 MiB     1.0 GiB   771.0 KiB   257.0 KiB     4.4 K    not all freed
+  bin L   57  :     3.4 MiB    52.5 MiB     2.5 MiB   321.2 KiB   168        not all freed
+  bin L   58  :     6.3 MiB    46.5 MiB     0         385.5 KiB   124        ok
+  bin L   59  :     1.7 MiB    11.8 MiB   449.7 KiB   449.7 KiB    27        not all freed
+  bin L   60  :     2.0 MiB     1.0 GiB     0         514.0 KiB     2.1 K    ok
+
+  binned      :   549.6 MiB    62.3 GiB   521.7 Mi                392.0 M    not all freed
+  huge        :   236.2 MiB     1.6 GiB    41.6 Mi                258        not all freed
+  total       :   758.0 MiB    63.9 GiB   563.4 Mi                392.0 M    
+  malloc req~ :                63.9 GiB
+
+ pages             peak       total     current       block      total#   
+  touched     :     4.6 GiB     4.6 GiB     4.6 GiB                          
+  pages       :     7.1 K      59.1 K       7.1 K  
+  abandoned   :     5.7 K     174.2 K       5.4 K  
+  os abandoned:     0           0           0      
+  os allocated:     0           0           0      
+  reclaima    :    52.1 K  
+  reclaimf    :   115.9 K  
+  reabandon   :    45.9 K  
+  waits       :     0      
+  extended    :   250.4 K  
+  retire      :    23.1 K  
+  stat updates:     2.7 M  
+  stat avg    :   288.6 avg
+  searches    :     3.1 avg
+  prof samples:     0      
+
+ arenas            peak       total     current       block      total#   
+  reserved    :     2.0 GiB     2.0 GiB     2.0 GiB                          
+  committed   :    13.0 GiB    13.0 GiB    13.0 GiB                          
+  reset       :     0      
+  purged      :    23.2 GiB
+  arenas      :     3      
+  rollback    :     0      
+  mmaps       :     7      
+  commits     :     6      
+  resets      :     0      
+  purges      :   543.1 K  
+  guarded     :     0      
+  theaps      :     9         764           9      
+  heaps       :     5         556           4      
+  heap waits  :     0      
+
+ process           peak       total     current       block      total#   
+  threads     :     9         212           9      
+  numa nodes  :     1
+  elapsed     :  3602.488 s
+  process     : user: 1155.454 s, system: 127.320 s, faults: 0, peak rss: 768.4 MiB, peak commit: 13.0 GiB
+
+holes: 76091392 bytes / 90166 blocks discarded now, 10568220672 bytes total, 524069 discards, 524668 reuses, 6075 pages freed by the sweep
+holes: 0 ineligible pages in the last sweep (0 bytes, of which 0 bytes are free)
+holes: the sweeps walked 474025337 free blocks and skipped 30208482 unchanged pages
+---- mimalloc at t=6905.202s ----
+subproc 0
+ blocks            peak       total     current       block      total#   
+  bin S    1  :   666.2 KiB    56.3 MiB   611.3 KiB     8   B       7.3 M    not all freed
+  bin S    2  :   975.5 KiB   765.9 MiB   460.4 KiB    16   B      50.1 M    not all freed
+  bin S    4  :     7.2 MiB     6.0 GiB     4.3 MiB    32   B     202.7 M    not all freed
+  bin S    6  :     7.9 MiB     3.0 GiB     3.3 MiB    48   B      68.9 M    not all freed
+  bin S    8  :    12.2 MiB     1.2 GiB     8.5 MiB    64   B      20.7 M    not all freed
+  bin S    9  :     4.8 MiB     1.4 GiB     2.3 MiB    80   B      18.8 M    not all freed
+  bin S   10  :     7.9 MiB    20.9 GiB     3.6 MiB    96   B     233.9 M    not all freed
+  bin S   11  :     4.0 MiB     4.6 GiB     2.0 MiB   112   B      44.1 M    not all freed
+  bin S   12  :     4.7 MiB     2.9 GiB     2.3 MiB   128   B      24.9 M    not all freed
+  bin S   13  :    15.8 MiB     1.7 GiB     7.6 MiB   160   B      11.7 M    not all freed
+  bin S   14  :     2.5 MiB     1.0 GiB   817.6 KiB   192   B       5.9 M    not all freed
+  bin S   15  :     1.1 MiB   502.3 MiB   503.7 KiB   224   B       2.3 M    not all freed
+  bin S   16  :     8.6 MiB   910.0 MiB   673.1 KiB   256   B       3.7 M    not all freed
+  bin S   17  :     2.7 MiB     2.0 GiB     1.0 MiB   320   B       6.8 M    not all freed
+  bin S   18  :     2.5 MiB   485.6 MiB   801.1 KiB   384   B       1.3 M    not all freed
+  bin S   19  :    10.0 MiB   474.9 MiB     8.4 MiB   448   B       1.1 M    not all freed
+  bin S   20  :    11.3 MiB     4.3 GiB   725.8 KiB   512   B       9.1 M    not all freed
+  bin S   21  :     2.6 MiB   677.8 MiB     1.0 MiB   640   B       1.1 M    not all freed
+  bin S   22  :     1.4 MiB   295.1 MiB   643.7 KiB   768   B     403.0 K    not all freed
+  bin S   23  :     1.3 MiB   465.0 MiB   484.8 KiB   896   B     544.2 K    not all freed
+  bin S   24  :     3.8 MiB     3.3 GiB     1.4 MiB     1.0 KiB     3.5 M    not all freed
+  bin S   25  :     2.5 MiB     2.1 GiB     1.0 MiB     1.2 KiB     1.8 M    not all freed
+  bin S   26  :     4.5 MiB     6.6 GiB   641.5 KiB     1.5 KiB     4.6 M    not all freed
+  bin S   27  :     3.3 MiB     2.7 GiB     1.8 MiB     1.7 KiB     1.6 M    not all freed
+  bin S   28  :     3.1 MiB     3.0 GiB   548.1 KiB     2.0 KiB     1.5 M    not all freed
+  bin S   29  :     3.2 MiB     3.8 GiB     1.0 MiB     2.5 KiB     1.6 M    not all freed
+  bin S   30  :    11.4 MiB     2.6 GiB   590.3 KiB     3.0 KiB   929.9 K    not all freed
+  bin S   31  :     4.2 MiB   334.4 MiB     1.1 MiB     3.5 KiB    97.8 K    not all freed
+  bin S   32  :     4.1 MiB     6.4 GiB   598.3 KiB     4.0 KiB     1.7 M    not all freed
+  bin S   33  :   315.1 MiB     3.0 GiB   310.4 MiB     5.0 KiB   645.1 K    not all freed
+  bin S   34  :     3.5 MiB     2.1 GiB   512.0 KiB     6.0 KiB   370.5 K    not all freed
+  bin S   35  :   990.8 KiB   937.6 MiB   491.9 KiB     7.0 KiB   137.1 K    not all freed
+  bin S   36  :     6.6 MiB   323.8 MiB   522.0 KiB     8.0 KiB    41.4 K    not all freed
+  bin S   37  :     1.4 MiB   285.1 MiB   873.4 KiB    10.0 KiB    29.2 K    not all freed
+  bin M   38  :     2.0 MiB   209.1 MiB   927.6 KiB    12.0 KiB    17.8 K    not all freed
+  bin M   39  :   604.3 KiB    63.2 MiB   323.2 KiB    14.0 KiB     4.6 K    not all freed
+  bin M   40  :   183.2 MiB    14.7 GiB   152.8 MiB    16.0 KiB   963.8 K    not all freed
+  bin M   41  :     1.7 MiB   304.4 MiB   843.2 KiB    20.0 KiB    15.5 K    not all freed
+  bin M   42  :   963.7 KiB    96.9 MiB   554.1 KiB    24.0 KiB     4.1 K    not all freed
+  bin M   43  :     1.3 MiB   165.4 MiB   505.9 KiB    28.1 KiB     6.0 K    not all freed
+  bin M   44  :   674.6 KiB   433.9 MiB   417.6 KiB    32.1 KiB    13.8 K    not all freed
+  bin M   45  :     1.8 MiB   766.1 MiB  1003.9 KiB    40.1 KiB    19.6 K    not all freed
+  bin M   46  :     1.1 MiB   142.2 MiB   433.6 KiB    48.1 KiB     3.0 K    not all freed
+  bin M   47  :     1.0 MiB   110.0 MiB   281.0 KiB    56.2 KiB     2.0 K    not all freed
+  bin M   48  :     1.5 MiB   490.0 MiB   128.5 KiB    64.2 KiB     7.8 K    not all freed
+  bin M   49  :     2.0 MiB   285.7 MiB   883.4 KiB    80.3 KiB     3.6 K    not all freed
+  bin L   50  :     1.8 MiB   107.1 MiB   385.5 KiB    96.3 KiB     1.1 K    not all freed
+  bin L   51  :     1.2 MiB   104.6 MiB   899.5 KiB   112.4 KiB   957        not all freed
+  bin L   52  :     2.0 MiB   944.8 MiB     1.0 MiB   128.5 KiB     7.5 K    not all freed
+  bin L   53  :     3.4 MiB   150.3 MiB   642.5 KiB   160.6 KiB   962        not all freed
+  bin L   54  :     3.3 MiB   211.3 MiB   771.0 KiB   192.7 KiB     1.1 K    not all freed
+  bin L   55  :     3.2 MiB    80.0 MiB     1.5 MiB   224.8 KiB   366        not all freed
+  bin L   56  :     2.2 MiB     2.0 GiB   771.0 KiB   257.0 KiB     8.4 K    not all freed
+  bin L   57  :     3.4 MiB    77.5 MiB     2.1 MiB   321.2 KiB   248        not all freed
+  bin L   58  :     6.3 MiB    70.8 MiB     0         385.5 KiB   189        ok
+  bin L   59  :     1.7 MiB    14.8 MiB   449.7 KiB   449.7 KiB    34        not all freed
+  bin L   60  :     2.0 MiB     2.0 GiB     0         514.0 KiB     4.1 K    ok
+
+  binned      :   601.1 MiB   115.5 GiB   539.4 Mi                735.9 M    not all freed
+  huge        :   307.4 MiB     3.3 GiB   307.4 Mi                467        not all freed
+  total       :   846.9 MiB   118.9 GiB   846.9 Mi                735.9 M    
+  malloc req~ :               118.9 GiB
+
+ pages             peak       total     current       block      total#   
+  touched     :     7.7 GiB     7.7 GiB     7.7 GiB                          
+  pages       :     7.6 K      74.7 K       7.4 K  
+  abandoned   :     6.6 K     294.7 K       5.7 K  
+  os abandoned:     0           0           0      
+  os allocated:     0           0           0      
+  reclaima    :   106.0 K  
+  reclaimf    :   181.6 K  
+  reabandon   :    91.7 K  
+  waits       :     0      
+  extended    :   329.8 K  
+  retire      :    32.6 K  
+  stat updates:     4.8 M  
+  stat avg    :   303.8 avg
+  searches    :     3.2 avg
+  prof samples:     0      
+
+ arenas            peak       total     current       block      total#   
+  reserved    :     2.0 GiB     2.0 GiB     2.0 GiB                          
+  committed   :    22.5 GiB    22.5 GiB    22.5 GiB                          
+  reset       :     0      
+  purged      :    41.9 GiB
+  arenas      :     3      
+  rollback    :     0      
+  mmaps       :     8      
+  commits     :     6      
+  resets      :     0      
+  purges      :     1.0 M  
+  guarded     :     0      
+  theaps      :     9         975           9      
+  heaps       :     5         556           4      
+  heap waits  :     0      
+
+ process           peak       total     current       block      total#   
+  threads     :     9         423           9      
+  numa nodes  :     1
+  elapsed     :  6913.492 s
+  process     : user: 2384.416 s, system: 251.779 s, faults: 0, peak rss: 1.0 GiB, peak commit: 22.5 GiB
+
+holes: 79634432 bytes / 85495 blocks discarded now, 20190081024 bytes total, 978061 discards, 980493 reuses, 9555 pages freed by the sweep
+holes: 0 ineligible pages in the last sweep (0 bytes, of which 0 bytes are free)
+holes: the sweeps walked 878074508 free blocks and skipped 62249013 unchanged pages
+bunvex-local-backend: stopping
