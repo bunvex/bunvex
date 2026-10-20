@@ -152,6 +152,19 @@ describe("a child that goes wrong is killed, and what waits on it fails with why
     expect(await rejection(c.load([QUERY], OPTS))).toBe(e);
   });
 
+  test("its socket breaks before it exits: a crash, never a bad message", async () => {
+    // On Linux a child that exits with frames of the host's unread resets the socket, and the host's read can fail
+    // before the host sees the exit (CI run 39367529452). This child holds the reset apart from its exit.
+    const c = await start({ entry: fake("reset") });
+    const e = await rejection(c.load([QUERY], OPTS));
+    expect((e as SandboxError).reason).toBe("crash");
+    // Left alive behind the broken socket, it is killed.
+    expect(e.message).toBe(
+      "the function sandbox's process exited unexpectedly (signal SIGKILL): the child dropped its channel",
+    );
+    expect(gone(c.pid)).toBe(true);
+  });
+
   test("the real child, killed in the middle of a load", async () => {
     const c = await start();
     const spin = mod("while (true) {}");
