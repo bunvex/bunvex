@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { adminKeyCipherKey, checkAdminKey } from "../src/admin-keys.ts";
 import {
   ADMIN_KEY_USAGE,
+  instanceSecretError,
   KEYGEN_USAGE,
   LOCAL_BACKEND_USAGE,
   localBackendDatabaseEnv,
@@ -269,6 +270,59 @@ describe("bunvex-local-backend", () => {
     const r = await fetch(`${b.url}/api/check_admin_key`, { headers: { authorization: `Bunvex ${k.out[0]}` } });
     expect(r.status).toBe(200);
   });
+
+  // As Convex's binary reads it (STUDY-172 §7): `const_hex::decode` drops one `0x` / `0X`.
+  test("a 0x-prefixed secret: accepted as Convex's, refused with its messages otherwise", () => {
+    for (const s of [`0x${SECRET}`, `0X${SECRET}`, `0x${"aB".repeat(32)}`]) expect(instanceSecretError(s)).toBeNull();
+    for (const [s, message] of [
+      [`0x0x${SECRET}`, "Couldn't hexdecode key"],
+      [`x${SECRET}`, "Couldn't hexdecode key"],
+      [`0x${SECRET}a`, "Couldn't hexdecode key"],
+      [`0x${SECRET.slice(1)}`, "Couldn't hexdecode key"],
+      ["0x", "Hex-decoded key was 0 bytes, not 32"],
+      ["0xab", "Hex-decoded key was 1 bytes, not 32"],
+    ])
+      expect(instanceSecretError(s!)).toBe(message!);
+    expect(refused(["--instance-secret", `0x${SECRET}`])).toBeNull();
+    expect(refused([], { INSTANCE_SECRET: `0X${SECRET}` })).toBeNull();
+    expect(refused([], { INSTANCE_SECRET: `0x0x${SECRET}` })).toBe("Couldn't hexdecode key");
+  });
+
+  test("keys are interchangeable across a secret's spellings (0x, 0X, case): the same 32 bytes", async () => {
+    const keygen = async (secret: string, env: Record<string, string> = {}) => {
+      const k = io();
+      const args = ["keygen", "admin-key", "--instance-name", "bunvex-self-hosted"];
+      expect(
+        await localBackendMain(secret ? [...args, "--instance-secret", secret] : args, { ...k.it, env }, "v"),
+      ).toBe(0);
+      return k.out[0]!;
+    };
+    const keys = [
+      await keygen(SECRET),
+      await keygen(`0x${SECRET}`),
+      await keygen(`0X${SECRET.toUpperCase()}`),
+      await keygen("", { INSTANCE_SECRET: `0x${SECRET}` }),
+    ];
+    const other = await keygen("cd".repeat(32));
+    for (const key of keys) expect(checkAdminKey(key, "bunvex-self-hosted", adminKeyCipherKey(SECRET))).toBeTruthy();
+    const cwd = mkdtempSync(join(tmpdir(), "bunvex-lb-"));
+    dirs.push(cwd);
+    // The same store started under each spelling in turn: every key is the deployment's, another secret's is not.
+    for (const secret of [`0x${SECRET}`, SECRET, `0X${SECRET.toUpperCase()}`]) {
+      const flags = parseLocalBackendFlags(["--instance-secret", secret, "--port", "0", "--site-proxy-port", "0"]);
+      if (typeof flags === "string") throw new Error(flags);
+      const b = await startLocalBackend(flags, io(cwd).it);
+      const check = (key: string) =>
+        fetch(`${b.url}/api/check_admin_key`, { headers: { authorization: `Bunvex ${key}` } }).then((r) => r.status);
+      try {
+        for (const key of keys) expect(await check(key)).toBe(200);
+        expect(await check(other)).toBe(401);
+      } finally {
+        await b.stop();
+      }
+    }
+  });
+
   test("--help; keygen's usage errors exit 2 with Convex's messages", async () => {
     const h = io();
     expect(await localBackendMain(["--port", "1", "--help"], h.it, "v1")).toBe(0);

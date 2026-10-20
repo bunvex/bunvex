@@ -475,7 +475,7 @@ classed as bugs by their study; they are listed here because they change what op
 
 | ID | Gap | Convex | Source |
 |---|---|---|---|
-| DV-55 | Components, partly built: namespaces, definitions and push, running and calling a component's functions, codegen, its scheduler and crons are built (STUDY-152 steps 1–7 so far: STUDY-152–157). Still to build: storage and HTTP mounts (STUDY-157 PRs 3–4), search and vector indexes in components (PR 5), bunvex's own components (step 8), the dashboard and `data --component` (step 9, DV-224), export and import (step 10, DV-215). (`Backfilled` and staged indexes are built: STUDY-29, #115) | has them | [STUDY-04 D4](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
+| DV-55 | Components, partly built: namespaces, definitions and push, running and calling a component's functions, codegen, its scheduler, crons and storage are built (STUDY-152 steps 1–7 so far: STUDY-152–157). Still to build: HTTP mounts (STUDY-157 PR 4), search and vector indexes in components (PR 5), bunvex's own components (step 8), the dashboard and `data --component` (step 9, DV-224), export and import (step 10, DV-215). (`Backfilled` and staged indexes are built: STUDY-29, #115) | has them | [STUDY-04 D4](../study/STUDY-04-table-and-index-metadata.md#5-divergences) |
 
 ## Pending owner decisions
 

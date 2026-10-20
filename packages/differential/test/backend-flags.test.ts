@@ -158,6 +158,12 @@ const CASES: string[][] = [
   ["--instance-name", "x", "--instance-secret", "abcd"],
   ["--instance-name", "x", "--instance-secret", "zz"],
   ["--instance-name", "x", "--instance-secret", "abc"],
+  // A `0x` prefix (STUDY-172 §7): one is dropped, as `const_hex::decode` drops it; what is left is checked.
+  ["--instance-name", "x", "--instance-secret", `0x0x${SECRET}`],
+  ["--instance-name", "x", "--instance-secret", "0x"],
+  ["--instance-name", "x", "--instance-secret", "0Xab"],
+  ["--instance-name", "x", "--instance-secret", `0x${SECRET}a`],
+  ["--instance-name", "x", "--instance-secret", `x${SECRET}`],
   // keygen.
   ["keygen"],
   ["keygen", "other"],
@@ -173,6 +179,9 @@ const CASES: string[][] = [
   ["keygen", "admin-key", "--instance-name", "a", "--instance-name", "b"],
   ["keygen", "admin-key", "--instance-name", "n", "--instance-secret", "xyz"],
   ["keygen", "admin-key", "--instance-name", "n", "--instance-secret", "abcd"],
+  ["keygen", "admin-key", "--instance-name", "n", "--instance-secret", `0x0x${SECRET}`],
+  ["keygen", "admin-key", "--instance-name", "n", "--instance-secret", "0x"],
+  ["keygen", "admin-key", "--instance-name", "n", "--instance-secret", `0X${SECRET.slice(1)}`],
   ["help", "foo"],
   ["keygen", "help", "foo"],
 ];
@@ -190,6 +199,8 @@ describe.skipIf(!ready)("the backend's command-line errors on Convex and on bunv
   test("help and version exit 0; keygen's help is clap's", async () => {
     for (const args of [
       ["keygen", "admin-key", "--instance-name", "n", "--instance-secret", SECRET],
+      ["keygen", "admin-key", "--instance-name", "n", "--instance-secret", `0x${SECRET}`],
+      ["keygen", "admin-key", "--instance-name", "n", "--instance-secret", `0X${SECRET.toUpperCase()}`],
       ["keygen", "--help"],
       ["keygen", "help", "admin-key"],
       ["help"],

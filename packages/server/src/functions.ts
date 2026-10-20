@@ -261,20 +261,6 @@ function componentEnv(c: ComponentRuntime, read: EnvReader, builtin: Record<stri
 /** Convex's `ComponentPath::in_component_str`: ` in '<path>'`, nothing for the app. */
 const inComponentStr = (path: string) => (path === "" ? "" : ` in '${path}'`);
 
-/** What a component's function may not use yet (STUDY-154 P-2): its storage comes in step 7. */
-const notYetInComponents = (what: string) =>
-  new Proxy(
-    {},
-    {
-      get(_t, prop) {
-        if (prop === "then") return undefined;
-        return () => {
-          throw new Error("`ctx." + what + "` in a component is not supported yet");
-        };
-      },
-    },
-  );
-
 /**
  * An index still being rebuilt after a start (STUDY-79), as an action sees it: Convex rejects the action's
  * syscall promise with a plain `Error` carrying the message, which the action may catch.
@@ -1902,7 +1888,8 @@ export class Functions {
         ? {
             db: (db.vars ? readerView(db) : db) as unknown as QueryCtx["db"],
             auth: txAuth(db),
-            storage: component ? notYetInComponents("storage") : (this.fileStorage?.reader(db) ?? noStorage),
+            // A component's files are its namespace's, its URLs `?component=` (STUDY-157).
+            storage: this.fileStorage?.reader(db, component?.id ?? null) ?? noStorage,
             runQuery: nested.runQuery,
             meta: this.meta(f, db, undefined),
           }
@@ -1925,7 +1912,7 @@ export class Functions {
               rooms ??= roomsCtx(functions, (fn) => db.afterCommit(fn), false).rooms;
               return rooms;
             },
-            storage: component ? notYetInComponents("storage") : (this.fileStorage?.writer(db) ?? noStorage),
+            storage: this.fileStorage?.writer(db, component?.id ?? null) ?? noStorage,
             runQuery: nested.runQuery,
             runMutation: nested.runMutation,
             meta: this.meta(f, db, undefined),
@@ -2859,9 +2846,7 @@ export class Functions {
           jobComponent: caller?.request?.scheduledFunctionComponent ?? null,
         }),
       ),
-      storage: component
-        ? (notYetInComponents("storage") as never)
-        : cutOffWithAction(this.fileStorage?.actionWriter(storageMeter) ?? noStorage),
+      storage: cutOffWithAction(this.fileStorage?.actionWriter(storageMeter, component?.id ?? null) ?? noStorage),
       rooms: cutOffWithAction(r.rooms),
       presence: cutOffWithAction(r.presence as NonNullable<typeof r.presence>),
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
