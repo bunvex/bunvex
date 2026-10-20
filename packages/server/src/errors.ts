@@ -82,6 +82,25 @@ export class FunctionPathError extends Error {
 }
 
 /**
+ * A call's arguments that do not decode into values, held for the run: Convex resolves the function first, then
+ * `parse_udf_args` fails it (`ValidatedPathAndArgs`, crates/udf/src/validation.rs), so the call is a failed run
+ * of the function in the function log, and a missing function is "Could not find public function" whatever came.
+ */
+export class UndecodedArgs {
+  constructor(readonly error: FunctionPathError) {}
+}
+
+/** `decode()`'s value, or its "Invalid arguments" error held as `UndecodedArgs` for the run to throw. */
+export function decodeCallArgs(decode: () => unknown): unknown {
+  try {
+    return decode();
+  } catch (e) {
+    if (e instanceof FunctionPathError) return new UndecodedArgs(e);
+    throw e;
+  }
+}
+
+/**
  * A function path that names no public function, or one of another kind, with `UDF_404_ON_BAD_PATH` on
  * (STUDY-147 §3.8): Convex's `ErrorMetadata::not_found` instead of the function's error, so the request fails
  * (HTTP 404 `{code, message}`, a whole batch with it; a sync session closes with the code).
