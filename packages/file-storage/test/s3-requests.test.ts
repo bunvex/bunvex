@@ -221,7 +221,9 @@ test("a body over several parts: each part's checksum, the parts in order in the
       },
     }),
   );
-  expect(partsOf().map((p) => [p.query.get("partNumber"), p.headers.get("x-amz-checksum-crc32")])).toEqual([
+  // The parts upload in parallel (MAX_PARTS_IN_FLIGHT), so they may reach the server in any order: by number.
+  const parts = partsOf().map((p) => [p.query.get("partNumber"), p.headers.get("x-amz-checksum-crc32")]);
+  expect(parts.sort(([a], [b]) => Number(a) - Number(b))).toEqual([
     ["1", crc32("aaaa")],
     ["2", crc32("bbbb")],
     ["3", crc32("cc")],
