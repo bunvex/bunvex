@@ -471,6 +471,14 @@ describe("the dashboard in a browser", () => {
     const axeOn = async (page: Page) => {
       await page.addScriptTag({ content: AXE });
       return page.evaluate(async () => {
+        // once what moves has settled: mid-fade, colours are not yet their own (a dialog fading in, the tap's
+        // Clear going from disabled, half opaque, to enabled). The finite ones: the Live dot pulses forever.
+        await Promise.all(
+          document
+            .getAnimations()
+            .filter((a) => a.effect?.getTiming().iterations !== Number.POSITIVE_INFINITY)
+            .map((a) => a.finished),
+        );
         // biome-ignore lint/suspicious/noExplicitAny: axe is injected as a global
         const r = await (window as any).axe.run(document, { resultTypes: ["violations"] });
         return r.violations.map((v: { id: string; nodes: unknown[] }) => `${v.id} (${v.nodes.length})`);
@@ -495,7 +503,6 @@ describe("the dashboard in a browser", () => {
       await expect_(async () => expect(await first.textContent()).not.toBe(before), 5000);
       await first.click();
       await members.getByRole("listitem").first().locator("pre").waitFor();
-      expect(await axeOn(page)).toEqual([]);
       // the event tap (step 5): the mock's waves arrive, newest first
       const tap = panel.getByRole("grid", { name: "Room events" });
       await tap
@@ -503,21 +510,15 @@ describe("the dashboard in a browser", () => {
         .filter({ hasText: /^wave$/ })
         .first()
         .waitFor({ timeout: 10_000 });
+      // after the first wave: it enables the tap's Clear, which fades from half opaque (disabled) to its own
+      // colours; scanned before, the wave could land mid-scan, the button caught mid-fade (CI run 39367529452)
+      expect(await axeOn(page)).toEqual([]);
       // a test event (step 6), confirmed in a dialog: it shows in the tap, from the server
       await panel.getByRole("button", { name: "Send test event" }).click();
       const dialog = page.getByRole("alertdialog", { name: "Send a test event to rooms:doc?" });
       await dialog.getByRole("combobox", { name: "Event" }).fill("reaction");
       await dialog.getByRole("textbox", { name: "Data (JSON)" }).fill('{"emoji": "tada"}');
-      // once the dialog has faded in: mid-fade, its colours are not yet its own
-      await page.evaluate(() =>
-        // the finite ones: the Live dot pulses forever
-        Promise.all(
-          document
-            .getAnimations()
-            .filter((a) => a.effect?.getTiming().iterations !== Number.POSITIVE_INFINITY)
-            .map((a) => a.finished),
-        ),
-      );
+      // once the dialog has faded in (axeOn waits for it)
       expect(await axeOn(page)).toEqual([]);
       await dialog.getByRole("button", { name: "Send event" }).click();
       await dialog.waitFor({ state: "hidden" });
