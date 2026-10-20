@@ -8,7 +8,7 @@ import { decodeId, v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import type { Persistence } from "../src/persistence/index.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { defineSchema, defineTable, type SchemaDefinition } from "../src/schema.ts";
+import { defineSchema, defineTable, type EngineSchema } from "../src/schema.ts";
 
 const dirs: string[] = [];
 const open: Persistence[] = [];
@@ -23,7 +23,7 @@ function logPath() {
   dirs.push(d);
   return join(d, "log");
 }
-async function engine(path: string, schema: SchemaDefinition = defineSchema({})) {
+async function engine(path: string, schema: EngineSchema = defineSchema({})) {
   const p = await MemoryPersistence.open(path, { durable: false });
   open.push(p);
   const e = await new Engine(schema, p).init();

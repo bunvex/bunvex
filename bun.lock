@@ -406,6 +406,16 @@
         "vite": "^8.3.1",
       },
     },
+    "examples/testing": {
+      "name": "bunvex-example-testing",
+      "version": "0.0.0",
+      "dependencies": {
+        "bunvex": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^5.9.0",
+      },
+    },
     "examples/tutorial": {
       "name": "bunvex-example-tutorial",
       "version": "0.0.0",
@@ -499,6 +509,7 @@
         "@bunvex/react-clerk": "workspace:*",
         "@bunvex/sandbox": "workspace:*",
         "@bunvex/server": "workspace:*",
+        "@bunvex/testing": "workspace:*",
         "@bunvex/values": "workspace:*",
       },
       "devDependencies": {
@@ -762,6 +773,7 @@
       "devDependencies": {
         "@bunvex/persistence": "workspace:*",
         "jose": "^6.2.12",
+        "typescript": "^5.9.0",
       },
       "peerDependencies": {
         "@bunvex/persistence": "workspace:^",
@@ -807,6 +819,13 @@
     "packages/testing": {
       "name": "@bunvex/testing",
       "version": "0.0.0",
+      "dependencies": {
+        "@bunvex/cli": "workspace:*",
+        "@bunvex/core": "workspace:*",
+        "@bunvex/file-storage": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
+      },
     },
     "packages/ui": {
       "name": "@bunvex/ui",
@@ -1616,6 +1635,8 @@
     "bunvex-example-search": ["bunvex-example-search@workspace:examples/search"],
 
     "bunvex-example-system-tables": ["bunvex-example-system-tables@workspace:examples/system-tables"],
+
+    "bunvex-example-testing": ["bunvex-example-testing@workspace:examples/testing"],
 
     "bunvex-example-tutorial": ["bunvex-example-tutorial@workspace:examples/tutorial"],
 

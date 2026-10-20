@@ -151,6 +151,9 @@ test("a scheduled action waits for a permit as long as it takes (no timeout)", a
   const held = t.call("action", "m:slowAction", { g: "a" });
   await t.running("action");
   await t.call("mutation", "m:later");
+  // The scheduler runs on the virtual clock (STUDY-159 PR 1), which stands still: the job is due at the mutation's
+  // time, the instant after the last commit, once the clock gets there.
+  await t.rt.advance(1);
   await t.queued("action"); // the scheduled run waits for the permit
   await t.rt.advance(150); // well past the 40 ms timeout
   expect(t.limits.action.outstanding.queued).toBe(1);
