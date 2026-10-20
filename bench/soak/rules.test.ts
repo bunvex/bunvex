@@ -1,7 +1,21 @@
 // The soak's rules (STUDY-174 §2.4) on made-up runs: a flat run passes; each degradation the soak is for fails its
 // rule, and only that one; noise (a GC dip, one slow window) does not.
 import { describe, expect, test } from "bun:test";
-import { growthRule, judge, median, percentile, type RunData, type Sample, theilSen } from "./rules.ts";
+import {
+  exitCode,
+  growthRule,
+  judge,
+  median,
+  parseReportOnly,
+  percentile,
+  R8_MIN_P99_CALLS,
+  RULE_IDS,
+  type RunData,
+  ruleId,
+  type Sample,
+  theilSen,
+  withReportOnly,
+} from "./rules.ts";
 
 const MB = 2 ** 20;
 
@@ -142,6 +156,23 @@ describe("the rules", () => {
     expect(failing(runOf((t) => ({ latency: { q: { p50: 2 + t / 300, p99: 10 + t / 30, n: 100 } } })))).toEqual(["R8"]);
   });
 
+  test("R8 judges the p99 only on windows of at least R8_MIN_P99_CALLS calls (Q7)", () => {
+    expect(R8_MIN_P99_CALLS).toBe(100);
+    // A p99 that doubles while the p50 stays flat: a failure with full windows...
+    const p99Up = (n: number) => runOf((t) => ({ latency: { q: { p50: 2, p99: 10 + t / 30, n } } }));
+    expect(failing(p99Up(R8_MIN_P99_CALLS))).toEqual(["R8"]);
+    // ...and not judged with windows of 30 calls (the soak's `schedule`), where a "p99" is the slowest call.
+    expect(failing(p99Up(30))).toEqual([]);
+    expect(judge(p99Up(30)).find((x) => x.rule.startsWith("R8"))?.detail).toContain("p99 not judged");
+    // Below the threshold the p50 is still judged.
+    expect(failing(runOf((t) => ({ latency: { q: { p50: 2 + t / 60, p99: 10, n: 30 } } })))).toEqual(["R8"]);
+    // Mixed windows: the p99 is judged on the full ones alone.
+    const mixed = runOf((t, i) => ({
+      latency: { q: i % 2 ? { p50: 2, p99: 10 + t / 30, n: 30 } : { p50: 2, p99: 10, n: R8_MIN_P99_CALLS } },
+    }));
+    expect(failing(mixed)).toEqual([]);
+  });
+
   test("a lost job and a job run twice fail R9a; a growing lag fails R9b", () => {
     const base = runOf();
     const lost = runOf(() => ({}), { jobs: base.jobs.slice(1) });
@@ -166,5 +197,36 @@ describe("the rules", () => {
     const rising = Array.from({ length: 30 }, (_, i) => sample(i * 60, { rssBytes: 200 * MB + i * 2 * MB }));
     expect(growthRule("x", rising, (s) => s.rssBytes, MB, 0, String).pass).toBe(false);
     expect(growthRule("x", rising, (s) => s.rssBytes, MB, 100 * MB, String).pass).toBe(true);
+  });
+});
+
+describe("report-only rules (--report-only, the nightly's R1 until Q6)", () => {
+  const leak = runOf((t) => ({ rssBytes: 200 * MB + (t / 60) * MB }));
+
+  test("a report-only rule that fails is still reported, but does not fail the run", () => {
+    const v = withReportOnly(judge(leak), parseReportOnly("R1"));
+    const r1 = v.find((x) => ruleId(x) === "R1")!;
+    expect(r1.pass).toBe(false);
+    expect(r1.reportOnly).toBe(true);
+    expect(exitCode(v)).toBe(0);
+    expect(exitCode(withReportOnly(judge(leak), parseReportOnly("")))).toBe(1);
+  });
+
+  test("every other rule still fails the run, R10, R11 and R12 included", () => {
+    const only = parseReportOnly("R1");
+    expect(exitCode(withReportOnly(judge(runOf(() => ({}), { idleCpu: 0.26 })), only))).toBe(1);
+    expect(exitCode(withReportOnly(judge(runOf(() => ({ eventLoopLagSeconds: 0.5 }))), only))).toBe(1);
+    expect(exitCode(withReportOnly(judge(runOf(() => ({}), { unexpectedErrors: 1 })), only))).toBe(1);
+    expect(
+      exitCode(withReportOnly(judge(runOf(() => ({}), { canary: { misses: 88, writes: 5, calls: 1 } })), only)),
+    ).toBe(1);
+    expect(exitCode(withReportOnly(judge(runOf()), only))).toBe(0);
+  });
+
+  test("an unknown id throws; the ids are every rule's", () => {
+    expect(() => parseReportOnly("R1,R13")).toThrow(/unknown rule "R13"/);
+    expect(() => parseReportOnly("r1")).toThrow();
+    const ids = new Set(judge(runOf()).map(ruleId));
+    expect([...ids].sort()).toEqual([...RULE_IDS].sort());
   });
 });
