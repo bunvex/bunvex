@@ -43,6 +43,7 @@ import {
   stringifyValue,
   TooManyWritesError,
   type Tx,
+  timerDelay,
   wallClock,
 } from "@bunvex/core";
 import {
@@ -280,8 +281,6 @@ export function schedulerOptionsFromEnv(env: KnobEnv = process.env): Required<Sc
   };
 }
 
-const MAX_TIMER_MS = 2 ** 31 - 1;
-
 /** Convex's backoff: `initial · 2^(n-1)`, capped, with full jitter. */
 const backoff = (failures: number, initialMs: number, maxMs: number) =>
   Math.random() * Math.min(maxMs, initialMs * 2 ** Math.max(0, failures - 1));
@@ -319,6 +318,8 @@ export class ScheduledJobExecutor {
   private pokes = 0;
   private loop: Promise<void> | null = null;
   private gcTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Aborted by `stop()`: cuts short the retry backoffs of running jobs. */
+  private readonly stopping = new AbortController();
   private readonly o: Required<SchedulerOptions>;
   /** For tests and benchmarks. */
   readonly stats = { started: 0, succeeded: 0, failed: 0, systemErrors: 0, occRetries: 0 };
@@ -389,10 +390,26 @@ export class ScheduledJobExecutor {
 
   async stop() {
     this.stopped = true;
+    this.stopping.abort();
     this.poke();
     if (this.gcTimer) clearTimeout(this.gcTimer);
     await this.loop;
     await Promise.allSettled(this.running.values());
+  }
+
+  /** A sleep of `ms` that `stop()` cuts short. */
+  private pause(ms: number): Promise<void> {
+    const signal = this.stopping.signal;
+    if (signal.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(t);
+        signal.removeEventListener("abort", done);
+        resolve();
+      };
+      const t = setTimeout(done, ms);
+      signal.addEventListener("abort", done);
+    });
   }
 
   private poke() {
@@ -487,7 +504,8 @@ export class ScheduledJobExecutor {
       await new Promise<void>((resolve) => {
         this.wake = resolve;
         if (nextAt !== null) {
-          const t = setTimeout(() => this.poke(), Math.max(0, nextAt - wallClock()));
+          // Capped (STUDY-174 F2): a job months away wakes the loop every 24.8 days, which looks again.
+          const t = setTimeout(() => this.poke(), timerDelay(nextAt - wallClock()));
           const prev = resolve;
           this.wake = () => {
             clearTimeout(t);
@@ -652,9 +670,14 @@ export class ScheduledJobExecutor {
       } catch (e) {
         // A lost conflict, or the write throughput limit (STUDY-78): the job stays pending and runs again
         // later, as long as it takes (Convex retries both without limit).
+        // Unless the executor is stopping (STUDY-174 F5): it gives up the attempt, as Convex's shutdown aborts the
+        // executor's task (crates/application/src/scheduled_jobs/mod.rs `ScheduledJobRunner::shutdown`). Nothing of
+        // the attempt committed, so the job is still pending, and the next start runs it, as after a crash.
         if (e instanceof OccError || e instanceof TooManyWritesError) {
           this.stats.occRetries++;
-          await Bun.sleep(backoff(++occFailures, this.o.occInitialBackoffMs, this.o.occMaxBackoffMs));
+          if (this.stopped) return;
+          await this.pause(backoff(++occFailures, this.o.occInitialBackoffMs, this.o.occMaxBackoffMs));
+          if (this.stopped) return;
           continue;
         }
         if (isSystemFailure(e)) throw e;
@@ -690,6 +713,9 @@ export class ScheduledJobExecutor {
       state = { kind: "failed", error: describeUncaught(e).message };
     }
     // Recorded until it sticks; a job canceled meanwhile stays canceled (`completeJob` is a no-op then).
+    // A stopping executor (STUDY-174 F5) makes one last attempt without waiting, then gives up: the job stays in
+    // progress, and the next start fails it as an action cut short, exactly as after a crash here. The action never
+    // runs twice, and its result is recorded at most once (a failed commit records nothing).
     for (let n = 1; ; n++) {
       try {
         await this.engine.mutation(
@@ -698,8 +724,8 @@ export class ScheduledJobExecutor {
         );
         break;
       } catch (e) {
-        if (e instanceof CommitterStoppedError) return;
-        await Bun.sleep(backoff(n, this.o.errorInitialBackoffMs, this.o.errorMaxBackoffMs));
+        if (e instanceof CommitterStoppedError || this.stopped) return;
+        await this.pause(backoff(n, this.o.errorInitialBackoffMs, this.o.errorMaxBackoffMs));
       }
     }
     if (state.kind === "success") this.stats.succeeded++;
@@ -745,7 +771,7 @@ export class ScheduledJobExecutor {
         next = backoff(failures, this.o.gcInitialBackoffMs, this.o.gcMaxBackoffMs);
       }
       // A timer longer than 2^31 - 1 ms fires at once: a far wait is taken in steps.
-      this.scheduleGc(Math.min(next, MAX_TIMER_MS), failures);
+      this.scheduleGc(timerDelay(next), failures);
     }, delayMs);
   }
 }

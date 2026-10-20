@@ -21,6 +21,7 @@ import {
   readBackendState,
   SCHEDULED_BY_NEXT_TS,
   SCHEDULED_JOBS_TABLE,
+  timerDelay,
 } from "@bunvex/core";
 
 /** Where a commit's invalidations go: its source as the metric names it, the table, the count. */
@@ -171,7 +172,7 @@ export class ExecutorInvalidations {
     q.timer = null;
     q.boundary = next ? { key: indexKey(def, next as never), atMs: Number(next.nextTs / 1_000_000n) } : null;
     if (q.boundary && !this.stopped) {
-      const wait = Math.min(2 ** 31 - 1, Math.max(0, q.boundary.atMs - this.now() + 1));
+      const wait = timerDelay(q.boundary.atMs - this.now() + 1);
       q.timer = setTimeout(() => this.refresh(q), wait);
       (q.timer as { unref?: () => void }).unref?.();
     }

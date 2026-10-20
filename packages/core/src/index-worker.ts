@@ -102,6 +102,8 @@ export class IndexWorker {
   private readonly limiter: RateLimiter | null;
   private stopped = false;
   private running: Promise<void> | null = null;
+  /** Ends the failure backoff in progress, if any: `stop()` does not wait it out (STUDY-174 S4). */
+  private wakeBackoff: (() => void) | null = null;
   /** For tests and measurements. */
   readonly stats = { chunks: 0, docsIndexed: 0, checkpoints: 0, failures: 0 };
 
@@ -137,6 +139,7 @@ export class IndexWorker {
   /** Stop after the chunk in flight; resolves once the worker has stopped writing. */
   async stop() {
     this.stopped = true;
+    this.wakeBackoff?.();
     await this.running;
   }
 
@@ -172,9 +175,17 @@ export class IndexWorker {
         this.stats.failures++;
         this.onError(e);
         const { initialBackoffMs, maxBackoffMs } = this.opts;
-        await new Promise((r) =>
-          setTimeout(r, Math.min(initialBackoffMs * 2 ** failures, maxBackoffMs) * Math.random()),
-        );
+        await new Promise<void>((resolve) => {
+          const t = setTimeout(
+            () => this.wakeBackoff?.(),
+            Math.min(initialBackoffMs * 2 ** failures, maxBackoffMs) * Math.random(),
+          );
+          this.wakeBackoff = () => {
+            clearTimeout(t);
+            this.wakeBackoff = null;
+            resolve();
+          };
+        });
         failures++;
       }
     }

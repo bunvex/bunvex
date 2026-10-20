@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunvexClient } from "@bunvex/client";
+import { timerDelay } from "@bunvex/core";
 import { expectedFailure, History, type Op } from "./history.ts";
 import { checkBank, checkLog, checkSet } from "./invariants.ts";
 import { checkRegisters, type LinearizabilityResult } from "./linearizability.ts";
@@ -238,7 +239,7 @@ async function within<T>(by: number, p: Promise<T>, server: ServerProcess, what 
   const late = new Promise<never>((_, reject) => {
     timer = setTimeout(
       () => reject(new Error(`${what} had no answer in time (the server ${server.alive ? "runs" : "has exited"})`)),
-      Math.max(0, by - performance.now()),
+      timerDelay(by - performance.now()),
     );
   });
   try {
