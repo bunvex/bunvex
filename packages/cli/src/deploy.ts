@@ -547,6 +547,66 @@ async function evaluateSchema(
   }
 }
 
+/** A project bundled for a push: its configuration, functions and components, as `bunvex deploy` sends them. */
+export type BundledProject = {
+  project: ProjectConfig;
+  dir: string;
+  found: Components;
+  bundled: Awaited<ReturnType<typeof bundleFunctions>>;
+  components: BundledComponents;
+};
+
+/**
+ * Bundle the project at `cwd` (its `bunvex.json`, functions directory and components) as `bunvex deploy` does;
+ * `beforeBundle` runs once the components are found (deploy's codegen). `@bunvex/testing` pushes the same
+ * bundle into a test's engine (STUDY-159).
+ */
+export async function bundleProject(
+  cwd: string,
+  opts: { liveComponentSources?: boolean; beforeBundle?: (dir: string, found: Components) => void } = {},
+): Promise<BundledProject> {
+  const project = readProjectConfig(cwd);
+  const dir = functionsDir(cwd);
+  // The components' graph first: their modules import their own `_generated/` too (STUDY-156).
+  const found = await findComponents(dir, { liveComponentSources: opts.liveComponentSources });
+  opts.beforeBundle?.(dir, found);
+  const bundled = await bundleFunctions(dir, cwd, {
+    includeSourcesContent: project.bundler?.includeSourcesContent ?? false,
+    externalPackages: project.node?.externalPackages ?? [],
+  });
+  const components = await bundleComponents(found, cwd, {
+    includeSourcesContent: project.bundler?.includeSourcesContent ?? false,
+  });
+  return { project, dir, found, bundled, components };
+}
+
+/** `start_push`'s request for a bundled project; the deployed modules unchanged by hash, as `partitionModules` splits. */
+export function pushRequest(
+  { project, bundled, components }: BundledProject,
+  changedModules: ModuleConfig[],
+  unchangedModuleHashes: { path: string; environment: string; sha256: string }[],
+  dryRun = false,
+) {
+  return {
+    dryRun,
+    // As Convex's: the directory as configured, and `node.nodeVersion` when set (the deployment checks it).
+    functions: project.functions ?? "bunvex/",
+    appDefinition: {
+      definition: components.app.definition,
+      dependencies: components.app.dependencies,
+      schema: bundled.schema,
+      changedModules,
+      unchangedModuleHashes,
+      udfServerVersion: VERSION,
+    },
+    // Each component's every module, none by hash, as Convex's CLI sends them.
+    componentDefinitions: components.components.map((c) => ({ ...c, udfServerVersion: VERSION })),
+    // The packages the deployment installs for the "use node" modules (STUDY-148).
+    nodeDependencies: bundled.nodeDependencies,
+    ...(project.node?.nodeVersion === undefined ? {} : { nodeVersion: project.node.nodeVersion }),
+  };
+}
+
 export async function deploy(target: Target, flags: DeployOptions, io: Io): Promise<DeployResult> {
   const seen: { watch?: string[] } = {};
   const r = await deployOnce(target, flags, io, seen);
@@ -569,22 +629,17 @@ async function deployOnce(
   let codegen: CodegenConfig;
   let project: ProjectConfig;
   try {
-    project = readProjectConfig(io.cwd);
-    dir = functionsDir(io.cwd);
     codegen = codegenConfig(io.cwd);
     // Convex's initial codegen: what modules importing `_generated/` need to bundle.
-    if (flags.codegen && existsSync(dir)) runCodegen(dir, codegen, { initial: true });
-    // The components' graph first: their modules import their own `_generated/` too (STUDY-156).
-    found = await findComponents(dir, { liveComponentSources: flags.liveComponentSources });
-    seen.watch = found.directories.filter((d) => d.local).map((d) => d.dir);
-    if (flags.codegen) componentCodegen(found, codegen, null);
-    bundled = await bundleFunctions(dir, io.cwd, {
-      includeSourcesContent: project.bundler?.includeSourcesContent ?? false,
-      externalPackages: project.node?.externalPackages ?? [],
-    });
-    components = await bundleComponents(found, io.cwd, {
-      includeSourcesContent: project.bundler?.includeSourcesContent ?? false,
-    });
+    const initial = functionsDir(io.cwd);
+    if (flags.codegen && existsSync(initial)) runCodegen(initial, codegen, { initial: true });
+    ({ project, dir, found, bundled, components } = await bundleProject(io.cwd, {
+      liveComponentSources: flags.liveComponentSources,
+      beforeBundle: (_, f) => {
+        seen.watch = f.directories.filter((d) => d.local).map((d) => d.dir);
+        if (flags.codegen) componentCodegen(f, codegen, null);
+      },
+    }));
   } catch (e) {
     io.err(`bunvex deploy: ${e instanceof BundleError ? e.message : (e as Error).message}`);
     return { code: 1 };
@@ -621,24 +676,12 @@ async function deployOnce(
       environment: string;
     }[];
     const { changedModules, unchangedModuleHashes } = partitionModules(bundled.modules, hashes);
-    const request = {
-      dryRun: flags.dryRun,
-      // As Convex's: the directory as configured, and `node.nodeVersion` when set (the deployment checks it).
-      functions: project.functions ?? "bunvex/",
-      appDefinition: {
-        definition: components.app.definition,
-        dependencies: components.app.dependencies,
-        schema: bundled.schema,
-        changedModules,
-        unchangedModuleHashes,
-        udfServerVersion: VERSION,
-      },
-      // Each component's every module, none by hash, as Convex's CLI sends them.
-      componentDefinitions: components.components.map((c) => ({ ...c, udfServerVersion: VERSION })),
-      // The packages the deployment installs for the "use node" modules (STUDY-148).
-      nodeDependencies: bundled.nodeDependencies,
-      ...(project.node?.nodeVersion === undefined ? {} : { nodeVersion: project.node.nodeVersion }),
-    };
+    const request = pushRequest(
+      { project, dir, found, bundled, components },
+      changedModules,
+      unchangedModuleHashes,
+      flags.dryRun,
+    );
     // Convex's checks before the push, on one `evaluate_schema` (skipped against a deployment without it).
     const deletion = flags.largeIndexDeletionCheck ?? "no verification";
     const backfill = flags.largeIndexBackfillCheck ?? "no verification";

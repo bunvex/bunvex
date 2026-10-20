@@ -1,5 +1,5 @@
 // The soak app's tables (STUDY-174 §2): a chat with search, a hot counter, a config row read by the cache canary,
-// scheduled jobs that record when they ran, and uploaded files.
+// scheduled jobs that record when they ran, uploaded files, and the page cache's ballast (./ballast.ts).
 import { defineSchema, defineTable } from "bunvex/server";
 import { v } from "bunvex/values";
 
@@ -14,4 +14,5 @@ export default defineSchema({
     ["seq"],
   ),
   files: defineTable({ storageId: v.id("_storage") }),
+  ballast: defineTable({ body: v.string() }),
 });

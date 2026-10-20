@@ -16,6 +16,7 @@ import {
   vmExecutor,
 } from "@bunvex/server/executor";
 import { evaluatedValue, NOT_A_SCHEMA, SandboxProcess } from "../src/index.ts";
+import { describeRoom } from "../src/version.ts";
 
 type Options = { seed: number[]; timestamp: number; env: Record<string, string>; importTimeoutMs?: number };
 type Entry =
@@ -79,7 +80,7 @@ const inProcessView = (v: CodeVersion) => ({
       },
     ]),
   ),
-  rooms: new Map([...v.rooms].map(([k, r]) => [k, r.kind])),
+  rooms: new Map([...v.rooms].map(([k, r]) => [k, describeRoom(r)])),
 });
 
 /** A schema as the push checks it: its export and the checks run on it (push.ts `checkIndexReferences`). */
