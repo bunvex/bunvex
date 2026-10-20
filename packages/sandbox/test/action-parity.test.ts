@@ -175,11 +175,24 @@ import { action, query, mutation, createFunctionHandle, getServiceToken, log, ro
 import { anyApi as api } from ${SERVER};
 import { v, BunvexError } from ${VALUES};
 const acases = ${ACTION_CASES};
+// What an action leaves when it answers (STUDY-77 §7): module state the later calls read.
+const late = { fired: 0, ticks: 0, kept: null, msgs: [] };
+Object.assign(acases, {
+  endTimer: async (ctx) => { setTimeout(async () => { late.fired++; try { await ctx.runMutation("cases:ins", { k: 100 }); } catch (e) { late.msgs.push(e.message); } }, 40); return 1; },
+  endInterval: async () => { setInterval(() => { late.ticks++; }, 10); await new Promise((r) => setTimeout(r, 45)); return late.ticks > 0; },
+  endFiresWhileRunning: async () => { let n = 0; await new Promise((r) => { const t = setInterval(() => { if (++n === 3) { clearInterval(t); r(); } }, 5); }); return n; },
+  endKeep: async (ctx) => { late.kept = ctx; return 1; },
+  endUseKept: async () => { const out = []; for (const call of [() => late.kept.runQuery("cases:q", { n: 1 }), () => late.kept.runMutation("cases:ins", { k: 101 }), () => late.kept.scheduler.runAfter(0, "cases:ins", { k: 102 }), () => late.kept.auth.getUserIdentity(), () => late.kept.meta.getFunctionMetadata(), () => late.kept.storage.generateUploadUrl()]) try { await call(); out.push("ran"); } catch (e) { out.push(e.message); } return out; },
+  endContinuation: async (ctx, T) => { ctx.runQuery("cases:q", { n: 2 }).then(() => ctx.runMutation("cases:ins", { k: 103 })).catch((e) => late.msgs.push(e.message)); ctx.runQuery("cases:q", { n: 3 }).then(() => fetch(T + "/text")).then(() => late.msgs.push("fetched"), (e) => late.msgs.push(e.message)); ctx.runQuery("cases:q", { n: 4 }).then(() => setTimeout(() => { late.fired += 10; }, 5)); return 1; },
+  endInFlight: async (ctx) => { ctx.runMutation("cases:ins", { k: 104 }); return 1; },
+  endReport: async (ctx) => { const ks = (await ctx.runQuery("cases:items", {})).filter((k) => k >= 100).sort(); return { fired: late.fired, ticks: late.ticks, msgs: [...late.msgs].sort(), ks }; },
+});
 export const a = action({ args: { c: v.string(), a: v.optional(v.any()) }, handler: (ctx, { c, a }) => acases[c](ctx, a) });
 export const q = query({ args: { n: v.number() }, handler: async (ctx, { n }) => n * 2 });
 export const ins = mutation({ args: { k: v.number() }, handler: async (ctx, { k }) => ctx.db.insert("items", { k }) });
 export const boom = query(async () => { throw new Error("callee failed"); });
 export const boomData = mutation(async () => { throw new BunvexError({ why: "data", n: 1n }); });
+export const items = query(async (ctx) => (await ctx.db.query("items").collect()).map((d) => d.k));
 export const logs = query(async () => { console.log("in the callee"); return 1; });
 export const strict = action({ args: { n: v.number() }, returns: v.string(), handler: async (ctx, { n }) => (n > 0 ? "ok" : n) });
 export const lobby = room({ presence: v.any(), events: { ping: { n: v.number() } } });
@@ -416,5 +429,34 @@ describe("a room's gate decides as under vm", () => {
       });
     expect(view(proc)).toEqual(view(vm));
     expect(view(vm).length).toBe(3);
+  });
+});
+
+// What an action leaves when it answers (STUDY-77 §7, owner 2026-10-21): under both executors as Convex, its timers
+// cleared, its ctx and fetch refusing afterwards, what was in flight finished.
+describe("an action ends with its answer, as under vm", () => {
+  test("its timers, its kept ctx, its continuations, what was in flight", async () => {
+    const play = async (d: typeof vm) => {
+      const call = async (c: string) => normalized(await d.call("cases:a", { c, a: T }));
+      const answers = [];
+      for (const c of ["endFiresWhileRunning", "endTimer", "endInterval", "endKeep", "endContinuation", "endInFlight"])
+        answers.push(await call(c));
+      const ticks = (await call("endReport")).value as { ticks: number };
+      await Bun.sleep(200);
+      answers.push(await call("endUseKept"));
+      const report = (await call("endReport")).value as { ticks: number };
+      return { answers, report, intervalStopped: report.ticks === ticks.ticks };
+    };
+    const [x, y] = await Promise.all([play(vm), play(proc)]);
+    const ended = "the action has ended: its operations can no longer run";
+    for (const r of [x, y]) {
+      expect(r.answers[0]).toEqual({ value: 3, logLines: [] });
+      expect(r.answers.at(-1)).toEqual({ value: Array(6).fill(ended), logLines: [] });
+      expect(r.intervalStopped).toBe(true);
+    }
+    const { ticks: _a, ...rx } = x.report as Record<string, unknown>;
+    const { ticks: _b, ...ry } = y.report as Record<string, unknown>;
+    expect(ry).toEqual(rx);
+    expect(rx).toEqual({ fired: 0, msgs: [ended, ended], ks: [104] });
   });
 });

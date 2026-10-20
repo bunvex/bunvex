@@ -1088,16 +1088,19 @@ STUDY-168 §10.3: "the cut-off, then a kill of the process if it ignores it".
   (`for (;;) {}`, or `for (;;) await null`, which never lets the socket be read): it is killed. Its other calls fail
   as a system error (one child per version, §8.2), and the next call gets a new child. Under `vm` such an action
   blocks the server's event loop for good.
-- **What it does not stop**: an action that heard the cut-off (its loop yields: a timer, a `fetch` it did not await)
-  keeps its child, and its JavaScript keeps running there, cut off from everything but its own module state: owner
-  decision Q-PR5-1 (§12.11): kept until PR 9.
-- **After its answer** an action's leftover JavaScript (a timer it set) still runs in the child, but every `ctx`
-  call and `fetch` it makes is refused ("the action has ended …"), where under `vm` it still reaches the database:
-  owner decision Q-PR5-2 (§12.11): accepted, and `vm` made to match in a PR of its own.
+- **What it does not stop**: an action that heard the cut-off keeps its child. The timers its code set are cleared then
+  (`trackedActionTimers`, the engine's own tracking, #782), but JavaScript already running or queued (a loop that
+  yields on `await`, a `fetch` it did not await settling) goes on there, cut off from everything but its own module
+  state: owner decision Q-PR5-1 (§12.11), kept until PR 9.
+- **After its answer** the child ends the call as Convex ends its isolate and as `vm` ends an action (STUDY-77 §7,
+  #782): the timers its code left are cleared, and any `ctx` call or `fetch` made afterwards (an operation's
+  continuation, a `ctx` kept in module state and called by a later action) is refused with `ACTION_ENDED_MESSAGE`, "the
+  action has ended: its operations can no longer run"; an operation in flight finishes. Owner decision Q-PR5-2
+  (§12.11).
 
 ### 12.7 Parity
 
-**`action-parity.test.ts`** (137 tests): the same module deployed to a `vm` server and a `process` server, the client's
+**`action-parity.test.ts`** (138 tests, with "an action ends with its answer" under both executors): the same module deployed to a `vm` server and a `process` server, the client's
 whole answer compared (the value or the error's whole message, frames included, its data, and the log lines). 129
 action cases: the nested calls (their values, their errors caught and uncaught, awaited or returned, with data, a
 missing function, arguments that are not values or not an object, a validator's refusal, a `_system/` path, an action
@@ -1146,7 +1149,9 @@ cases fail were also run with those cases left out: their V8 action cases all pa
 - In the child: an `ArrayBuffer` body told by `instanceof` (the app's is its context's); a response's reads not
   failing as the host's (`asActionResponse`); `blob()` untyped; `ctx.meta` left unawaited missing from the warning;
   an unawaited `store` sent after the action's answer (the child was killed).
-- In `vm`: nothing new. One difference between the executors, kept as Convex's: §12.6's last point (Q-PR5-2, decided: `vm` is made to match Convex in its own PR).
+- In `vm`: one difference between the executors, §12.6's last point: `vm` let an action's leftover timers run and reach
+  the database. Decided (Q-PR5-2): both executors now end an action as Convex does (#782 for `vm`; here for the child,
+  with the parity case "an action ends with its answer").
 
 ### 12.9 Measurements
 
@@ -1213,6 +1218,8 @@ frames are messages or chunks), `analysis-parity.test.ts` (a version's room defi
 | A response's body not streamed | 26 (every case that reads a body) |
 | An abort of the app's signal not sent | 2: `fetchAbortWaiting`, `fetchAbortBody` |
 | A stored file read back without its type | 1: `storeSmall` |
+| The child's timers not cleared at the action's end (§12.6) | 1: "an action ends with its answer" |
+| The child's ended call refusing with other words than `vm`'s | 1: the same |
 
 Each was applied to the file, the three test files run (166 tests), the file restored from a saved copy and compared
 byte for byte before the next (a `scratchpad` script). One break first caught nothing, and the test it called for was

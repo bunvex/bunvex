@@ -19,6 +19,7 @@
 //   more for the call (its lines, its `done`). A child that is too busy to say it in time is killed by the host.
 import { checkEnvVarName, setFetchSender, setFetchSignal } from "@bunvex/core";
 import {
+  ACTION_ENDED_MESSAGE,
   appContext,
   asActionResponse,
   type CodeVersion,
@@ -27,6 +28,7 @@ import {
   type LogLine,
   SpecBlob,
   setServiceCallContext,
+  trackedActionTimers,
   vectorSearchFilter,
   withAllEnv,
 } from "@bunvex/server/executor";
@@ -163,7 +165,7 @@ class ChildActionCall extends ChildCallBase {
 
   protected override before() {
     if (this.cut !== null) throw this.cut;
-    if (this.done) throw new Error("the action has ended: its operations can no longer run");
+    if (this.done) throw new Error(ACTION_ENDED_MESSAGE);
   }
 
   protected override sendOp(op: number, name: string, args: unknown[]) {
@@ -190,6 +192,7 @@ class ChildActionCall extends ChildCallBase {
     const error = errorFromWire(w);
     this.cut = error;
     this.lines.length = 0;
+    this.endTimers();
     this.send({ t: "cancelled", id: this.id });
     this.cutOff.abort(error);
     for (const [op, waiting] of [...this.waiting]) {
@@ -203,9 +206,13 @@ class ChildActionCall extends ChildCallBase {
     return [...this.waiting.keys()];
   }
 
-  /** The handler settled (or the call could not start): nothing more is sent for it. */
+  /** Clears the timers its code set (none before it ran). */
+  private endTimers: () => void = () => {};
+
+  /** The handler settled (or the call could not start): nothing more is sent for it, and its timers are cleared. */
   ended() {
     this.done = true;
+    this.endTimers();
   }
 
   private ctx() {
@@ -259,16 +266,21 @@ class ChildActionCall extends ChildCallBase {
       while (this.preparing.size) await Promise.all([...this.preparing]);
     };
     try {
-      const value = await running.run(this, () =>
-        captureLines(
-          (line) => this.logLine(line),
-          () =>
-            inHandleScope(
-              { db: null, create: (ref: unknown) => this.op("createFunctionHandle", [ref]) } as never,
-              body,
-            ),
+      // Its code's timers are the action's: cleared when it ends (STUDY-77 §7), as the engine clears a `vm` action's.
+      const run = trackedActionTimers(() =>
+        running.run(this, () =>
+          captureLines(
+            (line) => this.logLine(line),
+            () =>
+              inHandleScope(
+                { db: null, create: (ref: unknown) => this.op("createFunctionHandle", [ref]) } as never,
+                body,
+              ),
+          ),
         ),
       );
+      this.endTimers = run.end;
+      const value = await run.value;
       await sent();
       message = {
         t: "done",
