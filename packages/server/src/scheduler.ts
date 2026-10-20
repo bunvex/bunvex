@@ -52,6 +52,7 @@ import {
   type OptionalRestArgs,
 } from "@bunvex/protocol";
 import {
+  checkJsonValue,
   type GenericId,
   hasCommitTs,
   isSimpleObject,
@@ -104,6 +105,19 @@ function unixTimestampDebug(secs: number): string {
   return `UnixTimestamp(${whole}${frac}s)`;
 }
 
+/**
+ * A `Date` of this realm or another, by its internal slot (`getTime` throws for anything else): Convex's `instanceof
+ * Date`, within the app's one realm. A pushed function's `Date` is its context's (STUDY-35, STUDY-18 §9).
+ */
+function isDate(v: unknown): v is Date {
+  try {
+    Date.prototype.getTime.call(v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function parseScheduleArgs(args: unknown): Record<string, Value> {
   if (args === undefined) return {};
   if (!isSimpleObject(args))
@@ -131,6 +145,14 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
       : target.engine.mutation((db) => inNamespace(db, namespace, () => f(db)), "_system/scheduler");
 
   const schedule = async (tsMs: number, fn: SchedulableFunction, args: Record<string, Value>) => {
+    // Convex's `convexToJson(functionArgs)` runs in the app's code, before the syscall: what is not a value fails
+    // first, with the arguments object's paths (`.v`, not the stored `[args]`'s `[0].v`). Deeper than the stack,
+    // the nesting check below answers (DV-363).
+    try {
+      checkJsonValue(args);
+    } catch (e) {
+      if (!(e instanceof RangeError)) throw e;
+    }
     // Convex's `schedule` text (scheduler_impl.ts): an action's request id, the function's address, the time
     // in seconds, then the arguments; serde reads it before anything is checked (STUDY-135).
     refuseLoneSurrogates(args, () =>
@@ -195,7 +217,7 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
     },
     async runAt(timestamp: number | Date, fn: SchedulableFunction, args?: Record<string, unknown>) {
       let ms: number;
-      if (timestamp instanceof Date) ms = timestamp.valueOf();
+      if (isDate(timestamp)) ms = timestamp.valueOf();
       else if (typeof timestamp === "number") ms = timestamp;
       else throw new Error("The invoke time must a Date or a timestamp");
       return schedule(ms, fn, parseScheduleArgs(args));

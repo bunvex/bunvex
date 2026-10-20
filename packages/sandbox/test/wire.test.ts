@@ -12,6 +12,7 @@ import {
   type Value,
 } from "@bunvex/values";
 import { BadMessageError, decode, encode, parseChildMessage } from "../src/index.ts";
+import { MAX_WIRE_ENTRIES } from "../src/wire.ts";
 
 /** What the host gets of `x`: the child's encoding, sent as JSON, checked. */
 const across = (x: unknown) => decode(JSON.parse(JSON.stringify(encode(x))), true);
@@ -95,11 +96,71 @@ describe("what is not a value fails the engine's checks with the same words", ()
     ["a typed array", "new Uint8Array(2)"],
     ["an object without a prototype's constructor", "Object.create({})"],
     ["inside an object", "({ v: [1, new Set()] })"],
+    // a Set's or Map's entries print (STUDY-18 §9): every size, nested, subclasses, cycles
+    ["an empty Set", "new Set()"],
+    ["a Set of many", 'new Set([1, "two", null, [3], { four: 4n }, undefined, NaN, new ArrayBuffer(1)])'],
+    ["an empty Map", "new Map()"],
+    ["a Map of many", 'new Map([["a", 1], [2, [true]], [null, { b: "c" }]])'],
+    ["a Set of Sets and Maps", "new Set([new Set([1]), new Map([[1, 2]])])"],
+    ["a subclass of Set holding one of Map", "new (class Tags extends Set {})([new (class Index extends Map {})()])"],
+    [
+      "a Set and a Map holding themselves",
+      "(() => { const s = new Set([1]); s.add(s); const m = new Map(); m.set(m, [m]); s.add(m); return s; })()",
+    ],
+    ["a Set past the entries carried", "new Set(Array.from({ length: 20000 }, (_, i) => i))"],
+    ["a Set in an array in an object", '({ x: 1, m: [0, new Map([["k", new Set(["s"])]])] })'],
+    ["a subclass of Date", "new (class Day extends Date {})(0)"],
+    ["an object with the ArrayBuffer tag", '({ [Symbol.toStringTag]: "ArrayBuffer", a: 1 })'],
   ] as const)
     test(name, () => {
       const x = theirs(code);
       expect(copyError(across(x))).toBe(copyError(x));
       expect(stringifyValueForError(across({ v: x }))).toBe(stringifyValueForError({ v: x }));
+    });
+});
+
+describe("a Set, a Map or a Date: the host's own, with the app's entries, time and class name", () => {
+  const realm = vm.createContext({});
+  test("the host gets a real one, its entries in order, cycles kept", () => {
+    const s = across(vm.runInContext("(() => { const s = new Set([1, 'a']); s.add(s); return s; })()", realm));
+    expect(s instanceof Set).toBe(true);
+    expect([...(s as Set<unknown>)].slice(0, 2)).toEqual([1, "a"]);
+    expect([...(s as Set<unknown>)][2]).toBe(s);
+    const m = across(vm.runInContext("new Map([[{ a: 1 }, [2n]]])", realm)) as Map<unknown, unknown>;
+    expect(m instanceof Map && [...m]).toEqual([[{ a: 1 }, [2n]]]);
+    const self = across(vm.runInContext("(() => { const m = new Map(); m.set(m, [m]); return m; })()", realm)) as Map<
+      unknown,
+      unknown
+    >;
+    const [[key, value]] = [...self] as [[unknown, unknown[]]];
+    expect([key === self, value[0] === self]).toEqual([true, true]);
+    const d = across(vm.runInContext("new Date(5)", realm));
+    expect(d instanceof Date && (d as Date).getTime()).toBe(5);
+    expect(Number.isNaN((across(vm.runInContext("new Date(NaN)", realm)) as Date).getTime())).toBe(true);
+  });
+
+  test("a subclass keeps its class name, and its kind's methods", () => {
+    const t = across(vm.runInContext("new (class Tags extends Set {})([1])", realm)) as Set<unknown>;
+    expect([t.constructor.name, t.has(1), t.size]).toEqual(["Tags", true, 1]);
+    const d = across(vm.runInContext("new (class Day extends Date {})(7)", realm)) as Date;
+    expect([d.constructor.name, d.valueOf()]).toEqual(["Day", 7]);
+  });
+
+  test("at most MAX_WIRE_ENTRIES entries cross", () => {
+    const big = encode(new Set(Array.from({ length: MAX_WIRE_ENTRIES + 5 }, (_, i) => i))) as { $x: { e: unknown[] } };
+    expect(big.$x.e.length).toBe(MAX_WIRE_ENTRIES);
+  });
+
+  for (const [name, wire] of [
+    ["entries that are not a list", { $x: { k: "set", c: "Set", e: 1 } }],
+    ["too many entries", { $x: { k: "set", c: "Set", e: new Array(MAX_WIRE_ENTRIES + 1).fill(1) } }],
+    ["a Map entry that is not a pair", { $x: { k: "map", c: "Map", e: [[1]] } }],
+    ["a Set without its class name", { $x: { k: "set", e: [] } }],
+    ["a Date without its time", { $x: { k: "date", c: "Date" } }],
+    ["a Date whose time is not a number", { $x: { k: "date", c: "Date", t: "5" } }],
+  ] as const)
+    test(`refused: ${name}`, () => {
+      expect(() => decode(wire, true)).toThrow(BadMessageError);
     });
 });
 
