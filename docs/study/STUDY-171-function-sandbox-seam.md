@@ -1,6 +1,6 @@
-# STUDY-171 — The function executor seam and its knobs (STUDY-168 PR 1), the wire and the child runtime (PR 2), queries and mutations over the bridge (PR 3), two `vm` bugs (§10), logs and errors (PR 4), actions (PR 5)
+# STUDY-171 — The function executor seam and its knobs (STUDY-168 PR 1), the wire and the child runtime (PR 2), queries and mutations over the bridge (PR 3), two `vm` bugs (§10), logs and errors (PR 4), actions (PR 5), unhandled rejections (PR 4b)
 
-- **Status:** PR 1 implemented (#738); PR 2 (§7) implemented (#743); PR 3 (§8) implemented (#750); §9 (#751) and §10 (#759) fixed; PR 4 (§11) implemented (#760); PR 5 (§12) implemented (this PR; the owner's decisions of 2026-10-21 in §12.11); AD-44 accepted
+- **Status:** PR 1 implemented (#738); PR 2 (§7) implemented (#743); PR 3 (§8) implemented (#750); §9 (#751) and §10 (#759) fixed; PR 4 (§11) implemented (#760); PR 5 (§12) implemented (#773; the owner's decisions of 2026-10-21 in §12.11); PR 4b (§13) implemented (this PR); AD-44 accepted
   (owner, 2026-10-19)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend, the reference commit
   ([upstream.md](../parity/upstream.md))
@@ -762,7 +762,7 @@ the default. The two `vm` bugs its parity test found are fixed on their own (§1
 - **An unhandled rejection** fails the function once the microtask queue has drained
   (`execution_scope.rs:90-110`, `request_scope.rs:504-540`). bunvex's `vm` does not: Bun prints it to the server's
   stderr and the call goes on (its result unchanged). `process` keeps `vm`'s behaviour for now (§11.6); DV-528
-  records `vm`'s for good, and a later sandbox PR makes `process` fail the function (§11.9).
+  records `vm`'s for good, and PR 4b makes `process` fail the function (§13).
 
 ### 11.2 Logs
 
@@ -877,7 +877,7 @@ this branch:
 | What | Under `process` | Its PR |
 |---|---|---|
 | Actions' lines (streamed as they come, `onLine`), `"use node"`'s `util.inspect` rendering | actions do not run yet | 5, 10 |
-| An unhandled rejection in a query or mutation | as `vm`: printed to the server's stderr (the child's), the call goes on; an unawaited operation's failure reaches the child after the call ends, as it reaches `vm`'s promise (the call's answers are awaited before the child forgets it) | Convex fails the function (§11.1). `vm`: DV-528, kept. `process`: fails the function in STUDY-168 §12.3's PR 4b (owner, 2026-10-20) |
+| An unhandled rejection in a query or mutation | as `vm`: printed to the server's stderr (the child's), the call goes on; an unawaited operation's failure reaches the child after the call ends, as it reaches `vm`'s promise (the call's answers are awaited before the child forgets it) | Convex fails the function (§11.1). `vm`: DV-528, kept. `process`: fails the function since PR 4b (§13) |
 | Import-time `console.log` | printed to the server's stdout, as under `vm` (no function's lines) | — |
 
 ### 11.7 Measurements
@@ -948,7 +948,8 @@ compared with the one before the break after each (`scratchpad` script).
   - **`process`: fails the function**, as Convex, in a later sandbox PR (STUDY-168 §12.3, PR 4b): the child runs
     one call at a time, sees the rejection in that call's context and can fail it with Convex's message. Until then
     `process` keeps `vm`'s behaviour, which `bridge-parity.test.ts` pins ("a rejection nothing handles leaves the
-    call as under vm"); that PR turns those three cases into the failure.
+    call as under vm"); that PR turns those three cases into the failure. **Built in §13**; the child runs several
+    calls at once, so it attributes by checkpoint rather than by the one call running.
 - Actions (PR 5): their lines stream as they come (`onLine`), so the child must send them as they come too, not with
   the next message; the per-call cap does not apply to them.
 
@@ -1242,3 +1243,139 @@ No DV or AD number: both are recorded here.
   "the action has ended: its operations can no longer run", its lines dropped). **`vm` is made to match Convex in a
   PR of its own**: when an action ends, the timers it created are cleared, and a `ctx` call or `fetch` made after its
   end is refused with the same words. No DV for either.
+
+## 13. PR 4b: an unhandled rejection fails the function under `process`
+
+STUDY-168 §12.3's PR 4b (owner, 2026-10-20): under `BUNVEX_FUNCTION_SANDBOX=process`, a promise a query, mutation or
+action leaves rejected with no handler fails it, as on Convex. Under `vm` it stays printed, and the call goes on
+(DV-528: `vm` cannot tell which call made it). **The default does not change.** HTTP actions and `"use node"` actions
+are out of scope (PRs 6 and 10).
+
+### 13.1 How Convex does it (read at `72ce13c`)
+
+- **The isolate records each rejection with no handler.** Its `promise_reject_callback` (`crates/isolate/src/
+  request_scope.rs:504-540`) adds the promise and its value to `PendingUnhandledPromiseRejections` on
+  `PromiseRejectWithNoHandler`, and removes it on `PromiseHandlerAddedAfterReject`. The comment on that type
+  (`execution_scope.rs:75-117`) gives the rule: a rejection is "necessary but not sufficient"; the isolate waits until
+  the microtask queue has drained, and a promise still unhandled then fails the function, "as Node.js and the HTML
+  spec" do.
+- **It checks after every microtask checkpoint, not only at the end.** A query's or mutation's loop
+  (`environment/udf/mod.rs:1102-1127`) and an action's (`environment/action/mod.rs:1059-1088`) both run
+  `perform_microtask_checkpoint`, then take the first pending rejection, format it (`format_traceback`) and
+  `terminate_and_throw(ContextTerminationReason::UnhandledPromiseRejection(err))`. The check comes before the loop
+  looks at the function's own promise, so it holds while the function waits for a syscall, after it returned and
+  after it threw.
+- **A query or mutation runs every syscall to the end before it answers.** Its loop ends only when no syscall is
+  pending (`udf/mod.rs:1150`, "No syscalls or javascript to run, so we're done"; `:1250`, "queries and mutations should run all syscalls to completion"),
+  so an operation the function did not await, and that fails, fails the function. **Syscalls run in batches**
+  (`AsyncSyscallBatch`, `environment/udf/async_syscall.rs:262`): reads (`1.0/get`, `1.0/queryStreamNext`) together, up
+  to `MAX_SYSCALL_BATCH_SIZE` (16, `crates/common/src/knobs.rs:613`), `storageGetUrl`s together, any other one alone; a batch's results
+  are resolved in order, then the microtasks drain. An action's tasks answer one at a time
+  (`TaskResponse`, `action/mod.rs`), each followed by a checkpoint.
+- **The error is the value's.** `format_traceback` (`error.rs:32`) gives an `Error`'s `Uncaught <name>: <message>`
+  (`format_uncaught_error`, `helpers.rs:210`) and its source-mapped frames, as a thrown error; a value that is not an
+  `Error` gets V8's message: `Uncaught a plain string`, `Uncaught 42`, `Uncaught #<Object>`, `Uncaught undefined`, no
+  frames. **An application error loses its data**: Convex's runtime marks a `ConvexError` (`ConvexErrorSymbol`, its
+  `data` as JSON) only where the handler's throw leaves it (`serializeConvexErrorData`,
+  `npm-packages/convex/src/server/impl/registration_impl.ts:112`), so one rejected unhandled reaches
+  `extract_source_mapped_error` unmarked: `Uncaught ConvexError: {"code":1}`, with no `data`.
+- **The termination is the current function's alone.** `ContextTerminationReason` "applies to just the currently
+  running subfunction, and can be caught by the parent function" (`termination.rs:42-48`): a `ctx.runQuery` whose
+  callee failed so throws in the caller, which can catch it. Nothing more of the terminated function runs: a
+  mutation's writes are rolled back, an action's later calls never happen, and the syscalls an action had not taken
+  the answer of are its unawaited operations (the warning).
+
+What an app sees, from Convex's binary (`precompiled-2026-10-10-72ce13c`, `packages/differential`'s
+`rejections-app`): the same error as if the value were thrown, at the end of the checkpoint where it was left
+unhandled: queries, mutations and actions alike.
+
+### 13.2 How bunvex does it
+
+```
+ child: every frame that resumes a call's code            Bun
+ checkpoint(id):  drainMicrotasks()   (what ran before: no call's)
+                  current = id
+                  resume()            (a start, an answer, a chunk, an end; an action's timer callback)
+                  drainMicrotasks()  ──► unhandledRejection(reason)  ──► calls[current].unhandled(reason)
+                  current = null                                         done {thrown reason}, no more of its code
+                  calls[id].checkpointed()  ──► a settled call answers once nothing it started is pending
+```
+
+- **Attribution by checkpoint** (`packages/sandbox/src/rejections.ts`). Bun's `unhandledRejection` carries no async
+  context (the reason for DV-528), and a child runs several calls at once (one child per code version until PR 9's
+  pool). But `drainMicrotasks()` (`bun:jsc`) runs the queue to the end and reports what it left rejected with no
+  handler, synchronously, before it returns. So the child resumes a call's code only inside a checkpoint of that call
+  (`child.ts`'s frame loop: a call's or action's start, an answer, a stream's chunk or message by the call that owns
+  the stream; an action's timer callbacks through `setActionTimerCallback`): the queue is drained first (what Bun
+  itself resumed is not this call's), then the resumption runs, then the drain whose reports name the call. This is
+  Convex's checkpoint, made where the child resumes the app.
+- **A query's or mutation's answers reach its code in Convex's order** (`ChildCall.reply`). The host still runs each
+  operation as it comes; the child gives the answers to the app in the order the operations were started, a batch at a
+  time (`batchOf`: `db.get`, `db.system.get`, `db.query`, `db.next` are reads; `storage.getUrl` its own; every other
+  one alone; at most 16), and drains between batches. So `const p = ctx.db.get(bad); await ctx.db.query(t).first();
+  p.catch()` succeeds, as on Convex (one batch); with `ctx.runQuery` in place of `db.get` it fails, as there.
+- **A query's or mutation's `done` waits** for every operation it started to be answered and its code drained
+  (`settled`, `checkpointed`), so an unawaited operation that fails fails the call. Before this PR the child answered
+  at once and an unawaited failure came after the answer.
+- **An action answers at the end of the checkpoint it settled in**, so a rejection made in the same turn as its
+  `return` fails it. Its later timers are cleared at its end (§12.6): a rejection there never happens, as on Convex.
+- **Failing.** `unhandled(reason)` answers the call at once with the value as thrown (`rejected`: a `BunvexError`
+  made a plain error, its data dropped, as Convex's), and marks it terminated: its later operations are never sent and
+  never settle, the answers still in flight are dropped, so its code stops at its next operation. An action's `done`
+  lists the operations it had not taken the answer of (the unawaited-operations warning, as on Convex). The host needs
+  no change: it already runs a query's or mutation's in-flight operations to their end after `done` (a failed
+  mutation's writes are rolled back), and a nested call's failure is an error its caller can catch.
+- **Outside any checkpoint** (code Bun resumed itself) a rejection is the running call's when exactly one call is
+  running and no load is; otherwise it is printed to the server's stderr (`bunvex sandbox: an unhandled rejection no
+  call can be found for: …`), as before.
+
+### 13.3 Limits
+
+- **Code resumed by Bun, not by the child**, with several calls running in the same child: a native completion
+  (`crypto.subtle`, reading a `Blob` or a `Response` the app made itself, a `ReadableStream` with no host behind it).
+  A rejection that code leaves is printed, not failed, unless that call is the only one running. PR 9 (one call per
+  process) makes every rejection its process's call's (STUDY-168 §12.3). Owner question Q-PR4b-1 (§13.7).
+- **Code of another call resumed by this one's**: a promise kept in module state, awaited by two calls and settled by
+  one of them, resumes the other's continuation in the first one's checkpoint. Both calls share the version's
+  module state (DV-165), on Convex as here; only the attribution is the first call's.
+- **Batches are approximate where the operations differ**: bunvex's `db.query` with a terminal (`collect`, `first`,
+  `take`) is one operation where Convex's library makes a `queryStreamNext` per page. Both are reads, so a page and a
+  `db.get` share a batch on both; a `collect` of several pages is one answer here, several batches there.
+
+### 13.4 Parity
+
+**`packages/differential/test/unhandled-rejections.test.ts`** (59 cases and the writes left), the app of
+`rejections-app/`, against Convex's binary (`precompiled-2026-10-10-72ce13c`) with bunvex under `process`: 21 query
+cases, 24 mutation cases, 14 action cases (a rejection before and after an operation, handled in time, handled too
+late, in a helper, of every kind of value, an application error, an unawaited operation and nested call, reads in one
+batch and a nested call between, a nested call's failure caught, a throw after a handled rejection; a write then a
+rejection, an unawaited write; an action's rejection before a timer, in a timer, in a timer after its answer, one that
+stops it before a write, a nested mutation's rolled back). Compared: the status, the error's first line, its data, the
+value, the log lines, whether the error has the app's frames, and what the writes left. **All match.** What is
+rewritten: `ConvexError` / `BunvexError` (DV-03), the docs link of the unawaited-operations warning (DV-04); the frames'
+names and positions are not compared (DV-345, DV-346; the same as a thrown error's). Five cases are a known frame
+difference (STUDY-150 §6): an id that does not parse is refused at the app's call, so bunvex's error has the app's
+frame and Convex's none.
+
+**`packages/sandbox/test/rejection-parity.test.ts`** (66): `vm` (a server in a process of its own,
+`fixtures/vm-server.ts`, since `bun test` fails a test on a rejection in its own process) against `process`:
+
+- DV-528 stated: 21 cases (7 shapes × query, mutation, action) where `vm` answers 1 and its server's
+  `unhandledRejection` hears the value, while `process` answers what the same value **thrown** gives on `vm`, frames
+  included;
+- 37 cases on their own, each with Convex's outcome (above), and `vm`'s; a mutation's writes rolled back under
+  `process` and kept under `vm`; an action stopped before a write;
+- **attribution under concurrency**: 30 queries, 30 mutations, 30 actions failing in their own timers, 20 actions
+  failing once their `fetch`'s body is read (chunks of 300 000 bytes interleaved), and the three kinds at once, every
+  third call rejecting: each fails with its own value, the others answer their own; then the child still serves.
+
+`bridge-parity.test.ts`: its three "a rejection nothing handles leaves the call as under vm" cases (PR 4's) moved
+here, as failures; two cases stay (an unawaited operation handled later, one whose answer logs a line).
+
+### 13.5 Measurements
+
+See §13.6's table; measured on the test VPS.
+
+### 13.6 Tests and sabotage
+
+### 13.7 Open questions

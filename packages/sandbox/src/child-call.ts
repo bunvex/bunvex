@@ -58,7 +58,16 @@ import {
   type WireTable,
   type WireThrown,
 } from "./protocol.ts";
-import { checkpoint, checkpointOf, drain, type Rejectable, track, untrack } from "./rejections.ts";
+import {
+  checkpointOf,
+  checkSoon,
+  drain,
+  later,
+  REPORTS_AT_DRAIN,
+  type Rejectable,
+  track,
+  untrack,
+} from "./rejections.ts";
 import { decode, encode } from "./wire.ts";
 
 export type Send = (m: ToHost) => void;
@@ -201,8 +210,8 @@ export abstract class ChildCallBase implements Rejectable {
   /** The app left `reason` rejected with no handler once its microtasks drained (`rejections.ts`). */
   abstract unhandled(reason: unknown): void;
 
-  /** A checkpoint of this call ended (`rejections.ts`). */
-  abstract checkpointed(): void;
+  /** Every checkpoint of this call so far was checked (`rejections.ts`). */
+  abstract checked(): void;
 
   /** Before an operation: a query's or mutation's budget checked. */
   protected before() {}
@@ -384,11 +393,13 @@ class ChildCall extends ChildCallBase implements DbHost {
   private nextLink = 0;
   private reported = 0;
   private timer!: UserTimer;
-  /** The call's answer once its handler settled, sent when no operation of it waits (`checkpointed`). */
+  /** The call's answer once its handler settled, sent when no operation of it waits (`checked`). */
   private outcome: Outcome | null = null;
   /** Its operations in flight, in the order it started them; the batch whose answers it waits for. */
   private readonly fifo: InFlight[] = [];
   private batch: InFlight[] | null = null;
+  /** A next batch is waiting for this checkpoint to be checked (`later`). */
+  private releasing = false;
   private answeredHost = false;
   readonly snapshot: bigint;
 
@@ -407,7 +418,7 @@ class ChildCall extends ChildCallBase implements DbHost {
 
   /**
    * The handler settled: the answer waits for every operation it started to be answered, and for the microtasks those
-   * answers resume to drain, as Convex runs a query's or mutation's syscalls to the end before it answers
+   * answers resume to drain and be checked, as Convex runs a query's or mutation's syscalls to the end before it answers
    * (`environment/udf/mod.rs`, the loop ends when no syscall is pending): a rejection nothing handles there still
    * fails the call. Settled outside a checkpoint of its own (resumed by Bun, not by the host), it checks in a
    * checkpoint of its own next.
@@ -415,10 +426,10 @@ class ChildCall extends ChildCallBase implements DbHost {
   private settled(outcome: Outcome) {
     if (this.terminated) return;
     this.outcome = outcome;
-    if (checkpointOf() !== this.id) setImmediate(() => checkpoint(this.id, () => {}, false));
+    if (checkpointOf() !== this.id) checkSoon(this.id);
   }
 
-  checkpointed() {
+  checked() {
     if (this.outcome === null || this.answeredHost || this.waiting.size) return;
     this.answer(this.outcome);
   }
@@ -440,23 +451,43 @@ class ChildCall extends ChildCallBase implements DbHost {
     const entry = this.fifo.find((e) => e.op === m.op);
     if (!entry || entry.answer) return;
     entry.answer = m;
+    this.release();
+  }
+
+  /** The batch whose answers came, or null: formed from the operations waiting, as they stand now. */
+  private ready(): InFlight[] | null {
+    if (this.batch === null) {
+      const head = this.fifo[0];
+      if (!head) return null;
+      let n = 1;
+      if (head.batch !== null) while (n < this.fifo.length && n < MAX_BATCH && this.fifo[n]!.batch === head.batch) n++;
+      this.batch = this.fifo.slice(0, n);
+    }
+    return this.batch.some((e) => !e.answer) ? null : this.batch;
+  }
+
+  /** Gives the app the batches whose answers came, each drained and checked before the next. */
+  private release() {
+    if (this.releasing) return;
     for (;;) {
-      if (this.batch === null) {
-        const head = this.fifo[0];
-        if (!head) return;
-        let n = 1;
-        if (head.batch !== null)
-          while (n < this.fifo.length && n < MAX_BATCH && this.fifo[n]!.batch === head.batch) n++;
-        this.batch = this.fifo.slice(0, n);
-      }
-      if (this.batch.some((e) => !e.answer)) return;
-      const batch = this.batch;
+      const batch = this.ready();
+      if (batch === null || this.terminated) return;
       this.fifo.splice(0, batch.length);
       this.batch = null;
       for (const e of batch) super.reply(e.answer!);
+      if (!REPORTS_AT_DRAIN) {
+        // Bun reports this checkpoint's rejections at the end of the turn: the next batch, in a checkpoint after.
+        if (this.ready() !== null) {
+          this.releasing = true;
+          later(this.id, () => {
+            this.releasing = false;
+            this.release();
+          });
+        }
+        return;
+      }
       // What the batch's answers resume runs to the end, and what it leaves rejected is reported, before the next.
       drain();
-      if (this.terminated) return;
     }
   }
 

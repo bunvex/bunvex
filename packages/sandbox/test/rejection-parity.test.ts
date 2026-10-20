@@ -70,6 +70,7 @@ const ACTION = `{
   inTimer: async () => { setTimeout(() => { Promise.reject(new Error("in a timer")); }, 0); await sleep(50); return 1; },
   timerAfterAnswer: async () => { setTimeout(() => { Promise.reject(new Error("after the answer")); }, 0); return 1; },
   stopsTheAction: async (ctx, a) => { Promise.reject(new Error("stops it")); await sleep(20); await ctx.runMutation("cases:m", { c: "writes", a: { tag: a.tag } }); return 1; },
+  stopsBeforeOp: async (ctx, a) => { Promise.reject(new Error("stops it at once")); await ctx.runMutation("cases:m", { c: "writes", a: { tag: a.tag } }); return 1; },
   nestedMutationRolledBack: async (ctx, a) => { try { await ctx.runMutation("cases:m", { c: "writesThenRejects", a: { tag: a.tag } }); } catch {} return ctx.runQuery("cases:count", { tag: a.tag }); },
   afterBody: async (ctx, a) => { const r = await fetch(a.url); const text = await r.text(); if (a.fail) Promise.reject(new Error("b" + a.i)); return text.length === 300000 ? a.i : -1; },
   slow: async (ctx, a) => { if (a.fail) setTimeout(() => { Promise.reject(new Error("t" + a.i)); }, a.k); await sleep(a.k + 15); if (a.fail) await sleep(5); return a.i; },
@@ -261,6 +262,7 @@ const PROCESS: Record<string, (kind: Kind) => { header?: string; value?: unknown
   inTimer: () => ({ header: "Uncaught Error: in a timer" }),
   timerAfterAnswer: () => ({ value: 1 }),
   stopsTheAction: () => ({ header: "Uncaught Error: stops it" }),
+  stopsBeforeOp: () => ({ header: "Uncaught Error: stops it at once" }),
   nestedMutationRolledBack: () => ({ value: 0 }),
 };
 /** What `vm` answers where it is not the call's own result: a nested call's rejection is not caught there either. */
@@ -307,10 +309,17 @@ describe("each case on its own", () => {
   });
 
   test("an action stops where it failed: what it would have done after never runs", async () => {
-    const tag = `stops-${Math.random()}`;
-    await proc.run("action", "stopsTheAction", { a: { tag } });
-    await Bun.sleep(100);
-    expect((await proc.call("query", "cases:count", { tag })).value).toBe(0);
+    for (const c of ["stopsTheAction", "stopsBeforeOp"]) {
+      const tag = `stops-${c}-${Math.random()}`;
+      const o = await proc.run("action", c, { a: { tag } });
+      await Bun.sleep(100);
+      expect({ c, count: (await proc.call("query", "cases:count", { tag })).value }).toEqual({ c, count: 0 });
+      // The mutation it started in the same turn was never run: it is unawaited, as on Convex.
+      if (c === "stopsBeforeOp")
+        expect(o.logLines).toEqual([
+          "[WARN] 1 unawaited operation: [mutation]. Async operations should be awaited or they might not run.",
+        ]);
+    }
   });
 });
 

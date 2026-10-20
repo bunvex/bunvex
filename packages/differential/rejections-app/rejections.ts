@@ -209,6 +209,17 @@ const actionCases: Record<string, (ctx: Ctx, tag: string) => Promise<unknown>> =
     await ctx.runMutation(mRef, { c: "writes", tag: `${tag}-never` });
     return 1;
   },
+  // The mutation is started in the same turn as the rejection, before the checkpoint that finds it.
+  stopsBeforeOp: async (ctx, tag) => {
+    Promise.reject(new Error("stops it at once"));
+    await ctx.runMutation(mRef, { c: "writes", tag: `${tag}-never` });
+    return 1;
+  },
+  stopsBeforeFetch: async (ctx, tag) => {
+    Promise.reject(new Error("stops it before a fetch"));
+    await fetch(`${tag}`);
+    return 1;
+  },
   unawaitedNested: async (ctx) => {
     ctx.runQuery(qRef, { c: "throws" });
     await sleep(100);

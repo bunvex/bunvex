@@ -1,7 +1,8 @@
 // Unhandled rejections (STUDY-171 §13) on Convex's backend (the oracle) and on bunvex's under the `process` function
 // sandbox (`BUNVEX_FUNCTION_SANDBOX=process`): queries, mutations and actions of `rejections-app/` that leave a
 // promise rejected with no handler — before and after an operation, in a helper, in an operation they did not await,
-// in an action's timer, with values that are not errors and with application errors — and the cases where a handler
+// in an action's timer, with values that are not errors and with application errors, an action's operation started in
+// the same turn (never run) — and the cases where a handler
 // comes in time, the error caught by a caller, a mutation's writes rolled back, an action stopped. Convex fails the
 // function once the microtask queue has drained (`crates/isolate/src/environment/udf/mod.rs` and
 // `environment/action/mod.rs`, `UnhandledPromiseRejection`); under `vm` bunvex does not (DV-528), so this suite runs
@@ -22,14 +23,26 @@ const PROCESS = { BUNVEX_FUNCTION_SANDBOX: "process", BUNVEX_FUNCTION_SANDBOX_IS
 
 let convex: Backend;
 let bunvex: Backend;
+/** What an action's `fetch` would reach: it counts the requests (none, for an action failed before it ran). */
+let hits = 0;
+let target: ReturnType<typeof Bun.serve> | undefined;
 
 beforeAll(async () => {
   if (!ready) return;
+  target = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch: () => {
+      hits++;
+      return new Response("ok");
+    },
+  });
   [convex, bunvex] = await Promise.all([startConvex({ app: APP }), startBunvex({ app: APP, env: PROCESS })]);
 }, 300_000);
 
 afterAll(async () => {
   await Promise.all([convex?.stop(), bunvex?.stop()]);
+  target?.stop(true);
 });
 
 const SHARED = [
@@ -72,6 +85,8 @@ const RUNS: ["query" | "mutation" | "action", string, string][] = [
     "inTimer",
     "timerAfterAnswer",
     "stopsTheAction",
+    "stopsBeforeOp",
+    "stopsBeforeFetch",
     "unawaitedNested",
     "nestedQueryCaught",
     "nestedMutationRolledBack",
@@ -111,7 +126,16 @@ function seen(a: Answer) {
 describe.skipIf(!ready)("an unhandled rejection under process, against Convex's backend", () => {
   for (const [kind, path, c] of RUNS)
     test(`${kind} ${c}`, async () => {
-      const args = (b: Backend) => (kind === "query" ? { c } : { c, tag: `${kind}-${c}-${b === convex ? "c" : "b"}` });
+      const args = (b: Backend) =>
+        kind === "query"
+          ? { c }
+          : {
+              c,
+              tag:
+                c === "stopsBeforeFetch"
+                  ? `http://127.0.0.1:${target!.port}/`
+                  : `${kind}-${c}-${b === convex ? "c" : "b"}`,
+            };
       const [x, y] = await Promise.all([convex.call(kind, path, args(convex)), bunvex.call(kind, path, args(bunvex))]);
       const [cs, bs] = [seen(x.body as Answer), seen(y.body as Answer)];
       if (FRAMES_DIFFER.has(`${kind} ${c}`)) {
@@ -125,11 +149,19 @@ describe.skipIf(!ready)("an unhandled rejection under process, against Convex's 
       ((await b.call("query", "rejections:count", { tag })).body as Answer).value;
     // A write that succeeds counts: the action's would have, had it run on.
     for (const b of [convex, bunvex]) await b.call("mutation", "rejections:m", { c: "writes", tag: "control" });
-    for (const tag of ["mutation-writesThenRejects", "mutation-unawaitedWrite", "action-stopsTheAction", "control"])
+    for (const tag of [
+      "mutation-writesThenRejects",
+      "mutation-unawaitedWrite",
+      "action-stopsTheAction",
+      "action-stopsBeforeOp",
+      "control",
+    ])
       for (const b of [convex, bunvex]) {
         const t =
           tag === "control" ? tag : `${tag}-${b === convex ? "c" : "b"}${tag.startsWith("action") ? "-never" : ""}`;
         expect({ tag, count: await count(b, t) }).toEqual({ tag, count: tag === "control" ? 1 : 0 });
       }
+    // Neither backend's `stopsBeforeFetch` reached the target.
+    expect(hits).toBe(0);
   });
 });

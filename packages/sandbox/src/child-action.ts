@@ -36,7 +36,7 @@ import {
 import { isBytes } from "@bunvex/values";
 import { ChildCallBase, rebuiltError, running, type Send, thrownValue } from "./child-call.ts";
 import type { ToHost, WireActionCall, WireLogLine, WireReply, WireReport, WireThrown } from "./protocol.ts";
-import { checkpoint, checkpointOf, track, untrack } from "./rejections.ts";
+import { checkpoint, checkpointOf, checkSoon, track, untrack } from "./rejections.ts";
 import { Streams } from "./streams.ts";
 import { decode, encode } from "./wire.ts";
 
@@ -124,6 +124,13 @@ function errorFromWire(w: WireThrown): unknown {
   return new Error("the host failed a stream");
 }
 
+/** The method an operation of a namespace calls (`scheduler`, `storage`, `rooms`, `presence`, `meta`): its first argument. */
+function methodOf(name: string, args: unknown[]): string | null {
+  return ["scheduler", "storage", "rooms", "presence", "meta"].includes(name) && typeof args[0] === "string"
+    ? args[0]
+    : null;
+}
+
 /** The `RequestInit` fields the host's `fetch` reads besides the method, headers and body (Bun's own are dropped). */
 const INIT_FIELDS = [
   "redirect",
@@ -159,8 +166,15 @@ class ChildActionCall extends ChildCallBase {
   private cut: unknown = null;
   /** Set once the action ended (answered, cut off, or failed of a rejection): nothing more is sent for it. */
   private done = false;
-  /** Its answer once the handler settled, sent at the end of the checkpoint it settled in (`checkpointed`). */
+  /** Its answer once the handler settled, sent once the checkpoint it settled in was checked (`checked`). */
   private outcome: ToHost | null = null;
+  /**
+   * The operations it started in a checkpoint not checked yet, and the aborts of their requests: sent once it was
+   * (`checked`), never if a rejection there failed the action (Convex runs no syscall its checkpoint ended the action
+   * before).
+   */
+  private readonly held: { op: number; name: string; args: unknown[] }[] = [];
+  private readonly heldAborts: number[] = [];
   /** The streams it took or sent (`StreamOwners`), forgotten with it. */
   private readonly streamIds: { in: number[]; out: number[] } = { in: [], out: [] };
   private lastOp = 0;
@@ -209,13 +223,18 @@ class ChildActionCall extends ChildCallBase {
   private settled(message: ToHost) {
     if (this.cut !== null || this.done) return;
     this.outcome = message;
-    if (checkpointOf() !== this.id) setImmediate(() => checkpoint(this.id, () => {}, false));
+    if (checkpointOf() !== this.id) checkSoon(this.id);
   }
 
-  checkpointed() {
+  checked() {
+    if (this.cut !== null || this.done || this.terminated) return;
+    for (const h of this.held.splice(0)) super.sendOp(h.op, h.name, h.args);
+    for (const op of this.heldAborts.splice(0)) this.send({ t: "abort", id: this.id, op });
     const message = this.outcome;
-    if (message === null || this.cut !== null || this.done) return;
+    if (message === null) return;
     this.outcome = null;
+    // What it had not taken the answer of, now that everything it started was sent.
+    if (message.t === "done") message.pending = this.unanswered();
     this.send(message);
     this.ended();
   }
@@ -226,13 +245,17 @@ class ChildActionCall extends ChildCallBase {
     // answer of are its unawaited ones, and no more of its code runs.
     this.terminated = true;
     this.outcome = null;
+    const pending = this.unanswered();
+    const unsent = this.held.splice(0).map((h): [string, string | null] => [h.name, methodOf(h.name, h.args)]);
+    this.heldAborts.length = 0;
     this.send({
       t: "done",
       id: this.id,
       ok: false,
       error: this.rejected(reason),
       report: this.report(),
-      pending: this.unanswered(),
+      pending,
+      ...(unsent.length ? { unsent } : {}),
     });
     this.ended();
   }
@@ -256,9 +279,11 @@ class ChildActionCall extends ChildCallBase {
     if (this.done) throw new Error(ACTION_ENDED_MESSAGE);
   }
 
+  /** Held until its checkpoint was checked (`checked`); one started outside a checkpoint of its own, checked next. */
   protected override sendOp(op: number, name: string, args: unknown[]) {
     this.lastOp = op;
-    super.sendOp(op, name, args);
+    this.held.push({ op, name, args });
+    if (checkpointOf() !== this.id) checkSoon(this.id);
   }
 
   /** A console line, sent as it comes: with the call's next message, or on its own once this turn's code is done. */
@@ -280,6 +305,8 @@ class ChildActionCall extends ChildCallBase {
     const error = errorFromWire(w);
     this.cut = error;
     this.outcome = null;
+    this.held.length = 0;
+    this.heldAborts.length = 0;
     untrack(this.id);
     this.forget();
     this.lines.length = 0;
@@ -294,7 +321,8 @@ class ChildActionCall extends ChildCallBase {
 
   /** The operations the action left without their answer: the host counts them as unawaited, as Convex does. */
   private unanswered(): number[] {
-    return [...this.waiting.keys()];
+    const held = new Set(this.held.map((h) => h.op));
+    return [...this.waiting.keys()].filter((op) => !held.has(op));
   }
 
   /** Clears the timers its code set (none before it ran). */
@@ -475,7 +503,9 @@ class ChildActionCall extends ChildCallBase {
       },
     );
     const onAbort = () => {
-      if (this.cut === null && !this.done) this.send({ t: "abort", id: this.id, op });
+      if (this.cut !== null || this.done) return;
+      if (this.held.some((h) => h.op === op)) this.heldAborts.push(op);
+      else this.send({ t: "abort", id: this.id, op });
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     let d: WireResponse;
