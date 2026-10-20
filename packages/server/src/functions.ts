@@ -152,6 +152,7 @@ import {
   FunctionPathNotFoundError,
   isSystemError,
   newRequestId,
+  UndecodedArgs,
   ValidatorError,
 } from "./errors.ts";
 import {
@@ -964,7 +965,7 @@ export class Functions {
   }
 
   private cacheKey(name: string, args: unknown): string | undefined {
-    if (tooDeepToStringify(args)) return undefined;
+    if (args instanceof UndecodedArgs || tooDeepToStringify(args)) return undefined;
     try {
       const c = splitComponentFunctionName(name);
       const hash = c
@@ -1656,9 +1657,12 @@ export class Functions {
   /**
    * Arguments are an object, nested at most 63 levels, no larger than `maxArgsSize`, checked against `args`
    * when the function declares it (Convex's rules and order: `ValidatedPathAndArgs` in
-   * crates/udf/src/validation.rs). `measured`: `measureArgs(args)`, when the caller has it already.
+   * crates/udf/src/validation.rs). `measured`: `measureArgs(args)`, when the caller has it already. Arguments
+   * that did not decode fail here, once the function is resolved, as Convex's `parse_udf_args`.
    */
-  private checkArgs(f: FunctionDef, args: unknown, measured = measureArgs(args)): AnyArgs {
+  private checkArgs(f: FunctionDef, args: unknown, measured?: ReturnType<typeof measureArgs>): AnyArgs {
+    if (args instanceof UndecodedArgs) throw args.error;
+    measured ??= measureArgs(args);
     const a = args === undefined ? {} : args;
     // Arguments a client sent with a lone surrogate do not parse into Convex's values (STUDY-135; nested
     // and scheduled calls are refused before, where their text is sent).

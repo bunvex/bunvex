@@ -241,6 +241,8 @@ export type SyncDeps = {
   /** Arguments in JSON form → values. */
   /** A call's arguments from the wire (`path`: the function's, for Convex's "Invalid arguments for" error). */
   fromWire: (args: unknown, path: string) => unknown;
+  /** The same, for a run: arguments that do not decode fail once the function is resolved (`UndecodedArgs`). */
+  callArgs: (args: unknown, path: string) => unknown;
   /** Splaying of wide invalidations; defaults to `splayOptions()`. */
   splay?: SplayOptions;
   /** Backpressure: `SYNC_MAX_SEND_TRANSITION_COUNT` (the environment, else Convex's 2). */
@@ -815,7 +817,7 @@ export class SyncHub {
   private async executeOnce(q: SessionQuery, ts: bigint, caller: Caller): Promise<Execution> {
     this.stats.executions++;
     const generation = this.generation;
-    const { engine, functions, fromWire } = this.deps;
+    const { engine, functions, fromWire, callArgs } = this.deps;
     let args: unknown;
     try {
       args = fromWire(q.args, q.udfPath);
@@ -834,7 +836,7 @@ export class SyncHub {
         async () => {
           let body =
             q.component === undefined
-              ? functions.queryBody(q.udfPath, fromWire(q.args, q.udfPath), true, caller)
+              ? functions.queryBody(q.udfPath, callArgs(q.args, q.udfPath), true, caller)
               : null;
           if (q.component !== undefined) {
             const component = q.component;
@@ -844,7 +846,7 @@ export class SyncHub {
               if (!meta) throw componentNotFound(component);
               return functions.queryBody(
                 componentFunctionName(meta._id, q.udfPath),
-                fromWire(q.args, q.udfPath),
+                callArgs(q.args, q.udfPath),
                 true,
                 caller,
               )(db);
@@ -1713,7 +1715,7 @@ export class SyncSession {
       try {
         // A closed connection's queued mutations never start; the client resends what it got no answer for.
         if (this.closed) return;
-        const { functions, fromWire } = this.hub.deps;
+        const { functions, callArgs } = this.hub.deps;
         const requested = this.requestCaller(m.requestId);
         if (requested === null) return;
         const caller: SourcedCaller = { ...requested, mutationQueueLength: queued };
@@ -1747,10 +1749,10 @@ export class SyncSession {
         }, this.hub.mutationTimeoutMs);
         const r = await collectLogs(() =>
           session === null
-            ? functions.runMutationWithTs(path, fromWire(m.args, udfPath), true, caller, deadline)
+            ? functions.runMutationWithTs(path, callArgs(m.args, udfPath), true, caller, deadline)
             : functions.runSessionMutation(
                 path,
-                fromWire(m.args, udfPath),
+                callArgs(m.args, udfPath),
                 { sessionId: session, requestId: m.requestId },
                 caller,
                 deadline,
@@ -1812,7 +1814,7 @@ export class SyncSession {
     this.inflightActions++;
     void (async () => {
       try {
-        const { functions, fromWire } = this.hub.deps;
+        const { functions, callArgs } = this.hub.deps;
         const udfPath = canonicalizeUdfPath(m.udfPath);
         const id = component === null ? null : await this.componentIdOf(component);
         const r = await collectLogs(() =>
@@ -1820,7 +1822,7 @@ export class SyncSession {
             ? Promise.reject(componentNotFound(component))
             : functions.runAction(
                 id === null ? udfPath : componentFunctionName(id, udfPath),
-                fromWire(m.args, m.udfPath),
+                callArgs(m.args, m.udfPath),
                 caller,
               ),
         );
