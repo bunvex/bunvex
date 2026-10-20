@@ -20,6 +20,7 @@ import { join, posix } from "node:path";
 import vm from "node:vm";
 import { installDeterminismIn, knob, runImportPhase, secondsKnob } from "@bunvex/core";
 import type { v1 } from "@bunvex/protocol";
+import { trackActionTimer } from "./action-timeout.ts";
 import { appNamespace, installAppErrors } from "./app-errors.ts";
 import { exportedValidator, type ValidatorExport } from "./builders.ts";
 import { type CronSpec, Crons, cronSpecs } from "./cron.ts";
@@ -267,6 +268,15 @@ const REGEXP_STATICS = [
 ];
 
 /** The globals of a context, besides its own JS intrinsics: the web platform Convex's runtime offers. */
+/** `set` (`setTimeout`, `setInterval`), each timer it makes during an action handed to that action (`trackActionTimer`). */
+function actionTimer<F extends typeof setTimeout | typeof setInterval>(set: F): F {
+  return Object.assign((...args: Parameters<F>) => {
+    const t = (set as unknown as (...a: unknown[]) => unknown)(...args);
+    trackActionTimer(t);
+    return t;
+  }, set) as unknown as F;
+}
+
 export function contextGlobals(node: boolean, env: Record<string, string>, onMissingEnv?: (name: string) => void) {
   const g = globalThis as Record<string, unknown>;
   const web = [
@@ -309,6 +319,12 @@ export function contextGlobals(node: boolean, env: Record<string, string>, onMis
   out.File = SpecFile;
   // A Response's headers as Convex's runtime gives them (STUDY-31 §8); a "use node" action keeps the host's.
   if (!node) out.Response = SpecResponse;
+  // A V8 action's timers end with it, as Convex's sleeps do with its isolate (STUDY-77 §7): each one its code sets is
+  // its action's, cleared when the action ends.
+  if (!node) {
+    out.setTimeout = actionTimer(g.setTimeout as typeof setTimeout);
+    out.setInterval = actionTimer(g.setInterval as typeof setInterval);
+  }
   // The deployment's variables (STUDY-37): the execution's, else the load's.
   out.process = { env: isolateProcessEnv({ ...env }, onMissingEnv) };
   if (node) {
