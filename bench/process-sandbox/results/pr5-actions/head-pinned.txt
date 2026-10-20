@@ -1,0 +1,37 @@
+bunvex: the function sandbox 'process' runs queries, mutations and actions in a separate process, with no OS isolation (BUNVEX_FUNCTION_SANDBOX_ISOLATION=none): it is not a security boundary yet. HTTP actions, "use node" actions and components are not available under it yet
+{"line":"empty action","sandbox":"vm","calls":1000,"p50":78.72199999997065,"mean":197.01875800000232,"p99":3082.3369999999954}
+{"line":"action, 1 runQuery","sandbox":"vm","calls":1000,"p50":151.33400000001984,"mean":318.7681669999999,"p99":3247.4109999999428}
+{"line":"fetch GET, empty body","sandbox":"vm","calls":1000,"p50":750.1710000001367,"mean":978.5233680000024,"p99":3313.1530000000566}
+{"line":"10 x fetch GET, empty body","sandbox":"vm","calls":250,"p50":5780.88200000002,"mean":6136.886527999988,"p99":11200.724000000264}
+{"line":"fetch GET, 64 KiB","sandbox":"vm","calls":1000,"p50":810.4419999999664,"mean":927.7386169999957,"p99":2982.003999999506,"mibPerS":77.11841192830899}
+{"line":"fetch GET, 1 MiB","sandbox":"vm","calls":250,"p50":2136.0100000001694,"mean":2495.6689240000296,"p99":5799.721999999747,"mibPerS":468.16260223497113}
+{"line":"fetch POST, 1 MiB","sandbox":"vm","calls":250,"p50":2418.0089999999836,"mean":3151.0102559999827,"p99":16456.041999999798,"mibPerS":413.5633903761346}
+{"line":"storage.store, 1 KiB","sandbox":"vm","calls":1000,"p50":263.5370000007242,"mean":611.4012969999983,"p99":4422.254000000066,"mibPerS":3.7055992137624556}
+{"line":"storage.get, 1 KiB","sandbox":"vm","calls":1000,"p50":142.8539999997156,"mean":237.60435199999645,"p99":2358.8350000009086,"mibPerS":6.836087893947276}
+{"line":"store + get + delete, 1 MiB","sandbox":"vm","calls":250,"p50":1662.3270000000048,"mean":3144.352368000015,"p99":14125.366999998732,"mibPerS":1203.1327169684391}
+{"line":"store + get + delete, 16 MiB + 1","sandbox":"vm","calls":20,"p50":59919.79999999967,"mean":55621.88274999989,"p99":66467.66399999979,"mibPerS":534.0472082241398}
+{"line":"empty action","sandbox":"process","calls":1000,"p50":218.69599999990896,"mean":407.311381000017,"p99":2579.652000000351}
+{"line":"action, 1 runQuery","sandbox":"process","calls":1000,"p50":526.8950000008772,"mean":736.9404960000047,"p99":3583.3009999987553}
+{"line":"fetch GET, empty body","sandbox":"process","calls":1000,"p50":1079.5209999996587,"mean":1301.2556259999947,"p99":4121.784999999363}
+{"line":"10 x fetch GET, empty body","sandbox":"process","calls":250,"p50":8413.786000000982,"mean":9645.116695999743,"p99":22088.09900000051}
+{"line":"fetch GET, 64 KiB","sandbox":"process","calls":1000,"p50":1512.7429999993183,"mean":1752.119636999968,"p99":5290.208000002167,"mibPerS":41.315676225259786}
+{"line":"fetch GET, 1 MiB","sandbox":"process","calls":250,"p50":7122.999999999593,"mean":7509.231075999935,"p99":13728.595000000496,"mibPerS":140.39028499228658}
+{"line":"fetch POST, 1 MiB","sandbox":"process","calls":250,"p50":11767.119000000093,"mean":13079.474380000005,"p99":29330.5220000002,"mibPerS":84.98256880039983}
+{"line":"storage.store, 1 KiB","sandbox":"process","calls":1000,"p50":655.2580000025046,"mean":1161.0282090000092,"p99":6885.162999999011,"mibPerS":1.4903480766297663}
+{"line":"storage.get, 1 KiB","sandbox":"process","calls":1000,"p50":490.76399999830755,"mean":722.347455000017,"p99":3612.1619999976247,"mibPerS":1.989882102198547}
+{"line":"store + get + delete, 1 MiB","sandbox":"process","calls":250,"p50":13940.15099999524,"mean":15733.480803999755,"p99":38411.575999998604,"mibPerS":143.4704688636933}
+{"line":"store + get + delete, 16 MiB + 1","sandbox":"process","calls":20,"p50":192119.76999999752,"mean":192538.5539500003,"p99":239459.3240000031,"mibPerS":166.56277439510282}
+p50 / mean / p99 µs per action, after a warm-up; 1000 calls for the short lines
+| Action | vm | process | process − vm, p50 |
+|---|---|---|---|
+| empty action (1000) | 79 / 197 / 3082 | 219 / 407 / 2580 | 140 |
+| action, 1 runQuery (1000) | 151 / 319 / 3247 | 527 / 737 / 3583 | 376 |
+| fetch GET, empty body (1000) | 750 / 979 / 3313 | 1080 / 1301 / 4122 | 329 |
+| 10 x fetch GET, empty body (250) | 5781 / 6137 / 11201 | 8414 / 9645 / 22088 | 2633 |
+| fetch GET, 64 KiB (1000) | 810 / 928 / 2982 (77 MiB/s) | 1513 / 1752 / 5290 (41 MiB/s) | 702 |
+| fetch GET, 1 MiB (250) | 2136 / 2496 / 5800 (468 MiB/s) | 7123 / 7509 / 13729 (140 MiB/s) | 4987 |
+| fetch POST, 1 MiB (250) | 2418 / 3151 / 16456 (414 MiB/s) | 11767 / 13079 / 29331 (85 MiB/s) | 9349 |
+| storage.store, 1 KiB (1000) | 264 / 611 / 4422 (4 MiB/s) | 655 / 1161 / 6885 (1 MiB/s) | 392 |
+| storage.get, 1 KiB (1000) | 143 / 238 / 2359 (7 MiB/s) | 491 / 722 / 3612 (2 MiB/s) | 348 |
+| store + get + delete, 1 MiB (250) | 1662 / 3144 / 14125 (1203 MiB/s) | 13940 / 15733 / 38412 (143 MiB/s) | 12278 |
+| store + get + delete, 16 MiB + 1 (20) | 59920 / 55622 / 66468 (534 MiB/s) | 192120 / 192539 / 239459 (167 MiB/s) | 132200 |

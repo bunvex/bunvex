@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./schema": "./src/schema.ts",
+    "./search-filter": "./src/search-filter.ts",
     "./knobs": "./src/knobs.ts",
     "./persistence": "./src/persistence/index.ts",
     "./persistence/memory": "./src/persistence/memory.ts",

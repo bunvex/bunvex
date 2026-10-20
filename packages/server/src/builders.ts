@@ -2,7 +2,14 @@
 // make. Isomorphic, as Convex's `convex/server`: they import no runtime, so an app's shared modules, and the
 // `_generated/server` they come through, load in a browser and in Node (`./isomorphic.ts`); the runtime that
 // runs them is `./functions.ts`.
-import { type GenericValidator, type Infer, type ObjectType, type PropertyValidators, v } from "@bunvex/values";
+import {
+  asObjectValidator,
+  type GenericValidator,
+  type Infer,
+  type ObjectType,
+  type PropertyValidators,
+  v,
+} from "@bunvex/values";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./functions.ts";
 import type { ActionBuilder, MutationBuilder, QueryBuilder } from "./registration.ts";
 import { parseValidatorJson } from "./validator-json.ts";
@@ -42,9 +49,6 @@ export type FunctionDef =
       returns?: GenericValidator;
     };
 
-const asObjectValidator = (a: ArgsValidator): GenericValidator =>
-  (a as GenericValidator).isValidator ? (a as GenericValidator) : v.object(a as PropertyValidators);
-
 /** Every function a builder made: how a code version's analysis tells its functions from other exports. */
 const DEFINED = new WeakSet<object>();
 /** The functions of `"use node"` modules (their code version marks them): the log's `environment` (STUDY-47). */
@@ -64,6 +68,11 @@ export type SandboxCall = {
 };
 /** The stand-ins of a sandboxed code version's queries and mutations, and how each runs. */
 export const REMOTE_FUNCTIONS = new WeakMap<FunctionDef, RemoteRunner>();
+/**
+ * The stand-ins of a sandboxed code version's room gates (AD-42: `canJoin`, `canPublish`), and how each runs: as a
+ * query in the child (STUDY-171 §12), run by `runGate` as any gate.
+ */
+export const REMOTE_GATES = new WeakMap<object, RemoteRunner>();
 
 export const isFunctionDef = (x: unknown): x is FunctionDef =>
   (typeof x === "function" || (typeof x === "object" && x !== null)) && DEFINED.has(x as object);

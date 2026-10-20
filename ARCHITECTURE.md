@@ -158,7 +158,7 @@ bunvex/
 │   │   ├── mcp                      MCP server for AI tools: the official SDK, zod (STUDY-121) ✅
 │   │   └── network-test, docs, update, dashboard  as Convex's (STUDY-146, STUDY-149)    ✅
 │   │
-│   ├── testing/                     @bunvex/testing  the REAL engine in memory, to test functions M
+│   ├── testing/                     @bunvex/testing  the REAL engine in memory, to test functions (STUDY-159) M
 │   │
 │   ├── sandbox/                     @bunvex/sandbox (private for now)  the function sandbox (AD-44,
 │   │   │                            STUDY-168): app code in a separate process
@@ -244,7 +244,7 @@ values ◄── search ◄── core ◄── persistence      protocol ◄�
 auth ──► values            file-storage (no bunvex dependency)
 client ──► protocol, values                    react ──► client, values
 nextjs, react-query ──► react, client, values  react-clerk, react-auth0 ──► react
-cli ──► server, core, values, client, protocol testing ──► server, core, values
+cli ──► server, core, values, client, protocol testing ──► server, core, values, cli, file-storage
 sandbox ──► server, core, values, protocol (its child runs the server's loader; the server never imports it)
 bunvex ──► the packages it re-exports, plus core, persistence and sandbox for bin/local-backend
 examples/* ──► bunvex, react-query (a user's app, STUDY-90)

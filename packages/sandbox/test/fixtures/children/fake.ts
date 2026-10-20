@@ -15,5 +15,6 @@ export const hello = (protocol = PROTOCOL_VERSION) => send({ t: "hello", protoco
 export async function requests(on: (m: { t: string; id: number }) => unknown) {
   const reader = new FrameReader();
   for await (const chunk of Bun.file(3).stream())
-    for (const text of reader.push(chunk)) await on(JSON.parse(text) as { t: string; id: number });
+    for (const text of reader.push(chunk))
+      if (typeof text === "string") await on(JSON.parse(text) as { t: string; id: number });
 }

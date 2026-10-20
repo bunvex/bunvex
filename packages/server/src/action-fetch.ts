@@ -245,6 +245,34 @@ function answering(r: Response, request: Request): Answering {
   return out;
 }
 
+/**
+ * A response the function sandbox's child made from its host's (STUDY-171 §12) as an action's: its reads fail as
+ * Convex's (a body read twice, a body that breaks), and its `url`, `redirected` and `type` are the host's response's,
+ * which a `Response` made here cannot have. `request`: what its failures name (its URL, the signal that aborts it).
+ */
+export function asActionResponse(
+  r: Response,
+  request: { url: string; signal: AbortSignal },
+  from: { url: string; redirected: boolean; type: string },
+): Response {
+  const out = answering(r, request as Request);
+  if (from.redirected) out[REDIRECTED] = true;
+  Object.defineProperty(out, "url", { value: from.url, configurable: true });
+  Object.defineProperty(out, "type", { value: from.type, configurable: true });
+  // Bun types a fetched response's `blob()` by its `Content-Type`, as given, and a streamed `Response`'s not at all.
+  const arrayBuffer = (out as unknown as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer;
+  Object.defineProperty(out, "blob", {
+    value: async function blob(this: Response) {
+      const bytes = await arrayBuffer.call(this);
+      const type = this.headers.get("content-type");
+      return new Response(bytes, type === null ? {} : { headers: { "content-type": type } }).blob();
+    },
+    configurable: true,
+    writable: true,
+  });
+  return out;
+}
+
 /** The redirect statuses Convex follows. */
 const REDIRECTS = [301, 302, 303, 307, 308];
 

@@ -1,6 +1,6 @@
 # STUDY-77 — The action timeout
 
-- **Status:** implemented
+- **Status:** implemented; §7 (the end of an action, owner 2026-10-21) implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04; the tests removed from
   it, at bea52bde0 (Rust) and c358201e1 (TypeScript)
 - **Related:** [STUDY-41](STUDY-41-nested-calls-and-execution-limit.md) (the 1 s limit of queries and
@@ -160,3 +160,80 @@ Sabotage, each check broken in turn:
 ## 6. Open questions
 
 None.
+
+## 7. The end of an action (owner, 2026-10-21)
+
+Found by the function sandbox's parity work (STUDY-171 §12.6, §12.11): under `vm` a V8 action's leftover JavaScript
+went on after its answer. The owner decided to match Convex.
+
+### 7.1 How Convex does it (re-read at `72ce13c`)
+
+- The action's loop runs the isolate until its result is in (`crates/isolate/src/environment/action/mod.rs:1059-1225`:
+  task answers, stream chunks, the timeout), so a timer (a `Sleep` task, `task.rs`) that fires while it runs resolves
+  as any task does.
+- Then it ends: "drain all remaining async syscalls that are not sleeps" is closing the task channel and shutting the
+  task executor down (`mod.rs:1226-1233`, `pending_task_sender.close()`, `running_tasks.shutdown()`;
+  `SpawnHandle::shutdown` stops the spawned task "soon", `crates/common/src/runtime/mod.rs:103-106`). No JavaScript of
+  the action runs after it: a timer still pending never fires, an interval stops, an operation's continuation never
+  runs. A task already running may or may not finish (the unawaited-operations warning's "might not run").
+
+### 7.2 What an app observes
+
+- A timer that fires before the action answers works, `setInterval` too.
+- After the answer, nothing the action left writes, schedules, stores or fetches.
+
+### 7.3 How bunvex does it
+
+- **An action's life** (`action-timeout.ts`, `ActionLife`), shared by its run and its `ctx`, ends when its body
+  settles or its time is up (`withActionTimeout`'s `endsWithAnswer`, V8 actions only).
+- **Its timers**: each `setTimeout` and `setInterval` a pushed module's context makes during an action is handed to
+  that action (`contextGlobals`, `trackActionTimer`) and cleared when it ends; one made after the end (in an
+  operation's continuation) is cleared at once. Timers the server makes for itself are not the action's.
+- **Its `ctx`** refuses once it ended, whoever calls it (a `ctx` kept in module state and called by a later action
+  too): "the action has ended: its operations can no longer run" (`ACTION_ENDED_MESSAGE`), the function sandbox's
+  child's words, or the timeout's message if it timed out. A `fetch` made in its async context after the end is
+  refused with the same words.
+- **What was in flight goes on**: an operation started before the answer (an unawaited `runMutation`, a `fetch`)
+  runs to its end, as before (Convex may shut it down: unchanged, and the same under both executors).
+- **Not changed**: HTTP actions (their body may stream, calling `ctx`, after the handler returns: their end is the
+  body's, STUDY-168 PR 6) and `"use node"` actions (Convex's Node executor, not an isolate).
+- Under `process` the child's call refuses every operation after its `done` (STUDY-171 §12.6); its timers are cleared
+  through `trackedActionTimers`, the same tracking, once the sandbox's actions are on `main` (STUDY-171 §12.11).
+
+### 7.4 Tests and sabotage
+
+`packages/server/test/action-end.test.ts` (11): a timer and an interval that fire while it runs; a pending timer that
+never fires; an interval stopped at the answer and at the timeout; a kept `ctx` refusing seven kinds of call; an
+operation's continuation refused (the operation itself ran); a timer set after the end cleared; an operation in flight
+finishing; a `fetch` after the end refused; an HTTP action's body still calling `ctx` after its handler returned;
+`trackedActionTimers`. `packages/differential/test/action-end.test.ts` (4, against Convex's binary
+`precompiled-2026-10-10-72ce13c`, the app in `action-end-app/`): a timer that fires while the action runs, one left
+pending, an interval, a continuation; on `main` three of the four fail (bunvex wrote after the answer).
+
+| Break | Failing tests (server / oracle) |
+|---|---|
+| Timers not cleared at the end | 3 / 0 (the `ctx` refusal still keeps the writes out) |
+| A context's timers not handed to the action | 4 / 0 |
+| A timer set after the end not cleared | 1 / 0 |
+| The action never marked ended | 4 / 1 |
+| A kept `ctx` not refused | 1 / 0 |
+| An ended action's `fetch` not refused | 1 / 0 |
+| The refusal over the timeout's message | 2 (STUDY-77's own timeout tests) / 0 |
+
+### 7.5 Measurement
+
+The action hot path under `vm`, `main` against this change, on the test VPS (2 vCPUs, idle: no other process of any
+session), ABAB, 2000 sequential actions per line through `Functions.runAction` after 200 (the actions bench of the
+function sandbox, `packages/sandbox/bench/actions.ts`, run with `--vm`; a copy and the runner in
+`bench/results/action-end/`). p50 / mean / p99 µs:
+
+| Action | `main`, round 1 | this, round 1 | `main`, round 2 | this, round 2 |
+|---|---|---|---|---|
+| empty action | 62 / 114 / 1621 | 55 / 75 / 203 | 65 / 120 / 1571 | 60 / 87 / 470 |
+| action, 1 `runQuery` | 153 / 227 / 2249 | 120 / 175 / 1768 | 137 / 217 / 2063 | 139 / 176 / 1242 |
+| `fetch` GET, empty body | 1144 / 1512 / 4766 | 765 / 991 / 3058 | 1297 / 1669 / 5587 | 733 / 960 / 3198 |
+| `storage.store`, 1 KiB | 226 / 285 / 1519 | 231 / 271 / 1218 | 234 / 307 / 1943 | 231 / 286 / 1276 |
+| `storage.get`, 1 KiB | 135 / 150 / 358 | 141 / 169 / 1024 | 120 / 140 / 429 | 124 / 139 / 298 |
+
+No cost shows: the per-action state (a life, a set of timers) and the per-call check are below the noise; the `fetch`
+line's difference is the target's and the scheduler's (it moves by ±50 % between runs, STUDY-171 §12.9).

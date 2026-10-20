@@ -211,8 +211,10 @@ Still on the process's clock, by module, roughly in the order their tests would 
 - **The sync hub** (`server/src/sync.ts`): the client-clock skew, the splay of reruns (the WS heartbeat is
   on the runtime since PR 5).
   Convex's own heartbeat test (§1.2) is the model.
-- **The scheduler and crons** (`server/src/scheduler.ts`, `cron-executor.ts`): their tests poll with sleeps
-  for the job to run.
+- **The scheduler and crons** (`server/src/scheduler.ts`, `cron-executor.ts`): on the runtime since STUDY-159
+  PR 1, with the transactions' clock (a transaction's start and the committer's timestamps read `preciseNow` and
+  `nowNs`); `executors-virtual-time.test.ts` moves a job and a cron an hour without waiting. The older tests still
+  poll with sleeps.
 - **The index worker** (`core/src/index-worker.ts`): its rate limiter and checkpoint interval
   (`performance.now()`, `setTimeout`); the backfill tests pace it with real `chunkRate`s.
 - **Retention, table summary checkpoints, session cleanup, usage gauges, log sinks, imports and exports**:

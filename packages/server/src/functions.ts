@@ -14,6 +14,7 @@ import {
   type Engine,
   failExecution,
   formatBytes,
+  type GenericTableInfo,
   IndexesUnavailableError,
   isQueryObject,
   knob,
@@ -116,10 +117,13 @@ import {
   functionLimitsFromEnv,
 } from "./action-permits.ts";
 import {
+  type ActionLife,
   ActionTimeoutError,
   actionTimeoutError,
   checkActionAlive,
+  currentActionLife,
   cutOffWithAction,
+  endedError,
   NODE_ACTION_USER_TIMEOUT_MS,
   nodeActionTimeoutError,
   V8_ACTION_USER_TIMEOUT_MS,
@@ -141,6 +145,7 @@ import {
   type FunctionDef,
   NODE_FUNCTIONS,
   REMOTE_FUNCTIONS,
+  REMOTE_GATES,
   type ValidatorExport,
 } from "./builders.ts";
 import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
@@ -152,6 +157,7 @@ import {
   FunctionPathNotFoundError,
   isSystemError,
   newRequestId,
+  UndecodedArgs,
   ValidatorError,
 } from "./errors.ts";
 import {
@@ -414,10 +420,7 @@ function atCallSite(e: unknown, site: Error): unknown {
   return err;
 }
 
-/** `ctx.storage` (STUDY-32): what each context gets of `FileStorage`. */
-export type StorageReader = ReturnType<FileStorage["reader"]>;
-export type StorageWriter = ReturnType<FileStorage["writer"]>;
-export type StorageActionWriter = ReturnType<FileStorage["actionWriter"]>;
+export type { StorageActionWriter, StorageReader, StorageWriter } from "./storage-api.ts";
 
 /** `ctx.storage` without a configured file storage: every call says so. */
 const noStorage = new Proxy(
@@ -430,7 +433,9 @@ const noStorage = new Proxy(
 ) as never;
 
 /** `ctx.auth` (STUDY-27): the caller's identity, or null without a (valid) token. */
-export type Auth = { getUserIdentity(): Promise<UserIdentity | null> };
+export interface Auth {
+  getUserIdentity(): Promise<UserIdentity | null>;
+}
 /** The contexts of functions without a data model (`query`, `queryGeneric`, …): any table, any document. */
 // biome-ignore lint/suspicious/noExplicitAny: Convex's builders without a data model take `any`
 export type QueryCtx = GenericQueryCtx<any>;
@@ -667,6 +672,13 @@ function resentEgress(bytes: number) {
   if (r && r.environment === "isolate") r.io.networkEgressBytes += bytes;
 }
 
+/**
+ * The running action's operations still pending, by Convex's name for each (the unawaited-operations warning). The
+ * function sandbox's host reads it to keep counting an operation whose answer its child had not taken when the
+ * action returned (STUDY-171 §12). Null outside an action.
+ */
+export const currentPendingOps = (): Map<string, number> | null => meteredAction()?.pendingOps ?? null;
+
 /** Count an operation of `r` as pending until the returned function is called (Convex's dangling tasks). */
 function pendingOp(r: Running, name: string): () => void {
   r.pendingOps.set(name, (r.pendingOps.get(name) ?? 0) + 1);
@@ -704,6 +716,9 @@ const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
 function tracked<T>(name: string, fn: () => Promise<T>): Promise<T> {
   const r = meteredAction();
   if (!r) return fn();
+  // Nothing an action calls once it has ended starts (Convex's isolate ends with the action).
+  const life = currentActionLife();
+  if (life?.ended) return Promise.reject(endedError(life));
   const settle = pendingOp(r, name);
   const started = currentTurn();
   const handOver = async () => {
@@ -727,14 +742,26 @@ function tracked<T>(name: string, fn: () => Promise<T>): Promise<T> {
  * (its syscalls, `name_when_dangling`): the unawaited-operations warning lists those still pending when the
  * action returns (STUDY-76).
  */
+/** Each tracked `ctx`'s action life, once it is given one (`endsWith`). */
+const LIVES = new WeakMap<object, { life?: ActionLife }>();
+/** `ctx` (made by `trackedCtx`) refuses once `life` ended (STUDY-77 §7). */
+const endsWith = (ctx: ActionCtx, life: ActionLife) => {
+  LIVES.get(ctx)!.life = life;
+};
+
 function trackedCtx(ctx: ActionCtx): ActionCtx {
+  const holder: { life?: ActionLife } = {};
   // biome-ignore lint/suspicious/noExplicitAny: wraps methods of every signature
   const wrap = <F extends (...a: any[]) => any>(name: string, fn: F | undefined): F =>
-    (fn === undefined ? fn : (...a: Parameters<F>) => tracked(name, async () => fn(...a))) as F;
+    (fn === undefined
+      ? fn
+      : (...a: Parameters<F>) =>
+          // A `ctx` called after its action ended refuses, whoever calls it (Convex's ends with its isolate).
+          holder.life?.ended ? Promise.reject(endedError(holder.life)) : tracked(name, async () => fn(...a))) as F;
   const c = ctx as unknown as Record<string, any>;
   const s = c.scheduler;
   const st = c.storage;
-  return {
+  const out = {
     ...c,
     auth: { ...c.auth, getUserIdentity: wrap("getUserIdentity", c.auth.getUserIdentity) },
     runQuery: wrap("query", c.runQuery),
@@ -772,6 +799,8 @@ function trackedCtx(ctx: ActionCtx): ActionCtx {
       },
     }),
   } as unknown as ActionCtx;
+  LIVES.set(out, holder);
+  return out;
 }
 
 // `createFunctionHandle` and `log.audit` in an action, pending as `ctx`'s calls are (STUDY-143).
@@ -886,6 +915,25 @@ const VECTOR_FILTER_BUILDER = {
   },
 };
 
+/**
+ * Convex's JS-side checks of `ctx.vectorSearch` (vector_search_impl.ts), in its order, and the filter's expression
+ * (the app's filter function run on the builder), before the engine's checks (STUDY-51). The function sandbox's
+ * child runs them at the app's call, and sends the expression (STUDY-171 §12).
+ */
+export function vectorSearchFilter(
+  tableName: unknown,
+  indexName: unknown,
+  query: VectorSearchQuery<GenericTableInfo, string>,
+): unknown {
+  const args = [tableName, indexName, query];
+  const argNames = ["tableName", "indexName", "query"];
+  for (let i = 0; i < 3; i++)
+    if (args[i] === undefined) throw new TypeError(`Must provide arg ${i + 1} \`${argNames[i]}\` to \`vectorSearch\``);
+  if (!Array.isArray(query.vector) || query.vector.length === 0)
+    throw new Error("`vector` must be a non-empty Array in vectorSearch");
+  return query.filter ? query.filter(VECTOR_FILTER_BUILDER as never) : undefined;
+}
+
 /** An error a system function throws from its own code, without the app's frames (`systemArgs`). */
 function systemArgsError(message: string): Error {
   const e = new Error(message);
@@ -964,7 +1012,7 @@ export class Functions {
   }
 
   private cacheKey(name: string, args: unknown): string | undefined {
-    if (tooDeepToStringify(args)) return undefined;
+    if (args instanceof UndecodedArgs || tooDeepToStringify(args)) return undefined;
     try {
       const c = splitComponentFunctionName(name);
       const hash = c
@@ -1656,9 +1704,12 @@ export class Functions {
   /**
    * Arguments are an object, nested at most 63 levels, no larger than `maxArgsSize`, checked against `args`
    * when the function declares it (Convex's rules and order: `ValidatedPathAndArgs` in
-   * crates/udf/src/validation.rs). `measured`: `measureArgs(args)`, when the caller has it already.
+   * crates/udf/src/validation.rs). `measured`: `measureArgs(args)`, when the caller has it already. Arguments
+   * that did not decode fail here, once the function is resolved, as Convex's `parse_udf_args`.
    */
-  private checkArgs(f: FunctionDef, args: unknown, measured = measureArgs(args)): AnyArgs {
+  private checkArgs(f: FunctionDef, args: unknown, measured?: ReturnType<typeof measureArgs>): AnyArgs {
+    if (args instanceof UndecodedArgs) throw args.error;
+    measured ??= measureArgs(args);
     const a = args === undefined ? {} : args;
     // Arguments a client sent with a lone surrogate do not parse into Convex's values (STUDY-135; nested
     // and scheduled calls are refused before, where their text is sent).
@@ -2646,6 +2697,9 @@ export class Functions {
     // A query of its own per run, so that runs at once (one gate in two rooms) each keep their name. No args
     // validator: the room's were checked at join.
     const f: QueryDef = { kind: "query", visibility: "internal", handler: (ctx, a) => gate(ctx as never, a) };
+    // A sandboxed version's gate runs in its child, as its queries do.
+    const remote = REMOTE_GATES.get(gate);
+    if (remote) REMOTE_FUNCTIONS.set(f as FunctionDef, remote);
     this.names.set(f, registryKey(name));
     return this.logged(
       "Query",
@@ -2759,7 +2813,9 @@ export class Functions {
         // As Convex's runner: a `_system/` path only for an admin or the system (there are no system actions)
         if (isSystemPath(name) && !isSystemIdentity(caller)) throw new SystemIdentityRequiredError("action");
         const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
-        const ctx = this.actionCtx(caller, opts.authError ?? null, opts.job, f);
+        // Shared by the action's run and its `ctx`: once it ended, the `ctx` refuses (STUDY-77 §7).
+        const life: ActionLife = { ended: false };
+        const ctx = this.actionCtx(caller, opts.authError ?? null, opts.job, f, f.handler, undefined, life);
         const a = this.checkArgs(f, args);
         // Node actions have their own limiter; scheduled and cron runs wait for a permit (STUDY-68).
         const node = NODE_FUNCTIONS.has(f);
@@ -2788,23 +2844,29 @@ export class Functions {
             try {
               const value = this.checkReturns(
                 f,
-                await withActionTimeout(ms, timeout, () => {
-                  const run = () =>
-                    this.inActionEnv(
-                      () =>
-                        inHandleScope(
-                          {
-                            db: null,
-                            engine: this.engine,
-                            resolve: (ref) => this.resolveCall(ref, this.componentOf.get(f), null, true),
-                          },
-                          () => f.handler(ctx, a),
-                        ),
-                      this.componentOf.get(f),
-                    );
-                  // A Node action's uncaught callback exception or `process.exit` fails it at once (platform §9).
-                  return node ? withNodeProcessErrors(run) : run();
-                }),
+                await withActionTimeout(
+                  ms,
+                  timeout,
+                  () => {
+                    const run = () =>
+                      this.inActionEnv(
+                        () =>
+                          inHandleScope(
+                            {
+                              db: null,
+                              engine: this.engine,
+                              resolve: (ref) => this.resolveCall(ref, this.componentOf.get(f), null, true),
+                            },
+                            () => f.handler(ctx, a),
+                          ),
+                        this.componentOf.get(f),
+                      );
+                    // A Node action's uncaught callback exception or `process.exit` fails it at once (platform §9).
+                    return node ? withNodeProcessErrors(run) : run();
+                  },
+                  // A V8 action ends with its answer, as Convex's isolate (STUDY-77 §7); a Node one runs on.
+                  { endsWithAnswer: !node, life },
+                ),
               );
               warn(sizeOfResult(value ?? null));
               return value;
@@ -2834,6 +2896,8 @@ export class Functions {
     handler: unknown = f?.handler,
     /** An HTTP action's component (STUDY-157): the one its route reached. */
     httpComponent?: ComponentRuntime,
+    /** Whether the action has ended: its `ctx` then refuses (V8 actions only). */
+    life?: ActionLife,
   ): ActionCtx {
     const identity = (caller?.identity ?? null) as UserIdentity | null;
     // A component's action calls its own component's functions by name (STUDY-154); other components are step 5.
@@ -2903,17 +2967,13 @@ export class Functions {
       storage: cutOffWithAction(this.fileStorage?.actionWriter(storageMeter, component?.id ?? null) ?? noStorage),
       rooms: cutOffWithAction(r.rooms),
       presence: cutOffWithAction(r.presence as NonNullable<typeof r.presence>),
-      vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
+      vectorSearch: async (
+        tableName: string,
+        indexName: string,
+        query: VectorSearchQuery<GenericTableInfo, string>,
+      ) => {
         checkActionAlive();
-        // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
-        const args = [tableName, indexName, query];
-        const argNames = ["tableName", "indexName", "query"];
-        for (let i = 0; i < 3; i++)
-          if (args[i] === undefined)
-            throw new TypeError(`Must provide arg ${i + 1} \`${argNames[i]}\` to \`vectorSearch\``);
-        if (!Array.isArray(query.vector) || query.vector.length === 0)
-          throw new Error("`vector` must be a non-empty Array in vectorSearch");
-        const filter = query.filter ? query.filter(VECTOR_FILTER_BUILDER as never) : undefined;
+        const filter = vectorSearchFilter(tableName, indexName, query);
         const r = meteredAction();
         let results: { _id: string; _score: number }[];
         try {
@@ -2940,6 +3000,8 @@ export class Functions {
       },
       ...(f ? { meta: this.meta(f, null, caller) } : {}),
     } as ActionCtx);
+    // Once the action ended, its `ctx` refuses, whoever calls it (STUDY-77 §7).
+    if (life) endsWith(ctx, life);
     if (!nestedCalls) return ctx;
     return appContext(handler, {
       ...ctx,
