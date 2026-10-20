@@ -62,7 +62,26 @@ export type LogOwner = {
   timer?: unknown;
   /** Where it runs: a "use node" action's lines are written as Convex's node executor writes them. */
   environment?: "isolate" | "node";
+  /** Its run's figures, fixed when its result is kept for the cache, so its own entry gives the same ones. */
+  ran?(): RunFigures;
+  /** On a cache hit, the figures of the run it reused (null when none were kept). */
+  reused?: RunFigures | null;
 };
+
+/**
+ * What a log entry says of the run behind it, kept with a cached result so a hit is logged with them, as
+ * Convex's `log_query` logs a hit with the cached outcome's user time, memory, start time and identity
+ * (crates/application/src/function_log.rs, STUDY-174 F4). Times in seconds.
+ */
+export type RunFigures = {
+  userExecutionTime: number;
+  memoryUsedMb: number;
+  executionTimestamp: number;
+  identityType: string;
+};
+
+/** What a cached query result keeps for its hits: its run's lines and figures. */
+export type CachedRun = { lines: LogLine[]; run: RunFigures | null };
 
 /**
  * The lines of one execution. A mutation re-run after a conflict replaces its previous attempt's lines (an
@@ -145,14 +164,16 @@ export function withoutLogs<T>(fn: () => T): T {
   return current.exit(fn);
 }
 
+const NOTHING_KEPT: CachedRun = { lines: [], run: null };
+
 /**
  * A query's lines kept with its cached result (STUDY-20 D2), for `Engine` queries: on a miss the body runs in
  * its own execution, whose lines are stored with the result; on a hit the stored lines join the current
- * invocation, and its logged execution is a cache hit. One shared object, so a cache hit allocates nothing
- * for it.
+ * invocation, and its logged execution is a cache hit with the figures of the run it reused. One shared
+ * object, so a cache hit allocates nothing for it.
  */
 export const cachedQueryLogs = {
-  wrap<A extends unknown[], R>(body: (...args: A) => R): { body: (...args: A) => R; capture(): LogLine[] } {
+  wrap<A extends unknown[], R>(body: (...args: A) => R): { body: (...args: A) => R; capture(): CachedRun } {
     let own: Execution | undefined;
     return {
       body: (...args) => {
@@ -162,15 +183,19 @@ export const cachedQueryLogs = {
         parent.entries.push(own);
         return current.run(own, () => body(...args));
       },
-      capture: () => (own ? capped(allLines(own)) : []),
+      capture: () => (own ? { lines: capped(allLines(own)), run: own.owner?.ran?.() ?? null } : NOTHING_KEPT),
     };
   },
   /** A cached run's lines into the current invocation; `hit`: it is served from the cache (the default). */
   replay(extra: unknown, hit = true) {
     const parent = current.getStore();
     if (!parent) return;
-    if (parent.owner && hit) parent.owner.cached = true;
-    if (Array.isArray(extra) && extra.length > 0) parent.entries.push(...(extra as LogLine[]));
+    const kept = extra as CachedRun | undefined;
+    if (parent.owner && hit) {
+      parent.owner.cached = true;
+      parent.owner.reused = kept?.run ?? null;
+    }
+    if (kept && kept.lines.length > 0) parent.entries.push(...kept.lines);
   },
 };
 
