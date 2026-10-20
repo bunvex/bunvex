@@ -83,7 +83,7 @@ import {
   writeCodeRows,
   writePackage,
 } from "./code-store.ts";
-import type { CodeVersion, ModuleSource } from "./code-version.ts";
+import type { LoadedCode, ModuleSource } from "./code-version.ts";
 import { withApiCors } from "./cors.ts";
 import { type Crons, cronSpecs } from "./cron.ts";
 import { CronJobExecutor } from "./cron-executor.ts";
@@ -111,7 +111,14 @@ import {
 } from "./errors.ts";
 import { EXECUTOR_SOURCES, ExecutorInvalidations } from "./executor-invalidations.ts";
 import { ExportError, ExportService } from "./exports.ts";
-import { type FunctionSandbox, functionSandboxConfig, loadCode, type SandboxIsolation } from "./function-executor.ts";
+import {
+  executorFor,
+  type FunctionSandbox,
+  functionSandboxConfig,
+  loadCode,
+  PROCESS_SANDBOX_WARNING,
+  type SandboxIsolation,
+} from "./function-executor.ts";
 import { canonicalPath, syncFunctionHandles } from "./function-handles.ts";
 import {
   FunctionLog,
@@ -595,10 +602,13 @@ export function createServer(opts: ServerOptions) {
   const { engine, functions } = opts;
   // The executor pushed code runs in (STUDY-171, AD-44), checked before anything starts: one the host cannot
   // give fails here, never falls back to `vm`.
-  functionSandboxConfig(
+  const sandbox = functionSandboxConfig(
     opts.functionSandbox ?? process.env.BUNVEX_FUNCTION_SANDBOX,
     opts.functionSandboxIsolation ?? process.env.BUNVEX_FUNCTION_SANDBOX_ISOLATION,
   );
+  // `process` needs its executor provided (the server cannot import it): without one, the start fails here.
+  const executor = executorFor(sandbox.sandbox);
+  if (executor.kind === "process") console.warn(`bunvex: ${PROCESS_SANDBOX_WARNING}`);
   // Traces (STUDY-131 AD-26): spans go to the OTLP exporter when an endpoint is configured.
   const tracingConfig =
     opts.tracing === null
@@ -1593,23 +1603,29 @@ export function createServer(opts: ServerOptions) {
         if (componentId === null) throw e;
         return requestError(500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE);
       }
-      found = await standaloneQuery(bundle, {
-        seed: config.seed,
-        timestamp: config.timestamp,
-        env: componentId === null ? await deploymentEnv() : {},
-      });
+      found = await standaloneQuery(
+        bundle,
+        {
+          seed: config.seed,
+          timestamp: config.timestamp,
+          env: componentId === null ? await deploymentEnv() : {},
+        },
+        executor,
+      );
     } catch (e) {
       if (e instanceof TestFunctionError) return requestError(e.status, e.code, e.message);
       throw e;
     }
     const tester = { ...caller, source: "Tester" } as SourcedCaller;
-    return udfResponse(
-      await collectLogs(async () =>
+    let ran: WithLogLines<string>;
+    try {
+      ran = await collectLogs(async () =>
         functions.runStandaloneQueryJson(found.query, found.name, fromWire(body.args, found.name), tester, componentId),
-      ),
-      "query",
-      { format: body.format, client: req.headers.get("bunvex-client") },
-    );
+      );
+    } finally {
+      executor.release?.(found.version);
+    }
+    return udfResponse(ran, "query", { format: body.format, client: req.headers.get("bunvex-client") });
   };
 
   const idleTimeoutSeconds = opts.idleTimeoutSeconds ?? 120;
@@ -2253,7 +2269,7 @@ export function createServer(opts: ServerOptions) {
    */
   const deployCode = async (modules: ModuleSource[]) => {
     const config = await udfConfig(engine);
-    const version = await loadCode(modules, { seed: config.seed, timestamp: config.timestamp });
+    const version = await loadCode(modules, { seed: config.seed, timestamp: config.timestamp }, executor);
     const pkg = await writePackage(modulesStore, modules);
     let unused: SourcePackage[];
     try {
@@ -2273,7 +2289,7 @@ export function createServer(opts: ServerOptions) {
   /** A deployable server's code: the latest version in the store, live once this resolves. */
   const codeReady: Promise<void> = opts.deployable
     ? deploymentEnv().then(async (env) => {
-        const code = await loadLatestCode(engine, modulesStore, env);
+        const code = await loadLatestCode(engine, modulesStore, env, executor);
         if (!code) return;
         await installCodeVersion(code.version);
         await installComponents();
@@ -2297,8 +2313,9 @@ export function createServer(opts: ServerOptions) {
       loaded.resolve();
     });
 
-  const installCodeVersion = async (version: CodeVersion, o: { crons?: boolean; auth?: AuthInfo[] } = {}) => {
+  const installCodeVersion = async (version: LoadedCode, o: { crons?: boolean; auth?: AuthInfo[] } = {}) => {
     const changed = functions.install(version.functions, version.moduleHashes, version.rooms, version.moduleLoads);
+    executor.installed?.(version);
     // The functions' handles (STUDY-50): a row per function, tombstones for the ones gone.
     await engine.mutation((db) => syncFunctionHandles(db, functions.functionPaths()), "_system/function_handles");
     httpOptions.router = version.router;
@@ -2340,7 +2357,7 @@ export function createServer(opts: ServerOptions) {
       }
     for (const { meta, path } of mounted) {
       if (meta.parent === null) continue;
-      const version = await loadComponentCode(engine, modulesStore, meta._id);
+      const version = await loadComponentCode(engine, modulesStore, meta._id, executor);
       if (!version) {
         functions.removeComponent(meta._id);
         continue;
@@ -2363,6 +2380,7 @@ export function createServer(opts: ServerOptions) {
     engine,
     modulesStore,
     cronExecutor,
+    executor,
     install: async (version, auth, module) => {
       authModule = module;
       const live = await installCodeVersion(version, { crons: false, auth });
@@ -2414,7 +2432,13 @@ export function createServer(opts: ServerOptions) {
         const value = next ?? origin;
         if (value === undefined) delete env[name];
         else env[name] = value;
-        providers = await evaluateAuthConfig(engine, authModule, env, "This change would make the auth config invalid");
+        providers = await evaluateAuthConfig(
+          engine,
+          authModule,
+          env,
+          "This change would make the auth config invalid",
+          executor,
+        );
       }
       const infos = authInfos(providers);
       await engine.mutation(async (db) => {
@@ -2481,6 +2505,7 @@ export function createServer(opts: ServerOptions) {
             // The built-ins as every other evaluation sees them: overridden by their canonical URLs.
             { ...withCanonical(builtinEnv, canonical), ...Object.fromEntries(after) },
             "This change would make the auth config invalid",
+            executor,
           );
         const infos = authInfos(providers);
         const same = await engine.mutation(async (db) => {
@@ -2642,6 +2667,8 @@ export function createServer(opts: ServerOptions) {
       server?.stop(true);
       builtinScreen?.stop();
       functionLog.close();
+      // The function sandbox's children (by their own pids), once nothing can call them.
+      await executor.close?.();
       await engine.close();
       // The last spans (the final commits' included) are sent before the process goes.
       await spanExporter?.close();

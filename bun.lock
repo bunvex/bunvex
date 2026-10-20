@@ -497,6 +497,7 @@
         "@bunvex/react": "workspace:*",
         "@bunvex/react-auth0": "workspace:*",
         "@bunvex/react-clerk": "workspace:*",
+        "@bunvex/sandbox": "workspace:*",
         "@bunvex/server": "workspace:*",
         "@bunvex/values": "workspace:*",
       },
@@ -734,6 +735,7 @@
       "version": "0.1.0-alpha.1",
       "dependencies": {
         "@bunvex/core": "workspace:*",
+        "@bunvex/protocol": "workspace:*",
         "@bunvex/server": "workspace:*",
         "@bunvex/values": "workspace:*",
       },

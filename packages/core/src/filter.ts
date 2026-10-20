@@ -4,6 +4,7 @@
 import {
   compareValues,
   displayValue,
+  fromJsonValue,
   hasCommitTs,
   isBytes,
   type JSONValue,
@@ -183,3 +184,55 @@ export type FilterBuilder = typeof filterBuilder;
 
 /** Whether `doc` passes a predicate's expression (it must evaluate to a boolean). */
 export const passes = (e: ExpressionOrValue, doc: Doc) => asBoolean(toExpr(e).evaluate(doc));
+
+const BINARY = {
+  $eq: "eq",
+  $neq: "neq",
+  $lt: "lt",
+  $lte: "lte",
+  $gt: "gt",
+  $gte: "gte",
+  $add: "add",
+  $sub: "sub",
+  $mul: "mul",
+  $div: "div",
+  $mod: "mod",
+} as const;
+
+/**
+ * A predicate's serialized form (`expressionJson`) back as what the filter builder made: the function sandbox's
+ * host runs the filter a child's query built (STUDY-171 §8.4). A literal is its value (a top-level one too, as the
+ * predicate returned it); a literal that was not a value comes back as its description, which no value equals.
+ * Throws on anything `expressionJson` never makes.
+ */
+export function expressionFromJson(j: JSONValue): ExpressionOrValue {
+  const parse = (x: JSONValue): ExpressionOrValue => {
+    if (x === null || typeof x !== "object" || Array.isArray(x)) throw new Error("not a filter expression");
+    const keys = Object.keys(x);
+    if (keys.length !== 1) throw new Error("not a filter expression");
+    const op = keys[0]!;
+    const body = (x as Record<string, JSONValue>)[op]!;
+    if (op === "$field") {
+      if (typeof body !== "string") throw new Error("not a filter expression");
+      return filterBuilder.field(body);
+    }
+    if (op === "$literal") {
+      if (body !== null && typeof body === "object" && !Array.isArray(body)) {
+        if ("$undefined" in body) return undefined;
+        if ("$notAValue" in body) return String(body.$notAValue) as Value;
+      }
+      return fromJsonValue(body) as Value;
+    }
+    if (op in BINARY) {
+      if (!Array.isArray(body) || body.length !== 2) throw new Error("not a filter expression");
+      return filterBuilder[BINARY[op as keyof typeof BINARY]](parse(body[0]!), parse(body[1]!));
+    }
+    if (op === "$neg" || op === "$not") return filterBuilder[op === "$neg" ? "neg" : "not"](parse(body));
+    if (op === "$and" || op === "$or") {
+      if (!Array.isArray(body)) throw new Error("not a filter expression");
+      return filterBuilder[op === "$and" ? "and" : "or"](...body.map(parse));
+    }
+    throw new Error("not a filter expression");
+  };
+  return parse(j);
+}

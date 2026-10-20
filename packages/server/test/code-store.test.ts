@@ -37,6 +37,7 @@ const app = (n: number, extra: ModuleSource[] = []) => [
      export const version = query(async () => ${n});
      export const rand = query(async () => 0);
      export const seeded = ${"Math.random()"};
+     export const seededValue = query(async () => seeded);
      export const add = mutation(async ({ db }) => db.insert("items", {}));`,
   ),
   ...extra,
@@ -71,7 +72,12 @@ describe("deployed code in the store", () => {
     expect((await d.call("messages:version")).value).toBe(1);
     const stored = (await storedModules(d.engine))!;
     expect(stored.rows.map((r) => [r.path, r.environment, r.sha256.length])).toEqual([["messages.js", "isolate", 64]]);
-    expect(stored.rows[0]!.analyzeResult!.functions.map((f) => f.name)).toEqual(["add", "rand", "version"]);
+    expect(stored.rows[0]!.analyzeResult!.functions.map((f) => f.name)).toEqual([
+      "add",
+      "rand",
+      "seededValue",
+      "version",
+    ]);
     expect(stored.pkg.packageSize.zippedSizeBytes).toBeGreaterThan(0n);
     expect((await readPackage(d.moduleStorage, stored.pkg.storageKey))[0]!.path).toBe("messages.js");
     // The package lives in the modules store, not with user files.
@@ -196,8 +202,9 @@ describe("deployed code in the store", () => {
     dirs.push(dir);
     const a = await deployable(dir);
     await a.s.codeReady;
-    const first = await a.s.deployCode(app(3));
-    const seeded = (first.version.modules.get("messages.js")!.module.namespace as { seeded: number }).seeded;
+    await a.s.deployCode(app(3));
+    const seeded = (await a.call("messages:seededValue")).value;
+    expect(typeof seeded).toBe("number");
     await a.s.shutdown();
     const b = await deployable(dir);
     stops.push(() => b.s.shutdown());
@@ -206,8 +213,8 @@ describe("deployed code in the store", () => {
     const rows = await b.engine.query((db) => db.asSystem(() => db.query(MODULES_TABLE).collect()));
     expect(rows.length).toBe(1);
     // Same seed: the module's import-time Math.random is the same after the restart.
-    const again = await b.s.deployCode(app(3));
-    expect((again.version.modules.get("messages.js")!.module.namespace as { seeded: number }).seeded).toBe(seeded);
+    await b.s.deployCode(app(3));
+    expect((await b.call("messages:seededValue")).value).toBe(seeded);
   });
 
   test("an embedded server does not load deployed code", async () => {

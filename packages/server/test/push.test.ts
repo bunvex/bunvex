@@ -1181,6 +1181,27 @@ describe("environment variables (STUDY-37)", () => {
     ).toBe(null);
   });
 
+  test("process.env: a name of Object.prototype's is a name like any other, unset (STUDY-171 §9)", async () => {
+    // Convex reads one name at a time (`environmentVariables/get`): `constructor` is unset unless set. The built-ins
+    // were a plain object read by name, so it read their prototype's members (`Object`, a function, not a value).
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    await d.push([envMod]);
+    for (const name of ["constructor", "toString", "hasOwnProperty", "valueOf", "__proto__"]) {
+      expect({ name, query: await d.call("query", "env:read", { name }) }).toMatchObject({
+        name,
+        query: { status: "success", value: null },
+      });
+      expect({ name, action: await d.call("action", "env:inAction", { name }) }).toMatchObject({
+        name,
+        action: { status: "success", value: null },
+      });
+    }
+    // Set, it reads as itself.
+    await d.post("/api/update_environment_variables", { changes: [{ name: "constructor", value: "c" }] });
+    expect((await d.call("query", "env:read", { name: "constructor" })).value).toBe("c");
+  });
+
   test("process.env in pushed code: per name in the read set, actions at their start, the built-ins", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());

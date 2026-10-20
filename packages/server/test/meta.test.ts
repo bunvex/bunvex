@@ -36,6 +36,7 @@ async function setup(opts: { skew?: { ms: number } } = {}) {
     },
   ).init();
   let snapshotRuns = 0;
+  let plainRuns = 0;
   const functions = new Functions(engine)
     .register("m", {
       q: query(async ({ meta }) => ({
@@ -48,6 +49,10 @@ async function setup(opts: { skew?: { ms: number } } = {}) {
       snapshot: query(async ({ meta }) => {
         snapshotRuns++;
         return meta.getSnapshotTs().toString();
+      }),
+      plain: query(async () => {
+        plainRuns++;
+        return 1;
       }),
       metricsInside: internalQuery(async ({ db, meta }) => {
         await db.query("items").collect();
@@ -106,7 +111,7 @@ async function setup(opts: { skew?: { ms: number } } = {}) {
     });
     return ((await r.json()) as { value: Record<string, unknown> }).value;
   };
-  return { engine, functions, issuer, server, call, runs: () => snapshotRuns };
+  return { engine, functions, issuer, server, call, runs: () => snapshotRuns, plainRuns: () => plainRuns };
 }
 
 test("function, deployment and transaction metadata; each method only where Convex has it", async () => {
@@ -159,6 +164,31 @@ test("getSnapshotTs makes a query time-dependent, as Date.now()", async () => {
   skew.ms = MAX_CACHE_AGE_MS + 1000;
   await t.functions.runQuery("m:snapshot", {});
   expect(t.runs()).toBe(2);
+});
+
+test("a query that reads no time stays cached however old (STUDY-171 §9: the server's own metrics read no time)", async () => {
+  // Convex expires only a result that read the time (`observe_time`). The server's app metrics took the deterministic
+  // `Date.now` inside every query, which marked every result as time-dependent: each one expired after 17 s.
+  const skew = { ms: 0 };
+  const t = await setup({ skew });
+  await t.functions.runQuery("m:plain", {});
+  await t.functions.runQuery("m:plain", {});
+  expect(t.plainRuns()).toBe(1);
+  skew.ms = MAX_CACHE_AGE_MS + 1000;
+  await t.functions.runQuery("m:plain", {});
+  expect(t.plainRuns()).toBe(1);
+  // Over HTTP too, where the server's metrics record each query.
+  const port = t.server.port;
+  const http = async () =>
+    fetch(`http://127.0.0.1:${port}/api/query`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "m:plain", args: {} }),
+    });
+  await http();
+  skew.ms += MAX_CACHE_AGE_MS + 1000;
+  await http();
+  expect(t.plainRuns()).toBe(1);
 });
 
 test("request metadata over HTTP: x-forwarded-for, the user agent, a request id, the user's token", async () => {

@@ -55,9 +55,9 @@ import {
 } from "./code-store.ts";
 import {
   type AnalyzedModule,
-  type CodeVersion,
   FunctionExportError,
   InvalidModulesError,
+  type LoadedCode,
   type ModuleSource,
 } from "./code-version.ts";
 import {
@@ -81,10 +81,14 @@ import {
   type NodeDependency,
 } from "./external-deps.ts";
 import {
+  type Executor,
   evaluateDefault as evaluateDefaultExport,
   isSchemaDefinition,
   loadCode,
   MissingEnvironmentVariableError,
+  sandboxNotYet,
+  UnserializableAuthConfigError,
+  vmExecutor,
 } from "./function-executor.ts";
 import { indexAuditDiff, indexDiffJson } from "./push-audit.ts";
 import {
@@ -260,7 +264,7 @@ export function parseNodeVersion(raw: unknown): string | null {
 }
 
 type Pending = {
-  version: CodeVersion;
+  version: LoadedCode;
   modules: ModuleSource[];
   authModule: ModuleSource | null;
   /** The schema's module: stored with the others, as Convex's (STUDY-134). */
@@ -289,7 +293,7 @@ type Pending = {
       string,
       EvaluatedDefinition & { schema: SchemaDefinition | null; udfServerVersion: string | null }
     >;
-    versions: Map<string, CodeVersion>;
+    versions: Map<string, LoadedCode>;
     change: ComponentsSchemaChange;
   };
 };
@@ -302,11 +306,13 @@ export type PushDeps = {
   modulesStore: BlobStore;
   cronExecutor: CronJobExecutor;
   /** Make a committed version live: functions, router, verifier, subscriptions. */
-  install: (version: CodeVersion, auth: AuthInfo[], authModule: ModuleSource | null) => Promise<unknown>;
+  install: (version: LoadedCode, auth: AuthInfo[], authModule: ModuleSource | null) => Promise<unknown>;
   /** The deployment's variables and the built-ins, as `auth.config` sees them (STUDY-37). */
   deploymentEnv: () => Promise<Record<string, string>>;
   /** The environment the external packages' install runs with (the server's own by default; STUDY-148). */
   installEnv?: Record<string, string | undefined>;
+  /** Where the push's code is loaded and evaluated (`vm` by default; STUDY-171). */
+  executor?: Executor;
 };
 
 /** The variables, canonically, to tell whether they changed during a push. */
@@ -322,6 +328,7 @@ export async function evaluateAuthConfig(
   m: ModuleSource,
   env: Record<string, string>,
   explanation = "Hit an error while evaluating your auth config",
+  executor: Executor = vmExecutor,
 ): Promise<unknown[]> {
   const config = await udfConfig(engine);
   let c: unknown;
@@ -330,10 +337,13 @@ export async function evaluateAuthConfig(
       m,
       { seed: config.seed, timestamp: config.timestamp, env, failOnMissingEnv: true },
       "authConfig",
+      executor,
     );
   } catch (e) {
     if (e instanceof MissingEnvironmentVariableError)
       throw new PushError("AuthConfigMissingEnvironmentVariable", e.message);
+    // Only an executor that sends the config as JSON, as Convex's isolate does, refuses one this way (the sandbox's).
+    if (e instanceof UnserializableAuthConfigError) throw new PushError("AuthConfigUnserializableError", e.message);
     const message =
       e instanceof InvalidModulesError ? e.message.split("\n").slice(1).join("\n") : describeUncaught(e).message;
     throw new PushError("InvalidAuthConfig", `${explanation}:\n${message.trimEnd()}`);
@@ -354,10 +364,11 @@ async function evaluateDefault(
   code: string,
   what: string,
   bare = false,
+  executor: Executor = vmExecutor,
 ) {
   try {
     const options = { seed: config.seed, timestamp: config.timestamp, env };
-    return await evaluateDefaultExport(m, options, "schema");
+    return await evaluateDefaultExport(m, options, "schema", executor);
   } catch (e) {
     const message =
       e instanceof InvalidModulesError ? e.message.split("\n").slice(1).join("\n") : describeUncaught(e).message;
@@ -379,20 +390,24 @@ export async function evaluateComponents(
   rootFunctions: Record<string, AnalyzedModule>,
   rootSchema: SchemaDefinition | null,
   forCodegen: boolean,
+  executor: Executor = vmExecutor,
 ) {
-  const versions = new Map<string, CodeVersion>();
+  const versions = new Map<string, LoadedCode>();
   const schemas = new Map<string, SchemaDefinition | null>();
+  // Components under the process sandbox are STUDY-168's PR 7.
+  if (executor.kind === "process" && pushed.components.length)
+    throw loadError(new InvalidModulesError(sandboxNotYet("Components")));
   for (const c of pushed.components) {
     // Convex's `ensure!`: a system error.
     if (versions.has(c.definitionPath)) throw new Error(`Component definition ${c.definitionPath} pushed twice`);
     try {
-      versions.set(c.definitionPath, await loadCode(c.functions, { ...config, env: {} }));
+      versions.set(c.definitionPath, await loadCode(c.functions, { ...config, env: {} }, executor));
     } catch (e) {
       throw loadError(e);
     }
     let schema: SchemaDefinition | null = null;
     if (c.schema) {
-      schema = schemaExport(await evaluateDefault(config, c.schema, {}, "InvalidSchema", "schema", true));
+      schema = schemaExport(await evaluateDefault(config, c.schema, {}, "InvalidSchema", "schema", true, executor));
       checkIndexReferences(schema);
     }
     schemas.set(c.definitionPath, schema);
@@ -438,6 +453,10 @@ export async function evaluateComponents(
 export class PushService {
   private pending = new Map<string, Pending>();
   constructor(private deps: PushDeps) {}
+
+  private get executor(): Executor {
+    return this.deps.executor ?? vmExecutor;
+  }
 
   /**
    * Convex's `get_config_hashes`: what is deployed, by path. None when the package cannot be read (STUDY-139
@@ -495,7 +514,7 @@ export class PushService {
     /** A component's schema: Convex answers its exception alone (`evaluate_components`), with no preamble. */
     bare = false,
   ) {
-    return evaluateDefault(await udfConfig(this.deps.engine), m, env, code, what, bare);
+    return evaluateDefault(await udfConfig(this.deps.engine), m, env, code, what, bare, this.executor);
   }
 
   /**
@@ -650,14 +669,18 @@ export class PushService {
     // The deployment's variables: what the modules read at import, as Convex's analysis gives them its
     // environment variables (the version this push installs keeps them, as one loaded at a start does).
     const env = await this.deps.deploymentEnv();
-    let version: CodeVersion;
+    let version: LoadedCode;
     try {
-      version = await loadCode(modules, {
-        seed: config.seed,
-        timestamp: config.timestamp,
-        env,
-        ...(installed ? { nodeModules: installed.dir } : {}),
-      });
+      version = await loadCode(
+        modules,
+        {
+          seed: config.seed,
+          timestamp: config.timestamp,
+          env,
+          ...(installed ? { nodeModules: installed.dir } : {}),
+        },
+        this.executor,
+      );
     } catch (e) {
       throw loadError(e);
     }
@@ -668,7 +691,9 @@ export class PushService {
       checkIndexReferences(s);
       schema = s;
     }
-    const auth = authModule ? await evaluateAuthConfig(this.deps.engine, authModule, env) : null;
+    const auth = authModule
+      ? await evaluateAuthConfig(this.deps.engine, authModule, env, undefined, this.executor)
+      : null;
     const components = await evaluateComponents(
       pushed,
       config,
@@ -676,6 +701,7 @@ export class PushService {
       version.analysis,
       schemaModule ? schema : null,
       req.forCodegen === true,
+      this.executor,
     );
     // Convex's `StagedSchemaWithEnforcedValidatorChanges` (STUDY-106 §7.4), dry run too.
     const staged = await this.deps.engine.stagedValidatorConflicts(schema);

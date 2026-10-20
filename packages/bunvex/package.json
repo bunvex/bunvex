@@ -16,6 +16,7 @@
     "./react-auth0": "./src/react-auth0.ts"
   },
   "dependencies": {
+    "@bunvex/sandbox": "workspace:*",
     "@bunvex/server": "workspace:*",
     "@bunvex/values": "workspace:*",
     "@bunvex/client": "workspace:*",
