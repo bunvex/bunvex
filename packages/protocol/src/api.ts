@@ -6,8 +6,11 @@
 
 export type FunctionType = "query" | "mutation" | "action";
 export type FunctionVisibility = "public" | "internal";
+/** A function's arguments: one object (Convex's `DefaultFunctionArgs`). What a reference's `Args` must be. */
+export type DefaultFunctionArgs = Record<string, unknown>;
+/** The arguments of a reference that does not type them: any object. */
 // biome-ignore lint/suspicious/noExplicitAny: a function's arguments object, any shape by default
-export type DefaultFunctionArgs = Record<string, any>;
+type AnyFunctionArgs = Record<string, any>;
 
 /** The name a reference stores. A symbol, so a reference has no enumerable fields to collide with. */
 export const functionName = Symbol.for("functionName");
@@ -16,7 +19,7 @@ export const functionName = Symbol.for("functionName");
 export type FunctionReference<
   Type extends FunctionType = FunctionType,
   Visibility extends FunctionVisibility = "public",
-  Args extends DefaultFunctionArgs = DefaultFunctionArgs,
+  Args extends DefaultFunctionArgs = AnyFunctionArgs,
   ReturnType = unknown,
   /** The component the function is in, by its path: what a component's `ComponentApi<Name>` passes (Convex's). */
   ComponentPath = string | undefined,
@@ -34,7 +37,7 @@ export type FunctionReference<
  */
 export type RoomReference<
   Kind extends "room" | "presence" = "room" | "presence",
-  Args = DefaultFunctionArgs,
+  Args = AnyFunctionArgs,
   Presence = unknown,
   Events = Record<string, never>,
 > = {
@@ -93,7 +96,7 @@ export const anyApi: AnyApi = createApi();
 
 export function makeFunctionReference<
   Type extends FunctionType,
-  Args extends DefaultFunctionArgs = DefaultFunctionArgs,
+  Args extends DefaultFunctionArgs = AnyFunctionArgs,
   ReturnType = unknown,
 >(name: string): FunctionReference<Type, "public", Args, ReturnType> {
   return { [functionName]: name } as unknown as FunctionReference<Type, "public", Args, ReturnType>;

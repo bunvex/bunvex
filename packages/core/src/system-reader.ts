@@ -4,7 +4,7 @@
 // `by_creation_time` indexes are public. Any other system table reads as empty, as Convex's (a function sees
 // its index as missing), but `count()` counts it (STUDY-107, DV-360).
 import { decodeId } from "@bunvex/values";
-import type { ExpressionOrValue, FilterBuilder } from "./filter.ts";
+import type { FilterBuilder, FilterOperand } from "./filter.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import type { Doc } from "./schema.ts";
 import { TableReader } from "./table-scope.ts";
@@ -102,7 +102,7 @@ export class VirtualQuery implements TxQueryChained {
   order(dir: "asc" | "desc"): TxQueryChained {
     return this.wrap(this.q.order(dir));
   }
-  filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQueryChained {
+  filter(predicate: (q: FilterBuilder) => FilterOperand<boolean>): TxQueryChained {
     return this.wrap(this.q.filter(predicate));
   }
   limit(n: number): TxQueryChained {

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineSchema, defineTable, Engine, type SchemaDefinition } from "@bunvex/core";
+import { defineSchema, defineTable, Engine, type EngineSchema } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { encodeId, toExportJson, type Value, v } from "@bunvex/values";
@@ -39,7 +39,7 @@ class FlakyStore extends MemoryBlobStore {
   }
 }
 
-async function setup(schema: SchemaDefinition = defineSchema({})) {
+async function setup(schema: EngineSchema = defineSchema({})) {
   const engine = await new Engine(schema, await MemoryPersistence.open(null, { durable: false }), {
     instanceName: NAME,
     instanceSecret: SECRET,

@@ -2,7 +2,14 @@
 // make. Isomorphic, as Convex's `convex/server`: they import no runtime, so an app's shared modules, and the
 // `_generated/server` they come through, load in a browser and in Node (`./isomorphic.ts`); the runtime that
 // runs them is `./functions.ts`.
-import { type GenericValidator, type Infer, type ObjectType, type PropertyValidators, v } from "@bunvex/values";
+import {
+  asObjectValidator,
+  type GenericValidator,
+  type Infer,
+  type ObjectType,
+  type PropertyValidators,
+  v,
+} from "@bunvex/values";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./functions.ts";
 import type { ActionBuilder, MutationBuilder, QueryBuilder } from "./registration.ts";
 import { parseValidatorJson } from "./validator-json.ts";
@@ -41,9 +48,6 @@ export type FunctionDef =
       args?: GenericValidator;
       returns?: GenericValidator;
     };
-
-const asObjectValidator = (a: ArgsValidator): GenericValidator =>
-  (a as GenericValidator).isValidator ? (a as GenericValidator) : v.object(a as PropertyValidators);
 
 /** Every function a builder made: how a code version's analysis tells its functions from other exports. */
 const DEFINED = new WeakSet<object>();

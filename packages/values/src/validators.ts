@@ -27,9 +27,18 @@ export type ValidatorJSON =
   | { type: "id"; tableName: string }
   | { type: "literal"; value: JSONValue }
   | { type: "array"; value: ValidatorJSON }
-  | { type: "object"; value: Record<string, { fieldType: ValidatorJSON; optional: boolean }> }
-  | { type: "record"; keys: ValidatorJSON; values: { fieldType: ValidatorJSON; optional: false } }
+  | { type: "object"; value: Record<string, ObjectFieldType> }
+  | { type: "record"; keys: RecordKeyValidatorJSON; values: RecordValueValidatorJSON }
   | { type: "union"; value: ValidatorJSON[] };
+/** A field of an object validator's JSON (Convex's `ObjectFieldType`). */
+export type ObjectFieldType = { fieldType: ValidatorJSON; optional: boolean };
+/** What a record validator's keys may be, as JSON (Convex's `RecordKeyValidatorJSON`): strings, ids, or a union. */
+export type RecordKeyValidatorJSON =
+  | { type: "string" }
+  | { type: "id"; tableName: string }
+  | { type: "union"; value: RecordKeyValidatorJSON[] };
+/** A record validator's values as JSON (Convex's `RecordValueValidatorJSON`): never optional. */
+export type RecordValueValidatorJSON = ObjectFieldType & { optional: false };
 
 abstract class BaseValidator<Type, IsOptional extends OptionalProperty> {
   /** Only for type inference (`Infer`); never set at runtime. */
@@ -327,7 +336,9 @@ export class VRecord<
     if (!key.isValidator || !value.isValidator) throw new Error("Key and value of v.record() but be validators");
   }
   get json(): ValidatorJSON {
-    return { type: "record", keys: this.key.json, values: { fieldType: this.value.json, optional: false } };
+    // The key is a string, an id or a union of them: Convex's builder types it so, and the push refuses others.
+    const keys = this.key.json as RecordKeyValidatorJSON;
+    return { type: "record", keys, values: { fieldType: this.value.json, optional: false } };
   }
   optional() {
     return new VRecord<Type | undefined, Key, Val, "optional">("optional", this.key, this.value);
@@ -362,6 +373,56 @@ function optionalOf<V extends GenericValidator>(x: V): Validator<Infer<V> | unde
   return (x.isOptional === "optional" ? x : (x as { optional(): unknown }).optional()) as never;
 }
 
+/**
+ * The validator `v.optional(x)` makes of `x` (Convex's `VOptional`): the same kind of validator, its type with
+ * `undefined` added, optional.
+ */
+export type VOptional<T extends GenericValidator> =
+  T extends VId<infer Type, OptionalProperty>
+    ? VId<Type | undefined, "optional">
+    : T extends VString<infer Type, OptionalProperty>
+      ? VString<Type | undefined, "optional">
+      : T extends VFloat64<infer Type, OptionalProperty>
+        ? VFloat64<Type | undefined, "optional">
+        : T extends VInt64<infer Type, OptionalProperty>
+          ? VInt64<Type | undefined, "optional">
+          : T extends VCommitTs<infer Type, OptionalProperty>
+            ? VCommitTs<Type | undefined, "optional">
+            : T extends VBoolean<infer Type, OptionalProperty>
+              ? VBoolean<Type | undefined, "optional">
+              : T extends VNull<infer Type, OptionalProperty>
+                ? VNull<Type | undefined, "optional">
+                : T extends VAny<infer Type, OptionalProperty>
+                  ? VAny<Type | undefined, "optional">
+                  : T extends VLiteral<infer Type, OptionalProperty>
+                    ? VLiteral<Type | undefined, "optional">
+                    : T extends VBytes<infer Type, OptionalProperty>
+                      ? VBytes<Type | undefined, "optional">
+                      : T extends VObject<infer Type, infer Fields, OptionalProperty>
+                        ? VObject<Type | undefined, Fields, "optional">
+                        : T extends VArray<infer Type, infer Element, OptionalProperty>
+                          ? VArray<Type | undefined, Element, "optional">
+                          : T extends VRecord<infer Type, infer Key, infer Val, OptionalProperty>
+                            ? VRecord<Type | undefined, Key, Val, "optional">
+                            : T extends VUnion<infer Type, infer Members, OptionalProperty>
+                              ? VUnion<Type | undefined, Members, "optional">
+                              : never;
+
+/**
+ * An `args` or `returns` given as a validator or as an object of field validators, as a validator (Convex's
+ * `AsObjectValidator`): a validator as it is, the fields as an object validator of them.
+ */
+export type AsObjectValidator<V extends GenericValidator | PropertyValidators> = V extends GenericValidator
+  ? V
+  : V extends PropertyValidators
+    ? Validator<ObjectType<V>>
+    : never;
+
+/** Convex's `asObjectValidator`: a validator as it is, an object of field validators as `v.object(fields)`. */
+export function asObjectValidator<V extends GenericValidator | PropertyValidators>(obj: V): AsObjectValidator<V> {
+  return ((obj as GenericValidator).isValidator ? obj : v.object(obj as PropertyValidators)) as AsObjectValidator<V>;
+}
+
 type Required<V extends GenericValidator> = V extends { isOptional: "optional" } ? never : V;
 
 /**
@@ -390,7 +451,7 @@ export const v = {
     new VRecord<Record<Infer<K> & string, Infer<V>>, K, V>("required", key, value),
   union: <M extends GenericValidator[]>(...members: M) => new VUnion<Infer<M[number]>, M>("required", members),
   any: () => new VAny("required"),
-  optional: <V extends GenericValidator>(x: V) => optionalOf(x) as ReturnType<typeof optionalOf<V>>,
+  optional: <V extends GenericValidator>(x: V) => optionalOf(x) as VOptional<V>,
   nullable: <V extends GenericValidator>(x: V) => v.union(x, v.null()),
 };
 
