@@ -2,6 +2,7 @@
 // the single-writer lock, descending scans, references to missing documents, the document log while a group is
 // open, and retention. The conformance suite checks these from outside, much of it in child processes; mutation
 // testing (TEST-01 §7) found no core test noticing them, so these drive the store directly.
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,7 +10,7 @@ import { join } from "node:path";
 import { internalIdString } from "../src/internal-id.ts";
 import { DanglingReferenceError, LeaseLostError } from "../src/persistence/index.ts";
 import { LayoutError, ReadOnlyError } from "../src/persistence/layout.ts";
-import { SqlitePersistence } from "../src/persistence/sqlite.ts";
+import { SQLITE_LAYOUT, SqlitePersistence } from "../src/persistence/sqlite.ts";
 
 const dirs: string[] = [];
 const open: SqlitePersistence[] = [];
@@ -102,6 +103,74 @@ describe("one writer per file", () => {
     second.close();
     const third = openDb(path); // closing released the lock
     expect("epoch" in (await third.acquireLease({ holder: "third", ttlMs: 1000 }))).toBe(true);
+  });
+});
+
+// Another process on the same file: SQLite's own locks, which a connection waits out for a while before failing
+// with SQLITE_BUSY, as Convex's does (rusqlite's 5 s default).
+describe("another connection's lock", () => {
+  /** Runs `script` in another process on `path`; resolves once it prints `ready`, with what it printed. */
+  const other = async (script: string, path: string) => {
+    const proc = Bun.spawn([process.execPath, "-e", `import { Database } from "bun:sqlite";\n${script}`, path], {
+      stdout: "pipe",
+      stderr: "inherit",
+    });
+    const reader = proc.stdout.getReader();
+    let out = "";
+    while (!out.includes("ready")) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error(`the other process exited before it was ready: ${out}`);
+      out += new TextDecoder().decode(value);
+    }
+    return { proc, out };
+  };
+
+  test("an open waits for another process's write lock to go, instead of failing at once with SQLITE_BUSY", async () => {
+    const path = dbPath();
+    // A store in SQLite's rollback journal (as Convex keeps it), where a writer's lock keeps readers out too.
+    const raw = new Database(path, { create: true });
+    raw.exec(SQLITE_LAYOUT);
+    raw.close();
+    const { proc: holder } = await other(
+      `const db = new Database(process.argv[1]);
+       db.exec("begin exclusive");
+       db.run("insert into persistence_globals values ('held', '1')");
+       console.log("ready");
+       await Bun.sleep(300);
+       db.exec("commit");
+       db.close();`,
+      path,
+    );
+    const t0 = performance.now();
+    const s = openDb(path);
+    const waited = performance.now() - t0;
+    expect(await holder.exited).toBe(0);
+    expect(s.getGlobal("held")).toBe(1); // read after the holder's commit
+    expect(waited).toBeGreaterThan(100);
+  });
+
+  test("close() lets go of the file at once: another process can then take the store for itself", async () => {
+    const path = dbPath();
+    const s = openDb(path);
+    s.apply(1n, [doc(id(1), '"x"')], [entry(key(1), id(1))]);
+    s.flush();
+    s.writeIndexEntries([{ ...entry(key(2), id(1)), ts: 1n }]);
+    s.pruneIndexes([{ index: I, key: key(2), ts: 1n }]);
+    s.pruneDocuments([]);
+    s.setGlobal("g", 1);
+    expect(s.scan(T, I, key(), key(255), 1n, 10, false)).toHaveLength(1);
+    expect(s.readDocumentLog(0n, 1n, 10)).toHaveLength(1);
+    s.close();
+    // Leaving WAL mode needs every other connection gone: a connection left open (until its statements are
+    // garbage-collected) refuses it with "database is locked".
+    const { proc, out } = await other(
+      `const db = new Database(process.argv[1]);
+       console.log("ready", JSON.stringify(db.query("pragma journal_mode = delete").get()));
+       db.close();`,
+      path,
+    );
+    expect(out).toContain(`{"journal_mode":"delete"}`);
+    expect(await proc.exited).toBe(0);
   });
 });
 

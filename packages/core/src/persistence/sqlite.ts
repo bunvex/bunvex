@@ -112,6 +112,12 @@ function cachedBytes(id: string): Uint8Array {
   return b;
 }
 const idString = (b: Uint8Array) => internalIdString(b);
+/** How long a statement waits for another connection's lock before failing with SQLITE_BUSY: rusqlite's default,
+ *  which Convex's SQLite store keeps (rusqlite 0.39.0 `InnerConnection::open_with_flags` calls
+ *  `sqlite3_busy_timeout(db, 5000)`; crates/sqlite/src/lib.rs `SqlitePersistence::new` sets no other). bun:sqlite
+ *  sets none, so without it a read fails at once while another connection holds the file, e.g. one closing. */
+export const SQLITE_BUSY_TIMEOUT_MS = 5000;
+
 /** A live index entry's document id and its document at the entry's ts (null columns: no such version). */
 type JoinedEntry = { id: Uint8Array; json: string | null; docDeleted: bigint | null };
 
@@ -122,6 +128,8 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   /** The store's single-writer lock: taken at open when free, else by acquireLease once it is. */
   private lock: ProcessLock | null = null;
   private db: Database;
+  /** The statements this handle prepared: finalized on close, else the connection outlives `close()`. */
+  private statements: Statement[] = [];
   private insDoc;
   private insIdx;
   private putIdx;
@@ -153,6 +161,8 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     try {
       db = new Database(path, { create: true });
       this.db = db;
+      // A connection setting: the file is not changed (checkStore reads it first).
+      db.exec(`pragma busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
       this.checkStore(opts);
       db.exec(`pragma journal_mode = wal; pragma synchronous = ${opts.durable ? "full" : "off"};
         pragma temp_store = memory; pragma cache_size = -262144;`);
@@ -165,11 +175,11 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       this.lock = null;
       throw e;
     }
-    this.insDoc = this.db.prepare(
+    this.insDoc = this.prepare(
       `insert into documents (id, ts, table_id, json_value, deleted, prev_ts) values (?, ?, ?, ?, ?, ?)`,
     );
-    this.insIdx = this.db.prepare(`insert into indexes values (?, ?, ?, ?, ?, ?)`);
-    this.putIdx = this.db.prepare(`insert or replace into indexes values (?, ?, ?, ?, ?, ?)`);
+    this.insIdx = this.prepare(`insert into indexes values (?, ?, ?, ?, ?, ?)`);
+    this.putIdx = this.prepare(`insert or replace into indexes values (?, ?, ?, ?, ?, ?)`);
     // Newest version per key at or before ts, joined to its document at the entry's own ts, as Convex's
     // `index_scan` (crates/sqlite/src/lib.rs): the key's max ts from the primary key's index alone (it holds
     // every column the grouping reads, so old versions and tombstones cost no row lookup), then that one row
@@ -177,31 +187,31 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     // Timestamps are nanoseconds above 2^53 (STUDY-133 §5.3): the statements that read them return
     // integers as `bigint`.
     const scan = (dir: "asc" | "desc") =>
-      this.db
-        .prepare(`select a.key, a.ts, b.deleted, b.document_id, c.json_value, c.deleted as doc_deleted
+      this.prepare(`select a.key, a.ts, b.deleted, b.document_id, c.json_value, c.deleted as doc_deleted
         from (select key, max(ts) as ts from indexes where index_id = ?1 and key >= ?2 and key < ?3 and ts <= ?4
               group by key order by key ${dir} limit ?5) a
         join indexes b on b.index_id = ?1 and b.key = a.key and b.ts = a.ts
         left join documents c on c.ts = b.ts and c.table_id = b.table_id and c.id = b.document_id
-        order by a.key ${dir}`)
-        .safeIntegers(true);
+        order by a.key ${dir}`).safeIntegers(true);
     this.scanAsc = scan("asc");
     this.scanDesc = scan("desc");
-    this.getDoc = this.db
-      .prepare(`select json_value, deleted, ts from documents
-        where table_id = ? and id = ? and ts <= ? order by ts desc limit 1`)
-      .safeIntegers(true);
+    this.getDoc = this.prepare(`select json_value, deleted, ts from documents
+        where table_id = ? and id = ? and ts <= ? order by ts desc limit 1`).safeIntegers(true);
     // The newest ts written (the durable prefix, once a flush has committed it): the key's leading column.
-    this.maxDocTs = this.db.prepare(`select max(ts) as m from documents`).safeIntegers(true);
-    this.docLogRows = this.db
-      .prepare(`select ts, table_id, id, deleted, prev_ts from documents
+    this.maxDocTs = this.prepare(`select max(ts) as m from documents`).safeIntegers(true);
+    this.docLogRows = this.prepare(`select ts, table_id, id, deleted, prev_ts from documents
         where ts > ?1 and ts <= (select max(ts) from (select distinct ts from documents
                                  where ts > ?1 and ts <= ?2 order by ts limit ?3))
-        order by ts, table_id, id`)
-      .safeIntegers(true);
+        order by ts, table_id, id`).safeIntegers(true);
     // Convex's `DELETE_INDEX` and `DELETE_DOCUMENT`.
-    this.pruneIdx = this.db.prepare(`delete from indexes where index_id = ? and ts <= ? and key = ?`);
-    this.pruneDoc = this.db.prepare(`delete from documents where table_id = ? and id = ? and ts <= ?`);
+    this.pruneIdx = this.prepare(`delete from indexes where index_id = ? and ts <= ? and key = ?`);
+    this.pruneDoc = this.prepare(`delete from documents where table_id = ? and id = ? and ts <= ?`);
+  }
+
+  private prepare(sql: string): Statement {
+    const st = this.db.prepare(sql);
+    this.statements.push(st);
+    return st;
   }
 
   private get inMemory() {
@@ -433,7 +443,12 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return (this.maxDocTs.get() as { m: bigint | null }).m ?? 0n;
   }
 
+  /** Closes the connection now. bun:sqlite's `close()` closes a connection with live prepared statements only
+   *  once they are garbage-collected (sqlite3_close_v2): until then it keeps the file open, and its real close —
+   *  the last connection's checkpoint, under an exclusive lock — lands at a random later moment, on another
+   *  process opening the store. */
   close() {
+    for (const st of this.statements.splice(0)) st.finalize();
     this.db.close();
     this.lock?.release();
     this.lock = null;
