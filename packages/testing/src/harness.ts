@@ -36,7 +36,7 @@ import {
   internalQuery,
   issueAdminKey,
 } from "@bunvex/server";
-import { fromJsonValue } from "@bunvex/values";
+import { fromJsonValue, toJsonValue, type Value } from "@bunvex/values";
 
 const INSTANCE_NAME = "bunvex-test";
 const INSTANCE_SECRET = "7e57".repeat(16);
@@ -232,6 +232,12 @@ async function settleJobs(b: Backend, timeoutMs = 30_000) {
   }
 }
 
+/**
+ * A function's result as a client receives it, as convex-test returns it: through the value JSON, so `undefined` is
+ * `null`, an object's `undefined` fields are gone, and nothing the caller holds is the function's own object.
+ */
+const asReceived = (result: unknown): unknown => fromJsonValue(toJsonValue((result ?? null) as Value));
+
 /** A test's view of its deployment, as convex-test's `TestConvex`, with an identity or none. */
 export class TestBunvex {
   constructor(
@@ -256,9 +262,13 @@ export class TestBunvex {
       }),
     };
     const a = typeof ref === "function" ? {} : (args ?? {});
-    if (kind === "query") return functions.runQuery(name, a, false, caller);
-    if (kind === "mutation") return functions.runMutation(name, a, false, caller);
-    return functions.runAction(name, a, caller, { internal: true });
+    const result =
+      kind === "query"
+        ? await functions.runQuery(name, a, false, caller)
+        : kind === "mutation"
+          ? await functions.runMutation(name, a, false, caller)
+          : await functions.runAction(name, a, caller, { internal: true });
+    return asReceived(result);
   }
 
   /** A reference's function: the app's by name, or a component's (`components.<name>.<module>.<fn>`). */
