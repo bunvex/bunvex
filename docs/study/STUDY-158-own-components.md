@@ -1,6 +1,17 @@
 # STUDY-158 — bunvex's own components (STUDY-152 step 8)
 
-- **Status:** study; questions Q-1–Q-8 open for the owner (§7).
+- **Status:** decided (owner, 2026-10-20), §7:
+  - Q-1 A: in the monorepo, each package on its own version;
+  - Q-2: `@bunvex/<Convex's name>`;
+  - Q-3: everything in §2 matches, quirks included;
+  - Q-4: the deprecated surface is not built (DV-539);
+  - Q-5 B: `@bunvex/helpers` first, a port of convex-helpers in parts;
+  - Q-6 B: `@bunvex/testing` first, so the packages ship `./test` (no divergence);
+  - Q-7: `BunvexError` and `bunvex` names only, never `Convex*` (DV-538);
+  - Q-8: the order of §3.4, with testing and helpers before the components.
+
+  Each piece is studied in its own study from its source repository, at a commit pinned in
+  [upstream.md](../parity/upstream.md). A large piece is split into several studies. This study is the plan.
 - **Convex source read:**
   - The published `@convex-dev/*` packages, at the newest version at least a week old on 2026-10-20 (read only;
     nothing copied):
@@ -240,7 +251,7 @@ The raw `1.0/getFunctionMetadata` syscall that migrations calls is not a gap. bu
   - migrations' log hints name `bunvex run`;
   - workpool's non-retryable marker key in the error data is renamed.
 
-  See DV-537.
+  See DV-538.
 - **Deprecated surface.** These exist only for jobs scheduled by older versions of the packages:
   - workpool's `loop:main`, `loop:updateRunStatus` and `worker:runActionWrapper`;
   - the aliases `resultValidator`, `vWorkIdValidator` and the like;
@@ -250,31 +261,49 @@ The raw `1.0/getFunctionMetadata` syscall that migrations calls is not a gap. bu
   or clients). A Convex export taken while such a job was pending would carry a job to a function that does not
   exist. That job fails as any missing function does. See Q-4.
 
-### 3.4 Order
+### 3.4 Order (decided, Q-8)
 
-1. **PR 0, platform:**
-   - G1 (the externals and the linker);
-   - G2 (`asObjectValidator`, the types);
-   - a shared, unpublished helper for paging inside a component (Q-5);
-   - the packaging (Q-1);
-   - one local test package that proves an `@bunvex/*` component installs, pushes and runs.
-2. **sharded-counter:** the smallest, queries and mutations only.
-3. **batch-worker:** the child of the next three.
-4. **rate-limiter:** a child, env, `commitTs`, `useStaleSnapshot`, the React hook.
-5. **workpool:** the scheduler, handles, retries, recovery.
-6. **aggregate:** the B-tree, the comparator, the queued mode.
-7. **migrations:** handles to the app's functions, the CLI flow.
+Every step below has its own study. Each study reads its source repository, cloned next to bunvex
+(`~/sandbox/<clone>`) at a commit pinned in [upstream.md](../parity/upstream.md#other-repositories), and bunvex's version is written
+from scratch.
 
-This is STUDY-152 §6.3's proving order (sharded-counter, then rate-limiter, then workpool), with batch-worker
-added before rate-limiter since three of them need it, then C7's list.
+1. **The platform.** No study is needed beyond this one; there is no owner choice.
+   - G1: the CLI's externals and the server's linker, so that an `@bunvex/*` package is bundled like any npm
+     package. `@bunvex/testing` and `@bunvex/helpers` need this as much as the components do.
+   - G2: `asObjectValidator` and the four types.
+   - G6: packaging. The packages live in the monorepo (Q-1): the libraries in `packages/`, the components in
+     `components/<name>/`. Each has its own version outside changesets' fixed group, and is in the publish list.
+2. **`@bunvex/testing`** (STUDY-159). Convex's is convex-test (`get-convex/convex-test`), about 4,000 lines: a backend
+   written in JS. bunvex's keeps its API, renamed for rule 5. The question its study answers is whether it runs
+   bunvex's real engine in memory, in the test's own process, instead of a mock. It includes
+   `registerComponent`.
+3. **`@bunvex/helpers`.** Convex's is convex-helpers (`get-convex/convex-helpers`), about 15,000 lines without
+   tests. It realises AD-23 and is studied and built in parts, in this order:
+   1. what the components use: `customFunctions`, `pagination` and `stream`, `triggers`, `validators`;
+   2. data: `relationships`, `filter`, `rowLevelSecurity`, `crud`;
+   3. Zod (3 and 4) and `standardSchema`;
+   4. HTTP: `cors`, `hono`;
+   5. the React side: `sessions`, the hooks, the query cache.
+
+   `server/rateLimit` and `server/migrations` are left out. They are the older forms of the rate-limiter and
+   migrations components.
+4. **The components**, each from its own repository (`get-convex/<name>`), in this order:
+   1. sharded-counter: the smallest, queries and mutations only;
+   2. batch-worker: the child of the next three;
+   3. rate-limiter: a child, env, `commitTs`, `useStaleSnapshot`, the React hook;
+   4. workpool: the scheduler, handles, retries, recovery;
+   5. aggregate: the B-tree, the comparator, the queued mode;
+   6. migrations: handles to the app's functions, the CLI flow.
+
+   workpool and aggregate are each studied in two parts: the data and the client first, then the loop or the
+   queued mode.
 
 ## 4. Divergences
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| DV-537 | Rule 5 in the components: `BunvexError` for `ConvexError` (DV-312); migrations' hints name `bunvex run`; workpool's non-retryable marker in the error data has no "convex" (`__bunvexWorkpoolNonRetryable` proposed) | Rule 5 (no "convex" in shipped strings) | rule 5 (no owner choice); the marker's name is Q-7 |
-| DV-538 | The deprecated functions and aliases kept only for older package versions are not built (§3.3) | CLAUDE.md: no paths for older clients | pending (Q-4) |
-| DV-539 | No `./test` entry until bunvex has a test harness | G5 | pending (Q-6) |
+| DV-538 | Rule 5 in the components: `BunvexError` for `ConvexError` (DV-312); migrations' hints name `bunvex run`; workpool's non-retryable marker in the error data has no "convex" (`__bunvexWorkpoolNonRetryable`) | Rule 5 (no "convex" in shipped strings) | rule 5; the names confirmed by the owner, 2026-10-20 (Q-7) |
+| DV-539 | The deprecated functions and aliases kept only for older package versions are not built (§3.3) | CLAUDE.md: no paths for older clients | owner, 2026-10-20 (Q-4) |
 
 ## 4b. Additions (beyond Convex)
 
@@ -311,13 +340,16 @@ study once the package matches Convex.
 
 ## 7. Questions for the owner
 
+All decided by the owner on 2026-10-20, each as recommended except Q-5 and Q-6, where the owner chose B:
+the test harness and the helpers come first, since they unblock more than the components.
+
 | # | Question | Options | Recommendation |
 |---|---|---|---|
 | Q-1 | Where the packages live, and how they are versioned (C1 left it open) | A: the monorepo, `components/<name>/`, each on its own version outside the fixed group; B: the monorepo on the platform's one version; C: another repo | **A.** The components test the runtime, and the runtime's changes break them, so one CI catches both. Their own versions let each follow its Convex package (0.x) without bumping every platform package |
 | Q-2 | npm names | `@bunvex/<convex-name>` (`@bunvex/rate-limiter`, `@bunvex/workpool`, …), sharing the scope with the platform (needs G1's exact list); or a separate scope | **`@bunvex/<same name>`.** The move from Convex is then one rename per import, and G1 is a small fix |
 | Q-3 | How far "the same" goes (DV-493 says client API, component name and schema) | Also the component's function paths, their validators and errors, the timing constants and the JSON log events (§2); or only the client API and schema | **All of §2.** Apps call component functions directly, the CLI and dashboard name them, and exports carry scheduled jobs that name them. Quirks (§1.4) are matched too. The aggregate `TypeError` is matched as an error, since an app cannot depend on its message |
-| Q-4 | The deprecated functions and aliases (§3.3) | Build none (DV-538); or build them for exports taken mid-run | **Build none.** That is CLAUDE.md's rule. An export with a pending job of an older package version is a corner case, and the job fails visibly |
+| Q-4 | The deprecated functions and aliases (§3.3) | Build none (DV-539); or build them for exports taken mid-run | **Build none.** That is CLAUDE.md's rule. An export with a pending job of an older package version is a corner case, and the job fails visibly |
 | Q-5 | Paging and helpers inside the components (G3, G4): convex-helpers is a dependency of five of the six | A: a private workspace helper bundled into each package; B: port convex-helpers first (AD-23) and depend on it | **A now.** It is a few dozen lines (an index-range reader with a JSON cursor). AD-23 stays its own decision, and the components can switch to it later |
-| Q-6 | Tests for apps (convex-test's `register(t)`) | A: no `./test` entry until `@bunvex/testing` exists (DV-539), the harness its own study; B: build a minimal `@bunvex/testing` with `registerComponent` first | **A.** An app on convex-test cannot run on bunvex's test harness anyway until that harness exists. The packages test themselves on the server's in-memory engine |
+| Q-6 | Tests for apps (convex-test's `register(t)`) | A: no `./test` entry until `@bunvex/testing` exists (a divergence), the harness its own study; B: build a minimal `@bunvex/testing` with `registerComponent` first | **A.** An app on convex-test cannot run on bunvex's test harness anyway until that harness exists. The packages test themselves on the server's in-memory engine |
 | Q-7 | workpool's non-retryable marker key (`__convexWorkpoolNonRetryable` cannot ship, rule 5) | `__bunvexWorkpoolNonRetryable`; or a neutral `__workpoolNonRetryable` | **`__bunvexWorkpoolNonRetryable`**, the same rename DV-312 applied elsewhere |
 | Q-8 | Order (§3.4) | As §3.4; or C7's order (workpool, rate-limiter, aggregate, migrations) without sharded-counter | **§3.4.** sharded-counter proves the packaging cheaply, and batch-worker has to come before the three that use it |
