@@ -110,6 +110,33 @@ test("a second session reusing a result logs a cache hit with the run's lines", 
   const [, logged] = t.completions.filter((c) => c.identifier === "m:list");
   expect(logged).toMatchObject({ cachedResult: true, caller: "SyncWorker", error: null });
   expect(JSON.stringify(logged.logLines)).toContain("listing");
+  // With the run's user time, memory and start (STUDY-174 F4), in its own request.
+  const [first] = t.completions.filter((c) => c.identifier === "m:list");
+  expect(logged).toMatchObject({
+    userExecutionTime: first.userExecutionTime,
+    executionTimestamp: first.executionTimestamp,
+    usageStats: { memoryUsedMb: 64 },
+  });
+  expect(logged.requestId).not.toBe(first.requestId);
+  expect(hit.usage.memory_used_mb).toBe(64);
+  expect(hit.user_execution_time_ms).toBe(ran.user_execution_time_ms);
+});
+
+test("a session reusing another identity's run of a query that read none logs that run's identity type", async () => {
+  const t = await setup();
+  const admin = await t.client();
+  admin.send({ type: "Authenticate", tokenType: "Admin", value: KEY, baseVersion: 0 } as v1.ClientMessage);
+  admin.modify([add(1, "m:list")]);
+  await t.until(() => t.completions.filter((c) => c.identifier === "m:list").length === 1);
+  const anonymous = await t.client();
+  anonymous.modify([add(1, "m:list")]);
+  await t.until(() => t.completions.filter((c) => c.identifier === "m:list").length === 2);
+  expect(t.runs()).toBe(1);
+  // As Convex's `log_query`, which logs the cached outcome's identity.
+  expect(t.completions.filter((c) => c.identifier === "m:list").map((c) => [c.cachedResult, c.identityType])).toEqual([
+    [false, "instance_admin"],
+    [true, "instance_admin"],
+  ]);
 });
 
 test("a session joining a run in flight logs a cache hit once it is served", async () => {

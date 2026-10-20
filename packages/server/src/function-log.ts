@@ -4,8 +4,9 @@
 //
 // A part is a Completion (one per execution) or a Progress event (lines an action printed as it ran). The
 // newest MAX_UDF_EXECUTION parts are kept, each under a cursor: wall-clock ms, strictly increasing.
-import { knob, wallClock } from "@bunvex/core";
-import { type LogLine, type LogOwner, prettyLogLine } from "./logs.ts";
+import { knob, type UserTimer, userTimeMs, wallClock } from "@bunvex/core";
+import { type LogLine, type LogOwner, prettyLogLine, type RunFigures } from "./logs.ts";
+import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB } from "./usage-limits.ts";
 
 /** How many parts the log keeps (Convex's MAX_UDF_EXECUTION). */
 export const MAX_UDF_EXECUTION = knob("MAX_UDF_EXECUTION", 1000);
@@ -193,6 +194,12 @@ export class Running implements LogOwner {
   links: ExecutionLinks | null = null;
   /** The run's user timer (a query's or mutation's), for its user execution time (STUDY-71). */
   timer: unknown = null;
+  /** The clock its times are read from (the engine's runtime); set by `Functions.logged`. */
+  clock: { now(): number } | null = null;
+  /** Its figures once its result was kept for the cache (`ran`), which its own entry then gives too. */
+  private kept: RunFigures | null = null;
+  /** On a cache hit, the run it reused (logs.ts `cachedQueryLogs.replay`). */
+  reused: RunFigures | null = null;
   /**
    * An action's metered calls (STUDY-71), as Convex's function usage tracker: its `fetch` request bodies,
    * and its file storage calls with the bytes they read and wrote.
@@ -220,6 +227,28 @@ export class Running implements LogOwner {
     readonly start: number,
     readonly environment: "isolate" | "node" = "isolate",
   ) {}
+
+  /** Its figures as of now, kept: a cached result's hits are logged with them (STUDY-174 F4). */
+  ran(): RunFigures {
+    this.kept ??= this.figuresAt(this.clock?.now() ?? wallClock());
+    return this.kept;
+  }
+
+  /** What its entry ending at `end` (wall-clock ms) says of its run: the kept figures if its result was cached. */
+  figuresAt(end: number): RunFigures {
+    if (this.kept) return this.kept;
+    const seconds = (end - this.start) / 1000;
+    return {
+      // A query's or mutation's user time excludes its store and nested calls, as Convex's; an action's is its
+      // wall time, as Convex pauses an action's clock only while its isolate starts (STUDY-71).
+      // Never above the wall time, which bunvex reads from a coarser clock.
+      userExecutionTime: this.timer ? Math.min(userTimeMs(this.timer as UserTimer) / 1000, seconds) : seconds,
+      // Convex's memory per execution: its isolate heap (64 MiB), a Node action's 512 MB (STUDY-61).
+      memoryUsedMb: this.environment === "node" ? NODE_MEMORY_MB : ISOLATE_MEMORY_MB,
+      executionTimestamp: this.start / 1000,
+      identityType: this.identityType,
+    };
+  }
 }
 
 /** The next double after `x` (> 0): Convex's `f64::next_up`, so two parts never share a cursor. */

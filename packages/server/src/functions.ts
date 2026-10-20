@@ -207,7 +207,7 @@ import { setServiceCallContext } from "./service-tokens.ts";
 import type { FileStorage, StorageMeter } from "./storage.ts";
 import { UnparsedSystemArgs } from "./system-args.ts";
 import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
-import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB, type UsageMeter } from "./usage-limits.ts";
+import type { UsageMeter } from "./usage-limits.ts";
 import { bodyLength } from "./web-response.ts";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe), and the
@@ -1153,6 +1153,7 @@ export class Functions {
       this.engine.runtime.now(),
       udfType === "Action" && this.isNodeAction(name) ? "node" : "isolate",
     );
+    r.clock = this.engine.runtime;
     if (inComponent) r.componentPath = this.componentRuntimes.get(inComponent.id)?.runtime.path ?? null;
     r.tokenIdentifier = ((caller?.identity as { tokenIdentifier?: unknown } | null)?.tokenIdentifier as string) ?? null;
     r.ip = caller?.request?.ip ?? null;
@@ -1375,9 +1376,11 @@ export class Functions {
     this.usageMeter?.recordExecution({
       udfType: c.udfType,
       environment: c.environment,
+      // A cache hit meters no compute, as Convex's `CallType::CachedQuery`: its entry's user time and memory
+      // are its run's, already metered (STUDY-174 F4).
       executionTime: c.cachedResult ? 0 : c.executionTime,
-      userExecutionTime: c.userExecutionTime,
-      memoryMb: c.usageStats.memoryUsedMb,
+      userExecutionTime: c.cachedResult ? null : c.userExecutionTime,
+      memoryMb: c.cachedResult ? 0 : c.usageStats.memoryUsedMb,
       databaseIoBytes: c.usageStats.databaseIoReadBytes + c.usageStats.databaseIoWriteBytes,
       dataEgressBytes: r.io.networkEgressBytes + r.io.storageReadBytes,
       searchQueryBytes: c.usageStats.textIndexQueryBytes + c.usageStats.vectorIndexReadQueryBytes,
@@ -1412,6 +1415,10 @@ export class Functions {
     const seconds = (end - r.start) / 1000;
     // An HTTP action that ran to the end is named, and measured, by its route.
     if (o.route) r.metricsName = o.route.metricsName;
+    // A cache hit gives the user time, memory, start and identity of the run it reused, as Convex's `log_query`
+    // logs the cached outcome's (STUDY-174 F4); its own are its wall time, timestamp, request and caller.
+    // A hit whose run kept none (never in practice) gives its own, with no memory.
+    const ran = r.cached ? r.reused : r.figuresAt(end);
     return {
       kind: "Completion",
       udfType: r.udfType,
@@ -1423,10 +1430,8 @@ export class Functions {
       caller: r.caller,
       parentExecutionId: r.parent?.executionId ?? null,
       executionTime: seconds,
-      // A query's or mutation's user time excludes its store and nested calls, as Convex's; an action's is its
-      // wall time, as Convex pauses an action's clock only while its isolate starts (STUDY-71).
-      // Never above the wall time, which bunvex reads from a coarser clock.
-      userExecutionTime: r.timer ? Math.min(userTimeMs(r.timer as UserTimer) / 1000, seconds) : seconds,
+      // How it is measured: `Running.figuresAt` (STUDY-71).
+      userExecutionTime: ran?.userExecutionTime ?? seconds,
       success: e === undefined ? (o.success ?? null) : null,
       // An attempt that lost an OCC conflict and runs again has no error, as Convex logs it before it fails
       // the outcome (only `occInfo` and `willRetry` tell it apart; STUDY-74).
@@ -1445,9 +1450,8 @@ export class Functions {
         ...(r.io.vectorReadBytes > 0 && {
           databaseReadBytes: (used?.readBytes ?? 0) + r.io.vectorReadBytes,
         }),
-        // Convex's memory per execution: its isolate heap (64 MiB), a Node action's 512 MB; none for a
-        // cached query (STUDY-61).
-        memoryUsedMb: r.cached ? 0 : r.environment === "node" ? NODE_MEMORY_MB : ISOLATE_MEMORY_MB,
+        // Convex's memory per execution (STUDY-61); a cache hit's is its run's.
+        memoryUsedMb: ran?.memoryUsedMb ?? 0,
       },
       returnBytes:
         e === undefined
@@ -1466,8 +1470,8 @@ export class Functions {
             }
           : null,
       willRetry,
-      executionTimestamp: r.start / 1000,
-      identityType: r.identityType,
+      executionTimestamp: ran?.executionTimestamp ?? r.start / 1000,
+      identityType: (ran?.identityType as IdentityType | undefined) ?? r.identityType,
       environment: r.environment,
       ...(r.links && { links: r.links }),
     };
