@@ -43,6 +43,7 @@ import {
   stringifyValue,
   TooManyWritesError,
   type Tx,
+  timerDelay,
   wallClock,
 } from "@bunvex/core";
 import {
@@ -258,8 +259,6 @@ export function schedulerOptionsFromEnv(env: KnobEnv = process.env): Required<Sc
   };
 }
 
-const MAX_TIMER_MS = 2 ** 31 - 1;
-
 /** Convex's backoff: `initial · 2^(n-1)`, capped, with full jitter. */
 const backoff = (failures: number, initialMs: number, maxMs: number) =>
   Math.random() * Math.min(maxMs, initialMs * 2 ** Math.max(0, failures - 1));
@@ -465,7 +464,8 @@ export class ScheduledJobExecutor {
       await new Promise<void>((resolve) => {
         this.wake = resolve;
         if (nextAt !== null) {
-          const t = setTimeout(() => this.poke(), Math.max(0, nextAt - wallClock()));
+          // Capped (STUDY-174 F2): a job months away wakes the loop every 24.8 days, which looks again.
+          const t = setTimeout(() => this.poke(), timerDelay(nextAt - wallClock()));
           const prev = resolve;
           this.wake = () => {
             clearTimeout(t);
@@ -723,7 +723,7 @@ export class ScheduledJobExecutor {
         next = backoff(failures, this.o.gcInitialBackoffMs, this.o.gcMaxBackoffMs);
       }
       // A timer longer than 2^31 - 1 ms fires at once: a far wait is taken in steps.
-      this.scheduleGc(Math.min(next, MAX_TIMER_MS), failures);
+      this.scheduleGc(timerDelay(next), failures);
     }, delayMs);
   }
 }

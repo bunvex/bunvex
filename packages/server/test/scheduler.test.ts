@@ -272,6 +272,23 @@ describe("_scheduled_functions through db.system", () => {
 });
 
 describe("the executor", () => {
+  test("idle with a job more than 24.8 days away, it sleeps instead of polling (STUDY-174 F2)", async () => {
+    // A timer longer than 2^31-1 ms fires at once in Bun: an uncapped sleep polls the queue every millisecond.
+    const { engine, functions, state } = await setup();
+    const id = (await functions.runMutation("m:schedule", { delay: 30 * 86400_000 })) as string;
+    expect(await state(id)).toBe("pending");
+    await Bun.sleep(50);
+    let queries = 0;
+    const query = engine.query.bind(engine);
+    engine.query = ((...a: Parameters<typeof query>) => {
+      queries++;
+      return query(...a);
+    }) as typeof engine.query;
+    await Bun.sleep(1500);
+    engine.query = query;
+    expect(queries).toBeLessThan(20);
+  });
+
   test("a failing mutation's writes are gone and its job is failed", async () => {
     const { engine, functions, state } = await setup();
     const id = (await functions.runMutation("m:schedule", { delay: 0, fn: "m:fails" })) as string;

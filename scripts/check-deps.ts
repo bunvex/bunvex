@@ -10,6 +10,11 @@
 //      API and its messages carry its own names (owner's decision, STUDY-18 D1). Apps (apps/*, e.g. the site
 //      comparing benchmarks) may name Convex descriptively. No exceptions, wire names included: a `format`
 //      value, a metric or an error code is bunvex's (owner, 2026-10-03: DV-307, DV-308, DV-312).
+//   6. in the packages' shipped code, a `setTimeout(` whose delay subtracts a time (`- now`, `- wallClock()`,
+//      `- Date.now()`, `- this.now()`, `- performance.now()`: a sleep towards a timestamp) passes it through core's
+//      `timerDelay`, which caps it at 2^31-1 ms. Past that Bun fires a timer after about 1 ms, so an uncapped sleep
+//      towards a far timestamp busy-loops (STUDY-174 F2, F3, I-25). It sees the delay written inline only, not one
+//      computed earlier into a variable; delays from operator knobs (no subtraction) are not its concern.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
@@ -149,6 +154,39 @@ function withoutComments(text: string): string {
   return out;
 }
 
+/** A sleep towards a timestamp: a delay that subtracts a clock reading or a `now` (rule 6). */
+const TIME_SUBTRACTED = /-\s*(?:wallClock\(\)|(?:[\w$]+\.)+now\(\)|now\b(?!\s*\())/;
+
+/** Each `setTimeout(` call's delay argument (its last), with the line it starts on, in comment-free code. */
+function* timerDelays(code: string): Generator<{ line: number; delay: string }> {
+  for (const m of code.matchAll(/\bsetTimeout\(/g)) {
+    const args: string[] = [""];
+    let depth = 0;
+    let quote: string | null = null;
+    for (let i = m.index + m[0].length; i < code.length; i++) {
+      const c = code[i]!;
+      if (quote) {
+        if (c === "\\") i++;
+        else if (c === quote) quote = null;
+        args[args.length - 1] += c;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === "`") quote = c;
+      else if ("([{".includes(c)) depth++;
+      else if (")]}".includes(c)) {
+        if (depth === 0) break;
+        depth--;
+      } else if (c === "," && depth === 0) {
+        args.push("");
+        continue;
+      }
+      args[args.length - 1] += c;
+    }
+    const delay = args.filter((a) => a.trim() !== "").at(-1) ?? "";
+    yield { line: code.slice(0, m.index).split("\n").length, delay };
+  }
+}
+
 function* tsFiles(dir: string): Generator<string> {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     if (e.name === "node_modules") continue;
@@ -181,7 +219,13 @@ for (const [name, dir] of dirOfName) {
     const rel = relative(ROOT, file);
     const text = readFileSync(file, "utf8");
     if (/^packages\/[^/]+\/src\//.test(rel)) {
-      const code = withoutComments(text).split("\n");
+      const stripped = withoutComments(text);
+      for (const { line, delay } of timerDelays(stripped))
+        if (TIME_SUBTRACTED.test(delay) && !/\btimerDelay\(/.test(delay))
+          errors.push(
+            `${rel}:${line}: a timer's delay towards a timestamp is not capped — pass it through timerDelay (rule 6)`,
+          );
+      const code = stripped.split("\n");
       code.forEach((line, n) => {
         if (/convex/i.test(line))
           errors.push(
