@@ -920,7 +920,11 @@ const VECTOR_FILTER_BUILDER = {
  * (the app's filter function run on the builder), before the engine's checks (STUDY-51). The function sandbox's
  * child runs them at the app's call, and sends the expression (STUDY-171 §12).
  */
-export function vectorSearchFilter(tableName: unknown, indexName: unknown, query: VectorSearchQuery): unknown {
+export function vectorSearchFilter(
+  tableName: unknown,
+  indexName: unknown,
+  query: VectorSearchQuery<GenericTableInfo, string>,
+): unknown {
   const args = [tableName, indexName, query];
   const argNames = ["tableName", "indexName", "query"];
   for (let i = 0; i < 3; i++)
