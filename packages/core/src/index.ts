@@ -130,12 +130,19 @@ export type {
   IdField,
   Indexes,
   IndexNames,
+  IndexTiebreakerField,
   NamedIndex,
+  NamedSearchIndex,
   NamedTableInfo,
+  NamedVectorIndex,
+  SearchIndexNames,
   SystemFields,
   SystemIndexes,
   SystemTableNames,
   TableNamesInDataModel,
+  TableSearchIndexes,
+  TableVectorIndexes,
+  VectorIndexNames,
   WithOptionalSystemFields,
   WithoutSystemFields,
 } from "./data-model.ts";
@@ -153,6 +160,7 @@ export type {
   BaseTableWriter,
   ExpressionOrValueOf,
   FieldTypeFromFieldPath,
+  FieldTypeFromFieldPathInner,
   FilterBuilder,
   GenericDatabaseReader,
   GenericDatabaseReaderWithTable,
@@ -166,7 +174,6 @@ export type {
   PatchValue,
   Query,
   QueryInitializer,
-  SearchFilter,
   SearchFilterBuilder,
   SearchFilterFinalizer,
   SystemDataModel,
@@ -251,7 +258,7 @@ export {
   type EnvVarChange,
   orderEnvVarChanges,
 } from "./environment-variables.ts";
-export { Expression, type ExpressionOrValue, expressionFromJson, expressionJson, filterBuilder } from "./filter.ts";
+export { Expression, expressionFromJson, expressionJson, type FilterOperand, filterBuilder } from "./filter.ts";
 export { INDEX_CACHE_MAX_BYTES, IndexCache, IndexCacheMismatchError, type IndexCacheStats } from "./index-cache.ts";
 export { opaqueToInspect } from "./inspect.ts";
 export {
@@ -348,6 +355,7 @@ export {
 export {
   checkIdentifier,
   type DeclaredTable,
+  type DefineSchemaOptions,
   type Doc,
   type DocValidator,
   declaredTables,
@@ -355,11 +363,16 @@ export {
   defineTable,
   documentTypeError,
   docValidator,
+  type EngineSchema,
   type Expand,
   type FieldValue,
+  type GenericIndexFields,
   type GenericSchema,
+  type GenericSearchIndexConfig,
   type GenericTableIndexes,
   type GenericTableSearchIndexes,
+  type GenericTableVectorIndexes,
+  type GenericVectorIndexConfig,
   type IndexDef,
   indexKey,
   indexReferenceError,
@@ -369,12 +382,14 @@ export {
   referencedTables,
   type SchemaDefinition,
   type SchemaValidators,
+  type SearchIndexConfig,
   type SearchIndexDef,
   type SystemFieldValidators,
   schemaOfDeclared,
   stagedDocumentError,
   type TableDef,
   TableDefinition,
+  type VectorIndexConfig,
 } from "./schema.ts";
 export {
   type SchemaJson,
@@ -394,6 +409,7 @@ export {
   stagedSchemaValidationProgress,
   type ValidationState,
 } from "./schema-validations.ts";
+export { SearchFilter } from "./search-filter.ts";
 export type { SearchSegmentStore } from "./search-segments.ts";
 export {
   SESSION_CLEANUP_CHUNK,

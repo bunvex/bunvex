@@ -62,6 +62,12 @@ export class TestRuntime implements Runtime {
   // Fields, not methods: a clock is handed around detached (`newUserTimer(…, rt.monotonicNow)`).
   readonly now = (): number => this.wallStart + this.mono;
   readonly monotonicNow = (): number => this.mono;
+  readonly preciseNow = (): number => this.now();
+  readonly nowNs = (): bigint => {
+    const ms = this.now();
+    const whole = Math.floor(ms);
+    return BigInt(whole) * 1_000_000n + BigInt(Math.round((ms - whole) * 1e6));
+  };
 
   setTimeout(fn: () => void, ms: number): RuntimeTimer {
     return this.add(fn, ms, null);

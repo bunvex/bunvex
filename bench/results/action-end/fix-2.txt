@@ -1,0 +1,25 @@
+{"line":"empty action","sandbox":"vm","calls":2000,"p50":60.28100000003178,"mean":87.20533449999861,"p99":469.80400000001055}
+{"line":"action, 1 runQuery","sandbox":"vm","calls":2000,"p50":139.4550000001118,"mean":176.06892699999813,"p99":1241.5439999999762}
+{"line":"fetch GET, empty body","sandbox":"vm","calls":2000,"p50":733.3599999999478,"mean":959.6031069999976,"p99":3198.0619999999362}
+{"line":"10 x fetch GET, empty body","sandbox":"vm","calls":500,"p50":8838.682999999946,"mean":10066.65517,"p99":21365.010999999868}
+{"line":"fetch GET, 64 KiB","sandbox":"vm","calls":2000,"p50":910.6449999999313,"mean":1187.4301489999978,"p99":3740.298000000621,"mibPerS":68.63267244645796}
+{"line":"fetch GET, 1 MiB","sandbox":"vm","calls":500,"p50":2634.925000000294,"mean":2904.275073999971,"p99":7152.713999999833,"mibPerS":379.5174435704578}
+{"line":"fetch POST, 1 MiB","sandbox":"vm","calls":500,"p50":2995.984999999564,"mean":3424.116289999968,"p99":11475.377000000663,"mibPerS":333.7800422899799}
+{"line":"storage.store, 1 KiB","sandbox":"vm","calls":2000,"p50":230.67699999955948,"mean":286.06583999998367,"p99":1276.3359999989916,"mibPerS":4.23346280731007}
+{"line":"storage.get, 1 KiB","sandbox":"vm","calls":2000,"p50":123.88300000020536,"mean":139.3294364999873,"p99":298.4879999967234,"mibPerS":7.882941969425839}
+{"line":"store + get + delete, 1 MiB","sandbox":"vm","calls":500,"p50":1529.6940000007453,"mean":2661.405520000045,"p99":9398.948000001837,"mibPerS":1307.451032689561}
+{"line":"store + get + delete, 16 MiB + 1","sandbox":"vm","calls":40,"p50":48901.34600000238,"mean":51176.38485000016,"p99":109715.41400000206,"mibPerS":654.3787548781802}
+p50 / mean / p99 µs per action, after a warm-up; 2000 calls for the short lines
+| Action | vm | process | process − vm, p50 |
+|---|---|---|---|
+| empty action (2000) | 60 / 87 / 470 |  |  |
+| action, 1 runQuery (2000) | 139 / 176 / 1242 |  |  |
+| fetch GET, empty body (2000) | 733 / 960 / 3198 |  |  |
+| 10 x fetch GET, empty body (500) | 8839 / 10067 / 21365 |  |  |
+| fetch GET, 64 KiB (2000) | 911 / 1187 / 3740 (69 MiB/s) |  |  |
+| fetch GET, 1 MiB (500) | 2635 / 2904 / 7153 (380 MiB/s) |  |  |
+| fetch POST, 1 MiB (500) | 2996 / 3424 / 11475 (334 MiB/s) |  |  |
+| storage.store, 1 KiB (2000) | 231 / 286 / 1276 (4 MiB/s) |  |  |
+| storage.get, 1 KiB (2000) | 124 / 139 / 298 (8 MiB/s) |  |  |
+| store + get + delete, 1 MiB (500) | 1530 / 2661 / 9399 (1307 MiB/s) |  |  |
+| store + get + delete, 16 MiB + 1 (40) | 48901 / 51176 / 109715 (654 MiB/s) |  |  |

@@ -38,9 +38,11 @@ export function httpActionGeneric(handler: HttpActionHandler): PublicHttpAction 
 /** The same builder, for apps without codegen (`_generated/server` re-exports it as `httpAction`). */
 export const httpAction = httpActionGeneric;
 
-export type RouteSpec =
-  | { path: string; method: RoutableMethod; handler: PublicHttpAction }
-  | { pathPrefix: string; method: RoutableMethod; handler: PublicHttpAction };
+/** A route on an exact path (Convex's `RouteSpecWithPath`). */
+export type RouteSpecWithPath = { path: string; method: RoutableMethod; handler: PublicHttpAction };
+/** A route on every path under a prefix ending in `/` (Convex's `RouteSpecWithPathPrefix`). */
+export type RouteSpecWithPathPrefix = { pathPrefix: string; method: RoutableMethod; handler: PublicHttpAction };
+export type RouteSpec = RouteSpecWithPath | RouteSpecWithPathPrefix;
 
 export const httpRouter = () => new HttpRouter();
 

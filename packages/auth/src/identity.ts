@@ -27,6 +27,9 @@ export interface UserIdentity {
   readonly [key: string]: JSONValue | undefined;
 }
 
+/** An identity without its `tokenIdentifier` (Convex's `UserIdentityAttributes`): what a test or an admin sets. */
+export type UserIdentityAttributes = Omit<UserIdentity, "tokenIdentifier">;
+
 /** A verified identity and when its token expires (seconds since the epoch), for the sync protocol's checks. */
 export type VerifiedIdentity = { identity: UserIdentity; expiresAt: number };
 

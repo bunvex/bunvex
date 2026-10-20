@@ -18,6 +18,13 @@ export interface Runtime {
   readonly now: () => number;
   /** A monotonic clock, in ms from an arbitrary origin (`performance.now()`). */
   readonly monotonicNow: () => number;
+  /**
+   * The wall clock in fractional ms, never behind `now()`: a transaction's first `_creationTime` (Convex's
+   * `CreationTime::for_transaction`). Not unique: the engine makes each transaction's start unique itself.
+   */
+  readonly preciseNow: () => number;
+  /** The wall clock in ns, never behind `now()`: the clock of commit timestamps (Convex's `system_time` as u64). */
+  readonly nowNs: () => bigint;
   setTimeout(fn: () => void, ms: number): RuntimeTimer;
   clearTimeout(timer: RuntimeTimer | null | undefined): void;
   setInterval(fn: () => void, ms: number): RuntimeTimer;
@@ -32,6 +39,22 @@ const realSetTimeout = globalThis.setTimeout;
 const realClearTimeout = globalThis.clearTimeout;
 const realSetInterval = globalThis.setInterval;
 const realClearInterval = globalThis.clearInterval;
+
+const origin = performance.timeOrigin;
+
+/** `performance.now()` on the epoch, or the wall clock when that is ahead (it drifts by up to a millisecond). */
+function realPreciseNow(): number {
+  const precise = origin + realPerformanceNow();
+  const wall = realNow();
+  return precise > wall ? precise : wall;
+}
+
+/** The whole milliseconds from the clock and the fraction from `performance.now()` (sub-microsecond on Bun). */
+function realNowNs(): bigint {
+  const ms = realPreciseNow();
+  const whole = Math.floor(ms);
+  return BigInt(whole) * 1_000_000n + BigInt(Math.floor((ms - whole) * 1e6));
+}
 
 function realSleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (!signal) return new Promise((resolve) => realSetTimeout(resolve, ms));
@@ -53,6 +76,8 @@ function realSleep(ms: number, signal?: AbortSignal): Promise<void> {
 export const realRuntime: Runtime = {
   now: () => realNow(),
   monotonicNow: realPerformanceNow,
+  preciseNow: realPreciseNow,
+  nowNs: realNowNs,
   setTimeout: (fn, ms) => realSetTimeout(fn, ms),
   clearTimeout: (t) => realClearTimeout(t as ReturnType<typeof setTimeout> | undefined),
   setInterval: (fn, ms) => realSetInterval(fn, ms),

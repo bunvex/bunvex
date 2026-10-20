@@ -16,13 +16,21 @@
 //   snapshot, variables and catalog); the child sends an `op` for each `ctx` operation and answers the call with
 //   `done`; the host answers each `op` with a `reply`. Calls and their operations interleave freely: each is named
 //   by the call's id and its own number.
+// - **Actions** (STUDY-171 §12): the host sends `action` (its arguments and the variables at its start); the child
+//   runs the handler outside any transaction, with an action's `ctx` of operations, and answers with `done`. Its
+//   console lines go as they come (`lines`), as an action's stream to the function log. Past the action's timeout the
+//   host sends `cancel`: the child cuts the handler off from its `ctx` and its `fetch`, says `cancelled`, and sends
+//   nothing more for that call; a child that does not say it in time is killed.
+// - **Bytes** (a `fetch` body, a stored file) go as streams (`streams.ts`): chunk frames of their own, with `end`,
+//   `fail`, `credit` and `stop` messages, both ways.
 import type { AnalyzedFunction, AnalyzedModule, DefaultExportUse, ModuleSource } from "@bunvex/server/executor";
+import type { StreamMessage } from "./streams.ts";
 
 /** How many catalogs and how many variable sets a child keeps (the host's `EpochWindow` counts the same). */
 export const EPOCHS_KEPT = 4;
 
 /** Bumped whenever a message changes: host and child are always the same build, but a stale child must not run. */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /** Convex's argument and result caps (`FUNCTION_MAX_ARGS_SIZE`, `FUNCTION_MAX_RESULT_SIZE`, knobs.rs:439-446). */
 export const MAX_VALUE_SIZE = 1 << 24;
@@ -45,7 +53,10 @@ export type ToChild =
       use: DefaultExportUse;
     }
   | WireCall
-  | WireReply;
+  | WireActionCall
+  | WireReply
+  | { t: "cancel"; id: number; error: WireThrown }
+  | StreamMessage;
 
 /**
  * `LoadOptions` as sent: the seed as numbers, the import time limit resolved. (`MAX_USER_MODULES`, read when the
@@ -66,7 +77,20 @@ export type ToHost =
   | { t: "evaluated"; id: number; export: EvaluatedDefault; loadMs: number }
   | { t: "failed"; id: number; error: WireError }
   | { t: "op"; id: number; op: number; name: string; args: unknown[]; report: WireReport }
-  | ({ t: "done"; id: number; report: WireReport } & ({ ok: true; value: unknown } | { ok: false; error: WireThrown }));
+  | ({
+      t: "done";
+      id: number;
+      report: WireReport;
+      /** An action's operations whose answer it had not taken when it returned (they are its unawaited ones). */
+      pending?: number[];
+    } & ({ ok: true; value: unknown } | { ok: false; error: WireThrown }))
+  /** An action's console lines, sent as they come (a query's or mutation's go with its next message). */
+  | { t: "lines"; id: number; lines: WireLogLine[] }
+  /** The child cut the action off (`cancel`): nothing more comes for that call. */
+  | { t: "cancelled"; id: number }
+  /** The app aborted the signal of its `fetch` (operation `op` of call `id`). */
+  | { t: "abort"; id: number; op: number }
+  | StreamMessage;
 
 /**
  * A loaded code version as the child describes it: what `CodeVersion.load` analyzed (`analysis`), and what the
@@ -77,7 +101,20 @@ export type WireVersion = {
   moduleHashes: [name: string, hash: string][];
   moduleLoads: [name: string, modules: string[]][];
   functions: [key: string, fn: WireFunction][];
-  rooms: [key: string, kind: "room" | "presence"][];
+  rooms: [key: string, room: WireRoom][];
+};
+/**
+ * A room or presence definition (AD-42): its validators' JSON (a room's presence and events, a presence scope's
+ * state) and which gates it has. The gates run in the child, as queries (`key#canJoin`).
+ */
+export type WireRoom = {
+  kind: "room" | "presence";
+  args: string | null;
+  /** A room's `presence`, a presence scope's `state`. */
+  value: string;
+  events: [name: string, validator: string][];
+  canJoin: boolean;
+  canPublish: boolean;
 };
 export type WireFunction = {
   kind: "query" | "mutation" | "action";
@@ -147,6 +184,19 @@ export type WireCall = {
   catalog: { epoch: number; tables?: WireTable[] };
   /** The tables this transaction created so far. */
   created: WireTable[];
+};
+
+/** host → child: an action's call. */
+export type WireActionCall = {
+  t: "action";
+  id: number;
+  version: number;
+  fn: string;
+  args: unknown;
+  /** The variables at the action's start (Convex's `get_all`), or null when it sees none of the deployment's. */
+  env: [string, string][] | null;
+  /** `ctx.meta`'s methods. */
+  meta: string[];
 };
 
 /**
@@ -350,7 +400,21 @@ function version(x: Json, where: string): WireVersion {
       },
       `${where}.functions`,
     ),
-    rooms: pairs(o.rooms, (k, w) => oneOf(k, ROOM_KINDS, w), `${where}.rooms`),
+    rooms: pairs(
+      o.rooms,
+      (r, w) => {
+        const room = obj(r, w);
+        return {
+          kind: oneOf(room.kind, ROOM_KINDS, `${w}.kind`),
+          args: nullable(room.args, str, `${w}.args`),
+          value: str(room.value, `${w}.value`),
+          events: pairs(room.events, str, `${w}.events`),
+          canJoin: bool(room.canJoin, `${w}.canJoin`),
+          canPublish: bool(room.canPublish, `${w}.canPublish`),
+        };
+      },
+      `${where}.rooms`,
+    ),
   };
 }
 
@@ -392,20 +456,25 @@ function report(x: Json, where: string): WireReport {
       if (e.length !== 4) fail(w, "a link: its kind, id, source and arguments");
       return [str(e[0], `${w}[0]`), int(e[1], `${w}[1]`), nullable(e[2], int, `${w}[2]`), e[3]] as WireLink;
     }),
-    lines: arr(o.lines, `${where}.lines`).map((l, i) => {
-      const w = `${where}.lines[${i}]`;
-      const e = arr(l, w);
-      if (e.length !== 4) fail(w, "a line: its level, messages, truncation and time");
-      const timestamp = num(e[3], `${w}[3]`);
-      if (!Number.isFinite(timestamp)) fail(`${w}[3]`, "a finite number");
-      return [
-        oneOf(e[0], LOG_LEVELS, `${w}[0]`),
-        arr(e[1], `${w}[1]`).map((m, j) => str(m, `${w}[1][${j}]`)),
-        bool(e[2], `${w}[2]`),
-        timestamp,
-      ] as WireLogLine;
-    }),
+    lines: logLines(o.lines, `${where}.lines`),
   };
+}
+
+/** Console lines, checked: each a level, its messages' text, whether it was cut, and a finite time. */
+function logLines(x: Json, where: string): WireLogLine[] {
+  return arr(x, where).map((l, i) => {
+    const w = `${where}[${i}]`;
+    const e = arr(l, w);
+    if (e.length !== 4) fail(w, "a line: its level, messages, truncation and time");
+    const timestamp = num(e[3], `${w}[3]`);
+    if (!Number.isFinite(timestamp)) fail(`${w}[3]`, "a finite number");
+    return [
+      oneOf(e[0], LOG_LEVELS, `${w}[0]`),
+      arr(e[1], `${w}[1]`).map((m, j) => str(m, `${w}[1][${j}]`)),
+      bool(e[2], `${w}[2]`),
+      timestamp,
+    ] as WireLogLine;
+  });
 }
 
 /** A thrown value's description (its values are checked when decoded). */
@@ -435,8 +504,33 @@ export function parseChildMessage(text: string): ToHost {
     throw new BadMessageError(`not JSON (${(e as Error).message})`);
   }
   const m = obj(x, "message");
-  const t = oneOf(m.t, ["hello", "loaded", "evaluated", "failed", "op", "done"], "message.t");
+  const t = oneOf(
+    m.t,
+    [
+      "hello",
+      "loaded",
+      "evaluated",
+      "failed",
+      "op",
+      "done",
+      "lines",
+      "cancelled",
+      "abort",
+      "end",
+      "fail",
+      "credit",
+      "stop",
+    ],
+    "message.t",
+  );
   if (t === "hello") return { t, protocol: num(m.protocol, "hello.protocol"), pid: int(m.pid, "hello.pid") };
+  if (t === "end" || t === "stop") return { t, s: int(m.s, `${t}.s`) };
+  if (t === "credit") {
+    const n = int(m.n, "credit.n");
+    if (n === 0) fail("credit.n", "a positive integer");
+    return { t, s: int(m.s, "credit.s"), n };
+  }
+  if (t === "fail") return { t, s: int(m.s, "fail.s"), error: thrown(m.error, "fail.error") };
   const id = int(m.id, `${t}.id`);
   if (t === "loaded")
     return { t, id, version: version(m.version, "loaded.version"), loadMs: num(m.loadMs, "loaded.loadMs") };
@@ -452,9 +546,16 @@ export function parseChildMessage(text: string): ToHost {
   if (t === "done") {
     const ok = bool(m.ok, "done.ok");
     const r = report(m.report, "done.report");
-    if (ok) return { t, id, ok, value: "value" in m ? m.value : fail("done.value", "a value"), report: r };
-    return { t, id, ok, error: thrown(m.error, "done.error"), report: r };
+    const pending =
+      m.pending === undefined
+        ? {}
+        : { pending: arr(m.pending, "done.pending").map((p, i) => int(p, `done.pending[${i}]`)) };
+    if (ok) return { t, id, ok, value: "value" in m ? m.value : fail("done.value", "a value"), report: r, ...pending };
+    return { t, id, ok, error: thrown(m.error, "done.error"), report: r, ...pending };
   }
+  if (t === "lines") return { t, id, lines: logLines(m.lines, "lines.lines") };
+  if (t === "cancelled") return { t, id };
+  if (t === "abort") return { t, id, op: int(m.op, "abort.op") };
   if (t === "evaluated")
     return { t, id, export: evaluated(m.export, "evaluated.export"), loadMs: num(m.loadMs, "evaluated.loadMs") };
   return { t, id, error: wireError(m.error, "failed.error") };

@@ -9,9 +9,9 @@ import {
   componentMeta,
   componentRow,
   type Engine,
+  type EngineSchema,
   type NewComponent,
   type NewComponentDefinition,
-  type SchemaDefinition,
   schemaToJson,
   type TableDef,
   type Tx,
@@ -139,7 +139,7 @@ export const analysisJson = (m: AnalyzedModule) => ({
 export function analysisAnswer(
   definitions: ReadonlyMap<
     string,
-    { definition: NewComponentDefinition; schema: SchemaDefinition | null; functions: Record<string, AnalyzedModule> }
+    { definition: NewComponentDefinition; schema: EngineSchema | null; functions: Record<string, AnalyzedModule> }
   >,
 ) {
   return sortedObject(
@@ -168,7 +168,7 @@ export type ComponentsSchemaChange = {
   namespaces: Map<string, string | null>;
 };
 
-const EMPTY: SchemaDefinition = { tables: {}, schemaValidation: false };
+const EMPTY: EngineSchema = { tables: {}, schemaValidation: false };
 
 /**
  * Convex's `start_component_schema_changes`: the existing `_components` tree and the new one walked together (each
@@ -180,8 +180,8 @@ const EMPTY: SchemaDefinition = { tables: {}, schemaValidation: false };
 export async function startComponentSchemas(
   engine: Engine,
   app: CheckedComponent,
-  schemas: ReadonlyMap<string, SchemaDefinition | null>,
-  rootSchema: SchemaDefinition,
+  schemas: ReadonlyMap<string, EngineSchema | null>,
+  rootSchema: EngineSchema,
   dryRun: boolean,
 ): Promise<ComponentsSchemaChange & { start: () => Promise<{ rootSchemaId: string }> }> {
   const rows = (await engine.query((db) => db.asSystem(() => db.query("_components").collect()))).map((r) =>
@@ -195,7 +195,7 @@ export async function startComponentSchemas(
     indexDiffs: new Map(),
     namespaces: new Map(),
   };
-  const childSchemas = new Map<string, SchemaDefinition | null>();
+  const childSchemas = new Map<string, EngineSchema | null>();
   type Visit = { path: string[]; existing: ComponentMeta | null; node: CheckedComponent | null };
   const stack: Visit[] = [{ path: [], existing: rows.find((r) => r.parent === null) ?? null, node: app }];
   for (let visit = stack.pop(); visit; visit = stack.pop()) {
