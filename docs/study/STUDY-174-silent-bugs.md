@@ -2,7 +2,7 @@
 
 - **Status:** decided (owner, 2026-10-19: §8 Q1–Q5 as recommended, §10). F4 is fixed (§10.2); the other findings of
   §3.3 are listed, not fixed. The soak nightly (Q1, §9 step 5) is `.github/workflows/soak-nightly.yml`, with R1
-  report-only until Q6 is decided (§10.3).
+  report-only until Q6 is decided (§10.3). Q7 (R8 on low-rate operations, §10.3) is open.
 - **Why now:** [#751](https://github.com/bunvex/bunvex/pull/751) found that since 2026-10-03 every cached query result
   expired after 17 s. [STUDY-58](STUDY-58-app-metrics.md)'s `AppMetrics` read the deterministic `Date.now` inside each
   query's execution, which marked every result as having read the clock. Every answer stayed correct, the tests and
@@ -940,7 +940,45 @@ unknown or lower-case id throws; the ids are exactly the rules `judge` gives.
 `/root/bunvex-soak-nightly`). The workflow's `soak` step was extracted from the YAML verbatim and run under
 `bash -e`, with `GITHUB_ENV` and `GITHUB_STEP_SUMMARY` as files and the event `schedule`:
 
-RESULTS_PLACEHOLDER
+| Run | Setup | Exit | Result |
+|---|---|---|---|
+| A | 8 min, the step as written | 1 | R1, R2 not judged (the index cache had not filled). R8 failed on 3 operations. Everything else passed, R11 at 1.7 % of a core |
+| B | 9 min, `--index-cache-mib 2` added so R1 is judged | 1 | R1 "fail (report-only)" at 5.0 → 8.4 MB/min, with its `::warning`, not counted. R2 and R8 failed. R2 because a 2 MiB cache fills in seconds and the heap is still growing at 5 minutes |
+| C | 6 min, the step as written, **sabotage**: core's `timerDelay` without its 2^31−1 ms cap (F2 back) | 1 | **R11 failed alone: 73.4 % of a core** (the 30-day job). The file was restored, `cmp` identical |
+| D | 8 min, dispatch input `report_only=R1,R8`, no sabotage | **0** | R8 shown as "fail (report-only)" with warnings. R11 1.3 %. So C's exit 1 is R11 alone |
+| F | **45 min, the step as written** (the nightly) | **1** | R1 report-only, 5.0 MB/min (+115 MB; the page cache, §4.7). **R8 `schedule` failed**: p99 38.1 → 64.2 ms. Every other rule passed: canary 7 misses for 7 writes, 5 411 jobs each run once, lag p99 ≤ 172 ms, fds flat, R11 1.4 % |
+
+Short runs are expected to fail R8. Their thirds are minutes apart while the store and the caches are still
+growing, which is why the pull-request smoke fails only on exit 2.
+
+**R8 at 45 minutes (F), open: Q7.** The one failure in F is the `schedule` mutation's p99 (1.68×, +26 ms; the
+limits are 1.5× and +20 ms):
+- `schedule` runs at 2 calls a second, so a 15 s window holds a median of 30 calls, and its "p99" is the
+  window's slowest call. The other operations have 150–300 per window.
+- Its p99 by 5 minutes is 21, 26, 45, 42, 33, 43, 72, 34, 81, 30 ms: it moves up and down, it does not climb.
+  Judged from the memory warm-up (t = 751 s) instead, it still fails (36.9 → 71.1 ms); its p50 is flat
+  (5.5 → 6.4 ms).
+- Earlier runs: `f6-sqlite-cache-256mib` (30 min) failed R8 on the canary's p99 and the hot counter's p50;
+  `f6-sqlite-cache-2mib` and `f6-main-2h` passed it. One run each cannot say whether the page cache plays a part.
+
+So the nightly, as shipped, can go red on R8 on some nights. R8 stays a failing rule until the owner decides Q7.
+
+**Q7. R8 and low-rate operations.**
+- Convex: no public soak (Q1), so no rule to compare. bunvex: R8 compares the median of per-window p99s for every
+  operation with at least 5 calls in a window.
+- Same: n/a, a test-suite rule, not product behaviour. Why: not built yet (the rule predates per-operation call
+  rates in the workload).
+- App impact: none. Soak impact: a nightly that fails on a 30-call window's slowest call is noise, and a week of
+  watching (§9 step 5) would be spent on it.
+- Options:
+  - (a) judge R8's p99 only on windows of at least 100 calls, and use the p50 alone below that. `schedule` keeps its
+    p50 check. The other operations do not change, and `rules.test.ts`'s doubling-latency case (100 calls per
+    window) still fails.
+  - (b) let the driver compute each operation's percentiles over 60 s windows, so `schedule` has ~120 calls per
+    window. More faithful, but every report changes shape.
+  - (c) keep R8 as it is and triage red nights by hand.
+- **Recommendation:** (a): a rule-only change with a test and a sabotage. Then one more 45-minute VPS run
+  re-judges F, and the week of watching starts. R8 is not made report-only in the meantime.
 
 **Not here.** The monthly 6-hour VPS soak (Q2) is §9 step 12, once this job has been green for a week; nothing in CI
 schedules anything against the VPS.
