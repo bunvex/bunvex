@@ -15,7 +15,7 @@
 // Convex's `is_stale`: only the indexes read, only the writes in the snapshot's window, and each key tested
 // against the read intervals by binary search.
 
-import { monotonicNow, outsideExecution, wallClockNs } from "./determinism.ts";
+import { monotonicNow, outsideExecution, timerDelay, wallClockNs } from "./determinism.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { compareKeys } from "./keyenc.ts";
 import { knob, secondsKnob } from "./knobs.ts";
@@ -924,7 +924,7 @@ export class Committer {
     if (!r || r.wait === null || this.stopped) return;
     // Stryker disable next-line ConditionalExpression,CallExpression: a timer left running only bumps once more, which writes a valid bound again
     if (r.timer) clearTimeout(r.timer);
-    r.timer = setTimeout(() => void this.bumpRepeatable(), Math.max(0, r.last + r.wait - performance.now()));
+    r.timer = setTimeout(() => void this.bumpRepeatable(), timerDelay(r.last + r.wait - performance.now()));
     // Stryker disable next-line OptionalChaining: Bun's timers have unref
     r.timer.unref?.();
   }

@@ -217,6 +217,17 @@ const realSetInterval = globalThis.setInterval;
 /** The wall clock, whether or not an execution is running (for the engine's own bookkeeping). */
 export const wallClock = (): number => realNow();
 
+/**
+ * The longest delay a timer takes: past 2^31-1 ms (24.8 days) Bun, like Node, fires it after about 1 ms
+ * (STUDY-174 I-25). Convex's tokio sleeps take any duration.
+ */
+export const MAX_TIMER_MS = 2 ** 31 - 1;
+/**
+ * A timer's delay, at least 0 and at most `MAX_TIMER_MS`. A sleep towards a far timestamp wakes early and looks
+ * again. Every delay a `setTimeout` computes from a clock goes through it (`bun run check:deps`, rule 6).
+ */
+export const timerDelay = (ms: number): number => Math.min(MAX_TIMER_MS, Math.max(0, ms));
+
 const realPerformanceNow = performance.now.bind(performance);
 const origin = performance.timeOrigin;
 

@@ -197,6 +197,7 @@ export {
   setFetchMeter,
   setFetchSender,
   setFetchSignal,
+  timerDelay,
   type UserTimer,
   userTimeMs,
   wallClock,

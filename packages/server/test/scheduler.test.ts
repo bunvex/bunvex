@@ -272,6 +272,23 @@ describe("_scheduled_functions through db.system", () => {
 });
 
 describe("the executor", () => {
+  test("idle with a job more than 24.8 days away, it sleeps instead of polling (STUDY-174 F2)", async () => {
+    // A timer longer than 2^31-1 ms fires at once in Bun: an uncapped sleep polls the queue every millisecond.
+    const { engine, functions, state } = await setup();
+    const id = (await functions.runMutation("m:schedule", { delay: 30 * 86400_000 })) as string;
+    expect(await state(id)).toBe("pending");
+    await Bun.sleep(50);
+    let queries = 0;
+    const query = engine.query.bind(engine);
+    engine.query = ((...a: Parameters<typeof query>) => {
+      queries++;
+      return query(...a);
+    }) as typeof engine.query;
+    await Bun.sleep(1500);
+    engine.query = query;
+    expect(queries).toBeLessThan(20);
+  });
+
   test("a failing mutation's writes are gone and its job is failed", async () => {
     const { engine, functions, state } = await setup();
     const id = (await functions.runMutation("m:schedule", { delay: 0, fn: "m:fails" })) as string;
@@ -506,6 +523,119 @@ describe("the executor", () => {
       gcInitialBackoffMs: 1000,
       gcMaxBackoffMs: 30_000,
     });
+  });
+});
+
+// STUDY-174 F5: a stopping executor stops retrying, as Convex's shutdown aborts its executor task
+// (crates/application/src/scheduled_jobs/mod.rs `ScheduledJobRunner::shutdown`).
+describe("stop", () => {
+  /** `p`, or a failure once `ms` have passed (today's hang shows as a failure, not a stuck test). */
+  async function within<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+    let t!: ReturnType<typeof setTimeout>;
+    const late = new Promise<never>((_, reject) => {
+      t = setTimeout(() => reject(new Error(`${what} took more than ${ms} ms`)), ms);
+    });
+    try {
+      return await Promise.race([p, late]);
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  async function contended() {
+    // No engine retries: every lost conflict reaches the executor's own retry loop.
+    const engine = await new Engine(
+      defineSchema({ hot: defineTable(v.any()) }),
+      await MemoryPersistence.open(null, { durable: false }),
+      { maxRetries: 0 },
+    ).init();
+    const hot = await engine.mutation((db) => db.insert("hot", { n: 0, by: "init" }));
+    const functions = new Functions(engine).register("m", {
+      // Reads the hot doc, holds the read a moment, then writes it: a writer every ms makes it lose.
+      slow: internalMutation(async ({ db }) => {
+        const doc = await db.get(hot as never);
+        await Bun.sleep(20);
+        await db.patch("hot", hot as never, { n: ((doc as { n: number }).n ?? 0) + 1, by: "job" });
+      }),
+      sched: mutation(async ({ scheduler }) => scheduler.runAfter(0, "m:slow" as never)),
+      job: query(async ({ db }, { id }: { id: string }) => db.system.get(id as never)),
+      act: action(async () => "done"),
+      schedAct: mutation(async ({ scheduler }) => scheduler.runAfter(0, "m:act" as never)),
+    });
+    const options = { occInitialBackoffMs: 5, occMaxBackoffMs: 20, errorInitialBackoffMs: 5, errorMaxBackoffMs: 20 };
+    const state = async (id: string) =>
+      (((await functions.runQuery("m:job", { id })) as { state: { kind: string; error?: string } } | null)?.state ??
+        null) as { kind: string; error?: string } | null;
+    let writing = true;
+    const writer = (async () => {
+      while (writing) {
+        await engine.mutation((db) => db.patch("hot", hot as never, { by: "writer" })).catch(() => {});
+        await Bun.sleep(1);
+      }
+    })();
+    const stopWriter = async () => {
+      writing = false;
+      await writer;
+    };
+    stops.push(stopWriter);
+    return { engine, functions, options, state, stopWriter };
+  }
+
+  test("a mutation losing every conflict: stop returns promptly; the job stays pending and the next start runs it", async () => {
+    const { engine, functions, options, state, stopWriter } = await contended();
+    const executor = new ScheduledJobExecutor(engine, functions, options);
+    stops.push(() => executor.stop());
+    executor.start();
+    const id = (await functions.runMutation("m:sched", {})) as string;
+    await until(() => executor.stats.occRetries >= 3, "conflicts");
+    try {
+      await within(executor.stop(), 1000, "the executor's stop");
+    } finally {
+      await stopWriter(); // else a hanging stop keeps hanging in afterEach
+    }
+    expect((await state(id))?.kind).toBe("pending");
+    const next = new ScheduledJobExecutor(engine, functions, options);
+    stops.push(() => next.stop());
+    next.start();
+    await until(async () => (await state(id))?.kind === "success", "the job run by the next start");
+  });
+
+  test("an action whose result cannot be recorded: stop returns promptly; the next start fails it, as after a crash", async () => {
+    const { engine, functions, options, state, stopWriter } = await contended();
+    await stopWriter();
+    // A long backoff after the first failed record: the stop has to cut it short.
+    const executor = new ScheduledJobExecutor(engine, functions, {
+      ...options,
+      errorInitialBackoffMs: 60_000,
+      errorMaxBackoffMs: 60_000,
+    });
+    stops.push(() => executor.stop());
+    // Every attempt to record the action's result fails.
+    const mutation = engine.mutation.bind(engine);
+    let failedRecords = 0;
+    (engine as { mutation: unknown }).mutation = (f: never, source?: string, ...rest: never[]) => {
+      if (source === "_system/scheduled_job_complete_action") {
+        failedRecords++;
+        return Promise.reject(new Error("store unavailable"));
+      }
+      return mutation(f, source as never, ...rest);
+    };
+    executor.start();
+    const id = (await functions.runMutation("m:schedAct", {})) as string;
+    await until(() => failedRecords >= 1, "a failed record");
+    try {
+      await within(executor.stop(), 1000, "the executor's stop");
+    } finally {
+      (engine as { mutation: unknown }).mutation = mutation; // else a hanging stop keeps hanging in afterEach
+    }
+    // One last attempt once stopping, then the executor gives up: the job stays in progress.
+    expect(failedRecords).toBe(2);
+    expect((await state(id))?.kind).toBe("inProgress");
+    const next = new ScheduledJobExecutor(engine, functions, options);
+    stops.push(() => next.stop());
+    next.start();
+    await until(async () => (await state(id))?.kind === "failed", "the job failed by the next start");
+    expect((await state(id))?.error).toBe("Transient error while executing action");
   });
 });
 
