@@ -219,3 +219,21 @@ pending, an interval, a continuation; on `main` three of the four fail (bunvex w
 | A kept `ctx` not refused | 1 / 0 |
 | An ended action's `fetch` not refused | 1 / 0 |
 | The refusal over the timeout's message | 2 (STUDY-77's own timeout tests) / 0 |
+
+### 7.5 Measurement
+
+The action hot path under `vm`, `main` against this change, on the test VPS (2 vCPUs, idle: no other process of any
+session), ABAB, 2000 sequential actions per line through `Functions.runAction` after 200 (the actions bench of the
+function sandbox, `packages/sandbox/bench/actions.ts`, run with `--vm`; a copy and the runner in
+`bench/results/action-end/`). p50 / mean / p99 µs:
+
+| Action | `main`, round 1 | this, round 1 | `main`, round 2 | this, round 2 |
+|---|---|---|---|---|
+| empty action | 62 / 114 / 1621 | 55 / 75 / 203 | 65 / 120 / 1571 | 60 / 87 / 470 |
+| action, 1 `runQuery` | 153 / 227 / 2249 | 120 / 175 / 1768 | 137 / 217 / 2063 | 139 / 176 / 1242 |
+| `fetch` GET, empty body | 1144 / 1512 / 4766 | 765 / 991 / 3058 | 1297 / 1669 / 5587 | 733 / 960 / 3198 |
+| `storage.store`, 1 KiB | 226 / 285 / 1519 | 231 / 271 / 1218 | 234 / 307 / 1943 | 231 / 286 / 1276 |
+| `storage.get`, 1 KiB | 135 / 150 / 358 | 141 / 169 / 1024 | 120 / 140 / 429 | 124 / 139 / 298 |
+
+No cost shows: the per-action state (a life, a set of timers) and the per-call check are below the noise; the `fetch`
+line's difference is the target's and the scheduler's (it moves by ±50 % between runs, STUDY-171 §12.9).
