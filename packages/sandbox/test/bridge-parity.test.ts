@@ -485,6 +485,7 @@ describe("an error at import fails the push as under vm", () => {
     });
 });
 
+// `vm` cannot attribute such a rejection to its call (DV-528); STUDY-168 PR 4b makes `process` fail it, as Convex.
 describe("a rejection nothing handles leaves the call as under vm", () => {
   for (const c of [...UNHANDLED.matchAll(/^ {2}(\w+):/gm)].map((m) => m[1]!))
     test(c, async () => {

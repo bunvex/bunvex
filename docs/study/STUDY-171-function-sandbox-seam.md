@@ -87,11 +87,12 @@ lists, fails with a message.
 
 ## 4. Divergences
 
-Convex has no executor choice; the default behaves as before. Found later (§10):
+Convex has no executor choice; the default behaves as before. Found later (§10, §11.9):
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | DV-527 | An embedded server (`createServer`) leaves the process's time zone alone: its pushed functions' `Date` follows the host's zone, not UTC | the zone is the whole process's; a library setting it would change the host app's dates, and it cannot refuse a process it does not own | owner, 2026-10-20 |
+| DV-528 | Under `vm`, an unhandled rejection in app code is printed and the function goes on; `process` will fail it (STUDY-168 PR 4b) | `vm` cannot tell which call a rejection belongs to (§11.9) | owner, 2026-10-20 |
 | DV-537 | `bunvex dev` starts the local backend with `TZ=UTC`, whatever the shell's `TZ` | Convex's CLI passes the shell's `TZ` through, so its backend refuses to start; bunvex's user is not blocked | owner, 2026-10-20 |
 
 ## 4b. Additions (beyond Convex)
@@ -759,7 +760,8 @@ the default. The two `vm` bugs its parity test found are fixed on their own (§1
   checked in JS, the line held by the host, bounded as it is added.
 - **An unhandled rejection** fails the function once the microtask queue has drained
   (`execution_scope.rs:90-110`, `request_scope.rs:504-540`). bunvex's `vm` does not: Bun prints it to the server's
-  stderr and the call goes on (its result unchanged). `process` keeps `vm`'s behaviour (§11.6).
+  stderr and the call goes on (its result unchanged). `process` keeps `vm`'s behaviour for now (§11.6); DV-528
+  records `vm`'s for good, and a later sandbox PR makes `process` fail the function (§11.9).
 
 ### 11.2 Logs
 
@@ -874,7 +876,7 @@ this branch:
 | What | Under `process` | Its PR |
 |---|---|---|
 | Actions' lines (streamed as they come, `onLine`), `"use node"`'s `util.inspect` rendering | actions do not run yet | 5, 10 |
-| An unhandled rejection in a query or mutation | as `vm`: printed to the server's stderr (the child's), the call goes on; an unawaited operation's failure reaches the child after the call ends, as it reaches `vm`'s promise (the call's answers are awaited before the child forgets it) | Convex fails the function (§11.1); `vm` and `process` both differ, a question below |
+| An unhandled rejection in a query or mutation | as `vm`: printed to the server's stderr (the child's), the call goes on; an unawaited operation's failure reaches the child after the call ends, as it reaches `vm`'s promise (the call's answers are awaited before the child forgets it) | Convex fails the function (§11.1). `vm`: DV-528, kept. `process`: fails the function in STUDY-168 §12.3's PR 4b (owner, 2026-10-20) |
 | Import-time `console.log` | printed to the server's stdout, as under `vm` (no function's lines) | — |
 
 ### 11.7 Measurements
@@ -933,11 +935,18 @@ was 212 µs, the machine's noise.)
 Each was applied to the file, the three test files run, and the file restored from a saved copy; `git diff` was
 compared with the one before the break after each (`scratchpad` script).
 
-### 11.9 Open questions
+### 11.9 Owner decisions and open questions
 
-- **No new divergence from `vm`.** One finding against Convex for the owner, not this PR's: an unhandled rejection in a
-  query or mutation fails the function in Convex (§11.1); both bunvex executors print it and go on. `process` could
-  match Convex (the child sees the rejection, in the call's context, and can fail it); `vm` cannot tell which call a
-  rejection belongs to (as DV-500 found for `"use node"` actions), so matching it there needs more.
+- **No new divergence from `vm`.** One finding against Convex, decided by the owner on 2026-10-20: an unhandled
+  rejection in a query or mutation fails the function in Convex once the microtask queue has drained (§11.1,
+  `environment/udf/mod.rs:1103-1119`, `UnhandledPromiseRejection`); both bunvex executors print it and go on.
+  - **`vm`: DV-528, "Não dá pra fazer" (impossible in `vm`).** Every `vm` call shares the server's process and event
+    loop, and Bun's `unhandledRejection` listener runs with no AsyncLocalStorage context, so a rejection cannot be
+    traced to the call that made it when several run at once (as DV-500 found for `"use node"` actions). `vm` logs
+    it to the server's stderr and the call keeps its result.
+  - **`process`: fails the function**, as Convex, in a later sandbox PR (STUDY-168 §12.3, PR 4b): the child runs
+    one call at a time, sees the rejection in that call's context and can fail it with Convex's message. Until then
+    `process` keeps `vm`'s behaviour, which `bridge-parity.test.ts` pins ("a rejection nothing handles leaves the
+    call as under vm"); that PR turns those three cases into the failure.
 - Actions (PR 5): their lines stream as they come (`onLine`), so the child must send them as they come too, not with
   the next message; the per-call cap does not apply to them.
