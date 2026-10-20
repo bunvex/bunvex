@@ -17,6 +17,7 @@ import {
   stringifyValue,
   TooManyWritesError,
   type Tx,
+  timerDelay,
   wallClock,
 } from "@bunvex/core";
 import { displayValue, rawValueSize, type Value } from "@bunvex/values";
@@ -282,7 +283,9 @@ export class CronJobExecutor {
       if (this.stopped) return;
       if (this.pokes !== seen) continue;
       await new Promise<void>((resolve) => {
-        const t = nextAt === null ? null : setTimeout(() => this.poke(), Math.max(0, nextAt - wallClock()));
+        // Capped (STUDY-174 F3): a yearly cron wakes the loop every 24.8 days, which looks again.
+        // Capped (STUDY-174 F3): a yearly cron wakes the loop every 24.8 days, which looks again.
+        const t = nextAt === null ? null : setTimeout(() => this.poke(), timerDelay(nextAt - wallClock()));
         this.wake = () => {
           if (t) clearTimeout(t);
           resolve();

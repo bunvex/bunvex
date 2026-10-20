@@ -2,7 +2,7 @@
 // paths, the JSON forms' refusals, values from another realm, and the error printer's cut. value.test.ts and the
 // property tests check the common cases; mutation testing (TEST-01 §7) found these edges untested.
 import { describe, expect, test } from "bun:test";
-import { runInNewContext } from "node:vm";
+import { runInNewContext, runInThisContext } from "node:vm";
 import { commitTsPlaceholder } from "../src/commit-ts.ts";
 import {
   compareValues,
@@ -56,12 +56,83 @@ describe("values from another realm (a function's own context)", () => {
     expect(isBytes(bytes)).toBe(true);
     expect(isBytes(new ArrayBuffer(1))).toBe(true);
     expect(isBytes(new Uint8Array(1))).toBe(false);
+    // A tag is not a buffer: Convex's `instanceof ArrayBuffer` misses it, and it is an object (STUDY-18 §9).
+    const tagged = runInNewContext('({ [Symbol.toStringTag]: "ArrayBuffer", a: 1 })');
+    expect(isBytes(tagged)).toBe(false);
+    expect(isBytes({ [Symbol.toStringTag]: "ArrayBuffer" })).toBe(false);
+    expect(toJsonValue(tagged)).toEqual({ a: 1 });
+    expect(copyValue(tagged)).toEqual({ a: 1 });
+    expect(stringifyValueForError(tagged)).toBe('{"a":1}');
     const obj = runInNewContext("({ a: 1 })");
     expect(Object.getPrototypeOf(obj) === Object.prototype).toBe(false);
     expect(isSimpleObject(obj)).toBe(true);
     expect(isSimpleObject(Object.create(null))).toBe(true);
     expect(isSimpleObject(new (class Point {})())).toBe(false);
     expect(isSimpleObject("s")).toBe(false);
+  });
+
+  test("its Set or Map prints its entries, as this realm's (Convex's `instanceof Set`, STUDY-18 §9)", () => {
+    const err = (f: () => unknown) => {
+      try {
+        f();
+      } catch (e) {
+        return (e as Error).message;
+      }
+      throw new Error("no error");
+    };
+    const cases: [string, string][] = [
+      ["new Set()", "Set[]"],
+      ["new Set([1])", "Set[1]"],
+      ['new Set([1, "two", null, [3], { four: 4n }])', 'Set[1,"two",null,[3],{"four":"4n"}]'],
+      ["new Map()", "Map[]"],
+      ['new Map([["a", 1]])', 'Map[["a",1]]'],
+      ['new Map([["a", 1], [2, [true]], [null, { b: "c" }]])', 'Map[["a",1],[2,[true]],[null,{"b":"c"}]]'],
+      // what it holds prints as anything else does: a Set or Map inside it is named, not opened (DV-316)
+      ["new Set([new Set([1]), new Map([[1, 2]])])", "Set[Set {…},Map {…}]"],
+      ["new (class Tags extends Set {})([1])", "Set[1]"],
+      ["new (class Index extends Map {})([[1, 2]])", "Map[[1,2]]"],
+    ];
+    for (const [source, shown] of cases) {
+      const other = runInNewContext(`(${source})`, {});
+      const own = runInThisContext(`(${source})`);
+      expect(other instanceof Set || other instanceof Map).toBe(false);
+      for (const v of [other, own]) {
+        expect({ source, m: err(() => toJsonValue(v)) }).toEqual({
+          source,
+          m: `${shown} is not a supported value type.`,
+        });
+        expect({ source, m: err(() => copyValue(v)) }).toEqual({
+          source,
+          m: `${shown} is not a supported value type.`,
+        });
+      }
+    }
+    const inObject = runInNewContext('({ x: 1, m: new Map([["k", 1]]) })');
+    expect(err(() => toJsonValue({ v: inObject }))).toBe(
+      'Map[["k",1]] is not a supported value type (present at path .v.m in original object {"v":{"x":1,"m":Map {…}}}).',
+    );
+    const inArray = runInNewContext('[0, [new Set(["s"])]]');
+    expect(err(() => copyValue(inArray))).toBe(
+      'Set["s"] is not a supported value type (present at path [1][0] in original object [0,[Set {…}]]).',
+    );
+  });
+
+  test("only a real Set or Map is one: a class named Set, a forged tag or a bare prototype is not", () => {
+    const err = (v: unknown) => {
+      try {
+        toJsonValue(v as Value);
+      } catch (e) {
+        return (e as Error).message;
+      }
+      throw new Error("no error");
+    };
+    // Convex: none is `instanceof Set` but the last, whose spread throws; each is an object it prints by class name.
+    expect(err(runInNewContext("new (class Set { x = 1 })()"))).toBe("Set {…} is not a supported value type.");
+    expect(err(runInThisContext("new (class Map {})()"))).toBe("Map {…} is not a supported value type.");
+    expect(err(runInNewContext('({ [Symbol.toStringTag]: "Set", __proto__: { constructor: { name: "Set" } } })'))).toBe(
+      "Set {…} is not a supported value type.",
+    );
+    expect(err(Object.create(Set.prototype))).toBe("Set {…} is not a supported value type.");
   });
 
   test("an object whose prototype cannot be read prints as {…}", () => {

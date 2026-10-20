@@ -115,6 +115,7 @@ import {
   preciseClock,
   runDeterministic,
   settled,
+  timerDelay,
   wallClock,
 } from "./determinism.ts";
 import { EnvironmentVariables } from "./environment-variables.ts";
@@ -686,7 +687,7 @@ export class Engine {
       const r = await store.acquireLease({ holder, ttlMs });
       if ("epoch" in r) break;
       if (Date.now() >= deadline) throw new LeaseHeldError(r.heldBy, r.expiresInMs);
-      await new Promise((ok) => setTimeout(ok, Math.min(250, Math.max(10, deadline - Date.now()))));
+      await new Promise((ok) => setTimeout(ok, timerDelay(Math.min(250, Math.max(10, deadline - Date.now())))));
     }
     const state = {
       holder,

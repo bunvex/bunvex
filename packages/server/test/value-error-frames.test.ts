@@ -141,7 +141,8 @@ test("an action that catches it sees the bare message, as Convex's own serializa
   const r = (await call("action", "values:runQueryCaught", { kind: "set" })) as unknown as { value: unknown };
   expect(r.value).toEqual({
     name: "Error",
-    message: 'Set {…} is not a supported value type (present at path .v in original object {"v":Set {…}}).',
+    message:
+      'Set["hello","world"] is not a supported value type (present at path .v in original object {"v":Set {…}}).',
   });
 });
 
