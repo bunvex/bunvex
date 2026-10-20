@@ -1,7 +1,7 @@
 // The subscription invalidations Convex's scheduler and cron executor count (STUDY-149 PR 5, DV-480 resolved to
 // match Convex): what a commit counts against each executor's read, as Convex's binary does
 // (packages/differential/test/dashboard-ops.test.ts compares the same steps with it).
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { defineSchema, Engine, setUserStopState } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { MetricsWindow } from "../src/app-metrics.ts";
@@ -46,7 +46,7 @@ async function setup() {
     await Bun.sleep(150);
     return id;
   };
-  return { engine, functions, counts, schedule };
+  return { engine, functions, server, counts, schedule };
 }
 
 describe("the scheduler's subscription (Convex's `stream_jobs_to_run` read)", () => {
@@ -85,6 +85,32 @@ describe("the scheduler's subscription (Convex's `stream_jobs_to_run` read)", ()
     await Bun.sleep(150);
     // functions do not run while paused: the write a scheduling mutation makes, under its name
     await engine.mutation((db) => makeScheduler(functions, { db }).runAfter(HOUR, "m:work" as never, {}), "m:schedule");
+    expect(await counts()).toEqual({});
+  });
+});
+
+// The server's synchronous `stop()` stops this too, as `shutdown()` does (STUDY-174 S5): the engine may stay open
+// after it (an embedder's, a test's), and nothing of the stopped server reads it or counts its commits any more.
+describe("after the server's stop()", () => {
+  test("no read when the next run falls due", async () => {
+    const { engine, server, counts, schedule } = await setup();
+    await schedule(1000); // the read's boundary: a timer at the run's time
+    expect(await counts()).toEqual({ "m.js:schedule:_scheduled_jobs": 1 });
+    server.stop();
+    const reads = spyOn(engine, "query");
+    try {
+      await Bun.sleep(1000); // past the run's time
+      expect(reads).not.toHaveBeenCalled();
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
+  test("a commit into the executor's read counts nothing", async () => {
+    const { server, counts, functions } = await setup();
+    await Bun.sleep(150); // the first reads: an empty queue, so any scheduled run is inside
+    server.stop();
+    await functions.runMutation("m:schedule", { delayMs: HOUR });
     expect(await counts()).toEqual({});
   });
 });

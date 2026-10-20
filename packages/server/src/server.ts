@@ -2694,6 +2694,7 @@ export function createServer(opts: ServerOptions) {
       usageLimitWorker.stop();
       void exportService?.stop();
       void importService?.stop();
+      executorInvalidations.stop();
       void scheduler.stop();
       void cronExecutor.stop();
       stopCleanup();
