@@ -8,9 +8,12 @@
   #750 ([STUDY-171](STUDY-171-function-sandbox-seam.md) §8–9) found it because it compares more than values: the
   read set and `ctx.meta`'s transaction metrics. This study asks how to catch that class on purpose: bugs that give
   correct answers but degrade the system over time or under load.
-- **Convex source read:** get-convex/convex-backend `4577b9031` (local clone), checked against the pinned oracle binary
-  `precompiled-2026-10-10-72ce13c` ([STUDY-173](STUDY-173-convex-reference-2026-10-10.md)). Files cited below.
-- **bunvex code read:** `main` at `016dfccb` (after #749). #751 is still open, so main still has its cache bug.
+- **Convex source read:** get-convex/convex-backend at `72ce13c`, the reference since
+  [STUDY-173](STUDY-173-convex-reference-2026-10-10.md) (`precompiled-2026-10-10-72ce13c`, also the differential's
+  oracle binary). Every line below is cited at that commit (`git -C ../convex-backend show 72ce13c:<path>`).
+- **bunvex code read:** `main` at `016dfccb` (after #749), before #751 merged. Every probe, prototype run and soak
+  pilot below ran on that pre-#751 build. #751 (with #750) is now on main at `7683a19a`, which fixes F1. This branch
+  was then merged with main, and the prototype re-run there: it passes (§5.3).
 - **Related:**
   - the differential: [STUDY-122](STUDY-122-differential-testing.md);
   - the Jepsen nightly: [STUDY-57](STUDY-57-linearizability-testing.md), `.github/workflows/jepsen-nightly.yml`;
@@ -24,8 +27,9 @@
 mutants killed. None of them checks how a resource behaves over time. We found no RSS or heap trend, no count of
 timers or handles, and no cache hit rate in any CI or nightly job. This study proposes three cheap layers to close
 that gap:
-- **(1) Invariant assertions.** §3 lists 32 of them by subsystem. Ten were probed against main. Five do not hold:
-  - F1: #751's cache expiry.
+- **(1) Invariant assertions.** §3 lists 32 of them by subsystem. Ten were probed against main before #751 merged.
+  Five did not hold; F1 is now fixed by #751, the other four still stand:
+  - F1: #751's cache expiry (fixed on main by #751 since these probes ran).
   - F2: an idle scheduler runs about 2 000 queue queries a second when its next job is more than 24.8 days away.
   - F3: the same for a cron, such as a monthly or yearly one.
   - F4: a cache hit's log entry does not describe the run it reused, as Convex's does.
@@ -35,8 +39,8 @@ that gap:
   also found a sixth, F6: resident memory grows about 5 MB a minute under steady load while the JS heap stays flat
   (§4.6).
 - **(3) Metadata differentials against Convex's binary.** A prototype in `packages/differential` compares the query
-  cache's hits and misses as the function log stream shows them on both backends. It fails on main exactly where #751
-  says, and passes on #751's branch (§5.3).
+  cache's hits and misses as the function log stream shows them on both backends. It failed on the pre-#751 main
+  exactly where #751 says, and passes on main now that #751 is merged (§5.3).
 
 ## 1. How Convex does it
 
@@ -47,17 +51,22 @@ structural, and they say what bunvex must match:
   (`observed_time` on the outcome, `crates/isolate/src/client.rs:1115`). Only those results expire: `MAX_CACHE_AGE`,
   `crates/application/src/cache/mod.rs:121`, checked at `:797` and `:807`. A result that read no time stays valid
   until a commit writes into its read set.
-- **A cache hit is logged as the run it reused.** In `log_query` (`crates/application/src/function_log.rs`, around
-  `:700–760`), the cached outcome's fields are logged as they were: `user_execution_time`, `memory_used_mb` and
-  `execution_timestamp` (`outcome.unix_timestamp`). `cached_result: true` marks the hit. The usage it meters is a
-  `CallType::CachedQuery`: no reads, no compute.
+- **A cache hit is logged as the run it reused.** In `log_query` (`crates/application/src/function_log.rs:623`), the
+  cached outcome's fields are logged as they were: `execution_timestamp: outcome.unix_timestamp` (`:735`),
+  `user_execution_time` (`:742`) and `memory_used_mb: outcome.memory_in_mb` (`:747`). `cached_result: was_cached`
+  (`:740`) marks the hit. The usage it meters is a `CallType::CachedQuery` (`:705`): no reads, no compute.
 - **Long waits are durations.** The scheduler waits until the next job with `rt.wait(next_job_ts − now)`
   (`crates/application/src/scheduled_jobs/mod.rs:315–321`). If it is behind, it re-runs its loop every 5 s. The cron
   executor does the same (`crates/application/src/cron_jobs/mod.rs:185–199`). A tokio sleep takes any `Duration`, so
   a job five years away costs nothing.
-- **Shutdown aborts workers.** The scheduler is a spawned task; `ScheduledJobRunner::shutdown` aborts it
-  (`scheduled_jobs/mod.rs:169`), and `Application::shutdown` calls the workers' shutdown first
-  (`crates/application/src/lib.rs:3925`). Nothing waits for a job to win its OCC race.
+- **Shutdown aborts workers.** The scheduler's executor is a spawned task (`rt.spawn("scheduled_job_executor", …)`,
+  `crates/application/src/scheduled_jobs/mod.rs:157`). The shutdown chain is:
+  - `Application::shutdown` (`crates/application/src/lib.rs:3938`) first calls `self.workers.shutdown()`;
+  - that calls `scheduled_job_runner.shutdown()` (`crates/application/src/worker_handles.rs:62`);
+  - which shuts down the executor's handle (`scheduled_jobs/mod.rs:169–171`);
+  - a tokio handle's `shutdown` is `abort()` (`crates/common/src/runtime/mod.rs:176–177`).
+
+  Nothing waits for a job to win its OCC race.
 - **Everything that grows has a knob.** Examples: `UDF_CACHE_MAX_SIZE`, `WRITE_LOG_*_RETENTION`, the function log's
   `MAX_UDF_EXECUTION`, the log sinks' buffers, and `UDF_METRICS_MAX_BUCKETS` (`crates/common/src/knobs.rs`). bunvex
   already copies them (DV-63, DV-128, STUDY-47, STUDY-58).
@@ -86,7 +95,7 @@ bounds (§3, §4).
 
 | # | Subsystem | Invariant | Where | Test today | Probe |
 |---|---|---|---|---|---|
-| I-01 | Query cache | A query that reads no time stays cached until a commit writes into its read set | `core/src/engine.ts` `stillValid` (787–802); `server/src/app-metrics.ts:452` | `meta.test.ts` on #751 only | P01 **VIOLATED** (F1) |
+| I-01 | Query cache | A query that reads no time stays cached until a commit writes into its read set | `core/src/engine.ts` `stillValid` (787–802); `server/src/app-metrics.ts:452` | `meta.test.ts` (#751, now on main) | P01 **VIOLATED** on the pre-#751 build (F1, fixed by #751) |
 | I-02 | Query cache | A result that read the clock expires after 17 s, and only such a result | `core/src/query-cache.ts:15`, `engine.ts:792` | `core/test/query-cache.test.ts:215` (engine only, not through `createServer`) | P01, P09 |
 | I-03 | Query cache | `bytes` equals the sum of entry sizes and stays ≤ `maxBytes`; no `waiting` entry outlives its calls | `query-cache.ts` `set`/`enforceLimit` | `core/test/query-cache-store.test.ts` (unit) | P08 holds |
 | I-04 | Query cache | An index, table or component change empties the cache; a run that straddles it stores nothing (`cacheEpoch`) | `engine.ts:757, 982, 3392, 3561` | none | not probed |
@@ -132,8 +141,12 @@ How a test asserts each class:
   window, and its `/proc/<pid>/fd` count. These are what the soak (§4) measures. A short form fits a test:
   `server/test/idle-cpu.test.ts` could spawn a backend with a far-future job and a yearly cron, and assert under
   5 % CPU over 2 s.
-- **Static (I-25).** A check in `scripts/check-deps.ts`, or a test, that every `setTimeout(` in `packages/*/src`
-  with a computed delay goes through one capped helper (e.g. core's runtime `setTimeout`, made to cap and re-arm).
+- **Static (I-25).** A rule in `scripts/check-deps.ts`, rule 6 next to rule 5's comment-stripping scan, so CI's
+  `check:deps` fails on a new one. The rule: in `packages/*/src`, a `setTimeout(`, `Bun.sleep(` or `timers.set(`
+  whose delay subtracts a clock (`- wallClock()`, `- Date.now()`, `- performance.now()`, `- now`) must take it from
+  one capped helper, e.g. `timerDelay(at)` in core, which clamps to 2^31−1 ms (the loop re-arms when it fires
+  early). It would fail today on `scheduler.ts:468` and `cron-executor.ts:285`, so it lands in the F2/F3 fix PR, not
+  here. The scan of §3.3 (S8) found no other site that matches.
 
 ### 3.2 The probes
 
@@ -158,8 +171,9 @@ scratchpad, not in this PR. Each one prints `HOLDS` or `VIOLATED`.
 None of these is fixed in this PR. Each is a bug against Convex's behaviour (§1), so none needs a DV unless the
 owner decides otherwise (F4 is the exception, see §8).
 
-**F1. Every cached query result expires after 17 s** (I-01). This is #751's finding, already fixed there. It is
-reproduced here as the baseline the new layers must catch:
+**F1. Every cached query result expires after 17 s** (I-01). This is #751's finding. #751 has since merged
+(`7683a19a`), so F1 is **fixed on main**. It is reproduced here, on the pre-#751 build, as the baseline the new layers
+must catch:
 
 ```ts
 const skew = { ms: 0 };
@@ -214,7 +228,11 @@ its running jobs. A job's OCC retry loop (`scheduler.ts:633–636`, backoff up t
 `stopped`. During `shutdown()` the engine and the HTTP server are still open: the scheduler stops at step 5, the
 server at step 7. So writers can keep a hot key contended and the shutdown waits on them. Under Docker or systemd
 the backend is then SIGKILLed after the grace period instead of closing its store cleanly. Convex aborts the
-executor task (`scheduled_jobs/mod.rs:169`).
+executor task. The chain at `72ce13c` is §1's:
+- `lib.rs:3938`;
+- `worker_handles.rs:62`;
+- `scheduled_jobs/mod.rs:169–171`;
+- `common/src/runtime/mod.rs:177`, `abort()`.
 
 ```ts
 // engine maxRetries 0, scheduler backoff 5–20 ms, a job that reads, sleeps 20 ms, writes one doc;
@@ -227,6 +245,25 @@ The probe is harsher than production: the conflicting writer runs in-process and
 read. In production, the conflicting writes come from requests that the still-open HTTP server keeps accepting. The
 same unbounded wait applies to an action's `completeJob` retry (`scheduler.ts:671–682`, up to 2 h), which only exits
 on `CommitterStoppedError`.
+
+**The other timers (bunvex-9f's review).** `git grep -n "setTimeout(" packages/server/src packages/core/src`,
+widened to `Bun.sleep(`, `setInterval(`, the runtime's and the rooms' `timers.set(`, and `packages/{file-storage,
+persistence,sandbox,search}/src`. Each delay's source was checked for an uncapped `x − now`:
+- **App-driven, `x − now`, uncapped:** only F2 and F3.
+- **`x − now`, but capped:**
+  - `scheduler.ts:718` (the GC: `MAX_TIMER_MS`, `:726`);
+  - `executor-invalidations.ts:174`;
+  - `engine.ts:689` (≤ 250 ms);
+  - `log-sink-http.ts:83` (≤ 50 ms);
+  - `otlp.ts:412` (≤ 60 s).
+- **`x − now`, bounded by a knob:** `committer.ts:927`, bounded by `MAX_REPEATABLE_TIMESTAMP_IDLE_FREQUENCY`
+  (1 h).
+- **Fixed constants, long polls, or backoffs capped by their max:** everything else.
+- **S8 (minor, not a finding).** About ten delays come straight from operator knobs, and the knob parsers do not cap
+  them. Setting one past 24.8 days would make its loop spin like F2. The knobs are
+  `MAX_REPEATABLE_TIMESTAMP_IDLE_FREQUENCY`, the retention intervals, `ROOM_RECONNECT_GRACE_SECS`,
+  `SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY`, the usage-gauge period, the table-summary interval, and the request and
+  action timeouts. No default comes close; the helper above would cover these too.
 
 **Suspected, from reading the code, not probed** (for the fix PRs to confirm or dismiss):
 - **S1.** `index-worker.ts:267–272`: a backfill that restarts from the beginning, because its checkpoint snapshot is
@@ -401,7 +438,9 @@ sets a budget (§8, Q4).
 Four runs on the test VPS (2 vCPU, 8 GB, Ubuntu, Bun 1.4.3), under `/root/bunvex-soak-study` (`pilot-N/report.json`
 and `pilot-N.log` there). Each had 20 clients, and the backend and the driver shared the machine. The asked-for
 10–15 minute pilot came first. What it could not settle (memory) led to the longer two, and each run changed the
-design a little. All four were judged again with the final rules (`report.json` keeps every sample).
+design a little. All four were judged again with the final rules (`report.json` keeps every sample). All four ran on the
+pre-#751 build (`016dfccb` plus this branch), so F1 shows in every one of them. On main today the canary (R3) should
+pass; the other results do not depend on #751.
 
 | Run | Setup | R1 RSS | R2 heap | R3 canary | R11 idle | Other |
 |---|---|---|---|---|---|---|
@@ -505,22 +544,20 @@ only, and skipped with a note without the binary, like its neighbours. Three cas
 3. `test.todo` (F4): a hit's user time, memory and timestamp are its miss's.
 
 Results:
-- **main:** case 1 passes; **case 2 fails**: bunvex `plain:miss`, Convex `plain:hit`. That is #751, found from outside
-  with no knowledge of the cause.
+- **Pre-#751 main (`016dfccb`):** case 1 passes; **case 2 fails**: bunvex `plain:miss`, Convex `plain:hit`. That is
+  #751, found from outside with no knowledge of the cause.
 - **#751's branch** (`fix/vm-parity-from-bridge`, in a throwaway worktree): cases 1 and 2 pass.
+- **This branch merged with main after #751 (`7683a19a`):** 2 pass, 1 todo, 0 fail.
 - **`--todo`:** Convex gives `{sameUserTime, sameMemory, sameTimestamp}` = `true, true, true`; bunvex gives
   `false, false, false` (F4).
 
 Run: `CONVEX_BACKEND_BIN=… bun test packages/differential/test/cache-metadata.test.ts` (about 21 s).
 
-Case 2 will fail on main until #751 merges. It is local only and not in the nightly list, so it breaks nothing. The
-PR says so, and the merge order should be #751 first.
-
 ## 6. Mapping: which layer should catch what
 
 | Class | Example | The layer that should catch it | Today |
 |---|---|---|---|
-| Cache behaviour over time | F1 | the metadata differential (§5.3), the soak's canary (R3), a unit test with an injected clock | none (#751's test now) |
+| Cache behaviour over time | F1 | the metadata differential (§5.3), the soak's canary (R3), a unit test with an injected clock | #751's `meta.test.ts` (on main) |
 | Busy loops and timer overflow | F2, F3 | a unit test with an injected clock; the soak's idle rule (R11, F2 only); a static check (I-25) | none |
 | State not freed after clients go | I-05, I-11 | an `afterEach` "hub is empty" helper in the server suites; a Jepsen post-run `/metrics` check; soak R5–R6 | partial (`reads` only) |
 | Unbounded buffers | I-19–I-23 | unit tests at the bound (most exist); soak R1–R2 for what nobody listed | mostly covered |
@@ -528,7 +565,7 @@ PR says so, and the merge order should be #751 first.
 | Exactly-once and lag | I-12, I-16 | unit tests (exist); Jepsen's set and log checks; soak R9 | covered except lag |
 | Shutdown that hangs or leaves work | F5, I-24, S4 | a "shutdown finishes within N ms under load" test; the process-exits test | partial |
 | Metadata parity | F4, I-10, I-30 | the differential's metadata files, then the generated programs with the log tail | read-count only (local) |
-| Lost tests | any of the above deleted later | coverage floors: add `function-log.ts`, `app-metrics.ts` and `rooms/hub.ts` (bunvex-9f's list) | 23 files |
+| Lost tests | any of the above deleted later | coverage floors: e.g. `function-log.ts`, `app-metrics.ts` and `rooms/hub.ts`, each added in the PR whose tests cover it | 23 files |
 | Performance drift | p99 creep | soak R8; benches (manual) | manual only |
 
 Coverage floors and mutation testing cannot catch this class: a line counts as covered even if its timer is never
@@ -554,7 +591,8 @@ file was restored and compared after each.
 | R11's limit 30 % instead of 3 % | 1 fails |
 | memory judged from the warm-up, not from the caches being full | 1 fails (the cache filling) |
 
-**The differential prototype** is its own sabotage: it fails on main (F1 present) and passes on #751 (F1 fixed).
+**The differential prototype** is its own sabotage: it failed on the pre-#751 main (F1 present) and passes on #751 and
+on main after it (F1 fixed).
 
 **The soak** is checked by its pilots (§4.6). Their failures were F1 and F2, the two load-visible bugs known to be on
 main. Removing the far-future job made R11 pass (1.3 % against 66 %). They also found F6.
@@ -563,8 +601,8 @@ main. Removing the far-future job made R11 pass (1.3 % against 66 %). They also 
 
 **Checks:**
 - `bun run typecheck`, `bun run check:deps` and `bunx biome ci` on the changed files pass.
-- The full `bun test --isolate --timeout 30000`: 4 056 pass, 0 fail, 587 skipped, before the last rules change.
-  `rules.test.ts` was re-run after it.
+- The full `bun test --isolate --timeout 30000`, after merging main with #751: 4 283 pass, 0 fail, 587 skipped.
+- `rules.test.ts`: 15 pass. `cache-metadata.test.ts` against the oracle: 2 pass, 1 todo, 0 fail.
 
 ## 8. Owner questions
 
@@ -577,8 +615,10 @@ Each question gives what Convex does, what bunvex does, whether they are the sam
 - Same: n/a, an addition to the test suite, not to the product.
 - Why: not built yet.
 - App impact: none directly. It catches F1-class bugs in a day instead of two weeks.
-- **Recommendation:** add `soak-nightly.yml`: 45 minutes, SQLite, `ubuntu-latest`, an issue on failure, as Jepsen
-  does. That is about 50 runner-minutes a night, free on a public repository. Postgres later as a matrix entry.
+- **Recommendation:** add `soak-nightly.yml`: 45 minutes, SQLite, `ubuntu-latest`. On failure it opens or comments on
+  an issue, as Jepsen does. It is **never a required merge check**: like the Jepsen and differential nightlies, it
+  reports, and a red night blocks no PR. That is about 50 runner-minutes a night, free on a public repository.
+  Postgres later as a matrix entry.
 
 **Q2. A monthly long soak on the VPS (6 h).**
 - Same answers as Q1.
@@ -609,21 +649,19 @@ Each question gives what Convex does, what bunvex does, whether they are the sam
 - bunvex: local only.
 - Same: n/a.
 - Why: not built yet.
-- **Recommendation:**
-  - add `cache-metadata.test.ts` (after #751 merges), `read-count.test.ts` and the log-stream files to
-    `scripts/nightly.sh`, for about 2 minutes a night more;
-  - extend the runner to tail the log stream per step;
-  - this is bunvex-9f's track: their call on placement.
+- **Recommendation:** bunvex-9f will add `cache-metadata.test.ts`, `read-count.test.ts` and the log-stream files to
+  `scripts/nightly.sh` after #755 merges, for about 2 minutes a night more. The runner's per-step log tail (§5.2)
+  follows on the same track.
 
-Not questions, because each matches Convex: the fixes for F1 (#751), F2, F3 and F5, and the suspected S1–S7 once
+Not questions, because each matches Convex: the fixes for F1 (done, #751), F2, F3 and F5, and the suspected S1–S7 once
 confirmed.
 
 ## 9. Recommended order and effort
 
 | Step | What | Effort | Catches |
 |---|---|---|---|
-| 1 | Merge #751; then this PR (the rules, the soak, the prototype) | — | F1 |
-| 2 | Fix F2 and F3: cap both loops' timers, test with an injected clock. Add the I-25 static check | 0.5 day | F2, F3 |
+| 1 | This PR (the rules, the soak, the prototype); #751 already fixed F1 | — | F1 (regression guard) |
+| 2 | Fix F2 and F3 with one capped `timerDelay` helper in core, a test per loop with an injected clock, and the I-25 rule in `check:deps` (rule 6, §3.1) in the same PR, so a new uncapped delay fails CI | 0.5 day | F2, F3, S8, and new ones |
 | 3 | Attribute F6: a 2 h VPS run with `external` and `arrayBuffers` sampled, a periodic forced GC, and the workload bisected (§4.6) | 1 day | F6 |
 | 4 | The server suites' `afterEach` "hub empty, cache consistent, no session left" helper (I-03, I-05, I-11, I-19, I-23) | 0.5–1 day | freed state across ~40 suites |
 | 5 | The soak nightly workflow (Q1) | 0.5 day + a week of watching for flakes | trends, R1–R12 |
@@ -632,5 +670,5 @@ confirmed.
 | 8 | F4 fix (Q3) | 0.5 day | F4 |
 | 9 | Confirm or dismiss S1–S7, one test each | 1 day | handles, backfill |
 | 10 | Jepsen post-run `/metrics` check (R6 + fds per run) | 0.5 day | freed state under faults |
-| 11 | Coverage floors: add the files the new tests cover | 0.5 hour | keeps the tests |
+| 11 | Coverage floors: each step's PR adds the files its new tests cover to `scripts/coverage-floors.ts` in the same PR (not as a separate step) | in each PR | keeps the tests |
 | 12 | The per-connection memory bench (Q4); the soak on Postgres; a monthly 6 h VPS run (Q2) | 1–2 days | slow leaks, drivers |
