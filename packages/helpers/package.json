@@ -9,7 +9,8 @@
     "./validators": "./src/validators.ts",
     "./server/customFunctions": "./src/server/customFunctions.ts",
     "./server/triggers": "./src/server/triggers.ts",
-    "./server/compare": "./src/server/compare.ts"
+    "./server/compare": "./src/server/compare.ts",
+    "./server/stream": "./src/server/stream.ts"
   },
   "peerDependencies": {
     "@bunvex/server": "workspace:^",
@@ -17,7 +18,8 @@
   },
   "devDependencies": {
     "@bunvex/core": "workspace:*",
-    "@bunvex/testing": "workspace:*"
+    "@bunvex/testing": "workspace:*",
+    "fast-check": "4.10.2"
   },
   "repository": {
     "type": "git",

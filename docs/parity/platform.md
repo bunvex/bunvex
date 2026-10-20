@@ -448,17 +448,18 @@ at `e48f9df` (0.1.128); paths are relative to its `packages/convex-helpers/`.
 | convex-helpers' custom functions: `customQuery`, `customMutation`, `customAction`, `customCtx`, `customCtxAndArgs`, `NoOp`, the `Customization`, `CustomBuilder`, `CustomCtx`, `Registration` and (deprecated) `Mod` types | `server/customFunctions.ts` | done (STUDY-181 PR 2) | `@bunvex/helpers/server/customFunctions`. The function's args are its own with the customization's added, validated by the engine; `input` gets the customization's args and the definition's extra keys; `onSuccess` runs only after a handler that returned. The merged `ctx` keeps `ctx`'s getters as getters, where upstream spreads it, so a mutation's lazy `rooms` (AD-42) is not built by the merge: what the handler reads is the same. Upstream's tests ported, run on `@bunvex/testing` against a pushed project. |
 | convex-helpers' triggers: `Triggers` (`registered`, `register`, `wrapDB`), `writerWithTriggers`, the `Trigger` and `Change` types, and (deprecated) `DatabaseWriterWithTriggers` | `server/triggers.ts` | done (STUDY-181 PR 5) | `@bunvex/helpers/server/triggers`. Only `insert`, `patch`, `replace` and `delete` on tables with triggers take the trigger path (the id-only forms find the table by `normalizeId`); each reads the document before and after; the app's write drains the queue first in, first out, so recursive triggers run breadth-first; the first trigger error is thrown after the drain, the others logged. The locks and queue are per transaction, not per module (DV-545): bunvex evaluates modules once per code version, where upstream's module variables would make concurrent mutations wait on each other. `ctx` is merged without reading its getters, as in custom functions. Upstream's tests ported, run on `@bunvex/testing`, with tests of the order, the errors and two mutations at once. |
 | convex-helpers' `compareValues` (deprecated) | `server/compare.ts` | done (STUDY-181 PR 1) | `@bunvex/helpers/server/compare`, `@bunvex/values`' `compareValues` (H-3). |
+| convex-helpers' streams: `stream`, `StreamDatabaseReader`, `QueryStream` (`filterWith`, `map`, `flatMap`, `distinct`, `paginate` with `endCursor`, `maximumRowsRead`, `maximumBytesRead`, `pageStatus` and `splitCursor`, `collect`, `take`, `first`, `unique`), `mergedStream`, `streamIndexRange`, `getIndexFields`, `SingletonStream`, `EmptyStream` | `server/stream.ts` | done (STUDY-181 PR 3) | `@bunvex/helpers/server/stream`. Cursors byte for byte with convex-helpers' (H-2: the value JSON of the index key, `"undefined"` and its `_` escape, `"[]"`), compared with convex-helpers 0.1.128 on Convex's binary by `packages/differential/test/helpers-stream.test.ts`; index fields from `schema.tables[t].indexes` (H-5). Upstream's tests ported, the property tests with fast-check on the same seeds; each step a transaction of its own, under a deployment's read limits. Rule 5: `toJsonValue` / `fromJsonValue`. |
 
 ### Summary counts
 
-Recounted on 2026-10-20 from the rows' status column, as [the README](README.md)'s table (STUDY-181 PR 5, the triggers row; PR 2, the custom functions row; PR 1, the libraries rows; the testing row, STUDY-159; before that 2026-10-19, STUDY-173, after the components rows' update).
+Recounted on 2026-10-20 from the rows' status column, as [the README](README.md)'s table (STUDY-181 PR 3, the streams row; PR 5, the triggers row; PR 2, the custom functions row; PR 1, the libraries rows; the testing row, STUDY-159; before that 2026-10-19, STUDY-173, after the components rows' update).
 
 | Status | Count |
 |---|---|
-| done | 242 |
+| done | 243 |
 | partial | 21 |
 | missing | 6 |
 | n/a (cloud-only or a decided divergence) | 6 |
-| **total** | **275** |
+| **total** | **276** |
 
 The gaps, ranked by what an app would notice, are in [the README](README.md#gaps-by-impact).

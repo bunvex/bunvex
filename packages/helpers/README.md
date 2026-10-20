@@ -62,12 +62,33 @@ What is there (convex-helpers 0.1.128):
   (deprecated upstream);
 - `@bunvex/helpers/server/triggers`: `Triggers` (`register`, `wrapDB`), `writerWithTriggers`, the types `Trigger` and
   `Change`, and `DatabaseWriterWithTriggers` (deprecated upstream);
-- `@bunvex/helpers/server/compare`: `compareValues` (deprecated upstream; it is `@bunvex/values`'s).
+- `@bunvex/helpers/server/compare`: `compareValues` (deprecated upstream; it is `@bunvex/values`'s);
+- `@bunvex/helpers/server/stream`: `stream`, `StreamDatabaseReader`, `QueryStream` (`filterWith`, `map`, `flatMap`,
+  `distinct`, `paginate` with `endCursor`, `maximumRowsRead`, `maximumBytesRead`, `pageStatus` and `splitCursor`,
+  `collect`, `take`, `first`, `unique`), `mergedStream`, `streamIndexRange`, `getIndexFields`, `SingletonStream`,
+  `EmptyStream`, and the types.
 
-Streams and pagination come next (STUDY-181 §3.4).
+```ts
+import { mergedStream, stream } from "@bunvex/helpers/server/stream";
+import schema from "./schema";
+
+// Messages of several authors, by creation time, a page at a time.
+const byAuthor = (author: string) =>
+  stream(ctx.db, schema).query("messages").withIndex("by_author", (q) => q.eq("author", author));
+const page = await mergedStream(authors.map(byAuthor), ["_creationTime"])
+  .filterWith(async (m) => !m.deleted)
+  .paginate({ ...paginationOpts, maximumRowsRead: 1000 });
+```
+
+A stream's cursors are convex-helpers' own, byte for byte (STUDY-181 H-2): the value JSON of an index key, `undefined`
+as `"undefined"`, and `"[]"` at the end. A cursor stored by an app or a component on Convex keeps working.
+
+Pagination (`getPage`, `paginator`) comes next (STUDY-181 §3.4).
 
 Where it differs from convex-helpers (rule 5, DV-544): a validator's `isConvexValidator` is bunvex's
-`isValidator`, and `vRequired` refuses an unknown kind with "Unknown validator type: ".
+`isValidator`, and `vRequired` refuses an unknown kind with "Unknown validator type: ". `server/stream` uses
+`@bunvex/values`' `toJsonValue` / `fromJsonValue` where upstream uses `convexToJson` / `jsonToConvex`: the same
+encoding.
 
 A custom function's handler sees the same `ctx` as upstream's, built differently: upstream spreads `ctx`, which reads
 each of its getters, where this keeps them getters, so a mutation's `ctx.rooms` is still built only on first use.

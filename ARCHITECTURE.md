@@ -166,8 +166,8 @@ bunvex/
 │   │   ├── server/compare           compareValues (deprecated upstream)                         ✅
 │   │   ├── server/customFunctions   customQuery, customMutation, customAction, customCtx, NoOp… ✅
 │   │   ├── server/triggers          Triggers, writerWithTriggers, locks per transaction (DV-545) ✅
-│   │   └── server/stream,           streams and pagination (STUDY-181 PRs 3–4)                  ·
-│   │       pagination
+│   │   ├── server/stream            stream, mergedStream, filterWith, flatMap, distinct…        ✅
+│   │   └── server/pagination        getPage, paginator (STUDY-181 PR 4)                         ·
 │   │
 │   ├── sandbox/                     @bunvex/sandbox (private for now)  the function sandbox (AD-44,
 │   │   │                            STUDY-168): app code in a separate process
