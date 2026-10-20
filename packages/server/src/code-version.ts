@@ -142,6 +142,12 @@ export const BUNVEX_MODULES: Record<string, () => Promise<Record<string, unknown
   "bunvex/values": () => import("@bunvex/values"),
   "@bunvex/values": () => import("@bunvex/values"),
 };
+/**
+ * The specifiers a push leaves as imports: exactly the modules linked above. Any other `bunvex/*` or `@bunvex/*`
+ * import (a component package, a library, the client) is bundled like any package, as Convex bundles everything but
+ * its own linked modules (STUDY-158 G1).
+ */
+export const LINKED_MODULES: readonly string[] = Object.keys(BUNVEX_MODULES);
 const SERVER_MODULES: Record<string, () => Promise<Record<string, unknown>>> = {
   ...BUNVEX_MODULES,
   // The function tester's builders (STUDY-119, DV-390): Convex's `convex:/_system/repl/wrappers.js`.

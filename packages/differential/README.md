@@ -98,6 +98,11 @@ backend is always started with `--disable-beacon`.
 `.github/workflows/differential-nightly.yml` runs `scripts/nightly.sh` against Convex's released backend,
 downloaded at run time:
 - the fixed programs;
+- a store with components as Convex writes it, and components' definitions (`component-store`,
+  `component-definitions`);
+- what the log stream says about each call (STUDY-174 Q5): the cache's hits, misses and expiry
+  (`cache-metadata`), the read-limit warning and error (`read-count`), unawaited operations
+  (`unawaited-operations`) and an HTTP action's log lines (`http-action-log-route`);
 - then batches of `DIFF_RUNS` generated programs (200), each from a fresh seed, for `MINUTES` (20).
 
 Every seed is in the log. On a difference:

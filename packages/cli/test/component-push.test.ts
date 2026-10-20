@@ -171,6 +171,40 @@ describe("bunvex deploy", () => {
     expect(await d.run("", "app:hi")).toMatchObject({ value: "hi" });
   });
 
+  test("a package under `@bunvex/`: its component is found and its client bundled (STUDY-158 G1)", async () => {
+    const d = await deployment();
+    const root = tmp();
+    // The linked `@bunvex/server`, spelled so the dependency checker does not take it for this test's own.
+    const LINKED = JSON.stringify(["@bunvex", "server"].join("/"));
+    write(root, {
+      "bunvex/bunvex.config.ts": `import { defineApp } from ${SERVER};\nimport limiter from "@bunvex/limiter/bunvex.config.js";\nconst app = defineApp();\napp.use(limiter);\nexport default app;\n`,
+      "bunvex/app.ts": `import { componentsGeneric, query } from ${SERVER};\nimport { Limiter } from "@bunvex/limiter";\nconst limiter = new Limiter(componentsGeneric().limiter);\nexport const count = query({ args: {}, handler: (ctx) => limiter.count(ctx) });\n`,
+      "node_modules/@bunvex/limiter/package.json": JSON.stringify({
+        name: "@bunvex/limiter",
+        type: "module",
+        exports: {
+          ".": "./dist/client/index.js",
+          "./bunvex.config.js": { bunvex: "./dist/component/bunvex.config.js" },
+        },
+      }),
+      // The client imports a linked module, which stays an import inside the bundled package.
+      "node_modules/@bunvex/limiter/dist/client/index.js": `import { makeFunctionReference } from ${LINKED};\nexport class Limiter {\n  constructor(component) { this.component = component; }\n  async count(ctx) { return { linked: typeof makeFunctionReference, n: await ctx.runQuery(this.component.lib.count, {}) }; }\n}\n`,
+      ...under(
+        "node_modules/@bunvex/limiter/dist/component",
+        Object.fromEntries(
+          Object.entries(component("limiter")).map(([p, t]) => [p === "bunvex.config.ts" ? "bunvex.config.js" : p, t]),
+        ),
+      ),
+    });
+    const r = io(root);
+    expect(
+      await main(["deploy", "--url", d.url, "--admin-key", KEY, "--typecheck=disable", "--codegen=disable"], r.it),
+    ).toBe(0);
+    expect(r.err).toContain("Installed component limiter.");
+    expect((await d.run("limiter", "lib:add", { body: "x" })).status).toBe("success");
+    expect(await d.run("", "app:count")).toMatchObject({ value: { linked: "function", n: 1 } });
+  });
+
   test("an unmount prints its line; a push that changes nothing prints none", async () => {
     const d = await deployment();
     const root = app();

@@ -105,8 +105,11 @@ export function cloneWithSentinels(body: AuditLogBody): { [key: string]: JsonVal
 /** A query's or mutation's audit log lines so far, as JSON text (and their total, Convex's heap check). */
 export type AuditLines = { lines: string[]; bytes: number };
 
-/** The running function's lines: null in an action, undefined outside any function (set by log-audit.ts). */
-let auditScope: () => AuditLines | null | undefined = () => undefined;
+/**
+ * The running function's lines: null in an action, undefined outside any function (set by log-audit.ts). In the
+ * function sandbox's child, a function that sends each line to the host, which holds them (STUDY-171 §11.3).
+ */
+let auditScope: () => AuditLines | ((json: string) => Promise<void>) | null | undefined = () => undefined;
 export function setAuditScope(s: typeof auditScope) {
   auditScope = s;
 }
@@ -119,7 +122,14 @@ export function audit(body: AuditLogBody): Promise<void> {
 async function auditLine(body: AuditLogBody): Promise<void> {
   const json = JSON.stringify(cloneWithSentinels(body));
   const scope = auditScope();
-  if (!scope) throw new Error("Audit logging is not yet supported in actions");
+  if (typeof scope === "function") return scope(json);
+  addAuditLine(json);
+}
+
+/** A line, as JSON text, added to the running function's (Convex's `emit_audit_log_line`). */
+export function addAuditLine(json: string) {
+  const scope = auditScope();
+  if (!scope || typeof scope === "function") throw new Error("Audit logging is not yet supported in actions");
   // Convex's `emit_audit_log_line`: the lines a function holds are bounded as it adds them.
   if (scope.bytes + json.length > auditLogLimits().maxHeapBytes)
     throw new Error("Audit logs exceed function execution limits");

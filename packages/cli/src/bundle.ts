@@ -7,7 +7,8 @@
 // - `"use node"` files are bundled apart (their own chunks under `_deps/node/`) and may import Node builtins;
 //   the others keep any builtin import too, and the server refuses it ("only available in \"use node\"
 //   files"), as Convex's browser-platform bundle would fail;
-// - `bunvex`, `bunvex/*` and `@bunvex/*` stay external: the server links them to its own modules;
+// - `bunvex/server`, `bunvex/values` and their `@bunvex/*` names stay external: the server links them to its own
+//   modules (`LINKED_MODULES`); every other `bunvex` import, a component package or a library, is bundled;
 // - ESM, code splitting into `_deps/[hash].js` chunks, source maps, `process.env.NODE_ENV` "production";
 // - `schema.ts` and `auth.config.ts` are bundled on their own (`schema.js`, `auth.config.js`);
 // - `node.externalPackages` (STUDY-148): the `"use node"` build leaves the listed packages as imports, and the
@@ -17,6 +18,7 @@
 //   (STUDY-83).
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { LINKED_MODULES } from "@bunvex/server";
 import type { BunPlugin } from "bun";
 import {
   computeExternalPackages,
@@ -30,7 +32,8 @@ import {
 export type ModuleConfig = { path: string; source: string; sourceMap?: string; environment: "isolate" | "node" };
 
 const EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".jsx"];
-export const EXTERNAL = ["bunvex", "bunvex/*", "@bunvex/*"];
+/** What a push leaves as imports: the modules the server links, and nothing else of `bunvex` (STUDY-158 G1). */
+export const EXTERNAL = [...LINKED_MODULES];
 
 export class BundleError extends Error {
   constructor(message: string) {

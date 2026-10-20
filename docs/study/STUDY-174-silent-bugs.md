@@ -763,7 +763,7 @@ confirmed.
 | 4 | The server suites' `afterEach` "hub empty, cache consistent, no session left" helper (I-03, I-05, I-11, I-19, I-23) | 0.5–1 day | freed state across ~40 suites |
 | 5 | ~~The soak nightly workflow (Q1)~~ done (§10.3), R1 report-only until Q6; then a week of watching for flakes | 0.5 day + a week of watching | trends, R1–R12 |
 | 6 | Fix F5: a stopping scheduler stops retrying and waits a bounded time. Test: shutdown under contention within 1 s | 0.5 day | F5, S4 |
-| 7 | The metadata files in the differential nightly; the runner's log tail (Q5, bunvex-9f) | 1–2 days | F4-class, usage, OCC shape |
+| 7 | The metadata files in the differential nightly (done: `cache-metadata`, `read-count`, `unawaited-operations`, `http-action-log-route` in `scripts/nightly.sh`, about 40 s a night); the runner's log tail (Q5, bunvex-9f, next) | 1–2 days | F4-class, usage, OCC shape |
 | 8 | F4 fix (Q3) | 0.5 day | F4 |
 | 9 | Confirm or dismiss S1–S7, one test each | 1 day | handles, backfill |
 | 10 | Jepsen post-run `/metrics` check (R6 + fds per run) | 0.5 day | freed state under faults |

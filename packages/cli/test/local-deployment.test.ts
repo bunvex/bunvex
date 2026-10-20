@@ -291,6 +291,35 @@ exec ${JSON.stringify(process.execPath)} ${JSON.stringify(ENTRY)} "$@"
     ]);
   }, 60_000);
 
+  test("a TZ in the user's shell does not stop the backend: it is started in UTC (DV-537)", async () => {
+    // The stand-in records the TZ it was started with, then runs the backend, which refuses any TZ but UTC.
+    const rec = join(tmp(), "tz");
+    const bin = join(tmp(), EXE);
+    writeFileSync(
+      bin,
+      `#!/bin/sh
+[ "$1" = --version ] && echo "bunvex-local-backend test-1" && exit 0
+[ "$1" = --help ] || [ "$1" = keygen ] || printf '%s\\n' "\${TZ-unset}" >>${JSON.stringify(rec)}
+exec ${JSON.stringify(process.execPath)} ${JSON.stringify(ENTRY)} "$@"
+`,
+    );
+    chmodSync(bin, 0o755);
+    const before = process.env.TZ;
+    process.env.TZ = "America/Sao_Paulo";
+    let running: Awaited<ReturnType<typeof startLocalDeployment>>;
+    try {
+      running = await startLocalDeployment(io(app(), { BUNVEX_LOCAL_BACKEND_BINARY: bin, HOME: tmp() }).it, {
+        cloudPort: freePort(),
+      });
+    } finally {
+      if (before === undefined) delete process.env.TZ;
+      else process.env.TZ = before;
+    }
+    stops.push(running.stop);
+    expect(readFileSync(rec, "utf8")).toBe("UTC\n");
+    expect(await portBusy(running.config.ports.cloud)).toBe(true);
+  }, 60_000);
+
   test("a backend that exits before it is ready: the error names the log and shows its end", async () => {
     const dir = app();
     const bin = join(tmp(), EXE);
