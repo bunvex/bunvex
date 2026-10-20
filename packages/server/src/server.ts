@@ -2444,6 +2444,8 @@ export function createServer(opts: ServerOptions) {
       return live;
     },
     deploymentEnv,
+    // As Convex's Node executor's timeout, which bounds its `build_deps`: NODE_ACTION_USER_TIMEOUT + 5 s.
+    installTimeoutMs: functions.nodeActionTimeoutMs + 5000,
   });
   /**
    * Convex's `GET /api/v1/get_canonical_urls` (any admin: the URLs, or the server's origins) and
@@ -2653,6 +2655,8 @@ export function createServer(opts: ServerOptions) {
   return {
     installCodeVersion,
     deployCode,
+    /** Convex's deploy2 protocol in-process (`startPush`, `waitForSchema`, `finishPush`); `@bunvex/testing` pushes with it. */
+    push,
     codeReady,
     server,
     /** The site port's server (HTTP actions), if any. */
@@ -2694,6 +2698,7 @@ export function createServer(opts: ServerOptions) {
       usageLimitWorker.stop();
       void exportService?.stop();
       void importService?.stop();
+      executorInvalidations.stop();
       void scheduler.stop();
       void cronExecutor.stop();
       stopCleanup();

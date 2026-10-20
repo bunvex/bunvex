@@ -1,7 +1,8 @@
 // A program (STUDY-122 §3.1): calls of the app, its ids written as references (`{ ref: "r1" }`) that each
 // backend resolves to its own ids (those of earlier calls: a reference is resolved before its call is sent),
 // and a page's cursor named for a later page to continue from. `run` plays it on one backend; `compare` plays
-// it on both and returns the differences of the normalised records (each answer, then every table's contents).
+// it on both and returns the differences of the normalised records (each answer, then every table's contents,
+// then what the function log recorded of each call: STUDY-174 §5.2).
 
 import type { Backend } from "./backends.ts";
 import { answerShape, creationTimes, IdMap, normalize, type Step } from "./compare.ts";
@@ -38,10 +39,61 @@ export type Call =
   | { kind: "call"; fn: "query" | "mutation" | "action"; path: string; args: Record<string, unknown> };
 export type Program = Call[];
 
-type Record_ = { steps: Step[]; dump: unknown; ids: IdMap };
+type Record_ = { steps: Step[]; dump: unknown; ids: IdMap; log: unknown[] };
+
+/**
+ * A completed call as the function log records it, the part both backends must agree on: its kind, function,
+ * whether the cache answered it, whether it failed, and its usage (documents, bytes and index rows read and
+ * written). Times, ids and the memory figure (an isolate's on Convex) are not compared.
+ */
+type LogEntry = {
+  kind?: string;
+  udfType?: string;
+  identifier?: string;
+  cachedResult?: boolean;
+  error?: unknown;
+  usageStats?: Record<string, number>;
+};
+const logView = (e: LogEntry) => {
+  // The counters that are not zero, so a difference reads at a glance.
+  const usage = Object.fromEntries(
+    Object.entries(e.usageStats ?? {}).filter(([k, n]) => k !== "memoryUsedMb" && n !== 0),
+  );
+  return [e.udfType, e.identifier?.replace(/\.js(?=:)/, ""), e.cachedResult ?? false, e.error ? "error" : "ok", usage];
+};
+
+/** Each backend's position in its function log stream, after the last program read. */
+const logCursors = new WeakMap<Backend, number>();
+
+/**
+ * The completions `backend` logged since the last program, through `ops:dump`, which every program ends with: the
+ * log is in completion order, and the dump is the last call.
+ */
+async function logTail(backend: Backend): Promise<unknown[]> {
+  const auth = `${backend.name === "convex" ? "Convex" : "Bunvex"} ${backend.adminKey}`;
+  let cursor = logCursors.get(backend) ?? 0;
+  const seen: LogEntry[] = [];
+  for (let i = 0; i < 200; i++) {
+    const r = await fetch(`${backend.url}/api/stream_function_logs?cursor=${cursor}`, {
+      headers: { authorization: auth },
+    });
+    if (!r.ok) throw new Error(`${backend.name}: the function log answered ${r.status}`);
+    const body = (await r.json()) as { entries: LogEntry[]; newCursor: number };
+    cursor = body.newCursor;
+    seen.push(...body.entries.filter((e) => e.kind === "Completion"));
+    if (seen.some((e) => e.identifier?.replace(/\.js(?=:)/, "") === "ops:dump")) break;
+    await Bun.sleep(10);
+  }
+  logCursors.set(backend, cursor);
+  return seen.map(logView);
+}
 
 /** Play `program` on `backend`. */
-export async function run(backend: Backend, program: Program, opts: { reset?: boolean } = {}): Promise<Record_> {
+export async function run(
+  backend: Backend,
+  program: Program,
+  opts: { reset?: boolean; log?: boolean } = {},
+): Promise<Record_> {
   // From empty tables, when a backend serves one program after another.
   if (opts.reset) {
     const r = await backend.call("mutation", "ops:reset", {});
@@ -116,11 +168,12 @@ export async function run(backend: Backend, program: Program, opts: { reset?: bo
     }
   }
   const dump = (await backend.call("query", "ops:dump", {})).body;
+  const log = opts.log ? await logTail(backend) : [];
   // Documents no answer named (written by a failed action, or by nested calls whose answer is a count) are
   // named here, in each table's creation order, which both backends share.
   const tables = (dump as { value?: Record<string, { _id: string }[]> }).value ?? {};
   for (const [table, docs] of Object.entries(tables)) for (const d of docs) ids.add(d._id, table);
-  return { steps, dump, ids };
+  return { steps, dump, ids, log };
 }
 
 /** The differences between the two backends' records of `program`, normalised; empty when they agree. */
@@ -128,7 +181,7 @@ export async function compare(
   oracle: Backend,
   bunvex: Backend,
   program: Program,
-  opts: { reset?: boolean } = {},
+  opts: { reset?: boolean; log?: boolean } = {},
 ): Promise<string[]> {
   const [a, b] = await Promise.all([run(oracle, program, opts), run(bunvex, program, opts)]);
   const view = (r: Record_) => {
@@ -147,5 +200,8 @@ export async function compare(
   });
   if (JSON.stringify(va.dump) !== JSON.stringify(vb.dump))
     diffs.push(`final data:\n  convex: ${JSON.stringify(va.dump)}\n  bunvex: ${JSON.stringify(vb.dump)}`);
+  // Only when the answers agree: a different answer already explains a different log.
+  if (!diffs.length && JSON.stringify(a.log) !== JSON.stringify(b.log))
+    diffs.push(`function log:\n  convex: ${JSON.stringify(a.log)}\n  bunvex: ${JSON.stringify(b.log)}`);
   return diffs;
 }

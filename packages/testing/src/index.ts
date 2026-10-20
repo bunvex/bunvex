@@ -1,3 +1,2 @@
-// Package @bunvex/testing — Test bunvex functions against the real engine in memory.
-// Nothing here yet; see ARCHITECTURE.md for what will live in this package.
-export {};
+// Package @bunvex/testing (STUDY-159): convex-test's API on bunvex's real engine, in the test's own process.
+export { type BunvexTestOptions, bunvexTest, TestBunvex } from "./harness.ts";
