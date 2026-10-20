@@ -4,6 +4,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import vm from "node:vm";
 import { adminKeyCipherKey, checkAdminKey } from "../src/admin-keys.ts";
 import {
   ADMIN_KEY_USAGE,
@@ -453,6 +454,37 @@ describe("bunvex-local-backend", () => {
       ),
     });
     expect((await keygen([], { INSTANCE_SECRET: "xyz" })).err).toBe("Error: Couldn't hexdecode key");
+  });
+
+  test("functions run in UTC, as Convex's `ensure_utc`; a TZ other than UTC refuses the start (STUDY-171 §10)", async () => {
+    const before = process.env.TZ;
+    try {
+      // The machine's own zone first, so the start has something to change.
+      process.env.TZ = "America/Sao_Paulo";
+      for (const TZ of ["America/Sao_Paulo", "", "utc"]) {
+        const r = io();
+        const args = ["--instance-secret", SECRET, "--port", "0", "--site-proxy-port", "0"];
+        expect(await localBackendMain(args, { ...r.it, env: { TZ } }, "v1")).toBe(1);
+        expect(r.err).toEqual(["Error: TZ is set, but bunvex requires UTC. Unset TZ to continue."]);
+      }
+      expect(new Date(0).getTimezoneOffset()).not.toBe(0);
+      for (const TZ of [undefined, "UTC"]) {
+        process.env.TZ = "America/Sao_Paulo";
+        const cwd = mkdtempSync(join(tmpdir(), "bunvex-lb-"));
+        dirs.push(cwd);
+        const flags = parseLocalBackendFlags(["--instance-secret", SECRET, "--port", "0", "--site-proxy-port", "0"]);
+        if (typeof flags === "string") throw new Error(flags);
+        const b = await startLocalBackend(flags, { ...io(cwd).it, env: TZ === undefined ? {} : { TZ } });
+        stops.push(b.stop);
+        // A pushed context's `Date` is the process's.
+        expect(vm.runInContext("new Date(0).toString()", vm.createContext({}))).toBe(
+          "Thu Jan 01 1970 00:00:00 GMT+0000 (Coordinated Universal Time)",
+        );
+      }
+    } finally {
+      if (before === undefined) delete process.env.TZ;
+      else process.env.TZ = before;
+    }
   });
 
   test("the program takes INSTANCE_SECRET from its environment and removes it there (DV-525)", async () => {

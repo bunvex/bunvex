@@ -279,12 +279,27 @@ export function localBackendDatabaseEnv(
   };
 }
 
+/** Convex's refusal of a time zone other than UTC (`ensure_utc`, crates/common/src/utils.rs), in bunvex's name. */
+export const TZ_NOT_UTC = "TZ is set, but bunvex requires UTC. Unset TZ to continue.";
+
+/**
+ * Convex's `ensure_utc` (crates/common/src/utils.rs, called as its function runner starts, isolate/src/client.rs):
+ * a function's `Date` is UTC whatever the machine's time zone (`new Date(0).toString()` reads `… GMT+0000
+ * (Coordinated Universal Time)`), as this process's is once `TZ` is set (a pushed context's `Date` follows the
+ * process's); `TZ` set to anything else, empty included, refuses the start.
+ */
+function useUtc(env: LocalBackendIo["env"]) {
+  if (env.TZ !== undefined && env.TZ !== "UTC") throw new Error(TZ_NOT_UTC);
+  process.env.TZ = "UTC";
+}
+
 export type RunningLocalBackend = { url: string; siteUrl: string | null; stop: () => Promise<void> };
 
 /** Start the backend (the program waits on it; tests and `bunvex dev` stop it). */
 export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo): Promise<RunningLocalBackend> {
   const refused = localBackendFlagsError(f);
   if (refused) throw new Error(refused);
+  useUtc(io.env);
   // The executor (AD-44), checked before the store opens: the flag, else the environment, else `vm`.
   const sandbox = functionSandboxConfig(
     f.functionSandbox ?? io.env.BUNVEX_FUNCTION_SANDBOX,

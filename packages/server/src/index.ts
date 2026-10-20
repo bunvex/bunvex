@@ -79,6 +79,7 @@ export type {
   FunctionReferenceFromExport,
 } from "./api-types.ts";
 export { filterApi } from "./api-types.ts";
+export { LINKED_MODULES } from "./code-version.ts";
 // Components' definitions (STUDY-153 PR 1): `bunvex.config.ts`'s `defineApp` / `defineComponent` and `components`.
 export {
   type AnyComponentReference,

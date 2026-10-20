@@ -22,7 +22,7 @@ import type { AnalyzedFunction, AnalyzedModule, DefaultExportUse, ModuleSource }
 export const EPOCHS_KEPT = 4;
 
 /** Bumped whenever a message changes: host and child are always the same build, but a stale child must not run. */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** Convex's argument and result caps (`FUNCTION_MAX_ARGS_SIZE`, `FUNCTION_MAX_RESULT_SIZE`, knobs.rs:439-446). */
 export const MAX_VALUE_SIZE = 1 << 24;
@@ -149,10 +149,14 @@ export type WireCall = {
   created: WireTable[];
 };
 
-/** host → child: an operation's answer. `created`: the transaction's created tables, when they changed. */
+/**
+ * host → child: an operation's answer. `created`: the transaction's created tables, when they changed. `sync`: the
+ * error was thrown before the engine's call returned, as under `vm` it is thrown at the app's call, with its frames;
+ * `link`: by the query chain's link of that id, made when the app made it (STUDY-171 §11.3).
+ */
 export type WireReply = { t: "reply"; id: number; op: number; created?: WireTable[] } & (
   | { ok: true; value: unknown }
-  | { ok: false; error: WireThrown }
+  | { ok: false; error: WireThrown; sync?: true; link?: number }
 );
 
 /**
@@ -161,7 +165,13 @@ export type WireReply = { t: "reply"; id: number; op: number; created?: WireTabl
  * `withIndex`, `filter`, `order`, …), which the host makes on its `ctx.db` first, as the engine makes each at the
  * app's call (`db.query` and `withIndex` read).
  */
-export type WireReport = { ran: number; time: boolean; env: string[]; links: WireLink[] };
+export type WireReport = { ran: number; time: boolean; env: string[]; links: WireLink[]; lines: WireLogLine[] };
+
+/**
+ * A console line the function logged since its previous message (STUDY-171 §11): made in the child as the console
+ * makes it in-process (rendered, cut at `MAX_LOG_LINE_LENGTH`, stamped with the wall clock), in order.
+ */
+export type WireLogLine = [level: string, messages: string[], isTruncated: boolean, timestamp: number];
 
 /**
  * A query chain's link: its kind, its id, the link it continues (none for `open`), and its arguments (wire values):
@@ -317,6 +327,7 @@ function analyzedModule(x: Json, where: string): WireAnalyzedModule {
 }
 
 const VISIBILITIES = ["public", "internal"] as const;
+const LOG_LEVELS = ["DEBUG", "ERROR", "WARN", "INFO", "LOG"] as const;
 const ROOM_KINDS = ["room", "presence"] as const;
 
 function version(x: Json, where: string): WireVersion {
@@ -380,6 +391,19 @@ function report(x: Json, where: string): WireReport {
       const e = arr(l, w);
       if (e.length !== 4) fail(w, "a link: its kind, id, source and arguments");
       return [str(e[0], `${w}[0]`), int(e[1], `${w}[1]`), nullable(e[2], int, `${w}[2]`), e[3]] as WireLink;
+    }),
+    lines: arr(o.lines, `${where}.lines`).map((l, i) => {
+      const w = `${where}.lines[${i}]`;
+      const e = arr(l, w);
+      if (e.length !== 4) fail(w, "a line: its level, messages, truncation and time");
+      const timestamp = num(e[3], `${w}[3]`);
+      if (!Number.isFinite(timestamp)) fail(`${w}[3]`, "a finite number");
+      return [
+        oneOf(e[0], LOG_LEVELS, `${w}[0]`),
+        arr(e[1], `${w}[1]`).map((m, j) => str(m, `${w}[1][${j}]`)),
+        bool(e[2], `${w}[2]`),
+        timestamp,
+      ] as WireLogLine;
     }),
   };
 }

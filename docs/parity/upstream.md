@@ -11,6 +11,27 @@ get-convex/convex-backend, and the process that keeps it there. The process is d
 - **Differential oracle:** `precompiled-2026-10-10-72ce13c` (`packages/differential/scripts/download-convex-backend.sh`).
 - **Last weekly bump:** [STUDY-173](../study/STUDY-173-convex-reference-2026-10-10.md) (2026-10-19), from `d8bdde0`.
 
+## Other repositories
+
+Convex's libraries and components live outside convex-backend. bunvex's `@bunvex/testing`, `@bunvex/helpers` and
+own components are written from scratch against these repositories ([STUDY-158](../study/STUDY-158-own-components.md)).
+Each one is read at the commit below, cloned next to bunvex (`~/sandbox/<clone>`). A study that moves a commit
+records the move here.
+
+| Repository | Clone | Commit | Version | For |
+|---|---|---|---|---|
+| get-convex/convex-test | `convex-test` | `8fe3dda` (2026-10-15) | 0.0.62 | `@bunvex/testing` |
+| get-convex/convex-helpers | `convex-helpers` | `e48f9df` (2026-10-19) | 0.1.128 | `@bunvex/helpers` |
+| get-convex/sharded-counter | `convex-sharded-counter` | `d8f0718` (2026-10-14) | 0.2.3 | `@bunvex/sharded-counter` |
+| get-convex/batch-worker | `convex-batch-worker` | `f299a7b` (2026-10-14) | 0.3.6 | `@bunvex/batch-worker` |
+| get-convex/rate-limiter | `convex-rate-limiter` | `dee5af1` (2026-10-15) | 0.4.2 | `@bunvex/rate-limiter` |
+| get-convex/workpool | `convex-workpool` | `fe6f2b8` (2026-10-15) | 0.4.14 | `@bunvex/workpool` |
+| get-convex/aggregate | `convex-aggregate` | `5a72b01` (2026-10-15) | 0.3.3 | `@bunvex/aggregate` |
+| get-convex/migrations | `convex-migrations` | `dc87b03` (2026-10-15) | 0.3.7 | `@bunvex/migrations` |
+
+These are not triaged daily. Each piece's study reads its repository's changes since its commit before it is
+built, and moves the commit.
+
 ## The process
 
 **Every day**, the workflow `upstream-triage.yml`:

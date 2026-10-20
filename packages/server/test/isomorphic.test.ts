@@ -20,6 +20,7 @@ const RUNTIME_ONLY = [
   "Functions",
   "instanceSecretError",
   "issueAdminKey",
+  "LINKED_MODULES",
   "LOCAL_BACKEND_USAGE",
   "localBackendMain",
   "openPersistence",
