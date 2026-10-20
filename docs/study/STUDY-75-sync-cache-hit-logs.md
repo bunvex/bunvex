@@ -23,7 +23,10 @@ Sources: `crates/sync/src/worker.rs` (`begin_update_queries`), `crates/applicati
   - `cached: true`;
   - the cached run's log lines (also as `console` events);
   - the result's bytes, no usage;
-  - this caller's `run_reason` (STUDY-74).
+  - the cached run's user time, memory, execution timestamp and identity type: `log_query` logs the cached
+    outcome's fields (`function_log.rs` at `72ce13c`, `:735`, `:742`, `:747`, `:751`;
+    [STUDY-174](STUDY-174-silent-bugs.md) §10.2, F4);
+  - its own log time, wall time, request and execution ids and caller, and this caller's `run_reason` (STUDY-74).
 - **Errors are never cached** (only `Ok` outcomes are stored). A query whose shared run failed runs again and
   logs its own failure.
 
@@ -31,7 +34,8 @@ Sources: `crates/sync/src/worker.rs` (`begin_update_queries`), `crates/applicati
 
 - `/api/stream_function_logs` (`bunvex logs`, the dashboard) shows one entry per client query answer.
 - Log streams count one `function_execution` per answer.
-- A cached answer reads `cached: true` with the lines the run printed.
+- A cached answer reads `cached: true` with the lines the run printed, and the run's `userExecutionTime`,
+  `usageStats.memoryUsedMb`, `executionTimestamp` and `identityType` (STUDY-174 §10.2).
 
 ## 3. How bunvex does it
 
@@ -41,8 +45,10 @@ Sources: `crates/sync/src/worker.rs` (`begin_update_queries`), `crates/applicati
 - Neither case was logged. A second session subscribing to a query produced no log entry.
 - Now each case logs as Convex's cache does (`SyncHub.logReuse`):
   - a reused result, or a join that is served, logs a cache hit through `functions.logged` with:
-    - `cachedQueryLogs.replay` of the lines the run kept (`Execution.logged`, captured with the query
-      cache's `wrap`);
+    - `cachedQueryLogs.replay` of the lines and figures the run kept (`Execution.logged.kept`, a `CachedRun`
+      captured with the query cache's `wrap`): the hit's entry gives the run's user time, memory, execution
+      timestamp and identity type (STUDY-174 §10.2; before, it gave its own wall time, 0 MB, its own start
+      and its own identity);
     - the run's result bytes;
     - the session's run reason.
   - a reused failure is logged as a failed run, not a hit.
@@ -64,7 +70,10 @@ The client sees the same error; the log shows a failed run per session, as Conve
 - a session joining a run in flight (held on a store read);
 - a reused failure;
 - a session whose identity changed reusing another session's run under that identity (`identityChange`,
-  a hit).
+  a hit);
+- the reused result's entry gives the run's user time, memory and execution timestamp, in its own request; an
+  anonymous session reusing an admin's run of a query that read no identity logs `instance_admin` (STUDY-174
+  §10.2).
 
 Sabotage checks, each failing a test:
 
