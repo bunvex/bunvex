@@ -23,7 +23,7 @@ import {
 } from "@bunvex/server/executor";
 import type { Subprocess } from "bun";
 import { evaluatedValue } from "./default-export.ts";
-import { FrameReader, FrameTooLargeError, frame } from "./frames.ts";
+import { chunkFrame, FrameReader, FrameTooLargeError, frame } from "./frames.ts";
 import {
   BadMessageError,
   type EvaluatedDefault,
@@ -34,7 +34,9 @@ import {
   type ToHost,
   type WireError,
   type WireLoadOptions,
+  type WireThrown,
 } from "./protocol.ts";
+import { Streams, WINDOW_BYTES } from "./streams.ts";
 import { type LoadedVersion, loadedVersion } from "./version.ts";
 
 /** The child's entry: this package's `child.ts`, on disk (a compiled executable has none yet: STUDY-171 §7.9). */
@@ -48,6 +50,8 @@ const CHILD_KNOBS = ["MAX_USER_MODULES", "ISOLATE_ANALYZE_USER_TIMEOUT_SECONDS"]
  * (crates/node_executor/src/local.rs:47-48, 116-126). A cold start here is about 40 ms (STUDY-171 §7.5).
  */
 export const HANDSHAKE_TIMEOUT_MS = 5_000;
+/** The credit the host's streams to the child start with: the child takes what it is sent as it comes. */
+const WINDOW_BYTES_TO_CHILD = WINDOW_BYTES;
 /** How much of the child's stderr a crash's message quotes. */
 const STDERR_TAIL = 2048;
 
@@ -89,8 +93,17 @@ export type ChildLoad = LoadedVersion & { loadMs: number; versionId: number };
 
 /** Where a call's messages go: the call's own loop (`HostCall`), which reads them in its async context. */
 export type CallSink = {
-  message(m: Extract<ToHost, { t: "op" } | { t: "done" }>): void;
+  message(m: Extract<ToHost, { t: "op" } | { t: "done" } | { t: "lines" } | { t: "cancelled" }>): void;
   gone(e: SandboxError): void;
+};
+
+/** The streams' failures across the wire (set by `host-call.ts`, which knows how errors cross). */
+export const streamErrors: {
+  thrown: (e: unknown) => WireThrown;
+  error: (w: WireThrown) => unknown;
+} = {
+  thrown: () => ({ k: "host", message: "a stream failed" }),
+  error: () => new Error("a stream failed"),
 };
 
 type Pending = { resolve: (m: ToHost) => void; reject: (e: unknown) => void };
@@ -135,6 +148,10 @@ export class SandboxProcess {
   private readonly drained: Promise<unknown>;
   /** From spawn to the child's hello, in ms. */
   spawnToReadyMs = Number.NaN;
+  /** The byte streams to and from the child (STUDY-171 §12): every frame of the child's about them is checked. */
+  readonly streams: Streams;
+  /** What aborts each `fetch` in flight, by call and operation (`abort` from the child). */
+  readonly fetches = new Map<string, AbortController>();
 
   private constructor(
     private readonly proc: Subprocess<"ignore", "inherit", "pipe">,
@@ -144,6 +161,18 @@ export class SandboxProcess {
     private readonly spawnedAt: number,
   ) {
     this.sink = Bun.file(fd).writer();
+    this.streams = new Streams(
+      {
+        message: (m) => this.send(m),
+        chunk: (id, bytes) => this.write(chunkFrame(id, bytes)),
+      },
+      {
+        strict: true,
+        initialCredit: WINDOW_BYTES_TO_CHILD,
+        thrown: (e) => streamErrors.thrown(e),
+        error: (w) => streamErrors.error(w),
+      },
+    );
     this.ready = new Promise<void>((resolve, reject) => {
       this.handshake = { resolve: () => resolve(), reject };
     });
@@ -254,11 +283,20 @@ export class SandboxProcess {
 
   /** Sends a message to the child (a `call`, a `reply`); dropped once it is gone. */
   send(m: ToChild) {
+    this.write(frame(m));
+  }
+
+  private write(bytes: Uint8Array) {
     if (this.dead) return;
     try {
-      this.sink.write(frame(m));
+      this.sink.write(bytes);
       Promise.resolve(this.sink.flush()).catch(() => {});
     } catch {}
+  }
+
+  /** Call `id` is over for the host (an action cut off and acknowledged): any later message for it is a bad one. */
+  closeCall(id: number) {
+    this.calls.delete(id);
   }
 
   /** Kills the child for `reason` (a call's backstop, a message its call cannot use). */
@@ -303,11 +341,20 @@ export class SandboxProcess {
       return;
     }
     if (Number.isNaN(this.spawnToReadyMs)) throw new BadMessageError(`${m.t} before hello`);
-    if (m.t === "op" || m.t === "done") {
+    if (m.t === "op" || m.t === "done" || m.t === "lines" || m.t === "cancelled") {
       const call = this.calls.get(m.id);
       if (!call) throw new BadMessageError(`a message for no running call (${m.t} ${m.id})`);
-      if (m.t === "done") this.calls.delete(m.id);
+      if (m.t === "done" || m.t === "cancelled") this.calls.delete(m.id);
       call.message(m);
+      return;
+    }
+    if (m.t === "abort") {
+      // A fetch that already ended has nothing to abort.
+      this.fetches.get(`${m.id}:${m.op}`)?.abort();
+      return;
+    }
+    if (m.t === "end" || m.t === "fail" || m.t === "credit" || m.t === "stop") {
+      this.streams.onMessage(m);
       return;
     }
     const p = this.pending.get(m.id);
@@ -338,8 +385,12 @@ export class SandboxProcess {
           this.proc.kill("SIGKILL");
           return;
         }
-        for (const text of reader.push(next.value)) {
-          this.onMessage(parseChildMessage(text));
+        for (const f of reader.push(next.value)) {
+          if (typeof f === "string") this.onMessage(parseChildMessage(f));
+          else {
+            if (Number.isNaN(this.spawnToReadyMs)) throw new BadMessageError("a chunk before hello");
+            this.streams.onChunk(f.s, f.bytes);
+          }
           if (this.dead) return;
         }
       }
@@ -386,6 +437,9 @@ export class SandboxProcess {
     this.pending.clear();
     for (const c of this.calls.values()) c.gone(error);
     this.calls.clear();
+    this.streams.failAll(error);
+    for (const f of this.fetches.values()) f.abort();
+    this.fetches.clear();
     return error;
   }
 }

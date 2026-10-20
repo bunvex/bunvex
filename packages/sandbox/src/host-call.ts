@@ -37,7 +37,7 @@ import {
   type SandboxCall,
 } from "@bunvex/server/executor";
 import { BunvexError, isBunvexError, type JSONValue } from "@bunvex/values";
-import type { SandboxError, SandboxProcess } from "./host.ts";
+import { type SandboxError, type SandboxProcess, streamErrors } from "./host.ts";
 import {
   BadMessageError,
   EPOCHS_KEPT,
@@ -58,8 +58,11 @@ import { decode, encode } from "./wire.ts";
  */
 export const BACKSTOP_SLACK_MS = 50;
 
-/** The most arguments an operation takes (`db.patch(table, id, value)`, `scheduler.runAfter`'s three, `storage`'s method and two). */
-const MAX_OP_ARGS = 4;
+/**
+ * The most arguments an operation takes (`db.patch(table, id, value)`, `scheduler.runAfter`'s three, `storage`'s
+ * method and two, `rooms.broadcast`'s method and four).
+ */
+const MAX_OP_ARGS = 5;
 
 type Kind = "query" | "mutation";
 
@@ -82,7 +85,10 @@ const OPS: Record<string, { kinds: readonly Kind[]; writes?: boolean }> = {
   meta: { kinds: ["query", "mutation"] },
   createFunctionHandle: { kinds: ["query", "mutation"] },
   "log.audit": { kinds: ["query", "mutation"] },
+  rooms: { kinds: ["mutation"] },
 };
+/** A mutation's `ctx.rooms` (AD-42): its broadcasts are sent once it commits. */
+const ROOMS_METHODS = ["broadcast"];
 
 /** `ctx.storage`'s methods (`FileStorage.reader` / `.writer`), `ctx.meta`'s and `ctx.scheduler`'s, by kind. */
 export const STORAGE_METHODS: Record<Kind, readonly string[]> = {
@@ -126,7 +132,7 @@ const define = (o: object, key: string, value: unknown) => {
 };
 
 /** An operation's error for the child: its class, name, message, and a `BunvexError`'s data. */
-function thrownToChild(e: unknown): WireThrown {
+export function thrownToChild(e: unknown): WireThrown {
   const isError = e instanceof Error || Object.prototype.toString.call(e) === "[object Error]";
   if (!isError) return { k: "value", v: encode(e) };
   const err = e as Error;
@@ -145,8 +151,14 @@ function thrownToChild(e: unknown): WireThrown {
 
 type OpMessage = Extract<ToHost, { t: "op" }>;
 type DoneMessage = Extract<ToHost, { t: "done" }>;
-/** What a call's inbox holds: the child's messages for it, its child's death, or its backstop. */
-type Inbox = OpMessage | DoneMessage | { t: "gone"; e: SandboxError } | { t: "timeout" };
+/** What a call's inbox holds: the child's messages for it, its child's death, its backstop or its cut-off. */
+export type Inbox =
+  | OpMessage
+  | DoneMessage
+  | Extract<ToHost, { t: "lines" } | { t: "cancelled" }>
+  | { t: "gone"; e: SandboxError }
+  | { t: "timeout" }
+  | { t: "cutOff"; error: unknown };
 
 /**
  * The epochs a child still has: the last `EPOCHS_KEPT` it was sent, in the order it was sent them, as the child keeps
@@ -189,9 +201,168 @@ const stateOf = (child: SandboxProcess): ChildState => {
   return st;
 };
 
-/** A call in progress: the child's messages, in order, and how the host answers them. */
-export class HostCall {
-  private readonly opErrors = new Map<number, unknown>();
+/**
+ * What a call of either kind (a query's or mutation's, `HostCall`; an action's, `HostActionCall`) does with the
+ * child's messages: queued as they come (outside the call's async context) and read by the call's own loop, each
+ * operation answered on the real `ctx`, each thrown value made again as the engine or the app threw it.
+ */
+export abstract class HostCallBase {
+  protected readonly opErrors = new Map<number, unknown>();
+  protected readonly inFlight = new Set<Promise<void>>();
+  private readonly queue: Inbox[] = [];
+  private wake: (() => void) | null = null;
+  readonly id: number;
+
+  constructor(protected readonly child: SandboxProcess) {
+    this.id = child.newCallId();
+  }
+
+  /** A message for this call from the child's reader (outside the call's async context: only queued here). */
+  protected push(item: Inbox) {
+    this.queue.push(item);
+    const w = this.wake;
+    this.wake = null;
+    w?.();
+  }
+
+  protected async next(): Promise<Inbox> {
+    while (!this.queue.length) await new Promise<void>((resolve) => (this.wake = resolve));
+    return this.queue.shift()!;
+  }
+
+  /** The sink the child's reader hands this call's messages to. */
+  protected sink() {
+    return {
+      message: (m: Extract<Inbox, { t: "op" | "done" | "lines" | "cancelled" }>) => this.push(m),
+      gone: (e: SandboxError) => this.push({ t: "gone", e }),
+    };
+  }
+
+  /**
+   * `fn`, where a message the host cannot use (`BadMessageError`) is the child's fault: it is killed, and the call
+   * fails as a system error. Any other error is the call's.
+   */
+  protected checked<T>(fn: () => T): T {
+    try {
+      return fn();
+    } catch (e) {
+      if (!(e instanceof BadMessageError)) throw e;
+      this.child.kill("badMessage", `sent a message that is not valid: ${e.message}`);
+      throw new ExecutorFailure(`the function sandbox's process sent a message that is not valid: ${e.message}`);
+    }
+  }
+
+  /**
+   * A console line the child logged, logged here where the console would have logged it in-process: in the call's
+   * execution, after the operations before it. The child made it as the console does (rendered, cut, stamped); one
+   * that may be past the cut (only a broken child sends one) is cut again.
+   */
+  protected logLine([level, messages, isTruncated, timestamp]: WireLogLine) {
+    let units = messages.length;
+    for (const m of messages) units += m.length;
+    // A UTF-16 unit is at most 3 bytes of UTF-8: a line that short is within the cut.
+    const line: LogLine =
+      units * 3 <= MAX_LOG_LINE_LENGTH
+        ? { level: level as LogLevel, messages, isTruncated, timestamp }
+        : makeLogLine(level as LogLevel, messages, timestamp);
+    if (isTruncated) line.isTruncated = true;
+    logChildLine(line);
+  }
+
+  /** What the function's `done` stands for: its value, or what it threw. */
+  protected result(m: DoneMessage): unknown {
+    if (m.ok) return decode(m.value as JSONValue, true);
+    const w = m.error;
+    switch (w.k) {
+      case "value":
+        throw decode(w.v as JSONValue, true);
+      case "op": {
+        if (!this.opErrors.has(w.op)) bad(`an error of no operation (${w.op})`);
+        const original = this.opErrors.get(w.op);
+        // The app's frames, as the child's context gave them (its `appContext` view): as under `vm`, the engine's
+        // error carries the app's call.
+        if (w.stack !== null && original !== null && typeof original === "object") define(original, "stack", w.stack);
+        throw original;
+      }
+      case "host":
+        throw new Error(w.message);
+      case "error":
+        throw appError(w);
+    }
+  }
+
+  /** Why the child may not send operation `name` (it is then killed), or null when it may. */
+  protected abstract refused(name: string): string | null;
+
+  /** Operation `name`, run on the real `ctx` (`atTheAppsCall`). */
+  abstract dispatch(name: string, args: unknown[], op: number): unknown;
+
+  /** What the reply carries besides the value (the transaction's created tables). */
+  protected extra(_reply: Record<string, unknown>) {}
+
+  protected async answer(m: OpMessage): Promise<void> {
+    const why = this.refused(m.name);
+    if (why !== null) {
+      this.child.kill("badMessage", why);
+      return;
+    }
+    if (m.args.length > MAX_OP_ARGS) {
+      this.child.kill("badMessage", `sent an operation with too many arguments (${m.name})`);
+      return;
+    }
+    let reply: Record<string, unknown>;
+    try {
+      const args = m.args.map((a) => decode(a as JSONValue, true));
+      const value = await atTheAppsCall(this, m.name, args, m.op);
+      reply = { t: "reply", id: this.id, op: m.op, ok: true, value: encode(value) };
+    } catch (e) {
+      if (e instanceof BadMessageError) {
+        this.child.kill("badMessage", `sent a message that is not valid: ${e.message}`);
+        return;
+      }
+      this.opErrors.set(m.op, e);
+      reply = { t: "reply", id: this.id, op: m.op, ok: false, error: thrownToChild(e) };
+      const made = madeAt(e);
+      if (made !== null) {
+        reply.sync = true;
+        if (made > 0) reply.link = made;
+      }
+    }
+    this.extra(reply);
+    this.child.send(reply as never);
+  }
+
+  /** Starts answering an operation; the call's loop goes on reading. */
+  protected start(m: OpMessage, settled?: () => void) {
+    const op = this.answer(m);
+    this.inFlight.add(op);
+    void op.finally(() => {
+      this.inFlight.delete(op);
+      settled?.();
+    });
+  }
+
+  protected method(args: unknown[], allowed: readonly string[], what: string): string {
+    const name = args[0];
+    if (typeof name !== "string" || !allowed.includes(name)) bad(`${what} has no method ${String(name)}`);
+    return name as string;
+  }
+}
+
+/** An app's error, as the child described it: made again with its class's name, a `BunvexError` with its data. */
+export function appError(w: Extract<WireThrown, { k: "error" }>): Error {
+  let e: Error;
+  if (w.bunvex) {
+    e = new BunvexError(decode((w.data ?? null) as JSONValue, true) as never);
+    define(e, "message", w.message);
+  } else e = appRealmError(w.cls, w.message);
+  if (e.name !== w.name) define(e, "name", w.name);
+  if (w.stack !== null) define(e, "stack", w.stack);
+  return e;
+}
+
+/** A query's or mutation's call in progress: the child's messages, in order, and how the host answers them. */
+export class HostCall extends HostCallBase {
   private readonly streams = new Map<number, AsyncIterator<unknown>>();
   /**
    * Each link of each query chain the function made, made again on its `ctx.db` (`WireReport.links`), by id: the
@@ -199,22 +370,18 @@ export class HostCall {
    */
   private readonly links = new Map<number, { q: Chain } | { error: unknown }>();
   private nextStream = 0;
-  private readonly inFlight = new Set<Promise<void>>();
-  private readonly queue: Inbox[] = [];
-  private wake: (() => void) | null = null;
   private backstop: ReturnType<typeof realRuntime.setTimeout> | null = null;
   private createdSent = 0;
   private readonly env = currentEnvReader();
   private readonly timer = currentUserTimer();
-  private readonly id: number;
 
   constructor(
-    private readonly child: SandboxProcess,
+    child: SandboxProcess,
     private readonly kind: Kind,
     private readonly ctx: Record<string, unknown>,
     private readonly call: SandboxCall,
   ) {
-    this.id = child.newCallId();
+    super(child);
   }
 
   private get db(): Tx {
@@ -283,19 +450,6 @@ export class HostCall {
     };
   }
 
-  /** A message for this call from the child's reader (outside the call's async context: only queued here). */
-  private push(item: Inbox) {
-    this.queue.push(item);
-    const w = this.wake;
-    this.wake = null;
-    w?.();
-  }
-
-  private async next(): Promise<Inbox> {
-    while (!this.queue.length) await new Promise<void>((resolve) => (this.wake = resolve));
-    return this.queue.shift()!;
-  }
-
   /** The created tables this transaction has, when they changed since the child last heard. */
   private createdTables(): WireTable[] | undefined {
     const created = this.db.createdTableDefs();
@@ -320,7 +474,7 @@ export class HostCall {
   /** Runs `fn` of version `version` to its end: the child's `done`, or its failure. In the stand-in's async context. */
   async run(fn: string, version: number, args: unknown): Promise<unknown> {
     const message = this.message(fn, version, args);
-    this.child.openCall(this.id, { message: (m) => this.push(m), gone: (e) => this.push({ t: "gone", e }) });
+    this.child.openCall(this.id, this.sink());
     this.child.send(message);
     this.arm();
     try {
@@ -335,13 +489,14 @@ export class HostCall {
           throw error;
         }
         if (item.t === "gone") throw new ExecutorFailure(item.e.message);
+        if (item.t === "lines" || item.t === "cancelled" || item.t === "cutOff") {
+          this.child.kill("badMessage", `sent an action's message (${item.t}) for a ${this.kind}`);
+          throw new ExecutorFailure(`the function sandbox's process sent a message that is not valid: ${item.t}`);
+        }
         this.disarm();
         this.checked(() => this.charge(item.report));
         if (item.t === "op") {
-          const op = this.answer(item);
-          this.inFlight.add(op);
-          void op.finally(() => {
-            this.inFlight.delete(op);
+          this.start(item, () => {
             if (!this.inFlight.size) this.arm();
           });
           continue;
@@ -354,20 +509,6 @@ export class HostCall {
     } finally {
       this.disarm();
       for (const it of this.streams.values()) void Promise.resolve(it.return?.()).catch(() => {});
-    }
-  }
-
-  /**
-   * `fn`, where a message the host cannot use (`BadMessageError`) is the child's fault: it is killed, and the call
-   * fails as a system error. Any other error is the call's.
-   */
-  private checked<T>(fn: () => T): T {
-    try {
-      return fn();
-    } catch (e) {
-      if (!(e instanceof BadMessageError)) throw e;
-      this.child.kill("badMessage", `sent a message that is not valid: ${e.message}`);
-      throw new ExecutorFailure(`the function sandbox's process sent a message that is not valid: ${e.message}`);
     }
   }
 
@@ -414,89 +555,16 @@ export class HostCall {
     }
   }
 
-  /**
-   * A console line the child logged, logged here where the console would have logged it in-process: in the call's
-   * execution, after the operations before it. The child made it as the console does (rendered, cut, stamped); one
-   * that may be past the cut (only a broken child sends one) is cut again.
-   */
-  private logLine([level, messages, isTruncated, timestamp]: WireLogLine) {
-    let units = messages.length;
-    for (const m of messages) units += m.length;
-    // A UTF-16 unit is at most 3 bytes of UTF-8: a line that short is within the cut.
-    const line: LogLine =
-      units * 3 <= MAX_LOG_LINE_LENGTH
-        ? { level: level as LogLevel, messages, isTruncated, timestamp }
-        : makeLogLine(level as LogLevel, messages, timestamp);
-    if (isTruncated) line.isTruncated = true;
-    logChildLine(line);
+  protected refused(name: string): string | null {
+    const spec = OPS[name];
+    if (!spec?.kinds.includes(this.kind) || (spec.writes && this.call.shape === "reader"))
+      return `sent an operation its function may not run (${name} in a ${this.kind})`;
+    return null;
   }
 
-  private result(m: DoneMessage): unknown {
-    if (m.ok) return decode(m.value as JSONValue, true);
-    const w = m.error;
-    switch (w.k) {
-      case "value":
-        throw decode(w.v as JSONValue, true);
-      case "op": {
-        if (!this.opErrors.has(w.op)) bad(`an error of no operation (${w.op})`);
-        const original = this.opErrors.get(w.op);
-        // The app's frames, as the child's context gave them (its `appContext` view): as under `vm`, the engine's
-        // error carries the app's call.
-        if (w.stack !== null && original !== null && typeof original === "object") define(original, "stack", w.stack);
-        throw original;
-      }
-      case "host":
-        throw new Error(w.message);
-      case "error": {
-        let e: Error;
-        if (w.bunvex) {
-          e = new BunvexError(decode((w.data ?? null) as JSONValue, true) as never);
-          define(e, "message", w.message);
-        } else e = appRealmError(w.cls, w.message);
-        if (e.name !== w.name) define(e, "name", w.name);
-        if (w.stack !== null) define(e, "stack", w.stack);
-        throw e;
-      }
-    }
-  }
-
-  private async answer(m: OpMessage): Promise<void> {
-    const spec = OPS[m.name];
-    if (!spec?.kinds.includes(this.kind) || (spec.writes && this.call.shape === "reader")) {
-      this.child.kill("badMessage", `sent an operation its function may not run (${m.name} in a ${this.kind})`);
-      return;
-    }
-    if (m.args.length > MAX_OP_ARGS) {
-      this.child.kill("badMessage", `sent an operation with too many arguments (${m.name})`);
-      return;
-    }
-    let reply: Record<string, unknown>;
-    try {
-      const args = m.args.map((a) => decode(a as JSONValue, true));
-      const value = await atTheAppsCall(this, m.name, args);
-      reply = { t: "reply", id: this.id, op: m.op, ok: true, value: encode(value) };
-    } catch (e) {
-      if (e instanceof BadMessageError) {
-        this.child.kill("badMessage", `sent a message that is not valid: ${e.message}`);
-        return;
-      }
-      this.opErrors.set(m.op, e);
-      reply = { t: "reply", id: this.id, op: m.op, ok: false, error: thrownToChild(e) };
-      const made = madeAt(e);
-      if (made !== null) {
-        reply.sync = true;
-        if (made > 0) reply.link = made;
-      }
-    }
+  protected override extra(reply: Record<string, unknown>) {
     const created = this.createdTables();
     if (created) reply.created = created;
-    this.child.send(reply as never);
-  }
-
-  private method(args: unknown[], allowed: readonly string[], what: string): string {
-    const name = args[0];
-    if (typeof name !== "string" || !allowed.includes(name)) bad(`${what} has no method ${String(name)}`);
-    return name as string;
   }
 
   dispatch(name: string, args: unknown[]): unknown {
@@ -548,16 +616,11 @@ export class HostCall {
         return (ctx.runMutation as unknown as (...a: unknown[]) => unknown)(...args);
       case "createFunctionHandle":
         return createFunctionHandle(args[0]);
-      case "log.audit": {
-        const json = args[0];
-        if (typeof json !== "string") return bad("an audit line that is not text");
-        try {
-          const body = JSON.parse(json);
-          if (body === null || typeof body !== "object" || Array.isArray(body)) throw new Error();
-        } catch {
-          return bad("an audit line that is not a JSON object");
-        }
-        return addAuditLine(json);
+      case "log.audit":
+        return auditLine(args[0]);
+      case "rooms": {
+        const method = this.method(args, ROOMS_METHODS, "ctx.rooms");
+        return (ctx.rooms as Record<string, (...a: unknown[]) => unknown>)[method]!(...args.slice(1));
       }
     }
     return bad(`no operation ${name}`);
@@ -592,16 +655,33 @@ export class HostCall {
   }
 }
 
+// A stream's failure crosses as an operation's error does: the host's own errors to the child, the app's back.
+streamErrors.thrown = (e) => thrownToChild(e);
+streamErrors.error = (w) =>
+  w.k === "error" ? appError(w) : w.k === "value" ? decode(w.v as JSONValue, true) : new Error("a stream failed");
+
+/** A `log.audit` line the child checked, checked again (only a broken child sends one that is not a JSON object). */
+export function auditLine(json: unknown): unknown {
+  if (typeof json !== "string") return bad("an audit line that is not text");
+  try {
+    const body = JSON.parse(json);
+    if (body === null || typeof body !== "object" || Array.isArray(body)) throw new Error();
+  } catch {
+    return bad("an audit line that is not a JSON object");
+  }
+  return addAuditLine(json);
+}
+
 /**
  * An operation run on the engine, by a function of its own name: an error made while it is on the stack (the
  * synchronous part of an engine's method, before its first `await`) was, under `vm`, made while the app's call was,
  * and holds the app's frames, which the app sees (`installAppErrors` keeps them, with no `at async` frame). Under
  * `process` the child gives such an error the frames of its own call (`sync`).
  */
-function atTheAppsCall(call: HostCall, name: string, args: unknown[]): unknown {
+function atTheAppsCall(call: HostCallBase, name: string, args: unknown[], op: number): unknown {
   // Not in a tail position, where JavaScriptCore takes the frame off the stack (a module is strict code).
   try {
-    return call.dispatch(name, args);
+    return call.dispatch(name, args, op);
   } finally {
   }
 }

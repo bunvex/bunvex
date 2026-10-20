@@ -17,9 +17,10 @@ import {
   MissingEnvironmentVariableError,
   vmExecutor,
 } from "@bunvex/server/executor";
+import { ActionRuntime } from "./child-action.ts";
 import { CallRuntime } from "./child-call.ts";
 import { exportDefault } from "./default-export.ts";
-import { FrameReader, frame } from "./frames.ts";
+import { chunkFrame, FrameReader, frame } from "./frames.ts";
 import { PROTOCOL_VERSION, type ToChild, type ToHost, type WireError, type WireLoadOptions } from "./protocol.ts";
 import { describeVersion } from "./version.ts";
 
@@ -30,14 +31,16 @@ const CHANNEL = 3;
 export const EXIT_BAD_STREAM = 70;
 
 const out = Bun.file(CHANNEL).writer();
-const send = (m: ToHost) => {
-  out.write(frame(m));
+const write = (bytes: Uint8Array) => {
+  out.write(bytes);
   void out.flush();
 };
+const send = (m: ToHost) => write(frame(m));
 
 /** The versions this child loaded, by request id: the calls name the one whose function they run. */
 const versions = new Map<number, CodeVersion>();
 const calls = new CallRuntime(send, versions);
+const actions = new ActionRuntime(send, (s, bytes) => write(chunkFrame(s, bytes)), versions);
 
 const loadOptions = (o: WireLoadOptions): LoadOptions => ({
   seed: Uint32Array.from(o.seed),
@@ -90,13 +93,17 @@ send({ t: "hello", protocol: PROTOCOL_VERSION, pid: process.pid });
 // The host is trusted: its frames are not capped (a push's modules may be large), only checked.
 const reader = new FrameReader();
 for await (const chunk of Bun.file(CHANNEL).stream()) {
-  let texts: string[];
+  let frames: ReturnType<FrameReader["push"]>;
   try {
-    texts = reader.push(chunk);
+    frames = reader.push(chunk);
   } catch (e) {
     badStream((e as Error).message);
   }
-  for (const text of texts) {
+  for (const text of frames) {
+    if (typeof text !== "string") {
+      actions.streams.onChunk(text.s, text.bytes);
+      continue;
+    }
     let m: ToChild;
     try {
       m = JSON.parse(text) as ToChild;
@@ -105,7 +112,13 @@ for await (const chunk of Bun.file(CHANNEL).stream()) {
     }
     const t = (m as { t?: unknown } | null)?.t;
     if (t === "call") void calls.call(m as Extract<ToChild, { t: "call" }>);
-    else if (t === "reply") calls.reply(m as Extract<ToChild, { t: "reply" }>);
+    else if (t === "reply") {
+      const r = m as Extract<ToChild, { t: "reply" }>;
+      if (!actions.reply(r)) calls.reply(r);
+    } else if (t === "action") void actions.call(m as Extract<ToChild, { t: "action" }>);
+    else if (t === "cancel") actions.cancel(m as Extract<ToChild, { t: "cancel" }>);
+    else if (t === "end" || t === "fail" || t === "credit" || t === "stop")
+      actions.streams.onMessage(m as Parameters<typeof actions.streams.onMessage>[0]);
     else if (t === "load" || t === "evaluate") void handle(m as Extract<ToChild, { t: "load" } | { t: "evaluate" }>);
     else badStream(`an unknown message (${String(t)})`);
   }

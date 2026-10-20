@@ -144,6 +144,7 @@ import {
   type FunctionDef,
   NODE_FUNCTIONS,
   REMOTE_FUNCTIONS,
+  REMOTE_GATES,
   type ValidatorExport,
 } from "./builders.ts";
 import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
@@ -670,6 +671,13 @@ function resentEgress(bytes: number) {
   if (r && r.environment === "isolate") r.io.networkEgressBytes += bytes;
 }
 
+/**
+ * The running action's operations still pending, by Convex's name for each (the unawaited-operations warning). The
+ * function sandbox's host reads it to keep counting an operation whose answer its child had not taken when the
+ * action returned (STUDY-171 §12). Null outside an action.
+ */
+export const currentPendingOps = (): Map<string, number> | null => meteredAction()?.pendingOps ?? null;
+
 /** Count an operation of `r` as pending until the returned function is called (Convex's dangling tasks). */
 function pendingOp(r: Running, name: string): () => void {
   r.pendingOps.set(name, (r.pendingOps.get(name) ?? 0) + 1);
@@ -905,6 +913,21 @@ const VECTOR_FILTER_BUILDER = {
     return { $or: exprs };
   },
 };
+
+/**
+ * Convex's JS-side checks of `ctx.vectorSearch` (vector_search_impl.ts), in its order, and the filter's expression
+ * (the app's filter function run on the builder), before the engine's checks (STUDY-51). The function sandbox's
+ * child runs them at the app's call, and sends the expression (STUDY-171 §12).
+ */
+export function vectorSearchFilter(tableName: unknown, indexName: unknown, query: VectorSearchQuery): unknown {
+  const args = [tableName, indexName, query];
+  const argNames = ["tableName", "indexName", "query"];
+  for (let i = 0; i < 3; i++)
+    if (args[i] === undefined) throw new TypeError(`Must provide arg ${i + 1} \`${argNames[i]}\` to \`vectorSearch\``);
+  if (!Array.isArray(query.vector) || query.vector.length === 0)
+    throw new Error("`vector` must be a non-empty Array in vectorSearch");
+  return query.filter ? query.filter(VECTOR_FILTER_BUILDER as never) : undefined;
+}
 
 /** An error a system function throws from its own code, without the app's frames (`systemArgs`). */
 function systemArgsError(message: string): Error {
@@ -2666,6 +2689,9 @@ export class Functions {
     // A query of its own per run, so that runs at once (one gate in two rooms) each keep their name. No args
     // validator: the room's were checked at join.
     const f: QueryDef = { kind: "query", visibility: "internal", handler: (ctx, a) => gate(ctx as never, a) };
+    // A sandboxed version's gate runs in its child, as its queries do.
+    const remote = REMOTE_GATES.get(gate);
+    if (remote) REMOTE_FUNCTIONS.set(f as FunctionDef, remote);
     this.names.set(f, registryKey(name));
     return this.logged(
       "Query",
@@ -2935,15 +2961,7 @@ export class Functions {
       presence: cutOffWithAction(r.presence as NonNullable<typeof r.presence>),
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
         checkActionAlive();
-        // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
-        const args = [tableName, indexName, query];
-        const argNames = ["tableName", "indexName", "query"];
-        for (let i = 0; i < 3; i++)
-          if (args[i] === undefined)
-            throw new TypeError(`Must provide arg ${i + 1} \`${argNames[i]}\` to \`vectorSearch\``);
-        if (!Array.isArray(query.vector) || query.vector.length === 0)
-          throw new Error("`vector` must be a non-empty Array in vectorSearch");
-        const filter = query.filter ? query.filter(VECTOR_FILTER_BUILDER as never) : undefined;
+        const filter = vectorSearchFilter(tableName, indexName, query);
         const r = meteredAction();
         let results: { _id: string; _score: number }[];
         try {
