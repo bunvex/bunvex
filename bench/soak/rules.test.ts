@@ -118,6 +118,37 @@ describe("the rules", () => {
     expect(r.find((x) => x.rule.startsWith("R1"))?.detail).toStartWith("not judged");
   });
 
+  test("memory is judged once the page cache is full: the ballast read's filling is not a leak (Q6)", () => {
+    // SQLite's 256 MiB page cache fills until t = 20 min, RSS with it; flat after.
+    const filling = (t: number) => ({ rssBytes: (200 + Math.min(300, (t / 1200) * 300)) * MB });
+    expect(failing(runOf(filling))).toEqual(["R1"]);
+    expect(failing(runOf(filling, { pageCacheFilledSeconds: 1200 }))).toEqual([]);
+    const at = judge(runOf(filling, { pageCacheFilledSeconds: 1200 })).find((x) => x.rule.startsWith("R1"))!;
+    expect(at.detail).toEndWith("judged from t=1200 s");
+    // A leak past the fill still fails: 2 MB a minute.
+    const leak = (t: number) => ({ rssBytes: (500 + Math.max(0, t - 1200) / 30) * MB });
+    expect(failing(runOf(leak, { pageCacheFilledSeconds: 1200 }))).toEqual(["R1"]);
+    // A fill that did not finish: memory is not judged, and says why.
+    const r = judge(runOf(filling, { pageCacheFilledSeconds: null }));
+    for (const id of ["R1", "R2"])
+      expect(r.find((x) => x.rule.startsWith(id))?.detail).toBe(
+        "not judged: the page cache's fill (the ballast read) did not finish",
+      );
+    // Filled early: a third of the run still bounds it (the JS heap's own warm-up).
+    expect(
+      judge(runOf(() => ({}), { pageCacheFilledSeconds: 60 })).find((x) => x.rule.startsWith("R1"))!.detail,
+    ).toEndWith("judged from t=600 s");
+  });
+
+  test("memory is judged no earlier than a third of the run, whatever filled the caches", () => {
+    // The heap warming up for 15 minutes (+1.6 MB a minute), the index cache full from the start: not a leak.
+    const warming = (t: number) => ({ heapBytes: (60 + Math.min(24, (t / 60) * 1.6)) * MB });
+    expect(failing(runOf(warming))).toEqual([]);
+    expect(judge(runOf(warming)).find((x) => x.rule.startsWith("R2"))!.detail).toEndWith("judged from t=600 s");
+    // Without the bound (a run's warm-up past its retention only) the same heap would fail R2.
+    expect(failing(runOf(warming, { durationSeconds: 0 }))).toEqual(["R2"]);
+  });
+
   test("a heap leak fails R2", () => {
     expect(failing(runOf((t) => ({ heapBytes: 60 * MB + (t / 60) * 1.5 * MB })))).toEqual(["R2"]);
   });
@@ -200,7 +231,7 @@ describe("the rules", () => {
   });
 });
 
-describe("report-only rules (--report-only, the nightly's R1 until Q6)", () => {
+describe("report-only rules (--report-only; the nightly's R1 until Q6)", () => {
   const leak = runOf((t) => ({ rssBytes: 200 * MB + (t / 60) * MB }));
 
   test("a report-only rule that fails is still reported, but does not fail the run", () => {

@@ -6,13 +6,16 @@
 //   error). A version is retired when another one is installed, and its child stopped once its last call ends; one
 //   that is never installed (a failed push) is stopped then too, or when it is collected. The pool of one-call
 //   processes is STUDY-168's PR 9.
+// - **Actions** (STUDY-171 §12) run in the version's child too: the stand-in is the action's handler, and the
+//   engine runs it as any action (`HostActionCall`). Rooms (AD-42) are stand-ins whose gates run in the child.
 // - **Push-time evaluations** (the auth config, a schema) run in one child kept for them.
-// - **Not available yet** (STUDY-171 §8.7): actions and HTTP actions fail when called, components and rooms fail the
-//   push, each with a message that names the sandbox.
+// - **Not available yet** (STUDY-171 §8.7): `"use node"` actions and HTTP actions fail when called, components fail
+//   the push, each with a message that names the sandbox.
 
 import { existsSync } from "node:fs";
 import { pausingUserTime } from "@bunvex/core";
 import {
+  type AnyRoomDef,
   Crons,
   type DefaultExportUse,
   type EvaluateOptions,
@@ -27,13 +30,18 @@ import {
   type ModuleSource,
   moduleHash,
   NODE_FUNCTIONS,
+  presenceGeneric,
   REMOTE_FUNCTIONS,
+  REMOTE_GATES,
+  roomGeneric,
   type SandboxCall,
   sandboxNotYet,
 } from "@bunvex/server/executor";
 import { validatorFromJson } from "@bunvex/values";
 import { CHILD_ENTRY, type ChildLoad, SandboxError, SandboxProcess, type SandboxProcessOptions } from "./host.ts";
+import { HostActionCall } from "./host-action.ts";
 import { HostCall } from "./host-call.ts";
+import type { WireRoom } from "./protocol.ts";
 import type { RemoteFunction } from "./version.ts";
 
 /** A version's child, replaced when it dies. */
@@ -71,7 +79,7 @@ class VersionChild {
 
 export class RemoteCodeVersion implements LoadedCode {
   readonly functions = new Map<string, FunctionDef>();
-  readonly rooms = new Map<string, never>();
+  readonly rooms = new Map<string, AnyRoomDef>();
   readonly moduleHashes: Map<string, string>;
   readonly moduleLoads: Map<string, string[]>;
   readonly analysis: LoadedCode["analysis"];
@@ -92,6 +100,7 @@ export class RemoteCodeVersion implements LoadedCode {
     this.analysis = load.analysis;
     this.modules = new Map(sources.map((s) => [s.path, { source: s, hash: moduleHash(s) }]));
     for (const [key, f] of load.functions) this.functions.set(key, this.standIn(key, f));
+    for (const [key, r] of load.rooms) this.rooms.set(key, this.roomStandIn(key, r));
     this.router = routerOf(load.analysis["http.js"]?.httpRoutes ?? null);
     this.crons = cronsOf(load.analysis["crons.js"]?.cronSpecs ?? null);
   }
@@ -102,10 +111,13 @@ export class RemoteCodeVersion implements LoadedCode {
     const def = {
       kind: f.kind,
       visibility: f.visibility,
-      // An action's handler is the engine's to call (`runAction`); a query's or mutation's goes through `run`.
-      handler: async () => {
-        throw new Error(sandboxNotYet(f.node ? '"use node" actions' : "Actions"));
-      },
+      // An action's handler is the engine's to call (`runAction`): the stand-in runs it in the child. A query's or
+      // mutation's goes through `REMOTE_FUNCTIONS`.
+      handler: f.node
+        ? async () => {
+            throw new Error(sandboxNotYet('"use node" actions'));
+          }
+        : (ctx: object, a: unknown) => this.action(key, ctx, a),
       ...(args ? { args } : {}),
       ...(returns ? { returns } : {}),
     } as FunctionDef;
@@ -113,6 +125,48 @@ export class RemoteCodeVersion implements LoadedCode {
     if (f.kind !== "action")
       REMOTE_FUNCTIONS.set(def, (ctx, a, call) => this.call(key, f.kind as "query" | "mutation", ctx, a, call));
     return def;
+  }
+
+  /** A room or presence definition whose gates run in the child, as queries (`key#canJoin`). */
+  private roomStandIn(key: string, r: WireRoom): AnyRoomDef {
+    const validator = (json: string) => validatorFromJson(JSON.parse(json));
+    const gate = (which: "canJoin" | "canPublish") => {
+      const g = () => {
+        throw new Error("a sandboxed room's gate runs in its child");
+      };
+      REMOTE_GATES.set(g, (ctx, a, call) => this.call(`${key}#${which}`, "query", ctx, a, call));
+      return g;
+    };
+    const args = r.args === null ? undefined : validator(r.args);
+    if (r.kind === "presence")
+      return presenceGeneric({
+        ...(args ? { args } : {}),
+        ...(r.canJoin ? { canJoin: gate("canJoin") } : {}),
+        state: validator(r.value),
+      } as never) as unknown as AnyRoomDef;
+    return roomGeneric({
+      ...(args ? { args } : {}),
+      ...(r.canJoin ? { canJoin: gate("canJoin") } : {}),
+      ...(r.canPublish ? { canPublish: gate("canPublish") } : {}),
+      presence: validator(r.value),
+      events: Object.fromEntries(r.events.map(([name, v]) => [name, validator(v)])),
+    } as never) as unknown as AnyRoomDef;
+  }
+
+  /** An action, run in the child: the engine already holds its permit, its timeout and its environment. */
+  private async action(key: string, ctx: object, args: unknown) {
+    this.inFlight++;
+    try {
+      let got: Awaited<ReturnType<VersionChild["get"]>>;
+      try {
+        got = await this.child.get();
+      } catch (e) {
+        throw e instanceof SandboxError ? new ExecutorFailure(e.message) : e;
+      }
+      return await new HostActionCall(got.child, ctx).run(key, got.load.versionId, args);
+    } finally {
+      if (--this.inFlight === 0 && this.retired) void this.child.close();
+    }
   }
 
   private async call(key: string, kind: "query" | "mutation", ctx: object, args: unknown, call: SandboxCall) {
@@ -158,9 +212,6 @@ export class ProcessExecutor implements Executor {
     let load: ChildLoad;
     try {
       load = await child.load(sources, opts);
-      // Rooms (AD-42) run their gates in the server; under the sandbox they are a later PR.
-      if (Object.values(load.analysis).some((a) => a.rooms.length))
-        throw new InvalidModulesError(sandboxNotYet("Rooms"));
     } catch (e) {
       await child.close();
       throw e;

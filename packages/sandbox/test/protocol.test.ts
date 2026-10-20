@@ -39,7 +39,7 @@ describe("frames", () => {
       const reader = new FrameReader();
       const out: unknown[] = [];
       for (let i = 0; i < stream.byteLength; i += size)
-        for (const text of reader.push(stream.subarray(i, i + size))) out.push(JSON.parse(text));
+        for (const text of reader.push(stream.subarray(i, i + size))) out.push(JSON.parse(text as string));
       expect(out).toEqual(messages);
       expect(reader.pending).toBe(0);
     }
