@@ -37,7 +37,17 @@ export const newRequestId = () => randomBytes(8).toString("hex");
  * store read failed under a function (STUDY-20 D8), or a timestamp fell out of the write log's retention
  * (Convex's `OutOfRetention`, STUDY-06 D10).
  */
+/**
+ * The function sandbox failed a call that is not the function's fault: its child process died or broke the protocol
+ * (STUDY-171 §8.6). A system error, as Convex's internal error for a terminated isolate: the client gets the
+ * internal-error message, and a function cannot catch it.
+ */
+export class ExecutorFailure extends Error {
+  override name = "ExecutorFailure";
+}
+
 export const isSystemError = (e: unknown) =>
+  e instanceof ExecutorFailure ||
   e instanceof CommitterStoppedError ||
   e instanceof OutOfRetentionError ||
   e instanceof PersistenceReadError ||

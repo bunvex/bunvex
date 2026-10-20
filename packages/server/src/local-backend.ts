@@ -32,7 +32,12 @@ import { type BlobStore, blobStoreFromEnv, LocalBlobStore, s3OptionsFromEnv } fr
 import { ADDRESS_SCREENS, type AddressScreen, DEFAULT_ADDRESS_SCREEN } from "./address-screen.ts";
 import { adminKeyCipherKey, issueAdminKey } from "./admin-keys.ts";
 import { type ArgSpec, type CommandSpec, errorText, ipv4Error, parseCommand, portError } from "./command-line.ts";
-import { FUNCTION_SANDBOXES, type FunctionSandbox, functionSandboxConfig } from "./function-executor.ts";
+import {
+  FUNCTION_SANDBOXES,
+  type FunctionSandbox,
+  functionSandboxConfig,
+  requireProcessExecutor,
+} from "./function-executor.ts";
 import { Functions } from "./functions.ts";
 import { openPersistence, type PersistenceConfig, persistenceConfigFromEnv } from "./persistence.ts";
 import { searchSegmentStore } from "./search-storage.ts";
@@ -283,6 +288,8 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
     f.functionSandbox ?? io.env.BUNVEX_FUNCTION_SANDBOX,
     io.env.BUNVEX_FUNCTION_SANDBOX_ISOLATION,
   );
+  // Its executor is the entry point's to provide (`bin/local-backend.ts`): without it, fail before the store opens.
+  if (sandbox.sandbox === "process") requireProcessExecutor();
   let persistence: Persistence;
   if (f.db === "sqlite") {
     const { SqlitePersistence } = await import("@bunvex/core/persistence/sqlite");

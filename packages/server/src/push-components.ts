@@ -26,7 +26,7 @@ import {
   type UdfServerVersionDiff,
   writeCodeRows,
 } from "./code-store.ts";
-import type { AnalyzedModule, CodeVersion, ModuleSource } from "./code-version.ts";
+import type { AnalyzedModule, LoadedCode, ModuleSource } from "./code-version.ts";
 import { type CheckedComponent, fileBasedExports } from "./component-tree.ts";
 import { cronSpecsJson } from "./cron-rows.ts";
 import { DEFINITION_MODULE, definitionPathError } from "./definition-eval.ts";
@@ -249,7 +249,7 @@ export function schemaChangeAnswer(change: ComponentsSchemaChange) {
 export const definitionModule = (m: ModuleSource): ModuleSource => ({ ...m, path: DEFINITION_MODULE });
 
 /** A definition's code as `finish_push` writes it: its package, its loaded modules, its other modules (no functions). */
-export type DefinitionCode = { pkg: SourcePackageFields; version: CodeVersion; other: ModuleSource[] };
+export type DefinitionCode = { pkg: SourcePackageFields; version: LoadedCode; other: ModuleSource[] };
 
 /** What `finishComponents` needs besides the transaction (Convex's `apply_component_definitions_diff` and tree diff). */
 export type FinishComponentsInput = {
@@ -268,7 +268,7 @@ export type FinishComponentsInput = {
   /** The `_components` table (global), whose rows a create inserts with their allocated ids. */
   componentsTable: TableDef;
   /** Apply a namespace's crons (null: the app's), Convex's `CronModel::apply`. */
-  crons: (db: Tx, namespace: string | null, version: CodeVersion | null) => Promise<ComponentDiff["cronDiff"]>;
+  crons: (db: Tx, namespace: string | null, version: LoadedCode | null) => Promise<ComponentDiff["cronDiff"]>;
 };
 
 /** Module paths as Convex's `ModuleDiff` lists them (a `BTreeSet`): sorted, `_deps/` left out. */

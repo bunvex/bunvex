@@ -1,7 +1,8 @@
 # STUDY-168 — Running app code in a sandboxed process (exploratory)
 
 - **Status:** decided (owner, 2026-10-19: every recommendation accepted, the knob named `BUNVEX_FUNCTION_SANDBOX`;
-  AD-44). Being built as STUDY-171 (PR 1: the seam; PR 2, §7 there: the wire and the child runtime). The prototype and its measurements stay in `bench/process-sandbox/` as the
+  AD-44). Being built as STUDY-171 (PR 1: the seam; PR 2, §7 there: the wire and the child runtime; PR 3, §8:
+  queries and mutations over the bridge). The prototype and its measurements stay in `bench/process-sandbox/` as the
   reference: no default code path reaches them, and their tests run only with `SANDBOX_STUDY=1`.
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend, the reference commit
   ([upstream.md](../parity/upstream.md)). The first round read `4577b903`; every citation was re-checked at

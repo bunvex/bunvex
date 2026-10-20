@@ -121,3 +121,52 @@ test("a cron mutation's result holding the placeholder is logged resolved, as Co
   expect(logs[0]!.status.type).toBe("success");
   expect(typeof logs[0]!.status.result!.value.at).toBe("bigint");
 });
+
+// Pushed code runs in its own realm (STUDY-35): its objects' prototype is its context's `Object.prototype`, which
+// `hasCommitTs` and `resolveCommitTs` did not look into (STUDY-171 §9), so a pushed mutation's result kept the
+// placeholder (the answer failed) and its scheduled arguments took it (the job was scheduled with it).
+test("pushed code: a mutation's result resolves on the wire; the placeholder in scheduled args is refused", async () => {
+  const engine = await new Engine(
+    defineSchema({ events: defineTable(v.any()) }),
+    await MemoryPersistence.open(null, { durable: false }),
+  ).init();
+  const s = createServer({ engine, functions: new Functions(engine), port: 0, deployable: true });
+  stops.push(() => s.shutdown());
+  await s.codeReady;
+  const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+  await s.deployCode([
+    {
+      path: "m.js",
+      environment: "isolate",
+      source: `import { mutation } from ${SERVER};
+export const echo = mutation(async () => null);
+export const write = mutation(async ({ db }) => {
+  await db.insert("events", {});
+  return { at: db.vars.commitTs, list: [{ deep: db.vars.commitTs }] };
+});
+export const sched = mutation(async ({ db, scheduler }) => scheduler.runAfter(0, "m:echo", { at: db.vars.commitTs }));
+export const schedDeep = mutation(async ({ db, scheduler }) =>
+  scheduler.runAfter(0, "m:echo", { list: [{ at: db.vars.commitTs }] }),
+);`,
+    },
+  ]);
+  const call = async (path: string) =>
+    (await (
+      await fetch(`http://127.0.0.1:${s.server.port}/api/mutation`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path, args: {}, format: "encoded_json" }),
+      })
+    ).json()) as { status: string; value?: any; errorMessage?: string };
+  const w = await call("m:write");
+  expect(w.status).toBe("success");
+  expect(Object.keys(w.value.at)).toEqual(["$integer"]);
+  expect(w.value.list[0].deep).toEqual(w.value.at);
+  for (const path of ["m:sched", "m:schedDeep"])
+    expect({ path, error: (await call(path)).errorMessage }).toEqual({
+      path,
+      error: expect.stringContaining(
+        "Invalid arguments for m.js:echo: Field name $commitTs starts with '$', which is reserved.",
+      ),
+    });
+});

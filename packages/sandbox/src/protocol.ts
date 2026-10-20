@@ -12,12 +12,17 @@
 // What a child sends is checked here (`parseChildMessage`): its shape, never its truth. A child can only
 // misdescribe the app code it was given; a message the host cannot use kills it.
 //
-// Function calls and their `ctx` operations (`call`, `op`, `result`, `done`) are STUDY-168's PR 3: requests of
-// the same shape, one `id` each way, in the same frames.
+// - **Calls** (STUDY-171 §8): the host sends `call` (a query or mutation, its arguments, its transaction's clock,
+//   snapshot, variables and catalog); the child sends an `op` for each `ctx` operation and answers the call with
+//   `done`; the host answers each `op` with a `reply`. Calls and their operations interleave freely: each is named
+//   by the call's id and its own number.
 import type { AnalyzedFunction, AnalyzedModule, DefaultExportUse, ModuleSource } from "@bunvex/server/executor";
 
+/** How many catalogs and how many variable sets a child keeps (the host's `EpochWindow` counts the same). */
+export const EPOCHS_KEPT = 4;
+
 /** Bumped whenever a message changes: host and child are always the same build, but a stale child must not run. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** Convex's argument and result caps (`FUNCTION_MAX_ARGS_SIZE`, `FUNCTION_MAX_RESULT_SIZE`, knobs.rs:439-446). */
 export const MAX_VALUE_SIZE = 1 << 24;
@@ -38,7 +43,9 @@ export type ToChild =
       source: ModuleSource;
       options: WireLoadOptions & { failOnMissingEnv: boolean };
       use: DefaultExportUse;
-    };
+    }
+  | WireCall
+  | WireReply;
 
 /**
  * `LoadOptions` as sent: the seed as numbers, the import time limit resolved. (`MAX_USER_MODULES`, read when the
@@ -57,7 +64,9 @@ export type ToHost =
   | { t: "hello"; protocol: number; pid: number }
   | { t: "loaded"; id: number; version: WireVersion; loadMs: number }
   | { t: "evaluated"; id: number; export: EvaluatedDefault; loadMs: number }
-  | { t: "failed"; id: number; error: WireError };
+  | { t: "failed"; id: number; error: WireError }
+  | { t: "op"; id: number; op: number; name: string; args: unknown[]; report: WireReport }
+  | ({ t: "done"; id: number; report: WireReport } & ({ ok: true; value: unknown } | { ok: false; error: WireThrown }));
 
 /**
  * A loaded code version as the child describes it: what `CodeVersion.load` analyzed (`analysis`), and what the
@@ -75,6 +84,9 @@ export type WireFunction = {
   visibility: "public" | "internal";
   /** Defined in a `"use node"` module. */
   node: boolean;
+  /** Its validators' JSON, as the function has them (null: none; `analysis` cannot tell none from `v.any()`). */
+  args: string | null;
+  returns: string | null;
 };
 /** `AnalyzedModule`, its crons' arguments in the value JSON format. */
 export type WireAnalyzedModule = Omit<AnalyzedModule, "cronSpecs"> & {
@@ -100,6 +112,85 @@ export type WireError =
   | { kind: "FunctionExport"; message: string }
   | { kind: "MissingEnvironmentVariable"; variable: string }
   | { kind: "Error"; message: string };
+
+/** A call's execution, as the child makes it again (core `ExecutionClock`), and the host's id for it. */
+export type WireExecution = { id: number; kind: "query" | "mutation"; now: number; perfStart: number; elapsed: number };
+
+/** A table of the call's namespace: its number, and each index's fields and the ts it was enabled at. */
+export type WireTable = {
+  name: string;
+  number: number;
+  indexes: [name: string, fields: string[], readyTs: string | null][];
+};
+
+/** host → child: a query's or mutation's call. */
+export type WireCall = {
+  t: "call";
+  id: number;
+  /** The id of the `load` that made the version. */
+  version: number;
+  fn: string;
+  kind: "query" | "mutation";
+  args: unknown;
+  exec: WireExecution;
+  /** The transaction's snapshot (`ctx.meta.getSnapshotTs()`), as a decimal string. */
+  snapshot: string;
+  userMs: number;
+  systemMs: number;
+  /** How the function was given its `db` (`Functions.invoke`). */
+  db: "tx" | "reader" | "writer";
+  /** `ctx.storage`'s methods, for this kind. */
+  storage: string[];
+  /** The variables, by epoch: sent once per child. Null when the function sees none of the deployment's. */
+  env: { epoch: number; vars?: [string, string][] } | null;
+  /** The namespace's tables, by epoch: sent once per child. */
+  catalog: { epoch: number; tables?: WireTable[] };
+  /** The tables this transaction created so far. */
+  created: WireTable[];
+};
+
+/** host → child: an operation's answer. `created`: the transaction's created tables, when they changed. */
+export type WireReply = { t: "reply"; id: number; op: number; created?: WireTable[] } & (
+  | { ok: true; value: unknown }
+  | { ok: false; error: WireThrown }
+);
+
+/**
+ * What the child ran, observed, read and built since its previous message for the call: `env`, each
+ * `process.env` read, in order; `links`, each link of a query chain the function made (`db.query(t)`, then each
+ * `withIndex`, `filter`, `order`, …), which the host makes on its `ctx.db` first, as the engine makes each at the
+ * app's call (`db.query` and `withIndex` read).
+ */
+export type WireReport = { ran: number; time: boolean; env: string[]; links: WireLink[] };
+
+/**
+ * A query chain's link: its kind, its id, the link it continues (none for `open`), and its arguments (wire values):
+ * `open` [table, system], `withIndex` [name, hasRange, [op, field, value][]], `withSearchIndex` [name,
+ * [type, field, value][]], `fullTableScan` [], `order` [dir], `filter` [{ expr: json } | { literal: value }],
+ * `limit` [n].
+ */
+export type WireLink = [kind: string, id: number, from: number | null, args: unknown];
+
+/** A thrown value. */
+export type WireThrown =
+  /** An operation's error, as it came back: the host throws its original. */
+  | { k: "op"; op: number; stack: string | null }
+  /** An error, with its class's name; a `BunvexError` with its data. */
+  | { k: "error"; cls: string; name: string; message: string; stack: string | null; bunvex: boolean; data?: unknown }
+  /** An error the host's own check would have thrown (a query object returned). */
+  | { k: "host"; message: string }
+  /** Anything else thrown (`throw "no"`). */
+  | { k: "value"; v: unknown };
+
+/** What runs a query chain (`db.query` [link, terminal]). */
+export type WireTerminal =
+  | { k: "collect" }
+  | { k: "take"; n: number }
+  | { k: "first" }
+  | { k: "unique" }
+  | { k: "paginate"; opts: unknown }
+  | { k: "count" }
+  | { k: "iterate" };
 
 /** A message the host cannot use: the child is killed. */
 export class BadMessageError extends Error {}
@@ -242,6 +333,8 @@ function version(x: Json, where: string): WireVersion {
           kind: oneOf(fn.kind, ["query", "mutation", "action"], `${w}.kind`),
           visibility: oneOf(fn.visibility, VISIBILITIES, `${w}.visibility`),
           node: bool(fn.node, `${w}.node`),
+          args: nullable(fn.args, str, `${w}.args`),
+          returns: nullable(fn.returns, str, `${w}.returns`),
         };
       },
       `${where}.functions`,
@@ -273,6 +366,42 @@ function wireError(x: Json, where: string): WireError {
   return { kind, message: str(o.message, `${where}.message`) };
 }
 
+/** What a message reports of the call's time and reads. */
+function report(x: Json, where: string): WireReport {
+  const o = obj(x, where);
+  const ran = num(o.ran, `${where}.ran`);
+  if (!Number.isFinite(ran) || ran < 0) fail(`${where}.ran`, "a finite non-negative number");
+  return {
+    ran,
+    time: bool(o.time, `${where}.time`),
+    env: arr(o.env, `${where}.env`).map((n, i) => str(n, `${where}.env[${i}]`)),
+    links: arr(o.links, `${where}.links`).map((l, i) => {
+      const w = `${where}.links[${i}]`;
+      const e = arr(l, w);
+      if (e.length !== 4) fail(w, "a link: its kind, id, source and arguments");
+      return [str(e[0], `${w}[0]`), int(e[1], `${w}[1]`), nullable(e[2], int, `${w}[2]`), e[3]] as WireLink;
+    }),
+  };
+}
+
+/** A thrown value's description (its values are checked when decoded). */
+function thrown(x: Json, where: string): WireThrown {
+  const o = obj(x, where);
+  const k = oneOf(o.k, ["op", "error", "host", "value"], `${where}.k`);
+  if (k === "op") return { k, op: int(o.op, `${where}.op`), stack: nullable(o.stack, str, `${where}.stack`) };
+  if (k === "host") return { k, message: str(o.message, `${where}.message`) };
+  if (k === "value") return { k, v: "v" in o ? o.v : fail(`${where}.v`, "a value") };
+  return {
+    k,
+    cls: str(o.cls, `${where}.cls`),
+    name: str(o.name, `${where}.name`),
+    message: str(o.message, `${where}.message`),
+    stack: nullable(o.stack, str, `${where}.stack`),
+    bunvex: bool(o.bunvex, `${where}.bunvex`),
+    ...(o.data === undefined ? {} : { data: o.data }),
+  };
+}
+
 /** A message from a child, checked; throws `BadMessageError` for anything the host does not expect. */
 export function parseChildMessage(text: string): ToHost {
   let x: Json;
@@ -282,11 +411,26 @@ export function parseChildMessage(text: string): ToHost {
     throw new BadMessageError(`not JSON (${(e as Error).message})`);
   }
   const m = obj(x, "message");
-  const t = oneOf(m.t, ["hello", "loaded", "evaluated", "failed"], "message.t");
+  const t = oneOf(m.t, ["hello", "loaded", "evaluated", "failed", "op", "done"], "message.t");
   if (t === "hello") return { t, protocol: num(m.protocol, "hello.protocol"), pid: int(m.pid, "hello.pid") };
   const id = int(m.id, `${t}.id`);
   if (t === "loaded")
     return { t, id, version: version(m.version, "loaded.version"), loadMs: num(m.loadMs, "loaded.loadMs") };
+  if (t === "op")
+    return {
+      t,
+      id,
+      op: int(m.op, "op.op"),
+      name: str(m.name, "op.name"),
+      args: arr(m.args, "op.args"),
+      report: report(m.report, "op.report"),
+    };
+  if (t === "done") {
+    const ok = bool(m.ok, "done.ok");
+    const r = report(m.report, "done.report");
+    if (ok) return { t, id, ok, value: "value" in m ? m.value : fail("done.value", "a value"), report: r };
+    return { t, id, ok, error: thrown(m.error, "done.error"), report: r };
+  }
   if (t === "evaluated")
     return { t, id, export: evaluated(m.export, "evaluated.export"), loadMs: num(m.loadMs, "evaluated.loadMs") };
   return { t, id, error: wireError(m.error, "failed.error") };

@@ -1,6 +1,7 @@
 // The executor seam and its knobs (STUDY-171, AD-44): every load of an app's modules goes through `loadCode`;
 // `BUNVEX_FUNCTION_SANDBOX` / `--function-sandbox` and `BUNVEX_FUNCTION_SANDBOX_ISOLATION` checked strictly, the
-// flag over the environment, and `process` (not built yet) refused at start rather than run as `vm`.
+// flag over the environment; `process` starts only with the isolation it has (`none`, STUDY-171 §8.8) and its
+// executor provided, and is refused at start otherwise, never run as `vm`.
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,11 +10,15 @@ import { defineSchema, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { CodeVersion } from "../src/code-version.ts";
 import {
+  type Executor,
   functionSandbox,
   functionSandboxConfig,
   loadCode,
-  PROCESS_SANDBOX_UNAVAILABLE,
+  PROCESS_SANDBOX_NOT_PROVIDED,
+  processIsolationUnavailable,
+  provideProcessExecutor,
   sandboxIsolation,
+  vmExecutor,
 } from "../src/function-executor.ts";
 import { Functions } from "../src/functions.ts";
 import { localBackendMain, parseLocalBackendFlags, startLocalBackend } from "../src/local-backend.ts";
@@ -58,12 +63,16 @@ describe("the knobs", () => {
     );
   });
 
-  test("at start: vm runs; process is refused, not run as vm; a bad isolation is refused even with vm", () => {
+  test("at start: vm runs; process only with `none`, else refused, not run as vm; a bad isolation is refused even with vm", () => {
     expect(functionSandboxConfig(undefined, undefined)).toEqual({ sandbox: "vm", isolation: "auto" });
     expect(functionSandboxConfig("vm", "none")).toEqual({ sandbox: "vm", isolation: "none" });
-    for (const isolation of [undefined, "auto", "namespaces", "landlock", "none"])
-      expect(() => functionSandboxConfig("process", isolation)).toThrow(PROCESS_SANDBOX_UNAVAILABLE);
-    expect(PROCESS_SANDBOX_UNAVAILABLE).toContain("not available yet");
+    expect(functionSandboxConfig("process", "none")).toEqual({ sandbox: "process", isolation: "none" });
+    for (const isolation of [undefined, "auto", "namespaces", "landlock"] as const)
+      expect(() => functionSandboxConfig("process", isolation)).toThrow(
+        processIsolationUnavailable(isolation ?? "auto"),
+      );
+    expect(processIsolationUnavailable("auto")).toContain("not available yet");
+    expect(processIsolationUnavailable("auto")).toContain("BUNVEX_FUNCTION_SANDBOX_ISOLATION=none");
     expect(() => functionSandboxConfig("vm", "x")).toThrow("possible values: auto, namespaces, landlock, none");
   });
 });
@@ -76,12 +85,18 @@ describe("createServer", () => {
     const e = await engine();
     stops.push(() => e.close());
     expect(() => createServer({ engine: e, functions: new Functions(e), port: 0, functionSandbox: "process" })).toThrow(
-      PROCESS_SANDBOX_UNAVAILABLE,
+      processIsolationUnavailable("auto"),
     );
     process.env.BUNVEX_FUNCTION_SANDBOX = "process";
     expect(() => createServer({ engine: e, functions: new Functions(e), port: 0 })).toThrow(
-      PROCESS_SANDBOX_UNAVAILABLE,
+      processIsolationUnavailable("auto"),
     );
+    // Its isolation, but no executor provided (the server cannot import the sandbox).
+    process.env.BUNVEX_FUNCTION_SANDBOX_ISOLATION = "none";
+    expect(() => createServer({ engine: e, functions: new Functions(e), port: 0 })).toThrow(
+      PROCESS_SANDBOX_NOT_PROVIDED,
+    );
+    expect(PROCESS_SANDBOX_NOT_PROVIDED).toContain("@bunvex/sandbox");
     const app = createServer({ engine: e, functions: new Functions(e), port: 0, functionSandbox: "vm" });
     stops.unshift(() => app.shutdown());
     expect(app.server.port).toBeGreaterThan(0);
@@ -140,9 +155,30 @@ describe("bunvex-local-backend", () => {
       const cwd = tempDir();
       const r = io(cwd, env);
       expect(await localBackendMain(["--instance-secret", SECRET, ...args], r.it, "v1")).toBe(1);
-      expect(r.err).toEqual([`Error: ${PROCESS_SANDBOX_UNAVAILABLE}`]);
+      expect(r.err).toEqual([`Error: ${processIsolationUnavailable("auto")}`]);
       expect(existsSync(join(cwd, "bunvex_local_backend.sqlite3"))).toBe(false);
     }
+    // With its isolation, and no executor provided (`bin/local-backend.ts` provides it): refused before the store.
+    const cwd = tempDir();
+    const r = io(cwd, { BUNVEX_FUNCTION_SANDBOX: "process", BUNVEX_FUNCTION_SANDBOX_ISOLATION: "none" });
+    expect(await localBackendMain(["--instance-secret", SECRET], r.it, "v1")).toBe(1);
+    expect(r.err).toEqual([`Error: ${PROCESS_SANDBOX_NOT_PROVIDED}`]);
+    expect(existsSync(join(cwd, "bunvex_local_backend.sqlite3"))).toBe(false);
+  });
+
+  test("process starts with `none` and its executor provided", async () => {
+    // An executor that loads in-process: the start takes the one provided.
+    let made = 0;
+    const fake: Executor = { ...vmExecutor, kind: "process" };
+    provideProcessExecutor(() => (made++, fake));
+    stops.push(() => provideProcessExecutor(null));
+    const b = await startLocalBackend(
+      flags("--function-sandbox", "process"),
+      io(tempDir(), { BUNVEX_FUNCTION_SANDBOX_ISOLATION: "none" }).it,
+    );
+    stops.unshift(b.stop);
+    expect((await fetch(`${b.url}/instance_name`)).status).toBe(200);
+    expect(made).toBe(1);
   });
 
   test("--function-sandbox vm wins over BUNVEX_FUNCTION_SANDBOX=process; a bad isolation still fails", async () => {

@@ -164,8 +164,10 @@ bunvex/
 │   │   │                            STUDY-168): app code in a separate process
 │   │   ├── child                    loads and analyzes a push with the server's own loader (STUDY-171 §7) ✅
 │   │   ├── protocol, frames         length-prefixed JSON on the child's socket, handshake, size cap   ✅
-│   │   └── host                     spawn, crash / bad message / oversize / time-out handling          ✅
-│   │                                calls over the bridge, OS isolation, the pool: STUDY-168 PRs 3–12   ·
+│   │   ├── host                     spawn, crash / bad message / oversize / time-out handling          ✅
+│   │   └── executor, host-call,     queries and mutations over the bridge: stand-ins, every `ctx` op   ✅
+│   │       child-call, child-db     on the host's transaction, user time charged (STUDY-171 §8)
+│   │                                actions, HTTP, components, OS isolation, the pool: PRs 4–12         ·
 │   │
 │   ├── sync-e2e/, jepsen/,          tests only, never published: end-to-end sync (STUDY-26),
 │   │   differential/                consistency runs (STUDY-57), against Convex's backend (STUDY-122) ✅
@@ -243,8 +245,8 @@ auth ──► values            file-storage (no bunvex dependency)
 client ──► protocol, values                    react ──► client, values
 nextjs, react-query ──► react, client, values  react-clerk, react-auth0 ──► react
 cli ──► server, core, values, client, protocol testing ──► server, core, values
-sandbox ──► server, core, values (its child runs the server's loader; the server never imports it)
-bunvex ──► the packages it re-exports, plus core and persistence for bin/local-backend
+sandbox ──► server, core, values, protocol (its child runs the server's loader; the server never imports it)
+bunvex ──► the packages it re-exports, plus core, persistence and sandbox for bin/local-backend
 examples/* ──► bunvex, react-query (a user's app, STUDY-90)
 
 tests only, never published:
@@ -294,6 +296,7 @@ Recorded in ARCH-01 §6, to be settled in their own specs:
 2. ~~Deploying functions~~ — decided: hot swap, a `vm` context per code version (STUDY-35, DV-164).
 3. Sandboxing functions — decided (owner, 2026-10-19; STUDY-168, AD-44): in-process `vm` contexts stay the
    default, not a security boundary (DV-164); a sandboxed process per call is an opt-in executor
-   (`BUNVEX_FUNCTION_SANDBOX=process`), being built: the seam and its knobs first (STUDY-171).
+   (`BUNVEX_FUNCTION_SANDBOX=process`), being built: the seam and its knobs, the child runtime, queries and mutations
+   over the bridge (STUDY-171).
 4. ~~Text and vector search: inside `core`, or a package of their own~~ — decided: a package of their own,
    `@bunvex/search` (the tokenizer, index and ranking), wired into transactions by `core` (owner, 2026-10-02).

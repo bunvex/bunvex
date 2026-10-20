@@ -50,6 +50,21 @@ const DEFINED = new WeakSet<object>();
 /** The functions of `"use node"` modules (their code version marks them): the log's `environment` (STUDY-47). */
 export const NODE_FUNCTIONS = new WeakSet<FunctionDef>();
 
+/**
+ * How a query or mutation of the function sandbox runs (STUDY-171 §8): its handler is in a child process, and the
+ * engine calls this in its place, in the function's transaction, with the `ctx` the handler would get (`invoke`).
+ */
+export type RemoteRunner = (ctx: object, args: unknown, call: SandboxCall) => unknown;
+/** What a sandboxed call needs of its transaction besides `ctx`. */
+export type SandboxCall = {
+  // biome-ignore lint/suspicious/noExplicitAny: the engine's `Tx` (builders import no runtime)
+  db: any;
+  /** How `ctx.db` was given: a query's own transaction, a reader of a mutation's (`ctx.runQuery`), a writer. */
+  shape: "tx" | "reader" | "writer";
+};
+/** The stand-ins of a sandboxed code version's queries and mutations, and how each runs. */
+export const REMOTE_FUNCTIONS = new WeakMap<FunctionDef, RemoteRunner>();
+
 export const isFunctionDef = (x: unknown): x is FunctionDef =>
   (typeof x === "function" || (typeof x === "object" && x !== null)) && DEFINED.has(x as object);
 

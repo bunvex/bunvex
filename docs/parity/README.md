@@ -186,6 +186,10 @@ gaps.
 
 **Low: rare, ops-only, or a missing nicety**
 
+- The function sandbox (AD-44, opt-in): under `BUNVEX_FUNCTION_SANDBOX=process`, queries and mutations run with no OS
+  isolation yet, one child per code version; actions, HTTP actions, components, rooms and log lines are not
+  available there yet (STUDY-171 §8.7; STUDY-168 PRs 4–9). The default `vm` is unaffected.
+
 - Error text (STUDY-150 §6): a missing function in `ctx.runQuery` / the scheduler is worded and framed as
   bunvex's server words it, not as Convex's app-side library (`Couldn't resolve api.nope.x`); a bad id fails before
   `db.get` awaits; in a `"use node"` action, an external package's own error read as `error.stack` shows its install
