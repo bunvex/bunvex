@@ -122,7 +122,7 @@ to a spec.
 | [STUDY-83](STUDY-83-bundling-server-only-and-wasm.md) | Bundling `import "server-only"` (an empty module) and `.wasm` imports (a `WebAssembly.Module`), as Convex's bundler plugins | implemented |
 | [STUDY-79](STUDY-79-search-index-bootstrapping.md) | Search and vector indexes while they are rebuilt after a start: Convex's bootstrapping answer, the sync skip and retry; options for the window | implemented; window decided (owner, 2026-10-04: A now, D planned) |
 | [STUDY-78](STUDY-78-write-throughput-limit.md) | The write throughput limit: 4 MiB/s per deployment, `TooManyWrites`, who waits and who fails | implemented |
-| [STUDY-77](STUDY-77-action-timeout.md) | The action timeout: 1800 s (Node 600 s), Convex's messages, the cut-off handler | implemented |
+| [STUDY-77](STUDY-77-action-timeout.md) | The action timeout: 1800 s (Node 600 s), Convex's messages, the cut-off handler; §7: a V8 action ends with its answer (its timers cleared, its `ctx` and `fetch` refusing afterwards) | implemented; §7 owner 2026-10-21 |
 | [STUDY-95](STUDY-95-error-stacks.md) | A function's error stack: only the app's frames, source-mapped to its files, everywhere errors surface | implemented; S1 / S2 (DV-345, DV-346) accepted as recommended (owner, 2026-10-04) |
 | [STUDY-122](STUDY-122-differential-testing.md) | Differential testing against Convex's own backend: generated operation sequences run on both, compared | accepted: D1 A, D2 A |
 | [STUDY-101](STUDY-101-user-table-cap.md) | At most 10 000 active user tables (`TooManyTables`) | implemented |

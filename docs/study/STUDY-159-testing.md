@@ -1,7 +1,10 @@
 # STUDY-159 — `@bunvex/testing`, the equivalent of convex-test
 
 - **Status:** decided (owner, 2026-10-20): T-1–T-8 as recommended (§7); DV-540–542 decided, AD-34 and AD-35
-  accepted. To build in §3.4's four PRs.
+  accepted. Built: PR 1, the clocks and executors on `engine.runtime` (#774); PR 2, `bunvexTest` (#776); PR 3,
+  components (#780); PR 4, `examples/testing` (#781). AD-34 and AD-35 built. Beyond the plan: `t.advanceTime(ms)`
+  (the virtual clock moved by hand, where convex-test moves Vitest's timers) and `bunvex/testing` in the umbrella
+  package. Not built: convex-test 0.0.61's `defineTestApp` (in-process modules), the owner's decision pending (T-9).
 - **Convex source read:** get-convex/convex-test at `8fe3dda` (0.0.62), pinned in
   [upstream.md](../parity/upstream.md#other-repositories). Paths are relative to its root. `index.ts` is one file of
   about 4,000 lines; line numbers are from it.
