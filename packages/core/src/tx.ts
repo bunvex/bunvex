@@ -50,7 +50,7 @@ import { COMPONENT_NAMESPACE_TABLES } from "./components.ts";
 import { type CursorCodec, type CursorPosition, decodeCursor, encodeCursor, queryFingerprint } from "./cursor.ts";
 import { failExecution, monotonicNow, nextUp, outsideExecution, storeCall, wallClock } from "./determinism.ts";
 import { engineOwned } from "./engine-owned.ts";
-import { type ExpressionOrValue, expressionJson, type FilterBuilder, filterBuilder } from "./filter.ts";
+import { expressionJson, type FilterBuilder, type FilterOperand, filterBuilder } from "./filter.ts";
 import type { IndexCache } from "./index-cache.ts";
 import { readNextIndexId } from "./index-ids.ts";
 import { opaqueToInspect } from "./inspect.ts";
@@ -89,6 +89,7 @@ import {
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
+import { SearchFilter } from "./search-filter.ts";
 import { filterKey, indexedDocBytes, type SearchIndexes, searchReadIntervals } from "./search-indexes.ts";
 import { rememberStagedSize, sizeOfVersion } from "./staged-size.ts";
 import { SystemReader, VirtualQuery } from "./system-reader.ts";
@@ -282,8 +283,10 @@ type QState = {
   notFound?: () => Error;
 };
 
-type SearchFilter = { type: "Search"; field: string; value: string } | { type: "Eq"; field: string; value: unknown };
-type SearchSpec = { name: string; filters: SearchFilter[] };
+type SearchFilterPart =
+  | { type: "Search"; field: string; value: string }
+  | { type: "Eq"; field: string; value: unknown };
+type SearchSpec = { name: string; filters: SearchFilterPart[] };
 
 /** Convex's messages for a system table reached outside `db.system` (STUDY-151). */
 const SYSTEM_TABLE_MESSAGES = {
@@ -303,7 +306,7 @@ const MAX_SEARCH_FILTER_CONDITIONS = 8;
  */
 export type TxQueryChained = {
   order(dir: "asc" | "desc"): TxQueryChained;
-  filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQueryChained;
+  filter(predicate: (q: FilterBuilder) => FilterOperand<boolean>): TxQueryChained;
   /** Convex's `limit(n)` (internal in its published types): at most `n` documents from here on. */
   limit(n: number): TxQueryChained;
   take(n: number): Promise<Doc[]>;
@@ -2765,11 +2768,13 @@ export class QueryCursorError extends Error {
  * `q` of `withSearchIndex(name, q => q.search(field, text).eq(field, value)…)`, as Convex's
  * `SearchFilterBuilderImpl`: each builder is used once; `eq(field, undefined)` matches a missing field.
  */
-export class SearchFilterBuilder {
+export class SearchFilterBuilder extends SearchFilter {
   private used = false;
-  constructor(private readonly parts: SearchFilter[]) {}
+  constructor(private readonly parts: SearchFilterPart[]) {
+    super();
+  }
 
-  private next(part: SearchFilter): SearchFilterBuilder {
+  private next(part: SearchFilterPart): SearchFilterBuilder {
     if (this.used)
       throw new Error(
         "SearchFilterBuilder has already been used! Chain your method calls like `q => q.search(...).eq(...)`.",
@@ -2796,7 +2801,7 @@ export class SearchFilterBuilder {
   }
 
   /** @internal */
-  filters(): SearchFilter[] {
+  filters(): SearchFilterPart[] {
     return this.parts;
   }
 }
@@ -2907,7 +2912,7 @@ class QueryImpl implements TxQueryChained {
     });
   }
 
-  filter(predicate: (q: FilterBuilder) => ExpressionOrValue<boolean>): TxQueryChained {
+  filter(predicate: (q: FilterBuilder) => FilterOperand<boolean>): TxQueryChained {
     if (typeof predicate !== "function") throw new TypeError("Must provide arg 1 `predicate` to `filter`");
     return this.chain((n) => {
       // Convex checks on the client, in `filter` only; `limit` and the start count too (`checkOps`).

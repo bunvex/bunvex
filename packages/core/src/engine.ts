@@ -112,7 +112,6 @@ import {
   nextUp,
   type Observed,
   outsideExecution,
-  preciseClock,
   runDeterministic,
   settled,
   timerDelay,
@@ -152,11 +151,11 @@ import {
   declaredTables,
   defineSchema,
   documentValidator,
+  type EngineSchema,
   MAX_VECTOR_DIMENSIONS,
   maintainedIndexes,
   pushOrder,
   referencedTables,
-  type SchemaDefinition,
   SYSTEM_INDEXES,
   type TableDef,
 } from "./schema.ts";
@@ -442,7 +441,7 @@ export class Engine {
 
   constructor(
     /** The declared schema: the constructor's, the stored one (`storedSchema`), or the last pushed. */
-    public schema: SchemaDefinition,
+    public schema: EngineSchema,
     readonly persistence: Persistence,
     private opts: {
       /**
@@ -533,7 +532,15 @@ export class Engine {
     this.runtime = opts.runtime ?? realRuntime;
     installDeterminism();
     this.installValidators(schema);
-    this.committer = new Committer(persistence, opts.writeLogRetention, undefined, opts.flushRetry, opts.writeBatch);
+    // Commit timestamps from the engine's clock: a test's virtual one moves them too (STUDY-159).
+    const runtime = this.runtime;
+    this.committer = new Committer(
+      persistence,
+      opts.writeLogRetention,
+      () => runtime.nowNs(),
+      opts.flushRetry,
+      opts.writeBatch,
+    );
     this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
     this.indexCache = indexCacheOf(persistence, opts.indexCache, this.committer);
     this.writeThroughput = new WriteThroughputLimiter(opts.writeThroughput ?? writeThroughputFromEnv());
@@ -869,7 +876,7 @@ export class Engine {
   }
 
   /** Every table the engine declares: its own system tables, then the schema's. */
-  private allDeclaredTables(schema: SchemaDefinition = this.schema): DeclaredTable[] {
+  private allDeclaredTables(schema: EngineSchema = this.schema): DeclaredTable[] {
     const systemTables: DeclaredTable[] = [
       // Convex's bootstrap tables, created with the store (bootstrap.ts), then its application system tables.
       ...BOOTSTRAP_TABLES.map((t) => ({ name: t.name, indexes: t.indexes, document: v.any() })),
@@ -1085,7 +1092,7 @@ export class Engine {
     return finished;
   }
 
-  private installValidators(schema: SchemaDefinition) {
+  private installValidators(schema: EngineSchema) {
     this.docValidators = validatorsOf(schema);
   }
 
@@ -1095,7 +1102,7 @@ export class Engine {
    */
   private refreshStagedChecks() {
     const checks: StagedCheck[] = [];
-    const add = (schemaId: string, schema: SchemaDefinition) => {
+    const add = (schemaId: string, schema: EngineSchema) => {
       const validators = stagedDocumentValidatorsOf(schema);
       if (validators.size) checks.push({ schemaId, validators });
     };
@@ -1144,13 +1151,15 @@ export class Engine {
   })();
 
   private startIndexWorker() {
-    if (!this.backfillEnabled) return;
+    // Not once the engine is closing: its stop has run or is running, and nothing would stop a worker started now
+    // (a push that lands during `close()`, STUDY-174 S4), as nothing restarts Convex's aborted worker.
+    if (!this.backfillEnabled || this.closed) return;
     this.indexWorker ??= new IndexWorker(this.workerHost(), this.opts.indexBackfill);
     this.indexWorker.start();
   }
 
   /** The schema change a push started and has not finished: its `_schemas` row and the schema. */
-  private pendingPush: { id: string; schema: SchemaDefinition } | null = null;
+  private pendingPush: { id: string; schema: EngineSchema } | null = null;
   /** The pending schema's document validators, checked on every write (but not enforced) until it finishes. */
   private pendingValidators: Map<string, GenericValidator> | null = null;
   /** The background walk of a pending schema's existing documents (STUDY-35 PR 5). */
@@ -1166,7 +1175,7 @@ export class Engine {
   private readonly componentSchemas = new Map<string, ComponentSchemas>();
 
   /** The schema active in component `id`'s namespace (an empty one before any push there). */
-  componentSchema(id: string): SchemaDefinition {
+  componentSchema(id: string): EngineSchema {
     return this.componentSchemas.get(id)?.schema ?? EMPTY_SCHEMA;
   }
 
@@ -2388,7 +2397,7 @@ export class Engine {
    * component's namespace (`namespace`, its `_components` id; STUDY-153 PR 3d), against its tables and its active
    * schema, as Convex's `predict_component_schema`.
    */
-  async evaluateSchema(next: SchemaDefinition, namespace: string | null = null): Promise<SchemaPrediction> {
+  async evaluateSchema(next: EngineSchema, namespace: string | null = null): Promise<SchemaPrediction> {
     if (!this.tableSummaries.ready) throw new TableSummariesUnavailableError();
     const { value: cat } = await this.execute("query", this.committer.visibleTs, (db) => readCatalog(db), true);
     const active = activeTables(cat.tables, namespace ?? undefined);
@@ -2627,8 +2636,8 @@ export class Engine {
   /** Check the stored documents against a pending schema in the background (`validateExisting`). */
   private startValidation(
     schemaId: string,
-    schema: SchemaDefinition,
-    active: SchemaDefinition,
+    schema: EngineSchema,
+    active: EngineSchema,
     namespace: string | null = null,
   ) {
     const walk = this.validateExisting(schemaId, schema, active, namespace).catch((e) =>
@@ -2684,8 +2693,8 @@ export class Engine {
    * shape from its summary (none while summaries build; a table that does not exist is empty).
    */
   private tableOutcome(
-    next: SchemaDefinition,
-    active: SchemaDefinition,
+    next: EngineSchema,
+    active: EngineSchema,
     table: string,
     tablet: TabletId | undefined,
     validStaged?: Map<string, unknown>,
@@ -2780,7 +2789,7 @@ export class Engine {
     const schemas = await this.query((db) =>
       db.asSystem(async () => {
         const rows = await db.query(SCHEMAS_TABLE).collect();
-        const out: { id: string; schema: SchemaDefinition; json: SchemaJson }[] = [];
+        const out: { id: string; schema: EngineSchema; json: SchemaJson }[] = [];
         for (const state of ["active", "validated", "pending"] as const) {
           const row = rows.find((r) => schemaStateOf(r) === state);
           if (!row) continue;
@@ -2888,8 +2897,8 @@ export class Engine {
    */
   private async validateExisting(
     schemaId: string,
-    schema: SchemaDefinition,
-    active: SchemaDefinition,
+    schema: EngineSchema,
+    active: EngineSchema,
     namespace: string | null = null,
   ) {
     const stillPending = () => this.pendingIdIn(namespace) === schemaId;
@@ -2996,7 +3005,7 @@ export class Engine {
    * that declares an index exists already: Convex adds the push's indexes first, creating their tables (a dry run
    * and `evaluate_push` too, in their read-only pass; checked against Convex's binary).
    */
-  async stagedValidatorConflicts(schema: SchemaDefinition): Promise<StagedSchemaError | null> {
+  async stagedValidatorConflicts(schema: EngineSchema): Promise<StagedSchemaError | null> {
     const tables: string[] = [];
     // Only read when there is a staged validator (Convex's `has_staged_validators` guard).
     const hasStaged = [...declaredTables(schema).values()].some((t) => t.stagedDocument !== undefined);
@@ -3037,8 +3046,8 @@ export class Engine {
    * (null) gets none. Each one's schema id and added indexes are in the result's `components`.
    */
   async startSchemaPush(
-    schema: SchemaDefinition,
-    components: ReadonlyMap<string, SchemaDefinition | null> = new Map(),
+    schema: EngineSchema,
+    components: ReadonlyMap<string, EngineSchema | null> = new Map(),
   ): Promise<{
     schemaId: string;
     addedIndexes: string[];
@@ -3201,7 +3210,7 @@ export class Engine {
     const pending = this.pendingPush;
     if (!pending || pending.id !== schemaId)
       throw new SchemaPushError("RaceDetected", "Schema was overwritten by another push.");
-    const finishing = new Map<string, { id: string; schema: SchemaDefinition }>();
+    const finishing = new Map<string, { id: string; schema: EngineSchema }>();
     for (const [id, componentSchemaId] of components) {
       const p = this.componentSchemas.get(id)?.pendingPush;
       if (!p || p.id !== componentSchemaId)
@@ -3616,7 +3625,7 @@ export class Engine {
    */
   private transactionStart(snapshot: bigint): number {
     const last = this.lastTx ? Math.max(this.lastStart, this.lastTx.creationCursor) : this.lastStart;
-    this.lastStart = transactionStart(snapshot, preciseClock(), last);
+    this.lastStart = transactionStart(snapshot, this.runtime.preciseNow(), last);
     return this.lastStart;
   }
 
@@ -4176,7 +4185,7 @@ export class SchemaEnforcementError extends Error {
 }
 
 /** Why `schema` refuses the deletion of `table` (Convex's `check_delete_table`), or null. */
-function deletionRefusal(schema: SchemaDefinition, table: string): string | null {
+function deletionRefusal(schema: EngineSchema, table: string): string | null {
   if (declaredTables(schema).has(table)) return `Failed to delete table "${table}" because it appears in the schema`;
   for (const name of [...declaredTables(schema).keys()].sort())
     if (referencedTables(declaredTables(schema).get(name)!.document.json).has(table))
@@ -4228,7 +4237,7 @@ export async function readSearchIndexStates(persistence: Persistence): Promise<{
 
 /** Schema enforcement (STUDY-14): each declared table's validator, with the system fields added. */
 /** Each table's staged validator as a document validator; checked whether or not the schema validates. */
-function stagedDocumentValidatorsOf(schema: SchemaDefinition): Map<string, GenericValidator> {
+function stagedDocumentValidatorsOf(schema: EngineSchema): Map<string, GenericValidator> {
   const out = new Map<string, GenericValidator>();
   for (const t of declaredTables(schema).values()) {
     if (t.stagedDocument === undefined) continue;
@@ -4238,7 +4247,7 @@ function stagedDocumentValidatorsOf(schema: SchemaDefinition): Map<string, Gener
   return out;
 }
 
-function validatorsOf(schema: SchemaDefinition): Map<string, GenericValidator> {
+function validatorsOf(schema: EngineSchema): Map<string, GenericValidator> {
   const out = new Map<string, GenericValidator>();
   if (schema.schemaValidation)
     for (const t of declaredTables(schema).values()) {
@@ -4269,7 +4278,7 @@ type SubmittedState = "active" | "pending" | "validated";
  */
 async function submitPending(
   db: Tx,
-  schema: SchemaDefinition,
+  schema: EngineSchema,
   json: SchemaJson,
   staged: ReturnType<typeof stagedValidatorsOf>,
 ): Promise<{ schemaId: string; state: SubmittedState }> {
@@ -4331,7 +4340,7 @@ export class ComponentDeletionError extends Error {
   }
 }
 
-function checkComponentSchema(schema: SchemaDefinition) {
+function checkComponentSchema(schema: EngineSchema) {
   for (const t of declaredTables(schema).values()) {
     if (t.stagedDocument !== undefined)
       throw new Error(`Table "${t.name}": staged validators in a component's schema are not supported yet`);
@@ -4385,11 +4394,11 @@ async function finishSchemaIn(
 
 /** A component's schemas (`Engine.componentSchemas`). */
 type ComponentSchemas = {
-  schema: SchemaDefinition;
+  schema: EngineSchema;
   /** Its document validators, which a write in the namespace is checked against (STUDY-154). */
   validators: Map<string, GenericValidator>;
   activeSchemaId: string | null;
-  pendingPush: { id: string; schema: SchemaDefinition } | null;
+  pendingPush: { id: string; schema: EngineSchema } | null;
 };
 
 /** The schema of a namespace no push gave one: no table, so nothing to check. */

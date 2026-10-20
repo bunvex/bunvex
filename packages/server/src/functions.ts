@@ -14,6 +14,7 @@ import {
   type Engine,
   failExecution,
   formatBytes,
+  type GenericTableInfo,
   IndexesUnavailableError,
   isQueryObject,
   knob,
@@ -156,6 +157,7 @@ import {
   FunctionPathNotFoundError,
   isSystemError,
   newRequestId,
+  UndecodedArgs,
   ValidatorError,
 } from "./errors.ts";
 import {
@@ -418,10 +420,7 @@ function atCallSite(e: unknown, site: Error): unknown {
   return err;
 }
 
-/** `ctx.storage` (STUDY-32): what each context gets of `FileStorage`. */
-export type StorageReader = ReturnType<FileStorage["reader"]>;
-export type StorageWriter = ReturnType<FileStorage["writer"]>;
-export type StorageActionWriter = ReturnType<FileStorage["actionWriter"]>;
+export type { StorageActionWriter, StorageReader, StorageWriter } from "./storage-api.ts";
 
 /** `ctx.storage` without a configured file storage: every call says so. */
 const noStorage = new Proxy(
@@ -434,7 +433,9 @@ const noStorage = new Proxy(
 ) as never;
 
 /** `ctx.auth` (STUDY-27): the caller's identity, or null without a (valid) token. */
-export type Auth = { getUserIdentity(): Promise<UserIdentity | null> };
+export interface Auth {
+  getUserIdentity(): Promise<UserIdentity | null>;
+}
 /** The contexts of functions without a data model (`query`, `queryGeneric`, …): any table, any document. */
 // biome-ignore lint/suspicious/noExplicitAny: Convex's builders without a data model take `any`
 export type QueryCtx = GenericQueryCtx<any>;
@@ -919,7 +920,11 @@ const VECTOR_FILTER_BUILDER = {
  * (the app's filter function run on the builder), before the engine's checks (STUDY-51). The function sandbox's
  * child runs them at the app's call, and sends the expression (STUDY-171 §12).
  */
-export function vectorSearchFilter(tableName: unknown, indexName: unknown, query: VectorSearchQuery): unknown {
+export function vectorSearchFilter(
+  tableName: unknown,
+  indexName: unknown,
+  query: VectorSearchQuery<GenericTableInfo, string>,
+): unknown {
   const args = [tableName, indexName, query];
   const argNames = ["tableName", "indexName", "query"];
   for (let i = 0; i < 3; i++)
@@ -1007,7 +1012,7 @@ export class Functions {
   }
 
   private cacheKey(name: string, args: unknown): string | undefined {
-    if (tooDeepToStringify(args)) return undefined;
+    if (args instanceof UndecodedArgs || tooDeepToStringify(args)) return undefined;
     try {
       const c = splitComponentFunctionName(name);
       const hash = c
@@ -1699,9 +1704,12 @@ export class Functions {
   /**
    * Arguments are an object, nested at most 63 levels, no larger than `maxArgsSize`, checked against `args`
    * when the function declares it (Convex's rules and order: `ValidatedPathAndArgs` in
-   * crates/udf/src/validation.rs). `measured`: `measureArgs(args)`, when the caller has it already.
+   * crates/udf/src/validation.rs). `measured`: `measureArgs(args)`, when the caller has it already. Arguments
+   * that did not decode fail here, once the function is resolved, as Convex's `parse_udf_args`.
    */
-  private checkArgs(f: FunctionDef, args: unknown, measured = measureArgs(args)): AnyArgs {
+  private checkArgs(f: FunctionDef, args: unknown, measured?: ReturnType<typeof measureArgs>): AnyArgs {
+    if (args instanceof UndecodedArgs) throw args.error;
+    measured ??= measureArgs(args);
     const a = args === undefined ? {} : args;
     // Arguments a client sent with a lone surrogate do not parse into Convex's values (STUDY-135; nested
     // and scheduled calls are refused before, where their text is sent).
@@ -2959,7 +2967,11 @@ export class Functions {
       storage: cutOffWithAction(this.fileStorage?.actionWriter(storageMeter, component?.id ?? null) ?? noStorage),
       rooms: cutOffWithAction(r.rooms),
       presence: cutOffWithAction(r.presence as NonNullable<typeof r.presence>),
-      vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
+      vectorSearch: async (
+        tableName: string,
+        indexName: string,
+        query: VectorSearchQuery<GenericTableInfo, string>,
+      ) => {
         checkActionAlive();
         const filter = vectorSearchFilter(tableName, indexName, query);
         const r = meteredAction();

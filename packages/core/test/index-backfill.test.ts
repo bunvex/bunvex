@@ -10,7 +10,7 @@ import { backfillMeta, INDEX_BACKFILLS_TABLE, INDEX_TABLE, indexMeta } from "../
 import { Engine, type IndexBackfillOptions } from "../src/engine.ts";
 import { prefixEnd } from "../src/keyenc.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { type Doc, defineSchema, defineTable, indexKey, type SchemaDefinition } from "../src/schema.ts";
+import { type Doc, defineSchema, defineTable, type EngineSchema, indexKey } from "../src/schema.ts";
 import { decodeDoc } from "../src/tx.ts";
 
 const dirs: string[] = [];
@@ -31,7 +31,7 @@ const slow = (chunk = 100, rate = 10): IndexBackfillOptions => ({ chunkSize: chu
 
 async function open(
   path: string,
-  schema: SchemaDefinition,
+  schema: EngineSchema,
   indexBackfill?: IndexBackfillOptions,
   /** Delay every range scan (the backfill's reads; the writers below only use point reads): a chunk's
    *  snapshot then stays open long enough for concurrent writes to land in it. */

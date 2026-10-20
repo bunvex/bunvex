@@ -241,13 +241,7 @@ export const realRandomBytes = (out: Uint8Array): Uint8Array => realGetRandomVal
  * `bigint` as Convex's u64 (STUDY-06 D9, STUDY-133 §5.3). The whole milliseconds come from the clock and the
  * fraction from `performance.now()` (sub-microsecond on Bun). Never behind Date.now().
  */
-export const wallClockNs = (): bigint => {
-  const precise = origin + realPerformanceNow();
-  const wall = realNow();
-  const ms = precise > wall ? precise : wall;
-  const whole = Math.floor(ms);
-  return BigInt(whole) * 1_000_000n + BigInt(Math.floor((ms - whole) * 1e6));
-};
+export const wallClockNs = (): bigint => realRuntime.nowNs();
 
 /**
  * Round down to 0.1 ms, as Convex's `secs_as_dom_high_res_ms` (crates/isolate/src/ops/time.rs) does to
@@ -263,9 +257,7 @@ let lastPrecise = 0;
 export const preciseClock = (): number => {
   // performance.now() drifts from the wall clock by up to a millisecond: never fall behind Date.now(), and
   // never repeat a value, so two transactions never share a first _creationTime.
-  let t = origin + realPerformanceNow();
-  const wall = realNow();
-  if (t < wall) t = wall;
+  let t = realRuntime.preciseNow();
   if (t <= lastPrecise) t = nextUp(lastPrecise);
   lastPrecise = t;
   return t;

@@ -27,7 +27,9 @@ test("an action searches with q.eq / q.or; Convex's argument errors", async () =
       }),
     ),
     empty: action((ctx) => ctx.vectorSearch("docs", "by_e", { vector: [] })),
-    badEq: action((ctx) => ctx.vectorSearch("docs", "by_e", { vector: [1, 0], filter: (q) => q.eq(1 as never, "a") })),
+    badEq: action((ctx) =>
+      ctx.vectorSearch("docs", "by_e", { vector: [1, 0], filter: (q) => q.eq(1 as never, "a" as never) }),
+    ),
   });
   await functions.runMutation("m:seed", {});
   const hits = (await functions.runAction("m:search", { kinds: ["a", "b"] })) as { _id: string; _score: number }[];

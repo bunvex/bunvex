@@ -10,7 +10,7 @@ import { Engine } from "../src/engine.ts";
 import { internalIdBytes, internalIdOf } from "../src/internal-id.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
 import type { RetentionOptions } from "../src/retention.ts";
-import { type Doc, defineSchema, defineTable, indexKey, type SchemaDefinition } from "../src/schema.ts";
+import { type Doc, defineSchema, defineTable, type EngineSchema, indexKey } from "../src/schema.ts";
 
 const indexed = defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]) });
 const plain = defineSchema({ items: defineTable(v.any()) });
@@ -30,7 +30,7 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-async function open(schema: SchemaDefinition, path = ":memory:") {
+async function open(schema: EngineSchema, path = ":memory:") {
   const p = new SqlitePersistence(path, { durable: false });
   // No `max_repeatable_ts` bump (5 s after a commit) during a test: it would take a timestamp and move the
   // newest one, which the windows trail, between two steps of a slow run.

@@ -88,13 +88,14 @@ export class ExecutorInvalidations {
 
   /** A scheduled mutation ran (its commit is already observed): the second subscription its run invalidates. */
   jobRan(source: string) {
-    if (this.paused) return;
+    if (this.paused || this.stopped) return;
     const name = this.nameOf(source);
     if (name !== undefined) this.record(name, SCHEDULED_JOBS_TABLE, 1);
   }
 
-  /** Counts each commit against both executors' reads, then moves the reads it changed. */
+  /** Counts each commit against both executors' reads, then moves the reads it changed; nothing once stopped. */
   observe(entries: readonly LogEntry[]) {
+    if (this.stopped) return;
     const catalog = this.engine.catalog;
     const jobs = catalog.table(this.scheduler.table).indexes.get(this.scheduler.index)?.id;
     const runs = catalog.table(this.crons.table).indexes.get(this.crons.index)?.id;

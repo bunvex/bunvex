@@ -32,6 +32,9 @@ backend is always started with `--disable-beacon`.
 - `test/cross-open.test.ts` (STUDY-133 PR 9): a store each binary wrote, opened by the other (same SQLite file
   and storage, the app of `cross-open-app/` redeployed by its CLI), read back by every kind of index, written,
   and read back by the first. Local only: the nightly does not run it.
+- `test/backfill-progress.test.ts` (STUDY-174 S1): a push adds an index to a table with documents (the app of
+  `backfill-progress-app/`); once backfilled, the `_index_backfills` row is read from each store's SQLite file and
+  compared: the count, the table's total, the cursor. Local only.
 - `test/component-store.test.ts` (STUDY-152 steps 1–2): a store Convex writes with the components of
   `component-store-app/` (a `counter` component, mounted twice, with a table of the root's name), opened by bunvex
   (the root's tables only, read, written, listed by `data`), then by Convex again (its components intact). Run by
@@ -93,7 +96,10 @@ backend is always started with `--disable-beacon`.
   not parse, from the app of `paginate-app/`; then the system functions' own argument errors, with an admin
   key. Local only.
 - `test/generated.test.ts`: `DIFF_RUNS` generated programs (25 by default), both backends started once and
-  reset before each program. `DIFF_SEED` replays a run. A difference is shrunk, written to
+  reset before each program. Besides the answers and the final data, each program's function log is compared
+  (STUDY-174 §5.2): per completed call its kind, function, cache hit, failure and usage counters (documents,
+  bytes, index rows), read from `/api/stream_function_logs` after the program's last call. `DIFF_SEED` replays
+  a run. A difference is shrunk, written to
   `.cache/failures/last.json` (the program and the differences, ready to become a fixed program) and fails
   the test with its seed.
 

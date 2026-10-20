@@ -40,9 +40,10 @@ function literalJson(x: unknown): JSONValue {
     return { $literal: { $notAValue: String(x) } };
   }
 }
-export type ExpressionOrValue<T = unknown> = Expression | (T & Value) | undefined;
+/** What the filter builder takes at run time: an expression or a literal (the typed form is `ExpressionOrValueOf`). */
+export type FilterOperand<T = unknown> = Expression | (T & Value) | undefined;
 
-const toExpr = (x: ExpressionOrValue): Expression => {
+const toExpr = (x: FilterOperand): Expression => {
   if (x instanceof Expression) return x;
   // A literal is a plain value: Convex's expression JSON refuses the commit timestamp's token (STUDY-53).
   if (hasCommitTs(x)) throw new Error("Field name $commitTs starts with '$', which is reserved.");
@@ -50,7 +51,7 @@ const toExpr = (x: ExpressionOrValue): Expression => {
 };
 
 /** A predicate's serialized form (a literal one included): what a cursor's fingerprint covers. */
-export const expressionJson = (x: ExpressionOrValue): JSONValue => toExpr(x).json;
+export const expressionJson = (x: FilterOperand): JSONValue => toExpr(x).json;
 
 /** A value's type as Convex's errors name it (`MaybeValue::type_name`, crates/value/src/walk.rs): `Float64`, `Bytes`, … */
 function typeName(v: MaybeValue): string {
@@ -93,7 +94,7 @@ function arithmetic(
 }
 
 const binary =
-  (op: string, f: (l: MaybeValue, r: MaybeValue) => MaybeValue) => (a: ExpressionOrValue, b: ExpressionOrValue) => {
+  (op: string, f: (l: MaybeValue, r: MaybeValue) => MaybeValue) => (a: FilterOperand, b: FilterOperand) => {
     const [x, y] = [toExpr(a), toExpr(b)];
     return new Expression((doc) => f(x.evaluate(doc), y.evaluate(doc)), { [op]: [x.json, y.json] });
   };
@@ -152,7 +153,7 @@ export const filterBuilder = {
       (a, b) => a % b,
     ),
   ),
-  neg: (x: ExpressionOrValue) => {
+  neg: (x: FilterOperand) => {
     const e = toExpr(x);
     return new Expression(
       (doc) => {
@@ -167,15 +168,15 @@ export const filterBuilder = {
       { $neg: e.json },
     );
   },
-  and: (...xs: ExpressionOrValue[]) => {
+  and: (...xs: FilterOperand[]) => {
     const es = xs.map(toExpr);
     return new Expression((doc) => es.every((e) => asBoolean(e.evaluate(doc))), { $and: es.map((e) => e.json) });
   },
-  or: (...xs: ExpressionOrValue[]) => {
+  or: (...xs: FilterOperand[]) => {
     const es = xs.map(toExpr);
     return new Expression((doc) => es.some((e) => asBoolean(e.evaluate(doc))), { $or: es.map((e) => e.json) });
   },
-  not: (x: ExpressionOrValue) => {
+  not: (x: FilterOperand) => {
     const e = toExpr(x);
     return new Expression((doc) => !asBoolean(e.evaluate(doc)), { $not: e.json });
   },
@@ -183,7 +184,7 @@ export const filterBuilder = {
 export type FilterBuilder = typeof filterBuilder;
 
 /** Whether `doc` passes a predicate's expression (it must evaluate to a boolean). */
-export const passes = (e: ExpressionOrValue, doc: Doc) => asBoolean(toExpr(e).evaluate(doc));
+export const passes = (e: FilterOperand, doc: Doc) => asBoolean(toExpr(e).evaluate(doc));
 
 const BINARY = {
   $eq: "eq",
@@ -205,8 +206,8 @@ const BINARY = {
  * predicate returned it); a literal that was not a value comes back as its description, which no value equals.
  * Throws on anything `expressionJson` never makes.
  */
-export function expressionFromJson(j: JSONValue): ExpressionOrValue {
-  const parse = (x: JSONValue): ExpressionOrValue => {
+export function expressionFromJson(j: JSONValue): FilterOperand {
+  const parse = (x: JSONValue): FilterOperand => {
     if (x === null || typeof x !== "object" || Array.isArray(x)) throw new Error("not a filter expression");
     const keys = Object.keys(x);
     if (keys.length !== 1) throw new Error("not a filter expression");

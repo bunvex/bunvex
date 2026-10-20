@@ -102,6 +102,7 @@ import {
 import { tooDeepToStringify } from "./deep-values.ts";
 import {
   clientError,
+  decodeCallArgs,
   FunctionPathError,
   FunctionPathNotFoundError,
   INTERNAL_SERVER_ERROR_MESSAGE,
@@ -420,6 +421,13 @@ const fromWire = (args: unknown, path: string) => {
     throw new FunctionPathError(`Invalid arguments for ${canonicalPath(path)}: ${message}`);
   }
 };
+
+/**
+ * A call's arguments for its run: those that do not decode fail once the function is resolved (`UndecodedArgs`).
+ * A system function reads its own arguments, after the access check.
+ */
+const callArgs = (args: unknown, path: string) =>
+  isSystemPath(path) ? fromWire(args, path) : decodeCallArgs(() => fromWire(args, path));
 
 /** Convex's message for a function `/api/function` or `/api/run` cannot find. */
 /** A body's `componentId` (Convex's `ComponentId::deserialize_from_string`): a component's id, or null for the app. */
@@ -946,7 +954,7 @@ export function createServer(opts: ServerOptions) {
       // Each entry's path is parsed after its format, and fails the whole batch (Convex's `parse_export_path`).
       const badPath = badFunctionPath(q.path);
       if (badPath) return requestError(badPath.status, badPath.code, badPath.message);
-      const r = await collectLogs(async () => functions.runQueryAtJson(q.path, fromWire(q.args, q.path), at, caller));
+      const r = await collectLogs(async () => functions.runQueryAtJson(q.path, callArgs(q.args, q.path), at, caller));
       const b = udfBody(r, "query", { format: q.format, client });
       if (typeof b !== "string") return b;
       results.push(b);
@@ -981,7 +989,7 @@ export function createServer(opts: ServerOptions) {
     const caller = await callerOfRequest(req);
     if (caller instanceof Response) return caller;
     return udfResponse(
-      await collectLogs(async () => functions.runQueryJson(path, fromWire(args, path), caller)),
+      await collectLogs(async () => functions.runQueryJson(path, callArgs(args, path), caller)),
       "query",
       formatRequest,
     );
@@ -998,6 +1006,7 @@ export function createServer(opts: ServerOptions) {
     redact,
     formatError,
     fromWire,
+    callArgs,
     splay: splayOptions(opts.subscriptionSplay),
     ...(opts.invalidationHistory === undefined ? {} : { invalidationHistory: opts.invalidationHistory }),
     ...(opts.wsHeartbeat ? { wsHeartbeat: opts.wsHeartbeat } : {}),
@@ -1950,7 +1959,7 @@ export function createServer(opts: ServerOptions) {
               body.args.map((a) => fromWire(a, body.path) as Value),
               caller,
             );
-          const args = fromWire(body.args, body.path);
+          const args = callArgs(body.args, body.path);
           if (kind === "query") return functions.runQueryJson(target, args, caller);
           if (kind === "query_at_ts") return functions.runQueryAtJson(target, args, at!, caller);
           const value =
@@ -2435,6 +2444,8 @@ export function createServer(opts: ServerOptions) {
       return live;
     },
     deploymentEnv,
+    // As Convex's Node executor's timeout, which bounds its `build_deps`: NODE_ACTION_USER_TIMEOUT + 5 s.
+    installTimeoutMs: functions.nodeActionTimeoutMs + 5000,
   });
   /**
    * Convex's `GET /api/v1/get_canonical_urls` (any admin: the URLs, or the server's origins) and
@@ -2644,6 +2655,8 @@ export function createServer(opts: ServerOptions) {
   return {
     installCodeVersion,
     deployCode,
+    /** Convex's deploy2 protocol in-process (`startPush`, `waitForSchema`, `finishPush`); `@bunvex/testing` pushes with it. */
+    push,
     codeReady,
     server,
     /** The site port's server (HTTP actions), if any. */
@@ -2685,6 +2698,7 @@ export function createServer(opts: ServerOptions) {
       usageLimitWorker.stop();
       void exportService?.stop();
       void importService?.stop();
+      executorInvalidations.stop();
       void scheduler.stop();
       void cronExecutor.stop();
       stopCleanup();

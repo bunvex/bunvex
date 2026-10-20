@@ -23,12 +23,12 @@ import {
   declaredTables,
   documentTypeError,
   type Engine,
+  type EngineSchema,
   indexReferenceError,
   insertAuditLogEvents,
   type NewComponentDefinition,
   resolveComponentPath,
   SCHEMAS_TABLE,
-  type SchemaDefinition,
   SchemaPushError,
   SYSTEM_ACTOR,
   schemaStateOf,
@@ -125,17 +125,17 @@ const invalidSchemaExport = () =>
  * schema.rs): none, `null` or `undefined` is `MissingSchemaExportError`; anything that is not a schema (made by
  * `defineSchema`) is `InvalidSchemaExport`. Convex's messages without its docs link (DV-356).
  */
-function schemaExport(value: unknown): SchemaDefinition {
+function schemaExport(value: unknown): EngineSchema {
   if (value === undefined || value === null)
     throw new PushError(
       "MissingSchemaExportError",
       "Hit an error while evaluating your schema:\nSchema file missing default export.",
     );
   if (!isSchemaDefinition(value)) throw invalidSchemaExport();
-  return value as SchemaDefinition;
+  return value as EngineSchema;
 }
 
-function checkIndexReferences(schema: SchemaDefinition) {
+function checkIndexReferences(schema: EngineSchema) {
   // First Convex exports the schema (`schemaToJson` here). An error there, such as a document or staged
   // validator whose JSON is not an object, is answered with `invalid_schema_export_error`, its own message
   // dropped (STUDY-14 §6, STUDY-106).
@@ -168,7 +168,7 @@ function loadError(e: unknown): unknown {
  * What a component's schema may not have yet (STUDY-153 PR 2b, the engine refuses it too): a staged validator (its
  * search and vector indexes are built since STUDY-157 PR 5). Refused before anything is allocated, as a 400.
  */
-function checkComponentSchemas(definitions: ReadonlyMap<string, { schema: SchemaDefinition | null }>) {
+function checkComponentSchemas(definitions: ReadonlyMap<string, { schema: EngineSchema | null }>) {
   for (const [path, d] of definitions) {
     if (path === "" || d.schema === null) continue;
     for (const t of declaredTables(d.schema).values()) {
@@ -269,7 +269,7 @@ type Pending = {
   schemaModule: ModuleSource | null;
   /** The variables the push was evaluated with (Convex re-reads them at `finish_push`). */
   env: string;
-  schema: SchemaDefinition;
+  schema: EngineSchema;
   auth: unknown[] | null;
   schemaId: string;
   /** The server version change the push made (Convex's `udfConfigDiff`). */
@@ -287,17 +287,14 @@ type Pending = {
     /** Each component definition as pushed, by definition path. */
     configs: Map<string, ComponentDefinitionConfig>;
     tree: CheckedComponent;
-    definitions: Map<
-      string,
-      EvaluatedDefinition & { schema: SchemaDefinition | null; udfServerVersion: string | null }
-    >;
+    definitions: Map<string, EvaluatedDefinition & { schema: EngineSchema | null; udfServerVersion: string | null }>;
     versions: Map<string, LoadedCode>;
     change: ComponentsSchemaChange;
   };
 };
 
 const AUTH_CONFIG = AUTH_CONFIG_MODULE;
-const emptySchema: SchemaDefinition = { tables: {}, schemaValidation: false };
+const emptySchema: EngineSchema = { tables: {}, schemaValidation: false };
 
 export type PushDeps = {
   engine: Engine;
@@ -309,6 +306,8 @@ export type PushDeps = {
   deploymentEnv: () => Promise<Record<string, string>>;
   /** The environment the external packages' install runs with (the server's own by default; STUDY-148). */
   installEnv?: Record<string, string | undefined>;
+  /** How long that install may take (STUDY-174 S6): `BUILD_DEPS_TIMEOUT_MS` by default. */
+  installTimeoutMs?: number;
   /** Where the push's code is loaded and evaluated (`vm` by default; STUDY-171). */
   executor?: Executor;
 };
@@ -386,12 +385,12 @@ export async function evaluateComponents(
   config: { seed: Uint32Array; timestamp: number },
   env: Record<string, string>,
   rootFunctions: Record<string, AnalyzedModule>,
-  rootSchema: SchemaDefinition | null,
+  rootSchema: EngineSchema | null,
   forCodegen: boolean,
   executor: Executor = vmExecutor,
 ) {
   const versions = new Map<string, LoadedCode>();
-  const schemas = new Map<string, SchemaDefinition | null>();
+  const schemas = new Map<string, EngineSchema | null>();
   // Components under the process sandbox are STUDY-168's PR 7.
   if (executor.kind === "process" && pushed.components.length)
     throw loadError(new InvalidModulesError(sandboxNotYet("Components")));
@@ -403,7 +402,7 @@ export async function evaluateComponents(
     } catch (e) {
       throw loadError(e);
     }
-    let schema: SchemaDefinition | null = null;
+    let schema: EngineSchema | null = null;
     if (c.schema) {
       schema = schemaExport(await evaluateDefault(config, c.schema, {}, "InvalidSchema", "schema", true, executor));
       checkIndexReferences(schema);
@@ -529,16 +528,16 @@ export class PushService {
       throw e;
     }
     // Each pushed definition's schema, by definition path (null: pushed without one), as Convex's `pushed_schemas`.
-    const pushedSchemas = new Map<string, SchemaDefinition | null>();
+    const pushedSchemas = new Map<string, EngineSchema | null>();
     const schemaModule = req.appDefinition?.schema;
-    let rootSchema: SchemaDefinition | null = null;
+    let rootSchema: EngineSchema | null = null;
     if (schemaModule) {
       rootSchema = schemaExport(await this.evaluateDefault(schemaModule, {}, "InvalidSchema", "schema"));
       checkIndexReferences(rootSchema);
     }
     pushedSchemas.set("", rootSchema);
     for (const c of pushed.components) {
-      let schema: SchemaDefinition | null = null;
+      let schema: EngineSchema | null = null;
       if (c.schema) {
         schema = schemaExport(await this.evaluateDefault(c.schema, {}, "InvalidSchema", "schema", true));
         checkIndexReferences(schema);
@@ -617,7 +616,9 @@ export class PushService {
   private async externalDeps(deps: NodeDependency[]): Promise<{ row: ExternalDepsPackage; dir: string }> {
     let row = await cachedExternalDeps(this.deps.engine, deps);
     try {
-      row ??= await buildExternalDeps(this.deps.engine, this.deps.modulesStore, deps, this.deps.installEnv);
+      row ??= await buildExternalDeps(this.deps.engine, this.deps.modulesStore, deps, this.deps.installEnv, {
+        timeoutMs: this.deps.installTimeoutMs,
+      });
     } catch (e) {
       if (e instanceof ExternalDepsError)
         throw new PushError(e.code, `Loading the pushed modules encountered the following error:\n${e.message}`);
