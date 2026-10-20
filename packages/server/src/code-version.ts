@@ -322,7 +322,22 @@ type Loaded = {
   hash: string;
 };
 
-export class CodeVersion {
+/**
+ * A loaded code version as the server uses it, whichever executor loaded it (STUDY-171 §8.6): `CodeVersion`
+ * in-process, or the function sandbox's stand-in for a version loaded in a child.
+ */
+export type LoadedCode = {
+  readonly modules: ReadonlyMap<string, { readonly source: ModuleSource; readonly hash: string }>;
+  readonly functions: Map<string, FunctionDef>;
+  readonly rooms: Map<string, AnyRoomDef>;
+  readonly moduleHashes: Map<string, string>;
+  readonly analysis: Record<string, AnalyzedModule>;
+  readonly router: HttpRouter | undefined;
+  readonly crons: Crons | undefined;
+  readonly moduleLoads: Map<string, string[]>;
+};
+
+export class CodeVersion implements LoadedCode {
   private constructor(
     /** Every module, by path. */
     readonly modules: Map<string, Loaded>,

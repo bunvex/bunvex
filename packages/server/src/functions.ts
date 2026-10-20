@@ -135,7 +135,14 @@ import {
 } from "./admin-keys.ts";
 import { appContext } from "./app-errors.ts";
 import type { AppMetrics } from "./app-metrics.ts";
-import { type AnyArgs, exportedValidator, type FunctionDef, NODE_FUNCTIONS, type ValidatorExport } from "./builders.ts";
+import {
+  type AnyArgs,
+  exportedValidator,
+  type FunctionDef,
+  NODE_FUNCTIONS,
+  REMOTE_FUNCTIONS,
+  type ValidatorExport,
+} from "./builders.ts";
 import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
 import { tooDeepToStringify } from "./deep-values.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
@@ -232,34 +239,27 @@ export type ComponentRuntime = {
  * deployment's variable it names), then the built-ins, `BUNVEX_SITE_URL` with its HTTP prefix when it has one;
  * nothing else of the deployment's.
  */
+/**
+ * A variable of `vars` by name, never one of `Object.prototype`'s members (`process.env.constructor` is a name like
+ * any other, unset unless set: Convex reads the variables one name at a time).
+ */
+const ownVar = (vars: Record<string, string>, name: string): string | undefined =>
+  Object.hasOwn(vars, name) ? vars[name] : undefined;
+
 function componentEnv(c: ComponentRuntime, read: EnvReader, builtin: Record<string, string>): EnvReader {
   return (name) => {
     const b = c.env.get(name);
     const bound = b === undefined ? undefined : b.type === "value" ? b.value : read(b.name);
     if (bound !== undefined) return bound;
-    const site = builtin[name];
+    const site = ownVar(builtin, name);
     if (name === "BUNVEX_SITE_URL" && site !== undefined && c.httpPrefix !== null)
       return `${site}${c.httpPrefix.replace(/\/+$/, "")}`;
-    return builtin[name];
+    return site;
   };
 }
 
 /** Convex's `ComponentPath::in_component_str`: ` in '<path>'`, nothing for the app. */
 const inComponentStr = (path: string) => (path === "" ? "" : ` in '${path}'`);
-
-/** What a component's function may not use yet (STUDY-154 P-2): its storage comes in step 7. */
-const notYetInComponents = (what: string) =>
-  new Proxy(
-    {},
-    {
-      get(_t, prop) {
-        if (prop === "then") return undefined;
-        return () => {
-          throw new Error("`ctx." + what + "` in a component is not supported yet");
-        };
-      },
-    },
-  );
 
 /**
  * An index still being rebuilt after a start (STUDY-79), as an action sees it: Convex rejects the action's
@@ -534,6 +534,9 @@ export {
   NODE_FUNCTIONS,
   query,
   queryGeneric,
+  REMOTE_FUNCTIONS,
+  type RemoteRunner,
+  type SandboxCall,
   type Visibility,
 } from "./builders.ts";
 
@@ -1014,7 +1017,9 @@ export class Functions {
     // The canonical URLs in place of the origins (STUDY-49), read here so a change re-runs what read them.
     const builtin = withCanonical(this.builtinEnv, await readCanonicalUrls(db));
     if (component) return componentEnv(component, read, builtin);
-    return (name) => read(name) ?? builtin[name];
+    const reader: EnvReader = (name) => read(name) ?? ownVar(builtin, name);
+    reader.variables = { deployment: read.vars, builtin };
+    return reader;
   }
 
   /** An action's `process.env`: the variables at its start (Convex's `get_all`, no reactivity). */
@@ -1028,7 +1033,7 @@ export class Functions {
       all,
       read: (name) => {
         checkEnvVarName(name);
-        return all[name];
+        return ownVar(all, name);
       },
     };
   }
@@ -1883,7 +1888,8 @@ export class Functions {
         ? {
             db: (db.vars ? readerView(db) : db) as unknown as QueryCtx["db"],
             auth: txAuth(db),
-            storage: component ? notYetInComponents("storage") : (this.fileStorage?.reader(db) ?? noStorage),
+            // A component's files are its namespace's, its URLs `?component=` (STUDY-157).
+            storage: this.fileStorage?.reader(db, component?.id ?? null) ?? noStorage,
             runQuery: nested.runQuery,
             meta: this.meta(f, db, undefined),
           }
@@ -1906,12 +1912,16 @@ export class Functions {
               rooms ??= roomsCtx(functions, (fn) => db.afterCommit(fn), false).rooms;
               return rooms;
             },
-            storage: component ? notYetInComponents("storage") : (this.fileStorage?.writer(db) ?? noStorage),
+            storage: this.fileStorage?.writer(db, component?.id ?? null) ?? noStorage,
             runQuery: nested.runQuery,
             runMutation: nested.runMutation,
             meta: this.meta(f, db, undefined),
           };
-    const run = () => (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(appContext(f.handler, ctx), args);
+    // A sandboxed function's handler is in its child: the stand-in gets the same `ctx`, and its transaction.
+    const remote = REMOTE_FUNCTIONS.get(f);
+    const run = remote
+      ? () => remote(ctx, args, { db, shape: f.kind === "mutation" ? "writer" : db.vars ? "reader" : "tx" })
+      : () => (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(appContext(f.handler, ctx), args);
     return notAQuery(
       inHandleScope({ db, engine: this.engine, resolve: (ref) => this.resolveCall(ref, component, db, false) }, () =>
         component
@@ -2836,9 +2846,7 @@ export class Functions {
           jobComponent: caller?.request?.scheduledFunctionComponent ?? null,
         }),
       ),
-      storage: component
-        ? (notYetInComponents("storage") as never)
-        : cutOffWithAction(this.fileStorage?.actionWriter(storageMeter) ?? noStorage),
+      storage: cutOffWithAction(this.fileStorage?.actionWriter(storageMeter, component?.id ?? null) ?? noStorage),
       rooms: cutOffWithAction(r.rooms),
       presence: cutOffWithAction(r.presence as NonNullable<typeof r.presence>),
       vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {

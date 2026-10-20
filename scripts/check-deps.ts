@@ -39,8 +39,9 @@ const ALLOWED: Record<string, string[]> = {
   // STUDY-37 E5 (owner, 2026-10-02): the CLI subscribes as Convex's does (`run --watch`).
   cli: ["server", "core", "values", "client", "protocol"],
   testing: ["server", "core", "values"],
-  // STUDY-171 §7 (STUDY-168 PR 2): the function sandbox's child runs the server's own loader (`@bunvex/server/executor`).
-  sandbox: ["server", "core", "values"],
+  // STUDY-171 §7 (STUDY-168 PR 2): the function sandbox's child runs the server's own loader (`@bunvex/server/executor`);
+  // §8 (PR 3): its wire carries function references (`@bunvex/protocol`'s symbols).
+  sandbox: ["server", "core", "values", "protocol"],
   // Test-only, never published: end-to-end sync tests (a server and clients in one process, STUDY-26).
   "sync-e2e": [
     "client",
@@ -62,8 +63,21 @@ const ALLOWED: Record<string, string[]> = {
   // Test-only, never published: the same app on Convex's backend and on bunvex's, compared (STUDY-122);
   // it uses bunvex as a user would, through the public package and its CLI.
   differential: ["bunvex"],
-  // bin/local-backend.ts (STUDY-39, STUDY-40) carries the persistence drivers into the executable.
-  bunvex: ["server", "values", "client", "react", "nextjs", "react-clerk", "react-auth0", "cli", "core", "persistence"],
+  // bin/local-backend.ts (STUDY-39, STUDY-40) carries the persistence drivers into the executable, and provides the
+  // function sandbox's executor, which the server cannot import (STUDY-171 §8.8).
+  bunvex: [
+    "server",
+    "values",
+    "client",
+    "react",
+    "nextjs",
+    "react-clerk",
+    "react-auth0",
+    "cli",
+    "core",
+    "persistence",
+    "sandbox",
+  ],
   // UI-01 §6: the design system depends on no bunvex package; the dashboard sees data only through its
   // injected DashboardDataSource, never the engine or the server.
   ui: [],

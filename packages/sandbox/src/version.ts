@@ -42,7 +42,13 @@ export function describeVersion(version: CodeVersion): WireVersion {
     moduleLoads: [...version.moduleLoads],
     functions: [...version.functions].map(([key, f]) => [
       key,
-      { kind: f.kind, visibility: f.visibility, node: NODE_FUNCTIONS.has(f) },
+      {
+        kind: f.kind,
+        visibility: f.visibility,
+        node: NODE_FUNCTIONS.has(f),
+        args: f.args ? JSON.stringify(f.args.json) : null,
+        returns: f.returns ? JSON.stringify(f.returns.json) : null,
+      },
     ]),
     rooms: [...version.rooms].map(([key, r]) => [key, r.kind]),
   };

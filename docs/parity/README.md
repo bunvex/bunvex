@@ -172,7 +172,7 @@ gaps.
    [STUDY-152](../study/STUDY-152-components-restudy.md)). Built (steps 1–7 so far, STUDY-152 to STUDY-157):
    namespaced tables and the registry, `bunvex.config.ts` with `defineApp` / `defineComponent` pushed by the CLI,
    a component's functions run and called across components (references, handles), its env, codegen, its
-   scheduler and crons. Left: its storage and HTTP mounts (STUDY-157 PRs 3–4), search and vector indexes in
+   scheduler, crons and storage. Left: its HTTP mounts (STUDY-157 PR 4), search and vector indexes in
    components (PR 5), bunvex's own components (step 8), the dashboard (step 9) and export/import (step 10). Until
    step 8, an app on `@convex-dev/*` components (rate limiter, aggregate, workpool, auth, …) has no package to
    install.
@@ -185,6 +185,10 @@ gaps.
    decided by the owner, 2026-10-12).
 
 **Low: rare, ops-only, or a missing nicety**
+
+- The function sandbox (AD-44, opt-in): under `BUNVEX_FUNCTION_SANDBOX=process`, queries and mutations run with no OS
+  isolation yet, one child per code version; actions, HTTP actions, components, rooms and log lines are not
+  available there yet (STUDY-171 §8.7; STUDY-168 PRs 4–9). The default `vm` is unaffected.
 
 - Error text (STUDY-150 §6): a missing function in `ctx.runQuery` / the scheduler is worded and framed as
   bunvex's server words it, not as Convex's app-side library (`Couldn't resolve api.nope.x`); a bad id fails before

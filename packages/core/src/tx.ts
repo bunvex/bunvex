@@ -757,6 +757,22 @@ export class Tx {
   }
 
   /**
+   * @internal (the function sandbox's host) The catalog names resolve in now (an identity that changes when it
+   * does), for a child's `normalizeId` and `withIndex` (STUDY-171 §8.4); read nothing.
+   */
+  get namespaceCatalog(): Catalog {
+    return this.names;
+  }
+
+  /** @internal (the function sandbox's host) The tables this transaction created in the current namespace. */
+  createdTableDefs(): TableDef[] {
+    const namespace = this.spaceId ?? undefined;
+    const out: TableDef[] = [];
+    for (const { def } of this.createdTables.values()) if (def.namespace === namespace) out.push(def);
+    return out;
+  }
+
+  /**
    * Run `fn` in the namespace of component `id` (its `_components` id; null for the root), as Convex's
    * per-namespace `TableModel` / `UserFacingModel`: `query`, `insert`, `get`, `normalizeId` and `newId` address
    * its tables, and ids encode its table numbers. Its tables are the namespace's own, its system tables

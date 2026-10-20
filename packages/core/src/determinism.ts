@@ -476,6 +476,63 @@ export function runDeterministic<T>(
 }
 
 /**
+ * An execution's clock, as another process makes it again (the function sandbox's child, STUDY-171 §8.2): its
+ * frozen time, `performance.now()`'s start, and how long it has run (a mutation's `performance.now()` counts on).
+ */
+export type ExecutionClock = { kind: "query" | "mutation"; now: number; perfStart: number; elapsed: number };
+
+/**
+ * @internal (the function sandbox's host) The running query's or mutation's execution: an identity (the same for its
+ * nested calls, which share it), and its clock. Null outside one, or in an import.
+ */
+export function currentExecution(): { key: object; clock: ExecutionClock } | null {
+  const e = executions.getStore();
+  if (!e || e.kind === "import") return null;
+  return {
+    key: e,
+    clock: { kind: e.kind, now: e.now, perfStart: e.perfStart, elapsed: realPerformanceNow() - e.monotonicStart },
+  };
+}
+
+/** @internal (the function sandbox's host) The running function's timer, if any. */
+export const currentUserTimer = (): UserTimer | null => executions.getStore()?.timer ?? null;
+
+/**
+ * @internal (the function sandbox's child) An execution with another process's clock: the same time and
+ * `performance.now()`, and its own seeded `Math.random` and `crypto` stream drawn on first use, as
+ * `runDeterministic`'s (the seed is per execution, never the host's). `observed` is filled in as it runs.
+ */
+export function executionFromClock(clock: ExecutionClock, observed: Observed): object {
+  let rng: (() => number) | undefined;
+  const execution: Execution = {
+    kind: clock.kind,
+    now: clock.now,
+    random: () => {
+      if (!rng) rng = seededRandom(realGetRandomValues(new Uint32Array(4)));
+      return rng();
+    },
+    cryptoBytes: lazyKeystream(),
+    perfStart: clock.perfStart,
+    monotonicStart: realPerformanceNow() - clock.elapsed,
+    observed,
+  };
+  return execution;
+}
+
+/** @internal Run `fn` in an execution `executionFromClock` made. */
+export const runInExecution = <T>(execution: object, fn: () => T): T => executions.run(execution as Execution, fn);
+
+/**
+ * Charge `ms` of user time the running function spent elsewhere (the function sandbox's child, which counts it) to
+ * its timer, while its clock is paused for the wait (`pausingUserTime`): the 1 s limit then counts the function's
+ * JavaScript, not the round trips (STUDY-168 §13.1).
+ */
+export function chargeUserTime(ms: number) {
+  const t = executions.getStore()?.timer;
+  if (t) t.paused -= ms;
+}
+
+/**
  * Run a code version's import phase (Convex's: `Math.random` seeded and `Date.now()` fixed by the
  * deployment, `performance.now()` 0; no fetch, timers or cryptographic randomness).
  */

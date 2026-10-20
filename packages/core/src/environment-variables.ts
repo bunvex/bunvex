@@ -124,14 +124,18 @@ export class EnvironmentVariables {
     db.recordInterval(i, "derived");
   }
 
-  /** A query's or mutation's reader: one name at a time, each read recorded. */
-  async reader(db: Tx): Promise<(name: string) => string | undefined> {
+  /**
+   * A query's or mutation's reader: one name at a time, each read recorded. `vars` is what it reads from (the
+   * snapshot's, the same object while no commit writes the table), which the function sandbox ships to its child.
+   */
+  async reader(db: Tx): Promise<((name: string) => string | undefined) & { vars: ReadonlyMap<string, string> }> {
     const vars = await this.snapshot(db);
-    return (name) => {
+    const read = (name: string) => {
       checkEnvVarName(name);
       this.recordRead(db, name);
       return vars.get(name);
     };
+    return Object.assign(read, { vars });
   }
 
   /** Every variable, by name (the CLI's `list`, the dashboard). */

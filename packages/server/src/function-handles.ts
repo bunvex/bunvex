@@ -124,6 +124,8 @@ type Scope = {
    * names, its children's exports; STUDY-155). Without one, a name of the app's.
    */
   resolve?: (ref: unknown) => Promise<string>;
+  /** Makes the handle elsewhere: the function sandbox's child asks its host, which runs this in its own scope. */
+  create?: (ref: unknown) => Promise<string>;
 };
 const scope = new AsyncLocalStorage<Scope>();
 /** Run a function's handler where `createFunctionHandle` can find it. */
@@ -172,6 +174,7 @@ async function handleFor<Type extends "query" | "mutation" | "action", Args, Ret
   const s = scope.getStore();
   if (!s) throw new Error("createFunctionHandle can only be called from a query, mutation or action");
   if (isFunctionHandle(functionReference)) return functionReference as FunctionHandle<Type, Args, Return>;
+  if (s.create) return (await s.create(functionReference)) as FunctionHandle<Type, Args, Return>;
   const name = s.resolve
     ? await s.resolve(functionReference)
     : typeof functionReference === "string"

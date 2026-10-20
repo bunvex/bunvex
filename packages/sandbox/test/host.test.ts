@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { FunctionExportError, InvalidModulesError, MissingEnvironmentVariableError } from "@bunvex/server/executor";
-import { MAX_MESSAGE_BYTES, SandboxError, SandboxProcess } from "../src/index.ts";
+import { MAX_MESSAGE_BYTES, PROTOCOL_VERSION, SandboxError, SandboxProcess } from "../src/index.ts";
 
 const CHILDREN = join(import.meta.dir, "fixtures/children");
 const fake = (name: string) => join(CHILDREN, `${name}.ts`);
@@ -47,7 +47,9 @@ describe("a child", () => {
     const c = await start();
     expect(c.spawnToReadyMs).toBeGreaterThan(0);
     const v = await c.load([QUERY], OPTS);
-    expect([...v.functions]).toEqual([["m:q", { kind: "query", visibility: "public", node: false }]]);
+    expect([...v.functions]).toEqual([
+      ["m:q", { kind: "query", visibility: "public", node: false, args: null, returns: null }],
+    ]);
     expect(v.analysis["m.js"]!.functions.map((f) => f.name)).toEqual(["q"]);
     expect(v.moduleHashes.get("m")).toMatch(/^[0-9a-f]{64}$/);
     expect(v.loadMs).toBeGreaterThan(0);
@@ -138,7 +140,7 @@ describe("a child that goes wrong is killed, and what waits on it fails with why
   test("it speaks another protocol", async () => {
     const e = await rejection(SandboxProcess.start({ entry: fake("wrong-protocol") }));
     expect((e as SandboxError).reason).toBe("protocol");
-    expect(e.message).toBe("the function sandbox's process speaks protocol 999, not 1");
+    expect(e.message).toBe(`the function sandbox's process speaks protocol 999, not ${PROTOCOL_VERSION}`);
   });
 
   test("it dies during a request: a crash, with its stderr", async () => {
