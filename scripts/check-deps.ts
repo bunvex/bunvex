@@ -83,6 +83,8 @@ const ALLOWED: Record<string, string[]> = {
     "core",
     "persistence",
     "sandbox",
+    // `bunvex/testing` (STUDY-159): an app's tests import it as its functions import `bunvex/server`.
+    "testing",
   ],
   // UI-01 §6: the design system depends on no bunvex package; the dashboard sees data only through its
   // injected DashboardDataSource, never the engine or the server.

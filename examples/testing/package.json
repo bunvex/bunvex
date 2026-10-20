@@ -1,0 +1,16 @@
+{
+  "name": "bunvex-example-testing",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Testing an app's functions with @bunvex/testing: the real engine in the test's process.",
+  "type": "module",
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "bunvex": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}

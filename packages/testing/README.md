@@ -5,7 +5,7 @@ It keeps convex-test's API, renamed: `convexTest` is `bunvexTest`.
 
 ```ts
 import { expect, test } from "bun:test";
-import { bunvexTest } from "@bunvex/testing";
+import { bunvexTest } from "bunvex/testing"; // or "@bunvex/testing"
 import { api, internal } from "../bunvex/_generated/api";
 
 test("sending a message", async () => {

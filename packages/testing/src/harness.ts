@@ -121,6 +121,9 @@ class Backend {
       deployable: true,
       moduleStorage: new MemoryBlobStore(),
       fileStorage: new MemoryBlobStore(),
+      // In memory too, so a test leaves nothing in its working directory.
+      exportStorage: new MemoryBlobStore(),
+      importStorage: new MemoryBlobStore(),
     });
     const stop = async () => {
       await server.stop();
@@ -338,9 +341,29 @@ export class TestBunvex {
     return fetch(`${siteUrl}${path}`, { ...init, headers });
   }
 
+  /**
+   * Set (or, with null, remove) one of the deployment's environment variables, as `bunvex env set` does (AD-34): the
+   * functions that read it see the new value from their next run.
+   */
+  async setEnv(name: string, value: string | null): Promise<void> {
+    const { engine } = await this.backend.start();
+    await engine.mutation((db) => engine.environment.update(db, [{ name, value }]));
+  }
+
   /** The deployment's virtual clock (ms since the epoch); it moves only when scheduled functions are finished. */
   now(): number {
     return this.backend.runtime.now();
+  }
+
+  /**
+   * Move the virtual clock `ms` forward, running the scheduled functions and crons due on the way, and wait for
+   * them: what a convex-test test does with `vi.advanceTimersByTime(ms)` and `finishInProgressScheduledFunctions`.
+   */
+  async advanceTime(ms: number): Promise<void> {
+    await this.backend.start();
+    await settleJobs(this.backend);
+    await this.backend.runtime.advance(ms);
+    await settleJobs(this.backend);
   }
 
   /** Wait for the scheduled functions in progress to finish, without moving the clock. */

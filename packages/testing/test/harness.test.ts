@@ -94,7 +94,12 @@ describe("bunvexTest", () => {
     process.env.GREETING = "from the host";
     try {
       expect(await make().query(api.messages.greeting)).toBeNull();
-      expect(await make({ GREETING: "hello" }).query(api.messages.greeting)).toBe("hello");
+      const t = make({ GREETING: "hello" });
+      expect(await t.query(api.messages.greeting)).toBe("hello");
+      await t.setEnv("GREETING", "hi again");
+      expect(await t.query(api.messages.greeting)).toBe("hi again");
+      await t.setEnv("GREETING", null);
+      expect(await t.query(api.messages.greeting)).toBeNull();
     } finally {
       delete process.env.GREETING;
     }
@@ -124,6 +129,15 @@ describe("bunvexTest", () => {
     expect(await t.query(api.messages.list)).toEqual(["anonymous: later"]);
     expect(t.now() - start).toBeGreaterThanOrEqual(3600_000);
     expect(t.now() - start).toBeLessThan(3600_000 + 1000);
+  });
+
+  test("advanceTime: what is due by then runs, nothing later", async () => {
+    const t = make();
+    await t.mutation(api.messages.sendLater, { body: "in an hour", delayMs: 3600_000 });
+    await t.advanceTime(3600_000 - 10);
+    expect(await t.query(api.messages.list)).toEqual([]);
+    await t.advanceTime(20);
+    expect(await t.query(api.messages.list)).toEqual(["anonymous: in an hour"]);
   });
 
   test("crons (AD-35): runCron runs one now; due crons run as the clock moves", async () => {
