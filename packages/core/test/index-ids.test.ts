@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { decodeId, v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { defineSchema, defineTable, type SchemaDefinition } from "../src/schema.ts";
+import { defineSchema, defineTable, type EngineSchema } from "../src/schema.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -16,7 +16,7 @@ function store() {
   const dir = mkdtempSync(join(tmpdir(), "bunvex-index-ids-"));
   dirs.push(dir);
   const path = join(dir, "log");
-  return async (schema: SchemaDefinition, fn: (e: Engine) => Promise<void>) => {
+  return async (schema: EngineSchema, fn: (e: Engine) => Promise<void>) => {
     const p = await MemoryPersistence.open(path, { durable: false });
     const e = await new Engine(schema, p).init();
     await e.indexesReady();

@@ -1,6 +1,21 @@
 // Pagination validators, as Convex's `convex/server` exports them (npm-packages/convex/src/server/pagination.ts).
 import { type GenericValidator, v } from "@bunvex/values";
 
+/** A position in a paginated query (Convex's `Cursor`): an opaque string. */
+export type Cursor = string;
+
+/**
+ * `.paginate()`'s options (Convex's `PaginationOptions`): how many items, from which cursor, up to which one. The
+ * validator below also takes the `id` Convex's client adds; the type leaves it out, as Convex's.
+ */
+export interface PaginationOptions {
+  numItems: number;
+  cursor: Cursor | null;
+  endCursor?: Cursor | null;
+  maximumRowsRead?: number;
+  maximumBytesRead?: number;
+}
+
 /** The shape of `.paginate()`'s options, for a function's `args`. */
 export const paginationOptsValidator = v.object({
   numItems: v.number(),

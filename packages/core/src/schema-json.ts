@@ -8,11 +8,16 @@
 // a vector index's legacy `dimension: null`, an object validator's fields by name and a table's top-level system
 // fields left out (`filter_system_fields`). The text is serde_json's, whose only difference from
 // `JSON.stringify` here is a float literal's form (`1.0`, `1e16`).
-import { type GenericValidator, type ValidatorJSON, validatorFromJson } from "@bunvex/values";
+import {
+  type GenericValidator,
+  type RecordKeyValidatorJSON,
+  type ValidatorJSON,
+  validatorFromJson,
+} from "@bunvex/values";
 import {
   type DeclaredTable,
   declaredTables,
-  type SchemaDefinition,
+  type EngineSchema,
   schemaOfDeclared,
   stagedDocumentJson,
   documentJson as validDocumentJson,
@@ -92,7 +97,7 @@ function canonical(j: ValidatorJSON): ValidatorJSON {
     case "record":
       return {
         type: "record",
-        keys: canonical(j.keys),
+        keys: canonical(j.keys) as RecordKeyValidatorJSON,
         values: { fieldType: canonical(j.values.fieldType), optional: false },
       };
     case "union":
@@ -121,7 +126,7 @@ function documentType(j: ValidatorJSON): ValidatorJSON {
 const documentJson = (v: GenericValidator) => documentType(validDocumentJson(v));
 
 /** The schema as Convex's `DatabaseSchemaJson`. Throws Convex's export error for a staged validator that is not an object. */
-export function schemaToJson(s: SchemaDefinition): SchemaJson {
+export function schemaToJson(s: EngineSchema): SchemaJson {
   const tables = [...declaredTables(s).values()].sort((a, b) => byName(a.name, b.name));
   return {
     tables: tables.map((t) => {
@@ -212,7 +217,7 @@ function text(v: unknown): string {
 }
 
 /** The schema's text as `_schemas` stores it (and the audit log's `schemaDiff` shows it): Convex's, byte for byte. */
-export const schemaJsonText = (s: SchemaDefinition): string => text(schemaToJson(s));
+export const schemaJsonText = (s: EngineSchema): string => text(schemaToJson(s));
 
 /**
  * Each table's staged validator (STUDY-106 §7.1): its JSON and `validatorHash`, the sha256 of the text Convex
@@ -229,7 +234,7 @@ export function stagedValidatorsOf(j: SchemaJson): Map<string, StagedValidator> 
   return out;
 }
 
-export function schemaFromJson(j: SchemaJson): SchemaDefinition {
+export function schemaFromJson(j: SchemaJson): EngineSchema {
   const tables = new Map<string, DeclaredTable>();
   // The `_creationTime` Convex appends to an index is bunvex's implicit one (catalog.ts `wantedIndexes`).
   const userFields = (fields: string[]) =>

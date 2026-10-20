@@ -19,6 +19,8 @@ export type Value =
   | CommitTsPlaceholder
   | Value[]
   | { [field: string]: Value };
+/** A number a filter's arithmetic takes (Convex's `NumericValue`): a float64 or an int64. */
+export type NumericValue = bigint | number;
 export type JSONValue = null | boolean | number | string | JSONValue[] | { [field: string]: JSONValue };
 
 const MIN_INT64 = -(2n ** 63n);
