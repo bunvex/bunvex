@@ -265,7 +265,9 @@ describe("the open rooms", () => {
   }, 60_000);
 
   test("a read-only key may look (ViewMetrics)", async () => {
-    expect((await open(READ_ONLY_KEY).listRooms!()).length).toBeGreaterThan(0);
+    // the test before restarts the server, and the members may still be rejoining: wait for them
+    const src = open(READ_ONLY_KEY);
+    await until(async () => (await src.listRooms!()).length > 0, "the rooms back after the restart");
   });
 });
 
