@@ -43,7 +43,8 @@ const ALLOWED: Record<string, string[]> = {
   "file-storage": [],
   // STUDY-37 E5 (owner, 2026-10-02): the CLI subscribes as Convex's does (`run --watch`).
   cli: ["server", "core", "values", "client", "protocol"],
-  testing: ["server", "core", "values"],
+  // STUDY-159 T-2 (owner, 2026-10-20): a test pushes the app as `bunvex deploy` bundles it, into an engine of its own.
+  testing: ["server", "core", "values", "cli", "file-storage"],
   // STUDY-171 §7 (STUDY-168 PR 2): the function sandbox's child runs the server's own loader (`@bunvex/server/executor`);
   // §8 (PR 3): its wire carries function references (`@bunvex/protocol`'s symbols).
   sandbox: ["server", "core", "values", "protocol"],
@@ -82,6 +83,8 @@ const ALLOWED: Record<string, string[]> = {
     "core",
     "persistence",
     "sandbox",
+    // `bunvex/testing` (STUDY-159): an app's tests import it as its functions import `bunvex/server`.
+    "testing",
   ],
   // UI-01 §6: the design system depends on no bunvex package; the dashboard sees data only through its
   // injected DashboardDataSource, never the engine or the server.
