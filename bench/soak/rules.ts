@@ -124,6 +124,13 @@ export function memoryWarmup(run: RunData): number | null {
   return s ? s.t : null;
 }
 
+/**
+ * R8 compares an operation's p99 only on windows of at least this many calls (STUDY-174 Q7, owner, 2026-10-20).
+ * Below it a window's "p99" is its slowest call or two, noise that moves with no trend (the soak's `schedule`, 2 calls a
+ * second, ~30 a window); such an operation is judged on its p50 alone.
+ */
+export const R8_MIN_P99_CALLS = 100;
+
 /** Every rule, on the samples past the warm-up. */
 export function judge(run: RunData): RuleResult[] {
   const post = run.samples.filter((s) => s.t >= run.warmupSeconds);
@@ -215,21 +222,29 @@ export function judge(run: RunData): RuleResult[] {
     detail: `baseline ${run.baselineFds}, after the drain ${run.final.fds}`,
   });
 
-  // R8: latency: the last third's p50 and p99 are not much above the first third's.
+  // R8: latency: the last third's p50 and p99 are not much above the first third's. The p99 is compared only on
+  // windows of at least R8_MIN_P99_CALLS calls; an operation with fewer per window is judged on its p50 alone.
   const ops = new Set(post.flatMap((s) => Object.keys(s.latency)));
   for (const op of [...ops].sort()) {
     const ws = post.map((s) => s.latency[op]).filter((l): l is NonNullable<typeof l> => l != null && l.n >= 5);
     if (ws.length < 6) continue;
     const [a, c] = thirds(ws);
-    const p99a = median(a.map((w) => w.p99));
-    const p99c = median(c.map((w) => w.p99));
     const p50a = median(a.map((w) => w.p50));
     const p50c = median(c.map((w) => w.p50));
-    const pass = !(p99c > 1.5 * p99a && p99c > p99a + 20) && !(p50c > 1.3 * p50a && p50c > p50a + 10) && p99c < 1000;
+    let pass = !(p50c > 1.3 * p50a && p50c > p50a + 10);
+    let p99 = `p99 not judged (under ${R8_MIN_P99_CALLS} calls a window)`;
+    const full = ws.filter((w) => w.n >= R8_MIN_P99_CALLS);
+    if (full.length >= 6) {
+      const [fa, fc] = thirds(full);
+      const p99a = median(fa.map((w) => w.p99));
+      const p99c = median(fc.map((w) => w.p99));
+      pass &&= !(p99c > 1.5 * p99a && p99c > p99a + 20) && p99c < 1000;
+      p99 = `p99 ${p99a.toFixed(1)} → ${p99c.toFixed(1)} ms`;
+    }
     out.push({
       rule: `R8 ${op} latency does not trend up`,
       pass,
-      detail: `p50 ${p50a.toFixed(1)} → ${p50c.toFixed(1)} ms, p99 ${p99a.toFixed(1)} → ${p99c.toFixed(1)} ms (first → last third)`,
+      detail: `p50 ${p50a.toFixed(1)} → ${p50c.toFixed(1)} ms, ${p99} (first → last third)`,
     });
   }
 

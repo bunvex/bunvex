@@ -8,6 +8,7 @@ import {
   median,
   parseReportOnly,
   percentile,
+  R8_MIN_P99_CALLS,
   RULE_IDS,
   type RunData,
   ruleId,
@@ -153,6 +154,23 @@ describe("the rules", () => {
 
   test("latency that doubles fails R8", () => {
     expect(failing(runOf((t) => ({ latency: { q: { p50: 2 + t / 300, p99: 10 + t / 30, n: 100 } } })))).toEqual(["R8"]);
+  });
+
+  test("R8 judges the p99 only on windows of at least R8_MIN_P99_CALLS calls (Q7)", () => {
+    expect(R8_MIN_P99_CALLS).toBe(100);
+    // A p99 that doubles while the p50 stays flat: a failure with full windows...
+    const p99Up = (n: number) => runOf((t) => ({ latency: { q: { p50: 2, p99: 10 + t / 30, n } } }));
+    expect(failing(p99Up(R8_MIN_P99_CALLS))).toEqual(["R8"]);
+    // ...and not judged with windows of 30 calls (the soak's `schedule`), where a "p99" is the slowest call.
+    expect(failing(p99Up(30))).toEqual([]);
+    expect(judge(p99Up(30)).find((x) => x.rule.startsWith("R8"))?.detail).toContain("p99 not judged");
+    // Below the threshold the p50 is still judged.
+    expect(failing(runOf((t) => ({ latency: { q: { p50: 2 + t / 60, p99: 10, n: 30 } } })))).toEqual(["R8"]);
+    // Mixed windows: the p99 is judged on the full ones alone.
+    const mixed = runOf((t, i) => ({
+      latency: { q: i % 2 ? { p50: 2, p99: 10 + t / 30, n: 30 } : { p50: 2, p99: 10, n: R8_MIN_P99_CALLS } },
+    }));
+    expect(failing(mixed)).toEqual([]);
   });
 
   test("a lost job and a job run twice fail R9a; a growing lag fails R9b", () => {
