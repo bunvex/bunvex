@@ -31,7 +31,9 @@ that gap:
   - F4: a cache hit's log entry does not describe the run it reused, as Convex's does.
   - F5: `shutdown()` hangs while a scheduled mutation keeps losing OCC races.
 - **(2) A soak test.** `bench/soak/` has a 45-minute mixed workload judged on trends by twelve written rules. Its
-  12-minute pilot on the test VPS flagged F1 and F2/F3 on its own (§4.6).
+  pilots on the test VPS (12, 12, 30 and 25 minutes) flagged F1 and F2 on their own, with no knowledge of either. They
+  also found a sixth, F6: resident memory grows about 5 MB a minute under steady load while the JS heap stays flat
+  (§4.6).
 - **(3) Metadata differentials against Convex's binary.** A prototype in `packages/differential` compares the query
   cache's hits and misses as the function log stream shows them on both backends. It fails on main exactly where #751
   says, and passes on #751's branch (§5.3).
@@ -396,10 +398,65 @@ sets a budget (§8, Q4).
 
 ### 4.6 The pilot
 
-12 minutes on the test VPS (2 vCPU, 8 GB, Ubuntu, Bun 1.4.3), under `/root/bunvex-soak-study`:
-`bun bench/soak/soak.ts --minutes 12 --warmup 3 --clients 20`. The backend and the driver shared the machine.
+Four runs on the test VPS (2 vCPU, 8 GB, Ubuntu, Bun 1.4.3), under `/root/bunvex-soak-study` (`pilot-N/report.json`
+and `pilot-N.log` there). Each had 20 clients, and the backend and the driver shared the machine. The asked-for
+10–15 minute pilot came first. What it could not settle (memory) led to the longer two, and each run changed the
+design a little. All four were judged again with the final rules (`report.json` keeps every sample).
 
-⟨PILOT⟩
+| Run | Setup | R1 RSS | R2 heap | R3 canary | R11 idle | Other |
+|---|---|---|---|---|---|---|
+| 1 | 12 min, default caches (512 MiB index, 100 MiB query) | fail: 15.9 MB/min | fail | **fail**: 32 misses, 1 write | **fail**: 65 % of a core | R10 failed on one 207 ms sample, then the rule was changed |
+| 2 | 12 min, caches 32 MiB / 16 MiB | not enough steady samples | flat | **fail**: 32 / 1 | **fail**: 66 % | 1 hot-counter OCC failure, then classed as expected |
+| 3 | 30 min, the same | **fail**: 5.5 MB/min, +72 MB | pass: 0.6 MB/min | **fail**: 88 / 6 | **fail**: 67 % | everything else passed |
+| 4 | 25 min, the same, **no far-future job**, memory detail | **fail**: 5.0 MB/min, +41 MB | pass: −0.2 MB/min | **fail**: 74 / 5 | **pass: 1.3 %** | everything else passed |
+
+What the pilots show:
+- **F1 is caught from outside.** The canary missed every ~17 s in every run (32 misses in 9 minutes; 88 in 24). It
+  stays cached only between writes on Convex and on #751. R3 is a count, not a trend, so even the 12-minute run is
+  conclusive.
+- **F2 is caught, and attributed.** Runs 1–3 had a job 30 days ahead, and their idle backend burned 65–67 % of a core.
+  Run 4 had none and used 1.3 %. That is F2, the scheduler's timer overflow, alone. During the load itself it costs
+  ~25 % of a core that no latency rule sees.
+- **The design changed twice because of the pilots:**
+  - **Memory needs a memory warm-up.** With the default caches, RSS grew for the whole of run 1. The index cache's
+    512 MiB alone takes longer than a run to fill, so R1 there says nothing. With 32 MiB, the cache fills in 10–13
+    minutes at this load. R1 and R2 now start from the first sample where it is 90 % full and the write log has reached
+    300 s, and are "not judged" before.
+  - **One sample is not a trend.** R10 failed on a single 207 ms sample out of 37, so it now counts samples. A
+    hot-counter mutation that loses all 4 OCC retries is Convex's behaviour too, so it is reported, not failed.
+- **Everything about resources and freeing passed:**
+  - the sessions, subscriptions and room-member gauges matched the clients at every sample, through about 600
+    reconnects in run 3;
+  - all were 0 after the drain;
+  - file descriptors flat (38–46) and back below the baseline;
+  - every one of 1 424–3 603 jobs ran exactly once, with lag p99 ≤ 351 ms and flat;
+  - no latency trend in runs 3 and 4 (run 2's search p99 36 → 72 ms did not repeat);
+  - the hit rate was flat at ~57 %.
+
+**F6: resident memory grows ~5 MB a minute under steady load, outside the JS heap.**
+
+| | from (t = 781 s) | to (t = 1 502 s) | slope |
+|---|---|---|---|
+| RSS | 357 MB | 406 MB | |
+| anonymous memory (`smaps_rollup`) | 311 MB | 360 MB | **4.95 MB/min** |
+| file-backed | 46 MB | 46 MB | 0.00 |
+| JS heap (`heapUsed`) | 154 MB | 130 MB | −0.14 MB/min |
+| SQLite WAL | 6 MB | 6 MB | |
+| SQLite database file | 55 MB | 101 MB | on disk, not resident |
+
+- The measurements are from run 4, past its memory warm-up (index cache full). Run 3 had the same slope, 5.5 MB/min.
+- This rules out the JS heap, the index cache (full, at its budget), the write log (past its retention), and mapped
+  files (SQLite's pages). What is left is native memory: JSC's out-of-heap backing stores (strings and
+  `ArrayBuffer`s, which `heapUsed` does not count), Bun's native WebSocket and HTTP buffers, `bun:sqlite`'s
+  statements and rows, or the allocator keeping freed pages.
+- It is a real trend over two runs. It is **not yet known to be unbounded**: 20 minutes of steady state cannot tell a
+  leak from a slow plateau.
+- **Next step, not done here** (§9, step 3): a 2-hour run on the VPS. It would sample `process.memoryUsage()`'s
+  `external` and `arrayBuffers` (a `/metrics` gauge, or a debug route), with a forced GC every 10 minutes (does RSS
+  come back?), and bisect the workload by turning off one part at a time: rooms, storage, search, reconnects.
+- The database file grew 46 MB in 12 minutes although the trim keeps 2 000 messages. That is the document log
+  keeping every version until retention prunes it ([STUDY-33](STUDY-33-retention.md)'s retention runs on its own schedule). It is on disk, not
+  in memory; a longer run should check that it levels off.
 
 ## 5. Metadata differentials against Convex (part 3)
 
@@ -499,7 +556,8 @@ file was restored and compared after each.
 
 **The differential prototype** is its own sabotage: it fails on main (F1 present) and passes on #751 (F1 fixed).
 
-**The soak** is checked by its pilot (§4.6), whose two failures are F1 and F2/F3, the two bugs known to be on main.
+**The soak** is checked by its pilots (§4.6). Their failures were F1 and F2, the two load-visible bugs known to be on
+main. Removing the far-future job made R11 pass (1.3 % against 66 %). They also found F6.
 
 **Measurements:** none on default paths (nothing default changed).
 
@@ -566,12 +624,13 @@ confirmed.
 |---|---|---|---|
 | 1 | Merge #751; then this PR (the rules, the soak, the prototype) | — | F1 |
 | 2 | Fix F2 and F3: cap both loops' timers, test with an injected clock. Add the I-25 static check | 0.5 day | F2, F3 |
-| 3 | The server suites' `afterEach` "hub empty, cache consistent, no session left" helper (I-03, I-05, I-11, I-19, I-23) | 0.5–1 day | freed state across ~40 suites |
-| 4 | The soak nightly workflow (Q1) | 0.5 day + a week of watching for flakes | trends, R1–R12 |
-| 5 | Fix F5: a stopping scheduler stops retrying and waits a bounded time. Test: shutdown under contention within 1 s | 0.5 day | F5, S4 |
-| 6 | The metadata files in the differential nightly; the runner's log tail (Q5, bunvex-9f) | 1–2 days | F4-class, usage, OCC shape |
-| 7 | F4 fix (Q3) | 0.5 day | F4 |
-| 8 | Confirm or dismiss S1–S7, one test each | 1 day | handles, backfill |
-| 9 | Jepsen post-run `/metrics` check (R6 + fds per run) | 0.5 day | freed state under faults |
-| 10 | Coverage floors: add the files the new tests cover | 0.5 hour | keeps the tests |
-| 11 | The per-connection memory bench (Q4); the soak on Postgres; a monthly 6 h VPS run (Q2) | 1–2 days | slow leaks, drivers |
+| 3 | Attribute F6: a 2 h VPS run with `external` and `arrayBuffers` sampled, a periodic forced GC, and the workload bisected (§4.6) | 1 day | F6 |
+| 4 | The server suites' `afterEach` "hub empty, cache consistent, no session left" helper (I-03, I-05, I-11, I-19, I-23) | 0.5–1 day | freed state across ~40 suites |
+| 5 | The soak nightly workflow (Q1) | 0.5 day + a week of watching for flakes | trends, R1–R12 |
+| 6 | Fix F5: a stopping scheduler stops retrying and waits a bounded time. Test: shutdown under contention within 1 s | 0.5 day | F5, S4 |
+| 7 | The metadata files in the differential nightly; the runner's log tail (Q5, bunvex-9f) | 1–2 days | F4-class, usage, OCC shape |
+| 8 | F4 fix (Q3) | 0.5 day | F4 |
+| 9 | Confirm or dismiss S1–S7, one test each | 1 day | handles, backfill |
+| 10 | Jepsen post-run `/metrics` check (R6 + fds per run) | 0.5 day | freed state under faults |
+| 11 | Coverage floors: add the files the new tests cover | 0.5 hour | keeps the tests |
+| 12 | The per-connection memory bench (Q4); the soak on Postgres; a monthly 6 h VPS run (Q2) | 1–2 days | slow leaks, drivers |
