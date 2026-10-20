@@ -45,6 +45,8 @@ const ALLOWED: Record<string, string[]> = {
   cli: ["server", "core", "values", "client", "protocol"],
   // STUDY-159 T-2 (owner, 2026-10-20): a test pushes the app as `bunvex deploy` bundles it, into an engine of its own.
   testing: ["server", "core", "values", "cli", "file-storage"],
+  // STUDY-181: the port of convex-helpers. `core` only in its tests (TEST_ONLY): an Engine in memory.
+  helpers: ["server", "values", "core"],
   // STUDY-171 §7 (STUDY-168 PR 2): the function sandbox's child runs the server's own loader (`@bunvex/server/executor`);
   // §8 (PR 3): its wire carries function references (`@bunvex/protocol`'s symbols).
   sandbox: ["server", "core", "values", "protocol"],
@@ -100,6 +102,8 @@ const ALLOWED: Record<string, string[]> = {
   // STUDY-90: an example is a user's app: the public packages only (and the shared end-to-end helper).
   "examples/_harness": ["bunvex"],
 };
+/** Packages a package may import from its tests only, never from its shipped code (`src/`). */
+const TEST_ONLY: Record<string, string[]> = { helpers: ["core"] };
 /** Every example (examples/<dir>) may import what a user's app may. */
 const EXAMPLE_ALLOWED = ["bunvex", "react-query", "examples/_harness"];
 /** Imports core must never contain (rule 2). */
@@ -250,6 +254,8 @@ for (const [name, dir] of dirOfName) {
       if (targetDir !== undefined) {
         if (targetDir !== dir && !allowed.includes(targetDir))
           errors.push(`${rel}: ${name} may not import ${pkg} (allowed: ${allowed.join(", ") || "none"})`);
+        else if (TEST_ONLY[dir]?.includes(targetDir) && rel.startsWith(`${where}/src/`))
+          errors.push(`${rel}: ${name} may import ${pkg} from its tests only, not from src/`);
         if (targetDir !== dir && !declared.has(pkg))
           errors.push(`${rel}: imports ${pkg} but ${name}/package.json does not declare it`);
       } else if (
