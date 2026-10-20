@@ -2444,6 +2444,8 @@ export function createServer(opts: ServerOptions) {
       return live;
     },
     deploymentEnv,
+    // As Convex's Node executor's timeout, which bounds its `build_deps`: NODE_ACTION_USER_TIMEOUT + 5 s.
+    installTimeoutMs: functions.nodeActionTimeoutMs + 5000,
   });
   /**
    * Convex's `GET /api/v1/get_canonical_urls` (any admin: the URLs, or the server's origins) and
