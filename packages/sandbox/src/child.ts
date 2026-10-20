@@ -8,6 +8,7 @@
 // in-process, by construction; the parity test (test/analysis-parity.test.ts) checks it on every example app and
 // on the server's pushed-code fixtures. What the child adds is the process: the wall around it is the operating
 // system's (STUDY-168 PR 8), not `vm`'s.
+import { installDeterminism } from "@bunvex/core";
 import {
   type CodeVersion,
   FunctionExportError,
@@ -16,6 +17,7 @@ import {
   MissingEnvironmentVariableError,
   vmExecutor,
 } from "@bunvex/server/executor";
+import { CallRuntime } from "./child-call.ts";
 import { exportDefault } from "./default-export.ts";
 import { FrameReader, frame } from "./frames.ts";
 import { PROTOCOL_VERSION, type ToChild, type ToHost, type WireError, type WireLoadOptions } from "./protocol.ts";
@@ -33,8 +35,9 @@ const send = (m: ToHost) => {
   void out.flush();
 };
 
-/** The versions this child loaded, by request id: PR 3's calls run their functions. */
+/** The versions this child loaded, by request id: the calls name the one whose function they run. */
 const versions = new Map<number, CodeVersion>();
+const calls = new CallRuntime(send, versions);
 
 const loadOptions = (o: WireLoadOptions): LoadOptions => ({
   seed: Uint32Array.from(o.seed),
@@ -51,11 +54,12 @@ function wireError(e: unknown): WireError {
   return { kind: "Error", message: e instanceof Error ? e.message : String(e) };
 }
 
-async function handle(m: ToChild) {
+async function handle(m: Extract<ToChild, { t: "load" } | { t: "evaluate" }>) {
   const started = performance.now();
   try {
     if (m.t === "load") {
-      const version = await vmExecutor.load(m.sources, loadOptions(m.options));
+      // The `vm` executor's own version (its namespaces and handlers live here).
+      const version = (await vmExecutor.load(m.sources, loadOptions(m.options))) as CodeVersion;
       versions.set(m.id, version);
       send({ t: "loaded", id: m.id, version: describeVersion(version), loadMs: performance.now() - started });
     } else {
@@ -77,6 +81,10 @@ function badStream(why: string): never {
   process.exit(EXIT_BAD_STREAM);
 }
 
+// The deterministic globals, before any code version's contexts copy them (`contextGlobals`): in the server the
+// engine installs them at its start; this process has no engine.
+installDeterminism();
+
 send({ t: "hello", protocol: PROTOCOL_VERSION, pid: process.pid });
 
 // The host is trusted: its frames are not capped (a push's modules may be large), only checked.
@@ -96,8 +104,10 @@ for await (const chunk of Bun.file(CHANNEL).stream()) {
       badStream("a message that is not JSON");
     }
     const t = (m as { t?: unknown } | null)?.t;
-    if (t !== "load" && t !== "evaluate") badStream(`an unknown message (${String(t)})`);
-    void handle(m);
+    if (t === "call") void calls.call(m as Extract<ToChild, { t: "call" }>);
+    else if (t === "reply") calls.reply(m as Extract<ToChild, { t: "reply" }>);
+    else if (t === "load" || t === "evaluate") void handle(m as Extract<ToChild, { t: "load" } | { t: "evaluate" }>);
+    else badStream(`an unknown message (${String(t)})`);
   }
 }
 // The host closed the stream: it is done with this child.

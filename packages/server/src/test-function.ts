@@ -3,8 +3,8 @@
 // A single module the caller sends, loaded and analyzed alone (it may import only the server's modules, the
 // function tester's builders `bunvex:/_system/repl/wrappers.js` among them), whose default export, a query,
 // runs once, uncached; nothing of it is kept. `bunvex run --inline-query` and the MCP server use it.
-import { type CodeVersion, InvalidModulesError, type LoadOptions, moduleName } from "./code-version.ts";
-import { loadCode } from "./function-executor.ts";
+import { InvalidModulesError, type LoadedCode, type LoadOptions, moduleName } from "./code-version.ts";
+import { type Executor, loadCode, vmExecutor } from "./function-executor.ts";
 import { badModulePath } from "./function-path.ts";
 import type { FunctionDef, QueryDef } from "./functions.ts";
 
@@ -33,7 +33,8 @@ const canonical = (path: string) => (/\.[^/]*$/.test(path.split("/").at(-1)!) ? 
 export async function standaloneQuery(
   bundle: TestBundle,
   load: LoadOptions,
-): Promise<{ name: string; query: QueryDef }> {
+  executor: Executor = vmExecutor,
+): Promise<{ name: string; query: QueryDef; version: LoadedCode }> {
   const bad = badModulePath(bundle.path);
   if (bad) throw new TestFunctionError(bad.status, bad.code, bad.message);
   // `parse_module_environment`: as written, else from the path (`actions/` is Node's, Convex's old layout).
@@ -44,11 +45,12 @@ export async function standaloneQuery(
   if (environment !== "isolate")
     throw new TestFunctionError(400, "InvalidTestQueryEnvironment", "Test queries must use the bunvex runtime.");
   const path = canonical(bundle.path);
-  let version: CodeVersion;
+  let version: LoadedCode;
   try {
     version = await loadCode(
       [{ path, source: bundle.source, environment, ...(bundle.sourceMap ? { sourceMap: bundle.sourceMap } : {}) }],
       load,
+      executor,
     );
   } catch (e) {
     if (e instanceof InvalidModulesError)
@@ -68,5 +70,5 @@ export async function standaloneQuery(
       "UnsupportedTestQuery",
       `${found.def.kind === "mutation" ? "Mutations" : "Actions"} are not supported in the REPL yet.`,
     );
-  return { name: `${moduleName(path)}:default`, query: found.def as QueryDef };
+  return { name: `${moduleName(path)}:default`, query: found.def as QueryDef, version };
 }

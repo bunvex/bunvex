@@ -37,7 +37,8 @@ import {
 } from "./protocol.ts";
 import { type LoadedVersion, loadedVersion } from "./version.ts";
 
-const CHILD_ENTRY = join(import.meta.dir, "child.ts");
+/** The child's entry: this package's `child.ts`, on disk (a compiled executable has none yet: STUDY-171 §7.9). */
+export const CHILD_ENTRY = join(import.meta.dir, "child.ts");
 /** The child's working directory: no `bunfig.toml` there, so none applies to it. */
 const CHILD_CWD = dirname(CHILD_ENTRY);
 /** The host's knobs the child's loader reads itself, passed through when set (`code-version.ts`). */
@@ -51,7 +52,14 @@ export const HANDSHAKE_TIMEOUT_MS = 5_000;
 const STDERR_TAIL = 2048;
 
 /** Why a child is gone. */
-export type SandboxFailure = "crash" | "badMessage" | "oversize" | "handshakeTimeout" | "protocol" | "stopped";
+export type SandboxFailure =
+  | "crash"
+  | "badMessage"
+  | "oversize"
+  | "handshakeTimeout"
+  | "protocol"
+  | "stopped"
+  | "timeout";
 
 /** A request that failed because its child is gone (not an error of the app's code). */
 export class SandboxError extends Error {
@@ -73,8 +81,17 @@ export type SandboxProcessOptions = {
   entry?: string;
 };
 
-/** A version loaded in the child, and how long the child took (its own clock, request to answer). */
-export type ChildLoad = LoadedVersion & { loadMs: number };
+/**
+ * A version loaded in the child, how long the child took (its own clock, request to answer), and the id its calls
+ * name it by (the load's request id).
+ */
+export type ChildLoad = LoadedVersion & { loadMs: number; versionId: number };
+
+/** Where a call's messages go: the call's own loop (`HostCall`), which reads them in its async context. */
+export type CallSink = {
+  message(m: Extract<ToHost, { t: "op" } | { t: "done" }>): void;
+  gone(e: SandboxError): void;
+};
 
 type Pending = { resolve: (m: ToHost) => void; reject: (e: unknown) => void };
 
@@ -106,6 +123,7 @@ const wireOptions = (o: LoadOptions): WireLoadOptions => ({
 
 export class SandboxProcess {
   private readonly pending = new Map<number, Pending>();
+  private readonly calls = new Map<number, CallSink>();
   private nextId = 0;
   private readonly sink: ReturnType<ReturnType<typeof Bun.file>["writer"]>;
   private dead: SandboxError | null = null;
@@ -184,7 +202,10 @@ export class SandboxProcess {
 
   /** Loads and analyzes a code version in the child (`CodeVersion.load`'s analysis). */
   async load(sources: ModuleSource[], opts: LoadOptions): Promise<ChildLoad> {
-    const m = await this.request({ t: "load", id: 0, sources, options: wireOptions(opts) });
+    let versionId = 0;
+    const m = await this.request({ t: "load", id: 0, sources, options: wireOptions(opts) }, (id) => {
+      versionId = id;
+    });
     if (m.t !== "loaded") throw this.unexpected(m);
     let version: LoadedVersion;
     try {
@@ -192,7 +213,7 @@ export class SandboxProcess {
     } catch (e) {
       throw this.fail("badMessage", `sent a message that is not valid: loaded.version: ${(e as Error).message}`);
     }
-    return { ...version, loadMs: m.loadMs };
+    return { ...version, loadMs: m.loadMs, versionId };
   }
 
   /** A standalone module's default export, in the form its use takes (`Executor.evaluateDefault`). */
@@ -213,15 +234,47 @@ export class SandboxProcess {
     return evaluatedValue(await this.evaluate(source, opts, use));
   }
 
+  /** A new call's id: its `call`, its `op`s and their `reply`s carry it. */
+  newCallId(): number {
+    return ++this.nextId;
+  }
+
+  /**
+   * Opens call `id`: its `op`s and its `done` go to `sink`, until `done` or the child's death. Sends nothing: the
+   * caller sends the `call` (`send`).
+   */
+  openCall(id: number, sink: CallSink) {
+    if (this.dead) {
+      sink.gone(this.dead);
+      return;
+    }
+    this.calls.set(id, sink);
+  }
+
+  /** Sends a message to the child (a `call`, a `reply`); dropped once it is gone. */
+  send(m: ToChild) {
+    if (this.dead) return;
+    try {
+      this.sink.write(frame(m));
+      Promise.resolve(this.sink.flush()).catch(() => {});
+    } catch {}
+  }
+
+  /** Kills the child for `reason` (a call's backstop, a message its call cannot use). */
+  kill(reason: SandboxFailure, message: string): SandboxError {
+    return this.fail(reason, message);
+  }
+
   /** Stops the child (SIGKILL); waiting requests fail. */
   async close(): Promise<void> {
     this.fail("stopped", "was stopped");
     await Promise.all([this.proc.exited, this.drained]);
   }
 
-  private request(m: ToChild): Promise<ToHost> {
+  private request(m: ToChild, onId?: (id: number) => void): Promise<ToHost> {
     if (this.dead) return Promise.reject(this.dead);
     const id = ++this.nextId;
+    onId?.(id);
     return new Promise<ToHost>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       // A child that died meanwhile fails the request through `fail` (its exit), not through the write.
@@ -249,6 +302,13 @@ export class SandboxProcess {
       return;
     }
     if (Number.isNaN(this.spawnToReadyMs)) throw new BadMessageError(`${m.t} before hello`);
+    if (m.t === "op" || m.t === "done") {
+      const call = this.calls.get(m.id);
+      if (!call) throw new BadMessageError(`a message for no running call (${m.t} ${m.id})`);
+      if (m.t === "done") this.calls.delete(m.id);
+      call.message(m);
+      return;
+    }
     const p = this.pending.get(m.id);
     if (!p) throw new BadMessageError(`an answer to no request (${m.t} ${m.id})`);
     this.pending.delete(m.id);
@@ -304,6 +364,8 @@ export class SandboxProcess {
     this.handshake.reject(error);
     for (const p of this.pending.values()) p.reject(error);
     this.pending.clear();
+    for (const c of this.calls.values()) c.gone(error);
+    this.calls.clear();
     return error;
   }
 }
