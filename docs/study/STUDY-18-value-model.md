@@ -304,11 +304,39 @@ The other realm checks on the same path:
 
 ### 9.4 The `process` executor
 
-The `process` executor is not on main yet: it runs queries and mutations from STUDY-168 PR 3 (#750). Its codec
-(`packages/sandbox/src/wire.ts` there) carries what is not a value as its kind and class name only (`{"$x":…}`), so a
-`Set` reaches the host without its entries. Under `process` it will print `Set {…}` until the codec also carries a
-`Set`'s or `Map`'s entries, and #750's vm-vs-process parity test will then differ from `vm` for these kinds. That
-change belongs to #750, or to a PR after it.
+The bridge's codec (`packages/sandbox/src/wire.ts`, STUDY-171 §8.3) carried what is not a value as its kind and class
+name only (`{"$x":{k,c}}`). So under `process` a `Set` reached the host without its entries, and a `Date` without its
+time, so `runAt(new Date(…))` failed there too. The codec now carries three kinds with more:
+- `{"$x":{"k":"set","c":…,"e":[…]}}` and `{"$x":{"k":"map","c":…,"e":[[k,v],…]}}`: the class name and the entries,
+  encoded as any value (cycles too, a Map's pair counted as the array it is). The engine shows a Set's entries only
+  in a message, cut at 16384 characters, where each takes at least two, so at most `MAX_WIRE_ENTRIES` (16384)
+  cross. The host refuses more, a list that is not one, or a Map entry that is not a pair;
+- `{"$x":{"k":"date","c":…,"t":…}}`: the time (`getTime`, `NaN` as `{"$f":"NaN"}`).
+
+The host builds a real `Set`, `Map` or `Date` of its own. A subclass gets a prototype, between the instance and its
+kind's, that names the app's class (`Tags {…}`, as `vm` prints it), so its kind's methods still work. The forged
+`ArrayBuffer` tag needs nothing: the child's `isBytes` is the values package's, so the object crosses as a plain
+object and is stored as one.
+
+Tests:
+- `sandbox/test/wire.test.ts`: the engine's message for each kind, across the codec and under `vm`, equal (sizes,
+  nesting, subclasses, self-references, past the cap, a subclass of `Date`, the forged tag); a real host `Set`, `Map`
+  and `Date` with the entries, cycles, time and class name; the refusals.
+- `sandbox/test/bridge-parity.test.ts`: under `vm` and `process`, writes of every size and nesting, subclasses,
+  cycles, 20 000 entries, the forged tag, a scheduled `Map`, `runAt` with a `Date` and with a subclass of `Date`, a
+  nested call's `Set` argument, and returned `Set` / `Map`.
+
+Sabotage, each caught, the file restored and `git diff` clean after each:
+
+| Break (wire.ts) | Caught by |
+|---|---|
+| Set / Map back to a named object, no entries | wire (11), bridge-parity (10) |
+| a Map read as a plain named object | wire (5), bridge-parity (4) |
+| the Date's time not carried | wire (2), bridge-parity (3) |
+| a subclass's name dropped | wire (3), bridge-parity (1) |
+| no cap when encoding | wire (2), bridge-parity (1) |
+| the host takes more entries than the cap | wire (1) |
+| a Map's pair not counted as a `$c` level | wire (1) |
 
 ### 9.5 Divergences
 
