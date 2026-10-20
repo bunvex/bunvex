@@ -68,6 +68,11 @@ export type SandboxCall = {
 };
 /** The stand-ins of a sandboxed code version's queries and mutations, and how each runs. */
 export const REMOTE_FUNCTIONS = new WeakMap<FunctionDef, RemoteRunner>();
+/**
+ * The stand-ins of a sandboxed code version's room gates (AD-42: `canJoin`, `canPublish`), and how each runs: as a
+ * query in the child (STUDY-171 §12), run by `runGate` as any gate.
+ */
+export const REMOTE_GATES = new WeakMap<object, RemoteRunner>();
 
 export const isFunctionDef = (x: unknown): x is FunctionDef =>
   (typeof x === "function" || (typeof x === "object" && x !== null)) && DEFINED.has(x as object);

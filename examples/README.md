@@ -72,4 +72,5 @@ drives it in Chromium; any page error or console error fails the test.
 | [react-query](react-query) | TanStack Query (`@bunvex/react-query`), live |
 | [nextjs-app-router](nextjs-app-router) | Next.js App Router: `preloadQuery`, `usePreloadedQuery`, a Server Action |
 | [nextjs-pages-router](nextjs-pages-router) | Next.js Pages Router, and `fetchQuery` from an API route |
+| [testing](testing) | `@bunvex/testing`: the app's functions in tests, on the real engine (no front end) |
 | [users-and-clerk](users-and-clerk) | Signed-in users with Clerk (`bunvex/react-clerk`) |

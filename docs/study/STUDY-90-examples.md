@@ -82,7 +82,7 @@ unit tests (`bun run test:examples`, with a 120 s timeout per test: each deploys
 | `python-quickstart` | waits | a Python client |
 | `zod-validation-ts`, `sessions`, `presence-facepile`, `presence-typing-indicator` | waits | `convex-helpers` or components |
 | `html` | waits | a browser bundle of the client for `<script>` |
-| `convex-test` | waits | `@bunvex/testing` |
+| `convex-test` | built as `testing` (STUDY-159 PR 4) | `@bunvex/testing`; the globals and jsdom checks are the mock's and Vitest's, left out |
 | `users-and-auth`, `clerk`, `users-and-clerk-webhooks`, `react-native`, `tour-chat` | later batches | to check one by one |
 
 **Templates** (`bun create bunvex`): a second step, once the first examples are in; each template is close to
