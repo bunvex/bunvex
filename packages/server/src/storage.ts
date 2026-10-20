@@ -28,6 +28,7 @@ import { decodeId, type GenericId } from "@bunvex/values";
 import { readCanonicalUrls } from "./canonical-urls.ts";
 import { INTERNAL_SERVER_ERROR_MESSAGE } from "./errors.ts";
 import { inNamespace } from "./scheduler.ts";
+import type { StorageActionWriter, StorageReader } from "./storage-api.ts";
 import { SpecBlob } from "./web-blob.ts";
 
 /** The end of Convex's message for an id that does not parse, its line break and indentation included. */
@@ -258,7 +259,7 @@ export class FileStorage {
    * `ctx.storage` in a query: getUrl, getMetadata (deprecated). `component`: the function's (its `_components` id;
    * null the app's), whose namespace `db` reads in.
    */
-  reader(db: Tx, component: string | null = null) {
+  reader(db: Tx, component: string | null = null): StorageReader {
     return {
       getUrl: async (storageId: string) => {
         if (storageId === undefined) throw new TypeError("Must provide arg 1 `storageId` to `getUrl`");
@@ -292,7 +293,7 @@ export class FileStorage {
    * `ctx.storage` in an action (and an HTTP action): each call its own transaction; get and store, metered
    * through `meter` as Convex's action storage calls (STUDY-71): a call and the bytes stored or read.
    */
-  actionWriter(meter?: StorageMeter, component: string | null = null) {
+  actionWriter(meter?: StorageMeter, component: string | null = null): StorageActionWriter {
     // In the action's component's namespace (STUDY-157); the canonical URLs read are global.
     const q = <T>(f: (db: Tx) => Promise<T>) => this.engine.query((db) => inNamespace(db, component, () => f(db)));
     // Convex's action storage callbacks (all but generateUploadUrl) refuse while the deployment is stopped.
@@ -302,8 +303,10 @@ export class FileStorage {
         return f(db);
       });
     return {
-      getUrl: (storageId: string) => running((db) => this.reader(db, component).getUrl(storageId)),
-      getMetadata: (storageId: string) => running((db) => this.reader(db, component).getMetadata(storageId)),
+      // Any string reaches the runtime (a legacy id, a wrong one): the reader checks it, as Convex's syscalls do.
+      getUrl: (storageId: GenericId<"_storage">) => running((db) => this.reader(db, component).getUrl(storageId)),
+      getMetadata: (storageId: GenericId<"_storage">) =>
+        running((db) => this.reader(db, component).getMetadata(storageId)),
       generateUploadUrl: async () => this.uploadUrl(await q((db) => this.originIn(db)), component),
       delete: (storageId: string) =>
         this.engine.mutation(async (db) => {

@@ -762,6 +762,7 @@
       "devDependencies": {
         "@bunvex/persistence": "workspace:*",
         "jose": "^6.2.12",
+        "typescript": "^5.9.0",
       },
       "peerDependencies": {
         "@bunvex/persistence": "workspace:^",
