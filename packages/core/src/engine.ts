@@ -1151,7 +1151,9 @@ export class Engine {
   })();
 
   private startIndexWorker() {
-    if (!this.backfillEnabled) return;
+    // Not once the engine is closing: its stop has run or is running, and nothing would stop a worker started now
+    // (a push that lands during `close()`, STUDY-174 S4), as nothing restarts Convex's aborted worker.
+    if (!this.backfillEnabled || this.closed) return;
     this.indexWorker ??= new IndexWorker(this.workerHost(), this.opts.indexBackfill);
     this.indexWorker.start();
   }

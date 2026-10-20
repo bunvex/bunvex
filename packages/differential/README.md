@@ -32,6 +32,9 @@ backend is always started with `--disable-beacon`.
 - `test/cross-open.test.ts` (STUDY-133 PR 9): a store each binary wrote, opened by the other (same SQLite file
   and storage, the app of `cross-open-app/` redeployed by its CLI), read back by every kind of index, written,
   and read back by the first. Local only: the nightly does not run it.
+- `test/backfill-progress.test.ts` (STUDY-174 S1): a push adds an index to a table with documents (the app of
+  `backfill-progress-app/`); once backfilled, the `_index_backfills` row is read from each store's SQLite file and
+  compared: the count, the table's total, the cursor. Local only.
 - `test/component-store.test.ts` (STUDY-152 steps 1–2): a store Convex writes with the components of
   `component-store-app/` (a `counter` component, mounted twice, with a table of the root's name), opened by bunvex
   (the root's tables only, read, written, listed by `data`), then by Convex again (its components intact). Run by
