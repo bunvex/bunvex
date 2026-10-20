@@ -1,8 +1,8 @@
 # STUDY-174 — Catching silent bugs: invariants, a soak test, metadata differentials
 
 - **Status:** decided (owner, 2026-10-19: §8 Q1–Q5 as recommended, §10). F4 is fixed (§10.2); the other findings of
-  §3.3 are listed, not fixed. The soak nightly (Q1, §9 step 5) is `.github/workflows/soak-nightly.yml`, with R1
-  report-only until Q6 is decided (§10.3). Q7 (R8 on low-rate operations) is decided and done (§10.3). Q6 is
+  §3.3 are listed, not fixed. The soak nightly (Q1, §9 step 5) is `.github/workflows/soak-nightly.yml`, with every
+  rule judged (R1 report-only until Q6 was decided, §10.3). Q7 (R8 on low-rate operations) is decided and done (§10.3). Q6 is
   decided (owner, 2026-10-21): bunvex keeps its 256 MiB page cache (DV-550), with a setting for it (AD-46).
 - **Why now:** [#751](https://github.com/bunvex/bunvex/pull/751) found that since 2026-10-03 every cached query result
   expired after 17 s. [STUDY-58](STUDY-58-app-metrics.md)'s `AppMetrics` read the deterministic `Date.now` inside each
@@ -866,7 +866,7 @@ confirmed.
 | 2 | Fix F2 and F3 with one capped `timerDelay` helper in core, a test per loop with an injected clock, and the I-25 rule in `check:deps` (rule 6, §3.1) in the same PR, so a new uncapped delay fails CI | 0.5 day | F2, F3, S8, and new ones |
 | 3 | ~~Attribute F6~~ done (§4.7): SQLite's 256 MiB page cache, a plateau. ~~Measure Q6~~ done (§4.8): the default is ~20 % slower on in-memory reads; Q6 is the owner's | — | F6 |
 | 4 | The server suites' `afterEach` "hub empty, cache consistent, no session left" helper (I-03, I-05, I-11, I-19, I-23) | 0.5–1 day | freed state across ~40 suites |
-| 5 | ~~The soak nightly workflow (Q1)~~ done (§10.3), R1 report-only until Q6; then a week of watching for flakes | 0.5 day + a week of watching | trends, R1–R12 |
+| 5 | ~~The soak nightly workflow (Q1)~~ done (§10.3), every rule judged since Q6 (R1 with the page cache filled first); then a week of watching for flakes | 0.5 day + a week of watching | trends, R1–R12 |
 | 6 | Fix F5: a stopping scheduler stops retrying and waits a bounded time. Test: shutdown under contention within 1 s | 0.5 day | F5, S4 |
 | 7 | The metadata files in the differential nightly (done: `cache-metadata`, `read-count`, `unawaited-operations`, `http-action-log-route` in `scripts/nightly.sh`, about 40 s a night); the runner's log tail (Q5, bunvex-9f, next) | 1–2 days | F4-class, usage, OCC shape |
 | 8 | F4 fix (Q3) | 0.5 day | F4 |
@@ -1025,18 +1025,17 @@ assignment. The rule of this round is no benchmarks while other sessions run the
 - a pull request that changes the workflow or `bench/soak/**` runs a 5-minute smoke. It judges nothing (too few
   samples past the warm-up), so only exit 2 fails it; a failed rule there is a notice.
 
-**R1 is report-only until Q6 is decided.** At the soak's write rate SQLite's 256 MiB page cache needs ~70 minutes
+**R1 was report-only until Q6 was decided** (it is judged again: "R1 judged" below). At the soak's write rate SQLite's 256 MiB page cache needs ~70 minutes
 to fill (§4.7), longer than the run, so R1 would fail every night for a known, bounded reason. Rather than drop
 the rule, the soak has a switch:
 - `soak.ts --report-only <ids>` (comma-separated rule ids, `parseReportOnly` in `rules.ts`). The listed rules are
   still judged, printed and kept in `report.json` (`reportOnly: true`) and `report.md` ("fail (report-only)"); only
   the exit code (`exitCode`) leaves them out. An unknown id is exit 2, so a typo cannot silence a rule. Ids are exact:
   `R1` is not R10, R11 or R12. Empty by default: a local run judges every rule.
-- The workflow's `SOAK_REPORT_ONLY: R1` sets it. A failed report-only rule also shows as a warning on the run.
+- The workflow's `SOAK_REPORT_ONLY` sets it (`R1` until Q6; empty now). A failed report-only rule also shows as a warning on the run.
   The dispatch input `report_only` overrides it for one run (`none`: every rule fails the job).
-- **Once Q6 is decided, empty `SOAK_REPORT_ONLY`**, in the same PR as the decision: dropping the pragma (the
-  recommendation) makes R1 pass in 30 minutes (§4.7, `f6-sqlite-cache-2mib`); keeping 256 MiB needs the memory
-  warm-up to see the page cache first (Q6).
+- **Once Q6 is decided, empty `SOAK_REPORT_ONLY`.** Q6 kept 256 MiB, so the memory warm-up first had to see the
+  page cache: done, below.
 - Every other rule, R2–R12, fails the job.
 
 `rules.test.ts` (18 tests now) covers the switch: a leaking run with R1 report-only exits 0 and still reports R1
@@ -1114,6 +1113,54 @@ the threshold; the HTTP queries and the canary have ~150, the hot counter ~148, 
 
 One run on a 2-vCPU machine, so the week of watching (§9 step 5) still applies. If the hot counter's p50 is
 what fails next, look at that limit first.
+
+**R1 judged (Q6 decided, 2026-10-21).** The owner kept the 256 MiB page cache (DV-550), so the soak fills it
+instead of waiting ~70 minutes for the store to grow past it, and `SOAK_REPORT_ONLY` is empty:
+- **The ballast** (`app/ballast.ts`, `soak.ts --page-cache-fill-mib`, default 320):
+  - Before the workload, the soak writes 320 MiB of 8 000-byte documents through the backend, 64 a mutation. It
+    paces them at ~2 MiB a second, half the deployment's write-rate limit (4 MiB), so the crons keep their share.
+    A write the limit refuses anyway is retried; its log line is not an R12 error. The first try, unpaced, hit the
+    limit 55 times, and R12 failed.
+  - At t = 0, beside the workload, the soak reads the ballast once (`paginate`, 128 a page). The read takes ~5 s and
+    fills SQLite's cache to its budget: RSS is ~500 MB at t = 15 s, against ~170 MB on main.
+  - `RunData.pageCacheFilledSeconds` records when the read finished. `memoryWarmup` judges R1 and R2 no earlier;
+    a fill that did not finish means memory is not judged, and the report says why.
+- **A third of the run, at least.** The ballast read also fills the 32 MiB index cache in seconds. That cache's
+  filling used to hold memory's judgement back to ~751 s, and it turns out it was also covering the JS heap's own
+  warm-up. Re-judging main's 45-minute runs F and G from other starts gives this heap slope:
+
+  | judged from | heap slope (MB/min) |
+  |---|---|
+  | 541 s | 0.35–0.46 |
+  | 751 s | 0.10–0.20 |
+  | 900 s | −0.13–0.14 |
+
+  The limit is 0.3, so judging from 541 s would fail R2. `memoryWarmup` now also waits for `MEMORY_WARMUP_MIN_SHARE`
+  = 1/3 of the run, 900 s for 45 minutes.
+- **Tests** (`rules.test.ts`, 21 now), on synthetic runs:
+  - a page cache filling for 20 minutes fails R1 when judged as before, and passes once judged from its fill;
+  - a 2 MB/min leak after the fill still fails;
+  - an unfinished fill is "not judged";
+  - a heap warming for 15 minutes passes from a third of the run, and fails R2 without that bound.
+- **Sabotage**, each change alone, then restored (`cmp` identical):
+  - the fill's time dropped from `memoryWarmup`: 1 test fails;
+  - the third-of-the-run bound dropped: 2 fail.
+
+**Proof on the test VPS** (Bun 1.4.2, the workflow's soak step taken from the YAML verbatim and run under `bash -e`,
+event `schedule`, `SOAK_REPORT_ONLY` read from the job's env, so empty; results in `bench/soak/results/q6-*`):
+
+| Run | Setup | Exit | Result |
+|---|---|---|---|
+| H | 45 min, the ballast, memory judged from the warm-up, before the third-of-the-run bound | 1 | R1 0.6 MB/min and R2 0.3 MB/min, judged from 541 s, the heap's warm-up. R8: the canary's p99 54.6 → 85.4 ms, and the hot counter's p50 68.1 → 88.6 ms (1.30×). Its `report.json` judged again with the bound: R1 0.2, R2 −0.0 MB/min, both pass from 902 s; R8 as before |
+| I | **45 min, the step as written**, this branch | **0** | **R1 passes: 0.3 MB/min, +5.6 MB, judged from 902 s**, median RSS 608 MB. R2 0.3 MB/min (at its limit), −0.7 MB third to third. Every other rule passed; R8's hot counter p50 77.0 → 82.5 ms |
+| J | 20 min, the step as written, **sabotage**: the backend keeps 1 MiB every 10 s (`local-backend.ts`, 6 MB/min outside the JS heap) | **1** | **R1 fails: 9.4 MB/min, +82.8 MB**, judged from 406 s. R2 fails with it (8.3 MB/min: the backend's heap gauge counts the buffers), and so do three R8 operations (GC pressure). Everything else passed; R12 no errors |
+
+**What to watch** (the week of §9 step 5):
+- R8's hot-counter p50 runs at ~1.3× its first third on main as well: G 1.29× passed, H 1.30× failed. It does not
+  depend on the page cache: G had no ballast.
+- R2 passed I at its limit.
+
+If either fails a night, look at that limit first.
 
 **Not here.** The monthly 6-hour VPS soak (Q2) is §9 step 12, once this job has been green for a week; nothing in CI
 schedules anything against the VPS.
