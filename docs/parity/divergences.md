@@ -486,7 +486,11 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-None as of 2026-10-20.
+| ID | bunvex (proposed) | Convex | Observable | Why | Source |
+|---|---|---|---|---|---|
+| DV-540 | `@bunvex/testing` behaves as the real backend: OCC, Convex's limits on, real IDs, the planner's and search's real results, real storage URLs, deterministic `Date` and `Math.random`, retried scheduled mutations | convex-test is a mock: serialized transactions, limits off by default, fake IDs and search, fake URLs | yes (a test's results) | the real engine runs in the test | [STUDY-159 §7](../study/STUDY-159-testing.md#7-questions-for-the-owner) |
+| DV-541 | A test's functions see the env given to `bunvexTest`, not the host's `process.env` | convex-test reads `process.env` | yes (tests) | as a deployment; no `vi.stubEnv` in `bun test` | [STUDY-159 §7](../study/STUDY-159-testing.md#7-questions-for-the-owner) |
+| DV-542 | `@bunvex/testing` runs under `bun test` (Vitest only under Bun), not on Node | convex-test runs under Vitest's edge-runtime | yes (the test runner) | the engine uses Bun's APIs | [STUDY-159 §7](../study/STUDY-159-testing.md#7-questions-for-the-owner) |
 
 DV-521 (STUDY-161 §16 Q2) was decided by the owner (2026-10-15: accept, the module reads predicted from bunvex's bundle as built) and is in [Decided divergences](#decided-divergences).
 
