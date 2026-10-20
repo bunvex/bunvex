@@ -27,6 +27,7 @@ import {
   inHandleScope,
   type LogLine,
   SpecBlob,
+  setActionTimerCallback,
   setServiceCallContext,
   trackedActionTimers,
   vectorSearchFilter,
@@ -34,7 +35,8 @@ import {
 } from "@bunvex/server/executor";
 import { isBytes } from "@bunvex/values";
 import { ChildCallBase, rebuiltError, running, type Send, thrownValue } from "./child-call.ts";
-import type { WireActionCall, WireLogLine, WireReply, WireReport, WireThrown } from "./protocol.ts";
+import type { ToHost, WireActionCall, WireLogLine, WireReply, WireReport, WireThrown } from "./protocol.ts";
+import { checkpoint, checkpointOf, track, untrack } from "./rejections.ts";
 import { Streams } from "./streams.ts";
 import { decode, encode } from "./wire.ts";
 
@@ -52,13 +54,29 @@ setFetchSender(() => runningAction()?.fetch ?? noFetch);
 setFetchSignal(() => runningAction()?.signal ?? null);
 // `getServiceToken` / `getServiceUrl` exist in actions only (STUDY-151 §4).
 setServiceCallContext(() => runningAction() !== null);
+// A timer's callback resumes its action's code from a macrotask of Bun's: run in a checkpoint of that action, so what
+// it leaves rejected with no handler fails it (`rejections.ts`). Its async context is the action's (Bun keeps it).
+setActionTimerCallback(
+  (callback) =>
+    function (this: unknown, ...args: unknown[]) {
+      let out: unknown;
+      checkpoint(runningAction()?.id ?? null, () => {
+        out = callback.apply(this, args);
+      });
+      return out;
+    },
+);
 
 const noFetch = (() =>
   Promise.reject(new TypeError("fetch is not available outside a running action"))) as unknown as typeof fetch;
 
+/** Which call each stream is for, by its id: the host's (`in`, its chunks and their end) and the child's (`out`). */
+export type StreamOwners = { in: Map<number, number>; out: Map<number, number> };
+
 /** The child's actions: each call by id, and the byte streams to and from the host. */
 export class ActionRuntime {
   readonly streams: Streams;
+  readonly owners: StreamOwners = { in: new Map(), out: new Map() };
   private readonly calls = new Map<number, ChildActionCall>();
 
   constructor(
@@ -73,16 +91,16 @@ export class ActionRuntime {
   }
 
   async call(m: WireActionCall) {
-    const call = new ChildActionCall(m, this.send, this.streams);
+    const call = new ChildActionCall(m, this.send, this.streams, this.owners, () =>
+      call.whenAnswered(() => {
+        this.calls.delete(m.id);
+        call.forgetStreams();
+      }),
+    );
     this.calls.set(m.id, call);
-    try {
-      const f = this.versions.get(m.version)?.functions.get(m.fn);
-      if (!f || f.kind !== "action") throw new Error(`the function ${m.fn} is not an action of this version`);
-      await call.run(f.handler as (ctx: unknown, args: unknown) => unknown);
-    } finally {
-      call.whenAnswered(() => this.calls.delete(m.id));
-      call.ended();
-    }
+    const f = this.versions.get(m.version)?.functions.get(m.fn);
+    if (f?.kind !== "action") call.failToStart(new Error(`the function ${m.fn} is not an action of this version`));
+    else await call.run(f.handler as (ctx: unknown, args: unknown) => unknown);
   }
 
   /** The host's answer to an action's operation: false when the call is not an action's. */
@@ -139,7 +157,12 @@ class ChildActionCall extends ChildCallBase {
   private flushing = false;
   /** Set once the host cut the action off: what every operation now throws. */
   private cut: unknown = null;
+  /** Set once the action ended (answered, cut off, or failed of a rejection): nothing more is sent for it. */
   private done = false;
+  /** Its answer once the handler settled, sent at the end of the checkpoint it settled in (`checkpointed`). */
+  private outcome: ToHost | null = null;
+  /** The streams it took or sent (`StreamOwners`), forgotten with it. */
+  private readonly streamIds: { in: number[]; out: number[] } = { in: [], out: [] };
   private lastOp = 0;
   /** Operations started whose arguments are still being made (`later`): `done` waits for them. */
   private readonly preparing = new Set<Promise<void>>();
@@ -151,8 +174,73 @@ class ChildActionCall extends ChildCallBase {
     private readonly m: WireActionCall,
     send: Send,
     private readonly streams: Streams,
+    private readonly owners: StreamOwners,
+    private readonly forget: () => void,
   ) {
     super(m.id, send);
+    track(m.id, this);
+  }
+
+  /** The host's stream `s`, read by this action. */
+  private receive(s: number): ReadableStream<Uint8Array> {
+    this.owners.in.set(s, this.id);
+    this.streamIds.in.push(s);
+    return this.streams.receive(s);
+  }
+
+  /** `source` sent to the host as this action's stream. */
+  private sendStream(source: Parameters<Streams["send"]>[0]): number {
+    const s = this.streams.send(source);
+    this.owners.out.set(s, this.id);
+    this.streamIds.out.push(s);
+    return s;
+  }
+
+  forgetStreams() {
+    for (const s of this.streamIds.in) this.owners.in.delete(s);
+    for (const s of this.streamIds.out) this.owners.out.delete(s);
+  }
+
+  /**
+   * The handler settled: the answer goes at the end of the checkpoint it settled in, once Bun reported what that
+   * drain left rejected with no handler (Convex checks after each microtask checkpoint, the last one included:
+   * `environment/action/mod.rs`). Settled outside a checkpoint of its own, it checks in one of its own next.
+   */
+  private settled(message: ToHost) {
+    if (this.cut !== null || this.done) return;
+    this.outcome = message;
+    if (checkpointOf() !== this.id) setImmediate(() => checkpoint(this.id, () => {}, false));
+  }
+
+  checkpointed() {
+    const message = this.outcome;
+    if (message === null || this.cut !== null || this.done) return;
+    this.outcome = null;
+    this.send(message);
+    this.ended();
+  }
+
+  unhandled(reason: unknown) {
+    if (this.cut !== null || this.done) return;
+    // Convex terminates the isolate there: the action fails with that error, the operations it had not taken the
+    // answer of are its unawaited ones, and no more of its code runs.
+    this.terminated = true;
+    this.outcome = null;
+    this.send({
+      t: "done",
+      id: this.id,
+      ok: false,
+      error: this.rejected(reason),
+      report: this.report(),
+      pending: this.unanswered(),
+    });
+    this.ended();
+  }
+
+  /** The call could not start (a broken host's): it fails with `e`. */
+  failToStart(e: unknown) {
+    this.send({ t: "done", id: this.id, ok: false, error: this.thrown(e), report: this.report(), pending: [] });
+    this.ended();
   }
 
   get signal(): AbortSignal {
@@ -191,6 +279,9 @@ class ChildActionCall extends ChildCallBase {
     if (this.cut !== null || this.done) return;
     const error = errorFromWire(w);
     this.cut = error;
+    this.outcome = null;
+    untrack(this.id);
+    this.forget();
     this.lines.length = 0;
     this.endTimers();
     this.send({ t: "cancelled", id: this.id });
@@ -209,9 +300,11 @@ class ChildActionCall extends ChildCallBase {
   /** Clears the timers its code set (none before it ran). */
   private endTimers: () => void = () => {};
 
-  /** The handler settled (or the call could not start): nothing more is sent for it, and its timers are cleared. */
-  ended() {
+  /** The action ended: nothing more is sent for it, and its timers are cleared. */
+  private ended() {
     this.done = true;
+    untrack(this.id);
+    this.forget();
     this.endTimers();
   }
 
@@ -301,7 +394,7 @@ class ChildActionCall extends ChildCallBase {
         pending: this.unanswered(),
       };
     }
-    if (this.cut === null && !this.done) this.send(message);
+    this.settled(message);
   }
 
   // ------------------------------------------------------------------ storage
@@ -311,7 +404,7 @@ class ChildActionCall extends ChildCallBase {
     if (d === null) return null;
     const parts: (ArrayBuffer | Uint8Array)[] = [];
     if (d.b !== undefined) parts.push(d.b);
-    else if (d.s !== undefined) for await (const c of this.streams.receive(d.s)) parts.push(c);
+    else if (d.s !== undefined) for await (const c of this.receive(d.s)) parts.push(c);
     return new SpecBlob(parts, { type: d.type });
   }
 
@@ -352,7 +445,7 @@ class ChildActionCall extends ChildCallBase {
   /** A `Blob` for the host: its type and size, its bytes inline or as a stream. */
   private async file(blob: Blob): Promise<WireFile> {
     if (blob.size <= INLINE_BYTES) return { type: blob.type, size: blob.size, b: await blob.arrayBuffer() };
-    return { type: blob.type, size: blob.size, s: this.streams.send(blob.stream()) };
+    return { type: blob.type, size: blob.size, s: this.sendStream(blob.stream()) };
   }
 
   // ------------------------------------------------------------------ fetch
@@ -370,7 +463,7 @@ class ChildActionCall extends ChildCallBase {
             method: input.method,
             headers: [...input.headers],
             redirect: input.redirect,
-            body: input.body === null ? null : { kind: "stream", s: this.streams.send(input.body) },
+            body: input.body === null ? null : { kind: "stream", s: this.sendStream(input.body) },
           };
         } else request.input = String(input);
         if (init !== undefined && init !== null) request.init = await this.describeInit(init);
@@ -395,7 +488,7 @@ class ChildActionCall extends ChildCallBase {
       // An abort while the body is read fails the read, as the host's response's does.
       signal.addEventListener("abort", onAbort, { once: true });
     }
-    const body = d.body === null ? null : this.streams.receive(d.body);
+    const body = d.body === null ? null : this.receive(d.body);
     const response = new Response(body, { status: d.status, statusText: d.statusText, headers: d.headers });
     // Its reads fail as the host's response's would have (`isolateFetch`'s), naming its URL.
     return asActionResponse(
@@ -423,7 +516,7 @@ class ChildActionCall extends ChildCallBase {
     if (body === undefined) return { kind: "undefined" };
     if (body === null) return null;
     if (typeof body === "string") return { kind: "text", text: body };
-    if (body instanceof ReadableStream) return { kind: "stream", s: this.streams.send(body) };
+    if (body instanceof ReadableStream) return { kind: "stream", s: this.sendStream(body) };
     if (body instanceof Blob) return { kind: "blob", file: await this.file(body) };
     // The app's `ArrayBuffer` is its context's, not this realm's: told by its slot, not by `instanceof`.
     if (isBytes(body) || ArrayBuffer.isView(body)) {
