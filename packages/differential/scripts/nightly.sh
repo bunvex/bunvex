@@ -43,6 +43,15 @@ if ! bun test test/component-definitions.test.ts; then
   fail "A component definition differs." "bun test test/component-definitions.test.ts"
 fi
 
+# What the log stream says about each call, compared on both (STUDY-174 §5, Q5): the cache's hits and misses and
+# their expiry, the read-limit warning and error, unawaited operations, an HTTP action's log lines. About 40 s,
+# most of it the cache file's 19 s wait.
+for f in cache-metadata read-count unawaited-operations http-action-log-route; do
+  if ! bun test "test/$f.test.ts"; then
+    fail "The log stream's metadata differs ($f)." "bun test test/$f.test.ts"
+  fi
+done
+
 end=$(( $(date +%s) + MINUTES * 60 ))
 batches=0
 while [ "$(date +%s)" -lt "$end" ]; do
