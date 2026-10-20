@@ -27,7 +27,10 @@ export function streamOf(body: ReadableStream<Uint8Array> | Blob | Uint8Array): 
   return new Blob([body as Uint8Array<ArrayBuffer>]).stream();
 }
 
-/** Feed each chunk to `write`, hashing and counting as it goes. */
+/**
+ * Feed each chunk to `write`, hashing and counting as it goes. A write that fails cancels the body with its error,
+ * so its source stops (STUDY-174 S3), as Convex's upload stream is dropped with a failed write.
+ */
 export async function pumpHashing(
   body: ReadableStream<Uint8Array> | Blob | Uint8Array,
   write: (chunk: Uint8Array) => Promise<unknown> | unknown,
@@ -40,7 +43,12 @@ export async function pumpHashing(
     if (done) break;
     hasher.update(value);
     size += value.byteLength;
-    await write(value);
+    try {
+      await write(value);
+    } catch (e) {
+      await reader.cancel(e).catch(() => {});
+      throw e;
+    }
   }
   return { size, sha256: new Uint8Array(hasher.digest()) };
 }
