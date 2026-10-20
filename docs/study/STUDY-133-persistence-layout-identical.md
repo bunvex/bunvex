@@ -380,7 +380,7 @@ goes away), so sync-protocol `ts` values and `_creationTime`-independent cursors
 | L10 | index key split | SQLite: whole key, PK `(index_id, key, ts)`; PG: `key_sha256` = SHA-256 of the full key, PK `(index_id, key_sha256, ts)` + `(index_id, key_prefix, key_sha256)`; MySQL v5: PK `(index_id, key_prefix, key_sha256, ts)` | SQLite whole key; PG/MySQL `key_suffix_hash` (hash of the suffix), unique `(index_id, key_prefix, key_suffix_hash, ts desc)` |
 | L11 | index read join | the document **at the entry's exact ts** | newest version ≤ ts (DV-67) |
 | L12 | extra tables | PG/MySQL `leases (id, ts)`, `read_only (id)`; SQLite none | `bunvex_lease` (PG/MySQL), `read_only` everywhere, ts indexes |
-| L13 | SQLite settings | no pragmas: rollback journal, default sync | WAL, `synchronous=full`, temp_store, cache_size; a `.lock` + `.lock.holder` next to the file |
+| L13 | SQLite settings | no pragmas: rollback journal, default sync, default `cache_size` (2 000 KiB) | WAL, `synchronous=full`, temp_store, `cache_size` 256 MiB (measured against the default in [STUDY-174 §4.8](STUDY-174-silent-bugs.md#48-q6-measured-sqlites-default-page-cache-against-256-mib-on-reads-2026-10-20): ~20 % faster on in-memory reads, ~300 MiB more RSS; STUDY-174 Q6 open); a `.lock` + `.lock.holder` next to the file |
 | L14 | open check | none (IF NOT EXISTS) | `layout_version` record; refuses Convex's tables (C10/K22) |
 | L15 | Postgres/MySQL database | instance name with `-`→`_`, set by the server | taken from the URL as given |
 

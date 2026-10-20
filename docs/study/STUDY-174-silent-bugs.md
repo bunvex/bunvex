@@ -40,7 +40,9 @@ that gap:
   pilots on the test VPS (12, 12, 30 and 25 minutes) flagged F1 and F2 on their own, with no knowledge of either. They
   also found a sixth, F6: resident memory grows about 5 MB a minute under steady load while the JS heap stays flat
   (§4.6). F6 is now attributed (§4.7): a plateau, not a leak. It is SQLite's page cache, which bunvex sizes at
-  256 MiB, filling as the database file grows; it levels off at that budget.
+  256 MiB, filling as the database file grows; it levels off at that budget. §4.8 measures what SQLite's default,
+  Convex's, would cost in read speed: ~20 % on reads whose working set is past 2 MiB but in memory, nothing when
+  the disk is the bottleneck. Q6 is open again, with the numbers.
 - **(3) Metadata differentials against Convex's binary.** A prototype in `packages/differential` compares the query
   cache's hits and misses as the function log stream shows them on both backends. It failed on the pre-#751 main
   exactly where #751 says, and passes on main now that #751 is merged (§5.3).
@@ -510,7 +512,9 @@ bunvex opens its store with `pragma cache_size = -262144` (`packages/core/src/pe
 grows 3.8 MB a minute, from the document log: it keeps every version for 14 days, as Convex's does (STUDY-33). The
 cache follows the file at about 1.4 MB of memory per MB of file, then stops at its budget. Convex sets no pragma
 (`crates/sqlite/src/lib.rs:93-99`: `Connection::open`, then the tables), so it runs with SQLite's default,
-2 000 KiB. rusqlite's bundled build does not change that default either. STUDY-133 lists that difference as L13, but no DV records it.
+2 000 KiB. rusqlite's bundled build does not change that default either. STUDY-133 lists that difference as L13.
+DV-411 names `cache_size` among the pragmas bunvex keeps, but its decision (#472) was about WAL; the size itself
+was never studied.
 
 **How it was found.** All the runs were on the test VPS, the same machine as §4.6, on main at `9254fa5c`. They
 used `soak.ts --probe`, which preloads `bench/soak/probe.ts` into the backend. Every 15 s the probe records:
@@ -571,6 +575,8 @@ logtail,clients`) are in `soak.ts` for the next trend, but these runs did not ne
   against 59–84 ms, and the sync mutation p50 27 ms against 29 ms. That is one run each on a 2-vCPU machine, with
   the file (≤ 120 MB) in the OS page cache, so it shows no regression on this workload, not on every one. The index
   cache (512 MiB by default) serves the hot index reads in either case.
+  **Superseded by §4.8:** on a store bigger than memory, and on reads the index cache does not serve, the default
+  is ~20 % slower.
 
 **Seen in the 2-hour run, not F6:**
 - R11 failed at 73 % of a core: F2's far-future job (#757).
@@ -578,6 +584,91 @@ logtail,clients`) are in `soak.ts` for the next trend, but these runs did not ne
   seconds. `probe.ts` now writes its dumps before the snapshot, so a snapshot no longer inflates them.
 - The database file reached 437 MB in 2 hours under the soak's steady writes. That is the 14-day document retention, on
   disk, the same as Convex's.
+
+### 4.8 Q6 measured: SQLite's default page cache against 256 MiB, on reads (2026-10-20)
+
+The owner's decision (2026-10-20): measure first, then match Convex if the default is not meaningfully slower
+(p99 within ~10 % and throughput within ~5 %). **It is meaningfully slower** wherever reads are CPU-bound and their
+working set is past 2 MiB: 15–22 % fewer calls a second, and p99 up to 22 % higher. It is not slower when the disk
+is the bottleneck, or when the working set is tiny. So this PR changes no product code, and Q6 goes back to the owner.
+
+**How.** `bench/sqlite-cache/` (results in `results/`, the table in `results/summary.txt`):
+- **Machine.** The test VPS: 2 vCPU, 8 GB, Ubuntu 24.04, cgroup v2, a cloud disk. No other backend ran during any run
+  (each result records it). The repository is main at `65fd85c7`, on a copy patched by `patch-backend.ts` so that the
+  store reads `cache_size` from the environment. With no value set, the store sets no pragma (Convex's open), and
+  every run checks what the connection got: `-2000` or `-262144`.
+- **What runs.** The real local backend (`packages/bunvex/bin/local-backend.ts`, SQLite) serves an app of one
+  table: ~1 KB documents in 1 000 groups, with an index on `(group, n)`. The default index cache (512 MiB) and query
+  cache are left as they are.
+- **The workload.** A closed loop of 16 HTTP clients (`BunvexHttpClient`) with random arguments:
+  - 40 %: a point `db.get` by id;
+  - 40 %: an index range read of 20 (`withIndex(...).gte(...).take(20)`);
+  - 20 %: a paginated walk of up to 4 pages of 25 (`paginate`).
+
+  `uniform` reads every group; `hot` reads 20 of the 1 000 (2 %).
+- **The stores**, seeded through the same backend:
+  - *big:* 5 M documents, a 10.1 GB file, more than the machine's 8 GB. The backend runs in a systemd scope with
+    `MemoryMax=2G`, which counts the OS page cache it fills, so the file is 5× what it may cache. The 256 MiB cache
+    comes out of the same 2 GB.
+  - *small:* 100 k documents, a 202 MB file, no limit: it fits both the 256 MiB cache and the OS page cache.
+- **Each run.** The OS page cache is dropped, the backend starts, then a warm-up runs (90 s on the big store, 300 s
+  for its second hot round, 30 s on the small one), then 180 s (big) or 120 s (small) are measured.
+- **The order.** Each store and mode runs both caches in ABBA order, twice on the small store, so drift over time
+  does not favour one side.
+
+**Results**, the mean of the repetitions (each repetition's value is in `results/summary.txt`):
+
+| store | mode, warm-up | cache | calls/s | p50 ms | p95 ms | p99 ms | RSS MB | CPU ms/call | `read()` KiB/call |
+|---|---|---|---|---|---|---|---|---|---|
+| big | hot, 300 s (steady state) | 256 MiB | **549** (549, 548) | 25.4 | 58.6 | **86.4** | 1 312 | 1.92 | 118 |
+| big | hot, 300 s (steady state) | default | **428** (441, 416) | 32.8 | 73.0 | **105.0** | 947 | 2.44 | 1 130 |
+| big | hot, 90 s | 256 MiB | 420 (507, 333) | 28.2 | 92.5 | 247.2 | 1 236 | 2.21 | 126 |
+| big | hot, 90 s | default | 338 (378, 298) | 35.8 | 110.7 | 273.2 | 933 | 2.67 | 1 221 |
+| big | uniform, 90 s | 256 MiB | 13 (13, 14) | 1 125 | 2 085 | 2 984 | 610 | 15.5 | 397 |
+| big | uniform, 90 s | default | 15 (17, 14) | 982 | 1 834 | 2 637 | 311 | 14.5 | 1 250 |
+| small | uniform, 30 s | 256 MiB | **1 139** (1 013, 882, 1 305, 1 354) | 11.0 | 30.1 | 76.9 | 1 198 | 0.91 | 1 |
+| small | uniform, 30 s | default | **965** (816, 954, 969, 1 121) | 13.9 | 35.1 | 65.5 | 915 | 1.09 | 272 |
+| small | hot, 30 s | 256 MiB | 5 680 | 2.49 | 5.15 | 10.24 | 540 | 0.15 | 0 |
+| small | hot, 30 s | default | 5 561 | 2.55 | 5.31 | 10.58 | 546 | 0.15 | 0 |
+
+The default against 256 MiB:
+
+| store | mode | calls/s | p50 | p95 | p99 | RSS |
+|---|---|---|---|---|---|---|
+| big | hot, steady state | **−21.9 %** | +29.2 % | +24.6 % | **+21.5 %** | −365 MB |
+| big | hot, 90 s warm-up | −19.6 % | +27.0 % | +19.6 % | +10.5 % | −303 MB |
+| big | uniform (disk-bound) | +15.8 % | −12.7 % | −12.0 % | −11.6 % | −299 MB |
+| small | uniform | **−15.3 %** | +26.0 % | +16.5 % | −14.9 % | −283 MB |
+| small | hot (tiny set) | −2.1 % | +2.6 % | +3.1 % | +3.3 % | +7 MB |
+
+**What the numbers say:**
+- **The cost is CPU, not disk.** At the big store's steady state neither side reads the disk. With 2 000 KiB, though,
+  each call issues ~1.1 MiB of `read()`s, ~280 pages that SQLite re-reads from the OS page cache, against 118 KiB
+  with 256 MiB. Most of them are the B-trees' interior pages, which a 2 MiB cache cannot hold for a 10 GB file.
+  That is +27 % CPU a call, and on 2 vCPUs shared with the driver it shows as throughput: −22 % (the two ABBA pairs
+  agree within 6 %). The small store says the same: with 256 MiB the whole 202 MB file is in the process, 1 KiB of
+  `read()` a call against 272.
+- **When the disk is the bottleneck, the big cache does not help.** Uniform reads over 10 GB with 2 GB of memory
+  are a few disk reads per document (13–17 calls a second, p50 ~1 s). There the 256 MiB that SQLite holds is
+  256 MiB the OS page cache does not get, and the default was, if anything, faster: +16 %, inside the noise of a
+  disk-bound run.
+- **A tiny working set does not care.** The small store's hot set (2 000 documents, ~4 MB) is served by the index
+  and query caches. No `read()` happens on either side, and the gap (−2 %) is inside the run-to-run spread.
+- **The warm-up matters on the big store.** After 90 s the hot set was still coming off the disk (68–275 MB read
+  in the measured window), which is why that round is noisy (p99 97–398 ms). The 300 s round read nothing.
+- **p99 on the small uniform case went the other way** (−15 % with the default), from one 256 MiB run's 124 ms
+  outlier. The other three agree with throughput.
+- **Memory** is what §4.7 found: the 256 MiB cache adds ~280–365 MB of RSS once its working set is that large.
+
+**Seen on the way:**
+- A store's start replays the table summaries' log since their checkpoint (STUDY-72). A checkpoint is rewritten
+  500 commits, or 10 minutes with a commit, after the last, as Convex's. The seed ended 312 s after its last one,
+  so the next start replayed ~1 M documents: 9+ minutes under the 2 GB limit, and 209 s without it. `bench.ts`
+  makes 600 small commits at the end of its seed, so the checkpoint catches up. This is Convex's behaviour too,
+  not a bug; a store whose writes stop right after a burst pays it once at its next start.
+- `bun:sqlite`'s default differs by platform: `-2000` (2 000 KiB) with the SQLite Bun bundles on Linux, as in
+  Convex's rusqlite build, but `2000` (2 000 pages, 8 MiB) with the system SQLite Bun uses on macOS. A test that
+  pins "no pragma" must compare against a fresh connection, not a constant.
 
 ## 5. Metadata differentials against Convex (part 3)
 
@@ -735,20 +826,30 @@ Each question gives what Convex does, what bunvex does, whether they are the sam
   `scripts/nightly.sh` after #755 merges, for about 2 minutes a night more. The runner's per-step log tail (§5.2)
   follows on the same track.
 
-**Q6. F6: SQLite's page cache, 256 MiB or SQLite's default (§4.7).**
+**Q6. F6: SQLite's page cache, 256 MiB or SQLite's default (§4.7, measured in §4.8).**
 - Convex: no pragma, so SQLite's default `cache_size` of 2 000 KiB (`crates/sqlite/src/lib.rs:93-99`).
-- bunvex: `cache_size = -262144`, 256 MiB, since the first commit, with no study behind it.
-- Same: no. STUDY-133 lists it (L13), but no DV records it.
-- Why: a choice, not "impossible".
-- App impact: memory only. Up to ~310 MiB more resident memory once the store's file passes 256 MiB. The matched
-  soak pair showed no slower reads with the default (the file was in the OS page cache, and the index cache serves
-  the hot reads).
-- Soak impact: with 256 MiB, R1 fails for the first ~70 minutes at the soak's write rate, so the 45-minute nightly of
-  Q1 would fail every night.
-- **Recommendation:** match Convex: drop the pragma. Before that, measure a read-heavy run on a store bigger than
-  RAM, where the OS page cache cannot cover it. If the owner keeps 256 MiB instead, record it as a DV, and have the
-  soak's memory warm-up wait for the cache to fill, or run the soak with a smaller cache (which needs a setting:
-  an addition).
+- bunvex: `cache_size = -262144`, 256 MiB, since the first commit. DV-411 lists it among the pragmas it keeps, but
+  only WAL was decided there.
+- Same: no (STUDY-133 L13).
+- Why: a choice, not "impossible". The owner decided on 2026-10-20 to measure first, and to match Convex if the
+  default is not meaningfully slower.
+- **The measurement (§4.8): it is meaningfully slower.**
+  - Reads whose working set is past 2 MiB and in memory: −22 % throughput and +22 % p99 (the big store's hot set,
+    steady state); −15 % throughput on a 200 MB store.
+  - The cost is CPU: SQLite re-reads its B-trees' interior pages from the OS page cache, ~10× the `read()`
+    volume, +27 % CPU a call.
+  - When the disk is the bottleneck, or the working set is tiny, there is no gap.
+- App impact:
+  - Keeping 256 MiB: up to ~310 MiB more resident memory once the file passes 256 MiB (§4.7), and the soak's R1
+    fails for the first ~70 minutes at its write rate.
+  - Matching Convex: read-heavy apps whose working set does not fit in 2 MiB lose ~15–22 % of throughput on a small
+    machine. Answers and memory are otherwise unchanged, and the index and query caches still serve repeated reads.
+- **Recommendation:** keep 256 MiB, and record it as a DV (performance) in DV-411's row or a new one. A 20 %
+  read-throughput loss is worse for apps than a bounded, documented ~300 MiB. Then fix the soak without a setting:
+  seed a store of more than 256 MiB before the measured window and read it once in the warm-up, so the page cache is
+  full before R1 judges. If the owner still prefers Convex's default, the change is one line, plus a test that the store's
+  connection has a fresh connection's `cache_size` (not a constant: §4.8, "Seen on the way"). A middle size (32–64 MiB, roughly the interior pages of a 10 GB file) was
+  not measured; it would need its own run before it is offered.
 
 Not questions, because each matches Convex: the fixes for F1 (done, #751), F2, F3 and F5, and the suspected S1–S7 once
 confirmed.
@@ -759,7 +860,7 @@ confirmed.
 |---|---|---|---|
 | 1 | This PR (the rules, the soak, the prototype); #751 already fixed F1 | — | F1 (regression guard) |
 | 2 | Fix F2 and F3 with one capped `timerDelay` helper in core, a test per loop with an injected clock, and the I-25 rule in `check:deps` (rule 6, §3.1) in the same PR, so a new uncapped delay fails CI | 0.5 day | F2, F3, S8, and new ones |
-| 3 | ~~Attribute F6~~ done (§4.7): SQLite's 256 MiB page cache, a plateau. What is left is Q6 | — | F6 |
+| 3 | ~~Attribute F6~~ done (§4.7): SQLite's 256 MiB page cache, a plateau. ~~Measure Q6~~ done (§4.8): the default is ~20 % slower on in-memory reads; Q6 is the owner's | — | F6 |
 | 4 | The server suites' `afterEach` "hub empty, cache consistent, no session left" helper (I-03, I-05, I-11, I-19, I-23) | 0.5–1 day | freed state across ~40 suites |
 | 5 | ~~The soak nightly workflow (Q1)~~ done (§10.3), R1 report-only until Q6; then a week of watching for flakes | 0.5 day + a week of watching | trends, R1–R12 |
 | 6 | Fix F5: a stopping scheduler stops retrying and waits a bounded time. Test: shutdown under contention within 1 s | 0.5 day | F5, S4 |
