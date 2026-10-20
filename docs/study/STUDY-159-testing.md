@@ -1,6 +1,7 @@
 # STUDY-159 — `@bunvex/testing`, the equivalent of convex-test
 
-- **Status:** study; questions T-1–T-8 open for the owner (§7).
+- **Status:** decided (owner, 2026-10-20): T-1–T-8 as recommended (§7); DV-540–542 decided, AD-34 and AD-35
+  accepted. To build in §3.4's four PRs.
 - **Convex source read:** get-convex/convex-test at `8fe3dda` (0.0.62), pinned in
   [upstream.md](../parity/upstream.md#other-repositories). Paths are relative to its root. `index.ts` is one file of
   about 4,000 lines; line numbers are from it.
@@ -209,16 +210,16 @@ There are two ways to get the app's functions into the engine.
 | # | Divergence | Why | Decision |
 |---|---|---|---|
 | DV-538 | The names: `bunvexTest`, `TestBunvex*`; the default issuer `https://bunvex.test`; messages naming `bunvex dev` | Rule 5 | rule 5 (no owner choice), as STUDY-158 |
-| DV-540 | `@bunvex/testing` behaves as the real backend, where convex-test is a mock: OCC, limits on, real IDs, the planner's and search's real results, real storage URLs, deterministic `Date` and `Math.random`, retried scheduled mutations | It is the real engine; a test then checks what a deployment does | pending (T-3) |
-| DV-541 | A test's functions see the env given to `bunvexTest`, not `process.env` | As a deployment; `bun test` has no `vi.stubEnv` | pending (T-5) |
-| DV-542 | Runs under `bun test` (and Vitest only under Bun), not on Node | The engine uses Bun's APIs | pending (T-4) |
+| DV-540 | `@bunvex/testing` behaves as the real backend, where convex-test is a mock: OCC, limits on, real IDs, the planner's and search's real results, real storage URLs, deterministic `Date` and `Math.random`, retried scheduled mutations | It is the real engine; a test then checks what a deployment does | owner, 2026-10-20 (T-3) |
+| DV-541 | A test's functions see the env given to `bunvexTest`, not `process.env` | As a deployment; `bun test` has no `vi.stubEnv` | owner, 2026-10-20 (T-5) |
+| DV-542 | Runs under `bun test` (and Vitest only under Bun), not on Node | The engine uses Bun's APIs | owner, 2026-10-20 (T-4) |
 
 ## 4b. Additions (beyond Convex)
 
 | # | Addition | Why | Decision |
 |---|---|---|---|
-| AD-34 | `bunvexTest({env})` and `t.setEnv(name, value)` | Without `vi.stubEnv`, a test needs a way to set the deployment's variables | pending (T-5) |
-| AD-35 | Crons run in tests: `t.finishAllScheduledFunctions` runs due cron jobs too, and `t.runCron(name)` runs one now | convex-test never runs `crons.ts`; the real executor can | pending (T-6) |
+| AD-34 | `bunvexTest({env})` and `t.setEnv(name, value)` | Without `vi.stubEnv`, a test needs a way to set the deployment's variables | accepted, owner 2026-10-20 (T-5) |
+| AD-35 | Crons run in tests: `t.finishAllScheduledFunctions` runs due cron jobs too, and `t.runCron(name)` runs one now | convex-test never runs `crons.ts`; the real executor can | accepted, owner 2026-10-20 (T-6) |
 
 ## 5. Tests
 
@@ -237,6 +238,8 @@ There are two ways to get the app's functions into the engine.
   memory persistence it should be lower, to be measured in PR 2.
 
 ## 7. Questions for the owner
+
+All decided by the owner on 2026-10-20, as recommended.
 
 | # | Question | Options | Recommendation |
 |---|---|---|---|
