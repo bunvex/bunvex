@@ -89,7 +89,10 @@ backend is always started with `--disable-beacon`.
   not parse, from the app of `paginate-app/`; then the system functions' own argument errors, with an admin
   key. Local only.
 - `test/generated.test.ts`: `DIFF_RUNS` generated programs (25 by default), both backends started once and
-  reset before each program. `DIFF_SEED` replays a run. A difference is shrunk, written to
+  reset before each program. Besides the answers and the final data, each program's function log is compared
+  (STUDY-174 §5.2): per completed call its kind, function, cache hit, failure and usage counters (documents,
+  bytes, index rows), read from `/api/stream_function_logs` after the program's last call. `DIFF_SEED` replays
+  a run. A difference is shrunk, written to
   `.cache/failures/last.json` (the program and the differences, ready to become a fixed program) and fails
   the test with its seed.
 
