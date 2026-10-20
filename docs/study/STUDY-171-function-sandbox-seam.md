@@ -1334,8 +1334,8 @@ unhandled: queries, mutations and actions alike.
   later timers are cleared at its end (§12.6): a rejection there never happens, as on Convex.
 - **Failing.** `unhandled(reason)` answers the call at once with the value as thrown (`rejected`: a `BunvexError`
   made a plain error, its data dropped, as Convex's), and marks it terminated: its later operations are never sent and
-  never settle, the answers still in flight are dropped, so its code stops at its next operation (nothing a client
-  can observe depends on that: it keeps the child from running the call's code for nothing). The host runs a
+  never settle, the answers still in flight are dropped, so its code stops at its next operation (an operation sent
+  after its `done` would be a bad message for the host, which would kill the child). The host runs a
   query's or mutation's in-flight operations to their end after `done`, as before (a failed mutation's writes are
   rolled back), and a nested call's failure is an error its caller can catch.
 - **Outside any checkpoint** (code Bun resumed itself) a rejection is the running call's when exactly one call is
@@ -1430,6 +1430,33 @@ rejected and its event) and the answer's wait for the last marker's report (2.4 
 The `vm` column is unchanged (no `vm` code changed but the timer hook, a null check).
 
 ### 13.6 Tests and sabotage
+
+§13.4's files. Each break below was applied to a copy on the test VPS, the five files run (`rejections`,
+`rejection-parity`, `bridge-parity`, `streams`, `action-parity`) under Bun 1.4.2 and 1.4.3, and the sources restored
+from a saved copy and compared (`diff -r`) before the next:
+
+| Break | Failing tests, 1.4.2 / 1.4.3 |
+|---|---|
+| The listener never fails a call | 58 / 58 |
+| No drain and marker before a resumption (what ran before is the call's) | 1 / 0: the actions failing once their `fetch`'s body is read |
+| A query or mutation answers with operations pending | 6 / 6 (`unawaitedOp`, `unawaitedNested`, `unawaitedThen`, …) |
+| A query or mutation answers as it settles, before its check | 29 / 27 |
+| Answers given as they come (no batches) | 5 / 5 (`unawaitedOpHandledLater`, `nestedHandledAfterRead`, `unawaitedHandled`) |
+| No drain between batches | 2 / 0: `nestedHandledAfterRead` (1.4.3 releases a batch per checkpoint) |
+| An application error keeps its data | 6 / 6 |
+| An action's timer callback outside its checkpoint | 2 / 2: the actions failing in their own timers, the three kinds at once |
+| A stream's owner not recorded | 1 / 1: the actions failing once their `fetch`'s body is read |
+| An action answers as it settles, before its check | 10 / 10 |
+| No gate on a call's next checkpoint | 0 / 1: the attribution scenarios (the gate is idle where Bun reports at the drain) |
+| No turn forced after a marker | 0 / 1: 300 queries with three reads at once (an answer waits forever) |
+| The host refuses a stopped stream's chunks in flight | 2 / 1: the streams case, `fetchRedirect307Stream` (a race) |
+| A failed call's later operations still sent | 0 / 0 |
+
+The last one is kept as a guard: an operation that reaches the host after its call's `done` is a bad message, and the
+host kills the child with every call in it. No test reaches it: once a call failed, the child resumes none of its code
+(its answers are dropped), so only code Bun resumes itself (§13.3) could send one. Two mechanisms were built and dropped on what the tests and the oracle showed: the
+listener's own attribution of a report made inside a drain (the next marker attributes it, whenever Bun reports), and
+holding an action's operations until their checkpoint was checked (§13.2).
 
 ### 13.7 Open questions
 
