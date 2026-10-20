@@ -15,6 +15,7 @@
 import type { SchemaDefinition } from "@bunvex/core";
 import { CodeVersion, type LoadedCode, type LoadOptions, type ModuleSource } from "./code-version.ts";
 
+export { ACTION_ENDED_MESSAGE, trackedActionTimers } from "./action-timeout.ts";
 // What the child's calls and the host's stand-ins use (STUDY-171 §8).
 export { appContext } from "./app-errors.ts";
 export { type FunctionDef, REMOTE_FUNCTIONS, type RemoteRunner, type SandboxCall } from "./builders.ts";

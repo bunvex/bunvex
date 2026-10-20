@@ -116,10 +116,13 @@ import {
   functionLimitsFromEnv,
 } from "./action-permits.ts";
 import {
+  type ActionLife,
   ActionTimeoutError,
   actionTimeoutError,
   checkActionAlive,
+  currentActionLife,
   cutOffWithAction,
+  endedError,
   NODE_ACTION_USER_TIMEOUT_MS,
   nodeActionTimeoutError,
   V8_ACTION_USER_TIMEOUT_MS,
@@ -704,6 +707,9 @@ const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
 function tracked<T>(name: string, fn: () => Promise<T>): Promise<T> {
   const r = meteredAction();
   if (!r) return fn();
+  // Nothing an action calls once it has ended starts (Convex's isolate ends with the action).
+  const life = currentActionLife();
+  if (life?.ended) return Promise.reject(endedError(life));
   const settle = pendingOp(r, name);
   const started = currentTurn();
   const handOver = async () => {
@@ -727,10 +733,14 @@ function tracked<T>(name: string, fn: () => Promise<T>): Promise<T> {
  * (its syscalls, `name_when_dangling`): the unawaited-operations warning lists those still pending when the
  * action returns (STUDY-76).
  */
-function trackedCtx(ctx: ActionCtx): ActionCtx {
+function trackedCtx(ctx: ActionCtx, life?: ActionLife): ActionCtx {
   // biome-ignore lint/suspicious/noExplicitAny: wraps methods of every signature
   const wrap = <F extends (...a: any[]) => any>(name: string, fn: F | undefined): F =>
-    (fn === undefined ? fn : (...a: Parameters<F>) => tracked(name, async () => fn(...a))) as F;
+    (fn === undefined
+      ? fn
+      : (...a: Parameters<F>) =>
+          // A `ctx` called after its action ended refuses, whoever calls it (Convex's ends with its isolate).
+          life?.ended ? Promise.reject(endedError(life)) : tracked(name, async () => fn(...a))) as F;
   const c = ctx as unknown as Record<string, any>;
   const s = c.scheduler;
   const st = c.storage;
@@ -2759,7 +2769,9 @@ export class Functions {
         // As Convex's runner: a `_system/` path only for an admin or the system (there are no system actions)
         if (isSystemPath(name) && !isSystemIdentity(caller)) throw new SystemIdentityRequiredError("action");
         const f = this.fn(opts.internal ? registryKey(name) : name, "action", !opts.internal, caller);
-        const ctx = this.actionCtx(caller, opts.authError ?? null, opts.job, f);
+        // Shared by the action's run and its `ctx`: once it ended, the `ctx` refuses (STUDY-77 §7).
+        const life: ActionLife = { ended: false };
+        const ctx = this.actionCtx(caller, opts.authError ?? null, opts.job, f, f.handler, undefined, life);
         const a = this.checkArgs(f, args);
         // Node actions have their own limiter; scheduled and cron runs wait for a permit (STUDY-68).
         const node = NODE_FUNCTIONS.has(f);
@@ -2788,23 +2800,29 @@ export class Functions {
             try {
               const value = this.checkReturns(
                 f,
-                await withActionTimeout(ms, timeout, () => {
-                  const run = () =>
-                    this.inActionEnv(
-                      () =>
-                        inHandleScope(
-                          {
-                            db: null,
-                            engine: this.engine,
-                            resolve: (ref) => this.resolveCall(ref, this.componentOf.get(f), null, true),
-                          },
-                          () => f.handler(ctx, a),
-                        ),
-                      this.componentOf.get(f),
-                    );
-                  // A Node action's uncaught callback exception or `process.exit` fails it at once (platform §9).
-                  return node ? withNodeProcessErrors(run) : run();
-                }),
+                await withActionTimeout(
+                  ms,
+                  timeout,
+                  () => {
+                    const run = () =>
+                      this.inActionEnv(
+                        () =>
+                          inHandleScope(
+                            {
+                              db: null,
+                              engine: this.engine,
+                              resolve: (ref) => this.resolveCall(ref, this.componentOf.get(f), null, true),
+                            },
+                            () => f.handler(ctx, a),
+                          ),
+                        this.componentOf.get(f),
+                      );
+                    // A Node action's uncaught callback exception or `process.exit` fails it at once (platform §9).
+                    return node ? withNodeProcessErrors(run) : run();
+                  },
+                  // A V8 action ends with its answer, as Convex's isolate (STUDY-77 §7); a Node one runs on.
+                  { endsWithAnswer: !node, life },
+                ),
               );
               warn(sizeOfResult(value ?? null));
               return value;
@@ -2834,6 +2852,8 @@ export class Functions {
     handler: unknown = f?.handler,
     /** An HTTP action's component (STUDY-157): the one its route reached. */
     httpComponent?: ComponentRuntime,
+    /** Whether the action has ended: its `ctx` then refuses (V8 actions only). */
+    life?: ActionLife,
   ): ActionCtx {
     const identity = (caller?.identity ?? null) as UserIdentity | null;
     // A component's action calls its own component's functions by name (STUDY-154); other components are step 5.
@@ -2854,92 +2874,95 @@ export class Functions {
     const nestedCalls = (handler as { [NESTED_CALLS]?: NestedCalls } | undefined)?.[NESTED_CALLS];
     const inContext = nestedCalls !== undefined;
     const r = roomsCtx(this, null, true);
-    const ctx = trackedCtx({
-      auth: {
-        getUserIdentity: async () => {
-          if (authError) throw authError;
-          return copy(identity);
+    const ctx = trackedCtx(
+      {
+        auth: {
+          getUserIdentity: async () => {
+            if (authError) throw authError;
+            return copy(identity);
+          },
         },
-      },
-      // Once the action timed out, nothing it calls starts (STUDY-77).
-      runQuery: async (n: FunctionRef, a?: unknown) => {
-        checkActionAlive();
-        checkActionCallArgs(n, a);
-        const t = await target(n);
-        return acrossCall(await asActionCaller(this.runQuery(t, acrossArgs(a), false, callerOf(t)), inContext));
-      },
-      runMutation: async (n: FunctionRef, a?: unknown) => {
-        checkActionAlive();
-        checkActionCallArgs(n, a);
-        const t = await target(n);
-        return acrossCall(await asActionCaller(this.runMutation(t, acrossArgs(a), false, callerOf(t)), inContext));
-      },
-      runAction: async (n: FunctionRef, a?: unknown) => {
-        checkActionAlive();
-        checkActionCallArgs(n, a);
-        const t = await target(n);
-        return acrossCall(
-          await asActionCaller(
-            this.runAction(t, acrossArgs(a), callerOf(t), {
-              internal: true,
-              authError,
-            }),
-            inContext,
-          ),
-        );
-      },
-      // As a mutation's: the job also reaches an action that a scheduled action ran.
-      scheduler: cutOffWithAction(
-        makeScheduler(this, {
-          engine: this.engine,
-          component,
-          // Convex's action scheduler sends its request id first (an HTTP action's is "").
-          requestId: f === HTTP_ACTION ? "" : (caller?.request?.requestId ?? ""),
-          systemIdentity: isSystemIdentity(caller),
-          job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
-          jobComponent: caller?.request?.scheduledFunctionComponent ?? null,
-        }),
-      ),
-      storage: cutOffWithAction(this.fileStorage?.actionWriter(storageMeter, component?.id ?? null) ?? noStorage),
-      rooms: cutOffWithAction(r.rooms),
-      presence: cutOffWithAction(r.presence as NonNullable<typeof r.presence>),
-      vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
-        checkActionAlive();
-        // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
-        const args = [tableName, indexName, query];
-        const argNames = ["tableName", "indexName", "query"];
-        for (let i = 0; i < 3; i++)
-          if (args[i] === undefined)
-            throw new TypeError(`Must provide arg ${i + 1} \`${argNames[i]}\` to \`vectorSearch\``);
-        if (!Array.isArray(query.vector) || query.vector.length === 0)
-          throw new Error("`vector` must be a non-empty Array in vectorSearch");
-        const filter = query.filter ? query.filter(VECTOR_FILTER_BUILDER as never) : undefined;
-        const r = meteredAction();
-        let results: { _id: string; _score: number }[];
-        try {
-          results = this.engine.vectorSearch(
-            tableName,
-            indexName,
-            {
-              vector: query.vector,
-              ...(query.limit === undefined ? {} : { limit: query.limit }),
-              ...(filter === undefined ? {} : { filter }),
-            },
-            (bytes) => {
-              if (r) r.io.vectorQueryBytes += bytes;
-            },
-            // A component's action searches its own tables (Convex's `insert_component_id`, STUDY-157).
-            component?.id ?? null,
+        // Once the action timed out, nothing it calls starts (STUDY-77).
+        runQuery: async (n: FunctionRef, a?: unknown) => {
+          checkActionAlive();
+          checkActionCallArgs(n, a);
+          const t = await target(n);
+          return acrossCall(await asActionCaller(this.runQuery(t, acrossArgs(a), false, callerOf(t)), inContext));
+        },
+        runMutation: async (n: FunctionRef, a?: unknown) => {
+          checkActionAlive();
+          checkActionCallArgs(n, a);
+          const t = await target(n);
+          return acrossCall(await asActionCaller(this.runMutation(t, acrossArgs(a), false, callerOf(t)), inContext));
+        },
+        runAction: async (n: FunctionRef, a?: unknown) => {
+          checkActionAlive();
+          checkActionCallArgs(n, a);
+          const t = await target(n);
+          return acrossCall(
+            await asActionCaller(
+              this.runAction(t, acrossArgs(a), callerOf(t), {
+                internal: true,
+                authError,
+              }),
+              inContext,
+            ),
           );
-        } catch (e) {
-          throw unavailableToAction(e);
-        }
-        // Each result is Convex's vector egress: its id's 33 bytes and its 4-byte score.
-        if (r) r.io.vectorReadBytes += results.length * 37;
-        return results;
-      },
-      ...(f ? { meta: this.meta(f, null, caller) } : {}),
-    } as ActionCtx);
+        },
+        // As a mutation's: the job also reaches an action that a scheduled action ran.
+        scheduler: cutOffWithAction(
+          makeScheduler(this, {
+            engine: this.engine,
+            component,
+            // Convex's action scheduler sends its request id first (an HTTP action's is "").
+            requestId: f === HTTP_ACTION ? "" : (caller?.request?.requestId ?? ""),
+            systemIdentity: isSystemIdentity(caller),
+            job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
+            jobComponent: caller?.request?.scheduledFunctionComponent ?? null,
+          }),
+        ),
+        storage: cutOffWithAction(this.fileStorage?.actionWriter(storageMeter, component?.id ?? null) ?? noStorage),
+        rooms: cutOffWithAction(r.rooms),
+        presence: cutOffWithAction(r.presence as NonNullable<typeof r.presence>),
+        vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
+          checkActionAlive();
+          // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
+          const args = [tableName, indexName, query];
+          const argNames = ["tableName", "indexName", "query"];
+          for (let i = 0; i < 3; i++)
+            if (args[i] === undefined)
+              throw new TypeError(`Must provide arg ${i + 1} \`${argNames[i]}\` to \`vectorSearch\``);
+          if (!Array.isArray(query.vector) || query.vector.length === 0)
+            throw new Error("`vector` must be a non-empty Array in vectorSearch");
+          const filter = query.filter ? query.filter(VECTOR_FILTER_BUILDER as never) : undefined;
+          const r = meteredAction();
+          let results: { _id: string; _score: number }[];
+          try {
+            results = this.engine.vectorSearch(
+              tableName,
+              indexName,
+              {
+                vector: query.vector,
+                ...(query.limit === undefined ? {} : { limit: query.limit }),
+                ...(filter === undefined ? {} : { filter }),
+              },
+              (bytes) => {
+                if (r) r.io.vectorQueryBytes += bytes;
+              },
+              // A component's action searches its own tables (Convex's `insert_component_id`, STUDY-157).
+              component?.id ?? null,
+            );
+          } catch (e) {
+            throw unavailableToAction(e);
+          }
+          // Each result is Convex's vector egress: its id's 33 bytes and its 4-byte score.
+          if (r) r.io.vectorReadBytes += results.length * 37;
+          return results;
+        },
+        ...(f ? { meta: this.meta(f, null, caller) } : {}),
+      } as ActionCtx,
+      life,
+    );
     if (!nestedCalls) return ctx;
     return appContext(handler, {
       ...ctx,
