@@ -2,44 +2,59 @@
 // index_range_builder.ts, filter_builder.ts): what `ctx.db` is to an app whose data model is known — tables,
 // ids, documents, index names and fields, field paths. Types only: at run time `ctx.db` is the engine's `Tx`,
 // which accepts every one of these calls.
-import type { CommitTsPlaceholder, GenericId, Value } from "@bunvex/values";
+import type { CommitTsPlaceholder, GenericId, NumericValue, Value } from "@bunvex/values";
 import type {
   DocumentByInfo,
   DocumentByName,
   FieldPaths,
   GenericDataModel,
+  GenericDocument,
   GenericTableInfo,
   IndexNames,
   NamedIndex,
+  NamedSearchIndex,
   NamedTableInfo,
+  SearchIndexNames,
   SystemTableNames,
   TableNamesInDataModel,
   WithOptionalSystemFields,
   WithoutSystemFields,
 } from "./data-model.ts";
 import type { Expression } from "./filter.ts";
-import type { Expand } from "./schema.ts";
+import type { Expand, GenericSearchIndexConfig } from "./schema.ts";
+import type { SearchFilter } from "./search-filter.ts";
 import type { PaginationOptions } from "./tx.ts";
 
-/** The type of the value at a dotted field path of a document (`undefined` when a part may be missing). */
-export type FieldTypeFromFieldPath<
-  Document,
+/** A field of each member of a union of documents; `Missing` for a member without it. */
+type FieldOfEachMember<Document, Field, Missing> = Document extends unknown
+  ? Field extends keyof Document
+    ? Document[Field]
+    : Missing
+  : never;
+
+/**
+ * The type of the value at a dotted field path of a document, as Convex's `FieldTypeFromFieldPath`: over each
+ * member of a union of documents (`undefined` where a part may be missing), and any value when it is not one.
+ */
+export type FieldTypeFromFieldPath<Document extends GenericDocument, FieldPath extends string> =
+  FieldTypeFromFieldPathInner<Document, FieldPath> extends Value | undefined
+    ? FieldTypeFromFieldPathInner<Document, FieldPath>
+    : Value | undefined;
+
+/** `FieldTypeFromFieldPath` before it is clamped to a value (Convex's `FieldTypeFromFieldPathInner`). */
+export type FieldTypeFromFieldPathInner<
+  Document extends GenericDocument,
   FieldPath extends string,
 > = FieldPath extends `${infer First}.${infer Rest}`
-  ? First extends keyof Document
-    ? NonNullable<Document[First]> extends Record<string, unknown>
-      ?
-          | FieldTypeFromFieldPath<NonNullable<Document[First]>, Rest>
-          | (undefined extends Document[First] ? undefined : never)
+  ? FieldOfEachMember<Document, First, Record<never, never>> extends infer FieldValue
+    ? FieldValue extends GenericDocument
+      ? FieldTypeFromFieldPath<FieldValue, Rest>
       : undefined
     : undefined
-  : FieldPath extends keyof Document
-    ? Document[FieldPath]
-    : undefined;
+  : FieldOfEachMember<Document, FieldPath, undefined>;
 
-/** A filter's value or expression of a type. */
-export type ExpressionOrValueOf<T> = Expression<T> | T;
-type NumericValue = bigint | number;
+/** A filter's value or expression of a type (Convex's `ExpressionOrValue`, exported under that name). */
+export type ExpressionOrValueOf<T extends Value | undefined> = Expression<T> | T;
 
 /** Convex's `FilterBuilder`: field references and operators, typed by the table. */
 export interface FilterBuilder<TableInfo extends GenericTableInfo> {
@@ -73,7 +88,8 @@ type FieldAt<Fields extends string[], N extends number> = Fields[N] & string;
 /** After an upper bound: nothing more. */
 export interface UpperBoundIndexRangeBuilder extends IndexRange {}
 /** After a lower bound on a field: an upper bound on the same field, or nothing. */
-export interface LowerBoundIndexRangeBuilder<Document, Field extends string> extends IndexRange {
+export interface LowerBoundIndexRangeBuilder<Document extends GenericDocument, Field extends string>
+  extends IndexRange {
   lt(field: Field, value: FieldTypeFromFieldPath<Document, Field>): UpperBoundIndexRangeBuilder;
   lte(field: Field, value: FieldTypeFromFieldPath<Document, Field>): UpperBoundIndexRangeBuilder;
 }
@@ -81,8 +97,11 @@ export interface LowerBoundIndexRangeBuilder<Document, Field extends string> ext
  * Convex's `IndexRangeBuilder`: equalities on the index's fields in order, then a range on the next one.
  * `FieldNum` is how many equalities came before.
  */
-export interface IndexRangeBuilder<Document, IndexFields extends string[], FieldNum extends number = 0>
-  extends IndexRange {
+export interface IndexRangeBuilder<
+  Document extends GenericDocument,
+  IndexFields extends string[],
+  FieldNum extends number = 0,
+> extends IndexRange {
   eq(
     field: FieldAt<IndexFields, FieldNum>,
     value: FieldTypeFromFieldPath<Document, FieldAt<IndexFields, FieldNum>>,
@@ -127,16 +146,12 @@ export interface OrderedQuery<TableInfo extends GenericTableInfo> extends AsyncI
 export interface Query<TableInfo extends GenericTableInfo> extends OrderedQuery<TableInfo> {
   order(order: "asc" | "desc"): OrderedQuery<TableInfo>;
 }
-/** What a search filter callback returns (Convex's `SearchFilter`). */
-export interface SearchFilter {
-  readonly __isSearchFilter?: undefined;
-}
 /** Convex's `SearchFilterBuilder`: the search first. */
-export interface SearchFilterBuilder<Document, Config extends { searchField: string; filterFields: string }> {
+export interface SearchFilterBuilder<Document extends GenericDocument, Config extends GenericSearchIndexConfig> {
   search(fieldName: Config["searchField"], query: string): SearchFilterFinalizer<Document, Config>;
 }
 /** Convex's `SearchFilterFinalizer`: equality filters on the index's filter fields. */
-export interface SearchFilterFinalizer<Document, Config extends { searchField: string; filterFields: string }>
+export interface SearchFilterFinalizer<Document extends GenericDocument, Config extends GenericSearchIndexConfig>
   extends SearchFilter {
   eq<FieldName extends Config["filterFields"]>(
     fieldName: FieldName,
@@ -152,10 +167,10 @@ export interface QueryInitializer<TableInfo extends GenericTableInfo> extends Qu
     indexRange?: (q: IndexRangeBuilder<DocumentByInfo<TableInfo>, NamedIndex<TableInfo, IndexName>>) => IndexRange,
   ): Query<TableInfo>;
   /** A full-text search (STUDY-45): always in relevance order. */
-  withSearchIndex<IndexName extends keyof TableInfo["searchIndexes"] & string>(
+  withSearchIndex<IndexName extends SearchIndexNames<TableInfo>>(
     indexName: IndexName,
     searchFilter: (
-      q: SearchFilterBuilder<DocumentByInfo<TableInfo>, TableInfo["searchIndexes"][IndexName]>,
+      q: SearchFilterBuilder<DocumentByInfo<TableInfo>, NamedSearchIndex<TableInfo, IndexName>>,
     ) => SearchFilter,
   ): OrderedQuery<TableInfo>;
 }

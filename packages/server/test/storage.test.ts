@@ -22,6 +22,9 @@ afterEach(async () => {
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const check = <T extends true>(_: T) => {};
 check<Equal<Awaited<ReturnType<StorageActionWriter["store"]>>, GenericId<"_storage">>>(true);
+// A file's id, as the handlers below take it: any string reaches the runtime (legacy UUIDs, wrong ids), which
+// checks it; the types take `Id<"_storage">` only, as Convex's without its deprecated `StorageId` (DV-543).
+type FileId = GenericId<"_storage">;
 
 const sha256b64 = (s: string) => Buffer.from(new Bun.CryptoHasher("sha256").update(s).digest()).toString("base64");
 const msg = async (p: Promise<unknown>) =>
@@ -37,39 +40,42 @@ async function setup(opts: { maxRequestBodySize?: number } = {}) {
   ).init();
   const blobs = new MemoryBlobStore();
   const functions = new Functions(engine).register("m", {
-    url: query(async ({ storage }, { id }: { id: string }) => storage.getUrl(id)),
+    url: query(async ({ storage }, { id }: { id: FileId }) => storage.getUrl(id)),
     urlNoArg: query(async ({ storage }) =>
       (storage.getUrl as (x?: string) => Promise<unknown>)().catch((e: Error) => e.message),
     ),
-    meta: query(async ({ storage }, { id }: { id: string }) => storage.getMetadata(id)),
+    meta: query(async ({ storage }, { id }: { id: FileId }) => storage.getMetadata(id)),
     doc: query(async ({ db }, { id }: { id: string }) => db.system.get(id as never)),
     docs: query(async ({ db }) => db.system.query("_storage").collect()),
     otherId: mutation(async ({ db }) => db.insert("items", {})),
     uploadUrl: mutation(async ({ storage }) => storage.generateUploadUrl()),
     uploadUrlFromAction: action(async ({ storage }) => storage.generateUploadUrl()),
-    urlFromAction: action(async ({ storage }, { id }: { id: string }) => storage.getUrl(id)),
-    del: mutation(async ({ storage }, { id, fail }: { id: string; fail?: boolean }) => {
+    urlFromAction: action(async ({ storage }, { id }: { id: FileId }) => storage.getUrl(id)),
+    del: mutation(async ({ storage }, { id, fail }: { id: FileId; fail?: boolean }) => {
       await storage.delete(id);
       if (fail) throw new Error("rolled back");
     }),
-    storeInMutation: mutation(async ({ storage }) => storage.store(new Blob(["x"]))),
+    // The types offer no `store` in a mutation (Convex's `StorageWriter`); the runtime refuses it with a message.
+    storeInMutation: mutation(async ({ storage }) =>
+      (storage as unknown as StorageActionWriter).store(new Blob(["x"])),
+    ),
     storeBlob: action(async ({ storage }, { text, type, sha256 }: { text: string; type?: string; sha256?: string }) =>
       storage.store(new Blob([text], type ? { type } : {}), sha256 ? { sha256 } : undefined),
     ),
     storeNotBlob: action(async ({ storage }) => storage.store("x" as never)),
-    getBlob: action(async ({ storage }, { id }: { id: string }) => {
+    getBlob: action(async ({ storage }, { id }: { id: FileId }) => {
       const b = await storage.get(id);
       return b && { text: await b.text(), type: b.type, size: b.size };
     }),
     getNotString: action(async ({ storage }) => storage.get(1 as never)),
-    delAction: action(async ({ storage }, { id }: { id: string }) => storage.delete(id)),
+    delAction: action(async ({ storage }, { id }: { id: FileId }) => storage.delete(id)),
   });
   const http = httpRouter();
   http.route({
     path: "/file",
     method: "GET",
     handler: httpAction(async (ctx, req) => {
-      const blob = await ctx.storage.get(new URL(req.url).searchParams.get("id")!);
+      const blob = await ctx.storage.get(new URL(req.url).searchParams.get("id")! as FileId);
       return blob === null ? new Response("Image not found", { status: 404 }) : new Response(blob);
     }),
   });

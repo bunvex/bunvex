@@ -14,6 +14,7 @@ import {
   type Engine,
   failExecution,
   formatBytes,
+  type GenericTableInfo,
   IndexesUnavailableError,
   isQueryObject,
   knob,
@@ -414,10 +415,7 @@ function atCallSite(e: unknown, site: Error): unknown {
   return err;
 }
 
-/** `ctx.storage` (STUDY-32): what each context gets of `FileStorage`. */
-export type StorageReader = ReturnType<FileStorage["reader"]>;
-export type StorageWriter = ReturnType<FileStorage["writer"]>;
-export type StorageActionWriter = ReturnType<FileStorage["actionWriter"]>;
+export type { StorageActionWriter, StorageReader, StorageWriter } from "./storage-api.ts";
 
 /** `ctx.storage` without a configured file storage: every call says so. */
 const noStorage = new Proxy(
@@ -430,7 +428,9 @@ const noStorage = new Proxy(
 ) as never;
 
 /** `ctx.auth` (STUDY-27): the caller's identity, or null without a (valid) token. */
-export type Auth = { getUserIdentity(): Promise<UserIdentity | null> };
+export interface Auth {
+  getUserIdentity(): Promise<UserIdentity | null>;
+}
 /** The contexts of functions without a data model (`query`, `queryGeneric`, …): any table, any document. */
 // biome-ignore lint/suspicious/noExplicitAny: Convex's builders without a data model take `any`
 export type QueryCtx = GenericQueryCtx<any>;
@@ -2903,7 +2903,11 @@ export class Functions {
       storage: cutOffWithAction(this.fileStorage?.actionWriter(storageMeter, component?.id ?? null) ?? noStorage),
       rooms: cutOffWithAction(r.rooms),
       presence: cutOffWithAction(r.presence as NonNullable<typeof r.presence>),
-      vectorSearch: async (tableName: string, indexName: string, query: VectorSearchQuery) => {
+      vectorSearch: async (
+        tableName: string,
+        indexName: string,
+        query: VectorSearchQuery<GenericTableInfo, string>,
+      ) => {
         checkActionAlive();
         // Convex's JS-side checks (vector_search_impl.ts), then the engine's (STUDY-51).
         const args = [tableName, indexName, query];

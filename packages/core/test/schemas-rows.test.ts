@@ -9,7 +9,7 @@ import { v } from "@bunvex/values";
 import { SCHEMAS_TABLE } from "../src/catalog.ts";
 import { Engine } from "../src/engine.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
-import { declaredTables, defineSchema, defineTable, type SchemaDefinition } from "../src/schema.ts";
+import { declaredTables, defineSchema, defineTable, type EngineSchema } from "../src/schema.ts";
 import { schemaFromJson, schemaJsonText, schemaToJson } from "../src/schema-json.ts";
 import { convexRows, shapeDiff, stored } from "./convex-rows/shape.ts";
 
@@ -36,7 +36,7 @@ const until = async (f: () => Promise<boolean>) => {
   }
   throw new Error("timed out");
 };
-const push = async (e: Engine, s: SchemaDefinition) => {
+const push = async (e: Engine, s: EngineSchema) => {
   const p = await e.startSchemaPush(s);
   await until(async () => (await e.schemaPushStatus(p.schemaId)).type !== "inProgress");
   await e.commitSchemaPush(p.schemaId, async () => {});

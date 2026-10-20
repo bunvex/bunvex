@@ -10,7 +10,7 @@ import { decodeId, v } from "@bunvex/values";
 import { SCHEMAS_TABLE } from "../src/catalog.ts";
 import { Engine, SchemaPushError } from "../src/engine.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
-import { defineSchema, defineTable, type SchemaDefinition } from "../src/schema.ts";
+import { defineSchema, defineTable, type EngineSchema } from "../src/schema.ts";
 
 const engines: Engine[] = [];
 const dirs: string[] = [];
@@ -58,7 +58,7 @@ const complete = async (e: Engine, schemaId: string, ns: string | null = null) =
   until(async () => (await e.schemaPushStatus(schemaId, ns)).type === "complete");
 
 /** Push `rootSchema` and each component's schema, wait, and commit them all. */
-async function push(e: Engine, rootSchema: SchemaDefinition, components: Map<string, SchemaDefinition>) {
+async function push(e: Engine, rootSchema: EngineSchema, components: Map<string, EngineSchema>) {
   const p = await e.startSchemaPush(rootSchema, components);
   await complete(e, p.schemaId);
   const ids = new Map<string, string>();

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { defineSchema, defineTable, documentTypeError, type SchemaDefinition } from "../src/schema.ts";
+import { defineSchema, defineTable, documentTypeError, type EngineSchema } from "../src/schema.ts";
 import { schemaToJson } from "../src/schema-json.ts";
 
 const schema = defineSchema({
@@ -16,7 +16,7 @@ const schema = defineSchema({
   ),
   loose: defineTable(v.any()),
 });
-const engine = async (s: SchemaDefinition = schema) =>
+const engine = async (s: EngineSchema = schema) =>
   new Engine(s, await MemoryPersistence.open(null, { durable: false })).init();
 
 describe("defineSchema / defineTable: documents are validated on write (STUDY-14)", () => {

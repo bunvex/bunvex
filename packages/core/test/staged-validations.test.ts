@@ -10,7 +10,7 @@ import { v } from "@bunvex/values";
 import { SCHEMA_VALIDATION_PROGRESS_TABLE, SCHEMA_VALIDATIONS_TABLE } from "../src/catalog.ts";
 import { Engine, StagedSchemaError } from "../src/engine.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
-import { defineSchema, defineTable, type SchemaDefinition } from "../src/schema.ts";
+import { defineSchema, defineTable, type EngineSchema } from "../src/schema.ts";
 import { schemaToJson, stagedValidatorsOf } from "../src/schema-json.ts";
 import { stagedSchemaValidationProgress } from "../src/schema-validations.ts";
 
@@ -42,7 +42,7 @@ const until = async (f: () => Promise<boolean>) => {
   }
   throw new Error("timed out");
 };
-const push = async (e: Engine, s: SchemaDefinition) => {
+const push = async (e: Engine, s: EngineSchema) => {
   const p = await e.startSchemaPush(s);
   await until(async () => (await e.schemaPushStatus(p.schemaId)).type !== "inProgress");
   expect((await e.schemaPushStatus(p.schemaId)).type).toBe("complete");
@@ -526,7 +526,7 @@ describe("evaluate_schema's staged prediction, as Convex's (5b65aedb3)", () => {
     const e = await base();
     await setRow(e, (await rowOf(e, "t"))._id, { state: "valid" }, 10n, 10n);
     await setRow(e, (await rowOf(e, "u"))._id, { state: "failed", error: "no" }, 0n, 0n);
-    const discarded = async (s: SchemaDefinition) => (await e.evaluateSchema(s)).discardedStagedValidators;
+    const discarded = async (s: EngineSchema) => (await e.evaluateSchema(s)).discardedStagedValidators;
     // Widened: carried over. Promoted: kept as the enforced validator.
     expect(await discarded(defineSchema({ t: defineTable(v.any()).staged({ a: v.number() }) }))).toEqual([]);
     const promoted = await e.evaluateSchema(defineSchema({ t: defineTable({ a: lits() }) }));
