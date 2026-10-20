@@ -8,10 +8,10 @@ item. It is the project's to-do list at the scale of the whole product.
 |---|---|--:|--:|--:|
 | Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 244 | 3 | 0 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 163 | 2 | 1 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 237 | 20 | 6 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables | [platform.md](platform.md) | 237 | 21 | 6 |
 
-Beyond Convex, [additions.md](additions.md) lists 35 additions: 30 built (5 of them dashboard screens on the
-mock), 1 being built (AD-44), 2 accepted, 2 deferred, none proposed (recounted on 2026-10-19, STUDY-173; before that 2026-10-15, the dashboard audit after STUDY-149; AD-41 deferred; then
+Beyond Convex, [additions.md](additions.md) lists 37 additions: 32 built (5 of them dashboard screens on the
+mock), 1 being built (AD-44), 2 accepted, 2 deferred, none proposed (recounted on 2026-10-20 after AD-34 and AD-35, built in STUDY-159; before that 2026-10-19, STUDY-173; before that 2026-10-15, the dashboard audit after STUDY-149; AD-41 deferred; then
 AD-24 and AD-25's screens on a deployment, and AD-04's Topology, STUDY-131 §11; AD-42, rooms and presence scopes,
 accepted in STUDY-164 and built the same day, STUDY-164 §7; AD-43, rooms in the dashboard, accepted in STUDY-165 and built: the read and the counters, STUDY-165 §5.1,
 the event tap's server and data source, §5.2, the actions' server and data source, §5.3, and the tap's panel and the
