@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
-import { type Doc, defineSchema, defineTable, type SchemaDefinition } from "../src/schema.ts";
+import { type Doc, defineSchema, defineTable, type EngineSchema } from "../src/schema.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -16,7 +16,7 @@ function store() {
   dirs.push(dir);
   const path = join(dir, "log");
   // Each open replays the log: a restart of the same store.
-  return async (schema: SchemaDefinition, fn: (e: Engine) => Promise<void>) => {
+  return async (schema: EngineSchema, fn: (e: Engine) => Promise<void>) => {
     const p = await MemoryPersistence.open(path, { durable: false });
     const e = await new Engine(schema, p).init();
     // New indexes are backfilled in the background (STUDY-29): wait for them, as a push would.

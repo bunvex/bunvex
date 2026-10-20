@@ -1,15 +1,24 @@
 // Package @bunvex/server — the function runtime, the transports (HTTP + WebSocket sync) and configuration.
 
+// Identity and the auth config (STUDY-27), as Convex's `convex/server` exports them.
+export type { AuthConfig, AuthProvider, UserIdentity, UserIdentityAttributes } from "@bunvex/auth";
 // The data model and database as types, as Convex's `convex/server` exports them (`_generated/` imports them).
 export type {
   AnyDataModel,
   BaseTableReader,
   BaseTableWriter,
+  BetterOmit,
   DataModelFromSchemaDefinition,
+  DefineSchemaOptions,
   DocumentByInfo,
   DocumentByName,
+  Expand,
   Expression,
+  // Convex's name; core's `ExpressionOrValue` is the filter builder's runtime operand (STUDY-180).
+  ExpressionOrValueOf as ExpressionOrValue,
   FieldPaths,
+  FieldTypeFromFieldPath,
+  FieldTypeFromFieldPathInner,
   FilterBuilder,
   GenericDatabaseReader,
   GenericDatabaseReaderWithTable,
@@ -18,22 +27,45 @@ export type {
   GenericDataModel,
   GenericDocument,
   GenericFieldPaths,
+  GenericIndexFields,
+  GenericSchema,
+  GenericSearchIndexConfig,
+  GenericTableIndexes,
   GenericTableInfo,
+  GenericTableSearchIndexes,
+  GenericTableVectorIndexes,
+  GenericVectorIndexConfig,
+  IdField,
   Indexes,
   IndexNames,
   IndexRange,
   IndexRangeBuilder,
+  IndexTiebreakerField,
   NamedIndex,
+  NamedSearchIndex,
   NamedTableInfo,
+  NamedVectorIndex,
   OrderedQuery,
   PaginationResultOf as PaginationResult,
   Query,
   QueryInitializer,
+  SchemaDefinition,
+  SearchFilterBuilder,
+  SearchFilterFinalizer,
+  SearchIndexConfig,
+  SearchIndexNames,
   SystemDataModel,
   SystemFields,
   SystemIndexes,
   SystemTableNames,
+  // Convex exports the class as a type only.
+  TableDefinition,
   TableNamesInDataModel,
+  // Convex's names; in core `SearchIndexes` / `VectorIndexes` are the runtime's index sets (STUDY-180).
+  TableSearchIndexes as SearchIndexes,
+  TableVectorIndexes as VectorIndexes,
+  VectorIndexConfig,
+  VectorIndexNames,
   WithOptionalSystemFields,
   WithoutSystemFields,
 } from "@bunvex/core";
@@ -43,12 +75,14 @@ export {
   defineTable,
   docValidator,
   type SchemaValidators,
+  SearchFilter,
   type SystemFieldValidators,
 } from "@bunvex/core";
 // Function references, as Convex's `convex/server` exports them (STUDY-26 C3).
 export {
   type AnyApi,
   anyApi,
+  type DefaultFunctionArgs,
   type FunctionArgs,
   type FunctionReference,
   type FunctionReturnType,
@@ -76,12 +110,15 @@ export type {
   ApiFromModules,
   ConvertReturnType,
   FilterApi,
+  FunctionReference_future,
   FunctionReferenceFromExport,
+  PartialApi,
 } from "./api-types.ts";
 export { filterApi } from "./api-types.ts";
 export { LINKED_MODULES } from "./code-version.ts";
 // Components' definitions (STUDY-153 PR 1): `bunvex.config.ts`'s `defineApp` / `defineComponent` and `components`.
 export {
+  type AnyChildComponents,
   type AnyComponentReference,
   type AnyComponents,
   type AppDefinition,
@@ -94,6 +131,7 @@ export {
   defineComponent,
   type EnvDefinition,
   type EnvFromAppDefinition,
+  type EnvFromDefinition,
   type EnvRef,
   type InstalledComponent,
 } from "./components.ts";
@@ -104,6 +142,7 @@ export {
   type ActionCtx,
   type ArgsOf,
   type ArgsValidator,
+  type Auth,
   action,
   actionGeneric,
   type FunctionDef,
@@ -120,6 +159,9 @@ export {
   type QueryCtx,
   query,
   queryGeneric,
+  type StorageActionWriter,
+  type StorageReader,
+  type StorageWriter,
 } from "./functions.ts";
 export {
   instanceSecretError,
@@ -148,7 +190,12 @@ export type {
   TransactionMetric,
   TransactionMetrics,
 } from "./meta.ts";
-export { paginationOptsValidator, paginationResultValidator } from "./pagination.ts";
+export {
+  type Cursor,
+  type PaginationOptions,
+  paginationOptsValidator,
+  paginationResultValidator,
+} from "./pagination.ts";
 export { openPersistence, type PersistenceConfig, persistenceConfigFromEnv } from "./persistence.ts";
 // The analysis a push of components gets, without a deployment: the CLI's codegen (STUDY-156, DV-532).
 export { componentAnalysis, PushError } from "./push.ts";
@@ -157,7 +204,10 @@ export type {
   AdvancedRunQueryOptions,
   ArgsAndOptions,
   ArgsArray,
+  ArgsArrayForOptionalValidator,
   ArgsArrayToObject,
+  DefaultArgsForOptionalValidator,
+  FilterExpression,
   GenericActionCtx,
   GenericMutationCtx,
   GenericMutationCtxWithTable,
@@ -174,8 +224,13 @@ export type {
   RegisteredPresence,
   RegisteredQuery,
   RegisteredRoom,
+  ReturnValueForOptionalValidator,
   RoomBuilder,
   TransactionLimits,
+  ValidatorTypeToReturnType,
+  VectorFilterBuilder,
+  VectorSearch,
+  VectorSearchQuery,
 } from "./registration.ts";
 // Rooms and presence scopes (AD-42).
 export {
@@ -200,6 +255,8 @@ export {
   ROUTABLE_HTTP_METHODS,
   type RoutableMethod,
   type RouteSpec,
+  type RouteSpecWithPath,
+  type RouteSpecWithPathPrefix,
 } from "./router.ts";
 export {
   type SchedulableFunction,

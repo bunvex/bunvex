@@ -9,13 +9,7 @@ import { type GenericValidator, v } from "@bunvex/values";
 import { SCHEMAS_TABLE } from "../src/catalog.ts";
 import { Engine } from "../src/engine.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
-import {
-  declaredTables,
-  defineSchema,
-  defineTable,
-  type SchemaDefinition,
-  stagedDocumentError,
-} from "../src/schema.ts";
+import { declaredTables, defineSchema, defineTable, type EngineSchema, stagedDocumentError } from "../src/schema.ts";
 import { schemaFromJson, schemaToJson } from "../src/schema-json.ts";
 
 const engines: Engine[] = [];
@@ -45,7 +39,7 @@ const until = async (f: () => Promise<boolean>) => {
   throw new Error("timed out");
 };
 /** Push a schema to the end: start, wait for its validation, commit. */
-const push = async (e: Engine, s: SchemaDefinition) => {
+const push = async (e: Engine, s: EngineSchema) => {
   const p = await e.startSchemaPush(s);
   await until(async () => (await e.schemaPushStatus(p.schemaId)).type !== "inProgress");
   expect((await e.schemaPushStatus(p.schemaId)).type).toBe("complete");

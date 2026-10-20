@@ -12,7 +12,7 @@
 // Chosen by `BUNVEX_FUNCTION_SANDBOX` (`--function-sandbox` on `bunvex-local-backend` wins over it), the
 // isolation layers of `process` by `BUNVEX_FUNCTION_SANDBOX_ISOLATION`. Both are read once, at start, and checked
 // strictly, as `--deny-addresses` is: a security setting does not fall back to the default on a typo.
-import type { SchemaDefinition } from "@bunvex/core";
+import type { EngineSchema } from "@bunvex/core";
 import { CodeVersion, type LoadedCode, type LoadOptions, type ModuleSource } from "./code-version.ts";
 
 export { ACTION_ENDED_MESSAGE, trackedActionTimers } from "./action-timeout.ts";
@@ -81,13 +81,13 @@ export type EvaluateOptions = {
 };
 
 /** A schema module's default export as `defineSchema` makes it: its tables a record of table definitions. */
-export function isSchemaDefinition(value: unknown): value is SchemaDefinition {
-  const tables = (value as SchemaDefinition | null)?.tables;
+export function isSchemaDefinition(value: unknown): value is EngineSchema {
+  const tables = (value as EngineSchema | null)?.tables;
   return (
     typeof tables === "object" &&
     tables !== null &&
     !(tables instanceof Map) &&
-    typeof (value as SchemaDefinition).schemaValidation === "boolean"
+    typeof (value as EngineSchema).schemaValidation === "boolean"
   );
 }
 
