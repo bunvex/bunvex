@@ -1,0 +1,102 @@
+name: Soak nightly
+
+# The soak (STUDY-174 §4, the owner's Q1 decision of 2026-10-19): one long-lived local backend on SQLite, with
+# bench/soak/app deployed, under a mixed workload for 45 minutes every night, judged by the trend rules of
+# bench/soak/rules.ts (R1–R12). A failing rule fails the job and opens (or comments on) a GitHub issue with the
+# report; every run uploads its report (report.json keeps every sample, so a run can be judged again). It is never
+# a required merge check: like the Jepsen and differential nightlies, it reports. A pull request that changes this
+# file or the soak runs a 5-minute smoke, which judges nothing (too few samples past the warm-up) and fails only
+# when the run itself breaks (exit code 2).
+on:
+  schedule:
+    - cron: "7 4 * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: Minutes of workload
+        default: "45"
+      report_only:
+        description: "Report-only rules, comma-separated ids (empty: the job's SOAK_REPORT_ONLY; none: every rule fails the job)"
+        default: ""
+  pull_request:
+    paths:
+      - .github/workflows/soak-nightly.yml
+      - bench/soak/**
+
+concurrency:
+  group: soak-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  soak:
+    name: soak · SQLite
+    runs-on: ubuntu-latest
+    # 45 minutes of workload, ~2 to drain, 1.5 of idle tail, the start and the install.
+    timeout-minutes: 60
+    env:
+      MINUTES: ${{ github.event_name == 'pull_request' && '5' || inputs.minutes || '45' }}
+      # The report-only switch (STUDY-174 §10.3): rules judged, printed, kept in the report and flagged as a
+      # warning, which do not fail the job. Every other rule does. R1 (RSS) is here until Q6 is decided: SQLite's
+      # 256 MiB page cache (`cache_size = -262144`) takes ~70 minutes to fill at the soak's write rate (§4.7),
+      # longer than the run, so R1 would fail every night. Empty this once Q6 is decided.
+      SOAK_REPORT_ONLY: R1
+      REPORT_ONLY_INPUT: ${{ inputs.report_only }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: Soak for ${{ env.MINUTES }} minutes
+        id: soak
+        run: |
+          mkdir -p .data/soak
+          case "$REPORT_ONLY_INPUT" in
+            "") REPORT_ONLY="$SOAK_REPORT_ONLY" ;;
+            none) REPORT_ONLY="" ;;
+            *) REPORT_ONLY="$REPORT_ONLY_INPUT" ;;
+          esac
+          echo "REPORT_ONLY=$REPORT_ONLY" >> "$GITHUB_ENV"
+          echo "report-only rules: ${REPORT_ONLY:-none}"
+          set +e
+          bun bench/soak/soak.ts --minutes "$MINUTES" --out .data/soak --report-only "$REPORT_ONLY" 2>&1 | tee .data/soak/soak.log
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ -f .data/soak/report.md ]; then cat .data/soak/report.md >> "$GITHUB_STEP_SUMMARY"; fi
+          if [ -f .data/soak/report.json ]; then
+            # a report-only rule that failed shows as a warning on the run (the script is JavaScript, not shell)
+            # shellcheck disable=SC2016
+            bun -e 'const r = JSON.parse(await Bun.file(".data/soak/report.json").text());
+              for (const x of r.results) if (!x.pass && x.reportOnly) console.log(`::warning title=${x.rule} (report-only)::${x.detail}`);'
+          fi
+          case "$code" in
+            0) ;;
+            1) if [ "${{ github.event_name }}" = pull_request ]; then
+                 echo "::notice::a rule failed; a ${MINUTES}-minute smoke judges nothing, so only a broken run (exit 2) fails it"
+               else exit 1; fi ;;
+            *) echo "::error::the soak run itself broke (exit $code)"; exit "$code" ;;
+          esac
+      - name: The report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-report
+          path: .data/soak/
+          if-no-files-found: ignore
+      - name: Open or update an issue
+        if: failure() && steps.soak.outcome == 'failure' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Soak nightly: a rule failed"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          { echo "The nightly soak failed ([run]($run_url), commit ${{ github.sha }}, ${MINUTES} minutes; report-only: ${REPORT_ONLY:-none})."
+            echo "The run's artifact has \`report.json\` (every sample, re-judgeable), \`backend.stderr\` and the log. Bisect with \`bun bench/soak/soak.ts --off …\` (STUDY-174 §4.7)."
+            echo; cat .data/soak/report.md 2>/dev/null || echo "No report: the run broke before judging; see the log."; } > body.md
+          existing=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then gh issue comment "$existing" --body-file body.md
+          else gh issue create --title "$title" --body-file body.md; fi

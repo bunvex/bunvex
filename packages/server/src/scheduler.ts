@@ -35,6 +35,7 @@ import {
   nextJobTs,
   OccError,
   patchJob,
+  type RuntimeTimer,
   readBackendState,
   SCHEDULED_BY_NEXT_TS,
   SCHEDULED_JOBS_TABLE,
@@ -44,7 +45,6 @@ import {
   TooManyWritesError,
   type Tx,
   timerDelay,
-  wallClock,
 } from "@bunvex/core";
 import {
   type AnyFunctionReference,
@@ -317,7 +317,7 @@ export class ScheduledJobExecutor {
   /** Bumped by every poke, so one that lands while the loop is busy is not lost. */
   private pokes = 0;
   private loop: Promise<void> | null = null;
-  private gcTimer: ReturnType<typeof setTimeout> | null = null;
+  private gcTimer: RuntimeTimer | null = null;
   /** Aborted by `stop()`: cuts short the retry backoffs of running jobs. */
   private readonly stopping = new AbortController();
   private readonly o: Required<SchedulerOptions>;
@@ -392,7 +392,7 @@ export class ScheduledJobExecutor {
     this.stopped = true;
     this.stopping.abort();
     this.poke();
-    if (this.gcTimer) clearTimeout(this.gcTimer);
+    if (this.gcTimer) this.engine.runtime.clearTimeout(this.gcTimer);
     await this.loop;
     await Promise.allSettled(this.running.values());
   }
@@ -403,11 +403,11 @@ export class ScheduledJobExecutor {
     if (signal.aborted) return Promise.resolve();
     return new Promise((resolve) => {
       const done = () => {
-        clearTimeout(t);
+        this.engine.runtime.clearTimeout(t);
         signal.removeEventListener("abort", done);
         resolve();
       };
-      const t = setTimeout(done, ms);
+      const t = this.engine.runtime.setTimeout(done, ms);
       signal.addEventListener("abort", done);
     });
   }
@@ -459,7 +459,7 @@ export class ScheduledJobExecutor {
       const pokesSeen = this.pokes;
       let nextAt: number | null = null;
       try {
-        const now = wallClock();
+        const now = this.engine.runtime.now();
         const free = this.o.parallelism - this.running.size;
         // Stopped (paused): no polling until a commit to `_backend_state` wakes the loop (Convex).
         if (await this.engine.query(async (db) => isStopped(await readBackendState(db)))) {
@@ -496,7 +496,7 @@ export class ScheduledJobExecutor {
       } catch (e) {
         if (e instanceof CommitterStoppedError) return;
         console.error("scheduled functions: the executor failed, retrying", e);
-        nextAt = wallClock() + 1000;
+        nextAt = this.engine.runtime.now() + 1000;
       }
       if (this.stopped) return;
       if (this.pokes !== pokesSeen) continue; // something happened meanwhile: look again
@@ -505,10 +505,10 @@ export class ScheduledJobExecutor {
         this.wake = resolve;
         if (nextAt !== null) {
           // Capped (STUDY-174 F2): a job months away wakes the loop every 24.8 days, which looks again.
-          const t = setTimeout(() => this.poke(), timerDelay(nextAt - wallClock()));
+          const t = this.engine.runtime.setTimeout(() => this.poke(), timerDelay(nextAt - this.engine.runtime.now()));
           const prev = resolve;
           this.wake = () => {
-            clearTimeout(t);
+            this.engine.runtime.clearTimeout(t);
             prev();
           };
         }
@@ -530,7 +530,7 @@ export class ScheduledJobExecutor {
    * Convex's `scheduled_job_backlog_seconds`: how long the oldest runnable job has waited, 0 with none. It
    * keeps growing while the loop does not run again, so a stalled executor shows.
    */
-  backlogSeconds(now = wallClock()): number {
+  backlogSeconds(now = this.engine.runtime.now()): number {
     return this.oldestReady === null ? 0 : Math.max(0, now - this.oldestReady) / 1000;
   }
 
@@ -609,7 +609,7 @@ export class ScheduledJobExecutor {
         .mutation(async (db) => {
           if (await this.unchanged(db, job))
             await inNamespace(db, job.ns, () =>
-              patchJob(db, job._id, { systemErrors: failures, nextTs: wallClock() + delay }),
+              patchJob(db, job._id, { systemErrors: failures, nextTs: this.engine.runtime.now() + delay }),
             );
         }, "_system/scheduled_job_system_error")
         .catch(() => {});
@@ -741,11 +741,11 @@ export class ScheduledJobExecutor {
    */
   private scheduleGc(delayMs: number, failures = 0) {
     if (this.stopped) return;
-    this.gcTimer = setTimeout(async () => {
+    this.gcTimer = this.engine.runtime.setTimeout(async () => {
       const retentionMs = this.o.retentionSeconds * 1000;
       let next: number;
       try {
-        const now = wallClock();
+        const now = this.engine.runtime.now();
         let deleted = 0;
         let nextCompleted: number | null = null;
         for (const ns of this.namespaces()) {
@@ -763,7 +763,7 @@ export class ScheduledJobExecutor {
             ? this.o.gcDelayMs
             : nextCompleted === null
               ? Math.max(retentionMs, this.o.gcDelayMs)
-              : Math.max(1, nextCompleted + retentionMs - wallClock());
+              : Math.max(1, nextCompleted + retentionMs - this.engine.runtime.now());
         failures = 0;
       } catch (e) {
         if (e instanceof CommitterStoppedError) return;

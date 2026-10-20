@@ -112,7 +112,6 @@ import {
   nextUp,
   type Observed,
   outsideExecution,
-  preciseClock,
   runDeterministic,
   settled,
   timerDelay,
@@ -533,7 +532,15 @@ export class Engine {
     this.runtime = opts.runtime ?? realRuntime;
     installDeterminism();
     this.installValidators(schema);
-    this.committer = new Committer(persistence, opts.writeLogRetention, undefined, opts.flushRetry, opts.writeBatch);
+    // Commit timestamps from the engine's clock: a test's virtual one moves them too (STUDY-159).
+    const runtime = this.runtime;
+    this.committer = new Committer(
+      persistence,
+      opts.writeLogRetention,
+      () => runtime.nowNs(),
+      opts.flushRetry,
+      opts.writeBatch,
+    );
     this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
     this.indexCache = indexCacheOf(persistence, opts.indexCache, this.committer);
     this.writeThroughput = new WriteThroughputLimiter(opts.writeThroughput ?? writeThroughputFromEnv());
@@ -3616,7 +3623,7 @@ export class Engine {
    */
   private transactionStart(snapshot: bigint): number {
     const last = this.lastTx ? Math.max(this.lastStart, this.lastTx.creationCursor) : this.lastStart;
-    this.lastStart = transactionStart(snapshot, preciseClock(), last);
+    this.lastStart = transactionStart(snapshot, this.runtime.preciseNow(), last);
     return this.lastStart;
   }
 
