@@ -1,6 +1,6 @@
-# STUDY-171 — The function executor seam and its knobs (STUDY-168 PR 1), the wire and the child runtime (PR 2), queries and mutations over the bridge (PR 3)
+# STUDY-171 — The function executor seam and its knobs (STUDY-168 PR 1), the wire and the child runtime (PR 2), queries and mutations over the bridge (PR 3), two `vm` bugs (§10)
 
-- **Status:** PR 1 implemented (#738); PR 2 (§7) implemented (#743); PR 3 (§8) implemented (this PR); AD-44 accepted
+- **Status:** PR 1 implemented (#738); PR 2 (§7) implemented (#743); PR 3 (§8) implemented (#750); §9 (#751) and §10 (this PR) fixed; AD-44 accepted
   (owner, 2026-10-19)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend, the reference commit
   ([upstream.md](../parity/upstream.md))
@@ -688,3 +688,27 @@ query that reads no time stays cached past `MAX_CACHE_AGE_MS`, in-process and ov
 per call, no writes): before, 104 runs (13 % hits); now, 1 run (99 % hits). The skewed clock overstates the old
 miss rate (a result is stamped with the real time, so past 17 s of skew every check expires it); in real time, the
 old code ran a hot query again once every 17 s, where Convex (and now bunvex) runs it once.
+
+## 10. Two `vm` bugs the logs parity test found
+
+STUDY-168 PR 4's differential test (§8.9's `bridge-parity.test.ts`, now comparing the whole error message and the
+log lines, built in the next PR) showed two places where the default `vm` executor differs from Convex. They change
+the default path, so they are fixed here, on their own, as §9's were. No divergence is recorded for either: each was
+a bug against Convex's behaviour.
+
+| Bug | How Convex does it | Before | Now |
+|---|---|---|---|
+| A function's time zone | `ensure_utc` (`crates/common/src/utils.rs:66-75`), called when the function runner starts (`crates/isolate/src/client.rs:470`): `TZ` unset becomes `UTC`; set to anything else (empty included) the backend refuses to start, "TZ is set, but Convex requires UTC. Unset TZ to continue." | a pushed context's `Date` followed the server's zone: on a machine in São Paulo `new Date(0).toString()` in a function was `Wed Dec 31 1969 21:00:00 GMT-0300 (Brasilia Standard Time)`, and `console.log(new Date(0))` the same in its log lines; a child of the `process` executor (whose environment holds no `TZ`) read UTC | `bunvex-local-backend` sets `TZ=UTC` before anything starts and refuses another value with Convex's words in bunvex's name (`TZ_NOT_UTC`, local-backend.ts) |
+| `log.audit`'s errors in pushed code | made in the app's bundle (`npm-packages/convex/src/server/impl/audit_logging.ts`, `validateKey` and the variables' lookup): the app's frames | the server's `log` object, so an error it threw (a key starting with "$", an unknown variable, "not yet supported in actions") carried the server's own frames and paths in `error.stack` (`at invoke (…/packages/server/src/functions.ts:…)`), which the app could read, return or log; only the client's uncaught message dropped them (`mapStack`) | `bunvex/server`'s namespace, as a pushed context imports it, has `log` seen through the context's wrapper (`appNamespace`, app-errors.ts), as the engine's errors are (STUDY-150): the frames of the app's call, mapped |
+
+**What is left as it was.** An embedded server (`createServer` in an app's own process) does not set the process's
+time zone: it is the host app's, and a server library changing it would change the app's own dates. Its pushed
+functions keep the host's zone (a question for the owner, in the PR).
+
+**Tests:** `local-backend.test.ts` (a `TZ` of `America/Sao_Paulo`, empty or `utc` refuses the start with the
+message and exit code 1; unset or `UTC`, the start makes a context's `new Date(0).toString()` UTC);
+`audit-error-frames.test.ts` (uncaught, the client's message ends with the app's frames; caught, `error.stack` in a
+query and an action is the app's frames alone; `log.vars` reads as itself through the wrapper).
+
+**Sabotage:** `TZ` not set at start (1 failing test); the refusal removed (1); `log` not wrapped (1: the caught
+stacks).
