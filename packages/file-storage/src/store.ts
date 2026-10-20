@@ -46,7 +46,8 @@ export async function pumpHashing(
     try {
       await write(value);
     } catch (e) {
-      await reader.cancel(e).catch(() => {});
+      // Not awaited: a source's cancel may wait on a read that never ends, and must not hold the error back.
+      reader.cancel(e).catch(() => {});
       throw e;
     }
   }

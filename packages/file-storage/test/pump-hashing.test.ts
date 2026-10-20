@@ -77,3 +77,21 @@ test("a body that ends is hashed whole and never cancelled", async () => {
   expect(out).toEqual([6, 5]);
   expect(seen.cancelled).toBe(false);
 });
+
+test("a source whose cancel never settles does not hold the failed write's error back", async () => {
+  // Its cancel waits on a read that never ends (a stalled range read behind an async generator, say).
+  const body = new ReadableStream<Uint8Array>({
+    pull(c) {
+      c.enqueue(new Uint8Array(16));
+    },
+    cancel: () => new Promise<void>(() => {}),
+  });
+  const failure = new Error("write failed");
+  const outcome = await Promise.race([
+    pumpHashing(body, () => {
+      throw failure;
+    }).catch((e) => e),
+    Bun.sleep(1000).then(() => "still waiting after 1 s"),
+  ]);
+  expect(outcome).toBe(failure);
+});
