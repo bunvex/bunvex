@@ -11,7 +11,10 @@
 // `--probe` preloads ./probe.ts into the backend, which writes its memory detail to `<out>/probe.jsonl` (read by
 // ./analyze.ts). The backend's stderr is kept in `<out>/backend.stderr`.
 //
-// Exit code: 0 when every rule passes, 1 when one fails, 2 when the run itself broke. The report is
+// `--report-only R1,…` judges and reports those rules but leaves them out of the exit code (the nightly's R1 until
+// STUDY-174 Q6 is decided, §10.3).
+//
+// Exit code: 0 when every rule passes (report-only ones aside), 1 when one fails, 2 when the run itself broke. The report is
 // `<out>/report.json` (every sample, re-judgeable) and `<out>/report.md`.
 import { randomBytes } from "node:crypto";
 import {
@@ -29,7 +32,16 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { BunvexClient, BunvexHttpClient } from "bunvex/browser";
 import { anyApi } from "bunvex/server";
-import { type JobRecord, judge, percentile, type RunData, type Sample } from "./rules.ts";
+import {
+  exitCode,
+  type JobRecord,
+  judge,
+  parseReportOnly,
+  percentile,
+  type RunData,
+  type Sample,
+  withReportOnly,
+} from "./rules.ts";
 
 const { values: flags } = parseArgs({
   options: {
@@ -51,6 +63,9 @@ const { values: flags } = parseArgs({
     // The backend's memory probe (./probe.ts), and how often it forces a full GC first (0: never).
     probe: { type: "boolean", default: false },
     "probe-gc-minutes": { type: "string", default: "10" },
+    // Rules judged and reported but left out of the exit code, comma-separated ids (R1, R7a, …): a known
+    // failure that waits on a decision, never a way to silence a new one. Empty by default.
+    "report-only": { type: "string", default: "" },
   },
 });
 const MINUTES = Number(flags.minutes);
@@ -61,6 +76,13 @@ const OUT = resolve(flags.out!);
 const IDLE_S = Number(flags["idle-seconds"]);
 const OFF = new Set((flags.off ?? "").split(",").filter(Boolean));
 const on = (part: string) => !OFF.has(part);
+let REPORT_ONLY: Set<string>;
+try {
+  REPORT_ONLY = parseReportOnly(flags["report-only"] ?? "");
+} catch (e) {
+  console.error((e as Error).message);
+  process.exit(2);
+}
 mkdirSync(OUT, { recursive: true });
 
 const BENCH = resolve(import.meta.dir, "..");
@@ -529,7 +551,7 @@ const data: RunData = {
   jobsScheduled,
   unexpectedErrors: unexpectedErrors + logTail.failures,
 };
-const results = judge(data);
+const results = withReportOnly(judge(data), REPORT_ONLY);
 mkdirSync(OUT, { recursive: true });
 writeFileSync(
   join(OUT, "report.json"),
@@ -542,11 +564,14 @@ const md = [
   "",
   "| Rule | Result | Detail |",
   "|---|---|---|",
-  ...results.map((r) => `| ${r.rule} | ${r.pass ? "pass" : "**FAIL**"} | ${r.detail} |`),
+  ...results.map(
+    (r) => `| ${r.rule} | ${r.pass ? "pass" : r.reportOnly ? "fail (report-only)" : "**FAIL**"} | ${r.detail} |`,
+  ),
   "",
+  ...(REPORT_ONLY.size ? [`Report-only (judged, not in the exit code): ${[...REPORT_ONLY].join(", ")}.`, ""] : []),
   ...(errorSamples.length ? ["Errors (first 20):", "", ...errorSamples.map((e) => `- ${e}`), ""] : []),
 ].join("\n");
 writeFileSync(join(OUT, "report.md"), md);
 console.log(`\n${md}`);
 await cleanup();
-process.exit(results.every((r) => r.pass) ? 0 : 1);
+process.exit(exitCode(results));

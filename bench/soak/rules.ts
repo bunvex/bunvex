@@ -124,6 +124,13 @@ export function memoryWarmup(run: RunData): number | null {
   return s ? s.t : null;
 }
 
+/**
+ * R8 compares an operation's p99 only on windows of at least this many calls (STUDY-174 Q7, owner, 2026-10-20).
+ * Below it a window's "p99" is its slowest call or two, noise that moves with no trend (the soak's `schedule`, 2 calls a
+ * second, ~30 a window); such an operation is judged on its p50 alone.
+ */
+export const R8_MIN_P99_CALLS = 100;
+
 /** Every rule, on the samples past the warm-up. */
 export function judge(run: RunData): RuleResult[] {
   const post = run.samples.filter((s) => s.t >= run.warmupSeconds);
@@ -215,21 +222,29 @@ export function judge(run: RunData): RuleResult[] {
     detail: `baseline ${run.baselineFds}, after the drain ${run.final.fds}`,
   });
 
-  // R8: latency: the last third's p50 and p99 are not much above the first third's.
+  // R8: latency: the last third's p50 and p99 are not much above the first third's. The p99 is compared only on
+  // windows of at least R8_MIN_P99_CALLS calls; an operation with fewer per window is judged on its p50 alone.
   const ops = new Set(post.flatMap((s) => Object.keys(s.latency)));
   for (const op of [...ops].sort()) {
     const ws = post.map((s) => s.latency[op]).filter((l): l is NonNullable<typeof l> => l != null && l.n >= 5);
     if (ws.length < 6) continue;
     const [a, c] = thirds(ws);
-    const p99a = median(a.map((w) => w.p99));
-    const p99c = median(c.map((w) => w.p99));
     const p50a = median(a.map((w) => w.p50));
     const p50c = median(c.map((w) => w.p50));
-    const pass = !(p99c > 1.5 * p99a && p99c > p99a + 20) && !(p50c > 1.3 * p50a && p50c > p50a + 10) && p99c < 1000;
+    let pass = !(p50c > 1.3 * p50a && p50c > p50a + 10);
+    let p99 = `p99 not judged (under ${R8_MIN_P99_CALLS} calls a window)`;
+    const full = ws.filter((w) => w.n >= R8_MIN_P99_CALLS);
+    if (full.length >= 6) {
+      const [fa, fc] = thirds(full);
+      const p99a = median(fa.map((w) => w.p99));
+      const p99c = median(fc.map((w) => w.p99));
+      pass &&= !(p99c > 1.5 * p99a && p99c > p99a + 20) && p99c < 1000;
+      p99 = `p99 ${p99a.toFixed(1)} → ${p99c.toFixed(1)} ms`;
+    }
     out.push({
       rule: `R8 ${op} latency does not trend up`,
       pass,
-      detail: `p50 ${p50a.toFixed(1)} → ${p50c.toFixed(1)} ms, p99 ${p99a.toFixed(1)} → ${p99c.toFixed(1)} ms (first → last third)`,
+      detail: `p50 ${p50a.toFixed(1)} → ${p50c.toFixed(1)} ms, ${p99} (first → last third)`,
     });
   }
 
@@ -289,4 +304,59 @@ export function judge(run: RunData): RuleResult[] {
     detail: `${run.unexpectedErrors} unexpected errors`,
   });
   return out;
+}
+
+// ---- Report-only rules -----------------------------------------------------------------------------------------
+
+/** Every rule's id: the first word of its name (R8 is one id for every operation's latency). */
+export const RULE_IDS = [
+  "R1",
+  "R2",
+  "R3",
+  "R4",
+  "R5",
+  "R6",
+  "R7a",
+  "R7b",
+  "R8",
+  "R9a",
+  "R9b",
+  "R10",
+  "R11",
+  "R12",
+] as const;
+
+export const ruleId = (r: RuleResult): string => r.rule.split(" ", 1)[0]!;
+
+/** A rule's result, and whether the run's exit code ignores it (`--report-only`). */
+export type Verdict = RuleResult & { reportOnly: boolean };
+
+/**
+ * Parses `--report-only` (comma-separated rule ids, e.g. "R1"). An unknown id throws, so a typo cannot make a
+ * failing rule pass silently. Exact ids: "R1" is not R10, R11 or R12.
+ */
+export function parseReportOnly(list: string): Set<string> {
+  const ids = new Set(
+    list
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  for (const id of ids)
+    if (!(RULE_IDS as readonly string[]).includes(id))
+      throw new Error(`--report-only: unknown rule "${id}" (one of ${RULE_IDS.join(", ")})`);
+  return ids;
+}
+
+/**
+ * Marks the report-only rules. They are still judged, printed and kept in the report; only the exit code
+ * (`exitCode`) ignores them. The nightly uses it for R1 until STUDY-174 Q6 is decided (§10.3).
+ */
+export function withReportOnly(results: RuleResult[], reportOnly: Set<string>): Verdict[] {
+  return results.map((r) => ({ ...r, reportOnly: reportOnly.has(ruleId(r)) }));
+}
+
+/** 0 when every rule that counts passed, 1 otherwise. */
+export function exitCode(verdicts: Verdict[]): 0 | 1 {
+  return verdicts.every((v) => v.pass || v.reportOnly) ? 0 : 1;
 }
