@@ -7,10 +7,23 @@
 //
 //   bun bench/soak/soak.ts --minutes 45 --out .data/soak
 //
+// Diagnostics (STUDY-174 F6): `--off subs,storage,…` leaves workload parts out, to bisect a failing trend;
+// `--probe` preloads ./probe.ts into the backend, which writes its memory detail to `<out>/probe.jsonl` (read by
+// ./analyze.ts). The backend's stderr is kept in `<out>/backend.stderr`.
+//
 // Exit code: 0 when every rule passes, 1 when one fails, 2 when the run itself broke. The report is
 // `<out>/report.json` (every sample, re-judgeable) and `<out>/report.md`.
 import { randomBytes } from "node:crypto";
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -32,6 +45,12 @@ const { values: flags } = parseArgs({
     // filling up (the defaults, 512 MiB and 100 MiB, take longer than a run to fill).
     "index-cache-mib": { type: "string", default: "32" },
     "query-cache-mib": { type: "string", default: "16" },
+    // Workload parts to leave out, comma-separated: subs, rooms, reconnects, sync-mutations, hot, httpq,
+    // canary, search, scheduler, storage, crons, logtail, clients (no sync clients at all).
+    off: { type: "string", default: "" },
+    // The backend's memory probe (./probe.ts), and how often it forces a full GC first (0: never).
+    probe: { type: "boolean", default: false },
+    "probe-gc-minutes": { type: "string", default: "10" },
   },
 });
 const MINUTES = Number(flags.minutes);
@@ -40,6 +59,9 @@ const SAMPLE_S = Number(flags.sample);
 const CLIENTS = Number(flags.clients);
 const OUT = resolve(flags.out!);
 const IDLE_S = Number(flags["idle-seconds"]);
+const OFF = new Set((flags.off ?? "").split(",").filter(Boolean));
+const on = (part: string) => !OFF.has(part);
+mkdirSync(OUT, { recursive: true });
 
 const BENCH = resolve(import.meta.dir, "..");
 const ROOT = resolve(BENCH, "..");
@@ -75,6 +97,7 @@ const secret = randomBytes(32).toString("hex");
 const backend = Bun.spawn(
   [
     process.execPath,
+    ...(flags.probe ? ["--preload", join(import.meta.dir, "probe.ts")] : []),
     BACKEND,
     "--port",
     String(port),
@@ -93,6 +116,9 @@ const backend = Bun.spawn(
       INSTANCE_SECRET: secret,
       INDEX_CACHE_SIZE: String(Number(flags["index-cache-mib"]) * 2 ** 20),
       UDF_CACHE_MAX_SIZE: String(Number(flags["query-cache-mib"]) * 2 ** 20),
+      ...(flags.probe
+        ? { SOAK_PROBE_OUT: join(OUT, "probe.jsonl"), SOAK_PROBE_GC_MINUTES: flags["probe-gc-minutes"]! }
+        : {}),
     },
     stdout: "ignore",
     stderr: "pipe",
@@ -100,8 +126,11 @@ const backend = Bun.spawn(
 );
 let stderrTail = "";
 (async () => {
-  for await (const chunk of backend.stderr as ReadableStream<Uint8Array>)
-    stderrTail = (stderrTail + new TextDecoder().decode(chunk)).slice(-8000);
+  for await (const chunk of backend.stderr as ReadableStream<Uint8Array>) {
+    const text = new TextDecoder().decode(chunk);
+    appendFileSync(join(OUT, "backend.stderr"), text);
+    stderrTail = (stderrTail + text).slice(-8000);
+  }
 })();
 const cleanup = async () => {
   backend.kill("SIGTERM");
@@ -130,7 +159,7 @@ const adminKey = (
 const project = join(state, "project");
 mkdirSync(join(project, "bunvex"), { recursive: true });
 for (const f of readdirSync(join(import.meta.dir, "app")))
-  cpSync(join(import.meta.dir, "app", f), join(project, "bunvex", f));
+  if (on("crons") || f !== "crons.ts") cpSync(join(import.meta.dir, "app", f), join(project, "bunvex", f));
 writeFileSync(join(project, "package.json"), JSON.stringify({ name: "soak-app", private: true, type: "module" }));
 symlinkSync(join(BENCH, "node_modules"), join(project, "node_modules"));
 const envFile = join(state, "deployment.env");
@@ -291,27 +320,31 @@ function openClient(i: number): Driven {
   const client = new BunvexClient(url, { logger: false, unsavedChangesWarning: false } as never);
   const d: Driven = { client, stops: [], subs: 0 };
   const channel = CHANNELS[i % CHANNELS.length]!;
-  d.stops.push(
-    client.onUpdate(
-      api.messages.list,
-      { channel },
-      () => {},
-      (e) => failed("subscription", e),
-    ),
-  );
-  d.stops.push(
-    client.onUpdate(
-      api.counters.get,
-      { name: "hot" },
-      () => {},
-      (e) => failed("subscription", e),
-    ),
-  );
-  d.subs = 2;
-  const room = client.client.joinRoom(api.rooms.lobby as never, { n: i % 3 }) as {
-    setPresence(p: unknown): void;
-    leave(): void;
-  };
+  if (on("subs"))
+    d.stops.push(
+      client.onUpdate(
+        api.messages.list,
+        { channel },
+        () => {},
+        (e) => failed("subscription", e),
+      ),
+    );
+  if (on("subs"))
+    d.stops.push(
+      client.onUpdate(
+        api.counters.get,
+        { name: "hot" },
+        () => {},
+        (e) => failed("subscription", e),
+      ),
+    );
+  d.subs = on("subs") ? 2 : 0;
+  const room = on("rooms")
+    ? (client.client.joinRoom(api.rooms.lobby as never, { n: i % 3 }) as {
+        setPresence(p: unknown): void;
+        leave(): void;
+      })
+    : { setPresence() {}, leave() {} };
   d.stops.push(() => room.leave());
   clients.add(d);
   // Its own loop: a message every ~1 s, a bump every ~2 s, a presence every ~0.5 s; replaced after 30–90 s.
@@ -322,7 +355,7 @@ function openClient(i: number): Driven {
       while (alive && clients.has(d)) {
         n++;
         room.setPresence({ x: Math.random(), y: Math.random() });
-        if (n % 2 === 0)
+        if (n % 2 === 0 && on("sync-mutations"))
           void timed("sync mutation", () =>
             client.mutation(api.messages.send, {
               channel,
@@ -330,10 +363,10 @@ function openClient(i: number): Driven {
               body: `${pick(WORDS)} ${pick(WORDS)} ${n}`,
             }),
           );
-        if (n % 4 === 0)
+        if (n % 4 === 0 && on("hot"))
           void timed("sync mutation (hot counter)", () => client.mutation(api.counters.bump, { name: "hot" }), OCC);
         await Bun.sleep(500);
-        if (Date.now() > replaceAt && alive) {
+        if (Date.now() > replaceAt && alive && on("reconnects")) {
           await closeClient(d);
           reconnectTimes.push(Date.now());
           openClient(i);
@@ -353,13 +386,16 @@ async function closeClient(d: Driven) {
 
 const tStart = Date.now();
 const elapsed = () => (Date.now() - tStart) / 1000;
-for (let i = 0; i < CLIENTS; i++) openClient(i);
+if (on("clients")) for (let i = 0; i < CLIENTS; i++) openClient(i);
 // HTTP queries: a channel's list (invalidated often), the canary (written every 5 min), a search.
-every(100, () => timed("http query", () => http.query(api.messages.list, { channel: pick(CHANNELS) })), 8);
-every(100, () => timed("http query (canary)", () => http.query(api.config.get, { key: "canary" })), 8);
-every(500, () =>
-  timed("search", () => http.query(api.messages.search, { text: pick(WORDS), channel: pick(CHANNELS) })),
-);
+if (on("httpq"))
+  every(100, () => timed("http query", () => http.query(api.messages.list, { channel: pick(CHANNELS) })), 8);
+if (on("canary"))
+  every(100, () => timed("http query (canary)", () => http.query(api.config.get, { key: "canary" })), 8);
+if (on("search"))
+  every(500, () =>
+    timed("search", () => http.query(api.messages.search, { text: pick(WORDS), channel: pick(CHANNELS) })),
+  );
 let canaryWrites = 0;
 every(300_000, async () => {
   await timed("http mutation", () => http.mutation(api.config.set, { key: "canary", value: Date.now() }));
@@ -367,29 +403,32 @@ every(300_000, async () => {
 });
 // Scheduled jobs: two a second, due within 2 s.
 let jobsScheduled = 0;
-every(
-  500,
-  async () => {
-    const seq = ++jobsScheduled;
-    const r = await timed("schedule", () =>
-      http.mutation(api.jobs.schedule, { seq, delayMs: Math.floor(Math.random() * 2000) }),
-    );
-    if (r === undefined) jobsScheduled--; // not scheduled: not expected to run (counted as an error already)
-  },
-  1,
-);
+if (on("scheduler"))
+  every(
+    500,
+    async () => {
+      const seq = ++jobsScheduled;
+      const r = await timed("schedule", () =>
+        http.mutation(api.jobs.schedule, { seq, delayMs: Math.floor(Math.random() * 2000) }),
+      );
+      if (r === undefined) jobsScheduled--; // not scheduled: not expected to run (counted as an error already)
+    },
+    1,
+  );
 // File storage: upload, read back, delete.
-every(5000, () =>
-  timed("storage round trip", async () => {
-    const upload = (await http.mutation(api.files.uploadUrl, {})) as string;
-    const r = await fetch(upload, { method: "POST", body: randomBytes(16 * 1024) });
-    const { storageId } = (await r.json()) as { storageId: string };
-    const id = await http.mutation(api.files.save, { storageId });
-    const fileUrl = (await http.query(api.files.url, { id })) as string;
-    if ((await (await fetch(fileUrl)).arrayBuffer()).byteLength !== 16 * 1024) throw new Error("file read back short");
-    await http.mutation(api.files.remove, { id });
-  }),
-);
+if (on("storage"))
+  every(5000, () =>
+    timed("storage round trip", async () => {
+      const upload = (await http.mutation(api.files.uploadUrl, {})) as string;
+      const r = await fetch(upload, { method: "POST", body: randomBytes(16 * 1024) });
+      const { storageId } = (await r.json()) as { storageId: string };
+      const id = await http.mutation(api.files.save, { storageId });
+      const fileUrl = (await http.query(api.files.url, { id })) as string;
+      if ((await (await fetch(fileUrl)).arrayBuffer()).byteLength !== 16 * 1024)
+        throw new Error("file read back short");
+      await http.mutation(api.files.remove, { id });
+    }),
+  );
 await http.mutation(api.config.set, { key: "canary", value: 0 });
 const FAR_DAYS = Number(flags["far-future-days"]);
 if (FAR_DAYS > 0) await http.mutation(api.jobs.far, { days: FAR_DAYS });
@@ -399,7 +438,7 @@ if (FAR_DAYS > 0) await http.mutation(api.jobs.far, { days: FAR_DAYS });
 const samples: Sample[] = [];
 let prev = await metrics();
 const baselineFds = await fds();
-const logTimer = setInterval(() => void tailLogs().catch((e) => failed("log tail", e)), 1000);
+const logTimer = setInterval(() => on("logtail") && void tailLogs().catch((e) => failed("log tail", e)), 1000);
 const deadline = tStart + MINUTES * 60_000;
 while (Date.now() < deadline) {
   await Bun.sleep(SAMPLE_S * 1000);
