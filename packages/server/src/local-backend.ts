@@ -188,10 +188,12 @@ const ADMIN_KEY: CommandSpec = {
   ],
 };
 
-/** Convex's instance secret check (`DeploymentSecret::try_from`): 32 bytes, hex-encoded. */
+/** Convex's instance secret check (`DeploymentSecret::try_from`): 32 bytes, hex-encoded, after one optional `0x` /
+ *  `0X` (`const_hex::decode` drops it; `0x0x…` is refused, STUDY-172 §7). */
 export function instanceSecretError(secret: string): string | null {
-  if (!/^[0-9a-fA-F]*$/.test(secret) || secret.length % 2) return "Couldn't hexdecode key";
-  const n = secret.length / 2;
+  const hex = /^0[xX]/.test(secret) ? secret.slice(2) : secret;
+  if (!/^[0-9a-fA-F]*$/.test(hex) || hex.length % 2) return "Couldn't hexdecode key";
+  const n = hex.length / 2;
   return n === 32 ? null : `Hex-decoded key was ${n} bytes, not 32`;
 }
 
