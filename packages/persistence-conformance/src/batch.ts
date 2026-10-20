@@ -8,7 +8,6 @@
 //     it) is retried batch by batch: every commit is acknowledged once and stored once;
 //   - SIGKILL in the middle of a split group leaves a prefix of whole commits: maxTs ≥ the last acknowledged
 //     commit, no torn commit, and every commit a flush carried at or below maxTs is in the store's log.
-import { spawn } from "node:child_process";
 import {
   commitWriteBytes,
   type DocWrite,
@@ -20,6 +19,7 @@ import {
   WRITE_BATCH_MAX_DOCUMENTS,
 } from "@bunvex/core";
 import type { DriverModule } from "./index.ts";
+import { spawnChild } from "./spawn-child.ts";
 import { insertPadded, newEngine } from "./workload.ts";
 
 type Check = (ok: boolean, what: string) => void;
@@ -171,21 +171,18 @@ export async function batchChecks(
 
   // 3. SIGKILL in the middle of split groups: a prefix of whole commits survives.
   await mod.open(true).then((st) => st.close());
-  const childPath = new URL("./batch-child.ts", import.meta.url).pathname;
   let bad = 0;
   let splitRuns = 0;
   let announcedTotal = 0;
   for (let k = 0; k < kills; k++) {
-    const child = spawn(process.execPath, [childPath, driverModule], {
-      env: { ...process.env, LEASE_TTL_MS: String(childTtlMs) },
-      stdio: ["ignore", "pipe", "inherit"],
-    });
+    const spawned = spawnChild("batch-child.ts", driverModule, childTtlMs);
+    const child = spawned.proc;
     let lastAck = 0n;
     let started = false;
     let split = false;
     const announced: bigint[] = [];
     let buf = "";
-    child.stdout.on("data", (d) => {
+    child.stdout!.on("data", (d) => {
       buf += d;
       const lines = buf.split("\n");
       buf = lines.pop()!;
@@ -201,7 +198,7 @@ export async function batchChecks(
         }
       }
     });
-    while (!started) await new Promise((r) => setTimeout(r, 20));
+    await spawned.waitForStart(() => started);
     await new Promise((r) => setTimeout(r, 300 + rnd(700)));
     child.kill("SIGKILL");
     await new Promise((r) => child.on("exit", r));
