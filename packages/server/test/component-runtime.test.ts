@@ -61,6 +61,8 @@ const COUNTER = {
         'export const page = query({ args: {}, handler: async (ctx) => ctx.db.query("messages").paginate({ numItems: 1, cursor: null }) });',
         'export const viaAction = action({ args: {}, handler: async (ctx) => ctx.runQuery("lib:count", {}) });',
         'export const nested = mutation({ args: {}, handler: async (ctx) => { await ctx.runMutation("lib:add", { body: "nested" }); return ctx.runQuery("lib:count", {}); } });',
+        "export const meta = query({ args: {}, handler: async (ctx) => ctx.meta.getFunctionMetadata() });",
+        "export const actionMeta = action({ args: {}, handler: async (ctx) => ctx.meta.getFunctionMetadata() });",
       ].join("\n"),
     ),
   ],
@@ -186,6 +188,22 @@ describe("a component's functions, run by an admin", () => {
     expect((await d.run("counter", "lib:page")).body!.errorMessage).toContain(
       "paginate() is only supported in the app.",
     );
+  });
+
+  test("ctx.meta.getFunctionMetadata() names the instance's component path, as Convex's", async () => {
+    const d = await deployment();
+    await d.push();
+    expect((await d.run("counter", "lib:meta")).body!.value).toEqual({
+      name: "lib:meta",
+      componentPath: "counter",
+      type: "query",
+      visibility: "public",
+    });
+    expect((await d.run("second", "lib:actionMeta")).body!.value).toMatchObject({
+      name: "lib:actionMeta",
+      componentPath: "second",
+      type: "action",
+    });
   });
 
   test("each instance's module state is its own (C3)", async () => {

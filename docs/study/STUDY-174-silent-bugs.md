@@ -38,7 +38,8 @@ that gap:
 - **(2) A soak test.** `bench/soak/` has a 45-minute mixed workload judged on trends by twelve written rules. Its
   pilots on the test VPS (12, 12, 30 and 25 minutes) flagged F1 and F2 on their own, with no knowledge of either. They
   also found a sixth, F6: resident memory grows about 5 MB a minute under steady load while the JS heap stays flat
-  (§4.6).
+  (§4.6). F6 is now attributed (§4.7): a plateau, not a leak. It is SQLite's page cache, which bunvex sizes at
+  256 MiB, filling as the database file grows; it levels off at that budget.
 - **(3) Metadata differentials against Convex's binary.** A prototype in `packages/differential` compares the query
   cache's hits and misses as the function log stream shows them on both backends. It failed on the pre-#751 main
   exactly where #751 says, and passes on main now that #751 is merged (§5.3).
@@ -492,12 +493,90 @@ What the pilots show:
   statements and rows, or the allocator keeping freed pages.
 - It is a real trend over two runs. It is **not yet known to be unbounded**: 20 minutes of steady state cannot tell a
   leak from a slow plateau.
-- **Next step, not done here** (§9, step 3): a 2-hour run on the VPS. It would sample `process.memoryUsage()`'s
+- **Done since:** §4.7 attributes it. The paragraph below was the plan.
+- **Next step** (§9, step 3): a 2-hour run on the VPS. It would sample `process.memoryUsage()`'s
   `external` and `arrayBuffers` (a `/metrics` gauge, or a debug route), with a forced GC every 10 minutes (does RSS
   come back?), and bisect the workload by turning off one part at a time: rooms, storage, search, reconnects.
 - The database file grew 46 MB in 12 minutes although the trim keeps 2 000 messages. That is the document log
   keeping every version until retention prunes it ([STUDY-33](STUDY-33-retention.md)'s retention runs on its own schedule). It is on disk, not
   in memory; a longer run should check that it levels off.
+
+### 4.7 F6 attributed: SQLite's page cache, a plateau (2026-10-20)
+
+**The verdict: a plateau, not a leak, and bunvex's, not Bun's.** The memory that grows is SQLite's page cache.
+bunvex opens its store with `pragma cache_size = -262144` (`packages/core/src/persistence/sqlite.ts:160`), a
+256 MiB cache. The cache keeps every page it reads or writes until it reaches that budget. Here the database file
+grows 3.8 MB a minute, from the document log: it keeps every version for 14 days, as Convex's does (STUDY-33). The
+cache follows the file at about 1.4 MB of memory per MB of file, then stops at its budget. Convex sets no pragma
+(`crates/sqlite/src/lib.rs:93-99`: `Connection::open`, then the tables), so it runs with SQLite's default,
+2 000 KiB. rusqlite's bundled build does not change that default either. STUDY-133 lists that difference as L13, but no DV records it.
+
+**How it was found.** All the runs were on the test VPS, the same machine as §4.6, on main at `9254fa5c`. They
+used `soak.ts --probe`, which preloads `bench/soak/probe.ts` into the backend. Every 15 s the probe records:
+- `process.memoryUsage()`, including `external` and `arrayBuffers`;
+- `bun:jsc`'s `heapStats()`, with every object type's count;
+- `Bun.unsafe.memoryFootprint()`;
+- `/proc/self/smaps_rollup`.
+
+Every 10 minutes the probe forces a full GC. On demand it writes mimalloc's statistics (`Bun.unsafe.mimallocDump()`),
+a copy of `/proc/self/smaps`, and a heap snapshot. `bench/soak/analyze.ts` reads the result: Theil–Sen slopes, the
+object types' change, and mimalloc's size classes. The files are under `bench/soak/results/f6-*`.
+
+| Run | Window | anonymous | JS heap | `external` | SQLite file | R1 |
+|---|---|---|---|---|---|---|
+| main, 2 h (`f6-main-2h`) | 13–60 min | **5.38 MB/min** (310 → 544 MB) | 0.24 | 0.09 | 3.80 MB/min | fail |
+| the same run | 60–114 min | **0.22 MB/min** (555 → 578 MB) | 0.14 | 0.02 | 3.79 MB/min (to 437 MB) | — |
+| main, 30 min, 256 MiB cache (`f6-sqlite-cache-256mib`) | 13–30 min | **5.14 MB/min** | 0.15 | 0.07 | 3.79 MB/min | fail: 5.3 MB/min, +54 MB |
+| the same, cache at SQLite's default (`f6-sqlite-cache-2mib`) | 13–30 min | **0.12 MB/min** | 0.25 | 0.15 | 3.78 MB/min | pass: −0.3 MB/min |
+
+The two 30-minute runs differ only in that one pragma: the second run's backend had a local patch that read it
+from the environment. Both ran without the far-future job, so F2 did not interfere.
+
+What else the 2-hour run shows:
+- **The growth is all in one of mimalloc's size classes.** Bun's allocator serves SQLite too. Its 5 KiB class holds
+  one 4 KiB page plus SQLite's header. It held 103.5 MiB at 20 minutes, 292.2 MiB at 60 and 310.4 MiB at 115; that
+  is the 256 MiB budget, in 5 KiB blocks. The 16 KiB class (JSC's heap blocks) went 125 → 154 → 153 MiB. No other
+  class moved by more than 3 MB. With the 2 MiB cache, the 5 KiB class held 3.0 MiB at 27 minutes.
+- **Nothing else grows:**
+  - mapped files, `arrayBuffers` and `external` are flat;
+  - after a forced GC, between 60 and 114 minutes, objects, strings and `Uint8Array`s moved by 4 % or less. The
+    `ArrayBuffer` count rose by 1 210 (to 3 918), but `arrayBuffers` stayed at ~1 MB;
+  - anonymous memory sampled right after a forced GC levels off with the rest.
+- **No mapping tells the cause apart.** `smaps` shows almost all anonymous memory in one anonymous region, the
+  JS heap and the page cache together. The size classes are what separate them.
+- **Plain Bun reproduces it** (`bench/soak/sqlite-page-cache.ts`, `results/f6-plain-bun-sqlite.txt`). A plain
+  `bun:sqlite` script grows a WAL database to 196 MB:
+  - with `cache_size = -262144`, its resident memory grows 256 MB, 1.3 MB per MB of file, and mimalloc's 5 KiB class
+    holds 245 MiB;
+  - with SQLite's default it grows 11 MB and stays there.
+
+  This is SQLite doing what it was told to do. It is not a Bun bug.
+
+**Why the workload was not bisected part by part.** Changing one pragma, with the workload unchanged, took the
+slope from 5.1 to 0.12 MB/min, under R1's 0.5 MB/min. The 2-hour run's plateau, 0.22 then −0.16 MB/min, says the
+same of everything else in the workload. No part is left that could drive a slope R1 would see. So the
+per-part switches (`--off subs,rooms,reconnects,sync-mutations,hot,httpq,canary,search,scheduler,storage,crons,
+logtail,clients`) are in `soak.ts` for the next trend, but these runs did not need them.
+
+**What it means:**
+- **For apps:** the store's process holds up to ~310 MiB more than the JS heap and the index cache, once the file
+  is past 256 MiB. That is bounded, and on a store under 256 MiB it is about 1.3× the file.
+- **For the soak:** at this write rate the cache needs ~70 minutes to fill. Until then R1 sees a trend, so a
+  45-minute nightly fails R1 every night, and the 2-hour run failed it too: 1.8 MB/min, judged from t = 24 min,
+  before the cache was full. The memory warm-up must see the page cache, as it already sees the index cache (§4.2).
+  Today nothing reports the page cache: `bun:sqlite` does not expose `sqlite3_db_status`, and no setting changes the
+  pragma. Q6 asks which way to go.
+- **Speed:** in the matched 30-minute pair, the smaller cache was not slower. HTTP query p99 was 50–55 ms
+  against 59–84 ms, and the sync mutation p50 27 ms against 29 ms. That is one run each on a 2-vCPU machine, with
+  the file (≤ 120 MB) in the OS page cache, so it shows no regression on this workload, not on every one. The index
+  cache (512 MiB by default) serves the hot index reads in either case.
+
+**Seen in the 2-hour run, not F6:**
+- R11 failed at 73 % of a core: F2's far-future job (#757).
+- R9b failed on one minute, with a p99 lag of 7.8 s: the heap snapshot at t = 115 min stopped the process for
+  seconds. `probe.ts` now writes its dumps before the snapshot, so a snapshot no longer inflates them.
+- The database file reached 437 MB in 2 hours under the soak's steady writes. That is the 14-day document retention, on
+  disk, the same as Convex's.
 
 ## 5. Metadata differentials against Convex (part 3)
 
@@ -655,6 +734,21 @@ Each question gives what Convex does, what bunvex does, whether they are the sam
   `scripts/nightly.sh` after #755 merges, for about 2 minutes a night more. The runner's per-step log tail (§5.2)
   follows on the same track.
 
+**Q6. F6: SQLite's page cache, 256 MiB or SQLite's default (§4.7).**
+- Convex: no pragma, so SQLite's default `cache_size` of 2 000 KiB (`crates/sqlite/src/lib.rs:93-99`).
+- bunvex: `cache_size = -262144`, 256 MiB, since the first commit, with no study behind it.
+- Same: no. STUDY-133 lists it (L13), but no DV records it.
+- Why: a choice, not "impossible".
+- App impact: memory only. Up to ~310 MiB more resident memory once the store's file passes 256 MiB. The matched
+  soak pair showed no slower reads with the default (the file was in the OS page cache, and the index cache serves
+  the hot reads).
+- Soak impact: with 256 MiB, R1 fails for the first ~70 minutes at the soak's write rate, so the 45-minute nightly of
+  Q1 would fail every night.
+- **Recommendation:** match Convex: drop the pragma. Before that, measure a read-heavy run on a store bigger than
+  RAM, where the OS page cache cannot cover it. If the owner keeps 256 MiB instead, record it as a DV, and have the
+  soak's memory warm-up wait for the cache to fill, or run the soak with a smaller cache (which needs a setting:
+  an addition).
+
 Not questions, because each matches Convex: the fixes for F1 (done, #751), F2, F3 and F5, and the suspected S1–S7 once
 confirmed.
 
@@ -664,7 +758,7 @@ confirmed.
 |---|---|---|---|
 | 1 | This PR (the rules, the soak, the prototype); #751 already fixed F1 | — | F1 (regression guard) |
 | 2 | Fix F2 and F3 with one capped `timerDelay` helper in core, a test per loop with an injected clock, and the I-25 rule in `check:deps` (rule 6, §3.1) in the same PR, so a new uncapped delay fails CI | 0.5 day | F2, F3, S8, and new ones |
-| 3 | Attribute F6: a 2 h VPS run with `external` and `arrayBuffers` sampled, a periodic forced GC, and the workload bisected (§4.6) | 1 day | F6 |
+| 3 | ~~Attribute F6~~ done (§4.7): SQLite's 256 MiB page cache, a plateau. What is left is Q6 | — | F6 |
 | 4 | The server suites' `afterEach` "hub empty, cache consistent, no session left" helper (I-03, I-05, I-11, I-19, I-23) | 0.5–1 day | freed state across ~40 suites |
 | 5 | The soak nightly workflow (Q1) | 0.5 day + a week of watching for flakes | trends, R1–R12 |
 | 6 | Fix F5: a stopping scheduler stops retrying and waits a bounded time. Test: shutdown under contention within 1 s | 0.5 day | F5, S4 |
