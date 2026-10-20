@@ -238,7 +238,7 @@ each step writes its own tests and checks against these):
 | 5 | Calls across components (references, handles, identity, subtransaction) | A1–A3, A5–A12, A13–A17, B1–B3, and every test's cleanup |
 | 6 | CLI push and codegen (DV-174, DV-385, DV-429; STUDY-156) | every test |
 | 7 | Scheduler, crons, storage, HTTP mounts, env per component (STUDY-157; search and vector indexes too) | B4–B8, A4, A16, A17 |
-| 8 | bunvex's own components (C1, C7) | each against its Convex package's behaviour |
+| 8 | bunvex's own components (C1, C7; [STUDY-158](STUDY-158-own-components.md)) | each against its Convex package's behaviour |
 | 9 | Dashboard and CLI flags (DV-224, DV-391), with sandbox-86 | — |
 | 10 | Export, import, streaming export (DV-215) | — |
 

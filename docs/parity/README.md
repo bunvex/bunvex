@@ -172,8 +172,8 @@ gaps.
    [STUDY-152](../study/STUDY-152-components-restudy.md)). Built (steps 1–7 so far, STUDY-152 to STUDY-157):
    namespaced tables and the registry, `bunvex.config.ts` with `defineApp` / `defineComponent` pushed by the CLI,
    a component's functions run and called across components (references, handles), its env, codegen, its
-   scheduler, crons, storage and HTTP mounts. Left: search and vector indexes in
-   components (PR 5), bunvex's own components (step 8), the dashboard (step 9) and export/import (step 10). Until
+   scheduler, crons, storage, HTTP mounts and search and vector indexes. Left: bunvex's own components (step 8,
+   studied in [STUDY-158](../study/STUDY-158-own-components.md)), the dashboard (step 9) and export/import (step 10). Until
    step 8, an app on `@convex-dev/*` components (rate limiter, aggregate, workpool, auth, …) has no package to
    install.
 
