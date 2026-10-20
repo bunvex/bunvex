@@ -15,6 +15,7 @@
 import vm from "node:vm";
 import { BunvexError, isBunvexError } from "@bunvex/values";
 import { isSystemError, stackAfterMessage } from "./errors.ts";
+import { log } from "./log.ts";
 import { mapStack } from "./stack-map.ts";
 
 /** Where a context keeps its call wrapper: on its `Function.prototype`, so each pushed handler reaches it. */
@@ -104,7 +105,9 @@ export function installAppErrors(context: vm.Context, node: boolean): void {
     { filename: "bunvex-runtime:app-errors.js" },
   )(format, fix, Promise) as Call;
   const fnProto = vm.runInContext("Function.prototype", context) as object;
-  Object.defineProperty(fnProto, APP_ERRORS, { value: views(call) });
+  const viewOf = views(call);
+  Object.defineProperty(fnProto, APP_ERRORS, { value: viewOf });
+  appViews.set(context, viewOf);
   // The app's own `BunvexError`, a class of its realm (its stack formatted as the app's other errors), still a
   // `BunvexError` to the server; and to the app, any `BunvexError` is one, the engine's included (a nested call's).
   appBunvexErrors.set(
@@ -125,11 +128,21 @@ export function installAppErrors(context: vm.Context, node: boolean): void {
 }
 
 const appBunvexErrors = new WeakMap<vm.Context, unknown>();
+const appViews = new WeakMap<vm.Context, <T extends object>(v: T) => T>();
 
-/** A server module's namespace as a pushed context imports it: `bunvex/values` with the context's `BunvexError`. */
+/**
+ * A server module's namespace as a pushed context imports it: `bunvex/values` with the context's `BunvexError`;
+ * `bunvex/server` with `log` seen through the context's wrapper, so an error `log.audit` throws (a key starting with
+ * "$", the lines past their limit) has the app's frames, not the server's (Convex makes it in the app's bundle,
+ * `audit_logging.ts`).
+ */
 export function appNamespace(context: vm.Context, ns: Record<string, unknown>): Record<string, unknown> {
+  let out = ns;
   const own = appBunvexErrors.get(context);
-  return own !== undefined && ns.BunvexError === BunvexError ? { ...ns, BunvexError: own } : ns;
+  if (own !== undefined && ns.BunvexError === BunvexError) out = { ...out, BunvexError: own };
+  const view = appViews.get(context);
+  if (view !== undefined && ns.log === log) out = { ...out, log: view(log) };
+  return out;
 }
 
 /**

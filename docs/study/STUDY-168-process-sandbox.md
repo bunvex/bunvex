@@ -1214,6 +1214,7 @@ One concern per PR. Sizes count code plus tests, roughly:
 | 2 | **Wire protocol and child runtime.** `packages/sandbox`: framing (Bun IPC JSON, tagged values, message size caps at Convex's 16 MiB), the child entry, the `bunvex/server` shim with real builders, analysis in the child (functions, validators JSON, router, crons, rooms) | L (≈1200) | the shim must export everything a `_generated/server.js` imports; analysis must match `CodeVersion.analyze` exactly (`code-version.ts:498-593`) |
 | 3 | **Queries and mutations over the bridge.** Stand-ins with validators; `db` (get, the whole query chain with streamed iteration, writes, `normalizeId` (sync: a table-number map shipped with the call), `system`, `table()`), `auth`, `scheduler`, nested `runQuery`/`runMutation`, `ctx.meta` (`getSnapshotTs` is sync: sent with the call); per-call determinism; user time charged from the child; env reads reported | L (≈1500) | the synchronous APIs; chain-building errors that today throw synchronously; read-set and observed-time report-backs; the async-context state restored around every op (8 ALS instances) |
 | 4 | **Logs and errors.** Console rendering in the child, log owners, `log.audit`; `BunvexError` with `data`; source-mapped stacks; `console.trace` | M (≈600) | byte-for-byte log and stack parity (the existing frame tests are the oracle) |
+| 4b | **Unhandled rejections fail the function** (DV-528, owner 2026-10-20). Under `process`, a rejection nothing handled once the call's microtasks have drained fails the query, mutation or action with Convex's `UnhandledPromiseRejection` error and the app's mapped frames (`environment/udf/mod.rs:1103-1119`); the child runs one call at a time, so it can attribute the rejection, which `vm` cannot (DV-528 keeps `vm` logging it). `bridge-parity.test.ts`'s three unhandled cases become failures, compared with Convex's binary in `packages/differential` | S (≈200) | a rejection that lands after the call's answer (an unawaited operation): Convex drains before it answers, so the child must too |
 | 5 | **Actions.** `fetch` through the host's `isolateFetch` (SSRF screen, proxy, meters, abort on timeout), streamed; `ctx.storage` (`get` → Blob, `store`, bytes in 1 MiB chunks); `ctx.vectorSearch` with a recorded filter; `runAction`; rooms ctx; the action cut-off, then a kill | L (≈900) | streams both ways; the 16 MiB+ storage path (§14.1) |
 | 6 | **HTTP actions.** The router stand-in; `Request` in and `Response` out as chunk streams; `trackedFormData`; the 100 MiB response cap | M (≈500) | streaming backpressure; the content-type and body tests |
 | 7 | **Components.** One child per component instance and version, or the namespace switch in one child; `resolveCall` stays on the host | M (≈400) | DV-492 parity (each instance's modules evaluated once) |
@@ -1223,11 +1224,11 @@ One concern per PR. Sizes count code plus tests, roughly:
 | 11 | **Docker image and docs.** bubblewrap and the helper in the image; compose knobs; the AppArmor profile and seccomp JSON for the namespaces mode; self-hosting docs; the instance secret off argv (Q11) | S (≈250) | operators' kernels and Docker versions (`writable-cgroups` is recent) |
 | 12 | **Parity CI.** A Linux job that runs the suites of §12.4 with `BUNVEX_FUNCTION_SANDBOX=process` | S (≈150) + CI time | the runner needs user namespaces and a writable cgroup; if the CI image restricts user namespaces as Ubuntu 24.04 does, the job loads §13.5's profile |
 
-**Total: about 7,000–8,000 lines over 12 PRs,** of which PRs 2, 3, 5 and 8 are the bulk. Optional later:
+**Total: about 7,000–8,000 lines over 12 PRs** (plus 4b, added on 2026-10-20), of which PRs 2, 3, 5 and 8 are the bulk. Optional later:
 push-time evaluation (`definition-eval.ts`) in a child for a cloud (M), and spin-before-block or shared-memory
 transport if per-op latency matters (S–M, research).
 
-**Order.** PRs 1–4 are a usable self-hosted `process` mode for queries and mutations. Adding 5, 6, 9 and 8 makes
+**Order.** PRs 1–4 (and 4b) are a usable self-hosted `process` mode for queries and mutations. Adding 5, 6, 9 and 8 makes
 it a cloud executor. PR 10 can follow PR 2 on its own.
 
 ### 12.4 How parity is proven

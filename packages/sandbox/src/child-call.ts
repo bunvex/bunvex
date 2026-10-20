@@ -15,7 +15,13 @@
 // - **`process.env`** reads the variables the call carries, after checking the name as the engine's reader does;
 //   the names read are reported, and the host reads them on its transaction (the read set).
 // - **Errors.** An operation's error is rebuilt here with its class, name and message, and remembered: if it
-//   leaves the handler as it came, the host throws its own original.
+//   leaves the handler as it came, the host throws its own original. One the engine threw before its call returned
+//   (a value that is not one, written) gets the frames of the app's call, as under `vm` it is thrown there.
+// - **Logs** (STUDY-171 §11). The console is the server's own capture (`captureLines`): each line rendered, cut and
+//   stamped here exactly as in-process, then sent with the call's next message, so the host logs it in order with
+//   the operations around it (a nested call's lines after the ones before it). `log.audit` is an operation: the
+//   host holds the lines, shared with the nested calls, and checks their limits.
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   checkEnvVarName,
   checkUserTime,
@@ -29,7 +35,17 @@ import {
   userTimeMs,
   withUserTimer,
 } from "@bunvex/core";
-import { appContext, type CodeVersion, inHandleScope, sandboxNotYet, withEnv } from "@bunvex/server/executor";
+import {
+  appContext,
+  type CodeVersion,
+  captureLines,
+  inHandleScope,
+  type LogLine,
+  MAX_LOG_LINES,
+  sandboxNotYet,
+  setAuditScope,
+  withEnv,
+} from "@bunvex/server/executor";
 import { BunvexError, isBunvexError } from "@bunvex/values";
 import { type DbHost, QueryImpl, readerOf, Tx, VirtualQuery } from "./child-db.ts";
 import {
@@ -37,6 +53,7 @@ import {
   type ToHost,
   type WireCall,
   type WireLink,
+  type WireLogLine,
   type WireReply,
   type WireTable,
   type WireThrown,
@@ -44,6 +61,13 @@ import {
 import { decode, encode } from "./wire.ts";
 
 type Send = (m: ToHost) => void;
+
+/** The call whose handler runs: its `log.audit` lines go to the host. */
+const running = new AsyncLocalStorage<ChildCall>();
+setAuditScope(() => {
+  const call = running.getStore();
+  return call ? (json: string) => call.op("log.audit", [json]).then(() => {}) : undefined;
+});
 
 /** What a child keeps between calls: the catalogs and variables by epoch, the executions by the host's id. */
 export class CallRuntime {
@@ -86,7 +110,9 @@ export class CallRuntime {
       const env = m.env ? this.envs.get(m.env.epoch)! : null;
       await call.run(f.handler as (ctx: unknown, args: unknown) => unknown, env, exec.execution);
     } finally {
-      this.calls.delete(m.id);
+      // The answers to operations it did not await still reach it (an unawaited write that fails is an unhandled
+      // rejection, as in-process); the host sends them before it ends the call.
+      call.whenAnswered(() => this.calls.delete(m.id));
       if (--exec.calls === 0) this.executions.delete(m.exec.id);
     }
   }
@@ -122,7 +148,15 @@ const stackOf = (e: Error): string | null => {
 
 class ChildCall implements DbHost {
   private seq = 0;
-  private readonly waiting = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
+  private readonly waiting = new Map<
+    number,
+    { resolve: (v: unknown) => void; reject: (e: unknown) => void; site: Error }
+  >();
+  /** Where the app made each link of its chains: an error the engine throws making one is thrown there. */
+  private readonly linkSites = new Map<number, Error>();
+  private readonly lines: WireLogLine[] = [];
+  private logged = 0;
+  private answered: (() => void) | null = null;
   private created: Map<string, WireTable>;
   /** Each read, in order: the engine records an interval per read, the same name's included. */
   private readonly envReads: string[] = [];
@@ -150,6 +184,7 @@ class ChildCall implements DbHost {
     const id = ++this.nextLink;
     // Serialized at the call, as an operation's arguments are.
     this.links.push([kind, id, from, encode(args)]);
+    this.linkSites.set(id, new Error());
     return id;
   }
 
@@ -161,21 +196,39 @@ class ChildCall implements DbHost {
       time: this.observed.time,
       env: this.envReads.splice(0),
       links: this.links.splice(0),
+      lines: this.lines.splice(0),
     };
     this.reported = ran;
     return out;
   }
 
+  /**
+   * A console line, for the host. Past `MAX_LOG_LINES` of one call none can be shown: the host keeps the first ones
+   * of the invocation, which this call's first `MAX_LOG_LINES` come before (a query's or mutation's lines are not
+   * streamed, STUDY-20).
+   */
+  logLine(l: LogLine) {
+    if (this.logged++ < MAX_LOG_LINES) this.lines.push([l.level, l.messages, l.isTruncated, l.timestamp]);
+  }
+
+  /** Runs `then` once no operation of the call waits for its answer. */
+  whenAnswered(then: () => void) {
+    if (this.waiting.size === 0) then();
+    else this.answered = then;
+  }
+
   /** An operation, run by the host: paused while it waits, as a store call (`storeCall`), its budget checked around. */
   op(name: string, args: unknown[]): Promise<unknown> {
     checkUserTime();
+    // Where the app called it, for an error the engine throws at once (a stack is cheap to take: about 0.1 µs).
+    const site = new Error();
     // Serialized here, at the call, as the engine copies what it is given (a getter's throw is the app's).
     const encoded = args.map(encode);
     const op = ++this.seq;
     const answer = pausingUserTime(
       () =>
         new Promise<unknown>((resolve, reject) => {
-          this.waiting.set(op, { resolve, reject });
+          this.waiting.set(op, { resolve, reject, site });
           this.send({ t: "op", id: this.m.id, op, name, args: encoded, report: this.report() });
         }),
     );
@@ -198,7 +251,20 @@ class ChildCall implements DbHost {
       this.created = new Map(m.created.map((t) => [t.name, t]));
     }
     if (m.ok) w.resolve(decode(m.value, false));
-    else w.reject(this.rebuilt(m.error, m.op));
+    else {
+      const e = this.rebuilt(m.error, m.op);
+      // Thrown at the app's call under `vm`: the error holds the frames of that call (or of the link that failed),
+      // which the app's context maps (`installAppErrors`), and no `at async` frame.
+      const site = m.sync ? (m.link !== undefined && this.linkSites.get(m.link)) || w.site : null;
+      if (site && e instanceof Error) {
+        const stack = stackOf(site) ?? "";
+        const frames = stack.includes("\n") ? stack.slice(stack.indexOf("\n")) : "";
+        const header = e.message ? `${e.name}: ${e.message}` : e.name;
+        Object.defineProperty(e, "stack", { value: header + frames, writable: true, configurable: true });
+      }
+      w.reject(e);
+    }
+    if (this.waiting.size === 0 && this.answered) this.answered();
   }
 
   /** An operation's error as the app sees it: the engine's class and words. */
@@ -304,11 +370,16 @@ class ChildCall implements DbHost {
         const call = () => handler(appContext(handler, ctx), args);
         return read ? withEnv(read, call) : call();
       });
+    const logged = () =>
+      running.run(this, () =>
+        captureLines(
+          (line) => this.logLine(line),
+          () => inHandleScope({ create: (ref: unknown) => this.op("createFunctionHandle", [ref]) } as never, body),
+        ),
+      );
     let message: ToHost;
     try {
-      const value = await runInExecution(execution, () =>
-        inHandleScope({ create: (ref: unknown) => this.op("createFunctionHandle", [ref]) } as never, body),
-      );
+      const value = await runInExecution(execution, logged);
       // The engine checks this on what the handler returned (`notAQuery`); the object cannot cross.
       if (value instanceof QueryImpl || value instanceof VirtualQuery)
         message = {

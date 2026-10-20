@@ -113,13 +113,13 @@ describe("a child", () => {
     expect((e as InvalidModulesError).detail).toStartWith("Failed to analyze m.js: Uncaught Error: FLAG is undefined");
   });
 
-  test("its environment holds only the loader's knobs, never the server's variables", async () => {
+  test("its environment holds only the loader's knobs and TZ (UTC), never the server's variables", async () => {
     process.env.SANDBOX_TEST_SECRET = "s3cret";
     process.env.MAX_USER_MODULES = "4096";
     try {
       const c = await start({ entry: fake("env") });
       const e = await rejection(c.load([QUERY], OPTS));
-      expect(JSON.parse(e.message)).toEqual(["MAX_USER_MODULES"]);
+      expect(JSON.parse(e.message)).toEqual(["MAX_USER_MODULES", "TZ"]);
     } finally {
       delete process.env.SANDBOX_TEST_SECRET;
       delete process.env.MAX_USER_MODULES;
