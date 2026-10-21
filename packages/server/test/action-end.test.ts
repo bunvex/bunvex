@@ -6,7 +6,9 @@
 // - a `ctx` call or a `fetch` made after its end (a `ctx` kept in module state, an operation's continuation) is
 //   refused, with the words the function sandbox's child uses;
 // - an operation started before its end goes on (it was in flight), as before.
-// HTTP actions (whose body may stream after the handler returns) and `"use node"` actions keep running as before.
+// An HTTP action ends the same way, with its body (Convex's isolate runs until the response's stream ends): its body's
+// code runs on while it streams, and once it has been handed over (or the handler failed, or the client left) its
+// timers are cleared and a `ctx` it kept refuses. `"use node"` actions keep running as before.
 import { afterEach, describe, expect, test } from "bun:test";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
@@ -42,6 +44,22 @@ http.route({ path: "/stream", method: "GET", handler: httpAction(async (ctx) => 
   let n = 0;
   return new Response(new ReadableStream({ async pull(c) { if (n++ === 2) return c.close(); await new Promise((r) => setTimeout(r, 10)); c.enqueue(new TextEncoder().encode(String((await ctx.runQuery("m:read", { i: 100 + n }))[0]))); } }));
 }) });
+http.route({ path: "/leftTimer", method: "GET", handler: httpAction(async (ctx) => { state.saved = ctx; setTimeout(async () => { state.fired++; try { await ctx.runMutation("m:ins", { k: 10 }); } catch (e) { state.late.push(e.message); } }, 50); return new Response("answered"); }) });
+http.route({ path: "/leftInterval", method: "GET", handler: httpAction(async () => { setInterval(() => { state.ticks++; }, 10); await new Promise((r) => setTimeout(r, 45)); return new Response(new Uint8Array([1, 2])); }) });
+http.route({ path: "/throwsLeavingTimer", method: "GET", handler: httpAction(async () => { setTimeout(() => { state.fired++; }, 30); throw new Error("no"); }) });
+http.route({ path: "/streamLeavesTimer", method: "GET", handler: httpAction(async (ctx) => {
+  let n = 0;
+  return new Response(new ReadableStream({ async pull(c) {
+    await new Promise((r) => setTimeout(r, 10));
+    if (n++ === 2) { setTimeout(() => { state.fired++; ctx.runMutation("m:ins", { k: 11 }).catch((e) => state.late.push(e.message)); }, 30); return c.close(); }
+    await ctx.runMutation("m:ins", { k: 12 });
+    c.enqueue(new TextEncoder().encode("x"));
+  } }));
+}) });
+http.route({ path: "/endless", method: "GET", handler: httpAction(async () => {
+  return new Response(new ReadableStream({ start() { setInterval(() => { state.ticks++; }, 10); }, async pull(c) { await new Promise((r) => setTimeout(r, 5)); c.enqueue(new Uint8Array([1])); } }));
+}) });
+http.route({ path: "/fetchLater", method: "POST", handler: httpAction(async (ctx, req) => { const url = await req.text(); ctx.runQuery("m:read", { i: 5 }).then(() => fetch(url)).then(() => state.late.push("fetched"), (e) => state.late.push([e.name, e.message])); return new Response("ok"); }) });
 export default http;
 `;
 
@@ -136,11 +154,71 @@ describe("a V8 action ends with its answer", () => {
     await Bun.sleep(100);
     expect((await d.read())[3]).toEqual([["Error", ACTION_ENDED_MESSAGE]]);
   });
+});
 
-  test("an HTTP action's body still streams after its handler returned, calling ctx", async () => {
+describe("an HTTP action ends with its body", () => {
+  const get = (d: Awaited<ReturnType<typeof deployment>>, path: string, init?: RequestInit) =>
+    fetch(`http://127.0.0.1:${d.s.server.port}/http${path}`, init);
+
+  test("its body still streams after its handler returned, calling ctx and its timers", async () => {
     const d = await deployment();
-    const r = await fetch(`http://127.0.0.1:${d.s.server.port}/http/stream`);
-    expect(await r.text()).toBe("00");
+    expect(await (await get(d, "/stream")).text()).toBe("00");
+  });
+
+  test("a timer its handler left never fires; a ctx it kept refuses with the sandbox's words", async () => {
+    const d = await deployment();
+    expect(await (await get(d, "/leftTimer")).text()).toBe("answered");
+    await Bun.sleep(150);
+    expect(await d.read()).toEqual([0, 0, 0, []]);
+    expect(await d.functions.runAction("m:usesSaved", {})).toEqual(Array(7).fill(ACTION_ENDED_MESSAGE));
+    expect((await d.read())[0]).toBe(0);
+  });
+
+  test("an interval it left stops with its body", async () => {
+    const d = await deployment();
+    expect([...new Uint8Array(await (await get(d, "/leftInterval")).arrayBuffer())]).toEqual([1, 2]);
+    const [, , ticks] = await d.read();
+    expect(ticks).toBeGreaterThan(0);
+    await Bun.sleep(100);
+    expect((await d.read())[2]).toBe(ticks);
+  });
+
+  test("a handler that throws ends it: the timer it left never fires", async () => {
+    const d = await deployment();
+    expect((await get(d, "/throwsLeavingTimer")).status).toBe(500);
+    await Bun.sleep(100);
+    expect((await d.read())[1]).toBe(0);
+  });
+
+  test("a timer its streamed body left when it ended never fires; what it wrote while streaming stays", async () => {
+    const d = await deployment();
+    expect(await (await get(d, "/streamLeavesTimer")).text()).toBe("xx");
+    await Bun.sleep(150);
+    expect(await d.read()).toEqual([2, 0, 0, []]);
+  });
+
+  test("a client that leaves mid-body ends it: its body's interval stops", async () => {
+    const d = await deployment();
+    const ac = new AbortController();
+    const r = await get(d, "/endless", { signal: ac.signal });
+    const reader = r.body!.getReader();
+    await reader.read();
+    await Bun.sleep(40);
+    ac.abort();
+    await Bun.sleep(50);
+    const [, , ticks] = await d.read();
+    expect(ticks).toBeGreaterThan(0);
+    await Bun.sleep(100);
+    expect((await d.read())[2]).toBe(ticks);
+  });
+
+  test("a fetch made after its end (an operation's continuation) is refused, with the same words", async () => {
+    const d = await deployment();
+    const target = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("ok") });
+    stops.push(() => target.stop(true));
+    await (await get(d, "/fetchLater", { method: "POST", body: `http://127.0.0.1:${target.port}/` })).text();
+    await Bun.sleep(100);
+    expect((await d.read())[3]).toEqual([["Error", ACTION_ENDED_MESSAGE]]);
   });
 });
 

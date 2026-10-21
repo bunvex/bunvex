@@ -35,7 +35,8 @@ export const nodeActionTimeoutError = (exportName: string, ms: number) =>
  * The running action: its signal, aborted once it (or the action that called it) timed out; whether it has ended
  * (its answer given, or its time up), after which nothing it calls may start (Convex's isolate ends with the action,
  * `environment/action/mod.rs:1226-1233`); and the timers its code set, cleared when it ends (null: an action whose run
- * outlives its answer, an HTTP action whose body still streams, a `"use node"` action).
+ * outlives its answer, a `"use node"` action). An HTTP action's run ends with its body, which may stream after its
+ * handler returned (`endsLater`).
  */
 type Run = { signal: AbortSignal; life: ActionLife; timers: Set<unknown> | null };
 
@@ -109,17 +110,22 @@ export const currentActionLife = (): ActionLife | null => runs.getStore()?.life 
  * `timeout()` and the run's signal is aborted with that error (the body itself goes on, cut off from `ctx`
  * and `fetch`). An action called by a timed-out one is cut off too, as Convex cancels it. `endsWithAnswer`: once it
  * settles or times out the action has ended: the timers its code set are cleared and its `ctx` and `fetch` refuse.
+ * `endsLater`: its timers are tracked the same way, but it ends only when the function it is handed is called (an
+ * HTTP action, once its body has been handed over: Convex's isolate runs until the response's stream ends,
+ * `environment/action/mod.rs` `run_inner`).
  */
 export function withActionTimeout<T>(
   ms: number,
   timeout: () => Error,
   body: () => Promise<T>,
-  opts: { endsWithAnswer?: boolean; life?: ActionLife } = {},
+  opts: { endsWithAnswer?: boolean; life?: ActionLife; endsLater?: (end: () => void) => void } = {},
 ): Promise<T> {
   const parent = runs.getStore()?.signal;
   const own = new AbortController();
   const signal = parent ? AbortSignal.any([parent, own.signal]) : own.signal;
-  const run: Run = { signal, life: opts.life ?? { ended: false }, timers: opts.endsWithAnswer ? new Set() : null };
+  const tracked = opts.endsWithAnswer === true || opts.endsLater !== undefined;
+  const run: Run = { signal, life: opts.life ?? { ended: false }, timers: tracked ? new Set() : null };
+  opts.endsLater?.(() => end(run));
   const finish = () => {
     if (opts.endsWithAnswer) end(run);
   };
