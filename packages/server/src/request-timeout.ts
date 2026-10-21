@@ -9,7 +9,7 @@
 // Bun's own idle timeout is turned off for each request it times: it would close a connection whose handler
 // is still working, with no answer at all, after 120 s. A WebSocket upgrade is not timed (Convex's answers
 // 101 at once and runs the socket apart).
-import { secondsKnob } from "@bunvex/core";
+import { clearLongTimer, type LongTimer, longTimeout, secondsKnob } from "@bunvex/core";
 
 /** Convex's `HTTP_SERVER_TIMEOUT_DURATION`. */
 export const REQUEST_TIMEOUT_MS = secondsKnob("HTTP_SERVER_TIMEOUT_SECONDS", 300);
@@ -24,13 +24,13 @@ export function withRequestTimeout<D>(options: Bun.Serve.Options<D, never>, ms: 
     srv.timeout(req, 0);
     const r = fetch(req, srv);
     if (!(r instanceof Promise)) return r;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: LongTimer | undefined;
     const timedOut = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => resolve("timeout"), ms);
+      timer = longTimeout(() => resolve("timeout"), ms);
     });
     return Promise.race([r, timedOut]).then(
       (out) => {
-        clearTimeout(timer);
+        clearLongTimer(timer);
         if (out !== "timeout") return out;
         // The handler keeps running, as an HTTP action's does in Convex; its response, if one comes, is never
         // sent, so its body is let go.
@@ -38,7 +38,7 @@ export function withRequestTimeout<D>(options: Bun.Serve.Options<D, never>, ms: 
         return new Response(null, { status: 408 });
       },
       (e: unknown) => {
-        clearTimeout(timer);
+        clearLongTimer(timer);
         throw e;
       },
     );

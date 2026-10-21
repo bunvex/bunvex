@@ -142,6 +142,24 @@ Each variable below is read by the backend in the container; add the ones you se
 - **The CLI's update check.** `bunvex dev` and `bunvex deploy` ask the npm registry once a day for a newer
   release; `BUNVEX_DISABLE_VERSION_CHECK` (any value), `NO_UPDATE_NOTIFIER` or `CI` turns it off. It is set
   where the CLI runs, not in the container.
+- **SQLite's page cache.** `BUNVEX_SQLITE_CACHE_SIZE` (bytes, default `268435456`, 256 MiB) sizes the cache
+  SQLite keeps in the backend's memory, on top of the OS's own page cache (a bunvex addition, AD-46). Convex sets
+  none and runs with SQLite's 2 000 KiB; bunvex keeps 256 MiB (DV-550). The trade-off, measured on a 2-vCPU VPS
+  ([STUDY-174 §4.8](../docs/study/STUDY-174-silent-bugs.md#48-q6-measured-sqlites-default-page-cache-against-256-mib-on-reads-2026-10-20)):
+  - **Memory:** the cache fills up to its size as the store is read and written, then stays there. With 256 MiB
+    the process holds ~280–365 MB more than with 2 000 KiB once the database file is that large.
+  - **Read speed:** when the reads' working set is in memory but past 2 MiB, SQLite's 2 000 KiB served ~20 % fewer
+    reads a second (549 against 428 on a 10 GB store's hot set; 1 139 against 965 on a 200 MB store) and p99 was
+    ~20 % higher (86 against 105 ms): with a small cache SQLite re-reads its B-trees' pages from the OS, ~10× the
+    `read()` calls and +27 % CPU a call. When the disk is the bottleneck (a store far bigger than memory, read
+    uniformly), or the working set is tiny, the two sizes were the same.
+  - So lower it (`2048000` is SQLite's 2 000 KiB) on a host short of memory whose reads hit the disk anyway, and
+    raise it when the hot part of a large store does not fit. Answers never change.
+
+  The value is a whole number of bytes, rounded up to a KiB; one that does not parse, `0`, or more than SQLite
+  takes stops the backend at start, saying so. `0` is refused by design (owner, 2026-10-21): SQLite has no "off",
+  and `cache_size = 0` keeps its minimum, the slowest setting. For SQLite's 2 000 KiB, set `2048000`. It applies to
+  SQLite stores only.
 - **Metrics.** `DISABLE_METRICS_ENDPOINT=false` serves Prometheus metrics at `/metrics` (see the table above).
 - **Logs.** `bunvex logs` follows the functions' log lines
   ([STUDY-47](../docs/study/STUDY-47-log-streaming.md)); log streams send them, with audit and other events, to a

@@ -213,7 +213,8 @@ Still on the process's clock, by module, roughly in the order their tests would 
   Convex's own heartbeat test (§1.2) is the model.
 - **The scheduler and crons** (`server/src/scheduler.ts`, `cron-executor.ts`): on the runtime since STUDY-159
   PR 1, with the transactions' clock (a transaction's start and the committer's timestamps read `preciseNow` and
-  `nowNs`); `executors-virtual-time.test.ts` moves a job and a cron an hour without waiting. The older tests still
+  `nowNs`); `executors-virtual-time.test.ts` moves a job and a cron an hour without waiting. The write throughput
+  limiter's "now" too (it recorded commits on the engine's clock but read the real one). The older tests still
   poll with sleeps.
 - **The index worker** (`core/src/index-worker.ts`): its rate limiter and checkpoint interval
   (`performance.now()`, `setTimeout`); the backfill tests pace it with real `chunkRate`s.

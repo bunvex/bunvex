@@ -10,7 +10,7 @@
 // exponent float64, an object whose first key starts with `$` the internal form.
 import { compareUtf8, toBase64 } from "./bytes.ts";
 import type { Value } from "./value.ts";
-import { fromJsonValue, type JSONValue } from "./value.ts";
+import { fromJsonValue, isBytes, type JSONValue } from "./value.ts";
 
 const b64 = toBase64;
 
@@ -57,7 +57,7 @@ function write(v: Value): string {
   }
   if (typeof v === "boolean") return v ? "true" : "false";
   if (typeof v === "string") return JSON.stringify(v);
-  if (v instanceof ArrayBuffer) return `{"$bytes":"${b64(new Uint8Array(v))}"}`;
+  if (isBytes(v)) return `{"$bytes":"${b64(new Uint8Array(v))}"}`;
   if (Array.isArray(v)) return `[${v.map(write).join(",")}]`;
   const keys = Object.keys(v).sort(byteOrder);
   return `{${keys.map((k) => `${JSON.stringify(k)}:${write((v as Record<string, Value>)[k]!)}`).join(",")}}`;

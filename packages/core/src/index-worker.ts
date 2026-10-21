@@ -25,6 +25,7 @@ import {
   indexStatePatch,
 } from "./catalog.ts";
 import type { Committer } from "./committer.ts";
+import { longTimeout, timerDelay } from "./determinism.ts";
 import { internalIdOf } from "./internal-id.ts";
 import { compareKeys, encodeKey, prefixEnd } from "./keyenc.ts";
 import { boolKnob, knob, secondsKnob } from "./knobs.ts";
@@ -92,7 +93,7 @@ class RateLimiter {
         this.tokens -= n;
         return;
       }
-      await new Promise((r) => setTimeout(r, Math.max(1, ((need - this.tokens) / this.rate) * 1000)));
+      await new Promise((r) => setTimeout(r, timerDelay(Math.max(1, ((need - this.tokens) / this.rate) * 1000))));
     }
   }
 }
@@ -176,12 +177,13 @@ export class IndexWorker {
         this.onError(e);
         const { initialBackoffMs, maxBackoffMs } = this.opts;
         await new Promise<void>((resolve) => {
-          const t = setTimeout(
+          // Any length: INDEX_WORKERS_MAX_BACKOFF is a knob.
+          const t = longTimeout(
             () => this.wakeBackoff?.(),
             Math.min(initialBackoffMs * 2 ** failures, maxBackoffMs) * Math.random(),
           );
           this.wakeBackoff = () => {
-            clearTimeout(t);
+            t.clear();
             this.wakeBackoff = null;
             resolve();
           };
