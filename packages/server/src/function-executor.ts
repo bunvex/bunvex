@@ -3,8 +3,8 @@
 //
 // - `vm` (the default): this process's `node:vm` contexts, one pair per code version (`CodeVersion.load`,
 //   DV-164). Its own globals, not a security boundary.
-// - `process`: app code in a separate process (STUDY-168, `@bunvex/sandbox`): its queries, mutations and actions run
-//   there, each `ctx` operation answered on the host (STUDY-171 §8, §12). Without OS isolation yet (PR 8): it
+// - `process`: app code in a separate process (STUDY-168, `@bunvex/sandbox`): its queries, mutations, actions, HTTP
+//   actions and components run there, each `ctx` operation answered on the host (STUDY-171 §8, §12). Without OS isolation yet (PR 8): it
 //   starts only with `BUNVEX_FUNCTION_SANDBOX_ISOLATION=none`, and says so. The server cannot import the sandbox
 //   (the sandbox's child runs the server's loader): its entry point provides it (`provideProcessExecutor`), and a
 //   start that asks for `process` without one fails.
@@ -140,7 +140,11 @@ export const sandboxNotYet = (what: string) =>
 /** An executor: loads a code version's modules, analyzed, their functions ready to run. */
 export type Executor = {
   readonly kind: FunctionSandbox;
-  load(sources: ModuleSource[], opts: LoadOptions): Promise<LoadedCode>;
+  /**
+   * `beside`: a component instance's code is loaded beside the app's version it runs with (STUDY-168 PR 7): under
+   * `process`, in that version's child; `vm` loads every version alike.
+   */
+  load(sources: ModuleSource[], opts: LoadOptions, beside?: LoadedCode): Promise<LoadedCode>;
   /**
    * A standalone module's default export, evaluated as the push's import phase evaluates modules (the auth config,
    * a schema). Throws what `load` throws, or `MissingEnvironmentVariableError`.
@@ -183,12 +187,16 @@ export const vmExecutor: Executor = {
   },
 };
 
-/** Load code in `executor` (the server's; `vm` by default). Every load of an app's modules goes through here. */
+/**
+ * Load code in `executor` (the server's; `vm` by default), a component instance's `beside` the app's version. Every
+ * load of an app's modules goes through here.
+ */
 export const loadCode = (
   sources: ModuleSource[],
   opts: LoadOptions,
   executor: Executor = vmExecutor,
-): Promise<LoadedCode> => executor.load(sources, opts);
+  beside?: LoadedCode,
+): Promise<LoadedCode> => (beside ? executor.load(sources, opts, beside) : executor.load(sources, opts));
 
 /** Evaluate a standalone module's default export in `executor` (`Executor.evaluateDefault`). */
 export const evaluateDefault = (
@@ -229,9 +237,9 @@ export function executorFor(sandbox: FunctionSandbox): Executor {
 
 /** What a start under `process` logs: the isolation it runs with (STUDY-171 §8.8). */
 export const PROCESS_SANDBOX_WARNING =
-  "the function sandbox 'process' runs queries, mutations, actions and HTTP actions in a separate process, with no " +
-  "OS isolation (BUNVEX_FUNCTION_SANDBOX_ISOLATION=none): it is not a security boundary yet. " +
-  '"use node" actions and components are not available under it yet';
+  "the function sandbox 'process' runs queries, mutations, actions, HTTP actions and components in a separate " +
+  "process, with no OS isolation (BUNVEX_FUNCTION_SANDBOX_ISOLATION=none): it is not a security boundary yet. " +
+  '"use node" actions are not available under it yet';
 
 function oneOf<T extends string>(value: string | undefined, values: readonly T[], def: T, what: string): T {
   if (value === undefined || value === "") return def;
