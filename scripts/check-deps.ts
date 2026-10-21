@@ -9,7 +9,9 @@
 //      strings, error messages or URLs. bunvex studies and cites Convex (comments, docs/study), but its public
 //      API and its messages carry its own names (owner's decision, STUDY-18 D1). Apps (apps/*, e.g. the site
 //      comparing benchmarks) may name Convex descriptively. No exceptions, wire names included: a `format`
-//      value, a metric or an error code is bunvex's (owner, 2026-10-03: DV-307, DV-308, DV-312).
+//      value, a metric or an error code is bunvex's (owner, 2026-10-03: DV-307, DV-308, DV-312). A published
+//      package's npm metadata (description, keywords, homepage, repository, bugs, author) ships with it, so it
+//      is checked too.
 //   6. in the backend packages' shipped code (core, server, persistence, file-storage, search), every `setTimeout(` /
 //      `setInterval(` delay is known not to pass 2^31-1 ms: a number literal, a module constant of literals,
 //      `timerDelay(…)` (capped; the loop looks again when woken), or `Math.min(…)` with such a bound. Past 2^31-1 ms
@@ -19,7 +21,14 @@
 //      as Convex's `Duration`s do (owner, 2026-10-21: Q8). The scans are in scripts/rules.ts (tests: rules.test.ts).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { checkedTimerCall, literalConstants, timerDelays, unsafeTimerDelay, withoutComments } from "./rules.ts";
+import {
+  checkedTimerCall,
+  literalConstants,
+  metadataNaming,
+  timerDelays,
+  unsafeTimerDelay,
+  withoutComments,
+} from "./rules.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const PKGS = join(ROOT, "packages");
@@ -153,6 +162,10 @@ for (const [name, dir] of dirOfName) {
     continue;
   }
   const pj = readPkg(root);
+  // packages/* only (their keys have no prefix): apps may name Convex descriptively.
+  if (!dir.includes("/"))
+    for (const field of metadataNaming(pj))
+      errors.push(`${where}/package.json: "convex" in its ${field}, which npm publishes — use bunvex's own words (rule 5)`);
   const declared = new Set([
     ...Object.keys(pj.dependencies ?? {}),
     ...Object.keys(pj.peerDependencies ?? {}),
