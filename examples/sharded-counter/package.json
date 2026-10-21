@@ -1,0 +1,27 @@
+{
+  "name": "bunvex-example-sharded-counter",
+  "version": "0.0.0",
+  "private": true,
+  "description": "One million checkboxes, their checked ones counted by @bunvex/sharded-counter.",
+  "type": "module",
+  "scripts": {
+    "dev": "bunvex dev --start 'vite --open'",
+    "build": "tsc --noEmit && vite build"
+  },
+  "dependencies": {
+    "@bunvex/helpers": "workspace:*",
+    "@bunvex/sharded-counter": "workspace:*",
+    "bunvex": "workspace:*",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-window": "2.2.7"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "bunvex-examples-harness": "workspace:*",
+    "typescript": "^5.9.0",
+    "vite": "^8.3.1"
+  }
+}
