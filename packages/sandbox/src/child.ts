@@ -22,6 +22,7 @@ import { CallRuntime } from "./child-call.ts";
 import { exportDefault } from "./default-export.ts";
 import { chunkHeader, FrameReader, frame } from "./frames.ts";
 import { PROTOCOL_VERSION, type ToChild, type ToHost, type WireError, type WireLoadOptions } from "./protocol.ts";
+import { CHILD_WORK, checkpoint, childWork } from "./rejections.ts";
 import { describeVersion } from "./version.ts";
 
 /** The host's socket (`host.ts`: the 4th entry of the child's stdio). */
@@ -106,9 +107,11 @@ for await (const chunk of Bun.file(CHANNEL).stream()) {
   } catch (e) {
     badStream((e as Error).message);
   }
+  // Each frame resumes one call's code (or the child's own work), run with its microtasks to the end in a checkpoint
+  // of that call: what it leaves rejected with no handler fails it (`rejections.ts`).
   for (const text of frames) {
     if (typeof text !== "string") {
-      actions.streams.onChunk(text.s, text.bytes);
+      checkpoint(actions.owners.in.get(text.s) ?? null, () => actions.streams.onChunk(text.s, text.bytes));
       continue;
     }
     let m: ToChild;
@@ -118,15 +121,22 @@ for await (const chunk of Bun.file(CHANNEL).stream()) {
       badStream("a message that is not JSON");
     }
     const t = (m as { t?: unknown } | null)?.t;
-    if (t === "call") void calls.call(m as Extract<ToChild, { t: "call" }>);
+    if (t === "call") checkpoint((m as { id: number }).id, () => void calls.call(m as Extract<ToChild, { t: "call" }>));
     else if (t === "reply") {
       const r = m as Extract<ToChild, { t: "reply" }>;
-      if (!actions.reply(r)) calls.reply(r);
-    } else if (t === "action") void actions.call(m as Extract<ToChild, { t: "action" }>);
-    else if (t === "cancel") actions.cancel(m as Extract<ToChild, { t: "cancel" }>);
-    else if (t === "end" || t === "fail" || t === "credit" || t === "stop")
-      actions.streams.onMessage(m as Parameters<typeof actions.streams.onMessage>[0]);
-    else if (t === "load" || t === "evaluate") void handle(m as Extract<ToChild, { t: "load" } | { t: "evaluate" }>);
+      checkpoint(r.id, () => {
+        if (!actions.reply(r)) calls.reply(r);
+      });
+    } else if (t === "action")
+      checkpoint((m as { id: number }).id, () => void actions.call(m as Extract<ToChild, { t: "action" }>));
+    else if (t === "cancel")
+      checkpoint((m as { id: number }).id, () => actions.cancel(m as Extract<ToChild, { t: "cancel" }>));
+    else if (t === "end" || t === "fail" || t === "credit" || t === "stop") {
+      const sm = m as Parameters<typeof actions.streams.onMessage>[0];
+      const owner = (t === "end" || t === "fail" ? actions.owners.in : actions.owners.out).get(sm.s);
+      checkpoint(owner ?? null, () => actions.streams.onMessage(sm));
+    } else if (t === "load" || t === "evaluate")
+      checkpoint(CHILD_WORK, () => void childWork(handle(m as Extract<ToChild, { t: "load" } | { t: "evaluate" }>)));
     else badStream(`an unknown message (${String(t)})`);
   }
 }

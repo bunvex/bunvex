@@ -6,7 +6,18 @@
 
 import { createHmac, randomUUID } from "node:crypto";
 import { appendFile, open } from "node:fs/promises";
-import { DEPLOYMENT_AUDIT_LOG_TABLE, directFetch, type Engine, knob, LOG_SINKS_TABLE, type Tx } from "@bunvex/core";
+import {
+  clearLongTimer,
+  DEPLOYMENT_AUDIT_LOG_TABLE,
+  directFetch,
+  type Engine,
+  knob,
+  LOG_SINKS_TABLE,
+  type LongTimer,
+  longInterval,
+  longTimeout,
+  type Tx,
+} from "@bunvex/core";
 import { decodeId, toJsonValue, type Value } from "@bunvex/values";
 import { type HttpProxy, proxiedFetch } from "./http-proxy.ts";
 import { eventJsonV2, type LogEvent, type LogTopic } from "./log-events.ts";
@@ -307,7 +318,7 @@ type Running = { id: string; sink: Sink; queue: LogEvent[][]; busy: boolean };
 export class LogManager {
   private sinks = new Map<SinkType, Running>();
   private buffer: LogEvent[] = [];
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: LongTimer | null = null;
   private passing: Promise<void> | null = null;
   private again = false;
   private closed = false;
@@ -327,14 +338,14 @@ export class LogManager {
   ) {}
 
   /** Concurrency, sent every `concurrencyMs` when it changed (Convex's `ConcurrencyStats`, each metrics bucket). */
-  private concurrencyTimer: ReturnType<typeof setInterval> | null = null;
+  private concurrencyTimer: LongTimer | null = null;
   private lastConcurrency = "";
 
   watchConcurrency(
     read: () => Omit<Extract<LogEvent["event"], { topic: "concurrency_stats" }>, "topic">,
     everyMs = 60_000,
   ) {
-    this.concurrencyTimer = setInterval(() => {
+    this.concurrencyTimer = longInterval(() => {
       if (!this.active) return;
       const c = read();
       const key = JSON.stringify(c);
@@ -395,7 +406,7 @@ export class LogManager {
         for (const w of e.writes) if (w.index === auditIndex && w.id !== null) inserted.add(w.id);
       if (inserted.size > 0) this.streamAuditEvents([...inserted]);
     }, "log streams");
-    this.timer = setInterval(() => this.flush(), this.options.aggregationMs);
+    this.timer = longInterval(() => this.flush(), this.options.aggregationMs);
     this.timer.unref?.();
     this.wake();
     await this.passing;
@@ -527,12 +538,12 @@ export class LogManager {
       sink = new PostHogLogsSink(c as unknown as PostHogLogsConfig, proxied, this.metadata);
     else sink = new PostHogErrorTrackingSink(c as unknown as PostHogErrorTrackingConfig, proxied, this.metadata);
     if (verify) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
+      let timer: LongTimer | undefined;
       try {
         await Promise.race([
           sink.verify(),
           new Promise((_, reject) => {
-            timer = setTimeout(
+            timer = longTimeout(
               () => reject(new Error("Timed out verifying the log stream endpoint")),
               this.options.startupTimeoutMs,
             );
@@ -543,7 +554,7 @@ export class LogManager {
         // A failed update leaves the running sink of the type as it was (Convex's).
         return { type: "failed", reason: (e as Error).message };
       } finally {
-        clearTimeout(timer);
+        clearLongTimer(timer);
       }
     }
     this.sinks.get(c.type)?.sink.stop();
@@ -553,8 +564,8 @@ export class LogManager {
 
   stop() {
     this.closed = true;
-    if (this.timer) clearInterval(this.timer);
-    if (this.concurrencyTimer) clearInterval(this.concurrencyTimer);
+    if (this.timer) clearLongTimer(this.timer);
+    if (this.concurrencyTimer) clearLongTimer(this.concurrencyTimer);
     for (const r of this.sinks.values()) r.sink.stop();
     this.sinks.clear();
   }
