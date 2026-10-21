@@ -13,6 +13,7 @@ import { argumentError, invalidChoice, missingArgument, optionsIn, tooManyArgume
 import { BundleError, bundleFunctions, type ModuleConfig } from "./bundle.ts";
 import {
   type CodegenConfig,
+  packagesOf,
   printTypecheckFailure,
   runCodegen,
   type TypecheckMode,
@@ -193,22 +194,6 @@ export function codegenConfig(cwd: string): CodegenConfig {
   const config = readProjectConfig(cwd);
   const fileType = config.codegen?.fileType ?? "js/dts";
   return { fileType, packages: packagesOf(cwd), commonjs: config.generateCommonJSApi === true };
-}
-
-/**
- * Where the generated files import from (STUDY-40 L7): the scoped `@bunvex/*` packages, which are how an app installs
- * bunvex (npm will not allow `bunvex`), as Convex's always import the package its apps install. Only an app that
- * depends on this repository's private aggregate `bunvex` (its examples and tests) gets `bunvex/*`.
- */
-function packagesOf(cwd: string): CodegenConfig["packages"] {
-  try {
-    const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) as Record<string, Record<string, unknown>>;
-    const deps = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.peerDependencies };
-    if ("bunvex" in deps) return "bunvex";
-  } catch {
-    // no package.json
-  }
-  return "@bunvex";
 }
 
 const sha256 = (m: ModuleConfig) =>
