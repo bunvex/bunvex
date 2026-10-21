@@ -15,7 +15,7 @@
 // Convex's `is_stale`: only the indexes read, only the writes in the snapshot's window, and each key tested
 // against the read intervals by binary search.
 
-import { monotonicNow, outsideExecution, timerDelay, wallClockNs } from "./determinism.ts";
+import { longTimeout, monotonicNow, outsideExecution, timerDelay, wallClockNs } from "./determinism.ts";
 import { opaqueToInspect } from "./inspect.ts";
 import { compareKeys } from "./keyenc.ts";
 import { knob, secondsKnob } from "./knobs.ts";
@@ -855,10 +855,11 @@ export class Committer {
         failures++;
         (this.retry.onRetry ?? defaultOnRetry)(e, failures, delay);
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(done, delay);
+          // Any length: MAX_PERSISTENCE_WRITES_BACKOFF_MS is a knob.
+          const timer = longTimeout(done, delay);
           function done() {
             // Stryker disable next-line CallExpression: the timer resolves an already resolved promise
-            clearTimeout(timer);
+            timer.clear();
             resolve();
           }
           this.wakeRetry = done;

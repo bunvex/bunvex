@@ -11,7 +11,10 @@
 // nanoseconds, `intValue`) as decimal strings, and field names in lowerCamelCase.
 import {
   type AttributeValue,
+  clearLongTimer,
   directFetch,
+  type LongTimer,
+  longTimeout,
   parseSampler,
   type Sampler,
   type Span,
@@ -221,7 +224,7 @@ export type OtlpStats = {
 
 export class OtlpExporter implements SpanSink {
   private queue: Span[] = [];
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private timer: LongTimer | null = null;
   private exporting: Promise<void> | null = null;
   private closing = false;
   /** A flush asked for everything queued, full batch or not. */
@@ -248,7 +251,7 @@ export class OtlpExporter implements SpanSink {
     this.queue.push(span);
     if (this.queue.length >= this.config.maxBatchSize) this.kick();
     else if (this.timer === null && this.exporting === null) {
-      this.timer = setTimeout(() => this.kick(), this.config.scheduleDelayMs);
+      this.timer = longTimeout(() => this.kick(), this.config.scheduleDelayMs);
       this.timer.unref?.();
     }
   }
@@ -256,7 +259,7 @@ export class OtlpExporter implements SpanSink {
   /** Start exporting now, unless an export is under way (it takes the queue on when it ends). */
   private kick() {
     if (this.timer !== null) {
-      clearTimeout(this.timer);
+      clearLongTimer(this.timer);
       this.timer = null;
     }
     if (this.exporting) return;
@@ -265,7 +268,7 @@ export class OtlpExporter implements SpanSink {
       if (this.queue.length > 0 && !this.closing) {
         if (this.queue.length >= this.config.maxBatchSize || this.flushing) this.kick();
         else if (this.timer === null) {
-          this.timer = setTimeout(() => this.kick(), this.config.scheduleDelayMs);
+          this.timer = longTimeout(() => this.kick(), this.config.scheduleDelayMs);
           this.timer.unref?.();
         }
       }
@@ -328,11 +331,11 @@ export class OtlpExporter implements SpanSink {
 
   private backoff(ms: number): Promise<void> {
     return new Promise((resolve) => {
-      const t = setTimeout(done, ms);
+      const t = longTimeout(done, ms);
       t.unref?.();
       const self = this;
       function done() {
-        clearTimeout(t);
+        clearLongTimer(t);
         self.wakeBackoff = null;
         resolve();
       }
@@ -368,7 +371,7 @@ export class OtlpExporter implements SpanSink {
     this.closing = true;
     this.wakeBackoff?.();
     if (this.timer !== null) {
-      clearTimeout(this.timer);
+      clearLongTimer(this.timer);
       this.timer = null;
     }
     const drain = (async () => {
@@ -380,13 +383,13 @@ export class OtlpExporter implements SpanSink {
         await this.exporting;
       }
     })();
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: LongTimer | undefined;
     const timeout = new Promise<void>((resolve) => {
-      timer = setTimeout(resolve, this.config.shutdownTimeoutMs);
+      timer = longTimeout(resolve, this.config.shutdownTimeoutMs);
       timer.unref?.();
     });
     await Promise.race([drain, timeout]);
-    clearTimeout(timer);
+    clearLongTimer(timer);
     this.counts.dropped += this.queue.length;
     this.queue.length = 0;
   }

@@ -4,7 +4,7 @@
 //
 // A part is a Completion (one per execution) or a Progress event (lines an action printed as it ran). The
 // newest MAX_UDF_EXECUTION parts are kept, each under a cursor: wall-clock ms, strictly increasing.
-import { knob, type UserTimer, userTimeMs, wallClock } from "@bunvex/core";
+import { clearLongTimer, knob, type LongTimer, longTimeout, type UserTimer, userTimeMs, wallClock } from "@bunvex/core";
 import { type LogLine, type LogOwner, prettyLogLine, type RunFigures } from "./logs.ts";
 import { ISOLATE_MEMORY_MB, NODE_MEMORY_MB } from "./usage-limits.ts";
 
@@ -303,15 +303,15 @@ export class FunctionLog {
       const i = this.firstAfter(cursor);
       if (i < this.parts.length) return { parts: this.parts.slice(i).map((p) => p.part), newCursor: this.headCursor };
       if (signal?.aborted || this.closed) return { parts: [], newCursor: cursor };
-      let timer: ReturnType<typeof setTimeout> | undefined;
+      let timer: LongTimer | undefined;
       let wake!: () => void;
       const woken = await new Promise<boolean>((resolve) => {
         wake = () => resolve(true);
         this.waiters.add(wake);
-        timer = setTimeout(() => resolve(false), timeoutMs);
+        timer = longTimeout(() => resolve(false), timeoutMs);
         signal?.addEventListener("abort", () => resolve(false), { once: true });
       });
-      clearTimeout(timer);
+      clearLongTimer(timer);
       this.waiters.delete(wake);
       if (!woken) return { parts: [], newCursor: cursor };
     }

@@ -173,8 +173,7 @@ export class ExecutorInvalidations {
     q.timer = null;
     q.boundary = next ? { key: indexKey(def, next as never), atMs: Number(next.nextTs / 1_000_000n) } : null;
     if (q.boundary && !this.stopped) {
-      const wait = timerDelay(q.boundary.atMs - this.now() + 1);
-      q.timer = setTimeout(() => this.refresh(q), wait);
+      q.timer = setTimeout(() => this.refresh(q), timerDelay(q.boundary.atMs - this.now() + 1));
       (q.timer as { unref?: () => void }).unref?.();
     }
   }

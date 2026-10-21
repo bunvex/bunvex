@@ -3,6 +3,8 @@
 // the call waits forever, and so do startup, the query that made it, or a commit. Every remote driver
 // therefore bounds each call on the client side and drops the connection a timed-out call ran on.
 
+import { longTimeout } from "../determinism.ts";
+
 /**
  * A database call got no answer within its client-side timeout. The connection it ran on is not reused (the
  * driver drops it), and a flush that times out is fail-stop like any failed flush: whether the group
@@ -42,7 +44,8 @@ export function withTimeout<T>(
   return new Promise<T>((resolve, reject) => {
     let done = false;
     let timedOut = false;
-    const timer = setTimeout(() => {
+    // Any length: the store's timeouts are knobs.
+    const timer = longTimeout(() => {
       if (done) return;
       done = true;
       timedOut = true;
@@ -55,7 +58,7 @@ export function withTimeout<T>(
     const settle = () => {
       if (done) return false;
       done = true;
-      clearTimeout(timer);
+      timer.clear();
       return true;
     };
     let p: Promise<T>;

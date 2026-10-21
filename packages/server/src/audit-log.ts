@@ -2,7 +2,7 @@
 // (crates/model/src/deployment_audit_log/types.rs): each one's `action` and `metadata`, for the changes
 // bunvex can make. (Stored objects come back with their keys in order, as Convex's do.)
 import type { AuditLogActor, AuditLogEvent, Caller } from "@bunvex/core";
-import type { Value } from "@bunvex/values";
+import { isBytes, type Value } from "@bunvex/values";
 import type { AdminCaller } from "./functions.ts";
 
 const event = (action: string, metadata: Record<string, Value>): AuditLogEvent => ({ action, metadata });
@@ -103,7 +103,7 @@ export const auditEvents = {
 /** A value as Convex's clean JSON (`ValueFormat::ConvexCleanJSON`): int64 as a decimal string. */
 export function cleanJson(v: Value): unknown {
   if (typeof v === "bigint") return v.toString();
-  if (v instanceof ArrayBuffer) return Buffer.from(v).toString("base64");
+  if (isBytes(v)) return Buffer.from(v).toString("base64");
   if (Array.isArray(v)) return v.map(cleanJson);
   if (v !== null && typeof v === "object")
     return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, cleanJson(x as Value)]));

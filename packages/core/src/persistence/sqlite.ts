@@ -17,6 +17,7 @@
 import { Database, type SQLQueryBindings, type Statement } from "bun:sqlite";
 import { opaqueToInspect } from "../inspect.ts";
 import { internalIdBytes, internalIdString } from "../internal-id.ts";
+import { type KnobEnv, parseKnob } from "../knobs.ts";
 import { decodeGlobal, encodeGlobal } from "./global-json.ts";
 import type {
   DocLogRow,
@@ -112,8 +113,38 @@ function cachedBytes(id: string): Uint8Array {
   return b;
 }
 const idString = (b: Uint8Array) => internalIdString(b);
+/** How long a statement waits for another connection's lock before failing with SQLITE_BUSY: rusqlite's default,
+ *  which Convex's SQLite store keeps (rusqlite 0.39.0 `InnerConnection::open_with_flags` calls
+ *  `sqlite3_busy_timeout(db, 5000)`; crates/sqlite/src/lib.rs `SqlitePersistence::new` sets no other). bun:sqlite
+ *  sets none, so without it a read fails at once while another connection holds the file, e.g. one closing. */
+export const SQLITE_BUSY_TIMEOUT_MS = 5000;
+
 /** A live index entry's document id and its document at the entry's ts (null columns: no such version). */
 type JoinedEntry = { id: Uint8Array; json: string | null; docDeleted: bigint | null };
+
+/** The page cache's default (DV-550): 256 MiB. Convex sets no `cache_size`, so it runs with SQLite's 2 000 KiB. */
+export const SQLITE_CACHE_DEFAULT_BYTES = 256 * 1024 * 1024;
+/** The largest cache SQLite takes: `cache_size` is a 32-bit count of KiB. */
+export const SQLITE_CACHE_MAX_BYTES = (2 ** 31 - 1) * 1024;
+
+/**
+ * BUNVEX_SQLITE_CACHE_SIZE (AD-46): the SQLite page cache in bytes, the default when unset or empty. It parses as
+ * INDEX_CACHE_SIZE does (an unsigned integer, `knob`), but it is bunvex's own setting, so a value that does not
+ * parse fails the start, as BUNVEX_FUNCTION_SANDBOX does, instead of falling back. 0 is refused (owner, 2026-10-21): SQLite has no
+ * "off" (`cache_size = 0` keeps its minimum, a few pages, the slowest setting; STUDY-174 §4.8), and "SQLite's
+ * default" differs by platform (2 000 KiB on Linux, 2 000 pages on macOS). SQLite's 2 000 KiB is 2048000.
+ */
+export function sqliteCacheBytes(env: KnobEnv = process.env): number {
+  const raw = env.BUNVEX_SQLITE_CACHE_SIZE;
+  if (raw === undefined || raw === "") return SQLITE_CACHE_DEFAULT_BYTES;
+  const n = parseKnob(raw, "positive");
+  if (n === undefined || n > SQLITE_CACHE_MAX_BYTES)
+    throw new Error(
+      `invalid value '${raw}' for the SQLite page cache (BUNVEX_SQLITE_CACHE_SIZE): a size in bytes, from 1 to ` +
+        `${SQLITE_CACHE_MAX_BYTES}; the default is ${SQLITE_CACHE_DEFAULT_BYTES} (256 MiB)`,
+    );
+  return n;
+}
 
 export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
   readonly driver = "sqlite";
@@ -122,6 +153,8 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   /** The store's single-writer lock: taken at open when free, else by acquireLease once it is. */
   private lock: ProcessLock | null = null;
   private db: Database;
+  /** The statements this handle prepared: finalized on close, else the connection outlives `close()`. */
+  private statements: Statement[] = [];
   private insDoc;
   private insIdx;
   private putIdx;
@@ -143,8 +176,14 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
 
   constructor(
     private path: string,
-    opts: { durable: boolean } & OpenOptions,
+    opts: {
+      durable: boolean;
+      /** The page cache, in bytes; BUNVEX_SQLITE_CACHE_SIZE by default. */
+      cacheBytes?: number;
+    } & OpenOptions,
   ) {
+    // Checked before the file is touched: a bad setting fails the start and leaves the store as it was.
+    const cacheKiB = Math.ceil((opts.cacheBytes ?? sqliteCacheBytes()) / 1024);
     this.allowReadOnly = !!opts.allowReadOnly;
     if (!this.inMemory) this.lock = ProcessLock.tryTake(path);
     // Everything after the lock gives it back if it throws: a path SQLite cannot open, a store that is not one, or
@@ -153,9 +192,13 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     try {
       db = new Database(path, { create: true });
       this.db = db;
+      // A connection setting: the file is not changed (checkStore reads it first).
+      db.exec(`pragma busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
       this.checkStore(opts);
+      // The page cache always set, never left to the build: Bun's SQLite defaults to 2 000 KiB on Linux, 2 000 pages
+      // on macOS (AD-46).
       db.exec(`pragma journal_mode = wal; pragma synchronous = ${opts.durable ? "full" : "off"};
-        pragma temp_store = memory; pragma cache_size = -262144;`);
+        pragma temp_store = memory; pragma cache_size = -${cacheKiB};`);
       db.exec(SQLITE_LAYOUT);
       db.exec(`create table if not exists read_only (id integer primary key);`);
     } catch (e) {
@@ -165,11 +208,11 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       this.lock = null;
       throw e;
     }
-    this.insDoc = this.db.prepare(
+    this.insDoc = this.prepare(
       `insert into documents (id, ts, table_id, json_value, deleted, prev_ts) values (?, ?, ?, ?, ?, ?)`,
     );
-    this.insIdx = this.db.prepare(`insert into indexes values (?, ?, ?, ?, ?, ?)`);
-    this.putIdx = this.db.prepare(`insert or replace into indexes values (?, ?, ?, ?, ?, ?)`);
+    this.insIdx = this.prepare(`insert into indexes values (?, ?, ?, ?, ?, ?)`);
+    this.putIdx = this.prepare(`insert or replace into indexes values (?, ?, ?, ?, ?, ?)`);
     // Newest version per key at or before ts, joined to its document at the entry's own ts, as Convex's
     // `index_scan` (crates/sqlite/src/lib.rs): the key's max ts from the primary key's index alone (it holds
     // every column the grouping reads, so old versions and tombstones cost no row lookup), then that one row
@@ -177,31 +220,31 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     // Timestamps are nanoseconds above 2^53 (STUDY-133 §5.3): the statements that read them return
     // integers as `bigint`.
     const scan = (dir: "asc" | "desc") =>
-      this.db
-        .prepare(`select a.key, a.ts, b.deleted, b.document_id, c.json_value, c.deleted as doc_deleted
+      this.prepare(`select a.key, a.ts, b.deleted, b.document_id, c.json_value, c.deleted as doc_deleted
         from (select key, max(ts) as ts from indexes where index_id = ?1 and key >= ?2 and key < ?3 and ts <= ?4
               group by key order by key ${dir} limit ?5) a
         join indexes b on b.index_id = ?1 and b.key = a.key and b.ts = a.ts
         left join documents c on c.ts = b.ts and c.table_id = b.table_id and c.id = b.document_id
-        order by a.key ${dir}`)
-        .safeIntegers(true);
+        order by a.key ${dir}`).safeIntegers(true);
     this.scanAsc = scan("asc");
     this.scanDesc = scan("desc");
-    this.getDoc = this.db
-      .prepare(`select json_value, deleted, ts from documents
-        where table_id = ? and id = ? and ts <= ? order by ts desc limit 1`)
-      .safeIntegers(true);
+    this.getDoc = this.prepare(`select json_value, deleted, ts from documents
+        where table_id = ? and id = ? and ts <= ? order by ts desc limit 1`).safeIntegers(true);
     // The newest ts written (the durable prefix, once a flush has committed it): the key's leading column.
-    this.maxDocTs = this.db.prepare(`select max(ts) as m from documents`).safeIntegers(true);
-    this.docLogRows = this.db
-      .prepare(`select ts, table_id, id, deleted, prev_ts from documents
+    this.maxDocTs = this.prepare(`select max(ts) as m from documents`).safeIntegers(true);
+    this.docLogRows = this.prepare(`select ts, table_id, id, deleted, prev_ts from documents
         where ts > ?1 and ts <= (select max(ts) from (select distinct ts from documents
                                  where ts > ?1 and ts <= ?2 order by ts limit ?3))
-        order by ts, table_id, id`)
-      .safeIntegers(true);
+        order by ts, table_id, id`).safeIntegers(true);
     // Convex's `DELETE_INDEX` and `DELETE_DOCUMENT`.
-    this.pruneIdx = this.db.prepare(`delete from indexes where index_id = ? and ts <= ? and key = ?`);
-    this.pruneDoc = this.db.prepare(`delete from documents where table_id = ? and id = ? and ts <= ?`);
+    this.pruneIdx = this.prepare(`delete from indexes where index_id = ? and ts <= ? and key = ?`);
+    this.pruneDoc = this.prepare(`delete from documents where table_id = ? and id = ? and ts <= ?`);
+  }
+
+  private prepare(sql: string): Statement {
+    const st = this.db.prepare(sql);
+    this.statements.push(st);
+    return st;
   }
 
   private get inMemory() {
@@ -433,7 +476,12 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     return (this.maxDocTs.get() as { m: bigint | null }).m ?? 0n;
   }
 
+  /** Closes the connection now. bun:sqlite's `close()` closes a connection with live prepared statements only
+   *  once they are garbage-collected (sqlite3_close_v2): until then it keeps the file open, and its real close —
+   *  the last connection's checkpoint, under an exclusive lock — lands at a random later moment, on another
+   *  process opening the store. */
   close() {
+    for (const st of this.statements.splice(0)) st.finalize();
     this.db.close();
     this.lock?.release();
     this.lock = null;
