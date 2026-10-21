@@ -20,7 +20,7 @@ import { join, posix } from "node:path";
 import vm from "node:vm";
 import { installDeterminismIn, knob, runImportPhase, secondsKnob } from "@bunvex/core";
 import type { v1 } from "@bunvex/protocol";
-import { trackActionTimer } from "./action-timeout.ts";
+import { actionTimerCallback, trackActionTimer } from "./action-timeout.ts";
 import { appNamespace, installAppErrors } from "./app-errors.ts";
 import { exportedValidator, type ValidatorExport } from "./builders.ts";
 import { type CronSpec, Crons, cronSpecs } from "./cron.ts";
@@ -271,6 +271,7 @@ const REGEXP_STATICS = [
 /** `set` (`setTimeout`, `setInterval`), each timer it makes during an action handed to that action (`trackActionTimer`). */
 function actionTimer<F extends typeof setTimeout | typeof setInterval>(set: F): F {
   return Object.assign((...args: Parameters<F>) => {
+    if (args.length) (args as unknown[])[0] = actionTimerCallback(args[0]);
     const t = (set as unknown as (...a: unknown[]) => unknown)(...args);
     trackActionTimer(t);
     return t;

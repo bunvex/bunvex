@@ -44,6 +44,10 @@ backend is always started with `--disable-beacon`.
   needed; run by the nightly too.
 - `test/action-fetch.test.ts` (STUDY-142): an action's `fetch` (the app of `fetch-app/`) to local targets on
   both: how a request fails, redirects, the 407 refusal, aborts, the default `User-Agent`. Local only.
+- `test/unhandled-rejections.test.ts` (STUDY-171 §13): queries, mutations and actions of `rejections-app/` that leave
+  a promise rejected with no handler, on Convex's backend and on bunvex's under `BUNVEX_FUNCTION_SANDBOX=process` (under
+  `vm` it is printed and the call goes on, DV-528): the status, the error's first line, its data, the value, the log
+  lines, whether the error has the app's frames, and what the writes left. Local only.
 - `test/unawaited-operations.test.ts` (STUDY-143): the unawaited-operations warning of the actions and HTTP
   actions of `unawaited-app/` on both, a timeout included (`env` sets `V8_ACTION_USER_TIMEOUT_SECS` on both).
   Local only.
