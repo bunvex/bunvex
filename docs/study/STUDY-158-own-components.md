@@ -214,6 +214,8 @@ Step 7 left almost nothing for these packages. Each feature in §1.2 exists in b
   - Convex's packages page with convex-helpers' `paginator`, which reads an index range by hand and returns a
     JSON cursor.
   - bunvex has no convex-helpers port (AD-23, deferred). See Q-5.
+  - **Built (2026-10-20, STUDY-181 PR 4):** `@bunvex/helpers/server/pagination` has convex-helpers' `paginator` and
+    `getPage`, with its cursors byte for byte; a component can page its own tables with it.
 - **G4. No custom function builders.**
   - batch-worker uses convex-helpers' `customQuery` / `customMutation`, only to add a logger to `ctx`.
   - A rewrite does not need them.

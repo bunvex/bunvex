@@ -9,7 +9,9 @@
     "bunvex": "workspace:*"
   },
   "devDependencies": {
+    "@bunvex/helpers": "workspace:*",
     "convex": "1.46.0",
+    "convex-helpers": "0.1.128",
     "fast-check": "4.10.2"
   },
   "repository": {
