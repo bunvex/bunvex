@@ -1,7 +1,14 @@
 // Rule 6 of scripts/check-deps.ts (STUDY-174 F2, F3, S8; owner, 2026-10-21: Q8): every `setTimeout` / `setInterval`
 // delay in the backend's code is known not to pass 2^31−1 ms, or goes through `timerDelay` or core's long timers.
 import { describe, expect, test } from "bun:test";
-import { checkedTimerCall, literalConstants, timerDelays, unsafeTimerDelay, withoutComments } from "./rules.ts";
+import {
+  checkedTimerCall,
+  literalConstants,
+  metadataNaming,
+  timerDelays,
+  unsafeTimerDelay,
+  withoutComments,
+} from "./rules.ts";
 
 /** The delays rule 6 refuses in `code`, as `call: delay`. */
 function refused(code: string): string[] {
@@ -71,5 +78,26 @@ describe("rule 6: timer delays", () => {
 
   test("the call's delay is its second argument, nested calls and strings included", () => {
     expect([...timerDelays(`setTimeout(() => g(a, b), ms, "x, y")`)].map((t) => t.delay)).toEqual(["ms"]);
+  });
+});
+
+describe("rule 5: a published package's metadata", () => {
+  test("the npm fields that name the upstream project are refused; a private package is not checked", () => {
+    expect(
+      metadataNaming({
+        name: "@bunvex/x",
+        description: "A port of Convex's helpers",
+        keywords: ["bunvex", "convex"],
+        homepage: "https://bunvex.dev",
+        repository: { type: "git", url: "git+https://github.com/bunvex/bunvex.git" },
+        author: "someone",
+      }),
+    ).toEqual(["description", "keywords"]);
+    expect(metadataNaming({ name: "@bunvex/x", private: true, description: "as Convex's" })).toEqual([]);
+    expect(metadataNaming({ name: "@bunvex/x", description: "Helpers for bunvex apps" })).toEqual([]);
+  });
+
+  test("names, dependencies and scripts are not metadata: a dev dependency on the reference is fine", () => {
+    expect(metadataNaming({ name: "@bunvex/x", devDependencies: { "convex-helpers": "0.1.128" } })).toEqual([]);
   });
 });
