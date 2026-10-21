@@ -64,9 +64,16 @@ const SHARED = [
   "throws",
   "rejectedThenThrows",
 ];
+/** Nested calls started and not awaited before the function returns (`rejections-app`, `unawaitedMany…`). */
+const UNAWAITED = [1, 2, 10].flatMap((n) =>
+  ["unawaitedMany", "unawaitedManyFail", "unawaitedChain", "unawaitedChainFail", "unawaitedChainCaught"].map(
+    (c) => `${c}${n}`,
+  ),
+);
+const UNAWAITED_WRITES = [1, 2, 10].flatMap((n) => [`unawaitedWrites${n}`, `unawaitedWritesFail${n}`]);
 const RUNS: ["query" | "mutation" | "action", string, string][] = [
-  ...SHARED.map((c) => ["query", "rejections:q", c] as ["query", string, string]),
-  ...[...SHARED, "writesThenRejects", "unawaitedWrite", "nestedMutationCaught"].map(
+  ...[...SHARED, ...UNAWAITED].map((c) => ["query", "rejections:q", c] as ["query", string, string]),
+  ...[...SHARED, ...UNAWAITED, ...UNAWAITED_WRITES, "writesThenRejects", "unawaitedWrite", "nestedMutationCaught"].map(
     (c) => ["mutation", "rejections:m", c] as ["mutation", string, string],
   ),
   ...[
@@ -145,6 +152,14 @@ describe.skipIf(!ready)("an unhandled rejection under process, against Convex's 
       ((await b.call("query", "rejections:count", { tag })).body as Answer).value;
     // A write that succeeds counts: the action's would have, had it run on.
     for (const b of [convex, bunvex]) await b.call("mutation", "rejections:m", { c: "writes", tag: "control" });
+    // The nested mutations not awaited all ran: n writes each, none where one of them failed.
+    for (const c of UNAWAITED_WRITES)
+      for (const b of [convex, bunvex]) {
+        const on = b === convex ? "convex" : "bunvex";
+        const n = Number(/\d+$/.exec(c)![0]);
+        const want = c.includes("Fail") ? 0 : n;
+        expect({ on, c, count: await count(b, `mutation-${c}-${on[0]}`) }).toEqual({ on, c, count: want });
+      }
     for (const tag of ["mutation-writesThenRejects", "mutation-unawaitedWrite", "action-stopsTheAction", "control"])
       for (const b of [convex, bunvex]) {
         const t =
