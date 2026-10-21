@@ -14,7 +14,13 @@ export type ForgeMode =
   | "chunk"
   | "cancelled"
   | "fileSize"
-  | "fetchNoInput";
+  | "fetchNoInput"
+  // An HTTP action's (STUDY-168 PR 6): a response for an action, a mark for a stream the host never opened, a response
+  // whose inline body is not bytes, the form parse from an action.
+  | "responseForAction"
+  | "markNoStream"
+  | "responseNotBytes"
+  | "formDataInAction";
 
 export async function forge(mode: ForgeMode) {
   const realFile = Bun.file;
@@ -34,6 +40,12 @@ export async function forge(mode: ForgeMode) {
     if (mode === "cancelled") return { t: "cancelled", id: m.id };
     if (mode === "fileSize") return { ...m, name: "storage.store", args: [{ type: "", size: 5, b: { $b: "AQID" } }] };
     if (mode === "fetchNoInput") return { ...m, name: "fetch", args: [{}] };
+    const head = { t: "response", id: m.id, status: 200, statusText: "", headers: [] };
+    if (mode === "responseForAction") return { ...head, body: null };
+    if (mode === "markNoStream") return { t: "mark", s: 77 };
+    if (mode === "responseNotBytes") return { ...head, body: { kind: "bytes", b: "not bytes", length: 9 } };
+    if (mode === "formDataInAction")
+      return { ...m, name: "formData", args: ["multipart/form-data; boundary=x", { s: 1 }] };
     return m;
   };
   const CHUNK_FLAG = 0x8000_0000;

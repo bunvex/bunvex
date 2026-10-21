@@ -14,21 +14,30 @@
 //   `fetch` and says `cancelled`. A child that does not answer within `CUT_OFF_GRACE_MS` is running JavaScript that
 //   never yields: it is killed (STUDY-168 §10.3), and with it the version's other calls (one child per version, until
 //   STUDY-168's PR 9 pool).
+// - **HTTP actions** (STUDY-168 PR 6) are actions whose argument is the request and whose answer is a response: the
+//   request's body streams to the child as the handler reads it, and the response comes back as its head and its body
+//   (`runHttp`). A body of known length is gathered here before the response is handed on, so the server sends it as
+//   it sends one made in-process (its `content-length`, Bun's framing); a stream streams, and the call goes on while it
+//   does: the code that makes its chunks may still call `ctx`.
 
 import { realRuntime } from "@bunvex/core";
 import {
+  BODY_OVER_LIMIT,
   createFunctionHandle,
   currentActionSignal,
   currentAllEnv,
   currentPendingOps,
   ExecutorFailure,
   SpecBlob,
+  trackedOperation,
+  withBodyLength,
 } from "@bunvex/server/executor";
 import type { WireFile } from "./child-action.ts";
 import type { SandboxProcess } from "./host.ts";
 import { HostCallBase, thrownToChild } from "./host-call.ts";
-import { BadMessageError } from "./protocol.ts";
-import { encode } from "./wire.ts";
+import { BadMessageError, type WireResponse } from "./protocol.ts";
+import { MARK } from "./streams.ts";
+import { decode, encode } from "./wire.ts";
 
 /** How long a child has to acknowledge an action's cut-off before it is killed. */
 export const CUT_OFF_GRACE_MS = 1000;
@@ -54,6 +63,8 @@ const ACTION_OPS = new Set([
   "createFunctionHandle",
   "fetch",
 ]);
+/** What an HTTP action may send besides: its request's multipart body to parse (Convex's `form/parseMultiPart`). */
+const HTTP_OPS = new Set(["formData"]);
 const SCHEDULER_METHODS = ["runAfter", "runAt", "cancel"];
 const STORAGE_METHODS = ["getUrl", "getMetadata", "generateUploadUrl", "delete", "store"];
 const ROOMS_METHODS = ["broadcast", "members"];
@@ -65,12 +76,46 @@ const INLINE_BYTES = 64 << 10;
 // biome-ignore lint/suspicious/noExplicitAny: an action's `ctx`, driven as the app drove the child's
 type Ctx = any;
 
-type Counted = { names: string[]; settled: boolean; started: Promise<void>; start: () => void };
+type Counted = {
+  names: string[];
+  settled: boolean;
+  started: Promise<void>;
+  start: () => void;
+  /** Set when the call's answer named it still pending: once its engine call settles, it stays counted. */
+  kept?: Map<string, number>;
+};
 
 /** The operations whose engine call starts only once their bytes are in (a request body, a stored file). */
 const LATE = new Set(["fetch", "storage.store"]);
 
+/** The microtask turns `soon` waits: what is already queued resolves within them. */
+const SOON_TURNS = 32;
+
+/** `p`'s result if it settles within `SOON_TURNS` microtask turns, else null. */
+async function soon<T>(p: Promise<T>): Promise<T | null> {
+  let settled = false;
+  let value: T | null = null;
+  void p.then(
+    (v) => {
+      settled = true;
+      value = v;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  for (let i = 0; i < SOON_TURNS && !settled; i++) await null;
+  return settled ? (value ?? (await p)) : null;
+}
+
+/** An HTTP action's response, and when its call ends (its body handed over). */
+export type HttpOutcome = { response: Response | undefined; ended: Promise<void> };
+
 export class HostActionCall extends HostCallBase {
+  /** Set for an HTTP action: what its `response` message is handed to. */
+  private onResponse: ((m: WireResponse) => void) | null = null;
+  /** An HTTP action's response body, opened as its `response` message is read (its chunks may follow at once). */
+  private responseStream: ReadableStream<Uint8Array> | null = null;
   private killer: ReturnType<typeof realRuntime.setTimeout> | null = null;
   /**
    * Each operation's pending names (the unawaited-operations warning's, the engine's own `tracked` ones), once its
@@ -88,7 +133,6 @@ export class HostActionCall extends HostCallBase {
   /** Runs action `fn` of version `version` to its end, its cut-off or its child's death. */
   async run(fn: string, version: number, args: unknown): Promise<unknown> {
     const all = currentAllEnv();
-    const signal = currentActionSignal();
     this.child.openCall(this.id, this.sink());
     this.child.send({
       t: "action",
@@ -99,6 +143,141 @@ export class HostActionCall extends HostCallBase {
       env: all ? Object.entries(all) : null,
       meta: this.ctx.meta ? Object.keys(this.ctx.meta) : [],
     });
+    return this.loop();
+  }
+
+  /**
+   * Runs the HTTP action of `route` with `request`: its response once the child answered (undefined when the handler
+   * returned something else, which the server refuses as it refuses it in-process), and when its call ends.
+   */
+  async runHttp(route: [string, string], version: number, request: Request): Promise<HttpOutcome> {
+    const all = currentAllEnv();
+    let head!: (m: WireResponse | undefined) => void;
+    const answered = new Promise<WireResponse | undefined>((resolve) => (head = resolve));
+    this.onResponse = (m) => head(m);
+    this.child.openCall(this.id, this.sink());
+    const body = request.body === null ? null : this.child.streams.send(request.body);
+    this.child.send({
+      t: "http",
+      id: this.id,
+      version,
+      route,
+      request: { url: request.url, method: request.method, headers: [...request.headers], body },
+      env: all ? Object.entries(all) : null,
+      meta: this.ctx.meta ? Object.keys(this.ctx.meta) : [],
+    });
+    // The client left: the handler's request signal aborts, as in-process (Bun's `req.signal`).
+    const signal = request.signal;
+    const disconnect = () => this.child.send({ t: "disconnect", id: this.id, reason: thrownToChild(signal.reason) });
+    if (signal.aborted) disconnect();
+    else signal.addEventListener("abort", disconnect, { once: true });
+    const done = this.loop().finally(() => signal.removeEventListener("abort", disconnect));
+    // An answer with no response: its handler returned something else, or threw (the call's error).
+    void done.then(
+      () => head(undefined),
+      () => head(undefined),
+    );
+    const m = await answered;
+    const ended = done.then(
+      () => {},
+      () => {},
+    );
+    if (m === undefined) {
+      await done;
+      return { response: undefined, ended };
+    }
+    const init = { status: m.status, statusText: m.statusText, headers: m.headers };
+    const b = m.body;
+    if (b === null) {
+      await ended;
+      return { response: new Response(null, init), ended };
+    }
+    if (b.kind === "stream") {
+      // The body ends once its call has (its `done` counted what it left pending, for the warnings the server gives
+      // at the body's end). A mark is where the child dropped a chunk past the limit (the app's, whole).
+      const reader = this.responseStream!.getReader();
+      if (b.ended) {
+        // Ended in the handler's turn: gathered here, so the server has all of it at once, as in-process.
+        const chunks: unknown[] = [];
+        for (let r = await reader.read(); !r.done; r = await reader.read())
+          chunks.push(r.value === (MARK as unknown) ? BODY_OVER_LIMIT : r.value);
+        await ended;
+        const whole = new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (const c of chunks) controller.enqueue(c as Uint8Array);
+            controller.close();
+          },
+        });
+        return { response: new Response(whole, init), ended };
+      }
+      let over = false;
+      void ended.then(() => {
+        over = true;
+      });
+      const value = (v: unknown) => (v === (MARK as unknown) ? BODY_OVER_LIMIT : v) as Uint8Array;
+      const stream = new ReadableStream<Uint8Array>(
+        {
+          async pull(controller) {
+            // What came with a chunk (the chunks and the end the child sent together, as the app made them) is handed
+            // on with it: in-process, Bun has a body that ends with its chunk at once, and sends its length.
+            for (let r = await reader.read(); ; ) {
+              if (r.done) {
+                if (!over) await ended;
+                return controller.close();
+              }
+              controller.enqueue(value(r.value));
+              const next = reader.read();
+              const now = await soon(next);
+              if (now === null) {
+                const later = await next;
+                if (later.done) {
+                  if (!over) await ended;
+                  return controller.close();
+                }
+                return controller.enqueue(value(later.value));
+              }
+              r = now;
+            }
+          },
+          cancel: (reason) => reader.cancel(reason),
+        },
+        { highWaterMark: 0 },
+      );
+      return { response: new Response(stream, init), ended };
+    }
+    // Known length: gathered, so the server has it at once as it has a body made in-process.
+    let bytes: Uint8Array;
+    if (b.kind === "bytes") {
+      const v = this.checked(() => decode(b.b, true));
+      if (!(v instanceof ArrayBuffer)) {
+        this.child.kill("badMessage", "sent a response body that is not bytes");
+        throw new ExecutorFailure("the function sandbox's process sent a message that is not valid: response");
+      }
+      bytes = new Uint8Array(v);
+    } else bytes = new Uint8Array(await new Response(this.responseStream!).arrayBuffer());
+    await ended;
+    return { response: withBodyLength(new Response(bytes, init), b.length), ended };
+  }
+
+  /**
+   * The child's messages for the call. An HTTP action's response body is opened as its head is read, before the frames
+   * after it are: the child may send its chunks and its end right after the head.
+   */
+  protected override sink() {
+    const sink = super.sink();
+    return {
+      ...sink,
+      message: (m: Parameters<typeof sink.message>[0]) => {
+        if (m.t === "response" && this.onResponse !== null && this.responseStream === null && m.body)
+          if (m.body.kind !== "bytes") this.responseStream = this.child.streams.receive(m.body.s);
+        sink.message(m);
+      },
+    };
+  }
+
+  /** The call's messages, to its `done`, its cut-off or its child's death. */
+  private async loop(): Promise<unknown> {
+    const signal = currentActionSignal();
     const cutOff = () => this.push({ t: "cutOff", error: signal!.reason });
     if (signal?.aborted) cutOff();
     else signal?.addEventListener("abort", cutOff, { once: true });
@@ -131,11 +310,23 @@ export class HostActionCall extends HostCallBase {
           case "lines":
             for (const line of item.lines) this.logLine(line);
             continue;
+          case "response":
+            if (this.onResponse === null) {
+              this.child.kill("badMessage", "sent an HTTP action's response for an action");
+              throw new ExecutorFailure("the function sandbox's process sent a message that is not valid: response");
+            }
+            this.onResponse(item);
+            this.onResponse = () => {
+              this.child.kill("badMessage", "sent an HTTP action's response twice");
+            };
+            continue;
           case "op":
             for (const line of item.report.lines) this.logLine(line);
             this.start(item, () => {
               const c = this.counted.get(item.op);
-              if (c) c.settled = true;
+              if (!c) return;
+              c.settled = true;
+              if (c.kept) for (const name of c.names) c.kept.set(name, (c.kept.get(name) ?? 0) + 1);
             });
             continue;
           case "done":
@@ -153,7 +344,8 @@ export class HostActionCall extends HostCallBase {
   }
 
   protected refused(name: string): string | null {
-    return ACTION_OPS.has(name) ? null : `sent an operation its function may not run (${name} in an action)`;
+    if (ACTION_OPS.has(name) || (this.onResponse !== null && HTTP_OPS.has(name))) return null;
+    return `sent an operation its function may not run (${name} in an action)`;
   }
 
   /**
@@ -174,8 +366,11 @@ export class HostActionCall extends HostCallBase {
     if (timer !== null) realRuntime.clearTimeout(timer);
     for (const op of ops) {
       const c = this.counted.get(op);
-      if (!c?.settled) continue;
-      for (const name of c.names) pending.set(name, (pending.get(name) ?? 0) + 1);
+      if (!c) continue;
+      // Still running here: counted by the engine until it settles, and then by the call (an HTTP action's warnings
+      // come once its response is sent, which may be after that).
+      if (!c.settled) c.kept = pending;
+      else for (const name of c.names) pending.set(name, (pending.get(name) ?? 0) + 1);
     }
   }
 
@@ -235,6 +430,8 @@ export class HostActionCall extends HostCallBase {
         return createFunctionHandle(args[0]);
       case "fetch":
         return this.fetch(args[0], op);
+      case "formData":
+        return this.formData(args[0], args[1]);
     }
     return bad(`no operation ${name}`);
   }
@@ -279,6 +476,34 @@ export class HostActionCall extends HostCallBase {
     } else return bad("a file without its bytes");
     if (n !== f.size) return bad("a file of another size than it said");
     return parts;
+  }
+
+  // ------------------------------------------------------------------ HTTP actions
+
+  /**
+   * The request's multipart body, parsed here as Convex parses it (`form/parseMultiPart`, an operation: pending as
+   * `formData` until it settles, as `trackedFormData` counts it in-process) by the same parser as in-process (Bun's
+   * `formData()`); its files go back as files do.
+   */
+  private formData(contentType: unknown, body: unknown): Promise<unknown> {
+    if (typeof contentType !== "string") return bad("a form's type that is not text");
+    const b = body as { s?: unknown } | null;
+    if (b === null || typeof b !== "object" || typeof b.s !== "number") return bad("a form without its body");
+    const stream = this.child.streams.receive(b.s);
+    return trackedOperation("formData", async () => {
+      const form = await new Request("http://localhost/", {
+        method: "POST",
+        headers: { "content-type": contentType },
+        body: stream,
+        duplex: "half",
+      } as RequestInit).formData();
+      const entries: unknown[] = [];
+      for (const [name, value] of form as unknown as Iterable<[string, string | File]>) {
+        if (typeof value === "string") entries.push([name, value]);
+        else entries.push([name, { file: await this.file(value), name: value.name, lastModified: value.lastModified }]);
+      }
+      return entries;
+    });
   }
 
   // ------------------------------------------------------------------ fetch

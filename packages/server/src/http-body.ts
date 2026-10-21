@@ -22,6 +22,12 @@ import { describeUncaught } from "./errors.ts";
 /** Convex's HTTP_ACTION_RESPONSE_BODY_LIMIT: 100 MiB since 82e5c50 (20 MiB before). */
 export const HTTP_ACTION_RESPONSE_LIMIT = 100 << 20;
 
+/**
+ * What a body yields in place of a chunk that went past the limit and was dropped (the function sandbox's child cut
+ * it, the app's own chunk; STUDY-168 PR 6): the body goes on as past a chunk that would cross the limit.
+ */
+export const BODY_OVER_LIMIT: unique symbol = Symbol("over the limit");
+
 /** The microtask turns a body has to fail in before its head goes (`failedEarly`, DV-485). */
 const TURN_MICROTASKS = 32;
 
@@ -36,14 +42,7 @@ export function meteredBody(body: ReadableStream<Uint8Array>, signal?: AbortSign
     settle = r;
   });
   const finish = (disconnected = false) => settle({ bytes, errors, tooLarge, disconnected });
-  const reader = body.getReader() as ReadableStreamDefaultReader<unknown>;
-  // Reads started in the handler's turn (`failedEarly`), in order: `pull` takes them before reading on.
-  const early: ReturnType<typeof reader.read>[] = [];
-  // The body's error, once it failed (its start or a pull threw, or it was errored).
-  let failed: { error: unknown } | null = null;
-  reader.closed.catch((error: unknown) => {
-    failed ??= { error };
-  });
+  const reader = readsAhead(body);
   // Set once the client cancelled: a read still pending then must not touch the closed controller (that threw
   // "Controller is already closed", logged as a body error).
   let cancelled = false;
@@ -52,27 +51,26 @@ export function meteredBody(body: ReadableStream<Uint8Array>, signal?: AbortSign
       async pull(controller) {
         try {
           for (;;) {
-            const { value, done } = await (early.shift() ?? reader.read());
+            const { value, done } = await reader.read();
             if (cancelled) return;
             if (done) {
               controller.close();
               finish();
               return;
             }
-            // Nothing to send: Convex's op takes it as no chunk.
-            if (value === undefined || value === null) continue;
-            if (!isBytes(value)) throw notBytes(value);
+            const chunk = value === BODY_OVER_LIMIT ? value : bodyChunk(value);
+            if (chunk === null) continue;
             if (tooLarge) continue;
-            if (bytes + value.byteLength > HTTP_ACTION_RESPONSE_LIMIT) {
+            if (chunk === BODY_OVER_LIMIT || bytes + chunk.byteLength > HTTP_ACTION_RESPONSE_LIMIT) {
               tooLarge = true;
               errors.push(
                 `HttpResponseTooLarge: HTTP actions support responses up to ${formatBytes(HTTP_ACTION_RESPONSE_LIMIT)}`,
               );
               continue;
             }
-            bytes += value.byteLength;
+            bytes += chunk.byteLength;
             // Bun's stream takes an ArrayBuffer or any view as bytes.
-            controller.enqueue(value as Uint8Array);
+            controller.enqueue(chunk as Uint8Array);
             return;
           }
         } catch (e) {
@@ -92,6 +90,25 @@ export function meteredBody(body: ReadableStream<Uint8Array>, signal?: AbortSign
     },
     { highWaterMark: 0 },
   );
+  return { stream, sent, failedEarly: reader.failedEarly };
+}
+
+/**
+ * A response body's reader that can look for a failure in the handler's turn (`failedEarly`) before it is read on:
+ * the reads that look are kept, in order, and `read` hands them out first. The function sandbox's child reads an HTTP
+ * action's body with it too, so it fails early exactly where in-process it does (STUDY-168 PR 6).
+ */
+export function readsAhead(body: ReadableStream<Uint8Array>) {
+  const reader = body.getReader() as ReadableStreamDefaultReader<unknown>;
+  // Reads started in the handler's turn (`failedEarly`), in order: `read` takes them before reading on.
+  const early: ReturnType<typeof reader.read>[] = [];
+  // The body's error, once it failed (its start or a pull threw, or it was errored).
+  let failed: { error: unknown } | null = null;
+  // Whether the reads of the handler's turn reached its end.
+  let ended = false;
+  reader.closed.catch((error: unknown) => {
+    failed ??= { error };
+  });
   /**
    * The body's error if it failed in the handler's turn: Convex's isolate drains the microtask queue and looks for
    * an uncaught error before it sends the head, so a body that fails right away (in its start, or in its first pull
@@ -100,7 +117,7 @@ export function meteredBody(body: ReadableStream<Uint8Array>, signal?: AbortSign
    * TURN_MICROTASKS turns pass: a pull that throws after up to ~29 awaits (DV-485).
    *
    * Convex's runtime reads the body as soon as the handler returns it, so a chunk that is not bytes fails the run
-   * the same way when it comes in that turn: the turn reads what the body has ready, and `pull` sends it later.
+   * the same way when it comes in that turn: the turn reads what the body has ready, and `read` hands it out later.
    */
   const failedEarly = async () => {
     let reading = false;
@@ -111,8 +128,12 @@ export function meteredBody(body: ReadableStream<Uint8Array>, signal?: AbortSign
         early.push(read);
         read.then(
           ({ value, done }) => {
-            if (done) return;
-            if (value !== undefined && value !== null && !isBytes(value)) failed ??= { error: notBytes(value) };
+            if (done) {
+              ended = true;
+              return;
+            }
+            if (value !== undefined && value !== null && value !== BODY_OVER_LIMIT && !isBytes(value))
+              failed ??= { error: notBytes(value) };
             // The next one, unless the turn found an error.
             else reading = false;
           },
@@ -123,7 +144,23 @@ export function meteredBody(body: ReadableStream<Uint8Array>, signal?: AbortSign
     }
     return failed;
   };
-  return { stream, sent, failedEarly };
+  return {
+    read: () => early.shift() ?? reader.read(),
+    cancel: (reason?: unknown) => reader.cancel(reason),
+    failedEarly,
+    /** Whether the handler's turn read the body to its end (after `failedEarly`): Bun then has all of it at once. */
+    endedEarly: () => ended,
+  };
+}
+
+/**
+ * A body's chunk as Convex's streamer takes it: its bytes, null for nothing to send (null or undefined, skipped), or
+ * the error of a chunk that is not bytes (thrown).
+ */
+export function bodyChunk(value: unknown): ArrayBuffer | ArrayBufferView | null {
+  if (value === undefined || value === null) return null;
+  if (!isBytes(value)) throw notBytes(value);
+  return value;
 }
 
 /**
