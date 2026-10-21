@@ -110,6 +110,7 @@ Node's `fetch`, as Convex's Node executor):
 - **Body failures:** the response keeps Bun's native object (its fast `text()` / `json()`); its prototype is
   swapped for one whose reads and `body` stream map a network failure (an error with a `code`) to `fetch to
   <url> failed: error decoding response body`, an abort to Convex's, and leave a parser's `SyntaxError` alone.
+  Its `body` is one stream however often it is read (one wrapper per response, §8).
 - **`User-Agent`:** `Bunvex/1.0` (Convex's `Convex/1.0` in bunvex's words, rule 5, DV-456; the log sinks
   already send it, DV-304) when the app sets none.
 - **No timeout:** Bun's idle timeout (5 min by default) is turned off for the request (`timeout: false`); Bun's
@@ -235,3 +236,41 @@ None. Q1 and Q2 were decided (§4). The two gaps the first version left were clo
 - **Sabotage:**
   - S10, a resent body not metered: 1 failing test;
   - S11, OIDC without the `User-Agent`: 1 failing test.
+
+## 8. A fetched response returned as it came (owner, 2026-10-21)
+
+Found by the function sandbox's HTTP parity work (STUDY-171 §14, PR #812, its owner question Q-PR6-2): under `vm`, an
+HTTP action returning its `fetch`'s response as it came (a proxy route, `return fetch(url)`) failed with a 500
+"Uncaught TypeError: Invalid state: ReadableStream is locked"; under `process` it was sent.
+
+- **Convex** (`npm-packages/udf-runtime/src/23_response.ts` `convexJsonFromResponse`, at `72ce13c`): the fetched
+  response is an HTTP action's response like any other: its status, its headers (the target's, `content-length`
+  among them) and its body, streamed (checked against Convex's binary: a body of known length goes with its length,
+  a streamed one chunked).
+- **The bug:** the server reads the response's `body` twice (`runHttpAction`: whether there is one, then the stream
+  it meters), and the action's response's `body` getter (`actionResponse`, `action-fetch.ts`) made a new stream that
+  maps the native one's failures at each read: the second wrapper's reader found the native stream locked by the
+  first's.
+- **The fix:** the getter makes the wrapper once per response and keeps it on the response (Bun's own getter returns
+  the same native stream each time), so `r.body === r.body`, as on any `Response`. The server is unchanged. A response the
+  function sandbox's child makes from its host's (`asActionResponse`) shares the getter.
+- **Tests:** `packages/server/test/action-fetch.test.ts` (+1: a proxy route of a whole body and of a stream, and
+  `body` read twice inside an HTTP action); `packages/differential/test/http-proxy.test.ts` (7, against Convex's
+  binary `precompiled-2026-10-10-72ce13c`, the app in `http-proxy-app/`: text, JSON, bytes, a 204, a 404, a stream
+  and a followed redirect, compared off a raw socket: the status, the type, the target's own header,
+  `content-length` or `transfer-encoding`, the body). Sabotage: the wrapper made anew at each read (`main`'s getter)
+  fails the server test and 6 of the 7 oracle cases (all but the 204, which has no body).
+- **Measurement** (the test VPS, 2 vCPUs, Bun 1.4.3, idle: `ps` checked first; ABAB, 2000 sequential requests per line
+  after 200, the server and the fetch target in a process of their own; `bench/results/http-fetch-response/`, the
+  final code's rounds in `final/`). p50 µs of six rounds each:
+
+  | Line | `main` | this change |
+  |---|---|---|
+  | `fetch`, 1 KiB read whole (`arrayBuffer`) | 1957, 1003, 916, 944, 1031, 959 | 1005, 954, 948, 909, 1094, 947 |
+  | `fetch`, 1 KiB read from its `body` stream | 1193, 907, 865, 872, 1486, 835 | 846, 828, 1032, 844, 967, 820 |
+  | `fetch` returned as it came (a proxy) | a 500 | 977, 1023, 1025, 1006, 986, 986 |
+
+  No cost shows (the `body` line's median 889 µs on `main`, 845 here). A first version kept the wrappers in a `WeakMap`
+  by the native stream; its ten rounds (in `weakmap/`) put the `body` line's median ~75 µs above `main`'s, within the
+  noise of a line that moves by ±50 % between rounds but in one direction, so the wrapper is kept on the response
+  instead, which reads as `main` does.
