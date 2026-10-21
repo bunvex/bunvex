@@ -41,6 +41,38 @@ export const importsOf = (packages: CodegenConfig["packages"]): Imports =>
     ? { server: JSON.stringify(SERVER), values: JSON.stringify(VALUES) }
     : { server: JSON.stringify(`@${SERVER}`), values: JSON.stringify(`@${VALUES}`) };
 
+/**
+ * Where the generated files import from (STUDY-40 L7): the scoped `@bunvex/*` packages, which are how an app installs
+ * bunvex (npm will not allow `bunvex`), as Convex's always import the package its apps install. Only an app that
+ * depends on this repository's private aggregate `bunvex` (its examples and tests) gets `bunvex/*`.
+ */
+export function packagesOf(cwd: string): CodegenConfig["packages"] {
+  try {
+    const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) as Record<string, Record<string, unknown>>;
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.peerDependencies };
+    if ("bunvex" in deps) return "bunvex";
+  } catch {
+    // no package.json
+  }
+  return "@bunvex";
+}
+
+/**
+ * Where a component's generated files import from: the packages of the package its directory belongs to (the
+ * nearest `package.json` up from it), else `fallback`, the app's. A component of the app's own shares the app's
+ * `package.json`; a component package (STUDY-183: `@bunvex/sharded-counter`, its definition in TypeScript, so
+ * codegen writes its `_generated/` as Convex's does a linked one) depends on `@bunvex/*` whatever the app installs,
+ * and its committed files must not change with the app that deploys it.
+ */
+export function componentPackagesOf(dir: string, fallback: CodegenConfig["packages"]): CodegenConfig["packages"] {
+  for (let at = resolve(dir); ; ) {
+    if (existsSync(join(at, "package.json"))) return packagesOf(at);
+    const parent = resolve(at, "..");
+    if (parent === at) return fallback;
+    at = parent;
+  }
+}
+
 export function header(description: string) {
   return `/* eslint-disable */
 /**
