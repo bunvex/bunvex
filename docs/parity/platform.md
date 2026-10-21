@@ -214,6 +214,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | `deployment usage [--json]`, `deployment usage-limits list [--json] \| set \| remove` | `cli/usageLimits.ts`; `lib/usageLimits.ts` | done (STUDY-118, STUDY-137) | `--metric aiGatewayCostDollars` ("AI Gateway") since Convex b11a570. `bunvex deployment usage` and `bunvex deployment usage-limits list\|set\|remove` (`rm`, `delete`), on the deployment's `/api/v1/*usage*` routes (STUDY-61): Convex's box-drawn tables, compact amounts, order, seed-status message, `--json`, messages ("Created/Updated/No changes to/Deleted … usage limit on … per …", "--limit must be a positive integer", "No <type> usage limit on <metric> per <window>") and fetch errors; `set` creates or updates by (metric, window, type). The metric choices follow DV-308 (`actionComputeIsolateGbHours`). |
 | `deployment create/select/token`, `login`, `project` | `cli/deployment.ts` etc. | n/a (cloud-only) | Cloud-only. |
 | Self-hosted selection via `CONVEX_SELF_HOSTED_URL` / `CONVEX_SELF_HOSTED_ADMIN_KEY`, `--url`, `--admin-key`, `--env-file` | `cli/lib/command.ts`, `lib/deployment.ts` | done (STUDY-35, STUDY-37) | `BUNVEX_SELF_HOSTED_URL` / `BUNVEX_SELF_HOSTED_ADMIN_KEY` (DV-171) from the environment, `.env.local`, `.env`, or `--url` / `--admin-key` / `--env-file`, for `deploy`, `env` and `run`. |
+| Testing functions (`convex-test`: `convexTest`, `t.query/mutation/action/run/fetch`, `withIdentity`, scheduled functions, `registerComponent`) | get-convex/convex-test `index.ts` | partial (STUDY-159) | `@bunvex/testing`'s `bunvexTest` (PR 2): the real engine in the test's process, the app pushed as `bunvex deploy` bundles it, convex-test's API renamed for rule 5. Built: calls by reference or inline (internal functions callable), `t.run`, `withIdentity` with convex-test's defaults (issuer `https://bunvex.test`) and `withRequestMetadata`, `t.fetch` to the app's HTTP actions (as `withIdentity`'s user), scheduled functions and crons on a virtual clock (`finishInProgressScheduledFunctions`, `finishAllScheduledFunctions`, `t.runCron`, AD-35), the deployment's env (AD-34). It behaves as the real backend, not as convex-test's mock (DV-540–542). Components (PR 3): an app's own, installed by its push and callable from the test through `components.<name>`; `registerComponent(name, definition)` for a component package's own tests (an app of the test's own mounts it). `t.advanceTime(ms)` moves the virtual clock, as a convex-test test moves Vitest's timers. The example `examples/testing` (PR 4). Left: `defineTestApp` (convex-test 0.0.61's in-process modules; owner's decision pending). |
 
 ### 13. Codegen (`convex/_generated`)
 
@@ -248,7 +249,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 |---|---|---|---|
 | System indexes `by_id` and `by_creation_time` on every table | `crates/common/bootstrap_model/index` | done | `packages/core/src/schema.ts`. |
 | Declared database indexes (up to 16 fields) | `crates/common/schemas` | done (STUDY-14) | `defineSchema` / `defineTable().index()`, at most 16 fields. |
-| Index backfill over existing data | `crates/database/database_index_workers`; `_index_backfills` | done (STUDY-29) | In the background, as Convex: `init()` does not wait; a worker in the process holding the lease fills new indexes in rate-limited chunks (Convex's knobs: 1024 entries, 16 chunks/s, reads of 500, 8 tables at once) while every write maintains them, checkpoints in `_index_backfills` every second (Convex's row: int64 counts, a nanosecond `snapshotTs`, kept after the backfill; a search or vector index's too, without a cursor, STUDY-134) and resumes from there after a crash. As Convex's, a user index is backfilled even on a table the same schema change creates (`Backfilling` → retention started → `Backfilled2` → `Enabled`); bunvex runs that pass before the change finishes, so `init()` still returns with a new table's indexes enabled. `engine.indexesReady()` is Convex's `wait_for_schema`. As Convex's, each entry is written at its document's own ts, outside any commit (PERSIST-01 C17; DV-127 reversed in STUDY-133 PR 3). |
+| Index backfill over existing data | `crates/database/database_index_workers`; `_index_backfills` | done (STUDY-29) | In the background, as Convex: `init()` does not wait; a worker in the process holding the lease fills new indexes in rate-limited chunks (Convex's knobs: 1024 entries, 16 chunks/s, reads of 500, 8 tables at once) while every write maintains them, checkpoints in `_index_backfills` every second (Convex's row: int64 counts, a nanosecond `snapshotTs`, kept after the backfill; a search or vector index's too, without a cursor, STUDY-134) and resumes from there after a crash. 2026-10-20 (STUDY-174 S1): as Convex's, the pass records its last progress when it ends, so the row counts every document, and a backfill that starts over at a new snapshot (its checkpoint's fell out of retention) counts from 0 again. As Convex's, a user index is backfilled even on a table the same schema change creates (`Backfilling` → retention started → `Backfilled2` → `Enabled`); bunvex runs that pass before the change finishes, so `init()` still returns with a new table's indexes enabled. `engine.indexesReady()` is Convex's `wait_for_schema`. As Convex's, each entry is written at its document's own ts, outside any commit (PERSIST-01 C17; DV-127 reversed in STUDY-133 PR 3). |
 | Index states Backfilling, Backfilled, Enabled; staged indexes | `crates/common/bootstrap_model/index/database_index/index_state.rs` | done (STUDY-29) | `backfilling` → `backfilled` → `enabled`; `.index(name, { fields, staged: true })`; Convex's `IndexBackfillingError` / `IndexStagedError`; a changed index serves its old version until the new one is enabled. No push gate yet: code runs while its indexes backfill (**divergence, owner 2026-10-01, DV-126:** revisit with `bunvex deploy`). |
 | Index cache: persistence index reads (`get`, ranges, pages) cached under the query cache, `INDEX_CACHE_SIZE` 512 MiB, `INDEX_CACHE_VERIFY_PERCENT` | `crates/indexing/src/index_cache`; `database_index_snapshot.rs` | done (STUDY-136) | Not observable by apps. Lazy validation against the write log (DV-432); verify default 0 (DV-433); off for the memory driver (DV-434). Metrics `bunvex_index_cache_*`, `GET /api/debug/index_cache`. 2.2–4.3× on Postgres in process. |
 | Index/table limits: 64 indexes per table (docs say 32), 10 000 tables, names up to 64 chars | `crates/common/schemas/mod.rs`; `database/bootstrap_model/table.rs` | done (STUDY-101) | 64 indexes per table and identifiers up to 64 characters; at most 10 000 active user tables, Convex's `TooManyTables` ("Number of tables cannot exceed 10000.") for a write, push or import that would add one more (STUDY-101). |
@@ -435,16 +436,27 @@ bunvex enforces most of these with Convex's values and messages. Matching them m
 
 ---
 
+### 25. Libraries (convex-helpers)
+
+Libraries apps import beside `convex`, ported as bunvex packages with the same API. Reference: get-convex/convex-helpers
+at `e48f9df` (0.1.128); paths are relative to its `packages/convex-helpers/`.
+
+| Feature | Convex source | bunvex status | Notes |
+|---|---|---|---|
+| convex-helpers' root module: `asyncMap`, `pruneNull`, `nullThrows` / `NullDocumentError`, `pick`, `omit`, `withoutSystemFields`, `assert`, the type helpers | `index.ts` | done (STUDY-181 PR 1) | `@bunvex/helpers`, its own version outside the fixed group (STUDY-158 Q-1). Upstream's tests ported. |
+| convex-helpers' validators: `literals`, `nullable`, `partial`, `systemFields`, `withSystemFields`, `addFieldsToValidator`, `doc`, `typedV`, `brandedString`, `deprecated`, `pretend`, `pretendRequired`, `ValidationError`, `validate`, `parse`, `vRequired` | `validators.ts` | done (STUDY-181 PR 1) | `@bunvex/helpers/validators`. `nullable` puts null first (H-6); `typedV` and `doc` are AD-23. Rule 5: `isValidator` for `isConvexValidator`, "Unknown validator type: " (DV-544). Upstream's tests ported, its function tests on bunvex's engine. |
+| convex-helpers' `compareValues` (deprecated) | `server/compare.ts` | done (STUDY-181 PR 1) | `@bunvex/helpers/server/compare`, `@bunvex/values`' `compareValues` (H-3). |
+
 ### Summary counts
 
-Recounted on 2026-10-19 from the rows' status column, as [the README](README.md)'s table (STUDY-173, after the components rows' update).
+Recounted on 2026-10-20 from the rows' status column, as [the README](README.md)'s table (STUDY-181 PR 1, the libraries rows; the testing row, STUDY-159; before that 2026-10-19, STUDY-173, after the components rows' update).
 
 | Status | Count |
 |---|---|
-| done | 237 |
-| partial | 20 |
+| done | 240 |
+| partial | 21 |
 | missing | 6 |
 | n/a (cloud-only or a decided divergence) | 6 |
-| **total** | **269** |
+| **total** | **273** |
 
 The gaps, ranked by what an app would notice, are in [the README](README.md#gaps-by-impact).

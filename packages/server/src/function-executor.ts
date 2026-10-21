@@ -3,8 +3,8 @@
 //
 // - `vm` (the default): this process's `node:vm` contexts, one pair per code version (`CodeVersion.load`,
 //   DV-164). Its own globals, not a security boundary.
-// - `process`: app code in a separate process (STUDY-168, `@bunvex/sandbox`): its queries and mutations run there,
-//   each `ctx` operation answered on the host's transaction (STUDY-171 §8). Without OS isolation yet (PR 8): it
+// - `process`: app code in a separate process (STUDY-168, `@bunvex/sandbox`): its queries, mutations and actions run
+//   there, each `ctx` operation answered on the host (STUDY-171 §8, §12). Without OS isolation yet (PR 8): it
 //   starts only with `BUNVEX_FUNCTION_SANDBOX_ISOLATION=none`, and says so. The server cannot import the sandbox
 //   (the sandbox's child runs the server's loader): its entry point provides it (`provideProcessExecutor`), and a
 //   start that asks for `process` without one fails.
@@ -12,12 +12,20 @@
 // Chosen by `BUNVEX_FUNCTION_SANDBOX` (`--function-sandbox` on `bunvex-local-backend` wins over it), the
 // isolation layers of `process` by `BUNVEX_FUNCTION_SANDBOX_ISOLATION`. Both are read once, at start, and checked
 // strictly, as `--deny-addresses` is: a security setting does not fall back to the default on a typo.
-import type { SchemaDefinition } from "@bunvex/core";
+import type { EngineSchema } from "@bunvex/core";
 import { CodeVersion, type LoadedCode, type LoadOptions, type ModuleSource } from "./code-version.ts";
 
+export { asActionResponse } from "./action-fetch.ts";
+export { ACTION_ENDED_MESSAGE, currentActionSignal, trackedActionTimers } from "./action-timeout.ts";
 // What the child's calls and the host's stand-ins use (STUDY-171 §8).
 export { appContext } from "./app-errors.ts";
-export { type FunctionDef, REMOTE_FUNCTIONS, type RemoteRunner, type SandboxCall } from "./builders.ts";
+export {
+  type FunctionDef,
+  REMOTE_FUNCTIONS,
+  REMOTE_GATES,
+  type RemoteRunner,
+  type SandboxCall,
+} from "./builders.ts";
 // What the `process` executor's child runtime (`@bunvex/sandbox`) loads through this module: the same loader, so
 // a child analyzes a push exactly as this process does (STUDY-171 §7).
 export {
@@ -34,10 +42,10 @@ export {
   moduleHash,
 } from "./code-version.ts";
 export { Crons } from "./cron.ts";
-export { currentEnvReader, type EnvReader, withEnv } from "./env-scope.ts";
+export { currentAllEnv, currentEnvReader, type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
 export { ExecutorFailure } from "./errors.ts";
 export { createFunctionHandle, inHandleScope } from "./function-handles.ts";
-export { NODE_FUNCTIONS } from "./functions.ts";
+export { currentPendingOps, NODE_FUNCTIONS, vectorSearchFilter } from "./functions.ts";
 export { addAuditLine, setAuditScope } from "./log.ts";
 export {
   captureLines,
@@ -49,7 +57,10 @@ export {
   MAX_LOG_LINES,
   makeLogLine,
 } from "./logs.ts";
+export { type AnyRoomDef, presenceGeneric, roomGeneric } from "./rooms/define.ts";
 export { HttpRouter, httpActionGeneric } from "./router.ts";
+export { setServiceCallContext } from "./service-tokens.ts";
+export { SpecBlob } from "./web-blob.ts";
 
 export type FunctionSandbox = "vm" | "process";
 export const FUNCTION_SANDBOXES: readonly FunctionSandbox[] = ["vm", "process"];
@@ -80,13 +91,13 @@ export type EvaluateOptions = {
 };
 
 /** A schema module's default export as `defineSchema` makes it: its tables a record of table definitions. */
-export function isSchemaDefinition(value: unknown): value is SchemaDefinition {
-  const tables = (value as SchemaDefinition | null)?.tables;
+export function isSchemaDefinition(value: unknown): value is EngineSchema {
+  const tables = (value as EngineSchema | null)?.tables;
   return (
     typeof tables === "object" &&
     tables !== null &&
     !(tables instanceof Map) &&
-    typeof (value as SchemaDefinition).schemaValidation === "boolean"
+    typeof (value as EngineSchema).schemaValidation === "boolean"
   );
 }
 
@@ -209,9 +220,9 @@ export function executorFor(sandbox: FunctionSandbox): Executor {
 
 /** What a start under `process` logs: the isolation it runs with (STUDY-171 §8.8). */
 export const PROCESS_SANDBOX_WARNING =
-  "the function sandbox 'process' runs queries and mutations in a separate process, with no OS isolation " +
-  "(BUNVEX_FUNCTION_SANDBOX_ISOLATION=none): it is not a security boundary yet. Actions, HTTP actions, " +
-  "components and rooms are not available under it yet";
+  "the function sandbox 'process' runs queries, mutations and actions in a separate process, with no OS " +
+  "isolation (BUNVEX_FUNCTION_SANDBOX_ISOLATION=none): it is not a security boundary yet. HTTP actions, " +
+  '"use node" actions and components are not available under it yet';
 
 function oneOf<T extends string>(value: string | undefined, values: readonly T[], def: T, what: string): T {
   if (value === undefined || value === "") return def;

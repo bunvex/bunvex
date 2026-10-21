@@ -156,8 +156,10 @@ Each variable below is read by the backend in the container; add the ones you se
   - So lower it (`2048000` is SQLite's 2 000 KiB) on a host short of memory whose reads hit the disk anyway, and
     raise it when the hot part of a large store does not fit. Answers never change.
 
-  The value is a whole number of bytes, rounded up to a KiB; one that does not parse, `0` (SQLite has no "off"),
-  or more than SQLite takes stops the backend at start, saying so. It applies to SQLite stores only.
+  The value is a whole number of bytes, rounded up to a KiB; one that does not parse, `0`, or more than SQLite
+  takes stops the backend at start, saying so. `0` is refused by design (owner, 2026-10-21): SQLite has no "off",
+  and `cache_size = 0` keeps its minimum, the slowest setting. For SQLite's 2 000 KiB, set `2048000`. It applies to
+  SQLite stores only.
 - **Metrics.** `DISABLE_METRICS_ENDPOINT=false` serves Prometheus metrics at `/metrics` (see the table above).
 - **Logs.** `bunvex logs` follows the functions' log lines
   ([STUDY-47](../docs/study/STUDY-47-log-streaming.md)); log streams send them, with audit and other events, to a

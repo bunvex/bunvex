@@ -9,6 +9,7 @@ import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
 import type { FunctionHandle } from "./function-handles.ts";
 
 export { defineSchema, defineTable, docValidator } from "@bunvex/core/schema";
+export { SearchFilter } from "@bunvex/core/search-filter";
 export { anyApi, getFunctionAddress, getFunctionName, makeFunctionReference } from "@bunvex/protocol";
 export { filterApi } from "./api-types.ts";
 export {

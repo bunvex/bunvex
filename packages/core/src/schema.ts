@@ -82,8 +82,10 @@ export function checkIdentifier(kind: string, s: string) {
     );
 }
 
+/** An index's fields as types (Convex's `GenericIndexFields`). */
+export type GenericIndexFields = string[];
 /** A table's indexes as types: name → its fields, `_creationTime` appended (Convex's). */
-export type GenericTableIndexes = Record<string, string[]>;
+export type GenericTableIndexes = Record<string, GenericIndexFields>;
 
 /**
  * A table of a schema: its document validator and its indexes (Convex's `defineTable(...).index(...)`).
@@ -91,16 +93,28 @@ export type GenericTableIndexes = Record<string, string[]>;
  */
 /** A search index's configuration (Convex's `SearchIndexConfig`), as stored: its filter fields deduplicated. */
 export type SearchIndexDef = { searchField: string; filterFields: string[] };
+/** A search index as types (Convex's `GenericSearchIndexConfig`): its filter fields a union of their paths. */
+export type GenericSearchIndexConfig = { searchField: string; filterFields: string };
 /** A table's search indexes as types (Convex's `GenericTableSearchIndexes`). */
-export type GenericTableSearchIndexes = Record<string, { searchField: string; filterFields: string }>;
+export type GenericTableSearchIndexes = Record<string, GenericSearchIndexConfig>;
+/** A search index as `searchIndex(name, config)` declares it (Convex's `SearchIndexConfig`). */
+export interface SearchIndexConfig<SearchField extends string, FilterFields extends string> {
+  searchField: SearchField;
+  filterFields?: FilterFields[];
+}
 
 /** A vector index's configuration (Convex's `VectorIndexConfig`), its filter fields deduplicated. */
 export type VectorIndexDef = { vectorField: string; dimensions: number; filterFields: string[] };
+/** A vector index as types (Convex's `GenericVectorIndexConfig`): its filter fields a union of their paths. */
+export type GenericVectorIndexConfig = { vectorField: string; dimensions: number; filterFields: string };
 /** A table's vector indexes as types (Convex's `GenericTableVectorIndexes`). */
-export type GenericTableVectorIndexes = Record<
-  string,
-  { vectorField: string; dimensions: number; filterFields: string }
->;
+export type GenericTableVectorIndexes = Record<string, GenericVectorIndexConfig>;
+/** A vector index as `vectorIndex(name, config)` declares it (Convex's `VectorIndexConfig`). */
+export interface VectorIndexConfig<VectorField extends string, FilterFields extends string> {
+  vectorField: VectorField;
+  dimensions: number;
+  filterFields?: FilterFields[];
+}
 /** Convex's MIN_VECTOR_DIMENSIONS, MAX_VECTOR_DIMENSIONS and MAX_VECTOR_INDEX_FILTER_FIELDS_SIZE. */
 export const MIN_VECTOR_DIMENSIONS = 2;
 export const MAX_VECTOR_DIMENSIONS = 4096;
@@ -120,16 +134,42 @@ export class TableDefinition<
   // biome-ignore lint/correctness/noUnusedVariables: kept for the data model's types
   VectorIndexes extends GenericTableVectorIndexes = {},
 > {
-  readonly indexes: Record<string, string[]> = {};
+  /** @internal Convex's runtime shape, read by libraries (STUDY-181 H-5): the database indexes, not staged, in order. */
+  readonly indexes: { indexDescriptor: string; fields: string[] }[] = [];
+  /** @internal Convex's runtime shape (STUDY-181 H-5): the database indexes declared `staged: true`, in order. */
+  readonly stagedDbIndexes: { indexDescriptor: string; fields: string[] }[] = [];
+  /** @internal Convex's runtime shape (STUDY-181 H-5): the search indexes, not staged, in order. */
+  readonly searchIndexes: { indexDescriptor: string; searchField: string; filterFields: string[] }[] = [];
+  /** @internal Convex's runtime shape (STUDY-181 H-5): the search indexes declared `staged: true`, in order. */
+  readonly stagedSearchIndexes: { indexDescriptor: string; searchField: string; filterFields: string[] }[] = [];
+  /** @internal Convex's runtime shape (STUDY-181 H-5): the vector indexes, not staged, in order. */
+  readonly vectorIndexes: {
+    indexDescriptor: string;
+    vectorField: string;
+    dimensions: number;
+    filterFields: string[];
+  }[] = [];
+  /** @internal Convex's runtime shape (STUDY-181 H-5): the vector indexes declared `staged: true`, in order. */
+  readonly stagedVectorIndexes: {
+    indexDescriptor: string;
+    vectorField: string;
+    dimensions: number;
+    filterFields: string[];
+  }[] = [];
+  /**
+   * bunvex's own view of the database indexes, by name (the first declaration of a name), staged ones included: what
+   * `defineSchema` checks and the engine declares. A name declared twice is in `duplicateIndexes`.
+   */
+  readonly indexFields: Record<string, string[]> = {};
   /** Index names declared more than once (Convex refuses them at push, naming the table: see `defineSchema`). */
   readonly duplicateIndexes: string[] = [];
   /** The indexes declared `staged: true`: built in the background, never enabled until un-staged. */
   readonly stagedIndexes: string[] = [];
-  /** Full-text search indexes (STUDY-45), and those declared `staged: true`. */
-  readonly searchIndexes: Record<string, SearchIndexDef> = {};
+  /** Full-text search indexes by name (STUDY-45), and those declared `staged: true`. */
+  readonly searchIndexDefs: Record<string, SearchIndexDef> = {};
   readonly stagedSearch: string[] = [];
-  /** Vector indexes (STUDY-51), and those declared `staged: true`. */
-  readonly vectorIndexes: Record<string, VectorIndexDef> = {};
+  /** Vector indexes by name (STUDY-51), and those declared `staged: true`. */
+  readonly vectorIndexDefs: Record<string, VectorIndexDef> = {};
   readonly stagedVector: string[] = [];
   readonly document: GenericValidator;
   /** Convex's name for the table's document validator (`schema.tables.x.validator`, `docValidator`). */
@@ -148,9 +188,8 @@ export class TableDefinition<
    * order declared, as `{ indexDescriptor, fields }` (the fields as given, without `_creationTime`).
    */
   " indexes"(): { indexDescriptor: string; fields: string[] }[] {
-    return this.listedIndexes;
+    return this.indexes;
   }
-  private readonly listedIndexes: { indexDescriptor: string; fields: string[] }[] = [];
 
   /**
    * Declare an index on `fields` (Convex appends `_creationTime` and `_id`). As Convex's, the second
@@ -171,15 +210,16 @@ export class TableDefinition<
     const fields = Array.isArray(config) ? config : config?.fields;
     if (!Array.isArray(fields)) throw new Error(`Index "${name}" must be declared with an array of fields.`);
     checkIdentifier("index", name);
-    // Convex's list, a name declared twice included (the push refuses it).
-    if (Array.isArray(config) || config.staged !== true) this.listedIndexes.push({ indexDescriptor: name, fields });
+    const staged = !Array.isArray(config) && config.staged === true;
+    // Convex's lists, a name declared twice included (the push refuses it), the fields as given.
+    (staged ? this.stagedDbIndexes : this.indexes).push({ indexDescriptor: name, fields });
     // The other checks need the table's name and run in `defineSchema`, as Convex runs them at push.
-    if (name in this.indexes) {
+    if (name in this.indexFields) {
       this.duplicateIndexes.push(name);
       return this;
     }
-    this.indexes[name] = [...fields];
-    if (!Array.isArray(config) && config.staged === true) this.stagedIndexes.push(name);
+    this.indexFields[name] = [...fields];
+    if (staged) this.stagedIndexes.push(name);
     return this;
   }
 
@@ -210,7 +250,13 @@ export class TableDefinition<
     checkIdentifier("index", name);
     if (typeof config?.searchField !== "string")
       throw new Error(`Search index "${name}" must be declared with a \`searchField\`.`);
-    this.searchIndexes[name] = {
+    // Convex's lists: the filter fields as given (`[]` when absent), a name declared twice listed twice.
+    (config.staged === true ? this.stagedSearchIndexes : this.searchIndexes).push({
+      indexDescriptor: name,
+      searchField: config.searchField,
+      filterFields: config.filterFields || [],
+    });
+    this.searchIndexDefs[name] = {
       searchField: config.searchField,
       // A set, as Convex's: duplicates are dropped.
       filterFields: [...new Set(config.filterFields ?? [])],
@@ -255,7 +301,13 @@ export class TableDefinition<
     if (typeof config?.vectorField !== "string")
       throw new Error(`Vector index "${name}" must be declared with a \`vectorField\`.`);
     if (config.dimensions === undefined) throw new Error("Missing dimensions field");
-    this.vectorIndexes[name] = {
+    (config.staged === true ? this.stagedVectorIndexes : this.vectorIndexes).push({
+      indexDescriptor: name,
+      vectorField: config.vectorField,
+      dimensions: config.dimensions,
+      filterFields: config.filterFields || [],
+    });
+    this.vectorIndexDefs[name] = {
       vectorField: config.vectorField,
       dimensions: config.dimensions,
       filterFields: [...new Set(config.filterFields ?? [])],
@@ -297,14 +349,14 @@ const reservedIndexName = (table: string, n: string) =>
  */
 function checkDatabaseIndexes(table: string, t: TableDefinition) {
   const count =
-    Object.keys(t.indexes).length +
+    Object.keys(t.indexFields).length +
     t.duplicateIndexes.length +
-    Object.keys(t.searchIndexes).length +
-    Object.keys(t.vectorIndexes).length;
+    Object.keys(t.searchIndexDefs).length +
+    Object.keys(t.vectorIndexDefs).length;
   if (count > MAX_INDEXES_PER_TABLE)
     throw new Error(`Table "${table}" cannot have more than ${MAX_INDEXES_PER_TABLE} indexes.`);
   const staged = new Set(t.stagedIndexes);
-  const entries = Object.entries(t.indexes);
+  const entries = Object.entries(t.indexFields);
   for (const group of [false, true]) {
     const mine = entries.filter(([n]) => staged.has(n) === group);
     for (const [n, fields] of mine) {
@@ -355,7 +407,7 @@ export function stagedDocumentJson(staged: GenericValidator): ValidatorJSON {
  * offending validator, or the union's offending member), or null. Convex's message ends with a docs link, left
  * out (DV-356).
  */
-export function stagedDocumentError(schema: SchemaDefinition): string | null {
+export function stagedDocumentError(schema: EngineSchema): string | null {
   for (const t of declaredTables(schema).values()) {
     const s = t.stagedDocument;
     if (s === undefined || s.kind === "object" || s.kind === "any") continue;
@@ -368,7 +420,7 @@ export function stagedDocumentError(schema: SchemaDefinition): string | null {
 
 /** Convex's name checks for database indexes: reserved names, and a name declared twice. */
 function checkIndexNames(table: string, t: TableDefinition) {
-  for (const n of Object.keys(t.indexes))
+  for (const n of Object.keys(t.indexFields))
     if (n.startsWith("_") || n in SYSTEM_INDEXES) throw reservedIndexName(table, n);
   for (const n of t.duplicateIndexes) throw new Error(`Table "${table}" has two or more definitions of index "${n}".`);
 }
@@ -381,7 +433,7 @@ function checkIndexNames(table: string, t: TableDefinition) {
 function checkIndexSystemFields(t: TableDefinition) {
   const staged = new Set(t.stagedIndexes);
   const sorted = (group: boolean) =>
-    Object.entries(t.indexes)
+    Object.entries(t.indexFields)
       .filter(([n]) => staged.has(n) === group)
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   for (const [, fields] of [...sorted(false), ...sorted(true)]) {
@@ -397,9 +449,9 @@ function checkIndexSystemFields(t: TableDefinition) {
 
 /** Convex's push-time checks of a table's vector indexes (`schemas/json.rs`, `dimensions.rs`). */
 function checkVectorIndexes(table: string, t: TableDefinition) {
-  const others = new Set([...Object.keys(t.indexes), ...Object.keys(t.searchIndexes)]);
+  const others = new Set([...Object.keys(t.indexFields), ...Object.keys(t.searchIndexDefs)]);
   const seen = new Map<string, string>();
-  for (const [n, d] of Object.entries(t.vectorIndexes)) {
+  for (const [n, d] of Object.entries(t.vectorIndexDefs)) {
     if (n.startsWith("_") || n in SYSTEM_INDEXES)
       throw new Error(
         `In table "${table}" cannot name an index "${n}" because the name is reserved. Indexes may not start with an underscore or be named "by_id" or "by_creation_time".`,
@@ -429,15 +481,15 @@ const FIELD_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
 
 /** Convex's push-time checks of a table's search indexes (`schemas/json.rs`, `index_validation_error.rs`). */
 function checkSearchIndexes(table: string, t: TableDefinition) {
-  for (const n of Object.keys(t.searchIndexes)) {
+  for (const n of Object.keys(t.searchIndexDefs)) {
     if (n.startsWith("_") || n in SYSTEM_INDEXES)
       throw new Error(
         `In table "${table}" cannot name an index "${n}" because the name is reserved. Indexes may not start with an underscore or be named "by_id" or "by_creation_time".`,
       );
-    if (n in t.indexes) throw new Error(`Table "${table}" has two or more definitions of index "${n}".`);
+    if (n in t.indexFields) throw new Error(`Table "${table}" has two or more definitions of index "${n}".`);
   }
   const seen = new Map<string, string>();
-  for (const [n, d] of Object.entries(t.searchIndexes)) {
+  for (const [n, d] of Object.entries(t.searchIndexDefs)) {
     for (const f of [d.searchField, ...d.filterFields])
       if (!FIELD_PATH.test(f)) throw new Error(`In index "${n}": Invalid index field: "${f}"`);
     if (d.filterFields.length > MAX_SEARCH_FILTER_FIELDS)
@@ -556,19 +608,37 @@ export type GenericSchema = Record<
   TableDefinition<GenericValidator, GenericTableIndexes, GenericTableSearchIndexes, GenericTableVectorIndexes>
 >;
 /**
- * A schema (Convex's `SchemaDefinition`, STUDY-144): `tables`, the record of the `TableDefinition`s it was defined
- * with (`schema.tables.messages.validator`), and `schemaValidation`. `strictTableNameTypes` is a type only, never
- * set at run time, as Convex's. What the engine reads is the tables as it declares them: `declaredTables(schema)`.
+ * A schema (Convex's `SchemaDefinition`, STUDY-144, STUDY-180): `tables`, the record of the `TableDefinition`s it was
+ * defined with (`schema.tables.messages.validator`), `schemaValidation`, and `doc` / `id` (`SchemaValidators`).
+ * `strictTableNameTypes` is a type only, never set at run time, as Convex's. What the engine reads of a schema is
+ * `EngineSchema`, and the tables as it declares them: `declaredTables(schema)`.
  */
-export type SchemaDefinition<
-  Schema extends GenericSchema = GenericSchema,
-  StrictTableTypes extends boolean = boolean,
-> = {
+export interface SchemaDefinition<Schema extends GenericSchema, StrictTableTypes extends boolean>
+  extends SchemaValidators<Schema> {
   tables: Schema;
+  /** Types only: never set at run time. */
+  strictTableNameTypes: StrictTableTypes;
+  readonly schemaValidation: boolean;
+}
+
+/**
+ * What the engine reads of a schema: its tables and whether documents are validated. Every `SchemaDefinition` is
+ * one; so is a schema the engine makes itself (a pushed schema read back, an empty one), which has no `doc` / `id`.
+ */
+export type EngineSchema = {
+  tables: GenericSchema;
   readonly schemaValidation: boolean;
   /** Types only: never set at run time. */
-  readonly strictTableNameTypes?: StrictTableTypes;
+  readonly strictTableNameTypes?: boolean;
 };
+
+/** The options of `defineSchema` (Convex's `DefineSchemaOptions`). */
+export interface DefineSchemaOptions<StrictTableNameTypes extends boolean> {
+  /** Whether documents written are checked against their table's validator (default true). */
+  schemaValidation?: boolean;
+  /** Types only: false lets the data model name tables the schema does not declare (default true). */
+  strictTableNameTypes?: StrictTableNameTypes;
+}
 
 /** Each schema's tables as the engine declares them, made once. */
 const declared = new WeakMap<object, Map<string, DeclaredTable>>();
@@ -578,7 +648,7 @@ const declared = new WeakMap<object, Map<string, DeclaredTable>>();
  * document validator), made from its `tables` record on first use and kept (Convex exports `tables` when it pushes,
  * so what a table declares until then counts). Its errors are `defineSchema`'s, which checks the tables when it runs.
  */
-export function declaredTables(schema: Pick<SchemaDefinition, "tables">): Map<string, DeclaredTable> {
+export function declaredTables(schema: Pick<EngineSchema, "tables">): Map<string, DeclaredTable> {
   let out = declared.get(schema);
   if (!out) {
     out = declareTables(schema.tables);
@@ -602,14 +672,14 @@ function declareTables(tables: GenericSchema): Map<string, DeclaredTable> {
     checkIndexNames(name, t);
     out.set(name, {
       name,
-      indexes: { ...t.indexes },
+      indexes: { ...t.indexFields },
       document: t.document,
       staged: [...t.stagedIndexes],
-      ...(Object.keys(t.searchIndexes).length
-        ? { searchIndexes: structuredClone(t.searchIndexes), stagedSearch: [...t.stagedSearch] }
+      ...(Object.keys(t.searchIndexDefs).length
+        ? { searchIndexes: structuredClone(t.searchIndexDefs), stagedSearch: [...t.stagedSearch] }
         : {}),
-      ...(Object.keys(t.vectorIndexes).length
-        ? { vectorIndexes: structuredClone(t.vectorIndexes), stagedVector: [...t.stagedVector] }
+      ...(Object.keys(t.vectorIndexDefs).length
+        ? { vectorIndexes: structuredClone(t.vectorIndexDefs), stagedVector: [...t.stagedVector] }
         : {}),
       ...(t.stagedDocument === undefined ? {} : { stagedDocument: t.stagedDocument }),
     });
@@ -641,10 +711,14 @@ function tableDefinitionOf(table: DeclaredTable): TableDefinition {
   const staged = new Set(table.staged ?? []);
   for (const [name, fields] of Object.entries(table.indexes))
     t.index(name, staged.has(name) ? { fields: [...fields], staged: true } : [...fields]);
-  Object.assign(t.searchIndexes, structuredClone(table.searchIndexes ?? {}));
-  t.stagedSearch.push(...(table.stagedSearch ?? []));
-  Object.assign(t.vectorIndexes, structuredClone(table.vectorIndexes ?? {}));
-  t.stagedVector.push(...(table.stagedVector ?? []));
+  const stagedSearch = new Set(table.stagedSearch ?? []);
+  for (const [name, d] of Object.entries(structuredClone(table.searchIndexes ?? {})))
+    if (stagedSearch.has(name)) t.searchIndex(name, { ...d, staged: true });
+    else t.searchIndex(name, d);
+  const stagedVector = new Set(table.stagedVector ?? []);
+  for (const [name, d] of Object.entries(structuredClone(table.vectorIndexes ?? {})))
+    if (stagedVector.has(name)) t.vectorIndex(name, { ...d, staged: true });
+    else t.vectorIndex(name, d);
   if (table.stagedDocument !== undefined) t.stagedDocument = table.stagedDocument;
   return t;
 }
@@ -653,8 +727,8 @@ function tableDefinitionOf(table: DeclaredTable): TableDefinition {
  * A schema of tables the engine declared (a pushed schema read back, an empty one): its `tables` record made of
  * table definitions holding the same, and `declaredTables` giving `tables` as it is.
  */
-export function schemaOfDeclared(tables: Map<string, DeclaredTable>, schemaValidation: boolean): SchemaDefinition {
-  const schema: SchemaDefinition = {
+export function schemaOfDeclared(tables: Map<string, DeclaredTable>, schemaValidation: boolean): EngineSchema {
+  const schema: EngineSchema = {
     tables: Object.fromEntries([...tables].map(([name, t]) => [name, tableDefinitionOf(t)])),
     strictTableNameTypes: undefined,
     schemaValidation,
@@ -670,8 +744,8 @@ export function schemaOfDeclared(tables: Map<string, DeclaredTable>, schemaValid
  */
 export function defineSchema<Schema extends GenericSchema, StrictTableNameTypes extends boolean = true>(
   tables: Schema,
-  options: { schemaValidation?: boolean; strictTableNameTypes?: StrictTableNameTypes } = {},
-): SchemaDefinition<Schema, StrictTableNameTypes> & SchemaValidators<Schema> {
+  options: DefineSchemaOptions<StrictTableNameTypes> = {},
+): SchemaDefinition<Schema, StrictTableNameTypes> {
   // Convex's push-time checks, run here as before; the tables are declared from the record when first read (a push,
   // the engine), as Convex exports `tables` when it pushes: an index added to a table after `defineSchema` counts.
   declareTables(tables);
@@ -696,7 +770,7 @@ export function defineSchema<Schema extends GenericSchema, StrictTableNameTypes 
   return Object.defineProperties(
     { tables, strictTableNameTypes: undefined, schemaValidation: options.schemaValidation ?? true },
     { doc: { value: helpers.doc }, id: { value: helpers.id } },
-  ) as SchemaDefinition<Schema, StrictTableNameTypes> & SchemaValidators<Schema>;
+  ) as unknown as SchemaDefinition<Schema, StrictTableNameTypes>;
 }
 
 /**
@@ -802,7 +876,7 @@ export function documentJson(document: GenericValidator): ValidatorJSON {
  * union, its first member that is not an object), or null. Convex's message ends with a docs link, left out
  * (DV-397).
  */
-export function documentTypeError(schema: SchemaDefinition): string | null {
+export function documentTypeError(schema: EngineSchema): string | null {
   for (const t of declaredTables(schema).values()) {
     const d = t.document;
     if (d.kind === "object" || d.kind === "any") continue;
@@ -820,7 +894,7 @@ export function documentTypeError(schema: SchemaDefinition): string | null {
  * indexes' fields (then the staged ones'), the search fields, the search filter fields and the vector fields,
  * then the vector fields' types. The first failure's message, or null.
  */
-export function indexReferenceError(schema: SchemaDefinition): string | null {
+export function indexReferenceError(schema: EngineSchema): string | null {
   if (!schema.schemaValidation) return null;
   const byName = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
   for (const [table, t] of [...declaredTables(schema)].sort(([a], [b]) => byName(a, b))) {

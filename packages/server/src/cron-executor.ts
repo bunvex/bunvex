@@ -18,7 +18,6 @@ import {
   TooManyWritesError,
   type Tx,
   timerDelay,
-  wallClock,
 } from "@bunvex/core";
 import { displayValue, rawValueSize, type Value } from "@bunvex/values";
 import type { CronSpec } from "./cron.ts";
@@ -187,10 +186,10 @@ export class CronJobExecutor {
   /** Sleep `ms`, or less if the executor stops. */
   private pause(ms: number) {
     return new Promise<void>((resolve) => {
-      const t = setTimeout(done, ms);
+      const t = this.engine.runtime.setTimeout(done, ms);
       const self = this;
       function done() {
-        clearTimeout(t);
+        self.engine.runtime.clearTimeout(t);
         self.interrupt = null;
         resolve();
       }
@@ -246,7 +245,7 @@ export class CronJobExecutor {
       const seen = this.pokes;
       let nextAt: number | null = null;
       try {
-        const now = wallClock();
+        const now = this.engine.runtime.now();
         // Stopped (paused): no polling until a commit to `_backend_state` wakes the loop (Convex).
         if (await this.engine.query(async (db) => isStopped(await readBackendState(db)))) {
           if (this.stopped) return;
@@ -278,16 +277,19 @@ export class CronJobExecutor {
         // As Convex's executor loop: log, back off (500 ms to 15 s), and look again.
         const delay = backoff(++failures, this.o.errorInitialBackoffMs, this.o.errorMaxBackoffMs);
         console.error(`cron jobs: the executor failed, retrying in ${Math.round(delay)} ms`, e);
-        nextAt = wallClock() + delay;
+        nextAt = this.engine.runtime.now() + delay;
       }
       if (this.stopped) return;
       if (this.pokes !== seen) continue;
       await new Promise<void>((resolve) => {
         // Capped (STUDY-174 F3): a yearly cron wakes the loop every 24.8 days, which looks again.
         // Capped (STUDY-174 F3): a yearly cron wakes the loop every 24.8 days, which looks again.
-        const t = nextAt === null ? null : setTimeout(() => this.poke(), timerDelay(nextAt - wallClock()));
+        const t =
+          nextAt === null
+            ? null
+            : this.engine.runtime.setTimeout(() => this.poke(), timerDelay(nextAt - this.engine.runtime.now()));
         this.wake = () => {
-          if (t) clearTimeout(t);
+          if (t) this.engine.runtime.clearTimeout(t);
           resolve();
         };
       });
@@ -331,7 +333,7 @@ export class CronJobExecutor {
         if (e instanceof CommitterStoppedError || this.stopped) return;
         // A system error: retry, with backoff (Convex retries these without end).
         console.error(`cron ${job.name}:`, e);
-        await Bun.sleep(backoff(failures + 1, this.o.errorInitialBackoffMs, this.o.errorMaxBackoffMs));
+        await this.engine.runtime.sleep(backoff(failures + 1, this.o.errorInitialBackoffMs, this.o.errorMaxBackoffMs));
       }
     }
   }
@@ -358,7 +360,7 @@ export class CronJobExecutor {
     const body = this.functions.scheduledMutationBody(name, job.cronSpec.udfArgs[0]);
     const retries = { n: 0 };
     for (let occ = 0; ; ) {
-      const t0 = performance.now();
+      const t0 = this.engine.runtime.monotonicNow();
       let value: unknown;
       const r = await collectLogs(() =>
         this.functions.logged(
@@ -374,7 +376,14 @@ export class CronJobExecutor {
                 // the cron's namespace.
                 const lines = truncateLogLines(currentLogLines());
                 await inNamespace(db, job.ns, async () => {
-                  await insertLog(db, job, job.nextTs, resultStatus(value), lines, (performance.now() - t0) / 1000);
+                  await insertLog(
+                    db,
+                    job,
+                    job.nextTs,
+                    resultStatus(value),
+                    lines,
+                    (this.engine.runtime.monotonicNow() - t0) / 1000,
+                  );
                   await completeRun(db, job, Date.now(), this.o);
                 });
                 return true;
@@ -394,7 +403,7 @@ export class CronJobExecutor {
       }
       // A lost conflict, or the write throughput limit (STUDY-78): run again later, as Convex's loop does.
       if (r.error instanceof OccError || r.error instanceof TooManyWritesError) {
-        await Bun.sleep(backoff(++occ, this.o.occInitialBackoffMs, this.o.occMaxBackoffMs));
+        await this.engine.runtime.sleep(backoff(++occ, this.o.occInitialBackoffMs, this.o.occMaxBackoffMs));
         continue;
       }
       if (r.error instanceof CommitterStoppedError) throw r.error;
@@ -409,7 +418,7 @@ export class CronJobExecutor {
             job.nextTs,
             { type: "err", error },
             truncateLogLines(r.logLines),
-            (performance.now() - t0) / 1000,
+            (this.engine.runtime.monotonicNow() - t0) / 1000,
           );
           await completeRun(db, job, Date.now(), this.o);
         });
@@ -431,7 +440,7 @@ export class CronJobExecutor {
       });
     }, "_system/cron_in_progress");
     if (!started) return;
-    const t0 = performance.now();
+    const t0 = this.engine.runtime.monotonicNow();
     const r = await collectLogs(() =>
       this.functions.runAction(name, job.cronSpec.udfArgs[0], NO_ONE, {
         internal: true,
@@ -439,7 +448,7 @@ export class CronJobExecutor {
       }),
     );
     const status: CronStatus = r.ok ? resultStatus(r.value) : { type: "err", error: describeUncaught(r.error).message };
-    const elapsed = (performance.now() - t0) / 1000;
+    const elapsed = (this.engine.runtime.monotonicNow() - t0) / 1000;
     for (let n = 1; ; n++) {
       try {
         await this.engine.mutation(async (db) => {
@@ -454,7 +463,7 @@ export class CronJobExecutor {
         return;
       } catch (e) {
         if (e instanceof CommitterStoppedError) return;
-        await Bun.sleep(backoff(n, this.o.errorInitialBackoffMs, this.o.errorMaxBackoffMs));
+        await this.engine.runtime.sleep(backoff(n, this.o.errorInitialBackoffMs, this.o.errorMaxBackoffMs));
       }
     }
   }
