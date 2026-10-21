@@ -37,6 +37,7 @@ import {
 } from "@bunvex/core";
 import {
   appContext,
+  asCallerError,
   type CodeVersion,
   captureLines,
   inHandleScope,
@@ -342,7 +343,7 @@ export function rebuiltError(w: Extract<WireThrown, { k: "error" }>): Error {
   } else if (w.cls === "DOMException") e = new DOMException(w.message, w.name);
   else e = new (ERRORS[w.cls] ?? Error)(w.message);
   if (e.name !== w.name) Object.defineProperty(e, "name", { value: w.name, writable: true, configurable: true });
-  return e;
+  return w.caller ? asCallerError(e) : e;
 }
 
 /** A thrown value for the host: an error with its class, name, message, stack and a `BunvexError`'s data. */

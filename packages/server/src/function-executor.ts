@@ -23,7 +23,7 @@ export {
   trackedActionTimers,
 } from "./action-timeout.ts";
 // What the child's calls and the host's stand-ins use (STUDY-171 §8).
-export { appContext } from "./app-errors.ts";
+export { appContext, asCallerError, isCallerError } from "./app-errors.ts";
 export {
   type FunctionDef,
   REMOTE_FUNCTIONS,
