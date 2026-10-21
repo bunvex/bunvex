@@ -222,14 +222,14 @@ export type WireHttpCall = {
 
 /**
  * An HTTP action's response body: none; its bytes inline, or as the stream `s` (`whole`), for a body of known length
- * (`length`: its size, or null for one still to encode, as `bodyLength` tells); or streaming (`stream`), `ended` when
- * the handler's turn read it to its end (in-process the server then has all of it at once, and Bun sends its length).
+ * (`length`: its size, or null for one still to encode, as `bodyLength` tells; `gather`: past the 100 MiB cap, the host
+ * has it whole before the server sends it, as in-process); or streaming (`stream`).
  */
 export type WireResponseBody =
   | null
   | { kind: "bytes"; b: unknown; length: number | null }
-  | { kind: "whole"; s: number; length: number | null }
-  | { kind: "stream"; s: number; ended: boolean };
+  | { kind: "whole"; s: number; length: number | null; gather: boolean }
+  | { kind: "stream"; s: number };
 
 /** child → host: an HTTP action's response: its head, read before its body as the server reads it. */
 export type WireResponse = {
@@ -546,8 +546,9 @@ function response(m: Record<string, Json>, id: number): WireResponse {
   if (b !== null) {
     const kind = oneOf(b.kind, ["bytes", "whole", "stream"], "response.body.kind");
     const length = () => nullable(b.length, int, "response.body.length");
-    if (kind === "stream") body = { kind, s: int(b.s, "response.body.s"), ended: bool(b.ended, "response.body.ended") };
-    else if (kind === "whole") body = { kind, s: int(b.s, "response.body.s"), length: length() };
+    if (kind === "stream") body = { kind, s: int(b.s, "response.body.s") };
+    else if (kind === "whole")
+      body = { kind, s: int(b.s, "response.body.s"), length: length(), gather: bool(b.gather, "response.body.gather") };
     else body = { kind, b: "b" in b ? b.b : fail("response.body.b", "bytes"), length: length() };
   }
   return {

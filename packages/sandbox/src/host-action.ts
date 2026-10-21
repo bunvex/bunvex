@@ -88,26 +88,6 @@ type Counted = {
 /** The operations whose engine call starts only once their bytes are in (a request body, a stored file). */
 const LATE = new Set(["fetch", "storage.store"]);
 
-/** The microtask turns `soon` waits: what is already queued resolves within them. */
-const SOON_TURNS = 32;
-
-/** `p`'s result if it settles within `SOON_TURNS` microtask turns, else null. */
-async function soon<T>(p: Promise<T>): Promise<T | null> {
-  let settled = false;
-  let value: T | null = null;
-  void p.then(
-    (v) => {
-      settled = true;
-      value = v;
-    },
-    () => {
-      settled = true;
-    },
-  );
-  for (let i = 0; i < SOON_TURNS && !settled; i++) await null;
-  return settled ? (value ?? (await p)) : null;
-}
-
 /** An HTTP action's response, and when its call ends (its body handed over). */
 export type HttpOutcome = { response: Response | undefined; ended: Promise<void> };
 
@@ -192,60 +172,11 @@ export class HostActionCall extends HostCallBase {
       await ended;
       return { response: new Response(null, init), ended };
     }
-    if (b.kind === "stream") {
-      // The body ends once its call has (its `done` counted what it left pending, for the warnings the server gives
-      // at the body's end). A mark is where the child dropped a chunk past the limit (the app's, whole).
-      const reader = this.responseStream!.getReader();
-      if (b.ended) {
-        // Ended in the handler's turn: gathered here, so the server has all of it at once, as in-process.
-        const chunks: unknown[] = [];
-        for (let r = await reader.read(); !r.done; r = await reader.read())
-          chunks.push(r.value === (MARK as unknown) ? BODY_OVER_LIMIT : r.value);
-        await ended;
-        const whole = new ReadableStream<Uint8Array>({
-          start(controller) {
-            for (const c of chunks) controller.enqueue(c as Uint8Array);
-            controller.close();
-          },
-        });
-        return { response: new Response(whole, init), ended };
-      }
-      let over = false;
-      void ended.then(() => {
-        over = true;
-      });
-      const value = (v: unknown) => (v === (MARK as unknown) ? BODY_OVER_LIMIT : v) as Uint8Array;
-      const stream = new ReadableStream<Uint8Array>(
-        {
-          async pull(controller) {
-            // What came with a chunk (the chunks and the end the child sent together, as the app made them) is handed
-            // on with it: in-process, Bun has a body that ends with its chunk at once, and sends its length.
-            for (let r = await reader.read(); ; ) {
-              if (r.done) {
-                if (!over) await ended;
-                return controller.close();
-              }
-              controller.enqueue(value(r.value));
-              const next = reader.read();
-              const now = await soon(next);
-              if (now === null) {
-                const later = await next;
-                if (later.done) {
-                  if (!over) await ended;
-                  return controller.close();
-                }
-                return controller.enqueue(value(later.value));
-              }
-              r = now;
-            }
-          },
-          cancel: (reason) => reader.cancel(reason),
-        },
-        { highWaterMark: 0 },
-      );
-      return { response: new Response(stream, init), ended };
-    }
-    // Known length: gathered, so the server has it at once as it has a body made in-process.
+    if (b.kind === "stream") return { response: new Response(this.responseBody(ended), init), ended };
+    // Known length: the server reads it as it reads one made in-process (`bodyLength`: its type and length). Past the
+    // cap it is gathered first, so the server drops it as in-process (whole, not a MiB at a time).
+    if (b.kind === "whole" && !b.gather)
+      return { response: withBodyLength(new Response(this.responseBody(ended), init), b.length), ended };
     let bytes: Uint8Array;
     if (b.kind === "bytes") {
       const v = this.checked(() => decode(b.b, true));
@@ -257,6 +188,34 @@ export class HostActionCall extends HostCallBase {
     } else bytes = new Uint8Array(await new Response(this.responseStream!).arrayBuffer());
     await ended;
     return { response: withBodyLength(new Response(bytes, init), b.length), ended };
+  }
+
+  /**
+   * The response's body from the child: it ends once its call has (its `done` counted what it left pending, for the
+   * warnings the server gives at the body's end); a mark is where the child dropped a chunk past the limit (the app's,
+   * whole), handed to the server's meter as that chunk.
+   */
+  private responseBody(ended: Promise<void>): ReadableStream<Uint8Array> {
+    const reader = this.responseStream!.getReader();
+    let over = false;
+    void ended.then(() => {
+      over = true;
+    });
+    const value = (v: unknown) => (v === (MARK as unknown) ? BODY_OVER_LIMIT : v) as Uint8Array;
+    return new ReadableStream<Uint8Array>(
+      {
+        // A body's last chunk and its end come together (the child flushes them with its `done`), so Bun has a body
+        // that ends with its chunk at once, and sends its length, as in-process (DV-483).
+        async pull(controller) {
+          const r = await reader.read();
+          if (!r.done) return controller.enqueue(value(r.value));
+          if (!over) await ended;
+          controller.close();
+        },
+        cancel: (reason) => reader.cancel(reason),
+      },
+      { highWaterMark: 0 },
+    );
   }
 
   /**

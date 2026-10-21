@@ -104,8 +104,6 @@ export function readsAhead(body: ReadableStream<Uint8Array>) {
   const early: ReturnType<typeof reader.read>[] = [];
   // The body's error, once it failed (its start or a pull threw, or it was errored).
   let failed: { error: unknown } | null = null;
-  // Whether the reads of the handler's turn reached its end.
-  let ended = false;
   reader.closed.catch((error: unknown) => {
     failed ??= { error };
   });
@@ -128,10 +126,7 @@ export function readsAhead(body: ReadableStream<Uint8Array>) {
         early.push(read);
         read.then(
           ({ value, done }) => {
-            if (done) {
-              ended = true;
-              return;
-            }
+            if (done) return;
             if (value !== undefined && value !== null && value !== BODY_OVER_LIMIT && !isBytes(value))
               failed ??= { error: notBytes(value) };
             // The next one, unless the turn found an error.
@@ -148,8 +143,6 @@ export function readsAhead(body: ReadableStream<Uint8Array>) {
     read: () => early.shift() ?? reader.read(),
     cancel: (reason?: unknown) => reader.cancel(reason),
     failedEarly,
-    /** Whether the handler's turn read the body to its end (after `failedEarly`): Bun then has all of it at once. */
-    endedEarly: () => ended,
   };
 }
 

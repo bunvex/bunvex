@@ -150,6 +150,21 @@ for (const executor of EXECUTORS) {
   try {
     const { port, pid } = JSON.parse(await firstLine(server.stdout)) as { port: number; pid: number };
     const site = `http://127.0.0.1:${port}`;
+    // The backpressure lines first, on the fresh server (after a few small requests): what the others leave in its
+    // heap would hide what a slow client costs.
+    if (!ONLY || "backpressure".includes(ONLY)) {
+      for (let i = 0; i < 20; i++) await (await fetch(`${site}/stream/${MiB}`)).arrayBuffer();
+      const child = (await childrenOf(pid))[0] ?? null;
+      for (const mibs of [SLOW_MIBS, null]) {
+        Bun.gc(true);
+        await Bun.sleep(500);
+        const row = await backpressure(site, { server: pid, child: executor === "process" ? child : null }, mibs);
+        const name = `backpressure, 96 MiB stream, read ${row.read}`;
+        out[name] ??= {};
+        out[name]![executor] = row;
+        if (!JSON_OUT) console.log(executor.padEnd(8), name.padEnd(36), JSON.stringify(row));
+      }
+    }
     for (const line of LINES) {
       if (ONLY && !line.name.includes(ONLY)) continue;
       const n = line.requests(REQUESTS);
@@ -172,16 +187,6 @@ for (const executor of EXECUTORS) {
       out[line.name] ??= {};
       out[line.name]![executor] = row;
       if (!JSON_OUT) console.log(executor.padEnd(8), line.name.padEnd(36), JSON.stringify(row));
-    }
-    if (!ONLY || "backpressure".includes(ONLY)) {
-      const child = (await childrenOf(pid))[0] ?? null;
-      for (const mibs of [null, SLOW_MIBS]) {
-        const row = await backpressure(site, { server: pid, child: executor === "process" ? child : null }, mibs);
-        const name = `backpressure, 96 MiB stream, read ${row.read}`;
-        out[name] ??= {};
-        out[name]![executor] = row;
-        if (!JSON_OUT) console.log(executor.padEnd(8), name.padEnd(36), JSON.stringify(row));
-      }
     }
   } finally {
     server.kill("SIGKILL");

@@ -242,11 +242,6 @@ class ChildActionCall extends ChildCallBase {
    * then, false if the call ended before.
    */
   private responseBody: { s: number; opened: Promise<boolean>; open: (sent: boolean) => void } | null = null;
-  /**
-   * An HTTP action's operations without their answer when its response was made, for a body that does not stream: the
-   * server in-process counts what is pending once the handler answered (a streamed body's, once it ends).
-   */
-  private pendingAtAnswer: number[] | null = null;
   /** Set once an HTTP action's head was sent: its body streams (a rejection then ends the body, not the run). */
   private streaming = false;
   /** Ends the body's read of the app's stream with an unhandled rejection's failure, as thrown. */
@@ -634,7 +629,12 @@ class ChildActionCall extends ChildCallBase {
         body =
           bytes.byteLength <= INLINE_BYTES
             ? { kind: "bytes", b: encode(bytes.buffer as ArrayBuffer), length }
-            : { kind: "whole", s: this.openBody(() => this.whole(bytes)), length };
+            : {
+                kind: "whole",
+                s: this.openBody(() => this.whole(bytes)),
+                length,
+                gather: bytes.byteLength > HTTP_ACTION_RESPONSE_LIMIT,
+              };
       } else {
         const reader = readsAhead(stream);
         const early = await reader.failedEarly();
@@ -642,7 +642,6 @@ class ChildActionCall extends ChildCallBase {
         // Stopped by the host (the client gone, a HEAD request), the app's stream is cancelled at once, as in-process.
         body = {
           kind: "stream",
-          ended: reader.endedEarly(),
           s: this.openBody(
             () => this.chunks(reader),
             () => void reader.cancel().catch(() => {}),
@@ -650,7 +649,6 @@ class ChildActionCall extends ChildCallBase {
         };
       }
     }
-    if (body?.kind !== "stream") this.pendingAtAnswer = this.unanswered();
     return { t: "response", id: this.id, ...head, body };
   }
 
@@ -730,7 +728,7 @@ class ChildActionCall extends ChildCallBase {
       ok: true,
       value: encode(null),
       report: this.report(),
-      pending: this.pendingAtAnswer ?? this.unanswered(),
+      pending: this.unanswered(),
     });
     this.ended();
   }
