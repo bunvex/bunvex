@@ -1,7 +1,7 @@
 # STUDY-31 — HTTP actions (`httpRouter`, `httpAction`)
 
 - **Status:** accepted: H1–H5 as recommended (owner, 2026-10-01)
-- **Convex source read:** commit `4577b9031` of get-convex/convex-backend; §7–§10 at `d8bdde0`
+- **Convex source read:** commit `4577b9031` of get-convex/convex-backend; §7–§10 at `d8bdde0`; §12 at `72ce13c`
 - **Related:** server-api.md §16, platform.md §8; STUDY-30 S1 (registration at start); STUDY-27 (auth); STUDY-20
   (errors, redaction). HTTP actions come before file storage in the roadmap (owner, 2026-10-01); built-in
   auth (STUDY-28) needs them for OAuth callbacks, email links and JWKS.
@@ -604,3 +604,118 @@ included. *Tests:* `server/test/http-actions.test.ts` (several lines, a trailing
 new routes in `http-trace-app/`, and its `throws.ts`). Sabotage (each restored, `git diff` clean): the first line only
 (unit and oracle fail); the trailing newline trimmed (unit and oracle fail); the frames kept (unit and oracle fail);
 the frames cut from the first run of frame lines (`/m`: oracle fails, on the nested call).
+
+## 12. A system error in an HTTP action (follow-up, 2026-10-21)
+
+STUDY-171 §14.6's Q-PR6-3, approved by the owner on 2026-10-21: answer a system error in an HTTP action with Convex's
+internal error, under both executors. Read at `72ce13c` and checked against its binary
+(`precompiled-2026-10-10-72ce13c`).
+
+### 12.1 How Convex does it
+
+- **What is internal.** An error is the app's when it is a `JsError` (what the app threw, or a deterministic user
+  error turned into one), and internal when it is any other `anyhow::Error`: one with no `ErrorMetadata`, or with
+  metadata that is not a deterministic user error (`crates/errors/src/lib.rs:513-530`, `is_deterministic_user_error`).
+  In the isolate, a syscall or op that fails with such an error terminates it as `IsolateTerminationReason::SystemError`
+  (`crates/isolate/src/request_scope.rs:348-391`, `handle_syscall_or_op_error`); `take_termination_error` gives it
+  back as the run's `Err` (`crates/isolate/src/termination.rs:225-242`), and `run_http_action` returns it as such
+  (`crates/isolate/src/environment/action/mod.rs:384-420`). An action's *task* (a nested `runQuery`, `fetch`, storage)
+  that fails is different: `resolve_promise_allow_all_errors` reports it and rejects the app's promise with a plain
+  `Error` carrying `user_facing_message()`, the fixed message (`action/mod.rs:1193-1209`,
+  `environment/helpers/promise.rs:61-75`): the app's error from then on (§12.4).
+- **The answer.** `run_http_action` (`crates/application/src/application_function_runner/http_routing.rs:170-289`: the last arm)
+  sends an internal `Err` up untouched; `http_action_udf` bails with it (`crates/application/src/lib.rs:1519-1531`);
+  `http_any_method`'s `try_next().await?` makes it an `HttpResponseError` (`crates/local_backend/src/http_actions.rs`,
+  `crates/common/src/http/mod.rs:447-468`): the error's `http_status()`, `short_msg()` and `msg()` — for an error with
+  no metadata 500, `InternalServerError` and `INTERNAL_SERVER_ERROR_MSG` (`errors/src/lib.rs:997-1063`, `:1102`), for
+  `out_of_retention` 503 with the same code and message (`:398-410`, `:712-735`). The body is `{code, message}`
+  (`http/mod.rs:377-389`, axum's `Json`). Seen on the binary: 500, `content-type: application/json`,
+  `content-length: 95`, `{"code":"InternalServerError","message":"Your request couldn't be completed. Try again later."}`.
+- **The function log.** `log_http_action_system_error` (`crates/application/src/function_log.rs:1114-1148`) logs the
+  run with `JsError::from_error_ref`, whose message for an internal error is `user_facing_message()`, the fixed
+  message (`crates/common/src/errors.rs:663-676`); its route is the request's (`route_for_failure`,
+  `crates/udf/src/http_action.rs:56-70`, unmatched: no app metrics), its lines kept, no usage counted
+  (`TrackUsage::SystemError`). Seen on the binary: the Completion's error is
+  `"Your request couldn't be completed. Try again later.\n"`, under `GET /internal/system`, its line a Progress before.
+- **The server log.** `HttpResponseError::into_response` calls `report_error_sync` (`http/mod.rs:447-453`), which
+  writes `Caught error (…): <the error's chain>` on one line at ERROR level and reports it to Sentry
+  (`crates/common/src/errors.rs:149-178`). The detail is there only.
+
+### 12.2 What bunvex did
+
+Both executors: `httpActionServer`'s `errorResponse` (`server/src/http-actions.ts`) described every failure as the
+app's: a 500 whose `code` and `trace` carried the error's own message (`Uncaught QueryCursorError: Cursor was None…`
+under `vm`, `Uncaught ExecutorFailure: the function sandbox's process sent a message that is not valid: …` under
+`process`), and the function log recorded that message.
+
+### 12.3 What bunvex does now
+
+- A system error (`isSystemError`: the executor's `ExecutorFailure`, a stopped committer, a failed store read, out of
+  retention, a query cursor's, an index not ready) that fails an HTTP action before its head answers
+  `{code: "InternalServerError", message: "Your request couldn't be completed. Try again later."}` with
+  `content-type: application/json`: 500, or 503 out of retention; an index that is not ready answers its own 503
+  (`{code, message}`), as `/api/*` answers it (`udfBody`). The app's own errors keep their 500.
+- The run is logged under the request, its lines kept, with the error `"Your request couldn't be completed. Try again
+  later.\n"` (`functions.ts`, `errorText`).
+- The detail goes to the server's log, one line: `bunvex: the HTTP action of <METHOD> <path> failed with an internal
+  error: <the error's stack, its newlines escaped>`. The wording is bunvex's (Convex's names its Rust knobs).
+- Under `process`, this is the same code path (the server's `runHttpAction`), so an HTTP action's child that dies or
+  breaks the protocol answers the same once HTTP actions run there (STUDY-171 §14, PR #812, not merged when this was
+  written; its `http-limits.test.ts` expects the old message and is updated by whichever PR merges second).
+- Not covered: a system error *after* the head (Convex aborts the response's body; under `vm` no system error reaches
+  the server then other than through a nested call, §12.4; under `process`, a child that dies mid-body, #812).
+
+### 12.4 Divergences (owner questions; no number taken: TBD)
+
+- **Q-12-1. A nested call's system error in an action or an HTTP action.**
+  - Convex: the action's task fails, and its promise is rejected with a plain `Error` whose message is the fixed one
+    (`resolve_promise_allow_all_errors`, §12.1); the detail goes to the server's log. The app can catch it; uncaught
+    in an HTTP action, it is the app's 500: `Server Error: Uncaught Error: Your request couldn't be completed. Try again
+    later.` with its `trace`. Seen on the binary (`nested`, `caught`; an action's `catch` the same).
+  - bunvex: the error reaches the action as it is (DV-209 makes a nested system error fail a *transaction* for good;
+    an action has none): a `catch` sees its own message (`Cursor was None. This should be impossible…`), and the action
+    can return normally; uncaught in an HTTP action, it is now the internal 500 above.
+  - Same: no.
+  - Why: not built (DV-209 was decided for nested calls inside queries and mutations; Convex's action boundary turns
+    an internal error into the app's).
+  - App impact: an action that catches a nested call's error and shows or stores its message exposes bunvex's
+    internal text where Convex gives the fixed message; an HTTP action that lets it through answers
+    `{code, message}` where Convex answers the app's `{code, trace}` 500.
+  - **Recommendation: match Convex in a PR of its own**: at an action's nested call (and its other operations), a
+    system error rejects with `new Error("Your request couldn't be completed. Try again later.")`, its detail to the
+    server's log. `differential/test/http-internal-error.test.ts` states both behaviours today.
+- **Q-12-2. A query's, mutation's or action's system error in the function log.**
+  - Convex: logged with the fixed message (`log_query_system_error`, `log_mutation_system_error`,
+    `log_action_system_error`, `function_log.rs:647`, `:787`, `:969`, each through `JsError::from_error_ref`), a
+    query's with no log lines; the detail in the server's log. Seen on the binary for a query: error
+    `"Your request couldn't be completed. Try again later.\n"`, lines `[]`.
+  - bunvex: logged with the error's own message (`errorText`: `Cursor was None…`, no trailing newline), the query's
+    lines kept; nothing in the server's log. Clients get the fixed message already (`udfBody`).
+  - Same: no (an HTTP action's now is).
+  - Why: not built.
+  - App impact: none on what clients get; the dashboard's and log streams' entries show bunvex's internal message.
+  - **Recommendation: match Convex in a PR of its own** (the fixed message, a query's lines dropped as Convex drops
+    them, the detail to the server's log), as this PR does for HTTP actions.
+
+### 12.5 Tests
+
+- `server/test/http-action-system-error.test.ts` (`vm`): a handler that meets an `ExecutorFailure` (what the
+  `process` host throws), a nested query's system error, out of retention and an index that is not ready: each
+  status, type and body whole, nothing of the detail in any; one server-log line each with the detail; the
+  Completions under the request with the fixed message; the app's own throw unchanged.
+- `differential/test/http-internal-error.test.ts`, against `precompiled-2026-10-10-72ce13c` (`http-internal-app/`):
+  `system` compared whole (status, type, body, the run's Progress and Completion with its error); `thrown` (status,
+  the trace's first line); `nested` and `caught` spelled out per backend (Q-12-1). On Convex `system` calls its
+  runtime's op with no name (`op(op_name, ...) takes at least one argument`, an internal error: `ops/mod.rs:348-354`);
+  bunvex's runtime has none, and its route meets the nested query's system error instead, which reaches the server
+  as the executor's failures do.
+- Sabotage, on the test VPS, each break applied alone and the file restored and compared by hash
+  (both files run each time):
+
+| Break | Server test | Oracle test |
+|---|---|---|
+| No system-error answer (every error described as the app's) | fails | fails |
+| The function log keeps the error's own message | fails | fails |
+| No server-log line | fails | passes (not observable by a client) |
+| Out of retention answered 500 | fails | passes (not reachable on the oracle) |
+| An index not ready answered as the generic internal error | fails | passes (not reachable on the oracle) |
