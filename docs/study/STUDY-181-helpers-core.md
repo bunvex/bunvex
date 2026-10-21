@@ -1,7 +1,13 @@
 # STUDY-181 — `@bunvex/helpers`, part 1: custom functions, streams and pagination, triggers, validators
 
-- **Status:** decided (owner, 2026-10-20): H-1–H-8 as recommended (§7); DV-545 decided. To build in §3.4's
-  order, with H-5 (`TableDefinition.indexes` in Convex's runtime shape) first, as a platform PR.
+- **Status:** decided (owner, 2026-10-20): H-1–H-8 as recommended (§7); DV-545 decided. **Built**, all five PRs:
+  - PR 1, the package with `index`, `validators` and `compare` (#797);
+  - PR 2, `customFunctions` (#798);
+  - PR 3, `stream`, with a differential test against convex-helpers 0.1.128 on Convex (#801);
+  - PR 4, `pagination` (#804), which closes STUDY-158 G3;
+  - PR 5, `triggers`, with per-transaction locks (#803).
+
+  H-5 (`TableDefinition`'s runtime arrays) is #785. The other parts of convex-helpers come later (STUDY-158 §3.4).
 - **Convex source read:** get-convex/convex-helpers at `e48f9df` (0.1.128), pinned in
   [upstream.md](../parity/upstream.md#other-repositories). Paths are relative to `packages/convex-helpers/`.
 - **bunvex source:** `main` and the STUDY-180 branch (`fix/api-exports-parity`, the public names). Paths are
