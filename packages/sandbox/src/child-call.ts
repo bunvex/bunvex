@@ -113,8 +113,9 @@ export class CallRuntime {
     }
     exec.calls++;
     const theExec = exec;
-    // Once: when the handler settles, or when an unhandled rejection ends the call first (its code then waits
-    // forever, and its `run` never settles).
+    // Once: when the call has answered the host (its `done`, `ChildCall.answer`), not when its handler settles: a
+    // query or mutation runs every operation it started to the end before it answers, those it starts after its
+    // handler returned included (an unawaited chain of nested calls), and their answers must still find it here.
     let ended = false;
     const end = () => {
       if (ended) return;
@@ -131,8 +132,9 @@ export class CallRuntime {
       if (!handler) throw new Error(`the function ${m.fn} is not a query or mutation of this version`);
       const env = m.env ? this.envs.get(m.env.epoch)! : null;
       await call.run(handler, env, exec.execution);
-    } finally {
+    } catch (e) {
       end();
+      throw e;
     }
   }
 
@@ -497,6 +499,7 @@ class ChildCall extends ChildCallBase implements DbHost {
     this.outcome = null;
     untrack(this.id);
     this.send({ t: "done", id: this.m.id, ...outcome, report: this.report() } as ToHost);
+    this.end();
   }
 
   unhandled(reason: unknown) {
@@ -505,7 +508,6 @@ class ChildCall extends ChildCallBase implements DbHost {
     // to their end on the host, as the engine's would), and runs no more of its code.
     this.terminated = true;
     this.answer({ ok: false, error: this.rejected(reason) });
-    this.end();
   }
 
   table(name: string): WireTable | undefined {

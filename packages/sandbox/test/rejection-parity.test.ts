@@ -47,6 +47,11 @@ const OWN = `{
   applicationErrorString: async () => { Promise.reject(new BunvexError("with a message")); return 1; },
   nestedRejectionCaught: async (ctx) => { try { await ctx.runQuery("cases:q", { c: "rejected", mode: "reject" }); return "not caught"; } catch (e) { return "caught: " + e.message.split("\\n")[0]; } },
   rejectedThenThrows: async () => { const p = Promise.reject(new Error("rejected first")); await null; p.catch(() => {}); throw new Error("then thrown"); },
+  nestedRejectionCaughtThenCalls: async (ctx) => { let n = 0; for (let i = 0; i < 3; i++) { try { await ctx.runQuery("cases:q", { c: "rejected", mode: "reject" }); } catch {} n += await ctx.runQuery("cases:q", { c: "handledInTime" }); } return n; },
+  nestedMissingCaughtThenCalls: async (ctx) => { let n = 0; for (let i = 0; i < 3; i++) { try { await ctx.runQuery("cases:nope", {}); } catch {} n += await ctx.runQuery("cases:q", { c: "handledInTime" }); } return n; },
+  nestedBadArgsCaughtThenCalls: async (ctx) => { let n = 0; for (let i = 0; i < 3; i++) { try { await ctx.runQuery("cases:q", { c: 1 }); } catch {} n += await ctx.runQuery("cases:q", { c: "handledInTime" }); } return n; },
+  nestedStoppedCaughtThenCalls: async (ctx) => { let n = 0; for (let i = 0; i < 3; i++) { try { await ctx.runQuery("cases:q", { c: "rejectedBeforeOp", mode: "reject" }); } catch {} n += await ctx.runQuery("cases:q", { c: "handledInTime" }); } return n; },
+  nestedCaughtThenCalls: async (ctx) => { let n = 0; for (let i = 0; i < 3; i++) { try { await ctx.runQuery("cases:q", { c: "throws" }); } catch {} n += await ctx.runQuery("cases:q", { c: "handledInTime" }); } return n; },
 }`;
 
 /** Query and mutation cases: an operation they did not await fails after the handler returned. */
@@ -56,13 +61,19 @@ const UDF = `{
   unawaitedOpHandledLater: async (ctx) => { const p = ctx.db.get("nope"); await ctx.db.query("items").first(); p.catch(() => {}); return 1; },
   nestedHandledAfterRead: async (ctx) => { const p = ctx.runQuery("cases:q", { c: "throws" }); await ctx.db.query("items").first(); p.catch(() => {}); return 1; },
   throws: async () => { throw new Error("thrown"); },
+  nestedCaughtThenRead: async (ctx) => { let n = 0; for (let i = 0; i < 3; i++) { try { await ctx.runQuery("cases:q", { c: "throws" }); } catch {} n += (await ctx.db.query("items").first()) ? 1 : 0; } return n; },
   threeReads: async (ctx) => (await Promise.all([1, 2, 3].map(() => ctx.db.query("items").first()))).length,
+  unawaitedMany: async (ctx, a) => { for (let i = 0; i < a.n; i++) ctx.runQuery("cases:q", { c: a.fail && i === a.n - 1 ? "throws" : "handledInTime" }); return 1; },
+  unawaitedChain: async (ctx, a) => { void (async () => { for (let i = 0; i < a.n; i++) await ctx.runQuery("cases:q", { c: a.fail && i === a.n - 1 ? "throws" : "handledInTime" }); })(); return 1; },
+  unawaitedChainCaught: async (ctx, a) => { void (async () => { for (let i = 0; i < a.n; i++) try { await ctx.runQuery("cases:q", { c: i === 0 ? "throws" : "handledInTime" }); } catch {} })(); return 1; },
   slow: async (ctx, a) => { for (let k = 0; k < a.k; k++) await ctx.db.query("items").first(); if (a.fail) Promise.reject(new Error("r" + a.i)); return a.i; },
 }`;
 
 const MUTATION = `{
   writes: async (ctx, a) => { await ctx.db.insert("items", { tag: a.tag }); return 1; },
   writesThenRejects: async (ctx, a) => { await ctx.db.insert("items", { tag: a.tag }); Promise.reject(new Error("after a write")); return 1; },
+  nestedMutationCaughtThenCalls: async (ctx) => { let n = 0; for (let i = 0; i < 3; i++) { try { await ctx.runMutation("cases:m", { c: "throws" }); } catch {} n += await ctx.runMutation("cases:m", { c: "handledInTime" }); } return n; },
+  unawaitedWrites: async (ctx, a) => { void (async () => { for (let i = 0; i < a.n; i++) await ctx.runMutation("cases:m", a.fail && i === a.n - 1 ? { c: "throws" } : { c: "writes", a: { tag: a.tag } }); })(); return 1; },
   unawaitedWrite: async (ctx, a) => { await ctx.db.insert("items", { tag: a.tag }); ctx.db.patch("nope", { x: 1 }); return 1; },
 }`;
 
@@ -246,6 +257,14 @@ const PROCESS: Record<string, (kind: Kind) => { header?: string; value?: unknown
   applicationErrorString: () => ({ header: "Uncaught BunvexError: with a message" }),
   nestedRejectionCaught: () => ({ value: "caught: Uncaught Error: never handled" }),
   rejectedThenThrows: () => ({ header: "Uncaught Error: then thrown" }),
+  // A nested call's failure caught, then more calls: each answers (it used to leave the next one unanswered).
+  nestedCaughtThenCalls: () => ({ value: 3 }),
+  nestedStoppedCaughtThenCalls: () => ({ value: 3 }),
+  nestedMissingCaughtThenCalls: () => ({ value: 3 }),
+  nestedBadArgsCaughtThenCalls: () => ({ value: 3 }),
+  nestedRejectionCaughtThenCalls: () => ({ value: 3 }),
+  nestedCaughtThenRead: () => ({ value: 3 }),
+  nestedMutationCaughtThenCalls: () => ({ value: 3 }),
   unawaitedOp: () => ({
     header: "Uncaught Error: Invalid argument `id` for `db.get`: Unable to decode ID: Invalid ID length 4",
   }),
@@ -274,10 +293,12 @@ describe("each case on its own", () => {
     ...KINDS.flatMap((k) => names(OWN).map((c) => [k, c] as [Kind, string])),
     ...(["query", "mutation"] as const).flatMap((k) =>
       names(UDF)
-        .filter((c) => c !== "throws" && c !== "slow" && c !== "threeReads")
+        .filter((c) => c !== "throws" && c !== "slow" && c !== "threeReads" && !c.startsWith("unawaited"))
         .map((c) => [k, c] as [Kind, string]),
     ),
-    ...names(MUTATION).map((c) => ["mutation", c] as [Kind, string]),
+    ...names(MUTATION)
+      .filter((c) => c !== "unawaitedWrites")
+      .map((c) => ["mutation", c] as [Kind, string]),
     ...names(ACTION)
       .filter((c) => c !== "slow" && c !== "afterBody")
       .map((c) => ["action", c] as [Kind, string]),
@@ -322,6 +343,39 @@ describe("each case on its own", () => {
       "[WARN] 1 unawaited operation: [mutation]. Async operations should be awaited or they might not run.",
     ]);
   });
+});
+
+// Nested calls a query or mutation starts and does not await before it returns. Convex runs every syscall to the end
+// before it answers (environment/udf/mod.rs): they all finish, and one that fails with nothing to handle it fails the
+// call (`packages/differential` checks it there). Under `vm` the call answers as it returns and the failure reaches the
+// server's listener (DV-528). Under `vm` a mutation's nested mutations started after it returned are lost but the first
+// (Q-TBD, STUDY-171 §TBD): only `process` is checked for what the writes left. Before the fix, under `process`, an
+// operation started after the handler returned found its call gone from the child, and its answer was dropped: the
+// call timed out at 1 s.
+describe("nested calls not awaited before a query or mutation returns", () => {
+  for (const kind of ["query", "mutation"] as const)
+    for (const c of ["unawaitedMany", "unawaitedChain", "unawaitedChainCaught", "unawaitedWrites"])
+      for (const n of [1, 2, 10])
+        for (const fail of c === "unawaitedChainCaught" ? [false] : [false, true]) {
+          if (c === "unawaitedWrites" && kind === "query") continue;
+          test(`${kind} ${c}, ${n}${fail ? ", one failing" : ""}`, async () => {
+            const tag = `${kind}-${c}-${n}-${fail}-${Math.random()}`;
+            const before = reachedTheServer.length;
+            const [x, y] = await Promise.all([vm, proc].map((d) => d.run(kind, c, { a: { n, fail, tag } })));
+            if (fail) {
+              expect({ status: y!.status, header: header(y!) }).toEqual({
+                status: "error",
+                header: "Uncaught Error: thrown",
+              });
+              expect(normalized(x!).value).toBe(1);
+              expect(await heard(before + 1)).toBe(before + 1);
+            } else expect([normalized(x!).value, normalized(y!).value]).toEqual([1, 1]);
+            if (c === "unawaitedWrites") {
+              // process: every write ran before the answer, or none (rolled back with the failed call).
+              expect((await proc.call("query", "cases:count", { tag })).value).toBe(fail ? 0 : n);
+            }
+          });
+        }
 });
 
 describe("each rejection fails its own call when many run at once in the child", () => {

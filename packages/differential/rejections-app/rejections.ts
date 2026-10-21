@@ -123,6 +123,46 @@ const shared: Record<string, (ctx: Ctx) => Promise<unknown>> = {
   },
 };
 
+/**
+ * Nested calls a query or mutation starts and does not await before it returns (1, 2 and 10 of them): all at once
+ * (`unawaitedMany`), one after the other (`unawaitedChain`), or one after the other with the first one failing and
+ * caught (`unawaitedChainCaught`). With `Fail`, one of them fails and nothing handles it. Convex runs every syscall to
+ * the end before a query or mutation answers (environment/udf/mod.rs), so these all finish, and a failure fails it.
+ */
+for (const n of [1, 2, 10]) {
+  const ok = { c: "handledInTime" };
+  const bad = { c: "throws" };
+  shared[`unawaitedMany${n}`] = async (ctx) => {
+    for (let i = 0; i < n; i++) ctx.runQuery(qRef, ok);
+    return 1;
+  };
+  shared[`unawaitedManyFail${n}`] = async (ctx) => {
+    for (let i = 0; i < n; i++) ctx.runQuery(qRef, i === n - 1 ? bad : ok);
+    return 1;
+  };
+  shared[`unawaitedChain${n}`] = async (ctx) => {
+    void (async () => {
+      for (let i = 0; i < n; i++) await ctx.runQuery(qRef, ok);
+    })();
+    return 1;
+  };
+  shared[`unawaitedChainFail${n}`] = async (ctx) => {
+    void (async () => {
+      for (let i = 0; i < n; i++) await ctx.runQuery(qRef, i === n - 1 ? bad : ok);
+    })();
+    return 1;
+  };
+  shared[`unawaitedChainCaught${n}`] = async (ctx) => {
+    void (async () => {
+      for (let i = 0; i < n; i++)
+        try {
+          await ctx.runQuery(qRef, i === 0 ? bad : ok);
+        } catch {}
+    })();
+    return 1;
+  };
+}
+
 export const q = queryGeneric({
   args: { c: v.string() },
   handler: (ctx, { c }) => shared[c]!(ctx),
@@ -158,6 +198,26 @@ const mutationCases: Record<string, (ctx: Ctx, tag: string) => Promise<unknown>>
     }
   },
 };
+
+/**
+ * A mutation's nested mutations, one after the other, not awaited before it returns: each writes, so what the writes
+ * left says whether they ran. With `Fail`, the last one fails and nothing handles it: the mutation fails, its writes
+ * rolled back.
+ */
+for (const n of [1, 2, 10]) {
+  mutationCases[`unawaitedWrites${n}`] = async (ctx, tag) => {
+    void (async () => {
+      for (let i = 0; i < n; i++) await ctx.runMutation(mRef, { c: "writes", tag });
+    })();
+    return 1;
+  };
+  mutationCases[`unawaitedWritesFail${n}`] = async (ctx, tag) => {
+    void (async () => {
+      for (let i = 0; i < n; i++) await ctx.runMutation(mRef, i === n - 1 ? { c: "throws" } : { c: "writes", tag });
+    })();
+    return 1;
+  };
+}
 
 export const m = mutationGeneric({
   args: { c: v.string(), tag: v.optional(v.string()) },

@@ -1397,6 +1397,31 @@ frame and Convex's none.
   failing once their `fetch`'s body is read (chunks of 300 000 bytes interleaved), and the three kinds at once, every
   third call rejecting: each fails with its own value, the others answer their own; then the child still serves.
 
+**Since (TBD): an operation started after the handler returned.** A query or mutation that starts a chain of nested
+calls and does not await it (`void (async () => { for (…) await ctx.runQuery(…) })(); return 1`) has Convex run the
+chain to its end before it answers (`udf/mod.rs:1150`, `:1250` at `72ce13c`): every call runs, every nested
+mutation's write is kept, and a failure nothing handles fails the call. Under `process` the child dropped the call from
+its table (`CallRuntime.calls`, and the execution it shares with its nested calls) when its handler settled and no
+operation was waiting: the first call's answer emptied the waiting set, the chain's next operation went to the host,
+and its answer found no call. The call timed out at 1 s. Operations started before the return (one, or many at once)
+were not affected, nor actions. The fix: a call leaves the table when it answers the host (`ChildCall.answer`), not
+when its handler settles. Cases: `rejection-parity.test.ts` (36: 1, 2 and 10 nested calls at once, in a chain, in a
+chain whose first call fails and is caught; one failing; a mutation's chain of nested writes, counted) and
+`unhandled-rejections.test.ts` (36 against Convex's binary, the writes counted). 18 more in `rejection-parity` catch a
+failed nested call and call again, three times in a row (the first report, which awaited them, did not reproduce).
+
+**Found under `vm`, not changed: Q-TBD, for the owner.**
+
+- Convex: a query or mutation runs every syscall to the end before it answers, those its code starts after the
+  handler returned included; a mutation's nested mutations so started all commit with it.
+- bunvex `vm` (the default): the call answers once the handler returned and the operations then in flight settled; a
+  nested mutation its code starts after that is lost (a chain of 2 or 10 keeps 1 write), and the call succeeds.
+  `process` matches Convex (above).
+- Same: no.
+- Why: not built yet (the in-process executor does not wait for operations started after the return).
+- App impact: a mutation that forgets to await a chain of nested mutations loses all but the first write under `vm`,
+  with no error; on Convex they all commit.
+
 `bridge-parity.test.ts`: its three "a rejection nothing handles leaves the call as under vm" cases (PR 4's) moved
 here, as failures; two cases stay (an unawaited operation handled later, one whose answer logs a line).
 `rejections.test.ts` (1, its scenarios in `fixtures/rejections-scenarios.ts`, a process of their own): the late path
