@@ -621,6 +621,17 @@
       "name": "@bunvex/file-storage",
       "version": "0.1.0-alpha.1",
     },
+    "packages/helpers": {
+      "name": "@bunvex/helpers",
+      "version": "0.0.1",
+      "devDependencies": {
+        "@bunvex/core": "workspace:*",
+      },
+      "peerDependencies": {
+        "@bunvex/server": "workspace:^",
+        "@bunvex/values": "workspace:^",
+      },
+    },
     "packages/jepsen": {
       "name": "@bunvex/jepsen",
       "version": "0.0.0",
@@ -995,6 +1006,8 @@
     "@bunvex/differential": ["@bunvex/differential@workspace:packages/differential"],
 
     "@bunvex/file-storage": ["@bunvex/file-storage@workspace:packages/file-storage"],
+
+    "@bunvex/helpers": ["@bunvex/helpers@workspace:packages/helpers"],
 
     "@bunvex/jepsen": ["@bunvex/jepsen@workspace:packages/jepsen"],
 
