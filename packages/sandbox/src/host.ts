@@ -93,7 +93,9 @@ export type ChildLoad = LoadedVersion & { loadMs: number; versionId: number };
 
 /** Where a call's messages go: the call's own loop (`HostCall`), which reads them in its async context. */
 export type CallSink = {
-  message(m: Extract<ToHost, { t: "op" } | { t: "done" } | { t: "lines" } | { t: "cancelled" }>): void;
+  message(
+    m: Extract<ToHost, { t: "op" } | { t: "done" } | { t: "lines" } | { t: "cancelled" } | { t: "response" }>,
+  ): void;
   gone(e: SandboxError): void;
 };
 
@@ -344,7 +346,7 @@ export class SandboxProcess {
       return;
     }
     if (Number.isNaN(this.spawnToReadyMs)) throw new BadMessageError(`${m.t} before hello`);
-    if (m.t === "op" || m.t === "done" || m.t === "lines" || m.t === "cancelled") {
+    if (m.t === "op" || m.t === "done" || m.t === "lines" || m.t === "cancelled" || m.t === "response") {
       const call = this.calls.get(m.id);
       if (!call) throw new BadMessageError(`a message for no running call (${m.t} ${m.id})`);
       if (m.t === "done" || m.t === "cancelled") this.calls.delete(m.id);
@@ -356,7 +358,7 @@ export class SandboxProcess {
       this.fetches.get(`${m.id}:${m.op}`)?.abort();
       return;
     }
-    if (m.t === "end" || m.t === "fail" || m.t === "credit" || m.t === "stop") {
+    if (m.t === "end" || m.t === "fail" || m.t === "credit" || m.t === "stop" || m.t === "mark") {
       this.streams.onMessage(m);
       return;
     }

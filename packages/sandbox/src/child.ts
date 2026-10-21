@@ -32,9 +32,21 @@ const CHANNEL = 3;
 export const EXIT_BAD_STREAM = 70;
 
 const out = Bun.file(CHANNEL).writer();
+let flushing = false;
+/**
+ * Writes `bytes`, flushed now, or (`flush` false: a stream's chunk, its end) with the next message or at the end of the
+ * turn: a body's last chunk, its end and its call's `done` reach the host together.
+ */
 const write = (bytes: Uint8Array, flush = true) => {
   out.write(bytes);
   if (flush) void out.flush();
+  else if (!flushing) {
+    flushing = true;
+    setImmediate(() => {
+      flushing = false;
+      void out.flush();
+    });
+  }
 };
 const send = (m: ToHost) => write(frame(m));
 
@@ -45,9 +57,10 @@ const actions = new ActionRuntime(
   send,
   (s, bytes) => {
     write(chunkHeader(s, bytes.byteLength), false);
-    write(bytes);
+    write(bytes, false);
   },
   versions,
+  (m) => write(frame(m), false),
 );
 
 const loadOptions = (o: WireLoadOptions): LoadOptions => ({
@@ -129,8 +142,12 @@ for await (const chunk of Bun.file(CHANNEL).stream()) {
       });
     } else if (t === "action")
       checkpoint((m as { id: number }).id, () => void actions.call(m as Extract<ToChild, { t: "action" }>));
+    else if (t === "http")
+      checkpoint((m as { id: number }).id, () => void actions.http(m as Extract<ToChild, { t: "http" }>));
     else if (t === "cancel")
       checkpoint((m as { id: number }).id, () => actions.cancel(m as Extract<ToChild, { t: "cancel" }>));
+    else if (t === "disconnect")
+      checkpoint((m as { id: number }).id, () => actions.disconnect(m as Extract<ToChild, { t: "disconnect" }>));
     else if (t === "end" || t === "fail" || t === "credit" || t === "stop") {
       const sm = m as Parameters<typeof actions.streams.onMessage>[0];
       const owner = (t === "end" || t === "fail" ? actions.owners.in : actions.owners.out).get(sm.s);

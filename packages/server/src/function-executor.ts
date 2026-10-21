@@ -51,6 +51,8 @@ export { currentAllEnv, currentEnvReader, type EnvReader, withAllEnv, withEnv } 
 export { ExecutorFailure } from "./errors.ts";
 export { createFunctionHandle, inHandleScope } from "./function-handles.ts";
 export { currentPendingOps, NODE_FUNCTIONS, vectorSearchFilter } from "./functions.ts";
+export { typedBlob } from "./http-actions.ts";
+export { BODY_OVER_LIMIT, bodyChunk, HTTP_ACTION_RESPONSE_LIMIT, readsAhead } from "./http-body.ts";
 export { addAuditLine, setAuditScope } from "./log.ts";
 export {
   captureLines,
@@ -62,10 +64,12 @@ export {
   MAX_LOG_LINES,
   makeLogLine,
 } from "./logs.ts";
+export { trackedOperation } from "./pending-ops.ts";
 export { type AnyRoomDef, presenceGeneric, roomGeneric } from "./rooms/define.ts";
 export { HttpRouter, httpActionGeneric } from "./router.ts";
 export { setServiceCallContext } from "./service-tokens.ts";
 export { SpecBlob } from "./web-blob.ts";
+export { bodyLength, withBodyLength } from "./web-response.ts";
 
 export type FunctionSandbox = "vm" | "process";
 export const FUNCTION_SANDBOXES: readonly FunctionSandbox[] = ["vm", "process"];
@@ -225,8 +229,8 @@ export function executorFor(sandbox: FunctionSandbox): Executor {
 
 /** What a start under `process` logs: the isolation it runs with (STUDY-171 §8.8). */
 export const PROCESS_SANDBOX_WARNING =
-  "the function sandbox 'process' runs queries, mutations and actions in a separate process, with no OS " +
-  "isolation (BUNVEX_FUNCTION_SANDBOX_ISOLATION=none): it is not a security boundary yet. HTTP actions, " +
+  "the function sandbox 'process' runs queries, mutations, actions and HTTP actions in a separate process, with no " +
+  "OS isolation (BUNVEX_FUNCTION_SANDBOX_ISOLATION=none): it is not a security boundary yet. " +
   '"use node" actions and components are not available under it yet';
 
 function oneOf<T extends string>(value: string | undefined, values: readonly T[], def: T, what: string): T {

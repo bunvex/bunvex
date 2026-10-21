@@ -111,7 +111,7 @@ function requestUrl(req: Request, pathAndQuery: string): string {
  * request.blob())` would lose the file's content type; for a type its MIME table knows, Bun's own Blob gives
  * that table's form (`text/plain;charset=utf-8`).
  */
-function typedBlob(request: Request): void {
+export function typedBlob(request: Request): void {
   const blob = request.blob.bind(request);
   Object.defineProperty(request, "blob", {
     value: async () => {

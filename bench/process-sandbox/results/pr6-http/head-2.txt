@@ -1,0 +1,227 @@
+bunvex: the function sandbox 'process' runs queries, mutations, actions and HTTP actions in a separate process, with no OS isolation (BUNVEX_FUNCTION_SANDBOX_ISOLATION=none): it is not a security boundary yet. "use node" actions and components are not available under it yet
+{
+  "backpressure, 96 MiB stream, read 8 MiB/s": {
+    "vm": {
+      "read": "8 MiB/s",
+      "bytes": 100663296,
+      "seconds": 12,
+      "mibs": 8,
+      "server": {
+        "idle": 69.5,
+        "peak": 72.4,
+        "above": 2.9
+      },
+      "child": {
+        "idle": null,
+        "peak": null,
+        "above": null
+      }
+    },
+    "process": {
+      "read": "8 MiB/s",
+      "bytes": 100663296,
+      "seconds": 12,
+      "mibs": 8,
+      "server": {
+        "idle": 70.6,
+        "peak": 85.1,
+        "above": 14.5
+      },
+      "child": {
+        "idle": 55.9,
+        "peak": 69,
+        "above": 13.1
+      }
+    }
+  },
+  "backpressure, 96 MiB stream, read fast": {
+    "vm": {
+      "read": "fast",
+      "bytes": 100663296,
+      "seconds": 0.3,
+      "mibs": 290,
+      "server": {
+        "idle": 70.5,
+        "peak": 74.1,
+        "above": 3.6
+      },
+      "child": {
+        "idle": null,
+        "peak": null,
+        "above": null
+      }
+    },
+    "process": {
+      "read": "fast",
+      "bytes": 100663296,
+      "seconds": 0.2,
+      "mibs": 440.5,
+      "server": {
+        "idle": 72.2,
+        "peak": 91.2,
+        "above": 19
+      },
+      "child": {
+        "idle": 55.7,
+        "peak": 69.4,
+        "above": 13.8
+      }
+    }
+  },
+  "empty HTTP action": {
+    "vm": {
+      "p50": 337,
+      "mean": 570,
+      "p99": 2682,
+      "n": 1000
+    },
+    "process": {
+      "p50": 607,
+      "mean": 820,
+      "p99": 2857,
+      "n": 1000
+    }
+  },
+  "HTTP action, \"ok\"": {
+    "vm": {
+      "p50": 658,
+      "mean": 841,
+      "p99": 3027,
+      "n": 1000
+    },
+    "process": {
+      "p50": 606,
+      "mean": 803,
+      "p99": 2806,
+      "n": 1000
+    }
+  },
+  "request body, 1 MiB, read whole": {
+    "vm": {
+      "p50": 2565,
+      "mean": 2729,
+      "p99": 7109,
+      "n": 200,
+      "mibs": 390
+    },
+    "process": {
+      "p50": 3381,
+      "mean": 3652,
+      "p99": 8769,
+      "n": 200,
+      "mibs": 296
+    }
+  },
+  "request body, 1 MiB, streamed": {
+    "vm": {
+      "p50": 2336,
+      "mean": 2609,
+      "p99": 7878,
+      "n": 200,
+      "mibs": 428
+    },
+    "process": {
+      "p50": 2805,
+      "mean": 3253,
+      "p99": 10212,
+      "n": 200,
+      "mibs": 356
+    }
+  },
+  "response body, 1 MiB, bytes": {
+    "vm": {
+      "p50": 2712,
+      "mean": 3265,
+      "p99": 9199,
+      "n": 200,
+      "mibs": 369
+    },
+    "process": {
+      "p50": 4579,
+      "mean": 4942,
+      "p99": 15014,
+      "n": 200,
+      "mibs": 218
+    }
+  },
+  "response body, 1 MiB, streamed": {
+    "vm": {
+      "p50": 1823,
+      "mean": 2179,
+      "p99": 5911,
+      "n": 200,
+      "mibs": 549
+    },
+    "process": {
+      "p50": 4334,
+      "mean": 4564,
+      "p99": 12255,
+      "n": 200,
+      "mibs": 231
+    }
+  },
+  "request body, 64 MiB, read whole": {
+    "vm": {
+      "p50": 122311,
+      "mean": 126869,
+      "p99": 203715,
+      "n": 20,
+      "mibs": 523
+    },
+    "process": {
+      "p50": 210566,
+      "mean": 215725,
+      "p99": 276975,
+      "n": 20,
+      "mibs": 304
+    }
+  },
+  "request body, 64 MiB, streamed": {
+    "vm": {
+      "p50": 43853,
+      "mean": 45065,
+      "p99": 80577,
+      "n": 20,
+      "mibs": 1459
+    },
+    "process": {
+      "p50": 136253,
+      "mean": 146604,
+      "p99": 201554,
+      "n": 20,
+      "mibs": 470
+    }
+  },
+  "response body, 64 MiB, bytes": {
+    "vm": {
+      "p50": 139108,
+      "mean": 137585,
+      "p99": 173672,
+      "n": 20,
+      "mibs": 460
+    },
+    "process": {
+      "p50": 175539,
+      "mean": 173132,
+      "p99": 202674,
+      "n": 20,
+      "mibs": 365
+    }
+  },
+  "response body, 64 MiB, streamed": {
+    "vm": {
+      "p50": 64259,
+      "mean": 60173,
+      "p99": 79746,
+      "n": 20,
+      "mibs": 996
+    },
+    "process": {
+      "p50": 116551,
+      "mean": 114025,
+      "p99": 132458,
+      "n": 20,
+      "mibs": 549
+    }
+  }
+}

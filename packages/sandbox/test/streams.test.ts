@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { chunkFrame, FrameReader, frame } from "../src/frames.ts";
 import { BadMessageError } from "../src/protocol.ts";
-import { CHUNK_BYTES, type StreamMessage, Streams, WINDOW_BYTES } from "../src/streams.ts";
+import { CHUNK_BYTES, MARK, type StreamMessage, Streams, WINDOW_BYTES } from "../src/streams.ts";
 
 /** Two sides wired to each other, every frame of each recorded. */
 function pair(opts: { hostCredit?: number } = {}) {
@@ -202,5 +202,24 @@ describe("streams", () => {
     const r = child.receive(s);
     child.failAll(new Error("the host is gone"));
     await expect(collect(r)).rejects.toThrow("the host is gone");
+  });
+});
+
+describe("marks (STUDY-168 PR 6)", () => {
+  test("a mark comes out where its sender put it among the chunks; the host refuses one for no stream", async () => {
+    const { host, child, log } = pair();
+    const s = child.send(
+      (async function* () {
+        yield new Uint8Array([1, 2]);
+        yield MARK;
+        yield new Uint8Array([3]);
+      })(),
+    );
+    const got: unknown[] = [];
+    for await (const c of host.receive(s) as ReadableStream<unknown>)
+      got.push(c === MARK ? "mark" : [...(c as Uint8Array)]);
+    expect(got).toEqual([[1, 2], "mark", [3]]);
+    expect(() => host.onMessage({ t: "mark", s: 99 })).toThrow(BadMessageError);
+    expect(log.filter((l) => l === "child mark")).toHaveLength(1);
   });
 });
