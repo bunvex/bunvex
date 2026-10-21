@@ -458,7 +458,10 @@ describe("under process: the app and its component instances in one child", () =
 
   test("a push loads them all again in a new child; the old one stops", async () => {
     const [before] = await proc.executor!.children();
+    const started = proc.executor!.started;
     await proc.push();
+    // One child for the push: its own version, each definition's analysis and each instance's code in it.
+    expect(proc.executor!.started - started).toBe(1);
     const after = await proc.executor!.children();
     expect(after.length).toBe(1);
     expect(after[0]!.pid).not.toBe(before!.pid);
@@ -474,6 +477,7 @@ describe("under process: the app and its component instances in one child", () =
 
   test("a child that dies is replaced at the next call, with every version loaded again", async () => {
     const [before] = await proc.executor!.children();
+    const started = proc.executor!.started;
     process.kill(before!.pid, "SIGKILL");
     await waitGone(before!.pid);
     // The next call into a component (through the app) gets a new child, which holds every version again.
@@ -485,6 +489,8 @@ describe("under process: the app and its component instances in one child", () =
     expect(after[0]!.versions).toBe(4);
     expect(after[0]!.held).toBe(4);
     expect((await proc.http("/c/hello")).body).toBe("hello from counter");
+    // One child started for the four versions.
+    expect(proc.executor!.started - started).toBe(1);
   }, 30_000);
 });
 
