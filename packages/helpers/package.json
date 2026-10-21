@@ -1,20 +1,26 @@
 {
   "name": "@bunvex/helpers",
   "version": "0.0.1",
-  "description": "Helpers for bunvex apps, the port of convex-helpers: validators, utilities and server helpers, with its API.",
+  "description": "Helpers for bunvex apps: validators, utilities and server helpers (custom functions, streams, pagination, triggers).",
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./validators": "./src/validators.ts",
-    "./server/compare": "./src/server/compare.ts"
+    "./server/customFunctions": "./src/server/customFunctions.ts",
+    "./server/triggers": "./src/server/triggers.ts",
+    "./server/compare": "./src/server/compare.ts",
+    "./server/stream": "./src/server/stream.ts",
+    "./server/pagination": "./src/server/pagination.ts"
   },
   "peerDependencies": {
     "@bunvex/server": "workspace:^",
     "@bunvex/values": "workspace:^"
   },
   "devDependencies": {
-    "@bunvex/core": "workspace:*"
+    "@bunvex/core": "workspace:*",
+    "@bunvex/testing": "workspace:*",
+    "fast-check": "4.10.2"
   },
   "repository": {
     "type": "git",
