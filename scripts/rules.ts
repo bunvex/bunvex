@@ -163,3 +163,16 @@ function stringMask(code: string): Uint8Array {
   }
   return mask;
 }
+
+/** The npm metadata a published package ships, which rule 5 checks as it checks the code. */
+const METADATA_FIELDS = ["description", "keywords", "homepage", "repository", "bugs", "author"] as const;
+
+/**
+ * Rule 5 for a package.json: the metadata fields that name the upstream project. A private package is never
+ * published, so it is not checked; names, dependencies and scripts are not metadata (a dev dependency on the
+ * reference, for a test against it, is fine).
+ */
+export function metadataNaming(pkg: Record<string, unknown>): string[] {
+  if (pkg.private === true) return [];
+  return METADATA_FIELDS.filter((f) => pkg[f] !== undefined && /convex/i.test(JSON.stringify(pkg[f])));
+}
