@@ -6,7 +6,7 @@
 // its version at the checkpoint and at the build's snapshot (two batched `getVersions` per table), which sums
 // to the same counts and sizes. A checkpoint it cannot use — none, unreadable, ahead of the store, or outside
 // document retention — falls back to the scan (DV-318; Convex retries it forever, the summaries unavailable).
-import { outsideExecution } from "./determinism.ts";
+import { type LongTimer, longTimeout, outsideExecution } from "./determinism.ts";
 import { knob, secondsKnob } from "./knobs.ts";
 import type { DocLogRow, Persistence, RetentionStore, TabletId } from "./persistence/index.ts";
 import { fromJsonInteger, readTsGlobal } from "./persistence-globals.ts";
@@ -112,7 +112,7 @@ export async function restoreSummaries(
  * (± jitter). A lost lease ends it (`setGlobal` refuses); another failure is retried on the next tick.
  */
 export class SummaryCheckpointer {
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private timer: LongTimer | null = null;
   private stopped = false;
   private running: Promise<void> | null = null;
   private last: { at: number; commits: number } | null = null;
@@ -151,7 +151,7 @@ export class SummaryCheckpointer {
   private schedule(ms: number) {
     if (this.stopped) return;
     this.timer = outsideExecution(() =>
-      setTimeout(() => {
+      longTimeout(() => {
         this.running = this.tick().finally(() => {
           this.running = null;
           this.schedule(this.o.intervalMs);
@@ -184,7 +184,7 @@ export class SummaryCheckpointer {
 
   async stop() {
     this.stopped = true;
-    if (this.timer) clearTimeout(this.timer);
+    this.timer?.clear();
     await this.running;
   }
 }

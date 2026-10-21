@@ -8,6 +8,8 @@
 // It sits on the invalidation path, so it records only raw facts (the written key's bytes are decoded when
 // someone asks) and nothing at all when the ring's size is 0.
 
+import { clearLongTimer, longTimeout } from "@bunvex/core";
+
 /** The ring's default size per execution key. */
 export const INVALIDATION_HISTORY = 8;
 /** How many invalidations the follow feed keeps for a reader that polls behind. */
@@ -157,12 +159,12 @@ export class SyncInspector {
     if (found.length === 0 && timeoutMs > 0) {
       await new Promise<void>((resolve) => {
         const done = () => {
-          clearTimeout(timer);
+          clearLongTimer(timer);
           this.waiters.delete(done);
           signal?.removeEventListener("abort", done);
           resolve();
         };
-        const timer = setTimeout(done, timeoutMs);
+        const timer = longTimeout(done, timeoutMs);
         this.waiters.add(done);
         signal?.addEventListener("abort", done, { once: true });
       });

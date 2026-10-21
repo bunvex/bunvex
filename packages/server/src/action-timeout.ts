@@ -11,7 +11,7 @@
 // with the same error and aborts the fetches in flight. Calls already in flight (a mutation that reached the
 // committer) finish, as in Convex, where a dropped mutation may or may not have committed.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { formatDuration, outsideExecution, setFetchSignal } from "@bunvex/core";
+import { formatDuration, longTimeout, outsideExecution, setFetchSignal } from "@bunvex/core";
 
 /** Convex's `V8_ACTION_USER_TIMEOUT` default: 30 minutes. */
 export const V8_ACTION_USER_TIMEOUT_MS = 1800 * 1000;
@@ -109,8 +109,9 @@ export function withActionTimeout<T>(
   return new Promise<T>((resolve, reject) => {
     const timer = outsideExecution(() =>
       // Not the action's own timer: run outside its async context.
+      // Any length: V8_ACTION_USER_TIMEOUT_SECS and NODE_ACTION_USER_TIMEOUT_SECS are knobs (STUDY-174 Q8).
       runs.exit(() =>
-        setTimeout(() => {
+        longTimeout(() => {
           const e = timeout();
           own.abort(e);
           run.life.timedOut = e;
@@ -120,15 +121,15 @@ export function withActionTimeout<T>(
       ),
     );
     // A cut-off body that never settles must not keep the process alive.
-    (timer as { unref?: () => void }).unref?.();
+    timer.unref();
     runs.run(run, body).then(
       (value) => {
-        clearTimeout(timer);
+        timer.clear();
         finish();
         resolve(value);
       },
       (e: unknown) => {
-        clearTimeout(timer);
+        timer.clear();
         finish();
         reject(e);
       },
