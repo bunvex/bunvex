@@ -11,6 +11,7 @@ import {
   WriteThroughputLimiter,
 } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
+import { TestRuntime } from "@bunvex/core/test-runtime";
 import { v } from "@bunvex/values";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
 import { Functions, mutation, query } from "../src/functions.ts";
@@ -243,4 +244,28 @@ test("an import waits for the limit, then writes", async () => {
   expect(await res.json()).toEqual({ numWritten: 2 });
   // The fill's window had to pass first (less a little: it began before the request).
   expect(performance.now() - t0).toBeGreaterThan(150);
+});
+
+describe("on the engine's clock (STUDY-159)", () => {
+  test("a virtual clock moves the window: refused until the test moves the time past it", async () => {
+    const rt = new TestRuntime();
+    const engine = await new Engine(
+      defineSchema({ items: defineTable(v.any()) }),
+      await MemoryPersistence.open(null, { durable: false }),
+      { runtime: rt, writeThroughput: { maxBytesPerSecond: 1000, windowMs: 1000 }, maxRetries: 0 },
+    ).init();
+    try {
+      const write = () =>
+        engine.mutation((db) => db.insert("items", { s: "x".repeat(2000) }), undefined, undefined, { throttled: true });
+      // The engine's own first commits (its system tables) count too: past them first.
+      await rt.advance(1001);
+      await write();
+      // The clock has not moved: the 2 KB write is still in the window.
+      expect(await write().catch((e: Error) => e.constructor.name)).toBe("TooManyWritesError");
+      await rt.advance(1001);
+      await write();
+    } finally {
+      await engine.close();
+    }
+  });
 });

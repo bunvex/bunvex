@@ -22,7 +22,6 @@
 //
 //   import { runConformance } from "@bunvex/persistence-conformance";
 //   const { failures } = await runConformance({ name: "mydb", driverModule: "/abs/path/driver.ts" });
-import { spawn } from "node:child_process";
 import {
   compareKeys,
   type Doc,
@@ -51,6 +50,7 @@ import { nanosecondChecks } from "./nanos.ts";
 import { freezableProxy } from "./proxy.ts";
 import { referenceChecks } from "./references.ts";
 import { retentionChecks } from "./retention.ts";
+import { spawnChild } from "./spawn-child.ts";
 import { versionChecks } from "./versions.ts";
 import {
   allOfTenant,
@@ -535,17 +535,14 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   // K6 — crash atomicity: SIGKILL a committing child at random moments; reopen and audit.
   async function k6() {
     const kills = opts.kills ?? 8;
-    const childPath = new URL("./child.ts", import.meta.url).pathname;
     let bad = 0;
     for (let k = 0; k < kills; k++) {
-      const child = spawn(process.execPath, [childPath, opts.driverModule], {
-        env: { ...process.env, LEASE_TTL_MS: String(CHILD_TTL_MS) },
-        stdio: ["ignore", "pipe", "inherit"],
-      });
+      const spawned = spawnChild("child.ts", opts.driverModule, CHILD_TTL_MS);
+      const child = spawned.proc;
       let lastAck = 0n;
       let started = false;
       let buf = "";
-      child.stdout.on("data", (d) => {
+      child.stdout!.on("data", (d) => {
         buf += d;
         const lines = buf.split("\n");
         buf = lines.pop()!;
@@ -557,7 +554,7 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
           }
         }
       });
-      while (!started) await new Promise((r) => setTimeout(r, 20));
+      await spawned.waitForStart(() => started);
       await new Promise((r) => setTimeout(r, 150 + rnd(600)));
       child.kill("SIGKILL");
       await new Promise((r) => child.on("exit", r));
@@ -883,17 +880,14 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     // with a lost lease (exit 3) at its next write or lease check.
     if (newest) {
       await mod.open(true).then((s) => s.close());
-      const childPath = new URL("./lease-child.ts", import.meta.url).pathname;
-      const child = spawn(process.execPath, [childPath, opts.driverModule], {
-        env: { ...process.env, LEASE_TTL_MS: String(CHILD_TTL_MS) },
-        stdio: ["ignore", "pipe", "inherit"],
-      });
+      const spawned = spawnChild("lease-child.ts", opts.driverModule, CHILD_TTL_MS);
+      const child = spawned.proc;
       let started = false;
-      child.stdout.on("data", (d) => {
+      child.stdout!.on("data", (d) => {
         if (String(d).includes("start")) started = true;
       });
-      const exited = new Promise<number | null>((r) => child.on("exit", (code) => r(code)));
-      while (!started) await sleep(20);
+      const exited = spawned.exited;
+      await spawned.waitForStart(() => started);
       await sleep(200);
       const t0 = Date.now();
       const e = await newEngine(await mod.open(false)).catch((err: Error) => err);
@@ -918,17 +912,14 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
     // K19 — another PROCESS holds the store: an engine refuses to open, and takes over once it is gone.
     if (!newest) {
       await mod.open(true).then((s) => s.close());
-      const childPath = new URL("./lease-child.ts", import.meta.url).pathname;
-      const child = spawn(process.execPath, [childPath, opts.driverModule], {
-        env: { ...process.env, LEASE_TTL_MS: String(CHILD_TTL_MS) },
-        stdio: ["ignore", "pipe", "inherit"],
-      });
+      const spawned = spawnChild("lease-child.ts", opts.driverModule, CHILD_TTL_MS);
+      const child = spawned.proc;
       let started = false;
-      child.stdout.on("data", (d) => {
+      child.stdout!.on("data", (d) => {
         if (String(d).includes("start")) started = true;
       });
-      const exited = new Promise((r) => child.on("exit", r));
-      while (!started) await sleep(20);
+      const exited = spawned.exited;
+      await spawned.waitForStart(() => started);
       const refused = await newEngine(await mod.open(false)).then(
         async (e) => {
           await e.close();
@@ -951,21 +942,18 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
 
     // K13 (+ K14) — a paused writer resumes after a takeover: it must stop with a lost lease and land nothing.
     if (!processScoped) {
-      const childPath = new URL("./lease-child.ts", import.meta.url).pathname;
       let bad = 0;
       let worst = 0;
       let insideFlush = 0;
       let round0ok = false;
       for (let round = 0; round < 3; round++) {
         await mod.open(true).then((s) => s.close());
-        const child = spawn(process.execPath, [childPath, opts.driverModule], {
-          env: { ...process.env, LEASE_TTL_MS: String(CHILD_TTL_MS) },
-          stdio: ["ignore", "pipe", "inherit"],
-        });
+        const spawned = spawnChild("lease-child.ts", opts.driverModule, CHILD_TTL_MS);
+        const child = spawned.proc;
         let started = false;
         let stoppedBy = "";
         let buf = "";
-        child.stdout.on("data", (d) => {
+        child.stdout!.on("data", (d) => {
           buf += d;
           const lines = buf.split("\n");
           buf = lines.pop()!;
@@ -974,8 +962,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
             if (l === "lost" || l.startsWith("fatal ")) stoppedBy = l;
           }
         });
-        const exited = new Promise<number | null>((r) => child.on("exit", (code) => r(code)));
-        while (!started) await sleep(20);
+        const exited = spawned.exited;
+        await spawned.waitForStart(() => started);
         await sleep(200 + rnd(500));
         // Round 0 pauses the writer INSIDE a flush (K14) when the driver can tell; the others anywhere.
         let inside = false;

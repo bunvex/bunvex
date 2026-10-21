@@ -58,6 +58,16 @@ import {
   type WireTable,
   type WireThrown,
 } from "./protocol.ts";
+import {
+  checkpointOf,
+  checkSoon,
+  drain,
+  later,
+  REPORTS_AT_DRAIN,
+  type Rejectable,
+  track,
+  untrack,
+} from "./rejections.ts";
 import { decode, encode } from "./wire.ts";
 
 export type Send = (m: ToHost) => void;
@@ -102,7 +112,18 @@ export class CallRuntime {
       this.executions.set(m.exec.id, exec);
     }
     exec.calls++;
-    const call = new ChildCall(m, this.send, this.catalogs.get(m.catalog.epoch)!, exec.observed);
+    const theExec = exec;
+    // Once: when the handler settles, or when an unhandled rejection ends the call first (its code then waits
+    // forever, and its `run` never settles).
+    let ended = false;
+    const end = () => {
+      if (ended) return;
+      ended = true;
+      // The answers to operations it did not await still reach it, and are dropped once it was failed.
+      call.whenAnswered(() => this.calls.delete(m.id));
+      if (--theExec.calls === 0) this.executions.delete(m.exec.id);
+    };
+    const call = new ChildCall(m, this.send, this.catalogs.get(m.catalog.epoch)!, exec.observed, end);
     this.calls.set(m.id, call);
     try {
       const version = this.versions.get(m.version);
@@ -111,10 +132,7 @@ export class CallRuntime {
       const env = m.env ? this.envs.get(m.env.epoch)! : null;
       await call.run(handler, env, exec.execution);
     } finally {
-      // The answers to operations it did not await still reach it (an unawaited write that fails is an unhandled
-      // rejection, as in-process); the host sends them before it ends the call.
-      call.whenAnswered(() => this.calls.delete(m.id));
-      if (--exec.calls === 0) this.executions.delete(m.exec.id);
+      end();
     }
   }
 
@@ -168,8 +186,13 @@ const stackOf = (e: Error): string | null => {
  * what the call reported since its last message, its answer awaited, its error made again with the engine's class
  * and words; and how a thrown value leaves the handler.
  */
-export abstract class ChildCallBase {
+export abstract class ChildCallBase implements Rejectable {
   private seq = 0;
+  /**
+   * Set once an unhandled rejection failed the call (`unhandled`): it has answered, and its code is left waiting
+   * forever at its next operation, as Convex's terminated context runs no more of it.
+   */
+  protected terminated = false;
   protected readonly waiting = new Map<
     number,
     { resolve: (v: unknown) => void; reject: (e: unknown) => void; site: Error }
@@ -183,6 +206,12 @@ export abstract class ChildCallBase {
 
   /** What the host charges, records and logs since the last message. */
   protected abstract report(): WireReport;
+
+  /** The app left `reason` rejected with no handler once its microtasks drained (`rejections.ts`). */
+  abstract unhandled(reason: unknown): void;
+
+  /** Every checkpoint of this call so far was checked (`rejections.ts`). */
+  abstract checked(): void;
 
   /** Before an operation: a query's or mutation's budget checked. */
   protected before() {}
@@ -205,6 +234,7 @@ export abstract class ChildCallBase {
 
   /** An operation, run by the host: its answer, or its error made again with the engine's class and words. */
   op(name: string, args: unknown[]): Promise<unknown> {
+    if (this.terminated) return new Promise<never>(() => {});
     this.before();
     // Where the app called it, for an error the engine throws at once (a stack is cheap to take: about 0.1 µs).
     const site = new Error();
@@ -234,6 +264,11 @@ export abstract class ChildCallBase {
     const w = this.waiting.get(m.op);
     if (!w) return;
     this.waiting.delete(m.op);
+    if (this.terminated) {
+      // Its code runs no more: the answer is not given to it.
+      if (this.waiting.size === 0 && this.answered) this.answered();
+      return;
+    }
     this.replied(m);
     if (m.ok) {
       try {
@@ -269,6 +304,18 @@ export abstract class ChildCallBase {
     return e;
   }
 
+  /**
+   * How a value rejected with no handler fails the call: as a thrown one, except that an application error is a plain
+   * error, its data gone. Convex's runtime marks an application error as one where the handler's throw leaves it
+   * (`serializeConvexErrorData`, npm-packages/convex/src/server/impl/registration_impl.ts), which a rejection nothing
+   * handled never passes: the isolate sees an error like any other (`extract_source_mapped_error`, error.rs).
+   */
+  protected rejected(e: unknown): WireThrown {
+    const w = this.thrown(e);
+    if (w.k === "op" && isBunvexError(e)) return plain(thrownValue(e));
+    return plain(w);
+  }
+
   /** How a thrown value leaves the handler. */
   protected thrown(e: unknown): WireThrown {
     if (e !== null && typeof e === "object") {
@@ -277,6 +324,13 @@ export abstract class ChildCallBase {
     }
     return thrownValue(e);
   }
+}
+
+/** `w` with an application error made a plain one: its class and name, its message, no data. */
+function plain(w: WireThrown): WireThrown {
+  if (w.k !== "error" || !w.bunvex) return w;
+  const { data: _data, ...rest } = w;
+  return { ...rest, bunvex: false };
 }
 
 /** An error the host described, made again here with its class (the engine's, a `DOMException`, a `BunvexError`). */
@@ -308,6 +362,25 @@ export function thrownValue(e: unknown): WireThrown {
   };
 }
 
+/** What a query's or mutation's `done` says: its value, or what it threw. */
+type Outcome = { ok: true; value: unknown } | { ok: false; error: WireThrown };
+
+/** Convex's `MAX_SYSCALL_BATCH_SIZE` (crates/common/src/knobs.rs): the most syscalls one batch runs. */
+const MAX_BATCH = 16;
+
+/**
+ * Which batch of Convex's an operation joins (`AsyncSyscallBatch`, environment/udf/async_syscall.rs): reads
+ * (`1.0/get`, `1.0/queryStreamNext`) together, `1.0/storageGetUrl`s together, every other one alone (null).
+ */
+function batchOf(name: string, args: unknown[]): "read" | "url" | null {
+  if (name === "db.get" || name === "db.system.get" || name === "db.query" || name === "db.next") return "read";
+  if (name === "storage" && args[0] === "getUrl") return "url";
+  return null;
+}
+
+/** An operation in flight, in the order the app started it, and its answer once it came. */
+type InFlight = { op: number; batch: "read" | "url" | null; answer?: WireReply };
+
 class ChildCall extends ChildCallBase implements DbHost {
   /** Where the app made each link of its chains: an error the engine throws making one is thrown there. */
   private readonly linkSites = new Map<number, Error>();
@@ -320,6 +393,14 @@ class ChildCall extends ChildCallBase implements DbHost {
   private nextLink = 0;
   private reported = 0;
   private timer!: UserTimer;
+  /** The call's answer once its handler settled, sent when no operation of it waits (`checked`). */
+  private outcome: Outcome | null = null;
+  /** Its operations in flight, in the order it started them; the batch whose answers it waits for. */
+  private readonly fifo: InFlight[] = [];
+  private batch: InFlight[] | null = null;
+  /** A next batch is waiting for this checkpoint to be checked (`later`). */
+  private releasing = false;
+  private answeredHost = false;
   readonly snapshot: bigint;
 
   constructor(
@@ -327,10 +408,104 @@ class ChildCall extends ChildCallBase implements DbHost {
     send: Send,
     private readonly catalog: Map<string, WireTable>,
     private readonly observed: { time: boolean },
+    private readonly end: () => void,
   ) {
     super(m.id, send);
     this.snapshot = BigInt(m.snapshot);
     this.created = new Map(m.created.map((t) => [t.name, t]));
+    track(m.id, this);
+  }
+
+  /**
+   * The handler settled: the answer waits for every operation it started to be answered, and for the microtasks those
+   * answers resume to drain and be checked, as Convex runs a query's or mutation's syscalls to the end before it answers
+   * (`environment/udf/mod.rs`, the loop ends when no syscall is pending): a rejection nothing handles there still
+   * fails the call. Settled outside a checkpoint of its own (resumed by Bun, not by the host), it checks in a
+   * checkpoint of its own next.
+   */
+  private settled(outcome: Outcome) {
+    if (this.terminated) return;
+    this.outcome = outcome;
+    if (checkpointOf() !== this.id) checkSoon(this.id);
+  }
+
+  checked() {
+    if (this.outcome === null || this.answeredHost || this.waiting.size) return;
+    this.answer(this.outcome);
+  }
+
+  protected override sendOp(op: number, name: string, args: unknown[]) {
+    this.fifo.push({ op, batch: batchOf(name, args) });
+    super.sendOp(op, name, args);
+  }
+
+  /**
+   * An operation's answer, given to the app's code as Convex gives a syscall's: in the order the operations were
+   * started, a batch at a time (the first one waiting and the ones after it of its batch, as they stood when it was
+   * formed), each batch's microtasks drained before the next (environment/udf/mod.rs: one batch per turn of the
+   * loop, a microtask checkpoint between). So a rejection handled by code that one of its batch's answers resumes is
+   * handled in time, as there; one handled after a later batch is not. The host runs them as they come, at once.
+   */
+  override reply(m: WireReply) {
+    if (this.terminated) return super.reply(m);
+    const entry = this.fifo.find((e) => e.op === m.op);
+    if (!entry || entry.answer) return;
+    entry.answer = m;
+    this.release();
+  }
+
+  /** The batch whose answers came, or null: formed from the operations waiting, as they stand now. */
+  private ready(): InFlight[] | null {
+    if (this.batch === null) {
+      const head = this.fifo[0];
+      if (!head) return null;
+      let n = 1;
+      if (head.batch !== null) while (n < this.fifo.length && n < MAX_BATCH && this.fifo[n]!.batch === head.batch) n++;
+      this.batch = this.fifo.slice(0, n);
+    }
+    return this.batch.some((e) => !e.answer) ? null : this.batch;
+  }
+
+  /** Gives the app the batches whose answers came, each drained and checked before the next. */
+  private release() {
+    if (this.releasing) return;
+    for (;;) {
+      const batch = this.ready();
+      if (batch === null || this.terminated) return;
+      this.fifo.splice(0, batch.length);
+      this.batch = null;
+      for (const e of batch) super.reply(e.answer!);
+      if (!REPORTS_AT_DRAIN()) {
+        // Bun reports this checkpoint's rejections at the end of the turn: the next batch, in a checkpoint after.
+        if (this.ready() !== null) {
+          this.releasing = true;
+          later(this.id, () => {
+            this.releasing = false;
+            this.release();
+          });
+        }
+        return;
+      }
+      // What the batch's answers resume runs to the end, and what it leaves rejected is reported, before the next.
+      drain();
+    }
+  }
+
+  /** The call's `done`, with what it reported since its last message (the lines its last answers' code logged). */
+  private answer(outcome: Outcome) {
+    this.answeredHost = true;
+    this.outcome = null;
+    untrack(this.id);
+    this.send({ t: "done", id: this.m.id, ...outcome, report: this.report() } as ToHost);
+  }
+
+  unhandled(reason: unknown) {
+    if (this.answeredHost) return;
+    // Convex terminates the context there: the call answers with that error now (its other operations still run
+    // to their end on the host, as the engine's would), and runs no more of its code.
+    this.terminated = true;
+    this.answer({ ok: false, error: this.rejected(reason) });
+    this.end();
   }
 
   table(name: string): WireTable | undefined {
@@ -461,23 +636,17 @@ class ChildCall extends ChildCallBase implements DbHost {
           () => inHandleScope({ create: (ref: unknown) => this.op("createFunctionHandle", [ref]) } as never, body),
         ),
       );
-    let message: ToHost;
+    let outcome: Outcome;
     try {
       const value = await runInExecution(execution, logged);
       // The engine checks this on what the handler returned (`notAQuery`); the object cannot cross.
       if (value instanceof QueryImpl || value instanceof VirtualQuery)
-        message = {
-          t: "done",
-          id: this.m.id,
-          ok: false,
-          error: { k: "host", message: RETURNED_A_QUERY },
-          report: this.report(),
-        };
-      else message = { t: "done", id: this.m.id, ok: true, value: encode(value), report: this.report() };
+        outcome = { ok: false, error: { k: "host", message: RETURNED_A_QUERY } };
+      else outcome = { ok: true, value: encode(value) };
     } catch (e) {
-      message = { t: "done", id: this.m.id, ok: false, error: this.thrown(e), report: this.report() };
+      outcome = { ok: false, error: this.thrown(e) };
     }
-    this.send(message);
+    this.settled(outcome);
   }
 }
 

@@ -3,6 +3,7 @@
 // frame per member with the latest of every change since the last. Membership frames are never dropped; a
 // connection too far behind is closed instead, and rejoins on reconnect.
 import { randomUUID } from "node:crypto";
+import { clearLongTimer, type LongTimer, longTimeout } from "@bunvex/core";
 import type { v1 } from "@bunvex/protocol";
 import type { RoomLimits } from "./limits.ts";
 
@@ -18,11 +19,11 @@ export type Timers = {
 const realTimers: Timers = {
   now: () => performance.now(),
   set: (fn, ms) => {
-    const h = setTimeout(fn, ms);
+    const h = longTimeout(fn, ms);
     (h as { unref?: () => void }).unref?.();
     return h;
   },
-  clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+  clear: (h) => clearLongTimer(h as LongTimer),
 };
 export interface RoomSink {
   /** The protocol session (Connect), or a random id before it. */

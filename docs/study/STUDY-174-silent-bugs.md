@@ -4,8 +4,8 @@
   §3.3 are listed, not fixed. The soak nightly (Q1, §9 step 5) is `.github/workflows/soak-nightly.yml`, with every
   rule judged (R1 report-only until Q6 was decided, §10.3). Q7 (R8 on low-rate operations) is decided and done (§10.3). Q6 is
   decided (owner, 2026-10-21): bunvex keeps its 256 MiB page cache (DV-550), with a setting for it (AD-46). The
-  suspects S1–S8 are confirmed or dismissed in §11: S1–S7 are bugs, each fixed in its own PR; S8 is a divergence,
-  Q8, for the owner.
+  suspects S1–S8 are confirmed or dismissed in §11: S1–S7 are bugs, each fixed in its own PR; S8 was a divergence,
+  Q8, which the owner decided on 2026-10-21 (match Convex), done in #811 (§11).
 - **Why now:** [#751](https://github.com/bunvex/bunvex/pull/751) found that since 2026-10-03 every cached query result
   expired after 17 s. [STUDY-58](STUDY-58-app-metrics.md)'s `AppMetrics` read the deterministic `Date.now` inside each
   query's execution, which marked every result as having read the clock. Every answer stayed correct, the tests and
@@ -127,7 +127,7 @@ bounds (§3, §4).
 | I-22 | Buffers | The write log stays within its retention (30–300 s) and byte bounds | `core/src/committer.ts:95–102, 348` | committer tests (unit) | P08 (660 entries) |
 | I-23 | Buffers | The sync inspector forgets an unwatched key; its feed stays ≤ 1024 | `sync-inspector.ts:57, 77` | `invalidation-inspector.test.ts:136` | P08 holds |
 | I-24 | Timers | After `shutdown()`, nothing keeps the event loop alive: the process exits by itself | `server.ts:2620–2643` | none | P05 holds (bare, busy, socket left open) |
-| I-25 | Timers | No `setTimeout` is given more than 2^31−1 ms; Bun fires it after about 1 ms | `scheduler.ts:468`, `cron-executor.ts:285` (`executor-invalidations.ts:174` caps) | none | F2/F3 |
+| I-25 | Timers | No `setTimeout` or `setInterval` is given more than 2^31−1 ms (Bun fires it after about 1 ms); a longer wait, a knob's included, sleeps its whole length | every backend timer: `timerDelay`, or core's `longTimeout` / `longInterval` / `longSleep` (`core/src/long-timer.ts`) | `long-timer.test.ts`, `knob-timer-cap.test.ts`, `scripts/rules.test.ts`; `check:deps` rule 6 (#757, #811) | F2/F3 fixed (#757); S8 fixed (#811) |
 | I-26 | Handles | File descriptors return to the baseline after uploads, downloads and closed clients | storage, sqlite, sockets | none | soak R7 |
 | I-27 | Handles | `LocalSink.send` closes its file when `sync()` throws (otherwise each retry leaks an fd) | `log-sinks.ts:266–271` | `log-sink-local-close.test.ts` (#789) | S2 **confirmed** (§11) |
 | I-28 | Handles | `pumpHashing` cancels the body reader when a write throws | `file-storage/src/store.ts:37–47` | `file-storage/test/pump-hashing.test.ts` (#795) | S3 **confirmed**, small (§11) |
@@ -854,7 +854,10 @@ Each question gives what Convex does, what bunvex does, whether they are the sam
   size (32–64 MiB, roughly the interior pages of a 10 GB file) was not measured.
 - **Decided (owner, 2026-10-21):**
   - keep 256 MiB as the default, recorded as **DV-550** (performance);
-  - add a setting for it, `BUNVEX_SQLITE_CACHE_SIZE` (bytes), as an addition (AD-46), in its own PR;
+  - add a setting for it, `BUNVEX_SQLITE_CACHE_SIZE` (bytes), as an addition (AD-46), in its own PR. `0` is refused
+    at start (owner, 2026-10-21): SQLite has no "off", `cache_size = 0` keeps its minimum, the slowest setting
+    (point reads 317 ms against 188 ms for 2 000 KiB on a 98 MB file), and "SQLite's default" differs by platform;
+    `2048000` gives SQLite's 2 000 KiB everywhere;
   - the soak makes R1 see the page cache as recommended, and R1 leaves `SOAK_REPORT_ONLY`, in its own PR (§10.3).
 
 Not questions, because each matches Convex: the fixes for F1 (done, #751), F2, F3 and F5, and the suspected S1–S7 once
@@ -1183,9 +1186,10 @@ question for the owner (Q8).
 | S5 | **Bug**, minor | `executor-invalidations.test.ts`, "after the server's stop()": the stopped server still reads the queue when its next run falls due (1 `engine.query`), and still counts commits into the executors' reads. `observe()` never checked `stopped`, after `shutdown()` either (the engine is closed there, so it never showed). Convex has no stop that keeps the store open. | #791 |
 | S6 | **Bug** | `external-deps-timeout.test.ts`: against a registry that never answers, `buildExternalDeps` is still waiting after 15 s. Convex's `build_deps` request times out after NODE_ACTION_USER_TIMEOUT + 5 s (`local_backend/src/lib.rs:206`, `node_executor/src/local.rs:285`), and the push fails with `InvalidExternalModules`: "Function execution unexpectedly timed out. …". The fix uses the same deadline and message, and kills the install (Convex's `execSync` keeps running; an app cannot tell). | #792 |
 | S7 | **Bug** | `sqlite-open-lock.test.ts`: a directory as the path, or a new read-only file, throws after the lock was taken; the lock stays held in the process. Convex's SQLite store has no lock (STUDY-25 §1.5); the lock is bunvex's. | #793 |
-| S8 | **Divergence** (Q8) | `knob-timer-cap.test.ts` (a `test.todo`): with USAGE_TRACKING_PERIOD_SECS at 60 days, the gauges ran 152 times in 200 ms. Convex's knob is a `Duration` that tokio sleeps for its whole length (`usage_gauges_tracking_worker/src/lib.rs:71`). | this PR |
+| S8 | **Divergence** (Q8), decided 2026-10-21: match Convex; **fixed** | `knob-timer-cap.test.ts`: with USAGE_TRACKING_PERIOD_SECS at 60 days, the gauges ran 152 times in 200 ms; a 30-day action timeout timed a 100 ms action out; the runtime's 30-day timers fired at once. Convex's knob is a `Duration` that tokio sleeps for its whole length (`usage_gauges_tracking_worker/src/lib.rs:71`). | #796 (the question), #811 (the fix) |
 
-**Q8. S8: a delay from an operator's knob past 2^31−1 ms (24.8 days).**
+**Q8. S8: a delay from an operator's knob past 2^31−1 ms (24.8 days).** Decided (owner, 2026-10-21): match Convex, as
+recommended; done in #811 (below).
 - Convex: every such knob is a `Duration` (`crates/common/src/knobs.rs`, `env_config`). Its loop sleeps for the whole
   length, however long.
 - bunvex: some loops pass a knob's value straight to `setTimeout`, which fires after about 1 ms past 2^31−1 ms.
@@ -1211,4 +1215,35 @@ question for the owner (Q8).
   sleeps again for what is left, as the scheduler's does since #757. Then widen rule 6 to flag a timer whose delay is
   a knob's value. The test above then loses its `.todo`. Rejecting such knob values at parse time would be a
   divergence of its own: Convex accepts them.
+
+**Q8 done (#811).** Every backend timer now sleeps its whole length, however long, as Convex's `Duration`s do.
+- **The helpers** (`core/src/long-timer.ts`, next to `timerDelay`): `longTimeout`, `longInterval` and `longSleep`
+  arm at most 2^31−1 ms at a time, towards a deadline on the monotonic clock, and re-arm for what is left. A
+  `LongTimer` has `clear()` (mid-wait included), `refresh()`, `unref()` / `ref()` (passed on to every step's timer)
+  and `hasRef()`. The real `Runtime`'s `setTimeout` / `setInterval` / `sleep` use them, so the scheduler's, the crons'
+  and the action permits' waits take any length too.
+- **The sites**, each a knob's delay or an option's: the usage gauges; the search-unavailable retry; retention's
+  sleeps and backoff; the action timeouts; the room grace and the sync splay timers; the sync mutation timeout and
+  the update-queries retry sleep; the request timeout; the session cleanup; the log streams' aggregation, concurrency
+  stats and startup timeout; the OTLP exporter's schedule, export and shutdown timers; the topology sampler; the
+  usage-limit worker; the function log's and the inspector's long polls; the engine's lease renewal, search workers'
+  poll, OCC and write-throughput backoffs; the committer's write retry; the store call timeouts (`withTimeout`); the
+  table-summary checkpointer; the index worker's backoff. The index worker's rate-limit wait (at most 1 s) and the
+  executor invalidations' boundary (a capped sleep towards a timestamp) go through `timerDelay`.
+- **Rule 6** (`check:deps`, scans in `scripts/rules.ts`): in core, server, persistence, file-storage and search, every
+  `setTimeout` / `setInterval` delay must be a number literal, a module constant of literals, `timerDelay(…)` or a
+  `Math.min(…)` bounded by one; anything else (a knob, an option, a parameter, a clock difference) is refused. A
+  `Runtime`'s timers (`….runtime.setTimeout(`) are trusted, comments, strings and interface declarations skipped.
+  Scope: `packages/sandbox` is left to its own track; the client, the CLI and the dashboards read no knobs.
+- **Tests:** `long-timer.test.ts` (6, a fake clock: a 30-day timeout in two steps, firing once; a short one as one
+  timer; cleared after a re-arm, mid-wait; a 40-day interval cleared from its own callback; the real timers past the
+  cap); `knob-timer-cap.test.ts` (3, no `.todo` any more: the gauges, a 30-day action timeout, the runtime's timers and
+  sleep); `scripts/rules.test.ts` (5). All three knob tests fail on `origin/main` (132 gauge runs, "timed out", the
+  timers fired).
+- **Sabotage:** a plain `setTimeout` in `LongTimer` fails 7 of the 9 timer tests; capped without the re-arm, 3;
+  `clear()` that does not stop a re-arm, 1. Rule 6 back to "clock subtractions only" fails `rules.test.ts`; the usage
+  gauges back on `setTimeout(…, wait)` fails `check:deps`.
+- **Measurement** (test VPS, 2 vCPU, Bun 1.4.3, alternating, 7 rounds): arming and clearing a timer costs 133–138 ns
+  with Bun's `setTimeout` and 272–277 ns with `longTimeout`; a timer that fires, 246–295 ns and 489–510 ns. The hot
+  paths that arm one (each HTTP request's timeout, each action, each sync mutation) pay about 0.14 µs more per call.
 

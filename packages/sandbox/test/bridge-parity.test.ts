@@ -260,13 +260,11 @@ const MUTATION_CASES = `{
   auditOnly: async () => { await log.audit({ inner: 1 }); return 1; },
 }`;
 
-// Run under `process` only: in `vm` they reject in this process, which `bun test` counts as a failure of the test
-// that runs. Under `vm` (`bunvex-local-backend`) each is printed to the server's stderr and the call succeeds with 1;
-// in the child the same, on the child's stderr (the server's).
-const UNHANDLED = `{
-  unhandledRejection: async () => { Promise.reject(new Error("never handled")); return 1; },
-  unhandledOp: async (ctx) => { ctx.db.get("nope"); return 1; },
-  unhandledAfterOp: async (ctx) => { const p = ctx.db.get("nope"); await ctx.db.query("items").first(); p.catch(() => {}); return 1; },
+// Under `process`, unawaited operations whose answers come after the handler returned, and leave nothing rejected.
+// A rejection nothing handles fails the call there and not under `vm` (DV-528): rejection-parity.test.ts.
+const UNAWAITED = `{
+  unawaitedHandled: async (ctx) => { const p = ctx.db.get("nope"); await ctx.db.query("items").first(); p.catch(() => {}); return 1; },
+  unawaitedThen: async (ctx) => { ctx.db.query("items").first().then(() => console.log("answered after")); return 1; },
 }`;
 
 const CASES_MODULE = `
@@ -276,7 +274,7 @@ import { v, BunvexError } from ${VALUES};
 const qcases = ${QUERY_CASES};
 qcases.otherCount = async (ctx) => (await ctx.db.query("other").collect()).length;
 qcases.nowValue = async () => [Date.now()];
-Object.assign(qcases, ${UNHANDLED});
+Object.assign(qcases, ${UNAWAITED});
 const mcases = ${MUTATION_CASES};
 export const q = query({ args: { c: v.string(), a: v.optional(v.any()) }, handler: (ctx, { c, a }) => qcases[c](ctx, a) });
 export const m = mutation({ args: { c: v.string(), a: v.optional(v.any()), v: v.optional(v.any()) }, handler: (ctx, { c, a }) => mcases[c](ctx, a) });
@@ -485,14 +483,17 @@ describe("an error at import fails the push as under vm", () => {
     });
 });
 
-// `vm` cannot attribute such a rejection to its call (DV-528); STUDY-168 PR 4b makes `process` fail it, as Convex.
-describe("a rejection nothing handles leaves the call as under vm", () => {
-  for (const c of [...UNHANDLED.matchAll(/^ {2}(\w+):/gm)].map((m) => m[1]!))
+// The child answers once the operations the function did not await are answered (STUDY-171 §13): their code runs
+// first, as Convex runs a query's syscalls to the end, and logs what it logs into the call.
+describe("an operation the function did not await is answered before the call, as under vm", () => {
+  for (const c of [...UNAWAITED.matchAll(/^ {2}(\w+):/gm)].map((m) => m[1]!))
     test(c, async () => {
-      const y = await proc.call("query", "cases:q", { c, a: await proc.firstId() });
-      expect(normalized(y)).toEqual({ value: 1, logLines: [] });
-      // The child still serves.
-      expect(normalized(await proc.call("query", "cases:q", { c: "empty" }))).toEqual({ value: null, logLines: [] });
+      const [a, b] = await Promise.all([vm.firstId(), proc.firstId()]);
+      const [x, y] = await Promise.all([
+        vm.call("query", "cases:q", { c, a }),
+        proc.call("query", "cases:q", { c, a: b }),
+      ]);
+      expect(normalized(y)).toEqual(normalized(x));
     });
 });
 

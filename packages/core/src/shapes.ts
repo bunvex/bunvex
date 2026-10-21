@@ -3,7 +3,7 @@
 // Unions hold 2 to 16 pairwise disjoint variants; when a value would overlap one or make a union too long,
 // variants are contracted to a common supertype, in Convex's order (arrays, records, ids, field names,
 // strings, floats, objects, then records, then `Unknown`). The dashboard sees a reduced form (`reduceShape`).
-import { idTableNumber, type Value } from "@bunvex/values";
+import { idTableNumber, isBytes, type Value } from "@bunvex/values";
 
 /** Convex's ProdConfig limits. */
 export const MAX_OBJECT_FIELDS = 64;
@@ -84,7 +84,8 @@ export function shapeOf(value: Value): Shape {
   if (typeof value === "number") return floatShape(value);
   if (typeof value === "boolean") return scalar("Boolean");
   if (typeof value === "string") return stringShape(value);
-  if (value instanceof ArrayBuffer) return scalar("Bytes");
+  // `isBytes`: bytes from a function's own realm too (STUDY-182).
+  if (isBytes(value)) return scalar("Bytes");
   if (Array.isArray(value)) {
     const b = new UnionBuilder();
     for (const x of value) b.push(shapeOf(x));
