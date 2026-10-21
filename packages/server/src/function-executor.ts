@@ -16,7 +16,12 @@ import type { EngineSchema } from "@bunvex/core";
 import { CodeVersion, type LoadedCode, type LoadOptions, type ModuleSource } from "./code-version.ts";
 
 export { asActionResponse } from "./action-fetch.ts";
-export { ACTION_ENDED_MESSAGE, currentActionSignal, trackedActionTimers } from "./action-timeout.ts";
+export {
+  ACTION_ENDED_MESSAGE,
+  currentActionSignal,
+  setActionTimerCallback,
+  trackedActionTimers,
+} from "./action-timeout.ts";
 // What the child's calls and the host's stand-ins use (STUDY-171 §8).
 export { appContext } from "./app-errors.ts";
 export {

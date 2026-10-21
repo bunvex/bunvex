@@ -5,8 +5,11 @@
 // (`_backend_state.usage_limit`) while an enabled `disable` limit is reached, with Convex's audit events.
 import {
   type Caller,
+  clearLongTimer,
   type Engine,
   insertAuditLogEvents,
+  type LongTimer,
+  longInterval,
   readBackendState,
   SYSTEM_ACTOR,
   secondsKnob,
@@ -353,7 +356,7 @@ export async function usageLimitRoute(
  * enabled again otherwise (`change_usage_limit_stop_state`).
  */
 export class UsageLimitWorker {
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: LongTimer | null = null;
   private running: Promise<void> | null = null;
   private stopped = false;
   private again = false;
@@ -368,7 +371,7 @@ export class UsageLimitWorker {
   ) {}
 
   start() {
-    this.timer = setInterval(() => this.wake(), this.intervalMs);
+    this.timer = longInterval(() => this.wake(), this.intervalMs);
     this.timer.unref?.();
     this.wake();
   }
@@ -376,7 +379,7 @@ export class UsageLimitWorker {
   /** No evaluation starts after this; it resolves once the one under way, if any, ends. */
   stop(): Promise<void> {
     this.stopped = true;
-    if (this.timer) clearInterval(this.timer);
+    if (this.timer) clearLongTimer(this.timer);
     this.timer = null;
     return this.running ?? Promise.resolve();
   }

@@ -3,8 +3,11 @@
 // the records older than the retention window (two weeks), 64 per transaction and at most 256 per
 // second, then wait again. A client that could still resend such an old request is long gone.
 import {
+  clearLongTimer,
   type Engine,
   knob,
+  type LongTimer,
+  longTimeout,
   SESSION_CLEANUP_CHUNK,
   SESSION_CLEANUP_ROWS_PER_SECOND,
   SESSION_REQUEST_RETENTION_MS,
@@ -47,9 +50,9 @@ export async function cleanSessionRequests(
 export function startSessionCleanup(engine: Engine, retentionMs: number | null): () => void {
   if (retentionMs === null) return () => {};
   let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: LongTimer | undefined;
   const schedule = () => {
-    timer = setTimeout(async () => {
+    timer = longTimeout(async () => {
       try {
         await cleanSessionRequests(engine, retentionMs, { stopped: () => stopped });
       } catch (e) {
@@ -62,6 +65,6 @@ export function startSessionCleanup(engine: Engine, retentionMs: number | null):
   schedule();
   return () => {
     stopped = true;
-    clearTimeout(timer);
+    clearLongTimer(timer);
   };
 }

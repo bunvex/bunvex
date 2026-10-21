@@ -276,7 +276,8 @@ Throwaway runs, 30 Sep 2026:
 - **The MySQL driver** runs two unguarded `create table if not exists` on every open.
 - **The MongoDB driver** runs three `createIndex` on every open, and deletes every row above the commit
   marker, with no lease.
-- **SQLite** uses WAL, `synchronous=FULL|OFF`, no `busy_timeout` and no exclusive lock.
+- **SQLite** uses WAL, `synchronous=FULL|OFF`, no `busy_timeout` and no exclusive lock. (It now sets Convex's
+  5 s `busy_timeout`, rusqlite's default: STUDY-133 L13.)
 - **memory+log** opens its log file with no lock.
 - **All drivers:**
   - The URL is used as given; there is no database-name derivation. (Postgres and MySQL get Convex's TLS

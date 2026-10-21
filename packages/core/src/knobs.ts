@@ -16,7 +16,8 @@ export type KnobKind = "uint" | "positive" | "float";
 const UINT = /^\+?[0-9]+$/;
 const FLOAT = /^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$|^[+-]?(inf|infinity|nan)$/i;
 
-function parse(raw: string, kind: KnobKind): number | undefined {
+/** A knob's text as `kind`, or `undefined` when it does not parse (for a setting that refuses it instead). */
+export function parseKnob(raw: string, kind: KnobKind): number | undefined {
   if (kind === "float") {
     if (!FLOAT.test(raw)) return undefined;
     const t = raw.toLowerCase().replace(/^\+/, "");
@@ -54,7 +55,7 @@ function fromEnv<T>(name: string, def: T, env: KnobEnv, read: (raw: string) => T
 
 /** A numeric knob: `name` from `env` when it parses as `kind`, else `def`. */
 export function knob(name: string, def: number, kind: KnobKind = "uint", env: KnobEnv = process.env): number {
-  return fromEnv(name, def, env, (raw) => parse(raw, kind));
+  return fromEnv(name, def, env, (raw) => parseKnob(raw, kind));
 }
 
 /** A boolean knob: exactly `true` or `false`, as Rust's `bool::from_str`. */

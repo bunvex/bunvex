@@ -151,6 +151,18 @@ describe("streams", () => {
     expect(() => host.receive(6)).toThrow(BadMessageError);
   });
 
+  // The host stops a request body its fetch gave up on (a redirect it cannot follow with a streamed body) while the
+  // child's chunks are already on the wire: those are dropped, within the credit given, not a broken child.
+  test("the host drops what was in flight when it stopped a stream, within its credit", async () => {
+    const { host } = pair();
+    const reader = host.receive(7).getReader();
+    await reader.cancel();
+    host.onChunk(7, new Uint8Array(CHUNK_BYTES));
+    host.onMessage({ t: "end", s: 7 });
+    for (let i = 1; i < WINDOW_BYTES / CHUNK_BYTES; i++) host.onChunk(7, new Uint8Array(CHUNK_BYTES));
+    expect(() => host.onChunk(7, new Uint8Array(1))).toThrow("past its stream's credit");
+  });
+
   test("a source that fails fails its reader with the sender's error", async () => {
     const { host, child } = pair();
     const s = host.send(

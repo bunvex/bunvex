@@ -309,8 +309,10 @@ export async function startLocalBackend(f: LocalBackendFlags, io: LocalBackendIo
   if (sandbox.sandbox === "process") requireProcessExecutor();
   let persistence: Persistence;
   if (f.db === "sqlite") {
-    const { SqlitePersistence } = await import("@bunvex/core/persistence/sqlite");
-    persistence = new SqlitePersistence(resolve(io.cwd, f.dbSpec), { durable: true });
+    const { SqlitePersistence, sqliteCacheBytes } = await import("@bunvex/core/persistence/sqlite");
+    // The page cache (AD-46) from the backend's environment, checked before the file is touched.
+    const cacheBytes = sqliteCacheBytes(io.env);
+    persistence = new SqlitePersistence(resolve(io.cwd, f.dbSpec), { durable: true, cacheBytes });
   } else
     persistence = await openPersistence({
       kind: f.db,

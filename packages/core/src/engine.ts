@@ -109,6 +109,9 @@ import {
 import {
   type ExecutionKind,
   installDeterminism,
+  type LongTimer,
+  longInterval,
+  longSleep,
   nextUp,
   type Observed,
   outsideExecution,
@@ -673,7 +676,7 @@ export class Engine {
     else this.readyState.reject(error);
   }
 
-  private lease: { store: Lease; timer: ReturnType<typeof setInterval> } | null = null;
+  private lease: { store: Lease; timer: LongTimer } | null = null;
 
   /**
    * The store's lease as this process holds it, for the dashboard's topology (STUDY-131 §11): the holder it was
@@ -715,7 +718,7 @@ export class Engine {
     // process's, and this one must not keep serving as the writer.
     let renewedAt = Date.now();
     let renewing = false;
-    const timer = setInterval(async () => {
+    const timer = longInterval(async () => {
       if (this.committer.stopped) return;
       if (renewing) {
         if (Date.now() - renewedAt >= ttlMs)
@@ -735,8 +738,7 @@ export class Engine {
       } finally {
         renewing = false;
       }
-    }, ttlMs / 3);
-    timer.unref?.();
+    }, ttlMs / 3).unref();
     this.lease = { store, timer };
   }
 
@@ -764,12 +766,12 @@ export class Engine {
     this.settleReady(new Error("the engine closed before its indexes were ready"));
     this.committer.stopRepeatableBumps();
     await this.committer.idle();
-    if (this.workerTimer) clearInterval(this.workerTimer);
+    this.workerTimer?.clear();
     // A compaction in progress stops; then every index is flushed.
     await Promise.allSettled([...this.compacting.values()]);
     await this.flushSearchSegments();
     if (this.lease) {
-      clearInterval(this.lease.timer);
+      this.lease.timer.clear();
       if (!this.committer.stopped) await this.lease.store.releaseLease();
       this.lease = null;
     }
@@ -1405,7 +1407,7 @@ export class Engine {
   private get workers(): SearchWorkerOptions {
     return { ...searchWorkersFromEnv(), ...this.opts.searchWorkers };
   }
-  private workerTimer: ReturnType<typeof setInterval> | null = null;
+  private workerTimer: LongTimer | null = null;
   /** Commits since the start, and at the last fast-forward (Convex's `write_commits_since_load`). */
   private commitsSeen = 0;
   private lastForward: { at: number; commits: number } | null = null;
@@ -1423,12 +1425,12 @@ export class Engine {
     this.committer.onCommit((entries) => {
       this.commitsSeen += entries.length;
     }, "search workers");
-    this.workerTimer = setInterval(() => {
+    // Any length: DATABASE_WORKERS_POLL_INTERVAL is a knob.
+    this.workerTimer = longInterval(() => {
       void this.searchWorkersTick().catch((err) => {
         if (!this.closed) console.error(`bunvex: search index workers failed: ${err.message}`);
       });
-    }, this.workers.pollIntervalMs);
-    this.workerTimer.unref?.();
+    }, this.workers.pollIntervalMs).unref();
   }
 
   /** One pass of the search index workers (tests call it directly). */
@@ -3998,7 +4000,7 @@ export class Engine {
         const sleep = occBackoffMs(failures, initialMs, maxMs);
         failures++;
         this.stats.writeThroughputRetries++;
-        await new Promise((r) => setTimeout(r, sleep));
+        await longSleep(sleep); // UDF_EXECUTOR_OCC_MAX_BACKOFF_MS is a knob
         continue;
       }
       const { tx, value: raw } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
@@ -4067,7 +4069,7 @@ export class Engine {
         this.onOccRetry?.(lost, failures + 1);
         failures++;
         this.stats.retries++;
-        await new Promise((r) => setTimeout(r, sleep));
+        await longSleep(sleep); // UDF_EXECUTOR_OCC_MAX_BACKOFF_MS is a knob
         // As Convex: wait for the write we lost to, so the next snapshot contains it.
         await this.committer.waitForVisible(e.conflict.writeTs);
       }

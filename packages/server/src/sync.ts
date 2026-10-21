@@ -18,6 +18,7 @@
 import { AuthenticationError, type VerifiedIdentity } from "@bunvex/auth";
 import {
   type Caller,
+  clearLongTimer,
   DatabaseTimeoutError,
   type Engine,
   firstOverlap,
@@ -26,6 +27,8 @@ import {
   knob,
   LeaseLostError,
   type LogEntry,
+  type LongTimer,
+  longTimeout,
   OccError,
   OutOfRetentionError,
   type QueryJournal,
@@ -147,7 +150,7 @@ export function retryOptions(opts: Partial<RetryOptions> = {}, env = process.env
       opts.sleep ??
       ((ms) =>
         new Promise((r) => {
-          const t = setTimeout(r, ms);
+          const t = longTimeout(r, ms);
           t.unref?.();
         })),
   };
@@ -192,11 +195,11 @@ export type SplayOptions = {
 const realTimers: SplayTimers = {
   now: () => performance.now(),
   set: (fn, ms) => {
-    const t = setTimeout(fn, ms);
+    const t = longTimeout(fn, ms);
     t.unref?.();
     return t;
   },
-  clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+  clear: (h) => clearLongTimer(h as LongTimer),
 };
 /** A uniform [0, 1) from the system's CSPRNG, drawn 1 024 at a time. */
 function cryptoRandom(): () => number {
@@ -1001,7 +1004,7 @@ export class SyncSession {
   /** `version` as JSON: the next transition's `startVersion`. */
   private versionText = versionJson(this.version);
   /** The pending rerun of queries that found an index unavailable (STUDY-79). */
-  private unavailableTimer: ReturnType<typeof setTimeout> | null = null;
+  private unavailableTimer: LongTimer | null = null;
   /** This connection's rooms (AD-42): made on its first room message, so one without rooms costs nothing. */
   private rooms: RoomConnection | null = null;
 
@@ -1022,7 +1025,7 @@ export class SyncSession {
   close() {
     this.closed = true;
     this.cancelSplay();
-    if (this.unavailableTimer !== null) clearTimeout(this.unavailableTimer);
+    if (this.unavailableTimer !== null) clearLongTimer(this.unavailableTimer);
     this.unavailableTimer = null;
     for (const k of this.watching) this.hub.unwatch(k, this);
     this.watching.clear();
@@ -1610,7 +1613,7 @@ export class SyncSession {
     if (this.hub.inspector.enabled) this.inspected(stale, results, identityRerun);
     // As Convex's `schedule_unavailable_query_retry`: the skipped queries run again after a delay.
     if (unavailable && this.unavailableTimer === null) {
-      this.unavailableTimer = setTimeout(() => {
+      this.unavailableTimer = longTimeout(() => {
         this.unavailableTimer = null;
         this.schedule();
       }, this.hub.unavailableRetryMs);
@@ -1743,7 +1746,7 @@ export class SyncSession {
         // once, and the run is told to stop before it commits (Convex drops its future; JS cannot be
         // interrupted). The queue stays blocked behind it, but a closed connection's queue never runs.
         const deadline: Deadline = { aborted: false };
-        const timer = setTimeout(() => {
+        const timer = longTimeout(() => {
           deadline.aborted = true;
           this.internalError(new Error(`'mutation' timeout after ${this.hub.mutationTimeoutMs} ms`));
         }, this.hub.mutationTimeoutMs);
@@ -1758,7 +1761,7 @@ export class SyncSession {
                 deadline,
               ),
         );
-        clearTimeout(timer);
+        clearLongTimer(timer);
         if (deadline.aborted) return;
         if (!r.ok && r.error instanceof OccError)
           return this.fail({ code: "OCC", shortMsg: r.error.code, msg: r.error.message });
