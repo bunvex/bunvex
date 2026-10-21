@@ -1,0 +1,20 @@
+== out-base-process
+server:  81 pass  20 fail 
+examples:  70 pass  14 fail 
+cli:  16 pass  1 fail 
+differential:  337 pass  6 skip  17 fail 
+== out-base-vm
+server:  101 pass  0 fail 
+examples:  84 pass  0 fail 
+cli:  17 pass  0 fail 
+differential:  350 pass  6 skip  4 fail 
+== out-head-process
+server:  90 pass  11 fail 
+examples:  76 pass  8 fail 
+cli:  16 pass  1 fail 
+differential:  348 pass  6 skip  6 fail 
+== out-head-vm
+server:  101 pass  0 fail 
+examples:  84 pass  0 fail 
+cli:  17 pass  0 fail 
+differential:  350 pass  6 skip  4 fail 

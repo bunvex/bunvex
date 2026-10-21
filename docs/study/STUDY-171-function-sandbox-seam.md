@@ -1,9 +1,10 @@
-# STUDY-171 — The function executor seam and its knobs (STUDY-168 PR 1), the wire and the child runtime (PR 2), queries and mutations over the bridge (PR 3), two `vm` bugs (§10), logs and errors (PR 4), actions (PR 5), unhandled rejections (PR 4b)
+# STUDY-171 — The function executor seam and its knobs (STUDY-168 PR 1), the wire and the child runtime (PR 2), queries and mutations over the bridge (PR 3), two `vm` bugs (§10), logs and errors (PR 4), actions (PR 5), unhandled rejections (PR 4b), HTTP actions (PR 6)
 
-- **Status:** PR 1 implemented (#738); PR 2 (§7) implemented (#743); PR 3 (§8) implemented (#750); §9 (#751) and §10 (#759) fixed; PR 4 (§11) implemented (#760); PR 5 (§12) implemented (#773; the owner's decisions of 2026-10-21 in §12.11); PR 4b (§13) implemented (this PR); AD-44 accepted
+- **Status:** PR 1 implemented (#738); PR 2 (§7) implemented (#743); PR 3 (§8) implemented (#750); §9 (#751) and §10 (#759) fixed; PR 4 (§11) implemented (#760); PR 5 (§12) implemented (#773; the owner's decisions of 2026-10-21 in §12.11); PR 4b (§13) implemented (#802); PR 6 (§14) implemented (this PR); AD-44 accepted
   (owner, 2026-10-19)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend, the reference commit
-  ([upstream.md](../parity/upstream.md))
+  ([upstream.md](../parity/upstream.md)); §13 and §14 at `72ce13c`, checked against its binary
+  `precompiled-2026-10-10-72ce13c`
 - **Related:** [STUDY-168](STUDY-168-process-sandbox.md) (the design: §9 decisions, §10 configuration, §12 plan; draft
   PR #735), DV-164 (one `vm` context per code version), STUDY-80 (`--deny-addresses`, the knob style followed here),
   STUDY-147 (Convex's knobs as environment variables)
@@ -1479,3 +1480,320 @@ parity list (STUDY-168 §12.3).
   - The same note covers the Bun 1.4.3+ case (§13.3): where Bun reports at the end of the turn, a rejection that such
     Bun-resumed code handles later in the same turn is not reported, so the call succeeds where Convex fails it. PR 9
     closes it too (one call per process, and that process's checkpoints its own).
+
+## 14. PR 6: HTTP actions under `process`
+
+STUDY-168 §12.3's PR 6: under `BUNVEX_FUNCTION_SANDBOX=process`, an HTTP action runs in its code version's child, its
+request going in and its response coming out as streams of PR 5's chunk frames (§12.4), with PR 4b's rejection
+checkpoints (§13). **The default does not change**: `vm` stays the default, and runs as before (the server's changes
+are exports and one refactor of the body reader, `readsAhead`, which `vm` runs the same way). `"use node"` actions stay
+PR 10's, components PR 7's. Based on `main` with PR 4b (#802) merged in.
+
+### 14.1 How Convex does it (read at `72ce13c`)
+
+- **One isolate run per request, in two steps** (`crates/isolate/src/environment/action/mod.rs:439-563`,
+  `run_http_action_inner`): the router's `lookup()` (app code: `npm-packages/convex/src/server/router.ts:275`), a 404
+  "No matching routes found" when it gives none, then the router's `runRequest()` (`router.ts:304-332`), which makes
+  the `Request` (`requestFromConvexJson`), runs the route's handler and turns its answer into the response's JSON
+  (`convexJsonFromResponse`, `npm-packages/udf-runtime/src/23_response.ts:270-287`: "HTTP actions must return a
+  Response" otherwise; the headers, the status, the body as a stream id, a known length as `content-length`).
+- **The request's body is a stream** sent to the isolate as the run starts (`send_stream`, `mod.rs:518-527`), and the
+  request's signal is a stream that closes when the client goes (`signal_http_action_abort`, `:565-593`).
+- **The response streams**: its head first, then each chunk the body's stream hands its `stream/extend` op
+  (`stream_http_result`, `:595-623`). **The isolate's loop runs until that stream ends** (`run_inner`, `:1010-1236`):
+  the body's code keeps running (and calling syscalls) after the handler returned; the timeout covers it; an unhandled
+  rejection is checked after every checkpoint (`:1071-1088`), failing the run before the head and ending the body with
+  an `error:httpAction` line after it (`run_http_action`, `:401-418`); when the stream ends, the task channel is closed
+  and the running tasks shut down (`:1226-1233`): nothing of the action runs after its body.
+- **The 100 MiB cap is on the body's chunks** (`handle_http_streamed_part`, `:625-670`): the first chunk that would
+  cross `HTTP_ACTION_RESPONSE_BODY_LIMIT` is dropped with an `error:httpAction` line, and every one after it.
+- **A multipart body is parsed by the host**: `formData()` sends the body's stream to the `form/parseMultiPart` async
+  op (`npm-packages/udf-runtime/src/21_formdata.ts:125-148`), a task like any other (so an unawaited one is in the
+  unawaited-operations warning, as `formData`); another body type is parsed in JS.
+
+What an app sees is bunvex's `vm`'s already (STUDY-31, STUDY-76, STUDY-143, DV-483, DV-485, DV-529), checked against
+Convex's binary by `packages/differential`'s HTTP tests.
+
+### 14.2 The design
+
+```
+ host (server)                                                    child
+ router stand-in ── runHttpAction (permit, timeout, env, log) ──► http {route, request head, body: s1} ──►
+   request.body ── chunk frames, credit ─────────────────────────►  Request(url, headers, body ⟵ s1, signal)
+   ctx operations, fetch, formData (the multipart parse) ◄── op ◄──  the route's handler (an action's ctx)
+                                                                  ◄── response {head, body}   (once checked)
+   Response(head, body ⟵ s2) → the server's own meter (100 MiB,      the body: inline, whole (s2), or a stream
+   its lines, its warnings), Bun                                  ◄── chunk frames on s2 (credit), a mark past the cap
+   the client leaves ── disconnect ──► (the request's signal)       ◄── end, then done {pending}  (flushed together)
+```
+
+- **The router's stand-in** (`RemoteCodeVersion.routerOf`) is an `HttpRouter` made from the routes the child's
+  analysis listed (`getRoutes()`, already in the push's analysis since PR 2), in their order, each with a handler that
+  runs the app's in the child: so the server routes, names, logs and answers a request (its 404s, its 405, its HEAD)
+  exactly as in-process (components' routers come with PR 7). The child finds the route's handler by its method and path in its
+  version's router (`httpHandlerOf`).
+- **The call** (`HostActionCall.runHttp`, `ChildActionCall.runHttp`) is an action's (§12.2): the same `ctx`, the same
+  operations answered on the host's `ctx` in the run's async context (its permit, its timeout, its environment, its
+  meter, its pending operations), its lines as they come, its cut-off at the timeout.
+- **The request.** Its head goes with the call (the URL as rebuilt by the server, the method, the headers, the request
+  id among them); its body, if any, as a stream the host sends with PR 5's credit, so a handler that reads slowly holds
+  at most a window. The child's `Request` has the server's own `blob()` (`typedBlob`) and a signal aborted when the
+  client leaves (`disconnect`, the host's `req.signal`). A body the handler never touched is stopped when the call
+  ends.
+- **`formData()`** of a multipart body sends the body back to the host as the operation `formData` (Convex's
+  `form/parseMultiPart`): the host parses it with the parser `vm` uses (Bun's) inside `trackedOperation("formData")`,
+  so it is pending until it settles, as `trackedFormData` counts it in-process; its files come back as files do
+  (§12.4). Any other body is parsed in the child, as in-process.
+- **The response is read in the child as the server reads it** (`runHttpAction`): not a `Response` → the server
+  refuses it with its own error; its headers before its body (a Blob's or a form's type); no body → none; a body of
+  known length (`bodyLength`: bytes, a Blob, a string, a form) → read whole and sent inline (≤ 64 KiB) or as a stream,
+  handed to the server with its length (`withBodyLength`), so the server types, measures and frames it as one made
+  in-process (past the 100 MiB cap the host gathers it first, so the server drops it whole as in-process, not a MiB
+  at a time); a stream → checked for a failure in the handler's turn with the server's own reader
+  (`readsAhead`'s `failedEarly`, DV-485: such a failure is the run's 500), then streamed, each chunk checked as the
+  server checks it (`bodyChunk`: null and undefined skipped, what is not bytes ends the body with the server's error,
+  DV-529).
+- **The framing is `vm`'s**: Bun sends a body that ends with its chunk at once with its `content-length`, and chunked
+  otherwise (DV-483). So the child writes a stream's chunks and its end without a flush, and the call's `done` right
+  after flushes them in one write: a body's last chunk and its end reach the host together, as they reach Bun
+  in-process.
+- **The 100 MiB cap** is the server's (`meteredBody`) but on the app's chunks, as Convex's: the child counts them and,
+  at the first that would cross the limit, sends a mark (`MARK`, a new stream frame) in its place and drops it and the
+  rest; the host hands the server `BODY_OVER_LIMIT` there, which the server's meter takes as that chunk.
+- **The body streams after the handler returned, and the call goes on while it does**: the code that makes its chunks
+  runs in the call's context (its `ctx`, its console, its `fetch`, its `process.env`) and in its checkpoints. It ends
+  when the body has been handed over (its end, its failure, or the host's `stop` when the client left or the request was
+  a HEAD: the app's stream is cancelled at once, as in-process). Then the call ends as Convex's isolate ends: the timers
+  its code left are cleared, a `ctx` it kept refuses with `ACTION_ENDED_MESSAGE` (§12.6). Its `done` carries the
+  operations it left without their answer, and the host keeps counting one still running then until the server has
+  given its warnings (which come when the response is sent, possibly after it settled).
+- **Unhandled rejections** (§13): a rejection checked before the head fails the run with the value as thrown (the
+  500); after it, the body ends there with that error, which the server logs as `error:httpAction`, and no more of the
+  call's code runs.
+- **Checks** (the child is untrusted): a `response` for an action or a second one, an inline body that is not bytes,
+  a mark for a stream the host did not open, `formData` from an action, each kills the child.
+- **Protocol version 5.**
+
+### 14.3 Parity
+
+**`http-parity.test.ts`** (103 tests): the same module deployed to a `vm` server and a `process` server, each request
+made to both, and compared: the status and its text, every header (with `content-length` or `transfer-encoding`), the
+body byte for byte, and the function log's run (its name, its status or error, every line, Progress and Completion).
+
+- 84 cases: every kind of response body (text, JSON, none, empty, 204, bytes typed and untyped, an `ArrayBuffer`,
+  Blobs typed and untyped, `URLSearchParams`, a form, a number, 1 MiB of text, 3 MiB of bytes, 101 MiB of bytes typed
+  and untyped, an explicit length, a type removed, two `set-cookie`s, a redirect); streams (small, typed, empty, slow,
+  5 MB, 3 MiB made at once, failing late, at once, with a string, in a pull, after awaits), chunks that are not bytes (a string, a number, an object, null and undefined,
+  buffers and views), 141 MiB past the 100 MiB cap; a body that calls `runQuery` and logs in each pull, one that writes,
+  one that fetches, one that reads `process.env`; the request (its URL, method, headers and request id, `text`,
+  `json` good and bad, 3 MiB read whole and streamed, `blob()`'s type, a body read twice, cloned, unread; multipart
+  forms with files parsed, stored, left unawaited; urlencoded; a bad boundary); `ctx` (nested calls and their errors,
+  the scheduler, `auth`, `meta`, its keys, `process.env`, `fetch`, `storage` with the request's bytes and a stored
+  file served), the console (lines, 300 lines), the unawaited-operations warning; throws of every kind and what is not
+  a `Response`;
+- 12 routing cases (exact and prefix routes, the longer prefix, HEAD of each body kind, OPTIONS, PUT on a GET route, a
+  path no route matches), the writes the cases left, a client that leaves mid-body (the run's log; the app's stream
+  cancelled at once and the request's signal aborted, both);
+- 5 under `process` only, what it does as Convex and `vm` does not: a rejection before the head (the 500 the same
+  value thrown gives), one after it (the body ended there, its `error:httpAction` line), the call's end with its body
+  (a timer it left never fires; a `ctx` it kept refuses), with `vm`'s behaviour stated beside it (Q-PR6-1); and a
+  `fetch`'s response returned as it came, which `process` sends and `vm` fails (Q-PR6-2).
+
+Every vm-against-process case matches, in every run on the test VPS (more than twenty) and on the Mac. What it found,
+fixed before the PR: the response's stream opened on the host after its head was read (an empty stream's end came
+first: the child killed); the cap counted on the wire's 1 MiB pieces instead of the app's chunks (141 MiB sent 100 MiB
+where in-process sends 60); bodies that end with their chunk framed chunked where `vm` gives a length (the one flush);
+an unawaited `formData` missing from the warning half the time (the host stopped counting it once it settled, before
+the server's warnings); and a request body stopped while `formData` still read it.
+
+**`http-limits.test.ts`** (4): the four forgeries above, each killing the child with nothing written; the next
+request gets a new child. **`streams.test.ts`** (+1): a mark comes out where its sender put it; the host refuses one
+for no stream.
+
+**The suites under `process`** (`BUNVEX_FUNCTION_SANDBOX=process BUNVEX_FUNCTION_SANDBOX_ISOLATION=none`), on the test
+VPS (Bun 1.4.3): "before" is this branch's base (`main` with PR 4b), "after" this branch; `vm` passes every test of
+each on both (but the four of the differential suite's that need Node on the machine, below):
+
+| Suite | `vm`, this branch | `process`, before | `process`, after | Every remaining failure under `process` |
+|---|---|---|---|---|
+| Server pushed-code suites with HTTP routes (12 files: `http-actions`, `http-action-content-type`, `router`, `cors`, `action-end`, `component-http`, `component-tree`, `code-version`, `source-position`, `engine-error-frames`, `action-nested-error-frames`, `serve-after-code-ready`) | 101 / 101 | 81 / 101 | 90 / 101 | 8 components, 3 `"use node"` actions |
+| `examples/` end to end | 84 / 84 | 70 / 84 (6 HTTP actions) | 76 / 84 | the 8 of `examples/testing` (below) |
+| CLI `deploy.test.ts` | 17 / 17 | 16 / 17 (at its HTTP step) | 16 / 17 (past it, at its `"use node"` action) | 1 `"use node"` action |
+| `packages/differential` against Convex's binary (6 skipped on each run) | 350 / 354 | 337 / 354 (12 HTTP actions) | 349 / 354 | 4 `"use node"` suites, 1 component store |
+
+Each remaining failure was read:
+
+- server: 8 components (PR 7), 3 `"use node"` actions (PR 10);
+- examples: the 8 of `examples/testing`, whose `@bunvex/testing` server reads `BUNVEX_FUNCTION_SANDBOX` but is not
+  given the executor (it fails before any function runs, HTTP or not: a gap of `@bunvex/testing`, not of HTTP
+  actions; a note below);
+- CLI (`deploy.test.ts`): its one test now passes its HTTP step and stops at its `"use node"` action;
+- differential, against Convex's binary `precompiled-2026-10-10-72ce13c`: 4 suites whose app has `"use node"`
+  actions, which Convex's binary refuses on this machine (`DeploymentNotConfiguredForNodeActions`: no Node there; they
+  fail under `vm` too), and 1 component store. One more fails at times under both executors, `http-action-log-route`:
+  **the oracle's own race**. Convex logs a HEAD request as a client disconnect when hyper drops the body before the
+  isolate hands it over, and not otherwise; bunvex logs it as Convex usually does. Seen in 6 of 8 runs under
+  `process` (not in the final suite run above) and in 1 of 12 under `vm`.
+
+### 14.4 Measurements
+
+`packages/sandbox/bench/http.ts`: each executor's server in a process of its own (`bench/http-server.ts`), requested
+over HTTP by the bench's process, one request at a time (1000 for the latency lines, 200 for the 1 MiB ones, 20 for
+the 64 MiB ones, after a warm-up). **Linux VPS** (AMD EPYC 9354P, 2 vCPUs shared by the client, the server and the
+child; Ubuntu 24.04, Bun 1.4.3), idle (`ps` checked first; nothing else running), four rounds of this branch and two of
+its base under `vm` (whose `process` has no HTTP actions); raw output and the runner in
+`bench/process-sandbox/results/pr6-http/`. Each round's p50, and the medians:
+
+| Line | `vm`, base (2 rounds) | `vm`, this branch (4 rounds) | `process` (4 rounds) | medians: `vm` → `process` |
+|---|---|---|---|---|
+| empty HTTP action (`new Response(null)`), p50 µs | 287, 290 | 277, 337, 275, 261 | 520, 607, 593, 728 | 276 → 600 µs (+324) |
+| HTTP action answering "ok", p50 µs | 551, 321 | 299, 658, 329, 273 | 524, 606, 613, 1241 | 314 → 610 µs (+296) |
+| request body, 1 MiB, read whole, MiB/s | 717, 1242 | 1313, 390, 804, 1230 | 276, 296, 244, 137 | 1017 → 260 |
+| request body, 1 MiB, streamed, MiB/s | 587, 588 | 810, 428, 1172, 806 | 364, 356, 350, 208 | 808 → 353 |
+| response body, 1 MiB of bytes, MiB/s | 405, 406 | 508, 369, 449, 574 | 274, 218, 253, 230 | 479 → 242 |
+| response body, 1 MiB, streamed, MiB/s | 567, 567 | 776, 549, 738, 928 | 319, 231, 314, 267 | 757 → 291 |
+| request body, 64 MiB, read whole, MiB/s | 661, 615 | 551, 523, 1134, 537 | 327, 304, 330, 338 | 544 → 329 |
+| request body, 64 MiB, streamed, MiB/s | 1997, 1418 | 1334, 1459, 1518, 2129 | 625, 470, 534, 500 | 1489 → 517 |
+| response body, 64 MiB of bytes, MiB/s | 551, 495 | 597, 460, 584, 522 | 385, 365, 403, 402 | 553 → 394 |
+| response body, 64 MiB, streamed, MiB/s | 1394, 1419 | 1585, 996, 1451, 1198 | 556, 549, 550, 565 | 1325 → 553 |
+
+**Backpressure**: a 96 MiB body streamed a MiB at a time (its `pull` runs only when the reader wants more), read by a
+client that takes no more than 8 MiB/s (12 s), then by one that reads as fast as it can; each process's resident
+memory sampled every 50 ms, the first lines of a fresh server. Above its idle size, per round:
+
+| Read | `vm` server | `process` server | `process` child |
+|---|---|---|---|
+| 8 MiB/s | +3.7, +2.9, +3.1, +3.0 MiB | +12.4, +14.5, +7.3, +10.4 MiB | +14.1, +13.1, +13.7, +12.3 MiB |
+| as fast as it comes (`vm` 290–839 MiB/s, `process` 441–600 MiB/s) | +2.7, +3.6, +3.5, +3.0 MiB | +19.3, +19.0, +17.7, +20.1 MiB | +28.9, +13.8, +14.1, +21.4 MiB |
+
+- **Memory stays bounded on a slow client**: 96 MiB went through each process holding at most ~15 MiB more than idle
+  (the 4 MiB credit window each way, Bun's socket buffers, the 1 MiB chunks in flight), the same whether the client
+  reads 8 MiB/s or 500: the child makes the next chunk only when the host's reader gives credit back, and the host
+  reads the child only as Bun writes to the client.
+- **An HTTP action costs about +300 µs under `process`** (p50 600 µs against 276–314 µs), more than an action's +140 µs
+  (§12.9): the request's head and headers both ways, the child's `Request` and `Response`, the response's head then its
+  `done`, and three processes on two vCPUs (the client's here too).
+- **Bytes**: 250–400 MiB/s through the bridge for a body read or sent whole, 290–550 MiB/s streamed, against
+  480–1500 MiB/s in-process (where a streamed body is not copied at all). A known-length body streams to the server
+  with its length; gathering it on the host first, as this PR's first version did, gave 148 MiB/s for 64 MiB in a smoke
+  run (now 394), so only a body past the cap is gathered.
+- **`vm` unchanged**: its column on this branch is within the base's noise in every line (the only `vm` change is the
+  body reader's refactor, `readsAhead`).
+
+### 14.5 Tests and sabotage
+
+`packages/sandbox/test/`: `http-parity.test.ts` (103), `http-limits.test.ts` (4) and `streams.test.ts` (+1), §14.3;
+four forgeries in `fixtures/children/forge.ts`; the parity tests' in-memory file store moved to `fixtures/blobs.ts`
+(shared with `action-parity.test.ts`).
+
+Each break below was applied alone to a copy of the tree on the test VPS, the three files run (120 tests), and the file
+restored from a saved copy and compared byte for byte before the next (`bench/process-sandbox/results/pr6-http/
+sabotage.py`, its breaks in `breaks.py`, its output in `sabotage.jsonl`). The two guards against a race were run 12
+times each on the cases they guard:
+
+| Break | Failing tests |
+|---|---|
+| The response's stream opened on the host after its head is read, not as the message is read | 1: `streamEmpty` (the child killed: an end for no open stream) |
+| The 100 MiB cap counted on the wire's 1 MiB pieces (no mark) | 1: `overCap` |
+| The host drops a mark instead of handing the server its over-the-limit chunk | 1: `overCap` |
+| No look for a failure in the handler's turn (`failedEarly`) in the child | 3: `chunkString`, `pullThrows`, `streamFailsNow` |
+| A chunk that is not bytes sent as it is (no `bodyChunk` check) | 2: `chunkLateNumber`, `chunkLateObject` |
+| A multipart body parsed in the child (no `formData` operation) | 1: `formUnawaited` (no warning) |
+| The request's `blob()` not typed (`typedBlob`) | 2: `reqBlob`, `storeBody` |
+| A body's end and the call's `done` flushed apart | 11 runs of 12 (the cases whose body ends with its last chunk: `stream`, `bodyFetches`, `bodyWrites`, …; chunked where `vm` gives a length) |
+| An operation still running when the call's answer named it not kept counted | 4 runs of 12 (`formUnawaited`) |
+| The call's timers not cleared at its end | 1: "the call ends with its body" |
+| A rejection after the head fails the run, as before it, instead of ending the body | 2: "after the head, it ends the body there", "the call ends with its body" |
+| The client's leaving not sent (`disconnect`) | 1: "a client that leaves" |
+| A stopped body not cancelled at once (`onStop`) | 1: "a client that leaves" |
+| The host accepts a mark for a stream it never opened | 2: `markNoStream`, the streams' mark case |
+| The host takes an inline body that is not bytes | 1: `responseNotBytes` |
+| An action may send `formData` | 1: `formDataInAction` |
+| An action may send a response | 1: `responseForAction` |
+| A known-length body's length not given to the server (`withBodyLength`) | 4: `bigBytesTyped`, `bigText`, `formMultipart`, HEAD of 3 MiB of bytes |
+| A known-length body past the cap not gathered | 1: `overCapBytes` (100 MiB sent where in-process drops it whole) |
+| A small (inline) known-length body not given its length | 3: HEAD of bytes, of text, of `/exact` (no `content-length`) |
+
+Three mechanisms were built and dropped on what the breaks showed (no test failed without them, five clean runs each):
+the host's read-ahead that handed on the chunks that came together, the gathering of a stream that ended in the
+handler's turn, and a snapshot of what was pending when the response was made. The one flush of a body's end and the
+call's `done` made the first two redundant, and keeping a running operation counted the third. One ordering is kept
+that no test can see: the child reads the response's headers before its body, as the server does; with the server's
+`Response`, whose type is set when it is built (`SpecResponse`), the order no longer changes the headers.
+
+### 14.6 Owner questions
+
+No DV, STUDY or AD number taken (TBD). Each comes as Convex against bunvex, whether it is the same, why not, the app's
+impact, and a recommendation.
+
+- **Q-PR6-1. An HTTP action's end, under `vm`.**
+  - Convex: the isolate's loop runs until the response's body has been handed over, then closes the task channel and
+    shuts the running tasks down (`environment/action/mod.rs:1226-1233`): a timer the action left never fires, a `ctx`
+    it kept refuses, as for an action (STUDY-77 §7).
+  - bunvex `process`: the same (§14.2: the call ends with its body; its timers cleared, a kept `ctx` refuses with
+    "the action has ended: its operations can no longer run").
+  - bunvex `vm`: an HTTP action never ends: its leftover timers fire after the response, and a `ctx` kept in module
+    state keeps running (STUDY-77 §7.3 left HTTP actions out until this PR).
+  - Same: `process` yes; `vm` no.
+  - Why: not built yet in `vm` (it can be: the action's life ended when the body has been handed over, as #782 does for
+    actions).
+  - App impact: under `vm` an HTTP action that leaves a timer (or keeps its `ctx`) writes, schedules or fetches after
+    its response; on Convex and under `process` it does not.
+  - **Recommendation: make `vm` end an HTTP action with its body, in a PR of its own** (as #782); `http-parity.test.ts`
+    states both behaviours today.
+- **Q-PR6-2. A `fetch` response returned as it came, under `vm`.**
+  - Convex: sent as the HTTP action's response (a proxy route).
+  - bunvex `process`: the same.
+  - bunvex `vm`: the run fails, a 500 "Uncaught TypeError: Invalid state: ReadableStream is locked". The server reads
+    the response's `body` twice (`runHttpAction`: the check for none, then the stream), and a fetched response's
+    `body` getter (`actionResponse`, `action-fetch.ts`) wraps the native stream anew at each read, which the first
+    read locked.
+  - Same: `process` yes; `vm` no.
+  - Why: a `vm` bug, not impossible.
+  - App impact: `return fetch(url)` from an HTTP action fails under `vm`.
+  - **Recommendation: fix `vm` in its own PR** (the wrapper made once per response); `http-parity.test.ts` has the case.
+- **Q-PR6-3. A system error in an HTTP action.**
+  - Convex: Convex's internal error, a 500 `{"code":"InternalServerError","message":"Your request couldn't be
+    completed. Try again later."}` (`local_backend/src/http_actions.rs` `http_any_method`, an `HttpResponseError`;
+    `errors/src/lib.rs:1102`).
+  - bunvex, both executors: the server's `errorResponse` describes it as an app's error: a 500 whose `code` and `trace`
+    carry its message (`Uncaught ExecutorFailure: the function sandbox's process sent a message that is not valid: …`
+    under `process`, an engine's system error under `vm`). Under `process` a child that dies or misbehaves during an
+    HTTP action reaches it (`http-limits.test.ts`).
+  - Same: no.
+  - Why: not built yet (`http-actions.ts` does not ask `isSystemError`).
+  - App impact: a client sees the server's internal message instead of the generic one (queries, mutations and actions
+    already answer the generic one).
+  - **Recommendation: answer a system error in an HTTP action with Convex's internal 500, under both executors, in a
+    PR of its own.**
+- **Q-PR6-4. A router whose `lookup` is its own.**
+  - Convex: the isolate calls the app router's own `lookup()` and `runRequest()` (`environment/action/mod.rs:456-503`;
+    `router.ts:275-332`): app code.
+  - bunvex `vm`: the app router's own `lookup()`, then the matched handler.
+  - bunvex `process`: the router's stand-in, an `HttpRouter` made from the routes the child's analysis listed
+    (`getRoutes()`), looked up by bunvex's own `lookup`.
+  - Same: for `httpRouter()` (and any router whose `lookup` finds what `getRoutes()` lists), yes; for a router that
+    overrides `lookup` to route otherwise, no.
+  - Why: not built yet. The server routes before it runs anything (the route names the run's log); asking the child
+    would be a round trip per request.
+  - App impact: an app whose `http.js` exports a router with a `lookup` of its own may get another route, or a 404,
+    under `process`.
+  - **Recommendation: accept until STUDY-168 PR 9**; then let the child say at analysis whether the router's `lookup`
+    is `HttpRouter`'s, and route in the child (one round trip) only when it is not.
+- **Q-PR6-5. Framing, when the body's last chunk and its end reach the host apart (DV-483).**
+  - Convex: a stream is sent chunked.
+  - bunvex `vm`: a stream that ends with its chunk at once goes with its `content-length` (DV-483).
+  - bunvex `process`: the same, since the child writes the last chunk, the end and the call's `done` in one write
+    (§14.2). Under load, if the host reads them apart, the body goes chunked (Convex's framing).
+  - Same as `vm`: in every run measured; as Convex: more often.
+  - Why: two processes, and Bun picks the framing as it writes: it cannot be made exact.
+  - App impact: none for an app (`fetch` reads the same body); a raw-HTTP client may see `transfer-encoding:
+    chunked` where `vm` sends a length.
+  - **Recommendation: accept, as a note in DV-483's row.**
+
+
+Notes, not divergences from Convex: under `process` the host sends a request's body ahead of the handler up to the
+credit window (4 MiB), as Convex sends it to the isolate at the run's start, where `vm` reads it as the handler does;
+the action timeout covers an HTTP action's handler, not its body's streaming, under both executors (DV-146);
+`@bunvex/testing` under `BUNVEX_FUNCTION_SANDBOX=process` fails to start its server (it is not given the executor),
+which a test run that sets the variable for its backend meets (`examples/testing`).
