@@ -45,8 +45,8 @@ const APP_DEFINITION = mod(
   "bunvex.config.js",
   `import { defineApp } from ${SERVER};
 import { v } from ${VALUES};
-import counter from "${dep("counter")}";
-import other from "${dep("other")}";
+import counter from ${JSON.stringify(dep("counter"))};
+import other from ${JSON.stringify(dep("other"))};
 const app = defineApp({ env: { APPX: v.optional(v.string()) } });
 app.use(counter, { env: { MODE: "fast", KEY: app.env.APPX }, httpPrefix: "/c/" });
 app.use(counter, { name: "second" });
@@ -59,7 +59,7 @@ const ONLY_COUNTER = mod(
   "bunvex.config.js",
   `import { defineApp } from ${SERVER};
 import { v } from ${VALUES};
-import counter from "${dep("counter")}";
+import counter from ${JSON.stringify(dep("counter"))};
 const app = defineApp({ env: { APPX: v.optional(v.string()) } });
 app.use(counter, { env: { MODE: "fast", KEY: app.env.APPX }, httpPrefix: "/c/" });
 export default app;`,
