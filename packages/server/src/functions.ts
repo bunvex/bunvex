@@ -217,9 +217,11 @@ import type { UsageMeter } from "./usage-limits.ts";
 import { bodyLength } from "./web-response.ts";
 
 /** The query cache key: function name + the args' canonical Convex JSON (fields sorted, bigint safe), and the
- *  hash of the code it ran (a code version's module, STUDY-35), so a new version never reads an old result. */
-const cacheKeyOf = (hash: string, name: string, args: unknown) =>
-  `${hash}\u0000${name}\u0000${stringifyValue(args ?? {})}`;
+ *  hash of the code it ran (a code version's module, STUDY-35), so a new version never reads an old result.
+ *  `fromClient`: Convex keys the caller's `allowed_visibility` too (`StoredCacheKey`), `PublicOnly` for a client
+ *  and `All` for an action's `ctx.runQuery`, so neither reuses the other's result. */
+const cacheKeyOf = (hash: string, name: string, args: unknown, fromClient: boolean) =>
+  `${hash}\u0000${name}\u0000${fromClient ? "public" : "all"}\u0000${stringifyValue(args ?? {})}`;
 
 /** A function name as the registry keys it: `module:function`, `.js` stripped, `default` when unnamed. */
 export const registryKey = (name: string) => {
@@ -1011,14 +1013,14 @@ export class Functions {
     return key.slice(0, key.lastIndexOf(":"));
   }
 
-  private cacheKey(name: string, args: unknown): string | undefined {
+  private cacheKey(name: string, args: unknown, fromClient = true): string | undefined {
     if (args instanceof UndecodedArgs || tooDeepToStringify(args)) return undefined;
     try {
       const c = splitComponentFunctionName(name);
       const hash = c
         ? this.componentRuntimes.get(c.id)?.hashes.get(Functions.moduleOf(c.name))
         : this.moduleHashes.get(Functions.moduleOf(name));
-      return cacheKeyOf(hash ?? "", name, args);
+      return cacheKeyOf(hash ?? "", name, args, fromClient);
     } catch (e) {
       // Arguments too deep for the stack to stringify are past the nesting limit: no key, and the run's own
       // check refuses them with Convex's message (STUDY-109).
@@ -2633,7 +2635,7 @@ export class Functions {
       () =>
         this.engine.query(
           this.queryBody(name, args, fromClient, caller),
-          this.cacheKey(name, args),
+          this.cacheKey(name, args, fromClient),
           cachedQueryLogs,
           caller,
         ),
