@@ -1950,6 +1950,13 @@ the same counts: the server's 15 files 174 (`vm`) and 172 (`process`), PR 6's se
 One server test changed: `component-scheduler.test.ts`'s "a job whose component was unmounted fails" scheduled its
 job 400 ms ahead of the push that unmounts the component; on the VPS a push under `process` took longer, so the job ran
 first and succeeded (under both executors the job runs if it is due before the unmount). It is due 2 s ahead now.
+A second, "garbage collection deletes a component's completed jobs too", failed 7 of 20 runs under `process` on the
+VPS (0 of 20 under `vm`). Not a lifecycle bug: a probe showed the job had always run (its message written in the
+component) before its row went; with no retention the collector deletes the row about 50 ms after the success, and a
+poll under `process` (each call a round trip to the child) often comes after it, so `waitFor` met no row where it
+expected `success`. The test now asserts what it means, that the job ran in its component, never ended in another
+state, and its row is then deleted: 0 of 20 failed after (`results/pr7-components/gc-flake.txt`), and the collector
+skipping the components' namespaces still fails it.
 
 ### 15.5 Measurements
 

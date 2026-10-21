@@ -330,11 +330,21 @@ describe("across namespaces", () => {
   test("garbage collection deletes a component's completed jobs too", async () => {
     const d = await deployment({ retentionSeconds: 0, gcDelayMs: 50 });
     const id = await d.run("lib:scheduleSelf", { body: "done" });
-    expect((await waitFor(() => d.run("lib:job", { id }))).state.kind).toBe("success");
-    const until = Date.now() + 5000;
-    while ((await d.run("lib:job", { id })) !== null && Date.now() < until) await Bun.sleep(50);
-    expect(await d.run("lib:job", { id })).toBeNull();
-  });
+    // With no retention the row may go within ~50 ms of the job's success, before a poll sees it (a slower call, as
+    // under the function sandbox's `process`, often misses it): what is asserted is that the job ran, in its
+    // component, and that its row is then deleted, never that it stopped in another state.
+    const seen = new Set<string>();
+    const until = Date.now() + 10_000;
+    for (;;) {
+      const job = await d.run("lib:job", { id });
+      if (job === null) break;
+      seen.add(job.state.kind);
+      if (Date.now() > until) throw new Error(`the job is still there: ${[...seen].join(", ")}`);
+      await Bun.sleep(20);
+    }
+    expect([...seen].filter((k) => !["pending", "inProgress", "success"].includes(k))).toEqual([]);
+    expect(await d.run("lib:count")).toBe(1);
+  }, 20_000);
 });
 
 describe("/api/cancel_job with a componentId", () => {
