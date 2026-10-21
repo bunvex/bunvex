@@ -7,7 +7,7 @@
 // a note, when Convex's backend is not there (scripts/download-convex-backend.sh, or CONVEX_BACKEND_BIN).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { type Backend, ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 
 const ready = existsSync(ORACLE_BIN);
 if (!ready) console.warn(`parse-errors: skipped, no Convex backend at ${ORACLE_BIN} (set CONVEX_BACKEND_BIN)`);
@@ -156,7 +156,7 @@ function cases(): Case[] {
 
 describe.skipIf(!ready)("parse errors on Convex and on bunvex", () => {
   beforeAll(async () => {
-    [convex, bunvex] = await Promise.all([startConvex(), startBunvex()]);
+    [convex, bunvex] = await startAll([startConvex(), startBunvex()]);
   }, 180_000);
   afterAll(async () => {
     await Promise.all([convex?.stop(), bunvex?.stop()]);

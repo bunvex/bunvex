@@ -7,7 +7,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { type Backend, ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 import { errorText } from "../harness/compare.ts";
 
 const ready = existsSync(ORACLE_BIN);
@@ -19,7 +19,7 @@ let bunvex: Backend;
 
 beforeAll(async () => {
   if (!ready) return;
-  [convex, bunvex] = await Promise.all([startConvex({ app: APP }), startBunvex({ app: APP })]);
+  [convex, bunvex] = await startAll([startConvex({ app: APP }), startBunvex({ app: APP })]);
 }, 300_000);
 
 afterAll(async () => {

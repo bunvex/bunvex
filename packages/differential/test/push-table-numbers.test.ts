@@ -6,7 +6,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { type Backend, ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 
 const ready = existsSync(ORACLE_BIN);
 if (!ready) console.warn(`push-table-numbers: skipped, no Convex backend at ${ORACLE_BIN} (set CONVEX_BACKEND_BIN)`);
@@ -33,7 +33,7 @@ describe.skipIf(!ready)("a push's table numbers on Convex and on bunvex", () => 
     const prepare = (project: string, dir: "convex" | "bunvex") => {
       projects[dir] = join(project, dir);
     };
-    [convex, bunvex] = await Promise.all([startConvex({ app: APP, prepare }), startBunvex({ app: APP, prepare })]);
+    [convex, bunvex] = await startAll([startConvex({ app: APP, prepare }), startBunvex({ app: APP, prepare })]);
   }, 300_000);
   afterAll(async () => {
     await Promise.all([convex?.stop(), bunvex?.stop()]);

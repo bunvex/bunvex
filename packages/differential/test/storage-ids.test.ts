@@ -7,7 +7,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { type Backend, ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 
 const ready = existsSync(ORACLE_BIN);
 if (!ready) console.warn(`storage-ids: skipped, no Convex backend at ${ORACLE_BIN} (set CONVEX_BACKEND_BIN)`);
@@ -19,7 +19,7 @@ const otherId: Record<string, string> = {};
 
 beforeAll(async () => {
   if (!ready) return;
-  [convex, bunvex] = await Promise.all([startConvex({ app: APP }), startBunvex({ app: APP })]);
+  [convex, bunvex] = await startAll([startConvex({ app: APP }), startBunvex({ app: APP })]);
   for (const b of [convex, bunvex])
     otherId[b.name] = ((await b.call("mutation", "files:insert", {})).body as { value: string }).value;
 }, 300_000);

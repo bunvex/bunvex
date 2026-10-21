@@ -3,7 +3,7 @@
 // note, when Convex's backend is not there (scripts/download-convex-backend.sh fetches it).
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 import { LIMIT_CASES } from "../harness/generate.ts";
 import { compare, type Program } from "../harness/runner.ts";
 
@@ -287,7 +287,7 @@ describe.skipIf(!ready)("the same program on Convex and on bunvex", () => {
   for (const [name, program] of Object.entries(PROGRAMS))
     test(name, async () => {
       // Fresh backends per program: what one leaves cannot explain another's differences.
-      const [oracle, bunvex] = await Promise.all([startConvex(), startBunvex()]);
+      const [oracle, bunvex] = await startAll([startConvex(), startBunvex()]);
       try {
         expect(await compare(oracle, bunvex, program)).toEqual([]);
       } finally {

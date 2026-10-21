@@ -12,7 +12,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { type Backend, ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 
 const ready = existsSync(ORACLE_BIN);
 if (!ready) console.warn(`unhandled-rejections: skipped, no Convex backend at ${ORACLE_BIN} (set CONVEX_BACKEND_BIN)`);
@@ -33,7 +33,7 @@ beforeAll(async () => {
     hostname: "127.0.0.1",
     fetch: () => new Response("ok"),
   });
-  [convex, bunvex] = await Promise.all([startConvex({ app: APP }), startBunvex({ app: APP, env: PROCESS })]);
+  [convex, bunvex] = await startAll([startConvex({ app: APP }), startBunvex({ app: APP, env: PROCESS })]);
 }, 300_000);
 
 afterAll(async () => {

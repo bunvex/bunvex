@@ -64,8 +64,47 @@ export function freePorts(): [number, number] {
 /** How a backend is started on two ports: its process, and what it wrote to stderr so far. */
 type Launched = { proc: ReturnType<typeof Bun.spawn>; stderr: () => string };
 
+/** Every backend process this harness launched that has not exited yet, by its own handle. */
+const running = new Set<ReturnType<typeof Bun.spawn>>();
+
+/** The PIDs of the backends this harness launched that are still running. */
+export const runningBackends = (): number[] => [...running].map((p) => p.pid);
+
+/**
+ * Stop every backend this harness launched that is still running, by its own handle (SIGTERM, then SIGKILL after
+ * `graceMs`), and wait for each to exit. The backstop of a run (`preload.ts`): a test that fails between a start
+ * and its `stop` leaves nothing behind once the run ends.
+ */
+export async function stopEveryBackend(graceMs = 10_000): Promise<void> {
+  await Promise.all(
+    [...running].map(async (proc) => {
+      proc.kill("SIGTERM");
+      const killer = setTimeout(() => proc.kill("SIGKILL"), graceMs);
+      await proc.exited;
+      clearTimeout(killer);
+    }),
+  );
+}
+
+/**
+ * Start backends together, as `Promise.all` would, except that a start that fails does not leave the others
+ * running: every start is waited for, those that came up are stopped, and the first failure is thrown. With
+ * `Promise.all`, a Convex start that failed at once left bunvex's backend starting, with no handle to stop it by.
+ */
+export async function startAll<const T extends readonly Promise<Backend>[]>(
+  starts: T,
+): Promise<{ -readonly [K in keyof T]: Awaited<T[K]> }> {
+  const settled = await Promise.allSettled(starts);
+  const failed = settled.find((s): s is PromiseRejectedResult => s.status === "rejected");
+  if (!failed) return settled.map((s) => (s as PromiseFulfilledResult<Backend>).value) as never;
+  await Promise.all(settled.map((s) => (s.status === "fulfilled" ? s.value.stop() : null)));
+  throw failed.reason;
+}
+
 function launch(cmd: string[], cwd: string, env: Record<string, string> = {}): Launched {
   const proc = Bun.spawn(cmd, { cwd, env: { ...process.env, ...env }, stdout: "ignore", stderr: "pipe" });
+  running.add(proc);
+  void proc.exited.then(() => running.delete(proc));
   let err = "";
   (async () => {
     const decoder = new TextDecoder();

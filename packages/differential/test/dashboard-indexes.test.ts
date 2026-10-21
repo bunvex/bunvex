@@ -6,7 +6,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { type Backend, ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 
 const ready = existsSync(ORACLE_BIN);
 if (!ready) console.warn(`dashboard-indexes: skipped, no Convex backend at ${ORACLE_BIN} (set CONVEX_BACKEND_BIN)`);
@@ -48,7 +48,7 @@ async function settled(b: Backend, tableName: string): Promise<Index[] | null> {
 
 describe.skipIf(!ready)("the index list on Convex and on bunvex", () => {
   beforeAll(async () => {
-    [convex, bunvex] = await Promise.all([startConvex({ app: APP }), startBunvex({ app: APP })]);
+    [convex, bunvex] = await startAll([startConvex({ app: APP }), startBunvex({ app: APP })]);
     for (const b of [convex, bunvex]) {
       const r = await b.call("mutation", "docs:add", { n: 20 });
       if (!r.ok) throw new Error(`${b.name}: ${JSON.stringify(r.body)}`);

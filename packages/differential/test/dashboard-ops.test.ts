@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 import { BunvexClient } from "bunvex/browser";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
-import { type Backend, ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 
 const ready = existsSync(ORACLE_BIN);
 if (!ready) console.warn(`dashboard-ops: skipped, no Convex backend at ${ORACLE_BIN} (set CONVEX_BACKEND_BIN)`);
@@ -105,7 +105,7 @@ const window = () => {
 
 describe.skipIf(!ready)("the dashboard's operations reads on Convex and on bunvex", () => {
   beforeAll(async () => {
-    [convex, bunvex] = await Promise.all([startConvex({ app: APP }), startBunvex({ app: APP })]);
+    [convex, bunvex] = await startAll([startConvex({ app: APP }), startBunvex({ app: APP })]);
     for (const b of [convex, bunvex]) {
       await cronRan(b);
       await b.call("mutation", "ops:schedule", { count: 3, delayMs: HOUR });
@@ -349,7 +349,7 @@ describe.skipIf(!ready)("Health's invalidations of a scheduling app, step by ste
   let ours: ReturnType<typeof added>[] = [];
   beforeAll(async () => {
     for (let attempt = 1; ; attempt++) {
-      const [c, x] = await Promise.all([startConvex({ app: APP }), startBunvex({ app: APP })]);
+      const [c, x] = await startAll([startConvex({ app: APP }), startBunvex({ app: APP })]);
       try {
         oracle = await measure(c);
         ours = await measure(x);

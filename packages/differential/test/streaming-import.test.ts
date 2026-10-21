@@ -8,7 +8,7 @@
 // CONVEX_BACKEND_BIN).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { type Backend, ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 
 const ready = existsSync(ORACLE_BIN);
 if (!ready) console.warn(`streaming-import: skipped, no Convex backend at ${ORACLE_BIN} (set CONVEX_BACKEND_BIN)`);
@@ -71,7 +71,7 @@ const clear = (tableNames: unknown) => (b: Backend) =>
 
 describe.skipIf(!ready)("streaming import on Convex and on bunvex", () => {
   beforeAll(async () => {
-    [convex, bunvex] = await Promise.all([startConvex(), startBunvex()]);
+    [convex, bunvex] = await startAll([startConvex(), startBunvex()]);
   }, 180_000);
   afterAll(async () => {
     await Promise.all([convex?.stop(), bunvex?.stop()]);
