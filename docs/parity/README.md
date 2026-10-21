@@ -10,13 +10,13 @@ item. It is the project's to-do list at the scale of the whole product.
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 163 | 2 | 1 |
 | Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables, libraries | [platform.md](platform.md) | 241 | 21 | 6 |
 
-Beyond Convex, [additions.md](additions.md) lists 37 additions: 33 built (5 of them dashboard screens on the
+Beyond Convex, [additions.md](additions.md) lists 38 additions: 34 built (5 of them dashboard screens on the
 mock), 1 being built (AD-44), 1 accepted, 2 deferred, none proposed (recounted on 2026-10-20, STUDY-181 PR 1: AD-23
 built, and AD-34 and AD-35 built in STUDY-159; before that 2026-10-19, STUDY-173; before that 2026-10-15, the dashboard audit after STUDY-149; AD-41 deferred; then
 AD-24 and AD-25's screens on a deployment, and AD-04's Topology, STUDY-131 §11; AD-42, rooms and presence scopes,
 accepted in STUDY-164 and built the same day, STUDY-164 §7; AD-43, rooms in the dashboard, accepted in STUDY-165 and built: the read and the counters, STUDY-165 §5.1,
 the event tap's server and data source, §5.2, the actions' server and data source, §5.3, and the tap's panel and the
-actions' controls, STUDY-166).
+actions' controls, STUDY-166; AD-46, the SQLite page cache's size, decided on 2026-10-21 and built, STUDY-174 Q6).
 
 These counts were recounted on 2026-10-20 (STUDY-181 PR 2, the custom functions row of platform.md; PR 1, the libraries rows); before that on 2026-10-19 (STUDY-173, after the components rows' update of the same day, STUDY-152 steps 1–7; the docs audit of 2026-10-12 re-marked cloud-only and decided no-build rows *n/a*) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
@@ -189,7 +189,8 @@ gaps.
 
 - The function sandbox (AD-44, opt-in): under `BUNVEX_FUNCTION_SANDBOX=process`, queries, mutations and actions run
   with no OS isolation yet, one child per code version, with their log lines and stacks as under `vm` (STUDY-171 §11,
-  §12); `"use node"` actions, HTTP actions and components are not available there yet (STUDY-171 §8.7; STUDY-168
+  §12), and an unhandled rejection fails the function there, as on Convex (STUDY-171 §13; under `vm` it is printed,
+  DV-528); `"use node"` actions, HTTP actions and components are not available there yet (STUDY-171 §8.7; STUDY-168
   PRs 6, 7, 10). An action past its timeout is cut off, then killed after 1 s if it does not hear it, until STUDY-168 PR 9 ends its own process at the timeout (owner, 2026-10-21, STUDY-171 §12.11). The default `vm` is
   unaffected.
 

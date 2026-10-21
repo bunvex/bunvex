@@ -226,6 +226,12 @@ export type SystemDataModel = {
   };
 };
 
+/**
+ * The table name as is, but not inferred from where it is used (Convex's `NonUnion`): with an explicit table, an id's
+ * table must be that one, not inferred from the id into a union of both.
+ */
+type NonUnion<T> = T extends never ? never : T;
+
 /** Reading one data model (the app's, or the system tables'). */
 export interface BaseDatabaseReader<DataModel extends GenericDataModel> {
   get<TableName extends TableNamesInDataModel<DataModel>>(
@@ -233,7 +239,7 @@ export interface BaseDatabaseReader<DataModel extends GenericDataModel> {
   ): Promise<DocumentByName<DataModel, TableName> | null>;
   get<TableName extends TableNamesInDataModel<DataModel>>(
     table: TableName,
-    id: GenericId<TableName>,
+    id: GenericId<NonUnion<TableName>>,
   ): Promise<DocumentByName<DataModel, TableName> | null>;
   query<TableName extends TableNamesInDataModel<DataModel>>(
     tableName: TableName,
@@ -299,7 +305,7 @@ export interface GenericDatabaseWriter<DataModel extends GenericDataModel> exten
   ): Promise<void>;
   patch<TableName extends TableNamesInDataModel<DataModel>>(
     table: TableName,
-    id: GenericId<TableName>,
+    id: GenericId<NonUnion<TableName>>,
     value: PatchValue<DocumentByName<DataModel, TableName>>,
   ): Promise<void>;
   replace<Id extends GenericId<TableNamesInDataModel<DataModel>>>(
@@ -308,11 +314,14 @@ export interface GenericDatabaseWriter<DataModel extends GenericDataModel> exten
   ): Promise<void>;
   replace<TableName extends TableNamesInDataModel<DataModel>>(
     table: TableName,
-    id: GenericId<TableName>,
+    id: GenericId<NonUnion<TableName>>,
     value: WithOptionalSystemFields<DocumentByName<DataModel, TableName>>,
   ): Promise<void>;
   delete(id: GenericId<TableNamesInDataModel<DataModel>>): Promise<void>;
-  delete<TableName extends TableNamesInDataModel<DataModel>>(table: TableName, id: GenericId<TableName>): Promise<void>;
+  delete<TableName extends TableNamesInDataModel<DataModel>>(
+    table: TableName,
+    id: GenericId<NonUnion<TableName>>,
+  ): Promise<void>;
 }
 
 /** Convex's `GenericDatabaseWriterWithTable`: a mutation's `ctx.db` as the table-scoped API types it. */
