@@ -47,6 +47,11 @@ const OWN = `{
   applicationErrorString: async () => { Promise.reject(new BunvexError("with a message")); return 1; },
   nestedRejectionCaught: async (ctx) => { try { await ctx.runQuery("cases:q", { c: "rejected", mode: "reject" }); return "not caught"; } catch (e) { return "caught: " + e.message.split("\\n")[0]; } },
   rejectedThenThrows: async () => { const p = Promise.reject(new Error("rejected first")); await null; p.catch(() => {}); throw new Error("then thrown"); },
+  nestedRejectionCaughtThenCalls: async (ctx) => { let n = 0; for (let i = 0; i < 3; i++) { try { await ctx.runQuery("cases:q", { c: "rejected", mode: "reject" }); } catch {} n += await ctx.runQuery("cases:q", { c: "handledInTime" }); } return n; },
+  nestedMissingCaughtThenCalls: async (ctx) => { let n = 0; for (let i = 0; i < 3; i++) { try { await ctx.runQuery("cases:nope", {}); } catch {} n += await ctx.runQuery("cases:q", { c: "handledInTime" }); } return n; },
+  nestedBadArgsCaughtThenCalls: async (ctx) => { let n = 0; for (let i = 0; i < 3; i++) { try { await ctx.runQuery("cases:q", { c: 1 }); } catch {} n += await ctx.runQuery("cases:q", { c: "handledInTime" }); } return n; },
+  nestedStoppedCaughtThenCalls: async (ctx) => { let n = 0; for (let i = 0; i < 3; i++) { try { await ctx.runQuery("cases:q", { c: "rejectedBeforeOp", mode: "reject" }); } catch {} n += await ctx.runQuery("cases:q", { c: "handledInTime" }); } return n; },
+  nestedCaughtThenCalls: async (ctx) => { let n = 0; for (let i = 0; i < 3; i++) { try { await ctx.runQuery("cases:q", { c: "throws" }); } catch {} n += await ctx.runQuery("cases:q", { c: "handledInTime" }); } return n; },
 }`;
 
 /** Query and mutation cases: an operation they did not await fails after the handler returned. */
@@ -56,6 +61,7 @@ const UDF = `{
   unawaitedOpHandledLater: async (ctx) => { const p = ctx.db.get("nope"); await ctx.db.query("items").first(); p.catch(() => {}); return 1; },
   nestedHandledAfterRead: async (ctx) => { const p = ctx.runQuery("cases:q", { c: "throws" }); await ctx.db.query("items").first(); p.catch(() => {}); return 1; },
   throws: async () => { throw new Error("thrown"); },
+  nestedCaughtThenRead: async (ctx) => { let n = 0; for (let i = 0; i < 3; i++) { try { await ctx.runQuery("cases:q", { c: "throws" }); } catch {} n += (await ctx.db.query("items").first()) ? 1 : 0; } return n; },
   threeReads: async (ctx) => (await Promise.all([1, 2, 3].map(() => ctx.db.query("items").first()))).length,
   slow: async (ctx, a) => { for (let k = 0; k < a.k; k++) await ctx.db.query("items").first(); if (a.fail) Promise.reject(new Error("r" + a.i)); return a.i; },
 }`;
@@ -63,6 +69,7 @@ const UDF = `{
 const MUTATION = `{
   writes: async (ctx, a) => { await ctx.db.insert("items", { tag: a.tag }); return 1; },
   writesThenRejects: async (ctx, a) => { await ctx.db.insert("items", { tag: a.tag }); Promise.reject(new Error("after a write")); return 1; },
+  nestedMutationCaughtThenCalls: async (ctx) => { let n = 0; for (let i = 0; i < 3; i++) { try { await ctx.runMutation("cases:m", { c: "throws" }); } catch {} n += await ctx.runMutation("cases:m", { c: "handledInTime" }); } return n; },
   unawaitedWrite: async (ctx, a) => { await ctx.db.insert("items", { tag: a.tag }); ctx.db.patch("nope", { x: 1 }); return 1; },
 }`;
 
@@ -246,6 +253,14 @@ const PROCESS: Record<string, (kind: Kind) => { header?: string; value?: unknown
   applicationErrorString: () => ({ header: "Uncaught BunvexError: with a message" }),
   nestedRejectionCaught: () => ({ value: "caught: Uncaught Error: never handled" }),
   rejectedThenThrows: () => ({ header: "Uncaught Error: then thrown" }),
+  // A nested call's failure caught, then more calls: each answers (it used to leave the next one unanswered).
+  nestedCaughtThenCalls: () => ({ value: 3 }),
+  nestedStoppedCaughtThenCalls: () => ({ value: 3 }),
+  nestedMissingCaughtThenCalls: () => ({ value: 3 }),
+  nestedBadArgsCaughtThenCalls: () => ({ value: 3 }),
+  nestedRejectionCaughtThenCalls: () => ({ value: 3 }),
+  nestedCaughtThenRead: () => ({ value: 3 }),
+  nestedMutationCaughtThenCalls: () => ({ value: 3 }),
   unawaitedOp: () => ({
     header: "Uncaught Error: Invalid argument `id` for `db.get`: Unable to decode ID: Invalid ID length 4",
   }),

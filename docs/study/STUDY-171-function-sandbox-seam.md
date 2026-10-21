@@ -1397,6 +1397,14 @@ frame and Convex's none.
   failing once their `fetch`'s body is read (chunks of 300 000 bytes interleaved), and the three kinds at once, every
   third call rejecting: each fails with its own value, the others answer their own; then the child still serves.
 
+Since (TBD): 18 more cases, a nested call's failure caught and then more calls, three times in a row, for queries,
+mutations and actions (the callee throws, fails of an unhandled rejection with or without an operation in flight, is
+missing, or refuses its arguments; then a nested call, a read, or a nested mutation). Each answers the same under `vm`
+and `process`. A report had a query's or mutation's next nested call left unanswered under `process` after such a
+catch; it did not reproduce on `main` (`c167c7f1`), on the test VPS under Bun 1.4.2 and 1.4.3 or on the Mac under
+1.4.2. The cases fail, at 1 s and for queries and mutations only, when the child drops the answers that come after a
+failed one.
+
 `bridge-parity.test.ts`: its three "a rejection nothing handles leaves the call as under vm" cases (PR 4's) moved
 here, as failures; two cases stay (an unawaited operation handled later, one whose answer logs a line).
 `rejections.test.ts` (1, its scenarios in `fixtures/rejections-scenarios.ts`, a process of their own): the late path
