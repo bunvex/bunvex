@@ -50,6 +50,10 @@ backend is always started with `--disable-beacon`.
   a promise rejected with no handler, on Convex's backend and on bunvex's under `BUNVEX_FUNCTION_SANDBOX=process` (under
   `vm` it is printed and the call goes on, DV-528): the status, the error's first line, its data, the value, the log
   lines, whether the error has the app's frames, and what the writes left. Local only.
+- `test/caller-realm.test.ts` (STUDY-171 §TBD, Q-PR7-2): a nested call's error as the caller of `caller-realm-app/`
+  catches it (query → query, mutation → query, action → mutation, and the app → its `thrower` component), on both and
+  on bunvex under `process` too: `instanceof Error`, `instanceof` the application class, its prototype, constructor,
+  name, message, data and own keys. Local only.
 - `test/unawaited-operations.test.ts` (STUDY-143): the unawaited-operations warning of the actions and HTTP
   actions of `unawaited-app/` on both, a timeout included (`env` sets `V8_ACTION_USER_TIMEOUT_SECS` on both).
   Local only.

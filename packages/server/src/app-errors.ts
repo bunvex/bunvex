@@ -12,8 +12,13 @@
 // pushed context therefore formats its own errors' stacks (`Error.prepareStackTrace`, called by Bun on the first
 // read), and the context a function gets is a view whose every call gives the server's error the frames of the
 // app's call instead, made in the app's realm where the call was awaited (or made, when it threw at once).
+//
+// A nested call's error (`ctx.runQuery`, `runMutation`, `runAction`) is, in Convex, made again in the caller's code
+// (`performAsyncSyscall`: `new Error(e.message)`, or `ConvexError` with its data): an error of the caller's realm,
+// `instanceof Error` there. The server makes it (`toCallerError`, functions.ts) and marks it (`asCallerError`); the
+// view gives it the caller's realm, its `Error` or its `BunvexError` (STUDY-171 §15, Q-PR7-2).
 import vm from "node:vm";
-import { BunvexError, isBunvexError } from "@bunvex/values";
+import { BunvexError, isBunvexError, stringifyValueForError } from "@bunvex/values";
 import { isSystemError, stackAfterMessage } from "./errors.ts";
 import { log } from "./log.ts";
 import { mapStack } from "./stack-map.ts";
@@ -23,6 +28,21 @@ const APP_ERRORS = Symbol("bunvex.appErrors");
 
 type CallSite = { isAsync?: () => boolean; toString(): string };
 type Call = (fn: (...a: unknown[]) => unknown, self: unknown, args: unknown[]) => unknown;
+
+/**
+ * The errors the server made for a nested call's caller: the view moves each into the caller's realm. Under `process`
+ * the mark crosses the wire (`caller` on a thrown error), and the child marks the error it makes again.
+ */
+const callerErrors = new WeakSet<object>();
+
+/** `e`, marked as a nested call's error for its caller (`installAppErrors` gives it the caller's realm). */
+export function asCallerError<E>(e: E): E {
+  if (e !== null && typeof e === "object") callerErrors.add(e);
+  return e;
+}
+
+/** Whether `e` is a nested call's error for its caller (`asCallerError`). */
+export const isCallerError = (e: unknown): boolean => e !== null && typeof e === "object" && callerErrors.has(e);
 
 /** A pushed module's frame (`stack-map.ts` `moduleUrl`), named or not. */
 const APP_FRAME = /^\s+at (?:.* \()?bunvex:\//m;
@@ -60,10 +80,38 @@ const withHeader = (node: boolean, e: unknown, frames: string) =>
  */
 export function installAppErrors(context: vm.Context, node: boolean): void {
   const format = (e: unknown, callsites: CallSite[]) => withHeader(node, e, appFrames(callsites));
+  // The app's own `BunvexError`, a class of its realm (an `Error` there, its stack formatted as the app's other
+  // errors), still a `BunvexError` to the server (`isBunvexError`: the registered symbol is every realm's); and to the
+  // app, any `BunvexError` is one, the engine's included.
+  const AppBunvexError = vm.runInContext(
+    `(isBunvexError, stringify) => {
+  const ordinary = Function.prototype[Symbol.hasInstance];
+  return class BunvexError extends Error {
+    name = "BunvexError";
+    data;
+    [Symbol.for("BunvexError")] = true;
+    constructor(data) {
+      super(typeof data === "string" ? data : stringify(data));
+      this.data = data;
+    }
+    static [Symbol.hasInstance](v) {
+      return this === BunvexError ? isBunvexError(v) : ordinary.call(this, v);
+    }
+  };
+}`,
+    context,
+    { filename: "bunvex-runtime:app-errors.js" },
+  )(isBunvexError, stringifyValueForError) as { prototype: object };
+  appBunvexErrors.set(context, AppBunvexError);
+  const appError = vm.runInContext("Error.prototype", context) as object;
   // A server error the app's call threw, given the app's frames; `site` is an error made in the app's realm at the
-  // call (after its `await`, for a promise that rejected). The error itself is kept: its class, data and codes.
+  // call (after its `await`, for a promise that rejected). The error itself is kept: its class, data and codes; a
+  // nested call's (`asCallerError`) takes the app's realm, as Convex's caller makes it again: the app's `Error`, or
+  // with data the app's `BunvexError`. The object stays the server's, so what the server knows of it holds (the
+  // operation it came from under `process`, a timeout's identity).
   const fix = (e: unknown, site: Error) => {
     if (!(e instanceof Error) || isSystemError(e)) return e;
+    if (callerErrors.has(e)) Object.setPrototypeOf(e, isBunvexError(e) ? AppBunvexError.prototype : appError);
     // Thrown before the call returned, the error already holds the app's frames (Convex's synchronous checks, in
     // its library, show those); otherwise the frames of the app's `await`.
     const own = stackAfterMessage(e);
@@ -108,23 +156,6 @@ export function installAppErrors(context: vm.Context, node: boolean): void {
   const viewOf = views(call);
   Object.defineProperty(fnProto, APP_ERRORS, { value: viewOf });
   appViews.set(context, viewOf);
-  // The app's own `BunvexError`, a class of its realm (its stack formatted as the app's other errors), still a
-  // `BunvexError` to the server; and to the app, any `BunvexError` is one, the engine's included (a nested call's).
-  appBunvexErrors.set(
-    context,
-    vm.runInContext(
-      `(Base, isBunvexError) => {
-  const ordinary = Function.prototype[Symbol.hasInstance];
-  return class BunvexError extends Base {
-    static [Symbol.hasInstance](v) {
-      return this === BunvexError ? isBunvexError(v) : ordinary.call(this, v);
-    }
-  };
-}`,
-      context,
-      { filename: "bunvex-runtime:app-errors.js" },
-    )(BunvexError, isBunvexError),
-  );
 }
 
 const appBunvexErrors = new WeakMap<vm.Context, unknown>();

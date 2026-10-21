@@ -277,8 +277,20 @@ export type WireLink = [kind: string, id: number, from: number | null, args: unk
 export type WireThrown =
   /** An operation's error, as it came back: the host throws its original. */
   | { k: "op"; op: number; stack: string | null }
-  /** An error, with its class's name; a `BunvexError` with its data. */
-  | { k: "error"; cls: string; name: string; message: string; stack: string | null; bunvex: boolean; data?: unknown }
+  /**
+   * An error, with its class's name; a `BunvexError` with its data; `caller`: a nested call's error for its caller,
+   * which the child gives the caller's realm (`asCallerError`).
+   */
+  | {
+      k: "error";
+      cls: string;
+      name: string;
+      message: string;
+      stack: string | null;
+      bunvex: boolean;
+      data?: unknown;
+      caller?: true;
+    }
   /** An error the host's own check would have thrown (a query object returned). */
   | { k: "host"; message: string }
   /** Anything else thrown (`throw "no"`). */
@@ -534,6 +546,7 @@ function thrown(x: Json, where: string): WireThrown {
     stack: nullable(o.stack, str, `${where}.stack`),
     bunvex: bool(o.bunvex, `${where}.bunvex`),
     ...(o.data === undefined ? {} : { data: o.data }),
+    ...(o.caller === undefined ? {} : { caller: o.caller === true ? true : fail(`${where}.caller`, "true") }),
   };
 }
 
