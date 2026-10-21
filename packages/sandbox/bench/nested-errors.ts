@@ -13,11 +13,7 @@ import { createProcessExecutor } from "../src/executor.ts";
 const CALLS = Number(process.argv[2] ?? 1000);
 const WARMUP = Number(process.argv[3] ?? 200);
 const ONLY = process.argv[4];
-/**
- * Nested calls per function (`NESTED`, 10 by default) and the executors (`MODES`, both by default). Under `process` a
- * query's or mutation's second nested call after a caught failure does not return today (STUDY-171 §TBD.5): run it
- * with `NESTED=1`.
- */
+/** Nested calls per function (`NESTED`, 10 by default) and the executors (`MODES`, both by default). */
 const NESTED = Number(process.env.NESTED ?? 10);
 const MODES = (process.env.MODES ?? "vm,process").split(",") as ("vm" | "process")[];
 provideProcessExecutor(createProcessExecutor);
