@@ -16,7 +16,14 @@ import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { bundleProject, pushRequest } from "@bunvex/cli/push-request";
-import { CRON_JOBS_TABLE, defineSchema, Engine, resolveComponentPath, SCHEDULED_JOBS_TABLE } from "@bunvex/core";
+import {
+  CRON_JOBS_TABLE,
+  CRON_NEXT_RUN_TABLE,
+  defineSchema,
+  Engine,
+  resolveComponentPath,
+  SCHEDULED_JOBS_TABLE,
+} from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { TestRuntime } from "@bunvex/core/test-runtime";
 import { MemoryBlobStore } from "@bunvex/file-storage";
@@ -169,15 +176,24 @@ class Backend {
 
   /** Every scheduled job: the app's and each component's (each lives in its caller's namespace, STUDY-157). */
   async jobs(): Promise<Job[]> {
+    return this.rowsOf(SCHEDULED_JOBS_TABLE);
+  }
+
+  /** Every cron's next run, the app's and each component's: the same state and `nextTs` as a job's. */
+  async cronRuns(): Promise<Job[]> {
+    return this.rowsOf(CRON_NEXT_RUN_TABLE);
+  }
+
+  private async rowsOf(table: string): Promise<Job[]> {
     const { engine } = await this.start();
     const namespaces = [
       null,
-      ...[...engine.catalog.components].filter(([, c]) => c.tables.has(SCHEDULED_JOBS_TABLE)).map(([id]) => id),
+      ...[...engine.catalog.components].filter(([, c]) => c.tables.has(table)).map(([id]) => id),
     ];
     return (await engine.query(async (db) => {
       const out: unknown[] = [];
       for (const ns of namespaces)
-        out.push(...(await db.asSystem(() => db.inComponent(ns, () => db.query(SCHEDULED_JOBS_TABLE).collect()))));
+        out.push(...(await db.asSystem(() => db.inComponent(ns, () => db.query(table).collect()))));
       return out;
     })) as Job[];
   }
@@ -217,13 +233,16 @@ class Backend {
   }
 }
 
-/** Wait for what the jobs started to settle: no job in progress, none due now. Real time, as real work runs. */
+/**
+ * Wait for what the jobs and crons started to settle: none in progress, none due now. Real time, as real work runs: a
+ * cron's action waiting for a service, or any run under the function sandbox (a round trip to a child process).
+ */
 async function settleJobs(b: Backend, timeoutMs = 30_000) {
   const deadline = performance.now() + timeoutMs;
   for (;;) {
     await b.runtime.advance(0);
     const now = b.runtime.now();
-    const busy = (await b.jobs()).some(
+    const busy = [...(await b.jobs()), ...(await b.cronRuns())].some(
       (j) => j.state.type === "inProgress" || (j.state.type === "pending" && nextMs(j) <= now),
     );
     if (!busy) return;
@@ -237,6 +256,26 @@ async function settleJobs(b: Backend, timeoutMs = 30_000) {
  * `null`, an object's `undefined` fields are gone, and nothing the caller holds is the function's own object.
  */
 const asReceived = (result: unknown): unknown => fromJsonValue(toJsonValue((result ?? null) as Value));
+
+/**
+ * Move the virtual clock to `target`, a step at a time: to each job or cron run due on the way, waiting for what it
+ * starts before the next step, so a run that takes real time (an action waiting for a service, a round trip to a
+ * sandbox child) is not left behind by the clock.
+ */
+async function advanceTo(b: Backend, target: number) {
+  await settleJobs(b);
+  for (;;) {
+    const now = b.runtime.now();
+    const due = [...(await b.jobs()), ...(await b.cronRuns())]
+      .filter((j) => j.state.type === "pending")
+      .map(nextMs)
+      .filter((t) => t > now && t <= target);
+    const step = due.length ? Math.min(...due) : target;
+    await b.runtime.advance(Math.max(0, step - now));
+    await settleJobs(b);
+    if (step >= target) return;
+  }
+}
 
 /** A test's view of its deployment, as convex-test's `TestConvex`, with an identity or none. */
 export class TestBunvex {
@@ -371,9 +410,7 @@ export class TestBunvex {
    */
   async advanceTime(ms: number): Promise<void> {
     await this.backend.start();
-    await settleJobs(this.backend);
-    await this.backend.runtime.advance(ms);
-    await settleJobs(this.backend);
+    await advanceTo(this.backend, this.backend.runtime.now() + ms);
   }
 
   /** Wait for the scheduled functions in progress to finish, without moving the clock. */
@@ -393,8 +430,7 @@ export class TestBunvex {
       await settleJobs(this.backend);
       const pending = (await this.backend.jobs()).filter((j) => j.state.type === "pending");
       if (!pending.length) return;
-      const next = Math.min(...pending.map(nextMs));
-      await this.backend.runtime.advance(Math.max(0, next - this.backend.runtime.now()));
+      await advanceTo(this.backend, Math.min(...pending.map(nextMs)));
     }
     throw new Error(
       `bunvexTest: scheduled functions still pending after ${maxIterations} iterations (one that keeps scheduling itself?)`,
