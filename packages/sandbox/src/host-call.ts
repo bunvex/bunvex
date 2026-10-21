@@ -155,7 +155,7 @@ type DoneMessage = Extract<ToHost, { t: "done" }>;
 export type Inbox =
   | OpMessage
   | DoneMessage
-  | Extract<ToHost, { t: "lines" } | { t: "cancelled" }>
+  | Extract<ToHost, { t: "lines" } | { t: "cancelled" } | { t: "response" }>
   | { t: "gone"; e: SandboxError }
   | { t: "timeout" }
   | { t: "cutOff"; error: unknown };
@@ -233,7 +233,7 @@ export abstract class HostCallBase {
   /** The sink the child's reader hands this call's messages to. */
   protected sink() {
     return {
-      message: (m: Extract<Inbox, { t: "op" | "done" | "lines" | "cancelled" }>) => this.push(m),
+      message: (m: Extract<Inbox, { t: "op" | "done" | "lines" | "cancelled" | "response" }>) => this.push(m),
       gone: (e: SandboxError) => this.push({ t: "gone", e }),
     };
   }
@@ -489,7 +489,7 @@ export class HostCall extends HostCallBase {
           throw error;
         }
         if (item.t === "gone") throw new ExecutorFailure(item.e.message);
-        if (item.t === "lines" || item.t === "cancelled" || item.t === "cutOff") {
+        if (item.t === "lines" || item.t === "cancelled" || item.t === "cutOff" || item.t === "response") {
           this.child.kill("badMessage", `sent an action's message (${item.t}) for a ${this.kind}`);
           throw new ExecutorFailure(`the function sandbox's process sent a message that is not valid: ${item.t}`);
         }

@@ -8,9 +8,12 @@
 //   processes is STUDY-168's PR 9.
 // - **Actions** (STUDY-171 §12) run in the version's child too: the stand-in is the action's handler, and the
 //   engine runs it as any action (`HostActionCall`). Rooms (AD-42) are stand-ins whose gates run in the child.
+// - **HTTP actions** (STUDY-168 PR 6): the router is a stand-in made from the routes the child analyzed, each route's
+//   handler running the app's in the child (`HostActionCall.runHttp`), so the server routes, logs and answers a
+//   request as in-process. The version's child stays in use until the response's body has been handed over.
 // - **Push-time evaluations** (the auth config, a schema) run in one child kept for them.
-// - **Not available yet** (STUDY-171 §8.7): `"use node"` actions and HTTP actions fail when called, components fail
-//   the push, each with a message that names the sandbox.
+// - **Not available yet** (STUDY-171 §8.7): `"use node"` actions fail when called, components fail the push, each
+//   with a message that names the sandbox.
 
 import { existsSync } from "node:fs";
 import { pausingUserTime } from "@bunvex/core";
@@ -101,7 +104,7 @@ export class RemoteCodeVersion implements LoadedCode {
     this.modules = new Map(sources.map((s) => [s.path, { source: s, hash: moduleHash(s) }]));
     for (const [key, f] of load.functions) this.functions.set(key, this.standIn(key, f));
     for (const [key, r] of load.rooms) this.rooms.set(key, this.roomStandIn(key, r));
-    this.router = routerOf(load.analysis["http.js"]?.httpRoutes ?? null);
+    this.router = this.routerOf(load.analysis["http.js"]?.httpRoutes ?? null);
     this.crons = cronsOf(load.analysis["crons.js"]?.cronSpecs ?? null);
   }
 
@@ -189,6 +192,47 @@ export class RemoteCodeVersion implements LoadedCode {
     }
   }
 
+  /**
+   * The router's stand-in: the analyzed routes, in the order the child's router gave them, each one's handler running
+   * the app's in the child (the server looks a request up in it, as in the app's router in-process).
+   */
+  private routerOf(routes: LoadedCode["analysis"][string]["httpRoutes"]): HttpRouter | undefined {
+    if (routes === null) return undefined;
+    const router = new HttpRouter();
+    for (const { route } of routes) {
+      const method = route.method as Parameters<HttpRouter["route"]>[0]["method"];
+      const key: [string, string] = [route.method, route.path];
+      const handler = httpActionGeneric((ctx, request) => this.http(key, ctx, request) as Promise<Response>);
+      if (route.path.endsWith("*")) router.route({ pathPrefix: route.path.slice(0, -1), method, handler });
+      else router.route({ path: route.path, method, handler });
+    }
+    return router;
+  }
+
+  /**
+   * An HTTP action, run in the child: the engine holds its permit, its timeout and its environment, as for an action.
+   * The call is in flight until its response's body has been handed over.
+   */
+  private async http(route: [string, string], ctx: object, request: Request): Promise<Response | undefined> {
+    this.inFlight++;
+    let ended: Promise<void> = Promise.resolve();
+    try {
+      let got: Awaited<ReturnType<VersionChild["get"]>>;
+      try {
+        got = await this.child.get();
+      } catch (e) {
+        throw e instanceof SandboxError ? new ExecutorFailure(e.message) : e;
+      }
+      const outcome = await new HostActionCall(got.child, ctx).runHttp(route, got.load.versionId, request);
+      ended = outcome.ended;
+      return outcome.response;
+    } finally {
+      void ended.then(() => {
+        if (--this.inFlight === 0 && this.retired) void this.child.close();
+      });
+    }
+  }
+
   /** No more calls are expected: the child stops once the last one ends. */
   retire() {
     this.retired = true;
@@ -268,21 +312,6 @@ export function createProcessExecutor(): Executor {
         "yet: run bunvex-local-backend from its package, or unset BUNVEX_FUNCTION_SANDBOX",
     );
   return new ProcessExecutor();
-}
-
-/** The analyzed routes, each answering that HTTP actions are not available yet (STUDY-168 PR 6). */
-function routerOf(routes: LoadedCode["analysis"][string]["httpRoutes"]): HttpRouter | undefined {
-  if (routes === null) return undefined;
-  const router = new HttpRouter();
-  const handler = httpActionGeneric(async () => {
-    throw new Error(sandboxNotYet("HTTP actions"));
-  });
-  for (const { route } of routes) {
-    const method = route.method as Parameters<HttpRouter["route"]>[0]["method"];
-    if (route.path.endsWith("*")) router.route({ pathPrefix: route.path.slice(0, -1), method, handler });
-    else router.route({ path: route.path, method, handler });
-  }
-  return router;
 }
 
 const DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] as const;
