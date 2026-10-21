@@ -41,6 +41,10 @@ backend is always started with `--disable-beacon`.
   `component-store-app/` (a `counter` component, mounted twice, with a table of the root's name), opened by bunvex
   (the root's tables only, read, written, listed by `data`), then by Convex again (its components intact). Run by
   the nightly too.
+- `test/component-env.test.ts` (STUDY-171 §15.7, Q-PR7-1): a component's `process.env` on both, from the app of
+  `component-env-app/` (`envc` mounted with its variables bound, and again without): called from the app's query,
+  mutation and action, from one component into another and back into the app through handles, before and after the
+  app's variables are set, a bad name included; every value compared. Local only.
 - `test/component-definitions.test.ts` (STUDY-153 PR 1): the same `defineApp` / `defineComponent` / `use` /
   `componentsGeneric` calls with Convex's package and bunvex's, their `export()` and errors compared. No backend
   needed; run by the nightly too.
