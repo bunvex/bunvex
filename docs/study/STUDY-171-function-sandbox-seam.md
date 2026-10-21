@@ -1902,15 +1902,22 @@ p99 µs per call, each line in the same process, 2000 calls after 300 (`vm`) and
 | action, caught errors | 2060 / 2130 / 5246 | 1945 / 1986 / 5049 |
 | action, caught errors with data | 2208 / 2298 / 5938 | 2184 / 2310 / 6256 |
 
-Under `process`, one nested call per function (three rounds each; see below for why one), the error lines range
-806–1929 µs p50 on `main` and 759–1309 on this branch, the round-to-round spread larger than any difference. The
-change adds a `WeakSet` insert where the server makes the error, a lookup and a prototype change in the view, and
-under `process` one boolean on the wire: no cost a measurement here separates from the noise. The bench also counts
-the caught errors that are `instanceof Error` in the caller: 0 of 10 on `main`, 10 of 10 on this branch.
+Under `process`, 10 nested calls per function, three rounds of each tree taken in turn (no other process on the VPS
+during the runs), the p50 range over the rounds, µs:
 
-**Found, not fixed here (both trees):** under `process`, a query or mutation whose nested call failed and was caught
-does not get an answer for its next nested call: the function times out at its 1 s user-time limit
-(`Function execution timed out`). Actions are not affected, nor `vm`. Reported to the owner, for a PR of its own.
+| Function, `process`, 10 nested calls | `main` | this branch |
+|---|---|---|
+| query, calls that succeed | 3289–5021 | 2842–4814 |
+| query, caught errors | 10539–11429 | 10227–12598 |
+| query, caught errors with data | 9595–9959 | 8971–13252 |
+| mutation, caught errors | 9396–14268 | 8542–10912 |
+| action, caught errors | 10403–12810 | 8915–13479 |
+| action, caught errors with data | 12602–14724 | 10169–11365 |
+
+The ranges overlap on every line: the round-to-round spread is larger than any difference. The change adds a
+`WeakSet` insert where the server makes the error, a lookup and a prototype change in the view, and under `process`
+one boolean on the wire: no cost a measurement here separates from the noise. The bench also counts the caught errors
+that are `instanceof Error` in the caller: 0 of 10 on `main`, 10 of 10 on this branch, under both executors.
 
 ### TBD.6 Sabotage
 
