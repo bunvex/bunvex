@@ -254,6 +254,8 @@ const ownVar = (vars: Record<string, string>, name: string): string | undefined 
 
 function componentEnv(c: ComponentRuntime, read: EnvReader, builtin: Record<string, string>): EnvReader {
   return (name) => {
+    // A name is checked first, bound or not (Convex parses it before the lookup, `op_environment_variables_get`).
+    checkEnvVarName(name);
     const b = c.env.get(name);
     const bound = b === undefined ? undefined : b.type === "value" ? b.value : read(b.name);
     if (bound !== undefined) return bound;
@@ -2294,16 +2296,27 @@ export class Functions {
     };
     if (depth >= MAX_NESTED_CALL_DEPTH)
       throw new Error("Cross component call depth limit exceeded. Do you have an infinite loop in your app?");
+    // The callee's `process.env` is its own component's (Convex's callee phase loads its component's variables,
+    // `PreloadedEnvVars::load(tx, component, …)`, `isolate/src/environment/udf/phase.rs:195-199`): a component called
+    // from the app reads its bindings, never the app's variables; the app called back through a handle reads its own.
+    // Within one component the caller's reader is the callee's already.
+    const calleeComponent = this.componentOf.get(f);
+    const envOf = async (tx: Tx) =>
+      calleeComponent?.id === component?.id ? null : await this.txEnv(tx, calleeComponent);
+    const withCalleeEnv = (env: EnvReader | null, fn: () => unknown) => (env ? withEnv(env, fn) : fn());
     if (opts?.useStaleSnapshot) {
       const caller: Caller = { identity: db.identity, key: "" };
       const timer = this.newTimer();
       let value: unknown;
       try {
         value = await this.engine.query(
-          (stale) => {
+          async (stale) => {
             stale.identity = db.identity;
+            const env = await envOf(stale);
             return this.withLimits(stale, opts.transactionLimits, () =>
-              withUserTimer(timer, () => withSubFunction(sub, () => this.invoke(f, stale, a, depth + 1))),
+              withUserTimer(timer, () =>
+                withSubFunction(sub, () => withCalleeEnv(env, () => this.invoke(f, stale, a, depth + 1))),
+              ),
             );
           },
           undefined,
@@ -2316,11 +2329,15 @@ export class Functions {
       }
       return acrossCall(this.checkReturns(f, value));
     }
+    const env = await envOf(db);
     const sp = kind === "mutation" ? db.begin() : null;
     let value: unknown;
     const timer = this.newTimer();
     // A query called from a mutation paginates in a scope of its own; from a query, in its caller's (Convex 8449d41).
-    const run = () => withUserTimer(timer, () => withSubFunction(sub, () => this.invoke(f, db, a, depth + 1)));
+    const run = () =>
+      withUserTimer(timer, () =>
+        withSubFunction(sub, () => withCalleeEnv(env, () => this.invoke(f, db, a, depth + 1))),
+      );
     try {
       value = await this.withLimits(db, opts?.transactionLimits, () =>
         kind === "query" ? db.inQueryScope(run) : run(),
