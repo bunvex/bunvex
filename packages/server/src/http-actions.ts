@@ -6,15 +6,23 @@
 // - auth from `Authorization` that never rejects up front: a failure is thrown by `getUserIdentity()`;
 // - the answer: the handler's response streamed (HEAD without its body, cut past 100 MiB), or Convex's 404
 //   (a request no route matches, logged as Convex logs it; STUDY-31 §7), 405 and 500 (`{code, trace?, data?}`)
-//   answers; the 408 past 300 s is the server's, for every route (`request-timeout.ts`).
+//   answers; the 408 past 300 s is the server's, for every route (`request-timeout.ts`). A system error (the
+//   server's, not the app's: `isSystemError`) answers Convex's internal error instead, `{code, message}` with the
+//   fixed message, its detail in the server's log only (STUDY-171 §14.6 Q-PR6-3).
 // - Components' routers (STUDY-157 PR 4): the request is routed from the app as Convex's `route_http_action`
 //   (crates/application/src/application_function_runner/http_routing.rs) — the app's `http.js` after its own
 //   `httpPrefix`, an exact route first, else the longest prefix among its prefix routes and its mounts, a mount
 //   descending into its child with the rest of the path — and the handler runs in the component it reached, with the
 //   original request.
-import type { Caller } from "@bunvex/core";
+import { type Caller, IndexesUnavailableError } from "@bunvex/core";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
-import { describeUncaught, newRequestId } from "./errors.ts";
+import {
+  describeUncaught,
+  INTERNAL_SERVER_ERROR_MESSAGE,
+  isSystemError,
+  isTryAgainError,
+  newRequestId,
+} from "./errors.ts";
 import type { ComponentRuntime, Functions } from "./functions.ts";
 import { type HttpRouter, ROUTABLE_HTTP_METHODS, type RoutableMethod } from "./router.ts";
 import { SpecBlob } from "./web-blob.ts";
@@ -141,6 +149,26 @@ export function httpActionServer(o: HttpActionOptions) {
     return new Response(JSON.stringify(body), { status: 500, headers: { "content-type": "application/json" } });
   };
 
+  /**
+   * Convex's answer to a system error in an HTTP action: the run's `Err` goes up to `http_any_method`, whose
+   * `HttpResponseError` answers the error's status, code and message (crates/common/src/http/mod.rs) — for an error
+   * with no `ErrorMetadata`, 500 `InternalServerError` and the fixed message (crates/errors/src/lib.rs); out of
+   * retention 503 with the same code and message; an index that is not ready its own 503 (as `udfBody` answers them).
+   * The detail goes to the server's log, as Convex's `report_error_sync` writes it (one line, "Caught error").
+   */
+  const systemErrorResponse = (e: unknown, path: string) => {
+    const detail = ((e as Error).stack ?? String(e)).replaceAll("\n", "\\n");
+    console.error(`bunvex: the HTTP action of ${path} failed with an internal error: ${detail}`);
+    const [status, code, message] =
+      e instanceof IndexesUnavailableError
+        ? [503, e.code, e.message]
+        : [isTryAgainError(e) ? 503 : 500, "InternalServerError", INTERNAL_SERVER_ERROR_MESSAGE];
+    return new Response(JSON.stringify({ code, message }), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
   /** Answer one request; `path` is what the router sees (the `/http` prefix stripped), `search` its query. */
   return async function serve(req: Request, path: string, search: string): Promise<Response> {
     const disabled = () => text(404, "This bunvex deployment does not have HTTP actions enabled.");
@@ -188,6 +216,7 @@ export function httpActionServer(o: HttpActionOptions) {
           status: 429,
           headers: { "content-type": "application/json" },
         });
+      if (isSystemError(outcome.e)) return systemErrorResponse(outcome.e, `${method} ${path}`);
       return errorResponse(outcome.e);
     }
     const res = outcome.r;

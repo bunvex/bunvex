@@ -155,6 +155,7 @@ import {
   describeUncaught,
   FunctionPathError,
   FunctionPathNotFoundError,
+  INTERNAL_SERVER_ERROR_MESSAGE,
   isSystemError,
   newRequestId,
   UndecodedArgs,
@@ -898,11 +899,18 @@ class ClientDisconnectedError extends Error {
   }
 }
 
-/** An error as the log shows it: a function's as Convex's `JsError` display, the server's own as its message. */
-const errorText = (e: unknown) =>
-  e instanceof OccError || isSystemError(e) || e instanceof ClientDisconnectedError
-    ? (e as Error).message
-    : describeUncaught(e).message;
+/**
+ * An error as the log shows it: a function's as Convex's `JsError` display, the server's own as its message. An HTTP
+ * action's system error is the fixed message, its detail in the server's log only: Convex's
+ * `log_http_action_system_error` logs `JsError::from_error_ref`, the error's user-facing message
+ * (crates/application/src/function_log.rs; STUDY-171 §14.6 Q-PR6-3).
+ */
+const errorText = (e: unknown, udfType: UdfType) =>
+  udfType === "HttpAction" && isSystemError(e)
+    ? `${INTERNAL_SERVER_ERROR_MESSAGE}\n`
+    : e instanceof OccError || isSystemError(e) || e instanceof ClientDisconnectedError
+      ? (e as Error).message
+      : describeUncaught(e).message;
 
 /** Convex's vector filter builder: `q.eq(field, value)` and `q.or(...)`, as the expression JSON it sends. */
 const VECTOR_FILTER_BUILDER = {
@@ -1483,7 +1491,7 @@ export class Functions {
       success: e === undefined ? (o.success ?? null) : null,
       // An attempt that lost an OCC conflict and runs again has no error, as Convex logs it before it fails
       // the outcome (only `occInfo` and `willRetry` tell it apart; STUDY-74).
-      error: e === undefined || (willRetry && e instanceof OccError) ? null : errorText(e),
+      error: e === undefined || (willRetry && e instanceof OccError) ? null : errorText(e, r.udfType),
       requestId: r.requestId,
       executionId: r.executionId,
       usageStats: {
