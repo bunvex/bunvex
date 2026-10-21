@@ -19,7 +19,7 @@ Key bunvex facts behind the statuses:
 
 | Feature | Convex source (file) | bunvex status | Notes |
 |---|---|---|---|
-| `db.get(table, id)`, the table-scoped form | server/database.ts, impl/database_impl.ts | done (#7) | Checks the id belongs to the table, with Convex's errors. |
+| `db.get(table, id)`, the table-scoped form | server/database.ts, impl/database_impl.ts | done (#7) | Checks the id belongs to the table, with Convex's errors. Typed as Convex's (`GenericId<NonUnion<TableName>>`): with the table first, `get` / `patch` / `replace` / `delete` take only that table's ids (`server/test/types/db-table-ids.test.ts`). |
 | `db.get(id)`, the legacy form where the id carries its table | server/database.ts | done (#44) | The id names its table. |
 | `db.get` returns `null` for a missing or deleted doc | impl/database_impl.ts | done | |
 | `db.get` sees the transaction's own writes | crates/database/src/transaction.rs | done | Served from the write set. |
