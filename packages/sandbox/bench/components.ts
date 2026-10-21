@@ -69,7 +69,10 @@ export const fromAction = action({ args: { i: v.number() }, handler: async (ctx,
 );
 const COUNTER = {
   definitionPath: "counter",
-  definition: mod("bunvex.config.js", `import { defineComponent } from ${SERVER};\nexport default defineComponent("counter");`),
+  definition: mod(
+    "bunvex.config.js",
+    `import { defineComponent } from ${SERVER};\nexport default defineComponent("counter");`,
+  ),
   dependencies: [] as string[],
   schema: mod(
     "schema.js",

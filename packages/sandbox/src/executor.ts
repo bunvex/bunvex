@@ -73,6 +73,7 @@ class ChildHost {
     first: SandboxProcess,
     private readonly spawn: SandboxProcessOptions,
     private readonly onClosed: (host: ChildHost) => void = () => {},
+    private readonly onStarted: () => void = () => {},
   ) {
     this.current = Promise.resolve(first);
   }
@@ -83,6 +84,7 @@ class ChildHost {
     if (!now.failure) return now;
     const replacing = (async () => {
       const child = await SandboxProcess.start(this.spawn);
+      this.onStarted();
       try {
         for (const slot of this.slots) {
           const load = await child.load(slot.sources, slot.opts);
@@ -344,6 +346,8 @@ export class ProcessExecutor implements Executor {
   private readonly components: ComponentChildren;
   /** The children that hold versions now. */
   private readonly hosts = new Set<ChildHost>();
+  /** How many children this executor started for code versions (tests: a push starts one). */
+  started = 0;
 
   /** `options`: how its children start (tests only: a child that misbehaves), where components run (measurements). */
   constructor(options: ProcessExecutorOptions = {}) {
@@ -363,7 +367,13 @@ export class ProcessExecutor implements Executor {
     if (host) placed = await host.add(sources, opts);
     else {
       const child = await SandboxProcess.start(this.spawn);
-      host = new ChildHost(child, this.spawn, (h) => this.hosts.delete(h));
+      this.started++;
+      host = new ChildHost(
+        child,
+        this.spawn,
+        (h) => this.hosts.delete(h),
+        () => this.started++,
+      );
       this.hosts.add(host);
       try {
         placed = await host.add(sources, opts);
