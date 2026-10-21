@@ -1610,6 +1610,11 @@ the server's warnings); and a request body stopped while `formData` still read i
 request gets a new child. **`streams.test.ts`** (+1): a mark comes out where its sender put it; the host refuses one
 for no stream.
 
+The whole `packages/sandbox` suite and the server's HTTP action files pass on the Mac (1310 tests). The repository's
+`bun test --isolate` on the test VPS (Bun 1.4.3): 4947 pass, 588 skipped, 7 fail, each failing the same way on the base
+there: the 5 release-download and ZIP tests, and 2 proxy tests (`http-proxy`, `address-screen`) whose expected tunnel
+error is worded otherwise by Bun 1.4.3.
+
 **The suites under `process`** (`BUNVEX_FUNCTION_SANDBOX=process BUNVEX_FUNCTION_SANDBOX_ISOLATION=none`), on the test
 VPS (Bun 1.4.3): "before" is this branch's base (`main` with PR 4b), "after" this branch; `vm` passes every test of
 each on both (but the four of the differential suite's that need Node on the machine, below):
