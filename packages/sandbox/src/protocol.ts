@@ -25,6 +25,9 @@
 //   body as a stream); the child runs the route's handler as an action and answers with `response` (the response's
 //   head, its body inline, whole as a stream, or streaming), then `done` once the body was handed over: the call goes on
 //   while its body streams. A client that leaves is `disconnect` (the request's signal).
+// - **Components** (STUDY-168 PR 7): a child holds the app's version and the component instances' versions loaded
+//   beside it, each made by its own `load`; every call names the version it runs (the namespace switch: the data a
+//   call reaches is its `ctx`'s, on the host). `unload` forgets a version that runs no more calls.
 // - **Bytes** (a `fetch` body, a stored file) go as streams (`streams.ts`): chunk frames of their own, with `end`,
 //   `fail`, `credit` and `stop` messages, both ways.
 import type { AnalyzedFunction, AnalyzedModule, DefaultExportUse, ModuleSource } from "@bunvex/server/executor";
@@ -34,7 +37,7 @@ import type { StreamMessage } from "./streams.ts";
 export const EPOCHS_KEPT = 4;
 
 /** Bumped whenever a message changes: host and child are always the same build, but a stale child must not run. */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 /** Convex's argument and result caps (`FUNCTION_MAX_ARGS_SIZE`, `FUNCTION_MAX_RESULT_SIZE`, knobs.rs:439-446). */
 export const MAX_VALUE_SIZE = 1 << 24;
@@ -63,6 +66,8 @@ export type ToChild =
   | { t: "cancel"; id: number; error: WireThrown }
   /** The HTTP action's client left: its request's signal aborts with `reason`. */
   | { t: "disconnect"; id: number; reason: WireThrown }
+  /** The version a `load` made (named by that load's id) runs no more calls: the child forgets it. */
+  | { t: "unload"; version: number }
   | StreamMessage;
 
 /**
@@ -80,7 +85,8 @@ export type WireLoadOptions = {
 /** child → host */
 export type ToHost =
   | { t: "hello"; protocol: number; pid: number }
-  | { t: "loaded"; id: number; version: WireVersion; loadMs: number }
+  /** `held`: how many versions the child holds now, this one included (each `load`'s, less those `unload`ed). */
+  | { t: "loaded"; id: number; version: WireVersion; loadMs: number; held: number }
   | { t: "evaluated"; id: number; export: EvaluatedDefault; loadMs: number }
   | { t: "failed"; id: number; error: WireError }
   | { t: "op"; id: number; op: number; name: string; args: unknown[]; report: WireReport }
@@ -601,7 +607,13 @@ export function parseChildMessage(text: string): ToHost {
   if (t === "fail") return { t, s: int(m.s, "fail.s"), error: thrown(m.error, "fail.error") };
   const id = int(m.id, `${t}.id`);
   if (t === "loaded")
-    return { t, id, version: version(m.version, "loaded.version"), loadMs: num(m.loadMs, "loaded.loadMs") };
+    return {
+      t,
+      id,
+      version: version(m.version, "loaded.version"),
+      loadMs: num(m.loadMs, "loaded.loadMs"),
+      held: int(m.held, "loaded.held"),
+    };
   if (t === "op")
     return {
       t,

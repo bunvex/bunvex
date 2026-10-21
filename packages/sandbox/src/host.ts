@@ -86,10 +86,10 @@ export type SandboxProcessOptions = {
 };
 
 /**
- * A version loaded in the child, how long the child took (its own clock, request to answer), and the id its calls
- * name it by (the load's request id).
+ * A version loaded in the child, how long the child took (its own clock, request to answer), the id its calls
+ * name it by (the load's request id), and how many versions the child held then (this one included).
  */
-export type ChildLoad = LoadedVersion & { loadMs: number; versionId: number };
+export type ChildLoad = LoadedVersion & { loadMs: number; versionId: number; held: number };
 
 /** Where a call's messages go: the call's own loop (`HostCall`), which reads them in its async context. */
 export type CallSink = {
@@ -248,7 +248,7 @@ export class SandboxProcess {
     } catch (e) {
       throw this.fail("badMessage", `sent a message that is not valid: loaded.version: ${(e as Error).message}`);
     }
-    return { ...version, loadMs: m.loadMs, versionId };
+    return { ...version, loadMs: m.loadMs, versionId, held: m.held };
   }
 
   /** A standalone module's default export, in the form its use takes (`Executor.evaluateDefault`). */

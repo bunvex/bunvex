@@ -89,6 +89,10 @@ describe("a child's messages", () => {
     ['{"t":"loaded","id":-1}', "loaded.id: expected a non-negative integer"],
     ['{"t":"loaded","id":1,"version":{"analysis":{}}}', "loaded.version.analysis: expected an array"],
     [
+      '{"t":"loaded","id":1,"loadMs":1,"version":{"analysis":[],"moduleHashes":[],"moduleLoads":[],"functions":[],"rooms":[]}}',
+      "loaded.held: expected a non-negative integer",
+    ],
+    [
       '{"t":"loaded","id":1,"loadMs":1,"version":{"analysis":[["m.js",{"functions":[{"name":"q","pos":null,"udfType":"Thing"}]}]]}}',
       'loaded.version.analysis[0][1].functions[0].udfType: expected "Query" or "Mutation" or "Action"',
     ],
@@ -106,6 +110,7 @@ describe("a child's messages", () => {
         t: "loaded",
         id: 1,
         loadMs: 1,
+        held: 1,
         version: {
           analysis: [
             [
@@ -155,7 +160,7 @@ describe("a version across the wire", () => {
     ];
     const version = await CodeVersion.load(sources, { seed: new Uint32Array(4), timestamp: 0 });
     const wire = parseChildMessage(
-      JSON.stringify({ t: "loaded", id: 1, loadMs: 1, version: describeVersion(version) }),
+      JSON.stringify({ t: "loaded", id: 1, loadMs: 1, held: 1, version: describeVersion(version) }),
     );
     if (wire.t !== "loaded") throw new Error(wire.t);
     const loaded = loadedVersion(wire.version);
@@ -173,6 +178,7 @@ describe("a version across the wire", () => {
         t: "loaded",
         id: 1,
         loadMs: 1,
+        held: 1,
         version: { analysis, moduleHashes: [], moduleLoads: [], functions: [], rooms: [] },
       }),
     );

@@ -28,7 +28,7 @@ import { cronSpecOf, cronSpecsRow, msOfNs, nsOfMs } from "./cron-rows.ts";
 // otherwise delete packages (F3).
 import { DEFINITION_MODULE } from "./definition-eval.ts";
 import { externalDepsPath, externalDepsRow } from "./external-deps.ts";
-import { type Executor, loadCode, sandboxNotYet, vmExecutor } from "./function-executor.ts";
+import { type Executor, loadCode, vmExecutor } from "./function-executor.ts";
 import { SERVER_VERSION } from "./server-version.ts";
 import type { SourcePosition } from "./source-position.ts";
 import { bytesSource, entryBytes, ZipReader } from "./zip-reader.ts";
@@ -550,11 +550,11 @@ export async function loadComponentCode(
   store: BlobStore,
   namespace: string,
   executor: Executor = vmExecutor,
+  /** The app's version the instance runs with (under `process`, in its child: STUDY-168 PR 7). */
+  beside?: LoadedCode,
 ): Promise<LoadedCode | null> {
   const stored = await storedModules(engine, namespace);
   if (!stored) return null;
-  // Components under the process sandbox are STUDY-168's PR 7: a start with one fails to load the code, saying so.
-  if (executor.kind === "process") throw new Error(sandboxNotYet("Components"));
   const sources = await readablePackage(store, stored.pkg.storageKey);
   if (!sources) return null;
   const row = (await engine.query((db) =>
@@ -569,6 +569,7 @@ export async function loadComponentCode(
       env: {},
     },
     executor,
+    beside,
   );
 }
 
