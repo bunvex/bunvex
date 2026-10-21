@@ -1,0 +1,7 @@
+sandbox vm, 2000 calls (a quarter for the 10-call lines); p50 / mean / p99 µs
+  app query, empty: 56 / 79 / 249
+  app query, 1 runQuery into the component: 187 / 228 / 1400
+  app query, 10 runQuery into the component: 889 / 965 / 4855
+  app query, 10 runQuery into the app (no switch): 180 / 204 / 594
+  app mutation, 1 runMutation into the component: 166 / 187 / 343
+  app query → component → app by handle: 270 / 322 / 1429
