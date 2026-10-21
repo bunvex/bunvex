@@ -21,6 +21,7 @@
 //
 // It runs only in the process that holds the store's lease (Convex's leader), started by the engine.
 import { type Committer, OutOfRetentionError } from "./committer.ts";
+import { type LongTimer, longTimeout } from "./determinism.ts";
 import { compareKeys } from "./keyenc.ts";
 import { knob, secondsKnob } from "./knobs.ts";
 import type { DocLogRow, DocPrune, IndexPrune, Persistence, RetentionStore, TabletId } from "./persistence/index.ts";
@@ -95,7 +96,7 @@ export class Retention {
   readonly stats = { indexRowsDeleted: 0, documentRowsDeleted: 0, advances: 0, errors: 0 };
   private stopped = false;
   /** Sleeps in progress: their timer, and how to end them early (on stop). */
-  private timers = new Map<ReturnType<typeof setTimeout>, () => void>();
+  private timers = new Map<LongTimer, () => void>();
   private running = new Set<Promise<unknown>>();
   private lastCheckpoint = { index: 0, document: 0 };
   private wake: { index: (() => void) | null; document: (() => void) | null } = { index: null, document: null };
@@ -150,7 +151,7 @@ export class Retention {
   async stop() {
     this.stopped = true;
     for (const [t, end] of this.timers) {
-      clearTimeout(t);
+      t.clear();
       end();
     }
     this.timers.clear();
@@ -207,11 +208,11 @@ export class Retention {
   private sleep(ms: number) {
     return new Promise<void>((ok) => {
       if (this.stopped) return ok();
-      const t = setTimeout(() => {
+      // Any length: the delays are knobs (RETENTION_DELETE_FREQUENCY, DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS…).
+      const t = longTimeout(() => {
         this.timers.delete(t);
         ok();
-      }, ms);
-      t.unref?.();
+      }, ms).unref();
       this.timers.set(t, ok);
     });
   }

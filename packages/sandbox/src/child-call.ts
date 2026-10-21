@@ -42,7 +42,6 @@ import {
   inHandleScope,
   type LogLine,
   MAX_LOG_LINES,
-  sandboxNotYet,
   setAuditScope,
   withEnv,
 } from "@bunvex/server/executor";
@@ -55,17 +54,30 @@ import {
   type WireLink,
   type WireLogLine,
   type WireReply,
+  type WireReport,
   type WireTable,
   type WireThrown,
 } from "./protocol.ts";
+import {
+  checkpointOf,
+  checkSoon,
+  drain,
+  later,
+  REPORTS_AT_DRAIN,
+  type Rejectable,
+  track,
+  untrack,
+} from "./rejections.ts";
 import { decode, encode } from "./wire.ts";
 
-type Send = (m: ToHost) => void;
+export type Send = (m: ToHost) => void;
 
-/** The call whose handler runs: its `log.audit` lines go to the host. */
-const running = new AsyncLocalStorage<ChildCall>();
+/** The call whose handler runs (a query's, a mutation's or an action's): its `log.audit` lines go to the host. */
+export const running = new AsyncLocalStorage<ChildCallBase>();
 setAuditScope(() => {
   const call = running.getStore();
+  // An action has no audit lines (null), as in-process: `log.audit` refuses there with the server's own words.
+  if (call && !(call instanceof ChildCall)) return null;
   return call ? (json: string) => call.op("log.audit", [json]).then(() => {}) : undefined;
 });
 
@@ -100,20 +112,27 @@ export class CallRuntime {
       this.executions.set(m.exec.id, exec);
     }
     exec.calls++;
-    const call = new ChildCall(m, this.send, this.catalogs.get(m.catalog.epoch)!, exec.observed);
+    const theExec = exec;
+    // Once: when the handler settles, or when an unhandled rejection ends the call first (its code then waits
+    // forever, and its `run` never settles).
+    let ended = false;
+    const end = () => {
+      if (ended) return;
+      ended = true;
+      // The answers to operations it did not await still reach it, and are dropped once it was failed.
+      call.whenAnswered(() => this.calls.delete(m.id));
+      if (--theExec.calls === 0) this.executions.delete(m.exec.id);
+    };
+    const call = new ChildCall(m, this.send, this.catalogs.get(m.catalog.epoch)!, exec.observed, end);
     this.calls.set(m.id, call);
     try {
       const version = this.versions.get(m.version);
-      const f = version?.functions.get(m.fn);
-      if (!f || (f.kind !== "query" && f.kind !== "mutation"))
-        throw new Error(`the function ${m.fn} is not a query or mutation of this version`);
+      const handler = version ? handlerOf(version, m.fn) : null;
+      if (!handler) throw new Error(`the function ${m.fn} is not a query or mutation of this version`);
       const env = m.env ? this.envs.get(m.env.epoch)! : null;
-      await call.run(f.handler as (ctx: unknown, args: unknown) => unknown, env, exec.execution);
+      await call.run(handler, env, exec.execution);
     } finally {
-      // The answers to operations it did not await still reach it (an unawaited write that fails is an unhandled
-      // rejection, as in-process); the host sends them before it ends the call.
-      call.whenAnswered(() => this.calls.delete(m.id));
-      if (--exec.calls === 0) this.executions.delete(m.exec.id);
+      end();
     }
   }
 
@@ -121,6 +140,22 @@ export class CallRuntime {
   reply(m: WireReply) {
     this.calls.get(m.id)?.reply(m);
   }
+}
+
+/**
+ * What a call names: a query or mutation (`dir/file:name`), or a room's gate (`dir/file:name#canJoin`, AD-42), run
+ * as a query.
+ */
+function handlerOf(version: CodeVersion, fn: string): ((ctx: unknown, args: unknown) => unknown) | null {
+  const gate = /^(.*)#(canJoin|canPublish)$/.exec(fn);
+  if (gate) {
+    const def = version.rooms.get(gate[1]!) as Record<string, unknown> | undefined;
+    const g = def?.[gate[2]!];
+    return typeof g === "function" ? (ctx, args) => (g as (c: unknown, a: unknown) => unknown)(ctx, args) : null;
+  }
+  const f = version.functions.get(fn);
+  if (!f || (f.kind !== "query" && f.kind !== "mutation")) return null;
+  return f.handler as (ctx: unknown, args: unknown) => unknown;
 }
 
 /** The error classes an operation's error is rebuilt with (the engine's are these, or `BunvexError`). */
@@ -146,17 +181,211 @@ const stackOf = (e: Error): string | null => {
   }
 };
 
-class ChildCall implements DbHost {
+/**
+ * What a call of either kind (`ChildCall`, `ChildActionCall`) does with its operations: each sent to the host with
+ * what the call reported since its last message, its answer awaited, its error made again with the engine's class
+ * and words; and how a thrown value leaves the handler.
+ */
+export abstract class ChildCallBase implements Rejectable {
   private seq = 0;
-  private readonly waiting = new Map<
+  /**
+   * Set once an unhandled rejection failed the call (`unhandled`): it has answered, and its code is left waiting
+   * forever at its next operation, as Convex's terminated context runs no more of it.
+   */
+  protected terminated = false;
+  protected readonly waiting = new Map<
     number,
     { resolve: (v: unknown) => void; reject: (e: unknown) => void; site: Error }
   >();
+  private answered: (() => void) | null = null;
+
+  constructor(
+    readonly id: number,
+    protected readonly send: Send,
+  ) {}
+
+  /** What the host charges, records and logs since the last message. */
+  protected abstract report(): WireReport;
+
+  /** The app left `reason` rejected with no handler once its microtasks drained (`rejections.ts`). */
+  abstract unhandled(reason: unknown): void;
+
+  /** Every checkpoint of this call so far was checked (`rejections.ts`). */
+  abstract checked(): void;
+
+  /** Before an operation: a query's or mutation's budget checked. */
+  protected before() {}
+
+  /** Around an operation's wait: a query's or mutation's paused, its budget checked after. */
+  protected around<T>(wait: () => Promise<T>): Promise<T> {
+    return wait();
+  }
+
+  /** The frames of an error the engine made at the app's call: where the app called (or made a chain's link). */
+  protected siteOf(m: WireReply & { ok: false }, opSite: Error): Error | null {
+    return m.sync ? opSite : null;
+  }
+
+  /** Runs `then` once no operation of the call waits for its answer. */
+  whenAnswered(then: () => void) {
+    if (this.waiting.size === 0) then();
+    else this.answered = then;
+  }
+
+  /** An operation, run by the host: its answer, or its error made again with the engine's class and words. */
+  op(name: string, args: unknown[]): Promise<unknown> {
+    if (this.terminated) return new Promise<never>(() => {});
+    this.before();
+    // Where the app called it, for an error the engine throws at once (a stack is cheap to take: about 0.1 µs).
+    const site = new Error();
+    // Serialized here, at the call, as the engine copies what it is given (a getter's throw is the app's).
+    const encoded = args.map(encode);
+    const op = ++this.seq;
+    return this.around(
+      () =>
+        new Promise<unknown>((resolve, reject) => {
+          this.waiting.set(op, { resolve, reject, site });
+          this.sendOp(op, name, encoded);
+        }),
+    );
+  }
+
+  /** Sends operation `op` (an action cut off sends nothing). */
+  protected sendOp(op: number, name: string, args: unknown[]) {
+    this.send({ t: "op", id: this.id, op, name, args, report: this.report() });
+  }
+
+  /** What the reply's value stands for (an action's `fetch` and `storage.get` make a `Response` and a `Blob`). */
+  protected value(_op: number, v: unknown): unknown {
+    return v;
+  }
+
+  reply(m: WireReply) {
+    const w = this.waiting.get(m.op);
+    if (!w) return;
+    this.waiting.delete(m.op);
+    if (this.terminated) {
+      // Its code runs no more: the answer is not given to it.
+      if (this.waiting.size === 0 && this.answered) this.answered();
+      return;
+    }
+    this.replied(m);
+    if (m.ok) {
+      try {
+        w.resolve(this.value(m.op, decode(m.value, false)));
+      } catch (e) {
+        w.reject(e);
+      }
+    } else {
+      const e = this.rebuilt(m.error, m.op);
+      // Thrown at the app's call under `vm`: the error holds the frames of that call (or of the link that failed),
+      // which the app's context maps (`installAppErrors`), and no `at async` frame.
+      const site = this.siteOf(m, w.site);
+      if (site && e instanceof Error) {
+        const stack = stackOf(site) ?? "";
+        const frames = stack.includes("\n") ? stack.slice(stack.indexOf("\n")) : "";
+        const header = e.message ? `${e.name}: ${e.message}` : e.name;
+        Object.defineProperty(e, "stack", { value: header + frames, writable: true, configurable: true });
+      }
+      w.reject(e);
+    }
+    if (this.waiting.size === 0 && this.answered) this.answered();
+  }
+
+  /** What else a reply tells the call (the transaction's created tables). */
+  protected replied(_m: WireReply) {}
+
+  /** An operation's error as the app sees it: the engine's class and words. */
+  protected rebuilt(w: WireThrown, op: number): unknown {
+    if (w.k === "value") return decode(w.v, false);
+    if (w.k !== "error") return new Error("the host answered with an error the child cannot read");
+    const e = rebuiltError(w);
+    fromOp.set(e, { call: this.id, op });
+    return e;
+  }
+
+  /**
+   * How a value rejected with no handler fails the call: as a thrown one, except that an application error is a plain
+   * error, its data gone. Convex's runtime marks an application error as one where the handler's throw leaves it
+   * (`serializeConvexErrorData`, npm-packages/convex/src/server/impl/registration_impl.ts), which a rejection nothing
+   * handled never passes: the isolate sees an error like any other (`extract_source_mapped_error`, error.rs).
+   */
+  protected rejected(e: unknown): WireThrown {
+    const w = this.thrown(e);
+    if (w.k === "op" && isBunvexError(e)) return plain(thrownValue(e));
+    return plain(w);
+  }
+
+  /** How a thrown value leaves the handler. */
+  protected thrown(e: unknown): WireThrown {
+    if (e !== null && typeof e === "object") {
+      const origin = fromOp.get(e);
+      if (origin?.call === this.id) return { k: "op", op: origin.op, stack: stackOf(e as Error) };
+    }
+    return thrownValue(e);
+  }
+}
+
+/** `w` with an application error made a plain one: its class and name, its message, no data. */
+function plain(w: WireThrown): WireThrown {
+  if (w.k !== "error" || !w.bunvex) return w;
+  const { data: _data, ...rest } = w;
+  return { ...rest, bunvex: false };
+}
+
+/** An error the host described, made again here with its class (the engine's, a `DOMException`, a `BunvexError`). */
+export function rebuiltError(w: Extract<WireThrown, { k: "error" }>): Error {
+  let e: Error;
+  if (w.bunvex) {
+    e = new BunvexError(decode(w.data ?? null, false) as never);
+    Object.defineProperty(e, "message", { value: w.message, writable: true, configurable: true });
+  } else if (w.cls === "DOMException") e = new DOMException(w.message, w.name);
+  else e = new (ERRORS[w.cls] ?? Error)(w.message);
+  if (e.name !== w.name) Object.defineProperty(e, "name", { value: w.name, writable: true, configurable: true });
+  return e;
+}
+
+/** A thrown value for the host: an error with its class, name, message, stack and a `BunvexError`'s data. */
+export function thrownValue(e: unknown): WireThrown {
+  const isError = e instanceof Error || Object.prototype.toString.call(e) === "[object Error]";
+  if (!isError) return { k: "value", v: encode(e) };
+  const err = e as Error;
+  const bunvex = isBunvexError(err);
+  return {
+    k: "error",
+    cls: Object.getPrototypeOf(err)?.constructor?.name ?? "Error",
+    name: String(err.name),
+    message: String(err.message),
+    stack: stackOf(err),
+    bunvex,
+    ...(bunvex ? { data: encode((err as BunvexError<never>).data) } : {}),
+  };
+}
+
+/** What a query's or mutation's `done` says: its value, or what it threw. */
+type Outcome = { ok: true; value: unknown } | { ok: false; error: WireThrown };
+
+/** Convex's `MAX_SYSCALL_BATCH_SIZE` (crates/common/src/knobs.rs): the most syscalls one batch runs. */
+const MAX_BATCH = 16;
+
+/**
+ * Which batch of Convex's an operation joins (`AsyncSyscallBatch`, environment/udf/async_syscall.rs): reads
+ * (`1.0/get`, `1.0/queryStreamNext`) together, `1.0/storageGetUrl`s together, every other one alone (null).
+ */
+function batchOf(name: string, args: unknown[]): "read" | "url" | null {
+  if (name === "db.get" || name === "db.system.get" || name === "db.query" || name === "db.next") return "read";
+  if (name === "storage" && args[0] === "getUrl") return "url";
+  return null;
+}
+
+/** An operation in flight, in the order the app started it, and its answer once it came. */
+type InFlight = { op: number; batch: "read" | "url" | null; answer?: WireReply };
+
+class ChildCall extends ChildCallBase implements DbHost {
   /** Where the app made each link of its chains: an error the engine throws making one is thrown there. */
   private readonly linkSites = new Map<number, Error>();
   private readonly lines: WireLogLine[] = [];
   private logged = 0;
-  private answered: (() => void) | null = null;
   private created: Map<string, WireTable>;
   /** Each read, in order: the engine records an interval per read, the same name's included. */
   private readonly envReads: string[] = [];
@@ -164,16 +393,119 @@ class ChildCall implements DbHost {
   private nextLink = 0;
   private reported = 0;
   private timer!: UserTimer;
+  /** The call's answer once its handler settled, sent when no operation of it waits (`checked`). */
+  private outcome: Outcome | null = null;
+  /** Its operations in flight, in the order it started them; the batch whose answers it waits for. */
+  private readonly fifo: InFlight[] = [];
+  private batch: InFlight[] | null = null;
+  /** A next batch is waiting for this checkpoint to be checked (`later`). */
+  private releasing = false;
+  private answeredHost = false;
   readonly snapshot: bigint;
 
   constructor(
     private readonly m: WireCall,
-    private readonly send: Send,
+    send: Send,
     private readonly catalog: Map<string, WireTable>,
     private readonly observed: { time: boolean },
+    private readonly end: () => void,
   ) {
+    super(m.id, send);
     this.snapshot = BigInt(m.snapshot);
     this.created = new Map(m.created.map((t) => [t.name, t]));
+    track(m.id, this);
+  }
+
+  /**
+   * The handler settled: the answer waits for every operation it started to be answered, and for the microtasks those
+   * answers resume to drain and be checked, as Convex runs a query's or mutation's syscalls to the end before it answers
+   * (`environment/udf/mod.rs`, the loop ends when no syscall is pending): a rejection nothing handles there still
+   * fails the call. Settled outside a checkpoint of its own (resumed by Bun, not by the host), it checks in a
+   * checkpoint of its own next.
+   */
+  private settled(outcome: Outcome) {
+    if (this.terminated) return;
+    this.outcome = outcome;
+    if (checkpointOf() !== this.id) checkSoon(this.id);
+  }
+
+  checked() {
+    if (this.outcome === null || this.answeredHost || this.waiting.size) return;
+    this.answer(this.outcome);
+  }
+
+  protected override sendOp(op: number, name: string, args: unknown[]) {
+    this.fifo.push({ op, batch: batchOf(name, args) });
+    super.sendOp(op, name, args);
+  }
+
+  /**
+   * An operation's answer, given to the app's code as Convex gives a syscall's: in the order the operations were
+   * started, a batch at a time (the first one waiting and the ones after it of its batch, as they stood when it was
+   * formed), each batch's microtasks drained before the next (environment/udf/mod.rs: one batch per turn of the
+   * loop, a microtask checkpoint between). So a rejection handled by code that one of its batch's answers resumes is
+   * handled in time, as there; one handled after a later batch is not. The host runs them as they come, at once.
+   */
+  override reply(m: WireReply) {
+    if (this.terminated) return super.reply(m);
+    const entry = this.fifo.find((e) => e.op === m.op);
+    if (!entry || entry.answer) return;
+    entry.answer = m;
+    this.release();
+  }
+
+  /** The batch whose answers came, or null: formed from the operations waiting, as they stand now. */
+  private ready(): InFlight[] | null {
+    if (this.batch === null) {
+      const head = this.fifo[0];
+      if (!head) return null;
+      let n = 1;
+      if (head.batch !== null) while (n < this.fifo.length && n < MAX_BATCH && this.fifo[n]!.batch === head.batch) n++;
+      this.batch = this.fifo.slice(0, n);
+    }
+    return this.batch.some((e) => !e.answer) ? null : this.batch;
+  }
+
+  /** Gives the app the batches whose answers came, each drained and checked before the next. */
+  private release() {
+    if (this.releasing) return;
+    for (;;) {
+      const batch = this.ready();
+      if (batch === null || this.terminated) return;
+      this.fifo.splice(0, batch.length);
+      this.batch = null;
+      for (const e of batch) super.reply(e.answer!);
+      if (!REPORTS_AT_DRAIN()) {
+        // Bun reports this checkpoint's rejections at the end of the turn: the next batch, in a checkpoint after.
+        if (this.ready() !== null) {
+          this.releasing = true;
+          later(this.id, () => {
+            this.releasing = false;
+            this.release();
+          });
+        }
+        return;
+      }
+      // What the batch's answers resume runs to the end, and what it leaves rejected is reported, before the next.
+      drain();
+    }
+  }
+
+  /** The call's `done`, with what it reported since its last message (the lines its last answers' code logged). */
+  private answer(outcome: Outcome) {
+    this.answeredHost = true;
+    this.outcome = null;
+    untrack(this.id);
+    this.send({ t: "done", id: this.m.id, ...outcome, report: this.report() } as ToHost);
+  }
+
+  unhandled(reason: unknown) {
+    if (this.answeredHost) return;
+    // Convex terminates the context there: the call answers with that error now (its other operations still run
+    // to their end on the host, as the engine's would), and runs no more of its code.
+    this.terminated = true;
+    this.answer({ ok: false, error: this.rejected(reason) });
+    this.end();
   }
 
   table(name: string): WireTable | undefined {
@@ -189,7 +521,7 @@ class ChildCall implements DbHost {
   }
 
   /** What the host charges, records and opens since the last message. */
-  private report() {
+  protected report() {
     const ran = userTimeMs(this.timer);
     const out = {
       ran: Math.max(0, ran - this.reported),
@@ -211,28 +543,12 @@ class ChildCall implements DbHost {
     if (this.logged++ < MAX_LOG_LINES) this.lines.push([l.level, l.messages, l.isTruncated, l.timestamp]);
   }
 
-  /** Runs `then` once no operation of the call waits for its answer. */
-  whenAnswered(then: () => void) {
-    if (this.waiting.size === 0) then();
-    else this.answered = then;
+  protected override before() {
+    checkUserTime();
   }
 
-  /** An operation, run by the host: paused while it waits, as a store call (`storeCall`), its budget checked around. */
-  op(name: string, args: unknown[]): Promise<unknown> {
-    checkUserTime();
-    // Where the app called it, for an error the engine throws at once (a stack is cheap to take: about 0.1 µs).
-    const site = new Error();
-    // Serialized here, at the call, as the engine copies what it is given (a getter's throw is the app's).
-    const encoded = args.map(encode);
-    const op = ++this.seq;
-    const answer = pausingUserTime(
-      () =>
-        new Promise<unknown>((resolve, reject) => {
-          this.waiting.set(op, { resolve, reject, site });
-          this.send({ t: "op", id: this.m.id, op, name, args: encoded, report: this.report() });
-        }),
-    );
-    return answer.then(
+  protected override around<T>(wait: () => Promise<T>): Promise<T> {
+    return pausingUserTime(wait).then(
       (v) => {
         checkUserTime();
         return v;
@@ -243,63 +559,13 @@ class ChildCall implements DbHost {
     );
   }
 
-  reply(m: WireReply) {
-    const w = this.waiting.get(m.op);
-    if (!w) return;
-    this.waiting.delete(m.op);
-    if (m.created) {
-      this.created = new Map(m.created.map((t) => [t.name, t]));
-    }
-    if (m.ok) w.resolve(decode(m.value, false));
-    else {
-      const e = this.rebuilt(m.error, m.op);
-      // Thrown at the app's call under `vm`: the error holds the frames of that call (or of the link that failed),
-      // which the app's context maps (`installAppErrors`), and no `at async` frame.
-      const site = m.sync ? (m.link !== undefined && this.linkSites.get(m.link)) || w.site : null;
-      if (site && e instanceof Error) {
-        const stack = stackOf(site) ?? "";
-        const frames = stack.includes("\n") ? stack.slice(stack.indexOf("\n")) : "";
-        const header = e.message ? `${e.name}: ${e.message}` : e.name;
-        Object.defineProperty(e, "stack", { value: header + frames, writable: true, configurable: true });
-      }
-      w.reject(e);
-    }
-    if (this.waiting.size === 0 && this.answered) this.answered();
+  protected override siteOf(m: WireReply & { ok: false }, opSite: Error): Error | null {
+    if (!m.sync) return null;
+    return (m.link !== undefined && this.linkSites.get(m.link)) || opSite;
   }
 
-  /** An operation's error as the app sees it: the engine's class and words. */
-  private rebuilt(w: WireThrown, op: number): unknown {
-    if (w.k === "value") return decode(w.v, false);
-    if (w.k !== "error") return new Error("the host answered with an error the child cannot read");
-    let e: Error;
-    if (w.bunvex) {
-      e = new BunvexError(decode(w.data ?? null, false) as never);
-      Object.defineProperty(e, "message", { value: w.message, writable: true, configurable: true });
-    } else e = new (ERRORS[w.cls] ?? Error)(w.message);
-    if (e.name !== w.name) Object.defineProperty(e, "name", { value: w.name, writable: true, configurable: true });
-    fromOp.set(e, { call: this.m.id, op });
-    return e;
-  }
-
-  /** How a thrown value leaves the handler. */
-  private thrown(e: unknown): WireThrown {
-    if (e !== null && typeof e === "object") {
-      const origin = fromOp.get(e);
-      if (origin?.call === this.m.id) return { k: "op", op: origin.op, stack: stackOf(e as Error) };
-    }
-    const isError = e instanceof Error || Object.prototype.toString.call(e) === "[object Error]";
-    if (!isError) return { k: "value", v: encode(e) };
-    const err = e as Error;
-    const bunvex = isBunvexError(err);
-    return {
-      k: "error",
-      cls: Object.getPrototypeOf(err)?.constructor?.name ?? "Error",
-      name: String(err.name),
-      message: String(err.message),
-      stack: stackOf(err),
-      bunvex,
-      ...(bunvex ? { data: encode((err as BunvexError<never>).data) } : {}),
-    };
+  protected override replied(m: WireReply) {
+    if (m.created) this.created = new Map(m.created.map((t) => [t.name, t]));
   }
 
   private ctx(kind: "query" | "mutation") {
@@ -337,15 +603,8 @@ class ChildCall implements DbHost {
       db,
       auth,
       scheduler: methods("scheduler", ["runAfter", "runAt", "cancel"]),
-      // Rooms (AD-42) are not available yet: any use of `ctx.rooms` says so.
-      rooms: new Proxy(
-        {},
-        {
-          get() {
-            throw new Error(sandboxNotYet("Rooms (`ctx.rooms`)"));
-          },
-        },
-      ),
+      // Rooms (AD-42): a broadcast is sent once the mutation commits, by the host.
+      rooms: methods("rooms", ["broadcast"]),
       storage: methods("storage", this.m.storage),
       runQuery: nested("runQuery"),
       runMutation: nested("runMutation"),
@@ -377,23 +636,17 @@ class ChildCall implements DbHost {
           () => inHandleScope({ create: (ref: unknown) => this.op("createFunctionHandle", [ref]) } as never, body),
         ),
       );
-    let message: ToHost;
+    let outcome: Outcome;
     try {
       const value = await runInExecution(execution, logged);
       // The engine checks this on what the handler returned (`notAQuery`); the object cannot cross.
       if (value instanceof QueryImpl || value instanceof VirtualQuery)
-        message = {
-          t: "done",
-          id: this.m.id,
-          ok: false,
-          error: { k: "host", message: RETURNED_A_QUERY },
-          report: this.report(),
-        };
-      else message = { t: "done", id: this.m.id, ok: true, value: encode(value), report: this.report() };
+        outcome = { ok: false, error: { k: "host", message: RETURNED_A_QUERY } };
+      else outcome = { ok: true, value: encode(value) };
     } catch (e) {
-      message = { t: "done", id: this.m.id, ok: false, error: this.thrown(e), report: this.report() };
+      outcome = { ok: false, error: this.thrown(e) };
     }
-    this.send(message);
+    this.settled(outcome);
   }
 }
 

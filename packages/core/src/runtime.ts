@@ -6,7 +6,9 @@
 // `installDeterminism()` replaces the globals for queries and mutations, so engine code that reads the time
 // through a runtime is never frozen nor refused inside an execution.
 
-/** A pending timer: Bun's own for the real runtime (`unref` lets the process exit while it waits). */
+import { type LongTimer, longInterval, longTimeout } from "./long-timer.ts";
+
+/** A pending timer: a `LongTimer` for the real runtime (`unref` lets the process exit while it waits). */
 export interface RuntimeTimer {
   ref(): unknown;
   unref(): unknown;
@@ -25,6 +27,7 @@ export interface Runtime {
   readonly preciseNow: () => number;
   /** The wall clock in ns, never behind `now()`: the clock of commit timestamps (Convex's `system_time` as u64). */
   readonly nowNs: () => bigint;
+  /** A timer of any length: past 2^31-1 ms the real runtime re-arms for what is left (rule 6 trusts it). */
   setTimeout(fn: () => void, ms: number): RuntimeTimer;
   clearTimeout(timer: RuntimeTimer | null | undefined): void;
   setInterval(fn: () => void, ms: number): RuntimeTimer;
@@ -35,10 +38,6 @@ export interface Runtime {
 
 const realNow = Date.now;
 const realPerformanceNow = performance.now.bind(performance);
-const realSetTimeout = globalThis.setTimeout;
-const realClearTimeout = globalThis.clearTimeout;
-const realSetInterval = globalThis.setInterval;
-const realClearInterval = globalThis.clearInterval;
 
 const origin = performance.timeOrigin;
 
@@ -57,14 +56,14 @@ function realNowNs(): bigint {
 }
 
 function realSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (!signal) return new Promise((resolve) => realSetTimeout(resolve, ms));
+  if (!signal) return new Promise((resolve) => void longTimeout(resolve, ms));
   if (signal.aborted) return Promise.reject(signal.reason);
   return new Promise((resolve, reject) => {
     const onAbort = () => {
-      realClearTimeout(timer);
+      timer.clear();
       reject(signal.reason);
     };
-    const timer = realSetTimeout(() => {
+    const timer = longTimeout(() => {
       signal.removeEventListener("abort", onAbort);
       resolve();
     }, ms);
@@ -78,9 +77,10 @@ export const realRuntime: Runtime = {
   monotonicNow: realPerformanceNow,
   preciseNow: realPreciseNow,
   nowNs: realNowNs,
-  setTimeout: (fn, ms) => realSetTimeout(fn, ms),
-  clearTimeout: (t) => realClearTimeout(t as ReturnType<typeof setTimeout> | undefined),
-  setInterval: (fn, ms) => realSetInterval(fn, ms),
-  clearInterval: (t) => realClearInterval(t as ReturnType<typeof setInterval> | undefined),
+  // Any length, as Convex's `Runtime::wait` (a `Duration`): past 2^31-1 ms they re-arm (STUDY-174 Q8).
+  setTimeout: (fn, ms) => longTimeout(fn, ms),
+  clearTimeout: (t) => (t as LongTimer | null | undefined)?.clear(),
+  setInterval: (fn, ms) => longInterval(fn, ms),
+  clearInterval: (t) => (t as LongTimer | null | undefined)?.clear(),
   sleep: realSleep,
 };

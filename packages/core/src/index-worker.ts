@@ -25,6 +25,7 @@ import {
   indexStatePatch,
 } from "./catalog.ts";
 import type { Committer } from "./committer.ts";
+import { longTimeout, timerDelay } from "./determinism.ts";
 import { internalIdOf } from "./internal-id.ts";
 import { compareKeys, encodeKey, prefixEnd } from "./keyenc.ts";
 import { boolKnob, knob, secondsKnob } from "./knobs.ts";
@@ -92,7 +93,7 @@ class RateLimiter {
         this.tokens -= n;
         return;
       }
-      await new Promise((r) => setTimeout(r, Math.max(1, ((need - this.tokens) / this.rate) * 1000)));
+      await new Promise((r) => setTimeout(r, timerDelay(Math.max(1, ((need - this.tokens) / this.rate) * 1000))));
     }
   }
 }
@@ -176,12 +177,13 @@ export class IndexWorker {
         this.onError(e);
         const { initialBackoffMs, maxBackoffMs } = this.opts;
         await new Promise<void>((resolve) => {
-          const t = setTimeout(
+          // Any length: INDEX_WORKERS_MAX_BACKOFF is a knob.
+          const t = longTimeout(
             () => this.wakeBackoff?.(),
             Math.min(initialBackoffMs * 2 ** failures, maxBackoffMs) * Math.random(),
           );
           this.wakeBackoff = () => {
-            clearTimeout(t);
+            t.clear();
             this.wakeBackoff = null;
             resolve();
           };
@@ -275,11 +277,17 @@ export class IndexWorker {
       const c = p.cursor?.snapshotTs ?? 0n;
       return c > s ? c : s;
     }, 0n);
+    // Its progress starts over with it, as Convex's `initialize_backfill` does on a fresh start: the count from 0
+    // and the table's count now (STUDY-174 S1).
     if (snapshot < this.host.minSnapshotTs() || snapshot > committer.visibleTs) {
       snapshot = committer.visibleTs;
       lo = FULL_LO;
       lastId = null;
-      for (const p of progress) p.cursor = { snapshotTs: snapshot, cursor: null };
+      for (const [i, p] of progress.entries()) {
+        p.cursor = { snapshotTs: snapshot, cursor: null };
+        p.totalDocs = this.host.tableCount?.(metas[i].tablet) ?? null;
+        done[i] = 0;
+      }
     }
     for (;;) {
       if (this.stopped) {
@@ -304,6 +312,8 @@ export class IndexWorker {
       sinceCheckpoint += docs.length;
       if (performance.now() - checkpointAt >= this.opts.progressIntervalMs) await checkpoint();
     }
+    // The last progress, as Convex's `backfill_from_ts` flushes it after its walk: the row counts every document.
+    if (sinceCheckpoint > 0) await checkpoint();
 
     // Every document is in the indexes: as Convex's `mark_retention_started`, a commit of its own records it
     // before the backfill finishes (bunvex has no catching up to do: each chunk committed at a new ts).

@@ -32,6 +32,9 @@ backend is always started with `--disable-beacon`.
 - `test/cross-open.test.ts` (STUDY-133 PR 9): a store each binary wrote, opened by the other (same SQLite file
   and storage, the app of `cross-open-app/` redeployed by its CLI), read back by every kind of index, written,
   and read back by the first. Local only: the nightly does not run it.
+- `test/backfill-progress.test.ts` (STUDY-174 S1): a push adds an index to a table with documents (the app of
+  `backfill-progress-app/`); once backfilled, the `_index_backfills` row is read from each store's SQLite file and
+  compared: the count, the table's total, the cursor. Local only.
 - `test/component-store.test.ts` (STUDY-152 steps 1–2): a store Convex writes with the components of
   `component-store-app/` (a `counter` component, mounted twice, with a table of the root's name), opened by bunvex
   (the root's tables only, read, written, listed by `data`), then by Convex again (its components intact). Run by
@@ -41,6 +44,10 @@ backend is always started with `--disable-beacon`.
   needed; run by the nightly too.
 - `test/action-fetch.test.ts` (STUDY-142): an action's `fetch` (the app of `fetch-app/`) to local targets on
   both: how a request fails, redirects, the 407 refusal, aborts, the default `User-Agent`. Local only.
+- `test/unhandled-rejections.test.ts` (STUDY-171 §13): queries, mutations and actions of `rejections-app/` that leave
+  a promise rejected with no handler, on Convex's backend and on bunvex's under `BUNVEX_FUNCTION_SANDBOX=process` (under
+  `vm` it is printed and the call goes on, DV-528): the status, the error's first line, its data, the value, the log
+  lines, whether the error has the app's frames, and what the writes left. Local only.
 - `test/unawaited-operations.test.ts` (STUDY-143): the unawaited-operations warning of the actions and HTTP
   actions of `unawaited-app/` on both, a timeout included (`env` sets `V8_ACTION_USER_TIMEOUT_SECS` on both).
   Local only.

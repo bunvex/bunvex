@@ -1,0 +1,16 @@
+bunvex: the function sandbox 'process' runs queries, mutations and actions in a separate process, with no OS isolation (BUNVEX_FUNCTION_SANDBOX_ISOLATION=none): it is not a security boundary yet. HTTP actions, "use node" actions and components are not available under it yet
+{"line":"fetch GET, 1 MiB","sandbox":"vm","calls":250,"p50":3314.4629999999324,"mean":3724.5581679999973,"p99":8394.994999999995,"mibPerS":301.70799915401693}
+{"line":"fetch POST, 1 MiB","sandbox":"vm","calls":250,"p50":3292.9720000001907,"mean":3824.943404000002,"p99":13263.080000000173,"mibPerS":303.67704310876076}
+{"line":"store + get + delete, 1 MiB","sandbox":"vm","calls":250,"p50":1653.4860000001572,"mean":2758.2318559999962,"p99":9170.348000000104,"mibPerS":1209.565729615981}
+{"line":"store + get + delete, 16 MiB + 1","sandbox":"vm","calls":20,"p50":49649.2989999997,"mean":51934.82389999991,"p99":100893.03500000006,"mibPerS":644.520719363003}
+{"line":"fetch GET, 1 MiB","sandbox":"process","calls":250,"p50":9210.78800000032,"mean":9823.203467999989,"p99":20301.408999999694,"mibPerS":108.56834398967442}
+{"line":"fetch POST, 1 MiB","sandbox":"process","calls":250,"p50":8780.596000000514,"mean":10471.822355999959,"p99":26254.69499999963,"mibPerS":113.88748554197703}
+{"line":"store + get + delete, 1 MiB","sandbox":"process","calls":250,"p50":10864.785000001575,"mean":11398.212335999988,"p99":23226.028999997652,"mibPerS":184.08095512241707}
+{"line":"store + get + delete, 16 MiB + 1","sandbox":"process","calls":20,"p50":207538.2619999982,"mean":203555.7243999992,"p99":247251.54100000145,"mibPerS":154.188445055731}
+p50 / mean / p99 µs per action, after a warm-up; 1000 calls for the short lines
+| Action | vm | process | process − vm, p50 |
+|---|---|---|---|
+| fetch GET, 1 MiB (250) | 3314 / 3725 / 8395 (302 MiB/s) | 9211 / 9823 / 20301 (109 MiB/s) | 5896 |
+| fetch POST, 1 MiB (250) | 3293 / 3825 / 13263 (304 MiB/s) | 8781 / 10472 / 26255 (114 MiB/s) | 5488 |
+| store + get + delete, 1 MiB (250) | 1653 / 2758 / 9170 (1210 MiB/s) | 10865 / 11398 / 23226 (184 MiB/s) | 9211 |
+| store + get + delete, 16 MiB + 1 (20) | 49649 / 51935 / 100893 (645 MiB/s) | 207538 / 203556 / 247252 (154 MiB/s) | 157889 |

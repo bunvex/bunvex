@@ -11,7 +11,7 @@
 // with the same error and aborts the fetches in flight. Calls already in flight (a mutation that reached the
 // committer) finish, as in Convex, where a dropped mutation may or may not have committed.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { formatDuration, outsideExecution, setFetchSignal } from "@bunvex/core";
+import { formatDuration, longTimeout, outsideExecution, setFetchSignal } from "@bunvex/core";
 
 /** Convex's `V8_ACTION_USER_TIMEOUT` default: 30 minutes. */
 export const V8_ACTION_USER_TIMEOUT_MS = 1800 * 1000;
@@ -84,6 +84,23 @@ export function trackActionTimer(t: unknown) {
   else r.timers.add(t);
 }
 
+type TimerCallback = (...args: unknown[]) => unknown;
+let timerCallback: ((callback: TimerCallback) => TimerCallback) | null = null;
+
+/**
+ * How the callback of a timer an action's code sets runs: as given in-process; the function sandbox's child runs it in
+ * a checkpoint of its action, so what it leaves rejected with no handler fails that action (STUDY-171 §13).
+ */
+export function setActionTimerCallback(wrap: (callback: TimerCallback) => TimerCallback) {
+  timerCallback = wrap;
+}
+
+/** `callback`, as a timer the running action's code sets runs it (`setActionTimerCallback`). */
+export function actionTimerCallback(callback: unknown): unknown {
+  if (timerCallback === null || typeof callback !== "function" || !runs.getStore()?.timers) return callback;
+  return timerCallback(callback as TimerCallback);
+}
+
 /** The running action's life (null outside an action): once ended, what it calls refuses. */
 export const currentActionLife = (): ActionLife | null => runs.getStore()?.life ?? null;
 
@@ -109,8 +126,9 @@ export function withActionTimeout<T>(
   return new Promise<T>((resolve, reject) => {
     const timer = outsideExecution(() =>
       // Not the action's own timer: run outside its async context.
+      // Any length: V8_ACTION_USER_TIMEOUT_SECS and NODE_ACTION_USER_TIMEOUT_SECS are knobs (STUDY-174 Q8).
       runs.exit(() =>
-        setTimeout(() => {
+        longTimeout(() => {
           const e = timeout();
           own.abort(e);
           run.life.timedOut = e;
@@ -120,21 +138,27 @@ export function withActionTimeout<T>(
       ),
     );
     // A cut-off body that never settles must not keep the process alive.
-    (timer as { unref?: () => void }).unref?.();
+    timer.unref();
     runs.run(run, body).then(
       (value) => {
-        clearTimeout(timer);
+        timer.clear();
         finish();
         resolve(value);
       },
       (e: unknown) => {
-        clearTimeout(timer);
+        timer.clear();
         finish();
         reject(e);
       },
     );
   });
 }
+
+/**
+ * The running action's signal, aborted with its timeout once it timed out (or its caller did): what the function
+ * sandbox's host hears to cut the action off in its child (STUDY-171 §12). Null outside an action.
+ */
+export const currentActionSignal = (): AbortSignal | null => runs.getStore()?.signal ?? null;
 
 /**
  * `fn` run as an action whose code's timers are tracked, for a runtime that runs actions outside `withActionTimeout`

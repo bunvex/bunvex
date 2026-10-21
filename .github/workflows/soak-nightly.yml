@@ -40,10 +40,10 @@ jobs:
     env:
       MINUTES: ${{ github.event_name == 'pull_request' && '5' || inputs.minutes || '45' }}
       # The report-only switch (STUDY-174 §10.3): rules judged, printed, kept in the report and flagged as a
-      # warning, which do not fail the job. Every other rule does. R1 (RSS) is here until Q6 is decided: SQLite's
-      # 256 MiB page cache (`cache_size = -262144`) takes ~70 minutes to fill at the soak's write rate (§4.7),
-      # longer than the run, so R1 would fail every night. Empty this once Q6 is decided.
-      SOAK_REPORT_ONLY: R1
+      # warning, which do not fail the job. None now: R1 (RSS) was here until Q6 was decided (owner, 2026-10-21:
+      # keep SQLite's 256 MiB page cache, DV-550). The soak now fills that cache from a ballast read during its
+      # warm-up (`--page-cache-fill-mib`), so R1 judges a full cache instead of one filling for ~70 minutes.
+      SOAK_REPORT_ONLY: ""
       REPORT_ONLY_INPUT: ${{ inputs.report_only }}
     steps:
       - uses: actions/checkout@v4

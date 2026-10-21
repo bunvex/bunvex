@@ -17,6 +17,7 @@
 import { Database, type SQLQueryBindings, type Statement } from "bun:sqlite";
 import { opaqueToInspect } from "../inspect.ts";
 import { internalIdBytes, internalIdString } from "../internal-id.ts";
+import { type KnobEnv, parseKnob } from "../knobs.ts";
 import { decodeGlobal, encodeGlobal } from "./global-json.ts";
 import type {
   DocLogRow,
@@ -115,6 +116,30 @@ const idString = (b: Uint8Array) => internalIdString(b);
 /** A live index entry's document id and its document at the entry's ts (null columns: no such version). */
 type JoinedEntry = { id: Uint8Array; json: string | null; docDeleted: bigint | null };
 
+/** The page cache's default (DV-550): 256 MiB. Convex sets no `cache_size`, so it runs with SQLite's 2 000 KiB. */
+export const SQLITE_CACHE_DEFAULT_BYTES = 256 * 1024 * 1024;
+/** The largest cache SQLite takes: `cache_size` is a 32-bit count of KiB. */
+export const SQLITE_CACHE_MAX_BYTES = (2 ** 31 - 1) * 1024;
+
+/**
+ * BUNVEX_SQLITE_CACHE_SIZE (AD-46): the SQLite page cache in bytes, the default when unset or empty. It parses as
+ * INDEX_CACHE_SIZE does (an unsigned integer, `knob`), but it is bunvex's own setting, so a value that does not
+ * parse fails the start, as BUNVEX_FUNCTION_SANDBOX does, instead of falling back. 0 is refused (owner, 2026-10-21): SQLite has no
+ * "off" (`cache_size = 0` keeps its minimum, a few pages, the slowest setting; STUDY-174 §4.8), and "SQLite's
+ * default" differs by platform (2 000 KiB on Linux, 2 000 pages on macOS). SQLite's 2 000 KiB is 2048000.
+ */
+export function sqliteCacheBytes(env: KnobEnv = process.env): number {
+  const raw = env.BUNVEX_SQLITE_CACHE_SIZE;
+  if (raw === undefined || raw === "") return SQLITE_CACHE_DEFAULT_BYTES;
+  const n = parseKnob(raw, "positive");
+  if (n === undefined || n > SQLITE_CACHE_MAX_BYTES)
+    throw new Error(
+      `invalid value '${raw}' for the SQLite page cache (BUNVEX_SQLITE_CACHE_SIZE): a size in bytes, from 1 to ` +
+        `${SQLITE_CACHE_MAX_BYTES}; the default is ${SQLITE_CACHE_DEFAULT_BYTES} (256 MiB)`,
+    );
+  return n;
+}
+
 export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, RetentionStore {
   readonly driver = "sqlite";
   /** PERSIST-01 C7 as an OS lock on the file, held for the process's life (STUDY-25 L9). */
@@ -143,23 +168,36 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
 
   constructor(
     private path: string,
-    opts: { durable: boolean } & OpenOptions,
+    opts: {
+      durable: boolean;
+      /** The page cache, in bytes; BUNVEX_SQLITE_CACHE_SIZE by default. */
+      cacheBytes?: number;
+    } & OpenOptions,
   ) {
+    // Checked before the file is touched: a bad setting fails the start and leaves the store as it was.
+    const cacheKiB = Math.ceil((opts.cacheBytes ?? sqliteCacheBytes()) / 1024);
     this.allowReadOnly = !!opts.allowReadOnly;
     if (!this.inMemory) this.lock = ProcessLock.tryTake(path);
-    this.db = new Database(path, { create: true });
+    // Everything after the lock gives it back if it throws: a path SQLite cannot open, a store that is not one, or
+    // one that cannot be written (STUDY-174 S7). Otherwise this process keeps the store locked until it exits.
+    let db: Database | null = null;
     try {
+      db = new Database(path, { create: true });
+      this.db = db;
       this.checkStore(opts);
+      // The page cache always set, never left to the build: Bun's SQLite defaults to 2 000 KiB on Linux, 2 000 pages
+      // on macOS (AD-46).
+      db.exec(`pragma journal_mode = wal; pragma synchronous = ${opts.durable ? "full" : "off"};
+        pragma temp_store = memory; pragma cache_size = -${cacheKiB};`);
+      db.exec(SQLITE_LAYOUT);
+      db.exec(`create table if not exists read_only (id integer primary key);`);
     } catch (e) {
-      // Stryker disable next-line CallExpression: a refused handle's connection; left open it only leaks.
-      this.db.close();
+      // Stryker disable next-line OptionalChaining,CallExpression: a refused handle's connection; left open it only leaks.
+      db?.close();
       this.lock?.release();
+      this.lock = null;
       throw e;
     }
-    this.db.exec(`pragma journal_mode = wal; pragma synchronous = ${opts.durable ? "full" : "off"};
-      pragma temp_store = memory; pragma cache_size = -262144;`);
-    this.db.exec(SQLITE_LAYOUT);
-    this.db.exec(`create table if not exists read_only (id integer primary key);`);
     this.insDoc = this.db.prepare(
       `insert into documents (id, ts, table_id, json_value, deleted, prev_ts) values (?, ?, ?, ?, ?, ?)`,
     );

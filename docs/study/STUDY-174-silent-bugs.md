@@ -1,8 +1,11 @@
 # STUDY-174 — Catching silent bugs: invariants, a soak test, metadata differentials
 
 - **Status:** decided (owner, 2026-10-19: §8 Q1–Q5 as recommended, §10). F4 is fixed (§10.2); the other findings of
-  §3.3 are listed, not fixed. The soak nightly (Q1, §9 step 5) is `.github/workflows/soak-nightly.yml`, with R1
-  report-only until Q6 is decided (§10.3). Q7 (R8 on low-rate operations) is decided and done (§10.3).
+  §3.3 are listed, not fixed. The soak nightly (Q1, §9 step 5) is `.github/workflows/soak-nightly.yml`, with every
+  rule judged (R1 report-only until Q6 was decided, §10.3). Q7 (R8 on low-rate operations) is decided and done (§10.3). Q6 is
+  decided (owner, 2026-10-21): bunvex keeps its 256 MiB page cache (DV-550), with a setting for it (AD-46). The
+  suspects S1–S8 are confirmed or dismissed in §11: S1–S7 are bugs, each fixed in its own PR; S8 was a divergence,
+  Q8, which the owner decided on 2026-10-21 (match Convex), done in #811 (§11).
 - **Why now:** [#751](https://github.com/bunvex/bunvex/pull/751) found that since 2026-10-03 every cached query result
   expired after 17 s. [STUDY-58](STUDY-58-app-metrics.md)'s `AppMetrics` read the deterministic `Date.now` inside each
   query's execution, which marked every result as having read the clock. Every answer stayed correct, the tests and
@@ -40,7 +43,9 @@ that gap:
   pilots on the test VPS (12, 12, 30 and 25 minutes) flagged F1 and F2 on their own, with no knowledge of either. They
   also found a sixth, F6: resident memory grows about 5 MB a minute under steady load while the JS heap stays flat
   (§4.6). F6 is now attributed (§4.7): a plateau, not a leak. It is SQLite's page cache, which bunvex sizes at
-  256 MiB, filling as the database file grows; it levels off at that budget.
+  256 MiB, filling as the database file grows; it levels off at that budget. §4.8 measures what SQLite's default,
+  Convex's, would cost in read speed: ~20 % on reads whose working set is past 2 MiB but in memory, nothing when
+  the disk is the bottleneck. The owner decided Q6 on 2026-10-21: keep 256 MiB, as DV-550.
 - **(3) Metadata differentials against Convex's binary.** A prototype in `packages/differential` compares the query
   cache's hits and misses as the function log stream shows them on both backends. It failed on the pre-#751 main
   exactly where #751 says, and passes on main now that #751 is merged (§5.3).
@@ -114,7 +119,7 @@ bounds (§3, §4).
 | I-14 | Crons | An idle cron executor sleeps until its next run, however far away | `cron-executor.ts:285` | none | P07 **VIOLATED** (F3) |
 | I-15 | Scheduler | `shutdown()` finishes promptly, whatever the running jobs are doing | `scheduler.ts:368–374, 633–636, 671–682` | `shutdown.test.ts` (store access only) | P10 **VIOLATED** (F5) |
 | I-16 | Scheduler | Lag (ran − due) stays bounded under load and does not trend up | `scheduler.ts` `logStats` (501) | none | soak R9b |
-| I-17 | Index backfill | `numDocsIndexed ≤ totalDocs`; a restart from the start resets the count | `core/src/index-worker.ts:229, 267–272` | none | suspected S1 (code read) |
+| I-17 | Index backfill | `numDocsIndexed ≤ totalDocs`; a restart from the start resets the count | `core/src/index-worker.ts:229, 267–272` | `index-backfill-restart.test.ts`, `differential/test/backfill-progress.test.ts` (#788) | S1 **confirmed**, and a second case (§11) |
 | I-18 | Index backfill | Once backfilled, the index holds exactly the table's documents | `index-worker.ts` | `core/test/index-backfill.test.ts:109, 167` | — |
 | I-19 | Buffers | The function log keeps at most `MAX_UDF_EXECUTION` (1000) parts, and no waiter after its poll | `server/src/function-log.ts:233–248` | `function-log.test.ts:310` | P08 holds |
 | I-20 | Buffers | Log streams: the buffer stays ≤ `bufferSize` (4096) and each sink queue ≤ its capacity; drops are counted | `log-sinks.ts:405–426` | none | not probed |
@@ -122,10 +127,10 @@ bounds (§3, §4).
 | I-22 | Buffers | The write log stays within its retention (30–300 s) and byte bounds | `core/src/committer.ts:95–102, 348` | committer tests (unit) | P08 (660 entries) |
 | I-23 | Buffers | The sync inspector forgets an unwatched key; its feed stays ≤ 1024 | `sync-inspector.ts:57, 77` | `invalidation-inspector.test.ts:136` | P08 holds |
 | I-24 | Timers | After `shutdown()`, nothing keeps the event loop alive: the process exits by itself | `server.ts:2620–2643` | none | P05 holds (bare, busy, socket left open) |
-| I-25 | Timers | No `setTimeout` is given more than 2^31−1 ms; Bun fires it after about 1 ms | `scheduler.ts:468`, `cron-executor.ts:285` (`executor-invalidations.ts:174` caps) | none | F2/F3 |
+| I-25 | Timers | No `setTimeout` or `setInterval` is given more than 2^31−1 ms (Bun fires it after about 1 ms); a longer wait, a knob's included, sleeps its whole length | every backend timer: `timerDelay`, or core's `longTimeout` / `longInterval` / `longSleep` (`core/src/long-timer.ts`) | `long-timer.test.ts`, `knob-timer-cap.test.ts`, `scripts/rules.test.ts`; `check:deps` rule 6 (#757, #811) | F2/F3 fixed (#757); S8 fixed (#811) |
 | I-26 | Handles | File descriptors return to the baseline after uploads, downloads and closed clients | storage, sqlite, sockets | none | soak R7 |
-| I-27 | Handles | `LocalSink.send` closes its file when `sync()` throws (otherwise each retry leaks an fd) | `log-sinks.ts:266–271` | none | suspected S2 (code read) |
-| I-28 | Handles | `pumpHashing` cancels the body reader when a write throws | `file-storage/src/store.ts:37–47` | none | suspected S3 (code read) |
+| I-27 | Handles | `LocalSink.send` closes its file when `sync()` throws (otherwise each retry leaks an fd) | `log-sinks.ts:266–271` | `log-sink-local-close.test.ts` (#789) | S2 **confirmed** (§11) |
+| I-28 | Handles | `pumpHashing` cancels the body reader when a write throws | `file-storage/src/store.ts:37–47` | `file-storage/test/pump-hashing.test.ts` (#795) | S3 **confirmed**, small (§11) |
 | I-29 | OCC | A mutation runs at most 1 + `UDF_EXECUTOR_OCC_MAX_RETRIES` (4) times. Each lost attempt is logged with `willRetry` and `occInfo.retryCount` | `engine.ts:283–294, 4029–4044`; `functions.ts:1211–1219` | `core/test/occ.test.ts:21, 65`; `function-log.test.ts:233` | — |
 | I-30 | Counters | Read and write counts (`usageStats`, the read limit) equal Convex's | `core/src/tx.ts:518–651`, `read-count.ts` | `usage-database-io.test.ts`; `differential/test/read-count.test.ts` (local only) | §5 |
 | I-31 | Counters / log | A cache hit's log entry matches Convex's: `cachedResult`, zero usage, and the user time, memory and timestamp of the run it reused | `functions.ts:1400–1447` | `cache-hit-log-fields.test.ts`; `differential/test/cache-metadata.test.ts` | P09 **VIOLATED** (F4), fixed (§10.2) |
@@ -269,7 +274,7 @@ persistence,sandbox,search}/src`. Each delay's source was checked for an uncappe
   `SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY`, the usage-gauge period, the table-summary interval, and the request and
   action timeouts. No default comes close; the helper above would cover these too.
 
-**Suspected, from reading the code, not probed** (for the fix PRs to confirm or dismiss):
+**Suspected, from reading the code, not probed** (for the fix PRs to confirm or dismiss; each verdict is in §11):
 - **S1.** `index-worker.ts:267–272`: a backfill that restarts from the beginning, because its checkpoint snapshot is
   older than `minSnapshotTs`, keeps its `done[]` count. Its progress can then pass 100 % (I-17).
 - **S2.** `log-sinks.ts:268–271`: `LocalSink.send` opens, syncs and closes the file without `finally`. A throwing
@@ -510,7 +515,9 @@ bunvex opens its store with `pragma cache_size = -262144` (`packages/core/src/pe
 grows 3.8 MB a minute, from the document log: it keeps every version for 14 days, as Convex's does (STUDY-33). The
 cache follows the file at about 1.4 MB of memory per MB of file, then stops at its budget. Convex sets no pragma
 (`crates/sqlite/src/lib.rs:93-99`: `Connection::open`, then the tables), so it runs with SQLite's default,
-2 000 KiB. rusqlite's bundled build does not change that default either. STUDY-133 lists that difference as L13, but no DV records it.
+2 000 KiB. rusqlite's bundled build does not change that default either. STUDY-133 lists that difference as L13.
+DV-411 names `cache_size` among the pragmas bunvex keeps, but its decision (#472) was about WAL; the size itself
+was never studied.
 
 **How it was found.** All the runs were on the test VPS, the same machine as §4.6, on main at `9254fa5c`. They
 used `soak.ts --probe`, which preloads `bench/soak/probe.ts` into the backend. Every 15 s the probe records:
@@ -571,6 +578,8 @@ logtail,clients`) are in `soak.ts` for the next trend, but these runs did not ne
   against 59–84 ms, and the sync mutation p50 27 ms against 29 ms. That is one run each on a 2-vCPU machine, with
   the file (≤ 120 MB) in the OS page cache, so it shows no regression on this workload, not on every one. The index
   cache (512 MiB by default) serves the hot index reads in either case.
+  **Superseded by §4.8:** on a store bigger than memory, and on reads the index cache does not serve, the default
+  is ~20 % slower.
 
 **Seen in the 2-hour run, not F6:**
 - R11 failed at 73 % of a core: F2's far-future job (#757).
@@ -578,6 +587,92 @@ logtail,clients`) are in `soak.ts` for the next trend, but these runs did not ne
   seconds. `probe.ts` now writes its dumps before the snapshot, so a snapshot no longer inflates them.
 - The database file reached 437 MB in 2 hours under the soak's steady writes. That is the 14-day document retention, on
   disk, the same as Convex's.
+
+### 4.8 Q6 measured: SQLite's default page cache against 256 MiB, on reads (2026-10-20)
+
+The owner's decision (2026-10-20): measure first, then match Convex if the default is not meaningfully slower
+(p99 within ~10 % and throughput within ~5 %). **It is meaningfully slower** wherever reads are CPU-bound and their
+working set is past 2 MiB: 15–22 % fewer calls a second, and p99 up to 22 % higher. It is not slower when the disk
+is the bottleneck, or when the working set is tiny. So the measurement changed no product code, and Q6 went back
+to the owner, who decided on 2026-10-21 to keep 256 MiB (DV-550; Q6 below).
+
+**How.** `bench/sqlite-cache/` (results in `results/`, the table in `results/summary.txt`):
+- **Machine.** The test VPS: 2 vCPU, 8 GB, Ubuntu 24.04, cgroup v2, a cloud disk. No other backend ran during any run
+  (each result records it). The repository is main at `65fd85c7`, on a copy patched by `patch-backend.ts` so that the
+  store reads `cache_size` from the environment. With no value set, the store sets no pragma (Convex's open), and
+  every run checks what the connection got: `-2000` or `-262144`.
+- **What runs.** The real local backend (`packages/bunvex/bin/local-backend.ts`, SQLite) serves an app of one
+  table: ~1 KB documents in 1 000 groups, with an index on `(group, n)`. The default index cache (512 MiB) and query
+  cache are left as they are.
+- **The workload.** A closed loop of 16 HTTP clients (`BunvexHttpClient`) with random arguments:
+  - 40 %: a point `db.get` by id;
+  - 40 %: an index range read of 20 (`withIndex(...).gte(...).take(20)`);
+  - 20 %: a paginated walk of up to 4 pages of 25 (`paginate`).
+
+  `uniform` reads every group; `hot` reads 20 of the 1 000 (2 %).
+- **The stores**, seeded through the same backend:
+  - *big:* 5 M documents, a 10.1 GB file, more than the machine's 8 GB. The backend runs in a systemd scope with
+    `MemoryMax=2G`, which counts the OS page cache it fills, so the file is 5× what it may cache. The 256 MiB cache
+    comes out of the same 2 GB.
+  - *small:* 100 k documents, a 202 MB file, no limit: it fits both the 256 MiB cache and the OS page cache.
+- **Each run.** The OS page cache is dropped, the backend starts, then a warm-up runs (90 s on the big store, 300 s
+  for its second hot round, 30 s on the small one), then 180 s (big) or 120 s (small) are measured.
+- **The order.** Each store and mode runs both caches in ABBA order, twice on the small store, so drift over time
+  does not favour one side.
+
+**Results**, the mean of the repetitions (each repetition's value is in `results/summary.txt`):
+
+| store | mode, warm-up | cache | calls/s | p50 ms | p95 ms | p99 ms | RSS MB | CPU ms/call | `read()` KiB/call |
+|---|---|---|---|---|---|---|---|---|---|
+| big | hot, 300 s (steady state) | 256 MiB | **549** (549, 548) | 25.4 | 58.6 | **86.4** | 1 312 | 1.92 | 118 |
+| big | hot, 300 s (steady state) | default | **428** (441, 416) | 32.8 | 73.0 | **105.0** | 947 | 2.44 | 1 130 |
+| big | hot, 90 s | 256 MiB | 420 (507, 333) | 28.2 | 92.5 | 247.2 | 1 236 | 2.21 | 126 |
+| big | hot, 90 s | default | 338 (378, 298) | 35.8 | 110.7 | 273.2 | 933 | 2.67 | 1 221 |
+| big | uniform, 90 s | 256 MiB | 13 (13, 14) | 1 125 | 2 085 | 2 984 | 610 | 15.5 | 397 |
+| big | uniform, 90 s | default | 15 (17, 14) | 982 | 1 834 | 2 637 | 311 | 14.5 | 1 250 |
+| small | uniform, 30 s | 256 MiB | **1 139** (1 013, 882, 1 305, 1 354) | 11.0 | 30.1 | 76.9 | 1 198 | 0.91 | 1 |
+| small | uniform, 30 s | default | **965** (816, 954, 969, 1 121) | 13.9 | 35.1 | 65.5 | 915 | 1.09 | 272 |
+| small | hot, 30 s | 256 MiB | 5 680 | 2.49 | 5.15 | 10.24 | 540 | 0.15 | 0 |
+| small | hot, 30 s | default | 5 561 | 2.55 | 5.31 | 10.58 | 546 | 0.15 | 0 |
+
+The default against 256 MiB:
+
+| store | mode | calls/s | p50 | p95 | p99 | RSS |
+|---|---|---|---|---|---|---|
+| big | hot, steady state | **−21.9 %** | +29.2 % | +24.6 % | **+21.5 %** | −365 MB |
+| big | hot, 90 s warm-up | −19.6 % | +27.0 % | +19.6 % | +10.5 % | −303 MB |
+| big | uniform (disk-bound) | +15.8 % | −12.7 % | −12.0 % | −11.6 % | −299 MB |
+| small | uniform | **−15.3 %** | +26.0 % | +16.5 % | −14.9 % | −283 MB |
+| small | hot (tiny set) | −2.1 % | +2.6 % | +3.1 % | +3.3 % | +7 MB |
+
+**What the numbers say:**
+- **The cost is CPU, not disk.** At the big store's steady state neither side reads the disk. With 2 000 KiB, though,
+  each call issues ~1.1 MiB of `read()`s, ~280 pages that SQLite re-reads from the OS page cache, against 118 KiB
+  with 256 MiB. Most of them are the B-trees' interior pages, which a 2 MiB cache cannot hold for a 10 GB file.
+  That is +27 % CPU a call, and on 2 vCPUs shared with the driver it shows as throughput: −22 % (the two ABBA pairs
+  agree within 6 %). The small store says the same: with 256 MiB the whole 202 MB file is in the process, 1 KiB of
+  `read()` a call against 272.
+- **When the disk is the bottleneck, the big cache does not help.** Uniform reads over 10 GB with 2 GB of memory
+  are a few disk reads per document (13–17 calls a second, p50 ~1 s). There the 256 MiB that SQLite holds is
+  256 MiB the OS page cache does not get, and the default was, if anything, faster: +16 %, inside the noise of a
+  disk-bound run.
+- **A tiny working set does not care.** The small store's hot set (2 000 documents, ~4 MB) is served by the index
+  and query caches. No `read()` happens on either side, and the gap (−2 %) is inside the run-to-run spread.
+- **The warm-up matters on the big store.** After 90 s the hot set was still coming off the disk (68–275 MB read
+  in the measured window), which is why that round is noisy (p99 97–398 ms). The 300 s round read nothing.
+- **p99 on the small uniform case went the other way** (−15 % with the default), from one 256 MiB run's 124 ms
+  outlier. The other three agree with throughput.
+- **Memory** is what §4.7 found: the 256 MiB cache adds ~280–365 MB of RSS once its working set is that large.
+
+**Seen on the way:**
+- A store's start replays the table summaries' log since their checkpoint (STUDY-72). A checkpoint is rewritten
+  500 commits, or 10 minutes with a commit, after the last, as Convex's. The seed ended 312 s after its last one,
+  so the next start replayed ~1 M documents: 9+ minutes under the 2 GB limit, and 209 s without it. `bench.ts`
+  makes 600 small commits at the end of its seed, so the checkpoint catches up. This is Convex's behaviour too,
+  not a bug; a store whose writes stop right after a burst pays it once at its next start.
+- `bun:sqlite`'s default differs by platform: `-2000` (2 000 KiB) with the SQLite Bun bundles on Linux, as in
+  Convex's rusqlite build, but `2000` (2 000 pages, 8 MiB) with the system SQLite Bun uses on macOS. A test that
+  pins "no pragma" must compare against a fresh connection, not a constant.
 
 ## 5. Metadata differentials against Convex (part 3)
 
@@ -735,20 +830,35 @@ Each question gives what Convex does, what bunvex does, whether they are the sam
   `scripts/nightly.sh` after #755 merges, for about 2 minutes a night more. The runner's per-step log tail (§5.2)
   follows on the same track.
 
-**Q6. F6: SQLite's page cache, 256 MiB or SQLite's default (§4.7).**
+**Q6. F6: SQLite's page cache, 256 MiB or SQLite's default (§4.7, measured in §4.8).**
 - Convex: no pragma, so SQLite's default `cache_size` of 2 000 KiB (`crates/sqlite/src/lib.rs:93-99`).
-- bunvex: `cache_size = -262144`, 256 MiB, since the first commit, with no study behind it.
-- Same: no. STUDY-133 lists it (L13), but no DV records it.
-- Why: a choice, not "impossible".
-- App impact: memory only. Up to ~310 MiB more resident memory once the store's file passes 256 MiB. The matched
-  soak pair showed no slower reads with the default (the file was in the OS page cache, and the index cache serves
-  the hot reads).
-- Soak impact: with 256 MiB, R1 fails for the first ~70 minutes at the soak's write rate, so the 45-minute nightly of
-  Q1 would fail every night.
-- **Recommendation:** match Convex: drop the pragma. Before that, measure a read-heavy run on a store bigger than
-  RAM, where the OS page cache cannot cover it. If the owner keeps 256 MiB instead, record it as a DV, and have the
-  soak's memory warm-up wait for the cache to fill, or run the soak with a smaller cache (which needs a setting:
-  an addition).
+- bunvex: `cache_size = -262144`, 256 MiB, since the first commit. DV-411 lists it among the pragmas it keeps, but
+  only WAL was decided there.
+- Same: no (STUDY-133 L13).
+- Why: a choice, not "impossible". The owner decided on 2026-10-20 to measure first, and to match Convex if the
+  default is not meaningfully slower.
+- **The measurement (§4.8): it is meaningfully slower.**
+  - Reads whose working set is past 2 MiB and in memory: −22 % throughput and +22 % p99 (the big store's hot set,
+    steady state); −15 % throughput on a 200 MB store.
+  - The cost is CPU: SQLite re-reads its B-trees' interior pages from the OS page cache, ~10× the `read()`
+    volume, +27 % CPU a call.
+  - When the disk is the bottleneck, or the working set is tiny, there is no gap.
+- App impact:
+  - Keeping 256 MiB: up to ~310 MiB more resident memory once the file passes 256 MiB (§4.7), and the soak's R1
+    fails for the first ~70 minutes at its write rate.
+  - Matching Convex: read-heavy apps whose working set does not fit in 2 MiB lose ~15–22 % of throughput on a small
+    machine. Answers and memory are otherwise unchanged, and the index and query caches still serve repeated reads.
+- **Recommendation:** keep 256 MiB and record it as a DV (performance). A 20 % read-throughput loss is worse for
+  apps than a bounded, documented ~300 MiB. Then fix the soak without a setting: seed a store of more than 256 MiB
+  before the measured window and read it once in the warm-up, so the page cache is full before R1 judges. A middle
+  size (32–64 MiB, roughly the interior pages of a 10 GB file) was not measured.
+- **Decided (owner, 2026-10-21):**
+  - keep 256 MiB as the default, recorded as **DV-550** (performance);
+  - add a setting for it, `BUNVEX_SQLITE_CACHE_SIZE` (bytes), as an addition (AD-46), in its own PR. `0` is refused
+    at start (owner, 2026-10-21): SQLite has no "off", `cache_size = 0` keeps its minimum, the slowest setting
+    (point reads 317 ms against 188 ms for 2 000 KiB on a 98 MB file), and "SQLite's default" differs by platform;
+    `2048000` gives SQLite's 2 000 KiB everywhere;
+  - the soak makes R1 see the page cache as recommended, and R1 leaves `SOAK_REPORT_ONLY`, in its own PR (§10.3).
 
 Not questions, because each matches Convex: the fixes for F1 (done, #751), F2, F3 and F5, and the suspected S1–S7 once
 confirmed.
@@ -759,13 +869,13 @@ confirmed.
 |---|---|---|---|
 | 1 | This PR (the rules, the soak, the prototype); #751 already fixed F1 | — | F1 (regression guard) |
 | 2 | Fix F2 and F3 with one capped `timerDelay` helper in core, a test per loop with an injected clock, and the I-25 rule in `check:deps` (rule 6, §3.1) in the same PR, so a new uncapped delay fails CI | 0.5 day | F2, F3, S8, and new ones |
-| 3 | ~~Attribute F6~~ done (§4.7): SQLite's 256 MiB page cache, a plateau. What is left is Q6 | — | F6 |
+| 3 | ~~Attribute F6~~ done (§4.7): SQLite's 256 MiB page cache, a plateau. ~~Measure Q6~~ done (§4.8): the default is ~20 % slower on in-memory reads; Q6 is the owner's | — | F6 |
 | 4 | The server suites' `afterEach` "hub empty, cache consistent, no session left" helper (I-03, I-05, I-11, I-19, I-23) | 0.5–1 day | freed state across ~40 suites |
-| 5 | ~~The soak nightly workflow (Q1)~~ done (§10.3), R1 report-only until Q6; then a week of watching for flakes | 0.5 day + a week of watching | trends, R1–R12 |
+| 5 | ~~The soak nightly workflow (Q1)~~ done (§10.3), every rule judged since Q6 (R1 with the page cache filled first); then a week of watching for flakes | 0.5 day + a week of watching | trends, R1–R12 |
 | 6 | Fix F5: a stopping scheduler stops retrying and waits a bounded time. Test: shutdown under contention within 1 s | 0.5 day | F5, S4 |
 | 7 | The metadata files in the differential nightly (done: `cache-metadata`, `read-count`, `unawaited-operations`, `http-action-log-route` in `scripts/nightly.sh`, about 40 s a night); the runner's log tail (done: `compare(…, { log: true })` in `generated.test.ts`, about 20 % more time per program; its first sample found DV-506, fixed in #783) (Q5, bunvex-9f) | 1–2 days | F4-class, usage, OCC shape |
 | 8 | F4 fix (Q3) | 0.5 day | F4 |
-| 9 | Confirm or dismiss S1–S7, one test each | 1 day | handles, backfill |
+| 9 | ~~Confirm or dismiss S1–S7, one test each~~ done (§11): S1–S7 confirmed and fixed, one PR each; S8 is Q8 | 1 day | handles, backfill |
 | 10 | Jepsen post-run `/metrics` check (R6 + fds per run) | 0.5 day | freed state under faults |
 | 11 | Coverage floors: each step's PR adds the files its new tests cover to `scripts/coverage-floors.ts` in the same PR (not as a separate step) | in each PR | keeps the tests |
 | 12 | The per-connection memory bench (Q4); the soak on Postgres; a monthly 6 h VPS run (Q2) | 1–2 days | slow leaks, drivers |
@@ -784,8 +894,9 @@ The owner approved every recommendation of §8 on 2026-10-19:
 | Q4 | Measure the per-connection memory first, publish it in the parity notes, assert it only if it regresses (no budget yet) | §9 step 12 |
 | Q5 | The metadata tests go in the differential nightly (`scripts/nightly.sh`), done by bunvex-9f | §9 step 7 |
 | Q7 (2026-10-20) | R8 judges the p99 only on windows of at least 100 calls, the p50 alone below that (option (a)) | done, §10.3 |
+| Q6 (2026-10-21) | Keep SQLite's 256 MiB page cache (DV-550), measured in §4.8; a setting for it (AD-46); the soak's R1 made to see the page cache, then judged | three PRs: this record, the setting, the soak (§10.3) |
 
-None of them is a divergence, so none takes a DV number. DV-527, reserved for F4 in case something could not match,
+None of Q1–Q5 and Q7 is a divergence, so none takes a DV number; Q6 is DV-550. DV-527, reserved for F4 in case something could not match,
 is unused.
 
 ### 10.2 F4: a cache hit is logged as the run it reused
@@ -919,18 +1030,17 @@ assignment. The rule of this round is no benchmarks while other sessions run the
 - a pull request that changes the workflow or `bench/soak/**` runs a 5-minute smoke. It judges nothing (too few
   samples past the warm-up), so only exit 2 fails it; a failed rule there is a notice.
 
-**R1 is report-only until Q6 is decided.** At the soak's write rate SQLite's 256 MiB page cache needs ~70 minutes
+**R1 was report-only until Q6 was decided** (it is judged again: "R1 judged" below). At the soak's write rate SQLite's 256 MiB page cache needs ~70 minutes
 to fill (§4.7), longer than the run, so R1 would fail every night for a known, bounded reason. Rather than drop
 the rule, the soak has a switch:
 - `soak.ts --report-only <ids>` (comma-separated rule ids, `parseReportOnly` in `rules.ts`). The listed rules are
   still judged, printed and kept in `report.json` (`reportOnly: true`) and `report.md` ("fail (report-only)"); only
   the exit code (`exitCode`) leaves them out. An unknown id is exit 2, so a typo cannot silence a rule. Ids are exact:
   `R1` is not R10, R11 or R12. Empty by default: a local run judges every rule.
-- The workflow's `SOAK_REPORT_ONLY: R1` sets it. A failed report-only rule also shows as a warning on the run.
+- The workflow's `SOAK_REPORT_ONLY` sets it (`R1` until Q6; empty now). A failed report-only rule also shows as a warning on the run.
   The dispatch input `report_only` overrides it for one run (`none`: every rule fails the job).
-- **Once Q6 is decided, empty `SOAK_REPORT_ONLY`**, in the same PR as the decision: dropping the pragma (the
-  recommendation) makes R1 pass in 30 minutes (§4.7, `f6-sqlite-cache-2mib`); keeping 256 MiB needs the memory
-  warm-up to see the page cache first (Q6).
+- **Once Q6 is decided, empty `SOAK_REPORT_ONLY`.** Q6 kept 256 MiB, so the memory warm-up first had to see the
+  page cache: done, below.
 - Every other rule, R2–R12, fails the job.
 
 `rules.test.ts` (18 tests now) covers the switch: a leaking run with R1 report-only exits 0 and still reports R1
@@ -1009,5 +1119,131 @@ the threshold; the HTTP queries and the canary have ~150, the hot counter ~148, 
 One run on a 2-vCPU machine, so the week of watching (§9 step 5) still applies. If the hot counter's p50 is
 what fails next, look at that limit first.
 
+**R1 judged (Q6 decided, 2026-10-21).** The owner kept the 256 MiB page cache (DV-550), so the soak fills it
+instead of waiting ~70 minutes for the store to grow past it, and `SOAK_REPORT_ONLY` is empty:
+- **The ballast** (`app/ballast.ts`, `soak.ts --page-cache-fill-mib`, default 320):
+  - Before the workload, the soak writes 320 MiB of 8 000-byte documents through the backend, 64 a mutation. It
+    paces them at ~2 MiB a second, half the deployment's write-rate limit (4 MiB), so the crons keep their share.
+    A write the limit refuses anyway is retried; its log line is not an R12 error. The first try, unpaced, hit the
+    limit 55 times, and R12 failed.
+  - At t = 0, beside the workload, the soak reads the ballast once (`paginate`, 128 a page). The read takes ~5 s and
+    fills SQLite's cache to its budget: RSS is ~500 MB at t = 15 s, against ~170 MB on main.
+  - `RunData.pageCacheFilledSeconds` records when the read finished. `memoryWarmup` judges R1 and R2 no earlier;
+    a fill that did not finish means memory is not judged, and the report says why.
+- **A third of the run, at least.** The ballast read also fills the 32 MiB index cache in seconds. That cache's
+  filling used to hold memory's judgement back to ~751 s, and it turns out it was also covering the JS heap's own
+  warm-up. Re-judging main's 45-minute runs F and G from other starts gives this heap slope:
+
+  | judged from | heap slope (MB/min) |
+  |---|---|
+  | 541 s | 0.35–0.46 |
+  | 751 s | 0.10–0.20 |
+  | 900 s | −0.13–0.14 |
+
+  The limit is 0.3, so judging from 541 s would fail R2. `memoryWarmup` now also waits for `MEMORY_WARMUP_MIN_SHARE`
+  = 1/3 of the run, 900 s for 45 minutes.
+- **Tests** (`rules.test.ts`, 21 now), on synthetic runs:
+  - a page cache filling for 20 minutes fails R1 when judged as before, and passes once judged from its fill;
+  - a 2 MB/min leak after the fill still fails;
+  - an unfinished fill is "not judged";
+  - a heap warming for 15 minutes passes from a third of the run, and fails R2 without that bound.
+- **Sabotage**, each change alone, then restored (`cmp` identical):
+  - the fill's time dropped from `memoryWarmup`: 1 test fails;
+  - the third-of-the-run bound dropped: 2 fail.
+
+**Proof on the test VPS** (Bun 1.4.2, the workflow's soak step taken from the YAML verbatim and run under `bash -e`,
+event `schedule`, `SOAK_REPORT_ONLY` read from the job's env, so empty; results in `bench/soak/results/q6-*`):
+
+| Run | Setup | Exit | Result |
+|---|---|---|---|
+| H | 45 min, the ballast, memory judged from the warm-up, before the third-of-the-run bound | 1 | R1 0.6 MB/min and R2 0.3 MB/min, judged from 541 s, the heap's warm-up. R8: the canary's p99 54.6 → 85.4 ms, and the hot counter's p50 68.1 → 88.6 ms (1.30×). Its `report.json` judged again with the bound: R1 0.2, R2 −0.0 MB/min, both pass from 902 s; R8 as before |
+| I | **45 min, the step as written**, this branch | **0** | **R1 passes: 0.3 MB/min, +5.6 MB, judged from 902 s**, median RSS 608 MB. R2 0.3 MB/min (at its limit), −0.7 MB third to third. Every other rule passed; R8's hot counter p50 77.0 → 82.5 ms |
+| J | 20 min, the step as written, **sabotage**: the backend keeps 1 MiB every 10 s (`local-backend.ts`, 6 MB/min outside the JS heap) | **1** | **R1 fails: 9.4 MB/min, +82.8 MB**, judged from 406 s. R2 fails with it (8.3 MB/min: the backend's heap gauge counts the buffers), and so do three R8 operations (GC pressure). Everything else passed; R12 no errors |
+
+**What to watch** (the week of §9 step 5):
+- R8's hot-counter p50 runs at ~1.3× its first third on main as well: G 1.29× passed, H 1.30× failed. It does not
+  depend on the page cache: G had no ballast.
+- R2 passed I at its limit.
+
+If either fails a night, look at that limit first.
+
 **Not here.** The monthly 6-hour VPS soak (Q2) is §9 step 12, once this job has been green for a week; nothing in CI
 schedules anything against the VPS.
+
+## 11. The suspects S1–S8, confirmed or dismissed (2026-10-20)
+
+Each suspect of §3.3 was read on both sides (bunvex on `main` at `ab13e2d2`, Convex at `72ce13c`) and given a test that
+fails if the bug is real. Seven are bugs, each fixed in its own PR with that test, a sabotage check, and a measurement
+where the path is hot. None was dismissed. S8 behaves differently from Convex without corrupting anything, so it is a
+question for the owner (Q8).
+
+| # | Verdict | Evidence (the test, and what it saw on `main`) | PR |
+|---|---|---|---|
+| S1 | **Bug**, and a second case | `index-backfill-restart.test.ts`: a backfill that starts over because its checkpoint's snapshot fell out of retention ends with `numDocsIndexed` 4 200 for 3 000 documents (140 %). The oracle found the commoner case: a pass shorter than the 1 s progress interval never records its count. On Convex, after a push adds an index over 300 documents, the row is `{300, 300, cursor: <id>}`; on bunvex it is `{0, 300, null}` (`differential/test/backfill-progress.test.ts`). Convex flushes its last progress after the walk (`index_writer.rs:676–689`) and resets the count on a fresh start (`index_backfills/mod.rs:116–150`). | #788 |
+| S2 | **Bug** | `log-sink-local-close.test.ts`: fsync fails 5 times, then succeeds; 7 handles opened, 1 closed. Convex's `LocalSink::process_events` drops (closes) its file with each attempt (`local_sink.rs`). Retrying forever and appending the batch again on a retry are the same on both. | #789 |
+| S3 | **Bug**, small | `pump-hashing.test.ts`: a write that throws never cancels the body (`cancel` not called), so an async generator behind it never runs its cleanup. The import's file stream (`imports.ts` `streamFrom` over a zip entry's `read()`) is such a source: on a failed write its inflater and its range read are left suspended until collected. A probe found no fd leak for `Bun.file` bodies (300 failed writes: 5 → 6 fds), and a request body stops either way once the response is sent. Convex drops the stream with the failed write. | #795 |
+| S4 | **Bug** (the half #756 left) | `index-worker-close.test.ts`: a push whose commit lands during `close()` starts the worker after the close stopped it; the worker indexes a chunk, fails with `LeaseLostError`, and is still running after `close()` resolved. Convex's worker is a task the shutdown aborts (`lib.rs:3938`, `runtime/mod.rs:176–177`); nothing restarts it. | #790 |
+| S5 | **Bug**, minor | `executor-invalidations.test.ts`, "after the server's stop()": the stopped server still reads the queue when its next run falls due (1 `engine.query`), and still counts commits into the executors' reads. `observe()` never checked `stopped`, after `shutdown()` either (the engine is closed there, so it never showed). Convex has no stop that keeps the store open. | #791 |
+| S6 | **Bug** | `external-deps-timeout.test.ts`: against a registry that never answers, `buildExternalDeps` is still waiting after 15 s. Convex's `build_deps` request times out after NODE_ACTION_USER_TIMEOUT + 5 s (`local_backend/src/lib.rs:206`, `node_executor/src/local.rs:285`), and the push fails with `InvalidExternalModules`: "Function execution unexpectedly timed out. …". The fix uses the same deadline and message, and kills the install (Convex's `execSync` keeps running; an app cannot tell). | #792 |
+| S7 | **Bug** | `sqlite-open-lock.test.ts`: a directory as the path, or a new read-only file, throws after the lock was taken; the lock stays held in the process. Convex's SQLite store has no lock (STUDY-25 §1.5); the lock is bunvex's. | #793 |
+| S8 | **Divergence** (Q8), decided 2026-10-21: match Convex; **fixed** | `knob-timer-cap.test.ts`: with USAGE_TRACKING_PERIOD_SECS at 60 days, the gauges ran 152 times in 200 ms; a 30-day action timeout timed a 100 ms action out; the runtime's 30-day timers fired at once. Convex's knob is a `Duration` that tokio sleeps for its whole length (`usage_gauges_tracking_worker/src/lib.rs:71`). | #796 (the question), #811 (the fix) |
+
+**Q8. S8: a delay from an operator's knob past 2^31−1 ms (24.8 days).** Decided (owner, 2026-10-21): match Convex, as
+recommended; done in #811 (below).
+- Convex: every such knob is a `Duration` (`crates/common/src/knobs.rs`, `env_config`). Its loop sleeps for the whole
+  length, however long.
+- bunvex: some loops pass a knob's value straight to `setTimeout`, which fires after about 1 ms past 2^31−1 ms.
+  Checked in the code:
+  - USAGE_TRACKING_PERIOD_SECS (`usage-gauges.ts:91`): the gauges then run and send their storage totals to the log
+    streams every millisecond (the test).
+  - SEARCH_INDEXES_UNAVAILABLE_RETRY_DELAY (`sync.ts:1613`): the retry is at once instead of after the delay.
+  - RETENTION_DELETE_FREQUENCY and DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS (`retention.ts:193–194`, the failure
+    backoff's ceiling): a failing pass retries every millisecond once the backoff reaches it.
+  - V8_ACTION_USER_TIMEOUT_SECS and NODE_ACTION_USER_TIMEOUT_SECS (`action-timeout.ts:113`): every action times
+    out at once.
+  - ROOM_RECONNECT_GRACE_SECS (`rooms/hub.ts:544`), an addition (AD-42): the grace ends at once.
+
+  MAX_REPEATABLE_TIMESTAMP_IDLE_FREQUENCY is already capped (#757). §3.3's list also names others, such as the
+  table-summary checkpoint, whose knob is compared, not slept on.
+- Same: no.
+- Why: not built yet. #757's `timerDelay` capped the delays that subtract a clock (rule 6). These take the knob as
+  is, so rule 6 does not see them.
+- App impact: none with the defaults; the largest is 1 h. Only an operator who sets one of these knobs past 24.8 days
+  sees it: a busy loop (CPU, and repeated gauges, log events or retries), or a timeout or grace that ends at once
+  (every action fails as timed out).
+- **Recommendation:** match Convex. Pass each of these delays through `timerDelay`. A loop that wakes early then
+  sleeps again for what is left, as the scheduler's does since #757. Then widen rule 6 to flag a timer whose delay is
+  a knob's value. The test above then loses its `.todo`. Rejecting such knob values at parse time would be a
+  divergence of its own: Convex accepts them.
+
+**Q8 done (#811).** Every backend timer now sleeps its whole length, however long, as Convex's `Duration`s do.
+- **The helpers** (`core/src/long-timer.ts`, next to `timerDelay`): `longTimeout`, `longInterval` and `longSleep`
+  arm at most 2^31−1 ms at a time, towards a deadline on the monotonic clock, and re-arm for what is left. A
+  `LongTimer` has `clear()` (mid-wait included), `refresh()`, `unref()` / `ref()` (passed on to every step's timer)
+  and `hasRef()`. The real `Runtime`'s `setTimeout` / `setInterval` / `sleep` use them, so the scheduler's, the crons'
+  and the action permits' waits take any length too.
+- **The sites**, each a knob's delay or an option's: the usage gauges; the search-unavailable retry; retention's
+  sleeps and backoff; the action timeouts; the room grace and the sync splay timers; the sync mutation timeout and
+  the update-queries retry sleep; the request timeout; the session cleanup; the log streams' aggregation, concurrency
+  stats and startup timeout; the OTLP exporter's schedule, export and shutdown timers; the topology sampler; the
+  usage-limit worker; the function log's and the inspector's long polls; the engine's lease renewal, search workers'
+  poll, OCC and write-throughput backoffs; the committer's write retry; the store call timeouts (`withTimeout`); the
+  table-summary checkpointer; the index worker's backoff. The index worker's rate-limit wait (at most 1 s) and the
+  executor invalidations' boundary (a capped sleep towards a timestamp) go through `timerDelay`.
+- **Rule 6** (`check:deps`, scans in `scripts/rules.ts`): in core, server, persistence, file-storage and search, every
+  `setTimeout` / `setInterval` delay must be a number literal, a module constant of literals, `timerDelay(…)` or a
+  `Math.min(…)` bounded by one; anything else (a knob, an option, a parameter, a clock difference) is refused. A
+  `Runtime`'s timers (`….runtime.setTimeout(`) are trusted, comments, strings and interface declarations skipped.
+  Scope: `packages/sandbox` is left to its own track; the client, the CLI and the dashboards read no knobs.
+- **Tests:** `long-timer.test.ts` (6, a fake clock: a 30-day timeout in two steps, firing once; a short one as one
+  timer; cleared after a re-arm, mid-wait; a 40-day interval cleared from its own callback; the real timers past the
+  cap); `knob-timer-cap.test.ts` (3, no `.todo` any more: the gauges, a 30-day action timeout, the runtime's timers and
+  sleep); `scripts/rules.test.ts` (5). All three knob tests fail on `origin/main` (132 gauge runs, "timed out", the
+  timers fired).
+- **Sabotage:** a plain `setTimeout` in `LongTimer` fails 7 of the 9 timer tests; capped without the re-arm, 3;
+  `clear()` that does not stop a re-arm, 1. Rule 6 back to "clock subtractions only" fails `rules.test.ts`; the usage
+  gauges back on `setTimeout(…, wait)` fails `check:deps`.
+- **Measurement** (test VPS, 2 vCPU, Bun 1.4.3, alternating, 7 rounds): arming and clearing a timer costs 133–138 ns
+  with Bun's `setTimeout` and 272–277 ns with `longTimeout`; a timer that fires, 246–295 ns and 489–510 ns. The hot
+  paths that arm one (each HTTP request's timeout, each action, each sync mutation) pay about 0.14 µs more per call.
+

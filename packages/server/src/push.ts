@@ -306,6 +306,8 @@ export type PushDeps = {
   deploymentEnv: () => Promise<Record<string, string>>;
   /** The environment the external packages' install runs with (the server's own by default; STUDY-148). */
   installEnv?: Record<string, string | undefined>;
+  /** How long that install may take (STUDY-174 S6): `BUILD_DEPS_TIMEOUT_MS` by default. */
+  installTimeoutMs?: number;
   /** Where the push's code is loaded and evaluated (`vm` by default; STUDY-171). */
   executor?: Executor;
 };
@@ -614,7 +616,9 @@ export class PushService {
   private async externalDeps(deps: NodeDependency[]): Promise<{ row: ExternalDepsPackage; dir: string }> {
     let row = await cachedExternalDeps(this.deps.engine, deps);
     try {
-      row ??= await buildExternalDeps(this.deps.engine, this.deps.modulesStore, deps, this.deps.installEnv);
+      row ??= await buildExternalDeps(this.deps.engine, this.deps.modulesStore, deps, this.deps.installEnv, {
+        timeoutMs: this.deps.installTimeoutMs,
+      });
     } catch (e) {
       if (e instanceof ExternalDepsError)
         throw new PushError(e.code, `Loading the pushed modules encountered the following error:\n${e.message}`);
