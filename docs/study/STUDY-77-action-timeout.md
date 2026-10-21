@@ -195,8 +195,8 @@ went on after its answer. The owner decided to match Convex.
   refused with the same words.
 - **What was in flight goes on**: an operation started before the answer (an unawaited `runMutation`, a `fetch`)
   runs to its end, as before (Convex may shut it down: unchanged, and the same under both executors).
-- **Not changed**: HTTP actions (their body may stream, calling `ctx`, after the handler returns: their end is the
-  body's, STUDY-168 PR 6) and `"use node"` actions (Convex's Node executor, not an isolate).
+- **Not changed**: `"use node"` actions (Convex's Node executor, not an isolate). HTTP actions were left out here (their
+  body may stream, calling `ctx`, after the handler returns: their end is the body's); §8 ends them with it.
 - Under `process` the child's call refuses every operation after its `done` (STUDY-171 §12.6); its timers are cleared
   through `trackedActionTimers`, the same tracking, once the sandbox's actions are on `main` (STUDY-171 §12.11).
 
@@ -237,3 +237,82 @@ function sandbox, `packages/sandbox/bench/actions.ts`, run with `--vm`; a copy a
 
 No cost shows: the per-action state (a life, a set of timers) and the per-call check are below the noise; the `fetch`
 line's difference is the target's and the scheduler's (it moves by ±50 % between runs, STUDY-171 §12.9).
+
+## 8. The end of an HTTP action (owner, 2026-10-21)
+
+Found by the function sandbox's HTTP parity work (STUDY-171 §14, PR #812, its owner question Q-PR6-1): under `process`
+an HTTP action's call ends with its body, as Convex's isolate; under `vm` it never ended, so the timers it left fired
+after its response and a `ctx` it kept went on writing. The owner decided to match Convex under `vm` too.
+
+### 8.1 How Convex does it (re-read at `72ce13c`)
+
+- An HTTP action is one isolate run (`crates/isolate/src/environment/action/mod.rs` `run_http_action_inner`), whose
+  loop (`run_inner`, `:1010-1236`) runs until the result's stream is done: for an HTTP action that stream is the
+  response, its head then each chunk the body's stream hands its `stream/extend` op (`stream_http_result`,
+  `:595-623`). So the body's code (its pulls, its timers, its `ctx` calls) runs after the handler returned, until the
+  body ends, fails, or the client goes (`cancellation`, `:1217-1220`).
+- Then the run ends as an action's does (`:1226-1233`, §7.1): the task channel closed and the running tasks shut down;
+  no JavaScript of the HTTP action runs after its body.
+
+### 8.2 What an app observes
+
+- The body's code works while it streams: a pull may await a timer and call `ctx`.
+- Once the body has been handed over (or the handler failed, or the client left), nothing the HTTP action left
+  writes, schedules, stores or fetches: a pending timer never fires, an interval stops, an operation's continuation
+  never runs, a `ctx` kept in module state refuses.
+
+### 8.3 How bunvex does it
+
+- `runHttpAction` (`functions.ts`) gives the HTTP action an `ActionLife`, shared with its `ctx` (`actionCtx`'s
+  `endsWith`), and runs its handler with `withActionTimeout`'s new `endsLater`: its code's timers are tracked as a V8
+  action's (`trackActionTimer`), but the run ends only when `runHttpAction` says so. A stream the handler made runs its
+  pulls in the run's async context (Bun binds a stream's callbacks to the context it was made in), so the timers its
+  body sets are the action's too.
+- It ends: at once when the handler fails (a throw, not a `Response`, a body failing in the handler's turn); when the
+  response has no body; when a body of known length has been read whole; and for a streamed body when the server's
+  meter settles (`meteredBody`'s `sent`: the body's end, its failure, its cancellation by a client that left or a
+  HEAD request).
+- Then, as §7.3: its pending timers cleared (one set later, at once), its `ctx` and `fetch` refusing with
+  `ACTION_ENDED_MESSAGE`, the function sandbox's child's words (STUDY-171 §14.2, so `vm` and `process` say the same),
+  or the timeout's message if its handler timed out; what was in flight goes on.
+- The action timeout still covers the handler, not the body's streaming (DV-146).
+
+### 8.4 Tests and sabotage
+
+`packages/server/test/action-end.test.ts` (+6, 17 in all): a body that streams after its handler returned, awaiting
+timers and calling `ctx`; a timer its handler left that never fires, and the `ctx` it kept refusing seven kinds of
+call; an interval stopped with its body; a handler that throws leaving a timer; a timer its streamed body left as it
+ended; a client that leaves mid-body stopping its body's interval; a `fetch` after the end refused.
+`packages/differential/test/http-action-end.test.ts` (4, against Convex's binary `precompiled-2026-10-10-72ce13c`, the
+app in `http-end-app/`): a timer pending at the answer, an interval, a continuation, a streamed body whose pulls wait
+on timers and write, and that leaves a timer as it closes. On `main` all four fail (bunvex wrote after the body ended).
+
+| Break | Failing tests (server / oracle) |
+|---|---|
+| Timers not cleared at the end (`endsLater` given no end) | 5 / 0 (the `ctx` refusal still keeps the writes out) |
+| A kept `ctx` not refused (no life for the HTTP action's `ctx`) | 1 / 0 |
+| A streamed body never ends the action | 3 / 1 |
+| A streamed body ends the action at its head, not its end | 3 / 1 |
+| A body of known length never ends the action | 2 / 3 |
+| A failed handler never ends the action | 1 / 0 |
+
+### 8.5 Measurement
+
+The `vm` HTTP-action hot path, `main` against this change, on the test VPS (2 vCPUs, Bun 1.4.3, idle: `ps` checked
+first, no other process of any session), ABAB, 2000 sequential requests per line after 200, the server in a process of
+its own (`bench/results/http-action-end/`: `server.ts`, `bench.ts`, the runner `vps.sh` and the raw output).
+p50 / mean / p99 µs:
+
+| Line | `main`, round 1 | this, round 1 | `main`, round 2 | this, round 2 |
+|---|---|---|---|---|
+| empty HTTP action (`new Response(null)`) | 287 / 358 / 1501 | 271 / 320 / 1400 | 282 / 331 / 1545 | 289 / 348 / 1405 |
+| HTTP action answering "ok" | 289 / 390 / 1737 | 285 / 363 / 1763 | 290 / 419 / 2036 | 275 / 334 / 1753 |
+| HTTP action, 1 `runQuery` | 311 / 362 / 1619 | 331 / 426 / 2066 | 350 / 451 / 1908 | 323 / 386 / 2028 |
+| 1 KiB of bytes (streamed) | 298 / 388 / 1753 | 285 / 362 / 1633 | 294 / 388 / 1716 | 281 / 350 / 1616 |
+| a stream of 3 × 1 KiB | 300 / 367 / 1568 | 293 / 362 / 1520 | 300 / 388 / 1738 | 296 / 376 / 1767 |
+| a stream of 3 × 1 KiB, a timer per pull | 5033 / 5170 / 6959 | 5656 / 6081 / 10693 | 5122 / 5253 / 6947 | 5109 / 5246 / 6987 |
+| a stream of 1 MiB | 823 / 979 / 2877 | 799 / 943 / 2794 | 850 / 953 / 2829 | 957 / 1128 / 3257 |
+
+No cost shows: every line of this change is within `main`'s spread between its two rounds but for single rounds (the
+timer line's first, the 1 MiB line's second), each matched by the other round. The per-request state (a life, a set of
+timers, one `then` on the meter's `sent`) is below the noise.

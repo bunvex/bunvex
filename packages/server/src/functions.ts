@@ -3028,7 +3028,14 @@ export class Functions {
       caller = { ...caller, identity: null };
       authError = null;
     }
-    const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION, handler, component);
+    // The action's life (STUDY-77 §7): it ends once its body has been handed over (or it failed), as Convex's isolate
+    // runs until the response's stream ends and then shuts its tasks down (`environment/action/mod.rs` `run_inner`):
+    // the timers its code left are cleared, and a `ctx` it kept refuses.
+    const life: ActionLife = { ended: false };
+    let end = () => {
+      life.ended = true;
+    };
+    const ctx = this.actionCtx(caller, authError, undefined, HTTP_ACTION, handler, component, life);
     let t0 = 0;
     let running: Running | null = null;
     let body: { sent: Promise<SentBody> } | null = null;
@@ -3074,6 +3081,12 @@ export class Functions {
                     ),
                   component,
                 ),
+              {
+                life,
+                endsLater: (e) => {
+                  end = e;
+                },
+              },
             );
             // Convex's router checks the result (`convexJsonFromResponse`): a failure before the head, logged with
             // its error and answered with the 500.
@@ -3082,6 +3095,7 @@ export class Functions {
             // they are read first.
             const headers = response.headers;
             if (!response.body) {
+              end();
               warnings(0);
               return response;
             }
@@ -3098,6 +3112,7 @@ export class Functions {
                 body = {
                   sent: Promise.resolve({ bytes: whole.size, errors: [], tooLarge: false, disconnected: false }),
                 };
+                end();
                 return new Response(whole, init);
               }
               stream = whole.stream();
@@ -3114,8 +3129,12 @@ export class Functions {
               if (early) throw early.error;
             }
             body = metered;
+            // The body's code runs on while it streams (its pulls, its `ctx`); the action ends when it has been handed
+            // over: its end, its failure, or its client gone.
+            void metered.sent.then(() => end());
             return new Response(metered.stream, init);
           } catch (e) {
+            end();
             if (!isSystemError(e)) warnings(0);
             throw e;
           }
