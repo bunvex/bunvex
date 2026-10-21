@@ -56,7 +56,9 @@ const ALLOWED: Record<string, string[]> = {
   // STUDY-37 E5 (owner, 2026-10-02): the CLI subscribes as Convex's does (`run --watch`).
   cli: ["server", "core", "values", "client", "protocol"],
   // STUDY-159 T-2 (owner, 2026-10-20): a test pushes the app as `bunvex deploy` bundles it, into an engine of its own.
-  testing: ["server", "core", "values", "cli", "file-storage"],
+  // `sandbox`: it starts a server, so it provides the function sandbox's executor, as bin/local-backend.ts does
+  // (the server cannot import it, STUDY-171 §8.8); the sandbox imports no testing, so no cycle.
+  testing: ["server", "core", "values", "cli", "file-storage", "sandbox"],
   // STUDY-181: the port of convex-helpers. `core` and `testing` only in its tests (TEST_ONLY): an Engine in memory, and
   // `bunvexTest` for the functions its server helpers build.
   helpers: ["server", "values", "core", "testing"],

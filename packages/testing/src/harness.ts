@@ -20,6 +20,7 @@ import { CRON_JOBS_TABLE, defineSchema, Engine, resolveComponentPath, SCHEDULED_
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { TestRuntime } from "@bunvex/core/test-runtime";
 import { MemoryBlobStore } from "@bunvex/file-storage";
+import { createProcessExecutor } from "@bunvex/sandbox";
 import {
   adminKeyCipherKey,
   callerOf,
@@ -36,7 +37,13 @@ import {
   internalQuery,
   issueAdminKey,
 } from "@bunvex/server";
+import { provideProcessExecutor } from "@bunvex/server/executor";
 import { fromJsonValue, toJsonValue, type Value } from "@bunvex/values";
+
+// The function sandbox (AD-44, STUDY-171 §8): with `BUNVEX_FUNCTION_SANDBOX=process`, a test's functions run in the
+// sandbox's children, as on `bunvex-local-backend`. The server cannot import the sandbox (its child runs the server's
+// loader), so the entry point that starts a server provides it: here, as bin/local-backend.ts does.
+provideProcessExecutor(createProcessExecutor);
 
 const INSTANCE_NAME = "bunvex-test";
 const INSTANCE_SECRET = "7e57".repeat(16);
@@ -125,10 +132,8 @@ class Backend {
       exportStorage: new MemoryBlobStore(),
       importStorage: new MemoryBlobStore(),
     });
-    const stop = async () => {
-      await server.stop();
-      await engine.close();
-    };
+    // `shutdown`, not `stop`: it also stops the function sandbox's children (by their own pids) and closes the engine.
+    const stop = () => server.shutdown();
     try {
       const env = Object.entries(this.opts.env ?? {});
       if (env.length)

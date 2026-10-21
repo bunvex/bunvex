@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { type Backend, ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 import { errorText } from "../harness/compare.ts";
 
 const ready = existsSync(ORACLE_BIN);
@@ -43,7 +43,7 @@ const call = async (b: Backend, kind: "query" | "mutation", path: string, args: 
 beforeAll(async () => {
   if (!ready) return;
   const env = { TRANSACTION_MAX_READ_SET_INTERVALS: String(LIMIT) };
-  [convex, bunvex] = await Promise.all([startConvex({ app: APP, env }), startBunvex({ app: APP, env })]);
+  [convex, bunvex] = await startAll([startConvex({ app: APP, env }), startBunvex({ app: APP, env })]);
   for (const b of [convex, bunvex]) {
     await call(b, "mutation", "reads:fill", { table: "big", n: 60 });
     await call(b, "mutation", "reads:fill", { table: "small", n: 20 });

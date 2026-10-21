@@ -17,27 +17,47 @@
 // - **The cut-off.** Past the action's timeout the host says `cancel`: every operation waiting is rejected with the
 //   timeout, every later one too, and the call's `fetch`es are aborted; the child says `cancelled` and sends nothing
 //   more for the call (its lines, its `done`). A child that is too busy to say it in time is killed by the host.
+// - **HTTP actions** (STUDY-168 PR 6) run as actions whose argument is a `Request` made from the host's (its body
+//   streamed from the host as it is read, its signal aborted when the client leaves) and whose answer is the response,
+//   read as the server reads one in-process (`runHttpAction`): its headers first, then a body of known length whole, or
+//   a stream checked for a failure in the handler's turn (`readsAhead`, the server's own) and then streamed, its chunks
+//   checked as the server checks them (`bodyChunk`). The call goes on until the body has been handed over: the code
+//   making its chunks may call `ctx`, log, `fetch`, and what it leaves rejected with no handler ends the body there.
 import { checkEnvVarName, setFetchSender, setFetchSignal } from "@bunvex/core";
 import {
   ACTION_ENDED_MESSAGE,
   appContext,
   asActionResponse,
+  bodyChunk,
+  bodyLength,
   type CodeVersion,
   captureLines,
+  HTTP_ACTION_RESPONSE_LIMIT,
   inHandleScope,
   type LogLine,
+  readsAhead,
   SpecBlob,
   setActionTimerCallback,
   setServiceCallContext,
   trackedActionTimers,
+  typedBlob,
   vectorSearchFilter,
   withAllEnv,
 } from "@bunvex/server/executor";
 import { isBytes } from "@bunvex/values";
 import { ChildCallBase, rebuiltError, running, type Send, thrownValue } from "./child-call.ts";
-import type { ToHost, WireActionCall, WireLogLine, WireReply, WireReport, WireThrown } from "./protocol.ts";
+import type {
+  ToHost,
+  WireActionCall,
+  WireHttpCall,
+  WireLogLine,
+  WireReply,
+  WireReport,
+  WireResponseBody,
+  WireThrown,
+} from "./protocol.ts";
 import { checkpoint, checkpointOf, checkSoon, track, untrack } from "./rejections.ts";
-import { Streams } from "./streams.ts";
+import { MARK, Streams } from "./streams.ts";
 import { decode, encode } from "./wire.ts";
 
 /** Bytes up to this size go inline (base64 in the message); larger ones as a stream. */
@@ -83,10 +103,17 @@ export class ActionRuntime {
     private readonly send: Send,
     chunk: (s: number, bytes: Uint8Array) => void,
     private readonly versions: Map<number, CodeVersion>,
+    /** Sends a stream's end or mark, flushed with what follows it (or at the end of the turn). */
+    later: Send = send,
   ) {
     this.streams = new Streams(
-      { message: (m) => send(m), chunk },
-      { strict: false, initialCredit: 0, thrown: thrownValue, error: (w) => errorFromWire(w) },
+      { message: (m) => (m.t === "end" || m.t === "mark" ? later(m) : send(m)), chunk },
+      {
+        strict: false,
+        initialCredit: 0,
+        thrown: (e) => (e instanceof WireFailure ? e.wire : thrownValue(e)),
+        error: (w) => errorFromWire(w),
+      },
     );
   }
 
@@ -103,6 +130,26 @@ export class ActionRuntime {
     else await call.run(f.handler as (ctx: unknown, args: unknown) => unknown);
   }
 
+  /** An HTTP action's call: the handler of the route the host's router matched, with the request. */
+  async http(m: WireHttpCall) {
+    const call = new ChildActionCall(m, this.send, this.streams, this.owners, () =>
+      call.whenAnswered(() => {
+        this.calls.delete(m.id);
+        call.forgetStreams();
+      }),
+    );
+    this.calls.set(m.id, call);
+    const version = this.versions.get(m.version);
+    const handler = version ? httpHandlerOf(version, m.route) : null;
+    if (!handler) call.failToStart(new Error(`the route ${m.route.join(" ")} is not an HTTP action of this version`));
+    else await call.runHttp(handler);
+  }
+
+  /** The HTTP action's client left. */
+  disconnect(m: { id: number; reason: WireThrown }) {
+    this.calls.get(m.id)?.disconnect(m.reason);
+  }
+
   /** The host's answer to an action's operation: false when the call is not an action's. */
   reply(m: WireReply): boolean {
     const call = this.calls.get(m.id);
@@ -116,6 +163,22 @@ export class ActionRuntime {
     this.calls.get(m.id)?.cancel(m.error);
   }
 }
+
+/** The handler of a version's route, as its router lists it (`getRoutes`: what the host's stand-in was made from). */
+function httpHandlerOf(version: CodeVersion, [method, path]: [string, string]) {
+  const route = version.router?.getRoutes().find(([p, m]) => p === path && m === method);
+  const handler = (route?.[2] as { _handler?: unknown } | undefined)?._handler;
+  return typeof handler === "function" ? (handler as (ctx: unknown, request: Request) => unknown) : null;
+}
+
+/** A failure already described for the wire (an unhandled rejection's, as thrown), ending a body stream. */
+class WireFailure {
+  constructor(readonly wire: WireThrown) {}
+}
+
+/** A chunk of any realm's bytes as a view of them (the app's `ArrayBuffer` is its context's). */
+const viewOf = (b: ArrayBuffer | ArrayBufferView): Uint8Array =>
+  ArrayBuffer.isView(b) ? new Uint8Array(b.buffer, b.byteOffset, b.byteLength) : new Uint8Array(b);
 
 /** An error from the wire (a stream's failure, the cut-off's timeout). */
 function errorFromWire(w: WireThrown): unknown {
@@ -169,9 +232,23 @@ class ChildActionCall extends ChildCallBase {
   private readonly cutOff = new AbortController();
   /** The call's `fetch`: the host's. */
   readonly fetch = ((input: unknown, init?: RequestInit) => this.bridgeFetch(input, init)) as unknown as typeof fetch;
+  /** An HTTP action's: its request's signal, aborted when the client leaves. */
+  private readonly clientGone = new AbortController();
+  /** An HTTP action's request body (the host's stream), stopped at its end if nobody read it. */
+  private requestBody: number | null = null;
+  private req: Request | null = null;
+  /**
+   * An HTTP action's response body (its stream to the host), which waits for the head to be sent (`opened`): true
+   * then, false if the call ended before.
+   */
+  private responseBody: { s: number; opened: Promise<boolean>; open: (sent: boolean) => void } | null = null;
+  /** Set once an HTTP action's head was sent: its body streams (a rejection then ends the body, not the run). */
+  private streaming = false;
+  /** Ends the body's read of the app's stream with an unhandled rejection's failure, as thrown. */
+  private bodyFailed: ((w: WireFailure) => void) | null = null;
 
   constructor(
-    private readonly m: WireActionCall,
+    private readonly m: WireActionCall | WireHttpCall,
     send: Send,
     private readonly streams: Streams,
     private readonly owners: StreamOwners,
@@ -189,8 +266,8 @@ class ChildActionCall extends ChildCallBase {
   }
 
   /** `source` sent to the host as this action's stream. */
-  private sendStream(source: Parameters<Streams["send"]>[0]): number {
-    const s = this.streams.send(source);
+  private sendStream(source: Parameters<Streams["send"]>[0], onStop?: () => void, onEnd?: () => void): number {
+    const s = this.streams.send(source, onStop, onEnd);
     this.owners.out.set(s, this.id);
     this.streamIds.out.push(s);
     return s;
@@ -217,11 +294,24 @@ class ChildActionCall extends ChildCallBase {
     if (message === null || this.cut !== null || this.done) return;
     this.outcome = null;
     this.send(message);
-    this.ended();
+    if (message.t !== "response") return this.ended();
+    // An HTTP action's response: its body streams now, and its end ends the call; with none to stream, it ends here.
+    this.streaming = true;
+    if (this.responseBody) this.responseBody.open(true);
+    else void this.finishHttp();
   }
 
   unhandled(reason: unknown) {
     if (this.cut !== null || this.done) return;
+    if (this.streaming) {
+      // After the response's head: the body ends there, with the error, as Convex's run ends with its termination
+      // error once the response has started (`run_http_action`); the call ends as the body does.
+      this.terminated = true;
+      const failure = new WireFailure(this.rejected(reason));
+      if (this.responseBody) this.streams.failOutgoing(this.responseBody.s, failure.wire);
+      this.bodyFailed?.(failure);
+      return;
+    }
     // Convex terminates the isolate there: the action fails with that error, the operations it had not taken the
     // answer of are its unawaited ones, and no more of its code runs.
     this.terminated = true;
@@ -235,6 +325,11 @@ class ChildActionCall extends ChildCallBase {
       pending: this.unanswered(),
     });
     this.ended();
+  }
+
+  /** The HTTP action's client left: its request's signal aborts. */
+  disconnect(w: WireThrown) {
+    if (!this.clientGone.signal.aborted) this.clientGone.abort(errorFromWire(w));
   }
 
   /** The call could not start (a broken host's): it fails with `e`. */
@@ -284,6 +379,7 @@ class ChildActionCall extends ChildCallBase {
     this.forget();
     this.lines.length = 0;
     this.endTimers();
+    this.closeHttp();
     this.send({ t: "cancelled", id: this.id });
     this.cutOff.abort(error);
     for (const [op, waiting] of [...this.waiting]) {
@@ -306,6 +402,24 @@ class ChildActionCall extends ChildCallBase {
     untrack(this.id);
     this.forget();
     this.endTimers();
+    this.closeHttp();
+  }
+
+  /**
+   * An HTTP action's streams once it ended: a response body that never got its head is dropped here, unsent (the host
+   * never opened it); a request body nobody read is stopped.
+   */
+  private closeHttp() {
+    if (this.responseBody) {
+      this.streams.onMessage({ t: "stop", s: this.responseBody.s });
+      this.responseBody.open(false);
+      this.responseBody = null;
+    }
+    // A body the app (or its `formData()`) is reading goes on, as in-process.
+    if (this.requestBody !== null && !this.req?.bodyUsed && !this.req?.body?.locked) {
+      this.streams.stopIncoming(this.requestBody);
+    }
+    this.requestBody = null;
   }
 
   private ctx() {
@@ -342,7 +456,7 @@ class ChildActionCall extends ChildCallBase {
   }
 
   async run(handler: (ctx: unknown, args: unknown) => unknown) {
-    const args = decode(this.m.args, false);
+    const args = decode((this.m as WireActionCall).args, false);
     const ctx = this.ctx();
     const all = this.m.env ? Object.fromEntries(this.m.env) : null;
     const read = (name: string) => {
@@ -395,6 +509,236 @@ class ChildActionCall extends ChildCallBase {
       };
     }
     this.settled(message);
+  }
+
+  // ------------------------------------------------------------------ HTTP actions
+
+  /** The HTTP action's handler, run as an action is, with the request; then its response, as the server reads it. */
+  async runHttp(handler: (ctx: unknown, request: Request) => unknown) {
+    const ctx = this.ctx();
+    const all = this.m.env ? Object.fromEntries(this.m.env) : null;
+    const read = (name: string) => {
+      checkEnvVarName(name);
+      return all && Object.hasOwn(all, name) ? all[name] : undefined;
+    };
+    const sent = async () => {
+      while (this.preparing.size) await Promise.all([...this.preparing]);
+    };
+    // The response is read where the handler ran (its async context: its lines, its `ctx`, its `fetch`), so the code
+    // that makes the body's chunks runs as the handler's own.
+    const body = async () => {
+      const request = this.request();
+      const call = async () => this.respond(await handler(appContext(handler, ctx), request));
+      return all ? withAllEnv(all, read, call) : call();
+    };
+    let message: ToHost;
+    try {
+      const run = trackedActionTimers(() =>
+        running.run(this, () =>
+          captureLines(
+            (line) => this.logLine(line),
+            () =>
+              inHandleScope(
+                { db: null, create: (ref: unknown) => this.op("createFunctionHandle", [ref]) } as never,
+                body,
+              ),
+          ),
+        ),
+      );
+      this.endTimers = run.end;
+      message = await run.value;
+      await sent();
+    } catch (e) {
+      await sent();
+      message = {
+        t: "done",
+        id: this.id,
+        ok: false,
+        error: this.thrown(e),
+        report: this.report(),
+        pending: this.unanswered(),
+      };
+    }
+    this.settled(message);
+  }
+
+  /** The request the handler gets: the host's head, its body streamed from the host as it is read. */
+  private request(): Request {
+    const r = (this.m as WireHttpCall).request;
+    if (r.body !== null) this.requestBody = r.body;
+    const body = r.body === null ? null : this.receive(r.body);
+    const request = new Request(r.url, {
+      method: r.method,
+      headers: r.headers,
+      body,
+      signal: this.clientGone.signal,
+      ...(body === null ? {} : { duplex: "half" }),
+    } as RequestInit);
+    typedBlob(request);
+    this.req = request;
+    // A multipart body is parsed by the host, as Convex's runtime parses it with an operation (`form/parseMultiPart`,
+    // npm-packages/udf-runtime/src/21_formdata.ts), pending as `formData` until it settles (`trackedFormData`).
+    if (/^multipart\/form-data\b/i.test(request.headers.get("content-type") ?? "")) {
+      const own = request.formData.bind(request) as () => Promise<unknown>;
+      Object.defineProperty(request, "formData", { value: () => this.formData(request, own), configurable: true });
+    }
+    return request;
+  }
+
+  private formData(request: Request, own: () => Promise<unknown>): Promise<unknown> {
+    // What Bun refuses (a body read already, or none) it refuses here as in-process.
+    if (request.bodyUsed || request.body === null) return own();
+    const type = request.headers.get("content-type") ?? "";
+    const stream = request.body;
+    return this.later("formData", async () => [type, { s: this.sendStream(stream) }]).then(async (entries) => {
+      const form = new FormData();
+      for (const [name, v] of entries as [string, string | { file: WireFile; name: string; lastModified: number }][]) {
+        if (typeof v === "string") form.append(name, v);
+        else
+          form.append(
+            name,
+            new File(await this.fileParts(v.file), v.name, { type: v.file.type, lastModified: v.lastModified }),
+          );
+      }
+      return form;
+    });
+  }
+
+  /**
+   * The response, as the server reads one in-process (`runHttpAction`): not a `Response` (the server refuses it); its
+   * headers before its body; a body of known length (`bodyLength`) whole; a stream checked for a failure in the
+   * handler's turn, which fails the run, then streamed.
+   */
+  private async respond(response: unknown): Promise<ToHost> {
+    if (!(response instanceof Response))
+      return {
+        t: "done",
+        id: this.id,
+        ok: true,
+        value: encode(null),
+        report: this.report(),
+        pending: this.unanswered(),
+      };
+    const head = { status: response.status, statusText: response.statusText, headers: [...response.headers] };
+    const stream = response.body;
+    let body: WireResponseBody = null;
+    if (stream) {
+      const length = response.bodyUsed ? undefined : bodyLength(response);
+      if (length !== undefined) {
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        body =
+          bytes.byteLength <= INLINE_BYTES
+            ? { kind: "bytes", b: encode(bytes.buffer as ArrayBuffer), length }
+            : {
+                kind: "whole",
+                s: this.openBody(() => this.whole(bytes)),
+                length,
+                gather: bytes.byteLength > HTTP_ACTION_RESPONSE_LIMIT,
+              };
+      } else {
+        const reader = readsAhead(stream);
+        const early = await reader.failedEarly();
+        if (early) throw early.error;
+        // Stopped by the host (the client gone, a HEAD request), the app's stream is cancelled at once, as in-process.
+        body = {
+          kind: "stream",
+          s: this.openBody(
+            () => this.chunks(reader),
+            () => void reader.cancel().catch(() => {}),
+          ),
+        };
+      }
+    }
+    return { t: "response", id: this.id, ...head, body };
+  }
+
+  /**
+   * `source` as the response's body, held until its head is sent (the host opens it then). Once its end (or failure)
+   * is sent, the call ends: the host hears the body's end and the call's `done` together, as the server in-process sees
+   * a body that ends with its last chunk at once.
+   */
+  private openBody(source: () => AsyncGenerator<Uint8Array | typeof MARK>, onStop?: () => void): number {
+    let open!: (sent: boolean) => void;
+    const opened = new Promise<boolean>((resolve) => (open = resolve));
+    const body = { s: 0, opened, open };
+    this.responseBody = body;
+    body.s = this.sendStream(source(), onStop, () => void this.finishHttp());
+    return body.s;
+  }
+
+  private async *whole(bytes: Uint8Array): AsyncGenerator<Uint8Array> {
+    if (!(await this.responseBody!.opened)) return;
+    for (let i = 0; i < bytes.byteLength; i += 1 << 20) yield bytes.subarray(i, i + (1 << 20));
+  }
+
+  /**
+   * The app's body, read as the server reads it in-process (`meteredBody`): what it has is sent as its credit allows,
+   * a chunk that is not bytes ends it with the server's error, its own failure ends it with its error. Stopped by the
+   * host (the client gone, a HEAD request), it is cancelled, as in-process.
+   */
+  private async *chunks(reader: ReturnType<typeof readsAhead>): AsyncGenerator<Uint8Array | typeof MARK> {
+    if (!(await this.responseBody!.opened)) return;
+    const failed = new Promise<WireFailure>((resolve) => (this.bodyFailed = resolve));
+    let ended = false;
+    // The 100 MiB limit is the app's chunks': the first that would cross it is dropped, and every one after, as the
+    // server drops them (`meteredBody`); the host hears where (a mark), and its server logs it.
+    let sent = 0;
+    let over = false;
+    try {
+      for (;;) {
+        const r = await Promise.race([reader.read(), failed]);
+        if (r instanceof WireFailure) {
+          ended = true;
+          throw r;
+        }
+        if (r.done) {
+          ended = true;
+          return;
+        }
+        const chunk = bodyChunk(r.value);
+        if (chunk === null || over) continue;
+        if (sent + chunk.byteLength > HTTP_ACTION_RESPONSE_LIMIT) {
+          over = true;
+          yield MARK;
+          continue;
+        }
+        sent += chunk.byteLength;
+        yield viewOf(chunk);
+      }
+    } catch (e) {
+      ended = true;
+      throw e;
+    } finally {
+      if (!ended) void reader.cancel().catch(() => {});
+    }
+  }
+
+  /**
+   * The response's body was handed over (or there was none): the call ends, with what it left pending. Its `done`
+   * flushes what the body's end left unflushed (`child.ts`).
+   */
+  private async finishHttp() {
+    while (this.preparing.size) await Promise.all([...this.preparing]);
+    if (this.done || this.cut !== null) return;
+    this.responseBody = null;
+    this.bodyFailed = null;
+    this.send({
+      t: "done",
+      id: this.id,
+      ok: true,
+      value: encode(null),
+      report: this.report(),
+      pending: this.unanswered(),
+    });
+    this.ended();
+  }
+
+  /** A file's bytes as the host sent them, inline or as a stream. */
+  private async fileParts(d: WireFile): Promise<(ArrayBuffer | Uint8Array)[]> {
+    const parts: (ArrayBuffer | Uint8Array)[] = [];
+    if (d.b !== undefined) parts.push(d.b);
+    else if (d.s !== undefined) for await (const c of this.receive(d.s)) parts.push(c);
+    return parts;
   }
 
   // ------------------------------------------------------------------ storage

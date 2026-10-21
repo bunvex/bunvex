@@ -6,7 +6,7 @@
 // Convex's backend is not there (scripts/download-convex-backend.sh, or CONVEX_BACKEND_BIN).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { type Backend, ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 import { creationTimes, errorText, IdMap, normalize } from "../harness/compare.ts";
 
 const ready = existsSync(ORACLE_BIN);
@@ -98,7 +98,7 @@ const page = (b: Backend, table: string, expr: unknown, numItems = 50, cursor: s
 
 describe.skipIf(!ready)("the Data screen's reads on Convex and on bunvex", () => {
   beforeAll(async () => {
-    [convex, bunvex] = await Promise.all([startConvex(), startBunvex()]);
+    [convex, bunvex] = await startAll([startConvex(), startBunvex()]);
     for (const b of [convex, bunvex])
       for (const [table, name, doc] of DOCS) {
         const r = await b.call("mutation", "ops:apply", { ops: [{ kind: "insert", table, doc }] });

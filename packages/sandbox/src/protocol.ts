@@ -21,6 +21,10 @@
 //   console lines go as they come (`lines`), as an action's stream to the function log. Past the action's timeout the
 //   host sends `cancel`: the child cuts the handler off from its `ctx` and its `fetch`, says `cancelled`, and sends
 //   nothing more for that call; a child that does not say it in time is killed.
+// - **HTTP actions** (STUDY-168 PR 6): the host sends `http` (the route its router matched, the request's head, its
+//   body as a stream); the child runs the route's handler as an action and answers with `response` (the response's
+//   head, its body inline, whole as a stream, or streaming), then `done` once the body was handed over: the call goes on
+//   while its body streams. A client that leaves is `disconnect` (the request's signal).
 // - **Bytes** (a `fetch` body, a stored file) go as streams (`streams.ts`): chunk frames of their own, with `end`,
 //   `fail`, `credit` and `stop` messages, both ways.
 import type { AnalyzedFunction, AnalyzedModule, DefaultExportUse, ModuleSource } from "@bunvex/server/executor";
@@ -30,7 +34,7 @@ import type { StreamMessage } from "./streams.ts";
 export const EPOCHS_KEPT = 4;
 
 /** Bumped whenever a message changes: host and child are always the same build, but a stale child must not run. */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /** Convex's argument and result caps (`FUNCTION_MAX_ARGS_SIZE`, `FUNCTION_MAX_RESULT_SIZE`, knobs.rs:439-446). */
 export const MAX_VALUE_SIZE = 1 << 24;
@@ -54,8 +58,11 @@ export type ToChild =
     }
   | WireCall
   | WireActionCall
+  | WireHttpCall
   | WireReply
   | { t: "cancel"; id: number; error: WireThrown }
+  /** The HTTP action's client left: its request's signal aborts with `reason`. */
+  | { t: "disconnect"; id: number; reason: WireThrown }
   | StreamMessage;
 
 /**
@@ -90,6 +97,8 @@ export type ToHost =
   | { t: "cancelled"; id: number }
   /** The app aborted the signal of its `fetch` (operation `op` of call `id`). */
   | { t: "abort"; id: number; op: number }
+  /** An HTTP action's response head and how its body comes; its `done` follows once the body was handed over. */
+  | WireResponse
   | StreamMessage;
 
 /**
@@ -197,6 +206,39 @@ export type WireActionCall = {
   env: [string, string][] | null;
   /** `ctx.meta`'s methods. */
   meta: string[];
+};
+
+/** host → child: an HTTP action's call: the route the host's router matched, and the request. */
+export type WireHttpCall = {
+  t: "http";
+  id: number;
+  version: number;
+  /** The route as the router has it (`getRoutes`): its method and its path (a prefix route's ends in `*`). */
+  route: [method: string, path: string];
+  request: { url: string; method: string; headers: [string, string][]; body: number | null };
+  env: [string, string][] | null;
+  meta: string[];
+};
+
+/**
+ * An HTTP action's response body: none; its bytes inline, or as the stream `s` (`whole`), for a body of known length
+ * (`length`: its size, or null for one still to encode, as `bodyLength` tells; `gather`: past the 100 MiB cap, the host
+ * has it whole before the server sends it, as in-process); or streaming (`stream`).
+ */
+export type WireResponseBody =
+  | null
+  | { kind: "bytes"; b: unknown; length: number | null }
+  | { kind: "whole"; s: number; length: number | null; gather: boolean }
+  | { kind: "stream"; s: number };
+
+/** child → host: an HTTP action's response: its head, read before its body as the server reads it. */
+export type WireResponse = {
+  t: "response";
+  id: number;
+  status: number;
+  statusText: string;
+  headers: [string, string][];
+  body: WireResponseBody;
 };
 
 /**
@@ -495,6 +537,30 @@ function thrown(x: Json, where: string): WireThrown {
   };
 }
 
+/** An HTTP action's response head, checked (its headers' validity is the host's `Headers`'). */
+function response(m: Record<string, Json>, id: number): WireResponse {
+  const status = int(m.status, "response.status");
+  if (status < 100 || status > 999) fail("response.status", "an HTTP status");
+  const b = nullable(m.body, obj, "response.body");
+  let body: WireResponseBody = null;
+  if (b !== null) {
+    const kind = oneOf(b.kind, ["bytes", "whole", "stream"], "response.body.kind");
+    const length = () => nullable(b.length, int, "response.body.length");
+    if (kind === "stream") body = { kind, s: int(b.s, "response.body.s") };
+    else if (kind === "whole")
+      body = { kind, s: int(b.s, "response.body.s"), length: length(), gather: bool(b.gather, "response.body.gather") };
+    else body = { kind, b: "b" in b ? b.b : fail("response.body.b", "bytes"), length: length() };
+  }
+  return {
+    t: "response",
+    id,
+    status,
+    statusText: str(m.statusText, "response.statusText"),
+    headers: pairs(m.headers, str, "response.headers"),
+    body,
+  };
+}
+
 /** A message from a child, checked; throws `BadMessageError` for anything the host does not expect. */
 export function parseChildMessage(text: string): ToHost {
   let x: Json;
@@ -516,7 +582,9 @@ export function parseChildMessage(text: string): ToHost {
       "lines",
       "cancelled",
       "abort",
+      "response",
       "end",
+      "mark",
       "fail",
       "credit",
       "stop",
@@ -524,7 +592,7 @@ export function parseChildMessage(text: string): ToHost {
     "message.t",
   );
   if (t === "hello") return { t, protocol: num(m.protocol, "hello.protocol"), pid: int(m.pid, "hello.pid") };
-  if (t === "end" || t === "stop") return { t, s: int(m.s, `${t}.s`) };
+  if (t === "end" || t === "stop" || t === "mark") return { t, s: int(m.s, `${t}.s`) };
   if (t === "credit") {
     const n = int(m.n, "credit.n");
     if (n === 0) fail("credit.n", "a positive integer");
@@ -556,6 +624,7 @@ export function parseChildMessage(text: string): ToHost {
   if (t === "lines") return { t, id, lines: logLines(m.lines, "lines.lines") };
   if (t === "cancelled") return { t, id };
   if (t === "abort") return { t, id, op: int(m.op, "abort.op") };
+  if (t === "response") return response(m, id);
   if (t === "evaluated")
     return { t, id, export: evaluated(m.export, "evaluated.export"), loadMs: num(m.loadMs, "evaluated.loadMs") };
   return { t, id, error: wireError(m.error, "failed.error") };

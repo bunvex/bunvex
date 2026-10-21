@@ -8,7 +8,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { type Backend, ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 
 const ready = existsSync(ORACLE_BIN);
 if (!ready) console.warn(`http-action-log-route: skipped, no Convex backend at ${ORACLE_BIN} (set CONVEX_BACKEND_BIN)`);
@@ -21,7 +21,7 @@ let bunvex: Backend;
 beforeAll(async () => {
   if (!ready) return;
   const env = { V8_ACTION_USER_TIMEOUT_SECS: "3" };
-  [convex, bunvex] = await Promise.all([startConvex({ app: APP, env }), startBunvex({ app: APP, env })]);
+  [convex, bunvex] = await startAll([startConvex({ app: APP, env }), startBunvex({ app: APP, env })]);
 }, 300_000);
 
 afterAll(async () => {

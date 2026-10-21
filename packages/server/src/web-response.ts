@@ -25,6 +25,15 @@ const lengths = new WeakMap<Response, number | null>();
  */
 export const bodyLength = (r: Response): number | null | undefined => lengths.get(r);
 
+/**
+ * `r`, read by the HTTP action server as a function's response whose body had `length` (`bodyLength`): the function
+ * sandbox's host rebuilds a response its child made (STUDY-168 PR 6).
+ */
+export function withBodyLength(r: Response, length: number | null): Response {
+  lengths.set(r, length);
+  return r;
+}
+
 /** WebIDL's conversion of a body (Convex's `convertBodyInit`): a value that is no body type becomes a string. */
 function convertBody(body: unknown): Body {
   if (

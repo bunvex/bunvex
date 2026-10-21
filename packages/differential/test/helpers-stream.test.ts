@@ -14,7 +14,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { convexToJson, type Value } from "convex/values";
-import { type Backend, ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 
 const ready = existsSync(ORACLE_BIN);
 if (!ready) console.warn(`helpers-stream: skipped, no Convex backend at ${ORACLE_BIN} (set CONVEX_BACKEND_BIN)`);
@@ -41,7 +41,7 @@ function prepare(project: string, dir: "convex" | "bunvex") {
 
 beforeAll(async () => {
   if (!ready) return;
-  [convex, bunvex] = await Promise.all([startConvex({ app: APP, prepare }), startBunvex({ app: APP, prepare })]);
+  [convex, bunvex] = await startAll([startConvex({ app: APP, prepare }), startBunvex({ app: APP, prepare })]);
   for (const b of [convex, bunvex]) {
     const r = await b.call("mutation", "streams:seed", {});
     if (!r.ok) throw new Error(`seed failed on ${b.name}: ${JSON.stringify(r.body)}`);

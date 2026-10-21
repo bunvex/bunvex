@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { BunvexClient } from "bunvex/browser";
 import { ConvexClient } from "convex/browser";
-import { type Backend, ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 import { errorText } from "../harness/compare.ts";
 
 const ready = existsSync(ORACLE_BIN);
@@ -99,7 +99,7 @@ const until = async <T>(read: () => Promise<T>, done: (v: T) => boolean) => {
 
 describe.skipIf(!ready)("the dashboard's Functions, runner and Settings reads on Convex and on bunvex", () => {
   beforeAll(async () => {
-    [convex, bunvex] = await Promise.all([startConvex({ app: APP, prepare }), startBunvex({ app: APP, prepare })]);
+    [convex, bunvex] = await startAll([startConvex({ app: APP, prepare }), startBunvex({ app: APP, prepare })]);
   }, 300_000);
   afterAll(async () => {
     await Promise.all([convex?.stop(), bunvex?.stop()]);

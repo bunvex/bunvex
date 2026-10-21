@@ -17,6 +17,7 @@
     "@bunvex/cli": "workspace:*",
     "@bunvex/core": "workspace:*",
     "@bunvex/file-storage": "workspace:*",
+    "@bunvex/sandbox": "workspace:*",
     "@bunvex/server": "workspace:*",
     "@bunvex/values": "workspace:*"
   },

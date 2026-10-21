@@ -196,7 +196,9 @@ went on after its answer. The owner decided to match Convex.
 - **What was in flight goes on**: an operation started before the answer (an unawaited `runMutation`, a `fetch`)
   runs to its end, as before (Convex may shut it down: unchanged, and the same under both executors).
 - **Not changed**: HTTP actions (their body may stream, calling `ctx`, after the handler returns: their end is the
-  body's, STUDY-168 PR 6) and `"use node"` actions (Convex's Node executor, not an isolate).
+  body's, STUDY-168 PR 6) and `"use node"` actions (Convex's Node executor, not an isolate). Under `process` an HTTP
+  action now ends with its body, as Convex's isolate (STUDY-171 §14); under `vm` it does not yet (STUDY-171 §14.6,
+  Q-PR6-1).
 - Under `process` the child's call refuses every operation after its `done` (STUDY-171 §12.6); its timers are cleared
   through `trackedActionTimers`, the same tracking, once the sandbox's actions are on `main` (STUDY-171 §12.11).
 

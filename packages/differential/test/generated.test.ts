@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import fc from "fast-check";
-import { type Backend, ORACLE_BIN, startBunvex, startConvex } from "../harness/backends.ts";
+import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 import { programArb } from "../harness/generate.ts";
 import { compare } from "../harness/runner.ts";
 
@@ -24,7 +24,7 @@ describe.skipIf(!ready)("generated programs on Convex and on bunvex", () => {
   let oracle: Backend;
   let bunvex: Backend;
   beforeAll(async () => {
-    [oracle, bunvex] = await Promise.all([startConvex(), startBunvex()]);
+    [oracle, bunvex] = await startAll([startConvex(), startBunvex()]);
   }, 120_000);
   afterAll(async () => {
     await Promise.all([oracle?.stop(), bunvex?.stop()]);

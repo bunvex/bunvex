@@ -2,6 +2,8 @@
 // way, and a stored file's bytes, each way. Bytes never go through JSON: each chunk is a frame of its own
 // (`chunkFrame`), at most `CHUNK_BYTES`, and the messages around them (`end`, `fail`, `credit`, `stop`) are small.
 //
+// - **Marks.** A sender may put a mark (`MARK`) among its chunks (`mark`, in order): the receiver's reader gets it as a
+//   value of its own. An HTTP action's body marks where a chunk past the 100 MiB limit was dropped.
 // - **Ids.** Each side numbers the streams it sends; a stream is named by its sender's id, so the two sides' ids
 //   never meet (a chunk from the child is always for one of the child's streams).
 // - **Credit.** A sender sends no more than its receiver granted: `credit` messages give it bytes, as the receiver's
@@ -14,6 +16,9 @@
 //   A `credit` or a `stop` for a stream that ended is not: the receiver may not have heard yet.
 
 import { BadMessageError, type WireThrown } from "./protocol.ts";
+
+/** A mark among a stream's chunks: a source yields it, the receiver's reader reads it. */
+export const MARK: unique symbol = Symbol("mark");
 
 /** The most bytes in one chunk: STUDY-168 §14.1's 1 MiB. */
 export const CHUNK_BYTES = 1 << 20;
@@ -29,6 +34,7 @@ export type StreamSink = {
 /** The messages about a stream (both ways). */
 export type StreamMessage =
   | { t: "end"; s: number }
+  | { t: "mark"; s: number }
   | { t: "fail"; s: number; error: WireThrown }
   | { t: "credit"; s: number; n: number }
   | { t: "stop"; s: number };
@@ -50,7 +56,7 @@ const bad = (what: string): never => {
 
 /** A stream this side receives: its chunks queued until its reader takes them, its credit given back as it does. */
 class Incoming {
-  readonly queue: Uint8Array[] = [];
+  readonly queue: (Uint8Array | typeof MARK)[] = [];
   /** Granted and not yet received (strict side only: what the sender may still send). */
   open = 0;
   /** Taken by the reader since the last credit sent. */
@@ -71,6 +77,10 @@ class Incoming {
         pull: async (controller) => {
           while (!this.queue.length && !this.done) await new Promise<void>((resolve) => (this.wake = resolve));
           const next = this.queue.shift();
+          if (next === MARK) {
+            controller.enqueue(MARK as unknown as Uint8Array);
+            return;
+          }
           if (next) {
             controller.enqueue(next);
             this.owed += next.byteLength;
@@ -102,7 +112,13 @@ class Outgoing {
   credit: number;
   stopped = false;
   wake: (() => void) | null = null;
-  constructor(initial: number) {
+  constructor(
+    initial: number,
+    /** What the sender does when the receiver stops the stream (`stop`). */
+    readonly onStop?: () => void,
+    /** What it does once the stream is over for it: its end or failure sent, or it stopped. */
+    readonly onEnd?: () => void,
+  ) {
     this.credit = initial;
   }
   notify() {
@@ -124,10 +140,18 @@ export class Streams {
     private readonly opts: StreamOptions,
   ) {}
 
-  /** Sends `source`'s bytes as a new stream, as its credit allows; its id, for the other side to `receive`. */
-  send(source: ReadableStream<Uint8Array> | AsyncIterable<Uint8Array | ArrayBufferView | string>): number {
+  /**
+   * Sends `source`'s bytes as a new stream, as its credit allows; its id, for the other side to `receive`. `onStop`:
+   * told at once when the receiver stops it (the source may be waiting for bytes that never come); `onEnd`: once the
+   * stream is over for this side (its end or failure sent, or stopped).
+   */
+  send(
+    source: ReadableStream<Uint8Array> | AsyncIterable<Uint8Array | ArrayBufferView | string | typeof MARK>,
+    onStop?: () => void,
+    onEnd?: () => void,
+  ): number {
     const s = ++this.next;
-    const out = new Outgoing(this.opts.initialCredit);
+    const out = new Outgoing(this.opts.initialCredit, onStop, onEnd);
     this.outgoing.set(s, out);
     void this.pump(s, out, source);
     return s;
@@ -145,16 +169,20 @@ export class Streams {
   private async pump(
     s: number,
     out: Outgoing,
-    source: ReadableStream<Uint8Array> | AsyncIterable<Uint8Array | ArrayBufferView | string>,
+    source: ReadableStream<Uint8Array> | AsyncIterable<Uint8Array | ArrayBufferView | string | typeof MARK>,
   ) {
     const it = (
       source instanceof ReadableStream ? source[Symbol.asyncIterator]() : source[Symbol.asyncIterator]()
-    ) as AsyncIterator<Uint8Array | ArrayBufferView | string>;
+    ) as AsyncIterator<Uint8Array | ArrayBufferView | string | typeof MARK>;
     try {
       for (;;) {
         if (out.stopped || this.gone) break;
         const r = await it.next();
         if (r.done) break;
+        if (r.value === MARK) {
+          if (!out.stopped && !this.gone) this.sink.message({ t: "mark", s });
+          continue;
+        }
         let bytes = asBytes(r.value);
         while (bytes.byteLength) {
           while (out.credit <= 0 && !out.stopped && !this.gone) await new Promise<void>((w) => (out.wake = w));
@@ -171,6 +199,7 @@ export class Streams {
     } finally {
       this.outgoing.delete(s);
       if (out.stopped || this.gone) await Promise.resolve(it.return?.()).catch(() => {});
+      out.onEnd?.();
     }
   }
 
@@ -240,6 +269,16 @@ export class Streams {
         if (!out) return;
         out.stopped = true;
         out.notify();
+        out.onStop?.();
+        return;
+      }
+      case "mark": {
+        const inc = this.incoming.get(m.s);
+        if (!inc || inc.done)
+          return this.opts.strict && !inc?.stopped ? bad(`a mark for no open stream (${m.s})`) : undefined;
+        if (inc.stopped) return;
+        inc.queue.push(MARK);
+        inc.notify();
         return;
       }
       case "end":
@@ -268,6 +307,21 @@ export class Streams {
       if (this.opts.strict) inc.open += n;
       if (n > 0) this.sink.message({ t: "credit", s: inc.s, n });
     }
+  }
+
+  /** Fails stream `s` this side sends with `error` now: what its source still makes is not sent. */
+  failOutgoing(s: number, error: WireThrown) {
+    const out = this.outgoing.get(s);
+    if (!out || out.stopped) return;
+    out.stopped = true;
+    out.notify();
+    if (!this.gone) this.sink.message({ t: "fail", s, error });
+  }
+
+  /** Stops stream `s` the other side sends, if it is still coming (nobody will read it); one read to its end is gone. */
+  stopIncoming(s: number) {
+    const inc = this.incoming.get(s);
+    if (inc) this.stopReceiving(inc);
   }
 
   /** The reader is done with an ended stream. */

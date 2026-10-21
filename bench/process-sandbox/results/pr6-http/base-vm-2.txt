@@ -1,0 +1,126 @@
+{
+  "backpressure, 96 MiB stream, read 8 MiB/s": {
+    "vm": {
+      "read": "8 MiB/s",
+      "bytes": 100663296,
+      "seconds": 12,
+      "mibs": 8,
+      "server": {
+        "idle": 69.4,
+        "peak": 73,
+        "above": 3.6
+      },
+      "child": {
+        "idle": null,
+        "peak": null,
+        "above": null
+      }
+    }
+  },
+  "backpressure, 96 MiB stream, read fast": {
+    "vm": {
+      "read": "fast",
+      "bytes": 100663296,
+      "seconds": 0.2,
+      "mibs": 589.4,
+      "server": {
+        "idle": 70.7,
+        "peak": 73.4,
+        "above": 2.7
+      },
+      "child": {
+        "idle": null,
+        "peak": null,
+        "above": null
+      }
+    }
+  },
+  "empty HTTP action": {
+    "vm": {
+      "p50": 290,
+      "mean": 378,
+      "p99": 1987,
+      "n": 1000
+    }
+  },
+  "HTTP action, \"ok\"": {
+    "vm": {
+      "p50": 321,
+      "mean": 429,
+      "p99": 1486,
+      "n": 1000
+    }
+  },
+  "request body, 1 MiB, read whole": {
+    "vm": {
+      "p50": 805,
+      "mean": 1129,
+      "p99": 4227,
+      "n": 200,
+      "mibs": 1242
+    }
+  },
+  "request body, 1 MiB, streamed": {
+    "vm": {
+      "p50": 1701,
+      "mean": 1943,
+      "p99": 6140,
+      "n": 200,
+      "mibs": 588
+    }
+  },
+  "response body, 1 MiB, bytes": {
+    "vm": {
+      "p50": 2461,
+      "mean": 2689,
+      "p99": 6790,
+      "n": 200,
+      "mibs": 406
+    }
+  },
+  "response body, 1 MiB, streamed": {
+    "vm": {
+      "p50": 1764,
+      "mean": 1908,
+      "p99": 4403,
+      "n": 200,
+      "mibs": 567
+    }
+  },
+  "request body, 64 MiB, read whole": {
+    "vm": {
+      "p50": 104076,
+      "mean": 100227,
+      "p99": 226859,
+      "n": 20,
+      "mibs": 615
+    }
+  },
+  "request body, 64 MiB, streamed": {
+    "vm": {
+      "p50": 45126,
+      "mean": 47085,
+      "p99": 98561,
+      "n": 20,
+      "mibs": 1418
+    }
+  },
+  "response body, 64 MiB, bytes": {
+    "vm": {
+      "p50": 129323,
+      "mean": 130411,
+      "p99": 181178,
+      "n": 20,
+      "mibs": 495
+    }
+  },
+  "response body, 64 MiB, streamed": {
+    "vm": {
+      "p50": 45116,
+      "mean": 46450,
+      "p99": 60113,
+      "n": 20,
+      "mibs": 1419
+    }
+  }
+}
