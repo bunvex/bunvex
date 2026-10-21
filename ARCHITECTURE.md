@@ -187,6 +187,15 @@ bunvex/
 │                                    bunvex/react-auth0 · bin: bunvex (apps install @bunvex/*)
 │       └── bin/local-backend        the bunvex-local-backend executable (STUDY-39, STUDY-40)   ✅
 │
+├── components/                      bunvex's own components (STUDY-158 step 4; the package model in STUDY-183 §3.1):
+│   │                                `@bunvex/<Convex's name>`, each on its own version, outside the fixed group
+│   └── sharded-counter/             @bunvex/sharded-counter 0.1.0, matching @convex-dev/sharded-counter 0.2.3   ✅
+│       ├── src/component/           bunvex.config.ts (`shardedCounter`), schema, public.ts, _generated/ (committed,
+│       │                            `bunvex codegen --component-dir src/component`)
+│       ├── src/client/              ShardedCounter: add, subtract, inc, dec, count, rebalance, reset,
+│       │                            estimateCount, for, trigger
+│       └── src/test.ts              `register(t, name)` for @bunvex/testing (`./test`)
+│
 ├── apps/
 │   ├── dashboard/                   thin Vite host mounting @bunvex/dashboard on a deployment     🟡
 │   │                                (dashboard-source) or the demo data; its own image, dashboard.zip,
@@ -255,9 +264,10 @@ client ──► protocol, values                    react ──► client, val
 nextjs, react-query ──► react, client, values  react-clerk, react-auth0 ──► react
 cli ──► server, core, values, client, protocol testing ──► server, core, values, cli, file-storage
 helpers ──► server, values (and core and testing in its tests only: an engine in memory, bunvexTest)
+components/* ──► server, values, helpers, another component (a child); testing in their tests only
 sandbox ──► server, core, values, protocol (its child runs the server's loader; the server never imports it)
 bunvex ──► the packages it re-exports, plus core, persistence and sandbox for bin/local-backend
-examples/* ──► bunvex, react-query (a user's app, STUDY-90)
+examples/* ──► bunvex, react-query, helpers, components/* (a user's app, STUDY-90)
 
 tests only, never published:
   sync-e2e ──► client, react, nextjs, react-clerk, react-auth0, react-query, server, core, protocol, values,
@@ -278,7 +288,7 @@ ui ◄── apps/site
   client and the contract's types, never the engine (UI-01 §34). The rules cover `apps/*` too.
 - A persistence driver depends only on the `Persistence` interface from `core` and on its native driver.
 - No relative import leaves its package, and every imported package is declared in its `package.json`.
-- No `convex` in shipped code (`packages/*/src`) outside comments: identifiers, strings and messages use
+- No `convex` in shipped code (`packages/*/src`, `components/*/src`) outside comments: identifiers, strings and messages use
   bunvex's own words (STUDY-18 D1).
 - No source file starts with `// @bun…` (Bun's "already transpiled" pragma).
 - In shipped code, a `setTimeout` whose delay subtracts a time (a sleep towards a timestamp) passes it

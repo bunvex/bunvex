@@ -8,7 +8,7 @@ item. It is the project's to-do list at the scale of the whole product.
 |---|---|--:|--:|--:|
 | Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 244 | 3 | 0 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 163 | 2 | 1 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables, libraries | [platform.md](platform.md) | 244 | 21 | 6 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables, libraries | [platform.md](platform.md) | 244 | 22 | 5 |
 
 Beyond Convex, [additions.md](additions.md) lists 38 additions: 34 built (5 of them dashboard screens on the
 mock), 1 being built (AD-44), 1 accepted, 2 deferred, none proposed (recounted on 2026-10-20, STUDY-181 PR 1: AD-23
@@ -18,7 +18,7 @@ accepted in STUDY-164 and built the same day, STUDY-164 §7; AD-43, rooms in the
 the event tap's server and data source, §5.2, the actions' server and data source, §5.3, and the tap's panel and the
 actions' controls, STUDY-166; AD-46, the SQLite page cache's size, decided on 2026-10-21 and built, STUDY-174 Q6).
 
-These counts were recounted on 2026-10-20 (STUDY-181 PR 4, the pagination row of platform.md; PR 3, the streams row; PR 5, the triggers row; PR 2, the custom functions row; PR 1, the libraries rows); before that on 2026-10-19 (STUDY-173, after the components rows' update of the same day, STUDY-152 steps 1–7; the docs audit of 2026-10-12 re-marked cloud-only and decided no-build rows *n/a*) from each row's status column: a row counts as done,
+These counts were recounted on 2026-10-21 (STUDY-183, the ecosystem components row of platform.md: sharded-counter built); before that on 2026-10-20 (STUDY-181 PR 4, the pagination row of platform.md; PR 3, the streams row; PR 5, the triggers row; PR 2, the custom functions row; PR 1, the libraries rows); before that on 2026-10-19 (STUDY-173, after the components rows' update of the same day, STUDY-152 steps 1–7; the docs audit of 2026-10-12 re-marked cloud-only and decided no-build rows *n/a*) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
 are not counted: 1 in server-api.md, 1 in client-sync.md, 6 in platform.md.
 
@@ -149,7 +149,8 @@ containers up, deploy functions, see them work) before the remaining platform it
 
 - full-text search (STUDY-45, STUDY-111: all 10 rows done, platform §6) and vector search (STUDY-51: all 6
   done, §7) — done;
-- components (1 of 7, §11; DV-55, plan in STUDY-62) — open;
+- components (§11; DV-55, plan in STUDY-62) — open: steps 1–7 built; step 8, bunvex's own components, started
+  with `@bunvex/sharded-counter` (STUDY-183);
 - Node actions: `"use node"` runs in Bun (DV-87) — done; `node.externalPackages` — done (STUDY-148; DV-470–DV-473
   decided by the owner, 2026-10-12);
 - log streaming (STUDY-47, STUDY-59, STUDY-70) and metrics (§20: 14 done; insights is cloud-only, *n/a*) —
@@ -174,9 +175,10 @@ gaps.
    namespaced tables and the registry, `bunvex.config.ts` with `defineApp` / `defineComponent` pushed by the CLI,
    a component's functions run and called across components (references, handles), its env, codegen, its
    scheduler, crons, storage, HTTP mounts and search and vector indexes. Left: bunvex's own components (step 8,
-   studied in [STUDY-158](../study/STUDY-158-own-components.md)), the dashboard (step 9) and export/import (step 10). Until
-   step 8, an app on `@convex-dev/*` components (rate limiter, aggregate, workpool, auth, …) has no package to
-   install.
+   studied in [STUDY-158](../study/STUDY-158-own-components.md); the first, `@bunvex/sharded-counter`, built in
+   [STUDY-183](../study/STUDY-183-sharded-counter.md)), the dashboard (step 9) and export/import (step 10). Until
+   step 8 is done, an app on the other `@convex-dev/*` components (rate limiter, aggregate, workpool, auth, …) has no
+   package to install.
 
 **Medium: an app hits it in normal use of a feature**
 
