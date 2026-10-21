@@ -166,7 +166,9 @@ for (const [name, dir] of dirOfName) {
   // packages/* only (their keys have no prefix): apps may name Convex descriptively.
   if (!dir.includes("/"))
     for (const field of metadataNaming(pj))
-      errors.push(`${where}/package.json: "convex" in its ${field}, which npm publishes — use bunvex's own words (rule 5)`);
+      errors.push(
+        `${where}/package.json: "convex" in its ${field}, which npm publishes — use bunvex's own words (rule 5)`,
+      );
   const declared = new Set([
     ...Object.keys(pj.dependencies ?? {}),
     ...Object.keys(pj.peerDependencies ?? {}),
