@@ -23,7 +23,8 @@ The full inventory of Convex's features and bunvex's status is [`docs/parity/`](
 update its rows in the PR that changes them.
 
 bunvex's own code never says "convex" outside comments: no identifier, exported name, string, error message
-or URL may contain it (`check:deps` rule 5). Cite Convex in comments and in `docs/study/`; name things, and
+or URL may contain it, nor a published package's npm metadata (description, keywords, homepage) (`check:deps`
+rule 5). Cite Convex in comments and in `docs/study/`; name things, and
 word messages, as bunvex. There are no exceptions: wire names (a `format` value, a metric, an error code)
 are bunvex's too, since the clients that talk to bunvex are bunvex's (owner, 2026-10-03: DV-307, DV-308,
 DV-312).
