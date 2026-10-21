@@ -1,6 +1,6 @@
 # STUDY-171 — The function executor seam and its knobs (STUDY-168 PR 1), the wire and the child runtime (PR 2), queries and mutations over the bridge (PR 3), two `vm` bugs (§10), logs and errors (PR 4), actions (PR 5), unhandled rejections (PR 4b)
 
-- **Status:** PR 1 implemented (#738); PR 2 (§7) implemented (#743); PR 3 (§8) implemented (#750); §9 (#751) and §10 (#759) fixed; PR 4 (§11) implemented (#760); PR 5 (§12) implemented (#773; the owner's decisions of 2026-10-21 in §12.11); PR 4b (§13) implemented (this PR); AD-44 accepted
+- **Status:** PR 1 implemented (#738); PR 2 (§7) implemented (#743); PR 3 (§8) implemented (#750); §9 (#751) and §10 (#759) fixed; PR 4 (§11) implemented (#760); PR 5 (§12) implemented (#773; the owner's decisions of 2026-10-21 in §12.11); PR 4b (§13) implemented; §TBD (a nested call's error in the caller's realm, Q-PR7-2) fixed (this PR); AD-44 accepted
   (owner, 2026-10-19)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend, the reference commit
   ([upstream.md](../parity/upstream.md))
@@ -1479,3 +1479,141 @@ parity list (STUDY-168 §12.3).
   - The same note covers the Bun 1.4.3+ case (§13.3): where Bun reports at the end of the turn, a rejection that such
     Bun-resumed code handles later in the same turn is not reported, so the call succeeds where Convex fails it. PR 9
     closes it too (one call per process, and that process's checkpoints its own).
+
+## TBD. A nested call's error in the caller's realm (Q-PR7-2)
+
+STUDY-168 PR 7's parity work (§15 of #822, Q-PR7-2) found that a nested call's error, caught by the caller, is not
+`instanceof Error` in pushed code, under both executors. The owner approved the fix on 2026-10-21. It is one of the
+`vm` cross-realm `instanceof` bugs (§9, §10): no divergence is recorded, it was a bug against Convex's behaviour.
+
+### TBD.1 How Convex does it (read at `72ce13c`)
+
+- `ctx.runQuery` / `ctx.runMutation` in a query or mutation go through `runUdf` (`npm-packages/convex/src/server/impl/
+  registration_impl.ts:755-770`, the `1.0/runUdf` syscall); an action's `runQuery` / `runMutation` / `runAction`
+  through `1.0/actions/query|mutation|action` (`actions_impl.ts:35-59`). Both await `performAsyncSyscall`
+  (`syscall.ts:28-55`).
+- `performAsyncSyscall` catches the syscall's rejection and throws a new error in the function's own code
+  (`syscall.ts:41-53`): with `e.data` set (an application error), `new ConvexError(e.message)` and then
+  `rethrown.data = jsonToConvex(e.data)`; otherwise `new Error(e.message)`. The comment says why: "Rethrow the
+  exception to attach stack trace starting from here."
+- `ConvexError` (`values/errors.ts`) is the app's bundled class, `extends Error`, with `name = "ConvexError"`, `data`
+  and the registered `Symbol.for("ConvexError")` field; its constructor's message is the string given, so the
+  rethrown error's message is the callee's, not its data's.
+- So the caller sees, measured on `precompiled-2026-10-10-72ce13c` (`packages/differential/test/caller-realm.test.ts`):
+  `e instanceof Error` true; `Object.getPrototypeOf(e)` is the caller's `Error.prototype`, or with data its
+  `ConvexError.prototype`; `e.constructor` `Error` / `ConvexError`; `name` `Error` / `ConvexError`; the callee's
+  message; `data` the callee's (none for a plain error); own properties `message`, `stack` (and `name`, `data` with
+  data) besides V8's `__frameData`; `Object.prototype.toString` `[object Error]`. The same for a call into a
+  component and for each caller kind. Its stack is the caller's frame where it awaited (`at async …`).
+
+### TBD.2 What bunvex did
+
+The server made the caller's error (`toCallerError`, `toActionCallerError`, functions.ts) in its own realm: a
+server `Error`, or the server's `BunvexError`. The context's view (`installAppErrors`, app-errors.ts) gave it the app's
+frames and kept the object. Under `process` the child made it again (`rebuiltError`, child-call.ts) in its main realm,
+not the context's. So `e instanceof Error` and `Object.getPrototypeOf(e) === Error.prototype` were false in the app,
+and with data `Object.getPrototypeOf(e) === BunvexError.prototype` too (`instanceof BunvexError` was right: the
+app's class recognises any `BunvexError` by its symbol).
+
+The oracle test found a second, related one: the app's own `BunvexError` extended the server's class, so in pushed
+code `new BunvexError(…) instanceof Error` was false as well (Convex's `ConvexError` is an `Error` of the app's realm).
+
+### TBD.3 The fix
+
+- The server marks each error it makes for a nested call's caller (`asCallerError`, app-errors.ts): the callee's
+  failure made into the caller's error (`toCallerError`, `toActionCallerError`), the timeout's included.
+- The view, in the caller's realm, gives a marked error the caller's prototype: its realm's `Error.prototype`, or with
+  data its `BunvexError.prototype`. The object stays the one the server made: its message (the callee's uncaught
+  display), data, frames and identity are unchanged (under `process` the child still knows which operation it came
+  from, and a rethrown error is described by the host as before).
+- Under `process` the mark crosses the wire: the host's `thrownToChild` sets `caller: true` on the thrown error, the
+  child's `rebuiltError` marks the error it makes, and the child's view does the rest.
+- The app's `BunvexError` is now a class of the context's realm (`extends Error` there), with the server class's
+  constructor, `name` and registered symbol, so the server still reads it as a `BunvexError` (`isBunvexError`), and
+  `instanceof BunvexError` still holds for any `BunvexError`, the engine's included.
+- Not changed: what the error's stack holds (the frames bunvex maps today: a query's or mutation's call site, an
+  action's `at async` await, STUDY-95, STUDY-150), and the env scope of nested calls.
+
+### TBD.4 Parity and tests
+
+- `packages/differential/test/caller-realm.test.ts` (the app of `caller-realm-app/`, with a `thrower` component),
+  against `precompiled-2026-10-10-72ce13c` and bunvex under `vm` and `process`: query → query, mutation → query,
+  action → mutation, and the app's query, mutation and action → its component's, each with a plain error and one
+  with data, plus the app's own errors as a baseline; `instanceof Error`, `instanceof` the application class, the
+  prototypes, the constructor and its name, `name`, `message`, `data`, own keys (each engine's own keys left out:
+  V8's `__frameData`, JavaScriptCore's `line`, `column`, `sourceURL`, `originalLine`, `originalColumn`), the
+  `toString` tag, and whether the stack has the caller's frame. The component cases run under `vm` only until
+  components run under `process` (#822): then `PROCESS_COMPONENTS` turns them on.
+- `packages/server/test/nested-error-realm.test.ts`, under `vm` and under `process` (the preload): the same kinds of
+  call (and mutation → mutation, action → action, a Node action → mutation), the message's first lines and the
+  caller's frames asserted as before the fix, the app's own `BunvexError` and a subclass, and the error left
+  uncaught: the client's message and data as before. Components and Node actions are skipped under `process`
+  (#822, PR 10).
+- The suites, on the test VPS (Linux, Bun 1.4.3), this branch against `main` (`c167c7f1`): `packages/server`,
+  `packages/sandbox`, `packages/values` and `packages/testing` under `vm` 2728 / 2732 against 2723 / 2727 (the new
+  file's 5 tests; the same 3 failures on both, the VPS's own: an action's proxy refusal twice, Info-ZIP archives);
+  `packages/server` under `process` 1303 / 1413 against 1300 / 1408 (the same 107 failures on both: components,
+  `"use node"`, HTTP actions not yet under `process`). The differential files `nested-errors`, `error-frames` and
+  `node-errors` need Node for Convex's CLI, which the VPS lacks; on the Mac (with Node, the same binary) they and
+  `caller-realm` pass, 23 / 23.
+
+### TBD.5 Measurements
+
+`packages/sandbox/bench/nested-errors.ts` on the test VPS (2 vCPU, idle), `main` against this branch, p50 / mean /
+p99 µs per call, each line in the same process, 2000 calls after 300 (`vm`) and 1000 after 200 (`process`):
+
+| Function, `vm`, 10 nested calls | `main` | this branch |
+|---|---|---|
+| query, calls that succeed | 186 / 225 / 1713 | 185 / 243 / 2223 |
+| query, caught errors | 874 / 938 / 2901 | 884 / 955 / 2956 |
+| query, caught errors with data | 1045 / 1108 / 3279 | 1131 / 1225 / 3537 |
+| mutation, caught errors | 1069 / 1118 / 3088 | 1024 / 1056 / 2958 |
+| action, caught errors | 2060 / 2130 / 5246 | 1945 / 1986 / 5049 |
+| action, caught errors with data | 2208 / 2298 / 5938 | 2184 / 2310 / 6256 |
+
+Under `process`, 10 nested calls per function, three rounds of each tree taken in turn (no other process on the VPS
+during the runs), the p50 range over the rounds, µs:
+
+| Function, `process`, 10 nested calls | `main` | this branch |
+|---|---|---|
+| query, calls that succeed | 3289–5021 | 2842–4814 |
+| query, caught errors | 10539–11429 | 10227–12598 |
+| query, caught errors with data | 9595–9959 | 8971–13252 |
+| mutation, caught errors | 9396–14268 | 8542–10912 |
+| action, caught errors | 10403–12810 | 8915–13479 |
+| action, caught errors with data | 12602–14724 | 10169–11365 |
+
+The ranges overlap on every line: the round-to-round spread is larger than any difference. The change adds a
+`WeakSet` insert where the server makes the error, a lookup and a prototype change in the view, and under `process`
+one boolean on the wire: no cost a measurement here separates from the noise. The bench also counts the caught errors
+that are `instanceof Error` in the caller: 0 of 10 on `main`, 10 of 10 on this branch, under both executors.
+
+### TBD.6 Sabotage
+
+Each undone alone, on the VPS:
+
+- the view's prototype change (`fix`, app-errors.ts): the server test fails 3 of 5 under `vm` and 1 of 3 under
+  `process`; the oracle test 12 of 14 (all but the baseline);
+- the wire's `caller` flag (`thrownToChild`): the server test passes under `vm` and fails 1 of 3 under `process`;
+- the app's `BunvexError` on the server's class again (`extends Base`): the server test fails 4 of 5 under `vm` and 2
+  of 3 under `process`.
+
+### TBD.7 Owner question
+
+- **Q-TBD-1. A nested call refused before the callee runs (no such function) is a `FunctionPathError` of the
+  server's realm in the caller.**
+  - Convex: the refusal comes back through the same `performAsyncSyscall`: `new Error(e.message)` in the caller's
+    realm, `name` `Error`, `constructor` `Error`. Its message: from a query "Could not find public function for
+    'errors:missing'."; from an action "Couldn't resolve api.errors.missing" (measured on `72ce13c`, the oracle app's
+    `queryToMissing` and `actionToMissing`).
+  - bunvex: the server's `FunctionPathError` is passed through (`atCallSite`, `toActionCallerError` keep it, so that
+    left uncaught it reads as the bare message), so in the caller `e instanceof Error` is false, `name` is
+    `FunctionPathError` (an own property), `constructor.name` `FunctionPathError` under `vm` and `Error` under
+    `process`; from an action the message is the query's, "Could not find public function for 'errors:missing'.".
+  - Same: no.
+  - Why: not built yet (the error can be marked as this PR's are, with the server keeping the bare message for the
+    uncaught case by the mark instead of the class).
+  - App impact: `catch (e) { if (e instanceof Error) … }` and `e.name === "Error"` checks around a call to a missing
+    function take the other branch; an action that shows the message shows other words.
+  - **Recommendation: make a refused nested call's error a plain `Error` of the caller's realm, and an action's
+    message Convex's, in a PR of its own, for both executors**, with the oracle cases this PR's app already has.
