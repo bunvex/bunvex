@@ -54,12 +54,13 @@ const cursors = new Map<Backend, number>();
  * Run `calls` on `b` in order, then the cache flag of each query call that the function log stream recorded after
  * them, as `name:hit` or `name:miss`.
  */
-async function observe(b: Backend, calls: [kind: "query" | "mutation", name: string][]): Promise<string[]> {
+async function observe(b: Backend, calls: [kind: "query" | "mutation" | "action", name: string][]): Promise<string[]> {
   for (const [kind, name] of calls) {
     const r = await b.call(kind, `cache:${name}`, {});
     expect(r.ok).toBe(true);
   }
-  const want = calls.filter(([k]) => k === "query").length;
+  // An action logs the query its runQuery ran too.
+  const want = calls.filter(([k]) => k !== "mutation").length;
   const auth = `${b.name === "convex" ? "Convex" : "Bunvex"} ${b.adminKey}`;
   const seen: string[] = [];
   lastEntries.length = 0;
@@ -80,7 +81,7 @@ async function observe(b: Backend, calls: [kind: "query" | "mutation", name: str
 }
 
 /** The same calls on both backends: bunvex's cache flags must be Convex's. */
-async function same(calls: [kind: "query" | "mutation", name: string][]) {
+async function same(calls: [kind: "query" | "mutation" | "action", name: string][]) {
   const c = await observe(convex, calls);
   expect(await observe(bunvex, calls)).toEqual(c);
   return c;
@@ -112,6 +113,20 @@ describe.skipIf(!ready)("the query cache's observable behaviour, against Convex'
       ]),
     ).toEqual(["plain:hit", "clock:miss"]);
   }, 60_000);
+
+  // Convex keys a cached result by the caller's visibility (`StoredCacheKey.allowed_visibility`): a client's call
+  // and an action's runQuery each reuse only their own (DV-507).
+  test("an action's runQuery and a client's call do not share a cached result", async () => {
+    expect(
+      await same([
+        ["mutation", "add"],
+        ["action", "viaAction"],
+        ["query", "plain"],
+        ["query", "plain"],
+        ["action", "viaAction"],
+      ]),
+    ).toEqual(["plain:miss", "plain:miss", "plain:hit", "plain:hit"]);
+  });
 
   // STUDY-174 finding F4: a hit's entry describes the run it reused, as Convex's `log_query`
   // (crates/application/src/function_log.rs) logs the cached outcome's user time, memory, execution timestamp and
