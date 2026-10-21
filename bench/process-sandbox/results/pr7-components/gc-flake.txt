@@ -1,0 +1,7 @@
+# component-scheduler.test.ts 'garbage collection deletes a component's completed jobs too', test VPS (Bun 1.4.3), BUNVEX_FUNCTION_SANDBOX=process unless said
+before: 7 of 20 failed
+after: 0 of 20 failed
+whole file after: 0 of 5 failed
+vm after: 0 of 20 failed
+# probe (10 runs, process): the job's state when first seen not pending, and the component's message count
+success 1 x3, gone (null) 1 x7: the job always ran (count 1) before its row went
