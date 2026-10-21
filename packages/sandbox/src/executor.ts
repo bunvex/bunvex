@@ -6,14 +6,20 @@
 //   error). A version is retired when another one is installed, and its child stopped once its last call ends; one
 //   that is never installed (a failed push) is stopped then too, or when it is collected. The pool of one-call
 //   processes is STUDY-168's PR 9.
+// - **Components** (STUDY-168 PR 7, STUDY-171 §15): each instance's code is loaded beside the app's version, in its
+//   child: a `CodeVersion` of its own there (its own contexts, its modules evaluated once, DV-492), each call naming
+//   the version it runs (the namespace switch), as Convex runs a nested call into a component in the caller's isolate
+//   in a context of its own. What a call reaches is its `ctx`'s, on the host: `resolveCall`, the namespace, the
+//   component's variables. The server releases an instance's version when the instance gets another or goes; the
+//   child forgets it (`unload`), and stops once it holds no version.
 // - **Actions** (STUDY-171 §12) run in the version's child too: the stand-in is the action's handler, and the
 //   engine runs it as any action (`HostActionCall`). Rooms (AD-42) are stand-ins whose gates run in the child.
 // - **HTTP actions** (STUDY-168 PR 6): the router is a stand-in made from the routes the child analyzed, each route's
 //   handler running the app's in the child (`HostActionCall.runHttp`), so the server routes, logs and answers a
 //   request as in-process. The version's child stays in use until the response's body has been handed over.
 // - **Push-time evaluations** (the auth config, a schema) run in one child kept for them.
-// - **Not available yet** (STUDY-171 §8.7): `"use node"` actions fail when called, components fail the push, each
-//   with a message that names the sandbox.
+// - **Not available yet** (STUDY-171 §8.7): `"use node"` actions fail when called, with a message that names the
+//   sandbox.
 
 import { existsSync } from "node:fs";
 import { pausingUserTime } from "@bunvex/core";
@@ -27,7 +33,6 @@ import {
   type FunctionDef,
   HttpRouter,
   httpActionGeneric,
-  InvalidModulesError,
   type LoadedCode,
   type LoadOptions,
   type ModuleSource,
@@ -47,36 +52,110 @@ import { HostCall } from "./host-call.ts";
 import type { WireRoom } from "./protocol.ts";
 import type { RemoteFunction } from "./version.ts";
 
-/** A version's child, replaced when it dies. */
-class VersionChild {
-  private current: Promise<{ child: SandboxProcess; load: ChildLoad }> | null;
+/** A version's place in a child: its code, and the id its calls name it by there. */
+type Slot = { sources: ModuleSource[]; opts: LoadOptions; versionId: number };
+
+/**
+ * A child and the versions loaded in it (STUDY-168 PR 7): the app's code version, and the component instances loaded
+ * beside it, each its own `CodeVersion` (its own contexts, its modules evaluated once: DV-492), each call naming the
+ * one it runs (the namespace switch). A child that dies is replaced at the next call of any of them, every version it
+ * held loaded again in the new one, in the order they came. The child stops once its last version is dropped.
+ */
+class ChildHost {
+  private current: Promise<SandboxProcess>;
+  private readonly slots = new Set<Slot>();
+  /** No version is left: the child is stopped, and no version may be added. */
+  closed = false;
+  /** How many versions the child said it held at its last load (the ones dropped forgotten). */
+  held = 0;
+
   constructor(
-    first: { child: SandboxProcess; load: ChildLoad },
-    private readonly sources: ModuleSource[],
-    private readonly opts: LoadOptions,
+    first: SandboxProcess,
     private readonly spawn: SandboxProcessOptions,
+    private readonly onClosed: (host: ChildHost) => void = () => {},
   ) {
     this.current = Promise.resolve(first);
   }
 
-  async get(): Promise<{ child: SandboxProcess; load: ChildLoad }> {
-    const now = await this.current!;
-    if (!now.child.failure) return now;
-    this.current = (async () => {
+  /** The child, alive: a new one, with every version loaded again, if it died. */
+  private async child(): Promise<SandboxProcess> {
+    const now = await this.current;
+    if (!now.failure) return now;
+    const replacing = (async () => {
       const child = await SandboxProcess.start(this.spawn);
       try {
-        return { child, load: await child.load(this.sources, this.opts) };
+        for (const slot of this.slots) {
+          const load = await child.load(slot.sources, slot.opts);
+          slot.versionId = load.versionId;
+          this.held = load.held;
+        }
+        return child;
       } catch (e) {
         await child.close();
         throw new ExecutorFailure(`the function sandbox could not load the code again: ${(e as Error).message}`);
       }
     })();
-    return this.current;
+    this.current = replacing;
+    // A failed replacement is tried again at the next call.
+    replacing.catch(() => {
+      if (this.current === replacing) this.current = Promise.resolve(now);
+    });
+    return replacing;
+  }
+
+  /** Loads a version in this host's child: the version's place, and what the child made of it. */
+  async add(sources: ModuleSource[], opts: LoadOptions): Promise<{ slot: Slot; load: ChildLoad }> {
+    const child = await this.child();
+    const load = await child.load(sources, opts);
+    this.held = load.held;
+    const slot: Slot = { sources, opts, versionId: load.versionId };
+    if (this.closed) {
+      // Every other version was dropped while this one loaded: the child is stopping.
+      throw new ExecutorFailure("the function sandbox's process was stopped while the code loaded");
+    }
+    this.slots.add(slot);
+    return { slot, load };
+  }
+
+  /** The child that runs `slot`'s calls, and the version's id there. */
+  async get(slot: Slot): Promise<{ child: SandboxProcess; versionId: number }> {
+    if (!this.slots.has(slot)) throw new ExecutorFailure("the function sandbox's code version was released");
+    const child = await this.child();
+    return { child, versionId: slot.versionId };
+  }
+
+  /** `slot` runs no more calls: the child forgets it, and stops once it holds none. */
+  drop(slot: Slot) {
+    if (!this.slots.delete(slot)) return;
+    if (this.slots.size === 0) {
+      this.closed = true;
+      void this.close();
+      return;
+    }
+    void this.current.then(
+      (child) => {
+        if (!child.failure) child.send({ t: "unload", version: slot.versionId });
+      },
+      () => {},
+    );
+  }
+
+  /** How many versions the child holds (tests). */
+  get size() {
+    return this.slots.size;
+  }
+
+  /** The child's pid (tests, measurements). */
+  async pid(): Promise<number> {
+    return (await this.current).pid;
   }
 
   async close() {
-    const now = await this.current?.catch(() => null);
-    await now?.child.close();
+    this.closed = true;
+    this.slots.clear();
+    this.onClosed(this);
+    const now = await this.current.catch(() => null);
+    await now?.close();
   }
 }
 
@@ -94,9 +173,13 @@ export class RemoteCodeVersion implements LoadedCode {
   private retired = false;
 
   constructor(
-    private readonly child: VersionChild,
+    /** The child this version runs in, and its place there. */
+    readonly host: ChildHost,
+    private readonly slot: Slot,
     sources: ModuleSource[],
     load: ChildLoad,
+    /** Loaded beside another version (a component instance beside the app's): `installed` does not retire it. */
+    readonly beside: boolean,
   ) {
     this.moduleHashes = load.moduleHashes;
     this.moduleLoads = load.moduleLoads;
@@ -160,15 +243,10 @@ export class RemoteCodeVersion implements LoadedCode {
   private async action(key: string, ctx: object, args: unknown) {
     this.inFlight++;
     try {
-      let got: Awaited<ReturnType<VersionChild["get"]>>;
-      try {
-        got = await this.child.get();
-      } catch (e) {
-        throw e instanceof SandboxError ? new ExecutorFailure(e.message) : e;
-      }
-      return await new HostActionCall(got.child, ctx).run(key, got.load.versionId, args);
+      const got = await this.childNow();
+      return await new HostActionCall(got.child, ctx).run(key, got.versionId, args);
     } finally {
-      if (--this.inFlight === 0 && this.retired) void this.child.close();
+      if (--this.inFlight === 0 && this.retired) this.host.drop(this.slot);
     }
   }
 
@@ -179,16 +257,11 @@ export class RemoteCodeVersion implements LoadedCode {
       // charges it (`HostCall.charge`), so the round trips, the host's work on each operation and a new child's
       // start are not user time.
       return await pausingUserTime(async () => {
-        let got: Awaited<ReturnType<VersionChild["get"]>>;
-        try {
-          got = await this.child.get();
-        } catch (e) {
-          throw e instanceof SandboxError ? new ExecutorFailure(e.message) : e;
-        }
-        return new HostCall(got.child, kind, ctx as Record<string, unknown>, call).run(key, got.load.versionId, args);
+        const got = await this.childNow();
+        return new HostCall(got.child, kind, ctx as Record<string, unknown>, call).run(key, got.versionId, args);
       });
     } finally {
-      if (--this.inFlight === 0 && this.retired) void this.child.close();
+      if (--this.inFlight === 0 && this.retired) this.host.drop(this.slot);
     }
   }
 
@@ -217,52 +290,90 @@ export class RemoteCodeVersion implements LoadedCode {
     this.inFlight++;
     let ended: Promise<void> = Promise.resolve();
     try {
-      let got: Awaited<ReturnType<VersionChild["get"]>>;
-      try {
-        got = await this.child.get();
-      } catch (e) {
-        throw e instanceof SandboxError ? new ExecutorFailure(e.message) : e;
-      }
-      const outcome = await new HostActionCall(got.child, ctx).runHttp(route, got.load.versionId, request);
+      const got = await this.childNow();
+      const outcome = await new HostActionCall(got.child, ctx).runHttp(route, got.versionId, request);
       ended = outcome.ended;
       return outcome.response;
     } finally {
       void ended.then(() => {
-        if (--this.inFlight === 0 && this.retired) void this.child.close();
+        if (--this.inFlight === 0 && this.retired) this.host.drop(this.slot);
       });
     }
   }
 
-  /** No more calls are expected: the child stops once the last one ends. */
+  /** The child that runs this version's calls now (a new one if it died). */
+  private async childNow() {
+    try {
+      return await this.host.get(this.slot);
+    } catch (e) {
+      throw e instanceof SandboxError ? new ExecutorFailure(e.message) : e;
+    }
+  }
+
+  /** No more calls are expected: the child forgets this version once the last one ends (and stops, if it was its last). */
   retire() {
+    if (this.retired) return;
     this.retired = true;
-    if (this.inFlight === 0) void this.child.close();
+    collected.unregister(this);
+    if (this.inFlight === 0) this.host.drop(this.slot);
+  }
+
+  get isRetired() {
+    return this.retired;
   }
 }
 
-/** Stops a version's child once the version is collected, if nothing retired it before. */
-const collected = new FinalizationRegistry<VersionChild>((child) => void child.close());
+/** Drops a version from its child once the version is collected, if nothing retired it before. */
+const collected = new FinalizationRegistry<{ host: ChildHost; slot: Slot }>(({ host, slot }) => host.drop(slot));
+
+/**
+ * Where a component instance's code runs (STUDY-168 PR 7): `shared`, in the child of the version it is loaded beside
+ * (the app's), each instance its own version there (the default); `own`, in a child of its own (measured against it:
+ * STUDY-171 §15).
+ */
+export type ComponentChildren = "shared" | "own";
+
+export type ProcessExecutorOptions = SandboxProcessOptions & { components?: ComponentChildren };
 
 export class ProcessExecutor implements Executor {
   readonly kind = "process" as const;
   private readonly versions = new Set<WeakRef<RemoteCodeVersion>>();
   private evaluator: Promise<SandboxProcess> | null = null;
 
-  /** `spawn`: how its children start (tests only: a child that misbehaves). */
-  constructor(private readonly spawn: SandboxProcessOptions = {}) {}
+  private readonly spawn: SandboxProcessOptions;
+  private readonly components: ComponentChildren;
+  /** The children that hold versions now. */
+  private readonly hosts = new Set<ChildHost>();
 
-  async load(sources: ModuleSource[], opts: LoadOptions): Promise<RemoteCodeVersion> {
-    const child = await SandboxProcess.start(this.spawn);
-    let load: ChildLoad;
-    try {
-      load = await child.load(sources, opts);
-    } catch (e) {
-      await child.close();
-      throw e;
+  /** `options`: how its children start (tests only: a child that misbehaves), where components run (measurements). */
+  constructor(options: ProcessExecutorOptions = {}) {
+    const { components = "shared", ...spawn } = options;
+    this.spawn = spawn;
+    this.components = components;
+  }
+
+  /**
+   * Loads `sources` in a child: a new one, or (`beside`, a component instance's code beside the app's version) the
+   * child of that version, while it runs.
+   */
+  async load(sources: ModuleSource[], opts: LoadOptions, beside?: LoadedCode): Promise<RemoteCodeVersion> {
+    let host: ChildHost | null = null;
+    if (this.components === "shared" && beside instanceof RemoteCodeVersion && !beside.host.closed) host = beside.host;
+    let placed: { slot: Slot; load: ChildLoad };
+    if (host) placed = await host.add(sources, opts);
+    else {
+      const child = await SandboxProcess.start(this.spawn);
+      host = new ChildHost(child, this.spawn, (h) => this.hosts.delete(h));
+      this.hosts.add(host);
+      try {
+        placed = await host.add(sources, opts);
+      } catch (e) {
+        await host.close();
+        throw e;
+      }
     }
-    const vc = new VersionChild({ child, load }, sources, opts, this.spawn);
-    const version = new RemoteCodeVersion(vc, sources, load);
-    collected.register(version, vc);
+    const version = new RemoteCodeVersion(host, placed.slot, sources, placed.load, beside !== undefined);
+    collected.register(version, { host, slot: placed.slot }, version);
     this.versions.add(new WeakRef(version));
     return version;
   }
@@ -276,16 +387,27 @@ export class ProcessExecutor implements Executor {
     return child.evaluateDefault(source, opts, use);
   }
 
+  /**
+   * The children that hold versions (tests, measurements): each one's pid, how many versions it runs, and how many it
+   * said it held at its last load.
+   */
+  async children(): Promise<{ pid: number; versions: number; held: number }[]> {
+    return Promise.all([...this.hosts].map(async (h) => ({ pid: await h.pid(), versions: h.size, held: h.held })));
+  }
+
   release(version: LoadedCode) {
     if (version instanceof RemoteCodeVersion) version.retire();
   }
 
-  /** `version` serves now: every other version this executor loaded is retired. */
+  /**
+   * `version` serves now: every other app version this executor loaded is retired. A component instance's version
+   * (loaded beside one) is the server's to release, when its instance gets another or goes.
+   */
   installed(version: LoadedCode) {
     for (const ref of this.versions) {
       const v = ref.deref();
-      if (!v) this.versions.delete(ref);
-      else if (v !== version) {
+      if (!v || v.isRetired) this.versions.delete(ref);
+      else if (v !== version && !v.beside) {
         v.retire();
         this.versions.delete(ref);
       }

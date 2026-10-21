@@ -2274,6 +2274,9 @@ export function createServer(opts: ServerOptions) {
       throw e;
     }
   };
+  /** The app's version installed last, and each installed component instance's (STUDY-168 PR 7). */
+  let liveVersion: LoadedCode | null = null;
+  const componentVersions = new Map<string, LoadedCode>();
   /**
    * Deploy a push's modules (STUDY-35): load and analyze them (nothing changes if that fails), store the
    * package, commit the module rows, then make the version live. Unused packages are deleted after.
@@ -2326,6 +2329,7 @@ export function createServer(opts: ServerOptions) {
 
   const installCodeVersion = async (version: LoadedCode, o: { crons?: boolean; auth?: AuthInfo[] } = {}) => {
     const changed = functions.install(version.functions, version.moduleHashes, version.rooms, version.moduleLoads);
+    liveVersion = version;
     executor.installed?.(version);
     // The functions' handles (STUDY-50): a row per function, tombstones for the ones gone.
     await engine.mutation((db) => syncFunctionHandles(db, functions.functionPaths()), "_system/function_handles");
@@ -2345,6 +2349,13 @@ export function createServer(opts: ServerOptions) {
    * or a deletion changed the tree. An unmounted or deleted one is removed: its functions are "not found".
    */
   const installComponents = async () => {
+    /** An instance's version gives way to another, or goes: the executor may let what it holds for it go. */
+    const replaced = (id: string, next: LoadedCode | null) => {
+      const before = componentVersions.get(id);
+      if (next) componentVersions.set(id, next);
+      else componentVersions.delete(id);
+      if (before && before !== next) executor.release?.(before);
+    };
     const mounted = await engine.query((db) =>
       db.asSystem(async () => {
         const out: { meta: ComponentMeta; path: string[] }[] = [];
@@ -2362,15 +2373,18 @@ export function createServer(opts: ServerOptions) {
     for (const id of functions.installedComponents())
       if (!live.has(id)) {
         functions.removeComponent(id);
+        replaced(id, null);
         changed.add(id);
         // Its handles soft-deleted (Convex's `apply_config_diff(component, None)` at an unmount).
         await engine.mutation((db) => syncFunctionHandles(db, [], id), "_system/function_handles");
       }
     for (const { meta, path } of mounted) {
       if (meta.parent === null) continue;
-      const version = await loadComponentCode(engine, modulesStore, meta._id, executor);
+      // Under `process`, in the app's child, each instance a version of its own there (STUDY-168 PR 7).
+      const version = await loadComponentCode(engine, modulesStore, meta._id, executor, liveVersion ?? undefined);
       if (!version) {
         functions.removeComponent(meta._id);
+        replaced(meta._id, null);
         continue;
       }
       functions.installComponent(
@@ -2380,6 +2394,7 @@ export function createServer(opts: ServerOptions) {
         version.moduleLoads,
         version.router,
       );
+      replaced(meta._id, version);
       // A handle row per function of the component, any visibility (Convex's `FunctionHandlesModel`, STUDY-155).
       const paths = [...version.functions.keys()].map(canonicalPath);
       await engine.mutation((db) => syncFunctionHandles(db, paths, meta._id), "_system/function_handles");

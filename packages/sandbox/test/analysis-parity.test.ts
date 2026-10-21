@@ -138,7 +138,7 @@ describe("a child analyzes as CodeVersion.load", () => {
         const [here, there] = [
           await outcome(async () => inProcessView(await CodeVersion.load(e.sources, opts))),
           await outcome(async () => {
-            const { loadMs: _, versionId: __, ...version } = await child.load(e.sources, opts);
+            const { loadMs: _, versionId: __, held: ___, ...version } = await child.load(e.sources, opts);
             return version;
           }),
         ];
