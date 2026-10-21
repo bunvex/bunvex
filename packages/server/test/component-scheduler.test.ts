@@ -296,11 +296,13 @@ describe("the scheduler from a component's functions", () => {
 
   test("a job whose component was unmounted fails: its module is gone", async () => {
     const d = await deployment();
-    const id = await d.call("mutation", "app:scheduleChildFromParent", { body: "late", delay: 400 });
+    // Due after the push that unmounts the component, even a slow one (a push under the function sandbox's
+    // `process` loads the code in a new child).
+    const id = await d.call("mutation", "app:scheduleChildFromParent", { body: "late", delay: 2000 });
     await d.push(false);
-    const job = await waitFor(() => d.call("query", "app:job", { id }));
+    const job = await waitFor(() => d.call("query", "app:job", { id }), 10_000);
     expect(job.state).toEqual({ error: "Couldn't find JavaScript module 'lib.js'.", kind: "failed" });
-  });
+  }, 20_000);
 
   test("what a canceled job's action schedules is born canceled, in the component's namespace", async () => {
     const d = await deployment();

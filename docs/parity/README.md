@@ -189,11 +189,11 @@ gaps.
 
 **Low: rare, ops-only, or a missing nicety**
 
-- The function sandbox (AD-44, opt-in): under `BUNVEX_FUNCTION_SANDBOX=process`, queries, mutations, actions and HTTP
-  actions run with no OS isolation yet, one child per code version, with their log lines and stacks as under `vm`
-  (STUDY-171 §11, §12, §14), and an unhandled rejection fails the function there, as on Convex (STUDY-171 §13, §14;
-  under `vm` it is printed, DV-528); `"use node"` actions and components are not available there yet (STUDY-171 §8.7;
-  STUDY-168 PRs 7, 10). An action past its timeout is cut off, then killed after 1 s if it does not hear it, until STUDY-168 PR 9 ends its own process at the timeout (owner, 2026-10-21, STUDY-171 §12.11). The default `vm` is
+- The function sandbox (AD-44, opt-in): under `BUNVEX_FUNCTION_SANDBOX=process`, queries, mutations, actions, HTTP
+  actions and components run with no OS isolation yet, one child per code version (each component instance a version
+  of its own in the app's child), with their log lines and stacks as under `vm` (STUDY-171 §11, §12, §14, §15), and an
+  unhandled rejection fails the function there, as on Convex (STUDY-171 §13, §14; under `vm` it is printed, DV-528);
+  `"use node"` actions are not available there yet (STUDY-171 §8.7; STUDY-168 PR 10). An action past its timeout is cut off, then killed after 1 s if it does not hear it, until STUDY-168 PR 9 ends its own process at the timeout (owner, 2026-10-21, STUDY-171 §12.11). The default `vm` is
   unaffected.
 
 - Error text (STUDY-150 §6): a missing function in `ctx.runQuery` / the scheduler is worded and framed as

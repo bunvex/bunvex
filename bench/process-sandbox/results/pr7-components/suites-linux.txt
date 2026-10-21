@@ -1,0 +1,16 @@
+Linux srv1715588 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:33:16 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+1.4.3
+t-cli-process.txt:  35 pass  0 fail 
+t-cli-vm.txt:  35 pass  0 fail 
+t-pr6-process.txt:  98 pass  3 fail 
+(fail) an uncaught nested error: the callee's display, then the caller's await, no server frame
+(fail) caught: a V8 `error.stack` is the app's frames alone; a Node one, `Error: <message>` and the frames
+(fail) the context still behaves as the server's: builders, iteration, paginate, db.system, BunvexError
+t-pr6-vm.txt:  101 pass  0 fail 
+u-server-process.txt:  172 pass  2 fail 
+(fail) environment variables (STUDY-37) > a module reads the deployment's variables at import, from the push on, as after a restart (Convex's analysis)
+(fail) environment variables (STUDY-37) > process.env in pushed code: per name in the read set, actions at their start, the built-ins
+u-server-vm.txt:  174 pass  0 fail 
+u-diff-process.txt:  21 pass  0 fail 
+u-diff-vm.txt:  21 pass  0 fail 
+u-sandbox.txt:  1346 pass  0 fail 
