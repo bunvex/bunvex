@@ -54,6 +54,14 @@ describe("bunvexTest", () => {
     expect(await r.mutation(api.messages.requestMeta)).toEqual({ ip: "203.0.113.7", userAgent: "tests/1.0" });
   });
 
+  test("results come back as a client receives them: undefined is null, undefined fields are gone", async () => {
+    const t = make();
+    expect(await t.run(async () => undefined)).toBeNull();
+    const r: object = await t.run(async () => ({ kept: 1, gone: undefined, nested: { gone: undefined, n: 2n } }));
+    expect(r).toStrictEqual({ kept: 1, nested: { n: 2n } });
+    expect("gone" in r).toBe(false);
+  });
+
   test("internal functions may be called, as in convex-test", async () => {
     const t = make();
     await t.mutation(api.messages.send, { body: "x" });

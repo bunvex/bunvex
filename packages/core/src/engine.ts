@@ -543,7 +543,9 @@ export class Engine {
     );
     this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
     this.indexCache = indexCacheOf(persistence, opts.indexCache, this.committer);
-    this.writeThroughput = new WriteThroughputLimiter(opts.writeThroughput ?? writeThroughputFromEnv());
+    this.writeThroughput = new WriteThroughputLimiter(opts.writeThroughput ?? writeThroughputFromEnv(), () =>
+      runtime.nowNs(),
+    );
     this.committer.writeThroughput = this.writeThroughput;
     // A count at an older snapshot (STUDY-107) needs the changes since: kept as long as the write log keeps them.
     this.tableSummaries.retainedAfter = () => this.committer.logStartTs;
