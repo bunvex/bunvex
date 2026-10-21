@@ -1355,7 +1355,7 @@ unhandled: queries, mutations and actions alike.
 - **Code resumed by Bun, not by the child**, with several calls running in the same child: a native completion
   (`crypto.subtle`, reading a `Blob` or a `Response` the app made itself, a `ReadableStream` with no host behind it).
   A rejection that code leaves is printed, not failed, unless that call is the only one running. PR 9 (one call per
-  process) makes every rejection its process's call's (STUDY-168 §12.3). Owner question Q-PR4b-1 (§13.7).
+  process) makes every rejection its process's call's (STUDY-168 §12.3). Accepted until then (Q-PR4b-1, §13.7).
 - **Code of another call resumed by this one's**: a promise kept in module state, awaited by two calls and settled by
   one of them, resumes the other's continuation in the first one's checkpoint. Both calls share the version's
   module state (DV-165), on Convex as here; only the attribution is the first call's.
@@ -1459,9 +1459,11 @@ host kills the child with every call in it. No test reaches it: once a call fail
 listener's own attribution of a report made inside a drain (the next marker attributes it, whenever Bun reports), and
 holding an action's operations until their checkpoint was checked (§13.2).
 
-### 13.7 Open questions
+### 13.7 Owner decision (2026-10-21)
 
-No new divergence from Convex in what the parity suites compare. One owner question, on what they cannot reach:
+No new divergence from Convex in what the parity suites compare. One owner question, on what they cannot reach,
+**accepted by the owner on 2026-10-21, with no new number**: recorded as a note in DV-528's row, and added to PR 9's
+parity list (STUDY-168 §12.3).
 
 - **Q-PR4b-1. A rejection left by code Bun resumes itself, while several calls run in one child** (§13.3).
   - Convex: the function fails, whatever resumed the code (one isolate per call).
@@ -1473,5 +1475,7 @@ No new divergence from Convex in what the parity suites compare. One owner quest
     attribute; until then a native completion carries no async context the child can read.
   - App impact: a query, mutation or action that leaves such a rejection unhandled succeeds under load instead of
     failing (as it always does under `vm`, DV-528).
-  - Recommendation: accept until PR 9 (record as DV-TBD, or as a note in DV-528's row), and add the case to PR 9's
-    parity list.
+  - **Decided: accepted until PR 9**, as a note in DV-528's row; PR 9's parity list covers it.
+  - The same note covers the Bun 1.4.3+ case (§13.3): where Bun reports at the end of the turn, a rejection that such
+    Bun-resumed code handles later in the same turn is not reported, so the call succeeds where Convex fails it. PR 9
+    closes it too (one call per process, and that process's checkpoints its own).
