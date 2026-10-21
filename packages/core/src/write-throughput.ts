@@ -89,7 +89,11 @@ export class WriteThroughputLimiter {
   /** For tests and metrics: checks refused. */
   refused = 0;
 
-  constructor(o: WriteThroughputOptions = {}) {
+  constructor(
+    o: WriteThroughputOptions = {},
+    /** The clock commit timestamps follow, in ns: the engine's runtime's, so a test's virtual clock moves the window. */
+    private readonly clockNs: () => bigint = wallClockNs,
+  ) {
     this.maxBytesPerSecond = o.maxBytesPerSecond ?? MAX_BYTES_WRITTEN_PER_SECOND;
     this.maxRowsPerSecond = o.maxRowsPerSecond ?? MAX_ROWS_WRITTEN_PER_SECOND;
     this.windowMs = o.windowMs ?? WRITE_THROUGHPUT_WINDOW_MS;
@@ -138,9 +142,9 @@ export class WriteThroughputLimiter {
     return limit;
   }
 
-  /** The limit refused now (the wall clock commit timestamps follow), or null. */
+  /** The limit refused now (by the clock commit timestamps follow), or null. */
   exceededNow(): WriteThroughputLimit | null {
-    return this.exceeded(wallClockNs());
+    return this.exceeded(this.clockNs());
   }
 
   /** Whether a writer may start at `now`. */

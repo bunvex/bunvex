@@ -24,7 +24,8 @@ test("sending a message", async () => {
   storage URLs, deterministic `Date` and `Math.random` in queries and mutations.
 - **Env**: functions see `bunvexTest({ env: { … } })`, not the test's `process.env`.
 - **Time**: scheduled functions and crons run on the test's virtual clock as `finishAllScheduledFunctions()` moves
-  it; `t.runCron(name)` runs a cron now.
+  it; `t.runCron(name)` runs a cron now. The write limit (4 MiB a second, as a deployment's) counts on that clock
+  too: a test that seeds more than that moves the clock between batches (`t.advanceTime(1000)`).
 - **Callers**: `withIdentity({ … })` and `withRequestMetadata({ ip, userAgent })`; `t.fetch(path)` calls the app's
   HTTP actions as that user.
 - **Components**: an app's are installed as its push installs them; call one directly through
