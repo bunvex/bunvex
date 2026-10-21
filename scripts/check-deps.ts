@@ -10,13 +10,16 @@
 //      API and its messages carry its own names (owner's decision, STUDY-18 D1). Apps (apps/*, e.g. the site
 //      comparing benchmarks) may name Convex descriptively. No exceptions, wire names included: a `format`
 //      value, a metric or an error code is bunvex's (owner, 2026-10-03: DV-307, DV-308, DV-312).
-//   6. in the packages' shipped code, a `setTimeout(` whose delay subtracts a time (`- now`, `- wallClock()`,
-//      `- Date.now()`, `- this.now()`, `- performance.now()`: a sleep towards a timestamp) passes it through core's
-//      `timerDelay`, which caps it at 2^31-1 ms. Past that Bun fires a timer after about 1 ms, so an uncapped sleep
-//      towards a far timestamp busy-loops (STUDY-174 F2, F3, I-25). It sees the delay written inline only, not one
-//      computed earlier into a variable; delays from operator knobs (no subtraction) are not its concern.
+//   6. in the backend packages' shipped code (core, server, persistence, file-storage, search), every `setTimeout(` /
+//      `setInterval(` delay is known not to pass 2^31-1 ms: a number literal, a module constant of literals,
+//      `timerDelay(…)` (capped; the loop looks again when woken), or `Math.min(…)` with such a bound. Past 2^31-1 ms
+//      Bun fires a timer after about 1 ms, so a far sleep busy-loops (STUDY-174 F2, F3, I-25) and a long knob's
+//      timeout ends at once (S8). Any other delay (a knob's value, an option, a parameter, a difference of clocks)
+//      goes through `timerDelay`, or core's `longTimeout` / `longInterval` / `longSleep`, which sleep any length,
+//      as Convex's `Duration`s do (owner, 2026-10-21: Q8). The scans are in scripts/rules.ts (tests: rules.test.ts).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { checkedTimerCall, literalConstants, timerDelays, unsafeTimerDelay, withoutComments } from "./rules.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const PKGS = join(ROOT, "packages");
@@ -45,8 +48,9 @@ const ALLOWED: Record<string, string[]> = {
   cli: ["server", "core", "values", "client", "protocol"],
   // STUDY-159 T-2 (owner, 2026-10-20): a test pushes the app as `bunvex deploy` bundles it, into an engine of its own.
   testing: ["server", "core", "values", "cli", "file-storage"],
-  // STUDY-181: the port of convex-helpers. `core` only in its tests (TEST_ONLY): an Engine in memory.
-  helpers: ["server", "values", "core"],
+  // STUDY-181: the port of convex-helpers. `core` and `testing` only in its tests (TEST_ONLY): an Engine in memory, and
+  // `bunvexTest` for the functions its server helpers build.
+  helpers: ["server", "values", "core", "testing"],
   // STUDY-171 §7 (STUDY-168 PR 2): the function sandbox's child runs the server's own loader (`@bunvex/server/executor`);
   // §8 (PR 3): its wire carries function references (`@bunvex/protocol`'s symbols).
   sandbox: ["server", "core", "values", "protocol"],
@@ -103,7 +107,7 @@ const ALLOWED: Record<string, string[]> = {
   "examples/_harness": ["bunvex"],
 };
 /** Packages a package may import from its tests only, never from its shipped code (`src/`). */
-const TEST_ONLY: Record<string, string[]> = { helpers: ["core"] };
+const TEST_ONLY: Record<string, string[]> = { helpers: ["core", "testing"] };
 /** Every example (examples/<dir>) may import what a user's app may. */
 const EXAMPLE_ALLOWED = ["bunvex", "react-query", "examples/_harness"];
 /** Imports core must never contain (rule 2). */
@@ -125,75 +129,6 @@ const readPkg = (dir: string) => JSON.parse(readFileSync(join(dir, "package.json
 const dirOfName = new Map<string, string>();
 for (const [key, dir] of workspaces) dirOfName.set(readPkg(dir).name, key);
 
-/**
- * The code of a TS/TSX source with its comments blanked out (strings, template literals and regex-free code
- * kept), so rule 5 sees identifiers, strings and URLs but not the comments that cite Convex.
- */
-function withoutComments(text: string): string {
-  let out = "";
-  let i = 0;
-  let quote: string | null = null;
-  while (i < text.length) {
-    const c = text[i];
-    const next = text[i + 1];
-    if (quote) {
-      out += c;
-      if (c === "\\") {
-        out += next ?? "";
-        i += 2;
-        continue;
-      }
-      if (c === quote) quote = null;
-      i++;
-    } else if (c === "/" && next === "/") {
-      while (i < text.length && text[i] !== "\n") i++;
-    } else if (c === "/" && next === "*") {
-      const end = text.indexOf("*/", i + 2);
-      const stop = end === -1 ? text.length : end + 2;
-      out += text.slice(i, stop).replace(/[^\n]/g, " ");
-      i = stop;
-    } else {
-      if (c === '"' || c === "'" || c === "`") quote = c;
-      out += c;
-      i++;
-    }
-  }
-  return out;
-}
-
-/** A sleep towards a timestamp: a delay that subtracts a clock reading or a `now` (rule 6). */
-const TIME_SUBTRACTED = /-\s*(?:wallClock\(\)|(?:[\w$]+\.)+now\(\)|now\b(?!\s*\())/;
-
-/** Each `setTimeout(` call's delay argument (its last), with the line it starts on, in comment-free code. */
-function* timerDelays(code: string): Generator<{ line: number; delay: string }> {
-  for (const m of code.matchAll(/\bsetTimeout\(/g)) {
-    const args: string[] = [""];
-    let depth = 0;
-    let quote: string | null = null;
-    for (let i = m.index + m[0].length; i < code.length; i++) {
-      const c = code[i]!;
-      if (quote) {
-        if (c === "\\") i++;
-        else if (c === quote) quote = null;
-        args[args.length - 1] += c;
-        continue;
-      }
-      if (c === '"' || c === "'" || c === "`") quote = c;
-      else if ("([{".includes(c)) depth++;
-      else if (")]}".includes(c)) {
-        if (depth === 0) break;
-        depth--;
-      } else if (c === "," && depth === 0) {
-        args.push("");
-        continue;
-      }
-      args[args.length - 1] += c;
-    }
-    const delay = args.filter((a) => a.trim() !== "").at(-1) ?? "";
-    yield { line: code.slice(0, m.index).split("\n").length, delay };
-  }
-}
-
 function* tsFiles(dir: string): Generator<string> {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     if (e.name === "node_modules") continue;
@@ -207,6 +142,8 @@ function* tsFiles(dir: string): Generator<string> {
 const importRe =
   /(?:^|\n)\s*(?:import|export)\s[^'"]*?from\s+["']([^"']+)["']|import\(\s*[`"']([^`"'$]+)|(?:^|\n)\s*import\s*["']([^"']+)["']/g;
 const errors: string[] = [];
+/** Rule 6's packages: the backend's, where delays come from knobs (packages/sandbox has its own owner, STUDY-171). */
+const RULE6_PACKAGES = /^packages\/(core|server|persistence|file-storage|search)\/src\/(?!test-runtime\.ts$)/;
 
 for (const [name, dir] of dirOfName) {
   const root = workspaces.get(dir)!;
@@ -227,11 +164,14 @@ for (const [name, dir] of dirOfName) {
     const text = readFileSync(file, "utf8");
     if (/^packages\/[^/]+\/src\//.test(rel)) {
       const stripped = withoutComments(text);
-      for (const { line, delay } of timerDelays(stripped))
-        if (TIME_SUBTRACTED.test(delay) && !/\btimerDelay\(/.test(delay))
-          errors.push(
-            `${rel}:${line}: a timer's delay towards a timestamp is not capped — pass it through timerDelay (rule 6)`,
-          );
+      if (RULE6_PACKAGES.test(rel)) {
+        const consts = literalConstants(stripped);
+        for (const { line, call, receiver, delay } of timerDelays(stripped))
+          if (checkedTimerCall(receiver) && unsafeTimerDelay(delay, consts))
+            errors.push(
+              `${rel}:${line}: ${call}'s delay \`${delay.replace(/\s+/g, " ").slice(0, 60)}\` may pass 2^31-1 ms — use timerDelay, or longTimeout / longInterval / longSleep from @bunvex/core (rule 6)`,
+            );
+      }
       const code = stripped.split("\n");
       code.forEach((line, n) => {
         if (/convex/i.test(line))

@@ -8,6 +8,7 @@
 // store's clock, the store's size and its connections, who the clients are (AD-08's handshake is a later study).
 import { availableParallelism, hostname } from "node:os";
 import type { Engine } from "@bunvex/core";
+import { clearLongTimer, type LongTimer, longInterval } from "@bunvex/core";
 
 /** How often a sample is taken, and how many are kept: a minute of history. */
 export const TOPOLOGY_SAMPLE_MS = 5_000;
@@ -57,7 +58,7 @@ const round = (n: number, digits: number) => Math.round(n * 10 ** digits) / 10 *
 export class TopologyReporter {
   private readonly samples: TopologySample[] = [];
   private last: Counters;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: LongTimer | null = null;
   private readonly cores = availableParallelism();
   /** When the process started (wall-clock ms), as `bunvex_process_start_time_seconds`. */
   private readonly startedAt = Math.round(performance.timeOrigin);
@@ -68,12 +69,12 @@ export class TopologyReporter {
 
   start() {
     if (this.timer) return;
-    this.timer = setInterval(() => this.sample(), this.s.sampleMs ?? TOPOLOGY_SAMPLE_MS);
+    this.timer = longInterval(() => this.sample(), this.s.sampleMs ?? TOPOLOGY_SAMPLE_MS);
     this.timer.unref?.();
   }
 
   stop() {
-    if (this.timer) clearInterval(this.timer);
+    if (this.timer) clearLongTimer(this.timer);
     this.timer = null;
   }
 

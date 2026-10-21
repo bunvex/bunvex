@@ -3,7 +3,16 @@
 // one and a half of it, the deployment's storage totals go to the log streams as a `current_storage_usage`
 // event, once the table summaries are built. Its usage events go nowhere in Convex's open-source backend;
 // the file storage total it keeps limits exports that include storage (1 TiB).
-import { type Engine, FILE_STORAGE_TABLE, isReservedIndex, SYSTEM_TO_VIRTUAL_TABLE, secondsKnob } from "@bunvex/core";
+import {
+  clearLongTimer,
+  type Engine,
+  FILE_STORAGE_TABLE,
+  isReservedIndex,
+  type LongTimer,
+  longTimeout,
+  SYSTEM_TO_VIRTUAL_TABLE,
+  secondsKnob,
+} from "@bunvex/core";
 import type { LogEvent, StorageUsage } from "./log-events.ts";
 
 /** The deployment's storage, as Convex's `get_gauge_metrics` and `compute_totals` sum it. */
@@ -66,7 +75,7 @@ export type UsageGaugeOptions = {
 export class UsageGauges {
   /** The file storage total of the last run (Convex's `latest_file_storage_size`), null before one. */
   latestFileStorageBytes: number | null = null;
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private timer: LongTimer | null = null;
   private stopped = false;
   private readonly periodMs: number;
   private readonly random: () => number;
@@ -88,7 +97,7 @@ export class UsageGauges {
     if (this.stopped) return;
     // Convex splays first, on start too: half the period plus up to a whole one.
     const wait = this.periodMs / 2 + this.periodMs * this.random();
-    this.timer = setTimeout(() => {
+    this.timer = longTimeout(() => {
       this.run()
         .catch((e) => console.error(`bunvex: storage usage gauges failed: ${(e as Error).message}`))
         .finally(() => this.schedule());
@@ -106,6 +115,6 @@ export class UsageGauges {
 
   stop() {
     this.stopped = true;
-    if (this.timer) clearTimeout(this.timer);
+    if (this.timer) clearLongTimer(this.timer);
   }
 }

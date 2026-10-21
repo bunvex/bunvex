@@ -171,7 +171,7 @@ None new. AD-23 (`typedV`, `doc`) is accepted and built here.
 
 ## 6. Not verified yet
 
-- Several queries open at once in one transaction (`mergedStream`). bunvex should allow it; the property tests will show it.
+- ~~Several queries open at once in one transaction (`mergedStream`).~~ Verified in PR 3: `mergedStream` reads its streams' next documents together (`Promise.all`), and the ported tests, the property tests and the differential test against convex-helpers on Convex's binary pass on bunvex.
 - Whether a trigger that calls `ctx.runMutation` while the outer write holds the lock deadlocks under per-module locks. That is moot under H-4's per-transaction locks.
 
 ## 7. Questions for the owner
