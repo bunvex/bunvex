@@ -1945,9 +1945,7 @@ export class Tx {
     let mounted = this.mounted.get(ns);
     if (mounted === undefined) {
       // The engine's own read (Convex's component registry, a derived read): recorded, not counted (STUDY-161 §16.7).
-      const row = await this.notCounted(() =>
-        this.asSystem(() => this.inComponent(null, () => this.get(COMPONENTS_TABLE, ns))),
-      );
+      const row = await this.rootSystemRead(COMPONENTS_TABLE, ns);
       mounted = (row as { state?: unknown } | null)?.state !== "unmounted";
       this.mounted.set(ns, mounted);
     }
@@ -1955,6 +1953,27 @@ export class Tx {
       throw new Error(
         "Cannot perform write operations in an unmounted component. Make sure your component is installed in your `bunvex.config.ts` file.",
       );
+  }
+
+  /**
+   * A row of a root system table, read by the engine from inside a component: in the root's namespace, with system
+   * access, recorded and not counted. Those are set only while `read` finds the table and records the read, all of
+   * which it does before its first await, and are back when it returns its promise: the function's other operations
+   * that overlap this one (a `Promise.all` of writes, each checking the component is mounted) keep the component's
+   * namespace and no system access. `inComponent`, `asSystem` and `notCounted` would hold them across the await.
+   */
+  private rootSystemRead(table: string, id: string): Promise<Doc | null> {
+    const [space, spaceId] = [this.space, this.spaceId];
+    [this.space, this.spaceId] = [null, null];
+    this.systemDepth++;
+    this.notCounting++;
+    try {
+      return this.read(table, id, "db.get");
+    } finally {
+      [this.space, this.spaceId] = [space, spaceId];
+      this.systemDepth--;
+      this.notCounting--;
+    }
   }
 
   private stage(t: TableDef, id: string, old: Doc | null, next: Doc | null) {

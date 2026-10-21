@@ -290,7 +290,10 @@ from scratch.
    `server/rateLimit` and `server/migrations` are left out. They are the older forms of the rate-limiter and
    migrations components.
 4. **The components**, each from its own repository (`get-convex/<name>`), in this order:
-   1. sharded-counter: the smallest, queries and mutations only;
+   1. sharded-counter: the smallest, queries and mutations only. **Built (2026-10-21,
+      [STUDY-183](STUDY-183-sharded-counter.md)):** `@bunvex/sharded-counter` 0.1.0 in `components/sharded-counter/`,
+      the package model every later component follows (STUDY-183 §3.1); its tests on `@bunvex/testing`, a differential
+      test against `@convex-dev/sharded-counter` 0.2.3 on Convex's binary, and `examples/sharded-counter`;
    2. batch-worker: the child of the next three;
    3. rate-limiter: a child, env, `commitTs`, `useStaleSnapshot`, the React hook;
    4. workpool: the scheduler, handles, retries, recovery;

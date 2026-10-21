@@ -1,6 +1,14 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": ["packages/*/src", "packages/*/test", "packages/sync-e2e/node/*.ts", "bench", "scripts"],
+  "include": [
+    "packages/*/src",
+    "packages/*/test",
+    "components/*/src",
+    "components/*/test",
+    "packages/sync-e2e/node/*.ts",
+    "bench",
+    "scripts"
+  ],
   // The UI packages need DOM types and JSX, which the engine and server must not see: own tsconfigs (UI-01 §8).
   "exclude": [
     "packages/ui",
