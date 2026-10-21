@@ -11,15 +11,15 @@ import { bunvexTest } from "../src/index.ts";
 const APP = join(import.meta.dir, "fixtures", "app");
 const api = anyApi;
 
-/** This process's children, by PID (`pgrep -P`, on Linux and macOS). */
+/** This process's live children, by PID (`ps`, on Linux and macOS): one that exited but is not reaped yet is gone. */
 function children(): number[] {
-  const r = Bun.spawnSync(["pgrep", "-P", String(process.pid)]);
+  const r = Bun.spawnSync(["ps", "-A", "-o", "pid=,ppid=,stat="]);
   return new TextDecoder()
     .decode(r.stdout)
     .split("\n")
-    .filter(Boolean)
-    .map(Number)
-    .filter((pid) => pid !== r.pid);
+    .map((line) => line.trim().split(/\s+/))
+    .filter(([pid, ppid, stat]) => Number(ppid) === process.pid && Number(pid) !== r.pid && !stat?.startsWith("Z"))
+    .map(([pid]) => Number(pid));
 }
 
 const saved = {
