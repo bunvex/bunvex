@@ -1726,10 +1726,16 @@ call's `done` made the first two redundant, and keeping a running operation coun
 that no test can see: the child reads the response's headers before its body, as the server does; with the server's
 `Response`, whose type is set when it is built (`SpecResponse`), the order no longer changes the headers.
 
-### 14.6 Owner questions
+### 14.6 Owner questions and decisions (2026-10-21)
 
-No DV, STUDY or AD number taken (TBD). Each comes as Convex against bunvex, whether it is the same, why not, the app's
-impact, and a recommendation.
+No DV, STUDY or AD number taken. Each comes as Convex against bunvex, whether it is the same, why not, the app's
+impact, and a recommendation. **The owner answered all five on 2026-10-21:**
+
+- **Q-PR6-1, Q-PR6-2 and Q-PR6-3: approved as separate PRs** (`vm` and server changes: `vm` ends an HTTP action with
+  its body; `vm` sends a fetched response returned as it came; a system error in an HTTP action answers Convex's
+  internal 500). Other PRs build them; this PR does not change `vm` or the server's error answers.
+- **Q-PR6-4: accepted until STUDY-168 PR 9**, added to PR 9's parity list (STUDY-168 §12.3).
+- **Q-PR6-5: accepted**, as a note in DV-483's row.
 
 - **Q-PR6-1. An HTTP action's end, under `vm`.**
   - Convex: the isolate's loop runs until the response's body has been handed over, then closes the task channel and
@@ -1785,6 +1791,7 @@ impact, and a recommendation.
     under `process`.
   - **Recommendation: accept until STUDY-168 PR 9**; then let the child say at analysis whether the router's `lookup`
     is `HttpRouter`'s, and route in the child (one round trip) only when it is not.
+  - **Decided (owner, 2026-10-21): accepted until PR 9**, on PR 9's parity list (STUDY-168 §12.3).
 - **Q-PR6-5. Framing, when the body's last chunk and its end reach the host apart (DV-483).**
   - Convex: a stream is sent chunked.
   - bunvex `vm`: a stream that ends with its chunk at once goes with its `content-length` (DV-483).
@@ -1795,6 +1802,7 @@ impact, and a recommendation.
   - App impact: none for an app (`fetch` reads the same body); a raw-HTTP client may see `transfer-encoding:
     chunked` where `vm` sends a length.
   - **Recommendation: accept, as a note in DV-483's row.**
+  - **Decided (owner, 2026-10-21): accepted**, as a note in DV-483's row.
 
 
 Notes, not divergences from Convex: under `process` the host sends a request's body ahead of the handler up to the
