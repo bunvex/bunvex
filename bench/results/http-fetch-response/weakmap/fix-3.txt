@@ -1,0 +1,3 @@
+{"name":"fetch, 1 KiB read whole (arrayBuffer)","p50":1604,"mean":2061,"p99":7268}
+{"name":"fetch, 1 KiB read from its body stream","p50":1157,"mean":1447,"p99":4314}
+{"name":"fetch returned as it came (a proxy; 500 on main)","p50":949,"mean":1104,"p99":3369}

@@ -132,6 +132,64 @@ test("an HTTP action's fetch is an action's", async () => {
   expect(await get(url)).toEqual({ status: 200, body: "tcp" });
 });
 
+test("an HTTP action may return its fetch's response as it came (a proxy), its body read once by the server", async () => {
+  const target = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch: (req) => {
+      if (new URL(req.url).pathname === "/text")
+        return new Response("from the target", { headers: { "x-target": "yes" } });
+      let n = 0;
+      return new Response(
+        new ReadableStream({
+          async pull(c) {
+            await Bun.sleep(5);
+            if (n++ === 2) return c.close();
+            c.enqueue(new TextEncoder().encode(`${n};`));
+          },
+        }),
+      );
+    },
+  });
+  stops.push(() => target.stop(true));
+  const engine = await new Engine(defineSchema({}), await MemoryPersistence.open(null, { durable: false })).init();
+  const http = httpRouter();
+  http.route({
+    path: "/proxy",
+    method: "GET",
+    handler: httpAction(async (_ctx, req) => fetch(new URL(req.url).searchParams.get("u")!)),
+  });
+  // `body` is one stream, however often it is read, as a native response's.
+  http.route({
+    path: "/same",
+    method: "GET",
+    handler: httpAction(async (_ctx, req) => {
+      const r = await fetch(new URL(req.url).searchParams.get("u")!);
+      const body = r.body;
+      const same = body === r.body;
+      const reader = r.body!.getReader();
+      const first = new TextDecoder().decode((await reader.read()).value);
+      return Response.json({ same, first, locked: r.body!.locked, used: r.bodyUsed });
+    }),
+  });
+  const app = createServer({ engine, functions: new Functions(engine), port: 0, sitePort: null, http });
+  stops.push(() => app.stop());
+  const get = (path: string, u: string) =>
+    fetch(
+      `http://127.0.0.1:${app.server.port}/http${path}?u=${encodeURIComponent(`http://127.0.0.1:${target.port}${u}`)}`,
+    );
+  const text = await get("/proxy", "/text");
+  expect([text.status, text.headers.get("x-target"), await text.text()]).toEqual([200, "yes", "from the target"]);
+  const stream = await get("/proxy", "/stream");
+  expect([stream.status, await stream.text()]).toEqual([200, "1;2;"]);
+  expect(await (await get("/same", "/text")).json()).toEqual({
+    same: true,
+    first: "from the target",
+    locked: true,
+    used: true,
+  });
+});
+
 // STUDY-142: how a request fails, the default User-Agent and redirects, as Convex's runtime (the same cases
 // against Convex's backend: packages/differential/test/action-fetch.test.ts).
 
