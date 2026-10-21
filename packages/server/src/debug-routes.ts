@@ -140,9 +140,12 @@ function subscriptions(ctx: Ctx, url: URL) {
   };
 }
 
-/** An HTTP query cache key: `codeHash\0path\0args` then `\u0001` and whose result (`*` for everyone). */
+/**
+ * An HTTP query cache key: `codeHash\0path\0visibility\0args` (visibility `public` for a client, `all` for an
+ * action's `runQuery`) then `\u0001` and whose result (`*` for everyone).
+ */
 function splitCacheKey(key: string): { path: string; args: string; shared: boolean } {
-  const [, path = "", rest = ""] = key.split("\u0000");
+  const [, path = "", , rest = ""] = key.split("\u0000");
   const i = rest.lastIndexOf("\u0001");
   return { path, args: i === -1 ? rest : rest.slice(0, i), shared: i !== -1 && rest.slice(i + 1) === "*" };
 }
