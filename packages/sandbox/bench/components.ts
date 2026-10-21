@@ -50,7 +50,7 @@ const definition = (n: number) =>
   mod(
     "bunvex.config.js",
     `import { defineApp } from ${SERVER};
-import counter from "${dep("counter")}";
+import counter from ${JSON.stringify(dep("counter"))};
 const app = defineApp();
 ${Array.from({ length: n }, (_, i) => `app.use(counter, { name: "c${i}"${i === 0 ? ', httpPrefix: "/c/"' : ""} });`).join("\n")}
 export default app;`,
