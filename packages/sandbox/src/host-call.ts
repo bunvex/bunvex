@@ -29,6 +29,7 @@ import {
   createFunctionHandle,
   currentEnvReader,
   ExecutorFailure,
+  isCallerError,
   type LogLevel,
   type LogLine,
   logChildLine,
@@ -146,6 +147,7 @@ export function thrownToChild(e: unknown): WireThrown {
     stack: null,
     bunvex,
     ...(bunvex ? { data: encode((err as BunvexError<never>).data) } : {}),
+    ...(isCallerError(err) ? { caller: true as const } : {}),
   };
 }
 
