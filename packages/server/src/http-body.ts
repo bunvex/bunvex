@@ -93,15 +93,29 @@ export function meteredBody(body: ReadableStream<Uint8Array>, signal?: AbortSign
   return { stream, sent, failedEarly: reader.failedEarly };
 }
 
+/** A read of a body: its next chunk, as given (checked by `bodyChunk`), or its end. */
+export type BodyRead = { done: false; value: unknown } | { done: true; value?: undefined };
+
+/** What `readsAhead` gives: the body's reads, its cancel, and the look for a failure in the handler's turn. */
+export type BodyReader = {
+  read(): Promise<BodyRead>;
+  cancel(reason?: unknown): Promise<void>;
+  failedEarly(): Promise<{ error: unknown } | null>;
+};
+
 /**
  * A response body's reader that can look for a failure in the handler's turn (`failedEarly`) before it is read on:
  * the reads that look are kept, in order, and `read` hands them out first. The function sandbox's child reads an HTTP
  * action's body with it too, so it fails early exactly where in-process it does (STUDY-168 PR 6).
  */
-export function readsAhead(body: ReadableStream<Uint8Array>) {
-  const reader = body.getReader() as ReadableStreamDefaultReader<unknown>;
+export function readsAhead(body: ReadableStream<Uint8Array>): BodyReader {
+  const reader = body.getReader() as unknown as {
+    read(): Promise<BodyRead>;
+    cancel(reason?: unknown): Promise<void>;
+    closed: Promise<void>;
+  };
   // Reads started in the handler's turn (`failedEarly`), in order: `read` takes them before reading on.
-  const early: ReturnType<typeof reader.read>[] = [];
+  const early: Promise<BodyRead>[] = [];
   // The body's error, once it failed (its start or a pull threw, or it was errored).
   let failed: { error: unknown } | null = null;
   reader.closed.catch((error: unknown) => {
@@ -117,7 +131,7 @@ export function readsAhead(body: ReadableStream<Uint8Array>) {
    * Convex's runtime reads the body as soon as the handler returns it, so a chunk that is not bytes fails the run
    * the same way when it comes in that turn: the turn reads what the body has ready, and `read` hands it out later.
    */
-  const failedEarly = async () => {
+  const failedEarly = async (): Promise<{ error: unknown } | null> => {
     let reading = false;
     for (let i = 0; i < TURN_MICROTASKS && !failed; i++) {
       if (!reading) {
