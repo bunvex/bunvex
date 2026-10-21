@@ -14,7 +14,7 @@
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { StoredSegment } from "@bunvex/search";
-import { encodeId } from "@bunvex/values";
+import { encodeId, isBytes } from "@bunvex/values";
 import { internalIdBytes, internalIdOf } from "./internal-id.ts";
 import { knob } from "./knobs.ts";
 import type { DocLogRow, Persistence, RetentionStore, TabletId } from "./persistence/index.ts";
@@ -318,7 +318,7 @@ const encodeGlobal = (v: unknown) =>
     JSON.stringify(v, (_k, x) =>
       typeof x === "bigint"
         ? { $bigint: x.toString() }
-        : x instanceof ArrayBuffer
+        : isBytes(x)
           ? { $bytes: Buffer.from(x).toString("base64") }
           : x,
     ),

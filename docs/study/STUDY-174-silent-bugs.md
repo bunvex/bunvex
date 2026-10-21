@@ -854,7 +854,10 @@ Each question gives what Convex does, what bunvex does, whether they are the sam
   size (32–64 MiB, roughly the interior pages of a 10 GB file) was not measured.
 - **Decided (owner, 2026-10-21):**
   - keep 256 MiB as the default, recorded as **DV-550** (performance);
-  - add a setting for it, `BUNVEX_SQLITE_CACHE_SIZE` (bytes), as an addition (AD-46), in its own PR;
+  - add a setting for it, `BUNVEX_SQLITE_CACHE_SIZE` (bytes), as an addition (AD-46), in its own PR. `0` is refused
+    at start (owner, 2026-10-21): SQLite has no "off", `cache_size = 0` keeps its minimum, the slowest setting
+    (point reads 317 ms against 188 ms for 2 000 KiB on a 98 MB file), and "SQLite's default" differs by platform;
+    `2048000` gives SQLite's 2 000 KiB everywhere;
   - the soak makes R1 see the page cache as recommended, and R1 leaves `SOAK_REPORT_ONLY`, in its own PR (§10.3).
 
 Not questions, because each matches Convex: the fixes for F1 (done, #751), F2, F3 and F5, and the suspected S1–S7 once

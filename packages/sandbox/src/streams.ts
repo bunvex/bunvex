@@ -58,6 +58,8 @@ class Incoming {
   done: { error: unknown } | { end: true } | null = null;
   wake: (() => void) | null = null;
   claimed = false;
+  /** This side stopped it (`stop`): what the sender had in flight still comes, and is dropped. */
+  stopped = false;
   readonly stream: ReadableStream<Uint8Array>;
 
   constructor(
@@ -204,6 +206,12 @@ export class Streams {
   onChunk(s: number, bytes: Uint8Array) {
     let inc = this.incoming.get(s);
     if (this.opts.strict) {
+      // In flight when this side said `stop`: dropped, within the credit it had given.
+      if (inc?.stopped) {
+        if (bytes.byteLength > inc.open) return bad(`a chunk past its stream's credit (${s})`);
+        inc.open -= bytes.byteLength;
+        return;
+      }
       if (!inc || inc.done) return bad(`a chunk for no open stream (${s})`);
       if (bytes.byteLength > CHUNK_BYTES) return bad(`a chunk of ${bytes.byteLength} bytes, over ${CHUNK_BYTES}`);
       if (bytes.byteLength > inc.open) return bad(`a chunk past its stream's credit (${s})`);
@@ -242,6 +250,7 @@ export class Streams {
           inc = new Incoming(m.s, this);
           this.incoming.set(m.s, inc);
         }
+        if (inc.stopped) return;
         if (inc.done) return this.opts.strict ? bad(`an ${m.t} for a stream that ended (${m.s})`) : undefined;
         inc.done = m.t === "end" ? { end: true } : { error: this.opts.error(m.error) };
         inc.notify();
@@ -273,6 +282,7 @@ export class Streams {
   stopReceiving(inc: Incoming) {
     if (!inc.done) {
       inc.done = { end: true };
+      inc.stopped = true;
       if (!this.gone) this.sink.message({ t: "stop", s: inc.s });
     }
     inc.queue.length = 0;

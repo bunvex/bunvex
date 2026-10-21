@@ -84,6 +84,23 @@ export function trackActionTimer(t: unknown) {
   else r.timers.add(t);
 }
 
+type TimerCallback = (...args: unknown[]) => unknown;
+let timerCallback: ((callback: TimerCallback) => TimerCallback) | null = null;
+
+/**
+ * How the callback of a timer an action's code sets runs: as given in-process; the function sandbox's child runs it in
+ * a checkpoint of its action, so what it leaves rejected with no handler fails that action (STUDY-171 §13).
+ */
+export function setActionTimerCallback(wrap: (callback: TimerCallback) => TimerCallback) {
+  timerCallback = wrap;
+}
+
+/** `callback`, as a timer the running action's code sets runs it (`setActionTimerCallback`). */
+export function actionTimerCallback(callback: unknown): unknown {
+  if (timerCallback === null || typeof callback !== "function" || !runs.getStore()?.timers) return callback;
+  return timerCallback(callback as TimerCallback);
+}
+
 /** The running action's life (null outside an action): once ended, what it calls refuses. */
 export const currentActionLife = (): ActionLife | null => runs.getStore()?.life ?? null;
 
