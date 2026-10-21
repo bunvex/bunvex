@@ -385,6 +385,30 @@ describe("bunvex codegen", () => {
       readFileSync(join(root, "node_modules/@acme/limiter/src/component/_generated/component.ts"), "utf8"),
     ).toContain("ComponentApi<");
   });
+
+  test("a component package's `_generated/` imports what its own package.json depends on, not the app's (STUDY-183)", async () => {
+    // An app on the private aggregate `bunvex` (the repo's examples) installs a component package written in
+    // TypeScript (a workspace one, `@bunvex/sharded-counter`): its committed `_generated/` stays on `@bunvex/*`.
+    const root = app();
+    write(root, {
+      "package.json": JSON.stringify({ name: "app", dependencies: { bunvex: "*", "@acme/limiter": "*" } }),
+      "node_modules/@acme/limiter/package.json": JSON.stringify({
+        name: "@acme/limiter",
+        type: "module",
+        exports: { "./bunvex.config.js": { bunvex: "./src/component/bunvex.config.ts" } },
+        peerDependencies: { "@bunvex/server": "*", "@bunvex/values": "*" },
+      }),
+      ...under("node_modules/@acme/limiter/src/component", component("limiter")),
+    });
+    expect(await main(["codegen", "--typecheck=disable"], io(root).it)).toBe(0);
+    const generated = (dir: string, file: string) => readFileSync(join(root, dir, "_generated", file), "utf8");
+    const scoped = JSON.stringify(`@${["bunvex", "server"].join("/")}`);
+    for (const file of ["component.ts", "server.ts", "api.ts"])
+      expect(generated("node_modules/@acme/limiter/src/component", file)).toContain(`from ${scoped}`);
+    // The app's own component shares the app's package.json, and the app's files are as before.
+    expect(generated("components/counter", "component.ts")).toContain(`from ${SERVER}`);
+    expect(generated("bunvex", "server.js")).toContain(`from ${SERVER}`);
+  });
 });
 
 describe("bunvex run --component (DV-391)", () => {
