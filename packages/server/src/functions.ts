@@ -1089,6 +1089,27 @@ export class Functions {
     return reader;
   }
 
+  /**
+   * A nested call's `process.env` in another namespace: `txEnv`, built once per transaction and component (a loop of
+   * calls into a component builds one). Each read is still recorded when it is made; the reads made building it (the
+   * canonical URLs) stay in the read set when a nested mutation rolls back.
+   */
+  private nestedEnvs = new WeakMap<Tx, Map<string | null, Promise<EnvReader | null>>>();
+  private nestedEnv(db: Tx, component?: ComponentRuntime): Promise<EnvReader | null> {
+    let byComponent = this.nestedEnvs.get(db);
+    if (!byComponent) {
+      byComponent = new Map();
+      this.nestedEnvs.set(db, byComponent);
+    }
+    const key = component?.id ?? null;
+    let env = byComponent.get(key);
+    if (!env) {
+      env = this.txEnv(db, component);
+      byComponent.set(key, env);
+    }
+    return env;
+  }
+
   /** An action's `process.env`: the variables at its start (Convex's `get_all`, no reactivity). */
   private async actionEnv(): Promise<{ all: Record<string, string>; read: EnvReader } | null> {
     if (!this.deployed) return null;
@@ -2302,7 +2323,7 @@ export class Functions {
     // Within one component the caller's reader is the callee's already.
     const calleeComponent = this.componentOf.get(f);
     const envOf = async (tx: Tx) =>
-      calleeComponent?.id === component?.id ? null : await this.txEnv(tx, calleeComponent);
+      calleeComponent?.id === component?.id ? null : await this.nestedEnv(tx, calleeComponent);
     const withCalleeEnv = (env: EnvReader | null, fn: () => unknown) => (env ? withEnv(env, fn) : fn());
     if (opts?.useStaleSnapshot) {
       const caller: Caller = { identity: db.identity, key: "" };
