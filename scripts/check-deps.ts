@@ -5,7 +5,7 @@
 //   3. no relative import leaves its package;
 //   4. no source file starts with `// @bun` — Bun reads that as its "already transpiled" pragma and
 //      would load the TypeScript as plain JavaScript (found the hard way during the ARCH-01 migration).
-//   5. no "convex" in the packages' shipped code (packages/*/src) outside comments: not in identifiers,
+//   5. no "convex" in the packages' and components' shipped code (packages/*/src, components/*/src) outside comments: not in identifiers,
 //      strings, error messages or URLs. bunvex studies and cites Convex (comments, docs/study), but its public
 //      API and its messages carry its own names (owner's decision, STUDY-18 D1). Apps (apps/*, e.g. the site
 //      comparing benchmarks) may name Convex descriptively. No exceptions, wire names included: a `format`
@@ -34,6 +34,7 @@ const ROOT = resolve(import.meta.dir, "..");
 const PKGS = join(ROOT, "packages");
 const APPS = join(ROOT, "apps");
 const EXAMPLES = join(ROOT, "examples");
+const COMPONENTS = join(ROOT, "components");
 
 /** Which @bunvex packages each package may import (by directory name; apps as "apps/<dir>"). */
 const ALLOWED: Record<string, string[]> = {
@@ -117,8 +118,20 @@ const ALLOWED: Record<string, string[]> = {
 };
 /** Packages a package may import from its tests only, never from its shipped code (`src/`). */
 const TEST_ONLY: Record<string, string[]> = { helpers: ["core", "testing"] };
-/** Every example (examples/<dir>) may import what a user's app may. */
-const EXAMPLE_ALLOWED = ["bunvex", "react-query", "examples/_harness"];
+/** Every component package (components/<dir>, STUDY-183 §3.1): what it imports, and what only its tests do. */
+const componentKeys = () => [...workspaces.keys()].filter((k) => k.startsWith("components/"));
+/**
+ * A component (components/<dir>, STUDY-183 §3.1) is an app's code: it may import the platform's `server` and
+ * `values`, `helpers` (STUDY-158 Q-5), and another component (a child, STUDY-158 §3.3); `testing` from its tests only
+ * (`bunvexTest`, `registerComponent`), never from `src/` (its `src/test.ts` types the harness structurally).
+ */
+const COMPONENT_ALLOWED = () => ["server", "values", "helpers", "testing", ...componentKeys()];
+const COMPONENT_TEST_ONLY = ["testing"];
+/**
+ * Every example (examples/<dir>) may import what a user's app may: the public packages, `helpers` and the component
+ * packages (an app installs them as any npm package; STUDY-183 S-4).
+ */
+const EXAMPLE_ALLOWED = () => ["bunvex", "react-query", "examples/_harness", "helpers", ...componentKeys()];
 /** Imports core must never contain (rule 2). */
 const CORE_FORBIDDEN = [/^postgres$/, /^mysql2(\/|$)/, /^mongodb$/, /^@bunvex\/persistence(\/|$)/, /^@bunvex\/server/];
 const CORE_FORBIDDEN_TEXT = [/\bBun\.serve\b/, /\bnew WebSocket\b/];
@@ -129,6 +142,7 @@ for (const [base, prefix] of [
   [PKGS, ""],
   [APPS, "apps/"],
   [EXAMPLES, "examples/"],
+  [COMPONENTS, "components/"],
 ] as const) {
   if (!existsSync(base)) continue;
   for (const d of readdirSync(base))
@@ -157,14 +171,17 @@ const RULE6_PACKAGES = /^packages\/(core|server|persistence|file-storage|search)
 for (const [name, dir] of dirOfName) {
   const root = workspaces.get(dir)!;
   const where = relative(ROOT, root);
-  const allowed = ALLOWED[dir] ?? (dir.startsWith("examples/") ? EXAMPLE_ALLOWED : undefined);
+  const allowed =
+    ALLOWED[dir] ??
+    (dir.startsWith("examples/") ? EXAMPLE_ALLOWED() : dir.startsWith("components/") ? COMPONENT_ALLOWED() : undefined);
+  const testOnly = TEST_ONLY[dir] ?? (dir.startsWith("components/") ? COMPONENT_TEST_ONLY : undefined);
   if (!allowed) {
     errors.push(`${name}: no dependency rule for ${where} — add it to scripts/check-deps.ts and ARCHITECTURE.md`);
     continue;
   }
   const pj = readPkg(root);
-  // packages/* only (their keys have no prefix): apps may name Convex descriptively.
-  if (!dir.includes("/"))
+  // packages/* (their keys have no prefix) and components/*, which npm publishes: apps may name Convex descriptively.
+  if (!dir.includes("/") || dir.startsWith("components/"))
     for (const field of metadataNaming(pj))
       errors.push(
         `${where}/package.json: "convex" in its ${field}, which npm publishes — use bunvex's own words (rule 5)`,
@@ -177,7 +194,7 @@ for (const [name, dir] of dirOfName) {
   for (const file of tsFiles(root)) {
     const rel = relative(ROOT, file);
     const text = readFileSync(file, "utf8");
-    if (/^packages\/[^/]+\/src\//.test(rel)) {
+    if (/^(packages|components)\/[^/]+\/src\//.test(rel)) {
       const stripped = withoutComments(text);
       if (RULE6_PACKAGES.test(rel)) {
         const consts = literalConstants(stripped);
@@ -209,7 +226,7 @@ for (const [name, dir] of dirOfName) {
       if (targetDir !== undefined) {
         if (targetDir !== dir && !allowed.includes(targetDir))
           errors.push(`${rel}: ${name} may not import ${pkg} (allowed: ${allowed.join(", ") || "none"})`);
-        else if (TEST_ONLY[dir]?.includes(targetDir) && rel.startsWith(`${where}/src/`))
+        else if (testOnly?.includes(targetDir) && rel.startsWith(`${where}/src/`))
           errors.push(`${rel}: ${name} may import ${pkg} from its tests only, not from src/`);
         if (targetDir !== dir && !declared.has(pkg))
           errors.push(`${rel}: imports ${pkg} but ${name}/package.json does not declare it`);
