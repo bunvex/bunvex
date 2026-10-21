@@ -122,6 +122,29 @@ describe("refused in a component", () => {
       expect(await failure(e.mutation((db) => db.inComponent(id, () => write(db))))).toBe(message);
   });
 
+  test("writes that overlap (`Promise.all`) as a transaction's first in a component stay in its namespace", async () => {
+    // Found by @bunvex/sharded-counter's `reset` (STUDY-183): each first write checks the component is mounted with
+    // a read of the root's `_components`, and that read must not move the overlapping writes to the root's tables
+    // (the root has no `notes`), nor lend them the engine's system access.
+    const e = await open();
+    const id = await component(e);
+    const ids = await e.mutation((db) =>
+      db.inComponent(id, () => Promise.all([0, 1, 2].map(() => db.insert("notes", {})))),
+    );
+    await e.mutation((db) => db.inComponent(id, () => Promise.all(ids.map((n) => db.delete("notes", n)))));
+    expect(await e.query((db) => db.inComponent(id, () => db.query("notes").collect()))).toEqual([]);
+    const refused = await e.mutation((db) =>
+      db.inComponent(id, async () => {
+        const [, read] = await Promise.allSettled([
+          db.insert("messages", { body: "a" }),
+          (async () => db.query("_components").collect())(),
+        ]);
+        return read.status;
+      }),
+    );
+    expect(refused).toBe("rejected");
+  });
+
   test(".paginate() in a component's function, after the page's own checks; the app's is fine", async () => {
     const e = await open();
     const id = await component(e);
