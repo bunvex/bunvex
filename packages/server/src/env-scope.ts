@@ -97,6 +97,9 @@ function installPackageEnv() {
   };
   process.env = new Proxy(real, {
     get: (t, p) => own(p) ?? Reflect.get(t, p),
+    // Bun 1.4.4 rejects an assignment that lands on the proxy itself (`process.env` only accepts a
+    // configurable, writable, enumerable data descriptor). Write the real environment.
+    set: (t, p, value) => Reflect.set(t, p, value),
     has: (t, p) => own(p) !== undefined || Reflect.has(t, p),
     ownKeys: (t) => {
       const vars = allScope.getStore();

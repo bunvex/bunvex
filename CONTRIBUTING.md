@@ -6,7 +6,7 @@ change so we can agree on the design first.
 ## Setup
 
 ```sh
-bun install            # Bun 1.4.2+
+bun install            # Bun 1.4.4+
 bun run check          # lint (Biome), typecheck (tsc strict), dependency rules, tests, dashboard and site builds
 ```
 

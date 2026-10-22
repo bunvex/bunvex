@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       - run: bun scripts/build-binary.ts --version "ci-${GITHUB_SHA::7}"
       - uses: actions/upload-artifact@v4
@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       - run: bun scripts/build-binary.ts --target x86_64-unknown-linux-gnu
       - run: scripts/smoke-binary.sh dist/bin/x86_64-unknown-linux-gnu/bunvex-local-backend
@@ -68,7 +68,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       - run: bun scripts/build-binary.ts --host
       - run: scripts/smoke-binary.sh dist/bin/aarch64-apple-darwin/bunvex-local-backend
@@ -80,7 +80,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       - run: bun scripts/build-binary.ts --target x86_64-unknown-linux-gnu
       - run: scripts/smoke-npm.sh
