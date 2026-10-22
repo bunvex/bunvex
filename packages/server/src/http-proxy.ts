@@ -35,6 +35,16 @@ export function screenFailure(code: string): TypeError {
   return Object.assign(e, { code: refused ? "ConnectionRefused" : code });
 }
 
+/** Bun 1.4.4's error for a proxy that answers 407 to CONNECT, instead of the response itself. */
+function tunnelRefused(e: unknown): boolean {
+  const message = (e as { message?: unknown } | null)?.message;
+  return typeof message === "string" && message.startsWith("Proxy refused to open a tunnel:");
+}
+
+/** reqwest's message for a CONNECT the proxy refused (`proxy authorization required`). */
+const tunnelMessage = (href: string) =>
+  `error sending request for url (${href}): client error (Connect): tunnel error: proxy authorization required`;
+
 /** A request a 407 refused: the message is Convex's (its clients'), naming the request's URL. */
 export class RefusedRequest extends Error {
   constructor(
@@ -69,7 +79,14 @@ export function proxiedFetch(send: typeof fetch, proxy: HttpProxy | null): typeo
   return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const href = hrefOf(input);
     const web = href?.startsWith("http:") || href?.startsWith("https:");
-    const r = await send(input, via && web ? ({ ...init, proxy: via } as RequestInit) : init);
+    // Bun 1.4.4 throws on a refused CONNECT instead of answering 407. Same refusal: Convex's tunnel message.
+    let r: Response;
+    try {
+      r = await send(input, via && web ? ({ ...init, proxy: via } as RequestInit) : init);
+    } catch (e) {
+      if (via && href?.startsWith("https:") && tunnelRefused(e)) throw new RefusedRequest(tunnelMessage(href), href);
+      throw e;
+    }
     if (token && r.status === 502) {
       const [from, code] = (r.headers.get(SCREEN_FAILURE_HEADER) ?? "").split(" ");
       if (from === token && code) {
@@ -80,9 +97,7 @@ export function proxiedFetch(send: typeof fetch, proxy: HttpProxy | null): typeo
     if (r.status !== 407 || !href) return r;
     await r.body?.cancel().catch(() => {});
     throw new RefusedRequest(
-      via && href.startsWith("https:")
-        ? `error sending request for url (${href}): client error (Connect): tunnel error: proxy authorization required`
-        : `Request to ${href} forbidden`,
+      via && href.startsWith("https:") ? tunnelMessage(href) : `Request to ${href} forbidden`,
       href,
     );
   }) as typeof fetch;

@@ -7,7 +7,7 @@
 # parent origins allowed to embed the dashboard and sign it in (DV-319); the server then frames it for them
 # (DV-488). Unset, it is framed same-origin only:
 #   docker build -f docker/dashboard.Dockerfile --build-arg VITE_BUNVEX_EMBED_ORIGINS=https://admin.example.com .
-FROM oven/bun:1.4.2-slim AS build
+FROM oven/bun:1.4.4-slim AS build
 WORKDIR /src
 COPY . .
 RUN bun install --frozen-lockfile

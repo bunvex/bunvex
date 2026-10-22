@@ -1,7 +1,7 @@
 # The bunvex self-hosted backend (STUDY-38, STUDY-40 L2), as Convex's convex-backend image: the compiled
 # bunvex-local-backend and Convex's scripts around it. Build from the repository root:
 #   docker build -f docker/Dockerfile -t bunvex-backend .
-FROM oven/bun:1.4.2-slim AS build
+FROM oven/bun:1.4.4-slim AS build
 WORKDIR /src
 COPY . .
 RUN bun install --frozen-lockfile
