@@ -8,6 +8,8 @@
 // - raise it when a PR adds tests to the file: run `bun run coverage`, take the new value, subtract the margin;
 // - lower it only with a reason in the PR (e.g. new defensive code that tests cannot reach), and the owner's
 //   review;
+// - Bun 1.4.4 stopped counting skipped lines as covered, so four floors dropped with that counter
+//   (`system-reader.ts`, `base-client.ts`, `cron-executor.ts`, `admin-keys.ts`);
 // - a new critical file gets an entry here with its area and reason;
 // - a renamed or removed file: move or drop its entry (the check fails on a floor whose file is not in the
 //   report, so a stale entry cannot pass silently).
@@ -83,7 +85,7 @@ export const FLOORS: Record<string, Floor> = {
     why: "cached query results and their invalidation",
   },
   "packages/core/src/system-reader.ts": {
-    floor: 98,
+    floor: 95,
     area: "invalidation/cache",
     why: "db.system: the public projection of system tables",
   },
@@ -96,7 +98,7 @@ export const FLOORS: Record<string, Floor> = {
     why: "reconnects, backoff, transition chunks",
   },
   "packages/client/src/base-client.ts": {
-    floor: 91,
+    floor: 86,
     area: "sync/reconnect",
     why: "query set, versions, optimistic updates",
   },
@@ -112,9 +114,9 @@ export const FLOORS: Record<string, Floor> = {
     area: "scheduler exactly-once",
     why: "scheduled functions run once",
   },
-  "packages/server/src/cron-executor.ts": { floor: 97, area: "scheduler exactly-once", why: "crons run once per slot" },
+  "packages/server/src/cron-executor.ts": { floor: 94, area: "scheduler exactly-once", why: "crons run once per slot" },
   // Admin keys.
-  "packages/server/src/admin-keys.ts": { floor: 98, area: "admin keys", why: "issuing and checking admin keys" },
+  "packages/server/src/admin-keys.ts": { floor: 94, area: "admin keys", why: "issuing and checking admin keys" },
   "packages/server/src/local-backend.ts": {
     floor: 98,
     area: "admin keys",
