@@ -2249,7 +2249,9 @@ export class Engine {
       throw new Error(`Expected a vector with dimensions ${MAX_VECTOR_DIMENSIONS}, received ${v.length}.`);
     if (limit > MAX_VECTOR_RESULTS)
       throw new Error(`Vector queries can fetch at most ${MAX_VECTOR_RESULTS} results, requested ${limit}.`);
-    const filter = query.filter === undefined ? null : vectorFilter(query.filter);
+    const parsed = query.filter === undefined ? null : vectorFilter(query.filter);
+    // A filter with no condition (`q.or()`) is no filter, as Convex's: an empty field map matches every document.
+    const filter = parsed && parsed.size > 0 ? parsed : null;
     if (filter) {
       let conditions = 0;
       for (const [field, keys] of filter) {

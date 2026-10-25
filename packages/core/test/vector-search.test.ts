@@ -92,6 +92,10 @@ test("filters: q.eq values per field, fields ORed, values compared as Convex's (
     'Vector query against docs.by_embedding contains a filter on "name" but that field isn\'t indexed for filtering in `filterFields`.',
   );
   expect(() => count({ $and: [] })).toThrow("Filters should be a combination of `q.eq` and `q.or`.");
+  // An empty `q.or()` has no condition: no filter, every document (Convex's empty field map, STUDY-187 §2.3).
+  expect(count({ $or: [] })).toBe(count(undefined));
+  expect(count({ $or: [] })).toBe(3);
+  expect(count({ $or: [{ $or: [] }, { $or: [] }] })).toBe(3);
   const many = { $or: Array.from({ length: 65 }, (_, i) => eq("kind", `k${i}`)) };
   expect(() => count(many)).toThrow(
     "Vector query against docs.by_embedding has too many conditions. Max: 64 Actual: 65",
