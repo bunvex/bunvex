@@ -1581,7 +1581,8 @@ export class Functions {
               tableName: e.info.table ?? null,
               documentId: e.info.documentId ?? null,
               writeSource: e.info.writeSource ?? null,
-              componentPath: null,
+              // A component's path (`a/b`); null at the root, as Convex's.
+              componentPath: e.info.componentId ? (this.componentPathOf(e.info.componentId) ?? null) : null,
               retryCount: e.info.retries,
             }
           : null,
