@@ -104,20 +104,24 @@ export type WithOptionalSystemFields<Document extends GenericDocument> = Expand<
   WithoutSystemFields<Document> & Partial<Pick<Document, keyof SystemFields | "_id">>
 >;
 
-/** The dotted paths of a value's object fields, down nested objects (not into arrays or records). */
+/**
+ * The dotted paths of a value's object fields, down nested objects and records (not into arrays). A field holding a
+ * union is followed into each of its object members, as Convex's (STUDY-189 T3).
+ */
 type PathsOf<T, Depth extends unknown[] = []> = Depth["length"] extends 8
   ? never
   : T extends readonly unknown[]
     ? never
     : T extends Record<string, unknown>
       ? {
-          [K in keyof T & string]:
-            | K
-            | (NonNullable<T[K]> extends Record<string, unknown>
-                ? `${K}.${PathsOf<NonNullable<T[K]>, [...Depth, 0]>}`
-                : never);
+          [K in keyof T & string]: PathKey<K> | NestedPaths<PathKey<K>, NonNullable<T[K]>, Depth>;
         }[keyof T & string]
       : never;
+/** A key as written in a path: a record's id key (`string` with a table brand) is any string, as Convex's. */
+type PathKey<K extends string> = string extends K ? string : K extends `${infer Plain}` ? Plain : string;
+/** The paths below a key; a naked parameter, so a union value gives the paths of each of its members. */
+type NestedPaths<K extends string, V, Depth extends unknown[]> =
+  V extends Record<string, unknown> ? `${K}.${PathsOf<V, [...Depth, 0]>}` : never;
 
 /** A document type with `_id` and `_creationTime`, over each branch of a union. */
 type WithSystemFields<TableName extends string, D> = D extends unknown
