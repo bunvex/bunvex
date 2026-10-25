@@ -1,4 +1,5 @@
 # STUDY-109 — The value nesting limit (64) on arguments, results and written values
+<!-- index: The value nesting limit (64): arguments (63, as `[args]`), results, written values; Convex's messages and order, any depth without a stack overflow | implemented; N1 decided by the owner (2026-10-05, DV-363) -->
 
 - **Status:** implemented; the depth past serde's limit decided by the owner (2026-10-05, DV-363)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05

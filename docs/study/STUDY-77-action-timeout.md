@@ -1,4 +1,5 @@
 # STUDY-77 — The action timeout
+<!-- index: The action timeout: 1800 s (Node 600 s), Convex's messages, the cut-off handler; §7: a V8 action ends with its answer (its timers cleared, its `ctx` and `fetch` refusing afterwards); §8: an HTTP action, with its body | implemented; §7, §8 owner 2026-10-21 -->
 
 - **Status:** implemented; §7 (the end of an action, owner 2026-10-21) implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04; the tests removed from

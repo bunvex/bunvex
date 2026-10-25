@@ -1,4 +1,5 @@
 # STUDY-25 — Persistence lifecycle: open, schema, timeouts, retries, shutdown
+<!-- index: Persistence lifecycle: open, schema and versioning, timeouts, retries, shutdown (with runs of the real Convex binary) | accepted: L1–L12 decided (owner, 2026-09-30 and 2026-10-01); L1, L3 (#107), L4 and L5 (#112), L6 and L7 (#114) and L8 (#116) done -->
 
 - **Status:** accepted. L1–L12 (§4) decided by the owner: L9 and L10 on 2026-09-30, the rest on 2026-10-01
   ("approve all recommendations"). L1, L3 (#107, §3.4), L4 and L5 (#112, §3.5; DV-123, DV-124), L6 and L7

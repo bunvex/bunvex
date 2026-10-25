@@ -1,4 +1,5 @@
 # STUDY-188 — What Convex's removed runtime tests pin that bunvex does not
+<!-- index: Runtime gaps from Convex's removed tests | decided (owner, 2026-10-25) -->
 
 - **Status:** decided (owner, 2026-10-25: every §5 recommendation; DV-553, DV-482 amended). R1 and R3 built; each other item ships on its own PR from `main`.
 - **Convex source read:**

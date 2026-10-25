@@ -1,4 +1,5 @@
 # STUDY-165 — Rooms in the dashboard (a proposed addition)
+<!-- index: Rooms in the dashboard: reading the in-memory hub through polled `/api/debug/rooms*` endpoints, a Rooms screen with members and presence, definitions on the Functions screen, counters on Health, an event tap and admin actions | decided (owner, 2026-10-16): AD-43 accepted, every recommendation; steps 1–4 built (the read and the counters) -->
 
 - **Status:** decided. The owner accepted AD-43 on 2026-10-16 with every recommendation of §6: polled `/api/debug/rooms*`
   endpoints, the Rooms screen and the definitions on the Functions screen, the counters, a 1 s period, then the

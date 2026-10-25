@@ -1,4 +1,5 @@
 # STUDY-181 — `@bunvex/helpers`, part 1: custom functions, streams and pagination, triggers, validators
+<!-- index: `@bunvex/helpers`, part 1: convex-helpers' `index`, `validators`, `customFunctions`, `stream`, `pagination`, `triggers` and `compare` (e48f9df) — what each does, the cursors, the oracles, the gaps (`TableDefinition.indexes`' shape, the triggers' module-level locks), a five-PR order | decided (owner, 2026-10-20): H-1–H-8; DV-544 (rule 5), DV-545; built: PRs 1–5 (#797, #798, #801, #803, #804), H-5 (#785) -->
 
 - **Status:** decided (owner, 2026-10-20): H-1–H-8 as recommended (§7); DV-545 decided. **Built**, all five PRs:
   - PR 1, the package with `index`, `validators` and `compare` (#797);

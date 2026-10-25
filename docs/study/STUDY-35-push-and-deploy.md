@@ -1,4 +1,5 @@
 # STUDY-35 — Pushing and deploying functions
+<!-- index: Pushing and deploying functions: bundling, the deploy2 protocol, code versions in `vm` contexts, the atomic switch | implemented (PRs #160–#166); P1–P6 accepted (owner, 2026-10-02) -->
 
 - **Status:** accepted: P1–P6 as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend.

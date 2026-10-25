@@ -1,4 +1,5 @@
 # STUDY-06 — Transactions, OCC and the committer
+<!-- index: Transactions, OCC, commit and retries | decided; D3, D10, D11 resolved to match Convex (DV-57, DV-60, DV-61); D12 built (DV-62), D13 decided (DV-152); D8 a gap to build (DV-59) -->
 
 - **Status:** decided — D1, D2 fixed (#9); D4–D7, D9 resolved to match Convex (DV-30, DV-31, DV-38, DV-39); D10 resolved to match Convex in #118 (DV-60), with a 256 MiB write-log cap by default (DV-128, decided); D11 resolved to match Convex in #120 (DV-61); D3 resolved to match Convex in #134 (DV-57, §9); D12 built as Convex's write batcher (DV-62, §10), with one decided divergence (D13, DV-152: one batch in flight, not 16); D8 to match Convex, a gap tracked in docs/parity (DV-59). Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

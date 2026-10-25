@@ -1,4 +1,5 @@
 # STUDY-72 — Table summary checkpoints
+<!-- index: Table summary checkpoints: the `table_summary_v2` global, Convex's worker pacing, a restore from the document log (DV-300) | implemented; C1 accepted as recommended (owner, 2026-10-03), DV-318 -->
 
 - **Status:** implemented. Owner decision (2026-10-03): an unusable checkpoint falls back to the scan
   (DV-318).

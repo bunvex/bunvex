@@ -1,4 +1,5 @@
 # STUDY-103 — Large-transition warnings in the client
+<!-- index: The client's large-transition warnings: a frame over 20 MB, a transit over 20 s (`reportLargeTransition`) | implemented; wording decided by the owner (2026-10-05, DV-349) -->
 
 - **Status:** implemented; thresholds, per-frame measurement and wording decided by the owner (2026-10-05,
   DV-349; the debug `Event` stays omitted under DV-91)

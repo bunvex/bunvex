@@ -1,4 +1,5 @@
 # STUDY-58 — App metrics (`/api/app_metrics/*`)
+<!-- index: App metrics: `/api/app_metrics/*`, the in-memory store, what is recorded | implemented; DV-302 accepted (owner, 2026-10-03) -->
 
 - **Status:** implemented; DV-302 accepted as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-03; HdrHistogram_rust `main` (Convex

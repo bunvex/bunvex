@@ -1,4 +1,5 @@
 # STUDY-13 — Validators (`v.*`) and argument / return validation
+<!-- index: Validators (`v.*`) and args / returns validation | implemented (#24, #25) -->
 
 - **Status:** implemented (#24 validators; the next PR wires `args` / `returns` into functions)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

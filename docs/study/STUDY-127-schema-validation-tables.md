@@ -1,4 +1,5 @@
 # STUDY-127 — `_schema_validations` and `_schema_validation_progress`
+<!-- index: `_schema_validations` and `_schema_validation_progress`: a pending schema's walk persisted as Convex's (attempts, flushed counters, deleted when the schema resolves, walked again after a restart); the dashboard's `getSchemas:schemaValidationProgress` | implemented (DV-404) -->
 
 - **Status:** implemented at 4577b9031; **revisited 2026-10-08 (§7)** for staged rows (DV-438; the rows built in its PR 2)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05; origin/main 7236c10, 2026-10-08 (§7)

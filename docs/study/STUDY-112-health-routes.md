@@ -1,4 +1,5 @@
 # STUDY-112 — Health routes: `/instance_version`, `/`, `/echo` and the version string
+<!-- index: Health routes: `/instance_version`, `/`, `/echo` (`MAX_ECHO_BYTES`, 128 MiB) and the version string (`@bunvex/server`'s semver) | implemented; V1–V3 decided (owner, 2026-10-05), DV-373–DV-375 -->
 
 - **Status:** implemented; V1–V3 decided by the owner (2026-10-05), DV-373–DV-375
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05; behaviour probed on a

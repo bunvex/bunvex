@@ -1,4 +1,5 @@
 # STUDY-95 — A function's error stack: the app's frames, mapped to its sources
+<!-- index: A function's error stack: only the app's frames, source-mapped to its files, everywhere errors surface | implemented; S1 / S2 (DV-345, DV-346) accepted as recommended (owner, 2026-10-04) -->
 
 - **Status:** implemented; S1 and S2 accepted as recommended (owner, 2026-10-04)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

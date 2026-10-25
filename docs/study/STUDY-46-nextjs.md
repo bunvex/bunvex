@@ -1,4 +1,5 @@
 # STUDY-46 — Next.js and server rendering: `fetchQuery`, `preloadQuery`, `usePreloadedQuery`
+<!-- index: Next.js and server rendering: `fetchQuery` / `fetchMutation` / `fetchAction`, `preloadQuery`, `usePreloadedQuery` | accepted: X1–X3 as recommended (owner, 2026-10-03) -->
 
 - **Status:** accepted: X1–X3 as recommended (owner, 2026-10-03)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

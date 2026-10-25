@@ -1,4 +1,5 @@
 # STUDY-163 — Small dashboard and CLI parity items
+<!-- index: Small dashboard and CLI parity items: `?var=` on the environment variables page, `tableOfId` for system tables, schema checks in the document editors, `dev`'s remaining lines; the Data screen's filter by a search index (§5) | implemented (owner, 2026-10-15: match Convex); the feedback line's address an owner question -->
 
 - **Status:** approved by the owner (2026-10-15: match Convex); §1–§6 implemented
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend; Convex's CLI as npm's `convex@1.46.0`

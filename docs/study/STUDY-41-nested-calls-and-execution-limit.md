@@ -1,4 +1,5 @@
 # STUDY-41 — `ctx.runQuery` / `ctx.runMutation` in queries and mutations, and the 1 s execution limit
+<!-- index: `ctx.runQuery` / `ctx.runMutation` in queries and mutations (one transaction, sub-transactions, depth 8, `useStaleSnapshot`, `transactionLimits`), and the 1 s user execution limit | accepted: all as recommended (owner, 2026-10-02) -->
 
 - **Status:** accepted: all as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

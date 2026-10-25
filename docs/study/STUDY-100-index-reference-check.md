@@ -1,4 +1,5 @@
 # STUDY-100 — Index field references checked at push
+<!-- index: Index field references checked at push (`check_index_references`) | implemented -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04

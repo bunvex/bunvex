@@ -1,4 +1,5 @@
 # STUDY-22 — Mutation order on one WebSocket connection
+<!-- index: Mutation order on one WebSocket connection | implemented; D1 decided (owner, 2026-10-01) -->
 
 - **Status:** implemented; D1 decided by the owner (2026-10-01): match Convex, with protocol v1
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

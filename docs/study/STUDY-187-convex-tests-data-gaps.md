@@ -1,4 +1,5 @@
 # STUDY-187 — What Convex's removed tests check on the data side, and bunvex misses
+<!-- index: What Convex's removed tests (`bea52bde0`, `c358201e1`) check on the data side and bunvex misses: unawaited writes before the commit, CSV empty cells, an empty vector `q.or()`, `_schemas` rows, `occInfo.componentPath`, `log_stream_egress`, a JSON Schema fallback, a no-op patch | decided (owner, 2026-10-25, §4); X20 #838 -->
 
 - **Status:** decided (owner, 2026-10-25): D-1–D-3 as recommended (§4): every item matches Convex, X13 waits for
   the operations in flight, in §3's order. No product change in this PR; each item becomes its own PR, with its test

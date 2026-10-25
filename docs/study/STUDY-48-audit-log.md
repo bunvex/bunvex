@@ -1,4 +1,5 @@
 # STUDY-48 — The deployment audit log
+<!-- index: The deployment audit log: `_deployment_audit_log`, its events, the dashboard's queries, `list_audit_log_events` | accepted: A1–A3 as recommended (owner, 2026-10-03) -->
 
 - **Status:** accepted: A1–A3 as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-02

@@ -1,4 +1,5 @@
 # STUDY-61 — Usage tracking and usage limits
+<!-- index: Usage tracking and usage limits: the meter, `/api/v1/*usage*`, the enforcement worker | implemented; DV-308 resolved, DV-309 accepted (owner, 2026-10-03) -->
 
 - **Status:** implemented; DV-308 resolved to match Convex, DV-309 accepted (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-03

@@ -1,4 +1,5 @@
 # STUDY-40 — The local backend executable, local deployments in `bunvex dev`, and the npm package
+<!-- index: `bunvex-local-backend` as Convex's `convex-local-backend`, local deployments in `bunvex dev` (download, state, `.env.local`), the npm package | accepted: all as recommended (owner, 2026-10-02); L7 settled (owner, 2026-10-12): npm will not allow the name `bunvex`, so the `@bunvex/*` packages are permanent and `packages/bunvex` stays private -->
 
 - **Status:** accepted: all as recommended (owner, 2026-10-02); L7 settled (owner, 2026-10-12): `@bunvex/*` is
   permanent, npm will not allow `bunvex` (§3, "Decided: `@bunvex/*` for good")

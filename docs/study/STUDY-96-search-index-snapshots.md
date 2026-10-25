@@ -1,4 +1,5 @@
 # STUDY-96 — Search index snapshots across restarts
+<!-- index: Search and vector indexes snapshotted at a clean shutdown, restored at start with the log since (STUDY-79 option D) | removed by STUDY-111 (persisted segments replace it) -->
 
 - **Status:** removed by [STUDY-111](STUDY-111-search-segments.md): persisted segments replace the snapshot (a clean
   shutdown flushes them). Before: implemented (STUDY-79 §6 option D, decided by the owner 2026-10-04); storage and

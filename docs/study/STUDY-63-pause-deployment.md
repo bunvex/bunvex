@@ -1,4 +1,5 @@
 # STUDY-63 — Pausing a deployment (`_backend_state`, pause / unpause)
+<!-- index: Pausing a deployment: `_backend_state`, pause / unpause, what stops while paused | implemented, no divergence an app can reach -->
 
 - **Status:** implemented (PR feat/pause-deployment)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-03

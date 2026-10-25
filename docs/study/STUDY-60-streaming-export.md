@@ -1,4 +1,5 @@
 # STUDY-60 — Streaming export (`list_snapshot`, `document_deltas`, `json_schemas`)
+<!-- index: Streaming export: `list_snapshot`, `document_deltas`, `json_schemas`, `get_table_column_names` | implemented; DV-306 accepted, DV-307 resolved (owner, 2026-10-03) -->
 
 - **Status:** implemented (the legacy routes); DV-306 accepted, DV-307 resolved to match Convex (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-03

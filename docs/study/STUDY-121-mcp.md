@@ -1,4 +1,5 @@
 # STUDY-121 — `mcp start`: the Model Context Protocol server
+<!-- index: `bunvex mcp start`: the MCP server over stdio (official SDK, zod), Convex's tools without `insights`, the production guards for self-hosted deployments | implemented; DV-392–DV-395 (owner, 2026-10-05) -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05

@@ -1,4 +1,5 @@
 # STUDY-70 — Provider log stream sinks: Datadog, Axiom, Sentry, PostHog Logs, PostHog Error Tracking
+<!-- index: Provider log stream sinks: Datadog, Axiom, Sentry, PostHog Logs and PostHog Error Tracking, as Convex's | implemented (DV-303 resolved; names under DV-304, owner, 2026-10-03) -->
 
 - **Status:** implemented. Owner decision (2026-10-03): every name Convex puts in these payloads is bunvex's
   (as DV-304 did for the webhook), recorded in DV-304.

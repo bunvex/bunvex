@@ -1,4 +1,5 @@
 # STUDY-138 — Following Convex: daily triage, weekly bump
+<!-- index: Following Convex: a daily triage of its new commits (digest issue, an issue per urgent fix) and a weekly reference bump; the state in `docs/parity/upstream.md` | accepted (owner, 2026-10-08); built -->
 
 - **Status:** accepted (owner, 2026-10-08: "sim" to the daily triage and the weekly bump); built in this PR.
 - **Convex source read:** get-convex/convex-backend `main` at `a4ad353` (2026-10-08): its commit history since

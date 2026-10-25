@@ -1,4 +1,5 @@
 # STUDY-160 — The packages as npm ships them: compiled JavaScript for Node.js and the bundlers
+<!-- index: The packages as npm ships them: compiled JavaScript (ES modules and CommonJS) and declarations beside the sources, so the client runs on Node.js and in bundlers as Convex's | implemented (#633); DV-503 accepted, DV-504 matched to Convex (owner, 2026-10-14) -->
 
 - **Status:** implemented (#633); DV-503 accepted, DV-504 matched to Convex (owner, 2026-10-14)
 - **Convex source read:** `npm-packages/convex` at the commit of [STUDY-137](STUDY-137-convex-reference-2026-10-07.md)

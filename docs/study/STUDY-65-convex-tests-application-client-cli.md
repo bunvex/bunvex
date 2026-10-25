@@ -1,4 +1,5 @@
 # STUDY-65 — What Convex tests in the application, the clients and the CLI, and what bunvex covers
+<!-- index: What Convex tests in `crates/application`, the React / browser / Next.js clients and the CLI, mapped to bunvex's tests; the bugs it found and the gaps left | draft; F1–F4 fixed (#277, #278, #279, #281), client tests #282 -->
 
 - **Status:** draft (inventory done; F1–F4 fixed in #277, #278, #279, #281; F6 in #331; client tests in #282)
 - **Convex source read:** the last snapshots with tests, `bea52bde0` (Rust, 2026-04-09) and `c358201e1`

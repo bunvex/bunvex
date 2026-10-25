@@ -1,4 +1,5 @@
 # STUDY-101 — The 10 000-table cap
+<!-- index: At most 10 000 active user tables (`TooManyTables`) | implemented -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04

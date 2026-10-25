@@ -1,4 +1,5 @@
 # STUDY-39 — The standalone executable (Convex's precompiled `convex-local-backend`)
+<!-- index: The standalone executable: `bunvex` compiled per platform, released as Convex releases `convex-local-backend` | accepted: all as recommended (owner, 2026-10-02) -->
 
 - **Status:** accepted: all as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

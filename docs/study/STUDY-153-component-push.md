@@ -1,4 +1,5 @@
 # STUDY-153 — Components: the push of component definitions (STUDY-152 step 3)
+<!-- index: Components, step 3: the push of component definitions — the request, evaluating each definition, the tree check, per-namespace schemas, `finish_push`'s diffs, the errors, checked against the binary; a four-PR plan | decided (owner, 2026-10-15): DV-494–DV-496; being built -->
 
 - **Status:** decided (owner, 2026-10-15): C-1/C-3/C-4 `bunvex.config.ts` (DV-494), C-7 the server links
   `bunvex/server` into definitions (DV-495), C-5 Convex's texts byte for byte, C-11 a 400 for a malformed

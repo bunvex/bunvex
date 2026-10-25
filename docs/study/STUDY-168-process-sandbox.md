@@ -1,4 +1,5 @@
 # STUDY-168 — Running app code in a sandboxed process (exploratory)
+<!-- index: Running app code in a sandboxed Bun process per deployment ("option C"): Convex's isolates, ops and limits, the threat model, a prototype (host ops over IPC into the real transaction; bubblewrap, seccomp, cgroup v2; Seatbelt on macOS), measurements against today's `vm` executor, escape and limit tests; round 2: the configuration design (an env knob and a flag, fail at start), bubblewrap in Docker (the minimum options and their cost) and a no-privilege Landlock mode, a 12-PR implementation plan, and the first round's fixes measured (user time in the child, a one-call pool, affinity, batching, an unprivileged host) | decided (owner, 2026-10-19: `vm` stays the self-hosted default, a cloud uses C, self-hosters opt in with `BUNVEX_FUNCTION_SANDBOX=process`; every recommendation accepted, AD-44); being built (STUDY-171) -->
 
 - **Status:** decided (owner, 2026-10-19: every recommendation accepted, the knob named `BUNVEX_FUNCTION_SANDBOX`;
   AD-44). Being built as STUDY-171 (PR 1: the seam; PR 2, §7 there: the wire and the child runtime; PR 3, §8:

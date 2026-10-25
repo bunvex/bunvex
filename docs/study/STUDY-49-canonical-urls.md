@@ -1,4 +1,5 @@
 # STUDY-49 — Canonical URLs
+<!-- index: Canonical URLs: `_canonical_urls`, `update_canonical_url`, the built-ins and file URLs they replace | accepted: C1 as recommended (owner, 2026-10-03) -->
 
 - **Status:** accepted: C1 as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-02

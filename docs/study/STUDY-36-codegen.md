@@ -1,4 +1,5 @@
 # STUDY-36 — Codegen: `_generated/` and the typed data model
+<!-- index: Codegen: `_generated/` (api, server, dataModel) and the typed data model behind it | accepted: all as recommended (owner, 2026-10-02) -->
 
 - **Status:** accepted: all as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend.

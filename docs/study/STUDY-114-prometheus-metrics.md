@@ -1,4 +1,5 @@
 # STUDY-114 — Prometheus `/metrics`
+<!-- index: Prometheus `/metrics`: Convex's meta route on both ports, `DISABLE_METRICS_ENDPOINT`, bunvex's own series with `le` histograms, the sync argument sizes | implemented; DV-377 and DV-378 (owner, 2026-10-05) -->
 
 - **Status:** implemented; DV-377 and DV-378 decided by the owner (2026-10-05)
 - **Convex source read:** commit `4577b903` of get-convex/convex-backend

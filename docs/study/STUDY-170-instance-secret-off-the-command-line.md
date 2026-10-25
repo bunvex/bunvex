@@ -1,4 +1,5 @@
 # STUDY-170 — The instance secret off the command line
+<!-- index: The instance secret off the command line: Convex's binary takes `--instance-secret` only and its image and CLI put it on argv, readable by every local user; bunvex's executable reads `INSTANCE_SECRET` too (the flag wins), and `bunvex dev` and the Docker scripts pass it there (STUDY-168 Q11) | implemented (this PR); DV-525 (owner, 2026-10-19) -->
 
 - **Status:** implemented (this PR); DV-525 decided (owner, 2026-10-19: move the secret off the command line)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend

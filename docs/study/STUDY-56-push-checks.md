@@ -1,4 +1,5 @@
 # STUDY-56 — The checks before a push (`evaluate_schema`, large indexes)
+<!-- index: The checks before a push: `evaluate_schema`, large-index deletion and backfill, slow schema walk, the default `--message` | P1 accepted as recommended (owner, 2026-10-03) -->
 
 - **Status:** P1 accepted as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-03

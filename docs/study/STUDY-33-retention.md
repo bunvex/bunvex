@@ -1,4 +1,5 @@
 # STUDY-33 — Retention: garbage collection of old versions
+<!-- index: Retention: garbage collection of old index and document versions, the windows, reads below them | implemented; R1–R4 accepted (owner, 2026-10-01) -->
 
 - **Since STUDY-133 PR 10:** R1 and R2 match Convex: both deleters walk the document log by `prev_ts` (DV-154, DV-155 reversed).
 - **Status:** implemented (PERSIST-01 C12–C14 and the engine's `Retention`); R1–R4 accepted (owner, 2026-10-01)

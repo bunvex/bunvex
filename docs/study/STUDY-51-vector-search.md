@@ -1,4 +1,5 @@
 # STUDY-51 — Vector search
+<!-- index: Vector search: `vectorIndex`, `ctx.vectorSearch`, exact in memory | V1–V2 decided (owner, 2026-10-02); V3–V5 accepted as recommended (owner, 2026-10-03) -->
 
 - **Status:** V1–V2 decided by the owner (2026-10-02: exact, in memory); V3–V5 accepted as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-03

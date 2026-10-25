@@ -1,4 +1,5 @@
 # STUDY-11 — Function results and errors on the wire
+<!-- index: Function results and errors | implemented / decided: all resolved (DV-31, DV-44, DV-46, DV-49, DV-70, DV-71) -->
 
 - **Status:** implemented / decided — every row resolved to match Convex (DV-31, DV-44, DV-46, DV-49, DV-70,
   DV-71). Retroactive: the code in §3 was written before the study-first rule. D1, D2, D3 and D7

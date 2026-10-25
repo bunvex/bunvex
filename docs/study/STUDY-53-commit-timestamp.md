@@ -1,4 +1,5 @@
 # STUDY-53 — The commit timestamp (`db.vars.commitTs`)
+<!-- index: The commit timestamp: `db.vars.commitTs`, `v.commitTs()`, resolution at commit | accepted: T1–T2 as recommended (owner, 2026-10-03) -->
 
 - **Status:** accepted: T1–T2 as recommended (owner, 2026-10-03). Closes DV-59
 - **Convex source read:** `main` of get-convex/convex-backend (npm 1.46.0; the feature is in 1.43.0), 2026-10-03

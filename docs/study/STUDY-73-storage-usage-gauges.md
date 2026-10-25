@@ -1,4 +1,5 @@
 # STUDY-73 — Storage usage gauges
+<!-- index: Storage usage gauges: the hourly `current_storage_usage` event, the 1 TiB export limit on files | implemented; G1 accepted as recommended (owner, 2026-10-03), DV-317 extended -->
 
 - **Status:** implemented. Owner decision (2026-10-03): the text index's storage is the same estimate as
   its search bytes (DV-317, extended).
