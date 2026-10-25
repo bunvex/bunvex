@@ -6,6 +6,7 @@
 // an entry it removed (a delete, or a patch that moved the indexed value). A range read merges the
 // snapshot with the pending entries of that range, in key order; on an equal key the pending entry wins.
 
+import { drainMicrotasks } from "bun:jsc";
 import { MAX_CANDIDATE_REVISIONS, MAX_QUERY_TERMS, tokenize } from "@bunvex/search";
 import {
   type CommitTsPlaceholder,
@@ -1276,7 +1277,7 @@ export class Tx {
     const start = spans ? monotonicNow() : 0;
     const cache = this.indexCache;
     const read = () => this.persistence.get(t.id, internalIdOf(id), this.snapshot);
-    const version = await storeCall(() =>
+    const version = await this.stored(() =>
       cache ? cache.get(t.byId.id, k, prefixEnd(k), this.snapshot, read) : read(),
     );
     if (spans) spans.record(t.byId, version ? 1 : 0, start);
@@ -1505,11 +1506,43 @@ export class Tx {
     return out;
   }
 
+  /** Store calls this transaction has in flight (`stored`); `settle` waits for them. */
+  private inFlight = 0;
+  private idle: (() => void) | null = null;
+
+  /** A store call, counted in flight until it settles. Every read of the transaction's store goes through it. */
+  private async stored<T>(fn: () => T | Promise<T>): Promise<T> {
+    this.inFlight++;
+    try {
+      return await storeCall(fn);
+    } finally {
+      if (--this.inFlight === 0 && this.idle) {
+        const wake = this.idle;
+        this.idle = null;
+        wake();
+      }
+    }
+  }
+
+  /**
+   * Once the function's promise has fulfilled: run the microtasks queued (the code its operations' answers resume, which
+   * may start more), and while an operation is in flight wait for it, then again, until none is left. Convex's loop
+   * (`environment/udf/mod.rs`): a microtask checkpoint, then the pending syscalls, until none is pending. So an
+   * unawaited write is part of the transaction (STUDY-187 §2.1), with no turn of the event loop added.
+   */
+  async settle(): Promise<void> {
+    for (;;) {
+      drainMicrotasks();
+      if (this.inFlight === 0) return;
+      await new Promise<void>((resolve) => (this.idle = resolve));
+    }
+  }
+
   private async storeRangeOf(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
     const t = st.t!;
     const ix = st.ix!;
     // The index range and its documents, each at its entry's ts, in one call (one round trip on a remote store).
-    const rows = await storeCall(async () => {
+    const rows = await this.stored(async () => {
       try {
         const read = () => this.persistence.scan(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc);
         const cache = this.indexCache;

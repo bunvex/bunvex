@@ -185,19 +185,26 @@ test("a retry first waits for the write it lost to, so it does not lose to it ag
   const id = await engine.mutation((db) => db.insert("counters", { n: 0 }));
   slow = true;
   let runs = 0;
-  const bump = (count: boolean) => async (db: Tx) => {
-    if (count) runs++;
+  // Both read before either writes (whatever order their microtasks run in): each waits until the other has read.
+  let reads = 0;
+  let bothRead!: () => void;
+  const read = new Promise<void>((r) => (bothRead = r));
+  // Which of the two loses depends on the order their commits reach the committer: count both (three runs, one retry).
+  const bump = async (db: Tx) => {
+    runs++;
     const d = (await db.get("counters", id)) as unknown as { n: number };
+    if (++reads === 2) bothRead();
+    if (reads <= 2) await read;
     await db.patch("counters", id, { n: d.n + 1 });
   };
   const saved = Math.random;
   Math.random = () => 0; // no backoff sleep: only the wait for the winner's write stands between retries
   try {
     // Both commit in one group: the first wins, the second conflicts with a write not yet visible.
-    await Promise.all([engine.mutation(bump(false)), engine.mutation(bump(true))]);
+    await Promise.all([engine.mutation(bump), engine.mutation(bump)]);
   } finally {
     Math.random = saved;
   }
-  expect(runs).toBe(2);
+  expect(runs).toBe(3);
   expect(((await engine.query((db) => db.get("counters", id))) as unknown as { n: number }).n).toBe(2);
 });
