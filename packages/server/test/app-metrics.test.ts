@@ -183,7 +183,7 @@ test("udf_rate, cache_hit_percentage, table_rate and latency_percentiles from re
   await t.call("query", "m:list");
   await t.call("query", "m:byId");
   await t.call("query", "m:list"); // a cache hit
-  await t.call("action", "m:run"); // runs m:list too, from the cache
+  await t.call("action", "m:run"); // runs m:list too: a miss, as an action's runQuery has a cache of its own
   await fetch(`${t.site}/hook/a`);
   await fetch(`${t.site}/hook/b`);
   const width = 660; // seconds in the one bucket
@@ -192,15 +192,15 @@ test("udf_rate, cache_hit_percentage, table_rate and latency_percentiles from re
   expect(Math.round((await rate("m:add", "invocations")) * width)).toBe(3);
   expect(Math.round((await rate("m.js:fail", "errors")) * width)).toBe(1);
   expect(Math.round((await rate("m:list", "invocations")) * width)).toBe(3);
-  expect(Math.round((await rate("m:list", "cacheHits")) * width)).toBe(2);
+  expect(Math.round((await rate("m:list", "cacheHits")) * width)).toBe(1);
   expect(Math.round((await rate("m:run", "invocations")) * width)).toBe(1);
   // An HTTP action is named by its route's path (a prefix route's ends in `*`).
   expect(Math.round((await rate("GET /hook/*", "invocations", "HttpAction")) * width)).toBe(2);
-  expect(t.one((await t.get("cache_hit_percentage", { udfPath: "m:list" })).body)).toBeCloseTo(200 / 3);
+  expect(t.one((await t.get("cache_hit_percentage", { udfPath: "m:list" })).body)).toBeCloseTo(100 / 3);
   const written = t.one((await t.get("table_rate", { name: "items", metric: "rowsWritten" })).body);
   expect(Math.round(written! * width)).toBe(3);
   const read = t.one((await t.get("table_rate", { name: "items", metric: "rowsRead" })).body);
-  expect(Math.round(read! * width)).toBe(5); // the uncached list read the three rows, byId two
+  expect(Math.round(read! * width)).toBe(8); // the two uncached lists read the three rows each, byId two
   const lat = await t.get("latency_percentiles", { udfPath: "m:add", percentiles: "[99,50]" });
   expect(lat.body.map(([p]: [number]) => p)).toEqual([50, 99]);
   expect(lat.body[0][1][0][1]).toBeGreaterThan(0);
