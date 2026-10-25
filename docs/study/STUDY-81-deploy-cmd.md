@@ -1,4 +1,5 @@
 # STUDY-81 — `deploy --cmd`
+<!-- index: `bunvex deploy --cmd` and `--cmd-url-env-var-name`: a build command run first with the deployment's URLs, as Convex's `runCommand` | implemented -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04

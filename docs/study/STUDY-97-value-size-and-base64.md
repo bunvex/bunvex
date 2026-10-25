@@ -1,4 +1,5 @@
 # STUDY-97 — `getDocumentSize`, `Base64` and `getConvexSize`
+<!-- index: `getDocumentSize`, `Base64` and `getConvexSize` (`valueSize`) from `bunvex/values`, as Convex's | implemented; the `getConvexSize` name kept as `valueSize` (owner, 2026-10-04, DV-347) -->
 
 - **Status:** implemented; the `getConvexSize` name decided by the owner (2026-10-04, DV-347)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04

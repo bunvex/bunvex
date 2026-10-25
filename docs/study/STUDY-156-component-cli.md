@@ -1,4 +1,5 @@
 # STUDY-156 — Components: the CLI's push and codegen (STUDY-152 step 6)
+<!-- index: Components, step 6: the CLI's push and codegen — finding and bundling definitions, the virtual `defineApp()` (DV-429), what a push prints, `components` and a component's `_generated/` (DV-174) built offline from the validators, `--component-dir` / `--live-component-sources` (DV-385), `run --component` (DV-391); a three-PR plan | decided (owner, 2026-10-19): DV-532–DV-534 -->
 
 - **Status:** decided (owner, 2026-10-19): Q-1 codegen offline from the validators (DV-532), Q-2 bunvex's
   resolution conditions (DV-533), Q-3 no `legacyComponentApi` (DV-534), Q-4 `run --component` in step 6 (§5); DV-535

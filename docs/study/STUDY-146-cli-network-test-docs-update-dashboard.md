@@ -1,4 +1,5 @@
 # STUDY-146 — `bunvex network-test`, `docs`, `update` and `dashboard`
+<!-- index: `bunvex network-test` (Convex's DNS, TCP, `/instance_name`, WebSocket and `/echo` checks, retries and timeout), `docs`, `update` and `dashboard` (`dash`), and what of each applies to a self-hosted deployment | implemented; DV-461 decided (rule 5); Q1 decided (owner, 2026-10-11): the version check in `dev` and `deploy`, AD-29, built -->
 
 - **Status:** implemented; DV-461 decided (rule 5); Q1 decided by the owner (2026-10-11): the version check, AD-29, built (§7);
   the package names moved to `@bunvex/*` (2026-10-12, §8)

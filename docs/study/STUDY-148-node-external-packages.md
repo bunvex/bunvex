@@ -1,4 +1,5 @@
 # STUDY-148 — `node.externalPackages`: packages installed by the deployment for Node actions
+<!-- index: `node.externalPackages`: what the CLI leaves external (the list, `"*"`, exact installed versions, peer and optional dependencies), the deployment's install (`npm install`, a zip in the modules storage, `_external_deps_packages`, the 10-row cache, `InvalidExternalModules`, the size limit), how Node actions load them; bunvex's design with `bun install` | implemented (#587, #588, #589, #590); Q1–Q7 decided as recommended (owner, 2026-10-12; DV-470–DV-473) -->
 
 - **Status:** decided (owner, 2026-10-12): Q1–Q4 as recommended (DV-470–DV-473); Q5–Q7 match Convex and stand as
   designed. PR 1 (the `bunvex.json` check, #587), PR 2 (`require` in `"use node"` modules, #588), the import-time

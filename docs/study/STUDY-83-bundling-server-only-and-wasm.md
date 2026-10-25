@@ -1,4 +1,5 @@
 # STUDY-83 — Bundling `server-only` and `.wasm` imports
+<!-- index: Bundling `import "server-only"` (an empty module) and `.wasm` imports (a `WebAssembly.Module`), as Convex's bundler plugins | implemented -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04

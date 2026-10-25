@@ -1,4 +1,5 @@
 # STUDY-135 — Strings with a lone surrogate, refused where Convex refuses them
+<!-- index: Strings with a lone surrogate, refused where Convex refuses them: syscall arguments ("Received invalid json", serde's column), return values, client arguments, U+FFFD in logs and messages | implemented (STUDY-122 D3 A; Q1 B, DV-431; Q2 A; owner, 2026-10-06) -->
 
 - **Status:** implemented (STUDY-122 D3 decided A; Q1 B, DV-431; Q2 A; owner, 2026-10-06)
 - **Convex source read:** commit `4577b903` of get-convex/convex-backend; `serde_json` 1.0.151 (its `Cargo.lock`)

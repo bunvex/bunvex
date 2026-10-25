@@ -1,4 +1,5 @@
 # STUDY-144 — `schema.tables` as Convex's record of `TableDefinition`s
+<!-- index: `schema.tables` as Convex's record of `TableDefinition`s (`schema.tables.messages.validator`), the schema's own fields, `" indexes"()`; the engine reads `declaredTables(schema)` | implemented -->
 
 - **Status:** implemented; no new divergence.
 - **Convex source read:** `npm-packages/convex/src/server/schema.ts` and its build in the `convex` 1.46.0 package

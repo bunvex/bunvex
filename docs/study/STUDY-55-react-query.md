@@ -1,4 +1,5 @@
 # STUDY-55 — TanStack Query: `@bunvex/react-query`, as Convex's `@convex-dev/react-query`
+<!-- index: TanStack Query: `@bunvex/react-query` (`BunvexQueryClient`, `bunvexQuery`, `bunvexAction`), as `@convex-dev/react-query`, with SSR at one snapshot | accepted: R1–R4 as recommended (owner, 2026-10-03); R4 built in a follow-up -->
 
 - **Status:** accepted: R1–R3 as recommended (owner, 2026-10-03); R4 (pagination) deferred, to revisit (owner, 2026-10-03)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

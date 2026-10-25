@@ -1,4 +1,5 @@
 # STUDY-140 — S3 server-side encryption and checksums (`AWS_S3_DISABLE_SSE`, `AWS_S3_DISABLE_CHECKSUMS`)
+<!-- index: S3 server-side encryption and checksums: `AWS_S3_DISABLE_SSE` and `AWS_S3_DISABLE_CHECKSUMS` as Convex's (SSE-S3 and CRC32 part checksums by default, exactly `true` turns each off), every write a signed multipart upload, what the AWS SDK adds on its own | implemented; DV-445 accepted, DV-446 resolved to match Convex (owner, 2026-10-11) -->
 
 - **Status:** implemented; DV-445 accepted, DV-446 resolved to match Convex, small uploads kept multipart (owner, 2026-10-11)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend (the reference, [upstream.md](../parity/upstream.md));

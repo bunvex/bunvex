@@ -1,4 +1,5 @@
 # STUDY-78 — The write throughput limit
+<!-- index: The write throughput limit: 4 MiB/s per deployment, `TooManyWrites`, who waits and who fails | implemented -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04; the tests removed from

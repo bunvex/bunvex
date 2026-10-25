@@ -1,4 +1,5 @@
 # STUDY-80 — Outbound requests: what an action's `fetch` may reach, and the SSRF proxy
+<!-- index: Outbound requests: the schemes and options an action's `fetch` takes, the SSRF proxy (`--convex-http-proxy`), what goes through it | PR 1 (#377), PR 2 (#379) and P1 (#381; DV-325 decided: C, owner, 2026-10-04) implemented -->
 
 - **Status:** PR 1 (schemes and Bun's options, #377) and PR 2 (the proxy, #379) implemented, as Convex. P1
   (screening without a proxy, beyond Convex; DV-325) decided by the owner, 2026-10-04: option C (§4.1),

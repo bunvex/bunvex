@@ -1,4 +1,5 @@
 # STUDY-159 — `@bunvex/testing`, the equivalent of convex-test
+<!-- index: `@bunvex/testing`, convex-test's equivalent: the real engine in the test's process, the app pushed in-process (bundled as the CLI does), convex-test's API renamed for rule 5, a virtual clock for the scheduler and crons, the deployment's env; a four-PR plan | decided (owner, 2026-10-20): T-1–T-8; DV-540–542, AD-34, AD-35 accepted -->
 
 - **Status:** decided (owner, 2026-10-20): T-1–T-8 as recommended (§7); DV-540–542 decided, AD-34 and AD-35
   accepted. Built: PR 1, the clocks and executors on `engine.runtime` (#774); PR 2, `bunvexTest` (#776); PR 3,

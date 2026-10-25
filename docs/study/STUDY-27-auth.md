@@ -1,4 +1,5 @@
 # STUDY-27 — Authentication (`ctx.auth`, JWT / OIDC, the sync and client auth flow)
+<!-- index: Authentication: auth.config, JWT / OIDC verification, `ctx.auth`, identity-aware caching, sync and client auth, React helpers | accepted: A1–A3, A5 as recommended (owner, 2026-09-30) -->
 
 - **Status:** accepted: A1–A3 and A5 as recommended (owner, 2026-09-30)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

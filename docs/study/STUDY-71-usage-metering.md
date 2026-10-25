@@ -1,4 +1,5 @@
 # STUDY-71 — Usage metering: database I/O, user time, egress, storage and search bytes
+<!-- index: Usage metering as Convex's: database I/O, user time, egress, storage and search bytes (DV-309) | U1–U2 accepted as recommended (owner, 2026-10-03); PR 1 (database I/O) implemented -->
 
 - **Status:** decisions taken (owner, 2026-10-03): text search bytes estimated from the index (U1); Node
   actions' fetch egress is 0, as Convex self-hosted (U2). Built in four PRs (§5); all four PRs are implemented.

@@ -1,4 +1,5 @@
 # STUDY-152 — Components, studied again before building them
+<!-- index: Components studied again before building them: where their data lives, what a call into one costs (and why users find them slower), the dashboard's picker, export and import, running Convex's published components, the js-integration-tests as oracles | study; C1–C7 open (owner) -->
 
 - **Status:** study; C1–C3 decided (owner, 2026-10-14, §9; DV-492, DV-493), C4–C7 open. Extends [STUDY-62](STUDY-62-components.md), which it corrects
   in §7; STUDY-62's plan (§7.5) stays the base, revised in §8.

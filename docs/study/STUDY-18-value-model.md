@@ -1,4 +1,5 @@
 # STUDY-18 — The value model: types, order, index keys, JSON
+<!-- index: The value model: types, order, index keys, JSON; §9 a pushed function's `Set` / `Map` in a value error (`Set[1]`, any realm), the conversion before the result's checks and in scheduled and nested-call arguments, `runAt` with its `Date` | implemented (#15, #21; §9 this PR) -->
 
 - **Status:** implemented (#15 values, #21 core and wire; §9 a pushed function's `Set` / `Map`); supersedes STUDY-05 D4/D6–D8 and STUDY-10 D1/D2/D10
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (§9: `d8bdde0`)

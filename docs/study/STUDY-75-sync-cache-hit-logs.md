@@ -1,4 +1,5 @@
 # STUDY-75 — Logging a sync query served without running
+<!-- index: A sync query served from another session's run logs a cache hit, as Convex's query cache | implemented, no divergence -->
 
 - **Status:** implemented; no divergence.
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-03

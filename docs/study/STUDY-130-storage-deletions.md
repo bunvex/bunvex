@@ -1,4 +1,5 @@
 # STUDY-130 — Deleting a file's blob: Convex's mechanism and bunvex's `_storage_deletions`
+<!-- index: Deleting a file's blob: Convex never does (no queue, no sweep); bunvex's `_storage_deletions` and sweeps dropped to match (DV-150 withdrawn) | implemented (owner, 2026-10-05: A; DV-407) -->
 
 - **Status:** implemented (owner, 2026-10-05: A, match Convex)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05

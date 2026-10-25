@@ -1,4 +1,5 @@
 # STUDY-116 — `codegen`'s other flags: `--dry-run`, `--debug`, `--commonjs`, and the rest
+<!-- index: `codegen --dry-run`, `--debug`, `--commonjs` (and `generateCommonJSApi`), and Convex's deployment and component flags | implemented; DV-384–DV-386 decided (owner, 2026-10-05) -->
 
 - **Status:** implemented; the divergences decided by the owner (2026-10-05: DV-384, DV-385, DV-386)
 - **Convex source read:** commit `4577b903` of get-convex/convex-backend

@@ -1,4 +1,5 @@
 # STUDY-183 — `@bunvex/sharded-counter`, and how bunvex's component packages are built
+<!-- index: `@bunvex/sharded-counter`, the first own component, and the package model every `@bunvex/*` component follows: `components/<name>/`, TypeScript sources in the repo and compiled JS at publish, `_generated/` committed, its own version, the upstream tests ported, a differential test against `@convex-dev/sharded-counter` on Convex, the example app | decided (owner, 2026-10-21): S-1–S-4 -->
 
 - **Status:** decided (owner, 2026-10-21): S-1–S-4 as recommended (§7).
 - **Convex source read:** get-convex/sharded-counter at `d8f0718` (0.2.3), pinned in

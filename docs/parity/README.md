@@ -6,9 +6,9 @@ item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
-| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 244 | 3 | 0 |
+| Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 250 | 2 | 0 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 163 | 2 | 1 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables, libraries | [platform.md](platform.md) | 244 | 22 | 5 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables, libraries | [platform.md](platform.md) | 246 | 22 | 3 |
 
 Beyond Convex, [additions.md](additions.md) lists 38 additions: 34 built (5 of them dashboard screens on the
 mock), 1 being built (AD-44), 1 accepted, 2 deferred, none proposed (recounted on 2026-10-20, STUDY-181 PR 1: AD-23
@@ -18,13 +18,15 @@ accepted in STUDY-164 and built the same day, STUDY-164 §7; AD-43, rooms in the
 the event tap's server and data source, §5.2, the actions' server and data source, §5.3, and the tap's panel and the
 actions' controls, STUDY-166; AD-46, the SQLite page cache's size, decided on 2026-10-21 and built, STUDY-174 Q6).
 
-These counts were recounted on 2026-10-21 (STUDY-183, the ecosystem components row of platform.md: sharded-counter built); before that on 2026-10-20 (STUDY-181 PR 4, the pagination row of platform.md; PR 3, the streams row; PR 5, the triggers row; PR 2, the custom functions row; PR 1, the libraries rows); before that on 2026-10-19 (STUDY-173, after the components rows' update of the same day, STUDY-152 steps 1–7; the docs audit of 2026-10-12 re-marked cloud-only and decided no-build rows *n/a*) from each row's status column: a row counts as done,
+Since 2026-10-26 these counts are computed from the rows (`scripts/docs.ts`). Before, they were recounted by hand on 2026-10-21 (STUDY-183, the ecosystem components row of platform.md: sharded-counter built); before that on 2026-10-20 (STUDY-181 PR 4, the pagination row of platform.md; PR 3, the streams row; PR 5, the triggers row; PR 2, the custom functions row; PR 1, the libraries rows); before that on 2026-10-19 (STUDY-173, after the components rows' update of the same day, STUDY-152 steps 1–7; the docs audit of 2026-10-12 re-marked cloud-only and decided no-build rows *n/a*) from each row's status column: a row counts as done,
 partial or missing by the word its status starts with. Rows marked *n/a* (cloud-only or a decided divergence)
 are not counted: 1 in server-api.md, 1 in client-sync.md, 6 in platform.md.
 
 ## How to use it
 
-- **Every PR that adds or changes a Convex feature updates the matching rows** in the same PR.
+- **Every PR that adds or changes a Convex feature updates the matching rows** in the same PR. The counts (the table
+  above, each file's "Summary counts" and the site's copy) are not edited by hand: `bun run docs` writes them from the
+  rows, and `bun run check` fails while they are out of date.
 - A row goes from *missing* to *done* only with the study (`docs/study/`) and tests.
 - Rows marked **Divergence?** in their notes are places where bunvex might deliberately differ. The owner
   decides them; until then, the default is to match Convex.

@@ -1,4 +1,5 @@
 # STUDY-34 — Admin keys and admin access
+<!-- index: Admin keys: format and crypto, instance name, identities (admin, acting user, system), admin-only functions and endpoints | accepted: AK1–AK6 as recommended (owner, 2026-10-01) -->
 
 - **Status:** accepted: AK1–AK6 as recommended (owner, 2026-10-01)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend.

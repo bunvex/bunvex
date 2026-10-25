@@ -1,4 +1,5 @@
 # STUDY-17 — `.paginate()`, cursors and reactive page boundaries
+<!-- index: `.paginate()`, cursors, reactive page boundaries, the instance secret | implemented (#42) -->
 
 - **Status:** implemented (#42)
 - **Convex source read:** commit `4577b9031`

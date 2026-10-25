@@ -1,4 +1,5 @@
 # STUDY-79 — Search and vector indexes while they are rebuilt after a start
+<!-- index: Search and vector indexes while they are rebuilt after a start: Convex's bootstrapping answer, the sync skip and retry; options for the window | implemented; window decided (owner, 2026-10-04: A now, D planned) -->
 
 - **Status:** implemented (the Convex answer and the sync skip); the rebuild window decided by the owner
   (2026-10-04, §6): A now, D planned

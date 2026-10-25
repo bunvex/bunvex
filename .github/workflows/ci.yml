@@ -59,6 +59,8 @@ jobs:
         run: bun run typecheck
       - if: needs.changes.outputs.code != 'false'
         run: bun run check:deps
+      # docs-only changes too: the study index and the parity counts are generated (scripts/docs.ts)
+      - run: bun run check:docs
       # includes PERSIST-01 conformance (K1–K7) on the embedded drivers: memory and SQLite,
       # then the UI packages' suites, each in its own process with a DOM (UI-01 §7)
       - if: needs.changes.outputs.code != 'false'

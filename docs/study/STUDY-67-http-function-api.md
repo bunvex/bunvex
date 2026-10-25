@@ -1,4 +1,5 @@
 # STUDY-67 — The HTTP function API (`/api/query`, `/api/mutation`, `/api/action`, `/api/function`, `/api/run`, …)
+<!-- index: The HTTP function API: routes, status codes, `format`, request errors, CORS (audited against Convex's local backend); §9 the dashboard's routes from another origin (`/instance_version`, `/stats` behind the layer) | studied; H7, H10–H12 pending (owner); §9 fixed, no new divergence -->
 
 - **Status:** studied; fixes in follow-up PRs (§4)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend; observed against Convex's

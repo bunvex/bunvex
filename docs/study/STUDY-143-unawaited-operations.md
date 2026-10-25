@@ -1,4 +1,5 @@
 # STUDY-143 — The unawaited-operations warning
+<!-- index: The unawaited-operations warning: what counts (`ctx.meta`, `createFunctionHandle`, `log.audit`, a multipart `formData()`), answers handed over in a later turn as Convex's tasks, timeouts and HTTP actions; checked against the binary | implemented -->
 
 - **Status:** implemented; no new divergence (the docs link is DV-04's).
 - **Convex source read:** `crates/isolate/src/environment/action/{mod.rs,task.rs,async_syscall.rs,task_executor.rs}`,

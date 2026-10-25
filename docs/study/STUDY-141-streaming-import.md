@@ -1,4 +1,5 @@
 # STUDY-141 — Streaming import (`/api/streaming_import/*`) and the `clear_tables` audit event
+<!-- index: Streaming import (`/api/streaming_import/*`): `clear_tables` and its `clear_tables` audit event, Airbyte records, Fivetran operations, hidden primary-key indexes (system indexes on user tables); who calls them; a four-PR plan | decided (owner, 2026-10-11): Q1–Q5 as recommended (DV-447–DV-451); PR 1 implemented (`clear_tables`, `get_schema`, `replace_tables`); PRs 2–4 future work -->
 
 - **Status:** decided (owner, 2026-10-11): Q1–Q5 as recommended (DV-447, DV-448, DV-449, DV-451 decided; DV-450
   matched to Convex). Scope: PR 1 only for now (§7); PRs 2–4 stay here as future work. PR 1 built (§8).

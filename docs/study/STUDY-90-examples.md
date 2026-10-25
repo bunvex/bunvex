@@ -1,4 +1,5 @@
 # STUDY-90 — Examples, demos and templates
+<!-- index: Examples, demos and templates | two batches built (21 examples); templates and a public mirror later; `examples/` at the root (owner, 2026-10-04) -->
 
 - **Status:** two batches built (21 examples); templates and a public mirror later. `examples/` at the root
   (owner, 2026-10-04)

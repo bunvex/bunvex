@@ -1,4 +1,5 @@
 # STUDY-03 — Deterministic queries and mutations
+<!-- index: Deterministic queries and mutations | implemented (#4), retroactive -->
 
 - **Status:** implemented (#4). Written retroactively, after the code.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

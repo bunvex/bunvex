@@ -1,4 +1,5 @@
 # STUDY-161 — Engine messages found with the dashboard
+<!-- index: Engine messages STUDY-149 found: `db.insert`'s table and value errors, a schema error's display without the system fields, a system-field mismatch's display, a query on a missing table or index, a `$` field in a system function's arguments, a push's table numbers, the analyzed line of a function; a streamed HTTP action body's chunk that is not bytes (§15; its words accepted as DV-529, option (b), owner, 2026-10-15) | decided (owner, 2026-10-15: match Convex); implemented (#664–#669); Q1 (the analyzed line) accepted as DV-520, option (a) (owner, 2026-10-15) -->
 
 - **Status:** decided (owner, 2026-10-15: match Convex on the differences STUDY-149 PR 3 found); one PR per
   concern (§1–§7, each section's *Built* line); §8 accepted as a divergence (owner, 2026-10-15: Q1 (a), DV-520); §15's words accepted as a divergence (owner,

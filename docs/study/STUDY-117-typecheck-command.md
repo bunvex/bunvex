@@ -1,4 +1,5 @@
 # STUDY-117 — `bunvex typecheck`, `tsgo` and `typescriptCompiler`
+<!-- index: `bunvex typecheck`, `tsgo` (`@typescript/native-preview`) and bunvex.json's `typescriptCompiler`, with Convex's messages | implemented; DV-387 decided (owner, 2026-10-05); the deploy-time failure layout left open -->
 
 - **Status:** implemented; DV-387 decided by the owner (2026-10-05); one open question (§6)
 - **Convex source read:** commit `4577b903` of get-convex/convex-backend

@@ -1,4 +1,5 @@
 # STUDY-182 — The realm of the values pushed code receives
+<!-- index: The realm of the values pushed code receives: every path hands it the server's objects (args, `ctx.db` reads, nested results, errors, `process`, web APIs), so `instanceof Object/Array/ArrayBuffer/Error` fail where Convex's hold; options measured (a boundary copy at about +2 µs per KB), the other direction's `instanceof` bugs | decided (owner, 2026-10-21): R-1–R-5; DV-547, DV-548; the other direction built (#807) -->
 
 - **Status:** decided (owner, 2026-10-21): R-1–R-5 as recommended (§7); DV-547 and DV-548 decided. The other
   direction is built (#807).

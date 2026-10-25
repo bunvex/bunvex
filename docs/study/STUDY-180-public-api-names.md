@@ -1,4 +1,5 @@
 # STUDY-180 — The names `bunvex/server` and `bunvex/values` export, against Convex's
+<!-- index: The names `bunvex/server` and `bunvex/values` export, against Convex 1.46.0's: the 65 missing ones, 60 brought in with Convex's shapes (the storage interfaces, generic vector search types, `SchemaDefinition` with `doc` / `id`, `FieldTypeFromFieldPath` over unions, `SearchFilter` a runtime class, `asObjectValidator` in `bunvex/values`, …); a name check against the installed `convex` package and type-level comparisons; the five deprecated names not built (DV-543) | implemented (owner, 2026-10-20: every public name matches Convex's shape; DV-543) -->
 
 - **Status:** decided (owner, 2026-10-20): every public name matches Convex's shape; the five deprecated ones are
   not built (DV-543).

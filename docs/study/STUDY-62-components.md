@@ -1,4 +1,5 @@
 # STUDY-62 — Components
+<!-- index: Components: how Convex does them, bunvex's touch points, the plan | K1–K9 accepted as recommended (owner, 2026-10-03) -->
 
 - **Status:** K1–K9 accepted as recommended (owner, 2026-10-03). Re-checked against Convex `a4ad353` on
   2026-10-08 (§7): K8 and the root component rows are built; §7.4 lists what that check corrects or adds, and

@@ -1,4 +1,5 @@
 # STUDY-137 — Convex from 4577b90 to precompiled-2026-10-07-d8bdde0
+<!-- index: Convex from 4577b90 to `precompiled-2026-10-07-d8bdde0`: the 72 runtime commits classified; the message changes, the rows-per-second write limit, 100 MiB HTTP responses, module path errors, the S3 export permission, the `max_repeatable_ts` follow-up bump; the differential oracle moved to that release | implemented; §4 decided by the owner (2026-10-08, "approve the recommendations"): DV-435, DV-436, DV-438 and DV-439 to be matched, DV-437 kept until the upload lands upstream (c61347e4) -->
 
 - **Status:** implemented; §4 decided by the owner (2026-10-08, "approve the recommendations"): DV-435, DV-436, DV-438 and DV-439 to be matched, DV-437 kept until the upload lands upstream.
 - **Convex source read:** get-convex/convex-backend from `4577b9031` (2026-09-28, the parity reference until

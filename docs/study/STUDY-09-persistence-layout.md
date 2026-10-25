@@ -1,4 +1,5 @@
 # STUDY-09 — Persistence layout and drivers
+<!-- index: Persistence layout and drivers | decided; D3 fixed (#17, B4); D9 built (DV-62); D5, D6 gaps (DV-65, DV-66; D6 partly built, #117); D4 not tracked -->
 
 - **Status:** superseded for the layout by [STUDY-133](STUDY-133-persistence-layout-identical.md) (owner, 2026-10-05: identical to Convex's; D7, D8 reversed, D6's `prev_ts` to be built). Before that: decided — D1, D2 fixed (#8); D3 fixed (#17, Phase 0 B4); D7, D8 kept (DV-67, DV-68); D9 built to match Convex (DV-62, STUDY-06 §10; one batch at a time, DV-152, decided); D5, D6 to match Convex, gaps tracked in docs/parity (DV-65, DV-66). D4 (a conformance test gap) has no ledger entry. Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

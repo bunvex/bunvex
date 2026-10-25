@@ -1,4 +1,5 @@
 # STUDY-50 — Function handles
+<!-- index: Function handles: `createFunctionHandle`, `_function_handles`, handles in `runX` and the scheduler | accepted: H1 as recommended (owner, 2026-10-03) -->
 
 - **Status:** accepted: H1 as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-02

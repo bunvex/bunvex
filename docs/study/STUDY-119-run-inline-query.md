@@ -1,4 +1,5 @@
 # STUDY-119 — `run --inline-query` and the function tester (`/api/run_test_function`)
+<!-- index: `run --inline-query` and the function tester (`POST /api/run_test_function`): Convex's wrapping rules, a module analyzed alone, its query run uncached as `Tester` | implemented; DV-390, DV-391 (owner, 2026-10-05) -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05

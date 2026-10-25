@@ -1,4 +1,5 @@
 # STUDY-69 — Data sync (`/api/v1/data/sync`), the current Fivetran connector's API
+<!-- index: Data sync: `/api/v1/data/sync` and its routes, Convex's cursor, by-id then log pages, progress | implemented; owner decisions 2026-10-03 -->
 
 - **Status:** implemented. Owner decisions (2026-10-03): Convex's cursor format; per-document revision
   timestamps from a new driver method (PERSIST-01 C16, the PR before this one); `Convex-Client` first

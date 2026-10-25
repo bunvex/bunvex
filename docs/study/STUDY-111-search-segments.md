@@ -1,4 +1,5 @@
 # STUDY-111 — Persisted search segments
+<!-- index: Persisted search segments (STUDY-79 option E): text and vector segment formats, the memory part and merged queries, the flusher, the paged backfill, the compactor, fast-forward and retention | decided (owner, 2026-10-05: build E); implemented (PRs 1–9: formats, merged queries, flusher and start, backpressure, paged backfill, compactor, `_index` rows, fast-forward, staged indexes, segments read from disk, memory-mapped) -->
 
 - **Status:** decided by the owner (2026-10-05: "build E now", STUDY-79 §6 option E); PR 1 (the segment
   formats), PR 2 (the merged query path) PR 3 (the flusher, the start from segments), PR 3b (backpressure), PR 4 (the paged backfill), PR 5 (the compactor), PR 6 (the `_index` rows), PR 7 (fast-forward, retention, orphans), PR 8 (staged indexes, kept `Backfilled { staged }`) and PR 9 (segments read from disk, memory-mapped; DV-371 resolved, DV-372 decided) implemented

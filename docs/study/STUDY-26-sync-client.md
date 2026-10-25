@@ -1,4 +1,5 @@
 # STUDY-26 — The sync client (`@bunvex/client`)
+<!-- index: The sync client: base client, local and remote state, requests, optimistic updates, reconnect and backoff, `BunvexClient` | accepted: C3–C7 as recommended (owner, 2026-09-30) -->
 
 - **Status:** accepted: C3–C7, R2–R3, P1–P2 and H2–H4 (owner, 2026-09-30); P2 built (§8.4); P3 accepted as recommended (owner, 2026-10-03)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

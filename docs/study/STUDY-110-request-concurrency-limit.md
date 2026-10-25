@@ -1,4 +1,5 @@
 # STUDY-110 — The HTTP server's concurrent request limit
+<!-- index: The HTTP server's concurrent request limit: 128 at once for the API and the site, then a FIFO wait (no 503), released at the response head; `APPLICATION_MAX_CONCURRENT_UPLOADS` n/a until components | implemented; DV-364, DV-365, DV-366 decided (owner, 2026-10-05) -->
 
 - **Status:** implemented; DV-364, DV-365 and DV-366 decided (owner, 2026-10-05)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
