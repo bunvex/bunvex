@@ -10,6 +10,7 @@ import { MAX_CANDIDATE_REVISIONS, MAX_QUERY_TERMS, tokenize } from "@bunvex/sear
 import {
   type CommitTsPlaceholder,
   commitTsPlaceholder,
+  compareValues,
   copyValue,
   decodeId,
   displayValue,
@@ -2122,10 +2123,22 @@ export class Tx {
     Object.assign(next, copyFields(x.value as Record<string, unknown>, "patch", this.writtenNesting() + 1));
     const merged = { ...next, _id: id, _creationTime: cur._creationTime };
     validateWritten(merged, fields, id, cur._creationTime);
+    if (this.unchanged(id, cur, merged, x.paths)) return;
     this.stage(t, id, old, sortFields(merged) as Doc);
     // A placeholder in a field the patch leaves alone stays (Convex merges into the pending body).
     const kept = (this.commitTs.get(id) ?? []).filter((p) => !(String(p[0]) in fields));
     this.setCommitTs(id, [...kept, ...x.paths]);
+  }
+
+  /**
+   * A patch or replace whose document equals the current one (this transaction's own version, when it wrote it)
+   * writes nothing, as Convex's `patch_inner` / `replace_inner` return before the schema check and the write: no
+   * usage, no invalidation, no conflict. Not when a `db.vars.commitTs` placeholder is involved, which only the
+   * commit resolves.
+   */
+  private unchanged(id: string, cur: Doc, next: Record<string, unknown>, placeholders: readonly unknown[]): boolean {
+    if (!this.writable || placeholders.length > 0 || this.commitTs.get(id)?.length) return false;
+    return compareValues(cur as unknown as Value, next as Value) === 0;
   }
 
   /** Convex's `db.replace(table, id, value)` or `db.replace(id, value)`: every non-system field is replaced. */
@@ -2154,6 +2167,7 @@ export class Tx {
       _creationTime: cur._creationTime,
     };
     validateWritten(next, value, id, cur._creationTime);
+    if (this.unchanged(id, cur, next, x.paths)) return;
     this.stage(t, id, old, sortFields(next));
     this.setCommitTs(id, x.paths);
   }
