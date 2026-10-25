@@ -754,8 +754,8 @@ export class Engine {
   private closed = false;
   private closing: Promise<void> | null = null;
   /**
-   * Mutations still running their body (with the operations they left in flight, `Tx.settle`): a close waits for them
-   * to reach the committer, so one begun before the close commits before the store does.
+   * Mutations still running (their attempts, each with the operations it left in flight, `Tx.settle`, and its retries'
+   * backoff): a close waits for them, so one begun before the close commits before the store closes.
    */
   private readonly runningMutations = new Set<Promise<unknown>>();
 
@@ -772,13 +772,15 @@ export class Engine {
     this.closed = true;
     this.untilClosed.reject(new Error("the engine closed"));
     await this.stagedWalk?.catch(() => {});
+    await Promise.allSettled([...this.validationWalks]);
     await this.deleting?.catch(() => {});
     await this.indexWorker?.stop();
     await this.retention?.stop();
     await this.summaryCheckpointer?.stop();
     this.settleReady(new Error("the engine closed before its indexes were ready"));
     this.committer.stopRepeatableBumps();
-    await Promise.allSettled([...this.runningMutations]);
+    // Until none is left: a background worker's last mutation (a validation walk's progress) may start meanwhile.
+    while (this.runningMutations.size) await Promise.allSettled([...this.runningMutations]);
     await this.committer.idle();
     this.workerTimer?.clear();
     // A compaction in progress stops; then every index is flushed.
@@ -2670,7 +2672,12 @@ export class Engine {
     );
     // The staged walk waits for the root's (`kickStagedWalk`); a component's runs on its own.
     if (namespace === null) this.validation = walk;
+    this.validationWalks.add(walk);
+    void walk.finally(() => this.validationWalks.delete(walk));
   }
+
+  /** The validation walks running (`startValidation`), which a close waits for. */
+  private readonly validationWalks = new Set<Promise<unknown>>();
 
   /**
    * At a start, as Convex's `SchemaWorker` since 900fe2c (STUDY-127, STUDY-106 §7.1): the validations are kept (a
@@ -2921,7 +2928,8 @@ export class Engine {
     active: EngineSchema,
     namespace: string | null = null,
   ) {
-    const stillPending = () => this.pendingIdIn(namespace) === schemaId;
+    // A close stops the walk (the schema stays pending; a restart walks it again from the beginning).
+    const stillPending = () => !this.closed && this.pendingIdIn(namespace) === schemaId;
     const names = () => this.catalogIn(namespace);
     const walk: { name: string; validator: GenericValidator }[] = [];
     // A component's schema has no staged validator (refused at its push, `startSchemaPush`).
@@ -2962,7 +2970,8 @@ export class Engine {
       let inFlight: Promise<boolean> = Promise.resolve(true);
       /** Write the counted documents; false once the attempt is gone. */
       const flush = async () => {
-        if (!(await inFlight)) return false;
+        // A flush left waiting on the one before it starts nothing once the engine closed.
+        if (!(await inFlight) || this.closed) return false;
         const count = unflushed;
         unflushed = 0;
         inFlight = this.runMutation(
@@ -4008,7 +4017,23 @@ export class Engine {
     maxRetries?: number,
   ): Promise<{ value: T; ts: bigint }>;
   // `withTs` rather than a wrapper, so the common path costs no extra promise.
-  private async runMutation<T>(
+  /** `attempts`, counted in `runningMutations` until it settles: a close waits for it to reach the committer. */
+  private runMutation<T>(
+    body: TxBody<T>,
+    system: boolean,
+    source?: string,
+    withTs = false,
+    caller: Caller = ANONYMOUS,
+    throttled = false,
+    retries?: number,
+  ): Promise<unknown> {
+    const running = this.attempts(body, system, source, withTs, caller, throttled, retries);
+    this.runningMutations.add(running);
+    void running.finally(() => this.runningMutations.delete(running)).catch(() => {});
+    return running;
+  }
+
+  private async attempts<T>(
     body: TxBody<T>,
     system: boolean,
     source?: string,
@@ -4032,9 +4057,9 @@ export class Engine {
         await longSleep(sleep); // UDF_EXECUTOR_OCC_MAX_BACKOFF_MS is a knob
         continue;
       }
-      const running = this.execute("mutation", this.committer.visibleTs, body, system, caller);
-      this.runningMutations.add(running);
-      const { tx, value: raw } = await running.finally(() => this.runningMutations.delete(running));
+      // Each attempt after the first starts only on an open engine: a retry after the close would read a closed store.
+      if (failures > 0 && this.closed) throw new Error("the engine closed");
+      const { tx, value: raw } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
       // `db.vars.commitTs` in the result resolves to the commit's timestamp (STUDY-53): in nanoseconds.
       const resolved = (ts: bigint) => (hasCommitTs(raw) ? resolveCommitTs(raw, ts) : raw);
       if (!tx.hasWrites) {
