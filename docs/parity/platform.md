@@ -134,7 +134,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 |---|---|---|---|
 | `vectorIndex(name, {vectorField, dimensions, filterFields?, staged?})` | `npm/convex/server/schema.ts` | done (STUDY-51) | Convex's push checks and JSON; the document-schema check is not yet (DV-272). |
 | `ctx.vectorSearch(table, index, {vector, limit, filter})` in actions only | `crates/isolate/environment/action/async_syscall.rs` | done (STUDY-51) | Latest visible state; Convex's argument checks and filter builder. |
-| Limit up to 256 (default 10); filter only `q.eq` / `q.or`, 64 values max | `crates/vector/lib.rs`, `query.rs` | done (STUDY-51) | Fields ORed; values compared by sort key. |
+| Limit up to 256 (default 10); filter only `q.eq` / `q.or`, 64 values max | `crates/vector/lib.rs`, `query.rs` | done (STUDY-51) | Fields ORed; values compared by sort key. An empty `q.or()` is no filter, as Convex's empty field map (STUDY-187 §2.3). |
 | Cosine `_score`, results `{_id, _score}` | `crates/vector/qdrant_segments.rs` | done (STUDY-51) | Exact (DV-269, owner): f32 over normalized vectors; ties by internal id, descending. |
 | Dimension mismatch error | `crates/vector/qdrant_index.rs` | done (STUDY-51) | And Convex's other query errors, in its order. |
 | Backfill, compaction, 100 MiB hard limit | `crates/search_index_workers/vector_index_worker` | done (STUDY-111) | Segments plus a memory part, as text indexes (flushed over 30 MiB); exact over flat segments (DV-269). The 100 MiB limit as text (DV-228 resolved). Built by the paged backfill and compacted, as text (STUDY-111). |
