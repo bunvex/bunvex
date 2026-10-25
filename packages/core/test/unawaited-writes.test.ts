@@ -116,3 +116,37 @@ test("a close begun while a mutation waits for its unawaited writes lets it comm
   expect(await count(again, "late")).toBe(1);
   await again.close();
 });
+
+test("a mutation retrying an OCC conflict when the engine closes fails, and reads no closed store", async () => {
+  const file = join(mkdtempSync(join(tmpdir(), "unawaited-retry-")), "db.sqlite");
+  const e = await new Engine(defineSchema({}), new SqlitePersistence(file, { durable: false }), {
+    occInitialBackoffMs: 50,
+    occMaxBackoffMs: 50,
+  }).init();
+  const id = await e.mutation((db: Tx) => db.insert("c", { n: 0 }));
+  let attempts = 0;
+  let lost!: () => void;
+  const firstLost = new Promise<void>((r) => (lost = r));
+  const saved = Math.random;
+  Math.random = () => 1; // the full 50 ms backoff, so the close lands in it
+  let failure: unknown;
+  try {
+    const retrying = e
+      .mutation(async (db: Tx) => {
+        attempts++;
+        await db.get("c", id);
+        // A rival commits a write to what this attempt read: it loses, and backs off.
+        if (attempts === 1) await e.mutation((r: Tx) => r.patch("c", id, { n: 1 }));
+        await db.patch("c", id, { n: 2 });
+        if (attempts === 1) queueMicrotask(lost);
+      })
+      .catch((x) => (failure = x));
+    await firstLost;
+    await e.close();
+    await retrying;
+  } finally {
+    Math.random = saved;
+  }
+  expect(attempts).toBe(1);
+  expect(String(failure)).toContain("the engine closed");
+});

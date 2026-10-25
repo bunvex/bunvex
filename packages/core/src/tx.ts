@@ -6,6 +6,7 @@
 // an entry it removed (a delete, or a patch that moved the indexed value). A range read merges the
 // snapshot with the pending entries of that range, in key order; on an equal key the pending entry wins.
 
+import { drainMicrotasks } from "bun:jsc";
 import { MAX_CANDIDATE_REVISIONS, MAX_QUERY_TERMS, tokenize } from "@bunvex/search";
 import {
   type CommitTsPlaceholder,
@@ -1524,16 +1525,16 @@ export class Tx {
   }
 
   /**
-   * Once the function's promise has fulfilled: wait while any of its operations is in flight, and one macrotask past
-   * the last, so the code their answers resume runs (and may start more), until none is left. Convex runs a query's
-   * or mutation's syscalls to the end before it answers (`environment/udf/mod.rs`: the loop ends when no syscall is
-   * pending), so an unawaited write is part of the transaction (STUDY-187 §2.1).
+   * Once the function's promise has fulfilled: run the microtasks queued (the code its operations' answers resume, which
+   * may start more), and while an operation is in flight wait for it, then again, until none is left. Convex's loop
+   * (`environment/udf/mod.rs`): a microtask checkpoint, then the pending syscalls, until none is pending. So an
+   * unawaited write is part of the transaction (STUDY-187 §2.1), with no turn of the event loop added.
    */
   async settle(): Promise<void> {
     for (;;) {
-      if (this.inFlight > 0) await new Promise<void>((resolve) => (this.idle = resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      drainMicrotasks();
       if (this.inFlight === 0) return;
+      await new Promise<void>((resolve) => (this.idle = resolve));
     }
   }
 
