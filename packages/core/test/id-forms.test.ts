@@ -31,7 +31,7 @@ describe("one-argument forms and normalizeId, as Convex", () => {
     );
     await expect(e.query((db) => db.get(5 as never))).rejects.toThrow("expected string but got 'number'");
     await expect(e.mutation((db) => db.patch(encodeId(10_999, new Uint8Array(16)), {}))).rejects.toThrow(
-      "Update on nonexistent document ID",
+      /^Invalid argument `id` for `db.patch`: Table for ID ".*" not found$/,
     );
   });
 
