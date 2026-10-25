@@ -35,7 +35,7 @@ import {
   type Tx,
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
-import { decodeId, type Value } from "@bunvex/values";
+import { decodeId, type GenericValidator, type Value } from "@bunvex/values";
 import { auditEvents } from "./audit-log.ts";
 import { INTERNAL_SERVER_ERROR_MESSAGE, isSystemError } from "./errors.ts";
 import {
@@ -937,10 +937,16 @@ export class ImportService {
     let n = 0;
     let batch: Record<string, Value>[] = [];
     let size = 0;
+    // A CSV's empty cell in a field the active schema has optional is no field (Convex's `remap_empty_string_by_schema`).
+    const optional =
+      row.format.format === "csv"
+        ? optionalTopLevelFields(declaredTables(this.engine.schema).get(t.name)?.document)
+        : null;
     for await (const r of t.rows()) {
       n++;
       // Written by an earlier attempt (batches commit whole and in order, so a count is a prefix).
       if (n <= skip) continue;
+      if (optional?.size) dropEmptyOptional(r.json, optional);
       batch.push(rowToDocument(r, t.uniform, n));
       size += r.text?.length ?? JSON.stringify(r.json).length;
       if (size > BATCH_MAX_BYTES || batch.length > BATCH_MAX_DOCUMENTS) {
@@ -1066,4 +1072,27 @@ function tableConflict(table: string, existing: string): ImportError {
         ? `New table \`${table}\` has IDs that conflict with existing internal table. Consider importing this table without \`_id\` fields or import into a new deployment.`
         : `New table \`${table}\` has IDs that conflict with existing table \`${existing}\`. To delete all existing tables, import with \`bunvex import --replace-all\`.`;
   return new ImportError("TableConflict", msg);
+}
+
+/**
+ * The top-level fields a document validator has optional, in any member of a union (Convex's
+ * `DocumentSchema::optional_top_level_fields`, crates/common/src/schemas/mod.rs). None for `v.any()` or no schema.
+ */
+function optionalTopLevelFields(document: GenericValidator | undefined): Set<string> {
+  const out = new Set<string>();
+  const walk = (v: GenericValidator) => {
+    if (v.kind === "object")
+      for (const [name, field] of Object.entries((v as { fields: Record<string, GenericValidator> }).fields))
+        if (field.isOptional === "optional") out.add(name);
+    if (v.kind === "union") for (const m of (v as { members: GenericValidator[] }).members) walk(m);
+  };
+  if (document) walk(document);
+  return out;
+}
+
+/** A CSV row's `""` cells in `optional` fields, removed (Convex's `remove_empty_string_optional_entries`). */
+function dropEmptyOptional(json: unknown, optional: Set<string>) {
+  if (!json || typeof json !== "object") return;
+  const row = json as Record<string, unknown>;
+  for (const name of optional) if (row[name] === "") delete row[name];
 }
