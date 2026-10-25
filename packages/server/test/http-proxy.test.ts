@@ -4,12 +4,14 @@
 // messages (those of its local backend run as an oracle, STUDY-80 §1.4). Against a local screening proxy.
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineSchema, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
 import { action, Functions, mutation, NODE_FUNCTIONS, query } from "../src/functions.ts";
+import { proxiedFetch } from "../src/http-proxy.ts";
 import { localBackendMain, NO_PROXY_WARNING, parseLocalBackendFlags } from "../src/local-backend.ts";
 import { httpAction, httpRouter } from "../src/router.ts";
 import { createServer, type ServerOptions } from "../src/server.ts";
@@ -142,6 +144,31 @@ test("a 407 from anywhere is the refusal, without a proxy too (Convex checks the
   });
   expect(await functions.runAction("m:get", { url: `${t.url}/ok` })).toEqual({ status: 200, body: "ok /ok" });
   expect(proxy.seen).toEqual([]);
+});
+
+test("a CONNECT the proxy answers with another status is reqwest's unsuccessful tunnel, its answer not trusted", async () => {
+  // A proxy that answers every CONNECT with `line`: hyper-util's TunnelError is `ProxyAuthRequired` for a 407,
+  // `TunnelUnsuccessful` for anything else that is not 200. A 502 shaped as the screen's is the proxy's own.
+  const answer = async (line: string, failureToken?: string) => {
+    const p = net.createServer((s) => s.once("data", () => s.end(`HTTP/1.1 ${line}\r\nContent-Length: 0\r\n\r\n`)));
+    await new Promise<void>((r) => p.listen(0, "127.0.0.1", r));
+    stops.push(() => p.close());
+    const url = `http://127.0.0.1:${(p.address() as net.AddressInfo).port}`;
+    const f = proxiedFetch(fetch, { url, clientId: NAME, ...(failureToken ? { failureToken } : {}) });
+    return attempt(() => f("https://api.test/x?tok=s"));
+  };
+  const tunnel = (what: string) => ({
+    error: "RefusedRequest",
+    message: `error sending request for url (https://api.test/x?tok=s): client error (Connect): tunnel error: ${what}`,
+  });
+  expect(await answer("407 Proxy Authentication Required")).toEqual(tunnel("proxy authorization required"));
+  expect(await answer("403 Forbidden")).toEqual(tunnel("unsuccessful"));
+  expect(await answer("502 Bad Gateway")).toEqual(tunnel("unsuccessful"));
+  expect(await answer("502 guess ECONNREFUSED", "secret")).toEqual(tunnel("unsuccessful"));
+  expect(await answer("502 secret ECONNREFUSED", "secret")).toEqual({
+    error: "TypeError",
+    message: "Unable to connect. Is the computer able to access the url?",
+  });
 });
 
 test("OIDC discovery and JWKS send bunvex's User-Agent, as Convex's client sends its own (STUDY-142, DV-456)", async () => {
