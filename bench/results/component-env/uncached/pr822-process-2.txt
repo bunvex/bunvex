@@ -1,0 +1,8 @@
+bunvex: the function sandbox 'process' runs queries, mutations, actions, HTTP actions and components in a separate process, with no OS isolation (BUNVEX_FUNCTION_SANDBOX_ISOLATION=none): it is not a security boundary yet. "use node" actions are not available under it yet
+sandbox process, 2000 calls (a quarter for the 10-call lines); p50 / mean / p99 µs
+  app query, empty: 287 / 392 / 1780
+  app query, 1 runQuery into the component: 630 / 786 / 3067
+  app query, 10 runQuery into the component: 7788 / 9128 / 27911
+  app query, 10 runQuery into the app (no switch): 9978 / 9874 / 26668
+  app mutation, 1 runMutation into the component: 1680 / 1741 / 5941
+  app query → component → app by handle: 2851 / 2899 / 8489
