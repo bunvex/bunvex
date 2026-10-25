@@ -85,7 +85,13 @@ async function handle(m: Extract<ToChild, { t: "load" } | { t: "evaluate" }>) {
       // The `vm` executor's own version (its namespaces and handlers live here).
       const version = (await vmExecutor.load(m.sources, loadOptions(m.options))) as CodeVersion;
       versions.set(m.id, version);
-      send({ t: "loaded", id: m.id, version: describeVersion(version), loadMs: performance.now() - started });
+      send({
+        t: "loaded",
+        id: m.id,
+        version: describeVersion(version),
+        loadMs: performance.now() - started,
+        held: versions.size,
+      });
     } else {
       const value = await vmExecutor.evaluateDefault(
         m.source,
@@ -152,7 +158,8 @@ for await (const chunk of Bun.file(CHANNEL).stream()) {
       const sm = m as Parameters<typeof actions.streams.onMessage>[0];
       const owner = (t === "end" || t === "fail" ? actions.owners.in : actions.owners.out).get(sm.s);
       checkpoint(owner ?? null, () => actions.streams.onMessage(sm));
-    } else if (t === "load" || t === "evaluate")
+    } else if (t === "unload") versions.delete((m as Extract<ToChild, { t: "unload" }>).version);
+    else if (t === "load" || t === "evaluate")
       checkpoint(CHILD_WORK, () => void childWork(handle(m as Extract<ToChild, { t: "load" } | { t: "evaluate" }>)));
     else badStream(`an unknown message (${String(t)})`);
   }

@@ -86,7 +86,6 @@ import {
   isSchemaDefinition,
   loadCode,
   MissingEnvironmentVariableError,
-  sandboxNotYet,
   UnserializableAuthConfigError,
   vmExecutor,
 } from "./function-executor.ts";
@@ -388,17 +387,19 @@ export async function evaluateComponents(
   rootSchema: EngineSchema | null,
   forCodegen: boolean,
   executor: Executor = vmExecutor,
+  /** The push's own version: under `process`, each definition's code is analyzed in its child (STUDY-168 PR 7). */
+  beside?: LoadedCode,
 ) {
   const versions = new Map<string, LoadedCode>();
   const schemas = new Map<string, EngineSchema | null>();
-  // Components under the process sandbox are STUDY-168's PR 7.
-  if (executor.kind === "process" && pushed.components.length)
-    throw loadError(new InvalidModulesError(sandboxNotYet("Components")));
   for (const c of pushed.components) {
     // Convex's `ensure!`: a system error.
     if (versions.has(c.definitionPath)) throw new Error(`Component definition ${c.definitionPath} pushed twice`);
     try {
-      versions.set(c.definitionPath, await loadCode(c.functions, { ...config, env: {} }, executor));
+      const loaded = await loadCode(c.functions, { ...config, env: {} }, executor, beside);
+      versions.set(c.definitionPath, loaded);
+      // Only its analysis is kept (the instances run the code their namespaces store, loaded at the install).
+      executor.release?.(loaded);
     } catch (e) {
       throw loadError(e);
     }
@@ -701,6 +702,7 @@ export class PushService {
       schemaModule ? schema : null,
       req.forCodegen === true,
       this.executor,
+      version,
     );
     // Convex's `StagedSchemaWithEnforcedValidatorChanges` (STUDY-106 §7.4), dry run too.
     const staged = await this.deps.engine.stagedValidatorConflicts(schema);
