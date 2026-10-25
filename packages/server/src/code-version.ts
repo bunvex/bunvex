@@ -405,7 +405,9 @@ export class CodeVersion implements LoadedCode {
     const versionId = registerModules(frameMaps);
     const env = opts.env ?? {};
     const contexts = {
-      isolate: vm.createContext(contextGlobals(false, env, opts.onMissingEnv)),
+      // No code from strings (`eval`, `new Function`), as Convex's isolate runs with
+      // `--disallow-code-generation-from-strings` (`isolate/src/client.rs`); a `"use node"` module keeps Node's.
+      isolate: vm.createContext(contextGlobals(false, env, opts.onMissingEnv), { codeGeneration: { strings: false } }),
       node: vm.createContext(contextGlobals(true, env)),
     };
     for (const [environment, c] of Object.entries(contexts)) {
@@ -421,6 +423,11 @@ export class CodeVersion implements LoadedCode {
     // Convex's runtime deletes the deprecated RegExp statics (`RegExp.$1`, `lastMatch`, …), which hold the last
     // match's input across calls (udf-runtime `setupMisc`, 644e25f; DV-436). Its Node executor is not known to.
     vm.runInContext(`for (const name of ${JSON.stringify(REGEXP_STATICS)}) delete RegExp[name];`, contexts.isolate);
+    // Convex's isolate refuses to block (`set_allow_atomics_wait(false)`, `isolate/src/isolate.rs`).
+    vm.runInContext(
+      `Atomics.wait = function wait() { throw new TypeError("Atomics.wait cannot be called in this context"); };`,
+      contexts.isolate,
+    );
 
     const modules = new Map<string, Loaded>();
     for (const m of sources) {

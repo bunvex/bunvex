@@ -78,6 +78,15 @@ describe("evaluating definitions", () => {
     expect(out.get("")!.definitionType).toEqual({ type: "app" });
   });
 
+  test("no code from strings while a definition is evaluated, as in Convex's isolate", async () => {
+    const out = await refused(
+      input({
+        source: `let r; try { r = eval("1"); } catch (e) { r = e.name + ": " + e.message; }\nexport default { export: () => { throw new Error(r); } };`,
+      }),
+    );
+    expect(out.message).toContain("EvalError: Code generation from strings disallowed for this context");
+  });
+
   test("an imported child is Convex's synthetic module: its serialized definition, its path and default name", async () => {
     const x = {
       source: `export default { export: () => ({ ...${component("xcomp")}, envVars: [["B", { type: "value", value: '{"type":"string"}' }], ["A", { type: "value", value: '{"type":"string"}', optional: true }]] }) };`,
