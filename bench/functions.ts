@@ -1,5 +1,5 @@
-// The convex-bench functions, mirroring ~/sandbox/convex-bench/convex/bench.ts: same names, arguments
-// and semantics (so the same k6 script and fan-out harness run unchanged).
+// The benchmark functions the HTTP harness (bench/load/k6.js) calls. Names and behavior follow the
+// convex-bench functions the earlier Mac and VPS tables were measured with.
 import { action, defineSchema, defineTable, internalMutation, internalQuery, mutation, query } from "bunvex/server";
 import { v } from "bunvex/values";
 
