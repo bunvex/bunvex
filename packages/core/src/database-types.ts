@@ -21,7 +21,7 @@ import type {
   WithoutSystemFields,
 } from "./data-model.ts";
 import type { Expression } from "./filter.ts";
-import type { Expand, GenericSearchIndexConfig } from "./schema.ts";
+import type { GenericSearchIndexConfig } from "./schema.ts";
 import type { SearchFilter } from "./search-filter.ts";
 import type { PaginationOptions } from "./tx.ts";
 
@@ -235,11 +235,11 @@ type NonUnion<T> = T extends never ? never : T;
 /** Reading one data model (the app's, or the system tables'). */
 export interface BaseDatabaseReader<DataModel extends GenericDataModel> {
   get<TableName extends TableNamesInDataModel<DataModel>>(
-    id: GenericId<TableName>,
-  ): Promise<DocumentByName<DataModel, TableName> | null>;
-  get<TableName extends TableNamesInDataModel<DataModel>>(
     table: TableName,
     id: GenericId<NonUnion<TableName>>,
+  ): Promise<DocumentByName<DataModel, TableName> | null>;
+  get<TableName extends TableNamesInDataModel<DataModel>>(
+    id: GenericId<TableName>,
   ): Promise<DocumentByName<DataModel, TableName> | null>;
   query<TableName extends TableNamesInDataModel<DataModel>>(
     tableName: TableName,
@@ -280,12 +280,14 @@ export interface GenericDatabaseReaderWithTable<DataModel extends GenericDataMod
   system: BaseDatabaseReaderWithTable<SystemDataModel>;
 }
 
-/** A patch: some fields of a document's, `undefined` to remove one (system fields cannot be patched). */
-export type PatchValue<Document> = Expand<{
-  [K in keyof WithoutSystemFieldsLoose<Document>]?: WithoutSystemFieldsLoose<Document>[K] | undefined;
-}>;
-type WithoutSystemFieldsLoose<Document> =
-  Document extends Record<string, Value | undefined> ? WithoutSystemFields<Document & Record<string, Value>> : Document;
+/**
+ * A patch, as Convex's: some of the document's fields, an optional one `undefined` to remove it. Only the
+ * document's own fields, so a misspelled or another table's field is refused. `_id` and `_creationTime` are in the
+ * type, as on Convex; the engine refuses a value that does not match the document's.
+ */
+export type PatchValue<Document> = {
+  [Field in keyof Document]?: undefined extends Document[Field] ? Document[Field] | undefined : Document[Field];
+};
 
 /** Convex's `GenericDatabaseWriter`: `ctx.db` in a mutation. */
 export interface GenericDatabaseWriter<DataModel extends GenericDataModel> extends GenericDatabaseReader<DataModel> {
@@ -299,29 +301,29 @@ export interface GenericDatabaseWriter<DataModel extends GenericDataModel> exten
     table: TableName,
     value: WithoutSystemFields<DocumentByName<DataModel, TableName>>,
   ): Promise<GenericId<TableName>>;
-  patch<Id extends GenericId<TableNamesInDataModel<DataModel>>>(
-    id: Id,
-    value: PatchValue<DocumentByName<DataModel, TableOf<Id> & TableNamesInDataModel<DataModel>>>,
-  ): Promise<void>;
   patch<TableName extends TableNamesInDataModel<DataModel>>(
     table: TableName,
     id: GenericId<NonUnion<TableName>>,
     value: PatchValue<DocumentByName<DataModel, TableName>>,
   ): Promise<void>;
-  replace<Id extends GenericId<TableNamesInDataModel<DataModel>>>(
+  patch<Id extends GenericId<TableNamesInDataModel<DataModel>>>(
     id: Id,
-    value: WithOptionalSystemFields<DocumentByName<DataModel, TableOf<Id> & TableNamesInDataModel<DataModel>>>,
+    value: PatchValue<DocumentByName<DataModel, TableOf<Id> & TableNamesInDataModel<DataModel>>>,
   ): Promise<void>;
   replace<TableName extends TableNamesInDataModel<DataModel>>(
     table: TableName,
     id: GenericId<NonUnion<TableName>>,
     value: WithOptionalSystemFields<DocumentByName<DataModel, TableName>>,
   ): Promise<void>;
-  delete(id: GenericId<TableNamesInDataModel<DataModel>>): Promise<void>;
+  replace<Id extends GenericId<TableNamesInDataModel<DataModel>>>(
+    id: Id,
+    value: WithOptionalSystemFields<DocumentByName<DataModel, TableOf<Id> & TableNamesInDataModel<DataModel>>>,
+  ): Promise<void>;
   delete<TableName extends TableNamesInDataModel<DataModel>>(
     table: TableName,
     id: GenericId<NonUnion<TableName>>,
   ): Promise<void>;
+  delete(id: GenericId<TableNamesInDataModel<DataModel>>): Promise<void>;
 }
 
 /** Convex's `GenericDatabaseWriterWithTable`: a mutation's `ctx.db` as the table-scoped API types it. */
