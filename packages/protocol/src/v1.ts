@@ -3,6 +3,10 @@
 // talk to a bunvex server. Frames are JSON text, one message each, tagged by `type`. 64-bit timestamps travel
 // as base64 of 8 little-endian bytes; in code they are `bigint`.
 
+import { ActingIdentityError, parseActingIdentity } from "./acting-identity.ts";
+
+export { ActingIdentityError, parseActingIdentity };
+
 /** A value in Convex's JSON form (`$integer`, `$float`, `$bytes`). */
 export type JSONValue = null | boolean | number | string | JSONValue[] | { [key: string]: JSONValue };
 
@@ -292,17 +296,27 @@ export function parseClientMessage(frame: string): ClientMessage {
       if (m.tokenType === "None") return { type: "Authenticate", tokenType: "None", baseVersion };
       if (m.tokenType === "User")
         return { type: "Authenticate", tokenType: "User", value: str(m.value, "value"), baseVersion };
-      if (m.tokenType === "Admin")
+      if (m.tokenType === "Admin") {
+        // Convex accepts `actingAs` too (crates/convex/sync_types json.rs). The acting identity is read with the
+        // message, before the key is checked: one that is not an identity is Convex's "Received Invalid JSON on
+        // websocket" (local_backend subs/mod.rs), whatever the key (STUDY-188 R5).
+        const impersonating = m.impersonating ?? m.actingAs ?? undefined;
+        if (impersonating !== undefined) {
+          try {
+            parseActingIdentity(impersonating);
+          } catch (e) {
+            if (!(e instanceof ActingIdentityError)) throw e;
+            throw new ProtocolError(`Received Invalid JSON on websocket: ${e.message}`);
+          }
+        }
         return {
           type: "Authenticate",
           tokenType: "Admin",
           value: str(m.value, "value"),
           baseVersion,
-          // Convex accepts `actingAs` too (crates/convex/sync_types json.rs).
-          ...((m.impersonating ?? m.actingAs) === undefined
-            ? {}
-            : { impersonating: (m.impersonating ?? m.actingAs) as JSONValue }),
+          ...(impersonating === undefined ? {} : { impersonating: impersonating as JSONValue }),
         };
+      }
       throw new ProtocolError(`Invalid message: unknown tokenType ${JSON.stringify(m.tokenType)}`);
     }
     case "Event":
