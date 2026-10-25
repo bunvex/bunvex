@@ -13,7 +13,7 @@
 import { realpathSync } from "node:fs";
 import { join, relative } from "node:path";
 import { posix } from "./bundle.ts";
-import { type CodegenConfig, header, importsOf, runCodegen, type WriteMode } from "./codegen.ts";
+import { type CodegenConfig, componentPackagesOf, header, importsOf, runCodegen, type WriteMode } from "./codegen.ts";
 import type { ComponentDirectory, Components } from "./components.ts";
 
 type Validator = { type: string; [k: string]: unknown };
@@ -170,9 +170,14 @@ export function componentCodegen(
   opts: { mode?: WriteMode /** Only this component's directory (`--component-dir`). */; only?: string } = {},
 ) {
   const dirs = byDefinitionPath(found);
-  const ts: CodegenConfig = { ...config, fileType: "ts", commonjs: false };
   for (const d of found.directories) {
     if (!d.local || (opts.only !== undefined && d.dir !== opts.only)) continue;
+    const ts: CodegenConfig = {
+      ...config,
+      fileType: "ts",
+      commonjs: false,
+      packages: componentPackagesOf(d.dir, config.packages),
+    };
     const mine = analysis?.[d.definitionPath];
     if (!mine) {
       runCodegen(d.dir, ts, { initial: true, mode: opts.mode });
@@ -182,11 +187,7 @@ export function componentCodegen(
       mode: opts.mode,
       components: componentEntries(mine, d.dir, dirs),
       extra: {
-        "component.ts": componentTs(
-          mine,
-          importsOf(config.packages).server,
-          header("Generated `ComponentApi` utility."),
-        ),
+        "component.ts": componentTs(mine, importsOf(ts.packages).server, header("Generated `ComponentApi` utility.")),
       },
     });
   }
