@@ -1230,6 +1230,16 @@ export class Tx {
     return name;
   }
 
+  /**
+   * A write's error for an id `tableOfIdArg` found no table for: Convex's `resolve_idv6` (`Table for ID "…" not found`,
+   * crates/database/src/transaction.rs) when the deployment has no table of its number; else `otherwise`.
+   */
+  private noTableOr(id: string, method: string, otherwise: string): Error {
+    return this.tableByNumber(decodeId(id).tableNumber) === undefined
+      ? new Error(`Invalid argument \`id\` for \`${method}\`: Table for ID "${id}" not found`)
+      : new Error(otherwise);
+  }
+
   /** Convex's `db.normalizeId(table, s)`: `s` as an id of `table`, or null. */
   normalizeId(table: string, idString: string): string | null {
     if (typeof table !== "string") throw new Error("Invalid argument `table` for `db.normalizeId`");
@@ -2119,7 +2129,7 @@ export class Tx {
       if (a === undefined) throw missingArgument(1, "id", "patch");
       if (b === undefined) throw missingArgument(2, "value", "patch");
       const table = this.tableOfIdArg(a, "db.patch");
-      if (table === undefined) throw new Error(`Update on nonexistent document ID ${a}`);
+      if (table === undefined) throw this.noTableOr(a, "db.patch", `Update on nonexistent document ID ${a}`);
       return this.patchIn(table, a, b as Record<string, unknown>);
     }
     return this.patchIn(a, b as string, c);
@@ -2166,7 +2176,7 @@ export class Tx {
       if (a === undefined) throw missingArgument(1, "id", "replace");
       if (b === undefined) throw missingArgument(2, "value", "replace");
       const table = this.tableOfIdArg(a, "db.replace");
-      if (table === undefined) throw new Error(`Replace on nonexistent document ID ${a}`);
+      if (table === undefined) throw this.noTableOr(a, "db.replace", `Replace on nonexistent document ID ${a}`);
       return this.replaceIn(table, a, b as Record<string, unknown>);
     }
     return this.replaceIn(a, b as string, c);
@@ -2195,7 +2205,7 @@ export class Tx {
   async delete(a: string, b?: string) {
     if (b === undefined) {
       const table = this.tableOfIdArg(a, "db.delete");
-      if (table === undefined) throw new Error(`Delete on nonexistent document ID ${a}`);
+      if (table === undefined) throw this.noTableOr(a, "db.delete", `Delete on nonexistent document ID ${a}`);
       return this.deleteIn(table, a);
     }
     return this.deleteIn(a, b);
