@@ -21,6 +21,9 @@
 //   stamped here exactly as in-process, then sent with the call's next message, so the host logs it in order with
 //   the operations around it (a nested call's lines after the ones before it). `log.audit` is an operation: the
 //   host holds the lines, shared with the nested calls, and checks their limits.
+// - **A promise that can never resolve** (STUDY-188 §X16): a handler still pending once a checkpoint of its call was
+//   checked with none of its operations waiting nor any `crypto.subtle` work, and still so a turn later, fails with
+//   the host's error for it (`never`), as the engine's `Tx.watch` fails it under `vm`.
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   checkEnvVarName,
@@ -29,6 +32,7 @@ import {
   executionFromClock,
   newUserTimer,
   observeTime,
+  onWork,
   pausingUserTime,
   runInExecution,
   type UserTimer,
@@ -407,6 +411,10 @@ class ChildCall extends ChildCallBase implements DbHost {
   /** A next batch is waiting for this checkpoint to be checked (`later`). */
   private releasing = false;
   private answeredHost = false;
+  /** Its `crypto.subtle` work in flight (`onWork`): what Bun answers turns later, not a promise that never resolves. */
+  private work = 0;
+  /** A turn is awaited to tell whether its pending handler can never resolve (`stuck`). */
+  private stuckCheck = false;
   readonly snapshot: bigint;
 
   constructor(
@@ -436,8 +444,38 @@ class ChildCall extends ChildCallBase implements DbHost {
   }
 
   checked() {
-    if (this.outcome === null || this.answeredHost || this.waiting.size) return;
+    if (this.outcome === null) return this.maybeStuck();
+    if (this.answeredHost || this.waiting.size) return;
     this.answer(this.outcome);
+  }
+
+  /** Its handler is pending with nothing it could be waiting on: no operation, no `crypto.subtle` work. */
+  private stuck(): boolean {
+    return (
+      this.outcome === null && !this.answeredHost && !this.terminated && this.waiting.size === 0 && this.work === 0
+    );
+  }
+
+  /** Pending with nothing to wait on, and still so a turn later (what Bun resumes on its own had its turn): it fails. */
+  private maybeStuck() {
+    if (this.stuckCheck || !this.stuck()) return;
+    this.stuckCheck = true;
+    setImmediate(() => {
+      this.stuckCheck = false;
+      if (!this.stuck()) return;
+      this.terminated = true;
+      this.answer({ ok: false, error: { k: "never" } });
+      this.end();
+    });
+  }
+
+  /** `crypto.subtle` work the handler started, counted until it settles; then its call is checked again. */
+  trackWork(p: PromiseLike<unknown>) {
+    this.work++;
+    const landed = () => {
+      if (--this.work === 0) checkSoon(this.id);
+    };
+    p.then(landed, landed);
   }
 
   protected override sendOp(op: number, name: string, args: unknown[]) {
@@ -632,6 +670,8 @@ class ChildCall extends ChildCallBase implements DbHost {
       : null;
     const body = () =>
       withUserTimer(this.timer, async () => {
+        // The execution is shared with the nested calls of the same host execution: the work is the running call's.
+        onWork((p) => (running.getStore() as ChildCall | undefined)?.trackWork?.(p));
         const call = () => handler(appContext(handler, ctx), args);
         return read ? withEnv(read, call) : call();
       });

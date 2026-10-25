@@ -89,6 +89,12 @@ export class FunctionPathError extends Error {
 export class FunctionLookupError extends FunctionPathError {}
 
 /**
+ * A query's or mutation's promise that can never resolve (`Tx.watch`): Convex's `JsError::from_message`, its message
+ * alone (`environment/udf/mod.rs`, STUDY-188 §X16).
+ */
+export const neverResolves = () => new FunctionPathError("Returned promise will never resolve");
+
+/**
  * A call's arguments that do not decode into values, held for the run: Convex resolves the function first, then
  * `parse_udf_args` fails it (`ValidatedPathAndArgs`, crates/udf/src/validation.rs), so the call is a failed run
  * of the function in the function log, and a missing function is "Could not find public function" whatever came.

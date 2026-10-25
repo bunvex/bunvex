@@ -114,6 +114,7 @@ import {
   longSleep,
   nextUp,
   type Observed,
+  onWork,
   outsideExecution,
   runDeterministic,
   settled,
@@ -3696,6 +3697,8 @@ export class Engine {
           kind,
           now,
           async () => {
+            // What the function waits on outside the store is counted in flight (STUDY-188 §X16).
+            onWork((p) => tx.track(p));
             const v = await body(tx);
             // An unawaited write is part of the mutation (Convex runs every syscall to its end): wait for them.
             if (kind === "mutation") await tx.settle();
@@ -3924,7 +3927,18 @@ export class Engine {
     const unpin = this.tableSummaries.pin(snapshot); // as in execute()
     try {
       const observed: Observed = { time: false };
-      const value = settled(observed, await runDeterministic("query", now, () => body(tx), observed));
+      const value = settled(
+        observed,
+        await runDeterministic(
+          "query",
+          now,
+          () => {
+            onWork((p) => tx.track(p));
+            return body(tx);
+          },
+          observed,
+        ),
+      );
       return { ok: true, value, ...out() };
     } catch (error) {
       return { ok: false, error, ...out() };
