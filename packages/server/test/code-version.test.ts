@@ -389,6 +389,30 @@ describe("running a code version", () => {
     expect(/(a)(b)/.exec("xab")?.[1]).toBe("a");
   });
 
+  test("no code from strings and no Atomics.wait in the isolate, as Convex's; a \"use node\" module has Node's", async () => {
+    // Convex: `--disallow-code-generation-from-strings` (`isolate/src/client.rs`) and `set_allow_atomics_wait(false)`
+    // (`isolate/src/isolate.rs`), pinned by its removed `adversarial.rs` tests (`test_no_eval`, `test_atomics_wait`).
+    const { functions, call } = await server();
+    const probe = `(() => [() => eval("1+1"), () => (0, eval)("1+1"), () => new Function("return 2")(), () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 1)].map((f) => { try { return f(); } catch (e) { return e.name + ": " + e.message; } }))()`;
+    const version = await load([
+      mod("iso.js", `import { query } from "@bunvex/server"; export const p = query(async () => ${probe});`),
+      mod(
+        "nod.js",
+        `"use node"; import { action } from "@bunvex/server"; export const p = action(async () => ${probe});`,
+        "node",
+      ),
+    ]);
+    functions.install(version.functions, version.moduleHashes);
+    const refused = "EvalError: Code generation from strings disallowed for this context";
+    expect((await call("query", "iso:p")).value).toEqual([
+      refused,
+      refused,
+      refused,
+      "TypeError: Atomics.wait cannot be called in this context",
+    ]);
+    expect((await call("action", "nod:p")).value).toEqual([2, 2, 2, "not-equal"]);
+  });
+
   test("installing a version: every function at once; internal ones stay internal", async () => {
     const { functions, call } = await server();
     const version = await load(APP_V1);

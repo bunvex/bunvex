@@ -359,7 +359,8 @@ function definitionContext(env: Record<string, string> | null): vm.Context {
           )
         : { ...env },
   };
-  const context = vm.createContext(globals);
+  // No code from strings, as Convex's isolate evaluates definitions with `--disallow-code-generation-from-strings`.
+  const context = vm.createContext(globals, { codeGeneration: { strings: false } });
   // The context's own `Date` and `Math.random`: reading the time or drawing a number is refused.
   const intrinsics = vm.runInContext("({ Date, Math })", context) as { Date: DateConstructor; Math: Math };
   const noDate = refused("Date unsupported when evaluating app definition");
