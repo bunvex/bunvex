@@ -1,9 +1,9 @@
-# STUDY-171 — The function executor seam and its knobs (STUDY-168 PR 1), the wire and the child runtime (PR 2), queries and mutations over the bridge (PR 3), two `vm` bugs (§10), logs and errors (PR 4), actions (PR 5), unhandled rejections (PR 4b), HTTP actions (PR 6)
+# STUDY-171 — The function executor seam and its knobs (STUDY-168 PR 1), the wire and the child runtime (PR 2), queries and mutations over the bridge (PR 3), two `vm` bugs (§10), logs and errors (PR 4), actions (PR 5), unhandled rejections (PR 4b), HTTP actions (PR 6), components (PR 7)
 
-- **Status:** PR 1 implemented (#738); PR 2 (§7) implemented (#743); PR 3 (§8) implemented (#750); §9 (#751) and §10 (#759) fixed; PR 4 (§11) implemented (#760); PR 5 (§12) implemented (#773; the owner's decisions of 2026-10-21 in §12.11); PR 4b (§13) implemented (#802); PR 6 (§14) implemented (#812); §TBD (a nested call's error in the caller's realm, Q-PR7-2) fixed (this PR); AD-44 accepted
+- **Status:** PR 1 implemented (#738); PR 2 (§7) implemented (#743); PR 3 (§8) implemented (#750); §9 (#751) and §10 (#759) fixed; PR 4 (§11) implemented (#760); PR 5 (§12) implemented (#773; the owner's decisions of 2026-10-21 in §12.11); PR 4b (§13) implemented (#802); PR 6 (§14) implemented (#812); PR 7 (§15) implemented (this PR); §16 (a nested call's error in the caller's realm, Q-PR7-2) fixed (#823); AD-44 accepted
   (owner, 2026-10-19)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend, the reference commit
-  ([upstream.md](../parity/upstream.md)); §13 and §14 at `72ce13c`, checked against its binary
+  ([upstream.md](../parity/upstream.md)); §13, §14 and §15 at `72ce13c`, checked against its binary
   `precompiled-2026-10-10-72ce13c`
 - **Related:** [STUDY-168](STUDY-168-process-sandbox.md) (the design: §9 decisions, §10 configuration, §12 plan; draft
   PR #735), DV-164 (one `vm` context per code version), STUDY-80 (`--deny-addresses`, the knob style followed here),
@@ -1811,13 +1811,286 @@ the action timeout covers an HTTP action's handler, not its body's streaming, un
 `@bunvex/testing` under `BUNVEX_FUNCTION_SANDBOX=process` fails to start its server (it is not given the executor),
 which a test run that sets the variable for its backend meets (`examples/testing`).
 
-## TBD. A nested call's error in the caller's realm (Q-PR7-2)
+## 15. PR 7: components under `process`
+
+STUDY-168 §12.3's PR 7: under `BUNVEX_FUNCTION_SANDBOX=process`, a component instance's queries, mutations, actions
+and HTTP routes run in the sandbox, and so do the calls between the app and its components (`ctx.runQuery(components.
+counter.lib.count)`) and the function handles across them. **The default does not change**: under `vm` the only
+changes are where a load is asked to go (`beside`, which `vm` ignores) and that the push and the server tell the
+executor when a component's version is no longer needed (`release`, which `vm` does not have). Based on PR 6's branch
+(#812, `feat/function-sandbox-http`), not yet merged: **this PR is stacked on it.**
+
+### 15.1 How Convex runs components (read at `72ce13c`)
+
+- **A nested call runs in the caller's isolate, in a context of its own.** `run_udf`
+  (`crates/isolate/src/environment/udf/async_syscall.rs:504-600`) checks the kinds, validates the arguments in the
+  callee's component, counts the depth ("Cross component call depth limit exceeded", `:560-566`), starts a
+  subtransaction and hands the request to `RunUdf::execute_nested_udf` (`environment/udf/mod.rs:525-560`), which pushes
+  a nested context on the same isolate (`push_context(true)`) and runs `run_nested` (`:777-830`): a fresh V8 context
+  (`get_or_create_fresh_context`) unless the module asks for `experimental_reuseContext`
+  (`context_cache.rs:130-190`). So Convex runs the app and every component it calls from a query or mutation in one
+  isolate, each call with its own context and its own module map.
+- **Each component's code and state is looked up per call, on the host.** The callee's phase
+  (`environment/udf/phase.rs:170-235`) loads its own `_udf_config` (the import seed and time), its own environment
+  variables (`PreloadedEnvVars::load(tx, component, …)`, `:195-199`) and its own source package. Every syscall the call
+  makes is answered for its component (`self.phase.component()`, e.g. `async_syscall.rs:497`).
+- **References and handles are resolved on the host**: `parse_name_or_reference`, then `provider.resolve`
+  (`async_syscall.rs:709-718`, `ComponentsModel::resolve`, `crates/model/src/components/mod.rs:64-140`: an argument,
+  a function, a child's export, its errors "Child component 'x' not found", "does not export"), or
+  `lookup_function_handle` for a `function://` handle (`async_syscall.rs:1686-1760`).
+- **An action's calls are new runs**: `1.0/actions/query` and its siblings (`environment/action/async_syscall.rs:68`)
+  go to the application's `ActionCallbacks` (`crates/application/src/application_function_runner/mod.rs:2119-2140`),
+  each a function run of its own, on an isolate of its own.
+
+What an app sees is bunvex's `vm`'s already (STUDY-152 to STUDY-158), with DV-492: bunvex evaluates a component
+instance's modules once per code version, where Convex evaluates them per call.
+
+### 15.2 The choice: one child, each instance a version in it
+
+STUDY-168's plan gave two ways: a child per component instance and version, or one child with a switch between the
+instances. Both were built behind an option of the executor (`new ProcessExecutor({ components: "shared" | "own" })`)
+and measured on the test VPS (§15.5). The executor uses `shared`; `own` stays only for the measurement.
+
+| | One child, each instance a version in it (`shared`, built) | A child per instance (`own`) |
+|---|---|---|
+| Memory, 16 instances: the children's RSS / PSS | 81 / 62 MiB | 892 / 374 MiB |
+| A push with 16 instances, after the first | 562–615 ms | 3.5–3.8 s |
+| A restart with 16 instances (`codeReady`) | 247–376 ms | 2.85 s |
+| `ctx.runQuery` into a component from an app query, p50 | 566–645 µs (602–1003 with 16) | 664–905 µs |
+| DV-492: each instance's modules evaluated once per version | yes: a `CodeVersion` of its own per instance (its contexts, its module state) | yes |
+| A child that dies or is killed | every version in it fails its in-flight calls; the next call loads them all again | only that instance's |
+| Like Convex | yes: Convex runs a nested call in the caller's isolate, a context per call (§15.1) | no |
+
+Memory and start time decide it: a child costs about 55 MiB of RSS (20–25 MiB of PSS) and about 170 ms to start and
+load, for each instance and at every push. The cost of `shared` is that a runaway call (the backstop's kill) takes
+the app's calls in flight with it, as it already does for the app's own functions in its child (§12.6, Q-PR5-1):
+STUDY-168 PR 9's one-call pool ends that for both.
+
+### 15.3 The design
+
+```
+ host (server)                                                 the app's child
+ resolveCall, the namespace, the component's variables         ┌ v1: the app's CodeVersion
+   (Functions, as under vm)                                     ├ v2: counter's  (its own contexts and module state)
+ a component's stand-in ── call {version: v2, fn, args} ──────► ├ v3: second's   (the same code, another instance)
+                        ◄── op / done ───────────────────────── └ v4: other's
+ push: start_push loads the app (v1') in a new child, each definition's code beside it (analyzed, then unload)
+ install: the app, then each instance's code beside it (load), the old versions released (unload); the old child stops
+```
+
+- **`resolveCall` stays on the host.** A component's functions are stand-ins as the app's are (§8.2), installed under
+  the instance's id (`Functions.installComponent`), so a reference, a handle, the namespace of every `ctx` operation,
+  the identity rule, the depth limit and Convex's texts are the host's, by construction. The child never names a
+  component: a call names the version it runs (the namespace switch is the version id), and its `ctx` is the host's
+  for that component.
+- **Each instance's code is loaded beside the app's version** (`Executor.load(sources, opts, beside)`): the server's
+  install passes the app's installed version (`installComponents`, `loadComponentCode(…, beside)`), the push its own
+  (`evaluateComponents(…, beside)`). Under `process` the load goes into that version's child (`ChildHost.add`): a
+  `CodeVersion` of its own there, so each instance's modules are evaluated once and its module state is its own
+  (DV-492, STUDY-152 C3). `vm` ignores `beside`.
+- **A child holds versions** (`ChildHost`): the app's and the instances' loaded beside it. One that dies is replaced
+  at the next call of any of them, every version it held loaded again in the order they came. Once it holds none, it
+  stops.
+- **Who lets a version go.** `installed(app)` retires the other *app* versions, as before; an instance's version
+  (loaded beside) is released by the server when the instance gets another version or goes (`installComponents`), and
+  each definition's version the push analyzed is released at once (its analysis is kept on the host). A released
+  version is forgotten by its child (`unload`, protocol version 6), so a long-lived child does not keep every past
+  version's contexts; the child reports how many it holds on each `loaded` (`held`), which the tests read.
+- **A component's `process.env` reaches the child**: a query's or mutation's reader in a component carried no
+  variables for the child (`variables`), so the child read none. It now carries the instance's bindings resolved
+  against the deployment's variables, then the built-ins, its `BUNVEX_SITE_URL` with the instance's HTTP prefix; the
+  child reports each name read and the host reads it again through the component's reader, so the read set is `vm`'s.
+- **HTTP routes**: a component's router is its version's stand-in (§14.2), mounted as under `vm` (`httpRouting`).
+
+### 15.4 Parity
+
+**`component-parity.test.ts`** (76 tests): the same app (mounting `counter` twice, with its variables bound and
+without, and `other`) pushed over HTTP to a `vm` server and a `process` server, each case called on both, the client's
+whole answer compared (the value or the error's whole message, frames included, its data, and the log lines):
+
+- 37 calls from the app: queries, mutations and actions calling into each instance (by reference, by handle, an
+  action's `runAction`), the namespaces' counts, each instance's variables and `ctx.meta`, the frozen clock across the
+  call, errors uncaught and caught (with data, a `BunvexError`'s bigint), the tree's refusals (an unknown child, an
+  internal export, a branch, a missing export, the wrong kind), a rolled-back nested mutation, the depth limit, each
+  instance's module state (twice), handles back into the app and from one component into another, an internal
+  function by handle, a bad handle, an app id given to a component's `v.id`, console lines on both sides, the
+  scheduler, storage in a component, an action's lines, the identity;
+- 23 runs by an admin in each instance (`/api/function` with `componentPath`): queries, mutations, actions, their
+  errors, variables, module state, storage, a missing function, a validator's refusal;
+- 10 HTTP requests to `counter`'s routes mounted at `/c/` (a text, `runQuery` and `runMutation` from a route, its
+  variables and site URL, a throw, no identity, a prefix route, a 404, the app's own 404);
+- the documents, jobs and files each namespace was left with;
+- 5 under `process` only: one child holds the app's version and each instance's (4 versions, 4 held); a push starts
+  exactly one child, loads every version in it, and the old child stops; a killed child is replaced at the next call
+  with every version loaded again; an unmounted instance's version is forgotten; the app's code deployed alone
+  (`deployCode`) leaves the instances running where they were.
+
+Every vm-against-process case matches. What it found, fixed here: a component's `process.env` under `process` (read
+nothing, §15.3). What it found in both executors, not fixed here: Q-PR7-1 and Q-PR7-2 (§15.7).
+
+**The suites under `process`** (`BUNVEX_FUNCTION_SANDBOX=process BUNVEX_FUNCTION_SANDBOX_ISOLATION=none`, the server's
+suites with `--preload ./packages/sandbox/test/process-preload.ts`), on the Mac and on the test VPS (Bun 1.4.3, Linux);
+"before" is PR 6's branch (`bd8340a4`), "after" this branch; `vm` passes every test of each on both:
+
+| Suite | `vm`, this branch | `process`, before | `process`, after | Every remaining failure under `process` |
+|---|---|---|---|---|
+| Server suites with components (15 files: `component-*` (11), `definition-eval`, `push-components`, `push`, `sync-component-path`) | 174 / 174 | 89 / 174 | 172 / 174 | 2 `"use node"` actions (`push.test.ts`'s variables tests) |
+| PR 6's server set (12 files, §14.3) | 101 / 101 | 90 / 101 (8 components) | 98 / 101 | 3 `"use node"` actions |
+| CLI `component-push` and `dev` | 35 / 35 | 24 / 35 (11 components) | 35 / 35 | — |
+| `packages/differential` against Convex's binary `precompiled-2026-10-10-72ce13c` (Mac, with Node) | 379 / 379 | 366 / 379 (12 `"use node"`, 1 component store) | 367 / 379 | 12 `"use node"` (PR 10) |
+| `packages/testing`, with #817 merged in (it gives `bunvexTest` the executor) | 21 / 21 | 17 / 21 (3 components, 1 cron) | 20 / 21 | the cron test (#817's note: the virtual clock, bunvex-d3's fix) |
+| `packages/sandbox` (its own executors) | 1346 / 1346 | — | — | the new parity file and a `held` refusal included |
+
+Each remaining failure was read: it stops at a `"use node"` action (§8.7's message), or is the cron test #817 names.
+The examples have no components; PR 6's run of `examples/` is unchanged by this PR. On the test VPS (Linux, Bun 1.4.3)
+the same counts: the server's 15 files 174 (`vm`) and 172 (`process`), PR 6's set 101 and 98, the CLI files 35 and
+35, the differential suite's two component files 21 and 21 (with a `node` that is Bun, for Convex's CLI), and
+`packages/sandbox` 1346.
+
+One server test changed: `component-scheduler.test.ts`'s "a job whose component was unmounted fails" scheduled its
+job 400 ms ahead of the push that unmounts the component; on the VPS a push under `process` took longer, so the job ran
+first and succeeded (under both executors the job runs if it is due before the unmount). It is due 2 s ahead now.
+A second, "garbage collection deletes a component's completed jobs too", failed 7 of 20 runs under `process` on the
+VPS (0 of 20 under `vm`). Not a lifecycle bug: a probe showed the job had always run (its message written in the
+component) before its row went; with no retention the collector deletes the row about 50 ms after the success, and a
+poll under `process` (each call a round trip to the child) often comes after it, so `waitFor` met no row where it
+expected `success`. The test now asserts what it means, that the job ran in its component, never ended in another
+state, and its row is then deleted: 0 of 20 failed after (`results/pr7-components/gc-flake.txt`), and the collector
+skipping the components' namespaces still fails it.
+
+### 15.5 Measurements
+
+`packages/sandbox/bench/components.ts`: an app mounting the same component N times (1, 4, 16), on a server in the
+bench's process (durable SQLite on disk, module storage in memory), under `vm`, `process` with the instances in the
+app's child (`shared`) and `process` with a child per instance (`own`), and PR 6's branch under `vm` (`base`). Each
+line in a fresh process; the calls in-process through `Functions` (no HTTP), one at a time, each with new arguments
+(no cache hit), 1000 after 100 (250 for the 10-call line); the route over HTTP. **Linux VPS** (AMD EPYC 9354P, 2 vCPUs,
+Ubuntu 24.04, Bun 1.4.3), idle (`ps` checked first; nothing else running), two rounds; each cell gives both rounds.
+Raw output and the runner in `bench/process-sandbox/results/pr7-components/`.
+
+Latency of a call into a component, p50 µs:
+
+| N | Line | `vm`, base | `vm` | `process`, `shared` | `process`, `own` |
+|---|---|---|---|---|---|
+| 1 | app query, empty (no component) | 90, 66 | 88, 87 | 291, 290 | 277, 290 |
+| 1 | app query, 1 `runQuery` into a component | 167, 177 | 193, 167 | 645, 577 | 815, 664 |
+| 1 | app query, 10 `runQuery` into a component | 764, 673 | 795, 726 | 3856, 3846 | 4529, 3918 |
+| 1 | app mutation, 1 `runMutation` into a component (an insert, durable) | 1770, 5551 | 2479, 1350 | 3485, 2132 | 3130, 2143 |
+| 1 | app action, 1 `runQuery` into a component | 236, 237 | 235, 223 | 714, 711 | 846, 749 |
+| 1 | a component's HTTP route, over HTTP | 323, 312 | 324, 324 | 1039, 616 | 712, 574 |
+| 4 | app query, 1 `runQuery` into a component | 174, 180 | 174, 178 | 593, 566 | 800, 683 |
+| 4 | app query, 10 `runQuery` | 759, 784 | 696, 791 | 3504, 3486 | 5760, 5587 |
+| 16 | app query, 1 `runQuery` into a component | 167, 160 | 172, 163 | 602, 1003 | 868, 905 |
+| 16 | app query, 10 `runQuery` | 668, 607 | 763, 727 | 3442, 6469 | 6171, 5830 |
+| 16 | app action, 1 `runQuery` into a component | 263, 265 | 240, 237 | 730, 738 | 716, 910 |
+| 16 | a component's HTTP route | 263, 291 | 296, 310 | 707, 743 | 622, 657 |
+
+Memory (MiB, after the calls; RSS, and PSS from `smaps_rollup`, which counts a page shared by k processes as 1/k):
+
+| N | `vm`: the server's RSS | `shared`: the server's RSS + its child's RSS (PSS) | `own`: the server's RSS + the children's RSS (PSS), children |
+|---|---|---|---|
+| 1 | 144, 137 | 136 + 74 (55), 141 + 75 (56) | 137 + 129 (80), 150 + 129 (81), 2 |
+| 4 | 161, 164 | 151 + 76 (57), 149 + 76 (58) | 149 + 282 (142), 156 + 285 (145), 5 |
+| 16 | 197, 192 | 154 + 81 (62), 153 + 81 (63) | 171 + 892 (374), 175 + 894 (375), 17 |
+
+Push and restart (ms; a push is `start_push`, `wait_for_schema` and `finish_push` over HTTP, the first and the median
+of the four after; a restart is the store reopened until `codeReady`, the median of three):
+
+| N | | `vm`, base | `vm` | `process`, `shared` | `process`, `own` |
+|---|---|---|---|---|---|
+| 1 | first push | 148, 127 | 182, 115 | 462, 462 | 863, 751 |
+| 1 | later push | 35, 31 | 49, 42 | 229, 215 | 525, 536 |
+| 1 | restart | 25, 19 | 34, 19 | 197, 177 | 336, 338 |
+| 4 | later push | 79, 76 | 87, 104 | 243, 295 | 1325, 1061 |
+| 4 | restart | 28, 29 | 35, 35 | 180, 197 | 824, 806 |
+| 16 | first push | 918, 987 | 1065, 1091 | 1463, 1391 | 4104, 4069 |
+| 16 | later push | 419, 388 | 381, 383 | 615, 562 | 3849, 3452 |
+| 16 | restart | 61, 57 | 70, 83 | 247, 376 | 2847, 2860 |
+
+- **A call into a component costs about what a nested call costs under `process`**: an app query's `runQuery` into a
+  component is about +400 µs over `vm` (577–645 µs against 167–193), of which about +200 µs is the query's own
+  constant (the empty line) and the rest the nested call's round trip and its run in the child (about 300 µs per
+  call in the 10-call line, against 60–75 µs under `vm`). An action's is +480 µs, a route's +300–700 µs (an HTTP action's own, §14.4: about
+  +300 µs).
+- **Memory grows by a version per instance, not by a process**: with 16 instances the child holds 17 versions in
+  81 MiB (6 MiB more than with one), where a child per instance takes 892 MiB of RSS (374 MiB of PSS). Under `process`
+  the server itself holds less than under `vm` (no contexts): with 16 instances the whole deployment is 234 MiB
+  against `vm`'s 192–197.
+- **Push and restart**: `shared` adds one child's start and the loads in it (about 180 ms over `vm` for a later push,
+  140–300 ms for a restart); `own` adds a child per instance and per definition analyzed, 3.5 s per push with 16.
+- **`vm` unchanged**: its column on this branch is within the base's noise in every line.
+
+### 15.6 Tests and sabotage
+
+`packages/sandbox/test/component-parity.test.ts` (76, §15.4); `protocol.test.ts` refuses a `loaded` with no `held`, and
+`analysis-parity.test.ts` leaves it out of the comparison.
+The server's component suites under `process` are the rest (§15.4).
+
+Each break below was applied alone, `component-parity.test.ts` run under `process` (with the server's
+`component-runtime.test.ts` for the variables), the file restored from a saved copy and the tree compared with `git
+diff` before the next (`bench/process-sandbox/results/pr7-components/sabotage.py`, its output `sabotage.jsonl`):
+
+| Break | Failing tests |
+|---|---|
+| A child per instance (`own` the default) | 5: the five `process`-only tests |
+| The child ignores `unload` | 4: one child holds…, a push…, an unmounted instance…, `deployCode` (`held` 6, not 4) |
+| The host sends no `unload` | 4: the same |
+| The push keeps each definition's analyzed version (no `release`) | 5 |
+| The push analyzes each definition in a child of its own (no `beside`) | 1: a push starts exactly one child |
+| An instance's version loaded in a child of its own at the install (no `beside`) | 5 |
+| The server releases no replaced or removed instance's version | 4 (the old child never stops) |
+| `installed` retires the instances' versions too | 1: `deployCode` (the instances' calls fail) |
+| A new child loads only the first version again | 1: a killed child is replaced… |
+| A component's variables not sent to the child | 3: `counter lib:env`, `second lib:env`, `component-runtime`'s variables test |
+| A component's variables sent unbound (the deployment's own) | 3: the same |
+| The site URL sent without the instance's HTTP prefix | 1: `counter lib:env` |
+| The host takes a `loaded` whose `held` is not a count | 1: `protocol.test.ts`'s refusal |
+| The push refuses components under `process` again | every test (the push in `beforeAll` fails) |
+
+### 15.7 Owner questions
+
+No DV, STUDY or AD number taken. Both were found by the parity test and are the same under both executors: they are
+`vm`'s behaviour, which `process` keeps. Neither is fixed in this PR.
+
+- **Q-PR7-1. A component's `process.env` in a call from the app's query or mutation.**
+  - Convex: the callee's phase loads its own component's variables for every call, nested ones included
+    (`environment/udf/phase.rs:195-199`, `PreloadedEnvVars::load(tx, component, …)`): a component sees its bindings and
+    the built-ins (its site URL with its prefix), never the app's variables.
+  - bunvex, both executors: a nested call keeps the caller's reader (`invoke` runs the callee inside the caller's
+    `withEnv`; only a top-level query, mutation or action of a component gets the component's, `txEnv` /
+    `inActionEnv`). So `counter`'s `lib:env`, called from an app query, reads the app's `APPX` and not its own `MODE`
+    or `KEY` (the parity test's `app:envs`); run by an admin, or from an action, it reads its own.
+  - Same: no.
+  - Why: not built yet (a nested call into another component could switch to the callee's reader, as the namespace
+    switches).
+  - App impact: a component called from the app's queries and mutations sees the app's variables (a leak of the
+    app's secrets to a third-party component) and misses its own bindings; from an action or a client it is right.
+  - **Recommendation: make a nested call into a component run with the component's reader (its read set kept), in a
+    PR of its own, for both executors**, with a differential test against Convex's binary.
+- **Q-PR7-2. A nested call's error is not `instanceof Error` in the caller.**
+  - Convex: `performAsyncSyscall` (`npm-packages/convex/src/server/impl/syscall.ts:28-55`) throws `new Error(e.message)`
+    (or a `ConvexError` with its data) in the caller's own realm: `e instanceof Error` is true.
+  - bunvex, both executors: the error is made by the server (`toCallerError`, `functions.ts`), in the server's realm,
+    so in the app's context `e instanceof Error` and `Object.getPrototypeOf(e) === Error.prototype` are false (its
+    `name`, `message`, `stack` and `constructor.name` are right). The same for a call into the app's own functions,
+    not only components.
+  - Same: no.
+  - Why: not built yet (the error can be made in the caller's context, as `appContext` already makes its frames).
+  - App impact: `catch (e) { if (e instanceof Error) … }` around `ctx.runQuery` / `runMutation` takes the other branch.
+    `instanceof BunvexError` is right (the class is the server's, linked into the context).
+  - **Recommendation: make a nested call's error in the caller's realm, in a PR of its own, for both executors.**
+
+Notes, not divergences: under `process` a component's functions run in the app's child, so the backstop's kill of a
+runaway call fails the app's calls in flight too, as for the app's own functions until STUDY-168 PR 9 (§12.6,
+Q-PR5-1); `"use node"` actions in a component are PR 10's, as the app's.
+
+## 16. A nested call's error in the caller's realm (Q-PR7-2)
 
 STUDY-168 PR 7's parity work (§15 of #822, Q-PR7-2) found that a nested call's error, caught by the caller, is not
 `instanceof Error` in pushed code, under both executors. The owner approved the fix on 2026-10-21. It is one of the
 `vm` cross-realm `instanceof` bugs (§9, §10): no divergence is recorded, it was a bug against Convex's behaviour.
 
-### TBD.1 How Convex does it (read at `72ce13c`)
+### 16.1 How Convex does it (read at `72ce13c`)
 
 - `ctx.runQuery` / `ctx.runMutation` in a query or mutation go through `runUdf` (`npm-packages/convex/src/server/impl/
   registration_impl.ts:755-770`, the `1.0/runUdf` syscall); an action's `runQuery` / `runMutation` / `runAction`
@@ -1837,7 +2110,7 @@ STUDY-168 PR 7's parity work (§15 of #822, Q-PR7-2) found that a nested call's 
   data) besides V8's `__frameData`; `Object.prototype.toString` `[object Error]`. The same for a call into a
   component and for each caller kind. Its stack is the caller's frame where it awaited (`at async …`).
 
-### TBD.2 What bunvex did
+### 16.2 What bunvex did
 
 The server made the caller's error (`toCallerError`, `toActionCallerError`, functions.ts) in its own realm: a
 server `Error`, or the server's `BunvexError`. The context's view (`installAppErrors`, app-errors.ts) gave it the app's
@@ -1849,7 +2122,7 @@ app's class recognises any `BunvexError` by its symbol).
 The oracle test found a second, related one: the app's own `BunvexError` extended the server's class, so in pushed
 code `new BunvexError(…) instanceof Error` was false as well (Convex's `ConvexError` is an `Error` of the app's realm).
 
-### TBD.3 The fix
+### 16.3 The fix
 
 - The server marks each error it makes for a nested call's caller (`asCallerError`, app-errors.ts): the callee's
   failure made into the caller's error (`toCallerError`, `toActionCallerError`), the timeout's included.
@@ -1865,7 +2138,7 @@ code `new BunvexError(…) instanceof Error` was false as well (Convex's `Convex
 - Not changed: what the error's stack holds (the frames bunvex maps today: a query's or mutation's call site, an
   action's `at async` await, STUDY-95, STUDY-150), and the env scope of nested calls.
 
-### TBD.4 Parity and tests
+### 16.4 Parity and tests
 
 - `packages/differential/test/caller-realm.test.ts` (the app of `caller-realm-app/`, with a `thrower` component),
   against `precompiled-2026-10-10-72ce13c` and bunvex under `vm` and `process`: query → query, mutation → query,
@@ -1888,7 +2161,7 @@ code `new BunvexError(…) instanceof Error` was false as well (Convex's `Convex
   `node-errors` need Node for Convex's CLI, which the VPS lacks; on the Mac (with Node, the same binary) they and
   `caller-realm` pass, 23 / 23.
 
-### TBD.5 Measurements
+### 16.5 Measurements
 
 `packages/sandbox/bench/nested-errors.ts` on the test VPS (2 vCPU, idle), `main` against this branch, p50 / mean /
 p99 µs per call, each line in the same process, 2000 calls after 300 (`vm`) and 1000 after 200 (`process`):
@@ -1919,7 +2192,7 @@ The ranges overlap on every line: the round-to-round spread is larger than any d
 one boolean on the wire: no cost a measurement here separates from the noise. The bench also counts the caught errors
 that are `instanceof Error` in the caller: 0 of 10 on `main`, 10 of 10 on this branch, under both executors.
 
-### TBD.6 Sabotage
+### 16.6 Sabotage
 
 Each undone alone, on the VPS:
 
@@ -1929,9 +2202,9 @@ Each undone alone, on the VPS:
 - the app's `BunvexError` on the server's class again (`extends Base`): the server test fails 4 of 5 under `vm` and 2
   of 3 under `process`.
 
-### TBD.7 Owner question
+### 16.7 Owner question
 
-- **Q-TBD-1. A nested call refused before the callee runs (no such function) is a `FunctionPathError` of the
+- **Q-16-1. A nested call refused before the callee runs (no such function) is a `FunctionPathError` of the
   server's realm in the caller.**
   - Convex: the refusal comes back through the same `performAsyncSyscall`: `new Error(e.message)` in the caller's
     realm, `name` `Error`, `constructor` `Error`. Its message: from a query "Could not find public function for

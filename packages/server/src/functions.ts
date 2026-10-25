@@ -255,18 +255,51 @@ export type ComponentRuntime = {
 const ownVar = (vars: Record<string, string>, name: string): string | undefined =>
   Object.hasOwn(vars, name) ? vars[name] : undefined;
 
-function componentEnv(c: ComponentRuntime, read: EnvReader, builtin: Record<string, string>): EnvReader {
-  return (name) => {
+function componentEnv(
+  c: ComponentRuntime,
+  read: EnvReader,
+  builtin: Record<string, string>,
+  /** The deployment's variables `read` reads (a query's or mutation's), for the function sandbox's child. */
+  vars?: ReadonlyMap<string, string>,
+): EnvReader {
+  const site = ownVar(builtin, "BUNVEX_SITE_URL");
+  const prefixed = site !== undefined && c.httpPrefix !== null ? `${site}${c.httpPrefix.replace(/\/+$/, "")}` : site;
+  const reader: EnvReader = (name) => {
     // A name is checked first, bound or not (Convex parses it before the lookup, `op_environment_variables_get`).
     checkEnvVarName(name);
     const b = c.env.get(name);
     const bound = b === undefined ? undefined : b.type === "value" ? b.value : read(b.name);
     if (bound !== undefined) return bound;
-    const site = ownVar(builtin, name);
-    if (name === "BUNVEX_SITE_URL" && site !== undefined && c.httpPrefix !== null)
-      return `${site}${c.httpPrefix.replace(/\/+$/, "")}`;
-    return site;
+    return name === "BUNVEX_SITE_URL" ? prefixed : ownVar(builtin, name);
   };
+  // For the function sandbox's child (STUDY-168 PR 7): what this reader reads, as variables the child reads by name
+  // (its bindings resolved, then the built-ins), the same object while the deployment's do not change. The child
+  // reports each name read, and the host reads it again here, so the read set is this reader's.
+  if (vars)
+    reader.variables = {
+      deployment: boundVariables(c, vars),
+      builtin: prefixed === undefined ? builtin : { ...builtin, BUNVEX_SITE_URL: prefixed },
+    };
+  return reader;
+}
+
+/** A component's bindings resolved against the deployment's variables `vars`: one map per instance and `vars`. */
+const bound = new WeakMap<ComponentRuntime, WeakMap<ReadonlyMap<string, string>, ReadonlyMap<string, string>>>();
+function boundVariables(c: ComponentRuntime, vars: ReadonlyMap<string, string>): ReadonlyMap<string, string> {
+  let byVars = bound.get(c);
+  if (!byVars) {
+    byVars = new WeakMap();
+    bound.set(c, byVars);
+  }
+  const known = byVars.get(vars);
+  if (known) return known;
+  const out = new Map<string, string>();
+  for (const [name, b] of c.env) {
+    const value = b.type === "value" ? b.value : vars.get(b.name);
+    if (value !== undefined) out.set(name, value);
+  }
+  byVars.set(vars, out);
+  return out;
 }
 
 /** Convex's `ComponentPath::in_component_str`: ` in '<path>'`, nothing for the app. */
@@ -1095,7 +1128,7 @@ export class Functions {
     const read = await this.engine.environment.reader(db);
     // The canonical URLs in place of the origins (STUDY-49), read here so a change re-runs what read them.
     const builtin = withCanonical(this.builtinEnv, await readCanonicalUrls(db));
-    if (component) return componentEnv(component, read, builtin);
+    if (component) return componentEnv(component, read, builtin, read.vars);
     const reader: EnvReader = (name) => read(name) ?? ownVar(builtin, name);
     reader.variables = { deployment: read.vars, builtin };
     return reader;
