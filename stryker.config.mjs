@@ -28,7 +28,10 @@ export default {
   ],
   bun: {
     testFiles: ["packages/core/test", "packages/values/test"],
+    // Wall clock for the whole dry run. Bun 1.4.4 ignores `[test] timeout` in bunfig.toml and uses 5 s
+    // per test; a test past that fails the dry run, so the per-test limit goes on the command line.
     timeout: 900000,
+    bunArgs: ["--timeout=30000"],
   },
   ignorePatterns: [
     "apps",

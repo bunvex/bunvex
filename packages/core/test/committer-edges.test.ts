@@ -591,14 +591,17 @@ describe("flush retries", () => {
   });
 
   test("by default each retry is logged", async () => {
+    // Jitter of 0.5 on a 4 ms base is a 2 ms wait. A draw near 0 asks the timer for a sub-millisecond
+    // wait, and on the Linux runner that wait can outlast Bun's 5 s default: Stryker then fails the dry run.
+    stubRandom(0.5);
     const errs = captureErrors();
     const s = fakeStore();
     s.transient = true;
     s.failFlushes = 1;
-    const c = new Committer(s.persistence, {}, () => 0n, { initialBackoffMs: 1 });
+    const c = new Committer(s.persistence, {}, () => 0n, { initialBackoffMs: 4 });
     expect(await put(c)).toBe(1n);
     expect(errs).toHaveLength(1);
-    expect(errs[0]).toMatch(/^bunvex: a flush failed with a transient error \(attempt 1\); retrying in \d+ ms: flaky$/);
+    expect(errs[0]).toBe("bunvex: a flush failed with a transient error (attempt 1); retrying in 2 ms: flaky");
   });
 
   test("stopped during a retry's backoff: the batch is refused, not written by a later attempt", async () => {

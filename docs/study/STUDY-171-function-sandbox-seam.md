@@ -1314,7 +1314,7 @@ unhandled: queries, mutations and actions alike.
   and closes it with a marker of the call. Bun reports rejections in the order they happened, markers among them, so
   what comes before a call's marker, and after the marker before it, is that call's. This is Convex's microtask
   checkpoint, made where the child resumes the app.
-- **When Bun reports.** Bun 1.4.2 (the version CI pins) reports a drain's rejections before `drainMicrotasks()`
+- **When Bun reports.** Bun 1.4.2 (what CI pinned before 1.4.4) reports a drain's rejections before `drainMicrotasks()`
   returns: the attribution is exact. Bun 1.4.3 reports at the end of the event loop's turn
   (`REPORTS_AT_DRAIN`, found at start): there a call's next checkpoint waits for its last marker's report (its frames
   queue, `later`), so each checkpoint of one call is checked before the next runs, as Convex's are; other calls' go
@@ -1352,7 +1352,7 @@ unhandled: queries, mutations and actions alike.
 - **Bun 1.4.3 and later report at the end of the turn**, and drop a rejection handled before then. The gate keeps one
   checkpoint per call per turn for everything the child resumes (frames, batches, timers), so this matters only for
   the next limit's code, which Bun resumes in the same turn without a checkpoint: a rejection it handles late is
-  missed there. Under Bun 1.4.2 (CI's) a drain's rejections are reported before it returns.
+  missed there. Under Bun 1.4.2 a drain's rejections are reported before it returns.
 - **Code resumed by Bun, not by the child**, with several calls running in the same child: a native completion
   (`crypto.subtle`, reading a `Blob` or a `Response` the app made itself, a `ReadableStream` with no host behind it).
   A rejection that code leaves is printed, not failed, unless that call is the only one running. PR 9 (one call per

@@ -15,7 +15,8 @@
 // would not tell it: a target that answers before reading the body keeps reading it, where a closing one
 // would reset the connection under the body still coming, and lose its answer. A target it cannot connect
 // to gets a `502` carrying the socket's error code and a secret (STUDY-142): the action's `fetch` then fails as
-// it would have without the screen ("Connection refused", …), where a real proxy's answer is its own.
+// it would have without the screen ("Connection refused", …), where a real proxy's answer is its own. Both ride
+// in the header and in the status line: Bun keeps only the line of an answer to `CONNECT` (`ERR_PROXY_TUNNEL`).
 import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import net from "node:net";
@@ -296,7 +297,7 @@ export function startAddressScreen(screen: AddressScreen) {
         // without the screen).
         const code = (e as NodeJS.ErrnoException).code ?? "ECONNRESET";
         return sock.end(
-          `HTTP/1.1 502 Bad Gateway\r\n${SCREEN_FAILURE_HEADER}: ${failureToken} ${code}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`,
+          `HTTP/1.1 502 ${failureToken} ${code}\r\n${SCREEN_FAILURE_HEADER}: ${failureToken} ${code}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`,
         );
       }
       up.on("error", () => sock.destroy());
