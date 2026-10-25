@@ -304,6 +304,8 @@ export type WireThrown =
    * the client gets the internal error, as under `vm` (STUDY-188 §X14).
    */
   | { k: "system"; message: string }
+  /** A query's or mutation's promise that can never resolve (STUDY-188 §X16): the host's own error for it. */
+  | { k: "never" }
   /** Anything else thrown (`throw "no"`). */
   | { k: "value"; v: unknown };
 
@@ -545,7 +547,8 @@ function logLines(x: Json, where: string): WireLogLine[] {
 /** A thrown value's description (its values are checked when decoded). */
 function thrown(x: Json, where: string): WireThrown {
   const o = obj(x, where);
-  const k = oneOf(o.k, ["op", "error", "host", "system", "value"], `${where}.k`);
+  const k = oneOf(o.k, ["op", "error", "host", "system", "never", "value"], `${where}.k`);
+  if (k === "never") return { k };
   if (k === "op") return { k, op: int(o.op, `${where}.op`), stack: nullable(o.stack, str, `${where}.stack`) };
   if (k === "host" || k === "system") return { k, message: str(o.message, `${where}.message`) };
   if (k === "value") return { k, v: "v" in o ? o.v : fail(`${where}.v`, "a value") };
