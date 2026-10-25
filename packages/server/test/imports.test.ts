@@ -172,6 +172,26 @@ describe("formats and values", () => {
     expect((await t.importNow("", "format=csv&tableName=empty")).body).toEqual({ numWritten: 0 });
   });
 
+  test('CSV: an empty cell in a field the schema has optional is no field; required ones and no schema keep ""', async () => {
+    // Convex's `remap_empty_string_by_schema` (snapshot_import/mod.rs, STUDY-187 §2.2): CSV only, top-level fields
+    // optional in any member of the table's validator, `v.optional(v.string())` included.
+    const t = await setup(
+      defineSchema({
+        people: defineTable({ a: v.optional(v.float64()), b: v.optional(v.string()), c: v.string() }),
+        either: defineTable(
+          v.union(v.object({ k: v.literal("x"), p: v.optional(v.float64()) }), v.object({ k: v.literal("y") })),
+        ),
+      }),
+    );
+    expect((await t.importNow("a,b,c\n,,\n1,s,t\n", "format=csv&tableName=people")).body).toEqual({ numWritten: 2 });
+    expect((await t.docs("people")).map(strip)).toEqual([{ c: "" }, { a: 1, b: "s", c: "t" }]);
+    expect((await t.importNow("k,p\nx,\nx,2\n", "format=csv&tableName=either")).body).toEqual({ numWritten: 2 });
+    expect((await t.docs("either")).map(strip)).toEqual([{ k: "x" }, { k: "x", p: 2 }]);
+    // A table the schema does not declare keeps every empty string.
+    await t.importNow("a,b\n,\n", "format=csv&tableName=loose");
+    expect((await t.docs("loose")).map(strip)).toEqual([{ a: "", b: "" }]);
+  });
+
   test("JSON Lines and JSON arrays: every number a float64, `$` keys refused, objects only", async () => {
     const t = await setup();
     const r = await t.importNow(
