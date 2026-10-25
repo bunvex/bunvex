@@ -31,6 +31,8 @@ every parity row marked "Divergence?" on `main`, 2026-09-30; the owner's decisio
 
 | ID | bunvex | Convex | Observable | Why | Decided | Source |
 |---|---|---|---|---|---|---|
+| DV-547 | `"use node"` actions keep the values they receive in the server's realm (args, `ctx` results) | a Node action runs in one realm, its values and packages alike | yes (`instanceof` in a Node action) | external packages and builtins live in the server's realm (DV-169, DV-472) | owner, 2026-10-21 | [STUDY-182 §7](../study/STUDY-182-value-realms.md#7-questions-for-the-owner) |
+| DV-548 | Errors pushed code receives are the server's objects; `instanceof Error` holds through `Symbol.hasInstance` on the context's `Error` family | errors re-created in the isolate | no (`instanceof` holds; an own `Symbol.hasInstance` on `Error`) | the engine needs its original error (`OccError`, system errors) | owner, 2026-10-21 | [STUDY-182 §7](../study/STUDY-182-value-realms.md#7-questions-for-the-owner) |
 | DV-545 | `@bunvex/helpers`' triggers keep their write locks and queue per transaction (keyed on the transaction's db; two stacked `Triggers` instances, `b.wrapDB(a.wrapDB(ctx))`, each keep their own, where upstream's shared lock would deadlock, from reading its code) | convex-helpers keeps them per module, which is one request on Convex (modules evaluated per request) | no (the same per request as on Convex) | bunvex evaluates modules once per code version (DV-492): per module, concurrent mutations would share them | owner, 2026-10-20 | [STUDY-181 H-4](../study/STUDY-181-helpers-core.md#7-questions-for-the-owner) |
 | DV-546 | `@bunvex/testing` has no `defineTestApp` (convex-test 0.0.61's API over modules evaluated in the test's process); a test uses `bunvexTest` | convex-test has it | yes (tests) | the harness pushes the app as a deployment does; in-process modules would run outside it | owner, 2026-10-20 | [STUDY-159 T-9](../study/STUDY-159-testing.md#7-questions-for-the-owner) |
 | DV-544 | `@bunvex/helpers` (convex-helpers' port) says "Unknown validator type: " for convex-helpers' "Unknown Convex validator type: ", and reads `isValidator` for `isConvexValidator` | as named | yes (one message) | Rule 5 (no "convex" in shipped strings) | rule 5 (no owner choice) | [STUDY-181 §4](../study/STUDY-181-helpers-core.md#4-divergences) |
@@ -496,7 +498,7 @@ classed as bugs by their study; they are listed here because they change what op
 
 Each row's study still says *owner*, *open* or *awaits*. Until decided, the default is to match Convex.
 
-None as of 2026-10-20.
+None as of 2026-10-21.
 
 DV-521 (STUDY-161 §16 Q2) was decided by the owner (2026-10-15: accept, the module reads predicted from bunvex's bundle as built) and is in [Decided divergences](#decided-divergences).
 
