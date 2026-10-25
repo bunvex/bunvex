@@ -10,6 +10,7 @@
       "!**/routeTree.gen.ts",
       "!**/dist",
       "!examples/*/bunvex/_generated",
+      "!components/*/src/component/_generated",
       "!packages/server/test/fixtures/openapi"
     ]
   },
