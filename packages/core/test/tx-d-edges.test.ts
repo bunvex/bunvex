@@ -531,32 +531,91 @@ describe("builders", () => {
   test("chaining: once, never after iteration, never after the query ran", async () => {
     const e = await engine();
     await e.mutation((db) => db.insert("items", { n: 1 }));
+    const CHAINED = "This query has been chained with another operator and can't be reused.";
+    const CHAIN_ONCE = "A query can only be chained once and can't be chained after iteration begins.";
+    const CONSUMED = "This query is closed and can't emit any more values.";
+    const ONCE = "Iteration can only begin on a query once.";
+    const scan = (db: any) => db.query("items").fullTableScan();
     await e.query(async (db) => {
-      const q = db.query("items");
-      q.filter((x) => x.eq(1, 1));
-      expect(await message(() => q.filter((x) => x.eq(1, 1)))).toBe(
+      const q = scan(db);
+      q.filter((x: any) => x.eq(1, 1));
+      // An operator, `take`, `first`, `unique`, `paginate` close the query: chaining again is "chained once", the
+      // terminals that iterate it are "chained".
+      expect(await message(() => q.filter((x: any) => x.eq(1, 1)))).toBe(CHAIN_ONCE);
+      expect(await message(() => q.collect())).toBe(CHAINED);
+      expect(await message(() => q[Symbol.asyncIterator]())).toBe(CHAINED);
+      expect(await message(() => q.next())).toBe(CHAINED);
+      const taken = scan(db);
+      await taken.take(1);
+      expect(await message(() => taken.take(1))).toBe(CHAIN_ONCE);
+      expect(await message(() => taken.collect())).toBe(CHAINED);
+      const paged = scan(db);
+      await paged.paginate({ numItems: 1, cursor: null });
+      expect(await message(() => paged.paginate({ numItems: 1, cursor: null }))).toBe(CHAIN_ONCE);
+      // An executing query: iteration only once, no chaining, no other terminal.
+      const it = scan(db);
+      expect(it[Symbol.asyncIterator]()).toBe(it);
+      expect(await message(() => it.filter((x: any) => x.eq(1, 1)))).toBe(CHAIN_ONCE);
+      expect(await message(() => it.paginate({ numItems: 1, cursor: null }))).toBe(CHAIN_ONCE);
+      expect(await message(() => it.first())).toBe(CHAIN_ONCE);
+      expect(await message(() => it.collect())).toBe(ONCE);
+      expect(await message(() => it[Symbol.asyncIterator]())).toBe(ONCE);
+      // A consumed query: read to its end (`collect`, a stream past its last document) or left by `return()`.
+      const ran = scan(db);
+      expect(await ran.collect()).toHaveLength(1);
+      expect(await message(() => ran.collect())).toBe(CONSUMED);
+      expect(await message(() => ran[Symbol.asyncIterator]())).toBe(CONSUMED);
+      expect(await message(() => ran.next())).toBe(CONSUMED);
+      expect(await message(() => ran.take(1))).toBe(CHAIN_ONCE);
+      expect(await message(() => ran.order("desc"))).toBe(CHAIN_ONCE);
+      const read = scan(db);
+      expect((await read.next()).done).toBe(false);
+      expect((await read.next()).done).toBe(true);
+      expect(await message(() => read.next())).toBe(CONSUMED);
+      const left = scan(db);
+      for await (const _ of left) break;
+      expect(await message(() => left.collect())).toBe(CONSUMED);
+      const returned = scan(db);
+      expect(await returned.return()).toEqual({ done: true, value: undefined });
+      expect(await message(() => returned.next())).toBe(CONSUMED);
+    });
+  });
+
+  test("a query's states, as Convex's: the initializer has none, a failed start or `order` as Convex's", async () => {
+    const e = await engine();
+    await e.mutation((db) => db.insert("items", { n: 1 }));
+    await e.query(async (db) => {
+      // `db.query(t)` (and `db.system.query(t)`) start a new query for each use, and are not iterators themselves.
+      const init = db.query("items") as any;
+      expect(await init.collect()).toHaveLength(1);
+      expect(await init.collect()).toHaveLength(1);
+      expect(await init.first()).not.toBeNull();
+      const it = init[Symbol.asyncIterator]();
+      expect(it).not.toBe(init);
+      expect((await it.next()).done).toBe(false);
+      expect(init.next).toBeUndefined();
+      expect(init.return).toBeUndefined();
+      init.order("desc");
+      expect(await init.take(5)).toHaveLength(1);
+      const system = db.system.query("_scheduled_functions") as any;
+      expect(await system.collect()).toEqual([]);
+      expect(await system.collect()).toEqual([]);
+      expect(system.next).toBeUndefined();
+      const sysScan = system.fullTableScan();
+      expect(sysScan[Symbol.asyncIterator]()).toBe(sysScan);
+      expect((await sysScan.next()).done).toBe(true);
+      expect(await message(() => sysScan.next())).toBe("This query is closed and can't emit any more values.");
+      // A start that fails leaves the query preparing: the same error again.
+      const missing = (db.query("items") as any).withIndex("nope");
+      expect(await message(() => missing.collect())).toBe("Index items.nope not found.");
+      expect(await message(() => missing.collect())).toBe("Index items.nope not found.");
+      expect(await message(() => missing[Symbol.asyncIterator]())).toBe("Index items.nope not found.");
+      // A refused `order` has taken the query first.
+      const ordered = db.query("items").order("asc") as any;
+      expect(await message(() => ordered.order("desc"))).toBe("Queries may only specify order at most once");
+      expect(await message(() => ordered.collect())).toBe(
         "This query has been chained with another operator and can't be reused.",
       );
-      const it = db.query("items");
-      it[Symbol.asyncIterator]();
-      expect(await message(() => it.filter((x) => x.eq(1, 1)))).toBe(
-        "A query can only be chained once and can't be chained after iteration begins.",
-      );
-      const ran = db.query("items");
-      await ran.collect();
-      expect(await message(() => ran.collect())).toContain("can't be reused");
-      const taken = db.query("items");
-      await taken.take(1);
-      expect(await message(() => taken.take(1))).toContain("can't be reused");
-      const paged = db.query("items");
-      await paged.paginate({ numItems: 1, cursor: null });
-      expect(await message(() => paged.paginate({ numItems: 1, cursor: null }))).toContain("can't be reused");
-      const iterated = db.query("items");
-      iterated[Symbol.asyncIterator]();
-      expect(await message(() => iterated.paginate({ numItems: 1, cursor: null }))).toContain("can't be reused");
-      const closed = db.query("items");
-      await closed.collect();
-      expect(await message(() => closed[Symbol.asyncIterator]())).toContain("can't be reused");
     });
   });
 

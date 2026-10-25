@@ -54,7 +54,20 @@ export type DbShape = "tx" | "reader" | "writer";
 // Convex's message for a system table queried outside `db.system` (core `tx.ts`, STUDY-151).
 const SYSTEM_TABLE_QUERY = "System tables can only be accessed from db.system.query().";
 
-const reusedError = () => new Error("This query has been chained with another operator and can't be reused.");
+// Core's states for a query (`tx.ts`, Convex's `QueryImpl`; STUDY-188 §X9).
+const PREPARING = 0;
+const EXECUTING = 1;
+const CLOSED = 2;
+const CONSUMED = 3;
+type QueryState = typeof PREPARING | typeof EXECUTING | typeof CLOSED | typeof CONSUMED;
+
+/** Core's error for a query that is closed or consumed, in its words for each. */
+const closedError = (state: QueryState) =>
+  new Error(
+    state === CONSUMED
+      ? "This query is closed and can't emit any more values."
+      : "This query has been chained with another operator and can't be reused.",
+  );
 
 type IndexSpec = { table: string; name: string; fields: string[] };
 
@@ -67,8 +80,6 @@ type ChainState = {
   orderSet: boolean;
   /** Filters and limits so far (core's `checkOps` limit is the host's; `filter` counts them, as core's). */
   ops: number;
-  closed: boolean;
-  iterated: boolean;
   search: boolean;
 };
 
@@ -84,22 +95,19 @@ function readyIndex(t: WireTable, name: string, snapshot: bigint): IndexSpec | n
 /** What a filter's predicate returned, for the host's own `filter`: an expression by its JSON, else the value. */
 const predicateResult = (r: unknown) => (r instanceof Expression ? { expr: r.json } : { literal: r });
 
-export class QueryImpl {
+/** What both stages of a chain share: the host, the table, the link, and how the next link is made. */
+export abstract class QueryChain {
   constructor(
     protected readonly host: DbHost,
     protected readonly table: string,
     protected readonly st: ChainState,
   ) {}
 
-  /** Core's `chain`, then the same link made by the host (`kind`, `args`: what it does there). */
-  protected chain(change: (next: ChainState) => unknown[], kind: string): QueryImpl {
-    const st = this.st;
-    if (st.iterated) throw new Error("A query can only be chained once and can't be chained after iteration begins.");
-    if (st.closed) throw reusedError();
-    st.closed = true;
-    const next: ChainState = { ...st, closed: false, iterated: false };
+  /** The next link (`kind`, `args`: what it does on the host), made by the host on its real chain too. */
+  protected derive(change: (next: ChainState) => unknown[], kind: string): QueryImpl {
+    const next: ChainState = { ...this.st };
     const args = change(next);
-    next.query = this.host.link(kind, st.query, args);
+    next.query = this.host.link(kind, this.st.query, args);
     return new QueryImpl(this.host, this.table, next);
   }
 
@@ -107,18 +115,51 @@ export class QueryImpl {
   protected run(terminal: WireTerminal): Promise<unknown> {
     return this.host.op("db.query", [this.st.query, terminal]);
   }
+}
 
-  private results(take: number | null): Promise<unknown> {
-    if (this.st.closed || this.st.iterated) throw reusedError();
-    this.st.closed = true;
-    return this.run(take === null ? { k: "collect" } : { k: "take", n: take });
+/**
+ * Core's `QueryImpl`: its own iterator, through core's states (preparing, executing, closed, consumed; STUDY-188 §X9),
+ * each checked here, at the app's call, in core's words. The host's link goes through the same states, as it is
+ * given the same calls.
+ */
+export class QueryImpl extends QueryChain {
+  private state: QueryState = PREPARING;
+  /** The host's stream of an executing query, opened at its first `next()`. */
+  private stream: Promise<number> | null = null;
+
+  /** Core's `takeQuery`. */
+  private takeQuery(): void {
+    if (this.state !== PREPARING)
+      throw new Error("A query can only be chained once and can't be chained after iteration begins.");
+    this.state = CLOSED;
+  }
+
+  private chain(change: (next: ChainState) => unknown[], kind: string): QueryImpl {
+    this.takeQuery();
+    return this.derive(change, kind);
+  }
+
+  /** Core's `startQuery`, but for the start's checks, which are the host's. */
+  private startQuery(): void {
+    if (this.state === EXECUTING) throw new Error("Iteration can only begin on a query once.");
+    if (this.state !== PREPARING) throw closedError(this.state);
+    this.state = EXECUTING;
+  }
+
+  private results(terminal: WireTerminal): Promise<unknown> {
+    try {
+      this.takeQuery();
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    return this.run(terminal);
   }
 
   order(dir: "asc" | "desc"): QueryImpl {
-    if (this.st.search)
-      throw new Error("Search queries must always be in relevance order. Can not set order manually.");
-    if (this.st.orderSet) throw new Error("Queries may only specify order at most once");
+    // Core takes the query first: a refused `order` leaves it closed.
     return this.chain((n) => {
+      if (n.search) throw new Error("Search queries must always be in relevance order. Can not set order manually.");
+      if (n.orderSet) throw new Error("Queries may only specify order at most once");
       n.orderSet = true;
       return [dir];
     }, "order");
@@ -144,23 +185,38 @@ export class QueryImpl {
   take(n: number): Promise<unknown> {
     if (n === undefined) throw new TypeError("Must provide arg 1 `n` to `take`");
     if (!Number.isInteger(n) || n < 0) throw new TypeError("Arg 1 `n` to `take` must be a non-negative integer");
-    return this.results(n);
+    return this.results({ k: "take", n });
   }
 
-  async first(): Promise<unknown> {
-    if (this.st.closed || this.st.iterated) throw reusedError();
-    this.st.closed = true;
-    return this.run({ k: "first" });
+  first(): Promise<unknown> {
+    return this.results({ k: "first" });
   }
 
-  async unique(): Promise<unknown> {
-    if (this.st.closed || this.st.iterated) throw reusedError();
-    this.st.closed = true;
-    return this.run({ k: "unique" });
+  unique(): Promise<unknown> {
+    return this.results({ k: "unique" });
   }
 
+  /**
+   * Core's `collect`: an iteration, so it starts the query, and consumes it once it has every document. A query whose
+   * start failed is still preparing (core's start throws before it is executing); the host's link knows if it failed
+   * later, and refuses what its state refuses.
+   */
   collect(): Promise<unknown> {
-    return this.results(null);
+    try {
+      this.startQuery();
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    return this.run({ k: "collect" }).then(
+      (docs) => {
+        this.state = CONSUMED;
+        return docs;
+      },
+      (e) => {
+        this.state = PREPARING;
+        throw e;
+      },
+    );
   }
 
   paginate(opts: unknown): Promise<unknown> {
@@ -170,46 +226,63 @@ export class QueryImpl {
       const n = (opts as { numItems?: unknown } | null)?.numItems;
       if (typeof n !== "number" || n < 0)
         throw new Error(`\`options.numItems\` must be a positive number. Received \`${n}\`.`);
-      if (this.st.closed || this.st.iterated) throw reusedError();
-      this.st.closed = true;
+      this.takeQuery();
       return this.run({ k: "paginate", opts });
     })();
   }
 
   [Symbol.asyncIterator](): AsyncIterator<unknown> {
-    if (this.st.iterated) throw new Error("Iteration can only begin on a query once.");
-    if (this.st.closed) throw reusedError();
-    this.st.iterated = true;
-    // The stream opens on the host at the first `next()`, where its start's checks throw (the engine throws them
-    // from this call: for a `for await`, the same statement fails).
-    let stream: Promise<number> | null = null;
-    let done = false;
-    const host = this.host;
-    const open = () => (stream ??= this.run({ k: "iterate" }) as Promise<number>);
-    return {
-      async next() {
-        if (done) return { done: true, value: undefined };
-        const id = await open();
-        const r = (await host.op("db.next", [id])) as { done: boolean; value: unknown };
-        if (r.done) done = true;
-        return r as IteratorResult<unknown>;
-      },
-      async return(value?: unknown) {
-        if (!done && stream) {
-          done = true;
-          await host.op("db.return", [await stream]);
-        }
-        done = true;
-        return { done: true, value };
-      },
-    };
+    this.startQuery();
+    return this;
+  }
+
+  /**
+   * The next document. The stream opens on the host at the first one, where its start's checks throw (the engine
+   * throws them from `[Symbol.asyncIterator]`, and leaves the query preparing: so does this; for a `for await`, the
+   * same statement fails).
+   */
+  async next(): Promise<IteratorResult<unknown>> {
+    if (this.state !== EXECUTING) {
+      if (this.state !== PREPARING) throw closedError(this.state);
+      this.startQuery();
+    }
+    this.stream ??= this.run({ k: "iterate" }) as Promise<number>;
+    let id: number;
+    try {
+      id = await this.stream;
+    } catch (e) {
+      if (this.state === EXECUTING) {
+        this.state = PREPARING;
+        this.stream = null;
+      }
+      throw e;
+    }
+    const r = (await this.host.op("db.next", [id])) as IteratorResult<unknown>;
+    if (r.done) {
+      this.state = CONSUMED;
+      this.stream = null;
+    }
+    return r;
+  }
+
+  /** A `for await` left early, or the app's own call: the query is consumed, and the host's stream let go. */
+  async return(): Promise<IteratorResult<unknown>> {
+    const stream = this.stream;
+    this.stream = null;
+    this.state = CONSUMED;
+    if (stream) await this.host.op("db.return", [await stream]);
+    return { done: true, value: undefined };
   }
 }
 
-export class QueryInitializerImpl extends QueryImpl {
+/**
+ * Core's `QueryInitializerImpl`: no state, so it can be used any number of times. Its operators and terminals are a
+ * new query's on its own link (the host's initializer starts a new query for each too).
+ */
+export class QueryInitializerImpl extends QueryChain {
   withIndex(name: string, f?: (b: IndexRangeBuilder) => IndexRangeBuilder): QueryImpl {
     const t = this.st.t;
-    return this.chain(() => {
+    return this.derive(() => {
       // The range builder runs here, as Convex's client; the index is looked up when the query starts.
       const exprs = f ? f(new IndexRangeBuilder()).exprs : [];
       // An index the catalog has ready: its range's errors throw here, as the engine's do. Any other case (missing,
@@ -223,14 +296,47 @@ export class QueryInitializerImpl extends QueryImpl {
   withSearchIndex(name: string, f: (q: SearchFilterBuilder) => SearchFilterBuilder): QueryImpl {
     if (typeof f !== "function") throw new TypeError("Must provide arg 2 `filter` to `withSearchIndex`");
     const filters = (f(new SearchFilterBuilder([])) as SearchFilterBuilder).filters();
-    return this.chain((n) => {
+    return this.derive((n) => {
       n.search = true;
       return [name, filters.map((x) => [x.type, x.field, x.value])];
     }, "withSearchIndex");
   }
 
   fullTableScan(): QueryImpl {
-    return this.chain(() => [], "fullTableScan");
+    return this.derive(() => [], "fullTableScan");
+  }
+
+  /** A new query on this link: what the host's initializer does with the operator or the terminal. */
+  private scan(): QueryImpl {
+    return new QueryImpl(this.host, this.table, this.st);
+  }
+
+  order(dir: "asc" | "desc"): QueryImpl {
+    return this.scan().order(dir);
+  }
+  filter(predicate: (q: FilterBuilder) => unknown): QueryImpl {
+    return this.scan().filter(predicate);
+  }
+  limit(n: number): QueryImpl {
+    return this.scan().limit(n);
+  }
+  take(n: number): Promise<unknown> {
+    return this.scan().take(n);
+  }
+  first(): Promise<unknown> {
+    return this.scan().first();
+  }
+  unique(): Promise<unknown> {
+    return this.scan().unique();
+  }
+  collect(): Promise<unknown> {
+    return this.scan().collect();
+  }
+  paginate(opts: unknown): Promise<unknown> {
+    return this.scan().paginate(opts);
+  }
+  [Symbol.asyncIterator](): AsyncIterator<unknown> {
+    return this.scan()[Symbol.asyncIterator]();
   }
 
   async count(): Promise<unknown> {
@@ -238,11 +344,11 @@ export class QueryInitializerImpl extends QueryImpl {
   }
 }
 
-/** A virtual table's query after its first operator (core `VirtualQuery`). */
-export class VirtualQuery {
+/** What a virtual table's queries share (core `VirtualChain`). */
+export abstract class VirtualChain {
   constructor(
     protected readonly table: string,
-    protected readonly q: QueryImpl,
+    protected readonly q: QueryImpl | QueryInitializerImpl,
   ) {}
   protected wrap(q: QueryImpl): VirtualQuery {
     return new VirtualQuery(this.table, q);
@@ -271,13 +377,26 @@ export class VirtualQuery {
   paginate(opts: unknown) {
     return this.q.paginate(opts);
   }
+}
+
+/** A virtual table's query after its first operator (core `VirtualQuery`): its own iterator. */
+export class VirtualQuery extends VirtualChain {
+  declare protected readonly q: QueryImpl;
   [Symbol.asyncIterator]() {
-    return this.q[Symbol.asyncIterator]();
+    this.q[Symbol.asyncIterator]();
+    return this;
+  }
+  next() {
+    return this.q.next();
+  }
+  return() {
+    return this.q.return();
   }
 }
 
 /** `db.system.query(table)` (core `VirtualQueryInitializer`). */
-export class VirtualQueryInitializer extends VirtualQuery {
+export class VirtualQueryInitializer extends VirtualChain {
+  declare protected readonly q: QueryInitializerImpl;
   constructor(
     table: string,
     q: QueryInitializerImpl,
@@ -286,17 +405,20 @@ export class VirtualQueryInitializer extends VirtualQuery {
     super(table, q);
   }
   count() {
-    return (this.q as QueryInitializerImpl).count();
+    return this.q.count();
   }
   withIndex(name: string, range?: (b: IndexRangeBuilder) => IndexRangeBuilder) {
     if (!this.anyIndex && !VIRTUAL_INDEXES.has(name)) throw new Error(`unknown index ${this.table}.${name}`);
-    return this.wrap((this.q as QueryInitializerImpl).withIndex(name, range));
+    return this.wrap(this.q.withIndex(name, range));
   }
   withSearchIndex(name: string): VirtualQuery {
     throw new Error(`Index ${this.table}.${name} not found.`);
   }
   fullTableScan() {
-    return this.wrap((this.q as QueryInitializerImpl).fullTableScan());
+    return this.wrap(this.q.fullTableScan());
+  }
+  [Symbol.asyncIterator]() {
+    return this.fullTableScan()[Symbol.asyncIterator]();
   }
 }
 
@@ -305,8 +427,6 @@ const newChain = (query: number, t: WireTable | undefined): ChainState => ({
   t,
   orderSet: false,
   ops: 0,
-  closed: false,
-  iterated: false,
   search: false,
 });
 
