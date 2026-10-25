@@ -153,6 +153,7 @@ import { tooDeepToStringify } from "./deep-values.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
 import {
   describeUncaught,
+  FunctionLookupError,
   FunctionPathError,
   FunctionPathNotFoundError,
   INTERNAL_SERVER_ERROR_MESSAGE,
@@ -346,6 +347,9 @@ function checkActionCallArgs(ref: unknown, args: unknown) {
 function toActionCallerError(e: unknown): unknown {
   if (e instanceof IndexesUnavailableError) return unavailableToAction(e);
   if (isSystemError(e)) return e;
+  // No such function, or one of another kind: Convex's action runtime gets the callee's `JsError` display (its
+  // message and a newline) and throws it as a plain `Error` in the caller's code (STUDY-188 §X21).
+  if (e instanceof FunctionLookupError) return asCallerError(new Error(`${e.message}\n`));
   // Refused before the callee ran (its path, its arguments, a `_system/` identity, a timeout): Convex's
   // syscall error is that message alone, which these errors already are.
   if (
@@ -1675,7 +1679,7 @@ export class Functions {
       const message = `Trying to execute ${shown.slice(0, i)}.js${shown.slice(i)}${where} as ${kindName(kind)}, but it is defined as ${kindName(f.kind)}.`;
       throw this.udf404OnBadPath
         ? new FunctionPathNotFoundError("FunctionPathWrongType", message)
-        : new FunctionPathError(message);
+        : new FunctionLookupError(message);
     }
     return f as Extract<FunctionDef, { kind: K }>;
   }
@@ -1765,7 +1769,7 @@ export class Functions {
     const message = `Could not find public function for '${name.replace(/:default$/, "")}'.`;
     return this.udf404OnBadPath
       ? new FunctionPathNotFoundError("FunctionPathNotFound", message)
-      : new FunctionPathError(message);
+      : new FunctionLookupError(message);
   }
   /** The `_system/` functions' (Convex's `deserialize_udf_result`, crates/isolate/src/helpers.rs). */
   maxSystemResultSize = knob("SYSTEM_FUNCTION_MAX_RESULT_SIZE", SYSTEM_FUNCTION_MAX_RESULT_SIZE);
@@ -2218,7 +2222,9 @@ export class Functions {
           return pausingUserTime(() => this.runNested(db, kind, ref, args, opts, depth, component));
         })
         .catch((e) => {
-          throw atCallSite(e, site);
+          // No such function, or one of another kind: Convex's `runUdf` syscall error, a plain `Error` of the
+          // caller's, its message alone (STUDY-188 §X21).
+          throw atCallSite(e instanceof FunctionLookupError ? asCallerError(new Error(e.message)) : e, site);
         });
       queue = run.catch(() => {});
       return run;
@@ -2235,7 +2241,8 @@ export class Functions {
   /**
    * The registry name of the function a call names (Convex's `ComponentsModel::resolve`, STUDY-155): a name in the
    * caller's own component, any visibility; a reference to a public export of one of the caller's direct children; a
-   * handle. `action`: an action's call, whose misses read as Convex's preloaded map's, "Couldn't resolve …".
+   * handle. `action`: a V8 action's call, whose misses read as Convex's preloaded map's, "Couldn't resolve …" (a
+   * Node action's calls go through the backend's HTTP API, as a query's or a mutation's do).
    */
   private async resolveCall(
     ref: unknown,
@@ -2247,11 +2254,25 @@ export class Functions {
     try {
       address = getFunctionAddress(ref);
     } catch {}
-    if (address && "reference" in address) return this.resolveReference(address.reference, caller, db, action);
+    if (address && "reference" in address) {
+      const resolved = await this.resolveReference(address.reference, caller, db, action);
+      return address.reference.startsWith("_reference/function/") ? this.inActionMap(resolved, action) : resolved;
+    }
     const name = await functionNameOf(ref, db, this.engine);
     // A handle names its function (the app's until STUDY-155 PR 2); a name is the caller's component's.
     if (address && "functionHandle" in address) return name;
-    return caller && !isSystemPath(name) ? componentFunctionName(caller.id, name) : name;
+    return this.inActionMap(caller && !isSystemPath(name) ? componentFunctionName(caller.id, name) : name, action);
+  }
+
+  /**
+   * A name a V8 action's call resolved, checked against Convex's preloaded map (`TaskExecutor::resolve`, crates/isolate
+   * src/environment/action/task_executor.rs): every function of the caller's component, of any kind or visibility. A
+   * miss is "Couldn't resolve api.<module path>.<function>", a plain `Error` of the action's (STUDY-188 §X21). A
+   * `_system/` name is refused by the call itself (`actionTarget`).
+   */
+  private inActionMap(name: string, action: boolean): string {
+    if (!action || isSystemPath(name) || this.lookup(name)) return name;
+    throw asCallerError(unresolvable(splitComponentFunctionName(name)?.name ?? name));
   }
 
   /** A `_reference/…` path resolved from `caller`'s component (Convex's `resolve` and `resolve_export`). */
@@ -2281,10 +2302,10 @@ export class Functions {
     if (kind !== "childComponent" || first === undefined) throw new Error(`Invalid reference ${reference}`);
     const child = first;
     const attributes = rest;
-    // An action's misses all read the same (Convex's preloaded map); a query's and a mutation's name the child or the
+    // A V8 action's misses all read the same (Convex's preloaded map); a query's and a mutation's name the child or the
     // export. A branch, not a function, is a 400 from either (DV-531).
     const miss = (message: string) =>
-      new Error(action ? `Couldn't resolve ${[child, ...attributes].join(".")}` : message);
+      action ? asCallerError(new Error(`Couldn't resolve ${[child, ...attributes].join(".")}`)) : new Error(message);
     const read = <T>(fn: (tx: Tx) => Promise<T>) => (db ? fn(db) : this.engine.query(fn));
     const row = await read(async (tx) => {
       const parent = caller ? caller.id : (await rootComponent(tx))?._id;
@@ -2939,7 +2960,7 @@ export class Functions {
                             {
                               db: null,
                               engine: this.engine,
-                              resolve: (ref) => this.resolveCall(ref, this.componentOf.get(f), null, true),
+                              resolve: (ref) => this.resolveCall(ref, this.componentOf.get(f), null, !node),
                             },
                             () => f.handler(ctx, a),
                           ),
@@ -2988,8 +3009,10 @@ export class Functions {
     const component = httpComponent ?? (f ? this.componentOf.get(f) : undefined);
     // What the action calls (STUDY-155): its own component's functions by name, its children's public exports by
     // reference, a handle's function.
+    // A Node action's calls go through the backend's HTTP API: no preloaded map (STUDY-188 §X21).
+    const v8 = !(f && NODE_FUNCTIONS.has(f));
     const target = async (ref: FunctionRef) => {
-      const t = await this.resolveCall(ref, component, null, true);
+      const t = await this.resolveCall(ref, component, null, v8);
       return splitComponentFunctionName(t) ? t : actionTarget(t);
     };
     // Convex's `propagate_component_auth`: a user's identity crosses only from the app to the app (an admin has none,
@@ -3043,6 +3066,7 @@ export class Functions {
           component,
           // Convex's action scheduler sends its request id first (an HTTP action's is "").
           requestId: f === HTTP_ACTION ? "" : (caller?.request?.requestId ?? ""),
+          node: !v8,
           systemIdentity: isSystemIdentity(caller),
           job: job ?? caller?.request?.scheduledFunctionId ?? undefined,
           jobComponent: caller?.request?.scheduledFunctionComponent ?? null,
@@ -3158,8 +3182,9 @@ export class Functions {
                       {
                         db: null,
                         engine: this.engine,
-                        // A component's handles resolve from it (STUDY-155).
-                        ...(component && { resolve: (ref: unknown) => this.resolveCall(ref, component, null, true) }),
+                        // A component's handles resolve from it (STUDY-155); a missing function is the V8 action's
+                        // "Couldn't resolve …" (STUDY-188 §X21).
+                        resolve: (ref: unknown) => this.resolveCall(ref, component, null, true),
                       },
                       () => handler(ctx, trackedFormData(request)),
                     ),

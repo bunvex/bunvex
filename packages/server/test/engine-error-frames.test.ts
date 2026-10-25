@@ -227,8 +227,9 @@ test("uncaught: the frames of the app's call, `at async` where it awaited a fail
   expect(await message("m:uncaught", "patchCreationTime")).toMatch(
     /^Uncaught Error: Provided creation time [\d.]+ doesn't match '_creationTime' field in .*\n {4}at async <anonymous> \(m\.js:\d+:\d+\)\n {4}at async <anonymous> \(m\.js:\d+:\d+\)\n$/,
   );
+  // A V8 action's missing function: Convex's preloaded map misses it first (STUDY-188 §X21).
   expect(await message("a:uncaught", "scheduleMissing", "action")).toMatch(
-    /^Uncaught Error: Attempted to schedule function at nonexistent path: nope\.js\n {4}at async <anonymous> \(a\.js:\d+:\d+\)\n {4}at async <anonymous> \(a\.js:\d+:\d+\)\n$/,
+    /^Uncaught Error: Couldn't resolve api\.nope\.x\n {4}at async <anonymous> \(a\.js:\d+:\d+\)\n {4}at async <anonymous> \(a\.js:\d+:\d+\)\n$/,
   );
   // Refused before the call returned: the app's frames where it made the call, as Convex's synchronous checks.
   expect(await message("m:uncaught", "systemTable")).toMatch(

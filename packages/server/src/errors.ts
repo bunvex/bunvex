@@ -82,6 +82,13 @@ export class FunctionPathError extends Error {
 }
 
 /**
+ * A path that names no function, or one of another kind ("Could not find public function", "Trying to execute …").
+ * To a client, its message alone, as any `FunctionPathError`. To a function whose nested call it fails, Convex's
+ * syscall error: a plain `Error` made in the caller's code, with the caller's frames (STUDY-188 §X21).
+ */
+export class FunctionLookupError extends FunctionPathError {}
+
+/**
  * A call's arguments that do not decode into values, held for the run: Convex resolves the function first, then
  * `parse_udf_args` fails it (`ValidatedPathAndArgs`, crates/udf/src/validation.rs), so the call is a failed run
  * of the function in the function log, and a missing function is "Could not find public function" whatever came.
