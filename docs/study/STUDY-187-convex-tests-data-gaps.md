@@ -1,7 +1,8 @@
 # STUDY-187 — What Convex's removed tests check on the data side, and bunvex misses
 
-- **Status:** draft, for the owner (§4). No product change in this PR; each item below becomes its own PR, with
-  its test and a sabotage check.
+- **Status:** decided (owner, 2026-10-25): D-1–D-3 as recommended (§4): every item matches Convex, X13 waits for
+  the operations in flight, in §3's order. No product change in this PR; each item becomes its own PR, with its test
+  and a sabotage check. X20 is #838.
 - **Convex source read:** the reference `72ce13c` of get-convex/convex-backend ([upstream.md](../parity/upstream.md));
   every citation below was checked at that commit. Convex's tests were removed from the open repository
   (TypeScript in `7a518c760`, Rust in `ba16e0638`, [TEST-01 §3](../specs/TEST-01-test-strategy.md)); they are read at
@@ -191,6 +192,8 @@ skip the write when equal, as Convex's. The function log and the subscriptions a
 Each is its own PR from `main`, with the oracle case in `packages/differential` where Convex's binary can show it.
 
 ## 4. Questions for the owner
+
+All decided by the owner on 2026-10-25, as recommended.
 
 | # | Question | Recommendation |
 |---|---|---|
