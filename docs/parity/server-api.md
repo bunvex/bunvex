@@ -178,7 +178,7 @@ Key bunvex facts behind the statuses:
 | `v.boolean()` | values/validator.ts | done (#24) | |
 | `v.string()` | values/validator.ts | done (#24) | |
 | `v.bytes()` (ArrayBuffer) | values/validator.ts | done (#24) | In a message's value display (a validator's `Value:`, `Document(value: …)`, a system-field mismatch, a filter's), bytes are Convex's `b"AQI="`: padded standard base64, never cut (STUDY-161 §13). |
-| `v.literal(string \| number \| bigint \| boolean)` | values/validator.ts | done (#24) | |
+| `v.literal(string \| number \| bigint \| boolean)` | values/validator.ts; `common/src/schemas/json.rs` (`UnsupportedFloatLiteral`) | done (#24; STUDY-188 R3) | An infinite or NaN number literal, in a schema or a function's `args` / `returns`, fails the push with Convex's 400 `UnsupportedFloatLiteral` |
 | `v.array(el)` | values/validator.ts | done (#24) | |
 | `v.object(fields)`, rejecting unknown fields | values/validator.ts | done (#24) | |
 | `v.record(keys, values)` (keys are string-like or ids; no optional keys or values) | values/validators.ts (`VRecord`) | done (#24) | |
