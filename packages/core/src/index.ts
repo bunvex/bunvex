@@ -191,6 +191,7 @@ export {
   executionFromClock,
   failExecution,
   formatDuration,
+  inExecution,
   installDeterminism,
   installDeterminismIn,
   LongTimer,
