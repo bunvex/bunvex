@@ -87,6 +87,15 @@ describe("evaluating definitions", () => {
     expect(out.message).toContain("EvalError: Code generation from strings disallowed for this context");
   });
 
+  test("`self` is the global object while a definition is evaluated, as in Convex's runtime", async () => {
+    const out = await refused(
+      input({
+        source: `const s = JSON.stringify([typeof self, typeof self === "object" && self === globalThis]);\nexport default { export: () => { throw new Error(s); } };`,
+      }),
+    );
+    expect(out.message).toContain('["object",true]');
+  });
+
   test("an imported child is Convex's synthetic module: its serialized definition, its path and default name", async () => {
     const x = {
       source: `export default { export: () => ({ ...${component("xcomp")}, envVars: [["B", { type: "value", value: '{"type":"string"}' }], ["A", { type: "value", value: '{"type":"string"}', optional: true }]] }) };`,
