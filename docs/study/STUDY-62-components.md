@@ -280,4 +280,5 @@ each is studied and taken in, or marked out of scope with a reason.
 | Commit | Subject | Note |
 |---|---|---|
 | `f9b2d83` | component-scoped custom-role statements | Cloud RBAC; out of scope unless bunvex gets custom roles |
+| `1943768`, `b7463e1`, `e324c6f`, `7fce6d2` | the dashboard's tree-based component switcher (sorted, expand-all, gutter) | Dashboard only; take with the components dashboard (DV-224). Triaged in STUDY-186 |
 
