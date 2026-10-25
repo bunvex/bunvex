@@ -207,6 +207,8 @@ to a spec.
 | [STUDY-180](STUDY-180-public-api-names.md) | The names `bunvex/server` and `bunvex/values` export, against Convex 1.46.0's: the 65 missing ones, 60 brought in with Convex's shapes (the storage interfaces, generic vector search types, `SchemaDefinition` with `doc` / `id`, `FieldTypeFromFieldPath` over unions, `SearchFilter` a runtime class, `asObjectValidator` in `bunvex/values`, …); a name check against the installed `convex` package and type-level comparisons; the five deprecated names not built (DV-543) | implemented (owner, 2026-10-20: every public name matches Convex's shape; DV-543) |
 | [STUDY-186](STUDY-186-convex-after-72ce13c.md) | Convex from `72ce13c` to `precompiled-2026-10-24-bb31399`, triaged | decided (owner, 2026-10-25) |
 | [STUDY-187](STUDY-187-convex-tests-data-gaps.md) | What Convex's removed tests (`bea52bde0`, `c358201e1`) check on the data side and bunvex misses: unawaited writes before the commit, CSV empty cells, an empty vector `q.or()`, `_schemas` rows, `occInfo.componentPath`, `log_stream_egress`, a JSON Schema fallback, a no-op patch | decided (owner, 2026-10-25, §4); X20 #838 |
+| [STUDY-188](STUDY-188-runtime-test-gaps.md) | Runtime gaps from Convex's removed tests | decided (owner, 2026-10-25) |
+| [STUDY-189](STUDY-189-public-type-mismatches.md) | Public types against Convex 1.46.0's | decided (owner, 2026-10-25) |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 
