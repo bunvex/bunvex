@@ -18,9 +18,9 @@ import { builtinModules, createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import vm from "node:vm";
-import { installDeterminismIn, knob, runImportPhase, secondsKnob } from "@bunvex/core";
+import { installDeterminismIn, knob, LongTimer, MAX_TIMER_MS, runImportPhase, secondsKnob } from "@bunvex/core";
 import type { v1 } from "@bunvex/protocol";
-import { actionTimerCallback, trackActionTimer } from "./action-timeout.ts";
+import { actionTimerCallback, clearActionTimer, trackActionTimer } from "./action-timeout.ts";
 import { appNamespace, installAppErrors } from "./app-errors.ts";
 import { exportedValidator, type ValidatorExport } from "./builders.ts";
 import { type CronSpec, Crons, cronSpecs } from "./cron.ts";
@@ -268,11 +268,20 @@ const REGEXP_STATICS = [
 ];
 
 /** The globals of a context, besides its own JS intrinsics: the web platform Convex's runtime offers. */
-/** `set` (`setTimeout`, `setInterval`), each timer it makes during an action handed to that action (`trackActionTimer`). */
-function actionTimer<F extends typeof setTimeout | typeof setInterval>(set: F): F {
+/**
+ * `set` (`setTimeout`, `setInterval`), each timer it makes during an action handed to that action (`trackActionTimer`).
+ * A finite delay past 2^31-1 ms waits its whole length, as Convex's `sleep` op does (`crates/isolate/src/ops/time.rs`):
+ * Bun would fire it after about 1 ms. Negative, infinite and NaN delays fire at once on both.
+ */
+function actionTimer<F extends typeof setTimeout | typeof setInterval>(set: F, repeat: boolean): F {
   return Object.assign((...args: Parameters<F>) => {
     if (args.length) (args as unknown[])[0] = actionTimerCallback(args[0]);
-    const t = (set as unknown as (...a: unknown[]) => unknown)(...args);
+    const [fn, ms, ...rest] = args as unknown[];
+    const delay = Number(ms);
+    const t =
+      typeof fn === "function" && Number.isFinite(delay) && delay > MAX_TIMER_MS
+        ? new LongTimer(() => fn(...rest), delay, repeat)
+        : (set as unknown as (...a: unknown[]) => unknown)(...args);
     trackActionTimer(t);
     return t;
   }, set) as unknown as F;
@@ -323,8 +332,10 @@ export function contextGlobals(node: boolean, env: Record<string, string>, onMis
   // A V8 action's timers end with it, as Convex's sleeps do with its isolate (STUDY-77 §7): each one its code sets is
   // its action's, cleared when the action ends.
   if (!node) {
-    out.setTimeout = actionTimer(g.setTimeout as typeof setTimeout);
-    out.setInterval = actionTimer(g.setInterval as typeof setInterval);
+    out.setTimeout = actionTimer(g.setTimeout as typeof setTimeout, false);
+    out.setInterval = actionTimer(g.setInterval as typeof setInterval, true);
+    out.clearTimeout = clearActionTimer;
+    out.clearInterval = clearActionTimer;
   }
   // The deployment's variables (STUDY-37): the execution's, else the load's.
   out.process = { env: isolateProcessEnv({ ...env }, onMissingEnv) };
