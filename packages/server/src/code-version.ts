@@ -422,6 +422,8 @@ export class CodeVersion implements LoadedCode {
       isolate: vm.createContext(contextGlobals(false, env, opts.onMissingEnv), { codeGeneration: { strings: false } }),
       node: vm.createContext(contextGlobals(true, env)),
     };
+    // `self` is the isolate's global object, as Convex's runtime sets it (`udf-runtime/src/00_misc.ts`); Node has none.
+    vm.runInContext("globalThis.self = globalThis", contexts.isolate);
     for (const [environment, c] of Object.entries(contexts)) {
       // The maps live as long as the code that throws: its context (`stack-map.ts` holds them weakly).
       Object.defineProperty(c, FRAME_MAPS, { value: frameMaps });

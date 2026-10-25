@@ -413,6 +413,24 @@ describe("running a code version", () => {
     expect((await call("action", "nod:p")).value).toEqual([2, 2, 2, "not-equal"]);
   });
 
+  test("`self` is the global object in the isolate, and `global` is absent, as Convex's runtime; a \"use node\" module has Node's", async () => {
+    // Convex: `udf-runtime/src/00_misc.ts` (`global.self = global`), pinned by its removed `globals.rs` test.
+    const { functions, call } = await server();
+    const probe = `(() => [typeof self, typeof self === "object" && self === globalThis, typeof self === "object" && self.Object === Object, typeof global])()`;
+    const version = await load([
+      mod("iso.js", `import { query } from "@bunvex/server"; export const g = query(async () => ${probe});`),
+      mod(
+        "nod.js",
+        `"use node"; import { action } from "@bunvex/server"; export const g = action(async () => ${probe});`,
+        "node",
+      ),
+    ]);
+    functions.install(version.functions, version.moduleHashes);
+    expect((await call("query", "iso:g")).value).toEqual(["object", true, true, "undefined"]);
+    // Node has `global` and no `self`.
+    expect((await call("action", "nod:g")).value).toEqual(["undefined", false, false, "object"]);
+  });
+
   test("installing a version: every function at once; internal ones stay internal", async () => {
     const { functions, call } = await server();
     const version = await load(APP_V1);
