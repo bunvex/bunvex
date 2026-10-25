@@ -183,9 +183,19 @@ that change nothing. The differential suite's generated programs keep failing on
 **Fix (to match).** Compare with the current version (the pending one when the transaction already wrote it) and
 skip the write when equal, as Convex's. The function log and the subscriptions are then unchanged by such a call.
 
+### 2.11 X21 — under `process`, an operation chained after the handler settled holds the call
+
+Found while building X13's differential test. Under `BUNVEX_FUNCTION_SANDBOX=process` (opt-in, AD-44), a mutation
+whose handler returns while an unawaited operation is in flight, and whose answer's code starts another operation
+(`doublyDanglingMutation`, a write after an unawaited read), never answers: the call fails at its 1 s limit with
+"Function execution timed out". The single unawaited insert works. It happens on `main` too, on Bun 1.4.2 and 1.4.4.
+The child already waits for the operations a call started before it answers (`packages/sandbox/src/child-call.ts`,
+`settled` / `checked`); the chained one is not seen through to the end. Matching Convex is X13's behaviour (every
+syscall run to the end). Its own PR, in `packages/sandbox`, with the differential case run under `process`.
+
 ## 3. Order
 
-1. X13 (data loss), X20 (it fails CI at random), X1 and X2 (wrong data or results).
+1. X13 (data loss), X20 (it fails CI at random), X1 and X2 (wrong data or results); X21 after X13.
 2. X12, X18, X3, X5, X6.
 3. X10: reproduction first.
 
