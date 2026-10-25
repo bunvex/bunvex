@@ -321,7 +321,15 @@ export class OccError extends Error {
   constructor(
     message: string,
     /** `retries`: how many times the mutation had already been re-run. */
-    readonly info: { table?: string; documentId?: string; writeSource?: string; writeTs: bigint; retries: number },
+    readonly info: {
+      table?: string;
+      /** The component whose table it is; null for the app's (Convex's `OccInfo.component_path`). */
+      componentId?: string | null;
+      documentId?: string;
+      writeSource?: string;
+      writeTs: bigint;
+      retries: number;
+    },
   ) {
     super(message);
   }
@@ -4081,9 +4089,20 @@ export class Engine {
   /** The OCC error for `conflict`, worded as Convex's (without its documentation link). */
   private occError(conflict: Conflict, source: string | undefined, retries: number): OccError {
     let table: string | undefined;
-    if (conflict.index !== undefined)
+    // The component whose table it is (Convex's `OccInfo.component_path`): null for the app's.
+    let componentId: string | null = null;
+    if (conflict.index !== undefined) {
       for (const t of this.catalog.tables.values())
         for (const ix of t.indexes.values()) if (ix.id === conflict.index) table = t.name;
+      if (table === undefined)
+        for (const [id, space] of this.catalog.components)
+          for (const t of space.tables.values())
+            for (const ix of t.indexes.values())
+              if (ix.id === conflict.index) {
+                table = t.name;
+                componentId = id;
+              }
+    }
     const documentId = conflict.id ?? undefined;
     const writeSource = conflict.source;
     // Convex names the document only when it knows which mutation changed it.
@@ -4095,7 +4114,7 @@ export class Engine {
     const where = table === undefined ? "some table" : `the "${table}" table`;
     return new OccError(
       `Documents read from or written to ${where} changed while this mutation was being run and on every subsequent retry.${changedBy}`,
-      { table, documentId, writeSource, writeTs: conflict.writeTs, retries },
+      { table, componentId, documentId, writeSource, writeTs: conflict.writeTs, retries },
     );
   }
 }
