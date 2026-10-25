@@ -76,9 +76,12 @@ describe("a child that forges an HTTP action's messages is killed", () => {
     test(mode, async () => {
       const d = await deployment(mode);
       const r = await d.site("/who");
-      // A system error, answered as an HTTP action's system errors are under vm too (STUDY-171 §14's Q-PR6-3).
+      // A system error: Convex's internal 500, as under vm (STUDY-31 §12, STUDY-171 §14's Q-PR6-3).
       expect(r.status).toBe(500);
-      expect(await r.text()).toContain("the function sandbox's process sent a message that is not valid");
+      expect(await r.json()).toEqual({
+        code: "InternalServerError",
+        message: "Your request couldn't be completed. Try again later.",
+      });
       expect(await d.api("query", "m:items")).toMatchObject({ status: "success", value: 0 });
       // The next request gets a new child (the forgery is in `ctx.auth`, which this one does not call).
       expect(await (await d.site("/ok")).text()).toBe("ok");
