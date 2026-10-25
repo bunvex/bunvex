@@ -148,6 +148,8 @@ function failed(request: Request, e: unknown): unknown {
 /** The request an action's response answers (for its body's failures), and whether it was redirected. */
 const REQUEST = Symbol("request");
 const REDIRECTED = Symbol("redirected");
+/** The stream an action's response's `body` gives, made once. */
+const MAPPED_BODY = Symbol("mappedBody");
 
 /**
  * A body's read failure as Convex's: reqwest's "error decoding response body" with the URL, or its abort. A
@@ -160,7 +162,11 @@ function bodyFailure(request: Request, e: unknown): unknown {
   return fetchFailure(request.url, "error decoding response body");
 }
 
-type Answering = Response & { [REQUEST]: Request; [REDIRECTED]?: boolean };
+type Answering = Response & {
+  [REQUEST]: Request;
+  [REDIRECTED]?: boolean;
+  [MAPPED_BODY]?: ReadableStream<Uint8Array>;
+};
 
 /** `body`, its read failures as Convex's. */
 function mappingFailures(body: ReadableStream<Uint8Array>, request: Request): ReadableStream<Uint8Array> {
@@ -207,7 +213,12 @@ function actionResponse(proto: object): object {
     body: {
       get(this: Answering) {
         const body = (nativeBody?.call(this) ?? null) as ReadableStream<Uint8Array> | null;
-        return body && mappingFailures(body, this[REQUEST]);
+        if (body === null) return null;
+        // One wrapper per response, as `body` is one stream however often it is read: a wrapper made anew at each read
+        // would find the native stream locked by the one before (the server reads `body` twice when an HTTP action
+        // returns this response as it came).
+        this[MAPPED_BODY] ??= mappingFailures(body, this[REQUEST]);
+        return this[MAPPED_BODY];
       },
     },
     ...Object.fromEntries(
