@@ -499,6 +499,12 @@ export function currentExecution(): { key: object; clock: ExecutionClock } | nul
   };
 }
 
+/**
+ * Whether a query, a mutation or a code version's import phase is running (Convex's runtimes that refuse a dynamic
+ * `import()`, STUDY-188 §X14): false in an action, and outside any function.
+ */
+export const inExecution = (): boolean => executions.getStore() !== undefined;
+
 /** @internal (the function sandbox's host) The running function's timer, if any. */
 export const currentUserTimer = (): UserTimer | null => executions.getStore()?.timer ?? null;
 

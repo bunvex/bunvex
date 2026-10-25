@@ -24,6 +24,7 @@ import { actionTimerCallback, trackActionTimer } from "./action-timeout.ts";
 import { appNamespace, installAppErrors } from "./app-errors.ts";
 import { exportedValidator, type ValidatorExport } from "./builders.ts";
 import { type CronSpec, Crons, cronSpecs } from "./cron.ts";
+import { dynamicImporter } from "./dynamic-import.ts";
 import { currentAllEnv, isolateProcessEnv, nodeProcessEnv, withPackageEnv } from "./env-scope.ts";
 import { describeUncaught, isError } from "./errors.ts";
 import { type FunctionDef, installNestedCalls, isFunctionDef, NODE_FUNCTIONS } from "./functions.ts";
@@ -423,6 +424,12 @@ export class CodeVersion implements LoadedCode {
     vm.runInContext(`for (const name of ${JSON.stringify(REGEXP_STATICS)}) delete RegExp[name];`, contexts.isolate);
 
     const modules = new Map<string, Loaded>();
+    // A dynamic `import()` (STUDY-188 §X14): resolved against `modules` once they are all made, in an action.
+    const dynamicHost = { modules, nodeExternal: (spec: string) => nodeExternal(spec) };
+    const importers = {
+      isolate: dynamicImporter("isolate", contexts.isolate, dynamicHost),
+      node: dynamicImporter("node", contexts.node, dynamicHost),
+    };
     for (const m of sources) {
       if (modules.has(m.path)) throw new InvalidModulesError(`Duplicate module path ${m.path}`);
       const context = contexts[m.environment];
@@ -431,6 +438,7 @@ export class CodeVersion implements LoadedCode {
         module = new vm.SourceTextModule(`${m.source}\n//# sourceURL=${moduleUrl(versionId, m.path)}`, {
           context,
           identifier: m.path,
+          importModuleDynamically: importers[m.environment] as never,
           ...(m.environment === "node"
             ? {
                 initializeImportMeta: (meta: { require?: NodeJS.Require }) => {
@@ -469,6 +477,20 @@ export class CodeVersion implements LoadedCode {
       }
       return s;
     };
+    /** A `"use node"` module's import of a builtin, or of an external package; null when it is neither. */
+    const nodeExternal = async (spec: string): Promise<vm.Module | null> => {
+      if (BUILTINS.has(spec)) return serverModule(spec, contexts.node, `node:${spec}`);
+      // An external package (STUDY-148): resolved from the push's `node_modules` and imported by Bun's own loader,
+      // in the server's realm as builtins are (DV-169), while the deployment's variables are in scope (DV-472).
+      if (!opts.nodeModules) return null;
+      let resolved: string | null = null;
+      try {
+        resolved = Bun.resolveSync(spec, join(opts.nodeModules, "modules"));
+      } catch {}
+      if (resolved === null) return null;
+      const path = resolved;
+      return serverModule(path, contexts.node, `node:${path}`, () => importPackage(path, opts.env ?? {}));
+    };
     /** Each module's own imports of other modules of the push (by path). */
     const imports = new Map<string, Set<string>>();
     const linker = async (spec: string, referencing: vm.Module) => {
@@ -490,18 +512,9 @@ export class CodeVersion implements LoadedCode {
         imports.set(from, (imports.get(from) ?? new Set()).add(path));
         return target.module;
       }
-      if (BUILTINS.has(spec) && env === "node") return serverModule(spec, contexts.node, `node:${spec}`);
-      // An external package (STUDY-148): resolved from the push's `node_modules` and imported by Bun's own loader,
-      // in the server's realm as builtins are (DV-169), while the deployment's variables are in scope (DV-472).
-      if (env === "node" && opts.nodeModules) {
-        let resolved: string | null = null;
-        try {
-          resolved = Bun.resolveSync(spec, join(opts.nodeModules, "modules"));
-        } catch {}
-        if (resolved !== null) {
-          const path = resolved;
-          return serverModule(path, contexts.node, `node:${path}`, () => importPackage(path, opts.env ?? {}));
-        }
+      if (env === "node") {
+        const external = await nodeExternal(spec);
+        if (external) return external;
       }
       throw new InvalidModulesError(
         BUILTINS.has(spec)
