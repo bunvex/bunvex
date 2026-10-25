@@ -315,14 +315,13 @@ describe("an HTTP action's response and log are the same in vm and in process", 
     }, 60_000);
 });
 
-test("a fetch's response returned as it came: process sends it as Convex does; vm fails it (its body read twice)", async () => {
-  // Under vm the server reads a fetched response's \`body\` twice, and the second read finds the stream the first one
-  // locked (\`asActionResponse\`): a vm bug, outside this change (STUDY-171 §14's owner questions).
+test("a fetch's response returned as it came: both executors send it as Convex does (STUDY-142 §8)", async () => {
   const y = await request(proc, "/fetchPassThrough");
   expect([y.status, y.body]).toEqual([200, "from the target"]);
   expect(y.headers).toContainEqual(["x-target", "yes"]);
   const x = await request(vm, "/fetchPassThrough");
-  expect([x.status, String(x.body).includes("ReadableStream is locked")]).toEqual([500, true]);
+  expect([x.status, x.body]).toEqual([200, "from the target"]);
+  expect(x.headers).toContainEqual(["x-target", "yes"]);
 });
 
 describe("routing, methods and HEAD", () => {
