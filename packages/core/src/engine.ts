@@ -753,6 +753,11 @@ export class Engine {
   /** Stop writing and hand the store over: let the last group land, release the lease, close the store. */
   private closed = false;
   private closing: Promise<void> | null = null;
+  /**
+   * Mutations still running their body (with the operations they left in flight, `Tx.settle`): a close waits for them
+   * to reach the committer, so one begun before the close commits before the store does.
+   */
+  private readonly runningMutations = new Set<Promise<unknown>>();
 
   /**
    * Once: a second call (the server's shutdown closes the engine, and so may its owner) waits for the first
@@ -773,6 +778,7 @@ export class Engine {
     await this.summaryCheckpointer?.stop();
     this.settleReady(new Error("the engine closed before its indexes were ready"));
     this.committer.stopRepeatableBumps();
+    await Promise.allSettled([...this.runningMutations]);
     await this.committer.idle();
     this.workerTimer?.clear();
     // A compaction in progress stops; then every index is flushed.
@@ -4026,7 +4032,9 @@ export class Engine {
         await longSleep(sleep); // UDF_EXECUTOR_OCC_MAX_BACKOFF_MS is a knob
         continue;
       }
-      const { tx, value: raw } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
+      const running = this.execute("mutation", this.committer.visibleTs, body, system, caller);
+      this.runningMutations.add(running);
+      const { tx, value: raw } = await running.finally(() => this.runningMutations.delete(running));
       // `db.vars.commitTs` in the result resolves to the commit's timestamp (STUDY-53): in nanoseconds.
       const resolved = (ts: bigint) => (hasCommitTs(raw) ? resolveCommitTs(raw, ts) : raw);
       if (!tx.hasWrites) {
