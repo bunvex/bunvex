@@ -96,3 +96,23 @@ test("a query's result is what its handler returned: a dangling read does not ho
   });
   expect(result).toEqual([]);
 });
+
+test("a close begun while a mutation waits for its unawaited writes lets it commit first", async () => {
+  // The mutation's handler has returned; its insert (which creates the table) is still in flight when the close
+  // starts. The close waits for it to reach the committer, so it commits before the store closes.
+  const file = join(mkdtempSync(join(tmpdir(), "unawaited-close-")), "db.sqlite");
+  const e = await new Engine(defineSchema({}), new SqlitePersistence(file, { durable: false })).init();
+  let returned!: () => void;
+  const handlerReturned = new Promise<void>((r) => (returned = r));
+  const done = e.mutation(async (db: Tx) => {
+    void db.insert("late", { n: 1 });
+    returned();
+  });
+  await handlerReturned;
+  const closing = e.close();
+  await done;
+  await closing;
+  const again = await new Engine(defineSchema({}), new SqlitePersistence(file, { durable: false })).init();
+  expect(await count(again, "late")).toBe(1);
+  await again.close();
+});

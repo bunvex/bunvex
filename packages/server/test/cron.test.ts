@@ -421,11 +421,14 @@ describe("createServer({ crons })", () => {
       registered = d;
     });
     // A few failed attempts, logged, and nothing escapes.
-    await until(() => state.failed >= 2 && logged.calls.length >= 2, "the registration to be retried");
+    // Other workers' reads fail too, and log in whatever order they ran: the crons' lines are looked for among them.
+    const cronLines = () =>
+      logged.calls.filter((c) => String(c[0]).includes("cron jobs: registering the crons failed, retrying in"));
+    await until(() => state.failed >= 2 && cronLines().length >= 2, "the registration to be retried");
     await Bun.sleep(20);
     expect(unhandled.seen).toEqual([]);
     expect(registered).toBeUndefined();
-    expect(String(logged.calls[0][0])).toContain("cron jobs: registering the crons failed, retrying in");
+    expect(cronLines().length).toBeGreaterThanOrEqual(2);
     // The store recovers: the crons are registered, and run.
     state.failing = false;
     await until(() => registered !== undefined, "the crons to be registered");
