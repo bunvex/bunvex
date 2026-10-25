@@ -140,13 +140,14 @@ describe("writes by id", () => {
     });
   });
 
-  test("an id of no table: each method's own message", async () => {
+  test("an id of no table: Convex's `Table for ID` message, naming the method (STUDY-187 §2.9)", async () => {
     const e = await engine();
     const id = strayId();
+    const noTable = (method: string) => `Invalid argument \`id\` for \`${method}\`: Table for ID "${id}" not found`;
     await e.mutation(async (db) => {
-      expect(await message(db.patch(id, { n: 1 }))).toBe(`Update on nonexistent document ID ${id}`);
-      expect(await message(db.replace(id, { n: 1 }))).toBe(`Replace on nonexistent document ID ${id}`);
-      expect(await message(db.delete(id))).toBe(`Delete on nonexistent document ID ${id}`);
+      expect(await message(db.patch(id, { n: 1 }))).toBe(noTable("db.patch"));
+      expect(await message(db.replace(id, { n: 1 }))).toBe(noTable("db.replace"));
+      expect(await message(db.delete(id))).toBe(noTable("db.delete"));
     });
   });
 
