@@ -156,6 +156,7 @@ import {
   FunctionPathError,
   FunctionPathNotFoundError,
   INTERNAL_SERVER_ERROR_MESSAGE,
+  isError,
   isSystemError,
   newRequestId,
   UndecodedArgs,
@@ -1450,7 +1451,8 @@ export class Functions {
     });
     if (c.error !== null) {
       // Convex's `Exception` event: the error's message, its frames, a `BunvexError`'s data (STUDY-70).
-      const e = error instanceof Error ? error : null;
+      // `isError`: an error from the function's own realm too (STUDY-182 §3).
+      const e = isError(error) ? error : null;
       let customData: unknown = null;
       if (isBunvexError(error))
         try {
