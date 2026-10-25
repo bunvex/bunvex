@@ -137,7 +137,7 @@ import {
   OperationNotPermittedError,
   SystemIdentityRequiredError,
 } from "./admin-keys.ts";
-import { appContext } from "./app-errors.ts";
+import { appContext, asCallerError } from "./app-errors.ts";
 import type { AppMetrics } from "./app-metrics.ts";
 import {
   type AnyArgs,
@@ -307,7 +307,8 @@ function checkActionCallArgs(ref: unknown, args: unknown) {
 /**
  * A callee's error as the action that called it catches it (Convex's `actions_impl.ts` through
  * `performAsyncSyscall`): a new `Error` whose message is the callee's uncaught message (its line and frames),
- * or with data a `BunvexError` carrying it, as for a nested call in a mutation. A system error stays as it is.
+ * or with data a `BunvexError` carrying it, as for a nested call in a mutation, of the caller's realm
+ * (`asCallerError`). A system error stays as it is.
  */
 function toActionCallerError(e: unknown): unknown {
   if (e instanceof IndexesUnavailableError) return unavailableToAction(e);
@@ -322,10 +323,10 @@ function toActionCallerError(e: unknown): unknown {
   )
     return e;
   const message = describeUncaught(e).message;
-  if (!isBunvexError(e)) return new Error(message);
+  if (!isBunvexError(e)) return asCallerError(new Error(message));
   const err = new BunvexError<Value>(message);
   err.data = e.data;
-  return err;
+  return asCallerError(err);
 }
 /**
  * The callee's error for the action that called it. Pushed code (its own vm context) gets it from its context's
@@ -400,16 +401,17 @@ export type NestedOptions = {
  * A nested function's error as its caller sees it (Convex's `run_udf` and `performAsyncSyscall`): a new error
  * whose message is the nested `JsError`'s display — the uncaught line and the nested stack frames (STUDY-41
  * N2), or for a timeout its message alone. With data, a `BunvexError` carrying it: Convex's
- * `new ConvexError(e.message)` and then `data`, so the message is the uncaught one, not the data's.
+ * `new ConvexError(e.message)` and then `data`, so the message is the uncaught one, not the data's. Marked
+ * (`asCallerError`): the caller's view gives it the caller's realm, as Convex makes it in the caller's code.
  */
 function toCallerError(e: unknown, timer: UserTimer): Error {
   if (isBunvexError(e)) {
     const err = new BunvexError<Value>(describeUncaught(e).message);
     err.data = e.data;
-    return err;
+    return asCallerError(err);
   }
-  if (e === timer.failed) return new Error(`${(e as Error).message}\n`);
-  return new Error(describeUncaught(e).message);
+  if (e === timer.failed) return asCallerError(new Error(`${(e as Error).message}\n`));
+  return asCallerError(new Error(describeUncaught(e).message));
 }
 
 /**
