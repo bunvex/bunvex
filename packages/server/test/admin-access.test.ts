@@ -294,16 +294,58 @@ describe("sync: Authenticate Admin", () => {
       ...(impersonating === undefined ? {} : { impersonating }),
     }) as v1.ClientMessage;
 
-  test("a bad key: AuthError (no update attempted), then close", async () => {
+  test("a bad key: AuthError, an update attempted (Convex's AuthUpdateFailed), then close", async () => {
     const { server } = await setup();
     const c = await v1Client(syncUrl(server.server.port));
     c.send(authenticate(OTHER));
     const e = await c.until(() => c.got.find((m) => m.type === "AuthError"));
-    expect(e).toMatchObject({
+    expect(e).toEqual({
+      type: "AuthError",
       error: "The provided admin key was invalid for this instance",
-      authUpdateAttempted: false,
+      baseVersion: 0,
+      authUpdateAttempted: true,
     });
     await c.closed;
+  });
+
+  // STUDY-188 R5: Convex reads the acting identity with the message, before the key; one that is not an
+  // identity is "Received Invalid JSON on websocket: …" (serde's words), a FatalError, whatever the key.
+  const invalidJson = (reason: string): v1.FatalError => ({
+    type: "FatalError",
+    error: `Received Invalid JSON on websocket: ${reason}`,
+  });
+  const MISSING = 'Either "tokenIdentifier" or "issuer" and "subject" must be set';
+  for (const [label, key, impersonating, reason] of [
+    ["{}", KEY, {}, MISSING],
+    ["only a subject", KEY, { subject: "s" }, MISSING],
+    ["a string", KEY, "x", 'invalid type: string "x", expected struct UserIdentityAttributesJson'],
+    ["an array", KEY, [1], "invalid type: sequence, expected struct UserIdentityAttributesJson"],
+    ["a number issuer", KEY, { issuer: 1, subject: "s" }, "invalid type: integer `1`, expected a string"],
+    [
+      "a string emailVerified",
+      KEY,
+      { emailVerified: "yes", issuer: 1 },
+      'invalid type: string "yes", expected a boolean',
+    ],
+    ["a bad key and {}", OTHER, {}, MISSING],
+    ["a bad key and a string", OTHER, "x", 'invalid type: string "x", expected struct UserIdentityAttributesJson'],
+  ] as const) {
+    test(`an acting identity that is not one (${label}): FatalError before the key is checked`, async () => {
+      const { server } = await setup();
+      const c = await v1Client(syncUrl(server.server.port));
+      c.send(authenticate(key, impersonating));
+      await c.closed;
+      expect(c.got.filter((m) => m.type !== "Ping")).toEqual([invalidJson(reason)]);
+    });
+  }
+
+  test("an acting identity with a null tokenIdentifier and extra claims acts as issuer|subject", async () => {
+    const { server } = await setup();
+    const c = await v1Client(syncUrl(server.server.port));
+    c.send(authenticate(KEY, { tokenIdentifier: null, issuer: "i", subject: "s", x: 1, y: null }));
+    c.modify([add(1, "m:whoami")]);
+    await c.until(() => history(c.transitions(), 1).length);
+    expect(history(c.transitions(), 1)).toEqual([{ tokenIdentifier: "i|s", issuer: "i", subject: "s", x: 1 }]);
   });
 
   test("an admin subscribes to internal and system queries; acting as a user, it is that user", async () => {
