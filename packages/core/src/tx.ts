@@ -1276,7 +1276,7 @@ export class Tx {
     const start = spans ? monotonicNow() : 0;
     const cache = this.indexCache;
     const read = () => this.persistence.get(t.id, internalIdOf(id), this.snapshot);
-    const version = await storeCall(() =>
+    const version = await this.stored(() =>
       cache ? cache.get(t.byId.id, k, prefixEnd(k), this.snapshot, read) : read(),
     );
     if (spans) spans.record(t.byId, version ? 1 : 0, start);
@@ -1505,11 +1505,43 @@ export class Tx {
     return out;
   }
 
+  /** Store calls this transaction has in flight (`stored`); `settle` waits for them. */
+  private inFlight = 0;
+  private idle: (() => void) | null = null;
+
+  /** A store call, counted in flight until it settles. Every read of the transaction's store goes through it. */
+  private async stored<T>(fn: () => T | Promise<T>): Promise<T> {
+    this.inFlight++;
+    try {
+      return await storeCall(fn);
+    } finally {
+      if (--this.inFlight === 0 && this.idle) {
+        const wake = this.idle;
+        this.idle = null;
+        wake();
+      }
+    }
+  }
+
+  /**
+   * Once the function's promise has fulfilled: wait while any of its operations is in flight, and one macrotask past
+   * the last, so the code their answers resume runs (and may start more), until none is left. Convex runs a query's
+   * or mutation's syscalls to the end before it answers (`environment/udf/mod.rs`: the loop ends when no syscall is
+   * pending), so an unawaited write is part of the transaction (STUDY-187 §2.1).
+   */
+  async settle(): Promise<void> {
+    for (;;) {
+      if (this.inFlight > 0) await new Promise<void>((resolve) => (this.idle = resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (this.inFlight === 0) return;
+    }
+  }
+
   private async storeRangeOf(st: QState, lo: Uint8Array, hi: Uint8Array, limit: number): Promise<Doc[]> {
     const t = st.t!;
     const ix = st.ix!;
     // The index range and its documents, each at its entry's ts, in one call (one round trip on a remote store).
-    const rows = await storeCall(async () => {
+    const rows = await this.stored(async () => {
       try {
         const read = () => this.persistence.scan(t.id, ix.id, lo, hi, this.snapshot, limit, st.desc);
         const cache = this.indexCache;

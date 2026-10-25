@@ -143,12 +143,15 @@ export class TestRuntime implements Runtime {
     }
   }
 
-  /** Let the process run: real turns, until one passes in which no timer was set (at most 100). */
+  /**
+   * Let the process run: real turns, until two in a row pass in which no timer was set (at most 100). Two: a mutation
+   * takes a turn of its own past its handler, for the operations it left unawaited (`Tx.settle`, STUDY-187 §2.1).
+   */
   private async settle() {
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0, quiet = 0; i < 100 && quiet < 2; i++) {
       const before = this.seq;
       await turn();
-      if (this.seq === before) return;
+      quiet = this.seq === before ? quiet + 1 : 0;
     }
   }
 

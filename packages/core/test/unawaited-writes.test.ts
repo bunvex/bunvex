@@ -1,0 +1,98 @@
+// A mutation's writes it did not await are part of it (STUDY-187 §2.1): Convex runs a query's or mutation's
+// syscalls to the end before it answers (environment/udf/mod.rs), its tests `danglingMutation` (one `db.insert` not
+// awaited: one row) and `doublyDanglingMutation` (two chained inserts in an unawaited function: two rows). Before,
+// bunvex committed when the handler settled: an insert that creates its table, or a write chained after a read of
+// a slow store, came after the commit and was lost while its promise answered an id.
+import { expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { v } from "@bunvex/values";
+import { Engine } from "../src/engine.ts";
+import { MemoryPersistence } from "../src/persistence/memory.ts";
+import { SqlitePersistence } from "../src/persistence/sqlite.ts";
+import { defineSchema, defineTable } from "../src/schema.ts";
+import type { Tx } from "../src/tx.ts";
+
+/** A store whose reads answer a few ms later, as a remote database's do. */
+async function slowStore() {
+  const p = await MemoryPersistence.open(null, { durable: false });
+  const slow =
+    <A extends unknown[], R>(f: (...a: A) => R) =>
+    async (...a: A): Promise<Awaited<R>> => {
+      await Bun.sleep(3);
+      return await f(...a);
+    };
+  p.get = slow(p.get.bind(p)) as never;
+  p.scan = slow(p.scan.bind(p)) as never;
+  return p;
+}
+
+const stores = {
+  memory: () => MemoryPersistence.open(null, { durable: false }),
+  sqlite: async () =>
+    new SqlitePersistence(join(mkdtempSync(join(tmpdir(), "unawaited-")), "db.sqlite"), { durable: false }),
+  slow: slowStore,
+};
+
+const count = (e: Engine, table: string) => e.query(async (db) => (await db.query(table).collect()).length);
+
+for (const [store, open] of Object.entries(stores))
+  for (const declared of [false, true])
+    test(`${store}, ${declared ? "a declared table" : "a table the insert creates"}: Convex's dangling mutations`, async () => {
+      const schema = declared
+        ? defineSchema({ test: defineTable({}), other: defineTable({ n: v.optional(v.number()) }) })
+        : defineSchema({});
+      const e = await new Engine(schema, await open()).init();
+      let id: unknown = null;
+      // danglingMutation: one insert, not awaited.
+      await e.mutation(async (db: Tx) => {
+        void db.insert("test", {}).then((x) => {
+          id = x;
+        });
+      });
+      expect(await count(e, "test")).toBe(1);
+      expect(await e.query((db) => db.get("test", id as string))).not.toBeNull();
+      // doublyDanglingMutation: two chained inserts in an async function nothing awaits.
+      await e.mutation(async (db: Tx) => {
+        void (async () => {
+          await db.insert("other", {});
+          await db.insert("other", {});
+        })();
+      });
+      expect(await count(e, "other")).toBe(2);
+      // A write chained after an unawaited read: on a slow store, the read answers after the handler returned.
+      await e.mutation(async (db: Tx) => {
+        void db
+          .query("other")
+          .first()
+          .then((d) => db.patch("other", d!._id as string, { n: 7 }));
+      });
+      expect(await e.query(async (db) => (await db.query("other").first())?.n)).toBe(7);
+    });
+
+test("a handler that throws fails at once: its dangling writes are not waited for, nor committed", async () => {
+  const e = await new Engine(defineSchema({}), await slowStore()).init();
+  await expect(
+    e.mutation(async (db: Tx) => {
+      void db.insert("lost", {});
+      throw new Error("boom");
+    }),
+  ).rejects.toThrow("boom");
+  await Bun.sleep(30);
+  expect(await count(e, "lost")).toBe(0);
+});
+
+test("a query's result is what its handler returned: a dangling read does not hold it", async () => {
+  const e = await new Engine(defineSchema({}), await slowStore()).init();
+  await e.mutation((db: Tx) => db.insert("t", { x: 1 }));
+  const seen: unknown[] = [];
+  const result = await e.query(async (db) => {
+    void db
+      .query("t")
+      .first()
+      .then((d) => seen.push(d));
+    return seen;
+  });
+  expect(result).toEqual([]);
+});
