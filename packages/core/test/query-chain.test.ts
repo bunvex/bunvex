@@ -52,21 +52,31 @@ describe("query chaining, unique() and async iteration, as Convex (STUDY-16)", (
     await e.mutation((db) => db.insert("items", { n: 1 }));
     await expect(
       e.query(async (db) => {
-        const q = db.query("items");
-        q.withIndex("by_n");
+        const q = db.query("items").fullTableScan();
+        q.order("asc");
         return q.collect();
       }),
     ).rejects.toThrow("This query has been chained with another operator and can't be reused.");
     await expect(e.query((db) => db.query("items").order("asc").order("desc").collect())).rejects.toThrow(
       "Queries may only specify order at most once",
     );
+    // A query read to its end is consumed (STUDY-188 §X9).
     await expect(
       e.query(async (db) => {
-        const q = db.query("items");
-        for await (const _ of q) break;
-        for await (const _ of q) break;
+        const q = db.query("items").fullTableScan();
+        for await (const _ of q);
+        for await (const _ of q);
       }),
-    ).rejects.toThrow("Iteration can only begin on a query once.");
+    ).rejects.toThrow("This query is closed and can't emit any more values.");
+    // `db.query(t)` holds no state, as Convex's: each use is a new query.
+    expect(
+      await e.query(async (db) => {
+        const q = db.query("items");
+        q.withIndex("by_n");
+        for await (const _ of q) break;
+        return [await q.collect(), await q.collect()];
+      }),
+    ).toHaveLength(2);
     expect(await e.query((db) => db.query("items").fullTableScan().collect())).toHaveLength(1);
   });
 

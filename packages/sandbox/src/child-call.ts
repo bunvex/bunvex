@@ -47,7 +47,7 @@ import {
   withEnv,
 } from "@bunvex/server/executor";
 import { BunvexError, isBunvexError } from "@bunvex/values";
-import { type DbHost, QueryImpl, readerOf, Tx, VirtualQuery } from "./child-db.ts";
+import { type DbHost, QueryChain, readerOf, Tx, VirtualChain } from "./child-db.ts";
 import {
   EPOCHS_KEPT,
   type ToHost,
@@ -641,7 +641,7 @@ class ChildCall extends ChildCallBase implements DbHost {
     try {
       const value = await runInExecution(execution, logged);
       // The engine checks this on what the handler returned (`notAQuery`); the object cannot cross.
-      if (value instanceof QueryImpl || value instanceof VirtualQuery)
+      if (value instanceof QueryChain || value instanceof VirtualChain)
         outcome = { ok: false, error: { k: "host", message: RETURNED_A_QUERY } };
       else outcome = { ok: true, value: encode(value) };
     } catch (e) {
