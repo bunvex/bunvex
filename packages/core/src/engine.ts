@@ -3675,7 +3675,20 @@ export class Engine {
     // Its count changes are kept while it runs (STUDY-107): a `count()` holds at its snapshot, however old.
     const unpin = this.tableSummaries.pin(snapshot);
     try {
-      const value = settled(observed, await runDeterministic(kind, now, () => body(tx), observed));
+      const value = settled(
+        observed,
+        await runDeterministic(
+          kind,
+          now,
+          async () => {
+            const v = await body(tx);
+            // An unawaited write is part of the mutation (Convex runs every syscall to its end): wait for them.
+            if (kind === "mutation") await tx.settle();
+            return v;
+          },
+          observed,
+        ),
+      );
       // A write a staged validator refused fails its validation in this same transaction (900fe2c).
       for (const v of tx.stagedViolations.values()) await markStagedValidationFailed(tx, v.schemaId, v.table, v.error);
       return { tx, value, observed, now };
