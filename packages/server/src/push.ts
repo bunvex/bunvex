@@ -318,16 +318,19 @@ const fingerprint = (env: Record<string, string>) =>
 
 /**
  * Evaluate `auth.config.js` with the deployment's variables (Convex's `get_evaluated_auth_config`): its
- * providers. A variable it reads that is not set fails with Convex's `AuthConfigMissingEnvironmentVariable`.
+ * providers. A variable it reads that is not set fails with Convex's `AuthConfigMissingEnvironmentVariable`; any
+ * other failure is Convex's `InvalidAuthConfig`, "<explanation>: <error>" (crates/isolate/src/client.rs
+ * `evaluate_auth_config`; "The pushed auth config is invalid" for a push, crates/application/src/lib.rs).
  */
 export async function evaluateAuthConfig(
   engine: Engine,
   m: ModuleSource,
   env: Record<string, string>,
-  explanation = "Hit an error while evaluating your auth config",
+  explanation = "The pushed auth config is invalid",
   executor: Executor = vmExecutor,
 ): Promise<unknown[]> {
   const config = await udfConfig(engine);
+  const invalid = (message: string) => new PushError("InvalidAuthConfig", `${explanation}: ${message.trimEnd()}`);
   let c: unknown;
   try {
     c = await evaluateDefaultExport(
@@ -339,16 +342,28 @@ export async function evaluateAuthConfig(
   } catch (e) {
     if (e instanceof MissingEnvironmentVariableError)
       throw new PushError("AuthConfigMissingEnvironmentVariable", e.message);
-    // Only an executor that sends the config as JSON, as Convex's isolate does, refuses one this way (the sandbox's).
-    if (e instanceof UnserializableAuthConfigError) throw new PushError("AuthConfigUnserializableError", e.message);
-    const message =
-      e instanceof InvalidModulesError ? e.message.split("\n").slice(1).join("\n") : describeUncaught(e).message;
-    throw new PushError("InvalidAuthConfig", `${explanation}:\n${message.trimEnd()}`);
+    throw invalid(
+      e instanceof InvalidModulesError
+        ? e.detail.replace(/^Failed to analyze [^:]*: /, "")
+        : e instanceof UnserializableAuthConfigError
+          ? e.message
+          : describeUncaught(e).message,
+    );
+  }
+  // Convex reads the config as its JSON (`v8::json::stringify`): what `JSON.stringify` refuses (a bigint, a cycle, a
+  // function) is refused, and what it leaves out is not seen. The sandbox's executor already sends it so.
+  if (c !== undefined && c !== null) {
+    let json: string | undefined;
+    try {
+      json = JSON.stringify(c);
+    } catch {}
+    if (json === undefined) throw invalid(new UnserializableAuthConfigError().message);
+    c = JSON.parse(json);
   }
   try {
     parseAuthConfig(c);
   } catch (e) {
-    throw new PushError("InvalidAuthConfig", (e as Error).message);
+    throw invalid((e as Error).message);
   }
   return (c as { providers: unknown[] }).providers;
 }
