@@ -568,8 +568,9 @@ describe("stop", () => {
         null) as { kind: string; error?: string } | null;
     let writing = true;
     const writer = (async () => {
-      while (writing) {
-        await engine.mutation((db) => db.patch("hot", hot as never, { by: "writer" })).catch(() => {});
+      // Each write changes the document: one that changes nothing writes nothing, and conflicts with no one.
+      for (let w = 0; writing; w++) {
+        await engine.mutation((db) => db.patch("hot", hot as never, { by: "writer", w })).catch(() => {});
         await Bun.sleep(1);
       }
     })();
