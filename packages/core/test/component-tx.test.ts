@@ -161,14 +161,20 @@ describe("inComponent", () => {
     const e = await open(s.path);
     try {
       const counters = e.catalog.components.get(s.ids.counter)!.table("counters");
-      const touches = await e.mutation((db) =>
-        db.asSystem(async () => {
-          const ix = counters.indexes.get("by_name")!;
-          const row = (await db.get("_index", ix.metaId!))!;
-          await db.replace("_index", ix.metaId!, { ...row, _id: undefined, _creationTime: undefined });
-          return db.catalogTouches().length;
-        }),
-      );
+      // A real change to the index's row (a replace with the same row writes nothing), rolled back after the count.
+      let touches = -1;
+      const rollback = new Error("rollback");
+      await expect(
+        e.mutation((db) =>
+          db.asSystem(async () => {
+            const ix = counters.indexes.get("by_name")!;
+            const row = (await db.get("_index", ix.metaId!))!;
+            await db.replace("_index", ix.metaId!, { ...row, _id: undefined, _creationTime: undefined, touched: true });
+            touches = db.catalogTouches().length;
+            throw rollback;
+          }),
+        ),
+      ).rejects.toBe(rollback);
       expect(touches).toBe(1);
     } finally {
       await e.close();

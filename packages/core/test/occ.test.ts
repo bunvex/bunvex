@@ -34,6 +34,8 @@ async function alwaysLoses(engine: Engine, id: string, source: string, writer = 
   let runs = 0;
   const box: { wake: (() => void) | null } = { wake: null };
   let stop = false;
+  // Each rival write changes the counter (a test may freeze Math.random): one that changes nothing conflicts with no one.
+  let bump = 0;
   const rival = (async () => {
     while (!stop) {
       const w = box.wake;
@@ -42,7 +44,7 @@ async function alwaysLoses(engine: Engine, id: string, source: string, writer = 
         continue;
       }
       box.wake = null;
-      await engine.mutation(async (db) => db.patch("counters", id, { n: Math.random() }), writer);
+      await engine.mutation(async (db) => db.patch("counters", id, { n: Math.random(), bump: ++bump }), writer);
       w();
     }
   })();
