@@ -1,3 +1,3 @@
 [test]
-timeout = 180000
 preload = ["./harness/preload.ts"]
+# The per-test timeout lives in harness/preload.ts (`setDefaultTimeout`). Bun 1.4.4 ignores `[test] timeout`.

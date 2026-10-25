@@ -35,6 +35,26 @@ export function screenFailure(code: string): TypeError {
   return Object.assign(e, { code: refused ? "ConnectionRefused" : code });
 }
 
+/**
+ * The status line a proxy answered a `CONNECT` with, when it was not 200: Bun 1.4.4 fails the `fetch` with
+ * `ERR_PROXY_TUNNEL` ("Proxy refused to open a tunnel: 407 Proxy Authentication Required") instead of answering
+ * the response, and the line is all that is left of it. Null for any other failure.
+ */
+function refusedTunnel(e: unknown): string | null {
+  const { code, message } = (e ?? {}) as { code?: unknown; message?: unknown };
+  const prefix = "Proxy refused to open a tunnel: ";
+  return code === "ERR_PROXY_TUNNEL" && typeof message === "string" && message.startsWith(prefix)
+    ? message.slice(prefix.length)
+    : null;
+}
+
+/**
+ * reqwest's message for a `CONNECT` the proxy did not open (hyper-util's `TunnelError`): `proxy authorization
+ * required` for a 407, `unsuccessful` for any other status.
+ */
+const tunnelMessage = (href: string, status: string) =>
+  `error sending request for url (${href}): client error (Connect): tunnel error: ${status === "407" ? "proxy authorization required" : "unsuccessful"}`;
+
 /** A request a 407 refused: the message is Convex's (its clients'), naming the request's URL. */
 export class RefusedRequest extends Error {
   constructor(
@@ -69,7 +89,17 @@ export function proxiedFetch(send: typeof fetch, proxy: HttpProxy | null): typeo
   return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const href = hrefOf(input);
     const web = href?.startsWith("http:") || href?.startsWith("https:");
-    const r = await send(input, via && web ? ({ ...init, proxy: via } as RequestInit) : init);
+    let r: Response;
+    try {
+      r = await send(input, via && web ? ({ ...init, proxy: via } as RequestInit) : init);
+    } catch (e) {
+      // A CONNECT that was not opened: the screen's failure (in its status line), else reqwest's tunnel error.
+      const line = via && href?.startsWith("https:") ? refusedTunnel(e) : null;
+      if (line === null || !href) throw e;
+      const [status = "", from, code] = line.split(" ");
+      if (token && status === "502" && from === token && code) throw screenFailure(code);
+      throw new RefusedRequest(tunnelMessage(href, status), href);
+    }
     if (token && r.status === 502) {
       const [from, code] = (r.headers.get(SCREEN_FAILURE_HEADER) ?? "").split(" ");
       if (from === token && code) {
@@ -80,9 +110,7 @@ export function proxiedFetch(send: typeof fetch, proxy: HttpProxy | null): typeo
     if (r.status !== 407 || !href) return r;
     await r.body?.cancel().catch(() => {});
     throw new RefusedRequest(
-      via && href.startsWith("https:")
-        ? `error sending request for url (${href}): client error (Connect): tunnel error: proxy authorization required`
-        : `Request to ${href} forbidden`,
+      via && href.startsWith("https:") ? tunnelMessage(href, "407") : `Request to ${href} forbidden`,
       href,
     );
   }) as typeof fetch;

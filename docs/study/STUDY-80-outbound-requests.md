@@ -149,8 +149,17 @@ within noise.
   (as Convex's JS loop does).
 - **The refusal.** A 407 response, from any request of those clients, is an error naming the request's URL:
   `Request to <url> forbidden`, or Convex's tunnel message when the proxy refused a `CONNECT` (an `https:`
-  target through the operator's proxy: Bun returns that 407 as a response). In an action, a `TypeError`
-  without the URL's query string, as Convex's `26_fetch.ts`.
+  target through the operator's proxy). In an action, a `TypeError` without the URL's query string, as
+  Convex's `26_fetch.ts`.
+- **A `CONNECT` not opened** (Bun 1.4.4). Bun no longer answers the proxy's response to a `CONNECT`: any status
+  but 200 fails the `fetch` with `ERR_PROXY_TUNNEL`, "Proxy refused to open a tunnel: <status line>" (1.4.2
+  answered the response). `proxiedFetch` reads the status off that line as `reqwest` does
+  (hyper-util 0.1.18, `client/legacy/connect/proxy/tunnel.rs`, the version convex-backend's `Cargo.lock` pins
+  under reqwest 0.13.4): a 407 is `tunnel error: proxy authorization required`, any other status
+  `tunnel error: unsuccessful`. That second case is now Convex's; under Bun 1.4.2 the app got the proxy's own
+  403 or 502 as a response, which leaked it. bunvex's screen (§4.1) sends its failure for an unreachable target
+  in the 502's status line as well as its header, since the line is all that reaches `proxiedFetch` for an
+  `https:` target.
 - **Without a proxy.** Bun's `fetch` honours `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` as `reqwest` does,
   without `Proxy-Authorization`; an explicit `proxy` replaces them. At start, without a proxy, the backend
   logs Convex's warning in its own words: "Running without a proxy -- actions' `fetch` requests are
@@ -244,6 +253,10 @@ than failing with a DNS error.
   the flag's checks.
 - **Sabotage:** the proxy ignored (5 tests fail), the 407 check removed (5), Sentry proxied (1), the hop not
   named (1).
+- A `CONNECT` answered 407, 403, 502, a 502 shaped as the screen's with a wrong token, and with the right one
+  (Bun 1.4.4's `ERR_PROXY_TUNNEL`). The screen's test fetches an unreachable `https:` target too, which must
+  fail as it does without the screen. Sabotage: every refused `CONNECT` mapped to the 407's message (as #833
+  first did) fails both; the screen's status line without the token fails the screen's test.
 - `packages/server/test/address-screen.test.ts` (P1 draft): the denied ranges per setting (IPv4-mapped and
   NAT64 included), names checked by every address, the metadata endpoint refused in four spellings and
   behind a redirect, loopback allowed under `metadata` and refused under `private`, bodies and streamed

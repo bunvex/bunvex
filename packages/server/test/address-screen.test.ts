@@ -302,7 +302,12 @@ test("a target the screen cannot reach fails as without it (STUDY-142); its answ
   const closed = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
   const closedPort = closed.port;
   closed.stop(true);
-  for (const url of [`http://127.0.0.1:${closedPort}/x?token=s`, `http://127.0.0.1:${empty.port}/x?token=s`]) {
+  // The https: target is a CONNECT, whose answer Bun keeps only the status line of (Bun 1.4.4).
+  for (const url of [
+    `http://127.0.0.1:${closedPort}/x?token=s`,
+    `http://127.0.0.1:${empty.port}/x?token=s`,
+    `https://127.0.0.1:${closedPort}/x?token=s`,
+  ]) {
     const through = await screened.functions.runAction("m:get", { url });
     expect(through).toEqual(await direct.functions.runAction("m:get", { url }));
     expect(through).toMatchObject({ error: "TypeError" });

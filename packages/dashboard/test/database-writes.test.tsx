@@ -165,8 +165,14 @@ describe("adding, deleting, clearing", () => {
     await heading("users");
     await screen.findByText("Read-only");
     expect(screen.queryByRole("button", { name: "Add documents" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /More actions/ })).toBeNull();
     expect(within(screen.getByRole("grid")).queryAllByRole("checkbox")).toEqual([]);
+    // Narrow widths keep this menu for the panels (schema, indexes, columns). It must not offer writes.
+    // happy-dom applies no Tailwind, so `@2xl/table:hidden` does not remove it from the accessibility tree.
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "More actions on users" }));
+    expect(screen.queryByRole("menuitem", { name: /Clear table/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /Delete table/ })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Schema" })).toBeDefined();
   });
 
   test("Edit a document: its fields as a literal, saved whole; system fields stay", async () => {

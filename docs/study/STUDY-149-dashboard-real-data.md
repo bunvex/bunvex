@@ -1488,7 +1488,7 @@ Packaging. Convex's side re-read for it (`cli/` is `npm-packages/convex/src/cli/
   (127.0.0.1), `--deployment-url` / `--admin-key` (else `BUNVEX_DEPLOYMENT_URL` / `BUNVEX_ADMIN_KEY`); in a project
   whose deployment is local, on a loopback address, it hands that deployment out at `/api/current_deployment`.
   SIGINT / SIGTERM stop it. `packages/cli/bin/bunvex-dashboard.ts` is the command alone, which the image compiles.
-- **The image** (`docker/dashboard.Dockerfile`, DV-475): built on `oven/bun:1.4.2-slim` (the app's Vite build and
+- **The image** (`docker/dashboard.Dockerfile`, DV-475): built on `oven/bun:1.4.4-slim` (the app's Vite build and
   `bun build --compile` of `bunvex-dashboard`), run on `gcr.io/distroless/cc-debian12:nonroot` (a non-root user,
   as Convex's), `--hostname 0.0.0.0 --port 6791`, `EXPOSE 6791`, `STOPSIGNAL SIGINT`. The compose file's
   `dashboard` service (DV-189 closed): Convex's ports, stop signal, `depends_on` and no key, with

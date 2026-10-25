@@ -634,8 +634,11 @@ describe("bunvex-local-backend", () => {
       } catch (e) {
         err = e;
       }
-      // The driver's 1 s bound, its own retries included (about 13 s; 100 s with the default 30 s).
-      expect(String(err)).toContain("no answer within 1000 ms");
+      // The 1 s bound, its own retries included (about 13 s; about 100 s with the default 30 s).
+      // The client-side timer reports "no answer within 1000 ms". postgres.js's connect_timeout, set from
+      // the same knob, reports CONNECT_TIMEOUT. Which one settles first moves under coverage instrumentation.
+      const message = String(err);
+      expect(message.includes("no answer within 1000 ms") || message.includes("CONNECT_TIMEOUT")).toBe(true);
       expect(performance.now() - started).toBeLessThan(60_000);
     }, 90_000);
 
