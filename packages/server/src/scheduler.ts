@@ -133,7 +133,13 @@ function parseScheduleArgs(args: unknown): Record<string, Value> {
  */
 type Target = { component?: ComponentRuntime; job?: string; jobComponent?: string | null } & (
   | { db: Tx }
-  | { engine: Engine; systemIdentity?: boolean; requestId?: string }
+  | {
+      engine: Engine;
+      systemIdentity?: boolean;
+      requestId?: string;
+      /** A Node action's: its target is resolved as the backend's HTTP API does, not from a V8 action's map. */
+      node?: boolean;
+    }
 );
 
 export function makeScheduler(functions: Functions, target: Target): Scheduler {
@@ -183,7 +189,7 @@ export function makeScheduler(functions: Functions, target: Target): Scheduler {
       target.component,
       "db" in target ? target.db : null,
       "db" in target ? target.db.systemIdentity : target.systemIdentity === true,
-      !("db" in target),
+      !("db" in target) && target.node !== true,
     );
     // As Convex's `validate_schedule_args`: the positional args, `[args]`, are parsed as a value, so they nest
     // at most 63 levels (STUDY-109); they travel as plain values, so a commit timestamp placeholder cannot
