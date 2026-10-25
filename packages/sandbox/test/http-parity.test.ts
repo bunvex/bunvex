@@ -414,7 +414,7 @@ describe("under process only: what vm cannot do (DV-528) and the end of the call
     expect(late.body).toBe(JSON.stringify([null, "refused", "the action has ended: its operations can no longer run"]));
   }, 30_000);
 
-  test("under vm the call does not end with its body: the timer fires and the kept ctx runs (STUDY-77 §7.3)", async () => {
+  test("under vm the call ends with its body too: the timer never fires, the kept ctx refuses (STUDY-77 §8)", async () => {
     await vm.s.deployCode([
       { path: "cases.js", source: CASES_MODULE, environment: "isolate" },
       { path: "http.js", source: REJECTIONS_MODULE, environment: "isolate" },
@@ -422,7 +422,7 @@ describe("under process only: what vm cannot do (DV-528) and the end of the call
     await request(vm, "/leftTimer");
     await Bun.sleep(300);
     const late = await request(vm, "/lateResult");
-    expect(late.body).toBe(JSON.stringify([["ran"], "ran", 2]));
+    expect(late.body).toBe(JSON.stringify([null, "refused", "the action has ended: its operations can no longer run"]));
   }, 30_000);
 });
 

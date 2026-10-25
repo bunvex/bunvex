@@ -1,0 +1,7 @@
+{"name":"empty HTTP action (new Response(null))","p50":287,"mean":358,"p99":1501}
+{"name":"HTTP action answering \"ok\"","p50":289,"mean":390,"p99":1737}
+{"name":"HTTP action, 1 runQuery","p50":311,"mean":362,"p99":1619}
+{"name":"1 KiB of bytes","p50":298,"mean":388,"p99":1753}
+{"name":"stream of 3 x 1 KiB","p50":300,"mean":367,"p99":1568}
+{"name":"stream of 3 x 1 KiB, a timer per pull","p50":5033,"mean":5170,"p99":6959}
+{"name":"stream of 1 MiB","p50":823,"mean":979,"p99":2877}
