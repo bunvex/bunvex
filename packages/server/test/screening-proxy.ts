@@ -9,6 +9,8 @@ export type ProxiedRequest = { method: string; target: string; auth: string | nu
 /** `refuse(host, port)`: true to answer 407. */
 export async function startScreeningProxy(refuse: (host: string, port: number) => boolean) {
   const seen: ProxiedRequest[] = [];
+  /** Every `Proxy-Authorization` each request carried, in order (one, when only the instance names itself). */
+  const auths: string[][] = [];
   const server = net.createServer((sock) => {
     sock.on("error", () => {});
     sock.once("data", (buf) => {
@@ -17,6 +19,7 @@ export async function startScreeningProxy(refuse: (host: string, port: number) =
       const [method = "", target = ""] = line.split(" ");
       const auth = /\r\nproxy-authorization: ([^\r\n]*)/i.exec(head)?.[1] ?? null;
       seen.push({ method, target, auth });
+      auths.push([...head.matchAll(/\r\nproxy-authorization: ([^\r\n]*)/gi)].map((m) => m[1] ?? ""));
       const refused = () =>
         sock.end(
           "HTTP/1.1 407 Proxy Authentication Required\r\nX-Smokescreen-Error: Egress proxying is denied to host\r\n" +
@@ -58,5 +61,5 @@ export async function startScreeningProxy(refuse: (host: string, port: number) =
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const { port } = server.address() as net.AddressInfo;
-  return { url: `http://127.0.0.1:${port}`, seen, stop: () => server.close() };
+  return { url: `http://127.0.0.1:${port}`, seen, auths, stop: () => server.close() };
 }
