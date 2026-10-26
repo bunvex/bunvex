@@ -535,6 +535,27 @@ ts, and an invalid one keeps its invalid ts).
 - 1M at 1 % before was not rerun here (§5.6 has 9.3 s of CPU per commit). Raw results:
   `bench/results/s184-invalidation/q4-before.jsonl` and `q4-after.jsonl`.
 
+**The one failure seen.** One run of 1M subscriptions at 1 % on the first version (the `WeakMap`) had 16
+`QueryFailed` in its saturated phase, with updates 16–31 s late. Its message was not captured. The bench now prints
+each failed query's message on the client, and on the server each failed run from its function log. What was
+found:
+
+- **Not seen again.** The cell ran 5 more times on the final code at 1M and 1 %, 5 times at 100 000 and 10 %, and
+  3 times with the `WeakMap` version restored (load average 3–14). None had a failure.
+- **The only failure this bench can produce is a timeout, and `origin/main` produces it too.** A query's time
+  waiting on its store calls counts against `DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS` (15 s, as Convex's). A store
+  call's answer that waits behind thousands of reruns on the one thread, or behind a long collection, counts as
+  that wait. With the limit at 1 s, `origin/main` (`a90013ff`) at 100 000 and 10 % failed 3 queries while other
+  sessions held the machine at a load average of 19: "Your request timed out performing too many system
+  operations." The branch had none in that pair of runs. Neither had any in two more pairs at a load average of
+  4–7.
+- **A probe holds the thread for 1.2 s while a sync rerun waits on its store call,** with the limit at 1 s. It gives
+  the same `QueryFailed` on `origin/main` and on the branch, and the same entry in the function log (`Query m:list
+  SyncWorker`, "Uncaught Error: Your request timed out performing too many system operations.").
+- **So the 16 are most likely this timeout, reached by the first version's heavier collections under a 16–31 s
+  backlog.** The `WeakMap` held a million entries. Validity tracking cannot fail a query: it only decides whether
+  one runs, and no test or run showed a wrong or missing result.
+
 ## 6. Additions
 
 None proposed.
