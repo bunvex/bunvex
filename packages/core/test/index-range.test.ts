@@ -161,7 +161,7 @@ describe("withIndex ranges follow Convex's rules", () => {
       }
       return "no error";
     };
-    const fields = (n: number) => Array.from({ length: n }, (_, i) => `f${i}`);
+    const fields = (n: number) => Array.from({ length: n }, (_, i) => `f${i}`) as [string, ...string[]];
     // IndexFieldsContainId, IndexFieldsContainCreationTime, IndexFieldNameReserved.
     expect(err(defineTable(v.any()).index("by_x", ["_id"]))).toBe(
       'In table "t": In index "by_x": `_id` is not a valid index field. To load documents by ID, use `db.get(id)`.',
@@ -186,7 +186,9 @@ describe("withIndex ranges follow Convex's rules", () => {
     expect(err(defineTable(v.any()).index("by_x", fields(16)))).toBe("Indexes may have up to 16 fields.");
     expect(err(defineTable(v.any()).index("by_x", fields(15)))).toBe("no error");
     // EmptyIndex, IndexNotUnique, IndexNameReserved, IndexNamesNotUnique.
+    // @ts-expect-error: no fields, refused by the types too (as Convex's)
     expect(err(defineTable(v.any()).index("by_x", []))).toBe('In table "t" index "by_x" must have at least one field.');
+    // @ts-expect-error: no fields, refused by the types too (as Convex's)
     expect(err(defineTable(v.any()).index("by_x", { fields: [], staged: true }))).toBe(
       'In table "t" staged index "by_x" must have at least one field.',
     );

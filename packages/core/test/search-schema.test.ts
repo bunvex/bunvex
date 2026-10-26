@@ -70,6 +70,7 @@ test("Convex's push-time checks and messages", () => {
   expect(define(messages().searchIndex("by_id", { searchField: "body" }))).toThrow(
     'In table "messages" cannot name an index "by_id" because the name is reserved.',
   );
+  // @ts-expect-error: not a field of the document (the types refuse it too, as Convex's)
   expect(define(messages().searchIndex("s", { searchField: "body.$x" }))).toThrow(
     'In index "s": Invalid index field: "body.$x"',
   );

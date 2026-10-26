@@ -19,6 +19,7 @@ async function setup() {
       .index("by_tag", ["tag"])
       .index("by_n", { fields: ["n"], staged: true })
       .searchIndex("search_title", { searchField: "title", filterFields: ["tag"] })
+      // @ts-expect-error: `vec` is not a field of the document (the types refuse it, as Convex's)
       .vectorIndex("by_vec", { vectorField: "vec", dimensions: 2, filterFields: ["tag"] }),
     other: defineTable(v.any()),
   });

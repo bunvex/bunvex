@@ -9,12 +9,14 @@ const missing = (table: string, index: string, field: string) =>
   `In table "${table}" the index "${index}" is invalid because it references the field "${field}" that does not exist.`;
 
 test("a database index on a field the validator does not have", () => {
+  // @ts-expect-error: a field the document does not have, refused by the types too (as Convex's)
   const s = defineSchema({ t: defineTable({ a: v.string() }).index("by_b", ["b"]) });
   expect(indexReferenceError(s)).toBe(missing("t", "by_b", "b"));
   expect(indexReferenceError(defineSchema({ t: defineTable({ a: v.string() }).index("by_a", ["a"]) }))).toBeNull();
 });
 
 test("without schema validation, or with v.any(), nothing is checked", () => {
+  // @ts-expect-error: a field the document does not have, refused by the types too (as Convex's)
   const t = defineTable({ a: v.string() }).index("by_b", ["b"]);
   expect(indexReferenceError(defineSchema({ t }, { schemaValidation: false }))).toBeNull();
   expect(indexReferenceError(defineSchema({ t: defineTable(v.any()).index("by_b", ["b"]) }))).toBeNull();
@@ -22,7 +24,7 @@ test("without schema validation, or with v.any(), nothing is checked", () => {
 
 test("nested paths: objects, optional fields, unions and any pass; records, arrays and scalars do not", () => {
   const ok = (doc: unknown, field: string) =>
-    indexReferenceError(defineSchema({ t: defineTable(doc as never).index("i", [field]) }));
+    indexReferenceError(defineSchema({ t: defineTable(doc as never).index("i", [field] as never) }));
   expect(ok({ a: v.object({ b: v.string() }) }, "a.b")).toBeNull();
   expect(ok({ a: v.optional(v.object({ b: v.string() })) }, "a.b")).toBeNull();
   expect(ok({ a: v.union(v.string(), v.object({ b: v.number() })) }, "a.b")).toBeNull();
@@ -37,12 +39,12 @@ test("nested paths: objects, optional fields, unions and any pass; records, arra
 test("search and vector indexes: the search field, filter fields and vector field", () => {
   const base = { body: v.string(), kind: v.string(), v: v.array(v.float64()) };
   const search = (searchField: string, filterFields: string[]) =>
-    indexReferenceError(defineSchema({ t: defineTable(base).searchIndex("s", { searchField, filterFields }) }));
+    indexReferenceError(defineSchema({ t: defineTable(base).searchIndex("s", { searchField, filterFields } as never) }));
   expect(search("body", ["kind"])).toBeNull();
   expect(search("nope", [])).toBe(missing("t", "s", "nope"));
   expect(search("body", ["nope"])).toBe(missing("t", "s", "nope"));
   const vector = (vectorField: string) =>
-    indexReferenceError(defineSchema({ t: defineTable(base).vectorIndex("vi", { vectorField, dimensions: 2 }) }));
+    indexReferenceError(defineSchema({ t: defineTable(base).vectorIndex("vi", { vectorField: vectorField as never, dimensions: 2 }) }));
   expect(vector("v")).toBeNull();
   expect(vector("nope")).toBe(missing("t", "vi", "nope"));
 });
@@ -75,17 +77,22 @@ test("a union branch that does not declare the vector field counts as able to ho
 
 test("Convex's order: tables by name; database, staged, search, filter, vector fields; then vector types", () => {
   const s = defineSchema({
+    // @ts-expect-error: a field the document does not have, refused by the types too (as Convex's)
     zeta: defineTable({ a: v.string() }).index("by_x", ["x"]),
     alpha: defineTable({ a: v.string(), e: v.string() })
       .vectorIndex("v1", { vectorField: "e", dimensions: 2 })
+      // @ts-expect-error: a field the document does not have, refused by the types too (as Convex's)
       .searchIndex("s1", { searchField: "missing_search" })
+      // @ts-expect-error: a field the document does not have, refused by the types too (as Convex's)
       .index("by_a", { fields: ["missing_staged"], staged: true })
+      // @ts-expect-error: a field the document does not have, refused by the types too (as Convex's)
       .index("by_b", ["missing_db"]),
   });
   expect(indexReferenceError(s)).toBe(missing("alpha", "by_b", "missing_db"));
   const noDb = defineSchema({
     alpha: defineTable({ a: v.string(), e: v.string() })
       .vectorIndex("v1", { vectorField: "e", dimensions: 2 })
+      // @ts-expect-error: a field the document does not have, refused by the types too (as Convex's)
       .searchIndex("s1", { searchField: "a", filterFields: ["missing_filter"] }),
   });
   expect(indexReferenceError(noDb)).toBe(missing("alpha", "s1", "missing_filter"));
@@ -94,6 +101,7 @@ test("Convex's order: tables by name; database, staged, search, filter, vector f
 test("a single system field passes whatever the validator", () => {
   expect(
     indexReferenceError(
+      // @ts-expect-error: `_id` is not an index field in the types (as Convex's); the push allows it
       defineSchema({ t: defineTable({ a: v.string() }).searchIndex("s", { searchField: "a", filterFields: ["_id"] }) }),
     ),
   ).toBeNull();

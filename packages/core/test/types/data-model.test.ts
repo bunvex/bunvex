@@ -56,7 +56,8 @@ check<Equal<DataModel["users"]["fieldPaths"], "_id" | "_creationTime" | "name" |
 // An optional field is a path, never `undefined`.
 check<Equal<undefined extends DataModel["users"]["fieldPaths"] ? true : false, false>>(true);
 check<Equal<NamedIndex<DataModel["messages"], "by_author">, ["author", "_creationTime"]>>(true);
-check<Equal<NamedIndex<DataModel["messages"], "by_author_body">, ["author", "body", "_creationTime"]>>(true);
+// A staged index is not in the type, as Convex's: `withIndex` cannot name it (STUDY-189 T5).
+check<Equal<keyof DataModel["messages"]["indexes"], "by_author" | "by_id" | "by_creation_time">>(true);
 check<Equal<NamedIndex<DataModel["users"], "by_id">, ["_id"]>>(true);
 // A union table: system fields on each branch.
 type Event = DocumentByName<DataModel, "events">;
