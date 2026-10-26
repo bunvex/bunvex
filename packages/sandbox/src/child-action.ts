@@ -32,6 +32,7 @@ import {
   bodyLength,
   type CodeVersion,
   captureLines,
+  ExecutorFailure,
   HTTP_ACTION_RESPONSE_LIMIT,
   inHandleScope,
   type LogLine,
@@ -184,6 +185,7 @@ const viewOf = (b: ArrayBuffer | ArrayBufferView): Uint8Array =>
 function errorFromWire(w: WireThrown): unknown {
   if (w.k === "error") return rebuiltError(w);
   if (w.k === "host") return new Error(w.message);
+  if (w.k === "system") return new ExecutorFailure(w.message);
   return new Error("the host failed a stream");
 }
 
@@ -474,17 +476,20 @@ class ChildActionCall extends ChildCallBase {
     };
     try {
       // Its code's timers are the action's: cleared when it ends (STUDY-77 §7), as the engine clears a `vm` action's.
-      const run = trackedActionTimers(() =>
-        running.run(this, () =>
-          captureLines(
-            (line) => this.logLine(line),
-            () =>
-              inHandleScope(
-                { db: null, create: (ref: unknown) => this.op("createFunctionHandle", [ref]) } as never,
-                body,
-              ),
+      const run = trackedActionTimers(
+        () =>
+          running.run(this, () =>
+            captureLines(
+              (line) => this.logLine(line),
+              () =>
+                inHandleScope(
+                  { db: null, create: (ref: unknown) => this.op("createFunctionHandle", [ref]) } as never,
+                  body,
+                ),
+            ),
           ),
-        ),
+        // A module its dynamic import loaded threw: the action fails at once, as Convex's (STUDY-188 §X14).
+        (e) => this.unhandled(e),
       );
       this.endTimers = run.end;
       const value = await run.value;
@@ -533,17 +538,19 @@ class ChildActionCall extends ChildCallBase {
     };
     let message: ToHost;
     try {
-      const run = trackedActionTimers(() =>
-        running.run(this, () =>
-          captureLines(
-            (line) => this.logLine(line),
-            () =>
-              inHandleScope(
-                { db: null, create: (ref: unknown) => this.op("createFunctionHandle", [ref]) } as never,
-                body,
-              ),
+      const run = trackedActionTimers(
+        () =>
+          running.run(this, () =>
+            captureLines(
+              (line) => this.logLine(line),
+              () =>
+                inHandleScope(
+                  { db: null, create: (ref: unknown) => this.op("createFunctionHandle", [ref]) } as never,
+                  body,
+                ),
+            ),
           ),
-        ),
+        (e) => this.unhandled(e),
       );
       this.endTimers = run.end;
       message = await run.value;

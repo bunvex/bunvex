@@ -40,6 +40,7 @@ import {
   asCallerError,
   type CodeVersion,
   captureLines,
+  ExecutorFailure,
   inHandleScope,
   type LogLine,
   MAX_LOG_LINES,
@@ -350,6 +351,8 @@ export function rebuiltError(w: Extract<WireThrown, { k: "error" }>): Error {
 
 /** A thrown value for the host: an error with its class, name, message, stack and a `BunvexError`'s data. */
 export function thrownValue(e: unknown): WireThrown {
+  // The server's own system error (a V8 action's dynamic import of a `"use node"` module): one on the host too.
+  if (e instanceof ExecutorFailure) return { k: "system", message: e.message };
   const isError = e instanceof Error || Object.prototype.toString.call(e) === "[object Error]";
   if (!isError) return { k: "value", v: encode(e) };
   const err = e as Error;
