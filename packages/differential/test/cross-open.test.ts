@@ -61,6 +61,10 @@ async function roundTrip(first: "convex" | "bunvex", second: "convex" | "bunvex"
 
     const b = await start[second](opts);
     expect(await reads(b)).toEqual(written);
+    // Both at the same data version (STUDY-193 A14, `DATABASE_VERSION` 134): neither prints the "newer" warning
+    // (Convex's crates/model/src/migrations.rs, bunvex's DV-418), and Convex runs no migration on bunvex's store.
+    expect(b.output()).not.toContain("persisted db metadata version is ahead");
+    expect(b.output()).not.toContain("Executing Migration");
     await value(b, "mutation", "notes:add", { body: "hello again", kind: "a", v: [3, 1] });
     await b.stop();
 

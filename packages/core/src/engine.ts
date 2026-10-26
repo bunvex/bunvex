@@ -68,6 +68,8 @@ import {
   MODULES_TABLE,
   NEXT_PERSISTENCE_INDEX_ID_TABLE,
   planCatalog,
+  S3_EXPORT_STATE_INDEX,
+  S3_EXPORT_STATE_TABLE,
   SCHEDULED_JOB_ARGS_TABLE,
   SCHEDULED_JOBS_TABLE,
   SCHEMA_VALIDATION_PROGRESS_TABLE,
@@ -930,6 +932,11 @@ export class Engine {
       },
       { name: SNAPSHOT_IMPORTS_TABLE, indexes: {}, document: v.any() },
       { name: LOG_SINKS_TABLE, indexes: {}, document: v.any() },
+      {
+        name: S3_EXPORT_STATE_TABLE,
+        indexes: { [S3_EXPORT_STATE_INDEX]: ["configId", "_creationTime"] },
+        document: v.any(),
+      },
       { name: BACKEND_STATE_TABLE, indexes: {}, document: v.any() },
       { name: CANONICAL_URLS_TABLE, indexes: {}, document: v.any() },
       {

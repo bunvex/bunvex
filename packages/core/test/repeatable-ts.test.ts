@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { v } from "@bunvex/values";
 import { DATABASE_GLOBALS_TABLE } from "../src/catalog.ts";
 import { MAX_REPEATABLE_TS_GLOBAL } from "../src/committer.ts";
+import { DATABASE_VERSION } from "../src/database-globals.ts";
 import { Engine } from "../src/engine.ts";
 import { decodeGlobal, encodeGlobal } from "../src/persistence/global-json.ts";
 import { LayoutError } from "../src/persistence/layout.ts";
@@ -196,7 +197,8 @@ describe("_db.version", () => {
   };
 
   test("an older version is refused, naming both, before anything is written", async () => {
-    const path = await storeAt(132n);
+    // The version before this one: bunvex keeps no migrations, so a store one version behind is refused too.
+    const path = await storeAt(DATABASE_VERSION - 1n);
     const before = maxTsOf(path);
     let err: unknown = null;
     try {
@@ -205,8 +207,8 @@ describe("_db.version", () => {
       err = e;
     }
     expect(err).toBeInstanceOf(LayoutError);
-    expect((err as Error).message).toContain("132");
-    expect((err as Error).message).toContain("133");
+    expect((err as Error).message).toContain(`version ${DATABASE_VERSION - 1n}`);
+    expect((err as Error).message).toContain(`reads version ${DATABASE_VERSION}`);
     expect(maxTsOf(path)).toEqual(before);
     // No bump of the refused start writes to the store later.
     await new Promise((r) => setTimeout(r, 30));
@@ -216,11 +218,11 @@ describe("_db.version", () => {
   test("a newer version opens with a warning; the current one silently", async () => {
     const warn = spyOn(console, "warn");
     try {
-      const newer = await storeAt(134n);
+      const newer = await storeAt(DATABASE_VERSION + 1n);
       warn.mockClear();
       await close(await open(newer));
-      expect(warn.mock.calls.some((c) => String(c[0]).includes("134"))).toBe(true);
-      const current = await storeAt(133n);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes(`ahead at ${DATABASE_VERSION + 1n}`))).toBe(true);
+      const current = await storeAt(DATABASE_VERSION);
       warn.mockClear();
       await close(await open(current));
       expect(warn.mock.calls.filter((c) => String(c[0]).includes("version"))).toEqual([]);

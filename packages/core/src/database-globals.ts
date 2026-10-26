@@ -11,7 +11,7 @@ import type { Tx } from "./tx.ts";
  * bunvex's store is in Convex's layout (STUDY-133). bunvex ports none of Convex's migrations, so it reads this
  * version only: an older store is refused, a newer one warned about, as Convex's migration worker does (DV-418).
  */
-export const DATABASE_VERSION = 133n;
+export const DATABASE_VERSION = 134n;
 
 /** Where the blobs live, as Convex's `StorageType` (serialized with its `tag`). */
 export type StorageType = { tag: "s3"; s3Prefix: string } | { tag: "local"; dir: string };

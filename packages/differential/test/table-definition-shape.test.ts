@@ -1,5 +1,5 @@
 // STUDY-181 H-5: a table definition's index lists at run time, against Convex's own `defineTable` from the installed
-// `convex` 1.46.0, for the same declarations. Libraries such as convex-helpers read these lists
+// `convex` 1.48.0, for the same declarations. Libraries such as convex-helpers read these lists
 // (`schema.tables[t].indexes.find((i) => i.indexDescriptor === name).fields`). No backend is needed.
 import { expect, test } from "bun:test";
 import * as b from "bunvex/server";

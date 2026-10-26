@@ -1,5 +1,5 @@
 // The shapes of the names STUDY-180 brought to `bunvex/server` and `bunvex/values`, against Convex's own types from
-// the installed `convex` 1.46.0: an app's value of one is a value of the other (assignable both ways), checked by
+// the installed `convex` 1.48.0: an app's value of one is a value of the other (assignable both ways), checked by
 // `tsc` (`bun run typecheck` compiles this file). Where bunvex's type accepts more, only Convex's → bunvex's is
 // checked, and the comment says why. The runtime test compares the two runtime values STUDY-180 added.
 import { expect, test } from "bun:test";
@@ -74,12 +74,14 @@ check<Equal<b.FieldTypeFromFieldPath<Doc, "kind">, c.FieldTypeFromFieldPath<Doc,
 check<Equal<b.FieldTypeFromFieldPathInner<Doc, "n.x">, c.FieldTypeFromFieldPathInner<Doc, "n.x">>>(true);
 
 // The storage interfaces: the same methods, each assignable both ways (ids are `Id<"_storage">`; Convex's
-// deprecated plain-string overloads are not built, DV-543).
+// deprecated plain-string overloads are not built, DV-543). Pending storage in mutations (DV-437, STUDY-193 §4.2):
+// 1.48.0 moved `get` and `store` onto the mutation's `StorageWriter`, which bunvex's does not have yet, so only
+// Convex's → bunvex's is checked there, and the two missing names are named.
 check<Equal<keyof b.StorageReader, keyof c.StorageReader>>(true);
-check<Equal<keyof b.StorageWriter, keyof c.StorageWriter>>(true);
+check<Equal<keyof b.StorageWriter | "get" | "store", keyof c.StorageWriter>>(true);
 check<Equal<keyof b.StorageActionWriter, keyof c.StorageActionWriter>>(true);
 check<Mutual<b.StorageActionWriter, c.StorageActionWriter>>(true);
-check<Mutual<b.StorageWriter, c.StorageWriter>>(true);
+check<Assignable<c.StorageWriter, b.StorageWriter>>(true);
 check<Mutual<b.StorageReader, c.StorageReader>>(true);
 
 // The schema: `SchemaDefinition`'s members, and a schema's tables. Convex's `TableDefinition` is a class with

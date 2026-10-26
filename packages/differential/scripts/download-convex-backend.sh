@@ -4,7 +4,7 @@
 # The binary is run, never vendored, and always with --disable-beacon (harness/backends.ts).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-TAG="${CONVEX_RELEASE:-precompiled-2026-10-10-72ce13c}"
+TAG="${CONVEX_RELEASE:-precompiled-2026-10-26-04d2f3b}"
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) TARGET=aarch64-apple-darwin ;;
   Darwin-x86_64) TARGET=x86_64-apple-darwin ;;

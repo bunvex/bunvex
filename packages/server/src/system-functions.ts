@@ -25,6 +25,8 @@ import {
   LOG_SINKS_TABLE,
   type PaginationOptions,
   readBackendState,
+  S3_EXPORT_STATE_INDEX,
+  S3_EXPORT_STATE_TABLE,
   SCHEDULED_FUNCTIONS_TABLE,
   SCHEDULED_JOB_ARGS_TABLE,
   SCHEDULED_JOBS_TABLE,
@@ -118,19 +120,32 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
   ...DATA_SYSTEM_QUERIES, // the Data screen's reads (STUDY-149 PR 2)
   ...FRONTEND_SYSTEM_QUERIES, // the Functions and Settings screens' reads (STUDY-149 PR 4)
   // The dashboard's integrations page (STUDY-59), as Convex's: every `_log_sinks` row, S3 export's secret
-  // key left out.
+  // key left out, and its `_s3_export_state` progress as `exportProgress` when it has a row (STUDY-193 A14;
+  // only Convex's export worker writes one, DV-571).
   "_system/frontend/listConfiguredSinks": {
     args: {},
     op: "ViewIntegrations",
     handler: async (db) => {
       const rows = (await db.asSystem(() => db.query(LOG_SINKS_TABLE).collect())) as unknown as {
+        _id: string;
         config: Record<string, unknown>;
       }[];
-      return rows.map((r) => {
-        if (r.config.type !== "s3Export") return r;
+      const out = [];
+      for (const r of rows) {
+        if (r.config.type !== "s3Export") {
+          out.push(r);
+          continue;
+        }
         const { secretAccessKey: _, ...config } = r.config;
-        return { ...r, config };
-      });
+        const state = (await db.asSystem(() =>
+          db
+            .query(S3_EXPORT_STATE_TABLE)
+            .withIndex(S3_EXPORT_STATE_INDEX, (q) => q.eq("configId", r._id))
+            .unique(),
+        )) as { checkpoint: { progress: unknown } } | null;
+        out.push({ ...r, config, ...(state ? { exportProgress: state.checkpoint.progress } : {}) });
+      }
+      return out;
     },
   },
   // The deployed auth providers (STUDY-129), as Convex's: the `_auth` documents as stored, oldest first.
