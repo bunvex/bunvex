@@ -372,13 +372,9 @@ class Out {
   optNum(n: bigint | null) {
     this.parts.push(n === null ? "_" : `${n}:`);
   }
-  /** One character per byte. */
+  /** One character per byte (Buffer's latin1: measured cheaper than `String.fromCharCode.apply` on the bench boxes). */
   bytes(b: Uint8Array) {
-    this.str(
-      b.length <= 1024
-        ? String.fromCharCode.apply(null, b as unknown as number[])
-        : Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString("latin1"),
-    );
+    this.str(Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString("latin1"));
   }
 }
 
