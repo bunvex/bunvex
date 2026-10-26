@@ -12,7 +12,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 
-const root = `${import.meta.dir}/../..`;
+const root = Bun.fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const dir = `${root}/.data/cloud`;
 const stateFile = `${dir}/state.json`;
 const knownHosts = `${dir}/known_hosts`;
@@ -192,7 +192,7 @@ function matrix(suite: string): Point[] {
 async function cpu(box: Box) {
   const out = await ssh(
     box,
-    "head -1 /proc/stat; getconf CLK_TCK; for p in $(cat /root/bench-data/pids); do cat /proc/$p/stat; done",
+    "head -1 /proc/stat; getconf CLK_TCK; for p in $(cat /root/bench-data/pids 2>/dev/null); do cat /proc/$p/stat; done",
   );
   const [stat, tick, ...procs] = out.trim().split("\n");
   const hz = Number(tick);
@@ -220,7 +220,7 @@ async function measure(s: State, p: Point) {
         throw new Error(`serve.ts did not start:\n${log.slice(-3000)}`);
       if (!ports) await Bun.sleep(1000);
     }
-    const before = await cpu(s.server);
+    const [before, loadBefore] = await Promise.all([cpu(s.server), cpu(s.load)]);
     const vus = process.env.VUS ?? "32";
     const duration = process.env.DURATION ?? "30s";
     const out = await ssh(
@@ -228,7 +228,7 @@ async function measure(s: State, p: Point) {
       `ulimit -n 1048576; cd ${remote} && TARGET=${s.server.private} PORTS=${ports} SCENARIO=${p.scenario} ` +
         `VUS=${vus} DURATION=${duration} bun bench/cloud/load.ts`,
     );
-    const after = await cpu(s.server);
+    const [after, loadAfter] = await Promise.all([cpu(s.server), cpu(s.load)]);
     const seconds = (after.at - before.at) / 1000;
     const servers = JSON.parse(out.trim().split("\n").at(-1)!) as { rate: number; errors: number; p99: number }[];
     return {
@@ -240,6 +240,8 @@ async function measure(s: State, p: Point) {
       p99: Math.max(...servers.map((r) => r.p99)),
       serverCores: (after.servers - before.servers) / seconds,
       boxCores: (after.box - before.box) / seconds,
+      // The load box's busy cores: near its vCPU count means k6, not the server, set the rate.
+      loadCores: (loadAfter.box - loadBefore.box) / seconds,
       servers,
     };
   } finally {
@@ -269,7 +271,8 @@ async function runSuite(suite: string, sha: string) {
       const m = await measure(s, p);
       console.log(
         `${p.persistence} n=${p.n} ${p.scenario} #${r}: ${Math.round(m.rate)} req/s, errors ${m.errors.toFixed(3)}, ` +
-          `p99 ${m.p99.toFixed(1)} ms, servers ${m.serverCores.toFixed(2)} cores, box ${m.boxCores.toFixed(2)}`,
+          `p99 ${m.p99.toFixed(1)} ms, servers ${m.serverCores.toFixed(2)} cores, box ${m.boxCores.toFixed(2)}, ` +
+          `load box ${m.loadCores.toFixed(2)}`,
       );
       results.push({ ...m, repeat: r });
     }
@@ -303,7 +306,7 @@ function summary(meta: { suite: string; sha: string; server: { machine: string[]
     return (
       `| ${first!.persistence} | ${first!.n} | ${first!.scenario} | ${Math.round(median(rates))} | ` +
       `${Math.round(Math.min(...rates))}–${Math.round(Math.max(...rates))} | ${median(g.map((r) => r.p99)).toFixed(1)} | ` +
-      `${median(g.map((r) => r.serverCores)).toFixed(2)} | ${median(g.map((r) => r.boxCores)).toFixed(2)} | ` +
+      `${median(g.map((r) => r.serverCores)).toFixed(2)} | ${median(g.map((r) => r.boxCores)).toFixed(2)} | ${median(g.map((r) => r.loadCores)).toFixed(2)} | ` +
       `${Math.max(...g.map((r) => r.errors)).toFixed(3)} |`
     );
   });
@@ -311,8 +314,8 @@ function summary(meta: { suite: string; sha: string; server: { machine: string[]
   return [
     `# ${meta.suite} at ${meta.sha}: server ${cores} vCPUs, ${model}`,
     "",
-    "| store | servers | scenario | req/s (median) | range | p99 ms | server cores | box cores | errors |",
-    "|---|---:|---|---:|---:|---:|---:|---:|---:|",
+    "| store | servers | scenario | req/s (median) | range | p99 ms | server cores | box cores | load box cores | errors |",
+    "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|",
     ...rows,
     "",
   ].join("\n");
