@@ -1,7 +1,7 @@
 # STUDY-190 — Work off the one JS thread
-<!-- index: Work off the one JS thread (STUDY-184 Q2): how Convex's backend spreads over cores, fresh per-request profiles of bench/server.ts (Mac, Linux VPS, DigitalOcean), the cost of a message between Bun threads, five candidates prototyped in bench/offthread/ (SQLite commits on a writer thread, SQLite readers, value work, HTTP front threads, execution on workers) and a ranked plan of PRs | draft: owner questions Q1–Q5 open -->
+<!-- index: Work off the one JS thread (STUDY-184 Q2): how Convex's backend spreads over cores, fresh per-request profiles of bench/server.ts (Mac, Linux VPS, DigitalOcean), the cost of a message between Bun threads, five candidates prototyped in bench/offthread/ (SQLite commits on a writer thread, SQLite readers, value work, HTTP front threads, execution on workers) and a ranked plan of PRs | decided (owner, 2026-10-26): every §8 recommendation; DV-573, DV-574 -->
 
-- **Status:** draft, owner questions in §8. No product change: the prototypes are in `bench/offthread/`, and no
+- **Status:** decided (owner, 2026-10-26): every §8 recommendation; DV-573, DV-574. No product change yet: the prototypes are in `bench/offthread/`, and no
   default code path reaches them.
 - **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
   - `crates/runtime/src/prod.rs`, `crates/common/src/knobs.rs`;
@@ -389,12 +389,12 @@ Each PR keeps PERSIST-01 conformance and the existing suites green, and adds:
 
 ## 7. Divergences
 
-None is proposed for (a)–(d). For (e), two, asked as Q3 and Q4; numbered here, and recorded in `divergences.md` once decided.
+None is proposed for (a)–(d). For (e), two, asked as Q3 and Q4; recorded in `divergences.md` (owner, 2026-10-26).
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| Q3 → DV-573 | Module-level state is per code version **and per worker thread** (was: per code version, DV-165); Convex keeps it per request | a Worker cannot share a JS heap | pending |
-| Q4 → DV-574 | `MAX_ISOLATE_WORKERS` defaults to the number of cores, Workers created lazily; Convex's default is 300 | a Bun Worker is a whole JS VM; 300 would cost memory for nothing on a small box | pending |
+| Q3 → DV-573 | Module-level state is per code version **and per worker thread** (was: per code version, DV-165); Convex keeps it per request | a Worker cannot share a JS heap | owner, 2026-10-26 |
+| Q4 → DV-574 | `MAX_ISOLATE_WORKERS` defaults to the number of cores, Workers created lazily; Convex's default is 300 | a Bun Worker is a whole JS VM; 300 would cost memory for nothing on a small box | owner, 2026-10-26 |
 
 ## 7b. Additions (beyond Convex)
 
@@ -402,7 +402,9 @@ None proposed. Q4 asks how the worker count is set; one option would be an addit
 
 ## 8. Owner questions
 
-| # | Question | Recommendation |
+Decided (owner, 2026-10-26): every recommendation below.
+
+| # | Question | Recommendation (decided) |
 |---|---|---|
 | Q1 | Start with PR 1, the SQLite writer thread, on its own (§4.1, §5)? | Yes. It is self-contained, changes nothing observable, and measured +36 % on inserts and +20 % for reads beside writes on a 1-vCPU box |
 | Q2 | Build execution workers in Convex's funrun shape (A2 on threads: the worker reads the store itself and returns its reads and writes), not by reusing the `process` executor's ops bridge? | Yes. The bridge keeps the reads, decoding and checks on the main thread (§4.5), which is where the time goes. The `process` executor stays the sandbox (AD-44) |
