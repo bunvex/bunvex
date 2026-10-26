@@ -3055,31 +3055,39 @@ export class Engine {
    * `initializeComponentNamespace`): each is submitted in its namespace in the same commit (Convex's
    * `start_component_schema_changes`), its existing documents walked as the root's. A component without a schema
    * (null) gets none. Each one's schema id and added indexes are in the result's `components`.
+   *
+   * A push without a schema (`schema` null) writes nothing for the root, as Convex's `start_component_schema_changes`
+   * without one: no table, no index, no `_schemas` row (a pending schema stays pending), and its id is null; its
+   * finish drops the indexes and clears the active schema (`commitSchemaPush`).
    */
   async startSchemaPush(
     schema: EngineSchema,
+    components?: ReadonlyMap<string, EngineSchema | null>,
+  ): Promise<StartedSchemaPush<string>>;
+  async startSchemaPush(
+    schema: EngineSchema | null,
+    components?: ReadonlyMap<string, EngineSchema | null>,
+  ): Promise<StartedSchemaPush<string | null>>;
+  async startSchemaPush(
+    schema: EngineSchema | null,
     components: ReadonlyMap<string, EngineSchema | null> = new Map(),
-  ): Promise<{
-    schemaId: string;
-    addedIndexes: string[];
-    components: Map<string, { schemaId: string | null; addedIndexes: string[] }>;
-  }> {
-    const conflict = await this.stagedValidatorConflicts(schema);
+  ): Promise<StartedSchemaPush<string | null>> {
+    const conflict = schema && (await this.stagedValidatorConflicts(schema));
     if (conflict) throw conflict;
     for (const [id, s] of components) {
       if (s) checkComponentSchema(s);
       if (!this.catalog.components.has(id)) throw new Error(`No namespace for component ${id}`);
     }
-    const declared = this.allDeclaredTables(schema);
-    const json = schemaToJson(schema);
-    const staged = stagedValidatorsOf(json);
+    const declared = schema && this.allDeclaredTables(schema);
+    const json = schema && schemaToJson(schema);
+    const staged = json ? stagedValidatorsOf(json) : new Map();
     // The pushed schema is checked from the commit that submits it on, by every transaction that sees it, as
     // Convex's writes read it from their snapshot's schema registry (STUDY-187 X10): installed as that commit is
     // visible, or after it when it wrote nothing. `walk`: it became pending, so its documents are walked.
     let installed = false;
     let walk = false;
-    const install = (schemaId: string, state: SubmittedState) => {
-      if (installed) return;
+    const install = (schemaId: string | null, state: SubmittedState | null) => {
+      if (installed || schemaId === null || schema === null) return;
       installed = true;
       if (state === "active") {
         // Nothing to validate: the push commits the active schema again (Convex's `mark_active` no-op).
@@ -3093,14 +3101,20 @@ export class Engine {
     };
     const r = await this.runMutation(
       async (db) => {
-        const current = await readCatalog(db);
-        const changes = planCatalog(declared, current.tables, current.indexes, true, current.nextIndexId);
-        const written = await writeCatalogChanges(db, changes, this.createdLowerBound(db));
-        const { schemaId, state } = await submitPending(db, schema, json, staged);
-        const addedIndexes = changes.insertIndexes
-          .filter((i) => !(i.name in SYSTEM_INDEXES))
-          .map((i) => `${i.table}.${i.name}`);
-        const created = [...written.tables.values()].map((t) => t.tablet);
+        let schemaId: string | null = null;
+        let state: SubmittedState | null = null;
+        let addedIndexes: string[] = [];
+        const created: TabletId[] = [];
+        if (schema && declared && json) {
+          const current = await readCatalog(db);
+          const changes = planCatalog(declared, current.tables, current.indexes, true, current.nextIndexId);
+          const written = await writeCatalogChanges(db, changes, this.createdLowerBound(db));
+          ({ schemaId, state } = await submitPending(db, schema, json, staged));
+          addedIndexes = changes.insertIndexes
+            .filter((i) => !(i.name in SYSTEM_INDEXES))
+            .map((i) => `${i.table}.${i.name}`);
+          created.push(...[...written.tables.values()].map((t) => t.tablet));
+        }
         const inComponents = new Map<
           string,
           { schemaId: string | null; state: SubmittedState | null; addedIndexes: string[] }
@@ -3139,7 +3153,7 @@ export class Engine {
     this.catalog = buildCatalog(r.after.tables, r.after.indexes);
     install(r.schemaId, r.state);
     if (await this.backfillNewTables(r.created, r.after.indexes)) r.after = await this.runMutation(readCatalog, true);
-    if (walk) this.startValidation(r.schemaId, schema, this.schema);
+    if (walk && r.schemaId !== null && schema) this.startValidation(r.schemaId, schema, this.schema);
     for (const [id, c] of r.inComponents) {
       if (c.schemaId === null) continue;
       const schemas = this.schemasOf(id);
@@ -3222,23 +3236,31 @@ export class Engine {
    * backfilled, disable what became staged, drop what was replaced or removed, make the schema `active`,
    * and whatever `body` writes (the code, the crons). The engine switches to the schema — its validators,
    * its catalog — when the commit is visible. Throws if the schema was overwritten or is not complete.
+   *
+   * `schemaId` null is a push without a schema (Convex's `SchemaModel::apply(None)`): every user index of the root
+   * is dropped and its active schema marked `overwritten`, none in its place; the engine then has no schema. So are
+   * the components in `withoutSchema`, by `_components` id. A pending schema of an earlier push is left as it is.
    */
   async commitSchemaPush<T>(
-    schemaId: string,
+    schemaId: string | null,
     body: (db: Tx) => Promise<T>,
     /** The components' schemas `startSchemaPush` submitted, by `_components` id: each finished in this commit too. */
     components: ReadonlyMap<string, string> = new Map(),
+    /** The pushed components without a schema, by `_components` id: finished in this commit as the root's would be. */
+    withoutSchema: ReadonlySet<string> = new Set(),
   ): Promise<{ value: T; indexDiff: IndexDiff; components: Map<string, IndexDiff> }> {
-    const pending = this.pendingPush;
-    if (!pending || pending.id !== schemaId)
+    const pushed = this.pendingPush;
+    if (schemaId !== null && (!pushed || pushed.id !== schemaId))
       throw new SchemaPushError("RaceDetected", "Schema was overwritten by another push.");
-    const finishing = new Map<string, { id: string; schema: EngineSchema }>();
+    const pending = schemaId === null ? { id: null, schema: EMPTY_SCHEMA } : pushed!;
+    const finishing = new Map<string, { id: string | null; schema: EngineSchema }>();
     for (const [id, componentSchemaId] of components) {
       const p = this.componentSchemas.get(id)?.pendingPush;
       if (!p || p.id !== componentSchemaId)
         throw new SchemaPushError("RaceDetected", "Schema was overwritten by another push.");
       finishing.set(id, p);
     }
+    for (const id of withoutSchema) finishing.set(id, { id: null, schema: EMPTY_SCHEMA });
     const declared = this.allDeclaredTables(pending.schema);
     const r = await this.runMutation(
       async (db) => {
@@ -3269,14 +3291,14 @@ export class Engine {
             schemas.schema = c.schema;
             schemas.validators = validatorsOf(c.schema);
             schemas.activeSchemaId = c.id;
-            if (schemas.pendingPush?.id === c.id) schemas.pendingPush = null;
+            if (c.id !== null && schemas.pendingPush?.id === c.id) schemas.pendingPush = null;
           }
           this.schema = pending.schema;
           this.activeSchemaId = schemaId;
           this.installValidators(pending.schema);
           this.reconcileSearch();
           this.reconcileVector();
-          if (this.pendingPush?.id === schemaId) {
+          if (schemaId !== null && this.pendingPush?.id === schemaId) {
             this.pendingPush = null;
             this.pendingValidators = null;
           }
@@ -4481,30 +4503,42 @@ function checkComponentSchema(schema: EngineSchema) {
   }
 }
 
+/** What `startSchemaPush` answers: the root's schema id (null for a push without a schema), each component's. */
+type StartedSchemaPush<Id> = {
+  schemaId: Id;
+  addedIndexes: string[];
+  components: Map<string, { schemaId: string | null; addedIndexes: string[] }>;
+};
+
 /** The indexes a push's finish changed, by `table.index` (`commitSchemaPush`). */
 type IndexDiff = { enabled: string[]; disabled: string[]; dropped: string[] };
 
 /**
- * A push's finish in `db`'s current namespace (Convex's `commit_indexes_for_schema` and `mark_active`): the schema
- * must be validated (or active already); enable what is backfilled, disable what became staged, drop what was
- * replaced or removed, and make the schema `active`.
+ * A push's finish in `db`'s current namespace (Convex's `commit_indexes_for_schema` and `SchemaModel::apply`): the
+ * schema must be validated (or active already); enable what is backfilled, disable what became staged, drop what
+ * was replaced or removed, and make the schema `active`. A push without a schema (`schemaId` null, Convex's
+ * `apply(None)`) declares no user table, so every user index goes, and the active schema is marked `overwritten`
+ * with none in its place (`clear_active`); a pending one is left as it is.
  */
 async function finishSchemaIn(
   db: Tx,
-  schemaId: string,
+  schemaId: string | null,
   declared: Iterable<DeclaredTable>,
   namespace?: string,
 ): Promise<{ f: FinishChanges; tables: TableMeta[] }> {
-  const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
-  const state = schemaStateOf(row);
-  const failed = schemaFailureOf(row);
-  if (failed) throw new SchemaPushError("SchemaNotReady", `Schema validation failed: ${failed.error}`);
-  if (!row || (state !== "pending" && state !== "validated" && state !== "active"))
-    throw new SchemaPushError("RaceDetected", "Schema was overwritten by another push.");
-  if (state === "pending")
-    throw new SchemaPushError("SchemaNotReady", "The existing documents are still being checked against the schema.");
+  let state: ReturnType<typeof schemaStateOf> | null = null;
+  if (schemaId !== null) {
+    const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
+    state = schemaStateOf(row);
+    const failed = schemaFailureOf(row);
+    if (failed) throw new SchemaPushError("SchemaNotReady", `Schema validation failed: ${failed.error}`);
+    if (!row || (state !== "pending" && state !== "validated" && state !== "active"))
+      throw new SchemaPushError("RaceDetected", "Schema was overwritten by another push.");
+    if (state === "pending")
+      throw new SchemaPushError("SchemaNotReady", "The existing documents are still being checked against the schema.");
+  }
   const { tables, indexes } = await readCatalog(db);
-  const f = finishCatalog(declared, tables, indexes, namespace);
+  const f = finishCatalog(declared, tables, indexes, namespace, true);
   if (!f) throw new SchemaPushError("SchemaNotReady", "The schema's indexes are still backfilling.");
   for (const i of f.drop) {
     await db.delete(INDEX_TABLE, i._id);
@@ -4517,9 +4551,11 @@ async function finishSchemaIn(
     // Convex's `clear_active`: the active schema is kept, `overwritten`.
     for (const old of await db.query(SCHEMAS_TABLE).collect())
       if (schemaStateOf(old) === "active") await markOverwritten(db, old._id as string);
-    await db.patch(SCHEMAS_TABLE, schemaId, { state: { state: "active" } });
-    // Convex's `mark_active`: the enforced walk's rows go; the staged ones keep running under this schema.
-    await deleteEnforcedValidationsForSchema(db, schemaId);
+    if (schemaId !== null) {
+      await db.patch(SCHEMAS_TABLE, schemaId, { state: { state: "active" } });
+      // Convex's `mark_active`: the enforced walk's rows go; the staged ones keep running under this schema.
+      await deleteEnforcedValidationsForSchema(db, schemaId);
+    }
   }
   return { f, tables };
 }

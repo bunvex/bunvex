@@ -181,9 +181,10 @@ export async function startComponentSchemas(
   engine: Engine,
   app: CheckedComponent,
   schemas: ReadonlyMap<string, EngineSchema | null>,
-  rootSchema: EngineSchema,
+  /** The app's schema; null when pushed without one. */
+  rootSchema: EngineSchema | null,
   dryRun: boolean,
-): Promise<ComponentsSchemaChange & { start: () => Promise<{ rootSchemaId: string }> }> {
+): Promise<ComponentsSchemaChange & { start: () => Promise<{ rootSchemaId: string | null }> }> {
   const rows = (await engine.query((db) => db.asSystem(() => db.query("_components").collect()))).map((r) =>
     componentMeta(r as Record<string, unknown>),
   );

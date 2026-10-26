@@ -37,6 +37,9 @@ backend is always started with `--disable-beacon`.
 - `test/backfill-progress.test.ts` (STUDY-174 S1): a push adds an index to a table with documents (the app of
   `backfill-progress-app/`); once backfilled, the `_index_backfills` row is read from each store's SQLite file and
   compared: the count, the table's total, the cursor. Local only.
+- `test/push-without-schema.test.ts` (STUDY-187 X23): the app of `no-schema-app/` and its component `kv`, deployed
+  with and without each `schema.ts`; after each deploy, `get_schema`, the export's JSON Schema and a query by each
+  index, and at the end the `_schemas` rows of each store, compared. Local only.
 - `test/schemas-overwritten.test.ts` (STUDY-187 X3): the app of `schemas-overwritten-app/` deployed with four
   schemas in a row (one its document does not match, the last one twice); the `_schemas` rows are read from each
   store's SQLite file and compared, by creation time: the replaced ones `overwritten`, the refused one `failed`, the

@@ -46,7 +46,7 @@ const until = async (f: () => Promise<boolean>) => {
   throw new Error("timed out");
 };
 
-async function push(e: Engine, schema: Parameters<Engine["startSchemaPush"]>[0]) {
+async function push(e: Engine, schema: NonNullable<Parameters<Engine["startSchemaPush"]>[0]>) {
   const p = await e.startSchemaPush(schema);
   await until(async () => (await e.schemaPushStatus(p.schemaId)).type === "complete");
   await e.commitSchemaPush(p.schemaId, async () => {});
