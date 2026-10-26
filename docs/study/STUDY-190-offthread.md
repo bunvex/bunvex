@@ -1,8 +1,9 @@
 # STUDY-190 — Work off the one JS thread
-<!-- index: Work off the one JS thread (STUDY-184 Q2): how Convex's backend spreads over cores, fresh per-request profiles of bench/server.ts (Mac, Linux VPS, DigitalOcean), the cost of a message between Bun threads, five candidates prototyped in bench/offthread/ (SQLite commits on a writer thread, SQLite readers, value work, HTTP front threads, execution on workers) and a ranked plan of PRs | decided (owner, 2026-10-26): every §8 recommendation; DV-573, DV-574 -->
+<!-- index: Work off the one JS thread (STUDY-184 Q2): how Convex's backend spreads over cores, fresh per-request profiles of bench/server.ts (Mac, Linux VPS, DigitalOcean), the cost of a message between Bun threads, five candidates prototyped in bench/offthread/ (SQLite commits on a writer thread, SQLite readers, value work, HTTP front threads, execution on workers) and a ranked plan of PRs | decided (owner, 2026-10-26): every §8 recommendation; DV-573, DV-574; PR 1 in #878 -->
 
-- **Status:** decided (owner, 2026-10-26): every §8 recommendation; DV-573, DV-574. No product change yet: the prototypes are in `bench/offthread/`, and no
-  default code path reaches them.
+- **Status:** decided (owner, 2026-10-26): every §8 recommendation; DV-573, DV-574. PR 1 (the SQLite writer thread) is #878:
+  on DO `c-4` (sfo2, Xeon 8168), insert +46 % and increment1000 +21 %, reads unchanged
+  (`bench/results/cloud/2026-10-26-18-*`). PRs 2–5 are not built; the prototypes are in `bench/offthread/`.
 - **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
   - `crates/runtime/src/prod.rs`, `crates/common/src/knobs.rs`;
   - `crates/isolate/src/client.rs`, `crates/function_runner/src/in_process_function_runner.rs`;
@@ -368,7 +369,7 @@ message when the main thread is the bottleneck; on Linux the main thread's own C
 
 | # | PR | Expected gain (from §4) | The measurement that proves it |
 |---|---|---|---|
-| 1 | **SQLite writer thread**: every write of the SQLite store on one Worker with its own connection; the main connection only reads; Worker failure fails the pending flushes | SQLite insert +30–36 %, increment +20 % (DO); reads beside writes +20 % on a 1-vCPU box | `bench/offthread/profile.ts` insert, increment1000 and mix on DO `c-4` and on the VPS, against the baseline of the same box; PERSIST-01 conformance and the crash tests on SQLite unchanged |
+| 1 | **SQLite writer thread** (#878: insert +46 %, increment1000 +21 % on DO `c-4`): every write of the SQLite store on one Worker with its own connection; the main connection only reads; Worker failure fails the pending flushes | SQLite insert +30–36 %, increment +20 % (DO); reads beside writes +20 % on a 1-vCPU box | `bench/offthread/profile.ts` insert, increment1000 and mix on DO `c-4` and on the VPS, against the baseline of the same box; PERSIST-01 conformance and the crash tests on SQLite unchanged |
 | 2 | **Query workers (A2 on threads, reads)**: queries run on a pool of Workers at the main thread's timestamp, each with its own store connection (SQLite reader, or its own Postgres pool), returning the result text and read set; the cache and subscriptions stay on the main thread | uncached reads up to the machine's ceiling: about 1.6–2× on DO `c-4`; the main thread's ceiling is 2.6× | uncached on DO `c-4` and the VPS; a vm-vs-worker differential test of every query answer, error and read set |
 | 3 | **Mutation workers (A2 on threads, writes)**: mutations the same way, their writes and reads committed by the main thread's committer | insert and increment past what PR 1 gives, until the committer or the store bounds them | insert, increment1000 and increment1 (OCC conflicts) on DO; OCC and serializability tests |
 | 4 | **Action and HTTP action workers**, as PR 2 | proportional to the action's own work | the `action` scenario |
