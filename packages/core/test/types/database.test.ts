@@ -3,7 +3,11 @@
 import { expect, test } from "bun:test";
 import { type GenericId, v } from "@bunvex/values";
 import type { DataModelFromSchemaDefinition } from "../../src/data-model.ts";
-import type { GenericDatabaseReader, GenericDatabaseWriter } from "../../src/database-types.ts";
+import type {
+  GenericDatabaseReader,
+  GenericDatabaseWriter,
+  GenericDatabaseWriterWithTable,
+} from "../../src/database-types.ts";
 import { Engine } from "../../src/engine.ts";
 import { MemoryPersistence } from "../../src/persistence/memory.ts";
 import { defineSchema, defineTable } from "../../src/schema.ts";
@@ -21,7 +25,19 @@ const schema = defineSchema({
 type DM = DataModelFromSchemaDefinition<typeof schema>;
 
 // Type-level checks against a typed database (never run: the async function is only type-checked).
-async function typed(db: GenericDatabaseWriter<DM>, reader: GenericDatabaseReader<DM>) {
+async function typed(
+  db: GenericDatabaseWriter<DM>,
+  reader: GenericDatabaseReader<DM>,
+  tables: GenericDatabaseWriterWithTable<DM>,
+) {
+  // The table-first overloads come first, as Convex's: `Parameters` sees the last, the id-first one.
+  type Arity<F extends (...args: never[]) => unknown> = Parameters<F>["length"];
+  check<
+    Equal<
+      [Arity<typeof db.get>, Arity<typeof db.patch>, Arity<typeof db.replace>, Arity<typeof db.delete>],
+      [1, 2, 2, 1]
+    >
+  >(true);
   const userId = await db.insert("users", { name: "ada", age: 36 });
   check<Equal<typeof userId, GenericId<"users">>>(true);
   // @ts-expect-error a missing field
@@ -41,6 +57,18 @@ async function typed(db: GenericDatabaseWriter<DM>, reader: GenericDatabaseReade
   // @ts-expect-error the wrong type for a field
   await db.patch(userId, { age: "old" });
   await db.patch("users", userId, { address: undefined });
+  // A patch takes only the table's fields, as Convex's `PatchValue` (STUDY-189 T1).
+  // @ts-expect-error not a field of users
+  await db.patch(userId, { nope: 1 });
+  // @ts-expect-error not a field of users, table first
+  await db.patch("users", userId, { nope: 1 });
+  // @ts-expect-error a field of another table
+  await db.patch(userId, { body: "hi" });
+  // @ts-expect-error not a field of users, through `db.table`
+  await tables.table("users").patch(userId, { nope: 1 });
+  await tables.table("users").patch(userId, { age: 40 });
+  // `_creationTime` is in the type on both sides (the engine checks it matches).
+  await db.patch(userId, { _creationTime: 1 });
   await db.replace(userId, { name: "ada", age: 38 });
   await db.delete(messageId);
   // Index names and fields, in order, with their values' types.
