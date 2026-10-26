@@ -1,8 +1,9 @@
 # STUDY-184 — Horizontal scaling: Convex's real shape, and what one bunvex process does with a core
-<!-- index: Horizontal scaling: Convex's real shape, one bunvex process per core | owner questions -->
+<!-- index: Horizontal scaling: Convex's real shape, one bunvex process per core | decided (owner, 2026-10-26): Convex's shape, pending measurement 3 -->
 
 - **Status:** rewritten from scratch on 2026-10-26. The earlier draft did not read Convex's source, and its load
-  measured the client rather than the server (§5.1). No product change. Owner questions in §7.
+  measured the client rather than the server (§5.1). No product change. Decided (owner, 2026-10-26): every §7
+  recommendation.
 - **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
   - `crates/database/src/{database,committer,subscription,transaction,retention}.rs`;
   - `crates/postgres/src/{lib,sql}.rs`, `crates/mysql/src/v5/persistence.rs`;
@@ -174,8 +175,9 @@ none.
 
 ## 4. Divergences
 
-Nothing new is recorded here. STUDY-24's DV-113–DV-121 stand as the owner decided them. If Q1 changes direction,
-DV-114, DV-116, DV-118 and DV-119 change with it.
+Nothing new is recorded here. Q1 (owner, 2026-10-26) follows Convex's shape, so DV-114, DV-116, DV-118 and DV-119
+are marked as under review in `divergences.md`. They are withdrawn or rewritten once §5.2's measurement 3 is in.
+DV-113, DV-115, DV-117 and DV-121 hold in both shapes.
 
 ## 5. Measurements, 2026-10-26
 
@@ -239,7 +241,10 @@ None proposed.
 
 ## 7. Owner questions
 
-| # | Question | Recommendation |
+Decided (owner, 2026-10-26): every recommendation below. Q1's direction is Convex's shape; measurement 3 confirms
+it before any follower code.
+
+| # | Question | Recommendation (decided) |
 |---|---|---|
 | Q1 | Keep STUDY-24's H2/H4 (followers execute queries and own subscriptions, fed by a pushed commit stream), or follow Convex's shape: the leader keeps the commit and the subscriptions, and other processes take execution against the store at the leader's timestamp (A2, already decided) and sockets forwarded to the leader? | Follow Convex's shape. It needs no commit stream, no read index and no lag handling, and its read-your-writes is automatic. Its cost is that the leader's subscription work does not spread; §5.1 did not load subscriptions, so measurement 3 in §5.2 decides it |
 | Q2 | Before any follower: take work off the one JS thread inside one process first, for example SQLite's synchronous writes (51 % of an insert's main thread) and the per-request value checks? | Yes. It raises what one process does, and every design in §3.1 needs it |
