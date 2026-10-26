@@ -1,5 +1,6 @@
 {
   "gets": [
+    "_tables.by_creation_time  ffffffff",
     "_tables.by_id 10<id0>00 10<id0>01",
     "big.by_id 10<id1>00 10<id1>01",
     "big.by_id 10<id2>00 10<id2>01",
@@ -8,17 +9,20 @@
     "big.by_id 10<id5>00 10<id5>01"
   ],
   "a get twice": [
+    "_tables.by_creation_time  ffffffff",
     "_tables.by_id 10<id0>00 10<id0>01",
     "big.by_id 10<id1>00 10<id1>01",
     "big.by_id 10<id1>00 10<id1>01"
   ],
   "patch a document read": [
+    "_tables.by_creation_time  ffffffff",
     "_tables.by_id 10<id0>00 10<id0>01",
     "big.by_id 10<id1>00 10<id1>01",
     "big.by_id 10<id1>00 10<id1>01"
   ],
-  "insert, then get it": ["_tables.by_id 10<id0>00 10<id0>01"],
+  "insert, then get it": ["_tables.by_creation_time  ffffffff", "_tables.by_id 10<id0>00 10<id0>01"],
   "a new table": [
+    "_tables.by_creation_time  ffffffff",
     "_tables.by_id 10<id0>00 10<id0>01",
     "_tables.by_creation_time  ffffffff",
     "_tables.by_id 10<id1>00 10<id1>01",
@@ -28,22 +32,45 @@
     "_next_persistence_index_id.by_creation_time  <time>10<id3>01",
     "_next_persistence_index_id.by_id 10<id3>00 10<id3>01"
   ],
-  "first": ["_tables.by_id 10<id0>00 10<id0>01", "small.by_creation_time  <time>10<id1>01"],
+  "first": [
+    "_tables.by_creation_time  ffffffff",
+    "_tables.by_id 10<id0>00 10<id0>01",
+    "small.by_creation_time  <time>10<id1>01"
+  ],
   "first twice": [
+    "_tables.by_creation_time  ffffffff",
     "_tables.by_id 10<id0>00 10<id0>01",
     "small.by_creation_time  <time>10<id1>01",
     "small.by_creation_time  <time>10<id1>01"
   ],
-  "collect": ["_tables.by_id 10<id0>00 10<id0>01", "small.by_creation_time  ffffffff"],
-  "take": ["_tables.by_id 10<id0>00 10<id0>01", "big.by_creation_time  <time>10<id1>01"],
-  "desc": ["_tables.by_id 10<id0>00 10<id0>01", "big.by_creation_time <time>10<id1>00 ffffffff"],
-  "iterate, then stop": ["_tables.by_id 10<id0>00 10<id0>01", "big.by_creation_time  <time>10<id1>01"],
+  "collect": [
+    "_tables.by_creation_time  ffffffff",
+    "_tables.by_id 10<id0>00 10<id0>01",
+    "small.by_creation_time  ffffffff"
+  ],
+  "take": [
+    "_tables.by_creation_time  ffffffff",
+    "_tables.by_id 10<id0>00 10<id0>01",
+    "big.by_creation_time  <time>10<id1>01"
+  ],
+  "desc": [
+    "_tables.by_creation_time  ffffffff",
+    "_tables.by_id 10<id0>00 10<id0>01",
+    "big.by_creation_time <time>10<id1>00 ffffffff"
+  ],
+  "iterate, then stop": [
+    "_tables.by_creation_time  ffffffff",
+    "_tables.by_id 10<id0>00 10<id0>01",
+    "big.by_creation_time  <time>10<id1>01"
+  ],
   "eq": [
+    "_tables.by_creation_time  ffffffff",
     "_tables.by_id 10<id0>00 10<id0>01",
     "_index.by_id 10<id1>00 10<id1>01",
     "small.by_k 0dc008000000000000 0dc008000000000000ff"
   ],
   "adjacent ranges": [
+    "_tables.by_creation_time  ffffffff",
     "_tables.by_id 10<id0>00 10<id0>01",
     "_index.by_id 10<id1>00 10<id1>01",
     "big.by_i 0dc024000000000000 0dc034000000000000",
@@ -51,13 +78,20 @@
     "big.by_i 0dc034000000000000 0dc03e000000000000"
   ],
   "a page": [
+    "_tables.by_creation_time  ffffffff",
     "_tables.by_id 10<id0>00 10<id0>01",
     "_index.by_id 10<id1>00 10<id1>01",
     "small.by_k  0dc000000000000000<time>10<id2>01"
   ],
   "a missing table": ["_tables.by_creation_time  ffffffff"],
-  "count": ["_tables.by_id 10<id0>00 10<id0>01", "big.by_id 10<id1>00 10<id1>01", "big.by_creation_time  ffffffff"],
+  "count": [
+    "_tables.by_creation_time  ffffffff",
+    "_tables.by_id 10<id0>00 10<id0>01",
+    "big.by_id 10<id1>00 10<id1>01",
+    "big.by_creation_time  ffffffff"
+  ],
   "search": [
+    "_tables.by_creation_time  ffffffff",
     "_tables.by_id 10<id0>00 10<id0>01",
     "small.by_id 10<id1>00 10<id1>01",
     "small.by_id 10<id2>00 10<id2>01",

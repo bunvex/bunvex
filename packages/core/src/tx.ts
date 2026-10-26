@@ -831,10 +831,15 @@ export class Tx {
   /**
    * Record that this transaction used table `t` as the catalog had it: a read of its `_tables` document, so
    * a commit that replaces or deletes the table (an import's activation, STUDY-42) conflicts with a mutation
-   * that wrote it and invalidates a query that read it.
+   * that wrote it and invalidates a query that read it. The first table used also reads all of `_tables`, as
+   * Convex's table mapping does (`take_table_mapping_dep`, an interval over every table): a commit that creates,
+   * replaces or deletes any table invalidates the query and conflicts with the mutation (STUDY-187 X22). That
+   * read is on `_tables`' default index, which `catalogTouches` never writes, so an index change stays a
+   * conflict for its own table only, as Convex's `_index` reads are.
    */
   private dependOn(t: TableDef) {
     if (this.systemTx || t.metaId === undefined || this.dependedOn.has(t.id)) return;
+    if (this.dependedOn.size === 0) this.readAllTables();
     this.dependedOn.add(t.id);
     const k = encodeKey([t.metaId]);
     // Convex's table mapping is a read the engine takes (`take_table_mapping_dep`): not counted.
@@ -930,10 +935,10 @@ export class Tx {
   }
 
   /**
-   * A read of a table that does not exist yet: nothing, but the read depends on `_tables`, so a cached
-   * query or a subscription re-runs when the table is created.
+   * A read of every table (Convex's table mapping): a read of a table that does not exist yet is nothing but
+   * this, so a cached query or a subscription re-runs when the table is created.
    */
-  private readMissingTable() {
+  private readAllTables() {
     this.recordInterval(
       { index: defaultIndex(this.catalog.table(TABLES_TABLE)).id, lo: FULL.lo, hi: FULL.hi },
       // the table mapping, not counted (Convex's `take_table_mapping_dep`)
@@ -1257,7 +1262,7 @@ export class Tx {
   private async read(table: string, id: string, method: string): Promise<Doc | null> {
     const t = this.findTable(table);
     if (!t) {
-      this.readMissingTable();
+      this.readAllTables();
       return null;
     }
     if (!this.checkId(table, id, method)) return null;
@@ -1294,7 +1299,7 @@ export class Tx {
    */
   query(table: string): TxQuery {
     const t = this.findTable(table, "query");
-    if (!t) this.readMissingTable(); // a missing table has no rows; the read depends on _tables
+    if (!t) this.readAllTables(); // a missing table has no rows; the read depends on _tables
     const st: QState = {
       t,
       ix: t && defaultIndex(t),
@@ -1313,7 +1318,7 @@ export class Tx {
    */
   queryVirtual(name: string, system: string, toVirtual: (d: Doc) => Doc | Promise<Doc>): TxQuery {
     const t = this.asSystemSync(() => this.findTable(system));
-    if (!t) this.readMissingTable();
+    if (!t) this.readAllTables();
     const st: QState = {
       t,
       ix: t && defaultIndex(t),
@@ -2371,7 +2376,7 @@ export class Tx {
   async countTable(table: string): Promise<number> {
     const t = this.findTable(table);
     if (!t) {
-      this.readMissingTable();
+      this.readAllTables();
       return 0;
     }
     const ix = defaultIndex(t);
