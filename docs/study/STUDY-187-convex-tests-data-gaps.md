@@ -193,11 +193,36 @@ The child already waits for the operations a call started before it answers (`pa
 `settled` / `checked`); the chained one is not seen through to the end. Matching Convex is X13's behaviour (every
 syscall run to the end). Its own PR, in `packages/sandbox`, with the differential case run under `process`.
 
+### 2.12 X22 — creating a table invalidates every cached query
+
+Found by the generated differential programs, intermittently (CI picks random seeds). Seed 347098918 shows it every
+time, and shrinks to three programs: a query reads `b`, a mutation in a later program creates a table nothing reads
+(`nope`), and the same query runs again. Convex runs it again; bunvex answered it from the cache.
+
+- **Convex:** every use of the table mapping records a read of all of `_tables` (`Transaction::table_mapping` →
+  `take_table_mapping_dep`, `database/src/transaction.rs`: `record_indexed_derived` over `_tables.by_id`,
+  `Interval::all()`). Every query and mutation that names a table takes it. A commit that writes any `_tables`
+  document (a table created, replaced by an import, deleted) invalidates every cached query and every subscription,
+  and conflicts with every mutation in flight.
+- **bunvex before:** a transaction read only the `_tables` row of each table it used (`Tx.dependOn`). Only a read of
+  a table that does not exist read all of `_tables`.
+- **bunvex now:** the first table a transaction uses also reads all of `_tables`. That read is on `_tables`'
+  `by_creation_time`, which `Tx.catalogTouches` (bunvex's own write log entries for an index change) never writes. An
+  index change therefore still conflicts only with transactions that used its table, as Convex's per-index `_index`
+  reads do (`transaction_index.rs`, `record_interval`).
+- **What apps observe:** the `cached` flag in the function log, and one more run after a table is created, as on
+  Convex. Mutations in flight while a table is created retry, as on Convex.
+- **Cost:** one interval per transaction. 20 000 mutations and 20 000 indexed queries on the memory store run within
+  noise before and after (about 50–58 k mutations/s and 140–170 k queries/s on both).
+- **Tests:** `packages/differential/test/table-mapping.test.ts` against Convex's binary, which fails without the fix;
+  `tx-b-edges.test.ts`; the read-set fixture, where each shape gains that one read.
+
 ## 3. Order
 
 1. X13 (data loss), X20 (it fails CI at random), X1 and X2 (wrong data or results); X21 after X13.
 2. X12, X18, X3, X5, X6.
 3. X10: reproduction first.
+4. X22 (found after the study), its own PR.
 
 Each is its own PR from `main`, with the oracle case in `packages/differential` where Convex's binary can show it.
 

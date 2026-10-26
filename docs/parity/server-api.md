@@ -262,7 +262,7 @@ Key bunvex facts behind the statuses:
 | `ctx.auth.getUserIdentity()` returns `UserIdentity \| null` in queries, mutations, actions and HTTP actions | server/authentication.ts | done (STUDY-27, STUDY-31) | Queries, mutations, actions (passed to `runQuery` / `runMutation`) and HTTP actions (from `Authorization`; a bad token throws at `getUserIdentity()`). |
 | `UserIdentity` fields (tokenIdentifier, subject, issuer, name, email, emailVerified, …, custom claims) | server/authentication.ts | done (STUDY-27) | `@bunvex/auth` `identityFromOidc` / `identityFromCustomJwt`, with Convex's dropped claims and custom-JWT flattening. |
 | `auth.config.ts` providers: OIDC `{ domain, applicationID }` and `customJwt` `{ issuer, jwks, algorithm RS256/ES256 }` | server/authentication.ts (`AuthConfig`) | done (STUDY-27) | `createServer({ auth })` with `bunvex/auth.config.ts`'s default export (DV-100). |
-| Query cache and subscriptions scoped by identity | crates/application | done (STUDY-27) | A result is keyed by identity only if the run read it, in the query cache and in sync's shared executions (B13). |
+| Query cache and subscriptions scoped by identity | crates/application | done (STUDY-27) | A result is keyed by identity only if the run read it, in the query cache and in sync's shared executions (B13). Every read set holds all of `_tables`, as Convex's table mapping: creating, replacing or deleting a table invalidates every cached query (STUDY-187 X22). |
 
 ### 13. File storage (`ctx.storage`)
 
