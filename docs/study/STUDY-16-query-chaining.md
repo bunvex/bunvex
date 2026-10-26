@@ -1,4 +1,5 @@
 # STUDY-16 — Query chaining, `unique()`, `fullTableScan()` and async iteration
+<!-- index: Query chaining, `unique()`, `fullTableScan()`, async iteration | implemented (#40) -->
 
 - **Status:** implemented (#40); D1 resolved to match Convex (owner, 2026-10-04)
 - **Convex source read:** commit `4577b9031`, `npm-packages/convex/src/server/impl/query_impl.ts`

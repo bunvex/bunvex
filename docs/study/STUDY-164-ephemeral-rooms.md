@@ -1,4 +1,5 @@
 # STUDY-164 — Ephemeral state: rooms, presence and broadcast (an addition)
+<!-- index: Ephemeral state: rooms with presence and broadcast held in memory beside the database (Convex keeps it in tables; its presence component, its peers, minivex's lessons) | built (v1): AD-42 (two concepts, relay through the leader) -->
 
 - **Status:** built (v1) — AD-42 accepted by the owner on 2026-10-15 (§6): rooms and presence scopes, two concepts
   (R2); relay through the leader when followers exist, a bus such as Redis measured then (R5); the rest as proposed.

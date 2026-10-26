@@ -1,4 +1,5 @@
 # STUDY-05 — Value order, index keys and system indexes
+<!-- index: Value order, index keys and system indexes | implemented / decided: all fixed (B5, B6, B11) or resolved (DV-33–DV-37) -->
 
 - **Status:** implemented / decided — every row fixed (#6, #10, #21; Phase 0 B5, B6, B11) or resolved to match Convex (DV-33–DV-37); D13 is the same in both systems. Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

@@ -1,4 +1,5 @@
 # STUDY-131 — Seeing inside a deployment: system tables, subscriptions, traces
+<!-- index: Seeing inside a deployment: system tables, the subscriptions and invalidation inspector, OpenTelemetry traces, a deterministic test runtime | accepted (owner, 2026-10-05): AD-24–AD-27, T1; AD-26 (OTLP traces) implemented (§9); AD-27 (links from Logs) implemented (§10); AD-04's server side (`/api/debug/topology`) implemented (§11) -->
 
 - **Status:** accepted (owner, 2026-10-05): AD-24 to AD-27, AD-26 with an in-house exporter, and T1 module by module. AD-26 built (§9); AD-27 built (§10). AD-25's screen on a deployment since 2026-10-14 ([STUDY-149](STUDY-149-dashboard-real-data.md), "Follow-ups after the plan: AD-25 on a deployment"). AD-04's server side, `/api/debug/topology`, built (§11, owner 2026-10-14).
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05

@@ -1,4 +1,5 @@
 # STUDY-47 — Function log streaming
+<!-- index: Function log streaming: the execution log, `stream_function_logs`, `bunvex logs`, `dev --tail-logs` | accepted: L1–L4, L6 as recommended (owner, 2026-10-03) -->
 
 - **Status:** accepted: L1–L4, L6 (L5 withdrawn: bunvex logs "use node" actions as `node`) as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-02

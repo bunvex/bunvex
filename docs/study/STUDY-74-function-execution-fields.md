@@ -1,4 +1,5 @@
 # STUDY-74 — The `function_execution` fields DV-305 left out
+<!-- index: The `function_execution` fields DV-305 left out: `run_reason` of sync reruns, `scheduler_info`, arguments' bytes, retry counts, the mutation queue | implemented; F1 accepted as recommended (owner, 2026-10-03), DV-320 -->
 
 - **Status:** implemented. Owner decisions (2026-10-03):
   - arguments measured re-serialized (DV-320);

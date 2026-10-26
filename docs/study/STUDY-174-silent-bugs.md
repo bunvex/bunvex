@@ -1,4 +1,5 @@
 # STUDY-174 — Catching silent bugs: invariants, a soak test, metadata differentials
+<!-- index: Catching silent bugs (correct answers, degrading over time or load), after #751: 32 invariants by subsystem with ten probed on main (five did not hold, the first since fixed by #751: the cache expiry, the scheduler and cron timers past 2^31 ms busy-polling, a cache hit's log fields, shutdown waiting on OCC retries); a 45-minute soak judged on trends (`bench/soak/`, twelve rules), whose VPS pilots caught two of those and found resident memory growing ~5 MB/min outside the JS heap; metadata differentials against Convex's binary, with a cache prototype | decided (owner, 2026-10-19: Q1–Q5 as recommended, §10); F4 (a cache hit logs the run it reused) fixed, §10.2; the soak nightly (Q1) in CI, R1 report-only until Q6; Q7 (R8 judges p99 only on windows of 100+ calls) decided and done, §10.3 -->
 
 - **Status:** decided (owner, 2026-10-19: §8 Q1–Q5 as recommended, §10). F4 is fixed (§10.2); the other findings of
   §3.3 are listed, not fixed. The soak nightly (Q1, §9 step 5) is `.github/workflows/soak-nightly.yml`, with every

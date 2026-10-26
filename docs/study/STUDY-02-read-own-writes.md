@@ -1,4 +1,5 @@
 # STUDY-02 — Read-your-own-writes inside a transaction
+<!-- index: Read-your-own-writes inside a transaction | implemented (#3), retroactive -->
 
 - **Status:** implemented (#3). Written retroactively, after the code.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

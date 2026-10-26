@@ -1,4 +1,5 @@
 # STUDY-37 — Deployment environment variables, and the CLI part 1 (`start`, `run`, `env`, `dev`)
+<!-- index: Deployment environment variables (`process.env`, limits, auth config) and the CLI part 1: `start`, `run`, `env`, `dev` | accepted: all as recommended (owner, 2026-10-02) -->
 
 - **Status:** accepted: all as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

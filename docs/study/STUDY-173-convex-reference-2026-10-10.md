@@ -1,4 +1,5 @@
 # STUDY-173 — Convex from d8bdde0 to precompiled-2026-10-10-72ce13c
+<!-- index: Convex from d8bdde0 to `precompiled-2026-10-10-72ce13c`: the 30 commits classified and the 11 carried ones resolved; 8917f16's `env set` instructions taken in the CLI (and `MissingEnvironmentVariables` handled, `dev` pushing again once the variables are set); the four urgent commits after the release (8449d41, 403c3e8, 1a9f5e1, d62e1c7) and their fix branches; the differential oracle moved to that release | implemented; owner decisions 2026-10-19: no new divergence (Q1 DV-494, Q3 DV-477), `indexes:backfilling` a gap until the dashboard's deploy-progress line (Q2) -->
 
 - **Status:** implemented; the owner's questions (§6) decided on 2026-10-19: no new divergence.
 - **Convex source read:** get-convex/convex-backend from `d8bdde0` (the reference since

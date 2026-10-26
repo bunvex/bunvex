@@ -1,4 +1,5 @@
 # STUDY-NN — <topic>
+<!-- index: <topic, one line> | draft -->
 
 - **Status:** draft
 - **Convex source read:** commit `<sha>` of get-convex/convex-backend

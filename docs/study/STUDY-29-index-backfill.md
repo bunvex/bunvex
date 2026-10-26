@@ -1,4 +1,5 @@
 # STUDY-29 — Background index backfill
+<!-- index: Background index backfill: index states, staged indexes, the worker, checkpoints and resume, queries on a backfilling index | implemented (#115); B1, B2 decided (owner, 2026-10-01: DV-126, DV-127) -->
 
 - **Status:** implemented (#115); B1 and B2 (§4) decided (owner, 2026-10-01: approved as recommended); B2 reversed and built as Convex's with STUDY-133 PR 3 (DV-127)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

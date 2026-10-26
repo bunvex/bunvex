@@ -1,4 +1,5 @@
 # STUDY-129 — `_auth`, the stored auth providers
+<!-- index: `_auth`: the deployed auth providers stored as Convex's documents, written by a push and by variable and canonical URL changes, read at start and by `listAuthProviders`; `finish_push`'s `authDiff` | implemented (DV-406) -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05

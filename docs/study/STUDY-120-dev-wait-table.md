@@ -1,4 +1,5 @@
 # STUDY-120 — `dev` waits on a table after a schema validation failure
+<!-- index: `dev` waits on the table a schema validation failed on (`_system/cli/queryTable`), and Convex's failure message | implemented, no divergence -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05

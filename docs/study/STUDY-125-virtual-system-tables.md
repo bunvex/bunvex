@@ -1,4 +1,5 @@
 # STUDY-125 — Virtual system tables: `_file_storage`, `_scheduled_jobs`, `_scheduled_job_args`
+<!-- index: Convex's physical system tables (`_file_storage`, `_scheduled_jobs`, `_scheduled_job_args`) behind the virtual `_storage` and `_scheduled_functions`: ids, indexes, `db.system`, the scheduler, snapshots | implemented (owner, 2026-10-05: match Convex's layout; DV-400 accepted; DV-401 matched, §7) -->
 
 - **Status:** implemented (owner decision 2026-10-05: match Convex's physical/virtual layout; no legacy data,
   no migration; system tables behave as the latest Convex version)

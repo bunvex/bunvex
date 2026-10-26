@@ -1,4 +1,5 @@
 # STUDY-54 — React providers for Clerk and Auth0
+<!-- index: React providers for Clerk and Auth0: `BunvexProviderWithClerk`, `BunvexProviderWithAuth0` | accepted: X1–X2 as recommended (owner, 2026-10-03) -->
 
 - **Status:** accepted: X1–X2 as recommended (owner, 2026-10-03)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

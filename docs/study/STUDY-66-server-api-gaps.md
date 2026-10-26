@@ -1,4 +1,5 @@
 # STUDY-66 — Small server-API gaps: `.limit(n)`, the operator cap, `db.table()`, returned queries, the restricted globals, bad tokens, schema helpers, registration guards
+<!-- index: Small server-API gaps: `.limit(n)` and the 256-operator cap, `db.table()`, returned queries, `fetch` / timers / randomness in queries and mutations, bad tokens in nested actions, `schema.doc` / `schema.id` / `docValidator`, registration guards | draft; no divergence needing the owner -->
 
 - **Status:** draft; each section is built in its own PR ("Now" describes the PR's change): §1 #291, §2 #296,
   §3 #297, §4 #294, §5 #306, §6 #304, §7 #305

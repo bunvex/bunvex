@@ -1,4 +1,5 @@
 # STUDY-162 — The custom test query's types and completions
+<!-- index: The custom test query's types and completions: Convex's bundled `convex/server` and `convex/values` declarations, its editor's globals, generated data model and schema; bunvex's declarations as a lazy chunk made at build, the query's files from the deployment's schema, Monaco's type checking and suggestions; search and vector index names (§8) | implemented (owner, 2026-10-15: match Convex) -->
 
 - **Status:** approved by the owner (2026-10-15: match Convex); implemented, §8 too (owner, 2026-10-15) (one PR: the declarations and the editor
   only work together)

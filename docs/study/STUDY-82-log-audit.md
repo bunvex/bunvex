@@ -1,4 +1,5 @@
 # STUDY-82 — The `log` export: `log.audit` and `log.vars`
+<!-- index: The `log` export: `log.audit(body)` and `log.vars`, audit log lines, their limits and the `custom_audit` topic | implemented -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04

@@ -1,4 +1,5 @@
 # STUDY-136 — The index cache: a cache of persistence index reads
+<!-- index: The index cache: a cache of persistence index reads under the query cache (Convex's `IndexCache`), lazy validation against the write log, the populate race, verification, and what it gains per driver (prototype and measurement) | implemented; I1–I6 accepted (owner, 2026-10-06; DV-432–DV-434) -->
 
 - **Status:** implemented. I1–I6 accepted as recommended (owner, 2026-10-06: "sim pode seguir, vamos
   implementar"); DV-432–DV-434 decided.

@@ -1,4 +1,5 @@
 # STUDY-134 — System-table row shapes, as Convex writes them
+<!-- index: System-table rows in Convex's shapes: `_tables`, `_index` and `_index_backfills`, `_schemas`, `_modules` / `_source_packages`, crons and `_udf_config`, the persistence globals, `_backend_state` | implemented (#473, #480, #477, #476, #478, #475, #474, #482); DV-421–DV-427 and DV-430 resolved, DV-428 / DV-429 waiting on a dependency (owner, 2026-10-05) -->
 
 - **Status:** implemented in #473, #480, #477, #476, #478, #475, #474, #482 (owner, 2026-10-05: every system-table
   row shape matches Convex's latest version; no legacy data, no migration); DV-421–DV-427 and DV-430 resolved;

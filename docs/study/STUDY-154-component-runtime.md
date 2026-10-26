@@ -1,4 +1,5 @@
 # STUDY-154 — Components: running a function inside a component (STUDY-152 step 4)
+<!-- index: Components, step 4: running a function inside a component — the admin entries with a component path, its code, env, schema and refusals, errors, logs and cache; a three-PR plan | decided (owner, 2026-10-16): DV-530; being built -->
 
 - **Status:** decided (owner, 2026-10-16): P-1 a 400 at `/api/function` too (DV-530), P-2 refused until step 7, P-3
   measured in PR 2 (§5). Steps 1–3 are built (STUDY-152 §10–11, STUDY-153).

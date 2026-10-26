@@ -1,4 +1,5 @@
 # STUDY-28 — Built-in authentication (users, sessions, a Users dashboard) on better-auth
+<!-- index: Built-in authentication on better-auth, hosted in the engine: users, sessions, plugins, a Users dashboard (beyond Convex) | accepted: B1–B10 as recommended (owner, 2026-10-01); spike done -->
 
 - **Status:** accepted: B1–B10 as recommended (owner, 2026-10-01); spike done (§7), the design holds
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (dashboard, docs); get-convex/convex-auth

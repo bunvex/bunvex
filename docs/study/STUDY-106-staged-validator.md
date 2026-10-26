@@ -1,4 +1,5 @@
 # STUDY-106 — `TableDefinition.staged(validator)`
+<!-- index: `TableDefinition.staged(validator)`: accepted, serialized and stored with the schema; nothing checks documents against it, as in Convex | implemented; DV-356 (owner, 2026-10-05) -->
 
 - **Status:** implemented at 4577b9031; **revisited 2026-10-08 (§7)**: Convex now validates staged validators (DV-438, to be built). §1–§3 describe 4577b9031; where §7 disagrees, §7 is current.
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05; origin/main 7236c10, 2026-10-08 (§7)

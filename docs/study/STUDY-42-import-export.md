@@ -1,4 +1,5 @@
 # STUDY-42 — Snapshot export and import (`bunvex export`, `bunvex import`)
+<!-- index: Snapshot export (ZIP, `_exports`, endpoints, `bunvex export`) and import (CSV/JSON/JSONL/ZIP, modes, hidden tables, `_snapshot_imports`, `bunvex import`) | accepted: all as recommended (owner, 2026-10-02) -->
 
 - **Status:** accepted: all as recommended (owner, 2026-10-02); X6–X8 (found while building PR 3) accepted as recommended (owner, 2026-10-02), X6 and X7 built in #210; X9 accepted (owner, 2026-10-02) and built in #216
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

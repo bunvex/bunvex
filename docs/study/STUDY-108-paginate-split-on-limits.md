@@ -1,4 +1,5 @@
 # STUDY-108 — `paginate()` at a transaction limit: `SplitRequired`, and limit error codes
+<!-- index: `paginate()` at a transaction limit: `SplitRequired` instead of the error, as Convex's `read_page_from_query`; limit error codes kept internal; Convex's page limits (pinned pages, split cursor, soft limits) | implemented; owner decisions 2026-10-05; DV-362 resolved to match Convex -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05

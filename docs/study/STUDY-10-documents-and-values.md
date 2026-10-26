@@ -1,4 +1,5 @@
 # STUDY-10 — Documents and values: types, field names, limits, insert/patch/replace/delete
+<!-- index: Documents and values | implemented / decided; D12 (`db.system`) a gap (DV-69) -->
 
 - **Status:** implemented / decided — D1, D3 fixed (#13, #21; Phase 0 B7, B9); D2, D4–D11 resolved to match Convex (DV-46–DV-48); D12's read-only system tables and `db.system` are a gap to match Convex (DV-69). Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

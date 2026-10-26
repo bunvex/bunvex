@@ -1,4 +1,5 @@
 # STUDY-132 — A deterministic runtime for tests, and why the tests flaked
+<!-- index: A deterministic runtime for tests (STUDY-131 T1), as Convex's test runtime; why the flaky tests flaked: test servers shadowed on 127.0.0.1, real-time budgets, assumed orders | accepted (owner, 2026-10-05: module by module); PRs 1–3 implemented, the rest listed in §6 -->
 
 - **Status:** implemented in parts (T1 of STUDY-131, accepted by the owner on 2026-10-05: module by module,
   starting with the flaky tests). PR 1 (loopback test servers), PR 2 (the runtime, the execution limits and

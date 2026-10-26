@@ -1,4 +1,5 @@
 # STUDY-115 — The deployment's OpenAPI documents
+<!-- index: The OpenAPI documents: `/api/v1/openapi.json`, `/api/dashboard_openapi.json`, `/api/public_openapi.json`, from a route table the `/api/v1/` router checks | implemented; O1–O2 decided by the owner (2026-10-05), DV-381, DV-382 -->
 
 - **Status:** implemented; O1–O2 decided by the owner (2026-10-05), DV-381, DV-382
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05

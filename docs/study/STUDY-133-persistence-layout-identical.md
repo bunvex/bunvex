@@ -1,4 +1,5 @@
 # STUDY-133 — A persisted layout identical to Convex's (cross-open)
+<!-- index: A persisted layout identical to Convex's on SQLite, Postgres and MySQL (16-byte ids, tablets as `_tables` rows, ns, `prev_ts`, bootstrap globals, system tables and document shapes), so a store cross-opens; the MongoDB analogue; the PR series | accepted (owner, 2026-10-05): DV-411–DV-420 decided; the PR series is complete (PRs 1–11) -->
 
 - **Status:** accepted (owner, 2026-10-05): the goal, the design and Q1–Q11 decided (§8a); the PR series
   of §7 is built (PRs 1–11).

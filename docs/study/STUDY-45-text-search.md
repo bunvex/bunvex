@@ -1,4 +1,5 @@
 # STUDY-45 — Full-text search (`searchIndex`, `withSearchIndex`)
+<!-- index: Full-text search: `searchIndex`, `withSearchIndex`, tokens, BM25, limits, reactivity | accepted: S1–S6 as recommended (owner, 2026-10-02) -->
 
 - **Status:** accepted: S1–S6 as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend. Convex runs a fork of tantivy

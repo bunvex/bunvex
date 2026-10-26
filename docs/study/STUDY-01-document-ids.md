@@ -1,4 +1,5 @@
 # STUDY-01 — Document IDs (`_id`) and table numbers
+<!-- index: Document IDs (`_id`) and table numbers | accepted (C: as Convex) -->
 
 - **Status:** accepted: option C, Convex's format and generator exactly (owner, 2026-09-29)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (2026-09-28)

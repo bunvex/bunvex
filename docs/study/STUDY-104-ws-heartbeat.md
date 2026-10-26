@@ -1,4 +1,5 @@
 # STUDY-104 — The sync socket's WS heartbeat and close frames
+<!-- index: The sync socket's WS heartbeat (a 5 s ping, a 120 s timeout closing with 1000 `ClientDisconnected`) and Convex's close frames (`close_frame`, the `FatalError` first, 1005 for no code) | implemented; DV-352–DV-354 (owner, 2026-10-05) -->
 
 - **Status:** implemented (owner decisions of 2026-10-05: DV-352, DV-353, DV-354)
 - **Convex source read:** commit `4577b9031cbe32ddffbf8b6a61a07fe4a5dd6922` of get-convex/convex-backend

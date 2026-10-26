@@ -1,4 +1,5 @@
 # STUDY-44 — `ctx.meta`: function, transaction, deployment and request metadata
+<!-- index: `ctx.meta`: function, transaction, deployment, snapshot and request metadata | built; no divergence -->
 
 - **Status:** built (no divergence; nothing for the owner to decide)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

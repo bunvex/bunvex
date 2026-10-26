@@ -1,4 +1,5 @@
 # STUDY-151 — A batch of small parity items
+<!-- index: A batch of small parity items: system table messages, `deploy -y`, the HTTP API's methods, `getServiceToken`/`getServiceUrl`, `setDefaultWebSocketConstructor`, `_audit_log_config` | decided (owner, 2026-10-12); DV-491; implemented (#608, #609, #611, #614, #615, and §6 *n/a*) -->
 
 - **Status:** implemented (owner's decisions, 2026-10-12), one PR per item: §1 system table messages (#608), §2 `deploy -y`
   (#609), §3 the HTTP API's methods (#611), §4 `getServiceToken` /

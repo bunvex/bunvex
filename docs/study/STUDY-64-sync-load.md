@@ -1,4 +1,5 @@
 # STUDY-64 — The sync worker under load and outages
+<!-- index: The sync worker under load and outages: the 60 s mutation timeout, per-socket caps, single-flight transitions, query rerun concurrency and retries, the reconnect limiter, result and argument sizes | W1 decided (owner, 2026-10-03: accept) -->
 
 - **Status:** W1 decided (owner, 2026-10-03: accept)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

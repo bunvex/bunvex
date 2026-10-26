@@ -1,4 +1,5 @@
 # STUDY-30 — Scheduled functions and cron jobs
+<!-- index: Scheduled functions (`ctx.scheduler`, `_scheduled_functions`) and cron jobs | accepted: S1–S3 as recommended (owner, 2026-10-01) -->
 
 - **Status:** accepted: S1–S4 as recommended (owner, 2026-10-01)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

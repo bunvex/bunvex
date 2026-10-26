@@ -1,4 +1,5 @@
 # STUDY-145 — The remaining `convex.json` keys in `bunvex.json`
+<!-- index: The remaining `convex.json` keys in `bunvex.json`: `node` and `bundler` checked with Convex's messages in its key order; `node.nodeVersion` sent with the push, checked by the deployment ("18" and unknown versions a 400 `InvalidConfig`), stored on the package and diffed in the audit log; `bundler.includeSourcesContent`; `externalPackages` left to its own track | implemented -->
 
 - **Status:** implemented
 - **Convex source read:** commit `4577b903` of get-convex/convex-backend; the messages checked against the

@@ -1,4 +1,5 @@
 # STUDY-172 — The backend's command-line messages, as clap writes them
+<!-- index: The backend's command-line messages as clap writes them: value names (`<FUNCTION_SANDBOX>`, not `<FUNCTION-SANDBOX>`), possible values, tips, usage lines, the trailer; Rust's `u16` and `Ipv4Addr` checks; Convex's `Error:` (exit 1) once the flags parse; checked against Convex's binary; §7, a `0x`-prefixed instance secret (Q1) | implemented (owner, 2026-10-19: match Convex; §7 the same day) -->
 
 - **Status:** implemented (this PR; the owner approved matching Convex, 2026-10-19)
 - **Convex source read:** commit `d8bdde0` of get-convex/convex-backend; clap_builder 4.5.31 (Convex's

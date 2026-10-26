@@ -1,4 +1,5 @@
 # STUDY-118 — `bunvex deployment usage` and `usage-limits list|set|remove`
+<!-- index: `bunvex deployment usage` and `usage-limits list\|set\|remove`: Convex's commands, tables and messages on STUDY-61's routes | implemented (owner, 2026-10-05: the `deployment` group; metrics per DV-308) -->
 
 - **Status:** implemented (owner decisions, 2026-10-05: the `deployment` group; the metrics per DV-308)
 - **Convex source read:** commit `4577b903` of get-convex/convex-backend

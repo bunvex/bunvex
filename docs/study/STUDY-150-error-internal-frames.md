@@ -1,4 +1,5 @@
 # STUDY-150 — No server frame or path in what an app sees of an error
+<!-- index: No server frame or path in what an app sees of an error: every client and log path audited; a pushed context's `Error.prepareStackTrace` (Convex's frames-only V8 `error.stack`), its context seen through an in-realm wrapper that gives an engine error the app's frames (`performAsyncSyscall`'s `at async`), its own `BunvexError`; checked against the binary | implemented; DV-482 accepted (owner, 2026-10-14) -->
 
 - **Status:** implemented; DV-482 accepted (owner, 2026-10-14)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend; oracle binary

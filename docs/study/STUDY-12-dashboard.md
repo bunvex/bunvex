@@ -1,4 +1,5 @@
 # STUDY-12 — The dashboard (Data browser first)
+<!-- index: The dashboard: every screen, built on the mock (§1–§15); on a deployment since STUDY-149 | accepted: divergences decided; bunvex additions recorded; open items in §6 (the Health review) -->
 
 - **Status:** accepted — every divergence decided by the owner (29 Sep–1 Oct 2026); bunvex additions
   (snapshots, Topology, Files buckets placeholder, Authentication, the design language) recorded as such;

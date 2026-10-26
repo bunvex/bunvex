@@ -1,4 +1,5 @@
 # STUDY-107 — `count()` on the query initializer
+<!-- index: `count()` on the query initializer (Convex's internal `1.0/count`): the snapshot's count with the transaction's own writes, virtual tables, bootstrapping | implemented; C1 decided (owner, 2026-10-05, DV-359); C3, C4 resolved to match Convex (owner, 2026-10-05, DV-360, DV-361) -->
 
 - **Status:** implemented; DV-359 decided (owner, 2026-10-05); C3 (DV-360) and C4 (DV-361) resolved to match Convex (owner, 2026-10-05)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05

@@ -1,4 +1,5 @@
 # STUDY-23 — Sync protocol v1: transitions, read-your-writes, sessions, reconnect, auth
+<!-- index: Sync protocol v1: transitions, read-your-writes, sessions, reconnect, auth | accepted: P1–P12 as recommended (owner, 2026-09-30); implementation in steps -->
 
 - **Status:** accepted — every decision in §6 taken as recommended (owner, 2026-09-30). Implementation
   follows in steps: messages and versions → transitions and read-your-writes → sessions and idempotency →

@@ -1,4 +1,5 @@
 # STUDY-43 — `bunvex data` (print tables and documents)
+<!-- index: `bunvex data`: the tables and a table's documents, as `npx convex data` (`_system/cli/tables`, `tableData`) | accepted: D1 as recommended (owner, 2026-10-02) -->
 
 - **Status:** accepted: D1 as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

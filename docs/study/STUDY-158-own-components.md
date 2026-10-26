@@ -1,4 +1,5 @@
 # STUDY-158 — bunvex's own components (STUDY-152 step 8)
+<!-- index: Components, step 8: bunvex's own `@bunvex/*` components (sharded-counter, batch-worker, rate-limiter, workpool, aggregate, migrations) — Convex's packages read, the platform gaps (the CLI's externals, two exports, paging inside a component, a test harness, publishing), the order, the differential oracle | decided (owner, 2026-10-20): Q-1–Q-8; DV-538 (rule 5), DV-539; the order is the platform fix, `@bunvex/testing` (STUDY-159), `@bunvex/helpers` in parts, then the six components, each studied from its repository at a commit pinned in upstream.md -->
 
 - **Status:** decided (owner, 2026-10-20), §7:
   - Q-1 A: in the monorepo, each package on its own version;

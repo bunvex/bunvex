@@ -1,4 +1,5 @@
 # STUDY-32 — File storage (`ctx.storage`, `_storage`, uploads and downloads)
+<!-- index: File storage: `ctx.storage`, `_storage`, upload tokens and URLs, downloads, local and S3 backends | accepted: F1–F4 as recommended (owner, 2026-10-01) -->
 
 - **Status:** accepted: F1–F4 as recommended (owner, 2026-10-01)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
