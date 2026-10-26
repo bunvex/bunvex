@@ -1,177 +1,278 @@
-# STUDY-185 — OLAP: the managed S3 export (Iceberg change log)
+# STUDY-185 — OLAP: Convex's managed S3 export (an Iceberg change log)
+<!-- index: OLAP: Convex's managed S3 export (Iceberg) | owner questions -->
 
-- **Status:** draft. Nothing to build until the owner answers §6. The open-source binary does not run the writer.
-- **Convex source read:** `db19afd4a` of get-convex/convex-backend (2026-10-22, "Report Parquet bytes as S3 export egress"). Ahead of bunvex's reference `72ce13c` (2026-10-09). The writer landed 2026-10-06 (`c4dfd3b46`) and was still moving on 2026-10-22.
-- **Related:** [STUDY-60](STUDY-60-streaming-export.md), [STUDY-69](STUDY-69-data-sync.md) (the page Porter consumes), [STUDY-59](STUDY-59-log-streams.md) (the sink row), [docs/parity/platform.md](../parity/platform.md) (S3 export drains, as the open-source stub).
-
-This is not a SQL engine inside the database. Convex's public comments and the code agree: analytical SQL stays off the transactional store. What they are testing internally is a mirror. A worker copies document revisions into Apache Iceberg tables in the customer's S3 bucket and registers them in AWS Glue. Athena, Spark, DuckDB or ClickHouse run the SQL against that bucket.
+- **Status:** rewritten from scratch on 2026-10-25. Every claim here was checked again, at the source tag and
+  against the binary. Owner questions are in §6. Nothing is built.
+- **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
+  - `crates/application/src/s3_export_worker.rs`;
+  - `crates/exports/src/interface.rs`;
+  - `crates/streaming_export/src/managed.rs`;
+  - `crates/managed_export/` (`Cargo.toml`, `src/{lib,iceberg,iceberg_writer,destination}.rs`);
+  - `crates/model/src/log_sinks/types/s3_export.rs` and `crates/model/src/s3_export_state/`;
+  - `crates/local_backend/src/log_sinks.rs`;
+  - `crates/log_streaming/src/lib.rs`;
+  - `crates/model/src/backend_info/mod.rs`;
+  - `npm-packages/system-udfs/convex/_system/frontend/listConfiguredSinks.ts`;
+  - `npm-packages/dashboard-common/.../integrations/S3ExportStatus.tsx`;
+  - `npm-packages/dashboard-self-hosted/src/pages/_app.tsx`;
+  - `npm-packages/docs/docs/production/state/state.mdx`.
+- **Oracle:** the Convex binary at the same tag, through `packages/differential`. The log stream API was probed on
+  both backends (§2.2).
+- **Related:**
+  - [STUDY-60](STUDY-60-streaming-export.md) and [STUDY-69](STUDY-69-data-sync.md) (the data-sync page the writer
+    consumes);
+  - [STUDY-59](STUDY-59-log-streams.md) (the `_log_sinks` row);
+  - [STUDY-186](STUDY-186-convex-after-72ce13c.md) A13 and A14 (the S3 export API items already queued);
+  - `docs/parity/platform.md` (log sinks rows).
+- **What changed from the earlier draft:**
+  - The Iceberg writer is public code. Only the driver that calls it is private.
+  - The destination freeze is a body-shape error, not `S3ExportDestinationChanged`.
+  - Four differences between bunvex and Convex were measured that the draft did not list (§2.2).
+  - One founder quote could not be checked (§1.1).
 
 ## 1. How Convex does it
 
-### 1.1 What the founders said, and what the code is
+### 1.1 What Convex said, and what is in the code
 
-| When | Who | What they said | What the repo has |
+| When | Who, where | What was said | Checked |
 |---|---|---|---|
-| 2023-01-30 | Jamie Turner, [HN](https://news.ycombinator.com/item?id=34582549) | An early SQL read adapter was kept on ice: SQL on the live store would slow the app the way every other database does. The practice was Airbyte into ClickHouse, MySQL or Snowflake. A later idea was an embedded column store (DuckDB was the example), not built. | No SQL parser, no DuckDB, no DataFusion. |
-| 2025-12-17 | Jamie Turner, [Discord](https://discord-questions.convex.dev/m/1450920191415419114) | Fivetran can sync out to ClickHouse. Soon, built-in OLAP so people can run read-only SQL against their tables. | Still no query endpoint. |
-| 2026-08-16 | Nipunn Koorapati, [Ship #234](https://ship.convex.dev/requests/js748s9fhk0391q18a4hjww71x83e5xr) | Working on it this quarter: replicate to an S3 bucket, streaming, in a standard format BI tools and OLAP databases can connect to. Estimated Q3 2026, still in progress. | This study. |
+| 2023-01-30 | Jamie Turner, [HN 34586364](https://news.ycombinator.com/item?id=34586364) | A SQL read adapter was "kept on ice": SQL on the live store would make "your website … slow down just like every other database". The recommended practice was Airbyte into ClickHouse, MySQL or Snowflake, "That's basically what we do". Maybe one day "some sort of mirrored column store sql thing (maybe DuckDB based? who knows)", "probably won't for some time" | yes, the comment text through HN's Algolia API |
+| 2026-08-16 | Nipunn Koorapati, [Ship #234](https://ship.convex.dev/requests/js748s9fhk0391q18a4hjww71x83e5xr) "Better support for analytics/OLAP" | "I'm working on this in this quarter": replicate to an S3 bucket, streaming, in a standard format BI tools and OLAP databases connect to. Status "In Progress", Q3 2026 | yes (the page shows Aug 16; the request is from March 2026) |
+| 2025-12-17 | Jamie Turner, Discord (cited by the earlier draft) | built-in read-only SQL "soon" | **not checked**: the page answered 429. Treat it as unverified |
 
-The internal name of the writer is **Porter**. The dashboard cites `crates_private/porter/src/managed_sync.rs` (`warehouse_uri`, `glue_database_name`). That crate is not in the public checkout. The public binary's `InProcessExportProvider::sync` returns *"In-process managed streaming exports are not implemented yet"* (`crates/exports/src/interface.rs`). `local_backend` wires that provider (`crates/local_backend/src/lib.rs`). The self-hosted dashboard forces `s3ExportIntegrationEnabled: false`.
+Convex's public docs still say the same thing today (`production/state/state.mdx`): Convex serves OLTP. For OLAP,
+download a backup or use the Fivetran connector (streaming export).
 
-So an app on the open-source binary can store an S3 export configuration. The worker starts, calls `sync`, and the call fails. The log manager's client for this sink only drains events (`crates/log_streaming/src/lib.rs`, `SinkConfig::S3Export`). bunvex already matches that stub (`packages/server/src/log-sinks.ts`, `DrainingSink`).
+The code agrees: there is no SQL parser, no DuckDB and no query endpoint anywhere in the repository. What Convex is
+building is a **mirror**: document revisions copied into Apache Iceberg tables in the customer's S3 bucket and
+registered in AWS Glue. The SQL runs elsewhere, in Athena, Spark, DuckDB or ClickHouse.
 
-### 1.2 The configuration an operator stores
+### 1.2 What is public and what is private
 
-One row in `_log_sinks`, type `s3Export`, beside the log streams. It is not a log sink: it carries no topics and the log manager does not deliver function logs to it (`crates/model/src/log_sinks/types/s3_export.rs`).
+| Piece | Where | Public? |
+|---|---|---|
+| The configuration row, the API, the progress table, the dashboard card | `model`, `local_backend`, `system-udfs`, `dashboard-common` | yes |
+| The worker loop that calls the exporter once per page | `application/src/s3_export_worker.rs` | yes |
+| The Iceberg writer (`IcebergChangeWriter`) and the commit store (`ExportStore`: state object plus Glue mirror) | `crates/managed_export` | yes, but **no public crate depends on it** (only its own `Cargo.toml` names it) |
+| The driver ("Porter") that reads a snapshot, runs the data-sync iterator, calls the writer and commits | `crates_private/porter/src/managed_sync.rs`, named in a comment in `S3ExportStatus.tsx:22,31` | no |
 
-`S3ExportConfig`: `bucket`, `region`, `prefix` (optional), `accessKeyId`, `secretAccessKey`, `selection`, `period`.
+The open-source binary wires `InProcessExportProvider` (`local_backend/src/lib.rs:280`). Its `sync` fails with
+"In-process managed streaming exports are not implemented yet" (`exports/src/interface.rs`). So on a self-hosted
+Convex:
+- the worker starts (`application/src/lib.rs:929-938`);
+- it finds the config and calls `sync`;
+- the call fails, and the worker backs off from 1 s to 60 s and reports the error, forever, while an S3 export
+  exists.
 
-- **Period.** `continuous`, `hourly`, `daily` (`npm-packages/system-udfs/convex/tableDefs/streamingExport.ts`).
-- **Selection.** The streaming-export `Selection`: nested maps of component, table and column, with `_other` as the default. Field filters are rejected: `FieldFiltersUnsupported`, "S3 exports can't filter fields within a table yet. Select whole tables instead." (`crates/local_backend/src/log_sinks.rs`, `validate_s3_selection`).
-- **Destination is frozen.** Changing bucket, region, prefix or access key id is `S3ExportDestinationChanged` (400). The secret, the selection and the period may change. A prefix of `None` and `""` are the same root; an update that only respells the prefix keeps the stored one (`requires_resync`, `ensure_same_s3_destination`).
-- **Bucket name.** AWS rules: 3–63 characters, lowercase, digits, dots and hyphens, no `..`, not an IPv4 address, not the reserved prefixes `xn--` / `sthree-` or suffixes `-s3alias` / `--ol-s3`. Error `InvalidS3Bucket`.
-- **Auth.** `create_log_stream` and `update_log_stream` for this type need `WriteIntegrations` and `ViewData` (Convex `4933aa2`). One sink of the type per deployment.
-- **Listing.** `listConfiguredSinks` omits `secretAccessKey` and joins `_s3_export_state` as `exportProgress`.
+The self-hosted dashboard hides the card (`dashboard-self-hosted/src/pages/_app.tsx:332`,
+`s3ExportIntegrationEnabled: false`). The log manager gives this sink a client that only drains events
+(`log_streaming/src/lib.rs:747-753`).
 
-Progress lives in `_s3_export_state`, indexed by `configId`, not on the sink row (`crates/model/src/s3_export_state`). `S3ExportProgress` is `snapshotting` (table and document counts, current component and table), `stale { ts }` or `upToDate { ts }`. `ts` is nanoseconds.
+### 1.3 The configuration
 
-### 1.3 The worker
+The configuration is one `_log_sinks` row of type `s3Export`
+(`model/src/log_sinks/types/s3_export.rs`). It carries `bucket`, `region`, `prefix?`, `accessKeyId`,
+`secretAccessKey`, `selection` and `period` (`continuous` | `hourly` | `daily`).
 
-`S3ExportWorker` (`crates/application/src/s3_export_worker.rs`) is spawned with the application (`crates/application/src/lib.rs`). One loop:
+**Create** (`POST /api/v1/create_log_stream`, `logStreamType: "s3Export"`; `local_backend/src/log_sinks.rs`):
+- **Permissions:** `WriteIntegrations`, plus `ViewData` for this type (`:669-671`). The gate
+  `ensure_streaming_export_enabled` is on by default for local and self-hosted (`backend_info/mod.rs:77-91`).
+- **One export per deployment.** A second create gets 409 `LogStreamAlreadyExists`, "S3Export log stream already
+  exists for this deployment".
+- **Bucket name** (`validate_s3_bucket`, `:507-531`):
+  - 3–63 characters of `[a-z0-9.-]`, starting and ending with a letter or digit;
+  - no `..`;
+  - not an IPv4 address;
+  - not the reserved prefixes `xn--` / `sthree-` or suffixes `-s3alias` / `--ol-s3`.
 
-1. Read the `s3Export` sink as system. If there is none, clear the gauges and wait until `_log_sinks` changes.
-2. Read the progress checkpoint in the same transaction. The configuration read stays in that transaction so OCC also sees an edit that restores the old values while a page is in flight.
-3. Call `ExportProvider::sync` with the latest database snapshot, `SyncDestination::ByoAwsBucket` (no custom endpoint from the config), `SyncFormat::Iceberg`, the selection, and the sink document id as `export_id`. Porter commits the page in S3 before it returns. The open-source provider bails here.
-4. Bill the returned page as `CallType::Export` (`s3_export`). A lost checkpoint race does not un-bill it. Parquet bytes are reported as egress (`db19afd4a`).
-5. Write the new checkpoint to `_s3_export_state` if it changed (`s3_export_worker_record_progress`). Losing this commit loses no exported data: the cursor lives in S3 (`9ff64aab5`, "Stop storing the S3 export cursor in the backend").
-6. If the page is `upToDate`, sleep. `continuous` wakes on the next write, on a config change, or after 5 s (`CONTINUOUS_POLL_INTERVAL`). `hourly` is 3600 s and `daily` is 86400 s, or sooner if the sink row changes. Any other status starts the next page immediately. The due time is wall clock, because an idle deployment's snapshot timestamp only moves with the repeatable-timestamp heartbeat.
-7. A failure backs off from 1 s to 60 s and is reported.
+  Otherwise: 400 `InvalidS3Bucket`, "`<b>` is not a valid S3 bucket name".
+- **Selection:**
+  - It defaults to everything, which is stored and returned as `{"_other":"included"}` (`Selection::default`).
+  - A selection that filters fields inside a table is refused: 400 `FieldFiltersUnsupported`, "S3 exports can't
+    filter fields within a table yet. Select whole tables instead." (`validate_s3_selection`, `:453-473`).
 
-`SyncDestination::Managed` (a Convex-owned bucket) and a custom `endpoint_url` exist on the type (`crates/streaming_export/src/managed.rs`). The worker always passes the customer's bucket and `endpoint_url: None`. The custom endpoint is for a local mock that serves both S3 and Glue.
+**Update** (`UpdateS3ExportSinkArgs`, `:1274-1288`, `deny_unknown_fields`):
+- It takes only `secretAccessKey`, `selection` and `period`.
+- A body naming `bucket`, `region`, `prefix` or `accessKeyId` is refused as a body-shape error: 400 `BadJsonBody`,
+  "Failed to deserialize the JSON body into the target type: unknown field `region`, expected one of
+  `secretAccessKey`, `selection`, `period`" (measured).
+- The `S3ExportDestinationChanged` check (`ensure_same_s3_destination`) runs after the update copies the old
+  destination, so it cannot fire through the API.
 
-### 1.4 What one page is
+**Reading back:**
+- `list_log_streams` / `get_log_stream` return the config without the secret, and leave out `prefix` when it is
+  absent (`S3ExportLogStreamConfig`, `:1014-1032`).
+- The dashboard's `listConfiguredSinks` also drops `secretAccessKey`. It joins `_s3_export_state` (index
+  `by_config_id`) as `exportProgress`.
 
-Porter is the missing function. The commits describe it (`19a02dfda`, `5c8a555d9`). It does not pull the public HTTP data-sync API. It runs the same iterator the API uses (`crates/streaming_export/src/lib.rs`, `data_sync`) and writes the page itself.
+**Progress** (`model/src/s3_export_state/types.rs`) is one of:
+- `snapshotting`: tables and documents done and in total, and the current component and table;
+- `stale { ts }`;
+- `upToDate { ts }`.
 
-`data_sync` (STUDY-69) returns:
+### 1.4 The worker
 
-- `truncates`: tables that entered the sync on this page (cold start, newly selected, or replaced by an import). Apply them before the rows. A deselected table is not deleted here; it is retired later.
-- `entries`: a document (`ts`, component, table, document) or a tombstone (`ts`, component, table, id).
-- `cursor`: the opaque `SyncCursor`.
-- `status`: `Snapshotting`, `Stale { ts }` or `UpToDate { ts }`.
+`S3ExportWorker::run_once` (`application/src/s3_export_worker.rs`):
 
-For each request Porter:
+1. **Read the config as system.** With no export, it clears its gauges and waits for `_log_sinks` to change.
+2. **Read the checkpoint, then drop the transaction.** A page can outlast the write log's retention, so the
+   worker cannot keep that transaction open (comment at `:126-130`).
+3. **Run one page.** It calls `ExportProvider::sync` on the latest snapshot with these arguments:
+   - `SyncDestination::ByoAwsBucket { bucket, region, prefix, endpoint_url: None, keys }`;
+   - `SyncFormat::Iceberg`;
+   - the selection;
+   - the `_log_sinks` id as `export_id`.
 
-1. Reads `s3://<bucket>/<prefix>/<deployment>/data-lake/_convex/state.json`. If `export_id` matches, it re-mirrors that state to Glue first, which finishes a mirror a crash interrupted. A missing object, or one from another export id, starts fresh.
-2. Writes the page with `IcebergChangeWriter::staged` (S3 only, no Glue).
-3. Commits data and cursor with one conditional PUT of the state (`If-Match` on the ETag, or `If-None-Match: *` for the first page). 409 or 412 is `ExportStateConflict`.
-4. Mirrors Glue and returns. The cursor it returns to the worker is empty; the next page reads the cursor from the state object. Porter ignores a cursor on the request.
+   The exporter commits the page in S3 before it returns.
+4. **Bill the page** as `CallType::Export` ("s3_export"). The Parquet bytes count as egress.
+5. **Re-read the config in a new transaction.** If the config changed, or the checkpoint moved, it stops.
+   Otherwise it writes the new progress to `_s3_export_state`. Losing that commit loses no data: the cursor lives
+   in S3.
+6. **Sleep only when `upToDate`:**
+   - `continuous` wakes on the next write, a config change, or 5 s;
+   - `hourly` and `daily` wake after 1 h or 24 h, or on a config change.
 
-The state object (`crates/managed_export/src/destination.rs`, `ExportState`): `export_id` (the `_log_sinks` id), `page` (a counter), `cursor` (base64 `SyncCursor`, absent before the first page), `tables` (Glue name to current Iceberg metadata location), `retired` (Glue names marked retired).
+   Any other status runs the next page at once.
+7. **On failure,** back off 1–60 s.
 
-Layout, from the dashboard, which mirrors Porter (`S3ExportStatus.tsx`):
+### 1.5 One page, as the public writer and commit store define it
 
-- Warehouse: `s3://<bucket>/<prefix>/<deploymentName>/data-lake/`.
-- One directory per source table, case-sensitive: `data-lake/<component>/<table>/`. The root component is the directory `app`. A component path's `/` becomes `__`.
-- Glue database: the deployment name lowercased, every character outside `[a-z0-9]` replaced by `_`.
-- Glue table: `<component>__<table>` lowercased. Names are at most 255 bytes and must match `[a-z0-9_]+`. Two Convex tables that collapse to the same Glue name or the same directory are an error. An S3 location longer than 896 bytes is an error (keys are at most 1024; the rest is Iceberg's file names).
+What Porter does between "read the cursor" and "return" is private. The public crate fixes its contract:
 
-The IAM policy the dashboard shows is least privilege on that prefix: `s3:ListBucket` on the prefix, get/put/delete/abort-multipart on `…/data-lake/*`, and Glue get/create/update/delete of that database and its tables.
+- **State object** (`destination.rs`, `ExportState`):
+  - JSON fields: `export_id`, `page`, `cursor` (base64 `SyncCursor`), `tables` (Glue name → Iceberg metadata
+    location) and `retired`.
+  - It is read with its ETag and committed with a conditional PUT: `If-Match`, or `If-None-Match: *` for the
+    first page.
+  - A 409 or 412 is `ExportStateConflict`. That single PUT is the page's commit point.
+  - Its key is not in the public crate; the dashboard and the earlier draft place the data under
+    `…/data-lake/`.
+- **Writer** (`iceberg_writer.rs`, `IcebergChangeWriter::staged`):
+  - It uses an in-memory Iceberg catalog over S3 (OpenDAL) and never touches Glue.
+  - Tables are registered lazily, from the state's metadata locations, when a page needs them.
+  - `apply(truncated, changes)` drops and recreates a truncated table, then appends each table's changes as one
+    snapshot.
+  - `retire_unselected` sets the table property `convex.porter.retired` to `true` or `false`. It never deletes
+    files.
+- **Table** (`iceberg.rs`, `change_log_schema`):
+  - The table is append-only and unpartitioned, with four columns: `_id` string, `ts` long, `deleted` boolean,
+    `payload` string (optional).
+  - A delete is a row with `deleted = true` and no payload.
+  - A retried page can repeat rows, so readers dedupe on (`_id`, `ts`) and take the latest `ts` per `_id`.
+  - The file names are UUID-prefixed, and the duplicate check is off.
+- **Names:**
+  - The root component is `app`, and a component path's `/` becomes `__`.
+  - The Glue table is `<component>__<table>` lowercased: at most 255 bytes, `[a-z0-9_]`.
+  - The directory keeps the exact case.
+  - A location is at most 896 bytes. Two tables that collapse to one name or directory are an error.
+  - The Glue database is the deployment name lowercased, with every other character replaced by `_`
+    (`S3ExportStatus.tsx:32-33`).
+- **Glue mirror** (`ExportStore::publish`):
+  - It creates the database, then creates, updates or drops tables until Glue matches the state.
+  - It never moves a table backward: a table stamped with this export's `convex.page` at or after the state's
+    page is left alone.
+  - A crash between the PUT and the mirror is finished by the next page.
+- **Properties carrying Convex's name:**
+  - `convex.porter.encoding = convex-change-log-json-v1`;
+  - `convex.porter.component` and `convex.porter.table`;
+  - `convex.porter.retired`;
+  - the Glue parameters `convex.export-id` and `convex.page`.
 
-### 1.5 The Iceberg table
+  These are the bytes an analytics tool reads.
+- **The `payload` encoding** is produced by Porter and is not visible. The writer treats it as an opaque string.
+- **Not in the code:** compaction, partitioning, equality deletes. Every revision stays a row.
+- **IAM policy shown by the dashboard** (`S3ExportStatus.tsx:53-92`): `s3:ListBucket` on the prefix;
+  get/put/delete/abort-multipart under it; Glue get/create/update/delete on that database and its tables.
 
-`crates/managed_export` (crate `iceberg` 0.10.1, Parquet 58). Each table is an **append-only change log**, unpartitioned. Schema (`change_log_schema`):
+## 2. What an app observes
 
-| id | name | type | required |
-|---|---|---|---|
-| 1 | `_id` | string | yes |
-| 2 | `ts` | long | yes |
-| 3 | `deleted` | boolean | yes |
-| 4 | `payload` | string | no |
+### 2.1 On Convex
 
-A row is one revision. `deleted` is true exactly when `payload` is null. A retried page can repeat rows; readers deduplicate on (`_id`, `ts`). The current document is the row with the greatest `ts` for that `_id`, dropped when that row is a delete.
+- **Cloud, with the flag on:** the dashboard card and the progress states, objects in the customer's bucket, and
+  Glue tables.
+- **Unchanged:** the app's own queries, mutations and sync. The export reads a snapshot and the document log, as
+  data sync does.
+- **Open-source binary:**
+  - the API stores and validates the config;
+  - nothing is written to S3;
+  - the server log shows the worker's error with backoff while the export exists;
+  - the self-hosted dashboard does not show the card.
 
-Table properties: `convex.porter.encoding` = `convex-change-log-json-v1`, `convex.porter.component`, `convex.porter.table` (Glue lowercases names, so these keep the real names), and `convex.porter.retired` = `true` or `false`. Each append records `convex.export-id` and `convex.page` on the snapshot. Glue parameters mirror those plus `table_type=ICEBERG` and `metadata_location`.
+### 2.2 bunvex against the binary (measured 2026-10-25)
 
-`apply(truncated, changes)` drops and recreates a truncated table (so a replaced `Users` does not keep `users`'s files), then appends. Creates the table on first use. `retire_unselected` runs only at a consistent snapshot, when `selected` lists every source table: it sets `convex.porter.retired` on tables the selection no longer includes and clears it on the rest. It does not delete their files. A slow Glue mirror will not move a table backward or drop a later page's table: a table already stamped at this export's page or later is left alone (`ExportStore::publish`).
+The same calls were made on both backends.
 
-The staged writer uses an in-memory Iceberg catalog whose files go to S3 through OpenDAL. Glue is written only by the mirror. File names are UUID-prefixed because the generator numbers from zero per writer. The duplicate-file check is off, because those names cannot collide, and because the check would read every manifest.
+| Call | Convex | bunvex |
+|---|---|---|
+| create, bucket `192.168.1.1` | 400 `InvalidS3Bucket` | 200, stored |
+| create, bucket `xn--abc` or `abc-s3alias` | 400 `InvalidS3Bucket` | accepted (the regex at `log-sinks-routes.ts:162-165` has no IPv4 or reserved-name rule) |
+| create, bucket `ab` | 400 `InvalidS3Bucket` | 400 `InvalidS3Bucket` |
+| create with a field filter | 400 `FieldFiltersUnsupported` | accepted (`:240-259`) |
+| create, then list | `selection: {"_other":"included"}`; no `prefix` key; `status: pending`, then `active` on the next read | `selection: null`; `prefix: null`; `status: active` at once |
+| update naming `bucket`/`region` | 400 `BadJsonBody` "unknown field …" | accepted, destination changed (`:345-350`) |
+| second create | 409 `LogStreamAlreadyExists` | the same |
+| `listConfiguredSinks` | secret dropped; `exportProgress` joined | secret dropped; there is no `_s3_export_state` table |
+| worker | fails and backs off, logged | none (the `DrainingSink` stub only) |
 
-The JSON inside `payload` is produced in Porter, which is not in this checkout. The public writer treats it as an opaque string. The encoding property names the version `convex-change-log-json-v1`. The data-sync page bunvex already emits uses `export_json` (STUDY-69); whether Porter stores that string, or another encoding, is not visible here.
+STUDY-186 A13/A14 already cover:
+- the field filters;
+- the frozen destination;
+- the existence check;
+- `_s3_export_state`.
 
-### 1.6 How a reader queries it
-
-There is no query API on the deployment. The operator points Athena (or any Iceberg engine) at the Glue database. The read is: latest `ts` per `_id`, skip `deleted`, and ignore a table whose `convex.porter.retired` is `true`. A table that was truncated has a new metadata location; older files are not part of the current snapshot.
-
-Compaction, partitioning and equality deletes are not in this code. Every revision stays as a row until something outside this crate compacts the table. That is why the worker's job is replication, not serving the analytical query: a scan of the change log never takes a lock in the document store, and a heavy aggregation never shares the transaction scheduler.
-
-## 2. What an app can observe
-
-On **Convex Cloud**, once the flag is on (it is not, in the source defaults):
-
-- Creating the integration with the dashboard or `POST /api/v1/create_log_stream` (`logStreamType: "s3Export"`).
-- Objects under `s3://<bucket>/<prefix>/<deployment>/data-lake/`, Glue tables, and the state object `data-lake/_convex/state.json`.
-- Progress on the integration card: starting, snapshotting (counts), stale, up to date, or the sink's failed reason.
-- Documents appear as revisions, not as a rewritten current row. Deletes remain as rows with `deleted = true`.
-- A change of bucket, region, prefix or access key id is refused. Field filters are refused.
-- The deployment's own queries, mutations and sync are unchanged. The export reads a snapshot and the document log the way data sync does. It does not add a SQL function to `ctx`.
-
-On the **open-source binary**, and on bunvex today: the configuration is stored, the secret is hidden from `listConfiguredSinks`, create and update require view-data, and nothing is written to S3. The self-hosted dashboard does not offer the card.
+The bucket rules, the stored default selection, the `prefix` key and the `pending` status are new here. STUDY-186
+A13 also describes the frozen destination as "400 when bucket … change". The status is right, but the code is
+`BadJsonBody`, not a destination code. That wording gets corrected when A13 is built.
 
 ## 3. How bunvex does it
 
-Today it matches the open-source stub, which is what [platform.md](../parity/platform.md) records. `s3Export` is a `DrainingSink`: `verify` and `send` do nothing (`packages/server/src/log-sinks.ts`). The create and update routes accept the body, check the bucket with a shorter rule than Convex's, and require `ViewData` (`packages/server/src/log-sinks-routes.ts`). There is no `_s3_export_state`, no progress join, no destination freeze, and no `FieldFiltersUnsupported`.
-
-The page source a writer would consume is already in process: `dataSync` / `dataSyncPage` (`packages/server/src/data-sync.ts`). A bunvex Porter would be a worker in the server process, not a second program and not an HTTP client of its own API.
-
-If the owner wants the cloud behaviour, the shape is:
-
-1. **Close the configuration gaps** so the stored row matches Convex before any byte is written: full bucket check, `FieldFiltersUnsupported`, `S3ExportDestinationChanged`, `_s3_export_state` with `by_config_id`, and `exportProgress` on `listConfiguredSinks`.
-2. **A worker** with Convex's loop: no sink means wait; one page; bill it; checkpoint; sleep 5 s / 1 h / 24 h or until the next commit when caught up; backoff 1–60 s. It calls `dataSyncPage` on the engine. The cursor it passes is the one in the state object, not a cursor in the database.
-3. **An Iceberg writer**, written in TypeScript, aimed at the contract in §1.5: the four columns, append-only Parquet, unpartitioned, UUID-prefixed files, metadata locations recorded in the state object, truncate as drop-and-create, retire as a property. The Rust crate is the reference for behaviour, not a source to translate line by line.
-4. **The commit.** Read `data-lake/_convex/state.json` (the key is part of the contract; see Q2). Conditional PUT, then Glue `CreateDatabase` / `CreateTable` / `UpdateTable` / `DeleteTable` with `convex.export-id` and `convex.page` (see Q2). A 409 or 412 retries the page.
-5. **Dashboard.** The card already exists in Convex's dashboard-common and is hidden on self-hosted. bunvex shows it only if this worker exists. The status UI can reuse the Fivetran progress shape Convex already maps `S3ExportProgress` onto.
-
-What this does **not** add: a SQL endpoint, a DuckDB inside the transaction, or aggregates in queries. Those would put the analytical scan on the same scheduler as the app, which is the design Convex refused in 2023 and has not built.
+- **The API and stub:**
+  - The `s3Export` row is stored and validated by `packages/server/src/log-sinks-routes.ts` with the gaps in §2.2.
+  - It runs as a `DrainingSink` (`packages/server/src/log-sinks.ts`).
+  - `listConfiguredSinks` drops the secret (`system-functions.ts`).
+- **The page a writer would consume is already in the process:** `dataSync` / `dataSyncPage`
+  (`packages/server/src/data-sync.ts`, STUDY-69).
+  - Its truncates, entries, tombstones, cursor and status are the inputs `IcebergChangeWriter::apply` takes.
+  - A bunvex writer would be a worker in the server, not an HTTP client of its own API.
+- **Missing for a writer:** an Iceberg/Parquet writer in TypeScript, an S3 conditional PUT (the S3 client in
+  `packages/file-storage` signs requests already) and a Glue client.
 
 ## 4. Divergences
 
-Each one is the owner's. None is decided. Q2 is the one that changes bytes an analytics tool sees.
+None is recorded until §6 is answered.
 
-| # | Divergence | Why | Decision |
-|---|---|---|---|
-| D1 | bunvex does not write the mirror. It stores the config and drains, as Convex's open-source binary. Convex Cloud's Porter is private and still moving (last public commit 2026-10-22). | Matching the binary an app runs locally. Building Porter is matching an unreleased cloud feature. | pending |
-| D2 | If D1 is "build it": the state key `data-lake/_convex/state.json`, the properties `convex.porter.*` and `convex.export-id` / `convex.page`, and the encoding name `convex-change-log-json-v1` contain a name rule 5 forbids in shipped strings. Renaming them means a Glue table written by bunvex is not the table Convex's dashboard and a Convex-aimed Athena query expect. | Rule 5, same kind of choice as DV-307. | pending |
+| # | Possible divergence | Why it arises |
+|---|---|---|
+| D1 | bunvex does not write the mirror, as Convex's open-source binary does not | the driver is private; the public pieces around it took 23 commits between 2 and 23 Oct 2026 |
+| D2 | Only if a writer is built: the state object, the table properties, the Glue parameters and the encoding name contain "convex" | rule 5 (no "convex" in shipped strings). Renaming them makes a bunvex lake differ from what Convex's dashboard and an Athena setup written for Convex expect |
+| D3 | The open-source worker logs a failure every ≤60 s while an export exists; bunvex logs nothing | matching it would mean shipping a failing loop |
 
-The configuration gaps in §3 (bucket rules, field filters, frozen destination, progress table) are observable against Convex's API even while the writer stays a stub. They are part of D1's "match the binary" work if the owner wants the API exact before any mirror. They are not listed again here until that choice is made.
+## 4b. Additions
 
-## 4b. Additions (beyond Convex)
+None proposed. An embedded SQL engine, a local catalog file instead of Glue, or a writer to a bucket of bunvex's
+own would each be an addition, and each needs the owner's request first.
 
-None proposed. A local file catalog, a SQL endpoint, or DuckDB inside the process would be an addition and needs its own row after the owner asks for it.
+## 5. Tests, when something is built
 
-| # | Addition | Why | Decision |
-|---|---|---|---|
+**For the API:** a differential test of every row in §2.2, which must match Convex exactly. Sabotage: drop the
+IPv4 rule.
 
-## 5. Tests
+**If a writer is built:**
+- inserts, a replace and a delete become rows whose latest `ts` per `_id`, without deletes, is the table, and a
+  repeated page changes nothing;
+- a truncate leaves only the rows after it;
+- deselecting a table retires it and keeps its files;
+- two writers: the conditional PUT lets one win;
+- a crash before the PUT is rewritten, and a crash after it is finished by the next page's Glue mirror without
+  going backward.
 
-Against the open-source binary, today: create and update need `ViewData` (`packages/server/test/log-sinks.test.ts`). That is the stub.
+A memory S3 and Glue is enough, as the Rust tests use.
 
-If the writer is built, the checks that matter:
+## 6. Owner questions
 
-- A page of inserts, a replace, and a delete become three rows; the latest `ts` per `_id` with `deleted` skipped is the table. A repeated page does not change that result (duplicate (`_id`, `ts`) collapses).
-- A truncate drops the previous snapshot: the new table has only the rows after the truncate.
-- Deselecting a table sets `retired` and leaves the files. Selecting it again truncates.
-- Two writers: the conditional PUT lets one commit; the loser sees the conflict and retries from the new state.
-- A crash after the Parquet append and before the state PUT leaves the next page free to rewrite. A crash after the PUT and before Glue leaves the next page to finish the mirror, and Glue does not move backward.
-- The worker does not start a second page while `snapshotting` without sleeping the hourly interval, and a `continuous` export waits for a write or 5 s once `upToDate`.
-- Field filters and a changed bucket fail with Convex's codes, before any S3 call.
-- Sabotage: drop the `deleted` flag or the dedupe and the read test fails. Point the conditional PUT at an unconditional PUT and the two-writer test fails.
-
-A memory S3 and a memory Glue (the Rust tests use `memory://` and a custom endpoint that serves both) is enough. A real AWS account is not required for the contract.
-
-## 6. Open questions
-
-1. **Build Porter, or stay on the stub?** The binary Convex ships for self-hosting does not write Iceberg. bunvex matches that. Building it matches Convex Cloud's in-progress work, which is private and changed twelve times between 6 Oct and 22 Oct 2026. Recommendation: do not build it until Porter's loop stops moving, or until the owner explicitly wants the cloud feature early. The study is the record either way.
-2. **If it is built, do the warehouse names match Convex's, including the `_convex` state key and the `convex.porter.*` properties?** Matching makes the same Athena and Glue setup work. Renaming obeys rule 5 and breaks that. This is D2.
-3. **What is `payload`?** It is an opaque string in the public crate, versioned `convex-change-log-json-v1`, produced in the private crate. bunvex's data sync already writes `export_json`. Treating that as the payload is a guess until someone reads an object Porter wrote, or the crate is published. Do not invent the encoding in the writer.
-4. **Glue.** Convex's mirror is AWS Glue. A self-hosted deployment with no AWS account has nothing to register. The S3 files would still be readable by DuckDB or Spark with the metadata location from the state object. Whether bunvex requires Glue, or also writes a catalog file an engine can open without Glue, is an addition (none proposed above).
+| # | Question | Recommendation |
+|---|---|---|
+| Q1 | Align the S3 export API with the binary now: the §2.2 rows plus STUDY-186 A13/A14 (bucket rules, field filters, the update body shape, default selection, the `prefix` key, the `pending` status, `_s3_export_state` and `exportProgress`)? | Yes. It is Convex-matching, small, and needs no S3 |
+| Q2 | Build the writer (a bunvex Porter), or stay a stub as the open-source binary is? | Stay a stub (D1). The driver is private and still changing, the payload encoding is not visible, and building it would be guessing. Revisit when Convex ships it publicly or an app needs it |
+| Q3 | If it is ever built: Convex's names in the lake (D2), or bunvex's? | Decide then. With the stub, nothing is written |
+| Q4 | The open-source worker's failing loop (D3): match it? | No. Record D3 when Q1 is built; a failing loop helps no one |
