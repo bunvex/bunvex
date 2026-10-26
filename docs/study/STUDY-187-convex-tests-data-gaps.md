@@ -155,6 +155,29 @@ shape (`packages/core/src/shapes.ts:94-107`).
 
 **Fix (to match).** The same fallback, with Convex's two errors.
 
+**Done.** `jsonSchemas` reads the active schema at the shapes' timestamp, only when a table needs it, and builds
+the table's JSON Schema as Convex's `json_schema_from_active_schema` and `Validator::to_json_schema`
+(`crates/common/src/schemas/validator.rs`, `crates/common/src/json_schemas/mod.rs`):
+
+- `v.any()` is `_id` and `_creationTime` only; an object gets them added, its fields and `required` in byte order.
+- A number (and a number literal) is the float schema with special values; `int64` and `commitTs`, bytes and the
+  float follow the format; a union is `anyOf`; a nested `v.any()` is `{}`.
+- A record is `{"type":"object","$description":"Record with keys of type <validator>","additionalProperties":
+  {"type":<value's schema>}}`: the value's schema nested under `type`, as Convex writes it.
+- The errors, 400 with code and message: `NoSchemaForExport` ("There is no active schema, which is needed for
+  streaming export."), `NoTableDefinitionForExport` (`The table "<t>" does not have a schema, which is needed for
+  streaming export.`), and `UnsupportedSchemaForExport` for a top-level union of objects (`Schema for table "<t>"
+  contains a union of object types, which is unsupported for streaming export`) or a nested one ("Schema contains a
+  union of objects, which is not supported for export").
+
+Tests: `packages/server/test/streaming-export.test.ts` and `packages/differential/test/export-schema.test.ts`
+(each table of `export-schema-app` given one 65-field document in turn, compared with Convex's binary). Both fail
+with the old throw. The no-schema case is in the server's test only: an app pushed without a schema leaves Convex
+with no active schema (`SchemaModel::apply(None)` → `clear_active`, `crates/database/src/bootstrap_model/schema/
+mod.rs`; its `get_schema` answers `null`), while bunvex's push activates an empty one
+(`{"tables":[],"schemaValidation":false}`), so bunvex answers `NoTableDefinitionForExport` there. That is a push
+gap, not this item's, and is reported separately.
+
 ### 2.9 X18 — an id whose table does not exist
 
 **Convex.** `delete`, `patch` and `replace` resolve an id's table first and fail with `Table for ID "<id>" not
