@@ -4193,6 +4193,8 @@ async function markSchemaFailed(
       const state = schemaStateOf(row);
       if (state === "pending" || state === "validated")
         await db.patch(SCHEMAS_TABLE, schemaId, { state: { state: "failed", error, table_name: tableName } });
+      // As Convex's `mark_failed`: even when it was failed or overwritten already (STUDY-187 X3).
+      await deleteOldFailedAndOverwrittenSchemas(db);
       await deleteValidationsForSchema(db, schemaId);
     }),
   );
@@ -4373,6 +4375,35 @@ export class ImportBackfillingError extends Error {
   }
 }
 
+/** Convex's `MAX_TIME_TO_KEEP_FAILED_AND_OVERWRITTEN_SCHEMAS`: one hour, in ns. */
+const KEEP_FAILED_AND_OVERWRITTEN_SCHEMAS_NS = 60n * 60n * 1_000_000_000n;
+
+/**
+ * Convex's `delete_old_failed_and_overwritten_schemas` (crates/database/src/bootstrap_model/schema/mod.rs), in
+ * `db`'s current namespace only: delete every `failed` and `overwritten` schema created at least an hour before the
+ * transaction's begin timestamp (its snapshot), so that `_schemas` stays small. It runs each time a schema is marked
+ * `overwritten` or `failed`, so the row just marked goes at once when it is that old. Their validations went when
+ * they were marked.
+ */
+async function deleteOldFailedAndOverwrittenSchemas(db: Tx) {
+  const begin = db.snapshot - KEEP_FAILED_AND_OVERWRITTEN_SCHEMAS_NS;
+  // As Convex's `timestamp_to_ms`: whole ms, then the rest as a fraction.
+  const cutoff = Number(begin / 1_000_000n) + Number(begin % 1_000_000n) * 1e-6;
+  for (const row of await db.query(SCHEMAS_TABLE).collect()) {
+    const state = schemaStateOf(row);
+    if (state !== "failed" && state !== "overwritten") continue;
+    if ((row._creationTime as number) > cutoff) continue;
+    await db.delete(SCHEMAS_TABLE, row._id as string);
+  }
+}
+
+/** Convex's `mark_overwritten`: the state, then the old failed and overwritten schemas go, then its validations. */
+async function markOverwritten(db: Tx, schemaId: string) {
+  await db.patch(SCHEMAS_TABLE, schemaId, { state: { state: "overwritten" } });
+  await deleteOldFailedAndOverwrittenSchemas(db);
+  await deleteValidationsForSchema(db, schemaId);
+}
+
 /** A push's schema change that cannot finish (Convex's `RaceDetected`, or indexes not ready). */
 /** What a schema becomes when a push submits it (Convex's `submit_pending`): a new or reused pending one, or the active one. */
 type SubmittedState = "active" | "pending" | "validated";
@@ -4413,8 +4444,7 @@ async function submitPending(
         carryOver.push(
           ...(await stagedValidationsWithProgress(db, row._id as string, stagedValidatorsOf(rowJson(row)))),
         );
-      await db.patch(SCHEMAS_TABLE, row._id as string, { state: { state: "overwritten" } });
-      await deleteValidationsForSchema(db, row._id as string);
+      await markOverwritten(db, row._id as string);
     }
   if (reused) {
     schemaId = reused._id as string;
@@ -4484,11 +4514,9 @@ async function finishSchemaIn(
     await db.patch(INDEX_TABLE, i._id, indexStatePatch(i, { state: "backfilled", staged: true }));
   // Already active (a push of the same schema): Convex's `mark_active` does nothing.
   if (state !== "active") {
+    // Convex's `clear_active`: the active schema is kept, `overwritten`.
     for (const old of await db.query(SCHEMAS_TABLE).collect())
-      if (schemaStateOf(old) === "active") {
-        await deleteValidationsForSchema(db, old._id as string);
-        await db.delete(SCHEMAS_TABLE, old._id as string);
-      }
+      if (schemaStateOf(old) === "active") await markOverwritten(db, old._id as string);
     await db.patch(SCHEMAS_TABLE, schemaId, { state: { state: "active" } });
     // Convex's `mark_active`: the enforced walk's rows go; the staged ones keep running under this schema.
     await deleteEnforcedValidationsForSchema(db, schemaId);

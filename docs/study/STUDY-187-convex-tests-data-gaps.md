@@ -108,6 +108,23 @@ document: the search returns nothing. Apps hit it with `q.or(...tags.map((t) => 
 
 **Fix (to match).** Mark, don't delete; delete `failed` / `overwritten` rows older than an hour at the same points.
 
+**Done (PR #PRNUM).** Checked in Convex's code: the deletion runs in `mark_overwritten` (`:631`, after the patch: a
+pending or validated schema a push replaces, `submit_pending` `:352`, `:356`, `:407`; the active one at activation,
+`mark_active` `:501`, or at a push without a schema, `apply` `:113`) and in `mark_failed` (`:519`, after the patch,
+even when the row was failed or overwritten already: the schema worker's walk, a write the pending schema refuses,
+`enforce_with_table_mapping` `:199`, a table deletion it refuses, `:148`). The age is the row's `_creationTime`
+against the transaction's begin timestamp less an hour (deleted when created at or before it), not the time it was
+marked: the row just marked goes in the same commit when it was created more than an hour before. `SchemaModel` is
+per namespace, so only the namespace whose schema is marked is cleaned; a component's rows stay. bunvex now marks the
+previous active schema `overwritten` (`finishSchemaIn`), and `markOverwritten` and `markSchemaFailed` (in the writing transaction for a refused write, since #871) delete the old rows
+at those points, in the namespace, against the snapshot (Convex's begin timestamp). Tests:
+`packages/core/test/schemas-overwritten.test.ts` (Convex's three tests, the 59-minute boundary, the component's rows
+kept) and `packages/differential/test/schemas-overwritten.test.ts` (the rows four deploys leave in each binary's
+store: `overwritten`, `overwritten`, `failed`, `active`). Each fails without the fix. Not covered here, read in the code
+and not yet run on the binary: a push without a schema submits an empty schema for the root on bunvex
+(`packages/server/src/push.ts:733`) and leaves a component's schema as it was, where Convex's `apply(None)` marks the
+namespace's active schema `overwritten` and adds no row (`:113`); a separate item.
+
 ### 2.5 X5 — `occInfo.componentPath` names the component
 
 **Convex.** An OCC error's info carries the component path of the conflicting table (`OccInfo`,

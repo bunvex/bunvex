@@ -37,6 +37,10 @@ backend is always started with `--disable-beacon`.
 - `test/backfill-progress.test.ts` (STUDY-174 S1): a push adds an index to a table with documents (the app of
   `backfill-progress-app/`); once backfilled, the `_index_backfills` row is read from each store's SQLite file and
   compared: the count, the table's total, the cursor. Local only.
+- `test/schemas-overwritten.test.ts` (STUDY-187 X3): the app of `schemas-overwritten-app/` deployed with four
+  schemas in a row (one its document does not match, the last one twice); the `_schemas` rows are read from each
+  store's SQLite file and compared, by creation time: the replaced ones `overwritten`, the refused one `failed`, the
+  last `active`. Local only.
 - `test/component-store.test.ts` (STUDY-152 steps 1–2): a store Convex writes with the components of
   `component-store-app/` (a `counter` component, mounted twice, with a table of the root's name), opened by bunvex
   (the root's tables only, read, written, listed by `data`), then by Convex again (its components intact). Run by
