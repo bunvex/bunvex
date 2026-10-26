@@ -3,20 +3,27 @@
 // results to bench/results/cloud/, and destroys the droplets. Needs `doctl` logged in (`doctl auth init`) and
 // ~/.ssh/id_ed25519.pub, which is registered on the account the first time.
 //   bun bench/cloud/cloud.ts all single   up, sync, run the suite, down (down also on failure or Ctrl-C)
-//   bun bench/cloud/cloud.ts up | sync | run <suite> | down | status
+//   bun bench/cloud/cloud.ts up | sync | run <suite> | down [all] | status
+// RUN=<name> keeps a run's droplets (tag bunvex-bench-<name>) and state apart from another session's: `down`
+// destroys only its own run's droplets, `down all` every bench droplet. `status` lists every run's.
 //   bun bench/cloud/cloud.ts use <server-ip> [<load-ip>]   existing boxes instead of droplets (down skips them)
 // Suites: quick, single (one server: sqlite and postgres, 4 scenarios), independent (1-4 servers, sqlite).
 // PERSISTENCES, NS and SCENARIOS (comma-separated) override a suite's matrix.
-// Env: SERVER_SIZE (c-8), LOAD_SIZE (c-8), REGION (nyc3), VUS (32 per server), DURATION (30s), REPEATS (3),
+// Env: RUN (default), SERVER_SIZE (c-8), LOAD_SIZE (c-8), REGION (nyc3), VUS (32 per server), DURATION (30s), REPEATS (3),
 // KEEP=1 (all: leave the droplets up).
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 
 const root = Bun.fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
-const dir = `${root}/.data/cloud`;
+const TAG = "bunvex-bench";
+// Each run has its own name (RUN, default "default"), droplet tag and state, so two sessions benchmarking at the
+// same time never destroy each other's droplets. Every droplet also carries TAG, for `status` and `down all`.
+const run = process.env.RUN ?? "default";
+if (!/^[a-z0-9-]+$/.test(run)) throw new Error(`RUN=${run}: lowercase letters, digits and - only`);
+const runTag = `${TAG}-${run}`;
+const dir = `${root}/.data/cloud/${run}`;
 const stateFile = `${dir}/state.json`;
 const knownHosts = `${dir}/known_hosts`;
-const TAG = "bunvex-bench";
 const remote = "/root/bunvex";
 
 type Box = { name: string; id?: number; public: string; private: string; size?: string; hourly?: number };
@@ -76,7 +83,7 @@ async function createDroplet(name: string, size: string, region: string, key: st
       "--ssh-keys",
       key,
       "--tag-names",
-      TAG,
+      `${TAG},${runTag}`,
       "--wait",
       "--output",
       "json",
@@ -112,8 +119,8 @@ async function up() {
   const key = await sshKeyFingerprint();
   console.log(`creating droplets in ${region} …`);
   const [server, load] = await Promise.all([
-    createDroplet(`${TAG}-server`, process.env.SERVER_SIZE ?? "c-8", region, key),
-    createDroplet(`${TAG}-load`, process.env.LOAD_SIZE ?? "c-8", region, key),
+    createDroplet(`${runTag}-server`, process.env.SERVER_SIZE ?? "c-8", region, key),
+    createDroplet(`${runTag}-load`, process.env.LOAD_SIZE ?? "c-8", region, key),
   ]);
   writeState({ server, load, createdAt: new Date().toISOString(), droplets: true });
   const hourly = (server.hourly ?? 0) + (load.hourly ?? 0);
@@ -128,13 +135,15 @@ async function use(serverIp: string, loadIp?: string) {
   await Promise.all([...new Set([server, load])].map(provision));
 }
 
-async function down() {
-  if (existsSync(stateFile) && !readState().droplets) {
+async function down(all = false) {
+  // `down all` destroys every bench droplet, every run's: for one a crashed session left behind.
+  const tag = all ? TAG : runTag;
+  if (!all && existsSync(stateFile) && !readState().droplets) {
     console.log("existing boxes (`use`): nothing to destroy");
   } else {
     // By tag, so a droplet a crashed run left behind goes too.
-    await sh(["doctl", "compute", "droplet", "delete", "--tag-name", TAG, "--force"]);
-    console.log(`destroyed every droplet tagged ${TAG}`);
+    await sh(["doctl", "compute", "droplet", "delete", "--tag-name", tag, "--force"]);
+    console.log(`destroyed every droplet tagged ${tag}`);
   }
   rmSync(stateFile, { force: true });
   rmSync(knownHosts, { force: true });
@@ -339,7 +348,7 @@ switch (command) {
     await runSuite(args[0] ?? "quick", (await sh(["git", "-C", root, "rev-parse", "--short", "HEAD"])).trim());
     break;
   case "down":
-    await down();
+    await down(args[0] === "all");
     break;
   case "status":
     await status();
