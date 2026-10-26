@@ -8,6 +8,7 @@
 // key is cached by its string, so this costs one decryption per new key.
 import { createCipheriv, randomBytes, timingSafeEqual } from "node:crypto";
 import { aes128GcmSivOpen, aes128GcmSivSeal, instanceSecretBytes, kbkdfCtrHmacSha256 } from "@bunvex/core";
+import { v1 } from "@bunvex/protocol";
 
 export { aes128GcmSivOpen, aes128GcmSivSeal };
 
@@ -363,47 +364,18 @@ export class HeaderParseError extends Error {
   }
 }
 
-const STRING_FIELDS = [
-  "issuer",
-  "subject",
-  "name",
-  "givenName",
-  "familyName",
-  "nickname",
-  "preferredUsername",
-  "profileUrl",
-  "pictureUrl",
-  "websiteUrl",
-  "email",
-  "gender",
-  "birthday",
-  "timezone",
-  "language",
-  "phoneNumber",
-  "address",
-  "updatedAt",
-];
-const BOOL_FIELDS = ["emailVerified", "phoneNumberVerified"];
-
 /**
- * The identity an admin acts as (Convex's `UserIdentityAttributes` from JSON): an object with
- * `tokenIdentifier`, or `issuer` and `subject` (then `tokenIdentifier` is `issuer|subject`); the standard
- * fields typed, every other field a custom claim. Null when it is not one.
+ * The identity an admin acts as (Convex's `UserIdentityAttributes` from JSON, `v1.parseActingIdentity`): an
+ * object with `tokenIdentifier`, or `issuer` and `subject` (then `tokenIdentifier` is `issuer|subject`); the
+ * standard fields typed, every other field a custom claim. Null when it is not one.
  */
 export function actingIdentity(json: unknown): Record<string, unknown> | null {
-  if (json === null || typeof json !== "object" || Array.isArray(json)) return null;
-  const o = json as Record<string, unknown>;
-  for (const f of STRING_FIELDS) if (o[f] !== undefined && o[f] !== null && typeof o[f] !== "string") return null;
-  for (const f of BOOL_FIELDS) if (o[f] !== undefined && o[f] !== null && typeof o[f] !== "boolean") return null;
-  let tokenIdentifier = o.tokenIdentifier;
-  if (tokenIdentifier !== undefined && typeof tokenIdentifier !== "string") return null;
-  if (tokenIdentifier === undefined) {
-    if (typeof o.issuer !== "string" || typeof o.subject !== "string") return null;
-    tokenIdentifier = `${o.issuer}|${o.subject}`;
+  try {
+    return v1.parseActingIdentity(json);
+  } catch (e) {
+    if (e instanceof v1.ActingIdentityError) return null;
+    throw e;
   }
-  const out: Record<string, unknown> = { tokenIdentifier };
-  for (const [k, v] of Object.entries(o)) if (k !== "tokenIdentifier" && v !== null && v !== undefined) out[k] = v;
-  return out;
 }
 
 /** `<key>[:<base64 JSON identity>]` after `removeTypePrefix` (Convex's `extract_admin_key`). */
