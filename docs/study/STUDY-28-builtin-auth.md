@@ -1,7 +1,9 @@
 # STUDY-28 — Built-in authentication (users, sessions, a Users dashboard) on better-auth
-<!-- index: Built-in authentication on better-auth, hosted in the engine: users, sessions, plugins, a Users dashboard (beyond Convex) | accepted: B1–B10 as recommended (owner, 2026-10-01); spike done -->
+<!-- index: Built-in authentication on better-auth, hosted in the engine: users, sessions, plugins, a Users dashboard (beyond Convex) | accepted: B1–B10 as recommended (owner, 2026-10-01); spike done; direction replaced by STUDY-191 (owner, 2026-10-26) -->
 
-- **Status:** accepted: B1–B10 as recommended (owner, 2026-10-01); spike done (§7), the design holds
+- **Status:** accepted: B1–B10 as recommended (owner, 2026-10-01); spike done (§7), the design holds.
+  **Direction replaced** (owner, 2026-10-26): built-in auth follows Convex Auth v2 instead
+  ([STUDY-191](STUDY-191-convex-auth-v2.md)); this study stays as the record of the better-auth design and its numbers
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (dashboard, docs); get-convex/convex-auth
   `7eab860` (v0.0.96); get-convex/better-auth `2f9fcf6` (v0.12.5); better-auth 1.7.6 (installed dist)
 - **Related:** STUDY-27 (`ctx.auth`, JWT / OIDC, sync and client auth), STUDY-12 (dashboard), the owner's
