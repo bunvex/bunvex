@@ -3791,7 +3791,7 @@ export class Engine {
         now: start.now,
         identity: start.identity == null ? null : JSON.stringify(start.identity),
         systemIdentity: start.systemIdentity,
-        request: start.request === null ? null : JSON.stringify(start.request),
+        request: start.request,
         tracked: start.tracked,
         journal: start.journal,
         refused: opts.refused === true,

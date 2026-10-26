@@ -1929,9 +1929,11 @@ export class Functions {
   private readonly ordinary: MutationOptions = { ...THROTTLED, permit: () => this.limits.mutation.acquire() };
 
   /**
-   * What the main thread checks before a call, as Convex's `ValidatedPathAndArgs` does before it runs one: the path
-   * and the caller's access to it, and the arguments. The request, when all pass; else null, and the call runs as a
-   * body, which fails the same way in its transaction. The `_system/` functions always do (STUDY-194 §4.14).
+   * What the main thread checks before a call: the path and the caller's access to it, and a query's arguments, which
+   * Convex's `CacheManager::get` checks before the query's permit (its `ValidatedPathAndArgs`). A mutation's are checked
+   * in its body, under its permit, as Convex's `run_mutation_inner` does: once either way. The request, when all pass;
+   * else null, and the call runs as a body, which fails the same way in its transaction. The `_system/` functions
+   * always do (STUDY-194 §4.14).
    */
   private callSpec(
     kind: "query" | "mutation",
@@ -1945,10 +1947,10 @@ export class Functions {
     const state = kind === "query" ? this.engine.backendState.latest() : null;
     if (state && notRunningMessage(state) !== null) return null;
     let f: FunctionDef;
-    let a: AnyArgs;
+    let a = args;
     try {
       f = this.fn(name, kind, fromClient, caller);
-      a = this.checkArgs(f, args);
+      if (kind === "query") a = this.checkArgs(f, args);
     } catch {
       return null;
     }
@@ -1977,7 +1979,8 @@ export class Functions {
         return f;
       };
     };
-    if (request.kind === "query") return noCommitTs(request.name, this.queryRun(callee("query"), args, false));
+    // A query's arguments were checked on the main thread (`callSpec`): the same text, so not again.
+    if (request.kind === "query") return noCommitTs(request.name, this.queryRun(callee("query"), args, false, true));
     const body = this.mutationRun(callee("mutation"), args, undefined, local?.deadline, false);
     const attempt = local?.attempt;
     return attempt ? (db) => attempt(() => body(db)) : body;
@@ -2025,12 +2028,12 @@ export class Functions {
    * A query's run in its transaction. `permit`: it takes its permit once validated (STUDY-68), as a body; a call
    * through the boundary holds its own already. A cached result never gets here.
    */
-  private queryRun(resolved: () => QueryDef, args: unknown, permit: boolean) {
+  private queryRun(resolved: () => QueryDef, args: unknown, permit: boolean, checked = false) {
     return async (db: Tx) => {
       noteTx(db);
       await this.failWhileNotRunning(db);
       const f = resolved();
-      const a = this.checkArgs(f, args);
+      const a = checked ? (args as AnyArgs) : this.checkArgs(f, args);
       this.countStartReads(db, f);
       const env = await this.txEnv(db, this.componentOf.get(f));
       const run = async () => {

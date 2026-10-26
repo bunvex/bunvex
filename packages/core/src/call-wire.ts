@@ -8,8 +8,8 @@
 // (STUDY-194 §4.2: structured clone costs 1.5–2× this). A message begins with its kind and its call id, `c<id>:` for
 // a request and `o<id>:` for an outcome. A message that does not parse is refused with where it went wrong.
 import type { Interval, LoggedIndexWrite, SearchRead } from "./committer.ts";
+import type { RequestMetadata } from "./engine.ts";
 import type { DocWrite } from "./persistence/index.ts";
-import { WireWriter } from "./persistence/sqlite-writer.ts";
 import type { SessionRequestId } from "./session-requests.ts";
 
 export type CallKind = "query" | "mutation";
@@ -38,8 +38,8 @@ export type CallRequest = CallSpec & {
   identity: string | null;
   /** An admin or the system acting as itself (`Caller.systemIdentity`). */
   systemIdentity: boolean;
-  /** The request the call comes from (`ctx.meta.getRequestMetadata()`), as JSON text, or null. */
-  request: string | null;
+  /** The request the call comes from (`ctx.meta.getRequestMetadata()`), or null. */
+  request: RequestMetadata | null;
   /** A subscription's run (`Engine.queryTracked`): reactive pagination's journal, and no index cache. */
   tracked: boolean;
   /** That subscription's end cursor from its previous run (Convex's `QueryJournal`). */
@@ -101,7 +101,7 @@ const STATUS = { ok: "k", failed: "f", refused: "r", replayed: "p" } as const;
 const flag = (b: boolean) => (b ? 1 : 0);
 
 export function encodeCallRequest(r: CallRequest): string {
-  const w = new WireWriter();
+  const w = new Out(`c${r.id}:`);
   w.str(KIND[r.kind]);
   w.str(r.name);
   w.str(r.args);
@@ -112,11 +112,22 @@ export function encodeCallRequest(r: CallRequest): string {
   w.num(r.now);
   w.opt(r.identity);
   w.num(flag(r.systemIdentity));
-  w.opt(r.request);
+  const m = r.request;
+  w.num(flag(m !== null));
+  if (m) {
+    w.opt(m.ip);
+    w.opt(m.userAgent);
+    w.str(m.requestId);
+    w.opt(m.authToken);
+    w.opt(m.scheduledFunctionId);
+    // Absent and null are two things here (`RequestMetadata.scheduledFunctionComponent`).
+    w.num(flag(m.scheduledFunctionComponent !== undefined));
+    if (m.scheduledFunctionComponent !== undefined) w.opt(m.scheduledFunctionComponent);
+  }
   w.num(flag(r.tracked));
   w.opt(r.journal);
   w.num(flag(r.refused));
-  return `c${r.id}:${w.take()}`;
+  return w.s;
 }
 
 export function decodeCallRequest(s: string): CallRequest {
@@ -147,7 +158,22 @@ export function decodeCallRequest(s: string): CallRequest {
   r.at("systemIdentity");
   const systemIdentity = r.bool();
   r.at("request");
-  const request = r.opt();
+  let request: RequestMetadata | null = null;
+  if (r.bool()) {
+    r.at("request.ip");
+    const ip = r.opt();
+    r.at("request.userAgent");
+    const userAgent = r.opt();
+    r.at("request.requestId");
+    const requestId = r.str();
+    r.at("request.authToken");
+    const authToken = r.opt();
+    r.at("request.scheduledFunctionId");
+    const scheduledFunctionId = r.opt();
+    request = { ip, userAgent, requestId, authToken, scheduledFunctionId };
+    r.at("request.scheduledFunctionComponent");
+    if (r.bool()) request.scheduledFunctionComponent = r.opt();
+  }
   r.at("tracked");
   const tracked = r.bool();
   r.at("journal");
@@ -174,7 +200,7 @@ export function decodeCallRequest(s: string): CallRequest {
 }
 
 export function encodeCallOutcome(o: CallOutcome): string {
-  const w = new WireWriter();
+  const w = new Out(`o${o.id}:`);
   w.str(STATUS[o.status]);
   w.opt(o.result);
   w.num(flag(o.identityObserved));
@@ -226,7 +252,7 @@ export function encodeCallOutcome(o: CallOutcome): string {
       w.bytes(t.key);
     }
   }
-  return `o${o.id}:${w.take()}`;
+  return w.s;
 }
 
 export function decodeCallOutcome(s: string): CallOutcome {
@@ -324,7 +350,32 @@ export function decodeCallOutcome(s: string): CallOutcome {
   };
 }
 
-/** Reads a message field by field, refusing anything `WireWriter` would not have written. */
+/** Builds one message as #878's `WireWriter` does, by concatenation (cheaper than its parts and `join` here). */
+class Out {
+  constructor(public s: string) {}
+  str(x: string) {
+    this.s += `${x.length}:${x}`;
+  }
+  opt(x: string | null) {
+    this.s += x === null ? "_" : `${x.length}:${x}`;
+  }
+  num(n: number | bigint) {
+    this.s += `${n}:`;
+  }
+  optNum(n: bigint | null) {
+    this.s += n === null ? "_" : `${n}:`;
+  }
+  /** One character per byte. */
+  bytes(b: Uint8Array) {
+    this.str(
+      b.length <= 1024
+        ? String.fromCharCode.apply(null, b as unknown as number[])
+        : Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString("latin1"),
+    );
+  }
+}
+
+/** Reads a message field by field, refusing anything `Out` would not have written. */
 class WireReader {
   private pos = 0;
   // Where it is, built into a path only when a field is refused.
@@ -364,28 +415,37 @@ class WireReader {
     if (this.pos !== this.s.length) this.fail(`${this.s.length - this.pos} characters past the last field`);
   }
 
-  /** The digits before the next `:`. */
+  /** The digits before the next `:`, for a number past 2^53 (a timestamp). */
   private digits(): string {
     const start = this.pos;
-    let i = start;
-    for (; i < this.s.length; i++) {
-      const c = this.s.charCodeAt(i);
-      if (c === 58 /* : */) break;
-      if (c < 48 || c > 57) this.fail(`expected a number, got ${JSON.stringify(this.s.slice(start, i + 1))}`);
-    }
-    if (i >= this.s.length) this.fail("the message ends inside a field");
-    if (i === start) this.fail("an empty number");
-    this.pos = i + 1;
-    return this.s.slice(start, i);
+    this.int(true);
+    return this.s.slice(start, this.pos - 1);
   }
   private isNull(): boolean {
     if (this.s.charCodeAt(this.pos) !== 95 /* _ */) return false;
     this.pos++;
     return true;
   }
-  int(): number {
-    const n = Number(this.digits());
-    if (!Number.isSafeInteger(n)) this.fail("a number past 2^53");
+  /** A number's digits and its `:`, read in place (no slice). `big`: past 2^53 is let through for `digits`. */
+  int(big = false): number {
+    const s = this.s;
+    const start = this.pos;
+    let n = 0;
+    let i = start;
+    for (; ; i++) {
+      const c = s.charCodeAt(i); // NaN past the end
+      if (c === 58 /* : */) break;
+      if (!(c >= 48 && c <= 57))
+        this.fail(
+          i >= s.length
+            ? "the message ends inside a field"
+            : `expected a number, got ${JSON.stringify(s.slice(start, i + 1))}`,
+        );
+      n = n * 10 + (c - 48);
+    }
+    if (i === start) this.fail("an empty number");
+    if (!big && n > Number.MAX_SAFE_INTEGER) this.fail("a number past 2^53");
+    this.pos = i + 1;
     return n;
   }
   /** A list's length: no more items than characters left, so a corrupt one cannot allocate. */
@@ -395,9 +455,15 @@ class WireReader {
     return n;
   }
   bool(): boolean {
-    const d = this.digits();
-    if (d !== "0" && d !== "1") this.fail(`expected 0 or 1, got ${d}`);
-    return d === "1";
+    const c = this.s.charCodeAt(this.pos);
+    if ((c === 48 || c === 49) && this.s.charCodeAt(this.pos + 1) === 58) {
+      this.pos += 2;
+      return c === 49;
+    }
+    const start = this.pos;
+    const n = this.int();
+    this.pos = start;
+    return this.fail(`expected 0 or 1, got ${n}`);
   }
   big(): bigint {
     return BigInt(this.digits());
@@ -407,13 +473,20 @@ class WireReader {
   }
   /** A finite number in JavaScript's own text (a timestamp in ms, with its fraction). */
   float(): number {
-    const end = this.s.indexOf(":", this.pos);
-    if (end < 0) this.fail("the message ends inside a field");
-    const text = this.s.slice(this.pos, end);
-    const n = Number(text);
-    if (text === "" || !Number.isFinite(n) || String(n) !== text)
-      this.fail(`expected a number, got ${JSON.stringify(text)}`);
-    this.pos = end + 1;
+    const s = this.s;
+    const start = this.pos;
+    let i = start;
+    // Only what `${n}` writes for a finite number: digits, a sign, a point, an exponent (Number would take more).
+    for (let c = s.charCodeAt(i); c !== 58 /* : */; c = s.charCodeAt(++i))
+      if (!((c >= 48 && c <= 57) || c === 46 || c === 45 || c === 43 || c === 101))
+        this.fail(
+          i >= s.length
+            ? "the message ends inside a field"
+            : `expected a number, got ${JSON.stringify(s.slice(start, i + 1))}`,
+        );
+    const n = Number(s.slice(start, i));
+    if (i === start || !Number.isFinite(n)) this.fail(`expected a number, got ${JSON.stringify(s.slice(start, i))}`);
+    this.pos = i + 1;
     return n;
   }
   str(): string {
@@ -428,13 +501,18 @@ class WireReader {
   }
   /** Bytes sent one character per byte. */
   bytes(): Uint8Array {
-    const t = this.str();
-    const b = new Uint8Array(t.length);
-    for (let i = 0; i < t.length; i++) {
-      const c = t.charCodeAt(i);
+    const n = this.int();
+    const s = this.s;
+    const start = this.pos;
+    if (start + n > s.length) this.fail(`a string of ${n} characters, with ${s.length - start} left`);
+    // Read in place: no string for the key, only its bytes.
+    const b = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      const c = s.charCodeAt(start + i);
       if (c > 255) this.fail("a byte past 255");
       b[i] = c;
     }
+    this.pos = start + n;
     return b;
   }
 }

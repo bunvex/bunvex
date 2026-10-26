@@ -34,7 +34,20 @@ const request: fc.Arbitrary<CallRequest> = fc.record({
   now: fc.oneof(fc.double({ min: 0, max: 1e15, noNaN: true }), fc.nat()),
   identity: fc.option(fc.json(), { nil: null }),
   systemIdentity: fc.boolean(),
-  request: fc.option(fc.json(), { nil: null }),
+  request: fc.option(
+    fc.record(
+      {
+        ip: optText,
+        userAgent: optText,
+        requestId: text,
+        authToken: optText,
+        scheduledFunctionId: optText,
+        scheduledFunctionComponent: optText,
+      },
+      { requiredKeys: ["ip", "userAgent", "requestId", "authToken", "scheduledFunctionId"] },
+    ),
+    { nil: null },
+  ),
   tracked: fc.boolean(),
   journal: optText,
   refused: fc.boolean(),

@@ -197,7 +197,7 @@ export class CallRunner {
         system: false,
         identity: request.identity === null ? null : JSON.parse(request.identity),
         systemIdentity: request.systemIdentity,
-        request: request.request === null ? null : JSON.parse(request.request),
+        request: request.request,
         tracked: request.tracked,
         journal: request.journal,
       },
