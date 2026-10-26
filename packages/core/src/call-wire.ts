@@ -350,20 +350,27 @@ export function decodeCallOutcome(s: string): CallOutcome {
   };
 }
 
-/** Builds one message as #878's `WireWriter` does, by concatenation (cheaper than its parts and `join` here). */
+/** Builds one message as #878's `WireWriter` does: its parts, joined once into a flat string. */
 class Out {
-  constructor(public s: string) {}
+  private parts: string[];
+  constructor(head: string) {
+    this.parts = [head];
+  }
+  get s(): string {
+    return this.parts.join("");
+  }
   str(x: string) {
-    this.s += `${x.length}:${x}`;
+    this.parts.push(`${x.length}:`, x);
   }
   opt(x: string | null) {
-    this.s += x === null ? "_" : `${x.length}:${x}`;
+    if (x === null) this.parts.push("_");
+    else this.parts.push(`${x.length}:`, x);
   }
   num(n: number | bigint) {
-    this.s += `${n}:`;
+    this.parts.push(`${n}:`);
   }
   optNum(n: bigint | null) {
-    this.s += n === null ? "_" : `${n}:`;
+    this.parts.push(n === null ? "_" : `${n}:`);
   }
   /** One character per byte. */
   bytes(b: Uint8Array) {
