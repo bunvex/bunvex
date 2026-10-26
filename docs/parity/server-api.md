@@ -183,8 +183,8 @@ Key bunvex facts behind the statuses:
 | `v.literal(string \| number \| bigint \| boolean)` | values/validator.ts; `common/src/schemas/json.rs` (`UnsupportedFloatLiteral`) | done (#24; STUDY-188 R3) | An infinite or NaN number literal, in a schema or a function's `args` / `returns`, fails the push with Convex's 400 `UnsupportedFloatLiteral` |
 | `v.array(el)` | values/validator.ts | done (#24) | |
 | `v.object(fields)`, rejecting unknown fields | values/validator.ts | done (#24) | |
-| `v.record(keys, values)` (keys are string-like or ids; no optional keys or values) | values/validators.ts (`VRecord`) | done (#24) | |
-| `v.union(...members)` | values/validator.ts | done (#24) | |
+| `v.record(keys, values)` (keys are string-like or ids; no optional keys or values) | values/validators.ts (`VRecord`) | done (#24) | Typed as Convex's: the keys a required `Validator<string>`, the values required, so a number, boolean or null key and an optional key or value are type errors (STUDY-189 P4). |
+| `v.union(...members)` | values/validator.ts | done (#24) | Typed as Convex's: every member required, so `v.union(v.optional(x), …)` and `v.nullable(v.optional(x))` are type errors (STUDY-189 P4). |
 | `v.any()` | values/validator.ts | done (#24) | |
 | `v.optional(x)` and the `.optional()` method on every validator | values/validator.ts, validators.ts | done (#24) | |
 | `v.nullable(x)` (= `union(x, null)`) | values/validator.ts | done (#24) | |
