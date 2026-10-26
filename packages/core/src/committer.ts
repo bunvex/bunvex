@@ -329,6 +329,12 @@ export class Committer {
   appliedTs = 0n;
   /** Highest ts that is DURABLE: new transactions read at this snapshot. */
   visibleTs = 0n;
+  /**
+   * The ts of the newest commit made visible, set with `visibleTs` before the commit listeners run. Past it,
+   * `visibleTs` moves only by `max_repeatable_ts` bumps, which write nothing: a listener that has seen every
+   * commit up to this ts has seen every write up to `visibleTs`.
+   */
+  lastCommitTs = 0n;
   /** Groups committed: the commits queued while the previous group was being written. */
   groups = 0;
   /** Flushes made: a group is written as one or more write batches (DV-62). */
@@ -416,7 +422,7 @@ export class Committer {
 
   /** Start after the store's durable maxTs (PERSIST-01 C5): nothing at or below it is in the write log. */
   resume(maxTs: bigint) {
-    this.appliedTs = this.visibleTs = this.purgedTs = maxTs;
+    this.appliedTs = this.visibleTs = this.purgedTs = this.lastCommitTs = maxTs;
   }
 
   /**
@@ -433,6 +439,28 @@ export class Committer {
     if (reads.length === 0) return false;
     return this.byIndex.conflict(intervalSetsByIndex(reads), from, to, this.sourceAt) !== null;
   }
+
+  /**
+   * The ts of the earliest durable commit in `(from, to]` (`to` ≤ visibleTs) that wrote into `reads`, or null
+   * when none did: where a result read at `from` stops being valid (a subscription's invalid ts in Convex's
+   * `SubscriptionManager`). When the write log no longer reaches back to `from`, `from + 1`: nothing can be
+   * proven past it.
+   */
+  earliestChange(reads: Interval[], from: bigint, to: bigint): bigint | null {
+    if (to > this.visibleTs) throw new Error(`earliestChange: ${to} is past the visible ts ${this.visibleTs}`);
+    if (from >= to) return null;
+    if (from < this.purgedTs) return from + 1n;
+    let earliest: bigint | null = null;
+    // Each index on its own: `conflict` names the oldest write of the first index that has one, not the oldest
+    // over all of them.
+    for (const set of intervalSetsByIndex(reads)) {
+      const c = this.byIndex.conflict([set], from, earliest === null ? to : earliest, this.noSource);
+      if (c !== null && (earliest === null || c.writeTs < earliest)) earliest = c.writeTs;
+    }
+    return earliest;
+  }
+
+  private noSource = (): undefined => undefined;
 
   /** The write source of the commit at `ts` (in the log): a binary search, only to report a conflict. */
   private sourceAt = (ts: bigint): string | undefined => {
@@ -739,7 +767,7 @@ export class Committer {
     this.commits += to - from;
     const flushSeconds = (performance.now() - flushStart) / 1000;
     const batch = accepted.slice(from, to);
-    this.visibleTs = batch[batch.length - 1][1].ts;
+    this.visibleTs = this.lastCommitTs = batch[batch.length - 1][1].ts;
     const entries = batch.map(([, e]) => e);
     const wt = this.writeThroughput;
     // A hook or listener that throws is a bug of bunvex, not a persistence failure: the batch is durable and

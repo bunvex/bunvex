@@ -126,6 +126,39 @@ test("changedBetween: whether a commit in (from, to] wrote into the reads, and t
   expect(c.changedBetween(reads(5, 9), 1n, 12n)).toBe(false);
 });
 
+test("earliestChange: the first commit in (from, to] that wrote into the reads, over every index; from + 1 beyond the log", async () => {
+  const p = await MemoryPersistence.open(null, { durable: false });
+  let now = 0n;
+  const c = new Committer(p, { maxRetentionNs: 10n }, () => now);
+  const idx = (index: string, n: number) => [{ index, key: new Uint8Array([n]), table: "t9", id: `d${n}` }];
+  const reads = (index: string, lo: number, hi: number) => ({
+    index,
+    lo: new Uint8Array([lo]),
+    hi: new Uint8Array([hi]),
+  });
+  const seen: bigint[] = [];
+  c.onCommit((entries) => seen.push(c.lastCommitTs, entries.at(-1)!.ts));
+  // ts 1 writes ix8 key 1, ts 2 writes ix9 key 2, ts 3 writes ix8 key 3.
+  await c.commit({ snapshot: 0n, reads: [], docs: [], idx: idx("ix8", 1) });
+  await c.commit({ snapshot: 1n, reads: [], docs: [], idx: idx("ix9", 2) });
+  await c.commit({ snapshot: 2n, reads: [], docs: [], idx: idx("ix8", 3) });
+  // Set before the listeners run, to the newest commit they are told of.
+  expect(seen).toEqual([1n, 1n, 2n, 2n, 3n, 3n]);
+  // ix9 sorts after ix8, and its write (ts 2) is older than ix8's in the window (ts 3): the oldest over both.
+  expect(c.earliestChange([reads("ix8", 3, 4), reads("ix9", 0, 9)], 1n, 3n)).toBe(2n);
+  expect(c.earliestChange([reads("ix9", 0, 9), reads("ix8", 0, 9)], 0n, 3n)).toBe(1n);
+  expect(c.earliestChange([reads("ix8", 3, 4)], 0n, 3n)).toBe(3n);
+  expect(c.earliestChange([reads("ix8", 3, 4)], 3n, 3n)).toBeNull(); // empty range
+  expect(c.earliestChange([reads("ix8", 4, 9)], 0n, 3n)).toBeNull();
+  expect(() => c.earliestChange([reads("ix8", 0, 9)], 0n, 4n)).toThrow("past the visible ts");
+  // Past the log (ts 1 dropped after a commit at ts 12): nothing is known after `from`.
+  now = 12n;
+  await c.commit({ snapshot: 3n, reads: [], docs: [], idx: idx("ix9", 4) });
+  expect(c.earliestChange([reads("ix8", 5, 9)], 0n, 12n)).toBe(1n);
+  expect(c.earliestChange([reads("ix8", 5, 9)], 1n, 12n)).toBeNull();
+  expect(c.lastCommitTs).toBe(12n);
+});
+
 describe("a commit listener that throws (an internal error, not a persistence failure)", () => {
   test("the committer stops once, with an error naming the listener and the original as its cause", async () => {
     const { e, fatal } = await setup();

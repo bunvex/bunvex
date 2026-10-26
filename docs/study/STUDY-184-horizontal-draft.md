@@ -1,5 +1,5 @@
 # STUDY-184 — Horizontal scaling: Convex's real shape, and what one bunvex process does with a core
-<!-- index: Horizontal scaling: Convex's real shape, one bunvex process per core | decided (owner, 2026-10-26): Convex's shape, confirmed by measurement 3 (§5.6); DV-114 rewritten, DV-116/118/119 withdrawn -->
+<!-- index: Horizontal scaling: Convex's real shape, one bunvex process per core | decided (owner, 2026-10-26): Convex's shape, confirmed by measurement 3 (§5.6); DV-114 rewritten, DV-116/118/119 withdrawn; Q4 built (§5.7) -->
 
 - **Status:** rewritten from scratch on 2026-10-26. The earlier draft did not read Convex's source, and its load
   measured the client rather than the server (§5.1). No product change. Decided (owner, 2026-10-26): Q1–Q5.
@@ -44,8 +44,8 @@
    - Matching a commit against a million subscriptions costs about 3 µs, and a STUDY-24 follower's apply under 1 µs.
    - The cost is per query update: 43–54 µs in one bunvex process once two avoidable checks are gone (22–29k
      updates/s), against Convex's 2.2 ms (1.0–1.7k updates/s from one backend on every core).
-   - Today those two checks in the sync session, which Convex does not make, cap one invalidation per commit at 261
-     commits/s with a million subscriptions. That is a fix for either design (§7 Q4).
+   - Those two checks in the sync session, which Convex does not make, capped one invalidation per commit at 261
+     commits/s with a million subscriptions. That was a fix for either design (§7 Q4), now built (§5.7): 3 822.
 
 ## 1. How Convex does it
 
@@ -497,6 +497,44 @@ replacement and the session's transition. Execution moves to other processes and
   that invalidates one subscription costs 0.3–4 ms of leader CPU, growing with N, in either design. In STUDY-24's
   each follower would pay it for its own sessions.
 
+### 5.7 Q4 built: a session reruns only what a commit invalidated
+
+**The change.** The sync hub now keeps each execution's validity, as Convex's subscription worker keeps each
+subscription's (`crates/database/src/subscription.rs`: a valid subscription's ts follows the manager's processed
+ts, and an invalid one keeps its invalid ts).
+
+- **While an execution is a watched key's latest,** the hub's `onCommit` records the first commit that wrote into
+  its reads, commit by commit, before it tells any session.
+- **A transition** (`stale`), **its end** (a commit that landed during it), **and a reuse** (`resultAt`) ask
+  `SyncHub.validAt`. For a tracked execution the answer is O(1), as Convex's `extend_validity` reads its
+  subscription's ts.
+- **An execution no longer tracked** (another run replaced it) is checked with `Committer.earliestChange` from the
+  ts it was last known valid at, and the answer is remembered.
+- **A new result is checked once, when it is registered,** against the commits that landed while it ran, as
+  Convex's `subscribe` refreshes a new subscription through the write log. If one of them wrote into it, the
+  session that ran it reruns it at once. Its other watchers wait for their own, possibly splayed, notification.
+- **A subscription nothing wrote into now stays valid past the write log's retention, as Convex's does.** Before,
+  a session whose last transition left the log reran every query (and logged the runs).
+
+**Before and after,** on the same bench and Mac (load average 3–6), at `f7d55c81`:
+
+| N | invalidated per commit | saturated commits/s, before → after | updates/s, before → after | update p50, before → after |
+|---|---:|---:|---:|---:|
+| 0 | 0 | 10 039 → 10 975 | — | — |
+| 1 000 | 1 / 10 / 100 | 2 678 / 1 202 / 320 → 7 905 / 2 347 / 534 | 2 661 / 11 119 / 19 361 → 7 848 / 21 894 / 29 783 | 6 / 15 / 58 → 2 / 9 / 38 ms |
+| 10 000 | 1 / 100 / 1 000 | 1 392 / 118 / 30 → 6 879 / 241 / 41 | 1 389 / 11 073 / 17 576 → 6 873 / 22 872 / 27 704 | 12 / 158 / 632 → 3 / 83 / 463 ms |
+| 100 000 | 1 / 1 000 / 10 000 | 660 / 12 / 3 → 5 990 / 22 / 4 | 659 / 10 437 / 14 509 → 5 988 / 20 565 / 24 351 | 25 / 1 544 / 6 615 → 4 / 920 / 4 133 ms |
+| 1 000 000 | 1 / 10 000 | 249 / — → 3 822 / <1 | 248 / — → 3 820 / 6 357 | 59 / — → 4 / 21 705 ms |
+
+- **One invalidation per commit:** 15× the commit rate at a million subscriptions, and 9× at 100 000. The rate
+  now falls only from 7.9k to 3.8k across three orders of magnitude of N.
+- **Wide fan-outs:** 20–30k query updates/s from one process, against 10–19k before.
+- **The isolated CPU per commit at 100 000 subscriptions and one invalidation** went from 1.5 to 0.71 ms.
+- **The prototype's numbers hold.** A first version kept the validity in a `WeakMap`, and at a million executions
+  that halved the commit rate (1 783/s): garbage collection walks every entry. It is now a field of the execution.
+- 1M at 1 % before was not rerun here (§5.6 has 9.3 s of CPU per commit). Raw results:
+  `bench/results/s184-invalidation/q4-before.jsonl` and `q4-after.jsonl`.
+
 ## 6. Additions
 
 None proposed.
@@ -518,5 +556,5 @@ does. Two questions it raised, decided (owner, 2026-10-26) as recommended:
 
 | # | Question | Recommendation (decided) |
 |---|---|---|
-| Q4 | Make the sync session rerun only the queries a commit invalidated, as Convex's `need_fetch` does, instead of re-checking every query against the write log on each transition and each rerun? | Yes, in its own PR with tests and a measurement. It is not a divergence: apps see the same transitions, sooner. §5.6's prototype gives 15× the commit rate at a million subscriptions |
+| Q4 | Make the sync session rerun only the queries a commit invalidated, as Convex's `need_fetch` does, instead of re-checking every query against the write log on each transition and each rerun? | Yes, in its own PR with tests and a measurement. It is not a divergence: apps see the same transitions, sooner. §5.6's prototype gives 15× the commit rate at a million subscriptions. **Built** (§5.7): 15× at a million, as the prototype |
 | Q5 | Withdraw DV-116, DV-118 and DV-119, and rewrite DV-114 as §4 proposes? | Yes. Convex's shape needs none of the three, and DV-114 then describes Convex Cloud's shape |

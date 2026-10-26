@@ -358,6 +358,18 @@ export type Execution = {
    * cache.
    */
   logged: { kept: CachedRun; returnBytes: number | null; error?: unknown };
+  /** What the sync hub knows of its validity, once it has been asked or tracked (`SyncHub.validAt`). */
+  validity?: Validity;
+};
+
+/** What the sync hub knows of an execution's validity (`SyncHub.validAt`). */
+type Validity = {
+  /** The first commit after the run that wrote into its reads, once known: invalid from that ts on. */
+  invalidAt: bigint | null;
+  /** While no such commit is known: valid through this ts. */
+  validThrough: bigint;
+  /** The watched keys it is the latest execution of: their commits are matched against it as they land. */
+  tracked: number;
 };
 
 export type SessionQuery = {
@@ -419,6 +431,8 @@ export class SyncHub {
   private watchers = new Map<string, Set<SyncSession>>();
   /** The read-set of each watched key's latest execution: what a commit is matched against (STUDY-08 D9). */
   readonly reads = new ReadSetIndex<string>();
+  /** The ts of the newest commit `onCommit` matched: every commit up to it has set the invalid ts it hit. */
+  private matchedTs: bigint;
   readonly sessions = new Set<SyncSession>();
   /** The queries subscribed to across every session (read when `/metrics` is scraped). */
   subscriptionCount(): number {
@@ -465,6 +479,7 @@ export class SyncHub {
       const limits = roomLimitsFromEnv();
       this.rooms = { hub: new RoomHub(limits), limits };
     }
+    this.matchedTs = deps.engine.committer.lastCommitTs;
     deps.engine.committer.onCommit((entries) => this.onCommit(entries), "sync");
     this.retry = retryOptions(deps.retry);
     this.wsHeartbeat = {
@@ -508,7 +523,20 @@ export class SyncHub {
    * transition then reruns every query that is stale, as Convex's sync worker does on any wake.
    */
   private onCommit(entries: LogEntry[]) {
-    const hit = this.reads.matchingEntries(entries);
+    this.matchedTs = entries[entries.length - 1]!.ts;
+    // Commit by commit, so each execution hit learns the first commit that invalidated it, before any session
+    // is told (a session told runs its transition up to its first await, which asks for validity).
+    let hit = new Set<string>();
+    for (const entry of entries) {
+      const found = this.reads.matching(entry.writes);
+      for (const key of found) {
+        const e = this.latest.get(key);
+        const v = e?.validity;
+        if (v && v.invalidAt === null) v.invalidAt = entry.ts;
+      }
+      if (entries.length === 1) hit = found;
+      else for (const key of found) hit.add(key);
+    }
     if (hit.size === 0) return;
     // Session → how many of its queries this commit invalidates. A query whose splayed notification is
     // still pending is not counted again: in Convex it left the subscription map when it was invalidated.
@@ -619,9 +647,68 @@ export class SyncHub {
     if (e.generation !== this.generation) return;
     const cur = this.latest.get(key);
     if (this.watchers.has(key) && (!cur || cur.ts <= e.ts)) {
+      if (cur === e) return;
       this.latest.set(key, e);
       this.reads.set(key, e.reads);
+      if (cur) this.untrack(cur);
+      // A commit that landed during the run already invalidates it: the session that ran it finds so at the
+      // end of its transition and runs again; the other watchers wait for their own notification (splayed).
+      this.track(e);
     }
+  }
+
+  /**
+   * What is known of an execution's validity (Convex's `Subscription` validity): the first commit after its ts
+   * that wrote into its reads, once known, else the ts it is known valid through. While it is a watched key's
+   * latest execution (`tracked` > 0: once per key it is registered under), `onCommit` sets its invalid ts, so a
+   * session or a reuse asks it in O(1) instead of scanning the write log (STUDY-184 §5.6, Q4). Kept on the
+   * execution itself: a `WeakMap` of a million entries made every collection slower.
+   */
+  private validityOf(e: Execution): Validity {
+    e.validity ??= { invalidAt: null, validThrough: e.ts, tracked: 0 };
+    return e.validity;
+  }
+
+  /**
+   * `e` is now some key's latest execution: commits are matched against its reads from here on. The ones
+   * since its run (those that landed while it ran) are checked now, as Convex's `subscribe` refreshes a new
+   * subscription through the write log.
+   */
+  private track(e: Execution) {
+    const v = this.validityOf(e);
+    if (v.tracked++ > 0 || v.invalidAt !== null || this.matchedTs <= v.validThrough) return;
+    v.invalidAt = this.deps.engine.committer.earliestChange(e.reads, v.validThrough, this.matchedTs);
+    if (v.invalidAt === null) v.validThrough = this.matchedTs;
+  }
+
+  /** `e` is no longer the latest execution of a key: past what has been matched, its validity is checked when asked. */
+  private untrack(e: Execution) {
+    const v = this.validityOf(e);
+    if (--v.tracked > 0 || v.invalidAt !== null) return;
+    if (this.matchedTs > v.validThrough) v.validThrough = this.matchedTs;
+  }
+
+  /**
+   * Whether `e`'s result is also the result at `ts` (≤ visibleTs): no commit between the two wrote into its
+   * reads (Convex's `extend_validity`). Known at once for a key's latest execution; any other is checked
+   * against the write log from where it was last known valid, and that is remembered. `current`: also of the
+   * code live now, to be reused (a session's own result of an unchanged module stays valid across a push).
+   */
+  validAt(e: Execution, ts: bigint, current = true): boolean {
+    if (current && e.generation !== this.generation) return false;
+    const committer = this.deps.engine.committer;
+    // A result newer than the snapshot asked for (another session ran it since): valid back to `ts`?
+    if (ts < e.ts) return !committer.changedBetween(e.reads, ts, e.ts);
+    const v = this.validityOf(e);
+    if (v.invalidAt !== null) return ts < v.invalidAt;
+    if (ts <= v.validThrough) return true;
+    // Tracked, and every commit made visible has been matched: nothing wrote into it up to `visibleTs`.
+    if (v.tracked > 0 && committer.lastCommitTs <= this.matchedTs) return true;
+    const from = v.tracked > 0 && this.matchedTs > v.validThrough ? this.matchedTs : v.validThrough;
+    v.invalidAt = committer.earliestChange(e.reads, from, ts);
+    if (v.invalidAt !== null) return ts < v.invalidAt;
+    v.validThrough = ts;
+    return true;
   }
 
   watch(key: string, s: SyncSession) {
@@ -634,6 +721,8 @@ export class SyncHub {
     const set = this.watchers.get(key);
     if (!set?.delete(s) || set.size > 0) return;
     this.watchers.delete(key);
+    const e = this.latest.get(key);
+    if (e) this.untrack(e);
     this.latest.delete(key);
     this.reads.delete(key);
     this.inspector.forget(key);
@@ -650,7 +739,6 @@ export class SyncHub {
     caller: Caller,
     session?: SyncSession,
   ): Promise<{ exec: Execution; idPart: string; cached?: boolean }> {
-    const committer = this.deps.engine.committer;
     const mine = idPartOf(caller);
     // Access first (STUDY-34): a caller who may not run the query (an internal or system function without
     // an admin key, an operation the key lacks) never reuses another caller's run; its own run fails, and
@@ -660,10 +748,7 @@ export class SyncHub {
     } catch {
       return this.execute(q, ts, caller, () => session?.isOpen ?? true).then((exec) => ({ exec, idPart: mine }));
     }
-    const valid = (l: Execution | undefined): l is Execution =>
-      l !== undefined &&
-      l.generation === this.generation &&
-      !(l.ts < ts ? committer.changedBetween(l.reads, l.ts, ts) : committer.changedBetween(l.reads, ts, l.ts));
+    const valid = (l: Execution | undefined): l is Execution => l !== undefined && this.validAt(l, ts);
     // Where the query lives now, when that is shared or this caller's.
     if (q.idPart === SHARED || q.idPart === mine) {
       const l = this.latest.get(q.key);
@@ -1538,9 +1623,7 @@ export class SyncSession {
       // (Convex drops the invalidation futures of the queries it reruns). Same tick as reading `ts`.
       this.cancelSplay();
       const at = ts;
-      stale = [...this.queries].filter(
-        ([, q]) => !q.exec || engine.committer.changedBetween(q.exec.reads, q.validAt, at),
-      );
+      stale = [...this.queries].filter(([, q]) => !q.exec || !this.hub.validAt(q.exec, at, false));
       // A query never answered is its initial subscription; one answered before reruns for the identity
       // change, else for a data change (an invalidated read, a pushed module).
       for (const [, q] of stale)
@@ -1627,11 +1710,7 @@ export class SyncSession {
     const visible = engine.committer.visibleTs;
     const rerun = new Set(stale.map(([, q]) => q));
     for (const q of this.queries.values())
-      if (
-        q.exec &&
-        (this.splayTimer === null || rerun.has(q)) &&
-        engine.committer.changedBetween(q.exec.reads, ts, visible)
-      ) {
+      if (q.exec && (this.splayTimer === null || rerun.has(q)) && !this.hub.validAt(q.exec, visible, false)) {
         this.scheduled = true;
         break;
       }

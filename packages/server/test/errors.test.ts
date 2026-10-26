@@ -329,7 +329,7 @@ test("a commit listener that throws stops the server, reported as that listener'
   const app = createServer({ engine, functions, port: 0, onFatal: (e) => fatal.push(e) });
   stops.push(app.stop);
   // A bug in the sync layer's handling of a commit.
-  (app.sync as unknown as { reads: { matchingEntries: () => never } }).reads.matchingEntries = () => {
+  (app.sync as unknown as { reads: { matching: () => never } }).reads.matching = () => {
     throw new Error("index broke");
   };
   await engine.mutation((db) => db.insert("items", {}));
