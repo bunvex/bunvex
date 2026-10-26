@@ -35,6 +35,7 @@ import {
   logChildLine,
   MAX_LOG_LINE_LENGTH,
   makeLogLine,
+  neverResolves,
   type SandboxCall,
 } from "@bunvex/server/executor";
 import { BunvexError, isBunvexError, type JSONValue } from "@bunvex/values";
@@ -291,6 +292,8 @@ export abstract class HostCallBase {
         throw new Error(w.message);
       case "system":
         throw new ExecutorFailure(w.message);
+      case "never":
+        throw neverResolves();
       case "error":
         throw appError(w);
     }

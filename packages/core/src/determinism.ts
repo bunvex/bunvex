@@ -49,6 +49,8 @@ type Execution = {
   observed: Observed;
   /** The running function's time budget (STUDY-41), when a user function runs. */
   timer?: UserTimer;
+  /** Counts work the function waits on outside its store (`crypto.subtle`), when its runner watches it (`onWork`). */
+  work?: (p: PromiseLike<unknown>) => void;
 };
 
 /**
@@ -450,6 +452,41 @@ export function installDeterminism() {
     if (e && (name === "RSA-PSS" || name === "ECDSA")) return Promise.reject(noCryptoRandomness(e.kind));
     return realSign(...args);
   }) as SubtleCrypto["sign"];
+  // Bun answers some of them from its thread pool, turns of the event loop later: work in flight for the function's
+  // runner, which must not take a function waiting on one for one that can never resolve (STUDY-188 §X16).
+  const counted = subtle as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
+  for (const method of SUBTLE_METHODS) {
+    const real = counted[method]!.bind(subtle);
+    counted[method] = (...args: unknown[]) => {
+      const p = real(...args);
+      executions.getStore()?.work?.(p);
+      return p;
+    };
+  }
+}
+
+const SUBTLE_METHODS = [
+  "decrypt",
+  "deriveBits",
+  "deriveKey",
+  "digest",
+  "encrypt",
+  "exportKey",
+  "generateKey",
+  "importKey",
+  "sign",
+  "unwrapKey",
+  "verify",
+  "wrapKey",
+] as const;
+
+/**
+ * The running execution's work outside its store (`crypto.subtle`), each promise handed to `count` as it starts: what
+ * a query's or mutation's runner counts in flight (`Tx.track`). Outside an execution, nothing.
+ */
+export function onWork(count: (p: PromiseLike<unknown>) => void): void {
+  const e = executions.getStore();
+  if (e) e.work = count;
 }
 
 /**
