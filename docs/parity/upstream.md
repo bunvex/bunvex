@@ -64,8 +64,10 @@ Commits up to the reference that the last bump did not cover: none. STUDY-173 re
 
 ## After the reference
 
-82 commits on Convex's `main` follow `72ce13c` (up to `95d8719`, 2026-10-16). They are not triaged yet: the daily
-digest issue (#549) tracks them, and the next bump takes them up to its release. The four urgent ones were studied at
+195 commits on Convex's `main` follow `72ce13c` up to the release `precompiled-2026-10-24-bb31399` (2026-10-24), the
+82 that the daily digest issue (#549) listed and 113 more. [STUDY-186](../study/STUDY-186-convex-after-72ce13c.md)
+triages every one: 19 items to align, four new features for their own studies, six owner questions. The reference
+and the oracle move to that release with the PR that aligns them. The four urgent ones were studied at
 once ([STUDY-173 §5](../study/STUDY-173-convex-reference-2026-10-10.md#5-after-the-reference-the-urgent-commits)):
 
 | Commit | Subject | bunvex |
