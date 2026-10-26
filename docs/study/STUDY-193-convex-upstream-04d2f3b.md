@@ -1,7 +1,8 @@
 # STUDY-193 — Convex up to precompiled-2026-10-26-04d2f3b, and STUDY-186's build status
-<!-- index: Convex from `precompiled-2026-10-24-bb31399` to `precompiled-2026-10-26-04d2f3b`, triaged; STUDY-186 A1–A19 status; the reference move planned | draft: owner questions in §6 -->
+<!-- index: Convex from `precompiled-2026-10-24-bb31399` to `precompiled-2026-10-26-04d2f3b`, triaged; STUDY-186 A1–A19 status; the reference move planned | decided (owner, 2026-10-26): oracle first, `convex` 1.48.0 -->
 
-- **Status:** draft; triage and plan only. Nothing is built here. The owner questions are in §6.
+- **Status:** decided; triage and plan only. Nothing is built here. The owner took both §6 recommendations on
+  2026-10-26.
 - **Convex source read:** get-convex/convex-backend from the release tag `precompiled-2026-10-24-bb31399` (the end
   of [STUDY-186](STUDY-186-convex-after-72ce13c.md)) to the release tag `precompiled-2026-10-26-04d2f3b`
   (2026-10-26). That is 3 commits. `scripts/upstream-triage.ts` sorts one as weekly (dashboard) and ignores two (docs).
@@ -192,7 +193,9 @@ PR 1 runs them, and A19 adds `FunctionHandle_future`.
 
 ## 6. Owner questions
 
-| # | Question | Recommendation |
+Decided (owner, 2026-10-26): both as recommended.
+
+| # | Question | Recommendation (decided) |
 |---|---|---|
 | Q1 | STUDY-186 says the reference and the oracle move "with the PR that aligns §4.1". So the move waits for all 17 remaining items, and every oracle case those PRs could add (and STUDY-192's) waits too. Split the move: the oracle and A14 first (PR 1), the reference line in upstream.md last (PR 21)? | **Split.** The oracle is a test tool. The reference is the claim that bunvex matches a release. Moving the oracle first lets each align PR prove itself against the binary it follows. The claim moves only once it is true. The move costs nothing today: the whole suite passes against `04d2f3b` (§5.3). A14 has to ship with the oracle move anyway (§5.3). |
 | Q2 | The differential suite pins `convex` 1.46.0, the floor CLAUDE.md names. The oracle release ships 1.48.0, and A7 (`.staged()` deltas), A19 (`FunctionHandle_future`) and the two mutation features exist only there. Move the pin to 1.48.0? | **Move it to 1.48.0 with PR 1.** The oracle's own CLI is then the one it ships with, and the 1.48 surface can be compared. `api-shapes`, `component-definitions` and `table-definition-shape` compare against the installed `convex`, so they move to 1.48.0 too, which is what Convex ships at the reference. The 1.46.0 floor stays tested by pinning `sync-e2e`'s `^1.46.0` to exactly `1.46.0` (both now resolve to 1.46.0 in `bun.lock`). |

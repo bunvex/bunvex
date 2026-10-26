@@ -217,7 +217,7 @@ there, then run `bun run docs` (`bun run check` fails while this table is out of
 | [STUDY-189](STUDY-189-public-type-mismatches.md) | Public types against Convex 1.46.0's | decided (owner, 2026-10-25) |
 | [STUDY-190](STUDY-190-offthread.md) | Work off the one JS thread (STUDY-184 Q2): how Convex's backend spreads over cores, fresh per-request profiles of bench/server.ts (Mac, Linux VPS, DigitalOcean), the cost of a message between Bun threads, five candidates prototyped in bench/offthread/ (SQLite commits on a writer thread, SQLite readers, value work, HTTP front threads, execution on workers) and a ranked plan of PRs | decided (owner, 2026-10-26): every §8 recommendation; DV-573, DV-574; PR 1 in #878 |
 | [STUDY-191](STUDY-191-convex-auth-v2.md) | Built-in auth following Convex Auth v2 (`@convex-dev/auth` 2.0 beta, branch `reboot`): its components, tokens, sessions and sign-in methods, and how `@bunvex/auth` matches them; the direction that replaces better-auth as AD-01's base | accepted: direction and A-1–A-8 as recommended (owner, 2026-10-26; DV-575–DV-577); work not started |
-| [STUDY-193](STUDY-193-convex-upstream-04d2f3b.md) | Convex from `precompiled-2026-10-24-bb31399` to `precompiled-2026-10-26-04d2f3b`, triaged; STUDY-186 A1–A19 status; the reference move planned | draft: owner questions in §6 |
+| [STUDY-193](STUDY-193-convex-upstream-04d2f3b.md) | Convex from `precompiled-2026-10-24-bb31399` to `precompiled-2026-10-26-04d2f3b`, triaged; STUDY-186 A1–A19 status; the reference move planned | decided (owner, 2026-10-26): oracle first, `convex` 1.48.0 |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 
