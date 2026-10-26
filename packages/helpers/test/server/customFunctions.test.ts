@@ -139,9 +139,7 @@ describe("defining", () => {
     });
     expect(() =>
       consumeArg({
-        // Upstream marks this `@ts-expect-error`: there, a handler without `args` takes `Record<string, unknown>`,
-        // which `object` is not. bunvex types it `Record<string, any>` (registration.ts, STUDY-180), which `object`
-        // is, so only the run-time error is left.
+        // @ts-expect-error: a handler without `args` takes `Record<string, unknown>`, which `object` is not (as upstream)
         handler: async (ctx, emptyArgs: object) => [ctx.a, emptyArgs],
       }),
     ).toThrow(
