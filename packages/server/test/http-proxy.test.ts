@@ -66,6 +66,9 @@ async function setup(opts: { proxy?: boolean; server?: Partial<ServerOptions> } 
     get: action(async (_ctx, { url, redirect }: { url: string; redirect?: "follow" | "manual" | "error" }) =>
       attempt(() => fetch(url, redirect ? { redirect } : undefined)),
     ),
+    getAs: action(async (_ctx, { url }: { url: string }) =>
+      attempt(() => fetch(url, { headers: { "Proxy-Authorization": "app's own" } })),
+    ),
     nodeGet,
     whoami: query(async ({ auth }) => (await auth.getUserIdentity())?.subject ?? null),
   });
@@ -107,6 +110,27 @@ test("an action's fetch goes through the proxy, named by the instance; a refusal
       "error sending request for url (https://api.refused.test/x): client error (Connect): tunnel error: proxy authorization required",
   });
   expect(proxy.seen.at(-1)).toEqual({ method: "CONNECT", target: "api.refused.test:443", auth: NAME });
+});
+
+test("the app's Proxy-Authorization never goes out: the proxy hears only the instance, a target nothing (9a96843)", async () => {
+  // Convex's fetch client skips the header an app sets (`common/src/http/fetch.rs`, at precompiled-2026-10-24-bb31399):
+  // it is hop-by-hop, and the proxy's comes from the client's own configuration.
+  const { t, proxy, functions } = await setup();
+  expect(await functions.runAction("m:getAs", { url: `${t.url}/ok` })).toEqual({ status: 200, body: "ok /ok" });
+  expect(proxy.auths.at(-1)).toEqual([NAME]);
+  const heard: (string | null)[] = [];
+  const echo = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch: (req) => (heard.push(req.headers.get("proxy-authorization")), new Response("ok")),
+  });
+  stops.push(() => echo.stop(true));
+  const direct = await setup({ proxy: false });
+  expect(await direct.functions.runAction("m:getAs", { url: `http://127.0.0.1:${echo.port}/` })).toEqual({
+    status: 200,
+    body: "ok",
+  });
+  expect(heard).toEqual([null]);
 });
 
 test("a redirect is another request through the proxy; its refusal names the hop; manual keeps the 302", async () => {
