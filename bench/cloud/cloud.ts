@@ -89,7 +89,15 @@ async function createDroplet(name: string, size: string, region: string, key: st
       "json",
     ]),
   );
-  const d = JSON.parse(out)[0];
+  const created = JSON.parse(out)[0];
+  if (!created?.id) throw new Error(`creating ${name}: ${out.slice(0, 2000)}`);
+  // `--wait` can answer before the addresses are assigned: read the droplet again until both are there.
+  let d = created;
+  for (let i = 0; !(d.networks?.v4 ?? []).some((n: { type: string }) => n.type === "private"); i++) {
+    if (i === 60) throw new Error(`${name} got no addresses`);
+    await Bun.sleep(5000);
+    d = JSON.parse(await sh(["doctl", "compute", "droplet", "get", String(created.id), "--output", "json"]))[0];
+  }
   const ip = (type: string) => d.networks.v4.find((n: { type: string }) => n.type === type)?.ip_address as string;
   return { name, id: d.id, public: ip("public"), private: ip("private"), size, hourly: d.size?.price_hourly };
 }
