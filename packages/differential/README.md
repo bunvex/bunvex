@@ -61,8 +61,9 @@ backend is always started with `--disable-beacon`.
 - `test/dynamic-import.test.ts` (STUDY-188 §X14): a dynamic `import()` in the functions of `dynamic-import-app/` on
   both, and on bunvex under `process` too: an action importing a sibling module and a chunk only it reaches,
   specifiers resolved against the importing module, missing paths, a module that throws while loading (it fails the
-  action even inside `try`), a query, a mutation and an action's nested query refused, and a `"use node"` action
-  importing as Node does (`vm` only). Local only.
+  action even inside `try`), a query, a mutation and an action's nested query refused, a V8 action importing a
+  `"use node"` module (an internal error, HTTP 500), and a `"use node"` action importing as Node does (`vm` only).
+  Local only.
 - `test/unawaited-operations.test.ts` (STUDY-143): the unawaited-operations warning of the actions and HTTP
   actions of `unawaited-app/` on both, a timeout included (`env` sets `V8_ACTION_USER_TIMEOUT_SECS` on both).
   Local only.

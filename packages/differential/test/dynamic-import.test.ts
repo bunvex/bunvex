@@ -91,11 +91,12 @@ describe.skipIf(!ready)("dynamic import(), against Convex's backend", () => {
     }
   });
 
-  test('a V8 action importing a "use node" module: an internal error (vm)', async () => {
+  test('a V8 action importing a "use node" module: an internal error (vm and process)', async () => {
     const args = { spec: "./node" };
     const c = await answer(convex, "action", "dynamic:importSpec", args);
     expect(c).toEqual({ status: 500 });
     expect(await answer(bunvex, "action", "dynamic:importSpec", args)).toEqual(c);
+    expect(await answer(bunvexProcess, "action", "dynamic:importSpec", args)).toEqual(c);
   });
 
   test('a "use node" action imports as Node does (vm)', async () => {

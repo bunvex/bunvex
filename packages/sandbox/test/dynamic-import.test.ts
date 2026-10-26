@@ -161,7 +161,7 @@ for (const sandbox of ["vm", "process"] as const) {
       expect(await d.call("action", "dynamic:nestedQuery")).toEqual({ value: unsupported });
     });
 
-    test.skipIf(sandbox === "process")('a V8 action importing a "use node" module is a system error', async () => {
+    test('a V8 action importing a "use node" module is a system error', async () => {
       expect(await d.call("action", "dynamic:importSpec", { spec: "./node" })).toEqual({ http: 500 });
     });
 
