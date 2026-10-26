@@ -996,16 +996,16 @@ export class Tx {
    */
   resolveIndex(t: TableDef, name: string): IndexDef {
     const ix = t.indexes.get(name);
-    if (!ix && this.searchIndexes?.get(t, name)) throw new Error(`Index ${t.name}.${name} is not a database index`);
+    if (!ix && this.searchIndexes?.get(t, name)) throw indexUnavailable(t.name, name, "search");
     // An index enabled after this snapshot was still being built at it.
     if (ix && (ix.readyTs ?? 0n) <= this.snapshot) {
       if (ix.metaId !== undefined && !(name in SYSTEM_INDEXES)) this.recordIndexMeta(ix);
       return ix;
     }
     const pending = ix ?? t.pending.find((p) => p.name === name);
-    if (!pending) throw indexNotFound(t.name, name);
+    if (!pending) throw indexUnavailable(t.name, name, "missing");
     if (pending.metaId !== undefined) this.recordIndexMeta(pending);
-    throw pending.staged ? new IndexStagedError(`${t.name}.${name}`) : new IndexBackfillingError(`${t.name}.${name}`);
+    throw indexUnavailable(t.name, name, pending.staged ? "staged" : "backfilling");
   }
 
   private recordIndexMeta(ix: IndexDef) {
@@ -2900,7 +2900,7 @@ const RANGE_TYPE = { eq: "Eq", gt: "Gt", gte: "Gte", lt: "Lt", lte: "Lte" } as c
  * parses the `queryStream` / `queryPage` text first, built here as Convex's `query_impl.ts` writes it (the
  * source, then the operators, `take`'s limit last), for serde's column.
  */
-function refuseLoneSurrogatesInQuery(table: string, st: QState, take: number | null) {
+function refuseLoneSurrogatesInQuery(table: string, st: QueryStartState, take: number | null) {
   const values = [
     st.index?.exprs.map((e) => e.value),
     st.ops.map((op) => ("filter" in op ? expressionJson(op.filter) : null)),
@@ -2934,17 +2934,48 @@ function refuseLoneSurrogatesInQuery(table: string, st: QState, take: number | n
 const indexNotFound = (table: string, index: string) => new Error(`Index ${table}.${index} not found.`);
 
 /**
+ * Why `withIndex(name)` of `table` cannot read (`Tx.resolveIndex`): a text index's name, a staged or backfilling
+ * index, or none of that name. Also the sandbox child's, which decides it from the catalog its call carries.
+ */
+export function indexUnavailable(
+  table: string,
+  name: string,
+  why: "search" | "staged" | "backfilling" | "missing",
+): Error {
+  if (why === "search") return new Error(`Index ${table}.${name} is not a database index`);
+  if (why === "staged") return new IndexStagedError(`${table}.${name}`);
+  if (why === "backfilling") return new IndexBackfillingError(`${table}.${name}`);
+  return indexNotFound(table, name);
+}
+
+/** What a query's start checks read: core's `QState`, or the sandbox child's copy of its chain. */
+export type QueryStartState = Pick<QState, "desc" | "orderSet" | "ops" | "search" | "index" | "notFound">;
+
+/**
+ * The checks of a query's start (Convex's `queryStream`, synchronous: they throw from `[Symbol.asyncIterator]()`):
+ * the query's text, its operators, its names, its index. Also the sandbox child's, so they throw at the same call.
+ */
+export function checkQueryStart(table: string, st: QueryStartState): void {
+  refuseLoneSurrogatesInQuery(table, st, null);
+  checkOps(st.ops, "queryStream");
+  startChecks(table, st, "queryStream");
+}
+
+/**
  * What Convex's backend checks when a query starts, after its operators (`Query::try_from` under
  * `with_argument_error`, then `start_query`): the source's names parse (a full scan's table as an identifier, an
  * index's `table.index` as an index name), then the index is looked up.
  */
-function startChecks(table: string, st: QState, syscall: "queryStream" | "queryPage") {
+function startChecks(table: string, st: QueryStartState, syscall: "queryStream" | "queryPage") {
   const index = st.search?.name ?? st.index?.name;
   const why = index === undefined ? identifierError(table) : indexNameError(`${table}.${index}`);
   if (why !== null) throw new Error(`Invalid argument \`query\` for \`${syscall}\`: ${why}`);
   // Made here, so its frames are the start's (the app's `collect`), as Convex's error from the syscall.
   if (st.notFound) throw st.notFound();
 }
+
+/** A stream that has ended: what a query's is after a read that failed. */
+async function* ended(): AsyncGenerator<Doc> {}
 
 /** The next link of a chain: `st` copied, then changed by the operator. */
 function derive(tx: Tx, table: string, st: QState, change: (next: QState) => void): QueryImpl {
@@ -2989,9 +3020,7 @@ class QueryImpl implements TxQueryChained {
   private startQuery(): void {
     if (this.state === EXECUTING) throw new Error("Iteration can only begin on a query once.");
     if (this.state !== PREPARING) throw closedError(this.state);
-    refuseLoneSurrogatesInQuery(this.table, this.st, null);
-    checkOps(this.st.ops, "queryStream");
-    startChecks(this.table, this.st, "queryStream");
+    checkQueryStart(this.table, this.st);
     this.state = EXECUTING;
   }
 
@@ -3068,7 +3097,8 @@ class QueryImpl implements TxQueryChained {
   /**
    * Convex's `collect` iterates the query itself: it starts it, and consumes it once every document is read.
    * No cap: everything in the range, bounded only by the transaction's read limit (one row past it is enough to
-   * raise Convex's error).
+   * raise Convex's error). One that fails after its start (a document its filter cannot evaluate) is still
+   * executing, and its stream ended: a `next()` after it is done, as Convex's.
    */
   collect(): Promise<Doc[]> {
     try {
@@ -3076,10 +3106,16 @@ class QueryImpl implements TxQueryChained {
     } catch (e) {
       return Promise.reject(e);
     }
-    return this.tx.runQuery(this.st, this.tx.collectLimit()).then((docs) => {
-      this.state = CONSUMED;
-      return docs;
-    });
+    return this.tx.runQuery(this.st, this.tx.collectLimit()).then(
+      (docs) => {
+        this.state = CONSUMED;
+        return docs;
+      },
+      (e) => {
+        this.stream = ended();
+        throw e;
+      },
+    );
   }
 
   paginate(opts: PaginationOptions): Promise<PaginationResult> {

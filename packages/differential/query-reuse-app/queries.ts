@@ -1,7 +1,8 @@
 // A query used again after it ran, was iterated or was chained (STUDY-188 §X9): `steps` are applied in order to the
 // same query object, and each step's outcome is kept (what it returned, or the error it threw). The object is
 // `db.query("items")` itself (`init`), a query after its first operator (`scan`), an ordered one (`ordered`), one of
-// an index that does not exist (`missing`: its start fails), or `db.system.query("_storage")` before (`sysinit`) and
+// an index that does not exist (`missing`: its start fails), one whose filter fails on the second document (`partway`:
+// it fails after its start, on a document it read), or `db.system.query("_storage")` before (`sysinit`) and
 // after (`sysscan`) its first operator.
 import { mutationGeneric, queryGeneric } from "convex/server";
 import { v } from "convex/values";
@@ -35,6 +36,7 @@ export const run = queryGeneric({
       v.literal("scan"),
       v.literal("ordered"),
       v.literal("missing"),
+      v.literal("partway"),
       v.literal("sysinit"),
       v.literal("sysscan"),
     ),
@@ -49,7 +51,10 @@ export const run = queryGeneric({
           ? init.order("asc")
           : base === "missing"
             ? init.withIndex("nope")
-            : init.fullTableScan();
+            : base === "partway"
+              ? // `n` is 1, then 2: the second document's filter negates a field it does not have.
+                init.filter((f: any) => f.or(f.eq(f.field("n"), 1), f.eq(f.neg(f.field("x")), 0)))
+              : init.fullTableScan();
     let it: any;
     const out: string[] = [];
     for (const step of steps) {
