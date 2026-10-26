@@ -28,13 +28,13 @@ export type GenericTableInfo = {
 /** Every table of an app, as types (Convex's `GenericDataModel`). */
 export type GenericDataModel = Record<string, GenericTableInfo>;
 
-/** A data model without a schema: any table, any document (Convex's `AnyDataModel`). */
+/** A data model without a schema: any table, any document, the system indexes (Convex's `AnyDataModel`). */
 export type AnyDataModel = {
   [tableName: string]: {
     // biome-ignore lint/suspicious/noExplicitAny: Convex's AnyDataModel is any by definition
     document: any;
     fieldPaths: GenericFieldPaths;
-    indexes: {};
+    indexes: SystemIndexes;
     searchIndexes: {};
     vectorIndexes: {};
   };

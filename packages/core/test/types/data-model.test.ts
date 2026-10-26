@@ -7,11 +7,19 @@ import type {
   DataModelFromSchemaDefinition,
   DocumentByName,
   NamedIndex,
+  SystemIndexes,
   TableNamesInDataModel,
   WithOptionalSystemFields,
   WithoutSystemFields,
 } from "../../src/data-model.ts";
-import { declaredTables, defineSchema, defineTable } from "../../src/schema.ts";
+import type { GenericDatabaseReader } from "../../src/database-types.ts";
+import {
+  declaredTables,
+  defineSchema,
+  defineTable,
+  type GenericSchema,
+  type SchemaDefinition,
+} from "../../src/schema.ts";
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const check = <T extends true>(_: T) => {};
@@ -65,7 +73,21 @@ const loose = defineSchema({ a: defineTable({ x: v.number() }) }, { strictTableN
 type Loose = DataModelFromSchemaDefinition<typeof loose>;
 check<Equal<DocumentByName<Loose, "a">["x"], number>>(true);
 type _Other = DocumentByName<Loose, "anything">;
-check<Equal<AnyDataModel[string]["indexes"], {}>>(true);
+// Every table of AnyDataModel has the system indexes, as Convex's (3cfd09626, in 1.46.0).
+check<Equal<AnyDataModel[string]["indexes"], SystemIndexes>>(true);
+const anyDb = null as unknown as GenericDatabaseReader<AnyDataModel>;
+const _byCreation = () => anyDb.query("anything").withIndex("by_creation_time");
+const _byId = () => anyDb.query("anything").withIndex("by_id");
+const _looseByCreation = () =>
+  (null as unknown as GenericDatabaseReader<Loose>).query("undeclared").withIndex("by_creation_time");
+// A boolean-strict model is a generic one (Convex's "specific DM from boolean-strict schema extends generic DM").
+check<
+  DataModelFromSchemaDefinition<
+    SchemaDefinition<(typeof schema)["tables"], boolean>
+  > extends DataModelFromSchemaDefinition<SchemaDefinition<GenericSchema, boolean>>
+    ? true
+    : false
+>(true);
 // Ids of different tables do not mix.
 const userId = "u" as GenericId<"users">;
 // @ts-expect-error a users id is not a messages id
