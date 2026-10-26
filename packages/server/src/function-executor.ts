@@ -121,9 +121,10 @@ const missingEnvMessage = (name: string) =>
   `Environment variable ${name} is used in auth config file but its value was not set`;
 
 /**
- * An auth config `JSON.stringify` refuses (a bigint, a cycle): Convex's `AuthConfigUnserializableError`
- * (crates/isolate/src/environment/auth_config.rs:286-290), its docs link left out (DV-04). Only an executor that
- * sends the config as its JSON throws it (the sandbox's); `vm` hands the live value to `parseAuthConfig`.
+ * An auth config `JSON.stringify` refuses (a bigint, a cycle): the message of Convex's
+ * `AuthConfigUnserializableError` (crates/isolate/src/environment/auth_config.rs:286-290), its docs link left out
+ * (DV-04), which the push reports as `InvalidAuthConfig` (STUDY-188 R4). Only an executor that sends the config as
+ * its JSON throws it (the sandbox's); for `vm`, the push turns the live value into JSON itself.
  */
 export class UnserializableAuthConfigError extends Error {
   constructor() {

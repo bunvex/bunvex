@@ -2,6 +2,7 @@
 // (`{ type: "customJwt", issuer, jwks, algorithm, applicationID? }`), with the checks and messages of Convex's
 // crates/isolate/src/environment/auth_config.rs and crates/common/src/auth.rs (naming bunvex's file).
 import { badRequest } from "./errors.ts";
+import { TOP_LEVEL_DOMAINS } from "./tlds.ts";
 
 export type AuthProvider =
   | { type?: "oidc"; applicationID: string; domain: string }
@@ -23,8 +24,15 @@ const schemaError = (detail: string) =>
     `auth config file must include a list of provider credentials: ${detail}`,
   );
 
-/** Convex's `ends_with_tld`, approximated: `localhost`, or a last label of letters (a real TLD list is overkill). */
-const endsWithTld = (host: string) => host === "localhost" || /\.[a-z]{2,}$/i.test(host);
+/**
+ * Convex's `ends_with_tld` (STUDY-188 R4): `localhost`, or a host whose last label is one of IANA's top-level
+ * domains (the parsed host: lowercased, an internationalized label as its `xn--` form).
+ */
+const endsWithTld = (host: string) => {
+  if (host === "localhost") return true;
+  const dot = host.lastIndexOf(".");
+  return dot !== -1 && TOP_LEVEL_DOMAINS.has(host.slice(dot + 1));
+};
 
 /** Convex's `deserialize_issuer_url`: an http(s) URL, `https://` added when there is no scheme. */
 export function normalizeIssuerUrl(original: string): string {
