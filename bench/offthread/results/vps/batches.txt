@@ -1,0 +1,8 @@
+wb0: write batches: 2253, 16.3 commits each, 3.95 ms per flush
+wb0: write batches: 1659, 16.5 commits each, 5.75 ms per flush
+wb1: write batches: 2592, 14.3 commits each, 7.21 ms per flush
+wb1: write batches: 1691, 14.4 commits each, 11.25 ms per flush
+mix0: write batches: 857, 4.0 commits each, 3.48 ms per flush
+mix0: write batches: 700, 4.1 commits each, 4.58 ms per flush
+mix1: write batches: 1067, 3.6 commits each, 13.48 ms per flush
+mix1: write batches: 1060, 3.5 commits each, 14.48 ms per flush
