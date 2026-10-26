@@ -2,7 +2,8 @@
 // Convex counts them (STUDY-161 §16: only the count changed). Each shape's read-set is compared with the one main
 // recorded before the change (`fixtures/read-sets.json`, written by this test with `WRITE_READ_SETS=1` on the
 // commit before it). Since then each read-set gained one read of all of `_tables`, Convex's table mapping
-// (STUDY-187 X22), and nothing else.
+// (STUDY-187 X22), and each that writes a document the reads of `_schemas.by_state` its schema checks take
+// (STUDY-187 X10), and nothing else.
 import { expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
