@@ -1501,9 +1501,12 @@ export class Tx {
     return out;
   }
 
-  /** Store calls this transaction has in flight (`stored`); `settle` waits for them. */
+  /**
+   * Work this transaction has in flight: its store calls (`stored`) and what its function waits on outside its store
+   * (`track`). `settle` and `watch` wait for it.
+   */
   private inFlight = 0;
-  private idle: (() => void) | null = null;
+  private idle: (() => void)[] = [];
 
   /** A store call, counted in flight until it settles. Every read of the transaction's store goes through it. */
   private async stored<T>(fn: () => T | Promise<T>): Promise<T> {
@@ -1511,12 +1514,26 @@ export class Tx {
     try {
       return await storeCall(fn);
     } finally {
-      if (--this.inFlight === 0 && this.idle) {
-        const wake = this.idle;
-        this.idle = null;
-        wake();
-      }
+      this.landed();
     }
+  }
+
+  /**
+   * Work the running function waits on outside this transaction's store (another transaction, `crypto.subtle`),
+   * counted in flight until it settles, as a store call is: a function waiting on it is not one that can never resolve.
+   */
+  track(work: PromiseLike<unknown>): void {
+    this.inFlight++;
+    const landed = () => this.landed();
+    work.then(landed, landed);
+  }
+
+  private landed() {
+    if (--this.inFlight === 0 && this.idle.length) for (const wake of this.idle.splice(0)) wake();
+  }
+
+  private whenIdle(): Promise<void> {
+    return new Promise<void>((resolve) => this.idle.push(resolve));
   }
 
   /**
@@ -1529,7 +1546,71 @@ export class Tx {
     for (;;) {
       drainMicrotasks();
       if (this.inFlight === 0) return;
-      await new Promise<void>((resolve) => (this.idle = resolve));
+      await this.whenIdle();
+    }
+  }
+
+  /** The functions running in this transaction whose promise is watched (`watch`), the innermost last. */
+  private readonly watched: { fail: (e: unknown) => void; never: () => unknown }[] = [];
+  private watching = false;
+
+  /**
+   * `run`'s promise (a function's), failed with `never()` once it can never resolve: still pending a turn of the event
+   * loop after nothing is in flight (its microtasks have all run then, and what Bun resumes on its own had its turn).
+   * Convex's loop (`environment/udf/mod.rs`): once no syscall is pending and the microtasks are drained, a pending
+   * result is "Returned promise will never resolve" (STUDY-188 §X16). A nested call is watched in its caller's
+   * transaction: the innermost fails first, and its caller gets its error.
+   */
+  watch<T>(run: () => T | PromiseLike<T>, never: () => unknown): Promise<Awaited<T>> {
+    return new Promise<Awaited<T>>((resolve, reject) => {
+      const entry = { fail: reject, never };
+      const off = () => {
+        const i = this.watched.lastIndexOf(entry);
+        if (i >= 0) this.watched.splice(i, 1);
+      };
+      // Watched before it runs: a call it makes at once is inner to it.
+      this.watched.push(entry);
+      let running: T | PromiseLike<T>;
+      try {
+        running = run();
+      } catch (e) {
+        off();
+        throw e;
+      }
+      Promise.resolve(running).then(
+        (v) => {
+          off();
+          resolve(v as Awaited<T>);
+        },
+        (e: unknown) => {
+          off();
+          reject(e);
+        },
+      );
+      if (!this.watching) void this.watchRunning();
+    });
+  }
+
+  private async watchRunning(): Promise<void> {
+    this.watching = true;
+    try {
+      for (;;) {
+        if (!this.watched.length) return;
+        if (this.inFlight > 0) {
+          await this.whenIdle();
+          continue;
+        }
+        // A turn of the event loop: every microtask has run by then (the code the last answer resumed, whatever it
+        // started), and what Bun resumes on its own has had its turn. Not `drainMicrotasks()`: watchers of many
+        // transactions would nest their drains.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        if (!this.watched.length) return;
+        if (this.inFlight > 0) continue;
+        const stuck = this.watched.pop()!;
+        stuck.fail(stuck.never());
+      }
+    } finally {
+      this.watching = false;
     }
   }
 

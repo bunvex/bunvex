@@ -202,6 +202,7 @@ export {
   monotonicNow,
   newUserTimer,
   observeTime,
+  onWork,
   outsideExecution,
   PersistenceReadError,
   pausingUserTime,

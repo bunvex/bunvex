@@ -159,6 +159,7 @@ import {
   INTERNAL_SERVER_ERROR_MESSAGE,
   isError,
   isSystemError,
+  neverResolves,
   newRequestId,
   UndecodedArgs,
   ValidatorError,
@@ -1029,6 +1030,7 @@ export class Functions {
     for (const [key, f] of fns) {
       this.componentFns.set(componentFunctionName(runtime.id, key), f);
       this.componentOf.set(f, runtime);
+      this.deployedFns.add(f);
       this.names.set(f, key);
       // The component's modules are its namespace's `_modules` rows: never the app's (STUDY-161 §16.7).
       const m = Functions.moduleOf(key);
@@ -1100,6 +1102,7 @@ export class Functions {
     for (const [k, f] of fns) {
       const m = Functions.moduleOf(k);
       this.moduleLoads.set(f, moduleLoads.get(m) ?? [m]);
+      this.deployedFns.add(f);
     }
     this.deployed = true;
     return changed;
@@ -1110,6 +1113,12 @@ export class Functions {
    * component's); its own when not known.
    */
   private moduleLoads = new WeakMap<FunctionDef, string[]>();
+  /**
+   * The functions of a deployed code version (the app's or a component's), whose promise is watched (`Tx.watch`,
+   * STUDY-188 §X16). Not the ones `register` adds in the server's own process: their code may wait on anything the
+   * server does (a test's gate), which no deployed function can.
+   */
+  private deployedFns = new WeakSet<FunctionDef>();
   /**
    * Convex's reads before a function's code (STUDY-161 §16.3, §16.7): its configuration, its environment, the `_modules`
    * row of each module it loads (its own and the chunks it imports), and for a component's function one more
@@ -2084,9 +2093,14 @@ export class Functions {
           };
     // A sandboxed function's handler is in its child: the stand-in gets the same `ctx`, and its transaction.
     const remote = REMOTE_FUNCTIONS.get(f);
+    // A deployed function's promise fails once it can never resolve (STUDY-188 §X16); a sandboxed one's child watches
+    // it (`ChildCall`).
+    const handler = () => (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(appContext(f.handler, ctx), args);
     const run = remote
       ? () => remote(ctx, args, { db, shape: f.kind === "mutation" ? "writer" : db.vars ? "reader" : "tx" })
-      : () => (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(appContext(f.handler, ctx), args);
+      : this.deployedFns.has(f)
+        ? () => db.watch(handler, neverResolves)
+        : handler;
     return notAQuery(
       inHandleScope({ db, engine: this.engine, resolve: (ref) => this.resolveCall(ref, component, db, false) }, () =>
         component
@@ -2399,7 +2413,7 @@ export class Functions {
       const timer = this.newTimer();
       let value: unknown;
       try {
-        value = await this.engine.query(
+        const staleRun = this.engine.query(
           async (stale) => {
             stale.identity = db.identity;
             const env = await envOf(stale);
@@ -2414,6 +2428,9 @@ export class Functions {
           caller,
           db.snapshot,
         );
+        // Its own transaction: in flight for the caller's, which waits on it (STUDY-188 §X16).
+        db.track(staleRun);
+        value = await staleRun;
       } catch (e) {
         throw this.nestedError(e, timer);
       }
