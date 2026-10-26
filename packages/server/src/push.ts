@@ -15,6 +15,7 @@
 //
 // The pushed version waits in memory between start_push and finish_push (Convex echoes start_push's answer
 // back; a restart in between makes finish_push answer RaceDetected and the CLI push again).
+import { createHash } from "node:crypto";
 import { type AuthInfo, parseAuthConfig } from "@bunvex/auth";
 import {
   type AuditLogActor,
@@ -112,6 +113,33 @@ import {
  * Convex's `check_index_references`, after the schema evaluates (`_evaluate_schema`): an index naming a field
  * the validator cannot hold is a 400 `SchemaDefinitionError`, wrapped as every schema error is.
  */
+/** How many started pushes without a schema are kept, finishable, at most (`Push.pending`). */
+const MAX_PENDING_WITHOUT_SCHEMA = 8;
+
+/** JSON with every object's keys sorted, so that an answer read back hashes as it was sent. */
+function canonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
+  if (v && typeof v === "object")
+    return `{${Object.keys(v)
+      .sort()
+      .filter((k) => (v as Record<string, unknown>)[k] !== undefined)
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson((v as Record<string, unknown>)[k])}`)
+      .join(",")}}`;
+  return JSON.stringify(v);
+}
+
+/**
+ * The key of a push without a schema among the pending ones: a hash of its `start_push` answer, which `finish_push`
+ * sends back. Convex's `finish_push` works from that answer alone; bunvex keeps what the push evaluated, found by
+ * the root schema's id when there is one, else by this.
+ */
+function pushKey(answer: Record<string, unknown>): string {
+  const { app, analysis, appAuth, externalDepsId, schemaChange } = answer;
+  return `answer:${createHash("sha256")
+    .update(canonicalJson({ app, analysis, appAuth, externalDepsId, schemaChange }))
+    .digest("hex")}`;
+}
+
 /** Convex's `invalid_schema_export_error`, without Convex's name or docs link (DV-356). */
 const invalidSchemaExport = () =>
   new PushError(
@@ -299,9 +327,13 @@ type Pending = {
   schemaModule: ModuleSource | null;
   /** The variables the push was evaluated with (Convex re-reads them at `finish_push`). */
   env: string;
-  schema: EngineSchema;
+  /** The app's schema; null when pushed without one (Convex's `SchemaModel::apply(None)`). */
+  schema: EngineSchema | null;
   auth: unknown[] | null;
-  schemaId: string;
+  /** The app's schema's `_schemas` id; null when pushed without one. */
+  schemaId: string | null;
+  /** Its key in `pending`: the schema's id, or `pushKey` of the answer for a push without a schema. */
+  key: string;
   /** The server version change the push made (Convex's `udfConfigDiff`). */
   udfConfigDiff: UdfServerVersionDiff | null;
   /** The push's `nodeVersion`, stored with its package. */
@@ -730,7 +762,7 @@ export class PushService {
     } catch (e) {
       throw loadError(e);
     }
-    let schema = emptySchema;
+    let schema: EngineSchema | null = null;
     const schemaModule = req.appDefinition?.schema;
     if (schemaModule) {
       const s = schemaExport(await this.evaluateDefault(schemaModule, {}, "InvalidSchema", "schema"));
@@ -745,14 +777,14 @@ export class PushService {
       config,
       env,
       version.analysis,
-      schemaModule ? schema : null,
+      schema,
       req.forCodegen === true,
       this.executor,
       version,
     );
     checkFloatLiterals(components.definitions);
     // Convex's `StagedSchemaWithEnforcedValidatorChanges` (STUDY-106 §7.4), dry run too.
-    const staged = await this.deps.engine.stagedValidatorConflicts(schema);
+    const staged = schema && (await this.deps.engine.stagedValidatorConflicts(schema));
     if (staged) throw new PushError(staged.code, staged.message);
     const externalDepsId = external?.id ?? null;
     // A dry run (and Convex's `forCodegen`) writes nothing (DV-444): what the push would do to each namespace's
@@ -761,7 +793,7 @@ export class PushService {
     const schemas = new Map([...components.definitions].map(([path, d]) => [path, d.schema]));
     if (!dryRun) checkComponentSchemas(components.definitions);
     let change: Awaited<ReturnType<typeof startComponentSchemas>>;
-    let schemaId: string;
+    let schemaId: string | null;
     try {
       change = await startComponentSchemas(this.deps.engine, components.tree, schemas, schema, dryRun);
       if (dryRun) return this.response(auth, components, change, externalDepsId);
@@ -771,7 +803,18 @@ export class PushService {
       if (e instanceof TooManyTablesError) throw new PushError(e.code, e.message);
       throw e;
     }
-    this.pending.set(schemaId, {
+    const answer = this.response(auth, components, change, externalDepsId);
+    const key = schemaId ?? pushKey(answer);
+    // Pushes without a schema stay finishable, as Convex's (its `finish_push` needs only the answer): the last few
+    // kept, so that they do not pile up in memory.
+    if (schemaId === null) {
+      this.pending.delete(key);
+      const kept = [...this.pending.values()].filter((q) => q.schemaId === null);
+      for (const q of kept.slice(0, Math.max(0, kept.length - (MAX_PENDING_WITHOUT_SCHEMA - 1))))
+        this.pending.delete(q.key);
+    }
+    this.pending.set(key, {
+      key,
       version,
       modules,
       authModule: authModule ?? null,
@@ -787,7 +830,7 @@ export class PushService {
       importPhase: { seed: config.seed, timestamp: config.timestamp },
       components: { ...components, change, configs: new Map(pushed.components.map((c) => [c.definitionPath, c])) },
     });
-    return this.response(auth, components, change, externalDepsId);
+    return answer;
   }
 
   private response(
@@ -872,15 +915,22 @@ export class PushService {
    * and runs from STUDY-152 step 4.
    */
   async finishPush(
-    req: { startPush?: { schemaChange?: { schemaIds?: Record<string, string> } }; dryRun?: boolean; message?: unknown },
+    req: {
+      startPush?: { schemaChange?: { schemaIds?: Record<string, string | null> } } & Record<string, unknown>;
+      dryRun?: boolean;
+      message?: unknown;
+    },
     actor: AuditLogActor = SYSTEM_ACTOR,
   ) {
     // Convex's `PushMessage`: at most 1024 bytes.
     const message = typeof req.message === "string" ? req.message : null;
     if (message !== null && new TextEncoder().encode(message).length > 1024)
       throw new PushError("PushMessageTooLong", "Push messages can be at most 1024 bytes long");
+    // The push this answer started: by its schema's id, or by the answer itself for one without a schema (Convex's
+    // `finish_push` works from the answer alone).
     const schemaId = req.startPush?.schemaChange?.schemaIds?.[""];
-    const p = schemaId ? this.pending.get(schemaId) : undefined;
+    const pendingKey = typeof schemaId === "string" ? schemaId : req.startPush ? pushKey(req.startPush) : undefined;
+    const p = pendingKey === undefined ? undefined : this.pending.get(pendingKey);
     if (!p) throw new PushError("RaceDetected", "Schema was overwritten by another push.");
     const engine = this.deps.engine;
     if (req.dryRun) return this.diff(new Map(), new Map([["", this.rootDryRunDiff(p)]]), { added: [], removed: [] });
@@ -893,6 +943,7 @@ export class PushService {
     const indexDiffs = new Map<string, ComponentDiff["indexDiff"]>();
     const schemaDiffs = new Map<string, ComponentDiff["schemaDiff"]>();
     const componentSchemaIds = new Map<string, string>();
+    const withoutSchema = new Set<string>();
     for (const [key, ns] of change.namespaces) {
       const node = componentsOf(tree).get(key)!;
       const next = key === "" ? p.schema : (definitions.get(node.definitionPath)?.schema ?? null);
@@ -900,6 +951,7 @@ export class PushService {
       indexDiffs.set(key, indexAuditDiff(before, next ?? emptySchema));
       const id = change.schemaIds.get(key) ?? null;
       if (ns !== null && id !== null) componentSchemaIds.set(ns, id);
+      if (ns !== null && id === null) withoutSchema.add(ns);
       const rows = (await engine.query((db) =>
         db.asSystem(() => db.inComponent(ns, () => db.query(SCHEMAS_TABLE).collect())),
       )) as unknown as ({ _id: string; schema: string } & Record<string, unknown>)[];
@@ -989,6 +1041,7 @@ export class PushService {
           return { ...finished, authDiff };
         },
         componentSchemaIds,
+        withoutSchema,
       )) as typeof committed;
     } catch (e) {
       for (const w of written) await this.deps.modulesStore.delete(w.storageKey).catch(() => {});
@@ -1000,8 +1053,11 @@ export class PushService {
         );
       throw e;
     }
-    this.pending.delete(p.schemaId);
-    for (const id of this.pending.keys()) if (id !== p.schemaId) this.pending.delete(id);
+    // A push with a schema overwrote every other pending schema (their finish is a race): their pushes go, its own
+    // too. One without a schema leaves them pending, finishable, as Convex's `apply(None)` does; and a push without a
+    // schema is never overwritten, so it stays finishable (Convex's `finish_push` needs only the answer), until the
+    // cap of `start_push` drops it.
+    if (p.schemaId !== null) for (const [k, q] of this.pending) if (q.schemaId !== null) this.pending.delete(k);
     await this.deps.install(p.version, auth, p.authModule);
     this.deps.cronExecutor.refresh();
     // A blob is deleted once no namespace's `_source_packages` row names it (two instances share one).
@@ -1022,7 +1078,7 @@ export class PushService {
       moduleDiff: { added: [], removed: [] },
       udfConfigDiff: null,
       cronDiff: emptyCronDiff(),
-      indexDiff: indexDiffJson(indexAuditDiff(this.deps.engine.schema, p.schema)),
+      indexDiff: indexDiffJson(indexAuditDiff(this.deps.engine.schema, p.schema ?? emptySchema)),
       schemaDiff: null,
     };
   }

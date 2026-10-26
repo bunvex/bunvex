@@ -123,7 +123,7 @@ kept) and `packages/differential/test/schemas-overwritten.test.ts` (the rows fou
 store: `overwritten`, `overwritten`, `failed`, `active`). Each fails without the fix. Not covered here, read in the code
 and not yet run on the binary: a push without a schema submits an empty schema for the root on bunvex
 (`packages/server/src/push.ts:733`) and leaves a component's schema as it was, where Convex's `apply(None)` marks the
-namespace's active schema `overwritten` and adds no row (`:113`); a separate item.
+namespace's active schema `overwritten` and adds no row (`:113`); a separate item, §2.13 X23.
 
 ### 2.5 X5 — `occInfo.componentPath` names the component
 
@@ -256,7 +256,7 @@ with the old throw. The no-schema case is in the server's test only: an app push
 with no active schema (`SchemaModel::apply(None)` → `clear_active`, `crates/database/src/bootstrap_model/schema/
 mod.rs`; its `get_schema` answers `null`), while bunvex's push activates an empty one
 (`{"tables":[],"schemaValidation":false}`), so bunvex answers `NoTableDefinitionForExport` there. That is a push
-gap, not this item's, and is reported separately.
+gap, not this item's: §2.13 X23.
 
 ### 2.9 X18 — an id whose table does not exist
 
@@ -338,12 +338,60 @@ time, and shrinks to three programs: a query reads `b`, a mutation in a later pr
 - **Tests:** `packages/differential/test/table-mapping.test.ts` against Convex's binary, which fails without the fix;
   `tx-b-edges.test.ts`; the read-set fixture, where each shape gains that one read.
 
+### 2.13 X23 — a push without a schema leaves no active schema
+
+Found while doing X3 and X12. Read at the reference, then run on Convex's binary.
+
+- **Convex, at `start_push`:** `start_component_schema_changes` (`crates/model/src/components/config.rs:266`) gives a
+  namespace whose definition has no schema nothing. No table is created, no index is prepared, and no `_schemas` row
+  is written, so a pending schema of an earlier push stays pending. The index diff it answers is computed read-only
+  against no table (`get_index_diff(namespace, {})`). Its schema id is `null`, for the app (`schemaIds: {"": null}`)
+  as for a component.
+- **Convex, at `finish_push`:** for each namespace, `SchemaModel::apply(None)`
+  (`crates/database/src/bootstrap_model/schema/mod.rs:88`) calls `clear_active`. The active schema is marked
+  `overwritten`, which runs X3's cleanup of `failed` and `overwritten` rows older than an hour, and nothing replaces
+  it. `IndexModel::apply(namespace, None)` (`bootstrap_model/index.rs:281`) commits the indexes against no table.
+  `get_index_diff` (`:513`) diffs every application index of the namespace, so all of them are dropped. The audit
+  log's schema diff is the previous schema, then `null`. `finish_push` works from the `start_push` answer alone: a
+  push without a schema has no schema id to be overwritten, so its answer can be finished even after another push
+  finished, and again.
+- **What apps observe:** `get_schema` answers `null`, and a streaming export that needs the active schema answers
+  `NoSchemaForExport`. The indexes are gone: a query by one fails. Writes are not checked. The dashboard shows no
+  schema. `_schemas` keeps one `overwritten` row and no new one. The same holds for a component deployed without its
+  `schema.ts`, in its namespace.
+- **bunvex before:**
+  - The app's push submitted an empty schema (`{tables: [], schemaValidation: false}`), which became active:
+    `get_schema` answered it, and the export answered `NoTableDefinitionForExport`.
+  - A component without a schema kept its active schema.
+  - A push's finish dropped the indexes of declared tables only (`finishCatalog`). A table no longer declared, or
+    every table for a push without a schema, kept its indexes, though the audit log said they were dropped.
+- **bunvex now:**
+  - `Engine.startSchemaPush(null, …)` writes nothing for the app, and its id is `null`.
+  - `Engine.commitSchemaPush(null, …, withoutSchema)` finishes the app and the components without a schema as
+    `apply(None)` does: every user index of the namespace dropped, the active schema marked `overwritten`, a
+    pending one left as it is, and the engine on no schema (also after a restart).
+  - `finishCatalog` drops the indexes of every user table the schema does not declare, at a push's finish only (not
+    at the engine's start).
+  - The server finds a push without a schema by a hash of its `start_push` answer, which `finish_push` sends back.
+    It keeps the last 8 such pushes finishable, so that, as on Convex, one can be finished after another push, or
+    twice. Past 8 unfinished ones, or after a restart (as for any push), it answers `RaceDetected` and the CLI
+    pushes again.
+- **Tests:**
+  - `packages/core/test/push-without-schema.test.ts`: the app, a restart, a pending schema left pending, a table
+    no longer declared, a component.
+  - `packages/server/test/push.test.ts`, "a push without a schema": the answers, the audit log, finishing an answer
+    after another push and twice.
+  - `packages/differential/test/push-without-schema.test.ts`: the app of `no-schema-app/` and its component `kv`,
+    deployed with and without each `schema.ts`. After each deploy it compares `get_schema`, the export's JSON Schema
+    and a query by each index; at the end, the `_schemas` rows of each store. Each fails without the fix.
+
 ## 3. Order
 
 1. X13 (data loss), X20 (it fails CI at random), X1 and X2 (wrong data or results); X21 after X13.
 2. X12, X18, X3, X5, X6.
 3. X10: reproduction first (done).
 4. X22 (found after the study), its own PR.
+5. X23 (found while doing X3 and X12), its own PR.
 
 Each is its own PR from `main`, with the oracle case in `packages/differential` where Convex's binary can show it.
 
