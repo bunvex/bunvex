@@ -49,6 +49,7 @@ import {
   type LogLine,
   MAX_LOG_LINES,
   setAuditScope,
+  snapshotOnSettle,
   withEnv,
 } from "@bunvex/server/executor";
 import { BunvexError, isBunvexError } from "@bunvex/values";
@@ -672,7 +673,8 @@ class ChildCall extends ChildCallBase implements DbHost {
       withUserTimer(this.timer, async () => {
         // The execution is shared with the nested calls of the same host execution: the work is the running call's.
         onWork((p) => (running.getStore() as ChildCall | undefined)?.trackWork?.(p));
-        const call = () => handler(appContext(handler, ctx), args);
+        // Its result as it stood when its promise settled, as under `vm` (STUDY-188 §X19 a).
+        const call = () => snapshotOnSettle(handler(appContext(handler, ctx), args));
         return read ? withEnv(read, call) : call();
       });
     const logged = () =>
