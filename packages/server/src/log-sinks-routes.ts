@@ -55,9 +55,9 @@ const bad = (code: string, message: string) => new LogSinkError(400, code, messa
 const badBody = (message: string) =>
   bad("BadJsonBody", `Failed to deserialize the JSON body into the target type: ${message}`);
 
-/** How serde names a value it did not expect (`invalid type: <this>, expected …`). */
+/** How serde names a value it did not expect (`invalid type: <this>, expected …`; a JSON `null` is `null`). */
 function unexpected(v: unknown): string {
-  if (v === null) return "unit value";
+  if (v === null) return "null";
   if (typeof v === "string") return `string ${JSON.stringify(v)}`;
   if (typeof v === "boolean") return `boolean \`${v}\``;
   if (typeof v === "number") return Number.isInteger(v) ? `integer \`${v}\`` : `floating point \`${v}\``;
@@ -123,8 +123,7 @@ function checkFormat(f: string) {
 }
 
 function checkSite(s: string) {
-  if (!DATADOG_SITES.includes(s))
-    throw badBody(`unknown variant \`${s}\`, expected one of ${DATADOG_SITES.map((x) => `\`${x}\``).join(", ")}`);
+  if (!DATADOG_SITES.includes(s)) throw unknownVariant(s, DATADOG_SITES);
 }
 
 function checkIngestUrl(u: string | null | undefined) {
@@ -159,9 +158,172 @@ function checkHost(h: string | null | undefined) {
   if (h !== undefined && h !== null && !isUrl(h)) throw bad("InvalidPostHogHost", `Invalid PostHog host URL: ${h}`);
 }
 
+// ---- S3 export (Convex's `CreateS3ExportLogStreamArgs`, `UpdateS3ExportSinkArgs`, `validate_s3_bucket` and
+// `validate_s3_selection` in local_backend/src/log_sinks.rs; `Selection` in common/src/types/streaming_export)
+
+/** AWS's reserved bucket name prefixes and suffixes (Convex's `S3_RESERVED_BUCKET_PREFIXES` / `_SUFFIXES`). */
+const RESERVED_BUCKET_PREFIXES = ["xn--", "sthree-"];
+const RESERVED_BUCKET_SUFFIXES = ["-s3alias", "--ol-s3"];
+
+/** Whether `s` reads as an IPv4 address as Rust's `Ipv4Addr` parses one: four decimal octets, no leading zero. */
+function isIpv4(s: string): boolean {
+  const parts = s.split(".");
+  return parts.length === 4 && parts.every((p) => /^(0|[1-9][0-9]{0,2})$/.test(p) && Number(p) <= 255);
+}
+
+/** AWS's bucket naming rules, as Convex checks them. */
 function checkBucket(b: string) {
-  if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(b) || b.includes(".."))
-    throw bad("InvalidS3Bucket", `\`${b}\` is not a valid S3 bucket name`);
+  const valid =
+    /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(b) &&
+    !b.includes("..") &&
+    !isIpv4(b) &&
+    !RESERVED_BUCKET_PREFIXES.some((p) => b.startsWith(p)) &&
+    !RESERVED_BUCKET_SUFFIXES.some((x) => b.endsWith(x));
+  if (!valid) throw bad("InvalidS3Bucket", `\`${b}\` is not a valid S3 bucket name`);
+}
+
+const INCLUSIONS = ["excl", "excluded", "incl", "included"];
+const EXCLUDED_TAG = ["excl", "excluded"];
+const PERIODS = ["continuous", "hourly", "daily"];
+
+/** serde's `unknown variant` wording: `a`, `a` or `b`, one of `a`, `b`, `c`. */
+function unknownVariant(name: string, variants: readonly string[]) {
+  const q = variants.map((x) => `\`${x}\``);
+  const expected = q.length === 1 ? q[0] : q.length === 2 ? `${q[0]} or ${q[1]}` : `one of ${q.join(", ")}`;
+  return badBody(`unknown variant \`${name}\`, expected ${expected}`);
+}
+
+const isMap = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** A unit variant as serde reads an enum: its name, or a map of its name to `null`. */
+function unitVariant(v: unknown, variants: readonly string[]): string {
+  if (isMap(v)) {
+    const entries = Object.entries(v);
+    if (entries.length !== 1) throw badBody("invalid value: map, expected map with a single key");
+    const [name, inner] = entries[0]!;
+    if (!variants.includes(name)) throw unknownVariant(name, variants);
+    if (inner !== null) throw badBody(`invalid type: ${unexpected(inner)}, expected unit`);
+    return name;
+  }
+  if (typeof v !== "string") throw badBody(`invalid type: ${unexpected(v)}, expected string or map`);
+  if (!variants.includes(v)) throw unknownVariant(v, variants);
+  return v;
+}
+
+type Inclusion = "included" | "excluded";
+const inclusion = (v: unknown): Inclusion => (unitVariant(v, INCLUSIONS).startsWith("incl") ? "included" : "excluded");
+
+/** A level of a selection: each entry by name, and `_other` for the rest. */
+type Level = { [name: string]: Level | Inclusion };
+
+/** A map of entries beside `_other` (serde's `flatten`): `_other` as it comes, then each entry in order. */
+function flattened(v: Record<string, unknown>, entry: (x: unknown) => Level | Inclusion): Level {
+  let other: Inclusion | undefined;
+  const rest: [string, unknown][] = [];
+  for (const [k, x] of Object.entries(v)) {
+    if (k === "_other") other = inclusion(x);
+    else rest.push([k, x]);
+  }
+  if (other === undefined) throw badBody("missing field `_other`");
+  const out: Level = {};
+  for (const [k, x] of rest) out[k] = entry(x);
+  out._other = other;
+  return out;
+}
+
+/** An untagged enum of `Included { …, _other }` and the `excluded` tag: the first that reads. */
+function includedOrExcluded(name: string, v: unknown, entry: (x: unknown) => Level | Inclusion): Level | Inclusion {
+  if (isMap(v))
+    try {
+      return flattened(v, entry);
+    } catch (e) {
+      if (!(e instanceof LogSinkError)) throw e;
+    }
+  try {
+    unitVariant(v, EXCLUDED_TAG);
+    return "excluded";
+  } catch (e) {
+    if (!(e instanceof LogSinkError)) throw e;
+    throw badBody(`data did not match any variant of untagged enum ${name}`);
+  }
+}
+
+/** Convex's `Selection`: components, each with its tables, each with its columns. */
+function selectionArg(v: unknown): Level {
+  if (!isMap(v)) throw badBody(`invalid type: ${unexpected(v)}, expected struct Selection`);
+  const table = (t: unknown) => includedOrExcluded("TableSelection", t, inclusion);
+  return flattened(v, (c) => includedOrExcluded("ComponentSelection", c, table));
+}
+
+/** `validate_s3_selection`: an export takes whole tables, so a table that leaves out a column is refused. */
+function checkWholeTables(selection: Level) {
+  const tables = Object.entries(selection).flatMap(([k, c]) =>
+    k === "_other" || typeof c === "string" ? [] : Object.entries(c).filter(([t]) => t !== "_other"),
+  );
+  const filters = tables.some(([, t]) => typeof t !== "string" && Object.values(t).includes("excluded"));
+  if (filters)
+    throw bad(
+      "FieldFiltersUnsupported",
+      "S3 exports can't filter fields within a table yet. Select whole tables instead.",
+    );
+}
+
+/** A selection as Convex serializes it: each level's entries in byte order, then `_other`. */
+function selectionJson(s: unknown): unknown {
+  if (!isMap(s)) return s;
+  const out: Record<string, unknown> = {};
+  const names = Object.keys(s).filter((k) => k !== "_other");
+  for (const k of names.sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))) out[k] = selectionJson(s[k]);
+  out._other = s._other;
+  return out;
+}
+
+/** A string field (an `Option<String>` when `optional`, where `null` is none). */
+function s3String(v: unknown, optional: boolean): string | null {
+  if (v === null && optional) return null;
+  if (typeof v !== "string") throw badBody(`invalid type: ${unexpected(v)}, expected a string`);
+  return v;
+}
+
+type S3CreateArgs = {
+  bucket: string;
+  region: string;
+  prefix?: string | null;
+  accessKeyId: string;
+  secretAccessKey: string;
+  selection?: Level | null;
+  period: string;
+};
+
+/** `CreateS3ExportLogStreamArgs` as serde reads it: each field in the body's order, then the missing ones. */
+function s3CreateArgs(b: Body): S3CreateArgs {
+  const got: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(b)) {
+    if (k === "bucket" || k === "region" || k === "accessKeyId" || k === "secretAccessKey") got[k] = s3String(v, false);
+    else if (k === "prefix") got[k] = s3String(v, true);
+    else if (k === "selection") got[k] = v === null ? null : selectionArg(v);
+    else if (k === "period") got[k] = unitVariant(v, PERIODS);
+  }
+  for (const k of ["bucket", "region", "accessKeyId", "secretAccessKey", "period"])
+    if (!(k in got)) throw badBody(`missing field \`${k}\``);
+  return got as S3CreateArgs;
+}
+
+/** `UpdateS3ExportSinkArgs` (`deny_unknown_fields`): only the secret, the selection and the period can change. */
+function s3UpdateArgs(b: Body): {
+  secretAccessKey?: string | null;
+  selection?: Level | null;
+  period?: string | null;
+} {
+  const got: ReturnType<typeof s3UpdateArgs> = {};
+  for (const [k, v] of Object.entries(b)) {
+    if (k === "logStreamType") continue;
+    if (k === "secretAccessKey") got.secretAccessKey = s3String(v, true);
+    else if (k === "selection") got.selection = v === null ? null : selectionArg(v);
+    else if (k === "period") got.period = v === null ? null : unitVariant(v, PERIODS);
+    else throw badBody(`unknown field \`${k}\`, expected one of \`secretAccessKey\`, \`selection\`, \`period\``);
+  }
+  return got;
 }
 
 function stringRecord(v: unknown): Record<string, string> | null | undefined {
@@ -238,25 +400,21 @@ function createConfig(b: Body): SinkConfig {
       return clean({ type, apiKey, host });
     }
     case "s3Export": {
-      const bucket = str(b, "bucket");
-      const region = str(b, "region");
-      const prefix = str(b, "prefix", true);
-      const accessKeyId = str(b, "accessKeyId");
-      const secretAccessKey = str(b, "secretAccessKey");
-      const period = str(b, "period");
-      if (!["continuous", "hourly", "daily"].includes(period))
-        throw badBody(`unknown variant \`${period}\`, expected one of \`continuous\`, \`hourly\`, \`daily\``);
-      checkBucket(bucket);
-      return clean({
+      const a = s3CreateArgs(b);
+      checkBucket(a.bucket);
+      // Everything by default, stored as such.
+      const selection = a.selection ?? { _other: "included" };
+      checkWholeTables(selection);
+      return {
         type,
-        bucket,
-        region,
-        prefix,
-        accessKeyId,
-        secretAccessKey,
-        selection: b.selection ?? null,
-        period,
-      });
+        bucket: a.bucket,
+        region: a.region,
+        prefix: a.prefix ?? null,
+        accessKeyId: a.accessKeyId,
+        secretAccessKey: a.secretAccessKey,
+        selection,
+        period: a.period,
+      };
     }
   }
   if (type === undefined) throw badBody("missing field `logStreamType`");
@@ -343,10 +501,12 @@ function updatedConfig(old: SinkConfig, b: Body): SinkConfig {
       break;
     }
     case "s3Export": {
-      for (const k of ["bucket", "region", "accessKeyId", "secretAccessKey", "period"]) set(k, keep(k));
-      set("prefix", str(b, "prefix", true));
-      if (b.selection !== undefined) set("selection", b.selection);
-      checkBucket(next.bucket as string);
+      // The destination and the access key ID stay as created; a `null` keeps the field as it is.
+      const a = s3UpdateArgs(b);
+      if (a.selection) checkWholeTables(a.selection);
+      if (a.secretAccessKey) next.secretAccessKey = a.secretAccessKey;
+      if (a.selection) next.selection = a.selection;
+      if (a.period) next.period = a.period;
       break;
     }
   }
@@ -403,9 +563,9 @@ export function logStreamJson(r: SinkRow): Record<string, unknown> | null {
         ...base,
         bucket: c.bucket,
         region: c.region,
-        prefix: c.prefix ?? null,
+        ...(c.prefix === undefined || c.prefix === null ? {} : { prefix: c.prefix }),
         accessKeyId: c.accessKeyId,
-        selection: c.selection ?? null,
+        selection: selectionJson(c.selection),
         period: c.period,
       };
     case "local":
@@ -413,7 +573,7 @@ export function logStreamJson(r: SinkRow): Record<string, unknown> | null {
   }
 }
 
-/** The routes. `wake`: run the log manager's worker after a change. */
+/** The routes. `wake`: run the log manager's worker after a change (`LogManager.wakeAfterChange`). */
 export async function logStreamRoute(
   deps: { engine: Engine; functions: Functions; wake: () => void },
   route: string,
@@ -503,6 +663,8 @@ export async function logStreamRoute(
       // Convex's extractors: the path's id and the body, then the operation.
       const sinkId = needId();
       const b = await body("UpdateLogStreamArgs");
+      // An S3 export's fields are read with the body (serde's `deny_unknown_fields`), before the operation.
+      if (b.logStreamType === "s3Export") s3UpdateArgs(b);
       functions.requireOperation(caller, "WriteIntegrations");
       await engine.mutation(async (db) => {
         const row = await mustGetSink(db, sinkId);

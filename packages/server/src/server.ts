@@ -1335,7 +1335,7 @@ export function createServer(opts: ServerOptions) {
     if (logStream)
       try {
         return await logStreamRoute(
-          { engine, functions, wake: () => logManager.wake() },
+          { engine, functions, wake: () => logManager.wakeAfterChange() },
           logStream[1]!,
           logStream[2],
           req,
