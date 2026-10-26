@@ -28,6 +28,10 @@ mutations, actions, HTTP actions and room gates run in its children; `"use node"
   chunk frames on the same socket, with credit both ways and marks among the chunks; the host refuses bytes it did not
   ask for.
 - `src/wire.ts`: values, and what is not one, across the wire, so the engine's checks give the same words.
+- `src/child-memory.ts`, `src/child-watchdog.ts`: the calls' memory cap (STUDY-188 R12, §X17b): the child measures its
+  calls' growth before each message (64 MiB of `ArrayBuffer`s, 96 MiB of heap after a collection), a watchdog thread
+  stops code that never yields past 256 MiB of process growth, and the child kills itself, saying so on fd 4; its calls
+  fail with Convex's "JavaScript execution ran out of memory" and the next call gets a new child.
 
 The design and its measurements: [STUDY-171 §7, §8, §11, §12, §13, §14](../../docs/study/STUDY-171-function-sandbox-seam.md). The parity
 test (`test/analysis-parity.test.ts`) runs a corpus written by `bun scripts/sandbox-parity-corpus.ts`; write it

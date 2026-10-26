@@ -18,10 +18,12 @@ import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { createServer, Functions } from "@bunvex/server";
 import { provideProcessExecutor } from "@bunvex/server/executor";
 import { v } from "@bunvex/values";
-import { createProcessExecutor } from "../src/executor.ts";
+import { ProcessExecutor } from "../src/executor.ts";
 import { TestBlobs } from "./fixtures/blobs.ts";
 
-provideProcessExecutor(createProcessExecutor);
+// No memory cap in the children: the cases past the response's 100 MiB cap hold more than a call's 64 MiB, which fails
+// them first under `process`, as on Convex (STUDY-188 §X17b; `memory-cap.test.ts`).
+provideProcessExecutor(() => new ProcessExecutor({ memoryCap: false }));
 process.env.TZ = "UTC";
 
 const SERVER = JSON.stringify(["bunvex", "server"].join("/"));

@@ -82,6 +82,9 @@ lists, fails with a message.
   `--function-sandbox-isolation`; it can come with PR 8, when the layers exist.
 - **The memory knobs** (`ISOLATE_MAX_USER_HEAP_SIZE`, `ISOLATE_MAX_HEAP_EXTRA_SIZE`) are left to the PR that builds the
   cap (PR 9). Reading them now would log Convex's "Overriding … from environment" for a limit that nothing enforces.
+  The cap itself came first, in STUDY-188 R12 (§X17b there): under `process` a call past Convex's default caps as
+  JavaScriptCore counts them (64 MiB of `ArrayBuffer`s; 96 MiB of heap, `ISOLATE_MAX_USER_HEAP_SIZE` plus
+  `ISOLATE_MAX_HEAP_EXTRA_SIZE`) fails with Convex's message; the knobs are still not read.
 - **`bunvex dev`** passes its environment to the backend it starts, so `BUNVEX_FUNCTION_SANDBOX=process bunvex dev`
   reaches it (and fails, for now). The CLI has no flag, and its default is `vm`.
 - **Docker.** `docker/docker-compose.yml` passes both variables through; `run_backend.sh` is unchanged.
@@ -375,7 +378,9 @@ Each was restored from a saved copy and checked with `diff`/`cmp` before the nex
 
 ### 7.9 Open questions and later PRs
 
-- **The child's memory baseline** (§7.5): measured on Linux in a cgroup by PR 9, before the 96 MiB cap is enforced.
+- **The child's memory baseline** (§7.5): measured on Linux in a cgroup by PR 9, before the 96 MiB cap is enforced. A
+  per-call cap measured from inside the child is built (STUDY-188 R12, §X17b): it counts the calls' growth, not the
+  baseline.
 - **A compiled `bunvex-local-backend`** (`bun build --compile`) has no `child.ts` on disk: the child must be the same
   executable started in a child mode (PR 9 or 11).
 - **Batching** (STUDY-168 §13.4) puts several values in one message; PR 3 splits a batch that would pass the frame cap.

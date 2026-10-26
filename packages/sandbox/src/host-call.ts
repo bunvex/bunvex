@@ -39,7 +39,7 @@ import {
   type SandboxCall,
 } from "@bunvex/server/executor";
 import { BunvexError, isBunvexError, type JSONValue } from "@bunvex/values";
-import { type SandboxError, type SandboxProcess, streamErrors } from "./host.ts";
+import { childGoneError, type SandboxError, type SandboxProcess, streamErrors } from "./host.ts";
 import {
   BadMessageError,
   EPOCHS_KEPT,
@@ -499,7 +499,12 @@ export class HostCall extends HostCallBase {
           this.child.kill("timeout", `ran past a call's user time (${ms} ms) without a word`);
           throw error;
         }
-        if (item.t === "gone") throw new ExecutorFailure(item.e.message);
+        if (item.t === "gone") {
+          const error = childGoneError(item.e);
+          // Past the memory cap, the function's failure (Convex's isolate terminated): nothing it ran may catch it.
+          if (item.e.reason === "oom") failExecution(error);
+          throw error;
+        }
         if (item.t === "lines" || item.t === "cancelled" || item.t === "cutOff" || item.t === "response") {
           this.child.kill("badMessage", `sent an action's message (${item.t}) for a ${this.kind}`);
           throw new ExecutorFailure(`the function sandbox's process sent a message that is not valid: ${item.t}`);

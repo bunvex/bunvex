@@ -19,6 +19,7 @@ import {
 } from "@bunvex/server/executor";
 import { ActionRuntime } from "./child-action.ts";
 import { CallRuntime } from "./child-call.ts";
+import { checkMemory, startMemoryGuard } from "./child-memory.ts";
 import { exportDefault } from "./default-export.ts";
 import { chunkHeader, FrameReader, frame } from "./frames.ts";
 import { PROTOCOL_VERSION, type ToChild, type ToHost, type WireError, type WireLoadOptions } from "./protocol.ts";
@@ -48,7 +49,14 @@ const write = (bytes: Uint8Array, flush = true) => {
     });
   }
 };
-const send = (m: ToHost) => write(frame(m));
+/**
+ * Each message of the child's: past the calls' memory cap, the child dies instead of sending it (`child-memory.ts`;
+ * an answer always checked, a query's or mutation's as it stops running, `untrack`, before its `done`).
+ */
+const send = (m: ToHost) => {
+  checkMemory(m.t === "done" || m.t === "response");
+  write(frame(m));
+};
 
 /** The versions this child loaded, by request id: the calls name the one whose function they run. */
 const versions = new Map<number, CodeVersion>();
@@ -114,6 +122,9 @@ function badStream(why: string): never {
 // The deterministic globals, before any code version's contexts copy them (`contextGlobals`): in the server the
 // engine installs them at its start; this process has no engine.
 installDeterminism();
+
+// The memory cap's watchdog, before any call can run (tests may turn the cap off: `host.ts`, `memoryCap`).
+if (!process.env.BUNVEX_SANDBOX_NO_MEMORY_CAP) await startMemoryGuard();
 
 send({ t: "hello", protocol: PROTOCOL_VERSION, pid: process.pid });
 
