@@ -1,8 +1,9 @@
 # STUDY-185 — OLAP: Convex's managed S3 export (an Iceberg change log)
-<!-- index: OLAP: Convex's managed S3 export (Iceberg) | owner questions -->
+<!-- index: OLAP: Convex's managed S3 export (Iceberg) | decided (owner, 2026-10-26): align the API, stay a stub; DV-570 -->
 
 - **Status:** rewritten from scratch on 2026-10-25. Every claim here was checked again, at the source tag and
-  against the binary. Owner questions are in §6. Nothing is built.
+  against the binary. Decided (owner, 2026-10-26): every §6
+  recommendation; DV-570. Nothing is built yet.
 - **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
   - `crates/application/src/s3_export_worker.rs`;
   - `crates/exports/src/interface.rs`;
@@ -239,7 +240,8 @@ A13 also describes the frozen destination as "400 when bucket … change". The s
 
 ## 4. Divergences
 
-None is recorded until §6 is answered.
+D1 is DV-570 (owner, 2026-10-26, Q2). D3 is recorded with the PR that builds Q1 (Q4). D2 waits for Q3, which
+only arises if a writer is ever built.
 
 | # | Possible divergence | Why it arises |
 |---|---|---|
@@ -270,7 +272,9 @@ A memory S3 and Glue is enough, as the Rust tests use.
 
 ## 6. Owner questions
 
-| # | Question | Recommendation |
+Decided (owner, 2026-10-26): every recommendation below.
+
+| # | Question | Recommendation (decided) |
 |---|---|---|
 | Q1 | Align the S3 export API with the binary now: the §2.2 rows plus STUDY-186 A13/A14 (bucket rules, field filters, the update body shape, default selection, the `prefix` key, the `pending` status, `_s3_export_state` and `exportProgress`)? | Yes. It is Convex-matching, small, and needs no S3 |
 | Q2 | Build the writer (a bunvex Porter), or stay a stub as the open-source binary is? | Stay a stub (D1). The driver is private and still changing, the payload encoding is not visible, and building it would be guessing. Revisit when Convex ships it publicly or an app needs it |
