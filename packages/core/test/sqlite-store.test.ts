@@ -41,7 +41,7 @@ const doc = (d: string, json: string | null, prevTs: bigint | null = null) => ({
 const entry = (k: Uint8Array, d: string | null) => ({ index: I, key: k, table: d === null ? null : T, id: d });
 
 describe("opening", () => {
-  test("a file that is not a SQLite database is refused, and its lock released", () => {
+  test("a file that is not a SQLite database is refused, and its lock released", async () => {
     const path = dbPath();
     writeFileSync(path, "x".repeat(4096));
     expect(() => openDb(path)).toThrow(
@@ -50,18 +50,18 @@ describe("opening", () => {
     rmSync(path);
     const s = openDb(path); // the failed open let its lock go
     s.apply(1n, [doc(id(1), '"x"')], []);
-    s.flush();
+    await s.flush();
   });
 
-  test("the read-only flag: set, the store does not open for writing unless allowed; cleared, it opens", () => {
+  test("the read-only flag: set, the store does not open for writing unless allowed; cleared, it opens", async () => {
     const path = dbPath();
     const s = openDb(path);
-    s.setReadOnly(true);
+    await s.setReadOnly(true);
     s.close();
     expect(() => openDb(path)).toThrow(ReadOnlyError);
     expect(() => openDb(path)).toThrow(`the SQLite store ${path} is read-only`);
     const reader = openDb(path, { allowReadOnly: true });
-    reader.setReadOnly(false);
+    await reader.setReadOnly(false);
     reader.close();
     openDb(path).close();
   });
@@ -95,10 +95,10 @@ describe("one writer per file", () => {
     await first.releaseLease();
     expect("epoch" in (await second.acquireLease({ holder: "second", ttlMs: 1000 }))).toBe(true);
     second.apply(1n, [doc(id(1), '"x"')], []);
-    second.flush();
-    second.setReadOnly(true);
+    await second.flush();
+    await second.setReadOnly(true);
     expect(() => openDb(path)).toThrow(ReadOnlyError); // refused without the lock, which another handle holds
-    second.setReadOnly(false);
+    await second.setReadOnly(false);
     first.close();
     second.close();
     const third = openDb(path); // closing released the lock
@@ -153,11 +153,11 @@ describe("another connection's lock", () => {
     const path = dbPath();
     const s = openDb(path);
     s.apply(1n, [doc(id(1), '"x"')], [entry(key(1), id(1))]);
-    s.flush();
-    s.writeIndexEntries([{ ...entry(key(2), id(1)), ts: 1n }]);
-    s.pruneIndexes([{ index: I, key: key(2), ts: 1n }]);
-    s.pruneDocuments([]);
-    s.setGlobal("g", 1);
+    await s.flush();
+    await s.writeIndexEntries([{ ...entry(key(2), id(1)), ts: 1n }]);
+    expect(await s.pruneIndexes([{ index: I, key: key(2), ts: 1n }])).toBe(1);
+    expect(await s.pruneDocuments([])).toBe(0);
+    await s.setGlobal("g", 1);
     expect(s.scan(T, I, key(), key(255), 1n, 10, false)).toHaveLength(1);
     expect(s.readDocumentLog(0n, 1n, 10)).toHaveLength(1);
     s.close();
@@ -235,20 +235,20 @@ describe("reads", () => {
 });
 
 describe("the document log (PERSIST-01 C12)", () => {
-  test("a group applied but not flushed is left out, on a new handle too", () => {
+  test("a group applied but not flushed is left out, on a new handle too", async () => {
     const path = dbPath();
     const s = openDb(path);
     s.apply(1n, [doc(id(1), '"x"')], []);
-    s.flush();
+    await s.flush();
     s.close();
     const again = openDb(path);
-    again.apply(2n, [doc(id(2), '"y"')], []); // its transaction is open
+    again.apply(2n, [doc(id(2), '"y"')], []); // not written before its flush
     expect(again.readDocumentLog(0n, 10n, 10).map((r) => r.ts)).toEqual([1n]);
     expect(again.readDocumentLog(0n, 1n, 10).map((r) => r.ts)).toEqual([1n]);
-    again.flush();
+    await again.flush();
     again.apply(3n, [doc(id(3), '"z"')], []); // durable through 2 now; still, no row above upToTs
     expect(again.readDocumentLog(0n, 1n, 10).map((r) => r.ts)).toEqual([1n]);
-    again.flush();
+    await again.flush();
     expect(again.readDocumentLog(0n, 10n, 10).map((r) => r.ts)).toEqual([1n, 2n, 3n]);
   });
 
@@ -262,7 +262,7 @@ describe("the document log (PERSIST-01 C12)", () => {
 });
 
 describe("index entries at past timestamps (PERSIST-01 C17)", () => {
-  test("inside an open group they join its transaction", () => {
+  test("between a group's apply and its flush, they are written at once, in a transaction of their own", () => {
     const s = openDb(":memory:");
     s.apply(1n, [doc(id(1), '"x"')], []);
     s.writeIndexEntries([{ ...entry(key(1), id(1)), ts: 1n }]);

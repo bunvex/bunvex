@@ -10,6 +10,13 @@ import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
 const ENTRY = join(ROOT, "packages/bunvex/bin/local-backend.ts");
+/**
+ * The Workers the backend starts, each an entry point of its own in the executable (Bun bundles a Worker's module
+ * only when it is one). A module of the executable starts a Worker at `new URL("./<file>", import.meta.url)`,
+ * which inside it is `/$bunfs/root/<file>`: `--root` at the Workers' directory embeds them there.
+ */
+const WORKERS_DIR = join(ROOT, "packages/core/src/persistence");
+const WORKERS = [join(WORKERS_DIR, "sqlite-writer-thread.ts")];
 export const EXE = "bunvex-local-backend";
 
 /** Convex's targets, and the Bun target that builds each. */
@@ -60,7 +67,9 @@ for (const target of targets) {
     `--target=${TARGETS[target]}`,
     "--minify-syntax",
     `--define=BUNVEX_BUILD_VERSION=${JSON.stringify(version)}`,
+    `--root=${WORKERS_DIR}`,
     ENTRY,
+    ...WORKERS,
     "--outfile",
     join(dir, exe),
   ]);

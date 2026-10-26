@@ -852,6 +852,10 @@ describe("deploy2 over HTTP", () => {
       "RaceDetected",
       "Schema was overwritten by another push.",
     ]);
+    // The newer one finishes once its indexes are backfilled (the store writes them asynchronously).
+    expect((await d.post("/api/deploy2/wait_for_schema", { schemaChange: b.body.schemaChange })).body).toMatchObject({
+      type: "complete",
+    });
     expect((await d.post("/api/deploy2/finish_push", { startPush: b.body, dryRun: false })).status).toBe(200);
     // A finish for a push this server never started (or lost on a restart) is refused the same way.
     const unknown = await d.post("/api/deploy2/finish_push", {
