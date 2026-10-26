@@ -90,8 +90,8 @@ export class SystemReader {
   }
 }
 
-/** A virtual table's query after its first operator (as `QueryImpl`: no index or scan methods). */
-export class VirtualQuery implements TxQueryChained {
+/** What a virtual table's queries share: each operator and terminal is the system table's query's. */
+export abstract class VirtualChain {
   constructor(
     protected readonly table: string,
     protected readonly q: TxQueryChained,
@@ -123,13 +123,30 @@ export class VirtualQuery implements TxQueryChained {
   paginate(opts: PaginationOptions): Promise<PaginationResult> {
     return this.q.paginate(opts);
   }
+}
+
+/**
+ * A virtual table's query after its first operator (as `QueryImpl`: no index or scan methods). Its own iterator, as
+ * `QueryImpl` (STUDY-188 §X9): `next` and `return` are the system table's query's.
+ */
+export class VirtualQuery extends VirtualChain implements TxQueryChained {
   [Symbol.asyncIterator](): AsyncIterator<Doc> {
-    return this.q[Symbol.asyncIterator]();
+    this.q[Symbol.asyncIterator]();
+    return this;
+  }
+  next(): Promise<IteratorResult<Doc>> {
+    return (this.q as unknown as AsyncIterator<Doc>).next();
+  }
+  return(): Promise<IteratorResult<Doc>> {
+    return (this.q as unknown as Required<AsyncIterator<Doc>>).return();
   }
 }
 
-/** `db.system.query(table)` (as `QueryInitializerImpl`): the only stage that picks an index or a scan. */
-export class VirtualQueryInitializer extends VirtualQuery implements TxQuery {
+/**
+ * `db.system.query(table)` (as `QueryInitializerImpl`): the only stage that picks an index or a scan. It holds no
+ * state, as the system table's initializer: each use starts a new query.
+ */
+export class VirtualQueryInitializer extends VirtualChain implements TxQuery {
   constructor(
     table: string,
     q: TxQuery,
@@ -157,6 +174,10 @@ export class VirtualQueryInitializer extends VirtualQuery implements TxQuery {
   }
   fullTableScan(): TxQueryChained {
     return this.wrap(this.initial.fullTableScan());
+  }
+  /** A new query's iteration, as the initializer's. */
+  [Symbol.asyncIterator](): AsyncIterator<Doc> {
+    return this.fullTableScan()[Symbol.asyncIterator]();
   }
 }
 
