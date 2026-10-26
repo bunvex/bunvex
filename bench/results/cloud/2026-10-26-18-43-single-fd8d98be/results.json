@@ -1,0 +1,157 @@
+{
+  "meta": {
+    "suite": "single",
+    "sha": "fd8d98be",
+    "bun": "1.4.4",
+    "k6": "k6 v2.3.0 (commit/e088784614, go1.26.8, linux/amd64)",
+    "server": {
+      "name": "bunvex-bench-pr1-server",
+      "id": 612875135,
+      "public": "138.197.199.201",
+      "private": "10.120.0.3",
+      "size": "c-4",
+      "hourly": 0.125,
+      "machine": ["4", "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz", "7", "6.8.0-142-generic"]
+    },
+    "load": {
+      "name": "bunvex-bench-pr1-load",
+      "id": 612875134,
+      "public": "167.71.153.159",
+      "private": "10.120.0.2",
+      "size": "c-4",
+      "hourly": 0.125,
+      "machine": ["4", "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz", "7", "6.8.0-142-generic"]
+    },
+    "env": {
+      "REGION": "sfo2",
+      "REPEATS": 5
+    }
+  },
+  "results": [
+    {
+      "persistence": "sqlite",
+      "n": 1,
+      "scenario": "cached",
+      "vus": 32,
+      "duration": "30s",
+      "rate": 8151.504768808475,
+      "errors": 0,
+      "p99": 9.470977820000005,
+      "serverCores": 0.9373804647965376,
+      "boxCores": 0.9626766629065748,
+      "loadCores": 1.755954066559435,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 8151.504768808475,
+          "errors": 0,
+          "p50": 3.056239,
+          "p90": 5.874811100000001,
+          "p99": 9.470977820000005,
+          "max": 378.260798
+        }
+      ],
+      "repeat": 1
+    },
+    {
+      "persistence": "sqlite",
+      "n": 1,
+      "scenario": "cached",
+      "vus": 32,
+      "duration": "30s",
+      "rate": 8991.98589663586,
+      "errors": 0,
+      "p99": 8.94208182,
+      "serverCores": 0.94446303335678,
+      "boxCores": 0.9575253603364596,
+      "loadCores": 1.874159957953923,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 8991.98589663586,
+          "errors": 0,
+          "p50": 2.8014415,
+          "p90": 5.534265,
+          "p99": 8.94208182,
+          "max": 32.27252
+        }
+      ],
+      "repeat": 2
+    },
+    {
+      "persistence": "sqlite",
+      "n": 1,
+      "scenario": "cached",
+      "vus": 32,
+      "duration": "30s",
+      "rate": 8456.002847745838,
+      "errors": 0,
+      "p99": 8.966324959999998,
+      "serverCores": 0.9506470259632783,
+      "boxCores": 0.9615905542839733,
+      "loadCores": 1.8560800007068499,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 8456.002847745838,
+          "errors": 0,
+          "p50": 2.9956475,
+          "p90": 5.8840942,
+          "p99": 8.966324959999998,
+          "max": 436.854679
+        }
+      ],
+      "repeat": 3
+    },
+    {
+      "persistence": "sqlite",
+      "n": 1,
+      "scenario": "cached",
+      "vus": 32,
+      "duration": "30s",
+      "rate": 6267.552905255325,
+      "errors": 0,
+      "p99": 10.820597250000002,
+      "serverCores": 0.9305475482187516,
+      "boxCores": 0.9594128130744365,
+      "loadCores": 1.4321172494238874,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 6267.552905255325,
+          "errors": 0,
+          "p50": 4.2948065,
+          "p90": 8.1248435,
+          "p99": 10.820597250000002,
+          "max": 400.175231
+        }
+      ],
+      "repeat": 4
+    },
+    {
+      "persistence": "sqlite",
+      "n": 1,
+      "scenario": "cached",
+      "vus": 32,
+      "duration": "30s",
+      "rate": 9027.767783369995,
+      "errors": 0,
+      "p99": 8.787068600000026,
+      "serverCores": 0.919494520392764,
+      "boxCores": 0.9298605463691618,
+      "loadCores": 1.8541178354537775,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 9027.767783369995,
+          "errors": 0,
+          "p50": 2.74504,
+          "p90": 5.468407,
+          "p99": 8.787068600000026,
+          "max": 345.215807
+        }
+      ],
+      "repeat": 5
+    }
+  ]
+}
