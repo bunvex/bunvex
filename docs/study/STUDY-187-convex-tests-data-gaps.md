@@ -376,6 +376,10 @@ Found while doing X3 and X12. Read at the reference, then run on Convex's binary
     It keeps the last 8 such pushes finishable, so that, as on Convex, one can be finished after another push, or
     twice. Past 8 unfinished ones, or after a restart (as for any push), it answers `RaceDetected` and the CLI
     pushes again.
+- **Divergence (DV-572, owner, 2026-10-26: accept the cap of 8):** Convex keeps nothing between `start_push` and
+  `finish_push`, so any number of unfinished pushes without a schema stay finishable. bunvex keeps what `start_push`
+  evaluated in memory, so it caps them at 8; the oldest past that answers `RaceDetected`. No CLI flow sees it (the CLI
+  finishes the push it just started); finishing from the answer alone, with no memory, is left for a study of its own.
 - **Tests:**
   - `packages/core/test/push-without-schema.test.ts`: the app, a restart, a pending schema left pending, a table
     no longer declared, a component.
