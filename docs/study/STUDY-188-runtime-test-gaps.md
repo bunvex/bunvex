@@ -193,7 +193,7 @@ backstop fails all of them.)
   children (`memoryCap: false`, a test-only option the host passes as an environment variable of its own) to keep
   comparing that cap with `vm`.
 
-**What differs from Convex, for the owner** (no divergence decided here):
+**What differs from Convex** (owner, 2026-10-26: accepted as DV-553's approximate cap; G2 and G3 close with STUDY-168 PR 9's one-call process pool):
 - **G1, where the cap falls.** Exact for `ArrayBuffer`s (64 / 65 MiB). Objects fail near Convex's count when held
   across an operation (1.25 to 1.5 M against 1.25 M); typed arrays without an `ArrayBuffer` and strings only at the
   backstop (up to 256 MiB). In one child, a run of calls each holding more objects than the last (1, 1.25, 1.5, 2 M)
@@ -301,7 +301,7 @@ measurement of module load and context creation.
 ## 4. Divergences
 
 - **DV-553** (Q1): no memory cap under `vm`; Convex's 64 MiB cap under the `process` executor (R12). Built; how far
-  it is from Convex's (G1–G7 in §X17b) is for the owner.
+  it is from Convex's (G1–G7 in §X17b) is accepted as part of DV-553 (owner, 2026-10-26).
 - **DV-482**, amended (Q2): the runtime's `node:` frames are kept in `"use node"` contexts (R11).
 - Q3: R6 matches Convex (a module that throws while loading fails the function); no divergence.
 - **DV-569** (owner, 2026-10-25): the rare-error texts, frames and timings the PRs left different, one entry for all of them. Each PR lists its own: #852 (X4), #853 (X7), #855 (X14), #856 (X9), #857 (X21), #858 (X16), #859 (X19). The `process` executor's differences in #855 and #856 are fixed to match Convex, not recorded.
