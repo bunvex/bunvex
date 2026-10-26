@@ -3,7 +3,7 @@
 
 - **Status:** rewritten from scratch on 2026-10-25. Every claim here was checked again, at the source tag and
   against the binary. Decided (owner, 2026-10-26): every §6
-  recommendation; DV-570. Nothing is built yet.
+  recommendation; DV-570. Q1 is built in #862 (D3 is DV-571 there); the writer is not built.
 - **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
   - `crates/application/src/s3_export_worker.rs`;
   - `crates/exports/src/interface.rs`;
