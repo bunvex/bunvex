@@ -50,14 +50,10 @@ const RUNS = [
 ];
 /**
  * Where bunvex's frames are not yet Convex's (STUDY-150 §6): a bad id is refused before `db.get` awaits (Convex
- * parses it in its async syscall), and a missing function is refused by bunvex's server, not in the app's code
- * (Convex's `Couldn't resolve api.nope.x` in V8; a Node action's nested call keeps the callee's display, a blank line).
+ * parses it in its async syscall). A missing function matches since STUDY-188 §X21: a V8 action's
+ * `Couldn't resolve api.nope.x`, a Node action's callee display and its blank line.
  */
-const FRAMES_DIFFER = new Set([
-  "mutation badId",
-  "frames:actionUncaught runQueryMissing",
-  "node:nodeUncaught runQueryMissing",
-]);
+const FRAMES_DIFFER = new Set(["mutation badId"]);
 
 describe.skipIf(!ready)("an engine-thrown error, against Convex's backend", () => {
   test("uncaught: the app's frames as Convex's, where it awaited or made the call", async () => {
