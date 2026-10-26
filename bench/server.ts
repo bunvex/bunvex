@@ -19,7 +19,14 @@ const engine = await new Engine(benchSchema, await openPersistence(config), {
   lease: { ttlMs: Number(process.env.LEASE_TTL_MS ?? 5000), waitMs: Number(process.env.LEASE_WAIT_MS ?? 0) },
 }).init();
 const functions = new Functions(engine).register("bench", bench);
-const app = createServer({ engine, functions, port: Number(process.env.PORT ?? 3210), label: config.kind });
+const app = createServer({
+  engine,
+  functions,
+  port: Number(process.env.PORT ?? 3210),
+  // BENCH_HOSTNAME=127.0.0.1 keeps a measurement off the public interfaces. Unset listens as before.
+  ...(process.env.BENCH_HOSTNAME ? { hostname: process.env.BENCH_HOSTNAME } : {}),
+  label: config.kind,
+});
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.once(signal, async () => {
     await app.shutdown();
