@@ -108,7 +108,7 @@ document: the search returns nothing. Apps hit it with `q.or(...tags.map((t) => 
 
 **Fix (to match).** Mark, don't delete; delete `failed` / `overwritten` rows older than an hour at the same points.
 
-**Done (PR #PRNUM).** Checked in Convex's code: the deletion runs in `mark_overwritten` (`:631`, after the patch: a
+**Done (#867).** Checked in Convex's code: the deletion runs in `mark_overwritten` (`:631`, after the patch: a
 pending or validated schema a push replaces, `submit_pending` `:352`, `:356`, `:407`; the active one at activation,
 `mark_active` `:501`, or at a push without a schema, `apply` `:113`) and in `mark_failed` (`:519`, after the patch,
 even when the row was failed or overwritten already: the schema worker's walk, a write the pending schema refuses,
