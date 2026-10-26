@@ -2623,18 +2623,6 @@ export class Engine {
     while (this.searchBackfills.size) await Promise.all([...this.searchBackfills]);
   }
 
-  /** A transaction's commit hook, plus failing the pending schema when one of its writes did not match it. */
-  private withPendingCheck(tx: Tx): ((ts: bigint) => void) | undefined {
-    const own = tx.onCommitVisible;
-    const v = tx.pendingViolation;
-    if (!v) return own ?? undefined;
-    const pending = this.pendingPush;
-    return (ts) => {
-      own?.(ts);
-      if (pending) void this.failSchemaPush(pending.id, v.error, v.table).catch(() => {});
-    };
-  }
-
   /** Mark a pending (or validated) schema `failed` (Convex's `mark_failed`), in its namespace (null: the root's). */
   private async failSchemaPush(
     schemaId: string,
@@ -2643,14 +2631,7 @@ export class Engine {
     namespace: string | null = null,
   ) {
     await this.runMutation(
-      (db) =>
-        db.inComponent(namespace, async () => {
-          const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
-          const state = schemaStateOf(row);
-          if (state === "pending" || state === "validated")
-            await db.patch(SCHEMAS_TABLE, schemaId, { state: { state: "failed", error, table_name: tableName } });
-          await deleteValidationsForSchema(db, schemaId);
-        }),
+      (db) => markSchemaFailed(db, schemaId, error, tableName, namespace),
       true,
       "_system/schema_worker",
     );
@@ -3092,6 +3073,24 @@ export class Engine {
     const declared = this.allDeclaredTables(schema);
     const json = schemaToJson(schema);
     const staged = stagedValidatorsOf(json);
+    // The pushed schema is checked from the commit that submits it on, by every transaction that sees it, as
+    // Convex's writes read it from their snapshot's schema registry (STUDY-187 X10): installed as that commit is
+    // visible, or after it when it wrote nothing. `walk`: it became pending, so its documents are walked.
+    let installed = false;
+    let walk = false;
+    const install = (schemaId: string, state: SubmittedState) => {
+      if (installed) return;
+      installed = true;
+      if (state === "active") {
+        // Nothing to validate: the push commits the active schema again (Convex's `mark_active` no-op).
+        this.pendingPush = { id: schemaId, schema };
+        this.pendingValidators = null;
+      } else if (this.pendingPush?.id !== schemaId) {
+        this.pendingPush = { id: schemaId, schema };
+        this.pendingValidators = validatorsOf(schema);
+        walk = true;
+      }
+    };
     const r = await this.runMutation(
       async (db) => {
         const current = await readCatalog(db);
@@ -3130,6 +3129,7 @@ export class Engine {
         // Installed as soon as the commit is visible (see `catalogTouches`).
         db.onCommitVisible = () => {
           this.catalog = buildCatalog(after.tables, after.indexes);
+          install(schemaId, state);
         };
         return { schemaId, state, addedIndexes, created, after, inComponents };
       },
@@ -3137,17 +3137,9 @@ export class Engine {
       "_system/start_push",
     );
     this.catalog = buildCatalog(r.after.tables, r.after.indexes);
+    install(r.schemaId, r.state);
     if (await this.backfillNewTables(r.created, r.after.indexes)) r.after = await this.runMutation(readCatalog, true);
-    const active = this.schema;
-    if (r.state === "active") {
-      // Nothing to validate: the push commits the active schema again (Convex's `mark_active` no-op).
-      this.pendingPush = { id: r.schemaId, schema };
-      this.pendingValidators = null;
-    } else if (this.pendingPush?.id !== r.schemaId) {
-      this.pendingPush = { id: r.schemaId, schema };
-      this.pendingValidators = validatorsOf(schema);
-      this.startValidation(r.schemaId, schema, active);
-    }
+    if (walk) this.startValidation(r.schemaId, schema, this.schema);
     for (const [id, c] of r.inComponents) {
       if (c.schemaId === null) continue;
       const schemas = this.schemasOf(id);
@@ -3684,6 +3676,7 @@ export class Engine {
       tx.docValidators = this.docValidators;
       tx.componentValidators = (ns) => this.componentSchemas.get(ns)?.validators;
       tx.pendingValidators = this.pendingValidators;
+      tx.pendingSchemaId = this.pendingValidators ? (this.pendingPush?.id ?? null) : null;
       tx.stagedChecks = this.stagedChecks;
     }
     if (this.tracerOf.on) this.indexSpansOf(tx);
@@ -3709,6 +3702,10 @@ export class Engine {
       );
       // A write a staged validator refused fails its validation in this same transaction (900fe2c).
       for (const v of tx.stagedViolations.values()) await markStagedValidationFailed(tx, v.schemaId, v.table, v.error);
+      // A write the pending (or validated) schema refused fails it in this same transaction, as Convex's `enforce`
+      // (`mark_failed`): a push that commits it conflicts, and the transaction that wrote it commits with it.
+      const pv = tx.pendingViolation;
+      if (pv && tx.pendingSchemaId !== null) await markSchemaFailed(tx, tx.pendingSchemaId, pv.error, pv.table, null);
       return { tx, value, observed, now };
     } finally {
       tx.indexSpans?.finish();
@@ -4090,7 +4087,7 @@ export class Engine {
           docs,
           idx,
           source,
-          ...this.searchCommit(tx, this.withPendingCheck(tx)),
+          ...this.searchCommit(tx, tx.onCommitVisible ?? undefined),
           ...(tx.hasCommitTs
             ? {
                 atTs: (ts: bigint) => {
@@ -4177,6 +4174,28 @@ export class Engine {
       { table, componentId, documentId, writeSource, writeTs: conflict.writeTs, retries },
     );
   }
+}
+
+/**
+ * Convex's `SchemaModel::mark_failed`: a pending or validated schema becomes `failed` with `error`, and its
+ * validations are deleted; one in another state is left as it is. In `namespace` (null: the root's).
+ */
+async function markSchemaFailed(
+  db: Tx,
+  schemaId: string,
+  error: string,
+  tableName: string | null,
+  namespace: string | null,
+) {
+  await db.inComponent(namespace, () =>
+    db.asSystem(async () => {
+      const row = (await db.get(SCHEMAS_TABLE, schemaId)) as Record<string, unknown> | null;
+      const state = schemaStateOf(row);
+      if (state === "pending" || state === "validated")
+        await db.patch(SCHEMAS_TABLE, schemaId, { state: { state: "failed", error, table_name: tableName } });
+      await deleteValidationsForSchema(db, schemaId);
+    }),
+  );
 }
 
 /**

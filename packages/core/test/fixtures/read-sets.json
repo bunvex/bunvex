@@ -18,9 +18,18 @@
     "_tables.by_creation_time  ffffffff",
     "_tables.by_id 10<id0>00 10<id0>01",
     "big.by_id 10<id1>00 10<id1>01",
-    "big.by_id 10<id1>00 10<id1>01"
+    "big.by_id 10<id1>00 10<id1>01",
+    "_schemas.by_state 15737461746500106163746976650000 15737461746500106163746976650001",
+    "_schemas.by_state 157374617465001070656e64696e670000 157374617465001070656e64696e670001",
+    "_schemas.by_state 157374617465001076616c6964617465640000 157374617465001076616c6964617465640001"
   ],
-  "insert, then get it": ["_tables.by_creation_time  ffffffff", "_tables.by_id 10<id0>00 10<id0>01"],
+  "insert, then get it": [
+    "_tables.by_creation_time  ffffffff",
+    "_tables.by_id 10<id0>00 10<id0>01",
+    "_schemas.by_state 15737461746500106163746976650000 15737461746500106163746976650001",
+    "_schemas.by_state 157374617465001070656e64696e670000 157374617465001070656e64696e670001",
+    "_schemas.by_state 157374617465001076616c6964617465640000 157374617465001076616c6964617465640001"
+  ],
   "a new table": [
     "_tables.by_creation_time  ffffffff",
     "_tables.by_id 10<id0>00 10<id0>01",
@@ -30,7 +39,10 @@
     "_tables.by_id 10<id2>00 10<id2>01",
     "_next_persistence_index_id.by_creation_time  <time>10<id3>01",
     "_next_persistence_index_id.by_creation_time  <time>10<id3>01",
-    "_next_persistence_index_id.by_id 10<id3>00 10<id3>01"
+    "_next_persistence_index_id.by_id 10<id3>00 10<id3>01",
+    "_schemas.by_state 15737461746500106163746976650000 15737461746500106163746976650001",
+    "_schemas.by_state 157374617465001070656e64696e670000 157374617465001070656e64696e670001",
+    "_schemas.by_state 157374617465001076616c6964617465640000 157374617465001076616c6964617465640001"
   ],
   "first": [
     "_tables.by_creation_time  ffffffff",
