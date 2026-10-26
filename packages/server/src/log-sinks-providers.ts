@@ -7,6 +7,8 @@ import { randomUUID } from "node:crypto";
 import { eventJsonV2, type LogEvent, type LogTopic, type StackFrame } from "./log-events.ts";
 import {
   type BackoffOptions,
+  countsEgress,
+  type EgressCount,
   EgressFailure,
   onlyExceptions,
   passes,
@@ -24,6 +26,8 @@ export type ProviderOptions = BackoffOptions & {
   fetch: typeof fetch;
   /** bunvex's version, where Convex sends its npm package's (`sdk.version`, `$lib_version`). */
   version: string;
+  /** Where the sent bytes are counted (the manager's log stream egress). */
+  countEgress?: EgressCount;
 };
 
 /** The metadata key on each event (DV-304: `deployment`, where Convex has `convex`). */
@@ -46,11 +50,17 @@ abstract class ProviderSink implements Sink {
   stop() {
     this.state.stopped = true;
   }
-  /** Each batch on its own: a failed one is dropped (logged once), the next still sent. */
-  protected async sendBatches(batches: string[], post: (body: string) => Promise<void>) {
-    for (const body of batches)
+  /**
+   * Each batch on its own: a failed one is dropped (logged once), the next still sent. A batch's bytes are counted
+   * unless it holds only egress events (`countsEgress`).
+   */
+  protected async sendBatches(
+    batches: { body: string; counted: boolean }[],
+    post: (body: string, count: EgressCount | undefined) => Promise<void>,
+  ) {
+    for (const { body, counted } of batches)
       try {
-        await post(body);
+        await post(body, counted ? this.o.countEgress : undefined);
       } catch (e) {
         console.error(`log stream (${this.label}): a batch was dropped: ${(e as Error).message}`);
       }
@@ -59,20 +69,35 @@ abstract class ProviderSink implements Sink {
 
 /** Convex's `build_sized_batches`: JSON items into arrays of at most `count` and `bytes` (brackets and commas counted). */
 export function sizedBatches(items: string[], count: number, bytes: number): string[] {
-  const out: string[] = [];
-  let cur: string[] = [];
+  return sizedRanges(items, count, bytes).map(([from, to]) => `[${items.slice(from, to).join(",")}]`);
+}
+
+/** `sizedBatches` as `[from, to)` ranges of `items`. */
+function sizedRanges(items: string[], count: number, bytes: number): [number, number][] {
+  const out: [number, number][] = [];
+  let from = 0;
   let size = 2;
-  for (const item of items) {
-    const add = Buffer.byteLength(item) + (cur.length > 0 ? 1 : 0);
-    if (cur.length > 0 && (cur.length >= count || size + add > bytes)) {
-      out.push(`[${cur.join(",")}]`);
-      cur = [];
+  for (let i = 0; i < items.length; i++) {
+    const n = i - from;
+    const add = Buffer.byteLength(items[i]!) + (n > 0 ? 1 : 0);
+    if (n > 0 && (n >= count || size + add > bytes)) {
+      out.push([from, i]);
+      from = i;
       size = 2;
     }
-    size += Buffer.byteLength(item) + (cur.length > 0 ? 1 : 0);
-    cur.push(item);
+    size += Buffer.byteLength(items[i]!) + (i > from ? 1 : 0);
   }
-  if (cur.length > 0) out.push(`[${cur.join(",")}]`);
+  if (items.length > from) out.push([from, items.length]);
+  return out;
+}
+
+/** Fixed-count batches of events as JSON arrays, each marked counted or not (`countsEgress`). */
+function countedBatches(events: LogEvent[], item: (e: LogEvent) => string, per: number) {
+  const out: { body: string; counted: boolean }[] = [];
+  for (let i = 0; i < events.length; i += per) {
+    const batch = events.slice(i, i + per);
+    out.push({ body: `[${batch.map(item).join(",")}]`, counted: countsEgress(batch) });
+  }
   return out;
 }
 
@@ -123,13 +148,14 @@ export class DatadogSink extends ProviderSink {
     });
   }
 
-  private post(body: string) {
+  private post(body: string, count?: EgressCount) {
     return postWithRetry(
       this.o,
       this.state,
       this.url,
       { headers: { "content-type": "application/json", "dd-api-key": this.c.ddApiKey }, body },
       PROVIDER_ATTEMPTS,
+      count,
     );
   }
 
@@ -138,8 +164,13 @@ export class DatadogSink extends ProviderSink {
   }
 
   async send(events: LogEvent[]) {
-    const items = events.filter((e) => passes(this.c.topics, e)).map((e) => this.item(e));
-    await this.sendBatches(sizedBatches(items, 1000, 4 << 20), (b) => this.post(b));
+    const kept = events.filter((e) => passes(this.c.topics, e));
+    const items = kept.map((e) => this.item(e));
+    const batches = sizedRanges(items, 1000, 4 << 20).map(([from, to]) => ({
+      body: `[${items.slice(from, to).join(",")}]`,
+      counted: countsEgress(kept.slice(from, to)),
+    }));
+    await this.sendBatches(batches, (b, count) => this.post(b, count));
   }
 }
 
@@ -186,13 +217,14 @@ export class AxiomSink extends ProviderSink {
     });
   }
 
-  private post(body: string) {
+  private post(body: string, count?: EgressCount) {
     return postWithRetry(
       this.o,
       this.state,
       this.url,
       { headers: { "content-type": "application/json", authorization: `Bearer ${this.c.apiKey}` }, body },
       PROVIDER_ATTEMPTS,
+      count,
     );
   }
 
@@ -201,10 +233,11 @@ export class AxiomSink extends ProviderSink {
   }
 
   async send(events: LogEvent[]) {
-    const items = events.filter((e) => passes(this.c.topics, e)).map((e) => this.item(e));
-    const batches: string[] = [];
-    for (let i = 0; i < items.length; i += 10_000) batches.push(`[${items.slice(i, i + 10_000).join(",")}]`);
-    await this.sendBatches(batches, (b) => this.post(b));
+    const kept = events.filter((e) => passes(this.c.topics, e));
+    await this.sendBatches(
+      countedBatches(kept, (e) => this.item(e), 10_000),
+      (b, count) => this.post(b, count),
+    );
   }
 }
 
@@ -459,25 +492,26 @@ export class PostHogLogsSink extends ProviderSink {
         { key: `${NAME}.deployment.name`, value: { stringValue: meta.deployment_name } },
       ],
     };
-    const batches: string[] = [];
-    for (let i = 0; i < kept.length; i += 400)
-      batches.push(
-        JSON.stringify({
+    const batches: { body: string; counted: boolean }[] = [];
+    for (let i = 0; i < kept.length; i += 400) {
+      const batch = kept.slice(i, i + 400);
+      batches.push({
+        body: JSON.stringify({
           resourceLogs: [
-            {
-              resource,
-              scopeLogs: [{ scope: { name: NAME }, logRecords: kept.slice(i, i + 400).map((e) => this.record(e)) }],
-            },
+            { resource, scopeLogs: [{ scope: { name: NAME }, logRecords: batch.map((e) => this.record(e)) }] },
           ],
         }),
-      );
-    await this.sendBatches(batches, (body) =>
+        counted: countsEgress(batch),
+      });
+    }
+    await this.sendBatches(batches, (body, count) =>
       postWithRetry(
         this.o,
         this.state,
         this.url,
         { headers: { "content-type": "application/json", authorization: `Bearer ${this.c.apiKey}` }, body },
         PROVIDER_ATTEMPTS,
+        count,
       ),
     );
   }
@@ -558,18 +592,21 @@ export class PostHogErrorTrackingSink extends ProviderSink {
 
   async send(events: LogEvent[]) {
     const kept = events.filter(onlyExceptions);
-    const batches: string[] = [];
+    // Exceptions only, so every batch is counted (Convex's sink counts without asking).
+    const batches: { body: string; counted: boolean }[] = [];
     for (let i = 0; i < kept.length; i += 100)
-      batches.push(
-        JSON.stringify({ api_key: this.c.apiKey, batch: kept.slice(i, i + 100).map((e) => this.capture(e)) }),
-      );
-    await this.sendBatches(batches, (body) =>
+      batches.push({
+        body: JSON.stringify({ api_key: this.c.apiKey, batch: kept.slice(i, i + 100).map((e) => this.capture(e)) }),
+        counted: true,
+      });
+    await this.sendBatches(batches, (body, count) =>
       postWithRetry(
         this.o,
         this.state,
         this.url,
         { headers: { "content-type": "application/json" }, body },
         PROVIDER_ATTEMPTS,
+        count,
       ),
     );
   }

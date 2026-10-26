@@ -148,6 +148,36 @@ as a `LogStreamPayload` call) is the cloud's.
 **Fix (to match).** Count each sink's sent bytes; a 60 s tick emits the event when the count is not zero. STUDY-59
 is corrected in the same PR.
 
+**Done** (`fix/x6-log-stream-egress`). What Convex counts, read at `72ce13c` and checked against its binary:
+
+- **One counter for the deployment** (`sinks/utils.rs` `EgressCounter`, an `AtomicU64` shared by every sink). A
+  tick (`lib.rs` `egress_emission_worker`, a fixed `Duration::from_secs(60)`, no knob; the first one 60 s after the
+  manager starts) swaps it to zero. When it held anything, the event is sent back into the manager's channel
+  (`try_send`, so dropped when the buffer is full), and so reaches every sink whose filter takes it: general sinks
+  subscribed to `log_stream_egress` or to every topic, never the exception sinks.
+- **Which bytes.** A request's body as it streamed out (`common/src/http/fetch.rs` `request_size`): the final
+  payload, after batching and encoding (the JSON array or JSON Lines, with the metadata), headers not included. It
+  is counted for each attempt that got an HTTP answer, whatever the status, retries included; not for an attempt
+  with no answer (a network error, a timeout, the proxy's 407, which the fetch client turns into an error). Webhook,
+  Datadog, Axiom and PostHog Logs count; so does PostHog Error Tracking (always: it only gets exceptions). Sentry and
+  the local sink do not.
+- **Not counted:** the connection test (`is_verification`, and PostHog's own `verify_creds`), and a batch holding
+  only `log_stream_egress` events (`batch_has_non_egress_events`, per request batch). An egress event in a batch
+  with other events is counted with them.
+- **The event:** V2 `{timestamp, topic: "log_stream_egress", egress_bytes}`; V1 `{_timestamp, _topic:
+  "_log_stream_egress", egress_bytes}` (bunvex has no V1, [STUDY-59 §4](STUDY-59-log-streams.md#4-divergences)).
+  PostHog's `topic` attribute is `log_stream_egress`.
+- **Usage.** The same tick reports a `log_stream_payload` call (`CallType::LogStreamPayload`, a system job: no
+  function call, no compute) whose `NetworkBandwidth` egress the open-source `UsageLimitRecorder` adds to
+  `DataEgressGB`. That part is not the cloud's: `get_current_usage` and the usage limits see it.
+
+bunvex does the same: `LogManager.emitEgress` every `egressIntervalMs` (60 s; an option for tests, not a knob),
+`countAnswer` / `countsEgress` in `log-sink-http.ts` at each sink's request, and the bytes into `dataEgressGb`.
+Tests: `packages/server/test/log-stream-egress.test.ts` (sabotage: counting egress-only batches, not resetting the
+count, and counting only 2xx answers each fail a test); `packages/differential/test/log-stream-egress.test.ts` on
+both backends (a minute: the event's fields, and its bytes are the bodies before it without the verification;
+counting the verification on bunvex fails it).
+
 ### 2.7 X10 — a mutation that straddles a schema push (done)
 
 **Convex.** Every write to an app table looks the schemas up with `SchemaModel::enforce`

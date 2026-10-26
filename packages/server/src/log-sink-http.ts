@@ -92,6 +92,26 @@ export function passes(topics: LogTopic[] | undefined, e: LogEvent): boolean {
   return topics === undefined ? t !== "custom_audit" : topics.includes(t);
 }
 
+/**
+ * Counts a sink's request bodies into the deployment's log stream egress (Convex's `track_log_sink_bandwidth`):
+ * the body's bytes, once per attempt that got an HTTP answer, whatever its status.
+ */
+export type EgressCount = (bytes: number) => void;
+
+/**
+ * Whether a request's bytes are counted (Convex's `batch_has_non_egress_events`): a batch of nothing but
+ * `log_stream_egress` events is not, so the event does not count itself forever.
+ */
+export const countsEgress = (events: LogEvent[]) => events.some((e) => e.event.topic !== "log_stream_egress");
+
+/**
+ * An attempt's answer, counted: any status but the proxy's 407, which Convex's fetch client turns into an error
+ * (its SSRF block). An attempt with no answer (a network failure, a timeout) is not counted.
+ */
+export function countAnswer(count: EgressCount | undefined, status: number, body: string) {
+  if (count && status !== 407) count(Buffer.byteLength(body));
+}
+
 /** The exception sinks' filter (Convex's `OnlyExceptions`). */
 export const onlyExceptions = (e: LogEvent) => e.event.topic === "exception";
 
@@ -108,6 +128,7 @@ export async function postWithRetry(
   url: string,
   init: { headers: Record<string, string>; body: string },
   attempts: number,
+  count?: EgressCount,
 ): Promise<void> {
   let last = "";
   for (let n = 0; n < attempts; n++) {
@@ -118,6 +139,7 @@ export async function postWithRetry(
         headers: { "user-agent": SINK_USER_AGENT, ...init.headers },
         body: init.body,
       });
+      countAnswer(count, r.status, init.body);
       await r.arrayBuffer().catch(() => undefined);
       if (r.status < 400) {
         state.failures = 0;
