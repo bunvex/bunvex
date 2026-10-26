@@ -288,6 +288,8 @@ export abstract class HostCallBase {
       }
       case "host":
         throw new Error(w.message);
+      case "system":
+        throw new ExecutorFailure(w.message);
       case "error":
         throw appError(w);
     }
@@ -660,7 +662,13 @@ export class HostCall extends HostCallBase {
 // A stream's failure crosses as an operation's error does: the host's own errors to the child, the app's back.
 streamErrors.thrown = (e) => thrownToChild(e);
 streamErrors.error = (w) =>
-  w.k === "error" ? appError(w) : w.k === "value" ? decode(w.v as JSONValue, true) : new Error("a stream failed");
+  w.k === "error"
+    ? appError(w)
+    : w.k === "value"
+      ? decode(w.v as JSONValue, true)
+      : w.k === "system"
+        ? new ExecutorFailure(w.message)
+        : new Error("a stream failed");
 
 /** A `log.audit` line the child checked, checked again (only a broken child sends one that is not a JSON object). */
 export function auditLine(json: unknown): unknown {

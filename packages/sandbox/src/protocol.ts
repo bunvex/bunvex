@@ -37,7 +37,7 @@ import type { StreamMessage } from "./streams.ts";
 export const EPOCHS_KEPT = 4;
 
 /** Bumped whenever a message changes: host and child are always the same build, but a stale child must not run. */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /** Convex's argument and result caps (`FUNCTION_MAX_ARGS_SIZE`, `FUNCTION_MAX_RESULT_SIZE`, knobs.rs:439-446). */
 export const MAX_VALUE_SIZE = 1 << 24;
@@ -299,6 +299,11 @@ export type WireThrown =
     }
   /** An error the host's own check would have thrown (a query object returned). */
   | { k: "host"; message: string }
+  /**
+   * A system error the server's code raised in the child (an `ExecutorFailure`): the host throws it again as one, so
+   * the client gets the internal error, as under `vm` (STUDY-188 §X14).
+   */
+  | { k: "system"; message: string }
   /** Anything else thrown (`throw "no"`). */
   | { k: "value"; v: unknown };
 
@@ -540,9 +545,9 @@ function logLines(x: Json, where: string): WireLogLine[] {
 /** A thrown value's description (its values are checked when decoded). */
 function thrown(x: Json, where: string): WireThrown {
   const o = obj(x, where);
-  const k = oneOf(o.k, ["op", "error", "host", "value"], `${where}.k`);
+  const k = oneOf(o.k, ["op", "error", "host", "system", "value"], `${where}.k`);
   if (k === "op") return { k, op: int(o.op, `${where}.op`), stack: nullable(o.stack, str, `${where}.stack`) };
-  if (k === "host") return { k, message: str(o.message, `${where}.message`) };
+  if (k === "host" || k === "system") return { k, message: str(o.message, `${where}.message`) };
   if (k === "value") return { k, v: "v" in o ? o.v : fail(`${where}.v`, "a value") };
   return {
     k,

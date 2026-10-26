@@ -38,7 +38,13 @@ export const nodeActionTimeoutError = (exportName: string, ms: number) =>
  * outlives its answer, a `"use node"` action). An HTTP action's run ends with its body, which may stream after its
  * handler returned (`endsLater`).
  */
-type Run = { signal: AbortSignal; life: ActionLife; timers: Set<unknown> | null };
+type Run = {
+  signal: AbortSignal;
+  life: ActionLife;
+  timers: Set<unknown> | null;
+  /** Fails the action at once, whatever its code does next (an imported module threw while loading, STUDY-188 §X14). */
+  fail: ((e: unknown) => void) | null;
+};
 
 /**
  * Whether an action has ended, shared by its run and its `ctx`: a `ctx` kept past its action's end (in module state)
@@ -108,6 +114,17 @@ export function actionTimerCallback(callback: unknown): unknown {
   return timerCallback(callback as TimerCallback);
 }
 
+/**
+ * Fail the running action at once with `e`, as Convex's isolate ends with an error its code cannot catch (STUDY-188
+ * §X14). False outside an action, or in one that cannot be failed this way.
+ */
+export function failRunningAction(e: unknown): boolean {
+  const fail = runs.getStore()?.fail;
+  if (!fail) return false;
+  fail(e);
+  return true;
+}
+
 /** The running action's life (null outside an action): once ended, what it calls refuses. */
 export const currentActionLife = (): ActionLife | null => runs.getStore()?.life ?? null;
 
@@ -130,7 +147,7 @@ export function withActionTimeout<T>(
   const own = new AbortController();
   const signal = parent ? AbortSignal.any([parent, own.signal]) : own.signal;
   const tracked = opts.endsWithAnswer === true || opts.endsLater !== undefined;
-  const run: Run = { signal, life: opts.life ?? { ended: false }, timers: tracked ? new Set() : null };
+  const run: Run = { signal, life: opts.life ?? { ended: false }, timers: tracked ? new Set() : null, fail: null };
   opts.endsLater?.(() => end(run));
   const finish = () => {
     if (opts.endsWithAnswer) end(run);
@@ -151,6 +168,11 @@ export function withActionTimeout<T>(
     );
     // A cut-off body that never settles must not keep the process alive.
     timer.unref();
+    run.fail = (e) => {
+      timer.clear();
+      finish();
+      reject(e);
+    };
     runs.run(run, body).then(
       (value) => {
         timer.clear();
@@ -174,10 +196,16 @@ export const currentActionSignal = (): AbortSignal | null => runs.getStore()?.si
 
 /**
  * `fn` run as an action whose code's timers are tracked, for a runtime that runs actions outside `withActionTimeout`
- * (the function sandbox's child, whose host keeps the timeout): `end()` clears them once the action has ended.
+ * (the function sandbox's child, whose host keeps the timeout): `end()` clears them once the action has ended. `fail`
+ * fails the action at once (`failRunningAction`).
  */
-export function trackedActionTimers<T>(fn: () => T): { value: T; end: () => void } {
-  const run: Run = { signal: new AbortController().signal, life: { ended: false }, timers: new Set() };
+export function trackedActionTimers<T>(fn: () => T, fail?: (e: unknown) => void): { value: T; end: () => void } {
+  const run: Run = {
+    signal: new AbortController().signal,
+    life: { ended: false },
+    timers: new Set(),
+    fail: fail ?? null,
+  };
   return { value: runs.run(run, fn), end: () => end(run) };
 }
 
