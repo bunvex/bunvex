@@ -114,6 +114,10 @@ backend is always started with `--disable-beacon`.
   taken a handle of from a V8 action, a "use node" action and a mutation of `run-missing-app/` (a missing module or
   export, an internal function, the wrong kind, the `cmp` component's missing or internal export, a missing child): the
   error uncaught and caught compared. Local only.
+- `test/node-frames.test.ts` (STUDY-188 §X11, DV-482 as amended): https-proxy-agent 9.1.0 bundled into a "use node"
+  action of `node-frames-app/`: an https request through it made (agent-base finds `node:https:` in the stack), and the
+  stack an agent sees when a request reads its protocol (its header and Node's frames above the app's call, positions
+  aside). Local only.
 - `test/paginate-args.test.ts`: `paginate`'s options (the client's checks, the `queryPage` syscall's serde
   messages in their field order, its own checks), a query's `limit` that is not a usize and a cursor that does
   not parse, from the app of `paginate-app/`; then the system functions' own argument errors, with an admin
