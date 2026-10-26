@@ -1,0 +1,79 @@
+diff --git a/packages/server/src/sync.ts b/packages/server/src/sync.ts
+index 67337438..88bd7cf1 100644
+--- a/packages/server/src/sync.ts
++++ b/packages/server/src/sync.ts
+@@ -419,6 +419,8 @@ export class SyncHub {
+   private watchers = new Map<string, Set<SyncSession>>();
+   /** The read-set of each watched key's latest execution: what a commit is matched against (STUDY-08 D9). */
+   readonly reads = new ReadSetIndex<string>();
++  /** PROTOTYPE (STUDY-184 §5.6): the newest commit that invalidated each watched key. */
++  readonly invalidatedAt = new Map<string, bigint>();
+   readonly sessions = new Set<SyncSession>();
+   /** The queries subscribed to across every session (read when `/metrics` is scraped). */
+   subscriptionCount(): number {
+@@ -542,6 +544,9 @@ export class SyncHub {
+       }
+     }
+     if (events && events.size > 0) this.deps.onInvalidations!([...events.values()]);
++    for (const [s, { keys }] of touched) s.markInvalid(keys);
++    const last = entries[entries.length - 1]!.ts;
++    for (const key of hit) this.invalidatedAt.set(key, last);
+     const { threshold, multiplierMs, random } = this.splay;
+     if (count <= threshold || multiplierMs === 0) {
+       for (const s of touched.keys()) s.schedule();
+@@ -667,7 +672,9 @@ export class SyncHub {
+     // Where the query lives now, when that is shared or this caller's.
+     if (q.idPart === SHARED || q.idPart === mine) {
+       const l = this.latest.get(q.key);
+-      if (valid(l)) {
++      const fast =
++        l !== undefined && l.generation === this.generation && l.ts <= ts && (this.invalidatedAt.get(q.key) ?? 0n) <= l.ts;
++      if (fast || (l !== undefined && l.ts > ts && valid(l))) {
+         this.stats.reused++;
+         return this.logReuse(q, caller, l).then(() => ({ exec: l, idPart: q.idPart, cached: true }));
+       }
+@@ -1394,6 +1401,12 @@ export class SyncSession {
+    * How many of this session's queries on `key` a commit newly invalidates: none while a splayed
+    * notification for the key is pending (Convex removed those subscriptions when it invalidated them).
+    */
++  /** PROTOTYPE (STUDY-184 §5.6): the keys a commit invalidated since the last transition started. */
++  private invalidKeys = new Set<string>();
++  markInvalid(keys: string[]) {
++    for (const k of keys) this.invalidKeys.add(k);
++  }
++
+   newlyInvalidated(key: string): number {
+     if (this.closed || this.splayedKeys.has(key)) return 0;
+     return this.keyCounts.get(key) ?? 1;
+@@ -1538,9 +1551,9 @@ export class SyncSession {
+       // (Convex drops the invalidation futures of the queries it reruns). Same tick as reading `ts`.
+       this.cancelSplay();
+       const at = ts;
+-      stale = [...this.queries].filter(
+-        ([, q]) => !q.exec || engine.committer.changedBetween(q.exec.reads, q.validAt, at),
+-      );
++      const inv = this.invalidKeys;
++      this.invalidKeys = new Set();
++      stale = [...this.queries].filter(([, q]) => !q.exec || inv.has(q.key));
+       // A query never answered is its initial subscription; one answered before reruns for the identity
+       // change, else for a data change (an invalidated read, a pushed module).
+       for (const [, q] of stale)
+@@ -1624,17 +1637,7 @@ export class SyncSession {
+     // transition did not rerun is still subscribed, so a splayed commit's timer covers it; one it reran is
+     // subscribed anew, and Convex finds a new subscription already invalid at once (`subscribe` refreshes it
+     // through the write log), so that one does not wait.
+-    const visible = engine.committer.visibleTs;
+-    const rerun = new Set(stale.map(([, q]) => q));
+-    for (const q of this.queries.values())
+-      if (
+-        q.exec &&
+-        (this.splayTimer === null || rerun.has(q)) &&
+-        engine.committer.changedBetween(q.exec.reads, ts, visible)
+-      ) {
+-        this.scheduled = true;
+-        break;
+-      }
++    if (this.invalidKeys.size > 0) this.scheduled = true;
+   }
+ 
+   /**

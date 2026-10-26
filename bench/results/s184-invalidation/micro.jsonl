@@ -1,0 +1,14 @@
+{"part":"match","N":1000,"fanout":"one","matchedPerCommit":1,"usPerCommit":0.583,"nsPerMatched":582.8,"replaceUsPerRerun":1.521,"buildMs":2,"heapMB":7}
+{"part":"match","N":1000,"fanout":"1%","matchedPerCommit":10,"usPerCommit":0.705,"nsPerMatched":70.5,"replaceUsPerRerun":1.612,"buildMs":1,"heapMB":13}
+{"part":"match","N":1000,"fanout":"10%","matchedPerCommit":100,"usPerCommit":6.011,"nsPerMatched":60.1,"replaceUsPerRerun":1.348,"buildMs":1,"heapMB":8}
+{"part":"match","N":10000,"fanout":"one","matchedPerCommit":1,"usPerCommit":0.857,"nsPerMatched":856.6,"replaceUsPerRerun":1.859,"buildMs":6,"heapMB":15}
+{"part":"match","N":10000,"fanout":"1%","matchedPerCommit":100,"usPerCommit":8.39,"nsPerMatched":83.9,"replaceUsPerRerun":2.47,"buildMs":10,"heapMB":29}
+{"part":"match","N":10000,"fanout":"10%","matchedPerCommit":1000,"usPerCommit":49.24,"nsPerMatched":49.2,"replaceUsPerRerun":1.916,"buildMs":9,"heapMB":15}
+{"part":"match","N":100000,"fanout":"one","matchedPerCommit":1,"usPerCommit":1.299,"nsPerMatched":1299.4,"replaceUsPerRerun":3.62,"buildMs":66,"heapMB":48}
+{"part":"match","N":100000,"fanout":"1%","matchedPerCommit":1000,"usPerCommit":174.206,"nsPerMatched":174.2,"replaceUsPerRerun":4.366,"buildMs":125,"heapMB":40}
+{"part":"match","N":100000,"fanout":"10%","matchedPerCommit":10000,"usPerCommit":1785.256,"nsPerMatched":178.5,"replaceUsPerRerun":4.166,"buildMs":105,"heapMB":93}
+{"part":"match","N":1000000,"fanout":"one","matchedPerCommit":1,"usPerCommit":2.938,"nsPerMatched":2937.8,"replaceUsPerRerun":5.35,"buildMs":801,"heapMB":247}
+{"part":"match","N":1000000,"fanout":"1%","matchedPerCommit":10000,"usPerCommit":2770.022,"nsPerMatched":277,"replaceUsPerRerun":8.312,"buildMs":1680,"heapMB":769}
+{"part":"match","N":1000000,"fanout":"10%","matchedPerCommit":100000,"usPerCommit":24820.475,"nsPerMatched":248.2,"replaceUsPerRerun":7.326,"buildMs":1278,"heapMB":761}
+{"part":"apply","usPerCommit":0.449,"frameBytes":118}
+{"part":"rerun","usPerRun":7.684}
