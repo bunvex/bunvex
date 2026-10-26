@@ -224,16 +224,92 @@ so it can only do worse.
   cached reads fall at 4.
 - The insert row writes to **separate** SQLite files. It says what the JS threads can do, not what one shared store
   can absorb.
-- **Not measured yet, and needed before any follower code:**
-  1. the same table on a dedicated Linux box with the load generator on another machine;
-  2. one shared Postgres store under N processes (the store's group commit becomes the write ceiling);
+- **Measured since on Linux:** item 1 in §5.5 and item 4 in §5.4. **Not measured yet, and needed before any
+  follower code:**
+  1. ~~the same table on a dedicated Linux box with the load generator on another machine~~ (§5.5);
+  2. one shared Postgres store under N processes (the store's group commit becomes the write ceiling). Today two
+     bench servers cannot share one store: the store's lease lets only the newest write (PERSIST-01 C7), so this
+     needs the first piece of Convex's shape (A2) built;
   3. the cost of invalidation under each design in §3.1;
-  4. Convex's binary under the same scenarios on the same box, to see what one multi-core Convex process gives.
+  4. ~~Convex's binary under the same scenarios on the same box~~ (§5.4).
 
 ### 5.3 From the earlier draft, kept
 
 On Linux, two processes binding one port with `reusePort` share the connections (195 / 205 of 400). On macOS one
 process gets all of them (`bench/scale/reuse-port.ts`). This matches STUDY-24 §4.7. It was not re-run here.
+
+### 5.4 bunvex and Convex, one core each, on Linux
+
+- **Box:** the owner's test VPS, 2 vCPUs (AMD EPYC 9354P), Ubuntu 24.04, shared (about 4.5 % steal).
+- **Setup:**
+  - the server pinned to CPU 0 and k6 to CPU 1 (`taskset`);
+  - 32 VUs, 5 s warm-up, 30 s, 3 runs, a fresh copy of the seeded store each run;
+  - Bun 1.4.4, k6 2.3.0, Postgres 17.11 (in Docker on CPU 1, default durability);
+  - bunvex at `8832af48`, Convex `precompiled-2026-10-24-bb31399` (its Linux release binary);
+  - the same bench functions pushed to Convex with the `convex` CLI 1.46.0, importing from `convex/server`;
+  - `MAX_BYTES_WRITTEN_PER_SECOND` lifted on both. Convex's concurrency limits stay at 16: at 32 VUs a request
+    waits for a permit and is not refused, so its 16-VU runs give the same rates.
+
+| scenario (req/s, median of 3) | bunvex SQLite | bunvex Postgres | Convex SQLite | Convex Postgres |
+|---|---:|---:|---:|---:|
+| cached query | 8 184 (k6-bound) | 7 012 (k6-bound) | 4 182 | 4 140 |
+| uncached query | 2 729 | 1 755 | 185 | 186 |
+| insert | 1 543 | 1 736 | 211 | 250 |
+| increment (1 000 keys) | 1 073 | 487 | 162 | 202 |
+
+- Every Convex row is server-bound (0.95–0.98 of the core; SQLite writes 0.72–0.83).
+  - A no-op query at one VU costs Convex about 2.8 ms of CPU, an uncached one about 7 ms.
+  - Under load its isolate threads take about 60 % of the core and tokio about 30 %: the time is in running each
+    function, not in the store.
+  - These are large gaps; a CPU profile of Convex (`perf`) should confirm them before any other document quotes
+    them.
+- **Bounds on the bunvex rows:**
+  - its cached rows are bound by k6, which uses 0.93–0.94 of CPU 1;
+  - its SQLite writes are bound by fsync latency (the server at 0.6–0.78 of a core; one synchronous 4 KiB write on
+    this disk takes about 1.4 ms);
+  - its Postgres increment shares CPU 1 between Postgres and k6 (0.86 busy).
+- **SQLite durability differs:** bunvex runs WAL with group commit; Convex's file uses the rollback journal with
+  `synchronous=FULL`, more fsyncs per commit. On Postgres both run on the same server with the same settings.
+- **Both cores, no pinning** (k6 shares them, one run): Convex spreads, with uncached at 317 req/s on 1.84 cores
+  (1.7× its pinned rate). bunvex stays on one core (2 283 req/s uncached).
+- Raw k6 summaries and scripts: `~/s184` on the VPS.
+
+### 5.5 Dedicated cores, client on another machine (`bench/cloud`)
+
+`bench/cloud/cloud.ts` rents two DigitalOcean CPU-Optimized droplets by the hour, in one region's private network:
+a server box and a load box. It runs a suite, writes `bench/results/cloud/`, and destroys them.
+
+- **Droplets:** `c-4` for both (4 dedicated vCPUs, Intel Xeon Platinum 8168 at 2.7 GHz, hyperthreads, so about 2
+  physical cores), region `sfo2`. The account allowed nothing larger.
+- **Runs:** 64 VUs per server, 30 s, 3 runs, Bun 1.4.4, k6 2.3.0, Postgres 17 in Docker on the server box.
+- **Code:** bunvex at `f0739b3f`.
+- The "load box" column checks the client: its 4 vCPUs never pass 3.3 busy.
+
+One process ([single](../../bench/results/cloud/2026-10-26-13-32-single-f0739b3f/summary.md)):
+
+| scenario | SQLite req/s | p99 ms | server cores | Postgres req/s | p99 ms | server cores |
+|---|---:|---:|---:|---:|---:|---:|
+| cached | 6 613 | 20.6 | 0.89 | 7 473 | 18.4 | 0.91 |
+| uncached | 1 881 | 63.4 | 0.98 | 1 581 | 81.7 | 0.98 |
+| insert | 1 604 | 231 | 0.62 | 2 017 | 82.5 | 0.72 |
+| increment (1 000 keys) | 1 076 | 298 | 0.76 | 999 | 402 | 0.97 |
+
+N independent processes, SQLite, each on its own copy of the store
+([independent](../../bench/results/cloud/2026-10-26-14-04-independent-f0739b3f/summary.md)):
+
+| scenario | 1 | 2 | 3 | 4 |
+|---|---:|---:|---:|---:|
+| cached | 7 815 | 12 488 (1.60×) | 13 808 (1.77×) | 14 299 (1.83×), load box 3.3 of 4 |
+| uncached | 1 891 | 3 363 (1.78×) | 4 116 (2.18×) | 4 525 (2.39×) |
+| insert (separate stores) | 1 711 | 2 824 (1.65×) | 3 626 (2.12×) | 4 198 (2.45×) |
+
+- **One process holds one core here too:** uncached runs at 0.98–1.00 of a core, and raising VUs from 32 to 256
+  left the rate flat and raised p99 (an earlier sweep).
+- **Past 2 processes the gain bends.** The 4 vCPUs are 2 physical cores with hyperthreads. The cached row is also
+  close to the load box's limit at 3–4 processes.
+- **Absolute rates are 3–4× under the M1 Pro's in §5.1** (an older x86 core and a hyperthread per vCPU). They
+  compare between runs on the same droplet type, not with other machines.
+- **Cost:** two `c-4` droplets cost $0.25 an hour; this section's two suites took about an hour.
 
 ## 6. Additions
 
