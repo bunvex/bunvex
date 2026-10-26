@@ -81,7 +81,30 @@ async function runServer() {
       return null;
     }),
   } as never);
-  const app = createServer({ engine, functions, port: 0, hostname: "127.0.0.1", label: "bench-subscriptions" });
+  // Failures in full: the client gets the error's message, and the server prints each failed run from its
+  // function log (the execution time and the message), so a failure under load can be told from a bug.
+  const app = createServer({
+    engine,
+    functions,
+    port: 0,
+    hostname: "127.0.0.1",
+    label: "bench-subscriptions",
+    redactLogsToClient: false,
+  });
+  void (async () => {
+    let cursor = 0;
+    let printed = 0;
+    for (;;) {
+      const { parts, newCursor } = await app.functionLog.after(cursor, 1000);
+      cursor = newCursor;
+      for (const part of parts)
+        if (part.kind === "Completion" && part.error !== null && printed++ < 50)
+          console.error(
+            `server: ${part.udfType} ${part.identifier} failed after ${part.executionTime.toFixed(3)} s ` +
+              `(user ${part.userExecutionTime?.toFixed(3) ?? "?"} s, ${part.caller}): ${part.error}`,
+          );
+    }
+  })();
   process.on("message", (m: { exit?: boolean; gc?: boolean }) => {
     if (m.exit) process.exit(0);
     if (m.gc) Bun.gc(true);
@@ -133,7 +156,7 @@ async function runClient() {
       const t = now();
       for (const mod of m.modifications) {
         if (mod.type === "QueryFailed") {
-          if (failed++ === 0) console.error(`query failed: ${mod.errorMessage}`);
+          if (failed++ < 20) console.error(`client: query ${mod.queryId} failed: ${mod.errorMessage}`);
         } else if (mod.type !== "QueryUpdated") continue;
         if (!answered.has(mod.queryId)) {
           answered.add(mod.queryId);
