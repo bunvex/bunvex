@@ -31,7 +31,7 @@ const loose = defineSchema({ items: defineTable(v.any()) });
 const strict = defineSchema({ items: defineTable({ n: v.number() }) });
 
 /** A schema pushed to the end (pending, validated, active). */
-const pushAll = async (e: Engine, schema: Parameters<Engine["startSchemaPush"]>[0]) => {
+const pushAll = async (e: Engine, schema: NonNullable<Parameters<Engine["startSchemaPush"]>[0]>) => {
   const p = await e.startSchemaPush(schema);
   await until(async () => (await e.schemaPushStatus(p.schemaId)).type !== "inProgress");
   expect((await e.schemaPushStatus(p.schemaId)).type).toBe("complete");

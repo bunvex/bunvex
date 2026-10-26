@@ -864,10 +864,13 @@ export function finishCatalog(
   indexes: IndexMeta[],
   /** The component whose namespace the declared tables are in (its `_components` id); the root's when absent. */
   namespace?: string,
+  /** A push's finish: the indexes of the user tables not declared go too (not the engine's start's). */
+  dropUndeclared = false,
 ) {
   const out: FinishChanges = { enable: [], disable: [], drop: [] };
   const active = activeTables(tables, namespace);
-  for (const d of declared) {
+  const list = [...declared];
+  for (const d of list) {
     const tablet = active.find((t) => t.name === d.name)?.tablet;
     if (tablet === undefined) continue;
     const stored = indexes.filter((i) => i.tablet === tablet);
@@ -887,6 +890,14 @@ export function finishCatalog(
       else if (w.staged) out.disable.push(i);
     }
   }
+  // As Convex's `get_index_diff`, which diffs every application index of the namespace: a user table the schema no
+  // longer declares (or every one, for a push without a schema) loses its indexes, whatever their state.
+  const names = new Set(list.map((d) => d.name));
+  if (dropUndeclared)
+    for (const t of active) {
+      if (t.name.startsWith("_") || names.has(t.name)) continue;
+      for (const i of indexes) if (i.tablet === t.tablet && !(i.name in SYSTEM_INDEXES)) out.drop.push(i);
+    }
   return out;
 }
 

@@ -1524,3 +1524,70 @@ export const list = query({
     expect(again.finish!.status).toBe(200);
   });
 });
+
+// A push without a schema (STUDY-187 X3 follow-up), as Convex's `SchemaModel::apply(None)`: no `_schemas` row, the
+// active schema `overwritten`, every index dropped; `finish_push` finds the push by its `start_push` answer.
+describe("a push without a schema", () => {
+  const schemaStates = async (d: Awaited<ReturnType<typeof deployment>>) =>
+    (
+      (await d.engine.query((db) => db.asSystem(() => db.query("_schemas").collect()))) as unknown as {
+        state: { state: string };
+      }[]
+    ).map((r) => r.state.state);
+
+  test("its schema id is null, and its finish clears the active schema and drops the indexes", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    await d.push([messages(1)], schema);
+    const p = await d.push([messages(2)], null);
+    expect(p.start.body.schemaChange.schemaIds).toEqual({ "": null });
+    expect(p.wait).toEqual({ type: "complete" });
+    expect(p.finish!.status).toBe(200);
+    expect(p.finish!.body.componentDiffs[""].indexDiff.removed_indexes.map((i: { name: string }) => i.name)).toEqual([
+      "messages.by_author",
+    ]);
+    expect(await schemaStates(d)).toEqual(["overwritten"]);
+    expect(d.engine.catalog.tables.get("messages")?.indexes.has("by_author") ?? false).toBe(false);
+    // The audit log's schema diff: the previous schema, then none.
+    const events = (
+      (await d.engine.query((db) => db.asSystem(() => db.query("_deployment_audit_log").collect()))) as unknown as {
+        action: string;
+        metadata: Record<string, any>;
+      }[]
+    ).filter((e) => e.action === "push_config_with_components");
+    const diff = events.at(-1)!.metadata.component_diffs[0].component_diff.schemaDiff;
+    expect(JSON.parse(diff.previous_schema).tables[0].tableName).toBe("messages");
+    expect(diff.next_schema).toBeNull();
+  });
+
+  test("its start answer can still be finished after another push finished, as Convex's (no schema to overwrite)", async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    await d.push([messages(1)], schema);
+    const post = (path: string, body: object) => d.post(path, body, KEY);
+    const startBody = {
+      dryRun: false,
+      functions: "bunvex",
+      appDefinition: {
+        definition: null,
+        dependencies: [],
+        schema: null,
+        changedModules: [messages(3)],
+        unchangedModuleHashes: [],
+        udfServerVersion: "1.46.0",
+      },
+      componentDefinitions: [],
+      nodeDependencies: [],
+    };
+    const stale = await post("/api/deploy2/start_push", startBody);
+    expect(stale.status).toBe(200);
+    await d.push([messages(1)], schema);
+    const finish = await post("/api/deploy2/finish_push", { startPush: stale.body, dryRun: false });
+    expect(finish.status).toBe(200);
+    expect(await schemaStates(d)).toEqual(["overwritten"]);
+    // As Convex's, the same answer can be finished again: nothing more to do.
+    const again = await post("/api/deploy2/finish_push", { startPush: stale.body, dryRun: false });
+    expect(again.status).toBe(200);
+    expect(await schemaStates(d)).toEqual(["overwritten"]);
+  });
+});
