@@ -74,6 +74,34 @@ const QUERY_CASES = `{
   count: async (ctx) => ctx.db.query("items").count(),
   iterate: async (ctx) => { const out = []; for await (const d of ctx.db.query("items").withIndex("by_k")) { out.push(d.k); if (out.length === 2) break; } return out; },
   iterateAll: async (ctx) => { const out = []; for await (const d of ctx.db.query("items")) out.push(d.k); return out; },
+  // A query's states (STUDY-188 §X9): each step's outcome on the same query, its message when it fails.
+  queryStates: async (ctx) => {
+    const m = async (f) => { try { const r = await f(); return Array.isArray(r) ? r.length : r && typeof r === "object" && "done" in r ? r.done : String(r); } catch (e) { return e.message; } };
+    const scan = () => ctx.db.query("items").fullTableScan();
+    const out = [];
+    let q = scan(); out.push(await m(async () => { for await (const _ of q); }), await m(async () => { for await (const _ of q); }));
+    q = scan(); out.push(await m(() => q.collect()), await m(() => q.collect()), await m(() => q.take(1)), await m(() => q.filter(() => true)));
+    q = scan(); out.push(await m(() => q.take(1)), await m(async () => { for await (const _ of q); }), await m(() => q.first()));
+    q = scan(); out.push(q[Symbol.asyncIterator]() === q, await m(() => q.next()), await m(() => q.collect()), await m(() => q.order("asc")), await m(() => q.next()), await m(() => q.next()), await m(() => q.next()));
+    q = scan(); out.push(await m(async () => { for await (const _ of q) break; }), await m(() => q.next()));
+    q = scan(); out.push(await m(() => q.return()), await m(() => q.collect()));
+    q = ctx.db.query("items"); out.push(await m(() => q.collect()), await m(() => q.collect()), await m(async () => { for await (const _ of q); }), typeof q.next);
+    q = ctx.db.query("items").withIndex("nope"); out.push(await m(() => q.collect()), await m(() => q.collect()), await m(async () => { for await (const _ of q); }));
+    q = ctx.db.query("items").order("asc"); out.push(await m(() => q.order("desc")), await m(() => q.collect()));
+    q = ctx.db.system.query("_scheduled_functions"); out.push(await m(() => q.collect()), await m(() => q.collect()), typeof q.next);
+    q = ctx.db.system.query("_scheduled_functions").fullTableScan(); out.push(q[Symbol.asyncIterator]() === q, await m(() => q.next()), await m(() => q.next()));
+    // A start that fails throws from \`[Symbol.asyncIterator]()\` itself, and leaves the query preparing.
+    const start = (q) => { try { return q[Symbol.asyncIterator]() === q; } catch (e) { return "sync: " + e.message; } };
+    q = ctx.db.query("items").withIndex("nope"); out.push(start(q), start(q), await m(() => q.next()), await m(() => q.filter(() => true)));
+    q = ctx.db.query("nope").withIndex("by_k"); out.push(start(q), await m(() => q.collect()));
+    q = ctx.db.query("items").withIndex("search_s"); out.push(start(q));
+    q = ctx.db.query("items").limit(-1); out.push(start(q), await m(() => q.limit(1)));
+    // One that fails after its start (a document its filter cannot evaluate) is still executing.
+    const partway = () => ctx.db.query("items").filter((f) => f.or(f.eq(f.field("k"), 1), f.eq(f.neg(f.field("nope")), 0)));
+    q = partway(); out.push(await m(() => q.collect()), await m(() => q.filter(() => true)), await m(() => q.collect()), await m(() => q.next()), await m(() => q.next()));
+    q = partway(); out.push(await m(async () => { for await (const _ of q); }), await m(() => q.next()), await m(() => q.order("asc")));
+    return out;
+  },
   iterateTwice: async (ctx) => { const q = ctx.db.query("items"); q[Symbol.asyncIterator](); try { q[Symbol.asyncIterator](); } catch (e) { return e.message; } },
   systemTableQuery: async (ctx) => { try { ctx.db.query("_storage"); } catch (e) { return e.message; } },
   queryNotString: async (ctx) => { try { ctx.db.query(5); } catch (e) { return [e.name, e.message]; } },
@@ -305,7 +333,10 @@ function normalized(o: Outcome) {
 
 async function deployment(sandbox: "vm" | "process") {
   const schema = defineSchema({
-    items: defineTable(v.any()).index("by_k", ["k"]).index("by_k_s", ["k", "s"]),
+    items: defineTable(v.any())
+      .index("by_k", ["k"])
+      .index("by_k_s", ["k", "s"])
+      .searchIndex("search_s", { searchField: "s" }),
     other: defineTable(v.any()),
     bulk: defineTable(v.any()),
   });

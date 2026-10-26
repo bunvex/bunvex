@@ -121,6 +121,12 @@ export class SearchIndexes {
     return this.byTablet.get(tablet) ?? NONE;
   }
   private byTablet = new Map<TabletId, SearchIndexEntry[]>();
+  private changes = 0;
+
+  /** How many times the set of indexes changed: what a copy of their names (the sandbox child's) is checked by. */
+  get generation(): number {
+    return this.changes;
+  }
 
   /**
    * Make the set of indexes the declared ones of the active tables; returns the new ones, to backfill.
@@ -168,6 +174,7 @@ export class SearchIndexes {
       added.push(e);
     }
     this.entries = next;
+    this.changes++;
     this.byTablet = new Map();
     for (const e of next.values()) {
       const list = this.byTablet.get(e.tablet);

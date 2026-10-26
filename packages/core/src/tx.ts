@@ -94,7 +94,7 @@ import {
 import { SearchFilter } from "./search-filter.ts";
 import { filterKey, indexedDocBytes, type SearchIndexes, searchReadIntervals } from "./search-indexes.ts";
 import { rememberStagedSize, sizeOfVersion } from "./staged-size.ts";
-import { SystemReader, VirtualQuery } from "./system-reader.ts";
+import { SystemReader, VirtualChain } from "./system-reader.ts";
 import { TableReader, TableWriter } from "./table-scope.ts";
 import { TableSummariesUnavailableError } from "./table-summaries.ts";
 import type { IndexReadSpans } from "./tracing.ts";
@@ -265,8 +265,6 @@ type QState = {
   orderSet: boolean;
   /** The operators (`filter`, `limit`) in chain order (STUDY-66 §1). */
   ops: QueryOp[];
-  closed: boolean;
-  iterated: boolean;
   /** A `withSearchIndex` query (STUDY-45): the index and the builder's filters, in order. */
   search?: SearchSpec;
   /** `withIndex`'s name and expressions as the app wrote them: the text Convex sends (STUDY-135). */
@@ -998,16 +996,16 @@ export class Tx {
    */
   resolveIndex(t: TableDef, name: string): IndexDef {
     const ix = t.indexes.get(name);
-    if (!ix && this.searchIndexes?.get(t, name)) throw new Error(`Index ${t.name}.${name} is not a database index`);
+    if (!ix && this.searchIndexes?.get(t, name)) throw indexUnavailable(t.name, name, "search");
     // An index enabled after this snapshot was still being built at it.
     if (ix && (ix.readyTs ?? 0n) <= this.snapshot) {
       if (ix.metaId !== undefined && !(name in SYSTEM_INDEXES)) this.recordIndexMeta(ix);
       return ix;
     }
     const pending = ix ?? t.pending.find((p) => p.name === name);
-    if (!pending) throw indexNotFound(t.name, name);
+    if (!pending) throw indexUnavailable(t.name, name, "missing");
     if (pending.metaId !== undefined) this.recordIndexMeta(pending);
-    throw pending.staged ? new IndexStagedError(`${t.name}.${name}`) : new IndexBackfillingError(`${t.name}.${name}`);
+    throw indexUnavailable(t.name, name, pending.staged ? "staged" : "backfilling");
   }
 
   private recordIndexMeta(ix: IndexDef) {
@@ -1304,8 +1302,6 @@ export class Tx {
       desc: false,
       orderSet: false,
       ops: [],
-      closed: false,
-      iterated: false,
       ...(t ? {} : { missingTable: true }),
     };
     return this.makeQuery(table, st);
@@ -1325,8 +1321,6 @@ export class Tx {
       desc: false,
       orderSet: false,
       ops: [],
-      closed: false,
-      iterated: false,
       virtual: toVirtual,
     };
     return this.makeQuery(name, st);
@@ -1351,8 +1345,6 @@ export class Tx {
       desc: false,
       orderSet: false,
       ops: [],
-      closed: false,
-      iterated: false,
     };
     return this.makeQuery(table, st);
   }
@@ -1370,8 +1362,6 @@ export class Tx {
       desc: false,
       orderSet: false,
       ops: [],
-      closed: false,
-      iterated: false,
     };
     return this.makeQuery(t.name, st);
   }
@@ -2821,7 +2811,24 @@ function writtenKey(
 export const encodeDoc = (doc: Doc): string => JSON.stringify(toJsonValue(doc as unknown as Value));
 export const decodeDoc = (json: string): Doc => fromJsonValue(JSON.parse(json)) as unknown as Doc;
 
-const reusedError = () => new Error("This query has been chained with another operator and can't be reused.");
+/**
+ * A query's states, as Convex's `QueryImpl` (`query_impl.ts`): preparing until an operator, a terminal or an iteration
+ * takes it; an operator, `take`, `first`, `unique` or `paginate` leaves it closed; an iteration (a `for await`, the
+ * first `next()`, `collect`) leaves it executing, then consumed when its stream ends or on `return()`.
+ */
+const PREPARING = 0;
+const EXECUTING = 1;
+const CLOSED = 2;
+const CONSUMED = 3;
+type QueryState = typeof PREPARING | typeof EXECUTING | typeof CLOSED | typeof CONSUMED;
+
+/** Convex's error for a query that is closed or consumed, in its words for each. */
+const closedError = (state: QueryState) =>
+  new Error(
+    state === CONSUMED
+      ? "This query is closed and can't emit any more values."
+      : "This query has been chained with another operator and can't be reused.",
+  );
 
 /**
  * Convex's "Cursor was None" (crates/isolate/src/environment/udf/async_syscall.rs, `read_page_from_query`):
@@ -2836,10 +2843,6 @@ export class QueryCursorError extends Error {
   }
 }
 
-/**
- * `db.query(table)` — one object per link of the chain, with its methods on the prototype (no closures
- * allocated per query: this is the hot path of every read).
- */
 /**
  * `q` of `withSearchIndex(name, q => q.search(field, text).eq(field, value)…)`, as Convex's
  * `SearchFilterBuilderImpl`: each builder is used once; `eq(field, undefined)` matches a missing field.
@@ -2887,7 +2890,7 @@ export class SearchFilterBuilder extends SearchFilter {
  * `validateReturnValue` refuses as a function's result (STUDY-66 §3).
  */
 export function isQueryObject(value: unknown): boolean {
-  return value instanceof QueryImpl || value instanceof VirtualQuery;
+  return value instanceof QueryImpl || value instanceof QueryInitializerImpl || value instanceof VirtualChain;
 }
 
 const RANGE_TYPE = { eq: "Eq", gt: "Gt", gte: "Gte", lt: "Lt", lte: "Lte" } as const;
@@ -2897,7 +2900,7 @@ const RANGE_TYPE = { eq: "Eq", gt: "Gt", gte: "Gte", lt: "Lt", lte: "Lte" } as c
  * parses the `queryStream` / `queryPage` text first, built here as Convex's `query_impl.ts` writes it (the
  * source, then the operators, `take`'s limit last), for serde's column.
  */
-function refuseLoneSurrogatesInQuery(table: string, st: QState, take: number | null) {
+function refuseLoneSurrogatesInQuery(table: string, st: QueryStartState, take: number | null) {
   const values = [
     st.index?.exprs.map((e) => e.value),
     st.ops.map((op) => ("filter" in op ? expressionJson(op.filter) : null)),
@@ -2931,11 +2934,39 @@ function refuseLoneSurrogatesInQuery(table: string, st: QState, take: number | n
 const indexNotFound = (table: string, index: string) => new Error(`Index ${table}.${index} not found.`);
 
 /**
+ * Why `withIndex(name)` of `table` cannot read (`Tx.resolveIndex`): a text index's name, a staged or backfilling
+ * index, or none of that name. Also the sandbox child's, which decides it from the catalog its call carries.
+ */
+export function indexUnavailable(
+  table: string,
+  name: string,
+  why: "search" | "staged" | "backfilling" | "missing",
+): Error {
+  if (why === "search") return new Error(`Index ${table}.${name} is not a database index`);
+  if (why === "staged") return new IndexStagedError(`${table}.${name}`);
+  if (why === "backfilling") return new IndexBackfillingError(`${table}.${name}`);
+  return indexNotFound(table, name);
+}
+
+/** What a query's start checks read: core's `QState`, or the sandbox child's copy of its chain. */
+export type QueryStartState = Pick<QState, "desc" | "orderSet" | "ops" | "search" | "index" | "notFound">;
+
+/**
+ * The checks of a query's start (Convex's `queryStream`, synchronous: they throw from `[Symbol.asyncIterator]()`):
+ * the query's text, its operators, its names, its index. Also the sandbox child's, so they throw at the same call.
+ */
+export function checkQueryStart(table: string, st: QueryStartState): void {
+  refuseLoneSurrogatesInQuery(table, st, null);
+  checkOps(st.ops, "queryStream");
+  startChecks(table, st, "queryStream");
+}
+
+/**
  * What Convex's backend checks when a query starts, after its operators (`Query::try_from` under
  * `with_argument_error`, then `start_query`): the source's names parse (a full scan's table as an identifier, an
  * index's `table.index` as an index name), then the index is looked up.
  */
-function startChecks(table: string, st: QState, syscall: "queryStream" | "queryPage") {
+function startChecks(table: string, st: QueryStartState, syscall: "queryStream" | "queryPage") {
   const index = st.search?.name ?? st.index?.name;
   const why = index === undefined ? identifierError(table) : indexNameError(`${table}.${index}`);
   if (why !== null) throw new Error(`Invalid argument \`query\` for \`${syscall}\`: ${why}`);
@@ -2943,46 +2974,85 @@ function startChecks(table: string, st: QState, syscall: "queryStream" | "queryP
   if (st.notFound) throw st.notFound();
 }
 
+/** A stream that has ended: what a query's is after a read that failed. */
+async function* ended(): AsyncGenerator<Doc> {}
+
+/** The next link of a chain: `st` copied, then changed by the operator. */
+function derive(tx: Tx, table: string, st: QState, change: (next: QState) => void): QueryImpl {
+  const next: QState = { ...st, ops: [...st.ops] };
+  change(next);
+  return new QueryImpl(tx, table, next);
+}
+
+/**
+ * A query after its first operator, as Convex's `QueryImpl`: one object per link of the chain, with its methods on the
+ * prototype (no closures allocated per query: this is the hot path of every read). It is its own iterator, as Convex's
+ * (`[Symbol.asyncIterator]` returns it; `next()` and `return()` are its own), and goes through Convex's states
+ * (`QueryState`), each refusing what Convex's refuses, in its words (STUDY-188 §X9).
+ */
 class QueryImpl implements TxQueryChained {
+  private state: QueryState = PREPARING;
+  /** The stream of an executing query. */
+  private stream: AsyncGenerator<Doc> | undefined = undefined;
+
   constructor(
-    protected readonly tx: Tx,
-    protected readonly table: string,
-    protected readonly st: QState,
+    private readonly tx: Tx,
+    private readonly table: string,
+    private readonly st: QState,
   ) {}
 
-  protected chain(change: (next: QState) => void): TxQueryChained {
-    const st = this.st;
-    if (st.iterated) throw new Error("A query can only be chained once and can't be chained after iteration begins.");
-    if (st.closed) throw reusedError();
-    st.closed = true;
-    const next: QState = { ...st, ops: [...st.ops], closed: false, iterated: false };
-    change(next);
-    return new QueryImpl(this.tx, this.table, next);
+  /** Convex's `takeQuery`: an operator, `take`, `first`, `unique` or `paginate` closes the query it is called on. */
+  private takeQuery(): void {
+    if (this.state !== PREPARING)
+      throw new Error("A query can only be chained once and can't be chained after iteration begins.");
+    this.state = CLOSED;
+  }
+
+  private chain(change: (next: QState) => void): TxQueryChained {
+    this.takeQuery();
+    return derive(this.tx, this.table, this.st, change);
   }
 
   /**
-   * Run the query to its end: `take(n)` (and `first`, `unique`) adds its limit as Convex's (`limit(n).collect()`),
-   * then the start's checks (Convex's backend parses the query here).
+   * Convex's `startQuery`: the state's checks, then the start's (Convex's backend parses the query in its
+   * `queryStream`), and only then the query is executing; a query whose start failed is still preparing.
    */
-  private results(take: number | null): Promise<Doc[]> {
-    if (this.st.closed || this.st.iterated) throw reusedError();
-    this.st.closed = true;
+  private startQuery(): void {
+    if (this.state === EXECUTING) throw new Error("Iteration can only begin on a query once.");
+    if (this.state !== PREPARING) throw closedError(this.state);
+    checkQueryStart(this.table, this.st);
+    this.state = EXECUTING;
+  }
+
+  /** Convex's `closeQuery`: the stream is let go, and the query is consumed. */
+  private closeQuery(): AsyncGenerator<Doc> | undefined {
+    const stream = this.stream;
+    this.stream = undefined;
+    this.state = CONSUMED;
+    return stream;
+  }
+
+  /**
+   * `take(n)`, `first`, `unique`: Convex's `limit(n).collect()`, so this query is closed (and the limit's link,
+   * which nothing else can reach, consumed); then the start's checks.
+   */
+  private results(take: number): Promise<Doc[]> {
     try {
+      this.takeQuery();
       refuseLoneSurrogatesInQuery(this.table, this.st, take);
-      checkOps(this.st.ops, "queryStream", take !== null);
+      checkOps(this.st.ops, "queryStream", true);
       startChecks(this.table, this.st, "queryStream");
     } catch (e) {
       return Promise.reject(e);
     }
-    // Stryker disable next-line BooleanLiteral: `take(n)` as a limit or as the cap stops at the same `n` documents
-    return take === null ? this.tx.runQuery(this.st, this.tx.collectLimit()) : this.tx.runQuery(this.st, take, true);
+    return this.tx.runQuery(this.st, take, true);
   }
 
   order(dir: "asc" | "desc"): TxQueryChained {
-    if (this.st.search)
-      throw new Error("Search queries must always be in relevance order. Can not set order manually.");
-    if (this.st.orderSet) throw new Error("Queries may only specify order at most once");
+    // Convex takes the query first: a refused `order` leaves it closed.
     return this.chain((n) => {
+      if (n.search) throw new Error("Search queries must always be in relevance order. Can not set order manually.");
+      if (n.orderSet) throw new Error("Queries may only specify order at most once");
       n.desc = dir === "desc";
       n.orderSet = true;
     });
@@ -3024,10 +3094,28 @@ class QueryImpl implements TxQueryChained {
     return two[0] ?? null;
   }
 
+  /**
+   * Convex's `collect` iterates the query itself: it starts it, and consumes it once every document is read.
+   * No cap: everything in the range, bounded only by the transaction's read limit (one row past it is enough to
+   * raise Convex's error). One that fails after its start (a document its filter cannot evaluate) is still
+   * executing, and its stream ended: a `next()` after it is done, as Convex's.
+   */
   collect(): Promise<Doc[]> {
-    // No cap: everything in the range, bounded only by the transaction's read limit (one row past it is
-    // enough to raise Convex's error).
-    return this.results(null);
+    try {
+      this.startQuery();
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    return this.tx.runQuery(this.st, this.tx.collectLimit()).then(
+      (docs) => {
+        this.state = CONSUMED;
+        return docs;
+      },
+      (e) => {
+        this.stream = ended();
+        throw e;
+      },
+    );
   }
 
   paginate(opts: PaginationOptions): Promise<PaginationResult> {
@@ -3038,8 +3126,7 @@ class QueryImpl implements TxQueryChained {
       const n = (opts as PaginationOptions | null)?.numItems;
       if (typeof n !== "number" || n < 0)
         throw new Error(`\`options.numItems\` must be a positive number. Received \`${n}\`.`);
-      if (this.st.closed || this.st.iterated) throw reusedError();
-      this.st.closed = true;
+      this.takeQuery();
       // Then the syscall: the query's JSON, its arguments, the query (`Query::try_from`), the page.
       refuseLoneSurrogatesInQuery(this.table, this.st, null);
       const args = queryPageArgs(opts);
@@ -3049,26 +3136,47 @@ class QueryImpl implements TxQueryChained {
     })();
   }
 
+  /** Convex starts the stream here, synchronously: its checks throw from this call. */
   [Symbol.asyncIterator](): AsyncIterator<Doc> {
-    if (this.st.iterated) throw new Error("Iteration can only begin on a query once.");
-    if (this.st.closed) throw reusedError();
-    this.st.iterated = true;
-    // Convex starts the stream here, synchronously: its checks throw from this call.
-    refuseLoneSurrogatesInQuery(this.table, this.st, null);
-    checkOps(this.st.ops, "queryStream");
-    startChecks(this.table, this.st, "queryStream");
-    return this.tx.iterate(this.st);
+    this.startQuery();
+    this.stream = this.tx.iterate(this.st);
+    return this;
+  }
+
+  /** The next document; a query still preparing starts here, as Convex's. */
+  async next(): Promise<IteratorResult<Doc>> {
+    if (this.state !== EXECUTING) {
+      if (this.state !== PREPARING) throw closedError(this.state);
+      this[Symbol.asyncIterator]();
+    }
+    const r = await this.stream!.next();
+    if (r.done) this.closeQuery();
+    return r;
+  }
+
+  /** A `for await` left early (`break`, `return`, a throw), or the app's own call: the query is consumed. */
+  async return(): Promise<IteratorResult<Doc>> {
+    await this.closeQuery()?.return(undefined);
+    return { done: true, value: undefined };
   }
 }
 
 /**
  * `db.query(table)`, as Convex's `QueryInitializerImpl`: the index or scan is picked here, before any other
- * operator. Each operator returns a plain `QueryImpl`, which has none of these methods.
+ * operator. It holds no state, so it can be used any number of times: every operator, terminal and iteration
+ * starts a new query (a full scan unless it picks an index), as Convex's. Each returns a plain `QueryImpl`, which has
+ * none of the index methods; the initializer has no `next` or `return` of its own.
  */
-class QueryInitializerImpl extends QueryImpl implements TxQuery {
+class QueryInitializerImpl implements TxQuery {
+  constructor(
+    private readonly tx: Tx,
+    private readonly table: string,
+    private readonly st: QState,
+  ) {}
+
   withIndex(name: string, f?: (b: IndexRangeBuilder) => IndexRangeBuilder): TxQueryChained {
     const t = this.st.t;
-    return this.chain((n) => {
+    return derive(this.tx, this.table, this.st, (n) => {
       // The range builder runs here, as Convex's client; the index is looked up when the query starts.
       const exprs = f ? f(new IndexRangeBuilder()).exprs : [];
       n.index = { name, exprs };
@@ -3093,20 +3201,50 @@ class QueryInitializerImpl extends QueryImpl implements TxQuery {
     if (typeof f !== "function") throw new TypeError("Must provide arg 2 `filter` to `withSearchIndex`");
     const filters = (f(new SearchFilterBuilder([])) as SearchFilterBuilder).filters();
     const t = this.st.t;
-    return this.chain((n) => {
+    return derive(this.tx, this.table, this.st, (n) => {
       n.search = { name, filters };
       if (!t && n.missingTable) n.notFound = () => indexNotFound(this.table, name);
     });
   }
 
-  fullTableScan(): TxQueryChained {
-    return this.chain(() => {});
+  /** A new query of the whole table (the state is shared: no link changes it). */
+  fullTableScan(): QueryImpl {
+    return new QueryImpl(this.tx, this.table, this.st);
+  }
+
+  order(dir: "asc" | "desc"): TxQueryChained {
+    return this.fullTableScan().order(dir);
+  }
+  filter(predicate: (q: FilterBuilder) => FilterOperand<boolean>): TxQueryChained {
+    return this.fullTableScan().filter(predicate);
+  }
+  limit(n: number): TxQueryChained {
+    return this.fullTableScan().limit(n);
+  }
+  take(n: number): Promise<Doc[]> {
+    return this.fullTableScan().take(n);
+  }
+  first(): Promise<Doc | null> {
+    return this.fullTableScan().first();
+  }
+  unique(): Promise<Doc | null> {
+    return this.fullTableScan().unique();
+  }
+  collect(): Promise<Doc[]> {
+    return this.fullTableScan().collect();
+  }
+  paginate(opts: PaginationOptions): Promise<PaginationResult> {
+    return this.fullTableScan().paginate(opts);
+  }
+  /** A new query's iteration (Convex's returns that query, not the initializer). */
+  [Symbol.asyncIterator](): AsyncIterator<Doc> {
+    return this.fullTableScan()[Symbol.asyncIterator]();
   }
 
   /**
    * Convex's internal `count()` (STUDY-107; `@internal` in its types, and so not in bunvex's public ones): the
-   * table's documents at this snapshot, with this transaction's own writes. On the initializer only, and it
-   * leaves the query usable, as Convex's (a call of its own, by table name).
+   * table's documents at this snapshot, with this transaction's own writes. On the initializer only (a call of its
+   * own, by table name).
    */
   async count(): Promise<number> {
     const invalid = identifierError(this.table);
