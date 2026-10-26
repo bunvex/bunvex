@@ -215,6 +215,7 @@ there, then run `bun run docs` (`bun run check` fails while this table is out of
 | [STUDY-187](STUDY-187-convex-tests-data-gaps.md) | What Convex's removed tests (`bea52bde0`, `c358201e1`) check on the data side and bunvex misses: unawaited writes before the commit, CSV empty cells, an empty vector `q.or()`, `_schemas` rows, `occInfo.componentPath`, `log_stream_egress`, a JSON Schema fallback, a no-op patch | decided (owner, 2026-10-25, §4); X20 #838 |
 | [STUDY-188](STUDY-188-runtime-test-gaps.md) | Runtime gaps from Convex's removed tests | decided (owner, 2026-10-25) |
 | [STUDY-189](STUDY-189-public-type-mismatches.md) | Public types against Convex 1.46.0's | decided (owner, 2026-10-25) |
+| [STUDY-190](STUDY-190-offthread.md) | Work off the one JS thread (STUDY-184 Q2): how Convex's backend spreads over cores, fresh per-request profiles of bench/server.ts (Mac, Linux VPS, DigitalOcean), the cost of a message between Bun threads, five candidates prototyped in bench/offthread/ (SQLite commits on a writer thread, SQLite readers, value work, HTTP front threads, execution on workers) and a ranked plan of PRs | draft: owner questions Q1–Q5 open |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 
