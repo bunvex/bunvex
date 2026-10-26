@@ -98,7 +98,8 @@ and any other scheme is a Bearer JWT. Without a header it can travel as `?adminK
 
 **Sync.** The message is `Authenticate { tokenType: "Admin", value, baseVersion, impersonating? }`, and
 `actingAs` is accepted too (`convex/sync_types/src/types/json.rs:161-171`). A bad key closes the socket
-with `AuthError { authUpdateAttempted: false }`.
+with `AuthError { authUpdateAttempted: true }`, and an acting identity that is not one is a `FatalError` read
+with the message, before the key (corrected 2026-10-25: this said `false`; see §8).
 
 **Errors.** They are mapped in `application_auth.rs:31-75`, `operations.rs:118-129` and
 `roles/src/eval.rs:280-300`:
@@ -353,3 +354,41 @@ Not divergences, but recorded:
 - `bunvex run` uses `/api/function` for the app's functions only, as Convex's CLI. The CLI's own system calls
   (`apiSpec`, `tables`, …) go through `/api/query` with the admin key, which still works.
 - Tests: `packages/server/test/system-identity.test.ts`.
+
+## 8. An admin's `Authenticate` on the sync socket (added 2026-10-25, STUDY-188 R5)
+
+§1.2 said a bad key gets `authUpdateAttempted: false`, and bunvex sent that. Convex's binary
+(`precompiled-2026-10-24-bb31399`) says otherwise. Each row below is a `Connect`, then
+`Authenticate { tokenType: "Admin", baseVersion: 0 }`:
+
+| Case | Convex, and now bunvex |
+|---|---|
+| a wrong key | `AuthError` "The provided admin key was invalid for this instance", `authUpdateAttempted: true` |
+| a good key, `impersonating: {}` or `{ subject }` only | `FatalError` "Received Invalid JSON on websocket: Either "tokenIdentifier" or "issuer" and "subject" must be set" |
+| a good key, `impersonating: "x"`, `[1]`, `true`, `1.5` | `FatalError` "Received Invalid JSON on websocket: invalid type: string "x", expected struct UserIdentityAttributesJson" (`sequence`, ``boolean `true` ``, ``floating point `1.5` ``) |
+| a good key, a standard field of the wrong type | `FatalError` "… invalid type: integer \`1\`, expected a string" (or "expected a boolean"); the first such field in the object's order |
+| a wrong key and a bad acting identity | the `FatalError`: the identity is read with the message, before the key |
+
+- **Convex.**
+  - `sync/src/worker.rs` `fetch_identity` turns any refusal into `AuthUpdateFailed`, and `local_backend/src/subs/mod.rs`
+    (:278-289) sends it with `auth_update_attempted: Some(true)`.
+  - The acting identity is converted with the client message (`sync_types/src/types/json.rs`: the `Authenticate`
+    arm, and `UserIdentityAttributes`' `TryFrom<JsonValue>` at :916-926). serde's error, or the missing identifier,
+    is the parse error, which `subs/mod.rs:173` sends as "Received Invalid JSON on websocket: {e}".
+- **bunvex.**
+  - `server/src/sync.ts` sends `true` for a refused key.
+  - `protocol/src/acting-identity.ts` `parseActingIdentity` reads the identity with serde's wording, and
+    `v1.parseClientMessage` refuses a bad one with the message. The HTTP header's `<key>:<identity>` uses the same
+    parser through `admin-keys.ts` `actingIdentity`. It still answers 400 "Malformed Authorization header." there,
+    and now accepts `tokenIdentifier: null` with `issuer` and `subject`, as Convex does.
+- **Wording not matched.** JSON.parse loses what serde_json keeps:
+  - An integral number written as a float (`1.0`, `1e2`) is a float to Convex (``floating point `1.0` ``) and an
+    integer to bunvex (``integer `1` ``).
+  - An integer beyond 2^53 loses digits: `9007199254740993` is printed `9007199254740992`, and
+    `-9223372036854775809` rounds into i64's range (an integer, where Convex prints a float).
+  - Which characters Rust's `{:?}` escapes follows the Unicode tables of each runtime (Bun's ICU, Rust's); they
+    agreed on every character tried.
+- **Tests.**
+  - `packages/server/test/admin-access.test.ts` ("sync: Authenticate Admin") covers each row.
+  - `packages/protocol/test/acting-identity.test.ts` holds the texts the binary sent, numbers and escapes included.
+  - `packages/differential/test/admin-socket-auth.test.ts` compares the frames with Convex's binary (local only).

@@ -1343,15 +1343,16 @@ export class SyncSession {
             new Error(`identity base version ${m.baseVersion} does not match ${this.received.identity}`),
           );
         if (m.tokenType === "Admin") {
-          // Convex's `authenticate` for an admin key: a bad key is unauthenticated (`AuthError`, not an
-          // update the client can retry); an acting identity that is not one ends the session.
+          // Convex's `authenticate` for an admin key: a refused key is its `AuthUpdateFailed`, sent with
+          // `authUpdateAttempted: true` (sync worker.rs `fetch_identity`, local_backend subs/mod.rs; STUDY-188
+          // R5). An acting identity that is not one was refused while the message was parsed, before the key.
           const make = this.hub.deps.adminCaller;
-          if (!make) return this.authError("The provided admin key was invalid for this instance", false);
+          if (!make) return this.authError("The provided admin key was invalid for this instance", true);
           try {
             this.caller = make(m.value, m.impersonating);
             this.token = null;
           } catch (e) {
-            if (e instanceof BadAdminKeyError) return this.authError(e.message, false);
+            if (e instanceof BadAdminKeyError) return this.authError(e.message, true);
             return this.badRequest((e as Error).message);
           }
           this.expiresAt = undefined; // admin identities do not expire (DV-163)
