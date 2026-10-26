@@ -4,13 +4,23 @@
 // given, `pending` on a read right after a create or an update, the second create's 409, and the dashboard's
 // `listConfiguredSinks`. Neither backend writes anything to S3 (DV-570), and bunvex runs no failing worker
 // (DV-571). Local only: skipped, with a note, when Convex's backend is not there
-// (scripts/download-convex-backend.sh, or CONVEX_BACKEND_BIN).
+// (scripts/download-convex-backend.sh, or CONVEX_BACKEND_BIN), or when it is older than
+// `precompiled-2026-10-24-bb31399`: bunvex follows that release here (STUDY-185 Q1, Q4) ahead of the differential
+// oracle (`docs/parity/upstream.md`), and `72ce13c` still takes column filters and every field in an update.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 
-const ready = existsSync(ORACLE_BIN);
-if (!ready) console.warn(`s3-export-api: skipped, no Convex backend at ${ORACLE_BIN} (set CONVEX_BACKEND_BIN)`);
+const FOLLOWS = "precompiled-2026-10-24";
+// The release the download script wrote beside the binary; a binary given by CONVEX_BACKEND_BIN alone is trusted.
+const releaseFile = join(dirname(ORACLE_BIN), "RELEASE");
+const release = existsSync(releaseFile) ? readFileSync(releaseFile, "utf8").trim() : undefined;
+const present = existsSync(ORACLE_BIN);
+const ready = present && (release === undefined || release >= FOLLOWS);
+if (!present) console.warn(`s3-export-api: skipped, no Convex backend at ${ORACLE_BIN} (set CONVEX_BACKEND_BIN)`);
+else if (!ready)
+  console.warn(`s3-export-api: skipped, Convex's backend is ${release}; this test needs ${FOLLOWS} or later`);
 
 let convex: Backend;
 let bunvex: Backend;
@@ -63,6 +73,23 @@ async function create(b: Backend, body: object): Promise<Answer> {
 }
 
 /** Wait until the worker started the stream. */
+/**
+ * A read right after a create or an update races the worker that starts the stream, on both backends: it is
+ * `pending` on most runs and `active` on some (about 1 in 15 after the create on Convex's), as on bunvex's. Such a
+ * read keeps either, as one value; bunvex's own test pins its `pending` (`log-sinks.test.ts`).
+ */
+function settling(a: Answer): Answer {
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(walk);
+    if (v === null || typeof v !== "object") return v;
+    const o = Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]));
+    const t = (o.status as { type?: unknown } | undefined)?.type;
+    if (t === "pending" || t === "active") o.status = { type: "pending or active" };
+    return o;
+  };
+  return { status: a.status, body: walk(a.body) };
+}
+
 async function active(b: Backend, id: string) {
   for (let i = 0; i < 500; i++) {
     const s = (await req(b, "GET", `/api/v1/get_log_stream/${id}`)).body as { status: { type: string } };
@@ -253,8 +280,8 @@ describe.skipIf(!ready)("the S3 export API on Convex and on bunvex", () => {
       const made = await req(b, "POST", "/api/v1/create_log_stream", MADE);
       const id = (made.body as { id: string }).id;
       out.create = made;
-      // Right after the create: `pending` (the worker runs from the commit's subscription), then `active`.
-      out.listed = await req(b, "GET", "/api/v1/list_log_streams");
+      // Right after the create: `pending` on most runs (`settling`), then `active`.
+      out.listed = settling(await req(b, "GET", "/api/v1/list_log_streams"));
       await active(b, id);
       out.active = await req(b, "GET", `/api/v1/get_log_stream/${id}`);
       out.second = await req(b, "POST", "/api/v1/create_log_stream", { ...MADE, bucket: "other" });
@@ -263,7 +290,7 @@ describe.skipIf(!ready)("the S3 export API on Convex and on bunvex", () => {
           logStreamType: "s3Export",
           ...body,
         });
-        out[`after: ${name}`] = await req(b, "GET", `/api/v1/get_log_stream/${id}`);
+        out[`after: ${name}`] = settling(await req(b, "GET", `/api/v1/get_log_stream/${id}`));
       }
       // The body is read before the key, and before the id is looked up.
       out["no key"] = await req(
@@ -300,7 +327,7 @@ describe.skipIf(!ready)("the S3 export API on Convex and on bunvex", () => {
     // What STUDY-185 §2.2 measured, on both.
     const first = (c.listed.body as Record<string, unknown>[])[0]!;
     expect([first.status, first.selection, "prefix" in first]).toEqual([
-      { type: "pending" },
+      { type: "pending or active" },
       {
         "": { Users: "excluded", posts: { _other: "included" }, _other: "excluded" },
         B: "excluded",
