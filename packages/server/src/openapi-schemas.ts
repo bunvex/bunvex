@@ -1735,19 +1735,8 @@ export const PLATFORM_SCHEMAS: Record<string, JsonSchema> = {
   },
   UpdateS3ExportSinkArgs: {
     type: "object",
+    description: "The destination and the access key ID are fixed when the export is created.",
     properties: {
-      bucket: {
-        type: ["string", "null"],
-      },
-      region: {
-        type: ["string", "null"],
-      },
-      prefix: {
-        type: ["string", "null"],
-      },
-      accessKeyId: {
-        type: ["string", "null"],
-      },
       secretAccessKey: {
         type: ["string", "null"],
       },
@@ -1772,6 +1761,7 @@ export const PLATFORM_SCHEMAS: Record<string, JsonSchema> = {
         ],
       },
     },
+    additionalProperties: false,
   },
   UpdateSentrySinkArgs: {
     type: "object",
