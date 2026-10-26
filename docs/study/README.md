@@ -216,6 +216,7 @@ there, then run `bun run docs` (`bun run check` fails while this table is out of
 | [STUDY-188](STUDY-188-runtime-test-gaps.md) | Runtime gaps from Convex's removed tests | decided (owner, 2026-10-25) |
 | [STUDY-189](STUDY-189-public-type-mismatches.md) | Public types against Convex 1.46.0's | decided (owner, 2026-10-25) |
 | [STUDY-190](STUDY-190-offthread.md) | Work off the one JS thread (STUDY-184 Q2): how Convex's backend spreads over cores, fresh per-request profiles of bench/server.ts (Mac, Linux VPS, DigitalOcean), the cost of a message between Bun threads, five candidates prototyped in bench/offthread/ (SQLite commits on a writer thread, SQLite readers, value work, HTTP front threads, execution on workers) and a ranked plan of PRs | decided (owner, 2026-10-26): every §8 recommendation; DV-573, DV-574; PR 1 in #878 |
+| [STUDY-194](STUDY-194-execution-protocol.md) | The execution protocol (STUDY-190 PRs 2–4, STUDY-24 A2): Convex's function runner (the request, the snapshot and metadata at a timestamp, the outcome, how the backend commits it), bunvex's in-thread call path, the messages and their encoding (a prototype), snapshots, metadata by epoch, code versions, nested calls, OCC, failures, backpressure, a five-PR plan | draft: Q1–Q6 open (owner) |
 
 The inventory of everything Convex has, and bunvex's status on each item, is in [docs/parity](../parity/README.md).
 
