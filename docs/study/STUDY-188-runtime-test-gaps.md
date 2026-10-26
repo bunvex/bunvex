@@ -187,6 +187,8 @@ measurement of module load and context creation.
 - **DV-553** (Q1): no memory cap under `vm`; Convex's 64 MiB cap under the `process` executor (R12).
 - **DV-482**, amended (Q2): the runtime's `node:` frames are kept in `"use node"` contexts (R11).
 - Q3: R6 matches Convex (a module that throws while loading fails the function); no divergence.
+- **DV-569** (owner, 2026-10-25): the rare-error texts, frames and timings the PRs left different, one entry for all of them. Each PR lists its own: #852 (X4), #853 (X7), #855 (X14), #856 (X9), #857 (X21), #858 (X16), #859 (X19). The `process` executor's differences in #855 and #856 are fixed to match Convex, not recorded.
+- **Known gap** (X19a, #859): bunvex's reads can resolve within microtasks, while Convex's never do. A dangling chain that reads and then changes the result within two microtask turns can still differ. Exact parity needs every read to answer on a later turn; not planned.
 
 ## 5. Owner questions
 
