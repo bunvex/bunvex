@@ -692,6 +692,8 @@ export function createServer(opts: ServerOptions) {
   // Usage limits (STUDY-61): this process's usage, and the worker that enforces the limits.
   const usageMeter = new UsageMeter();
   functions.usageMeter = usageMeter;
+  // The log streams' sent bytes count as data egress, as Convex's open-source backend meters them (STUDY-187 X6).
+  logManager.meterEgress = (bytes) => usageMeter.record("dataEgressGb", bytes);
   const usageLimitWorker = new UsageLimitWorker(engine, usageMeter, opts.usageLimitIntervalMs);
   // Storage usage gauges (STUDY-73): to the log streams, and the file storage total exports check.
   const usageGauges = new UsageGauges(engine, (events) => logManager.send(events));

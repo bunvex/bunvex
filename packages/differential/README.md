@@ -48,6 +48,9 @@ backend is always started with `--disable-beacon`.
 - `test/component-definitions.test.ts` (STUDY-153 PR 1): the same `defineApp` / `defineComponent` / `use` /
   `componentsGeneric` calls with Convex's package and bunvex's, their `export()` and errors compared. No backend
   needed; run by the nightly too.
+- `test/log-stream-egress.test.ts` (STUDY-187 X6): a webhook log stream on both, until the first
+  `log_stream_egress` event (Convex's fixed 60 s, so about a minute): its fields, and its bytes are the bodies sent
+  before it, the connection test left out. Local only.
 - `test/action-fetch.test.ts` (STUDY-142): an action's `fetch` (the app of `fetch-app/`) to local targets on
   both: how a request fails, redirects, the 407 refusal, aborts, the default `User-Agent`. Local only.
 - `test/unhandled-rejections.test.ts` (STUDY-171 §13): queries, mutations and actions of `rejections-app/` that leave

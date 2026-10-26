@@ -98,9 +98,12 @@
 | `scheduler_stats` | with the scheduler's stats, when late or busy | `lag_seconds`, `num_running_jobs` |
 | `scheduled_job_lag` | when late | `lag_seconds` |
 | `concurrency_stats` | every metrics bucket, when changed | `query`, `mutation`, `action`, `node_action`, `http_action` (`{num_running, num_queued}`) |
+| `log_stream_egress` | every 60 s, when the sinks sent anything ([STUDY-187 X6](STUDY-187-convex-tests-data-gaps.md#26-x6--log-streams-get-log_stream_egress-events)) | `egress_bytes` |
 
 The `function` object is `{path, type, cached (queries), request_id, mutation_queue_length,
-mutation_retry_count}`. Storage usage, AI gateway, egress and custom audit events are cloud-only.
+mutation_retry_count}`. AI gateway events are cloud-only. Storage usage ([STUDY-73](STUDY-73-storage-usage-gauges.md))
+and custom audit ([STUDY-82](STUDY-82-log-audit.md)) events came later. This study first called the egress event
+cloud-only too; it is not: the open-source log manager emits it ([STUDY-187 X6](STUDY-187-convex-tests-data-gaps.md#26-x6--log-streams-get-log_stream_egress-events)).
 
 ## 2. What an app can observe
 
@@ -121,7 +124,8 @@ mutation_retry_count}`. Storage usage, AI gateway, egress and custom audit event
   - completions and action lines from `Functions` (`logCompletion`, `onLine`);
   - audit events: inserted `_deployment_audit_log` rows, read after their commit;
   - the scheduler's stats;
-  - a 60 s concurrency timer.
+  - a 60 s concurrency timer;
+  - a 60 s egress tick: the bytes every sink sent, as one `log_stream_egress` event (STUDY-187 X6).
 - **Local sink**: `createServer({localLogSink})` or `BUNVEX_LOCAL_LOG_SINK`, in place of Convex's
   `--local-log-sink` flag. As Convex's `add_on_startup`, it replaces the stored local row.
 - **Cost**:

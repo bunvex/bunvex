@@ -96,6 +96,8 @@ export type StructuredLogEvent =
   | ({ topic: "current_storage_usage" } & StorageUsage)
   /** A file download over HTTP, once it ended or the client left: the bytes actually sent. */
   | { topic: "storage_api_bandwidth"; storageId: string; egressBytes: number }
+  /** The bytes the log streams sent since the last one (Convex's `LogStreamEgress`, every 60 s). */
+  | { topic: "log_stream_egress"; egressBytes: number }
   | {
       topic: "concurrency_stats";
       query: Concurrency;
@@ -283,6 +285,8 @@ export function eventJsonV2(e: LogEvent): Record<string, unknown> {
       };
     case "storage_api_bandwidth":
       return { timestamp: ms, topic: "storage_api_bandwidth", storage_id: ev.storageId, egress_bytes: ev.egressBytes };
+    case "log_stream_egress":
+      return { timestamp: ms, topic: "log_stream_egress", egress_bytes: ev.egressBytes };
     case "concurrency_stats":
       return {
         timestamp: ms,

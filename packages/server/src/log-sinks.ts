@@ -22,7 +22,17 @@ import {
 import { decodeId, toJsonValue, type Value } from "@bunvex/values";
 import { type HttpProxy, proxiedFetch } from "./http-proxy.ts";
 import { eventJsonV2, type LogEvent, type LogTopic } from "./log-events.ts";
-import { backoff, EgressFailure, passes, SINK_USER_AGENT, type Sink, statusText } from "./log-sink-http.ts";
+import {
+  backoff,
+  countAnswer,
+  countsEgress,
+  type EgressCount,
+  EgressFailure,
+  passes,
+  SINK_USER_AGENT,
+  type Sink,
+  statusText,
+} from "./log-sink-http.ts";
 import {
   type AxiomConfig,
   AxiomSink,
@@ -183,6 +193,8 @@ export type LogSinkOptions = {
   httpProxy: HttpProxy | null;
   /** The version sent where Convex sends its package's (`sdk.version`, `$lib_version`): "unknown", its fallback. */
   version: string;
+  /** How often the sent bytes become a `log_stream_egress` event (Convex's fixed 60 s; tests shorten it). */
+  egressIntervalMs: number;
 };
 
 export const defaultLogSinkOptions = (): LogSinkOptions => ({
@@ -198,6 +210,7 @@ export const defaultLogSinkOptions = (): LogSinkOptions => ({
   fetch: ((input, init) => directFetch(input, init)) as typeof fetch,
   httpProxy: null,
   version: "unknown",
+  egressIntervalMs: 60_000,
 });
 
 /** Convex's `WEBHOOK_SINK_MAX_LOGS_PER_BATCH`. */
@@ -219,18 +232,20 @@ export class WebhookSink implements Sink {
   constructor(
     private readonly config: WebhookConfig,
     private readonly metadata: () => DeploymentMetadata,
-    private readonly o: LogSinkOptions,
+    private readonly o: LogSinkOptions & { countEgress?: EgressCount },
   ) {}
 
   verify() {
-    return this.post([{ timestamp: Date.now(), event: { topic: "verification" } }], 3);
+    // The connection test is not counted (Convex's `is_verification`).
+    return this.post([{ timestamp: Date.now(), event: { topic: "verification" } }], 3, undefined);
   }
 
   async send(events: LogEvent[]) {
     const kept = events.filter((e) => passes(this.config.topics, e));
     for (let i = 0; i < kept.length; i += WEBHOOK_BATCH) {
+      const batch = kept.slice(i, i + WEBHOOK_BATCH);
       try {
-        await this.post(kept.slice(i, i + WEBHOOK_BATCH), 6);
+        await this.post(batch, 6, countsEgress(batch) ? this.o.countEgress : undefined);
       } catch (e) {
         // Once active, a failed batch is dropped (Convex logs it).
         console.error(`log stream (webhook): a batch was dropped: ${(e as Error).message}`);
@@ -242,7 +257,7 @@ export class WebhookSink implements Sink {
     this.stopped = true;
   }
 
-  private async post(events: LogEvent[], attempts: number) {
+  private async post(events: LogEvent[], attempts: number, count: EgressCount | undefined) {
     const meta = this.metadata();
     const items = events.map((e) => ({ ...eventJsonV2(e), deployment: meta }));
     const body = this.config.format === "json" ? JSON.stringify(items) : items.map((x) => JSON.stringify(x)).join("\n");
@@ -262,6 +277,7 @@ export class WebhookSink implements Sink {
           body,
           signal: AbortSignal.timeout(this.o.requestTimeoutMs),
         });
+        countAnswer(count, r.status, body);
         await r.arrayBuffer().catch(() => undefined);
         if (r.status < 400) return;
         const transient = r.status >= 500 || [408, 421, 425, 429].includes(r.status);
@@ -339,6 +355,17 @@ export class LogManager {
   private closed = false;
   private changeTimer: ReturnType<typeof setTimeout> | null = null;
   readonly stats = { dropped: 0, delivered: 0 };
+  /**
+   * The bytes every sink sent since the last `log_stream_egress` event (Convex's `EgressCounter`: one for the
+   * deployment, all sinks together, drained by each tick).
+   */
+  private egressBytes = 0;
+  private egressTimer: LongTimer | null = null;
+  /** Where each tick's bytes are metered, as data egress (Convex's `track_call` of `log_stream_payload`). */
+  meterEgress: ((bytes: number) => void) | null = null;
+  private readonly countEgress: EgressCount = (bytes) => {
+    this.egressBytes += bytes;
+  };
 
   constructor(
     private readonly engine: Engine,
@@ -425,8 +452,23 @@ export class LogManager {
     }, "log streams");
     this.timer = longInterval(() => this.flush(), this.options.aggregationMs);
     this.timer.unref?.();
+    this.egressTimer = longInterval(() => this.emitEgress(), this.options.egressIntervalMs);
+    this.egressTimer.unref?.();
     this.wake();
     await this.passing;
+  }
+
+  /**
+   * Convex's `egress_emission_worker` tick: the bytes counted since the last tick, when there are any, become one
+   * `log_stream_egress` event in the stream (to every sink whose filter takes it) and data egress in the usage
+   * meter; the count starts again from zero.
+   */
+  emitEgress() {
+    const bytes = this.egressBytes;
+    this.egressBytes = 0;
+    if (bytes === 0 || this.closed) return;
+    this.send([{ timestamp: Date.now(), event: { topic: "log_stream_egress", egressBytes: bytes } }]);
+    this.meterEgress?.(bytes);
   }
 
   /** Whether any sink is active: events are only gathered then (Convex's `active_sinks_count`). */
@@ -550,10 +592,12 @@ export class LogManager {
     let sink: Sink;
     const c = r.config;
     // Through the operator's proxy, as Convex's fetch client; Sentry's transport is its own (STUDY-80).
-    const proxied = { ...this.options, fetch: proxiedFetch(this.options.fetch, this.options.httpProxy) };
+    const countEgress = this.countEgress;
+    const proxied = { ...this.options, countEgress, fetch: proxiedFetch(this.options.fetch, this.options.httpProxy) };
     if (c.type === "webhook")
       sink = new WebhookSink(c, this.metadata, {
         ...this.options,
+        countEgress,
         fetch: proxiedFetch(directFetch, this.options.httpProxy),
       });
     else if (c.type === "local") sink = new LocalSink(c.path, this.options);
@@ -594,6 +638,7 @@ export class LogManager {
     if (this.timer) clearLongTimer(this.timer);
     if (this.changeTimer) clearTimeout(this.changeTimer);
     if (this.concurrencyTimer) clearLongTimer(this.concurrencyTimer);
+    if (this.egressTimer) clearLongTimer(this.egressTimer);
     for (const r of this.sinks.values()) r.sink.stop();
     this.sinks.clear();
   }
