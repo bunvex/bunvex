@@ -39,12 +39,16 @@ test("nested paths: objects, optional fields, unions and any pass; records, arra
 test("search and vector indexes: the search field, filter fields and vector field", () => {
   const base = { body: v.string(), kind: v.string(), v: v.array(v.float64()) };
   const search = (searchField: string, filterFields: string[]) =>
-    indexReferenceError(defineSchema({ t: defineTable(base).searchIndex("s", { searchField, filterFields } as never) }));
+    indexReferenceError(
+      defineSchema({ t: defineTable(base).searchIndex("s", { searchField, filterFields } as never) }),
+    );
   expect(search("body", ["kind"])).toBeNull();
   expect(search("nope", [])).toBe(missing("t", "s", "nope"));
   expect(search("body", ["nope"])).toBe(missing("t", "s", "nope"));
   const vector = (vectorField: string) =>
-    indexReferenceError(defineSchema({ t: defineTable(base).vectorIndex("vi", { vectorField: vectorField as never, dimensions: 2 }) }));
+    indexReferenceError(
+      defineSchema({ t: defineTable(base).vectorIndex("vi", { vectorField: vectorField as never, dimensions: 2 }) }),
+    );
   expect(vector("v")).toBeNull();
   expect(vector("nope")).toBe(missing("t", "vi", "nope"));
 });
