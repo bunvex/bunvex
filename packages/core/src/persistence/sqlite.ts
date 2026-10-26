@@ -14,7 +14,14 @@
 //
 // Retention (PERSIST-01 C12–C14, STUDY-33): the document log reads `documents` by its key's leading `ts`; prunes
 // are Convex's `ts <= X` statements per key; globals are `persistence_globals` rows.
+//
+// Two connections (STUDY-190 §4.1): this one reads, and every write of the store (a group's rows and its commit,
+// index backfills, prunes, globals, the read-only flag) runs on the writer thread's own connection
+// (`sqlite-writer.ts`), so a commit's fsync never holds the main thread. WAL lets this connection read while the
+// writer writes, and it sees a group once the writer has committed it, which is before its flush resolves. An
+// in-memory store has one connection only: its writes run inline, on it.
 import { Database, type SQLQueryBindings, type Statement } from "bun:sqlite";
+import { resolve } from "node:path";
 import { opaqueToInspect } from "../inspect.ts";
 import { internalIdBytes, internalIdString } from "../internal-id.ts";
 import { type KnobEnv, parseKnob } from "../knobs.ts";
@@ -40,6 +47,22 @@ import { DanglingReferenceError, LeaseLostError } from "./index.ts";
 import { checkStoreTables, LayoutError, type OpenOptions, ReadOnlyError, type ReadOnlyFlag } from "./layout.ts";
 import { ProcessLock } from "./lock.ts";
 import { scanLatestSync } from "./scan.ts";
+import {
+  cachedBytes,
+  encodeCommit,
+  encodeDocumentPrunes,
+  encodeEntries,
+  encodeGlobalWrite,
+  encodeIndexPrunes,
+  message,
+  SQLITE_BUSY_TIMEOUT_MS,
+  SqliteWriter,
+  WireWriter,
+  WriteOp,
+  WriterThread,
+} from "./sqlite-writer.ts";
+
+export { SQLITE_BUSY_TIMEOUT_MS, WriterThreadStoppedError } from "./sqlite-writer.ts";
 
 // Bun's per-statement switch (since 1.1.x), missing from its type declarations: integers come back as `bigint`.
 declare module "bun:sqlite" {
@@ -98,26 +121,7 @@ const COLUMNS = {
   persistence_globals: ["key text", "json_value text"],
 };
 
-/** A tablet's or an index's bytes, by id: few distinct ones, bound on every statement. */
-const idBytesCache = new Map<string, Uint8Array>();
-function cachedBytes(id: string): Uint8Array {
-  let b = idBytesCache.get(id);
-  // Stryker disable next-line ConditionalExpression: a cache: recomputing the bytes gives the same bytes.
-  if (b === undefined) {
-    b = internalIdBytes(id);
-    // Stryker disable next-line all: a cache's bound only limits its memory.
-    if (idBytesCache.size > 4096) idBytesCache.clear();
-    // Stryker disable next-line CallExpression: a cache: not keeping the bytes only recomputes them.
-    idBytesCache.set(id, b);
-  }
-  return b;
-}
 const idString = (b: Uint8Array) => internalIdString(b);
-/** How long a statement waits for another connection's lock before failing with SQLITE_BUSY: rusqlite's default,
- *  which Convex's SQLite store keeps (rusqlite 0.39.0 `InnerConnection::open_with_flags` calls
- *  `sqlite3_busy_timeout(db, 5000)`; crates/sqlite/src/lib.rs `SqlitePersistence::new` sets no other). bun:sqlite
- *  sets none, so without it a read fails at once while another connection holds the file, e.g. one closing. */
-export const SQLITE_BUSY_TIMEOUT_MS = 5000;
 
 /** A live index entry's document id and its document at the entry's ts (null columns: no such version). */
 type JoinedEntry = { id: Uint8Array; json: string | null; docDeleted: bigint | null };
@@ -126,6 +130,9 @@ type JoinedEntry = { id: Uint8Array; json: string | null; docDeleted: bigint | n
 export const SQLITE_CACHE_DEFAULT_BYTES = 256 * 1024 * 1024;
 /** The largest cache SQLite takes: `cache_size` is a 32-bit count of KiB. */
 export const SQLITE_CACHE_MAX_BYTES = (2 ** 31 - 1) * 1024;
+/** The writer connection's page cache, at most (the prototype's, STUDY-190 §4.1): it inserts and deletes rows, and
+ *  the main connection's cache serves the reads. */
+const SQLITE_WRITER_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 
 /**
  * BUNVEX_SQLITE_CACHE_SIZE (AD-46): the SQLite page cache in bytes, the default when unset or empty. It parses as
@@ -155,22 +162,16 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   private db: Database;
   /** The statements this handle prepared: finalized on close, else the connection outlives `close()`. */
   private statements: Statement[] = [];
-  private insDoc;
-  private insIdx;
-  private putIdx;
   private scanAsc;
   private scanDesc;
   private getDoc;
   private maxDocTs;
   private docLogRows;
-  private pruneIdx;
-  private pruneDoc;
-  private inTx = false;
-  /** The highest ts applied since the last flush. */
-  private top = 0n;
-  /** The highest durable ts, once this handle writes: the document log's bound while a group sits
-   *  uncommitted in this connection's open transaction (PERSIST-01 C12). Only the lock holder writes, so it stays exact. */
-  private durableTs: bigint | null = null;
+  /** Where the writes run: the writer thread (a file), or this connection (in memory). */
+  private thread: WriterThread | null = null;
+  private inline: SqliteWriter | null = null;
+  /** The commits applied since the last flush, as the writer's message. */
+  private group = new WireWriter();
   /** Opened with `allowReadOnly`: the lock is taken even while the store is marked read-only. */
   private allowReadOnly: boolean;
 
@@ -208,11 +209,13 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       this.lock = null;
       throw e;
     }
-    this.insDoc = this.prepare(
-      `insert into documents (id, ts, table_id, json_value, deleted, prev_ts) values (?, ?, ?, ?, ?, ?)`,
-    );
-    this.insIdx = this.prepare(`insert into indexes values (?, ?, ?, ?, ?, ?)`);
-    this.putIdx = this.prepare(`insert or replace into indexes values (?, ?, ?, ?, ?, ?)`);
+    if (this.inMemory) this.inline = new SqliteWriter(this.db);
+    else
+      this.thread = new WriterThread({
+        path: resolve(path),
+        durable: opts.durable,
+        cacheKiB: Math.min(cacheKiB, SQLITE_WRITER_CACHE_MAX_BYTES / 1024),
+      });
     // Newest version per key at or before ts, joined to its document at the entry's own ts, as Convex's
     // `index_scan` (crates/sqlite/src/lib.rs): the key's max ts from the primary key's index alone (it holds
     // every column the grouping reads, so old versions and tombstones cost no row lookup), then that one row
@@ -236,9 +239,6 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
         where ts > ?1 and ts <= (select max(ts) from (select distinct ts from documents
                                  where ts > ?1 and ts <= ?2 order by ts limit ?3))
         order by ts, table_id, id`).safeIntegers(true);
-    // Convex's `DELETE_INDEX` and `DELETE_DOCUMENT`.
-    this.pruneIdx = this.prepare(`delete from indexes where index_id = ? and ts <= ? and key = ?`);
-    this.pruneDoc = this.prepare(`delete from documents where table_id = ? and id = ? and ts <= ?`);
   }
 
   private prepare(sql: string): Statement {
@@ -280,8 +280,13 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
 
   /** Convex's `set_read_only`: no lock needed; the next open for writing is refused while it is set. */
   async setReadOnly(readOnly: boolean) {
-    if (readOnly) this.db.run(`insert or ignore into read_only (id) values (1)`);
-    else this.db.run(`delete from read_only`);
+    await this.write(WriteOp.ReadOnly, readOnly ? "1:" : "0:");
+  }
+
+  /** One call to the writer: on its thread (answered once its transaction has committed), or inline. */
+  private write(op: WriteOp, payload: string): number | undefined | Promise<number | undefined> {
+    if (this.thread) return this.thread.call(op, payload);
+    return this.inline!.run(message(op, 0, payload));
   }
 
   /**
@@ -304,6 +309,8 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   async renewLease() {} // the OS holds the lock for as long as this process lives
 
   async releaseLease() {
+    // The writes posted under the lock are done before it goes: none lands while another process holds it.
+    await this.thread?.drain();
     this.lock?.release();
     this.lock = null;
   }
@@ -313,55 +320,33 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     if (!this.inMemory && !this.lock) throw new LeaseLostError("another process holds this SQLite store");
   }
 
+  /** One commit of the group: written by the next `flush`, with the group's other commits, in one transaction. */
   apply(ts: bigint, docs: DocWrite[], idx: IndexWrite[]) {
     this.assertWriter();
-    if (!this.inTx) {
-      this.durableTs ??= (this.maxDocTs.get() as { m: bigint | null }).m ?? 0n;
-      this.db.exec("begin");
-      this.inTx = true;
-    }
-    this.top = ts;
-    for (const d of docs)
-      this.insDoc.run(internalIdBytes(d.id), ts, cachedBytes(d.table), d.json, d.json === null ? 1 : 0, d.prevTs);
-    for (const e of idx) this.writeEntry(this.insIdx, e, ts);
+    encodeCommit(this.group, ts, docs, idx);
   }
 
-  /** One `indexes` row, as Convex's `write`: a tombstone has NULL `table_id` and `document_id`. */
-  private writeEntry(stmt: Statement, e: IndexWrite, ts: bigint) {
-    if (e.id === null) stmt.run(cachedBytes(e.index), ts, e.key, 1, null, null);
-    else stmt.run(cachedBytes(e.index), ts, e.key, 0, cachedBytes(e.table!), internalIdBytes(e.id));
-  }
-
-  /** PERSIST-01 C17: Convex's `INSERT OR REPLACE` of index rows at their own ts. */
-  writeIndexEntries(entries: IndexEntryAt[]) {
+  /** PERSIST-01 C17: Convex's `INSERT OR REPLACE` of index rows at their own ts, in a transaction of their own. */
+  writeIndexEntries(entries: IndexEntryAt[]): void | Promise<void> {
     this.assertWriter();
     // Stryker disable next-line ConditionalExpression: a transaction of no writes writes nothing.
     if (!entries.length) return;
-    const write = () => {
-      for (const e of entries) this.writeEntry(this.putIdx, e, e.ts);
-    };
-    // Inside a group being applied, the rows join its transaction; else they are one of their own.
-    // Stryker disable next-line ConditionalExpression: outside a group, writing row by row differs only across a crash.
-    if (this.inTx) write();
-    else this.db.transaction(write)();
+    return done(this.write(WriteOp.Entries, encodeEntries(entries)));
   }
 
-  flush() {
-    if (this.inTx) {
-      this.db.exec("commit");
-      this.inTx = false;
-      this.durableTs = this.top;
-    }
+  /** The group in one transaction: resolved once the writer has committed it (with its fsync, on a durable store).
+   *  A failure rejects it, and the committer stops (no SQLite error is transient). */
+  flush(): void | Promise<void> {
+    if (this.group.empty) return;
+    return done(this.write(WriteOp.Group, this.group.take()));
   }
 
-  /** PERSIST-01 C12. Rows of a group applied but not yet flushed are visible to this connection only; the
-   *  bound leaves them out. */
+  /** PERSIST-01 C12. This connection never sees a group before the writer commits it: every row it reads is durable. */
   readDocumentLog(afterTs: bigint, upToTs: bigint, limit: number): DocLogRow[] {
     // Stryker disable next-line EqualityOperator: a limit of 0 reads no row either way.
     if (limit <= 0) return [];
-    const hi = this.inTx ? minTs(upToTs, this.durableTs ?? 0n) : upToTs;
     return (
-      this.docLogRows.all(afterTs, hi, limit) as {
+      this.docLogRows.all(afterTs, upToTs, limit) as {
         ts: bigint;
         table_id: Uint8Array;
         id: Uint8Array;
@@ -377,23 +362,16 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
     }));
   }
 
-  /** PERSIST-01 C13. Inside a group still being applied, the deletes join its transaction. */
-  pruneIndexes(entries: IndexPrune[]) {
+  /** PERSIST-01 C13, Convex's `DELETE_INDEX`: one transaction. */
+  pruneIndexes(entries: IndexPrune[]): number | Promise<number> {
     this.assertWriter();
-    return this.db.transaction(() => {
-      let n = 0;
-      for (const e of entries) n += this.pruneIdx.run(cachedBytes(e.index), e.ts, e.key).changes;
-      return n;
-    })();
+    return this.write(WriteOp.PruneIndexes, encodeIndexPrunes(entries)) as number | Promise<number>;
   }
 
-  pruneDocuments(entries: DocPrune[]) {
+  /** PERSIST-01 C13, Convex's `DELETE_DOCUMENT`: one transaction. */
+  pruneDocuments(entries: DocPrune[]): number | Promise<number> {
     this.assertWriter();
-    return this.db.transaction(() => {
-      let n = 0;
-      for (const e of entries) n += this.pruneDoc.run(cachedBytes(e.table), internalIdBytes(e.id), e.ts).changes;
-      return n;
-    })();
+    return this.write(WriteOp.PruneDocuments, encodeDocumentPrunes(entries)) as number | Promise<number>;
   }
 
   /** PERSIST-01 C14. */
@@ -405,9 +383,9 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   }
 
   /** Convex's `WRITE_PERSISTENCE_GLOBAL`. */
-  setGlobal(key: string, value: unknown) {
+  setGlobal(key: string, value: unknown): void | Promise<void> {
     this.assertWriter();
-    this.db.run(`insert or replace into persistence_globals values (?, ?)`, [key, encodeGlobal(value)]);
+    return done(this.write(WriteOp.Global, encodeGlobalWrite(key, encodeGlobal(value))));
   }
 
   auditRowCount() {
@@ -481,6 +459,9 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
    *  the last connection's checkpoint, under an exclusive lock — lands at a random later moment, on another
    *  process opening the store. */
   close() {
+    // The writer first: it runs what was posted, then closes its connection, so this one is the last to close.
+    this.thread?.close();
+    this.inline?.close();
     for (const st of this.statements.splice(0)) st.finalize();
     this.db.close();
     this.lock?.release();
@@ -488,8 +469,10 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
   }
 }
 
-// Stryker disable next-line EqualityOperator: at equality both are the same ts.
-const minTs = (a: bigint, b: bigint) => (a < b ? a : b);
+/** A write's answer as a write's `void`: a promise when the writer thread runs it. */
+function done(r: unknown): void | Promise<void> {
+  if (r instanceof Promise) return r.then(() => {});
+}
 
 // Printed by name only: `console.log` of one never shows the engine's state (inspect.ts).
 opaqueToInspect(SqlitePersistence);
