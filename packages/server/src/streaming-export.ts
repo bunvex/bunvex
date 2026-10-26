@@ -14,6 +14,9 @@ import {
   knob,
   OutOfRetentionError,
   reduceShape,
+  SCHEMAS_TABLE,
+  type SchemaJson,
+  schemaStateOf,
   shapeOf,
   type TableDef,
   type TabletId,
@@ -26,10 +29,12 @@ import {
   fromJsonValue,
   isBytes,
   type JSONValue,
+  type ValidatorJSON,
   type Value,
 } from "@bunvex/values";
 import { type BodyShape, checkJsonBody } from "./json-body.ts";
 import { intError, QueryArgsError, queryArgs } from "./query-args.ts";
+import { displayValidatorJson } from "./validator-json.ts";
 
 /** Convex's knobs. */
 export const SNAPSHOT_LIST_LIMIT = knob("SNAPSHOT_LIST_LIMIT", 1024);
@@ -366,8 +371,10 @@ export async function documentDeltas(deps: Deps, args: Record<string, unknown>):
 // ---------------------------------------------------------------- shapes: json_schemas, column names
 
 /** Each streamed user table's reduced shape now (computed from its documents, as `/api/shapes2`). */
-async function shapes(engine: Engine): Promise<{ name: string; shape: DashboardShape }[]> {
-  const at = engine.committer.visibleTs;
+async function shapes(
+  engine: Engine,
+  at = engine.committer.visibleTs,
+): Promise<{ name: string; shape: DashboardShape }[]> {
   const out: { name: string; shape: DashboardShape }[] = [];
   const active = [...engine.catalog.tables.values()].filter((t) => !t.name.startsWith("_"));
   for (const t of active.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
@@ -460,7 +467,6 @@ function shapeSchema(s: DashboardShape, f: Format): unknown {
   }
 }
 
-/** `json_schemas`: each active user table's JSON Schema, from its inferred shape. */
 /** Convex's `JsonSchemaArgs`, as its query extractor reads it. Throws `QueryArgsError`. */
 export function jsonSchemasArgs(q: URLSearchParams) {
   const a = queryArgs(q, [
@@ -471,22 +477,149 @@ export function jsonSchemasArgs(q: URLSearchParams) {
   return { delta: a.deltaSchema === true, byComponent: a.byComponent === true };
 }
 
+type FieldSchema = { schema: unknown; optional: boolean };
+
+/** Convex's `json_schemas::object`: fields and `required` in byte order, nothing else allowed. */
+function objectSchema(fields: [string, FieldSchema][]): Record<string, unknown> {
+  const sorted = [...fields].sort(([a], [b]) => byteOrder(a, b));
+  return {
+    type: "object",
+    properties: Object.fromEntries(sorted.map(([k, x]) => [k, x.schema])),
+    additionalProperties: false,
+    required: sorted.filter(([, x]) => !x.optional).map(([k]) => k),
+  };
+}
+
+/** `_id` and `_creationTime`, as Convex adds them to a table's schema (`AddTopLevelFields::True`). */
+const systemFields = (table: string): [string, FieldSchema][] => [
+  ["_id", { schema: { $description: `Id(${table})`, type: "string" }, optional: false }],
+  ["_creationTime", { schema: { type: "number" }, optional: false }],
+];
+
+/** Convex's `Validator::to_json_schema` (crates/common/src/schemas/validator.rs), on the validator's JSON. */
+function validatorSchema(j: ValidatorJSON, f: Format): unknown {
+  switch (j.type) {
+    case "id":
+      return { $description: `Id(${j.tableName})`, type: "string" };
+    case "null":
+      return { type: "null" };
+    case "number":
+      return leafSchema("Float64", f, true);
+    case "bigint":
+    case "commitTs":
+      return leafSchema("Int64", f);
+    case "boolean":
+      return { type: "boolean" };
+    case "string":
+      return { type: "string" };
+    case "bytes":
+      return leafSchema("Bytes", f);
+    case "literal": {
+      const x = j.value;
+      if (typeof x === "number") return leafSchema("Float64", f, true);
+      if (typeof x === "boolean") return { type: "boolean" };
+      if (typeof x === "string") return { type: "string" };
+      return leafSchema("Int64", f);
+    }
+    case "array":
+      return { type: "array", items: validatorSchema(j.value, f) };
+    case "record":
+      // As Convex's `json_schemas::record`, the value's schema under `type`.
+      return {
+        type: "object",
+        $description: `Record with keys of type ${displayValidatorJson(j.keys as Record<string, JSONValue>)}`,
+        additionalProperties: { type: validatorSchema(j.values.fieldType, f) },
+      };
+    case "object":
+      return objectSchema(
+        Object.entries(j.value).map(([k, x]) => [k, { schema: validatorSchema(x.fieldType, f), optional: x.optional }]),
+      );
+    case "union":
+      return { anyOf: j.value.map((x) => validatorSchema(x, f)) };
+    default:
+      return {};
+  }
+}
+
+/**
+ * Convex's `ensure_supported_for_streaming_export`: a union of more than one object, at any depth, has no JSON
+ * Schema an export can use.
+ */
+function checkExportable(j: ValidatorJSON): void {
+  if (j.type === "array") checkExportable(j.value);
+  else if (j.type === "object") for (const x of Object.values(j.value)) checkExportable(x.fieldType);
+  else if (j.type === "union") {
+    for (const x of j.value) checkExportable(x);
+    if (j.value.filter((x) => x.type === "object").length > 1)
+      throw bad("UnsupportedSchemaForExport", "Schema contains a union of objects, which is not supported for export");
+  }
+}
+
+/**
+ * Convex's `json_schema_from_active_schema` (local_backend/src/streaming_export.rs): a table whose shape is
+ * neither an object nor empty (a document with more fields than `MAX_OBJECT_FIELDS` is a `Record`) is
+ * described by its definition in the active schema.
+ */
+function schemaFromActive(active: SchemaJson | null, table: string, f: Format): Record<string, unknown> {
+  if (active === null)
+    throw bad("NoSchemaForExport", "There is no active schema, which is needed for streaming export.");
+  const doc = active.tables.find((t) => t.tableName === table)?.documentType ?? null;
+  if (doc === null)
+    throw bad(
+      "NoTableDefinitionForExport",
+      `The table "${table}" does not have a schema, which is needed for streaming export.`,
+    );
+  if (doc.type === "any") return objectSchema(systemFields(table));
+  // The stored document type is one object or a union of objects (Convex's `DocumentSchema`).
+  const objects = doc.type === "union" ? doc.value : [doc];
+  if (objects.length !== 1)
+    throw bad(
+      "UnsupportedSchemaForExport",
+      `Schema for table "${table}" contains a union of object types, which is unsupported for streaming export`,
+    );
+  const o = objects[0]!;
+  if (o.type !== "object") return objectSchema(systemFields(table));
+  const fields = Object.entries(o.value)
+    .filter(([k]) => !k.startsWith("_"))
+    .map(([k, x]): [string, FieldSchema] => [k, { schema: validatorSchema(x.fieldType, f), optional: x.optional }]);
+  const out = objectSchema([...fields, ...systemFields(table)]);
+  checkExportable(o);
+  return out;
+}
+
+/** The active schema at `at`, as stored (STUDY-134), or null. */
+async function activeSchemaAt(engine: Engine, at: bigint): Promise<SchemaJson | null> {
+  const text = await engine.query(
+    async (db) => {
+      const rows = (await db.asSystem(() => db.query(SCHEMAS_TABLE).collect())) as Record<string, unknown>[];
+      return (rows.find((r) => schemaStateOf(r) === "active")?.schema as string | undefined) ?? null;
+    },
+    undefined,
+    undefined,
+    undefined,
+    at,
+  );
+  return text === null ? null : (JSON.parse(text) as SchemaJson);
+}
+
+/**
+ * `json_schemas`: each active user table's JSON Schema, from its inferred shape, or from the active schema when
+ * the shape is not an object.
+ */
 export async function jsonSchemas(deps: Deps, q: URLSearchParams): Promise<unknown> {
   const { delta, byComponent } = jsonSchemasArgs(q);
   const f = parseFormat(q.get("format"));
+  const at = deps.engine.committer.visibleTs;
+  let active: SchemaJson | null | undefined;
   const out: Record<string, unknown> = {};
-  for (const { name, shape } of await shapes(deps.engine)) {
+  for (const { name, shape } of await shapes(deps.engine, at)) {
     let schema: Record<string, unknown>;
-    if (shape.type === "Never")
-      schema = {
-        type: "object",
-        properties: { _creationTime: { type: "number" }, _id: { $description: `Id(${name})`, type: "string" } },
-        additionalProperties: false,
-        required: ["_creationTime", "_id"],
-      };
+    if (shape.type === "Never") schema = objectSchema(systemFields(name));
     else if (shape.type === "Object") schema = shapeSchema(shape, f) as Record<string, unknown>;
-    // Unreachable with reduced shapes (a table's objects are merged into one); Convex falls back to the schema.
-    else throw bad("NoSchemaForExport", "There is no active schema, which is needed for streaming export.");
+    else {
+      if (active === undefined) active = await activeSchemaAt(deps.engine, at);
+      schema = schemaFromActive(active, name, f);
+    }
     if (delta)
       Object.assign(schema.properties as object, {
         _table: { type: "string" },
