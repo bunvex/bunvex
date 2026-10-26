@@ -424,6 +424,9 @@ export function asObjectValidator<V extends GenericValidator | PropertyValidator
 }
 
 type Required<V extends GenericValidator> = V extends { isOptional: "optional" } ? never : V;
+/** A validator that is not optional (Convex's `Validator<any, "required", any>`). */
+// biome-ignore lint/suspicious/noExplicitAny: of any type
+type RequiredValidator = Validator<any, "required">;
 
 /**
  * The system tables an id may name (as `SystemTableNames` in @bunvex/core). In `v.id`'s signature so editors
@@ -447,12 +450,15 @@ export const v = {
   literal: <T extends string | number | bigint | boolean>(value: T) => new VLiteral<T>("required", value),
   array: <E extends GenericValidator>(element: Required<E>) => new VArray<Infer<E>[], E>("required", element),
   object: <F extends PropertyValidators>(fields: F) => new VObject<ObjectType<F>, F>("required", fields),
-  record: <K extends GenericValidator, V extends GenericValidator>(key: K, value: V) =>
-    new VRecord<Record<Infer<K> & string, Infer<V>>, K, V>("required", key, value),
-  union: <M extends GenericValidator[]>(...members: M) => new VUnion<Infer<M[number]>, M>("required", members),
+  // As Convex's builders: a record's keys are strings (strings, ids, string literals or a union of them) and its
+  // keys, values and a union's members are never optional (the runtime refuses them too, STUDY-189 T6).
+  record: <K extends Validator<string, "required">, V extends RequiredValidator>(key: K, value: V) =>
+    new VRecord<Record<Infer<K>, Infer<V>>, K, V>("required", key, value),
+  union: <M extends RequiredValidator[]>(...members: M) =>
+    new VUnion<Infer<M[number]>, M>("required", members),
   any: () => new VAny("required"),
   optional: <V extends GenericValidator>(x: V) => optionalOf(x) as VOptional<V>,
-  nullable: <V extends GenericValidator>(x: V) => v.union(x, v.null()),
+  nullable: <V extends RequiredValidator>(x: V) => v.union(x, v.null()),
 };
 
 /**
@@ -502,8 +508,8 @@ export function validatorFromJson(j: ValidatorJSON): GenericValidator {
         ) as never,
       );
     case "record":
-      return v.record(validatorFromJson(j.keys), validatorFromJson(j.values.fieldType));
+      return v.record(validatorFromJson(j.keys) as never, validatorFromJson(j.values.fieldType) as never);
     case "union":
-      return v.union(...j.value.map(validatorFromJson));
+      return v.union(...(j.value.map(validatorFromJson) as never[]));
   }
 }

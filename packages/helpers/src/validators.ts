@@ -612,10 +612,10 @@ export function vRequired<T extends Validator<any, OptionalProperty>>(validator:
       required = v.array(checked.element as never);
       break;
     case "record":
-      required = v.record(checked.key, checked.value);
+      required = v.record(checked.key as never, checked.value as never);
       break;
     case "union":
-      required = v.union(...(checked.members as GenericValidator[]));
+      required = v.union(...(checked.members as never[]));
       break;
     case "commitTs":
       required = v.commitTs();
