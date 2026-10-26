@@ -194,6 +194,21 @@ The child already waits for the operations a call started before it answers (`pa
 `settled` / `checked`); the chained one is not seen through to the end. Matching Convex is X13's behaviour (every
 syscall run to the end). Its own PR, in `packages/sandbox`, with the differential case run under `process`.
 
+**Done (2026-10-26): already fixed on `main` by #824** (`f87428a1`, merged after this item was written), found by
+bisecting from X13's commit. The child dropped a call from its table (`CallRuntime.call`, `end`) when its handler
+settled with no operation waiting, so the answer to an operation started after that was dropped and the call never
+answered; a call now leaves the table only when it answers the host (`ChildCall.answer`). #824's cases are nested
+calls; this item's PR adds the database ones and changes no code (no protocol bump):
+- `packages/sandbox/test/unawaited-writes.test.ts`, under `vm` and `process`: `danglingMutation`,
+  `doublyDanglingMutation`, a write after an unawaited read, five chained inserts after a synchronous handler
+  returned, and a nested mutation chained after an unawaited nested query;
+- `packages/differential/test/dangling-writes.test.ts` now plays X13's case on a `process` backend too, against
+  Convex's binary.
+
+Sabotage: with `end()` back right after the handler settles, the `process` case times out at 1 s in both tests.
+Measured under `process` (HTTP, memory store, this laptop, noisy): the mutation throughput is the same with and
+without #824's change, about 450–700 µs per sequential mutation and 100–170 µs at 500 concurrent, either way.
+
 ### 2.12 X22 — creating a table invalidates every cached query
 
 Found by the generated differential programs, intermittently (CI picks random seeds). Seed 347098918 shows it every

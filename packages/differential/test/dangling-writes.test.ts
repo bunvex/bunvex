@@ -1,7 +1,7 @@
 // Writes a mutation leaves unawaited (STUDY-187 §2.1) on Convex's backend and on bunvex's: the rows each mutation
-// leaves, into a table the insert creates and into one that exists. Under `vm`, the default executor; under
-// `BUNVEX_FUNCTION_SANDBOX=process` an operation chained after the handler settled holds the call to its 1 s limit
-// (STUDY-187 §2.11, its own PR). Local only: skipped, with a note, when Convex's backend is not there
+// leaves, into a table the insert creates and into one that exists. Under `vm`, the default executor, and under
+// `BUNVEX_FUNCTION_SANDBOX=process`, where an operation chained after the handler settled held the call to its 1 s
+// limit (STUDY-187 §2.11). Local only: skipped, with a note, when Convex's backend is not there
 // (scripts/download-convex-backend.sh, or CONVEX_BACKEND_BIN).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
@@ -14,14 +14,19 @@ if (!ready) console.warn(`dangling-writes: skipped, no Convex backend at ${ORACL
 const APP = resolve(import.meta.dir, "../dangling-app");
 let convex: Backend;
 let bunvex: Backend;
+let sandboxed: Backend;
 
 beforeAll(async () => {
   if (!ready) return;
-  [convex, bunvex] = await startAll([startConvex({ app: APP }), startBunvex({ app: APP })]);
+  [convex, bunvex, sandboxed] = await startAll([
+    startConvex({ app: APP }),
+    startBunvex({ app: APP }),
+    startBunvex({ app: APP, env: { BUNVEX_FUNCTION_SANDBOX: "process", BUNVEX_FUNCTION_SANDBOX_ISOLATION: "none" } }),
+  ]);
 }, 300_000);
 
 afterAll(async () => {
-  await Promise.all([convex?.stop(), bunvex?.stop()]);
+  await Promise.all([convex?.stop(), bunvex?.stop(), sandboxed?.stop()]);
 });
 
 async function call(b: Backend, kind: "mutation" | "query", path: string, args: unknown) {
@@ -58,5 +63,6 @@ describe.skipIf(!ready)("unawaited writes in a mutation, against Convex's backen
       { rows: 1, n: [7] },
     ]);
     expect(await play(bunvex)).toEqual(expected);
+    expect(await play(sandboxed)).toEqual(expected);
   }, 120_000);
 });
