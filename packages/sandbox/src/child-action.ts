@@ -32,6 +32,7 @@ import {
   bodyLength,
   type CodeVersion,
   captureLines,
+  ExecutorFailure,
   HTTP_ACTION_RESPONSE_LIMIT,
   inHandleScope,
   type LogLine,
@@ -184,6 +185,7 @@ const viewOf = (b: ArrayBuffer | ArrayBufferView): Uint8Array =>
 function errorFromWire(w: WireThrown): unknown {
   if (w.k === "error") return rebuiltError(w);
   if (w.k === "host") return new Error(w.message);
+  if (w.k === "system") return new ExecutorFailure(w.message);
   return new Error("the host failed a stream");
 }
 
