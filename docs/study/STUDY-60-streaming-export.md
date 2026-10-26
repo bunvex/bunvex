@@ -100,9 +100,9 @@ A connector's view: pages, cursors, value encodings, field order, errors.
   - It checks the document retention window after the read, as Convex.
 - **`json_schemas` and `get_table_column_names`** use the reduced shapes, computed when asked as
   `/api/shapes2` does (DV-265).
-  - Reduced shapes merge a table's objects, so the top level is always an object or empty.
-  - Convex's fallback to the active schema is therefore not reached. bunvex answers Convex's
-    `NoSchemaForExport` if it ever were.
+  - Reduced shapes merge a table's objects, so the top level is an object, empty, or a record (a document
+    with more than 64 fields).
+  - A record falls back to the table's definition in the active schema, as Convex's (STUDY-187 X12).
 - **No components**: `_component` is always `""`.
 - **Cost**: these routes do not touch the function path.
 

@@ -45,10 +45,10 @@ const isFieldShape = (j: unknown) => isObject(j) && typeof j.optional === "boole
 class Invalid extends Error {}
 
 /**
- * Convex's `Display` for a validator (crates/common/src/schemas/validator.rs), for the record-key message:
- * `v.string()`, `v.literal("a")`, a bigint literal as `<bigint>`.
+ * Convex's `Display` for a validator (crates/common/src/schemas/validator.rs), for the record-key message and a
+ * streaming export's record schema: `v.string()`, `v.literal("a")`, a bigint literal as `<bigint>`.
  */
-function display(j: Record<string, Json>): string {
+export function displayValidatorJson(j: Record<string, Json>): string {
   switch (j.type) {
     case "number":
       return "v.float64()";
@@ -64,20 +64,20 @@ function display(j: Record<string, Json>): string {
       return `v.literal(${typeof value === "bigint" ? "<bigint>" : displayValue(value)})`;
     }
     case "array":
-      return `v.array(${display(j.value as Record<string, Json>)})`;
+      return `v.array(${displayValidatorJson(j.value as Record<string, Json>)})`;
     case "record":
-      return `v.record(${display(j.keys as Record<string, Json>)}, ${display((j.values as Record<string, Json>).fieldType as Record<string, Json>)})`;
+      return `v.record(${displayValidatorJson(j.keys as Record<string, Json>)}, ${displayValidatorJson((j.values as Record<string, Json>).fieldType as Record<string, Json>)})`;
     case "object":
       return `v.object({${Object.keys(j.value as Record<string, Json>)
         .sort()
         .map((k) => {
           const f = (j.value as Record<string, Record<string, Json>>)[k]!;
-          const inner = display(f.fieldType as Record<string, Json>);
+          const inner = displayValidatorJson(f.fieldType as Record<string, Json>);
           return `${k}: ${f.optional ? `v.optional(${inner})` : inner}`;
         })
         .join(", ")}})`;
     case "union":
-      return `v.union(${(j.value as Record<string, Json>[]).map(display).join(", ")})`;
+      return `v.union(${(j.value as Record<string, Json>[]).map(displayValidatorJson).join(", ")})`;
     default:
       return `v.${j.type as string}()`;
   }
@@ -144,7 +144,7 @@ function check(j: Record<string, Json>): void {
       check(keys);
       if (!isStringSubset(keys))
         throw new Invalid(
-          `Records can only have string keys. Your validator contains a record with key typed as \`${display(keys)}\`, which is not a subtype of \`v.string()\``,
+          `Records can only have string keys. Your validator contains a record with key typed as \`${displayValidatorJson(keys)}\`, which is not a subtype of \`v.string()\``,
         );
       const values = j.values as Record<string, Json>;
       check(values.fieldType as Record<string, Json>);

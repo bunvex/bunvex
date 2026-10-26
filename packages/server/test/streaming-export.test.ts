@@ -2,7 +2,7 @@
 // `document_deltas` from its snapshot (whole commits, deletes as `_deleted`), the three value encodings,
 // `json_schemas` and `get_table_column_names` from the inferred shapes, and the routes' errors and access.
 import { afterEach, describe, expect, test } from "bun:test";
-import { compareInternalIds, defineSchema, defineTable, Engine } from "@bunvex/core";
+import { compareInternalIds, defineSchema, defineTable, Engine, SCHEMAS_TABLE, schemaJsonText } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { toJsonValue, v } from "@bunvex/values";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
@@ -35,12 +35,19 @@ afterEach(async () => {
   for (const s of stops.splice(0).reverse()) await s();
 });
 
-async function setup() {
-  const engine = await new Engine(
-    defineSchema({ a: defineTable(v.any()), b: defineTable(v.any()) }),
-    await MemoryPersistence.open(null, { durable: false }),
-    { instanceName: NAME, instanceSecret: SECRET },
-  ).init();
+/** `active`: the schema is stored as the active one, as a push would. */
+async function setup(
+  schema: ReturnType<typeof defineSchema> = defineSchema({ a: defineTable(v.any()), b: defineTable(v.any()) }),
+  active = false,
+) {
+  const engine = await new Engine(schema, await MemoryPersistence.open(null, { durable: false }), {
+    instanceName: NAME,
+    instanceSecret: SECRET,
+  }).init();
+  if (active)
+    await engine.mutation((db) =>
+      db.asSystem(() => db.insert(SCHEMAS_TABLE, { state: { state: "active" }, schema: schemaJsonText(schema) })),
+    );
   const functions = new Functions(engine).register("m", {
     put: mutation(({ db }, { table, n, doc }: { table: string; n: number; doc?: object }) =>
       Promise.all(Array.from({ length: n }, () => db.insert(table, (doc ?? {}) as never))),
@@ -156,6 +163,128 @@ test("pages: 1024 documents a list_snapshot page; document_deltas pages at 128 r
   expect([p2.body.values.length, p2.body.hasMore]).toEqual([128, true]);
   const p3 = await t.get("document_deltas", { cursor: /"cursor":(\d+)/.exec(p2.text)![1]! });
   expect([p3.body.values.length, p3.body.hasMore]).toEqual([22, false]);
+});
+
+describe("json_schemas when a table's shape is not an object (STUDY-187 X12)", () => {
+  // More fields than `MAX_OBJECT_FIELDS` (64) make a document's shape a `Record`.
+  const wide = Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`f${i}`, i]));
+  const schema = defineSchema(
+    {
+      a: defineTable(v.any()),
+      b: defineTable(v.any()),
+      posts: defineTable({
+        author: v.id("a"),
+        body: v.string(),
+        n: v.optional(v.number()),
+        big: v.int64(),
+        bytes: v.bytes(),
+        lit: v.union(v.literal("x"), v.literal(1), v.literal(true), v.literal(2n)),
+        list: v.array(v.null()),
+        rec: v.record(v.string(), v.boolean()),
+        nested: v.object({ z: v.any(), y: v.optional(v.string()) }),
+        either: v.union(v.string(), v.object({ k: v.string() })),
+      }),
+      pairs: defineTable(v.union(v.object({ k: v.string() }), v.object({ j: v.string() }))),
+      deep: defineTable({ x: v.union(v.object({ k: v.string() }), v.object({ j: v.string() })) }),
+    },
+    { schemaValidation: false },
+  );
+  const error = (code: string, message: string) => ({ status: 400, body: { code, message } });
+
+  test("falls back to the table's definition in the active schema, as Convex's", async () => {
+    const t = await setup(schema, true);
+    await t.call("m:put", { table: "a", n: 1, doc: wide });
+    await t.call("m:put", { table: "posts", n: 1, doc: wide });
+    const s = (await t.get("json_schemas")).body;
+    expect(s.a).toEqual({
+      type: "object",
+      properties: { _creationTime: { type: "number" }, _id: { $description: "Id(a)", type: "string" } },
+      additionalProperties: false,
+      required: ["_creationTime", "_id"],
+      $schema: "http://json-schema.org/draft-07/schema#",
+    });
+    const float = {
+      $description: "float64",
+      anyOf: [{ type: "number" }, { type: "string", $description: "-inf, inf, or NaN" }],
+    };
+    const int = { $description: "int64 represented as base10 string", type: "string" };
+    expect(s.posts).toEqual({
+      type: "object",
+      properties: {
+        _creationTime: { type: "number" },
+        _id: { $description: "Id(posts)", type: "string" },
+        author: { $description: "Id(a)", type: "string" },
+        big: int,
+        body: { type: "string" },
+        bytes: { $description: "base64 bytes", type: "string" },
+        either: {
+          anyOf: [
+            { type: "string" },
+            { type: "object", properties: { k: { type: "string" } }, additionalProperties: false, required: ["k"] },
+          ],
+        },
+        list: { type: "array", items: { type: "null" } },
+        lit: { anyOf: [{ type: "string" }, float, { type: "boolean" }, int] },
+        n: float,
+        nested: {
+          type: "object",
+          properties: { y: { type: "string" }, z: {} },
+          additionalProperties: false,
+          required: ["z"],
+        },
+        rec: {
+          type: "object",
+          $description: "Record with keys of type v.string()",
+          additionalProperties: { type: { type: "boolean" } },
+        },
+      },
+      additionalProperties: false,
+      required: ["_creationTime", "_id", "author", "big", "body", "bytes", "either", "list", "lit", "nested", "rec"],
+      $schema: "http://json-schema.org/draft-07/schema#",
+    });
+    // The deltas' fields join the schema's, and the format applies to it.
+    const delta = (await t.get("json_schemas", { deltaSchema: "true", format: "export_json" })).body;
+    expect(delta.posts.properties.big).toEqual({ $description: "int64", type: "number" });
+    expect(delta.posts.properties._deleted).toEqual({ type: "boolean" });
+    // Only the columns Convex knows without an object shape.
+    const columns = (await t.get("get_table_column_names")).body.byComponent[""] as {
+      name: string;
+      columns: string[];
+    }[];
+    expect(columns.find((x) => x.name === "posts")).toEqual({ name: "posts", columns: ["_creationTime", "_id"] });
+  });
+
+  test("a union of objects has no export schema", async () => {
+    const t = await setup(schema, true);
+    await t.call("m:put", { table: "pairs", n: 1, doc: wide });
+    expect(await t.get("json_schemas")).toMatchObject(
+      error(
+        "UnsupportedSchemaForExport",
+        'Schema for table "pairs" contains a union of object types, which is unsupported for streaming export',
+      ),
+    );
+    const u = await setup(schema, true);
+    await u.call("m:put", { table: "deep", n: 1, doc: wide });
+    expect(await u.get("json_schemas")).toMatchObject(
+      error("UnsupportedSchemaForExport", "Schema contains a union of objects, which is not supported for export"),
+    );
+  });
+
+  test("without an active schema, or without the table in it", async () => {
+    const t = await setup(schema, false);
+    await t.call("m:put", { table: "a", n: 1, doc: wide });
+    expect(await t.get("json_schemas")).toMatchObject(
+      error("NoSchemaForExport", "There is no active schema, which is needed for streaming export."),
+    );
+    const u = await setup(schema, true);
+    await u.call("m:put", { table: "other", n: 1, doc: wide });
+    expect(await u.get("json_schemas")).toMatchObject(
+      error(
+        "NoTableDefinitionForExport",
+        'The table "other" does not have a schema, which is needed for streaming export.',
+      ),
+    );
+  });
 });
 
 test("json_schemas and get_table_column_names from the shapes", async () => {
