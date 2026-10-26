@@ -201,7 +201,7 @@ test("normalizeId: the table argument must be a string; system tables only with 
   });
 });
 
-test("a missing table's reads depend on _tables (get, query, a virtual table's system table)", async () => {
+test("reads depend on all of _tables, as Convex's table mapping (`take_table_mapping_dep`); a missing table's too", async () => {
   const { e } = await engine();
   const tables = e.catalog.table(TABLES_TABLE);
   const tablesById = (tables.indexes.get("by_creation_time") ?? tables.byId).id;
@@ -209,9 +209,8 @@ test("a missing table's reads depend on _tables (get, query, a virtual table's s
   await e.query(async (db) => {
     expect(fullRead(db, tablesById)).toBe(false);
     await db.query("items").collect();
-    expect(fullRead(db, tablesById)).toBe(false);
-    await db.asSystem(async () => db.queryVirtual("v", "_scheduled_jobs", (d) => d).collect());
-    expect(fullRead(db, tablesById)).toBe(false);
+    // STUDY-187 X22: a table created anywhere invalidates the query.
+    expect(fullRead(db, tablesById)).toBe(true);
   });
   await e.query(async (db) => {
     expect(await db.get("missing", stray)).toBeNull();

@@ -373,6 +373,8 @@ export const other = mutation(async ({ db }) => { await db.insert("others", {});
         body: JSON.stringify({ path, args: {} }),
       });
     expect((await call("messages:add")).status).toBe(200);
+    // `others` exists before the watch: creating a table would re-run it, as on Convex (the table mapping).
+    expect((await call("messages:other")).status).toBe(200);
     // A schema the stored document does not match.
     write(app, {
       "bunvex/schema.ts": `import { defineSchema, defineTable } from ${JSON.stringify(SERVER)};
@@ -385,7 +387,7 @@ export default defineSchema({ messages: defineTable({ body: v.string() }) });`,
     expect(failure.split("\n")[0]).toBe("✖ Schema validation failed.");
     expect(failure.split("\n")[1]).toContain('"messages"');
     expect(w.ready()).toBe(1);
-    // An unrelated table changing does not push.
+    // An unrelated table that exists changing does not push.
     await Bun.sleep(300);
     expect((await call("messages:other")).status).toBe(200);
     await Bun.sleep(700);
