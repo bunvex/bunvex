@@ -1,7 +1,8 @@
 # STUDY-194 — The execution protocol between the main thread and execution workers
-<!-- index: The execution protocol (STUDY-190 PRs 2–4, STUDY-24 A2): Convex's function runner (the request, the snapshot and metadata at a timestamp, the outcome, how the backend commits it), bunvex's in-thread call path, the messages and their encoding (a prototype), snapshots, metadata by epoch, code versions, nested calls, OCC, failures, backpressure, a five-PR plan | draft: Q1–Q6 open (owner) -->
+<!-- index: The execution protocol (STUDY-190 PRs 2–4, STUDY-24 A2): Convex's function runner (the request, the snapshot and metadata at a timestamp, the outcome, how the backend commits it), bunvex's in-thread call path, the messages and their encoding (a prototype), snapshots, metadata by epoch, code versions, nested calls, OCC, failures, backpressure, a five-PR plan | decided (owner, 2026-10-26): every §8 recommendation; AD-47 -->
 
-- **Status:** draft. No product code. Q1–Q6 (§8) are open for the owner.
+- **Status:** decided (owner, 2026-10-26): every §8 recommendation (Q1–Q6); Q4 is AD-47. No product code yet; §6's
+  PR 2a is next.
 - **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
   - `crates/function_runner/src/{lib,server,in_process_function_runner,in_memory_indexes,module_cache}.rs`;
   - `crates/isolate/src/client.rs`, `crates/isolate/src/environment/udf/{async_syscall,phase,mod}.rs`;
@@ -662,9 +663,9 @@ None proposed. Each edge of §2 matches Convex or today's bunvex:
 
 ## 5b. Additions (beyond Convex)
 
-None needed by an app. Q4 asks how an operator chooses the in-thread executor. One option gives
-`MAX_ISOLATE_WORKERS=0` a meaning Convex's knob does not have; it would be recorded as an addition (AD-47, the next
-free number) if the owner chooses it.
+None needed by an app. Q4 (owner, 2026-10-26): `MAX_ISOLATE_WORKERS=0` runs functions on the main thread, a
+meaning Convex's knob does not have, recorded as AD-47; tests choose with a `createServer` option, and the memory
+store and handed-in stores run in-thread automatically.
 
 ## 6. PR plan
 
@@ -708,6 +709,8 @@ STUDY-190's PR 5 (HTTP front threads) follows, unchanged.
   - a malformed message.
 
 ## 8. Owner questions
+
+All decided by the owner on 2026-10-26, as recommended.
 
 | # | Question | Recommendation |
 |---|---|---|
