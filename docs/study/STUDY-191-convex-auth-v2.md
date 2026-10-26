@@ -1,11 +1,11 @@
 # STUDY-191 — Built-in auth following Convex Auth v2
-<!-- index: Built-in auth following Convex Auth v2 (`@convex-dev/auth` 2.0 beta, branch `reboot`): its components, tokens, sessions and sign-in methods, and how `@bunvex/auth` matches them; the direction that replaces better-auth as AD-01's base | draft: direction decided (owner, 2026-10-26); A-1–A-8 open -->
+<!-- index: Built-in auth following Convex Auth v2 (`@convex-dev/auth` 2.0 beta, branch `reboot`): its components, tokens, sessions and sign-in methods, and how `@bunvex/auth` matches them; the direction that replaces better-auth as AD-01's base | accepted: direction and A-1–A-8 as recommended (owner, 2026-10-26; DV-575–DV-577); work not started -->
 
-- **Status:** draft.
+- **Status:** accepted (owner, 2026-10-26): A-1–A-8 as recommended (§4; DV-575–DV-577). Nothing is built yet; the
+  next step is the `signJwt` study (§3.4 step 2).
   - **Direction decided** (owner, 2026-10-26). bunvex's built-in auth follows Convex Auth v2 instead of hosting
     better-auth (STUDY-28, AD-01). The core comes first, for parity. What bunvex adds on top (engine services, more
     sign-in methods, the dashboard) is decided later, each as its own addition.
-  - **Open:** A-1–A-8 (§4).
 - **Convex source read:**
   - **convex/convex-auth**, branch `reboot` at `84ccfa8d` (2026-10-26) and tag `v2.0.0-beta.0` (`8c28cad9`,
     2026-10-15). The org was renamed from get-convex to convex. `main` is still v1, at `dd314f51` (0.0.96).
@@ -456,18 +456,18 @@ These were weighed on 2026-10-26 as shape E3. Each needs its own study and owner
 
 ## 4. Divergences
 
-Proposed; each is the owner's.
+Decided by the owner on 2026-10-26, all as recommended.
 
 | # | Divergence | Recommendation | Why | Decision |
 |---|---|---|---|---|
-| A-1 | Follow v2, not v1: bunvex does not build `@convex-dev/auth` 0.0.x (v1's tables in the app schema, `@auth/core` providers, OTP, magic links) | **Yes.** v1 apps move to v2 (Convex's own path) | v1 is in maintenance and v2 replaces it; building both doubles the security surface | open |
-| A-2 | The current token verifier `@bunvex/auth` (`packages/auth`) is renamed, so the name goes to the auth components (DV-493's `@bunvex/<Convex's name>`) | **Rename to `@bunvex/identity`**, kept as its own internal package | It is internal (only `packages/server` imports it); the user-facing name belongs to the auth app developers install | open |
-| A-3 | The access token's `aud`, and the `applicationID` an app writes in its auth config: v2 uses `"convex"` | **`"bunvex"`** | Rule 5. Only bunvex's own deployment verifies these tokens, and they live 60 s, so no stored state carries the value. A store opened from Convex has no live tokens to keep | open |
-| A-4 | Client storage keys and SSR cookie names that contain `convex` | **bunvex's names** (exact names in the core's PR) | Rule 5. A session cannot move between a Convex and a bunvex deployment anyway (different signing keys) | open |
-| A-5 | Password hashing: v2 runs its argon2id WASM inside the mutation, blocking the thread; bunvex could produce the same PHC string (argon2id, 16 MiB, t=3, p=1) natively | **Decide with a measurement in the core's PR.** Keep v2's parameters and PHC format in any case, so a hash from a Convex export verifies | Not observable apart from timing. Whether component code can reach a native hasher from its `vm` context is the open part (§6) | open |
-| A-6 | When to build the core: on a pinned `reboot` commit now, or after Convex's stable v2 | **Prerequisites now, the core on the pinned commit right after them**, moving the pin by triage | Waiting delays parity, and the stable release is near (Q4 2026). The pin and triage bound the churn | open |
-| A-7 | `@bunvex/resend`, needed by email: write it (Convex's API, DV-493) or let `authEmail` take any email-sending function | **Write `@bunvex/resend`** with Convex's API, its own small study | Parity; the email method's setup names Resend explicitly (`emailSender: {kind: "resend", …}`) | open |
-| A-8 | Convex's reserved claim prefixes in `signJwt` (`convex`, `cvx`) | **As STUDY-186 Q1 decided:** reserve them, word the message in bunvex's words; settled in the `signJwt` study | Parity for apps that move | decided in STUDY-186 Q1, recorded there |
+| A-1 | Follow v2, not v1: bunvex does not build `@convex-dev/auth` 0.0.x (v1's tables in the app schema, `@auth/core` providers, OTP, magic links) | **Yes.** v1 apps move to v2 (Convex's own path) | v1 is in maintenance and v2 replaces it; building both doubles the security surface | **accepted** (owner, 2026-10-26; DV-575) |
+| A-2 | The current token verifier `@bunvex/auth` (`packages/auth`) is renamed, so the name goes to the auth components (DV-493's `@bunvex/<Convex's name>`) | **Rename to `@bunvex/identity`**, kept as its own internal package | It is internal (only `packages/server` imports it); the user-facing name belongs to the auth app developers install | **accepted** (owner, 2026-10-26); internal, no DV |
+| A-3 | The access token's `aud`, and the `applicationID` an app writes in its auth config: v2 uses `"convex"` | **`"bunvex"`** | Rule 5. Only bunvex's own deployment verifies these tokens, and they live 60 s, so no stored state carries the value. A store opened from Convex has no live tokens to keep | **accepted** (owner, 2026-10-26; DV-576) |
+| A-4 | Client storage keys and SSR cookie names that contain `convex` | **bunvex's names** (exact names in the core's PR) | Rule 5. A session cannot move between a Convex and a bunvex deployment anyway (different signing keys) | **accepted** (owner, 2026-10-26; DV-577) |
+| A-5 | Password hashing: v2 runs its argon2id WASM inside the mutation, blocking the thread; bunvex could produce the same PHC string (argon2id, 16 MiB, t=3, p=1) natively | **Decide with a measurement in the core's PR.** Keep v2's parameters and PHC format in any case, so a hash from a Convex export verifies | Not observable apart from timing. Whether component code can reach a native hasher from its `vm` context is the open part (§6) | **accepted** (owner, 2026-10-26): measured in the core's PR; a native hasher, if chosen, comes back as its own decision |
+| A-6 | When to build the core: on a pinned `reboot` commit now, or after Convex's stable v2 | **Prerequisites now, the core on the pinned commit right after them**, moving the pin by triage | Waiting delays parity, and the stable release is near (Q4 2026). The pin and triage bound the churn | **accepted** (owner, 2026-10-26); not started yet |
+| A-7 | `@bunvex/resend`, needed by email: write it (Convex's API, DV-493) or let `authEmail` take any email-sending function | **Write `@bunvex/resend`** with Convex's API, its own small study | Parity; the email method's setup names Resend explicitly (`emailSender: {kind: "resend", …}`) | **accepted** (owner, 2026-10-26); parity, no DV |
+| A-8 | Convex's reserved claim prefixes in `signJwt` (`convex`, `cvx`) | **As STUDY-186 Q1 decided:** reserve them, word the message in bunvex's words; settled in the `signJwt` study | Parity for apps that move | **accepted** (owner, 2026-10-25, STUDY-186 Q1) |
 
 ## 4b. Additions
 
