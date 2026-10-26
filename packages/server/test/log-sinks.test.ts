@@ -11,6 +11,7 @@ import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { v } from "@bunvex/values";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
 import { Functions, mutation } from "../src/functions.ts";
+import { addOrUpdateSink } from "../src/log-sinks.ts";
 import { logStreamRoute } from "../src/log-sinks-routes.ts";
 import { createServer } from "../src/server.ts";
 
@@ -324,6 +325,151 @@ test("an S3 export's create and update also need ViewData (Convex 4933aa2)", asy
     integrationsOnly,
   );
   expect(hook.status).toBe(200);
+});
+
+test("an S3 export's arguments, stored config and status, as Convex's binary answers them (STUDY-185 §2.2)", async () => {
+  const t = await setup();
+  const s3 = {
+    logStreamType: "s3Export",
+    region: "us-east-1",
+    accessKeyId: "AK",
+    secretAccessKey: "SK",
+    period: "daily",
+  };
+  const refused = async (b: object) => (await t.req("create_log_stream", { ...s3, bucket: "bkt", ...b })).body;
+  const body = (message: string) => ({
+    code: "BadJsonBody",
+    message: `Failed to deserialize the JSON body into the target type: ${message}`,
+  });
+  // AWS's bucket rules: an IPv4 address (as Rust parses one) and the reserved prefixes and suffixes too.
+  for (const bucket of ["192.168.1.1", "0.0.0.0", "xn--abc", "sthree-abc", "abc-s3alias", "abc--ol-s3", "ab", "a..b"])
+    expect(await refused({ bucket })).toEqual({
+      code: "InvalidS3Bucket",
+      message: `\`${bucket}\` is not a valid S3 bucket name`,
+    });
+  // Whole tables only.
+  const filter = { code: "FieldFiltersUnsupported", message: expect.stringContaining("Select whole tables instead.") };
+  expect(
+    await refused({ selection: { _other: "excl", "": { _other: "excl", t: { _other: "incl", c: "excl" } } } }),
+  ).toEqual(filter);
+  expect(await refused({ selection: { _other: "incl", "": { _other: "incl", t: { _other: "excluded" } } } })).toEqual(
+    filter,
+  );
+  // The selection's shape, as serde reads it: `_other` first, then each component as an untagged enum.
+  expect(await refused({ selection: { "": "included" } })).toEqual(body("missing field `_other`"));
+  expect(await refused({ selection: { _other: "incl", "": "included" } })).toEqual(
+    body("data did not match any variant of untagged enum ComponentSelection"),
+  );
+  expect(await refused({ selection: { c: 5, _other: "maybe" } })).toEqual(
+    body("unknown variant `maybe`, expected one of `excl`, `excluded`, `incl`, `included`"),
+  );
+  expect(await refused({ selection: [] })).toEqual(body("invalid type: sequence, expected struct Selection"));
+  expect(await refused({ selection: { _other: {} } })).toEqual(
+    body("invalid value: map, expected map with a single key"),
+  );
+  expect(await refused({ selection: { _other: { included: 1 } } })).toEqual(
+    body("invalid type: integer `1`, expected unit"),
+  );
+  // A shape error comes before the bucket's rules; fields in the body's order, then the missing ones.
+  expect(await refused({ bucket: "ab", selection: { _other: "x" } })).toEqual(
+    body("unknown variant `x`, expected one of `excl`, `excluded`, `incl`, `included`"),
+  );
+  expect((await t.req("create_log_stream", { logStreamType: "s3Export", period: "x", bucket: 5 })).body).toEqual(
+    body("unknown variant `x`, expected one of `continuous`, `hourly`, `daily`"),
+  );
+  expect(
+    (await t.req("create_log_stream", { logStreamType: "s3Export", bucket: "b", region: "r", accessKeyId: "a" })).body,
+  ).toEqual(body("missing field `secretAccessKey`"));
+  expect(await refused({ bucket: null })).toEqual(body("invalid type: null, expected a string"));
+  expect((await t.engine.query((db) => db.asSystem(() => db.query("_log_sinks").collect()))).length).toBe(0);
+
+  // Created: everything selected by default, no prefix; `pending` until the worker runs, as on Convex.
+  const { id } = (await t.req("create_log_stream", { ...s3, bucket: "1.2.3.04" })).body;
+  const listed = (await t.req("list_log_streams")).body;
+  expect(listed).toEqual([
+    {
+      logStreamType: "s3Export",
+      id,
+      status: { type: "pending" },
+      bucket: "1.2.3.04",
+      region: "us-east-1",
+      accessKeyId: "AK",
+      selection: { _other: "included" },
+      period: "daily",
+    },
+  ]);
+  await until(async () => (await t.status(id))?.type === "active", "active");
+  const [row] = (await t.engine.query((db) => db.asSystem(() => db.query("_log_sinks").collect()))) as any[];
+  expect(row.config).toEqual({
+    type: "s3Export",
+    bucket: "1.2.3.04",
+    region: "us-east-1",
+    prefix: null,
+    accessKeyId: "AK",
+    secretAccessKey: "SK",
+    selection: { _other: "included" },
+    period: "daily",
+  });
+
+  // An update takes only the secret, the selection and the period, read with the body before anything else.
+  const update = (b: object, path = `update_log_stream/${id}`) => t.req(path, { logStreamType: "s3Export", ...b });
+  const unknown = (k: string) =>
+    body(`unknown field \`${k}\`, expected one of \`secretAccessKey\`, \`selection\`, \`period\``);
+  for (const k of ["bucket", "region", "prefix", "accessKeyId"])
+    expect((await update({ [k]: "x" })).body).toEqual(unknown(k));
+  expect((await update({ region: "x" }, "update_log_stream/nope")).body).toEqual(unknown("region"));
+  expect((await t.req(`update_log_stream/${id}`, { logStreamType: "s3Export", region: "x" }, READ_ONLY)).body).toEqual(
+    unknown("region"),
+  );
+  expect((await update({ period: "weekly", bucket: "x" })).body).toEqual(
+    body("unknown variant `weekly`, expected one of `continuous`, `hourly`, `daily`"),
+  );
+  expect((await update({ selection: { _other: "incl", "": { _other: "incl", t: { _other: "excl" } } } })).body).toEqual(
+    filter,
+  );
+  // `null` keeps a field; a selection is stored with its aliases spelled out, and listed in Convex's order.
+  expect((await update({ period: null, secretAccessKey: null, selection: null })).status).toBe(200);
+  expect(
+    (
+      await update({
+        secretAccessKey: "S2",
+        selection: { _other: "incl", "": { _other: "excl", u: { _other: "incl" }, B: "excl" } },
+      })
+    ).status,
+  ).toBe(200);
+  const got = (await t.req(`get_log_stream/${id}`)).body;
+  expect(got.status).toEqual({ type: "pending" });
+  expect(JSON.stringify(got.selection)).toBe(
+    '{"":{"B":"excluded","u":{"_other":"included"},"_other":"excluded"},"_other":"included"}',
+  );
+  expect([got.bucket, got.period, "prefix" in got]).toEqual(["1.2.3.04", "daily", false]);
+  const [after] = (await t.engine.query((db) => db.asSystem(() => db.query("_log_sinks").collect()))) as any[];
+  expect(after.config.secretAccessKey).toBe("S2");
+  // A prefix given is listed.
+  await t.req(`delete_log_stream/${id}`, {});
+  await until(async () => (await t.req("list_log_streams")).body.length === 0, "the row to go");
+  const made = await t.req("create_log_stream", { ...s3, bucket: "bkt", prefix: "" });
+  expect((await t.req(`get_log_stream/${made.body.id}`)).body.prefix).toBe("");
+});
+
+test("a second S3 export is refused inside the insert's transaction too (Convex f8b62ad)", async () => {
+  const engine = await new Engine(
+    defineSchema({ items: defineTable(v.any()) }),
+    await MemoryPersistence.open(null, { durable: false }),
+    { instanceName: NAME, instanceSecret: SECRET },
+  ).init();
+  const config = { type: "s3Export" as const, bucket: "bkt" };
+  await engine.mutation((db) => addOrUpdateSink(db, config));
+  const err = await engine.mutation((db) => addOrUpdateSink(db, config)).catch((e) => e);
+  expect([err.status, err.code, err.message]).toEqual([
+    409,
+    "LogStreamAlreadyExists",
+    "An S3 export already exists. Delete it before creating a new one.",
+  ]);
+  // Another type is replaced, as before.
+  const hook = { type: "webhook" as const, url: "https://x", format: "json" as const, hmacSecret: "s" };
+  await engine.mutation((db) => addOrUpdateSink(db, hook));
+  expect(typeof (await engine.mutation((db) => addOrUpdateSink(db, hook)))).toBe("string");
 });
 
 test("the local sink: every event as a V2 line, exceptions too, kept across a restart without verifying", async () => {

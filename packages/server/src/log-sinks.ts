@@ -17,6 +17,7 @@ import {
   longInterval,
   longTimeout,
   type Tx,
+  timerDelay,
 } from "@bunvex/core";
 import { decodeId, toJsonValue, type Value } from "@bunvex/values";
 import { type HttpProxy, proxiedFetch } from "./http-proxy.ts";
@@ -124,6 +125,13 @@ export async function sinkOfType(db: Tx, type: SinkType): Promise<SinkRow | null
 /** Convex's `add_or_update`: at most 8 live sinks; an existing one of the type is replaced. The new id. */
 export async function addOrUpdateSink(db: Tx, config: SinkConfig): Promise<string> {
   const all = await rows(db);
+  // Checked again inside the insert's transaction, so two creates at once cannot replace an export (Convex f8b62ad).
+  if (config.type === "s3Export" && all.some((r) => r.config.type === "s3Export" && r.status.type !== "deleting"))
+    throw new LogSinkError(
+      409,
+      "LogStreamAlreadyExists",
+      "An S3 export already exists. Delete it before creating a new one.",
+    );
   if (all.filter((r) => r.status.type !== "deleting").length >= LOG_SINKS_LIMIT)
     throw new LogSinkError(
       400,
@@ -155,6 +163,12 @@ export type LogSinkOptions = {
   localBackoffMs: [initial: number, max: number];
   /** `SINK_STARTUP_TIMEOUT` (15 s). */
   startupTimeoutMs: number;
+  /**
+   * How long after a commit to `_log_sinks` the worker runs (2 ms). Convex's runs when its subscription sees the
+   * commit, about a millisecond after the change answered, so a read right after a create or an update sees
+   * `pending` (measured against the binary, STUDY-185 §2.2); bunvex's would otherwise finish first.
+   */
+  changeWakeMs: number;
   /** `WEBHOOK_SINK_REQUEST_TIMEOUT` (30 s). */
   requestTimeoutMs: number;
   random: () => number;
@@ -177,6 +191,7 @@ export const defaultLogSinkOptions = (): LogSinkOptions => ({
   webhookBackoffMs: [1000, 60_000],
   localBackoffMs: [1000, 10_000],
   startupTimeoutMs: 15_000,
+  changeWakeMs: 2,
   requestTimeoutMs: 30_000,
   random: Math.random,
   providerBackoffMs: [500, 60_000],
@@ -322,6 +337,7 @@ export class LogManager {
   private passing: Promise<void> | null = null;
   private again = false;
   private closed = false;
+  private changeTimer: ReturnType<typeof setTimeout> | null = null;
   readonly stats = { dropped: 0, delivered: 0 };
 
   constructor(
@@ -398,7 +414,8 @@ export class LogManager {
     const audit = () => this.engine.catalog.tables.get(DEPLOYMENT_AUDIT_LOG_TABLE)?.byId.id;
     this.engine.committer.onCommit((entries) => {
       const id = table();
-      if (entries.some((e) => e.source !== "log_sink_worker" && e.writes.some((w) => w.index === id))) this.wake();
+      if (entries.some((e) => e.source !== "log_sink_worker" && e.writes.some((w) => w.index === id)))
+        this.wakeAfterChange();
       if (!this.active) return;
       const auditIndex = audit();
       const inserted = new Set<string>();
@@ -462,9 +479,19 @@ export class LogManager {
   async idle() {
     this.flush();
     for (let i = 0; i < 2000; i++) {
-      if ([...this.sinks.values()].every((r) => r.queue.length === 0 && !r.busy) && !this.passing) return;
+      if ([...this.sinks.values()].every((r) => r.queue.length === 0 && !r.busy) && !this.passing && !this.changeTimer)
+        return;
       await Bun.sleep(5);
     }
+  }
+
+  /** Run the startup worker after a commit to `_log_sinks`, as Convex's subscription does (`changeWakeMs`). */
+  wakeAfterChange() {
+    if (this.closed || this.changeTimer) return;
+    this.changeTimer = setTimeout(() => {
+      this.changeTimer = null;
+      this.wake();
+    }, timerDelay(this.options.changeWakeMs));
   }
 
   /** Run the startup worker again (serialized; a request during a pass runs one more). */
@@ -565,6 +592,7 @@ export class LogManager {
   stop() {
     this.closed = true;
     if (this.timer) clearLongTimer(this.timer);
+    if (this.changeTimer) clearTimeout(this.changeTimer);
     if (this.concurrencyTimer) clearLongTimer(this.concurrencyTimer);
     for (const r of this.sinks.values()) r.sink.stop();
     this.sinks.clear();

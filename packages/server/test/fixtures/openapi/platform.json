@@ -2952,31 +2952,8 @@
       },
       "UpdateS3ExportSinkArgs": {
         "type": "object",
+        "description": "The destination and the access key ID are fixed when the export is created.",
         "properties": {
-          "bucket": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "region": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "prefix": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "accessKeyId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "secretAccessKey": {
             "type": [
               "string",
@@ -3003,7 +2980,8 @@
               }
             ]
           }
-        }
+        },
+        "additionalProperties": false
       },
       "UpdateSentrySinkArgs": {
         "type": "object",
