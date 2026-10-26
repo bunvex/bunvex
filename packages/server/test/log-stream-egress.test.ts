@@ -83,7 +83,7 @@ async function setup(logSinks: Partial<LogSinkOptions> = {}) {
       headers: { authorization: `Bunvex ${KEY}`, "content-type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    return r.json();
+    return (await r.json()) as { id: string; status: { type: string } };
   };
   const create = async (body: object) => {
     const { id } = await req("create_log_stream", body);
