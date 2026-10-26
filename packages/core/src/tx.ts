@@ -41,6 +41,7 @@ import {
   IndexBackfillingError,
   IndexStagedError,
   planCatalog,
+  SCHEMAS_TABLE,
   searchIndexesUnavailable,
   TABLES_TABLE,
   tableMeta,
@@ -104,6 +105,8 @@ const ANY = v.any();
 
 type Range = { lo: Uint8Array; hi: Uint8Array };
 const FULL: Range = { lo: new Uint8Array(0), hi: Uint8Array.from([0xff, 0xff, 0xff, 0xff]) };
+/** The `_schemas.by_state` keys a write's schema lookups read (`Tx.readSchemas`), as Convex's `get_by_state`. */
+const SCHEMA_STATE_KEYS = (["active", "pending", "validated"] as const).map((state) => encodeKey([{ state }]));
 
 type RangeExpr = { op: "eq" | "gt" | "gte" | "lt" | "lte"; field: string; value: KeyValue };
 
@@ -844,6 +847,25 @@ export class Tx {
     const k = encodeKey([t.metaId]);
     // Convex's table mapping is a read the engine takes (`take_table_mapping_dep`): not counted.
     this.recordInterval({ index: this.catalog.table(TABLES_TABLE).byId.id, lo: k, hi: prefixEnd(k) }, "derived");
+  }
+
+  /** The namespaces whose schemas a write of this transaction looked up (`readSchemas`); the root's is undefined. */
+  private schemasRead: Set<string | undefined> | null = null;
+  /**
+   * Record that a write was checked against its namespace's schemas: a read of `_schemas.by_state` at the
+   * active, the pending and the validated state, as Convex's `SchemaModel::enforce` takes them (each
+   * `SchemaRegistry::get_by_state` records its interval, not counted). The validators a transaction checks are
+   * the ones there were at its start; a push that makes a schema pending, validated or active before it commits
+   * writes those keys, so it conflicts and runs again on the new schemas (STUDY-187 X10).
+   */
+  private readSchemas(namespace: string | undefined) {
+    if (this.schemasRead === null) this.schemasRead = new Set();
+    else if (this.schemasRead.has(namespace)) return;
+    this.schemasRead.add(namespace);
+    const space = namespace === undefined ? this.catalog : this.catalog.components.get(namespace);
+    const byState = space?.tables.get(SCHEMAS_TABLE)?.indexes.get("by_state")?.id;
+    if (byState === undefined) return;
+    for (const k of SCHEMA_STATE_KEYS) this.recordInterval({ index: byState, lo: k, hi: prefixEnd(k) }, "derived");
   }
 
   /** The tables whose `_index` rows this transaction writes (an index created, changed or dropped). */
@@ -2026,9 +2048,11 @@ export class Tx {
   docValidators: Map<string, GenericValidator> | null = null;
   /**
    * A pushed schema's validators while it is pending (STUDY-35, Convex's `enforce` on a pending schema): a
-   * write that does not match is NOT refused — it fails the pending schema once the write commits.
+   * write that does not match is NOT refused — it fails the pending schema in the same transaction.
    */
   pendingValidators: Map<string, GenericValidator> | null = null;
+  /** The `_schemas` id of the schema whose validators `pendingValidators` are. */
+  pendingSchemaId: string | null = null;
   /** The first write this transaction made that the pending schema refuses: its table and message. */
   pendingViolation: { table: string; error: string } | null = null;
   /**
@@ -2108,6 +2132,7 @@ export class Tx {
     this.tableStat(t.name).rowsWritten++;
     if (!this.writable) throw new Error("queries cannot write");
     const measured = t.name.startsWith("_") ? undefined : this.checkWriteLimits(next);
+    if (next && !t.name.startsWith("_")) this.readSchemas(t.namespace);
     // The schemas below are the root's: a component's table is checked against none of them, whatever its name.
     const inRoot = t.namespace === undefined;
     // A component's table is checked against its own active schema (STUDY-154), with the root's message, its ids'

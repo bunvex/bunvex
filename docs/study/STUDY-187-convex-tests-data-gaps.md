@@ -131,16 +131,49 @@ as a `LogStreamPayload` call) is the cloud's.
 **Fix (to match).** Count each sink's sent bytes; a 60 s tick emits the event when the count is not zero. STUDY-59
 is corrected in the same PR.
 
-### 2.7 X10 — a mutation that straddles a schema push (to verify)
+### 2.7 X10 — a mutation that straddles a schema push (done)
 
-**Convex.** The schema state is in a transaction's read set, so a transaction that saw the schema conflicts with
-a push that makes it pending or active (`database/src/tests/mod.rs` `test_schema_registry_takes_read_dependency`).
+**Convex.** Every write to an app table looks the schemas up with `SchemaModel::enforce`
+(`database/src/bootstrap_model/schema/mod.rs`): the active, the pending and the validated one, each through
+`SchemaRegistry::get_by_state` (`database/src/schema_registry.rs`), which records a read of `_schemas.by_state` at
+that state (`record_indexed_derived`, not counted). The registry is the transaction's snapshot's, so a write is
+checked against the schemas its snapshot has, and a push that writes one of those states after the snapshot (a
+schema made pending, validated, active, failed or overwritten) conflicts with the transaction. A write the
+pending or validated schema refuses fails it in the same transaction (`mark_failed`).
 
-**bunvex.** Writes are checked against pending validators when they are made (`tx.pendingViolation`,
-`withPendingCheck` in `packages/core/src/engine.ts`), and no read of `_schemas` is recorded. A mutation that starts
-before a push turns pending, and commits after the validation walk's snapshot, might pass both checks. Not
-reproduced yet. Its PR starts with the reproduction (a push held between pending and the walk); if it does not
-reproduce, the item closes with that test.
+**bunvex before.** A transaction took the engine's validators at its start and recorded no read of `_schemas`.
+X22 (all of `_tables` in every read set) did not cover it: a push writes `_tables` only when it creates a table.
+Reproduced (`packages/core/test/schema-push-straddle.test.ts`), with a mutation that writes `{n: "bad"}`, then
+waits while a push of `{n: v.number()}` runs:
+
+- through to `active`: the mutation committed, and the document stayed in a table whose active schema refuses it;
+- to `validated`: the mutation committed and the push could become active;
+- only to `pending`, on an empty table (which the walk skips): the push still became `validated`.
+
+Two more holes on the way:
+
+- The engine installed a pushed schema's validators after the push's commit returned (after its new tables'
+  backfill), so a mutation begun in between was checked against none.
+- A write the pending schema refused failed it in a later transaction (`failSchemaPush` after the commit), so a
+  push committing right after that write could still make the schema active.
+
+**bunvex now.**
+
+- `Tx.readSchemas`: the first write to an app table in each namespace records the three `_schemas.by_state`
+  intervals, as derived reads.
+- `startSchemaPush` installs the pending validators as its commit becomes visible.
+- A write the pending schema refuses fails it in the writing transaction (`markSchemaFailed`, Convex's
+  `mark_failed`).
+- Tests: the straddling mutation now runs again and is refused by the active schema (or fails the pending or
+  validated one); a push committing beside such a write is refused with `Schema validation failed`; a mutation
+  that only reads does not conflict.
+- Sabotage: without the read, 4 of the 7 tests fail; installing the validators after the commit again fails the
+  "begun as the push's commit turns visible" test; failing the schema after the commit fails 3.
+- The read-set fixture gains the three reads in every shape that writes.
+- Cost: three intervals per writing transaction. 10 000 inserts and 10 000 read-and-patch mutations (32 in flight)
+  on the memory store, CPU time per mutation, best of 5, four alternating runs: 23–27 µs and 38–42 µs before,
+  21–28 µs and 36–43 µs after (within noise; the machine was loaded).
+- No oracle case: Convex's binary cannot hold a mutation open across a push.
 
 ### 2.8 X12 — a streaming export's JSON Schema falls back to the active schema
 
@@ -224,7 +257,7 @@ time, and shrinks to three programs: a query reads `b`, a mutation in a later pr
 
 1. X13 (data loss), X20 (it fails CI at random), X1 and X2 (wrong data or results); X21 after X13.
 2. X12, X18, X3, X5, X6.
-3. X10: reproduction first.
+3. X10: reproduction first (done).
 4. X22 (found after the study), its own PR.
 
 Each is its own PR from `main`, with the oracle case in `packages/differential` where Convex's binary can show it.
