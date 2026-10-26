@@ -1,9 +1,9 @@
 # STUDY-184 — Horizontal scaling: Convex's real shape, and what one bunvex process does with a core
-<!-- index: Horizontal scaling: Convex's real shape, one bunvex process per core | decided (owner, 2026-10-26): Convex's shape; measurement 3 confirms it (§5.6), DV-114/116/118/119 proposals for the owner -->
+<!-- index: Horizontal scaling: Convex's real shape, one bunvex process per core | decided (owner, 2026-10-26): Convex's shape, confirmed by measurement 3 (§5.6); DV-114 rewritten, DV-116/118/119 withdrawn -->
 
 - **Status:** rewritten from scratch on 2026-10-26. The earlier draft did not read Convex's source, and its load
-  measured the client rather than the server (§5.1). No product change. Decided (owner, 2026-10-26): Q1–Q3.
-  Measurement 3 is in (§5.6); Q4 and Q5 are open.
+  measured the client rather than the server (§5.1). No product change. Decided (owner, 2026-10-26): Q1–Q5.
+  Measurement 3 is in (§5.6).
 - **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
   - `crates/database/src/{database,committer,subscription,transaction,retention}.rs`;
   - `crates/postgres/src/{lib,sql}.rs`, `crates/mysql/src/v5/persistence.rs`;
@@ -182,9 +182,9 @@ none.
 ## 4. Divergences
 
 Nothing new is recorded here. Q1 (owner, 2026-10-26) follows Convex's shape, so DV-114, DV-116, DV-118 and DV-119
-are marked as under review in `divergences.md`. DV-113, DV-115, DV-117 and DV-121 hold in both shapes.
+were marked as under review in `divergences.md` until measurement 3. DV-113, DV-115, DV-117 and DV-121 hold in both shapes.
 
-Measurement 3 is in (§5.6). Proposed, for the owner to decide (`divergences.md` is unchanged until then):
+Measurement 3 is in (§5.6). Decided (owner, 2026-10-26, Q5), and recorded in `divergences.md`:
 
 | DV | Today (STUDY-24) | Proposal | Why |
 |---|---|---|---|
@@ -514,9 +514,9 @@ it before any follower code.
 
 Measurement 3 (§5.6) is in. **It confirms Q1:** matching and a follower's apply cost microseconds at a million
 subscriptions, and a bunvex leader that keeps every subscription carries more query updates than one Convex backend
-does. Two questions it raises, open for the owner:
+does. Two questions it raised, decided (owner, 2026-10-26) as recommended:
 
-| # | Question | Recommendation |
+| # | Question | Recommendation (decided) |
 |---|---|---|
 | Q4 | Make the sync session rerun only the queries a commit invalidated, as Convex's `need_fetch` does, instead of re-checking every query against the write log on each transition and each rerun? | Yes, in its own PR with tests and a measurement. It is not a divergence: apps see the same transitions, sooner. §5.6's prototype gives 15× the commit rate at a million subscriptions |
 | Q5 | Withdraw DV-116, DV-118 and DV-119, and rewrite DV-114 as §4 proposes? | Yes. Convex's shape needs none of the three, and DV-114 then describes Convex Cloud's shape |
