@@ -553,7 +553,9 @@ function addSystemFields(tableName: string, validator: GenericValidator): Generi
       });
     case "union":
       return v.union(
-        ...((validator as VUnion<unknown, GenericValidator[]>).members.map((m) => addSystemFields(tableName, m)) as never[]),
+        ...((validator as VUnion<unknown, GenericValidator[]>).members.map((m) =>
+          addSystemFields(tableName, m),
+        ) as never[]),
       );
     // `v.any()` already accepts the system fields.
     case "any":

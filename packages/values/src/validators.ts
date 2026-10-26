@@ -454,8 +454,7 @@ export const v = {
   // keys, values and a union's members are never optional (the runtime refuses them too, STUDY-189 T6).
   record: <K extends Validator<string, "required">, V extends RequiredValidator>(key: K, value: V) =>
     new VRecord<Record<Infer<K>, Infer<V>>, K, V>("required", key, value),
-  union: <M extends RequiredValidator[]>(...members: M) =>
-    new VUnion<Infer<M[number]>, M>("required", members),
+  union: <M extends RequiredValidator[]>(...members: M) => new VUnion<Infer<M[number]>, M>("required", members),
   any: () => new VAny("required"),
   optional: <V extends GenericValidator>(x: V) => optionalOf(x) as VOptional<V>,
   nullable: <V extends RequiredValidator>(x: V) => v.union(x, v.null()),
