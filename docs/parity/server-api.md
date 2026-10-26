@@ -264,6 +264,7 @@ Key bunvex facts behind the statuses:
 | `UserIdentity` fields (tokenIdentifier, subject, issuer, name, email, emailVerified, …, custom claims) | server/authentication.ts | done (STUDY-27) | `@bunvex/auth` `identityFromOidc` / `identityFromCustomJwt`, with Convex's dropped claims and custom-JWT flattening. |
 | `auth.config.ts` providers: OIDC `{ domain, applicationID }` and `customJwt` `{ issuer, jwks, algorithm RS256/ES256 }` | server/authentication.ts (`AuthConfig`) | done (STUDY-27) | `createServer({ auth })` with `bunvex/auth.config.ts`'s default export (DV-100). |
 | Query cache and subscriptions scoped by identity | crates/application | done (STUDY-27) | A result is keyed by identity only if the run read it, in the query cache and in sync's shared executions (B13). Every read set holds all of `_tables`, as Convex's table mapping: creating, replacing or deleting a table invalidates every cached query (STUDY-187 X22). |
+| `ctx.auth.signJwt({claims?, expiresInSeconds})` in mutations (`MutationAuth`): ES256, `iss` / `iat` / `exp` set by the deployment, reserved claims and prefixes, 1 s–1 h, 8000 bytes | server/authentication.ts; crates/keybroker/src/deployment_jwt.rs | not built (STUDY-192) | The keys derived from the instance secret as Convex's, so the same secret serves the same JWKS. |
 
 ### 13. File storage (`ctx.storage`)
 
