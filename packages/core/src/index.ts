@@ -197,6 +197,7 @@ export {
   longInterval,
   longSleep,
   longTimeout,
+  MAX_TIMER_MS,
   monotonicNow,
   newUserTimer,
   observeTime,

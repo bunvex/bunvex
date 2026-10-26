@@ -11,7 +11,7 @@
 // with the same error and aborts the fetches in flight. Calls already in flight (a mutation that reached the
 // committer) finish, as in Convex, where a dropped mutation may or may not have committed.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { formatDuration, longTimeout, outsideExecution, setFetchSignal } from "@bunvex/core";
+import { formatDuration, LongTimer, longTimeout, outsideExecution, setFetchSignal } from "@bunvex/core";
 
 /** Convex's `V8_ACTION_USER_TIMEOUT` default: 30 minutes. */
 export const V8_ACTION_USER_TIMEOUT_MS = 1800 * 1000;
@@ -69,8 +69,14 @@ setFetchSignal(() => {
 function end(run: Run) {
   run.life.ended = true;
   if (!run.timers) return;
-  for (const t of run.timers) clearTimeout(t as Parameters<typeof clearTimeout>[0]);
+  for (const t of run.timers) clearActionTimer(t);
   run.timers.clear();
+}
+
+/** `clearTimeout` / `clearInterval` in a V8 action: a timer past 2^31-1 ms is a `LongTimer` (`actionTimer`). */
+export function clearActionTimer(t: unknown) {
+  if (t instanceof LongTimer) t.clear();
+  else clearTimeout(t as Parameters<typeof clearTimeout>[0]);
 }
 
 /**
@@ -81,7 +87,7 @@ function end(run: Run) {
 export function trackActionTimer(t: unknown) {
   const r = runs.getStore();
   if (!r?.timers) return;
-  if (r.life.ended) clearTimeout(t as Parameters<typeof clearTimeout>[0]);
+  if (r.life.ended) clearActionTimer(t);
   else r.timers.add(t);
 }
 

@@ -1247,3 +1247,22 @@ recommended; done in #811 (below).
   with Bun's `setTimeout` and 272–277 ns with `longTimeout`; a timer that fires, 246–295 ns and 489–510 ns. The hot
   paths that arm one (each HTTP request's timeout, each action, each sync mutation) pay about 0.14 µs more per call.
 
+
+**I-25 for an app's own timers (2026-10-25, found in STUDY-186's triage).** Q8 covered the backend's timers. A V8
+action's `setTimeout` / `setInterval` were still Bun's, so a finite delay past 2^31−1 ms fired after about 1 ms.
+- Convex: the runtime's timers (`npm-packages/udf-runtime/src/02_timers.ts`) call the `sleep` op. `sleep_request`
+  (`crates/isolate/src/ops/time.rs`, at `precompiled-2026-10-24-bb31399`) turns any finite delay into a `Duration`,
+  so the wait is the whole delay; the action's own timeout ends it first. Negative, infinite and NaN delays fire at
+  once (`85f9693`, "as in browsers").
+- bunvex: what an app sees on Convex, with no owner decision needed. In a V8 action, a finite delay past 2^31−1 ms
+  becomes a `LongTimer` (`actionTimer`, `server/src/code-version.ts`). The action's `clearTimeout` / `clearInterval`
+  and the end of the action clear it (`clearActionTimer`, `server/src/action-timeout.ts`). Shorter, infinite, NaN
+  and negative delays stay Bun's, which already fires the last three at once. `"use node"` actions keep the host's
+  timers, as Convex's Node executor keeps Node's.
+- **Tests:** `server/test/action-long-timer.test.ts` (6). Five fail on `main`: the 2^31 ms timeout fired, the 3e9 ms
+  interval ticked, and no `LongTimer` was made, cleared or tracked. The sixth pins `85f9693` (infinite, NaN and
+  negative fire at once).
+- **Sabotage:** without the `LongTimer` branch, 3 fail. With `clearActionTimer` leaving a `LongTimer` alone, 2 fail
+  (the end of the action, and `clearTimeout` / `clearInterval`).
+- **Measurement:** none. A delay at or under the cap costs one `Number()` and two comparisons more, and the path
+  past it is Q8's `LongTimer`, measured above.
