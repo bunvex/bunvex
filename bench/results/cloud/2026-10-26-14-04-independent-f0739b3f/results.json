@@ -9,24 +9,14 @@
       "private": "10.120.0.7",
       "size": "c-4",
       "hourly": 0.125,
-      "machine": [
-        "4",
-        "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz",
-        "7",
-        "6.8.0-142-generic"
-      ]
+      "machine": ["4", "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz", "7", "6.8.0-142-generic"]
     },
     "load": {
       "name": "bunvex-bench-load",
       "private": "10.120.0.6",
       "size": "c-4",
       "hourly": 0.125,
-      "machine": [
-        "4",
-        "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz",
-        "7",
-        "6.8.0-142-generic"
-      ]
+      "machine": ["4", "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz", "7", "6.8.0-142-generic"]
     },
     "env": {
       "REGION": "sfo2",

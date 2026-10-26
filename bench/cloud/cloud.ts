@@ -293,6 +293,8 @@ async function runSuite(suite: string, sha: string) {
   };
   writeFileSync(`${out}/results.json`, `${JSON.stringify({ meta, results }, null, 2)}\n`);
   writeFileSync(`${out}/summary.md`, summary(meta, results));
+  // In the repo's JSON style, so the results can be committed as they are.
+  await sh(["bunx", "biome", "format", "--write", `${out}/results.json`]);
   console.log(`\n${summary(meta, results)}\nwritten to ${out}`);
 }
 
