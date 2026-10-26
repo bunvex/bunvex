@@ -11,6 +11,7 @@ import { v } from "@bunvex/values";
 import { adminKeyCipherKey, issueAdminKey } from "../src/admin-keys.ts";
 import { Functions, mutation, query } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
+import type { Execution, SyncHub } from "../src/sync.ts";
 import { add, history, syncUrl, v1Client } from "./v1-client.ts";
 
 const SECRET = "cd".repeat(32);
@@ -80,6 +81,12 @@ async function setup(writeLogRetentionNs?: bigint) {
     ),
     put: mutation(({ db }, { g, n }: { g: number; n: number }) => db.insert("docs", { g, n })),
   } as never);
+  // A commit listener that runs before the sync hub's: what it sees of validity is what code in the commit's own
+  // publication would see.
+  const early: ((sync: SyncHub) => void)[] = [];
+  engine.committer.onCommit(() => {
+    for (const f of early) f(s.sync);
+  }, "early");
   const s = createServer({ engine, functions, port: 0 });
   stops.push(() => s.stop());
   const client = async (ts?: bigint) => {
@@ -99,7 +106,7 @@ async function setup(writeLogRetentionNs?: bigint) {
       return f(...a);
     };
   }
-  return { engine, sync: s.sync, client, put, runs, held, scans };
+  return { engine, sync: s.sync, client, put, runs, held, scans, early };
 }
 
 const settle = () => Bun.sleep(30);
@@ -295,4 +302,33 @@ test("a subscription nothing wrote into stays valid after the write log no longe
   await settle();
   expect(runs).toEqual(["group 2"]);
   expect(history(c.transitions(), 1)).toEqual([[]]);
+});
+
+test("validity: a result no longer tracked is checked against the log once, and a commit not yet matched is seen", async () => {
+  const { client, put, sync, engine, early } = await setup();
+  const c = await client();
+  c.modify([add(1, "m:group", { g: 1 })]);
+  await c.transition(0);
+  const tracked = [...(sync as unknown as { latest: Map<string, Execution> }).latest.values()][0]!;
+  // The same run, as an execution no key tracks (a session's result that another run replaced).
+  const untracked: Execution = { ...tracked, validity: undefined };
+  await put(9, 1);
+  const t1 = engine.committer.visibleTs;
+  expect(sync.validAt(untracked, t1)).toBe(true);
+  expect(untracked.validity).toMatchObject({ invalidAt: null, validThrough: t1 });
+  await put(1, 2);
+  const t2 = engine.committer.visibleTs;
+  expect(sync.validAt(untracked, t2)).toBe(false);
+  expect(untracked.validity?.invalidAt).toBe(t2);
+  expect(sync.validAt(untracked, t1)).toBe(true); // still valid before the commit that changed it
+  // A listener before the hub's, during the publication of a commit into the tracked result's reads: the hub has
+  // not matched it yet, and the write log says so.
+  await c.until(() => history(c.transitions(), 1).length === 2);
+  const latest = [...(sync as unknown as { latest: Map<string, Execution> }).latest.values()][0]!;
+  const seen: boolean[] = [];
+  early.push((hub) => seen.push(hub.validAt(latest, engine.committer.visibleTs)));
+  await put(9, 4); // elsewhere: still valid, known from the log
+  await put(1, 3); // into its reads
+  expect(seen).toEqual([true, false]);
+  expect(latest.validity?.invalidAt).not.toBeNull();
 });
