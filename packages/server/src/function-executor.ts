@@ -48,7 +48,7 @@ export {
 } from "./code-version.ts";
 export { Crons } from "./cron.ts";
 export { currentAllEnv, currentEnvReader, type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
-export { ExecutorFailure, neverResolves } from "./errors.ts";
+export { ExecutorFailure, neverResolves, outOfMemory } from "./errors.ts";
 export { createFunctionHandle, inHandleScope } from "./function-handles.ts";
 export { currentPendingOps, NODE_FUNCTIONS, vectorSearchFilter } from "./functions.ts";
 export { typedBlob } from "./http-actions.ts";

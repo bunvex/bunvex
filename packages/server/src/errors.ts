@@ -95,6 +95,13 @@ export class FunctionLookupError extends FunctionPathError {}
 export const neverResolves = () => new FunctionPathError("Returned promise will never resolve");
 
 /**
+ * A function past its memory cap (under the `process` executor, STUDY-188 R12): Convex's `OutOfMemoryError`, its
+ * message alone, the same whatever the cap (`crates/isolate/src/termination.rs`).
+ */
+export const outOfMemory = () =>
+  new FunctionPathError("JavaScript execution ran out of memory (maximum memory usage: 64 MB)");
+
+/**
  * A call's arguments that do not decode into values, held for the run: Convex resolves the function first, then
  * `parse_udf_args` fails it (`ValidatedPathAndArgs`, crates/udf/src/validation.rs), so the call is a failed run
  * of the function in the function log, and a missing function is "Could not find public function" whatever came.

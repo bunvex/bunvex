@@ -8,18 +8,20 @@
 // No OS isolation yet (STUDY-168 PR 8): the child is a plain Bun process with an environment of its own (only the
 // knobs it reads, never the server's variables), started in this package's directory so no `bunfig.toml` of the
 // server's working directory applies to it.
-import { closeSync } from "node:fs";
+import { closeSync, readSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { realRuntime } from "@bunvex/core";
 import {
   type DefaultExportUse,
   type EvaluateOptions,
+  ExecutorFailure,
   FunctionExportError,
   IMPORT_TIMEOUT_MS,
   InvalidModulesError,
   type LoadOptions,
   MissingEnvironmentVariableError,
   type ModuleSource,
+  outOfMemory,
 } from "@bunvex/server/executor";
 import type { Subprocess } from "bun";
 import { evaluatedValue } from "./default-export.ts";
@@ -41,6 +43,8 @@ import { type LoadedVersion, loadedVersion } from "./version.ts";
 
 /** The child's entry: this package's `child.ts`, on disk (a compiled executable has none yet: STUDY-171 §7.9). */
 export const CHILD_ENTRY = join(import.meta.dir, "child.ts");
+/** Set in a child's environment (by the host only): its calls' memory is not capped (`memoryCap`). */
+export const NO_MEMORY_CAP = "BUNVEX_SANDBOX_NO_MEMORY_CAP";
 /** The child's working directory: no `bunfig.toml` there, so none applies to it. */
 const CHILD_CWD = dirname(CHILD_ENTRY);
 /** The host's knobs the child's loader reads itself, passed through when set (`code-version.ts`). */
@@ -63,7 +67,9 @@ export type SandboxFailure =
   | "handshakeTimeout"
   | "protocol"
   | "stopped"
-  | "timeout";
+  | "timeout"
+  /** The child stopped itself past its calls' memory cap (`child-memory.ts`). */
+  | "oom";
 
 /** A request that failed because its child is gone (not an error of the app's code). */
 export class SandboxError extends Error {
@@ -76,6 +82,13 @@ export class SandboxError extends Error {
   }
 }
 
+/**
+ * What a call fails with when its child is gone: past the calls' memory cap, Convex's out-of-memory error (its isolate
+ * terminated, uncatchable: STUDY-188 R12); otherwise a system error, Convex's internal error.
+ */
+export const childGoneError = (e: SandboxError): Error =>
+  e.reason === "oom" ? outOfMemory() : new ExecutorFailure(e.message);
+
 export type SandboxProcessOptions = {
   /** How long the child may take to say hello (default `HANDSHAKE_TIMEOUT_MS`). */
   handshakeTimeoutMs?: number;
@@ -83,6 +96,11 @@ export type SandboxProcessOptions = {
   maxMessageBytes?: number;
   /** The child's entry. Tests only: a child that misbehaves. */
   entry?: string;
+  /**
+   * Whether the child caps its calls' memory (`child-memory.ts`; default true). Tests only: the HTTP response's 100 MiB
+   * cap, which a 64 MiB one makes out of reach, as on Convex.
+   */
+  memoryCap?: boolean;
 };
 
 /**
@@ -158,7 +176,9 @@ export class SandboxProcess {
   private constructor(
     private readonly proc: Subprocess<"ignore", "inherit", "pipe">,
     private readonly fd: number,
-    private readonly opts: Required<Omit<SandboxProcessOptions, "entry">>,
+    /** The child's memory channel (`child-memory.ts`): a byte on it, then its death, is its calls' memory cap. */
+    private readonly memoryFd: number,
+    private readonly opts: Required<Omit<SandboxProcessOptions, "entry" | "memoryCap">>,
     /** When it was spawned, on the host's monotonic clock. */
     private readonly spawnedAt: number,
   ) {
@@ -201,21 +221,25 @@ export class SandboxProcess {
   static async start(options: SandboxProcessOptions = {}): Promise<SandboxProcess> {
     // A function's `Date` is UTC, as Convex's (`ensure_utc`) and `bunvex-local-backend`'s (STUDY-171 §10).
     const env: Record<string, string> = { TZ: "UTC" };
+    if (options.memoryCap === false) env[NO_MEMORY_CAP] = "1";
     for (const k of CHILD_KNOBS) if (process.env[k] !== undefined) env[k] = process.env[k]!;
     const spawnedAt = realRuntime.monotonicNow();
     const proc = Bun.spawn([process.execPath, options.entry ?? CHILD_ENTRY], {
       cwd: CHILD_CWD,
       env,
-      stdio: ["ignore", "inherit", "pipe", "pipe"],
+      // fd 3: the messages, both ways; fd 4: the memory channel, the child's to write (`child-memory.ts`).
+      stdio: ["ignore", "inherit", "pipe", "pipe", "pipe"],
     });
     const fd = proc.stdio[3];
-    if (typeof fd !== "number") {
+    const memoryFd = proc.stdio[4];
+    if (typeof fd !== "number" || typeof memoryFd !== "number") {
       proc.kill("SIGKILL");
       throw new Error("the function sandbox's process has no channel");
     }
     const child = new SandboxProcess(
       proc,
       fd,
+      memoryFd,
       {
         handshakeTimeoutMs: options.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS,
         maxMessageBytes: options.maxMessageBytes ?? MAX_MESSAGE_BYTES,
@@ -418,17 +442,33 @@ export class SandboxProcess {
     }
   }
 
+  /**
+   * Whether the child wrote on its memory channel before it died: it stopped itself past its calls' memory cap. Read
+   * once it exited (its end is closed: the read never waits), not while it runs: a reader always waiting on the channel
+   * cost each operation of a call a few microseconds (measured, STUDY-188 §X17).
+   */
+  private stoppedPastCap(): boolean {
+    try {
+      return readSync(this.memoryFd, new Uint8Array(1)) > 0;
+    } catch {
+      return false;
+    }
+  }
+
   private async watchExit(stderr: Promise<unknown>) {
     const code = await this.proc.exited;
     await stderr;
     if (!this.dead) {
+      const oom = this.stoppedPastCap();
       const how = this.proc.signalCode ? `signal ${this.proc.signalCode}` : `exit code ${code}`;
       const tail = this.stderrTail.trim();
-      this.fail("crash", `exited unexpectedly (${how})${tail ? `: ${tail}` : ""}`);
+      if (oom) this.fail("oom", `stopped itself past its calls' memory cap (${how})`);
+      else this.fail("crash", `exited unexpectedly (${how})${tail ? `: ${tail}` : ""}`);
     }
-    // The socket is ours once read (`Subprocess.stdio`); the child's end is gone with it.
+    // The sockets are ours once read (`Subprocess.stdio`); the child's ends are gone with it.
     await this.drained.catch(() => {});
     closeSync(this.fd);
+    closeSync(this.memoryFd);
   }
 
   /** The child is gone: killed if it is not, and every waiting request failed with why. */

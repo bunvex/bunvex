@@ -33,7 +33,7 @@ import {
   withBodyLength,
 } from "@bunvex/server/executor";
 import type { WireFile } from "./child-action.ts";
-import type { SandboxProcess } from "./host.ts";
+import { childGoneError, type SandboxProcess } from "./host.ts";
 import { HostCallBase, thrownToChild } from "./host-call.ts";
 import { BadMessageError, type WireResponse } from "./protocol.ts";
 import { MARK } from "./streams.ts";
@@ -246,7 +246,7 @@ export class HostActionCall extends HostCallBase {
         const item = await this.next();
         switch (item.t) {
           case "gone":
-            throw new ExecutorFailure(item.e.message);
+            throw childGoneError(item.e);
           case "timeout":
             continue;
           case "cutOff":

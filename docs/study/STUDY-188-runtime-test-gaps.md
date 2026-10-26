@@ -1,7 +1,7 @@
 # STUDY-188 — What Convex's removed runtime tests pin that bunvex does not
 <!-- index: Runtime gaps from Convex's removed tests | decided (owner, 2026-10-25) -->
 
-- **Status:** decided (owner, 2026-10-25: every §5 recommendation; DV-553, DV-482 amended). R1 and R3 built; each other item ships on its own PR from `main`.
+- **Status:** decided (owner, 2026-10-25: every §5 recommendation; DV-553, DV-482 amended). R1, R3 and R12 (§X17b) built; each other item ships on its own PR from `main`.
 - **Convex source read:**
   - get-convex/convex-backend at `precompiled-2026-10-24-bb31399`;
   - the removed tests, from the snapshots `bea52bde0` (Rust: `crates/isolate/src/tests/{import,globals,async,adversarial}.rs`, `crates/sync/src/tests.rs`, `crates/common/src/{auth,schemas/json}.rs`) and `c358201e1` (TS: `js-integration-tests/stacktrace_node.test.ts`).
@@ -131,6 +131,121 @@ Same result in queries, mutations and actions:
   - On Bun 1.4.4, `codeGeneration: { strings: false }` gives Convex's exact `EvalError` for all three forms (probed).
   - A `vm` context cannot cap its own memory in a shared process.
 
+### X17b — memory under the `process` executor (R12, built)
+
+Q1 (c): no cap under `vm` (DV-553); under `process`, Convex's cap. Run on the oracle and on this branch with
+`packages/differential/memory-app/` (`test/memory-cap.test.ts`) and `packages/sandbox/test/memory-cap.test.ts`.
+
+**What Convex answers.** Each probe sits in a `try`/`catch` that would answer "caught"; none is caught.
+
+| Probe (query, mutation and action alike) | Convex |
+|---|---|
+| a 512 MiB and a 4 GiB `ArrayBuffer`, a 512 MiB `Blob`, 512 written 1 MiB `Uint8Array`s, 2^23 objects, 512 flat 1 MiB strings | HTTP 200 `{"status":"error","errorMessage":"[Request ID: …] Server Error\nJavaScript execution ran out of memory (maximum memory usage: 64 MB)\n","logLines":["[LOG] 'allocating …'"]}` |
+| the same over the sync socket | `[CONVEX Q(ops:query)] [Request ID: …] Server Error\nJavaScript execution ran out of memory (maximum memory usage: 64 MB)\n\n  Called by client` |
+| the function log | the run's `error` is the message and a newline; its log lines are kept |
+| the next call | succeeds |
+| `under` (16 MiB of typed array, a 16 Mi-character rope, 100 000 objects), `churn` (1 GiB of 1 MiB garbage) | succeed |
+
+Where the cap falls on Convex (a query that holds `n` of each, then returns):
+
+| Held | Convex: passes / fails | bunvex `process`, returned at once | bunvex `process`, held across a `db` read |
+|---|---|---|---|
+| one `new ArrayBuffer(n MiB)` | 64 / 65 | 64 / 65 | 64 / 65 |
+| `n` written 1 MiB `Uint8Array`s | 64 / 65 | 128 passes | 128 passes |
+| `n` flat 1 MiB strings | 84 / 88 | 128 passes | 112 passes; 128 passes or fails |
+| `n` objects `{ i, s }` | 1 000 000 / 1 250 000 | 2 000 000 passes | 1 250 000 / 1 500 000 |
+| `n` objects `{ i }` | 2 000 000 / 3 000 000 | 4 000 000 passes | 3 000 000 / 4 000 000 passes or fails |
+
+(bunvex's columns: two rounds each, sizes in ascending and in descending order in one child; past 256 MiB the
+backstop fails all of them.)
+
+**What Bun 1.4.4 offers** (probed on macOS):
+- No limit in the engine. `BUN_JSC_gcMaxHeapSize`, `maxHeapSizeAsRAMSizeMultiple` and `forceRAMSize` only steer the
+  collector: with `gcMaxHeapSize` at 64 MiB, 2·10⁷ objects grew the heap to 2 GB. `--smol` is collector tuning too;
+  `Worker` `resourceLimits` are ignored (STUDY-168 Q4).
+- No thread can stop another's JavaScript: a `Worker`'s `process.exit` ends the worker only. `process.kill(pid,
+  "SIGKILL")` from a worker kills the process.
+- The engine's counts, `process.memoryUsage()` (0.8 µs alone, about 4 µs in a loaded child; the calling thread's
+  engine only): `arrayBuffers` counts an `ArrayBuffer`'s bytes as soon as it is made, written or not, until it is
+  collected; `heapUsed` counts objects, but leaves out a typed array made without an `ArrayBuffer` and, mostly,
+  strings' bytes. `bun:jsc`'s `heapSize()` walks the heap (15 to 35 µs a call in a child): too slow per message.
+- The process's counts, `bun:jsc`'s `memoryUsage()` (2.2 µs, any thread): resident and committed memory. They count
+  garbage until it is collected (a call holding a few MiB grew them 30 to 130 MiB), memory the allocator keeps once
+  freed is reused unseen (48 MiB of typed arrays after an earlier call's garbage: no growth), and committed memory only
+  grows. So they cannot be the cap.
+
+**How bunvex does it** (`packages/sandbox/src/child-memory.ts`, `child-watchdog.ts`, `host.ts`):
+- **The cap**, in the thread that runs the calls, measured before the messages the child sends for its calls (the
+  first since they started, then at most once a millisecond: a measure costs about 4 µs in a child) and always as a
+  call answers: `arrayBuffers` past 64 MiB more than when the calls started (a 64 KiB slack: the engine's count of a
+  64 MiB buffer is 96 bytes over); or `heapUsed` past 96 MiB more (Convex's 64 + 32) after a full collection, run only
+  once it looks past it (V8 collects before it gives up).
+- **The backstop**: a watchdog thread (a `Worker`) reads the process's counts every millisecond while a call runs and
+  stops the child once they grew 256 MiB: code that never yields, and memory the engine does not count.
+- **Per call**: the calls a child runs at once share it (one child per code version, STUDY-171 §8.6); each limit is
+  multiplied by the most calls that ran at once since the child was last idle.
+- **Past it**: the child writes a byte on a socket of its own (fd 4) and kills itself. The host reads the byte once
+  the child exited (a reader waiting on it all along cost each operation about 4 µs), fails every call that ran in it
+  with `outOfMemory()` (a `FunctionPathError`: Convex's message alone, no `Uncaught`, no frames; a query's or
+  mutation's marked as the execution's failure), and the next call starts a new child. `PROTOCOL_VERSION` 9.
+- **The HTTP response's 100 MiB cap** (STUDY-171 §14) is now out of reach of a body held whole under `process`: a
+  101 MiB buffer fails the call first, as it would on Convex. `test/http-parity.test.ts` turns the cap off in its
+  children (`memoryCap: false`, a test-only option the host passes as an environment variable of its own) to keep
+  comparing that cap with `vm`.
+
+**What differs from Convex, for the owner** (no divergence decided here):
+- **G1, where the cap falls.** Exact for `ArrayBuffer`s (64 / 65 MiB). Objects fail near Convex's count when held
+  across an operation (1.25 to 1.5 M against 1.25 M); typed arrays without an `ArrayBuffer` and strings only at the
+  backstop (up to 256 MiB). In one child, a run of calls each holding more objects than the last (1, 1.25, 1.5, 2 M)
+  passed throughout: the counts a call starts from include what earlier calls left, and the engine's heap count lags
+  (collecting before such calls did not change it, measured). A call that allocates and returns without yielding is
+  seen only as it answers, after a collection that frees what it no longer holds, so only `ArrayBuffer`s and the
+  backstop fail it; and an `ArrayBuffer` it dropped before its next message may be collected first (a 4 GiB one made
+  and dropped at once passed once in six runs). Convex fails the allocation itself. The tests hold their buffers
+  across an operation.
+- **G2, concurrency.** The calls a child runs at once share its budget, and a kill fails all of them with the
+  message (the slow call beside an over-cap one, in the tests); Convex fails one isolate. The pool of one-call
+  processes (STUDY-168 PR 9) would make both per call.
+- **G3, log lines.** The failed call's lines are lost with its child (they travel with its next message); Convex keeps
+  them in the response and the function log.
+- **G4, push time.** A module's top level at load or analysis is not capped (no call runs).
+- **G5, a typed array never written** (`new Uint8Array(512 MiB)`): no engine count sees it, and committed memory does
+  not always grow: it often passes.
+- **G6, knobs.** `ISOLATE_MAX_USER_HEAP_SIZE`, `ISOLATE_MAX_HEAP_EXTRA_SIZE` and `ISOLATE_MAX_ARRAY_BUFFER_TOTAL_SIZE`
+  are not read; the caps are Convex's defaults.
+- **G7, Linux.** Measured on macOS only.
+
+**Cost** (`bench/calls.ts`, 1500 calls after 300, and `bench/startup.ts`, 20 children; `main` and this branch
+alternating, six and four rounds, the median of the rounds' p50; macOS, Apple silicon):
+
+| Under `process` | `main` | this branch |
+|---|---|---|
+| empty query | 66 µs | 72 µs |
+| 1 × `db.get` | 107 µs | 114 µs |
+| 100 × `db.get` | 3967 µs | 3924 µs |
+| insert mutation | 122 µs | 128 µs |
+| 10 `console.log` | 113 µs | 118 µs |
+| spawn to hello | 45 ms | 47 ms |
+| child RSS idle / after a load | 48.5 / 62.8 MiB | 50.8 / 67.2 MiB |
+
+About 6 µs a call (two measures, and waking the watchdog) and nothing per operation; the watchdog thread costs about
+2 ms at start and 2 to 4 MiB. `vm` is unchanged. Two designs were measured and dropped: measuring at every message
+(+4 µs an operation: 100 `db.get` at 4368 µs) and a host reader always waiting on fd 4 (+4 µs an operation).
+
+**Tests**: `packages/sandbox/test/memory-cap.test.ts` (6: each kind and probe past the cap, Convex's message, the next
+call succeeds; past it after an operation and held across operations; code that never yields stopped before its time
+limit; under the cap and 1 GiB of garbage succeed in the same child; a call beside one past the cap fails with it;
+under `vm` nothing is capped) and `packages/differential/test/memory-cap.test.ts` (3, against the oracle: every answer
+over HTTP but the log lines, the function log's errors, the sync socket's errors, `vm` uncapped). Each ran 20 and 8
+times in a row with no failure.
+
+| Sabotage | Fails |
+|---|---|
+| every limit raised to 64 GiB | sandbox: past the cap, after an operation, the call beside (3; the loop that never yields not run: it would allocate to its time limit); differential: HTTP and sync socket |
+| the host's `oom` answered as the internal error | sandbox: 5 of 6 |
+| the watchdog never stops the child | sandbox: 4, the loop that never yields with "Function execution timed out (maximum duration: 600ms)" |
+| no measure in the thread that runs the calls | sandbox: past the cap (the buffers held across an operation pass) |
+
 ### X19 — results after the function returns
 
 - **(a) Confirmed, narrow.** In Convex's `asyncTests:queryDangling`, the query returns an array and a dangling `.then` pushes to it.
@@ -178,14 +293,15 @@ Same result in queries, mutations and actions:
 | R9 (X16) | A query or mutation whose promise is still pending once nothing is in flight (X13's counter) and a macrotask has passed fails with "Returned promise will never resolve" | X13 |
 | R10 (X19a) | The result is snapshotted where the handler's promise settles, not after the wrappers | X13 (the same run loop) |
 | R11 (X11) | Per Q2 | Q2 |
-| R12 (X17b) | Per Q1 | Q1 |
+| R12 (X17b) | Per Q1 (c): under `process`, Convex's cap as far as the child can measure it, Convex's message, a new child for the next call (§X17b, built) | Q1 |
 
 Each PR comes with a differential test (both backends, the answers above), a sabotage check and, for R2 and R6, a
 measurement of module load and context creation.
 
 ## 4. Divergences
 
-- **DV-553** (Q1): no memory cap under `vm`; Convex's 64 MiB cap under the `process` executor (R12).
+- **DV-553** (Q1): no memory cap under `vm`; Convex's 64 MiB cap under the `process` executor (R12). Built; how far
+  it is from Convex's (G1–G7 in §X17b) is for the owner.
 - **DV-482**, amended (Q2): the runtime's `node:` frames are kept in `"use node"` contexts (R11).
 - Q3: R6 matches Convex (a module that throws while loading fails the function); no divergence.
 - **DV-569** (owner, 2026-10-25): the rare-error texts, frames and timings the PRs left different, one entry for all of them. Each PR lists its own: #852 (X4), #853 (X7), #855 (X14), #856 (X9), #857 (X21), #858 (X16), #859 (X19). The `process` executor's differences in #855 and #856 are fixed to match Convex, not recorded.

@@ -24,6 +24,7 @@
 // call running, when there is one, and only printed otherwise; and a continuation of another call that one call's
 // code resumes (a promise kept in module state, awaited by both) is that call's.
 import { drainMicrotasks } from "bun:jsc";
+import { callsRunning, checkMemory } from "./child-memory.ts";
 
 /** A call that can fail of a rejection: a query's or mutation's (`ChildCall`), or an action's (`ChildActionCall`). */
 export interface Rejectable {
@@ -93,13 +94,17 @@ function mark(id: number | null) {
   if (!reportsAtDrain) setImmediate(() => {});
 }
 
-/** `call` runs from now until it answers (`untrack`). */
+/** `call` runs from now until it answers (`untrack`); the calls running are the memory cap's (`child-memory.ts`). */
 export function track(id: number, call: Rejectable) {
   live.set(id, call);
+  callsRunning(live.size);
 }
 
+/** `id` answers now: past the memory cap, the child dies first, so no call answers past it. */
 export function untrack(id: number) {
+  if (live.has(id)) checkMemory(true);
   live.delete(id);
+  callsRunning(live.size);
   lastMarker.delete(id);
   // Its late answers (dropped, or the code it left running): each in a turn of its own.
   for (const resume of queued.get(id) ?? []) setImmediate(resume);
