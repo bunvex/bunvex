@@ -950,6 +950,53 @@ describe("deploy2 over HTTP", () => {
     expect(await me()).toBe("user-1");
   });
 
+  test('an invalid auth.config: Convex\'s InvalidAuthConfig, "The pushed auth config is invalid: …" (STUDY-188 R4)', async () => {
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const auth = (source: string) => mod("auth.config.js", source);
+    const refused = async (source: string) => {
+      const r = await d.push([auth(source)]);
+      expect(r.start.status).toBe(400);
+      expect(r.start.body.code).toBe("InvalidAuthConfig");
+      return r.start.body.message as string;
+    };
+    const PUSHED = "Hit an error while pushing:\nThe pushed auth config is invalid: ";
+    // What Convex's binary answered (precompiled-2026-10-24-bb31399), each after the same prefix.
+    expect(await refused(`export default { providers: [{ domain: "foo.test", applicationID: "x" }] };`)).toBe(
+      `${PUSHED}Invalid provider domain URL "foo.test": Does not look like a URL (must have a scheme or end with a top-level domain)`,
+    );
+    expect(await refused(`export default { providers: [{ domain: "example.com", applicationId: "x" }] };`)).toBe(
+      `${PUSHED}auth config file must include a list of provider credentials: Provider at index 0 must have applicationID property spelled lowercase 'application', capital I, capital D.`,
+    );
+    expect(await refused("export const x = 1;")).toBe(`${PUSHED}auth config file is missing default export.`);
+    // Convex's frame names its own bundle; the first line is the same.
+    expect((await refused(`throw new Error("boom");\nexport default {};`)).split("\n").slice(0, 2)).toEqual([
+      "Hit an error while pushing:",
+      "The pushed auth config is invalid: Uncaught Error: boom",
+    ]);
+    // What JSON cannot hold is refused, not a 500 (it was, under `vm`).
+    expect(
+      await refused(`export default { providers: [{ domain: "example.com", applicationID: "x", n: 10n }] };`),
+    ).toBe(`${PUSHED}auth config file can only contain strings`);
+    // A punycode top-level domain is one.
+    const ok = await d.push([auth(`export default { providers: [{ domain: "foo.xn--p1ai", applicationID: "x" }] };`)]);
+    expect(ok.start.body.appAuth).toEqual([{ domain: "foo.xn--p1ai", applicationID: "x" }]);
+    // A variable change that would break it: Convex's other explanation, the same structure.
+    await d.post("/api/update_environment_variables", { changes: [{ name: "D", value: "a.com" }] });
+    const reads = await d.push([
+      auth(`export default { providers: [{ domain: process.env.D, applicationID: "x" }] };`),
+    ]);
+    expect(reads.start.status).toBe(200);
+    expect(await d.post("/api/update_environment_variables", { changes: [{ name: "D", value: "a.local" }] })).toEqual({
+      status: 400,
+      body: {
+        code: "InvalidAuthConfig",
+        message:
+          'This change would make the auth config invalid: Invalid provider domain URL "a.local": Does not look like a URL (must have a scheme or end with a top-level domain)',
+      },
+    });
+  });
+
   test("crons come with the push, in its commit", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());
