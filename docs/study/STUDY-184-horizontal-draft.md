@@ -1,9 +1,9 @@
 # STUDY-184 — Horizontal scaling: Convex's real shape, and what one bunvex process does with a core
-<!-- index: Horizontal scaling: Convex's real shape, one bunvex process per core | decided (owner, 2026-10-26): Convex's shape, pending measurement 3 -->
+<!-- index: Horizontal scaling: Convex's real shape, one bunvex process per core | decided (owner, 2026-10-26): Convex's shape, confirmed by measurement 3 (§5.6); DV-114 rewritten, DV-116/118/119 withdrawn -->
 
 - **Status:** rewritten from scratch on 2026-10-26. The earlier draft did not read Convex's source, and its load
-  measured the client rather than the server (§5.1). No product change. Decided (owner, 2026-10-26): every §7
-  recommendation.
+  measured the client rather than the server (§5.1). No product change. Decided (owner, 2026-10-26): Q1–Q5.
+  Measurement 3 is in (§5.6).
 - **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
   - `crates/database/src/{database,committer,subscription,transaction,retention}.rs`;
   - `crates/postgres/src/{lib,sql}.rs`, `crates/mysql/src/v5/persistence.rs`;
@@ -40,6 +40,12 @@
    - Convex keeps invalidation on the one backend and moves only execution and sockets.
    - Both give an app the same answers. They differ in how much machinery bunvex must build and keep correct.
    - §7 Q1 asks whether to keep H2/H4 or follow Convex's shape.
+5. **Measurement 3 (§5.6) confirms Convex's shape.**
+   - Matching a commit against a million subscriptions costs about 3 µs, and a STUDY-24 follower's apply under 1 µs.
+   - The cost is per query update: 43–54 µs in one bunvex process once two avoidable checks are gone (22–29k
+     updates/s), against Convex's 2.2 ms (1.0–1.7k updates/s from one backend on every core).
+   - Today those two checks in the sync session, which Convex does not make, cap one invalidation per commit at 261
+     commits/s with a million subscriptions. That is a fix for either design (§7 Q4).
 
 ## 1. How Convex does it
 
@@ -176,8 +182,16 @@ none.
 ## 4. Divergences
 
 Nothing new is recorded here. Q1 (owner, 2026-10-26) follows Convex's shape, so DV-114, DV-116, DV-118 and DV-119
-are marked as under review in `divergences.md`. They are withdrawn or rewritten once §5.2's measurement 3 is in.
-DV-113, DV-115, DV-117 and DV-121 hold in both shapes.
+were marked as under review in `divergences.md` until measurement 3. DV-113, DV-115, DV-117 and DV-121 hold in both shapes.
+
+Measurement 3 is in (§5.6). Decided (owner, 2026-10-26, Q5), and recorded in `divergences.md`:
+
+| DV | Today (STUDY-24) | Proposal | Why |
+|---|---|---|---|
+| DV-114 | Followers hold WebSockets and serve queries and subscriptions themselves | **Rewrite:** other nodes hold WebSockets and forward them to the leader, and run queries at the leader's ts (A2); the leader keeps every subscription and its invalidation (Convex Cloud's Usher and funrun) | §5.6: the leader's subscription work stays above one Convex backend's capacity |
+| DV-116 | The leader pushes a commit stream; followers catch up by ts | **Withdraw.** No node keeps state from commits: execution reads the store at the leader's ts | Nothing consumes a stream in Convex's shape |
+| DV-118 | A lagging node waits briefly, then refuses `Connect` | **Withdraw.** The leader's sync session answers `Connect`, as Convex's does at once | No node serves from its own, possibly lagging, state |
+| DV-119 | Follower reads use a "read index" round trip to the leader | **Withdraw.** Every read runs at a ts the leader hands out, so read-your-writes is automatic, as in Convex | No follower snapshot to bring up to date |
 
 ## 5. Measurements, 2026-10-26
 
@@ -224,13 +238,13 @@ so it can only do worse.
   cached reads fall at 4.
 - The insert row writes to **separate** SQLite files. It says what the JS threads can do, not what one shared store
   can absorb.
-- **Measured since on Linux:** item 1 in §5.5 and item 4 in §5.4. **Not measured yet, and needed before any
-  follower code:**
+- **Measured since:** item 1 in §5.5, item 4 in §5.4 and item 3 in §5.6. **Not measured yet, and needed before
+  any follower code:**
   1. ~~the same table on a dedicated Linux box with the load generator on another machine~~ (§5.5);
   2. one shared Postgres store under N processes (the store's group commit becomes the write ceiling). Today two
      bench servers cannot share one store: the store's lease lets only the newest write (PERSIST-01 C7), so this
      needs the first piece of Convex's shape (A2) built;
-  3. the cost of invalidation under each design in §3.1;
+  3. ~~the cost of invalidation under each design in §3.1~~ (§5.6);
   4. ~~Convex's binary under the same scenarios on the same box~~ (§5.4).
 
 ### 5.3 From the earlier draft, kept
@@ -311,6 +325,178 @@ N independent processes, SQLite, each on its own copy of the store
   compare between runs on the same droplet type, not with other machines.
 - **Cost:** two `c-4` droplets cost $0.25 an hour; this section's two suites took about an hour.
 
+### 5.6 The cost of invalidation (measurement 3)
+
+The question: in Convex's shape one leader keeps the commit and every subscription. Is the leader's subscription
+work the ceiling, before the store's writes are? STUDY-24's shape spreads subscriptions over followers, but each
+follower applies every commit. Measured on bunvex as it is, plus Convex's binary for reference.
+
+- **Machine:** the same M1 Pro (8 cores, 16 GB), shared with other sessions' work. The load average was 2–7 during
+  the runs. Bun 1.4.4, bunvex at `dcbcc4ce`, Convex `precompiled-2026-10-10-72ce13c` (the differential tests' binary).
+- **End to end:** `bench/s184-invalidation.ts`.
+  - **Server.** A real server in its own process: `createServer` on the memory store, which writes its log with
+    an fsync per group commit, in a fresh directory per cell.
+  - **Clients.** N subscriptions held by real WebSocket sync sessions in 4 other processes, over loopback, with 20
+    subscriptions per socket (84 at 1M, to stay under macOS's 16k ephemeral ports).
+  - **Queries.** Subscription i is `subs:watch({g: i mod G, i})`: the newest document of group g, like a chat room's
+    latest message. Each subscription is its own execution, so no two share a result.
+  - **Writes.** A commit is `subs:bump({g, t})` over HTTP. It inserts into group g and so invalidates N/G
+    subscriptions: G = N (one), 100 (1 %) or 10 (10 %). Inserts read nothing, so writers never conflict.
+  - **Splaying is off** (`SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER=0`, on both backends). Convex's default would
+    spread a commit that invalidates more than 200 subscriptions over count × 5 ms. That changes latency, not CPU.
+  - **Isolated:** commits one at a time, each waiting until the clients received every update it caused. Server
+    CPU per commit.
+  - **Saturated:** 16 writers as fast as the server answers, for 10 s. Reported: commits/s, query updates the
+    clients received per second, and latency from a commit's start to its update at a client. A session folds the
+    commits that land while it reruns into one transition, as Convex's does, so updates per commit fall under load.
+- **Micro:** `bench/s184-invalidation-micro.ts`, in one process, on the same read-sets:
+  - `ReadSetIndex` matching one commit;
+  - replacing one read-set after its rerun;
+  - one rerun through `engine.queryTracked`;
+  - a STUDY-24 follower applying one pushed commit: decoding the binary `{ts, prevTs, writes}` frame of STUDY-24
+    §4.3 and appending it to its log.
+- **Convex:** `packages/differential/scripts/s184-invalidation-oracle.ts` runs the same bench against Convex's
+  local backend on SQLite, a fresh backend per cell, with the same functions (`packages/differential/s184-invalidation-app/`).
+  Its CPU comes from `ps` and spans every core.
+- **Raw results:** `bench/results/s184-invalidation/`: `bunvex.jsonl`, `prototype.jsonl` (with `prototype.diff`,
+  below), `oracle.jsonl` (Convex's) and `micro.jsonl`.
+
+**Matching is not the cost** (micro):
+
+| N subscriptions | match, ~1 invalidated | match, 1 % | match, 10 % | replace one read-set |
+|---|---:|---:|---:|---:|
+| 1 000 | 0.6 µs | 0.7 µs | 6 µs | 1.5 µs |
+| 10 000 | 0.9 µs | 8 µs | 49 µs | 1.9 µs |
+| 100 000 | 1.3 µs | 174 µs | 1.8 ms | 3.6–4.4 µs |
+| 1 000 000 | 2.9 µs | 2.8 ms | 25 ms | 5–8 µs |
+
+- Finding the invalidated subscriptions costs about 3 µs at a million when a commit touches one of them, and about
+  50–280 ns per subscription it does touch. It is proportional to the answer, as Convex's interval map.
+- A follower's apply costs **0.45 µs** per commit (a 118-byte frame). One rerun through the engine costs 7.7 µs.
+
+**End to end, bunvex today** (one server process):
+
+| N | invalidated per commit | isolated CPU per commit | saturated commits/s | updates pushed/s | update p50 / p99 |
+|---|---:|---:|---:|---:|---:|
+| 0 | 0 | 0.24 ms | 10 917 | — | — |
+| 1 000 | 1 / 10 / 100 | 0.93 / 2.6 / 9.4 ms | 3 731 / 1 214 / 356 | 3 707 / 11 352 / 21 382 | 4 / 15 / 53 ms ; 12 / 22 / 70 |
+| 10 000 | 1 / 100 / 1 000 | 1.1 / 16 / 97 ms | 1 633 / 119 / 30 | 1 630 / 11 171 / 18 965 | 10 / 153 / 612 ms ; 20 / 193 / 804 |
+| 100 000 | 1 / 1 000 / 10 000 | 1.1 / 169 / 1 270 ms | 686 / 10 / 3 | 684 / 9 803 / 17 430 | 24 / 1 669 / 6 440 ms ; 49 / 1 984 / 8 663 |
+| 1 000 000 | 1 / 10 000 | 2.8 / 9 254 ms | 261 / <1 | 260 / 3 341 | 55 / 27 842 ms ; 193 / 41 395 |
+
+- **Setup:** 1M subscriptions took 28 s to subscribe and about 3.1 GB of the server's heap, so about 3 KB each.
+- **1M at 10 % was not run:** at about 1 ms per invalidated subscription it would take some 100 s of CPU per
+  commit.
+- **The server holds 1.1–1.4 cores in every saturated cell:** the JS thread plus Bun's own threads.
+
+**What sets these numbers.** The profiles (`PROFILE=<dir>`) show two costs that Convex does not have, both in the
+sync session:
+
+- **Every transition re-checks every query of its session against the write log.** The check is
+  `changedBetween(q.exec.reads, q.validAt, ts)` before the reruns, and again after them. It scans every write into
+  the index since the session's last transition.
+- **A rerun first checks whether the key's latest result is still valid.** That is `resultAt`'s `valid`, with the
+  same scan, from the result's own ts.
+- So a commit that invalidates one subscription costs O(queries per session × commits since that session last
+  moved). That cost grows with N, since each session moves more rarely.
+- In the profiles, the first check took 32 % of the server's CPU at 1 000 subscriptions. With it removed, the second
+  took 44 % at 10 000.
+- **Convex reruns only what was invalidated.** Its `need_fetch` takes the queries whose subscription is gone
+  (`crates/sync/src/state.rs:379-391`). The subscription manager drops them when a commit hits them, so valid
+  queries are not looked at (`worker.rs:1080-1135`).
+
+The same bench on a **prototype that is not in this PR** shows what that costs. The prototype takes a session's
+stale queries from the keys the hub matched, and trusts a key's latest result unless the hub saw a commit hit it
+since. Every `sync*` test passed with it.
+
+| N | invalidated per commit | isolated CPU per commit | saturated commits/s | updates pushed/s | update p50 |
+|---|---:|---:|---:|---:|---:|
+| 1 000 | 1 / 10 / 100 | 0.82 / 1.5 / 5.1 ms | 7 892 / 2 337 / 485 | 7 832 / 21 751 / 29 295 | 2 / 9 / 41 ms |
+| 10 000 | 1 / 100 / 1 000 | 0.84 / 6.5 / 44 ms | 6 943 / 261 / 52 | 6 938 / 24 554 / 28 817 | 3 / 77 / 390 ms |
+| 100 000 | 1 / 1 000 / 10 000 | 0.86 / 62 / 511 ms | 6 065 / 24 / 5 | 6 063 / 22 936 / 26 144 | 3 / 847 / 4 068 ms |
+| 1 000 000 | 1 / 10 000 | 0.85 / 1 187 ms | 4 027 / 1 | 4 025 / 11 021 | 4 / 10 894 ms |
+
+- **With one invalidation per commit, the commit rate no longer falls with N:** 6–8k commits/s up to 100k, 4k at
+  a million, against 261 today.
+- **What is left is per update:** 43–54 µs of CPU for each query update at saturation, about 22–29k updates/s
+  from one process. At a million subscriptions it is 119 µs, with a 3 GB heap.
+- **Where an update's CPU goes** (10 000 subscriptions, 10 %):
+  - replacing the read-set in the `ReadSetIndex`, 25 %;
+  - running the query (engine, transaction, functions, values), about a third;
+  - the session's transition, its JSON and the socket send, the rest.
+
+**Convex's binary on the same Mac** (one backend, every core):
+
+| N | invalidated per commit | isolated CPU per commit | saturated commits/s | updates pushed/s | backend cores | update p50 / p99 |
+|---|---:|---:|---:|---:|---:|---:|
+| 0 | 0 | 2.1 ms | 2 094 | — | 4.6 | — |
+| 1 000 | 1 / 10 / 100 | 4.6 / 27 / 235 ms | 1 087 / 474 / 232 | 1 082 / 1 591 / 834 | 5.2 / 4.7 / 2.9 | 23 / 744 / 1 327 ms ; 34 / 1 237 / 3 044 |
+| 10 000 | 1 / 100 / 1 000 | 5.1 / 233 / 2 167 ms | 1 034 / 715 / 505 | 1 032 / 1 674 / 1 410 | 5.4 / 5.8 / 4.8 | 24 / 4 397 / 3 645 ms ; 55 / 6 465 / 5 630 |
+| 100 000 | 1 | 5.6 ms | 1 134 | 1 132 | 6.4 | 24 ms ; 41 |
+
+- **Convex spends about 2.2 ms of CPU per invalidated subscription,** about 40× bunvex's prototype. It delivers
+  1.0–1.7k query updates/s however many cores it uses.
+- **Its commit rate holds while its updates fall behind.** Commits run on other threads than the sync workers, so
+  a wide fan-out shows as seconds of update latency, not fewer commits. bunvex's one thread slows the writers
+  instead.
+- **Its 100 000 row ran with 200 subscriptions per socket** (500 sockets). With 20 per socket, Convex's backend
+  stopped accepting subscriptions at about 680 sockets (13 600 subscriptions in 10 min). Not investigated.
+- Its 1 % and 10 % rows at 100 000 and beyond were not run: at 2.2 ms per invalidated subscription a commit takes
+  some 20 s of CPU.
+
+**Measured as asked, and what is a model.**
+
+- The end-to-end numbers use real sync sessions over loopback, the client in other processes on the same machine.
+  The clients took 4 other cores at most.
+- The commit stream of STUDY-24 is not built, so its follower is a model from the micro numbers. So is the leader
+  of Convex's shape, which bunvex does not have either: its execution off the leader (A2 for queries) and its
+  socket tier are not built.
+
+**What saturates first in Convex's shape.** The leader keeps the commit, the matching, each invalidated read-set's
+replacement and the session's transition. Execution moves to other processes and sockets to a forwarding tier.
+
+- **The leader's load per second** is `W × c_commit + U × c_update`:
+  - W is commits/s and U is query updates/s;
+  - `c_commit` is 0.12 ms today (10.9k/s on 1.33 cores), less once mutations execute elsewhere (A2);
+  - `c_update` is what stays on the leader: the prototype's 43–54 µs minus the run, so about 30–40 µs;
+  - the matching is a few µs per commit.
+- So one leader core carries about **25–33k query updates/s** when it commits little, and fewer as it commits more.
+- **At the store's write ceiling** (§5.1: 4.6–5k inserts/s on SQLite here), the leader keeps up while a commit
+  updates about 2–4 subscriptions on average. Past that, its subscription work saturates before the store does.
+- **On the droplets** (§5.5: 1.6–2k inserts/s on 0.6–0.7 of a core), every cost is 3–4× higher, and the same
+  arithmetic gives about 2 updates per commit.
+- **Today it saturates much earlier:** with one invalidation per commit, 1 633 commits/s at 10 000 subscriptions
+  and 261 at a million. That is below every write ceiling in §5.1, §5.4 and §5.5, and it is the two costs above,
+  not anything Convex's shape requires.
+
+**STUDY-24's shape, as a model.** With k followers sharing N subscriptions:
+
+- **Per follower:** `W × (a + m(N/k)) + (U/k) × c_full`:
+  - `a` = 0.45 µs to apply a commit, plus its socket read (not measured here);
+  - `m(N/k)` = 1–3 µs to match it;
+  - `c_full` = 43–54 µs per update, including the run.
+- **Per leader:** `W × (c_commit + k × s)`, with s the push of a frame to one follower. STUDY-24 §4.5 measured
+  about 6 µs per socket per 1 KB message.
+- At W = 5k commits/s, a follower's own share costs about 2 % of a core (4 % with a socket read as dear as the
+  leader's send), and the leader's push to 8 followers about 24 %. Update capacity then grows about linearly with k: 8 followers would carry some 200k updates/s.
+- **Assumptions:**
+  - followers' reruns read the shared store at their own applied ts, at the same cost as on the leader;
+  - subscriptions spread evenly over followers;
+  - deduplication across followers is lost (two followers watching one key both rerun it);
+  - the stream's catch-up, gaps and lag handling (H4, H9, H10) are free in steady state. They cost code, not CPU.
+
+**Reading.**
+
+- **The per-commit apply that STUDY-24 adds is cheap:** under 1 µs, and about 3 µs of matching even at a million
+  subscriptions. That is not what makes Convex's shape preferable.
+- **STUDY-24's shape scales update fan-out past one core; Convex's does not.** Convex does not either: its one
+  backend delivered 1.0–1.7k updates/s here, and bunvex's one process, with the two costs fixed, carries 13–29×
+  that. A bunvex leader in Convex's shape stays above what a Convex deployment's one backend does, which is the
+  bar parity sets.
+- **The number that matters today is the session's revalidation, not the design.** Until it is fixed, a commit
+  that invalidates one subscription costs 0.3–4 ms of leader CPU, growing with N, in either design. In STUDY-24's
+  each follower would pay it for its own sessions.
+
 ## 6. Additions
 
 None proposed.
@@ -325,3 +511,12 @@ it before any follower code.
 | Q1 | Keep STUDY-24's H2/H4 (followers execute queries and own subscriptions, fed by a pushed commit stream), or follow Convex's shape: the leader keeps the commit and the subscriptions, and other processes take execution against the store at the leader's timestamp (A2, already decided) and sockets forwarded to the leader? | Follow Convex's shape. It needs no commit stream, no read index and no lag handling, and its read-your-writes is automatic. Its cost is that the leader's subscription work does not spread; §5.1 did not load subscriptions, so measurement 3 in §5.2 decides it |
 | Q2 | Before any follower: take work off the one JS thread inside one process first, for example SQLite's synchronous writes (51 % of an insert's main thread) and the per-request value checks? | Yes. It raises what one process does, and every design in §3.1 needs it |
 | Q3 | Run §5.2's missing measurements on the owner's Linux box, with k6 on a second machine? | Yes. Without them, neither Q1 nor A1 has a number behind it |
+
+Measurement 3 (§5.6) is in. **It confirms Q1:** matching and a follower's apply cost microseconds at a million
+subscriptions, and a bunvex leader that keeps every subscription carries more query updates than one Convex backend
+does. Two questions it raised, decided (owner, 2026-10-26) as recommended:
+
+| # | Question | Recommendation (decided) |
+|---|---|---|
+| Q4 | Make the sync session rerun only the queries a commit invalidated, as Convex's `need_fetch` does, instead of re-checking every query against the write log on each transition and each rerun? | Yes, in its own PR with tests and a measurement. It is not a divergence: apps see the same transitions, sooner. §5.6's prototype gives 15× the commit rate at a million subscriptions |
+| Q5 | Withdraw DV-116, DV-118 and DV-119, and rewrite DV-114 as §4 proposes? | Yes. Convex's shape needs none of the three, and DV-114 then describes Convex Cloud's shape |
