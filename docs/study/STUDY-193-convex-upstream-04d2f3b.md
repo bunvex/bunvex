@@ -58,7 +58,7 @@ opened). Two of the nineteen items are built.
 | A1 | Log lines: 1024 for actions, 256 for queries and mutations | no | — | one `MAX_LOG_LINES = 256` for every function (`server/src/logs.ts:21`; the child's copy, `sandbox/src/child-call.ts:588`) |
 | A2 | Import limits: 64 MiB part, 16 MiB JSONL line and CSV record | no | — | `/api/import/upload_part` reads any size (`server/src/server.ts:2233`); `import-parse.ts` has no line or record bound |
 | A3 | Drop the 90 MB zipped package limit | no | — | `MAX_ZIPPED_PACKAGE_BYTES = 90_000_000` and its knob (`server/src/code-store.ts:40-49`) |
-| A4 | PBKDF2 cap at 150 000 000 work units | **yes** | #PR | a function context's `crypto.subtle` rejects past the bound, and past 64 KiB (`server/src/web-crypto.ts`); differential `pbkdf2-cap.test.ts` |
+| A4 | PBKDF2 cap at 150 000 000 work units | **yes** | #888 | a function context's `crypto.subtle` rejects past the bound, and past 64 KiB (`server/src/web-crypto.ts`); differential `pbkdf2-cap.test.ts` |
 | A5 | 204/205/304 with a body throws | no | — | `SpecResponse` has no null-body status check (`server/src/web-response.ts:63`), and Bun 1.4.4's `Response` accepts all three (probed: `new Response("x", {status: 204})` does not throw) |
 | A6 | Action `fetch` drops the app's `Proxy-Authorization` | **yes** | #842 | `request.headers.delete("proxy-authorization")` (`server/src/action-fetch.ts:311`) |
 | A7 | `.staged({ field })` field deltas | no | — | an object is still taken as the whole validator (`core/src/schema.ts:336-341`) |
