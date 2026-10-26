@@ -65,6 +65,7 @@ export {
   makeLogLine,
 } from "./logs.ts";
 export { trackedOperation } from "./pending-ops.ts";
+export { snapshotOnSettle } from "./result-snapshot.ts";
 export { type AnyRoomDef, presenceGeneric, roomGeneric } from "./rooms/define.ts";
 export { HttpRouter, httpActionGeneric } from "./router.ts";
 export { setServiceCallContext } from "./service-tokens.ts";

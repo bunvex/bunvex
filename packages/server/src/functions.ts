@@ -207,6 +207,7 @@ import {
 import { withNodeProcessErrors } from "./node-process-errors.ts";
 import { setOperationTracker } from "./pending-ops.ts";
 import type { GenericActionCtx, GenericMutationCtx, GenericQueryCtx, VectorSearchQuery } from "./registration.ts";
+import { snapshotOnSettle } from "./result-snapshot.ts";
 import { roomsCtx } from "./rooms/ctx.ts";
 import { type AnyRoomDef, isRoomDef, type RoomGate } from "./rooms/define.ts";
 import type { RoomHub } from "./rooms/hub.ts";
@@ -2094,8 +2095,10 @@ export class Functions {
     // A sandboxed function's handler is in its child: the stand-in gets the same `ctx`, and its transaction.
     const remote = REMOTE_FUNCTIONS.get(f);
     // A deployed function's promise fails once it can never resolve (STUDY-188 §X16); a sandboxed one's child watches
-    // it (`ChildCall`).
-    const handler = () => (f.handler as (ctx: unknown, args: AnyArgs) => unknown)(appContext(f.handler, ctx), args);
+    // it (`ChildCall`). Its result is as it stood when its promise settled, as Convex serializes it there (STUDY-188
+    // §X19 a); a sandboxed one's child snapshots it (`ChildCall.run`).
+    const handler = () =>
+      snapshotOnSettle((f.handler as (ctx: unknown, args: AnyArgs) => unknown)(appContext(f.handler, ctx), args));
     const run = remote
       ? () => remote(ctx, args, { db, shape: f.kind === "mutation" ? "writer" : db.vars ? "reader" : "tx" })
       : this.deployedFns.has(f)
