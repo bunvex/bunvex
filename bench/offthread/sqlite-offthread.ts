@@ -60,7 +60,7 @@ class Thread {
 export class OffThreadSqlite extends SqlitePersistence {
   private writer: Thread | null = null;
   private readers: Thread[] = [];
-  private group: { ts: bigint; docs: DocWrite[]; idx: IndexWrite[] }[] = [];
+  private commits: { ts: bigint; docs: DocWrite[]; idx: IndexWrite[] }[] = [];
   private groupEntries: IndexEntryAt[] = [];
   private nextReader = 0;
 
@@ -78,13 +78,13 @@ export class OffThreadSqlite extends SqlitePersistence {
   override apply(ts: bigint, docs: DocWrite[], idx: IndexWrite[]) {
     if (!this.writer) return super.apply(ts, docs, idx);
     (this as any).assertWriter();
-    this.group.push({ ts, docs, idx });
+    this.commits.push({ ts, docs, idx });
   }
 
   override writeIndexEntries(entries: IndexEntryAt[]): void | Promise<void> {
     if (!this.writer) return super.writeIndexEntries(entries);
     (this as any).assertWriter();
-    if (this.group.length) {
+    if (this.commits.length) {
       this.groupEntries.push(...entries);
       return;
     }
@@ -93,14 +93,14 @@ export class OffThreadSqlite extends SqlitePersistence {
 
   override flush(): void | Promise<void> {
     if (!this.writer) return super.flush();
-    if (!this.group.length) return;
-    const commits = this.group;
+    if (!this.commits.length) return;
+    const commits = this.commits;
     const entries = this.groupEntries;
     const top = commits[commits.length - 1]!.ts;
     // A retry after a failure sends the same group again: it stays until the write succeeds.
     return this.writer.call<void>({ op: "group", commits, entries }).then(() => {
-      if (this.group === commits) {
-        this.group = [];
+      if (this.commits === commits) {
+        this.commits = [];
         this.groupEntries = [];
       }
       (this as any).durableTs = top;
