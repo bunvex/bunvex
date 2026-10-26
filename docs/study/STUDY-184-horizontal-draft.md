@@ -1,175 +1,246 @@
-# STUDY-184 — horizontal scaling, the Linux measurements before any follower
+# STUDY-184 — Horizontal scaling: Convex's real shape, and what one bunvex process does with a core
+<!-- index: Horizontal scaling: Convex's real shape, one bunvex process per core | owner questions -->
 
-- **Status:** draft. No product change. [STUDY-24](STUDY-24-horizontal-scaling.md) H1–H12 stay as the owner
-  decided them. This study records what has to be measured on Linux before a follower exists.
-- **Convex source read:** not re-read. Convex Cloud's shape is STUDY-24 §1.3: one committer per deployment,
-  function execution and WebSockets scaled beside it. Self-hosted Convex is one process.
-- **Related:** STUDY-24, DV-113–DV-121, the VPS table in
-  [E2E-VPS-2026-10-05](../bench/E2E-VPS-2026-10-05.md)
+- **Status:** rewritten from scratch on 2026-10-26. The earlier draft did not read Convex's source, and its load
+  measured the client rather than the server (§5.1). No product change. Owner questions in §7.
+- **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
+  - `crates/database/src/{database,committer,subscription,transaction,retention}.rs`;
+  - `crates/postgres/src/{lib,sql}.rs`, `crates/mysql/src/v5/persistence.rs`;
+  - `crates/function_runner/src/{lib,server,in_process_function_runner,in_memory_indexes}.rs`;
+  - `crates/application/src/{api,lib}.rs`, `crates/application/src/application_function_runner/mod.rs`;
+  - `crates/sync/src/{worker,subscription_reconnect}.rs`, `crates/local_backend/src/{lib,main}.rs`,
+    `crates/local_backend/src/subs/mod.rs`;
+  - `crates/search/src/searcher/`, `crates/common/src/knobs.rs`;
+  - `crates/backend_harness/src/provision.rs`;
+  - `self-hosted/README.md`, `npm-packages/docs/docs/production/state/limits.mdx`.
+- **Related:**
+  - [STUDY-24](STUDY-24-horizontal-scaling.md), whose H1–H12 the owner decided (DV-113–DV-121);
+  - [STUDY-171](STUDY-171-function-sandbox-seam.md) (the `process` executor, AD-44);
+  - `bench/scale/`.
 
-## 1. What is already decided and built
+## 0. In short
 
-One deployment keeps one committer. Extra processes take reads, sockets and, later, function execution.
-Mutations are forwarded to the leader first (A1). Execution on the follower with the leader's begin
-timestamp (A2) comes after that. Memory and SQLite stay one node. Postgres, MySQL and MongoDB are the
-stores that can have followers.
+1. **Convex never scales a deployment's writes or its subscriptions beyond one process.**
+   - One backend per deployment holds the committer, the subscriptions and every background worker.
+   - Convex Cloud adds stateless function runners ("funrun") that read the database directly at the timestamp the
+     backend hands them.
+   - It also adds a WebSocket tier ("Usher") that forwards to the backend.
+   - There is no follower that applies a commit stream, in the open code or in its hints.
+2. **One Convex backend process uses every core of its machine** (Rust and tokio, a pool of V8 isolates).
+   - One bunvex process does its HTTP, sync, engine and store work on one JavaScript thread.
+   - Measured on an 8-core Mac: one bunvex process saturates about one core while the others stay free (§5).
+   - So bunvex needs more processes just to use one machine the way one Convex process does. That is a capacity
+     difference an operator sees, not a semantic one.
+3. **More processes do pay, when the client is not the bottleneck.** Independent processes on one 8-core machine
+   gave 1.7–1.8× with 2 processes and 2.2–2.6× with 3 (§5.2). The earlier draft's "a second process does not pay"
+   came from a load generator that was itself one saturated JS thread on the same small box.
+4. **STUDY-24's decided design differs from Convex's shape in one place that matters:**
+   - H2 and H4: followers run queries and hold subscriptions themselves, fed by a commit stream the leader pushes.
+   - Convex keeps invalidation on the one backend and moves only execution and sockets.
+   - Both give an app the same answers. They differ in how much machinery bunvex must build and keep correct.
+   - §7 Q1 asks whether to keep H2/H4 or follow Convex's shape.
 
-Already in the product, and left as they are:
+## 1. How Convex does it
 
-- the lease, so a second process on the same store is refused instead of writing;
-- the document log by timestamp, so a follower can catch up;
-- the time-based OCC window an off-leader execution needs;
-- index backfill in the background, so a new leader does not stall writes.
+### 1.1 What the open-source code does
 
-Not built: a follower process, mutation forwarding, off-leader execution, the commit stream, the read-index
-round trip, and SCALE-01.
+- **One committer per deployment.**
+  - `Database::load` starts one `Committer` and one `SubscriptionsWorker` over one in-memory write log
+    (`database.rs:1086-1094`).
+  - The committer is one task fed by a channel (`committer.rs:302-350`).
+  - OCC validation checks the read set against the write log and pending writes (`committer.rs:912-929, 1032-1045`).
+    The log is kept 30–300 s (`WRITE_LOG_MIN/MAX_RETENTION_SECS`, `knobs.rs:875-881`).
+- **The lease is the only cross-process guard.** On Postgres:
+  - **Acquiring.** `UPDATE leases SET ts=$1 WHERE id=1 AND ts<$1 …` with `ts` the wall clock at start
+    (`postgres/src/sql.rs:730-744`, `lib.rs:1767-1789`). The newest process wins at once, despite the comment
+    "Blocks as long as there is another lease holder" (`lib.rs:1753`).
+  - **Checking.** Every write transaction checks the lease (`Lease::transact`, `lib.rs:1840-1875`, `FOR SHARE`
+    before COMMIT).
+  - **Losing it.** The old process exits on its next write (`lease_lost_shutdown`, `local_backend/src/main.rs:144-148,
+    202-207`).
+  - **Not fenced:** bulk import (`lib.rs:741-745, 810-814, 874-878`).
+  - **MySQL v5** does the same (`v5/persistence.rs:1536-1640`). SQLite has no lease.
+- **Why the lease exists,** in its own comment (`postgres/src/lib.rs:1731-1738`): "we want to purposefully run
+  multiple so that one can coordinate all writes and the others can serve stale reads, and smoothly swap between
+  them during deployment and node failure."
+- **A function runner reads at the backend's timestamp and returns its read set.**
+  - **Running.** `FunctionRunner::run_function` takes the backend's `begin_timestamp` and returns
+    `FunctionFinalTransaction { begin_timestamp, reads, writes, … }` ("Reads and writes from a UDF that executed in
+    Funrun", `function_runner/src/lib.rs:86-161`).
+  - **Merging.** The backend merges it with `apply_function_runner_tx`, refusing a different timestamp ("Timestamp
+    mismatch", `transaction.rs:591-618`).
+  - **Committing** goes through the normal OCC path.
+  - **Reading.** The in-process runner reads the persistence directly at that timestamp
+    (`in_process_function_runner.rs:274-279`). It then checks the snapshot was still within retention for queries
+    and mutations (`server.rs:222-239`).
+- **Followers are prepared for, not built.**
+  - `max_repeatable_ts` is bumped "so followers can read this commit" (`committer.rs:474-479`).
+    `MAX_REPEATABLE_TIMESTAMP_COMMIT_DELAY` (5 s) is "the delay between a commit and the commit being visible from
+    db-verifier and other follower reads" (`knobs.rs:673-679`).
+  - `FollowerRetentionManager` is defined and exported (`retention.rs:1657-1777`, `lib.rs:226`) and used nowhere in
+    the open code.
+  - A follower in Convex's sense reads the **database** at `max_repeatable_ts`. Nothing pushes commits to it.
+- **Sync and HTTP.** One `SyncWorker` per WebSocket, inside the backend (`local_backend/src/subs/mod.rs:129-260`).
+  Subscriptions go from the committer's log to the managers (`subscription.rs:259-353`) to the socket
+  (`sync/src/worker.rs:1201-1203`), all in one process.
+- **Search.** `InProcessSearcher` over a disk cache (`search/src/searcher/in_process.rs:136-156`). The flushers that
+  build segments run in the backend.
+- **Limits are per backend.**
+  - Defaults: `APPLICATION_MAX_CONCURRENT_QUERIES` 16, `_MUTATIONS` 16, `_V8_ACTIONS` 64, `_NODE_ACTIONS` 64
+    (`knobs.rs:1101-1157`).
+  - These are "a per backend limit applied before FunctionRunner implementations", so adding funrun nodes does not
+    raise them.
+  - Over the limit, after waiting up to 5 s for a permit: 429 `TooManyConcurrentRequests` ("Too many concurrent
+    requests. Your backend is limited to N concurrent …", `application_function_runner/mod.rs:576-593`).
+- **Self-hosted docs.**
+  - "Self-hosted Convex supports all the free-tier features … The cloud-hosted product is optimized for scale"
+    (`self-hosted/README.md:129-132`).
+  - Nothing describes running several backends for one deployment.
 
-## 2. What an app must still observe
+### 1.2 What the code only hints at for Convex Cloud
 
-A draft that fails any of these stops.
+None of these services is in the repository.
 
-- A mutation the client was told succeeded is durable, and a later query sees it.
-- A cached page is invalidated by that write.
-- Two processes never commit to the same store. The lease already refuses the second.
-- A follower does not acknowledge a write the leader has not flushed.
-- Failover loses nothing that was acknowledged. STUDY-24 measured that on a throwaway spike; the product
-  has no failover path yet.
-- Logs, metrics and usage limits stay on.
+- **Funrun.** `UDF_USE_FUNRUN` (default true): "Whether to run queries, mutations, HTTP actions, and v8 actions in
+  Funrun (true) or InProcessFunctionRunner (false)" (`knobs.rs:1354-1356`). It is read only by `backend_harness`,
+  which launches private `conductor`, `funrun` and `usher` binaries (`provision.rs:157-174, 438-482`). Funrun keeps
+  an index cache across many deployments (`in_memory_indexes.rs:142-161`; `FUNRUN_*` knobs).
+- **Usher.**
+  - Reconnect replays are limited "per partition within one Usher process" (`subscription_reconnect.rs:18`).
+  - `worker.rs:959-961` notes an RPC to the backend "since Usher can't validate auth tokens".
+  - `ApplicationApi` says it routes "to the appropriate backend in the hosted version" (`api.rs:83-88`), and remote
+    subscription streams exist as a type (`api.rs:558-623`).
+- **Searchlight.** Search and compaction on a separate service (`searchlight_knobs.rs`, the `pb::searchlight`
+  protocol).
+- **Node actions.** They leave the backend for Lambda (`knobs.rs:1143-1153`).
+- **Deployment classes** (S16 … D2048) raise the per-backend limits (`limits.mdx:96-146`). Nothing says they run
+  more than one backend.
 
-## 3. The box
+Not verifiable from here:
+- whether funrun opens its own database connection;
+- whether any Cloud process serves the "stale reads" the lease comment intends.
 
-The owner's test VPS, inspected 23 Oct 2026: Linux 6.8, 2 CPUs, 7.8 GiB, Bun and Docker installed, ssh
-the only public listener. Same class of machine as the 5 Oct bench (2 vCPU, 8 GB, real fsync). On that
-bench one bunvex process did about 6 000 cached queries/s and about 3 300 Postgres inserts/s.
+## 2. What an app observes
 
-Two cores decide what this box can answer. STUDY-24 §4.7, on an 8-core Mac, saw cached reads at 1.5× with
-2 processes and 1.7× with 6, and told a 2-vCPU deployment to let the leader serve traffic too. This VPS
-can check the Linux port split and a 1-process against 2-process ceiling. It cannot stand in for a
-6-process or multi-machine run.
+- **The same answers, at any scale.** One committer and OCC against one write log mean:
+  - serializable mutations;
+  - a query's results are those of one timestamp;
+  - a subscription is invalidated by every commit that changes its read set.
 
-## 4. Measurement 1 — one port, two processes
+  Funrun and Usher change none of this. They change latency and capacity.
+- **Capacity limits are per deployment** (§1.1). Past them an app sees 429 `TooManyConcurrentRequests`.
+- **No stale reads reach an app.** The 5 s `max_repeatable_ts` delay concerns follower reads of the database
+  (db-verifier). An app's queries go through the backend's own timestamp.
 
-`bun bench/scale/reuse-port.ts`. Two processes bind `127.0.0.1` with `reusePort`. Each response is the
-process id. No store is opened. 23 Oct 2026:
+## 3. How bunvex does it
 
-| where | requests | process 0 | process 1 | balance (min/max) |
+- **One process holds the lease** and runs the committer, the scheduler, every sync session and every function
+  (`packages/server/src/topology.ts:1-3`).
+  - The lease is newest-wins on Postgres, MySQL and MongoDB, as Convex (DV-413, DV-416).
+  - SQLite and memory use an OS lock (DV-14).
+  - The engine fails its committer on `LeaseLostError` (`packages/core/src/engine.ts`).
+- **One JavaScript thread** does the HTTP, the sync, the engine, the value checks and, on SQLite, the store's
+  synchronous writes. That is the difference from Convex that matters for scaling (§5.1).
+- **The `process` executor (STUDY-171, AD-44)** runs queries, mutations and actions in child processes.
+  - Every `ctx` operation is still answered by the host's transaction.
+  - It is bunvex's nearest thing to funrun on one machine, but the store reads stay on the host thread.
+- **STUDY-24's decided plan** (owner, 2026-09-30/10-01):
+  - leader plus followers (H1);
+  - followers that hold sockets and run queries and subscriptions themselves (H2);
+  - mutations forwarded to the leader (A1), then executed off the leader with Convex's begin-timestamp protocol
+    (A2) (H3);
+  - a commit stream the leader pushes, with by-timestamp catch-up (H4);
+  - singletons on the leader (H6);
+  - read-your-writes through a "read index" round trip (H10);
+  - leader-derived time (H12).
+
+  H5 (a TTL lease) and H11 (the log read from `indexes`) were later reversed toward Convex (DV-413, STUDY-133).
+  None of it is built.
+
+### 3.1 Where STUDY-24's plan and Convex's shape differ
+
+| | Convex | STUDY-24 (decided) |
+|---|---|---|
+| Who runs queries | funrun, reading the database at the backend's timestamp | followers, at their own applied timestamp |
+| Who invalidates subscriptions | the one backend's `SubscriptionsWorker` | each follower, from the pushed commit stream |
+| How a node learns of commits | it does not need to: the backend owns invalidation; followers read the database at `max_repeatable_ts` | a leader push stream plus catch-up (H4) |
+| Sockets | Usher, forwarding to the backend | followers, executing locally |
+| Read-your-writes | automatic: everything goes through the backend's timestamp | a "read index" round trip (H10), and a wait-then-refuse for lagging nodes (H9) |
+| Mutations | executed on funrun, committed on the backend (begin-timestamp protocol) | A1 forward, then A2 (the same protocol as Convex) |
+
+A2 is already Convex's protocol. H2/H4/H9/H10 are the parts Convex does not have. They exist because a follower
+must answer queries from its own state. In Convex's shape, the leader keeps that state and the other processes keep
+none.
+
+## 4. Divergences
+
+Nothing new is recorded here. STUDY-24's DV-113–DV-121 stand as the owner decided them. If Q1 changes direction,
+DV-114, DV-116, DV-118 and DV-119 change with it.
+
+## 5. Measurements, 2026-10-26
+
+- **Machine:** an Apple M1 Pro, 8 cores and 16 GB, shared with other work. The load average was 4–17 during the
+  runs, so read the ratios, not the absolute numbers.
+- **Setup:**
+  - Bun 1.4.4;
+  - `bench/server.ts` on SQLite with durable writes, seeded by `bench/seed.ts` (100 000 items, 1 000 counters);
+  - k6 at 32 VUs for 10 s, scenarios from `bench/load/k6.js`;
+  - no errors in any run counted below.
+
+### 5.1 One process: one core
+
+The server's CPU time over the 10 s run, and a profile (`bun --cpu-prof-md`):
+
+| scenario | req/s | server CPU | where the main thread went (self time) |
+|---|---:|---:|---|
+| cached query | 24 400–31 000 | 1.02 cores | Bun's HTTP serving and `Response` (about half), the server's request path: CORS, function log, metrics (28 %) |
+| uncached query | 6 700–8 900 | 1.1–1.3 | value checks and encoding (`valueHasLoneSurrogate`, `byteLength`, JSON) and the store's reads |
+| insert | 4 600–5 000 | 0.95–1.0 | SQLite's synchronous statement `run` (51 %), on the JS thread |
+| increment (1 000 keys) | 3 600 | 1.1 | the request path and the store |
+
+- The bench functions' own JavaScript is not visible in any profile's top entries. Moving function execution to
+  other processes (funrun's shape, or the `process` executor) would not raise these numbers: the thread is busy with
+  everything around the function.
+- With Postgres the store's work is asynchronous I/O, so the insert profile would differ. Not measured here.
+- The first draft's load ran in a Bun process issuing requests on one thread (`bench/scale/two-read.ts`, removed).
+  That client held about one core itself, so on 2 and 4 vCPU boxes it, not the server, set the ceiling. Its 8 130
+  and 4 000 req/s describe that client.
+
+### 5.2 N independent processes on one machine
+
+`bench/scale/independent.ts`: each process has its own copy of the seeded store and its own port, and its own k6.
+Nothing is shared, so this is a **ceiling**. A real follower shares one store and needs invalidation and forwarding,
+so it can only do worse.
+
+| scenario | 1 | 2 | 3 | 4 |
 |---|---:|---:|---:|---:|
-| this Mac | 200 | 0 | 200 | 0 |
-| the VPS | 400 | 195 | 205 | 0.95 |
+| cached query | 30 930 | 55 619 (1.80×) | 55 616 | 47 696 |
+| uncached query | 8 628 | 14 561 (1.69×) | 22 313 (2.59×) | 23 505 (2.72×) |
+| insert (separate stores) | 4 691 | 8 547 (1.82×) | 10 385 (2.21×) | 11 737 (2.50×) |
 
-Linux shares the connections. macOS gives them all to one process, which is what STUDY-24 §4.7 recorded.
-A Bun proxy is still a one-core bottleneck there (27k req/s against 58k direct). On Linux the kernel can
-spread connections, so the draft does not start by writing a proxy.
+- Past 2–3 processes, each k6 also takes cores, so the machine, not bunvex, sets the ceiling. That is visible when
+  cached reads fall at 4.
+- The insert row writes to **separate** SQLite files. It says what the JS threads can do, not what one shared store
+  can absorb.
+- **Not measured yet, and needed before any follower code:**
+  1. the same table on a dedicated Linux box with the load generator on another machine;
+  2. one shared Postgres store under N processes (the store's group commit becomes the write ceiling);
+  3. the cost of invalidation under each design in §3.1;
+  4. Convex's binary under the same scenarios on the same box, to see what one multi-core Convex process gives.
 
-## 5. Measurement 2 — one core, then two processes
+### 5.3 From the earlier draft, kept
 
-`bun bench/scale/two-read.ts`, on the VPS, 23 Oct 2026. Each server is the bench server, memory store,
-its own data directory, bound to `127.0.0.1`. The cached query is `bench:listCached` after seeding one
-tenant's 20 documents. The load is 32 connections in this process, 1 s of warmup, then 10 s. No failures.
+On Linux, two processes binding one port with `reusePort` share the connections (195 / 205 of 400). On macOS one
+process gets all of them (`bench/scale/reuse-port.ts`). This matches STUDY-24 §4.7. It was not re-run here.
 
-| servers | req/s | server cores | client cores |
-|---|---:|---:|---:|
-| 1 | 8 130 | 1.01 | 0.58 |
-| 2 | 9 717 | 0.68 + 0.68 | 0.54 |
+## 6. Additions
 
-Two processes are 1.19×, not 2×. One server already held a whole core, and the client held most of the
-other. The second server took core away from the first (1.01 became 0.68 + 0.68) and the sum of reads
-rose by about a fifth. On this 2-core box a follower beside a busy leader does not multiply cached reads.
-STUDY-24's advice stands: with 2 vCPUs the leader serves traffic too.
+None proposed.
 
-The absolute 8 130 is not the 5 Oct figure (about 6 000, k6, a seeded 100 000-document store). The client
-and the data differ. The ratio is the result.
+## 7. Owner questions
 
-## 5b. The same measurement on 4 cores
-
-A second machine, 23 Oct 2026: 4 vCPU, AMD EPYC at 2.0 GHz, 7.8 GiB, KVM. Load was about 0.3 before the
-run. Docker containers were up and idle (about 1.2 GiB in use) and were left running. Bun 1.4.4 was
-installed for the run. Same script, localhost only, no failures.
-
-| connections | servers | req/s | server cores | client cores |
-|---|---:|---:|---:|---:|
-| 32 | 1 | 3 341 | 1.16 | 0.86 |
-| 32 | 2 | 3 821 | 0.91 + 0.96 | 0.67 |
-| 128 | 1 | 3 944 | 1.25 | 0.92 |
-| 128 | 2 | 4 105 | 1.03 + 1.07 | 0.82 |
-
-One server already finishes about 4 000 cached reads/s and holds a little more than one core. Two cores
-stay idle. A second server raises the rate by 14 % with 32 connections and by 4 % with 128. The extra
-server core is busy and the responses do not come out faster: the process issuing the requests is near
-one core and stays near 4 000/s.
-
-A core here serves about half of what a core on the 2-vCPU test box served (8 130/s at one core). The
-published 2.0 GHz cap is the visible difference. Free cores on this box do not multiply one deployment's
-cached reads while a single client process is the one asking.
-
-Giving each server its own client process (`SPLIT=1`, 128 connections each) does not change that. One
-pair did 3 513/s (server 1.41 cores, client 0.97). Two pairs at once did 1 802 + 1 606 = 3 408/s, with
-the servers at 1.24 and 1.14 cores and the clients at 0.56 and 0.45. No failures. The cores were busy
-and the building's total stayed the same: each shop received about half. Spare cores on this machine do
-not become extra cached reads.
-
-## 6. What gets measured next, before any follower code
-
-Each step is a number with the guarantees of §2 still holding. A step that does not pay for itself stops
-the draft. Step 1 below is done (§5): two processes did not pay for themselves on this box.
-
-1. **Two independent processes, cached reads, separate memory stores, two ports.** Done. 8 130 req/s with
-   one server, 9 717 with two (§5).
-2. **One process, the current server, memory and Postgres.** The denominator for later runs, next to the
-   5 Oct table. Postgres stays a database created for the run. The lease stays on. Worth doing before any
-   forwarding experiment, and it does not need a second core.
-3. **Throwaway A1.** Followers forward inserts to one leader over a local socket, the shape that measured
-   +55% on the Mac (18k to 28–29k) because the leader stopped parsing HTTP. On this box the spare core is
-   already small (§5), so the gain should be smaller still. The leader is the only committer. A follower
-   that flushes on its own fails the test.
-4. **Reads and subscriptions on a follower** that applies the leader's commit stream and does not serve a
-   page older than a write the client was told succeeded. Not on this 2-core box as a throughput bet.
-
-## 6b. One process on the Hostinger box, 23 Oct 2026
-
-The 2-vCPU EPYC 9354P, k6 on the box, 10 s, the bench seed (100 000 items). One server. No failures.
-Postgres 17 was a new container on `127.0.0.1` with default durability, removed after the run. The 5 Oct
-table was 20 s, best of 8/32/128, k6, on a Postgres that box already had.
-
-| | 5 Oct | today, 32 | today, 128 | server cores at 128 |
-|---|---:|---:|---:|---:|
-| memory, cached | 5 953 | 7 118 | 7 513 | 0.77 |
-| memory, insert | 3 861 | 2 738 | 3 918 | 1.00 |
-| postgres, cached | 5 925 | 6 990 | 5 574 | 0.73 |
-| postgres, insert | 3 281 | 1 517 | 2 225 | 0.67 |
-
-Memory inserts match 5 Oct (3 918 against 3 861). Cached reads are higher. Postgres inserts are lower and
-the server core is not full, so the wait is this fresh database, not a second process. One shop on this
-CPU is where the 5 Oct insert number already was.
-
-The same insert, still one process, with that container on the host network instead of a published port
-(`--network host`, listen `127.0.0.1` only, same image, default durability: fsync on, synchronous commit
-on, shared buffers 128 MB). Seed 18.0 s. No failures.
-
-| | 32 VU | 128 VU | server cores at 128 | postgres cores at 128 |
-|---|---:|---:|---:|---:|
-| postgres insert, published port | 1 517 | 2 225 | 0.67 | — |
-| postgres insert, host network | 672 | 1 720 | 0.70 | 0.27 |
-
-Host network does not recover the 5 Oct insert (3 281). The server stays near 0.7 cores and Postgres
-itself near 0.3, so the wait is the fresh database's flush, not the Docker port hop. The 5 Oct number
-was the instance that box already had.
-
-A2, off-leader execution, waits until A1's numbers and the read-your-writes checks exist. Sharding the
-committer stays out, as STUDY-24 recommended.
-
-## 7. Divergences
-
-None proposed here.
-
-| # | Divergence | Why | Decision |
-|---|---|---|---|
-| — | — | — | — |
-
-## 7b. Additions
-
-None.
-
-| # | Addition | Why | Decision |
-|---|---|---|---|
-| — | — | — | — |
+| # | Question | Recommendation |
+|---|---|---|
+| Q1 | Keep STUDY-24's H2/H4 (followers execute queries and own subscriptions, fed by a pushed commit stream), or follow Convex's shape: the leader keeps the commit and the subscriptions, and other processes take execution against the store at the leader's timestamp (A2, already decided) and sockets forwarded to the leader? | Follow Convex's shape. It needs no commit stream, no read index and no lag handling, and its read-your-writes is automatic. Its cost is that the leader's subscription work does not spread; §5.1 did not load subscriptions, so measurement 3 in §5.2 decides it |
+| Q2 | Before any follower: take work off the one JS thread inside one process first, for example SQLite's synchronous writes (51 % of an insert's main thread) and the per-request value checks? | Yes. It raises what one process does, and every design in §3.1 needs it |
+| Q3 | Run §5.2's missing measurements on the owner's Linux box, with k6 on a second machine? | Yes. Without them, neither Q1 nor A1 has a number behind it |
