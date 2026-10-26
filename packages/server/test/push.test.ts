@@ -498,6 +498,37 @@ describe("deploy2 over HTTP", () => {
     expect([bad.status, bad.body.code]).toEqual([409, "ExistingModuleHashConflict"]);
   });
 
+  test("an infinite or NaN literal, in a schema, args or returns: Convex's 400 UnsupportedFloatLiteral; -0 and 1.5 push", async () => {
+    // Convex refuses it when a validator turns back into JSON (`common/src/schemas/json.rs`, `Number::from_f64`).
+    const d = await deployment(tmp());
+    stops.push(() => d.s.shutdown());
+    const REFUSED = {
+      code: "UnsupportedFloatLiteral",
+      message: "Hit an error while pushing:\nInfinite or NaN values are not supported in literal validators.",
+    };
+    const fn = (opts: string) =>
+      mod(
+        "m.js",
+        `import { query } from "@bunvex/server"; import { v } from "@bunvex/values"; export const q = query({ ${opts}, handler: async () => null });`,
+      );
+    const table = (field: string) =>
+      mod(
+        "schema.js",
+        `import { defineSchema, defineTable } from "@bunvex/server"; import { v } from "@bunvex/values"; export default defineSchema({ t: defineTable({ x: ${field} }) });`,
+      );
+    for (const [modules, schema] of [
+      [[fn("args: { x: v.literal(Infinity) }")], null],
+      [[fn("args: {}, returns: v.literal(NaN)")], null],
+      [[fn("args: { x: v.optional(v.union(v.null(), v.object({ y: v.literal(-Infinity) }))) }")], null],
+      [[fn("args: {}")], table("v.literal(Infinity)")],
+    ] as [ModuleSource[], ModuleSource | null][]) {
+      const r = await d.push(modules, schema);
+      expect([r.start.status, r.start.body]).toEqual([400, REFUSED]);
+    }
+    const ok = await d.push([fn("args: { x: v.literal(-0), y: v.literal(1.5) }")], table("v.literal(1.5)"));
+    expect(ok.start.status).toBe(200);
+  }, 60_000);
+
   test("a module or schema that fails: Convex's errors, and the old code keeps serving", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());

@@ -37,7 +37,7 @@ import {
   TooManyTablesError,
 } from "@bunvex/core";
 import type { BlobStore } from "@bunvex/file-storage";
-import { checkValue, validatorFromJson } from "@bunvex/values";
+import { checkValue, fromJsonValue, type JSONValue, validatorFromJson } from "@bunvex/values";
 import { auditEvents, type ComponentDiff } from "./audit-log.ts";
 import { putAuthInfo } from "./auth-info.ts";
 import {
@@ -178,6 +178,37 @@ function checkComponentSchemas(definitions: ReadonlyMap<string, { schema: Engine
         );
       if (t.stagedDocument !== undefined) throw refuse("staged validators");
     }
+  }
+}
+
+/** Whether a validator's JSON holds an infinite or NaN float literal, anywhere in it. */
+function hasNonFiniteLiteral(j: unknown): boolean {
+  if (typeof j !== "object" || j === null) return false;
+  if (Array.isArray(j)) return j.some(hasNonFiniteLiteral);
+  const o = j as Record<string, unknown>;
+  if (o.type === "literal" && "value" in o) {
+    const value = fromJsonValue(o.value as JSONValue);
+    return typeof value === "number" && !Number.isFinite(value);
+  }
+  return Object.values(o).some(hasNonFiniteLiteral);
+}
+
+/**
+ * Convex's `UnsupportedFloatLiteral`: a literal validator of an infinite or NaN number cannot be turned back into
+ * JSON (`common/src/schemas/json.rs`, `Number::from_f64`), in a schema or a function's `args` / `returns`.
+ */
+function checkFloatLiterals(
+  definitions: ReadonlyMap<string, { schema: EngineSchema | null; functions: Record<string, AnalyzedModule> }>,
+) {
+  for (const d of definitions.values()) {
+    const validators = [
+      ...(d.schema === null ? [] : [schemaToJson(d.schema)]),
+      ...Object.values(d.functions).flatMap((m) =>
+        m.functions.flatMap((f) => [JSON.parse(f.args), JSON.parse(f.returns)]),
+      ),
+    ];
+    if (validators.some(hasNonFiniteLiteral))
+      throw new PushError("UnsupportedFloatLiteral", "Infinite or NaN values are not supported in literal validators.");
   }
 }
 
@@ -704,6 +735,7 @@ export class PushService {
       this.executor,
       version,
     );
+    checkFloatLiterals(components.definitions);
     // Convex's `StagedSchemaWithEnforcedValidatorChanges` (STUDY-106 §7.4), dry run too.
     const staged = await this.deps.engine.stagedValidatorConflicts(schema);
     if (staged) throw new PushError(staged.code, staged.message);
