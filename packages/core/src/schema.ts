@@ -21,6 +21,7 @@ import {
   type VUnion,
   v,
 } from "@bunvex/values";
+import type { IndexableFieldPaths } from "./data-model.ts";
 import { encodeKey, type KeyValue } from "./keyenc.ts";
 import type { IndexId, TabletId } from "./persistence/index.ts";
 
@@ -194,18 +195,25 @@ export class TableDefinition<
   /**
    * Declare an index on `fields` (Convex appends `_creationTime` and `_id`). As Convex's, the second
    * argument may also be `{ fields, staged }`: a staged index is backfilled but not enabled (queries on it
-   * fail) until a later schema declares it without `staged`.
+   * fail) until a later schema declares it without `staged`. As Convex's types, the fields are the document's
+   * paths or `_creationTime`, and a staged index is not in the table's type, so `withIndex` cannot name it.
    */
-  index<IndexName extends string, const Fields extends [string, ...string[]]>(
+  index<
+    IndexName extends string,
+    const Fields extends [IndexableFieldPaths<DocumentType>, ...IndexableFieldPaths<DocumentType>[]],
+  >(
     name: IndexName,
-    config: Fields | { fields: Fields; staged?: boolean },
+    config: Fields | { fields: Fields; staged?: false },
   ): TableDefinition<
     DocumentType,
     Expand<Indexes & Record<IndexName, [...Fields, "_creationTime"]>>,
     SearchIndexes,
     VectorIndexes
   >;
-  index(name: string, config: string[] | { fields: string[]; staged?: boolean }): this;
+  index<
+    IndexName extends string,
+    const Fields extends [IndexableFieldPaths<DocumentType>, ...IndexableFieldPaths<DocumentType>[]],
+  >(name: IndexName, config: { fields: Fields; staged: true }): this;
   index(name: string, config: string[] | { fields: string[]; staged?: boolean }) {
     const fields = Array.isArray(config) ? config : config?.fields;
     if (!Array.isArray(fields)) throw new Error(`Index "${name}" must be declared with an array of fields.`);
@@ -230,13 +238,13 @@ export class TableDefinition<
    */
   searchIndex<
     const IndexName extends string,
-    const SearchField extends string,
-    const FilterFields extends string = never,
+    const SearchField extends IndexableFieldPaths<DocumentType>,
+    const FilterFields extends IndexableFieldPaths<DocumentType> = never,
   >(name: IndexName, config: { searchField: SearchField; filterFields?: FilterFields[]; staged: true }): this;
   searchIndex<
     const IndexName extends string,
-    const SearchField extends string,
-    const FilterFields extends string = never,
+    const SearchField extends IndexableFieldPaths<DocumentType>,
+    const FilterFields extends IndexableFieldPaths<DocumentType> = never,
   >(
     name: IndexName,
     config: { searchField: SearchField; filterFields?: FilterFields[]; staged?: false },
@@ -272,16 +280,16 @@ export class TableDefinition<
    */
   vectorIndex<
     const IndexName extends string,
-    const VectorField extends string,
-    const FilterFields extends string = never,
+    const VectorField extends IndexableFieldPaths<DocumentType>,
+    const FilterFields extends IndexableFieldPaths<DocumentType> = never,
   >(
     name: IndexName,
     config: { vectorField: VectorField; dimensions: number; filterFields?: FilterFields[]; staged: true },
   ): this;
   vectorIndex<
     const IndexName extends string,
-    const VectorField extends string,
-    const FilterFields extends string = never,
+    const VectorField extends IndexableFieldPaths<DocumentType>,
+    const FilterFields extends IndexableFieldPaths<DocumentType> = never,
   >(
     name: IndexName,
     config: { vectorField: VectorField; dimensions: number; filterFields?: FilterFields[]; staged?: false },
@@ -553,7 +561,9 @@ function addSystemFields(tableName: string, validator: GenericValidator): Generi
       });
     case "union":
       return v.union(
-        ...(validator as VUnion<unknown, GenericValidator[]>).members.map((m) => addSystemFields(tableName, m)),
+        ...((validator as VUnion<unknown, GenericValidator[]>).members.map((m) =>
+          addSystemFields(tableName, m),
+        ) as never[]),
       );
     // `v.any()` already accepts the system fields.
     case "any":
@@ -710,7 +720,7 @@ function tableDefinitionOf(table: DeclaredTable): TableDefinition {
   const t = new TableDefinition(table.document);
   const staged = new Set(table.staged ?? []);
   for (const [name, fields] of Object.entries(table.indexes))
-    t.index(name, staged.has(name) ? { fields: [...fields], staged: true } : [...fields]);
+    t.index(name, (staged.has(name) ? { fields: [...fields], staged: true } : [...fields]) as never);
   const stagedSearch = new Set(table.stagedSearch ?? []);
   for (const [name, d] of Object.entries(structuredClone(table.searchIndexes ?? {})))
     if (stagedSearch.has(name)) t.searchIndex(name, { ...d, staged: true });

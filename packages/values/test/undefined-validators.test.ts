@@ -56,9 +56,11 @@ describe("the builders' other checks, as Convex's", () => {
   });
 
   test("a record: optional keys and values are refused before non-validators", () => {
+    // @ts-expect-error: the types refuse an optional key too, as Convex's
     expect(message(() => v.record(v.optional(v.string()), {} as never))).toBe(
       "Record validator cannot have optional keys",
     );
+    // @ts-expect-error: the types refuse an optional value too, as Convex's
     expect(message(() => v.record({} as never, v.optional(v.string())))).toBe(
       "Record validator cannot have optional values",
     );

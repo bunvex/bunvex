@@ -56,7 +56,7 @@ const pairs: fc.Arbitrary<Pair> = fc.letrec<{ p: Pair }>((tie) => ({
     ),
     fc.tuple(tie("p"), tie("p"), fc.boolean()).map(
       ([a, b, first]): Pair => ({
-        validator: v.union(a.validator, b.validator),
+        validator: v.union(a.validator as never, b.validator as never),
         value: first ? a.value : b.value,
       }),
     ),

@@ -252,12 +252,11 @@ export interface VectorSearchQuery<TableInfo extends GenericTableInfo, IndexName
 }
 
 /**
- * A function's arguments: one object, or none. Without an `args` validator the object is `any`, where Convex's is
- * `DefaultFunctionArgs` (`Record<string, unknown>`): typing it so broke handlers that destructure their arguments
- * without types (bench/functions.ts), so it stays `any` (STUDY-180).
+ * A function's arguments: one object, or none. Without an `args` validator the object is `DefaultFunctionArgs`
+ * (`Record<string, unknown>`), as Convex's (STUDY-180 §3.1, STUDY-189 T4): a handler reads its untyped arguments
+ * through a validator, an annotation or a check.
  */
-// biome-ignore lint/suspicious/noExplicitAny: see above
-type OneArgArray<ArgsObject extends DefaultFunctionArgs = Record<string, any>> = [ArgsObject];
+type OneArgArray<ArgsObject extends DefaultFunctionArgs = DefaultFunctionArgs> = [ArgsObject];
 export type ArgsArray = OneArgArray | [];
 export type ArgsArrayToObject<Args extends ArgsArray> =
   Args extends OneArgArray<infer ArgsObject> ? ArgsObject : EmptyObject;

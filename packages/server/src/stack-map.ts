@@ -51,28 +51,59 @@ const isServerFile = (file: string) =>
  * frame (the server's own) dropped. Lines that are not frames are kept. A stack with no pushed module's frame
  * keeps its frames but the server's own code's (`serverFramesDropped`): functions registered in-process
  * (`Functions.register`, `@bunvex/testing`) are not pushed code, and their frames are the developer's.
+ *
+ * `nodeFrames`, for a `"use node"` context (DV-482 as amended, STUDY-188 Q2): Node's own frames (`node:https`,
+ * `node:_http_client`, `node:internal/…`) are kept too, as they are, as Convex's Node executor keeps them
+ * (`node-executor/src/errors.ts` `registerPrepareStackTrace`: "proxy-agents depends on Node-formatted frames";
+ * agent-base looks for `node:https:` in a fresh stack to tell an https request). They hold no path of the
+ * server's. Those past the app's outermost frame are the server calling the handler (`AsyncLocalStorage.run`),
+ * not the app's code, and are dropped with the server's other frames.
  */
-export function mapStack(stack: string): string {
-  if (!stack.includes(SCHEME)) return serverFramesDropped(stack);
-  const out: { line: string; located: boolean; frame: boolean }[] = [];
+export function mapStack(stack: string, nodeFrames = false): string {
+  if (!stack.includes(SCHEME)) return serverFramesDropped(stack, nodeFrames);
+  const out: Line[] = [];
   for (const line of stack.split("\n")) {
     const frame = FRAME.exec(line);
     if (!frame) {
-      out.push({ line, located: false, frame: false });
+      out.push({ line, kind: "text" });
       continue;
     }
     const [, at, fn, inParens, bare] = frame;
-    const mapped = mapLocation((inParens ?? bare)!);
+    const where = (inParens ?? bare)!;
+    if (nodeFrames && isNodeFile(LOCATION.exec(where)?.[1])) {
+      // Named by its function alone, as Convex's executor prints a frame (`formatTraceLine`): no `new`.
+      const name = fn?.startsWith("new ") ? fn.slice(4) : fn;
+      out.push({ line: name !== undefined ? `${at}${name} (${where})` : line, kind: "node" });
+      continue;
+    }
+    const mapped = mapLocation(where);
     // No location (native code, the module loader's `unknown`): kept between the app's frames only, as
     // Convex trims the harness's frames before and after them.
-    if (mapped === undefined) out.push({ line, located: false, frame: true });
+    if (mapped === undefined) out.push({ line, kind: "unlocated" });
     else if (mapped !== null)
-      out.push({ line: fn !== undefined ? `${at}${fn} (${mapped})` : `${at}${mapped}`, located: true, frame: true });
+      out.push({ line: fn !== undefined ? `${at}${fn} (${mapped})` : `${at}${mapped}`, kind: "app" });
   }
-  const first = out.findIndex((l) => l.located);
-  const last = out.findLastIndex((l) => l.located);
+  return trimmed(out);
+}
+
+/** A line of a stack: not a frame, a frame with no location, the app's, or Node's (`mapStack`'s `nodeFrames`). */
+type Line = { line: string; kind: "text" | "unlocated" | "app" | "node" };
+
+/** Whether a frame's file is one of Node's own modules (`node:https`, `node:internal/…`). */
+const isNodeFile = (file: string | undefined) => file?.startsWith("node:") === true;
+
+/**
+ * A stack's lines, its frames trimmed to the app's: a frame with no location kept between the others only;
+ * Node's kept from the top down to the app's outermost frame, or all of them when the app has none (an error
+ * Node made in its own callback).
+ */
+function trimmed(out: Line[]): string {
+  const located = (l: Line) => l.kind === "app" || l.kind === "node";
+  const first = out.findIndex(located);
+  let last = out.findLastIndex((l) => l.kind === "app");
+  if (last === -1) last = out.findLastIndex(located);
   return out
-    .filter((l, i) => !l.frame || (i >= first && i <= last))
+    .filter((l, i) => l.kind === "text" || (i >= first && i <= last))
     .map((l) => l.line)
     .join("\n");
 }
@@ -96,25 +127,21 @@ function mapLocation(where: string): string | null | undefined {
  * A stack with no pushed module's frame, without the server's own frames (its sources, its packages, `node:`
  * internals): an error the server raised for pushed code (a value it could not serialize) shows no frame of the
  * server's installation, as Convex's shows none of its runtime's. Frames with no location are kept between the
- * remaining ones only.
+ * remaining ones only. With `nodeFrames`, Node's own frames are kept as `mapStack` keeps them.
  */
-function serverFramesDropped(stack: string): string {
-  const out: { line: string; located: boolean; frame: boolean }[] = [];
+function serverFramesDropped(stack: string, nodeFrames: boolean): string {
+  const out: Line[] = [];
   for (const line of stack.split("\n")) {
     const frame = FRAME.exec(line);
     if (!frame) {
-      out.push({ line, located: false, frame: false });
+      out.push({ line, kind: "text" });
       continue;
     }
     const where = (frame[3] ?? frame[4])!;
     const loc = LOCATION.exec(where);
-    if (!loc) out.push({ line, located: false, frame: true });
-    else if (!isServerFile(loc[1]!)) out.push({ line, located: true, frame: true });
+    if (!loc) out.push({ line, kind: "unlocated" });
+    else if (nodeFrames && isNodeFile(loc[1])) out.push({ line, kind: "node" });
+    else if (!isServerFile(loc[1]!)) out.push({ line, kind: "app" });
   }
-  const first = out.findIndex((l) => l.located);
-  const last = out.findLastIndex((l) => l.located);
-  return out
-    .filter((l, i) => !l.frame || (i >= first && i <= last))
-    .map((l) => l.line)
-    .join("\n");
+  return trimmed(out);
 }

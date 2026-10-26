@@ -206,7 +206,7 @@ describe("a push's schema change", () => {
       const indexes: Record<string, string[]> = { by_n: ["n"] };
       if (name === "by_m") indexes.by_m = ["m"];
       const t = defineTable(v.any());
-      for (const [k, f] of Object.entries(indexes)) t.index(k, f);
+      for (const [k, f] of Object.entries(indexes)) t.index(k, f as [string]);
       const p = await e.startSchemaPush(defineSchema({ items: t }));
       await until(async () => (await e.schemaPushStatus(p.schemaId)).type === "complete");
       await e.commitSchemaPush(p.schemaId, async () => {});

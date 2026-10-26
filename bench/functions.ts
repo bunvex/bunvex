@@ -22,21 +22,26 @@ export const benchSchema = defineSchema({
 const PAGE = 20;
 
 export const bench = {
-  seedItems: mutation(async ({ db }, { tenants, perTenant, tenantOffset }) => {
-    const now = Date.now();
-    for (let t = tenantOffset; t < tenantOffset + tenants; t++)
-      for (let i = 0; i < perTenant; i++)
-        await db.insert("items", {
-          tenantId: `t${t}`,
-          title: `item ${i} of tenant ${t}`,
-          status: i % 3 === 0 ? "done" : "open",
-          amount: Math.floor(Math.random() * 10_000),
-          createdAt: now - i * 1000,
-        });
-    return null;
-  }),
+  seedItems: mutation(
+    async (
+      { db },
+      { tenants, perTenant, tenantOffset }: { tenants: number; perTenant: number; tenantOffset: number },
+    ) => {
+      const now = Date.now();
+      for (let t = tenantOffset; t < tenantOffset + tenants; t++)
+        for (let i = 0; i < perTenant; i++)
+          await db.insert("items", {
+            tenantId: `t${t}`,
+            title: `item ${i} of tenant ${t}`,
+            status: i % 3 === 0 ? "done" : "open",
+            amount: Math.floor(Math.random() * 10_000),
+            createdAt: now - i * 1000,
+          });
+      return null;
+    },
+  ),
 
-  seedCounters: mutation(async ({ db }, { n }) => {
+  seedCounters: mutation(async ({ db }, { n }: { n: number }) => {
     for (let i = 0; i < n; i++) {
       const key = `k${i}`;
       const existing = await db

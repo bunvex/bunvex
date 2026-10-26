@@ -22,8 +22,10 @@ describe("schemaToJson: Convex's order, whatever the declaration's", () => {
       .index("by_z", ["b"])
       .index("by_a", ["a"])
       .index("by_staged", { fields: ["a", "b"], staged: true })
+      // @ts-expect-error: fields the document does not have (the JSON keeps them; the types refuse them, as Convex's)
       .searchIndex("s_z", { searchField: "b", filterFields: ["z", "a", "z"] })
       .searchIndex("s_a", { searchField: "c" })
+      // @ts-expect-error: fields the document does not have (the JSON keeps them; the types refuse them, as Convex's)
       .vectorIndex("v_z", { vectorField: "a", dimensions: 2, filterFields: ["y", "b"] })
       .vectorIndex("v_a", { vectorField: "d", dimensions: 3 }),
     alpha: defineTable(v.any()),

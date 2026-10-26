@@ -64,7 +64,9 @@ describe("v.* builders and checking (STUDY-13)", () => {
     expect(err(r, { a: "x" })).toContain("Path: .values()");
     const ids = v.record(v.id("users"), v.boolean());
     expect(err(ids, { notAnId: true })).toContain("Path: .keys()");
+    // @ts-expect-error: the types refuse an optional value too, as Convex's
     expect(() => v.record(v.string(), v.optional(v.number()))).toThrow("Record validator cannot have optional values");
+    // @ts-expect-error: the types refuse an optional key too, as Convex's
     expect(() => v.record(v.optional(v.string()), v.number())).toThrow("Record validator cannot have optional keys");
     expect(() => v.record(undefined as never, v.number())).toThrow('A validator is undefined for field "key"');
   });

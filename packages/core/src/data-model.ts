@@ -123,6 +123,14 @@ type PathKey<K extends string> = string extends K ? string : K extends `${infer 
 type NestedPaths<K extends string, V, Depth extends unknown[]> =
   V extends Record<string, unknown> ? `${K}.${PathsOf<V, [...Depth, 0]>}` : never;
 
+/**
+ * The fields a table's indexes may name (Convex's `ExtractFieldPaths`): the document's paths and `_creationTime`
+ * (not `_id`), any string on a `v.any()` table (STUDY-189 T5).
+ */
+export type IndexableFieldPaths<DocumentType extends GenericValidator> = unknown extends DocumentType["type"]
+  ? GenericFieldPaths
+  : "_creationTime" | PathsOf<DocumentType["type"]>;
+
 /** A document type with `_id` and `_creationTime`, over each branch of a union. */
 type WithSystemFields<TableName extends string, D> = D extends unknown
   ? Expand<IdField<TableName> & SystemFields & D>
