@@ -1,4 +1,5 @@
 # STUDY-102 — `QueryOptions` and `bunvexQueryOptions`
+<!-- index: `QueryOptions` and `bunvexQueryOptions` (Convex's `convexQueryOptions`), and `prewarmQuery`'s required `args` | implemented; the name decided by the owner (2026-10-05, DV-348) -->
 
 - **Status:** implemented; the name and `prewarmQuery`'s required `args` decided by the owner (2026-10-05, DV-348)
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05; the `convex` npm package

@@ -1,4 +1,5 @@
 # STUDY-155 — Components: calls across components (STUDY-152 step 5)
+<!-- index: Components, step 5: calls across components — references and names, the nested transaction, identity, `v.id` across namespaces (C4), errors, function handles; a two-PR plan | decided (owner, 2026-10-16): DV-531; built (PRs 1–2) -->
 
 - **Status:** decided (owner, 2026-10-16): Q-1 a 400 for a branch reference (DV-531), Q-2 (C4), Q-3 and Q-5 as
   Convex, Q-4 refused until step 7 (§5).

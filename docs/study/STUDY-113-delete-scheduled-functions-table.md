@@ -1,4 +1,5 @@
 # STUDY-113 — `POST /api/delete_scheduled_functions_table` and the audit events left
+<!-- index: `POST /api/delete_scheduled_functions_table`: the scheduler's table replaced with an empty one in one commit; which audit events Convex's open-source backend never emits | implemented, no divergence -->
 
 - **Status:** implemented, no divergence
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05

@@ -1,4 +1,5 @@
 # STUDY-76 — Approaching-limit warnings
+<!-- index: Approaching-limit warnings: WARN system lines past 80 % of a limit, for queries, mutations, actions, HTTP actions and system functions | implemented; DV-323 resolved in the next PR (owner, 2026-10-04) -->
 
 - **Status:** implemented. Owner decisions (2026-10-04):
   - system functions warn as Convex's;

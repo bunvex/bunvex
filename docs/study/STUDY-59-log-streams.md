@@ -1,4 +1,5 @@
 # STUDY-59 — Log streams (`_log_sinks`, the log stream API, webhook and local sinks)
+<!-- index: Log streams: `_log_sinks`, the API, the manager, webhook and local sinks, events | implemented; DV-303–DV-305 accepted (owner, 2026-10-03) -->
 
 - **Status:** implemented; DV-303–DV-305 accepted as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-03

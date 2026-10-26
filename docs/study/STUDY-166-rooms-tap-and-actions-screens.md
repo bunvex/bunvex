@@ -1,4 +1,5 @@
 # STUDY-166 — The Rooms screen's event tap and actions (AD-43 steps 5 and 6)
+<!-- index: The Rooms screen's event tap and actions (AD-43 steps 5 and 6): a live event panel on `watchRoomEvents`, and confirmed controls to send a test event, remove a member and close a room, with their History words | implemented (this PR) -->
 
 - **Status:** implemented (this PR).
 - **Convex source read:** nothing to read. Convex has no rooms (STUDY-164 §1), so its dashboard has no screen for

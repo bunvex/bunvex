@@ -1,4 +1,5 @@
 # STUDY-52 — Table shape inference
+<!-- index: Table shape inference: the counted lattice, `/api/shapes2` | A1–A3 accepted as recommended (owner, 2026-10-03) -->
 
 - **Status:** A1–A3 accepted as recommended (owner, 2026-10-03)
 - **Convex source read:** `main` of get-convex/convex-backend, 2026-10-03

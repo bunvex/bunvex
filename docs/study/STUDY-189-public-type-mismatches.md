@@ -1,4 +1,5 @@
 # STUDY-189 — Public types that accept or refuse what Convex's do not
+<!-- index: Public types against Convex 1.46.0's | decided (owner, 2026-10-25) -->
 
 - **Status:** decided (owner, 2026-10-25: every §5 recommendation; the `fieldPaths` gap recorded). Nothing built yet.
 - **Convex source read:**

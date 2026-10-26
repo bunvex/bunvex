@@ -1,4 +1,5 @@
 # STUDY-04 — Table and index metadata (`_tables`, `_index`)
+<!-- index: Table and index metadata (`_tables`, `_index`) | implemented (#6) -->
 
 - **Status:** accepted (fixes a bug found in STUDY-01); implemented in the PR that adds this file
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

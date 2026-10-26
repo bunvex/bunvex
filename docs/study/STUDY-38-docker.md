@@ -1,4 +1,5 @@
 # STUDY-38 — The Docker image and docker-compose
+<!-- index: The Docker image and docker-compose: `bunvex start` in a container, credentials in the volume, `generate_admin_key.sh`, publishing | accepted: all as recommended (owner, 2026-10-02) -->
 
 - **Status:** accepted: all as recommended (owner, 2026-10-02)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`self-hosted/`)

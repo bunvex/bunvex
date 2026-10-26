@@ -1,4 +1,5 @@
 # STUDY-15 — `.filter()` and the filter builder
+<!-- index: `.filter()` and the filter builder | implemented (#37) -->
 
 - **Status:** implemented (#37)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

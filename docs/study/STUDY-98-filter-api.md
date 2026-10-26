@@ -1,4 +1,5 @@
 # STUDY-98 — `filterApi`
+<!-- index: `filterApi` from `bunvex/server`: the api, filtered by type | implemented -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04

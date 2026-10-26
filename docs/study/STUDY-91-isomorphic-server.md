@@ -1,4 +1,5 @@
 # STUDY-91 — `bunvex/server` outside Bun: the browser and Node, as `convex/server`
+<!-- index: `bunvex/server` in a browser bundle and in Node, as `convex/server`: the builders moved to `builders.ts`, an isomorphic entry under the non-`bun` conditions | implemented; no divergence (the owner chose full parity, 2026-10-04) -->
 
 - **Status:** implemented; no divergence (owner, 2026-10-04: full parity with Convex rather than a smaller entry)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend (`npm-packages/convex/package.json`,

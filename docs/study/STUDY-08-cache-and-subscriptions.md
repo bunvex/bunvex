@@ -1,4 +1,5 @@
 # STUDY-08 — Query cache and subscriptions
+<!-- index: Query cache and subscriptions | decided; D9, D10 resolved to match Convex (DV-64, DV-57); D6 (sync path, B13) and D8 (DV-63) to build -->
 
 - **Status:** decided — D1–D3 fixed (#11, #13); D6 fixed for the HTTP query cache (#103), the sync path next (Phase 0 B13); D4, D5, D7, D11 resolved to match Convex (DV-44, DV-45, DV-49); D9 resolved to match Convex (#119, #121; DV-64); D10 resolved to match Convex in #134 (DV-57, STUDY-06 §9); D8 built to match Convex (§1.6, §3.6; DV-63), with one decided internal divergence (§3.6, DV-153). Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

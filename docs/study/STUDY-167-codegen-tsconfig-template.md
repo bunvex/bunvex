@@ -1,4 +1,5 @@
 # STUDY-167 — The tsconfig.json that `codegen --init` writes
+<!-- index: The `tsconfig.json` that `codegen --init` writes: Convex's template as prettier writes it, in bunvex's name; no `allowImportingTsExtensions` now that the published packages ship `.d.ts` (DV-177 resolved); the workspace's examples keep it | implemented (owner, 2026-10-19: ships with the next release, the first built one) -->
 
 - **Status:** implemented (owner, 2026-10-19: both §6 recommendations accepted)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

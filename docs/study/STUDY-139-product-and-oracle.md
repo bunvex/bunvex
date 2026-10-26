@@ -1,4 +1,5 @@
 # STUDY-139 — bunvex as a product, Convex as the oracle
+<!-- index: bunvex as a product, Convex as the oracle: compatibility from the reference on, no paths for older Convex clients, formats or stores; migration by export and import; what to remove (P1–P7) | accepted (owner, 2026-10-08): the principle and P1–P7 -->
 
 - **Status:** the principle and P1–P7 accepted (owner, 2026-10-08); the principle revisited the same day (§1.1): stores the Convex binary wrote keep opening in bunvex. P1–P3 built (#525), P4 built (#526) and then superseded by DV-166 (#532), P5 withdrawn (#527 closed), P6 built (#528), P7 built (#529). P8 accepted (owner, 2026-10-11).
 - **Convex source read:** reference `d8bdde0` (`docs/parity/upstream.md`), npm `convex` 1.46.0.

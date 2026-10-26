@@ -1,4 +1,5 @@
 # STUDY-142 — A failed `fetch` in an action, redirects and the default `User-Agent`
+<!-- index: A failed `fetch` in an action: reqwest's causes, `fetch to <url> failed: …`, the query string dropped; Convex's redirect loop; the default `User-Agent` (`Bunvex/1.0`); no idle timeout; the screen's failures, early closes and addresses; §8: a fetched response returned as it came | implemented; DV-456 decided (rule 5); DV-457 accepted, DV-458 the spec's behaviour (owner, 2026-10-11); egress per redirect hop, OIDC's User-Agent -->
 
 - **Status:** implemented; DV-456 decided (rule 5); DV-457 accepted and DV-458 the spec's behaviour kept (owner, 2026-10-11).
 - **Convex source read:** the reference `d8bdde0` (`precompiled-2026-10-07-d8bdde0`, `docs/parity/upstream.md`):

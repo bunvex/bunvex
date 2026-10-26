@@ -1,4 +1,5 @@
 # STUDY-128 — `_next_persistence_index_id`, the index id allocator
+<!-- index: `_next_persistence_index_id`: index ids from one counter, written with the indexes, never reused after a drop | implemented (DV-405) -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05

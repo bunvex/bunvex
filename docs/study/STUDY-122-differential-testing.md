@@ -1,4 +1,5 @@
 # STUDY-122 — Differential testing against Convex's own backend
+<!-- index: Differential testing against Convex's own backend: generated operation sequences run on both, compared | accepted: D1 A, D2 A -->
 
 - **Status:** accepted (owner, 2026-10-05: D1 A, D2 A). Phase 1 built (#429), phase 2 built (the generator,
   `packages/differential/harness/generate.ts`): its first runs found #428 and #486. Phase 3 built (nested

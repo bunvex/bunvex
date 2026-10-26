@@ -1,4 +1,5 @@
 # STUDY-57 — Jepsen-style consistency testing
+<!-- index: Jepsen-style consistency testing: a history of concurrent clients, a linearizability checker, invariants, faults | draft (PR 1: harness and checker) -->
 
 - **Status:** draft (PR 1: harness, checker, invariants; PR 2: faults and two findings; PR 3: nightly on the external stores)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend; Convex's tests from the last commits

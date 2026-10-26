@@ -1,4 +1,5 @@
 # STUDY-99 — `BunvexHttpClient.function()`
+<!-- index: `BunvexHttpClient.function()`: any function by an admin, through `/api/function` | implemented -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-04

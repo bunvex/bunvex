@@ -1,4 +1,5 @@
 # STUDY-31 — HTTP actions (`httpRouter`, `httpAction`)
+<!-- index: HTTP actions: `httpRouter`, `httpAction`, serving on `/http` and the site port, errors, limits, auth | accepted: H1–H5 as recommended (owner, 2026-10-01); §7 (2026-10-14): the log name, the request's or the matched route's, as Convex's, built, no divergence; §8 (2026-10-14): a response's implicit headers (`content-type` from the body, `content-length`), built; DV-483 accepted (owner, 2026-10-14: (a)); §9 (2026-10-14): a handler's non-Response logged with Convex's error, built, no divergence; §10 (2026-10-14): a body that fails ends the response cleanly, or fails the run in the handler's turn, built; DV-485 accepted (owner, 2026-10-14: (a)); §11 (2026-10-15): the 500's `trace` ends with its newline and its `code` carries the whole message, built, no divergence -->
 
 - **Status:** accepted: H1–H5 as recommended (owner, 2026-10-01)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend; §7–§10 at `d8bdde0`; §12 at `72ce13c`

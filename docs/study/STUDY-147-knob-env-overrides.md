@@ -1,4 +1,5 @@
 # STUDY-147 — Knob environment overrides
+<!-- index: Knobs from the environment under Convex's names, read as Convex's `env_config` (a bad value warns and keeps the default); which of `knobs.rs` apply to bunvex | PR 1 implemented (131 knobs read); PR 3a implemented (five defaults matched, 666f8658); PR 3b implemented (`HTTP_SERVER_TIMEOUT_SECONDS` on every route, #591); PR 2 (mechanism changes) planned -->
 
 - **Status:** PR 1 implemented (the shared reader, every knob whose mechanism exists); PR 3a implemented (five
   defaults matched, §3.2); PR 3b implemented (`HTTP_SERVER_TIMEOUT_SECONDS` on every route, §3.3); PR 2 in parts (one PR each, §3.4):

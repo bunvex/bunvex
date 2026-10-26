@@ -1,4 +1,5 @@
 # STUDY-68 — Concurrency limits per function kind
+<!-- index: Concurrency limits per function kind (queries, mutations, actions, Node actions) | implemented; closes DV-302 -->
 
 - **Status:** implemented; closes DV-302 (owner, 2026-10-03: "fechar")
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-03

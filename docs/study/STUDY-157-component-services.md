@@ -1,4 +1,5 @@
 # STUDY-157 — Components: scheduler, crons, storage, HTTP and search per component (STUDY-152 step 7)
+<!-- index: Components, step 7: scheduler (jobs in the caller's namespace, one executor over every namespace), crons, storage (`?component=`, the token's component), HTTP mounts (Convex's `route_http_action`), search and vector indexes in components; a five-PR plan | decided (owner, 2026-10-19): DV-536, AD-33; PRs 1–5 (scheduler, crons, storage, HTTP mounts, search and vector indexes) built: step 7 done -->
 
 - **Status:** decided (owner, 2026-10-19):
   - Q-1: an action's cancel in its own component (DV-536);

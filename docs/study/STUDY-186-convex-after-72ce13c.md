@@ -1,4 +1,5 @@
 # STUDY-186 — Convex after 72ce13c, up to precompiled-2026-10-24-bb31399
+<!-- index: Convex from `72ce13c` to `precompiled-2026-10-24-bb31399`, triaged | decided (owner, 2026-10-25) -->
 
 - **Status:** decided; triage only. The owner took every §5 recommendation on 2026-10-25 (DV-551, DV-552). Nothing is built here; each item in §4 ships on its own PR
   (or its own study), with a test and a sabotage check.

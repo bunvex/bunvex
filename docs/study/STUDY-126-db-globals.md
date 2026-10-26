@@ -1,4 +1,5 @@
 # STUDY-126 — `_db`, the database globals
+<!-- index: `_db`, the database globals: the data version, the storage type pinned at the first start (local or S3, `<instance name>-<uuid>/`), Convex's refusal to switch | implemented (DV-403) -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05

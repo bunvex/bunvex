@@ -1,4 +1,5 @@
 # STUDY-124 — The CLI's argument errors and failed-typecheck output, as Convex's
+<!-- index: The CLI's argument errors (commander's `error: …`, help after, suggestions, exit 1) and a failed typecheck's output, as Convex's | implemented; DV-388 decided (owner, 2026-10-05) -->
 
 - **Status:** implemented (owner decisions, 2026-10-05; DV-388)
 - **Convex source read:** commit `4577b903` of get-convex/convex-backend; commander 14.0.3 (Convex's

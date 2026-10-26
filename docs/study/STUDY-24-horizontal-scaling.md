@@ -1,4 +1,5 @@
 # STUDY-24 — Horizontal scaling
+<!-- index: Horizontal scaling: leader + followers, commit stream, leases, readiness | draft v2 (reviewed, with experiments): H1–H12 decided (owner, 2026-09-30 and 2026-10-01); S1–S5 fixed (S5: STUDY-29, #115) -->
 
 - **Status:** draft v2 — an exploration, not a design. v1 was reviewed on 30 Sep 2026 by seven independent
   passes (Convex claims, lease and fencing, commit stream, follower reads and remote mutations, multi-core

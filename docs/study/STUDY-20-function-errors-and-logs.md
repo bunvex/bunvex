@@ -1,4 +1,5 @@
 # STUDY-20 — Function errors, redaction and log lines
+<!-- index: Function errors, redaction and log lines | implemented; D1–D8 decided (owner, 2026-09-30 and 2026-10-01) -->
 
 - **Status:** implemented; divergences D1–D8 decided by the owner (2026-09-30), D9 accepted (owner, 2026-10-04, DV-321), D8 built to match Convex (2026-10-03, §4.1); D3 and D6 resolved with protocol v1 (#50, v0 deleted in #94)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

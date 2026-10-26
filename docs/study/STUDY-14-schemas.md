@@ -1,4 +1,5 @@
 # STUDY-14 — Schemas: `defineSchema`, `defineTable`, document validation
+<!-- index: Schemas: `defineSchema`, `defineTable`, document validation, implicit tables | implemented (#29, #33) -->
 
 - **Status:** implemented (#29 schemas, #33 implicit table creation)
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

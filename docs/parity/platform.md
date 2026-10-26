@@ -457,9 +457,9 @@ Recounted on 2026-10-20 from the rows' status column, as [the README](README.md)
 
 | Status | Count |
 |---|---|
-| done | 244 |
-| partial | 21 |
-| missing | 6 |
+| done | 246 |
+| partial | 22 |
+| missing | 3 |
 | n/a (cloud-only or a decided divergence) | 6 |
 | **total** | **277** |
 

@@ -1,4 +1,5 @@
 # STUDY-21 — The OCC error and mutation retries
+<!-- index: The OCC error and mutation retries | implemented; D1, D2 decided (DV-81, DV-82); D3 a gap -->
 
 - **Status:** implemented (#38); D1 decided (DV-81), D2 resolved to match Convex (DV-82, #50), D3 a gap tracked in docs/parity
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend

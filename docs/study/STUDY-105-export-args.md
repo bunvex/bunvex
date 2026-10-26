@@ -1,4 +1,5 @@
 # STUDY-105 — `exportArgs()` / `exportReturns()` on registered functions
+<!-- index: `exportArgs()` / `exportReturns()` on registered functions: what the push's analysis and `apiSpec` read (`returns: null` without a validator) | implemented; DV-355, DV-357 (owner, 2026-10-05) -->
 
 - **Status:** implemented
 - **Convex source read:** `main` of get-convex/convex-backend (4577b9031), 2026-10-05
