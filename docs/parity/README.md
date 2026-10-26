@@ -140,7 +140,9 @@ In this order:
     functions it reads), then live logs — done (STUDY-149, PRs 1–8: the server source `@bunvex/dashboard-source`,
     the app on it, the image, `dashboard.zip` and the local dashboard, the CLI's links; [docs/dashboard.md](../dashboard.md));
     the gaps left are in [Gaps by impact](#gaps-by-impact);
-13. built-in auth (STUDY-28) phases — open (AD-01 accepted, spike done);
+13. built-in auth — open: the core follows Convex Auth v2 (STUDY-191, direction decided 2026-10-26; it replaces
+    STUDY-28's better-auth base, AD-01 under review); prerequisites `signJwt`, `@bunvex/batch-worker`,
+    `@bunvex/rate-limiter`;
 14. import/export in Convex's snapshot format, so data can move between Convex and bunvex (STUDY-42) —
     done; shape inference and the upgrade path remain (platform §18; cloud backups are cloud-only, *n/a*).
 
@@ -184,7 +186,7 @@ gaps.
 
 **Medium: an app hits it in normal use of a feature**
 
-2. **Auth helpers:** no Convex Auth (`@convex-dev/auth`, itself a component) or WorkOS AuthKit equivalent;
+2. **Auth helpers:** no Convex Auth (`@convex-dev/auth`, components; planned in STUDY-191) or WorkOS AuthKit equivalent;
    Clerk and Auth0 exist (platform §1).
 3. **`node.externalPackages`:** done (STUDY-148): installed by the deployment with `bun install` (DV-470–DV-473,
    decided by the owner, 2026-10-12).
