@@ -168,11 +168,17 @@ export type WireError =
 /** A call's execution, as the child makes it again (core `ExecutionClock`), and the host's id for it. */
 export type WireExecution = { id: number; kind: "query" | "mutation"; now: number; perfStart: number; elapsed: number };
 
-/** A table of the call's namespace: its number, and each index's fields and the ts it was enabled at. */
+/**
+ * A table of the call's namespace: its number, and each enabled index's fields and the ts it was enabled at; the
+ * indexes being built (`pending`, staged or not) and its text indexes (`search`), when it has any: what a query's
+ * start needs to know why an index cannot be read (core `Tx.resolveIndex`).
+ */
 export type WireTable = {
   name: string;
   number: number;
   indexes: [name: string, fields: string[], readyTs: string | null][];
+  pending?: [name: string, staged: boolean][];
+  search?: string[];
 };
 
 /** host → child: a query's or mutation's call. */

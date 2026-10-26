@@ -461,10 +461,12 @@ export {
   unixNanos,
 } from "./tracing.ts";
 export {
+  checkQueryStart,
   compileRange,
   formatBytes,
   ImportIdError,
   IndexRangeBuilder as TxIndexRangeBuilder,
+  indexUnavailable,
   isQueryObject,
   MAX_DOCUMENT_NESTING,
   MAX_USER_SIZE,
@@ -472,6 +474,7 @@ export {
   type PaginationOptions,
   type PaginationResult,
   QueryCursorError,
+  type QueryStartState,
   type Savepoint,
   SearchFilterBuilder as TxSearchFilterBuilder,
   TRANSACTION_MAX_NUM_USER_WRITES,

@@ -22,6 +22,7 @@ import { query, mutation } from ${SERVER};
 export const empty = query(async (ctx, { i }) => i);
 export const gets = query(async (ctx, { i, ids }) => { let n = 0; for (const id of ids) if (await ctx.db.get(id)) n++; return n + i * 0; });
 export const page = query(async (ctx, { i }) => (await ctx.db.query("items").withIndex("by_k").paginate({ numItems: 100, cursor: null })).page.length + i * 0);
+export const starts = query(async (ctx, { i }) => { let n = 0; for (let k = 0; k < 10; k++) n += (await ctx.db.query("items").withIndex("by_k", (q) => q.eq("k", k)).filter((f) => f.neq(f.field("pad"), "")).collect()).length; return n + i * 0; });
 export const insert = mutation(async (ctx, { i }) => ctx.db.insert("writes", { i }));
 export const logs = query(async (ctx, { i, n }) => { for (let k = 0; k < n; k++) console.log("line", k, { i }); return i; });
 `;
@@ -59,6 +60,8 @@ const lines: [name: string, run: (f: Functions, i: number, ids: string[]) => Pro
   ["10 x db.get", (f, i, ids) => f.runQuery("b:gets", { i, ids: ids.slice(0, 10) })],
   ["100 x db.get", (f, i, ids) => f.runQuery("b:gets", { i, ids: ids.slice(0, 100) })],
   ["page of 100", (f, i) => f.runQuery("b:page", { i })],
+  // Queries started: each one's start checks, at the app's call.
+  ["10 x indexed collect", (f, i) => f.runQuery("b:starts", { i })],
   ["insert mutation", (f, i) => f.runMutation("b:insert", { i })],
   // Under an invocation that collects its lines, as an HTTP or WebSocket call is (STUDY-171 §11).
   ["empty query, lines collected", (f, i) => collectLogs(() => f.runQuery("b:empty", { i }))],

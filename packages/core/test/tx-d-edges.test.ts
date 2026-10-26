@@ -581,7 +581,7 @@ describe("builders", () => {
     });
   });
 
-  test("a query's states, as Convex's: the initializer has none, a failed start or `order` as Convex's", async () => {
+  test("a query's states, as Convex's: the initializer has none, a failed start, a failed read or `order` as Convex's", async () => {
     const e = await engine();
     await e.mutation((db) => db.insert("items", { n: 1 }));
     await e.query(async (db) => {
@@ -610,6 +610,16 @@ describe("builders", () => {
       expect(await message(() => missing.collect())).toBe("Index items.nope not found.");
       expect(await message(() => missing.collect())).toBe("Index items.nope not found.");
       expect(await message(() => missing[Symbol.asyncIterator]())).toBe("Index items.nope not found.");
+      // A `collect` that fails after its start (a document its filter cannot evaluate) leaves it executing, its
+      // stream ended: chaining fails at the call, `next()` is done and consumes it.
+      const partway = db.query("items").filter((f: any) => f.eq(f.neg(f.field("nope")), 0)) as any;
+      expect(await message(() => partway.collect())).toBe("Cannot negate undefined (type undefined)");
+      expect(await message(() => partway.filter(() => true))).toBe(
+        "A query can only be chained once and can't be chained after iteration begins.",
+      );
+      expect(await message(() => partway.collect())).toBe("Iteration can only begin on a query once.");
+      expect(await partway.next()).toEqual({ done: true, value: undefined });
+      expect(await message(() => partway.next())).toBe("This query is closed and can't emit any more values.");
       // A refused `order` has taken the query first.
       const ordered = db.query("items").order("asc") as any;
       expect(await message(() => ordered.order("desc"))).toBe("Queries may only specify order at most once");

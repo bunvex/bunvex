@@ -19,7 +19,7 @@ let convex: Backend;
 let vm: Backend;
 let sandbox: Backend;
 
-const BASES = ["init", "scan", "ordered", "missing", "sysinit", "sysscan"];
+const BASES = ["init", "scan", "ordered", "missing", "partway", "sysinit", "sysscan"];
 const FIRST = ["iter", "break", "collect", "take", "first", "unique", "paginate", "start", "next", "return", "count"];
 const THEN = [
   ...["iter", "break", "collect", "take", "first", "paginate"],
@@ -34,6 +34,9 @@ const CASES: string[][] = [
   ["start", "itnext", "collect"],
   ["start", "itnext", "iter"],
   ["order", "collect"],
+  // a stream that failed after its start (`partway`), read again
+  ["collect", "next", "collect"],
+  ["iter", "next", "iter"],
 ];
 
 describe.skipIf(!ready)("a query used again, on Convex and on bunvex", () => {
@@ -66,12 +69,7 @@ describe.skipIf(!ready)("a query used again, on Convex and on bunvex", () => {
         return { base, steps: steps.join(","), convex: c, vm: v, sandbox: s };
       }),
     );
-    // Under the sandbox a query starts on the host, at its first `next()`: a start that fails (`missing`) throws there,
-    // not from a bare `[Symbol.asyncIterator]()` (a `for await` fails at the same statement either way).
-    const lazyStart = (r: { base: string; steps: string }) => r.base === "missing" && r.steps.includes("start");
-    const wrong = got.filter(
-      (r) => !Bun.deepEquals(r.convex, r.vm) || (!lazyStart(r) && !Bun.deepEquals(r.convex, r.sandbox)),
-    );
+    const wrong = got.filter((r) => !Bun.deepEquals(r.convex, r.vm) || !Bun.deepEquals(r.convex, r.sandbox));
     expect(wrong).toEqual([]);
     // The probes of STUDY-188 §X9, as Convex answers them.
     const at = (base: string, steps: string) => got.find((r) => r.base === base && r.steps === steps)!.convex;
@@ -83,5 +81,15 @@ describe.skipIf(!ready)("a query used again, on Convex and on bunvex", () => {
     expect(at("scan", "take,iter")).toEqual(["ok:1", chained]);
     // `db.query(t)` holds no state: each use is a new query.
     expect(at("init", "collect,collect")).toEqual(["ok:2", "ok:2"]);
+    // A start that fails throws from `[Symbol.asyncIterator]()`, and leaves the query preparing.
+    const notFound = "err:Error:Index items.nope not found.";
+    expect(at("missing", "start,collect")).toEqual([notFound, notFound]);
+    // A query that failed after its start is still executing: the next operator fails at its call.
+    const negate = expect.stringContaining("Cannot negate");
+    expect(at("partway", "collect,filter")).toEqual([
+      negate,
+      "err:Error:A query can only be chained once and can't be chained after iteration begins.",
+    ]);
+    expect(at("partway", "collect,next")).toEqual([negate, "next:true"]);
   }, 120_000);
 });

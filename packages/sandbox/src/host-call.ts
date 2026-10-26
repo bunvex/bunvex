@@ -179,7 +179,8 @@ class EpochWindow {
 
 /** What the host keeps per child: the epochs it sent, and its ids for the executions it has seen. */
 type ChildState = {
-  catalogs: WeakMap<object, number>;
+  /** Each catalog's epoch, and the text indexes' generation it was sent with (their names are in it). */
+  catalogs: WeakMap<object, { epoch: number; search: number }>;
   catalogWindow: EpochWindow;
   envs: WeakMap<object, { builtin: string; epoch: number }[]>;
   envWindow: EpochWindow;
@@ -406,13 +407,16 @@ export class HostCall extends HostCallBase {
       st.executions.set(exec.key, execId);
     }
     const catalog = this.db.namespaceCatalog;
-    let catalogEpoch = st.catalogs.get(catalog);
+    const search = this.db.searchIndexes;
+    const generation = search?.generation ?? -1;
+    const sent = st.catalogs.get(catalog);
+    let catalogEpoch = sent?.epoch;
     let tables: WireTable[] | undefined;
-    if (catalogEpoch === undefined || !st.catalogWindow.has(catalogEpoch)) {
+    if (catalogEpoch === undefined || sent!.search !== generation || !st.catalogWindow.has(catalogEpoch)) {
       catalogEpoch = ++st.next;
-      st.catalogs.set(catalog, catalogEpoch);
+      st.catalogs.set(catalog, { epoch: catalogEpoch, search: generation });
       st.catalogWindow.add(catalogEpoch);
-      tables = [...catalog.tables.values()].map(wireTable);
+      tables = [...catalog.tables.values()].map((t) => wireTable(t, search));
     }
     let env: WireCall["env"] = null;
     const vars = this.env?.variables;
@@ -448,7 +452,7 @@ export class HostCall extends HostCallBase {
       storage: [...STORAGE_METHODS[this.kind]],
       env,
       catalog: tables ? { epoch: catalogEpoch, tables } : { epoch: catalogEpoch },
-      created: created.map(wireTable),
+      created: created.map((t) => wireTable(t)),
     };
   }
 
@@ -457,7 +461,7 @@ export class HostCall extends HostCallBase {
     const created = this.db.createdTableDefs();
     if (created.length === this.createdSent) return undefined;
     this.createdSent = created.length;
-    return created.map(wireTable);
+    return created.map((t) => wireTable(t));
   }
 
   /** Arms the backstop: the call's remaining user time, plus the slack, with no word from the child. */
@@ -772,11 +776,18 @@ function makeLink(db: Chain, source: Chain | null, kind: string, a: unknown[]): 
   return bad(`no link ${kind}`);
 }
 
-/** A table as the child's `normalizeId` and `withIndex` need it: its number, and each index's fields and readiness. */
-export function wireTable(t: TableDef): WireTable {
-  return {
+/**
+ * A table as the child's `normalizeId` and `withIndex` need it: its number, each index's fields and readiness, the
+ * ones being built and its text indexes (`search`, the registry's: a table this transaction created has none).
+ */
+export function wireTable(t: TableDef, search?: Tx["searchIndexes"]): WireTable {
+  const w: WireTable = {
     name: t.name,
     number: t.number,
     indexes: [...t.indexes].map(([name, ix]) => [name, ix.fields, ix.readyTs == null ? null : ix.readyTs.toString()]),
   };
+  if (t.pending.length) w.pending = t.pending.map((ix) => [ix.name, ix.staged === true]);
+  const text = search?.forTablet(t.id);
+  if (text?.length) w.search = text.map((e) => e.name);
+  return w;
 }
