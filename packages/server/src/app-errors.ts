@@ -2,7 +2,8 @@
 //
 //   udf-runtime/src/errors.ts `setupSourceMapping`   a V8 function's `error.stack`: the source-mapped frames alone,
 //                                                     its runtime's own trimmed (`JsError::from_frames`), no header
-//   node-executor/src/errors.ts                       a Node action's: `Error: <message>`, then the frames
+//   node-executor/src/errors.ts                       a Node action's: `Error: <message>`, then the frames, Node's
+//                                                     own (`node:https`) among them, which agent-base reads
 //   convex/src/server/impl/syscall.ts                 a syscall's failure made again in the app's code
 //     `performAsyncSyscall`                           (`new Error(e.message)`), so its frames are where the app
 //                                                     awaited it (`at async …`)
@@ -55,10 +56,10 @@ const framesOf = (stack: string) =>
     .join("\n");
 
 /** The app's frames of `callsites`, mapped to its sources, one `    at …` line each. */
-function appFrames(callsites: CallSite[]): string {
+function appFrames(callsites: CallSite[], node: boolean): string {
   let raw = "";
   for (const c of callsites) raw += `    at ${c.isAsync?.() ? "async " : ""}${String(c)}\n`;
-  return framesOf(mapStack(raw));
+  return framesOf(mapStack(raw, node));
 }
 
 /** Convex's Node executor header: `Error`, then the message when there is one, whatever the error's class. */
@@ -76,10 +77,11 @@ const withHeader = (node: boolean, e: unknown, frames: string) =>
 
 /**
  * Install a pushed context's error stacks: its `Error.prepareStackTrace` (the app's own errors), and the wrapper
- * `appContext` gives the engine's errors through. `node`: a `"use node"` context, with Node's header.
+ * `appContext` gives the engine's errors through. `node`: a `"use node"` context, with Node's header, and Node's own
+ * frames kept among the app's (`mapStack`'s `nodeFrames`: DV-482 as amended, STUDY-188 Q2), as libraries read them.
  */
 export function installAppErrors(context: vm.Context, node: boolean): void {
-  const format = (e: unknown, callsites: CallSite[]) => withHeader(node, e, appFrames(callsites));
+  const format = (e: unknown, callsites: CallSite[]) => withHeader(node, e, appFrames(callsites, node));
   // The app's own `BunvexError`, a class of its realm (an `Error` there, its stack formatted as the app's other
   // errors), still a `BunvexError` to the server (`isBunvexError`: the registered symbol is every realm's); and to the
   // app, any `BunvexError` is one, the engine's included.
@@ -116,7 +118,7 @@ export function installAppErrors(context: vm.Context, node: boolean): void {
     // its library, show those); otherwise the frames of the app's `await`.
     const own = stackAfterMessage(e);
     let frames: string;
-    if (APP_FRAME.test(own)) frames = framesOf(mapStack(own));
+    if (APP_FRAME.test(own)) frames = framesOf(mapStack(own, node));
     else {
       const stack = String(site.stack ?? "");
       frames = node ? stack.slice(stack.indexOf("\n") + 1 || stack.length) : stack;

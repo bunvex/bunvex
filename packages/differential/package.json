@@ -14,7 +14,8 @@
     "@convex-dev/sharded-counter": "0.2.3",
     "convex": "1.46.0",
     "convex-helpers": "0.1.128",
-    "fast-check": "4.10.2"
+    "fast-check": "4.10.2",
+    "https-proxy-agent": "9.1.0"
   },
   "repository": {
     "type": "git",

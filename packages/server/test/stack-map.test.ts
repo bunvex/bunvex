@@ -83,6 +83,45 @@ test("with no pushed module's frame, only the server's own frames go: its source
   );
 });
 
+test("in a \"use node\" context, Node's frames are kept down to the app's outermost one (DV-482, STUDY-188 Q2)", () => {
+  const stack = [
+    "Error",
+    "    at readFileSync (node:fs:441:20)",
+    `    at load (${at("messages.js", 2, 6)})`,
+    "    at new ClientRequest (node:_http_client:105:129)",
+    "    at map (native)",
+    "    at request (node:https:18:97)",
+    "    at runQuery (/srv/packages/server/src/functions.ts:812:20)",
+    `    at ${at("messages.js", 1, 1)}`,
+    "    at run (node:async_hooks:144:29)",
+    "    at processTicksAndRejections (native:7:39)",
+  ].join("\n");
+  expect(mapStack(stack, true)).toBe(
+    [
+      "Error",
+      "    at readFileSync (node:fs:441:20)",
+      "    at load (../bunvex/lib/check.ts:3:3)",
+      "    at ClientRequest (node:_http_client:105:129)",
+      "    at map (native)",
+      "    at request (node:https:18:97)",
+      "    at ../bunvex/messages.ts:1:1",
+    ].join("\n"),
+  );
+  // Not in a V8 context: none of them.
+  expect(mapStack(stack)).toBe(
+    [
+      "Error",
+      "    at load (../bunvex/lib/check.ts:3:3)",
+      "    at map (native)",
+      "    at ../bunvex/messages.ts:1:1",
+    ].join("\n"),
+  );
+  // No frame of the app's (an error Node made in its own callback): Node's frames alone.
+  const server = resolve(import.meta.dir, "../src/functions.ts");
+  const node = `Error: connect ECONNREFUSED\n    at afterConnect (node:net:1607:16)\n    at f (${server}:1:1)`;
+  expect(mapStack(node, true)).toBe("Error: connect ECONNREFUSED\n    at afterConnect (node:net:1607:16)");
+});
+
 test("the log's exception frames are the mapped ones", () => {
   const frames = stackFrames(`Error: boom\n    at f (${at("messages.js", 2, 6)})\n    at g (/srv/engine.ts:1:1)`);
   expect(frames).toEqual([

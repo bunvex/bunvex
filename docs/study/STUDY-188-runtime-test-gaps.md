@@ -177,7 +177,7 @@ Same result in queries, mutations and actions:
 | R8 (X9) | Convex's four query states in `core/src/tx.ts` and `sandbox/src/child-db.ts` | STUDY-187's X20 and X13 (same file) |
 | R9 (X16) | A query or mutation whose promise is still pending once nothing is in flight (X13's counter) and a macrotask has passed fails with "Returned promise will never resolve" | X13 |
 | R10 (X19a) | The result is snapshotted where the handler's promise settles, not after the wrappers | X13 (the same run loop) |
-| R11 (X11) | Per Q2 | Q2 |
+| R11 (X11) | Per Q2: Node's own frames kept in `"use node"` contexts (`stack-map.ts` `nodeFrames`); built in #PRNUM | Q2 (decided) |
 | R12 (X17b) | Per Q1 | Q1 |
 
 Each PR comes with a differential test (both backends, the answers above), a sabotage check and, for R2 and R6, a
@@ -186,7 +186,7 @@ measurement of module load and context creation.
 ## 4. Divergences
 
 - **DV-553** (Q1): no memory cap under `vm`; Convex's 64 MiB cap under the `process` executor (R12).
-- **DV-482**, amended (Q2): the runtime's `node:` frames are kept in `"use node"` contexts (R11).
+- **DV-482**, amended (Q2): the runtime's `node:` frames are kept in `"use node"` contexts (R11, #PRNUM): Node's frames from the top down to the app's outermost frame, named as Convex's executor names them (no `new`). Those past it are the server calling the handler (`node:async_hooks`), not Convex's executor's, and stay dropped. The client's error and a V8 stack keep none, as Convex maps both.
 - Q3: R6 matches Convex (a module that throws while loading fails the function); no divergence.
 - **DV-569** (owner, 2026-10-25): the rare-error texts, frames and timings the PRs left different, one entry for all of them. Each PR lists its own: #852 (X4), #853 (X7), #855 (X14), #856 (X9), #857 (X21), #858 (X16), #859 (X19). The `process` executor's differences in #855 and #856 are fixed to match Convex, not recorded.
 - **Known gap** (X19a, #859): bunvex's reads can resolve within microtasks, while Convex's never do. A dangling chain that reads and then changes the result within two microtask turns can still differ. Exact parity needs every read to answer on a later turn; not planned.
