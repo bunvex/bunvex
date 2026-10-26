@@ -11,6 +11,7 @@
 // - A failed request is Convex's `TypeError` (`fetchFailure`): reqwest's message for the cause, with the URL's
 //   query string, fragment and credentials dropped, or `fetch to <url> failed: <cause>` when the cause does
 //   not name the URL (a body that fails to read). An abort is Convex's `AbortError`.
+// - The app's `Proxy-Authorization` never goes out, as Convex's fetch client skips it.
 // - Requests carry Convex's default `User-Agent` in bunvex's words (`Bunvex/1.0`, DV-456) unless the app sets
 //   one, and wait as long as the action may (reqwest has no timeout; Bun's idle timeout is turned off).
 // - A `"use node"` action runs on Node in Convex, whose `fetch` takes `http:`, `https:` and `data:`; another
@@ -305,6 +306,9 @@ export function isolateFetch(
 ): typeof fetch {
   /** One request, never redirected by Bun: its response, or Convex's error. */
   const once = async (request: Request): Promise<Response> => {
+    // Hop-by-hop: the proxy's comes from the operator's configuration (`http-proxy.ts`), never the app's, as Convex's
+    // client skips it (`common/src/http/fetch.rs`, 9a96843). Without a proxy it does not go out either.
+    request.headers.delete("proxy-authorization");
     let r: Response;
     try {
       r = await send(request, { redirect: "manual", timeout: false } as RequestInit);
