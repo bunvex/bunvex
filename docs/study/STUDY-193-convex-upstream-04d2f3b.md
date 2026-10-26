@@ -209,6 +209,8 @@ PR 1 runs them, and A19 adds `FunctionHandle_future`.
 - `cross-open.test.ts` now reads each binary's output (Convex's logs go to stdout, which the harness used to drop):
   neither prints the "newer" warning, and Convex runs no migration. With bunvex at 133 both directions fail.
 - `s3-export-api.test.ts` runs against the new oracle and passes.
+- The whole differential suite against `04d2f3b` (aarch64-apple-darwin) with the 1.48.0 client: 502 pass, 0 fail,
+  0 skipped, in 373 s.
 
 ## 6. Owner questions
 
