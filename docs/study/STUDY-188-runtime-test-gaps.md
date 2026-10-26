@@ -181,10 +181,15 @@ backstop fails all of them.)
   64 MiB buffer is 96 bytes over); or `heapUsed` past 96 MiB more (Convex's 64 + 32) after a full collection, run only
   once it looks past it (V8 collects before it gives up).
 - **The backstop**: a watchdog thread (a `Worker`) reads the process's counts every millisecond while a call runs and
-  stops the child once they grew 256 MiB: code that never yields, and memory the engine does not count.
+  stops the child once they grew 256 MiB: code that never yields, and memory the engine does not count. The counts the
+  growth is measured from are taken by the thread that starts the calls, not by the watchdog as it wakes: on Linux
+  (CI, a 2-vCPU VPS) it woke after a 512 MiB `Blob`'s bytes were already committed, and missed them (2 runs in 8).
 - **Per call**: the calls a child runs at once share it (one child per code version, STUDY-171 §8.6); each limit is
   multiplied by the most calls that ran at once since the child was last idle.
-- **Past it**: the child writes a byte on a socket of its own (fd 4) and kills itself. The host reads the byte once
+- **Past it**: the child writes a byte on a socket of its own (fd 4) and kills itself. A thread that sees it while
+  the other is already stopping the child waits for the death: on Linux the calling thread went on and sent the
+  action's next operation (`ctx.runQuery`) before the watchdog's kill landed, and the host then added the
+  unawaited-operations warning to Convex's message (CI, and 1 run in 4 on the VPS). The host reads the byte once
   the child exited (a reader waiting on it all along cost each operation about 4 µs), fails every call that ran in it
   with `outOfMemory()` (a `FunctionPathError`: Convex's message alone, no `Uncaught`, no frames; a query's or
   mutation's marked as the execution's failure), and the next call starts a new child. `PROTOCOL_VERSION` 9.

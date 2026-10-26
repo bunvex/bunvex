@@ -50,21 +50,31 @@ const CHECK_EVERY_MS = 1;
 /** The shared cells (an `Int32Array`): how many calls run, the most that ran since the child was last idle, … */
 export const RUNNING = 0;
 export const PEAK = 1;
-/** … how many times the child went from idle to running (the watchdog's measures start over at each), … */
-export const STARTS = 2;
+/**
+ * … the process's resident and committed memory then, in KiB (taken by the thread that starts the calls: a watchdog
+ * that measured it as it woke would miss what the calls allocated before it ran, seen on Linux), …
+ */
+export const BASE_RESIDENT = 2;
+export const BASE_COMMITTED = 3;
 /** … and whether the child is stopping. */
-const TRIPPED = 3;
+const TRIPPED = 4;
 /** A cell nothing changes: the watchdog sleeps on it between measures. */
-export const TICK = 4;
-const CELLS = 5;
+export const TICK = 5;
+const CELLS = 6;
 
-/** Past the cap: says so on the memory channel, and kills the child (whichever thread saw it first). */
+/**
+ * Past the cap: says so on the memory channel, and kills the child. Whichever thread saw it second waits for the death
+ * instead of going on: the calling thread would otherwise send the host what the call does next (an operation the host
+ * would then count as left unawaited, seen on Linux).
+ */
 export function trip(cells: Int32Array): void {
-  if (Atomics.compareExchange(cells, TRIPPED, 0, 1) !== 0) return;
-  try {
-    writeSync(MEMORY_CHANNEL, "m");
-  } catch {}
-  process.kill(process.pid, "SIGKILL");
+  if (Atomics.compareExchange(cells, TRIPPED, 0, 1) === 0) {
+    try {
+      writeSync(MEMORY_CHANNEL, "m");
+    } catch {}
+    process.kill(process.pid, "SIGKILL");
+  }
+  for (;;) Atomics.wait(cells, TICK, 0);
 }
 
 /** The process's memory as its allocator counts it, in bytes: resident, and committed (written or not). */
@@ -99,13 +109,15 @@ export function callsRunning(n: number): void {
   if (!cells) return;
   const before = Atomics.load(cells, RUNNING);
   if (before === 0 && n > 0) {
-    // The child was idle: the calls' memory is measured from now (the watchdog takes its own measure as it wakes).
+    // The child was idle: the calls' memory is measured from now.
     const u = process.memoryUsage();
     startHeap = u.heapUsed;
     startArrayBuffers = u.arrayBuffers;
     lastCheck = Number.NEGATIVE_INFINITY;
+    const p = processMemory();
+    Atomics.store(cells, BASE_RESIDENT, Math.floor(p.resident / 1024));
+    Atomics.store(cells, BASE_COMMITTED, Math.floor(p.committed / 1024));
     Atomics.store(cells, PEAK, n);
-    Atomics.add(cells, STARTS, 1);
   } else if (n > Atomics.load(cells, PEAK)) Atomics.store(cells, PEAK, n);
   Atomics.store(cells, RUNNING, n);
   if (before === 0 && n > 0) Atomics.notify(cells, RUNNING);
