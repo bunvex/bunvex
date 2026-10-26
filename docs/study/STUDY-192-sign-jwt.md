@@ -1,7 +1,7 @@
 # STUDY-192 — `ctx.auth.signJwt` and the deployment JWKS
-<!-- index: `ctx.auth.signJwt` in mutations and `/.well-known/jwks.json`: ES256 tokens signed by a key derived from the instance secret, so a store the Convex binary wrote serves the same keys; the claim rules, limits and errors; the first prerequisite of built-in auth (STUDY-191) | draft: S-1–S-3 open -->
+<!-- index: `ctx.auth.signJwt` in mutations and `/.well-known/jwks.json`: ES256 tokens signed by a key derived from the instance secret, so a store the Convex binary wrote serves the same keys; the claim rules, limits and errors; the first prerequisite of built-in auth (STUDY-191) | accepted: S-1–S-3 as recommended (DV-578, DV-579); not built -->
 
-- **Status:** draft; S-1–S-3 open (§4). Nothing built.
+- **Status:** accepted: S-1–S-3 as recommended (owner, 2026-10-26; DV-578, DV-579). Nothing built.
 - **Convex source read:** convex/convex-backend `origin/main` on 2026-10-26:
   - the runtime commits `76fe874` (the syscall and the keys), `aafa4d8` (the JWKS route), `2c4c29f` (1 h maximum
     lifetime), `f34ac10` (`sub` must be a string), `74a65e0` (a missing key is an internal error) and `72e88b8`
@@ -230,9 +230,9 @@ PR 1 waits for that move or ships its differential tests with it.
 
 | # | Divergence | Recommendation | Why | Decision |
 |---|---|---|---|---|
-| S-1 | Messages that name Convex ("is set by Convex", "is reserved by Convex") use bunvex's words: "is set by the deployment", "is reserved by the deployment". The reserved prefixes stay `convex` and `cvx`, at runtime and in the types (STUDY-186 Q1, already decided) | **Yes** | Rule 5 on messages. The prefixes are kept for apps that move between the two | open |
-| S-2 | Also reserve a `bunvex` claim prefix | **No**, not until bunvex sets a claim of its own | Convex's apps may set `bunvexFoo`; reserving it is a divergence with no use today. STUDY-191's later additions can ask again if they need one | open |
-| S-3 | The process sandbox signs in the host, never giving the child the key (Convex sends the root bytes to its runner) | **Yes** | Not observable; it keeps key material out of sandboxed app code | open |
+| S-1 | Messages that name Convex ("is set by Convex", "is reserved by Convex") use bunvex's words: "is set by the deployment", "is reserved by the deployment". The reserved prefixes stay `convex` and `cvx`, at runtime and in the types (STUDY-186 Q1, already decided) | **Yes** | Rule 5 on messages. The prefixes are kept for apps that move between the two | **Yes** (owner, 2026-10-26; DV-578) |
+| S-2 | Also reserve a `bunvex` claim prefix | **No**, not until bunvex sets a claim of its own | Convex's apps may set `bunvexFoo`; reserving it is a divergence with no use today. STUDY-191's later additions can ask again if they need one | **No** (owner, 2026-10-26; matches Convex) |
+| S-3 | The process sandbox signs in the host, never giving the child the key (Convex sends the root bytes to its runner) | **Yes** | Not observable; it keeps key material out of sandboxed app code | **Yes** (owner, 2026-10-26; DV-579) |
 
 `JwtSignInQuery`, `InvalidJwtRequest` and `InvalidArguments` keep Convex's codes, since none contains "convex".
 
