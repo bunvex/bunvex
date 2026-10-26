@@ -211,7 +211,9 @@ time, and shrinks to three programs: a query reads `b`, a mutation in a later pr
   index change therefore still conflicts only with transactions that used its table, as Convex's per-index `_index`
   reads do (`transaction_index.rs`, `record_interval`).
 - **What apps observe:** the `cached` flag in the function log, and one more run after a table is created, as on
-  Convex. Mutations in flight while a table is created retry, as on Convex.
+  Convex. Mutations in flight while a table is created retry, as on Convex. `bunvex dev` waiting on a table after a
+  schema validation failure (`_system/cli/queryTable`, `Math.random()` per run, as Convex's) pushes again when any
+  table is created, as Convex's CLI does; `dev.test.ts` now creates its unrelated table before the watch.
 - **Cost:** one interval per transaction. 20 000 mutations and 20 000 indexed queries on the memory store run within
   noise before and after (about 50–58 k mutations/s and 140–170 k queries/s on both).
 - **Tests:** `packages/differential/test/table-mapping.test.ts` against Convex's binary, which fails without the fix;
