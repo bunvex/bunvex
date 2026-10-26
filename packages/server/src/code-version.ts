@@ -34,6 +34,7 @@ import { checkRouter, HttpRouter } from "./router.ts";
 import { byPosition, SourceMapTokens, type SourcePosition } from "./source-position.ts";
 import { moduleUrl, registerModules } from "./stack-map.ts";
 import { SpecBlob, SpecFile } from "./web-blob.ts";
+import { isolateCrypto } from "./web-crypto.ts";
 import { SpecResponse } from "./web-response.ts";
 
 const FRAME_MAPS = Symbol("bunvex.frameMaps");
@@ -330,6 +331,8 @@ export function contextGlobals(node: boolean, env: Record<string, string>, onMis
   out.File = SpecFile;
   // A Response's headers as Convex's runtime gives them (STUDY-31 §8); a "use node" action keeps the host's.
   if (!node) out.Response = SpecResponse;
+  // PBKDF2 bounded as in Convex's runtime (`crates/webcrypto/src/pbkdf2.rs`); a "use node" action keeps the host's.
+  if (!node) out.crypto = isolateCrypto(g.crypto as Crypto);
   // A V8 action's timers end with it, as Convex's sleeps do with its isolate (STUDY-77 §7): each one its code sets is
   // its action's, cleared when the action ends.
   if (!node) {
