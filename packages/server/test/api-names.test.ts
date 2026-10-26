@@ -1,5 +1,5 @@
 // The names `bunvex/server` and `bunvex/values` export, against Convex's (STUDY-180 §3.2): every name the installed
-// `convex` 1.46.0 exports from `convex/server` and `convex/values` (its `.d.ts`, as the type checker sees them,
+// `convex` 1.48.0 exports from `convex/server` and `convex/values` (its `.d.ts`, as the type checker sees them,
 // values and types together) is exported by bunvex's entry under the same name, except the ones listed here. The
 // `convex` package is the differential suite's dev dependency (packages/differential): read from its `.d.ts`
 // files, not imported. The shapes are compared by packages/differential/test/api-shapes.test.ts and
@@ -17,6 +17,14 @@ const NOT_EXPORTED: Record<"server" | "values", Record<string, string>> = {
     FileMetadata: "DV-543",
     ValidatedFunction: "DV-543",
     UnvalidatedFunction: "DV-543",
+    // New in 1.48.0, each pending its item (STUDY-193 §5.1): `FunctionHandle_future` is A19; `ctx.auth.signJwt` in
+    // mutations and its types are STUDY-192.
+    FunctionHandle_future: "STUDY-193 A19",
+    MutationAuth: "STUDY-192",
+    ReservedJwtClaim: "STUDY-192",
+    ReservedJwtClaimPrefix: "STUDY-192",
+    SignJwtClaims: "STUDY-192",
+    SignJwtOptions: "STUDY-192",
   },
   values: {
     // Rule 5 (DV-312): bunvex's names for them are `BunvexError`, `toJsonValue`, `fromJsonValue`, `valueSize`.
@@ -63,7 +71,8 @@ const ENTRIES = {
 
 describe("bunvex's entries export the reference's names (STUDY-180)", () => {
   test("the reference is the client version bunvex matches", () => {
-    expect(version).toBe("1.46.0");
+    // The one Convex's oracle release ships (STUDY-193 Q2); sync-e2e keeps testing the 1.46.0 floor.
+    expect(version).toBe("1.48.0");
   });
 
   for (const [entry, files] of Object.entries(ENTRIES) as [keyof typeof ENTRIES, (typeof ENTRIES)["server"]][]) {

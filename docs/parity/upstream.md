@@ -8,7 +8,9 @@ get-convex/convex-backend, and the process that keeps it there. The process is d
 
 - **Reference commit:** `72ce13c`, the commit of the release `precompiled-2026-10-10-72ce13c` (2026-10-09). The parity
   files cite `4577b9031` brought up to this commit.
-- **Differential oracle:** `precompiled-2026-10-10-72ce13c` (`packages/differential/scripts/download-convex-backend.sh`).
+- **Differential oracle:** `precompiled-2026-10-26-04d2f3b` (`packages/differential/scripts/download-convex-backend.sh`),
+  ahead of the reference: STUDY-193 moved it first (Q1), so each align PR is checked against the release it follows.
+  The suite's `convex` client is 1.48.0, the one that release ships; `sync-e2e` keeps the 1.46.0 floor (Q2).
 - **Last weekly bump:** [STUDY-173](../study/STUDY-173-convex-reference-2026-10-10.md) (2026-10-19), from `d8bdde0`.
 
 ## Other repositories

@@ -1,7 +1,7 @@
 # STUDY-193 — Convex up to precompiled-2026-10-26-04d2f3b, and STUDY-186's build status
 <!-- index: Convex from `precompiled-2026-10-24-bb31399` to `precompiled-2026-10-26-04d2f3b`, triaged; STUDY-186 A1–A19 status; the reference move planned | decided (owner, 2026-10-26): oracle first, `convex` 1.48.0 -->
 
-- **Status:** decided; triage and plan only. Nothing is built here. The owner took both §6 recommendations on
+- **Status:** decided; PR 1 (the oracle, A14 and the client pin) is built (§5.4). The owner took both §6 recommendations on
   2026-10-26.
 - **Convex source read:** get-convex/convex-backend from the release tag `precompiled-2026-10-24-bb31399` (the end
   of [STUDY-186](STUDY-186-convex-after-72ce13c.md)) to the release tag `precompiled-2026-10-26-04d2f3b`
@@ -11,7 +11,8 @@
   same, and the `convex` npm package is still 1.48.0.
 - **bunvex code read:** `main` at `a90013ff` (after #878).
 - **Process:** the weekly bump of [STUDY-138](STUDY-138-following-convex.md) and
-  [upstream.md](../parity/upstream.md). The reference and the oracle are still at `precompiled-2026-10-10-72ce13c`.
+  [upstream.md](../parity/upstream.md). The reference is still at `precompiled-2026-10-10-72ce13c`; PR 1 moved the
+  oracle to `04d2f3b` (§5.4).
   STUDY-186 triaged up to `bb31399` and left the move for later. This study plans the move straight to `04d2f3b`.
 - **Related:** [STUDY-186](STUDY-186-convex-after-72ce13c.md) (the previous triage and its A1–A19),
   [STUDY-173](STUDY-173-convex-reference-2026-10-10.md) (the last reference move),
@@ -67,7 +68,7 @@ opened). Two of the nineteen items are built.
 | A11 | Mutation permit before the transaction | no | — | the permit is taken inside `perAttempt`, after the transaction began (`server/src/functions.ts:1967`) |
 | A12 | Audit log: integration configs, `download_export` | no | — | integration events carry `{id, type}` only (`server/src/audit-log.ts:86-88`); no `download_export` |
 | A13 | S3 export API: `FieldFiltersUnsupported`, frozen destination, in-transaction check | **yes** | #862 (+#881) | `FieldFiltersUnsupported` (`server/src/log-sinks-routes.ts:266`); differential `s3-export-api.test.ts`, which #881 skips against an oracle older than `precompiled-2026-10-24` |
-| A14 | `_s3_export_state`, `DATABASE_VERSION` 134 | no (planned for the move) | — | `DATABASE_VERSION = 133n` (`core/src/database-globals.ts:14`); no `_s3_export_state` in `core/src/catalog.ts`. #862 left it for the reference move, by design |
+| A14 | `_s3_export_state`, `DATABASE_VERSION` 134 | **yes** (PR 1) | PR 1 (§5.1) | `DATABASE_VERSION = 134n`; `_s3_export_state` (number 556, `by_config_id` on `configId`) in `core/src/catalog.ts` and the engine's system tables; `listConfiguredSinks` adds its `exportProgress`. `cross-open.test.ts` checks that neither binary warns or migrates |
 | A15 | Refuse Node 20 | no | — | `"20"` accepted (`server/src/push.ts:315`) |
 | A16 | `env list --include-values`; MCP `envList` names by default (and DV-551's agent default) | no | — | only `--names-only` (`cli/src/env.ts:30-36`); MCP `envList` returns values (`cli/src/mcp-tools.ts:347`) |
 | A17 | Validate `--local-backend-version` | no | — | `opts.backendVersion` used unchecked (`cli/src/local-deployment.ts:321`) |
@@ -190,6 +191,24 @@ behaviour (A1, A2, A3, A5, A7, A8, A9, A12, A15, A18, DV-552, through a webhook 
 does). Each is red against bunvex until its PR. Moving the `convex` pin to 1.48.0 (Q2) moves `api-shapes`,
 `component-definitions` and `table-definition-shape` onto 1.48.0's types. Whether they still agree was not run here.
 PR 1 runs them, and A19 adds `FunctionHandle_future`.
+
+### 5.4 PR 1, as built
+
+- The download script fetches `precompiled-2026-10-26-04d2f3b`; upstream.md's oracle line names it (the reference
+  line waits for PR 21).
+- A14 as Convex's `ea8497f`, with `9ff64aab5`'s change (the checkpoint keeps `progress` only, no `cursor`). Convex
+  numbers the table 44 (`DefaultTableNumber::S3ExportState`), so 556, and its index `by_config_id` is
+  `["configId", "_creationTime"]`. Convex's migration to 134 is empty: its bootstrap creates the table, and so does
+  bunvex's start. A 133 store is now refused, bunvex's own included: bunvex keeps no paths for older stores (CLAUDE.md),
+  and DV-418 refuses an older version. An app moves its data by export, then import.
+- `exportProgress` in `listConfiguredSinks`, from the export's `_s3_export_state` row when there is one. bunvex never
+  writes one (DV-571), so it shows only in a store Convex's worker wrote.
+- `convex` 1.48.0 in the differential suite, and `sync-e2e` at exactly 1.46.0. `api-shapes` fails on 1.48.0's
+  `StorageWriter`, which now has `get` and `store` (storage in mutations, DV-437, §4.2 above): those two checks name the
+  two methods and check one way until that item is built. `component-definitions` and `table-definition-shape` agree.
+- `cross-open.test.ts` now reads each binary's output (Convex's logs go to stdout, which the harness used to drop):
+  neither prints the "newer" warning, and Convex runs no migration. With bunvex at 133 both directions fail.
+- `s3-export-api.test.ts` runs against the new oracle and passes.
 
 ## 6. Owner questions
 

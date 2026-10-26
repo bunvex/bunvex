@@ -79,6 +79,13 @@ export const CANONICAL_URLS_TABLE = "_canonical_urls";
 export const DEPLOYMENT_AUDIT_LOG_TABLE = "_deployment_audit_log";
 /** Log streams (STUDY-59), as Convex's `_log_sinks`: `{status, config}`, one per sink type. */
 export const LOG_SINKS_TABLE = "_log_sinks";
+/**
+ * The S3 export's progress (STUDY-193 A14), as Convex's `_s3_export_state` (crates/model/src/s3_export_state, from
+ * `DATABASE_VERSION` 134): `{configId, checkpoint: {progress}}`, one per `s3Export` sink, indexed `by_config_id`.
+ * Only Convex's export worker writes it; bunvex runs none (DV-571), so its rows are those of a Convex store.
+ */
+export const S3_EXPORT_STATE_TABLE = "_s3_export_state";
+export const S3_EXPORT_STATE_INDEX = "by_config_id";
 /** Usage limits (STUDY-61), as Convex's `_usage_limits`: `{metric, window, limitType, limit, enabled}`. */
 export const USAGE_LIMITS_TABLE = "_usage_limits";
 /**
@@ -150,6 +157,7 @@ export const SYSTEM_TABLE_NUMBERS: Readonly<Record<string, number>> = {
   _file_storage: 540,
   _snapshot_imports: 541,
   _log_sinks: 535,
+  _s3_export_state: 556,
   _function_handles: 545,
   _canonical_urls: 546,
   _backend_state: 536,
@@ -195,6 +203,7 @@ export const SYSTEM_TABLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   _file_storage: "Stored files' metadata (apps read it as _storage).",
   _snapshot_imports: "Snapshot imports, their state and checkpoints.",
   _log_sinks: "Configured log streams and their status.",
+  _s3_export_state: "The S3 export's progress, one row per S3 export (bunvex writes none: it runs no export worker).",
   _function_handles: "Function handles: a function path and when it was deleted.",
   _canonical_urls: "The deployment's canonical cloud and site URLs.",
   _backend_state: "The deployment's run state (running, paused, disabled).",

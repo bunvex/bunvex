@@ -5,8 +5,9 @@
 // `listConfiguredSinks`. Neither backend writes anything to S3 (DV-570), and bunvex runs no failing worker
 // (DV-571). Local only: skipped, with a note, when Convex's backend is not there
 // (scripts/download-convex-backend.sh, or CONVEX_BACKEND_BIN), or when it is older than
-// `precompiled-2026-10-24-bb31399`: bunvex follows that release here (STUDY-185 Q1, Q4) ahead of the differential
-// oracle (`docs/parity/upstream.md`), and `72ce13c` still takes column filters and every field in an update.
+// `precompiled-2026-10-24-bb31399`, the release this API follows (STUDY-185 Q1, Q4): `72ce13c` still takes column
+// filters and every field in an update. The oracle the script fetches, `precompiled-2026-10-26-04d2f3b`
+// (STUDY-193), is later, so the test runs.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

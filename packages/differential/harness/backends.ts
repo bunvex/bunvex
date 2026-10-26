@@ -36,6 +36,11 @@ export type Backend = {
   stop: () => Promise<void>;
   /** An admin key of the deployment (the admin API's tests, e.g. streaming import). */
   adminKey: string;
+  /**
+   * What the backend's process wrote so far, stdout and stderr together (its last 4000 characters): a start's
+   * warnings. Convex's binary logs to stdout, bunvex's to stderr.
+   */
+  output: () => string;
 };
 
 async function run(cmd: string[], cwd: string, env: Record<string, string> = {}): Promise<string> {
@@ -61,8 +66,8 @@ export function freePorts(): [number, number] {
   }
 }
 
-/** How a backend is started on two ports: its process, and what it wrote to stderr so far. */
-type Launched = { proc: ReturnType<typeof Bun.spawn>; stderr: () => string };
+/** How a backend is started on two ports: its process, and what it wrote so far (stdout and stderr). */
+type Launched = { proc: ReturnType<typeof Bun.spawn>; output: () => string };
 
 /** Every backend process this harness launched that has not exited yet, by its own handle. */
 const running = new Set<ReturnType<typeof Bun.spawn>>();
@@ -102,16 +107,16 @@ export async function startAll<const T extends readonly Promise<Backend>[]>(
 }
 
 function launch(cmd: string[], cwd: string, env: Record<string, string> = {}): Launched {
-  const proc = Bun.spawn(cmd, { cwd, env: { ...process.env, ...env }, stdout: "ignore", stderr: "pipe" });
+  const proc = Bun.spawn(cmd, { cwd, env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
   running.add(proc);
   void proc.exited.then(() => running.delete(proc));
-  let err = "";
-  (async () => {
-    const decoder = new TextDecoder();
-    for await (const chunk of proc.stderr as ReadableStream<Uint8Array>)
-      err = (err + decoder.decode(chunk)).slice(-4000);
-  })().catch(() => {});
-  return { proc, stderr: () => err };
+  let out = "";
+  for (const stream of [proc.stdout, proc.stderr] as ReadableStream<Uint8Array>[])
+    (async () => {
+      const decoder = new TextDecoder();
+      for await (const chunk of stream) out = (out + decoder.decode(chunk, { stream: true })).slice(-4000);
+    })().catch(() => {});
+  return { proc, output: () => out };
 }
 
 /** The backend did not come up on its ports (they were taken, or it failed): another pair may do. */
@@ -123,14 +128,14 @@ class NotStarted extends Error {}
  */
 async function waitUntilUp(url: string, name: string, l: Launched, what: string) {
   for (let i = 0; i < 300; i++) {
-    if (l.proc.exitCode !== null) throw new NotStarted(`${what} exited at start:\n${l.stderr().trim()}`);
+    if (l.proc.exitCode !== null) throw new NotStarted(`${what} exited at start:\n${l.output().trim()}`);
     const answer = await fetch(`${url}/instance_name`)
       .then((r) => (r.ok ? r.text() : null))
       .catch(() => null);
     if (answer === name && l.proc.exitCode === null) return;
     await Bun.sleep(100);
   }
-  throw new NotStarted(`${what} did not answer as ${name} within 30 s:\n${l.stderr().trim()}`);
+  throw new NotStarted(`${what} did not answer as ${name} within 30 s:\n${l.output().trim()}`);
 }
 
 export type StartOptions = {
@@ -288,7 +293,7 @@ export async function startConvex(opts: StartOptions = {}): Promise<Backend> {
         CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey,
       });
     await cli(["deploy", "--yes", "--typecheck=disable"]);
-    return { name: "convex", url: up.url, call: caller(up.url), cli, stop, adminKey };
+    return { name: "convex", url: up.url, call: caller(up.url), cli, stop, adminKey, output: up.launched.output };
   } catch (e) {
     await stop();
     throw e;
@@ -339,7 +344,7 @@ export async function startBunvex(opts: StartOptions = {}): Promise<Backend> {
     writeFileSync(envFile, `BUNVEX_SELF_HOSTED_URL=${up.url}\nBUNVEX_SELF_HOSTED_ADMIN_KEY=${adminKey}\n`);
     const cli = (args: string[]) => run([process.execPath, BUNVEX_CLI, ...args, "--env-file", envFile], proj);
     await cli(["deploy", "--typecheck=disable"]);
-    return { name: "bunvex", url: up.url, call: caller(up.url), cli, stop, adminKey };
+    return { name: "bunvex", url: up.url, call: caller(up.url), cli, stop, adminKey, output: up.launched.output };
   } catch (e) {
     await stop();
     throw e;

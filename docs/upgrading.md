@@ -70,14 +70,14 @@ Convex's CLI does (`packages/cli/src/local-deployment.ts`). Its store follows §
 
 Every store records the version of its data in `_db` (`{version, awsPrefixSecret, storageType}`), as Convex's
 `DATABASE_VERSION` ([STUDY-126](study/STUDY-126-db-globals.md), [STUDY-133](study/STUDY-133-persistence-layout-identical.md)
-Q8, DV-418). bunvex's is Convex's, **133**, and bunvex ports none of Convex's migrations (DV-56). At each start,
+Q8, DV-418). bunvex's is Convex's, **134**, and bunvex ports none of Convex's migrations (DV-56). At each start,
 before anything is written to the store (`packages/core/src/database-globals.ts`, `engine.ts`):
 
 | The store's `_db.version` | What bunvex does |
 |---|---|
-| 133 (this release's) | opens it |
-| higher (a newer bunvex, or a newer Convex) | opens it with Convex's warning: `persisted db metadata version is ahead at <n>, this binary is at 133` |
-| lower | refuses it, untouched (`LayoutError`): "the store's data is at version <n> …; this bunvex reads version 133 and has no migrations from older versions" |
+| 134 (this release's) | opens it |
+| higher (a newer bunvex, or a newer Convex) | opens it with Convex's warning: `persisted db metadata version is ahead at <n>, this binary is at 134` |
+| lower | refuses it, untouched (`LayoutError`): "the store's data is at version <n> …; this bunvex reads version 134 and has no migrations from older versions" |
 
 The tables themselves are checked too: an open finds Convex's columns in `documents`, `indexes` and
 `persistence_globals` (or, on MongoDB, its analogue; the memory log checks its file header), and refuses anything
@@ -86,7 +86,8 @@ else untouched, an older bunvex layout included (PERSIST-01 C10, `packages/core/
 So, unlike Convex, **there is no in-place upgrade across a format change** (Convex's option 1, its migration
 worker's `Executing Migration 114/115` log lines, has no counterpart). If the new release refuses your store, or if
 its changelog says the stored format changed, use the export and import of §4. That includes a release in which
-bunvex follows Convex to a new `DATABASE_VERSION` ([upstream.md](parity/upstream.md)): it refuses stores at 133. Moving back to an older release
+bunvex follows Convex to a new `DATABASE_VERSION` ([upstream.md](parity/upstream.md)), as the move to 134
+([STUDY-193](study/STUDY-193-convex-upstream-04d2f3b.md) A14) did: it refuses stores at 133. Moving back to an older release
 after a newer one wrote to the store is not tested: restore your export instead.
 
 Also kept from Convex: the storage kind is pinned at the first start (`_db.storageType`). A start with S3 on a

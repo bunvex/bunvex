@@ -472,6 +472,43 @@ test("a second S3 export is refused inside the insert's transaction too (Convex 
   expect(typeof (await engine.mutation((db) => addOrUpdateSink(db, hook)))).toBe("string");
 });
 
+test("listConfiguredSinks: an S3 export's `_s3_export_state` progress as `exportProgress`, none without a row (Convex ea8497f)", async () => {
+  const t = await setup();
+  const list = async () =>
+    (
+      await t.req("../query", { path: "_system/frontend/listConfiguredSinks", args: {}, format: "json" })
+    ).body.value.map(({ _creationTime: _, ...s }: Record<string, unknown>) => s);
+  const { id } = (
+    await t.req("create_log_stream", {
+      logStreamType: "s3Export",
+      bucket: "bkt",
+      region: "us-east-1",
+      accessKeyId: "AK",
+      secretAccessKey: "SK",
+      period: "daily",
+    })
+  ).body;
+  await until(async () => (await t.status(id))?.type === "active", "active");
+  // No row yet (bunvex runs no export worker, DV-571): no `exportProgress` key, as Convex's.
+  const [before] = await list();
+  expect(before._id).toBe(id);
+  expect("exportProgress" in before).toBe(false);
+  expect("secretAccessKey" in before.config).toBe(false);
+  // A row as Convex's worker writes one (a Convex store opened here), and one for another id, which is not read.
+  await t.engine.mutation((db) =>
+    db.asSystem(async () => {
+      await db.insert("_s3_export_state", { configId: id, checkpoint: { progress: { type: "upToDate", ts: 7n } } });
+      await db.insert("_s3_export_state", {
+        configId: "elsewhere",
+        checkpoint: { progress: { type: "stale", ts: 1n } },
+      });
+    }),
+  );
+  const [after] = await list();
+  expect(after.exportProgress).toEqual({ type: "upToDate", ts: "7" }); // an int64, as `format: "json"` writes one
+  expect({ ...after, exportProgress: undefined }).toEqual({ ...before, exportProgress: undefined });
+});
+
 test("the local sink: every event as a V2 line, exceptions too, kept across a restart without verifying", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bunvex-sink-"));
   const path = join(dir, "logs.jsonl");

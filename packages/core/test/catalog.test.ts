@@ -53,6 +53,8 @@ describe("catalog (_tables / _index)", () => {
           _schemas: 532,
           _cron_job_logs: 533,
           _log_sinks: 535,
+          // Convex's at `DATABASE_VERSION` 134 (STUDY-193 A14): `DefaultTableNumber::S3ExportState` 44.
+          _s3_export_state: 556,
           _backend_state: 536,
           // Convex's, kept empty (STUDY-133 §12 M1).
           _external_deps_packages: 537,
@@ -273,6 +275,7 @@ test("system indexes as Convex declares them: `_creationTime` last except SYSTEM
     "_exports.by_requestor": ["requestor", "_creationTime"],
     "_deployment_audit_log.by_action_and_creation_time": ["action", "_creationTime"],
     "_function_handles.by_component_path": ["component", "path"],
+    "_s3_export_state.by_config_id": ["configId", "_creationTime"],
     "_data_sync_progress.by_sync_id": ["syncId", "_creationTime"],
     "_data_sync_progress.by_last_updated": ["lastUpdatedMs", "_creationTime"],
     "_usage_limits.by_selector": ["metric", "window", "limitType", "_creationTime"],

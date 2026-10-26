@@ -1,5 +1,5 @@
 // Components' definitions on both (STUDY-153 PR 1): the same `defineApp` / `defineComponent` / `use` calls with
-// Convex's package (`convex/server` 1.46.0) and bunvex's, their `export()` and their errors compared. No backend
+// Convex's package (`convex/server` 1.48.0) and bunvex's, their `export()` and their errors compared. No backend
 // needed. The one wording bunvex changes is its runtime's name (DV-494).
 import { describe, expect, test } from "bun:test";
 import * as b from "bunvex/server";
