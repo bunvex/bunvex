@@ -157,9 +157,10 @@ test("a nested call: 64 levels are the callee's arguments error, 65 the `runUdf`
   expect(await fns.runQuery("m:callInner", { n: 100_000 })).toBe(
     `caught: Invalid argument \`args\` for \`runUdf\`: ${TOO_NESTED}`,
   );
-  // An action's call takes its arguments as JSON to the callee's check, at any depth.
+  // An action's call takes its arguments as JSON to the callee's check, at any depth; it catches the check's
+  // display, a newline after the message (packages/differential test/nested-arg-errors.test.ts).
   expect(await fns.runAction("m:actCallInner", { n: 64 })).toBe(
-    `caught: Invalid arguments for m.js:inner: ${TOO_NESTED}`,
+    `caught: Invalid arguments for m.js:inner: ${TOO_NESTED}\n`,
   );
 });
 
