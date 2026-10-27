@@ -180,7 +180,7 @@ export function componentCodegen(
     };
     const mine = analysis?.[d.definitionPath];
     if (!mine) {
-      runCodegen(d.dir, ts, { initial: true, mode: opts.mode });
+      runCodegen(d.dir, ts, { initial: true, mode: opts.mode, keep: ["component.ts"] });
       continue;
     }
     runCodegen(d.dir, ts, {

@@ -493,6 +493,11 @@ export function runCodegen(
     components?: string[];
     /** More files of `_generated/`, written in the final pass (a component's `component.ts`). */
     extra?: Record<string, string>;
+    /**
+     * Files of `_generated/` the initial pass leaves where they are: a component's `component.ts`, which only the
+     * final pass writes (Convex's `doInitialComponentCodegen` keeps it, `cli/lib/codegen.ts`).
+     */
+    keep?: string[];
   } = {},
 ) {
   const dir = join(functionsDir, "_generated");
@@ -506,7 +511,7 @@ export function runCodegen(
     components: opts.components,
   });
   const result: CodegenResult = { written: [], removed: [] };
-  const keep = new Set<string>();
+  const keep = new Set<string>(opts.initial ? (opts.keep ?? []) : []);
   // In dependency order: dataModel (imports the schema), server (imports dataModel), api (imports the
   // modules, which import server), so a watcher never sees an import of a file not yet written.
   const groups = opts.initial
