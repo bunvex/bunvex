@@ -59,6 +59,7 @@ async function setup(opts: { maxRetries?: number } = {}) {
       return "the same value either time";
     }),
     act: action(async () => 1),
+    typed: action({ args: { n: v.number() }, handler: async () => 1 }),
     laterContended: mutation(({ scheduler }) => scheduler.runAfter(0, "m:contendedJob" as never, {})),
     contendedJob: mutation(async ({ db }) => {
       await db.get(id as never);
@@ -184,4 +185,30 @@ test("a scheduled mutation whose conflict escapes the engine's retries: the sche
   const [lost, won] = await t.until(() => t.of("m:contendedJob").length === 2 && t.of("m:contendedJob"));
   expect(lost).toMatchObject({ will_retry: true, status: "success", error_message: null });
   expect([lost.function.mutation_retry_count, won.function.mutation_retry_count]).toEqual([0, 1]);
+});
+
+test("function.runtime (DV-552): bunvex for a V8 function, none for an action that never ran", async () => {
+  const t = await setup();
+  await t.call("query", "m:count");
+  await t.call("mutation", "m:add", { tag: "r" });
+  await t.call("action", "m:act");
+  await t.call("action", "m:typed", { n: 1 });
+  await (await fetch(`http://127.0.0.1:${t.s.site!.port}/hook`, { method: "POST" })).text();
+  // Before it ran, as Convex's `ModuleEnvironment::Invalid`: no such function, or arguments its validator refuses.
+  await t.call("action", "m:nope");
+  await t.call("action", "m:typed", { n: "x" });
+  await t.until(() => t.events.length >= 7);
+  const runtime = (path: string) => t.of(path).map((e) => [e.function.type, e.function.runtime]);
+  expect(runtime("m.js:count")).toEqual([["query", "bunvex"]]);
+  expect(runtime("m.js:add")).toEqual([["mutation", "bunvex"]]);
+  expect(runtime("m.js:act")).toEqual([["action", "bunvex"]]);
+  expect(runtime("m.js:typed")).toEqual([
+    ["action", "bunvex"],
+    ["action", null],
+  ]);
+  expect(runtime("m.js:nope")).toEqual([["action", null]]);
+  expect(runtime("POST /hook")).toEqual([["http_action", "bunvex"]]);
+  // The key sits after `type`, as in Convex's JSON.
+  const keys = Object.keys(t.of("m.js:count")[0]!.function);
+  expect(keys.indexOf("runtime")).toBe(keys.indexOf("type") + 1);
 });
