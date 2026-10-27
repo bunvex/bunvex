@@ -754,6 +754,39 @@ export class MongoPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
     return r.deletedCount;
   }
 
+  /** PERSIST-01 C18: up to `limit` rows of the tablet's indexes, else every version of up to `limit` documents. */
+  async purgeTablet(table: TabletId, indexes: IndexId[], limit: number) {
+    await this.assertLease();
+    if (indexes.length) {
+      const rows = await this.read(() =>
+        this.idx
+          .find({ "_id.index_id": { $in: indexes.map(bin) } }, { projection: { _id: 1 } })
+          .limit(limit)
+          .toArray(),
+      );
+      if (rows.length) {
+        const r = await this.call(() =>
+          this.idx.deleteMany({ _id: { $in: rows.map((x) => x._id) } }, { writeConcern: { w: "majority" } }),
+        );
+        return r.deletedCount;
+      }
+    }
+    const docs = await this.read(() =>
+      this.docs
+        .find({ "_id.table_id": bin(table) }, { projection: { _id: 1 } })
+        .limit(limit)
+        .toArray(),
+    );
+    if (!docs.length) return 0;
+    // One per document: a row per version comes back.
+    const key = (b: Bin) => (Buffer.isBuffer(b) ? b : Buffer.from(b.buffer)).toString("hex");
+    const ids = [...new Map(docs.map((d) => [key(d._id.id), d._id.id])).values()];
+    const r = await this.call(() =>
+      this.docs.deleteMany({ "_id.table_id": bin(table), "_id.id": { $in: ids } }, { writeConcern: { w: "majority" } }),
+    );
+    return r.deletedCount;
+  }
+
   /** PERSIST-01 C14. */
   async getGlobal(key: string): Promise<unknown> {
     const d = await this.read(() => this.globals.findOne({ _id: key }));

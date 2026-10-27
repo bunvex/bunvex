@@ -22,7 +22,7 @@ test("delete_tables: in one commit, as Convex's route", async () => {
   const engine = await new Engine(
     defineSchema({ posts: defineTable({ author: v.id("authors") }) }),
     await MemoryPersistence.open(null, { durable: false }),
-    { instanceName: NAME, instanceSecret: SECRET },
+    { instanceName: NAME, instanceSecret: SECRET, retention: { documentRatePerSec: 1_000_000 } },
   ).init();
   for (const t of ["a", "b", "authors"]) await engine.mutation((db) => db.insert(t, { x: 1 }));
   const { server, stop } = createServer({ engine, functions: new Functions(engine), port: 0 });
@@ -38,6 +38,10 @@ test("delete_tables: in one commit, as Convex's route", async () => {
   expect(await del({ tableNames: ["a", "b", "never"], componentId: null })).toEqual({ status: 200, body: "" });
   expect(engine.catalog.tables.has("a")).toBe(false);
   expect(engine.catalog.tables.has("b")).toBe(false);
+  // Kept, deleting, through the document retention window (STUDY-195 §1): purged once it passes.
+  await engine.tablesDeleted();
+  expect(engine.catalog.deleting.size).toBe(2);
+  engine.retention!.minDocumentTs = engine.committer.visibleTs + 1n;
   await engine.tablesDeleted();
   expect(engine.catalog.deleting.size).toBe(0);
   expect(await del({ tableNames: ["posts"] })).toEqual({

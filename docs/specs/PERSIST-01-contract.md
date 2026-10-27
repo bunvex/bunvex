@@ -410,6 +410,20 @@ each entry at the ts of the document version it indexes, so that the exact-ts jo
 - **Durable when it returns**, and survives a reopen.
 - **Only the lease holder** writes: a caller without the lease gets `LeaseLostError` and nothing is written.
 
+## C18 — a deleted table's purge
+
+`purgeTablet(table, indexes, limit)` removes what is left of a deleted table once document retention has passed its
+deletion (Convex's `delete_tablet_documents`, STUDY-195 §1, DV-580): up to `limit` stored rows of the given
+`indexes` (every version of an index key, removals included), or, once none of those is left, every version of up
+to `limit` of the table's documents. It answers how many rows went, and 0 once nothing of the table is left.
+
+- **No new revision.** The rows go as they are: no tombstone is written, the document log (C12) loses the table's
+  versions, and `maxTs` does not move.
+- **Only that table.** Another table's documents and other indexes' rows are untouched.
+- **Chunked.** A call is bounded: the caller calls again until it answers 0. One transaction a call where the store
+  has them.
+- **Only the lease holder** deletes: a caller without the lease gets `LeaseLostError` and nothing goes.
+
 Required of every driver. Conformance K36 (and K24, through the engine's backfill).
 
 
@@ -449,6 +463,7 @@ Required of every driver. Conformance K36 (and K24, through the engine's backfil
 | K33 | nanosecond timestamps (C1) | two commits one nanosecond apart at a real ns ts above 2^53 (2026-10-06, with a sub-µs part), then a reopen: `maxTs`, `get` (at T1, T1 + 1 ns, T1 − 1 ns), `getVersions`, `scan` and `readDocumentLog` return the exact values. STUDY-133 PR 1 |
 | K34 | `prev_ts` (C1, C12) | versions written directly at 10, 20 and 30 (a delete) with `prevTs` null, 10 and 20: `readDocumentLog` returns them as written after a reopen; through the engine, an insert, two patches and a delete: each version's `prevTs` is the ts of the one before it (null for the insert). STUDY-133 PR 3 |
 | K36 | index entries at past timestamps (C17) | three commits (ts 100, 200, 300; a document's second version at 300), then `writeIndexEntries` for a new index at each document's own ts (300 and 200): a scan at 250 sees only the entry at 200, one at 400 both, each joined to its version; an entry at the same (index, key, ts) replaces the stored one (here a removal); `maxTs` stays 300; the entries survive a reopen; with another handle holding the lease, `writeIndexEntries` throws `LeaseLostError` and nothing changes. STUDY-133 PR 3 |
+| K37 | a deleted table's purge (C18, C13) | a table with two indexes, 23 documents in one to three versions and a delete's tombstone, beside a table of 5 documents: `purgeTablet` with a limit of 7, called until it answers 0, removes exactly the table's rows (more than two calls; no call above 7 documents' versions), its scans and gets then find nothing, the other table is intact, and a purge of the purged table removes nothing. Without the lease it throws `LeaseLostError` (in K29's fence). STUDY-195 §1 |
 
 Notes from validating the suite (each check was sabotaged and had to go red):
 - K6 must count **live documents** (`auditLiveDocs`, audit-only) as well as index entries: a torn commit

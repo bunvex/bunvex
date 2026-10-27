@@ -224,6 +224,13 @@ export interface RetentionStore {
    */
   pruneIndexes(entries: IndexPrune[], through: bigint): number | Promise<number>;
   pruneDocuments(entries: DocPrune[], through: bigint): number | Promise<number>;
+  /**
+   * PERSIST-01 C18, a deleted table's purge once document retention has passed its deletion (Convex's
+   * `delete_tablet_documents`, STUDY-195 §1): up to `limit` stored rows of the tablet's `indexes` (every version of
+   * an index key goes with it), or, when none is left, every version of up to `limit` of its documents. How many rows
+   * went: 0 once nothing of the tablet is left. No new revision is written. Only the lease holder deletes (as C13).
+   */
+  purgeTablet(table: TabletId, indexes: IndexId[], limit: number): number | Promise<number>;
 }
 
 export const hasRetention = (p: Persistence): p is Persistence & RetentionStore =>

@@ -129,6 +129,7 @@ import { INDEX_CACHE_MAX_BYTES, IndexCache } from "./index-cache.ts";
 import { readNextIndexId } from "./index-ids.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
 import { opaqueToInspect } from "./inspect.ts";
+import { indexIdOf, internalIdOf } from "./internal-id.ts";
 import { canonicalInstanceSecret, instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 import { knob } from "./knobs.ts";
 import {
@@ -385,9 +386,6 @@ export type CacheCompanion = {
   /** On a hit: hand back what was stored. */
   replay(extra: unknown): void;
 };
-
-/** Documents a deletion-worker transaction removes (Convex deletes tables in batches too). */
-export const TABLE_DELETION_BATCH = 1000;
 
 export class Engine {
   readonly committer: Committer;
@@ -677,8 +675,6 @@ export class Engine {
     }
     // The worker belongs to the process that holds the lease: the one that writes (STUDY-24 §4.6).
     if (backfilling) this.startIndexWorker();
-    // Tables left being deleted by an earlier run (STUDY-42).
-    this.startTableDeletion();
     this.summariesBuild = this.buildSummaries().catch((err) => {
       if (!this.closed) console.error(`bunvex: table summaries failed to build: ${err.message}`);
     });
@@ -688,7 +684,10 @@ export class Engine {
         const t = this.catalog.anyTablet(tablet);
         return t ? maintainedIndexes(t) : [];
       });
+      this.retention.onTabletPurged = (tablet) => this.finishTableDeletion(tablet);
       await this.retention.start();
+      // Tables left being deleted by an earlier run: purged once the document window passes them (STUDY-195 §1).
+      await this.startTableDeletion();
     }
     return this;
   }
@@ -805,7 +804,7 @@ export class Engine {
     this.untilClosed.reject(new Error("the engine closed"));
     await this.stagedWalk?.catch(() => {});
     await Promise.allSettled([...this.validationWalks]);
-    await this.deleting?.catch(() => {});
+    await this.deletedTablesWrite.catch(() => {});
     await this.indexWorker?.stop();
     await this.retention?.stop();
     await this.summaryCheckpointer?.stop();
@@ -1028,14 +1027,20 @@ export class Engine {
           ids.push(c._id);
         }
         const { tables } = await readCatalog(db);
+        const deleting: TabletId[] = [];
         for (const c of ids) {
           await db.delete(COMPONENTS_TABLE, c);
           for (const t of tables)
-            if (t.namespace === c && t.state !== "deleting") await db.patch(TABLES_TABLE, t._id, { state: "deleting" });
+            if (t.namespace === c && t.state !== "deleting") {
+              await db.patch(TABLES_TABLE, t._id, { state: "deleting" });
+              deleting.push(t.tablet);
+            }
         }
+        const purge = await this.dropDeletedTableIndexes(db, deleting);
         if (body) await body(db, path);
         gone = ids;
-        db.onCommitVisible = () => {
+        db.onCommitVisible = (ts) => {
+          this.noteDeletedTables(purge, ts);
           const next = this.catalog.withTableStates({});
           const components = new Map(next.components);
           for (const c of gone) {
@@ -1059,7 +1064,6 @@ export class Engine {
       "_system/delete_component",
       true,
     );
-    this.startTableDeletion();
   }
 
   /**
@@ -3622,11 +3626,13 @@ export class Engine {
           if (this.opts.storedSchema)
             await this.invalidateTableReferences(db, SYSTEM_TO_VIRTUAL_TABLE[t.name] ?? t.name);
         }
+        const purge = await this.dropDeletedTableIndexes(db, toDelete);
         if (body) await body(db);
         const deleteList = [...toDelete];
-        db.onCommitVisible = () => {
+        db.onCommitVisible = (ts) => {
           deleted = deleteList.map((tb) => this.catalog.byTablet(tb)!).filter(Boolean);
           this.catalog = this.catalog.withTableStates({ activate: tablets, delete: deleteList });
+          this.noteDeletedTables(purge, ts);
           this.cache.clear();
           this.cacheEpoch++;
           this.reconcileSearch();
@@ -3637,7 +3643,6 @@ export class Engine {
       "_system/activate_tables",
       true,
     );
-    this.startTableDeletion();
     return { deleted, ts };
   }
 
@@ -3674,14 +3679,15 @@ export class Engine {
           await db.patch(TABLES_TABLE, t._id, { state: "deleting" });
           gone.push(tablet);
         }
-        db.onCommitVisible = () => {
+        const purge = await this.dropDeletedTableIndexes(db, gone);
+        db.onCommitVisible = (ts) => {
           this.catalog = this.catalog.withTableStates({ delete: gone });
+          this.noteDeletedTables(purge, ts);
         };
       },
       true,
       "_system/drop_hidden_tables",
     );
-    this.startTableDeletion();
   }
 
   /**
@@ -3743,49 +3749,107 @@ export class Engine {
     await this.activateTables([], [name]);
   }
 
-  private deleting: Promise<void> | null = null;
   /**
-   * The deletion worker (Convex's table deletion): empties each `deleting` table in batches of ordinary
-   * deletes (retention then removes their history), then removes its `_index` and `_tables` documents.
+   * A deleted table's `_index` rows go in its deletion's transaction, as Convex's
+   * `delete_table_by_id_bypassing_schema_enforcement` drops `all_indexes_on_table` (STUDY-195 §1): its database,
+   * search and vector indexes alike. Returns, by tablet, the database indexes' persistence ids, whose stored rows the
+   * purge removes once document retention passes the deletion.
    */
-  startTableDeletion() {
-    if (this.deleting || !this.catalog.deleting.size) return;
-    this.deleting = (async () => {
-      try {
-        while (!this.closed && this.catalog.deleting.size) {
-          // A background worker: let the server's own work run between batches.
-          await new Promise((r) => setImmediate(r));
-          const t = [...this.catalog.deleting.values()][0]!;
-          const done = await this.runMutation(
-            async (db) => {
-              const docs = await db.queryDef(t).take(TABLE_DELETION_BATCH);
-              for (const d of docs) await db.deleteFrom(t, d);
-              if (docs.length) return false;
-              const { tables, indexes } = await readCatalog(db);
-              for (const i of indexes) if (i.tablet === t.id) await db.delete(INDEX_TABLE, i._id);
-              const meta = tables.find((x) => x.tablet === t.id);
-              if (meta) await db.delete(TABLES_TABLE, meta._id);
-              db.onCommitVisible = () => {
-                this.catalog = this.catalog.withTableStates({ gone: [t.id] });
-              };
-              return true;
-            },
-            true,
-            "_system/delete_table",
-          );
-          void done;
-        }
-      } catch (e) {
-        if (!this.closed) console.error(`bunvex: table deletion failed: ${(e as Error).message}`);
-      } finally {
-        this.deleting = null;
-      }
-    })();
+  private async dropDeletedTableIndexes(db: Tx, tablets: Iterable<TabletId>): Promise<Map<TabletId, string[]>> {
+    const wanted = new Set(tablets);
+    const out = new Map<TabletId, string[]>();
+    if (!wanted.size) return out;
+    for (const t of wanted) out.set(t, []);
+    for (const r of (await db.query(INDEX_TABLE).collect()) as Record<string, unknown>[]) {
+      const tablet = r.table_id as TabletId;
+      if (!wanted.has(tablet)) continue;
+      await db.delete(INDEX_TABLE, r._id as string);
+      if (!isSearchIndexRow(r)) out.get(tablet)!.push(indexIdOf(r._id as string));
+    }
+    return out;
   }
 
-  /** Wait until no table is being deleted (tests). */
+  /**
+   * After tables' deletion committed at `ts`: their search rows forgotten by their writer (the rows went with the
+   * deletion), their indexes recorded for the purge (a bunvex global, read again at a start), and each handed to
+   * retention, which purges it once the document window passes `ts` (DV-580).
+   */
+  private noteDeletedTables(purge: Map<TabletId, string[]>, ts: bigint) {
+    if (!purge.size) return;
+    this.indexRows?.forgetTablets(new Set(purge.keys()));
+    for (const [tablet, indexes] of purge) this.retention?.scheduleTabletPurge(tablet, ts, indexes);
+    void this.recordDeletedTables((all) => {
+      for (const [tablet, indexes] of purge) all[tablet] = indexes;
+    }).catch((err: Error) => {
+      if (!this.closed) console.error(`bunvex: the deleted tables' indexes could not be recorded: ${err.message}`);
+    });
+  }
+
+  /** The deleted tables' indexes, by tablet, in the bunvex global `DELETED_TABLES_GLOBAL`; changes are serialized. */
+  private deletedTablesWrite: Promise<void> = Promise.resolve();
+  private recordDeletedTables(change: (all: Record<string, string[]>) => void): Promise<void> {
+    const run = this.deletedTablesWrite.then(async () => {
+      const all = readDeletedTables(await this.persistence.getGlobal(DELETED_TABLES_GLOBAL));
+      change(all);
+      await this.persistence.setGlobal(DELETED_TABLES_GLOBAL, all);
+    });
+    this.deletedTablesWrite = run.catch(() => {});
+    return run;
+  }
+
+  /**
+   * Hands every `deleting` table to retention's purge (Convex's `tablets_to_delete`, at a start): its deletion ts, the
+   * ts of its `_tables` row's revision, and the indexes recorded for it (none for a store another binary wrote: its
+   * documents go, as Convex's `delete_tablet_documents`). Each is purged once the document window passes its
+   * deletion, its `_tables` row then removed (`finishTableDeletion`); until then it keeps its number.
+   */
+  async startTableDeletion() {
+    const retention = this.retention;
+    if (!retention || !this.catalog.deleting.size) return;
+    const recorded = readDeletedTables(await this.persistence.getGlobal(DELETED_TABLES_GLOBAL));
+    const waiting = retention.waitingTablets();
+    const tablesTablet = this.catalog.tables.get(TABLES_TABLE)?.id;
+    const rows = (await this.runMutation(
+      (db) => db.query(TABLES_TABLE).collect() as Promise<Record<string, unknown>[]>,
+      true,
+    )) as Record<string, unknown>[];
+    for (const t of this.catalog.deleting.values()) {
+      if (waiting.has(t.id)) continue;
+      const row = rows.find((r) => tableMeta(r).tablet === t.id);
+      if (!row || !tablesTablet) continue;
+      const version = await this.persistence.get(tablesTablet, internalIdOf(row._id as string), MAX_TS);
+      if (!version) continue;
+      retention.scheduleTabletPurge(t.id, version.ts, recorded[t.id] ?? []);
+    }
+  }
+
+  /** Retention purged a deleted table's rows: its `_tables` row goes (Convex's `hard_delete_tablet_document`). */
+  private async finishTableDeletion(tablet: TabletId) {
+    await this.runMutation(
+      async (db) => {
+        const { tables } = await readCatalog(db);
+        const meta = tables.find((x) => x.tablet === tablet);
+        if (meta && meta.state !== "deleting")
+          throw new Error(`Cannot hard-delete tablet ${tablet} in state ${meta.state}, expected Deleting`);
+        if (meta) await db.delete(TABLES_TABLE, meta._id);
+        db.onCommitVisible = () => {
+          this.catalog = this.catalog.withTableStates({ gone: [tablet] });
+        };
+      },
+      true,
+      "_system/cleanup_deleted_tablets",
+    );
+    await this.recordDeletedTables((all) => {
+      delete all[tablet];
+    });
+  }
+
+  /**
+   * Runs retention's purge of the deleted tables past the document window now and waits for it (tests); a table
+   * deleted inside the window is kept.
+   */
   async tablesDeleted() {
-    while (this.deleting) await this.deleting;
+    await this.retention?.purgeTablets();
   }
 
   /**
@@ -4898,6 +4962,17 @@ export class StagedSchemaError extends Error {
     this.name = "StagedSchemaError";
   }
 }
+
+/**
+ * The bunvex-only global holding each deleted table's database indexes (by tablet, their persistence ids), whose
+ * rows the purge removes once document retention passes the deletion (STUDY-195 §1): its `_index` rows go with
+ * the deletion, so a start reads them here. A table missing (a store another binary wrote) loses its documents only.
+ */
+export const DELETED_TABLES_GLOBAL = "bunvex_deleted_tables";
+const readDeletedTables = (v: unknown): Record<string, string[]> =>
+  v && typeof v === "object" && !Array.isArray(v) ? { ...(v as Record<string, string[]>) } : {};
+/** The highest timestamp: a read of a row's newest version. */
+const MAX_TS = (1n << 63n) - 1n;
 
 /** Drop the backfill checkpoint of a dropped index, if it has one. */
 

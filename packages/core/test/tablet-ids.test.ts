@@ -32,12 +32,13 @@ async function engine(path: string, schema: EngineSchema = defineSchema({})) {
 }
 const allTablets = (e: Engine) => [...e.catalog.tables.values()].map((t) => t.id);
 const internal = (id: string) => Buffer.from(decodeId(id).internalId).toString("base64url");
-/** Delete `name` and wait until the deletion worker purged it (its `_tables` document gone). */
+/** Delete `name`, move the document window past it, and wait until it is purged (its `_tables` document gone). */
 async function purge(e: Engine, name: string) {
   const tablet = e.catalog.table(name).id;
   await e.deleteTable(name);
-  e.startTableDeletion();
-  for (let i = 0; i < 500 && e.catalog.byTablet(tablet); i++) await Bun.sleep(5);
+  // Purged once document retention passes the deletion (STUDY-195 §1): the window moved past it.
+  e.retention!.minDocumentTs = e.committer.visibleTs + 1n;
+  await e.tablesDeleted();
   expect(e.catalog.byTablet(tablet)).toBeUndefined();
   const metas = (await e.query((db) => db.asSystem(() => db.query("_tables").collect()))) as unknown as {
     _id: string;
