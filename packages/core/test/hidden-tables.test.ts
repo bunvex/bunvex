@@ -74,26 +74,48 @@ test("activation conflicts with a mutation that used the old table, and invalida
   const cached = () => e.query(async (db) => (await db.query("items").collect()).length, "count");
   expect(await cached()).toBe(1);
   const hidden = await e.createHiddenTable("items", { copyIndexesOf: "items" });
+  await sys(e, async (db) => {
+    await db.importInsert(hidden, { n: "a" });
+    await db.importInsert(hidden, { n: "b" });
+  });
+  // Explicit synchronisation, no sleeps: the first attempt signals once it has used the old table, then
+  // holds its transaction open until the activation and the old table's deletion have both committed.
+  // The deletion worker's last commit removes the old table's `_tables` row, which conflicts with every
+  // mutation in flight (as Convex's `cleanup_deleted_tablets` does); waiting for it keeps it from landing
+  // inside the retry, which would then run a third time.
+  let used!: () => void;
+  const usedOld = new Promise<void>((r) => {
+    used = r;
+  });
   let release!: () => void;
   const gate = new Promise<void>((r) => {
     release = r;
   });
   let attempts = 0;
+  const lostTo: (string | undefined)[] = [];
+  e.onOccRetry = (err) => lostTo.push(err.info.writeSource);
   const racing = e.mutation(async (db) => {
     attempts++;
     await db.insert("items", { n: "racer" });
-    if (attempts === 1) await gate;
+    if (attempts === 1) {
+      used();
+      await gate;
+    }
   });
-  await Bun.sleep(10);
+  await usedOld;
   await e.activateTables([hidden.id]);
+  // The cached count is recomputed on the new table (its 2 imported documents), not the old table's 1.
+  expect(await cached()).toBe(2);
+  await deleted(e);
   release();
   await racing;
   // Retried on the new table: the write is not lost in the deleted one.
   expect(attempts).toBe(2);
-  expect(await names(e)).toEqual(["racer"]);
-  expect(await cached()).toBe(1); // recomputed on the new table, not the old cached 1 by chance
+  expect(lostTo).toEqual(["_system/activate_tables"]); // the activation is the write it lost to
+  expect((await names(e)).sort()).toEqual(["a", "b", "racer"]);
+  expect(await cached()).toBe(3);
   await e.mutation((db) => db.insert("items", { n: "more" }));
-  expect(await cached()).toBe(2);
+  expect(await cached()).toBe(4);
   await e.close();
 });
 
