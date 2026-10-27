@@ -161,7 +161,17 @@ test("a webhook stream: created, verified and signed; functions' events as V2 JS
   expect(Object.keys(execs[0].usage)).toContain("database_write_documents");
   // Exceptions only go to the local sink (and error trackers).
   expect(events.some((e) => e._topic === "_exception")).toBe(false);
-  expect(await t.audit()).toEqual([["create_integration", { id, type: "webhook" }]]);
+  // The sink's configuration as an audit snapshot (Convex's 3a958a4): its URL cut to its origin, no secret.
+  expect(await t.audit()).toEqual([
+    [
+      "create_integration",
+      {
+        id,
+        type: "webhook",
+        config: { type: "webhook", url_origin: new URL(hook.url).origin, format: "jsonl", topics: null },
+      },
+    ],
+  ]);
 });
 
 test("topics: only those subscribed (verification always); json format; the audit log streamed", async () => {
@@ -182,7 +192,15 @@ test("topics: only those subscribed (verification always); json format; the audi
   expect(hook.got.every((g) => g.body.startsWith("["))).toBe(true);
   const a = events.find((e) => e.topic === "audit_log");
   expect(a.audit_log_action).toBe("update_integration");
-  expect(JSON.parse(a.audit_log_metadata)).toEqual({ id, type: "webhook" });
+  // A rotated secret: the same configuration before and after, the secret's change flagged.
+  const snapshot = { type: "webhook", url_origin: new URL(hook.url).origin, format: "json", topics: ["audit_log"] };
+  expect(JSON.parse(a.audit_log_metadata)).toEqual({
+    id,
+    type: "webhook",
+    previous: snapshot,
+    current: snapshot,
+    credential_changes: { type: "webhook", hmac_secret_changed: true, url_changed: false },
+  });
 });
 
 test("a failing verification fails the stream with Convex's reason; an update verifies again", async () => {
