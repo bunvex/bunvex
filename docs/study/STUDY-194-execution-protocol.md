@@ -1,9 +1,10 @@
 # STUDY-194 — The execution protocol between the main thread and execution workers
-<!-- index: The execution protocol (STUDY-190 PRs 2–4, STUDY-24 A2): Convex's function runner (the request, the snapshot and metadata at a timestamp, the outcome, how the backend commits it), bunvex's in-thread call path, the messages and their encoding (a prototype), snapshots, metadata by epoch, code versions, nested calls, OCC, failures, backpressure, a five-PR plan | decided (owner): Q1–Q6 and AD-47 (2026-10-26), Q7 (2026-10-27); PR 2a is #895 -->
+<!-- index: The execution protocol (STUDY-190 PRs 2–4, STUDY-24 A2): Convex's function runner (the request, the snapshot and metadata at a timestamp, the outcome, how the backend commits it), bunvex's in-thread call path, the messages and their encoding (a prototype), snapshots, metadata by epoch, code versions, nested calls, OCC, failures, backpressure, a five-PR plan | decided (owner): Q1–Q6 and AD-47 (2026-10-26), Q7 (2026-10-27); PR 2a is #895; PR 2b planned (§10), Q8–Q10 decided (2026-10-27) -->
 
 - **Status:** decided (owner): every §8 recommendation, Q1–Q6 on 2026-10-26 (Q4 is AD-47) and Q7 on 2026-10-27
   (the codec round-trips in-thread calls under the tests only). PR 2a is #895: the boundary, the codec and the permit
-  order (§9); on DO `c-4` uncached +0.7 % and insert −2.2 % against `main`.
+  order (§9); on DO `c-4` uncached +0.7 % and insert −2.2 % against `main`. PR 2b is planned in §10; its Q8–Q10
+  were decided by the owner on 2026-10-27, as recommended.
 - **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
   - `crates/function_runner/src/{lib,server,in_process_function_runner,in_memory_indexes,module_cache}.rs`;
   - `crates/isolate/src/client.rs`, `crates/isolate/src/environment/udf/{async_syscall,phase,mod}.rs`;
@@ -761,3 +762,93 @@ Q1–Q6 decided by the owner on 2026-10-26, as recommended; Q7 on 2026-10-27, op
     insert −12 %; the boundary without the codec (`9e0345c1`, measurement only) −3 % and −2 %. An in-process
     micro-benchmark on the server box put the codec at about 45 µs a query and 55 µs an insert there, three to four
     times what it costs alone in a loop; that is why Q7 was asked.
+
+## 10. PR 2b, planned (2026-10-27)
+
+Read at `perf/exec-call-boundary` (#895) merged with `main` `873df0bf`. `F` is `packages/server/src/functions.ts`, `E`
+is `packages/core/src/engine.ts`, `T` is `packages/core/src/tx.ts`.
+
+### 10.1 What a worker needs to run a query's body
+
+A query's body is `Functions.callBody` → `queryRun` (F:1977, F:2036) in a `Tx` begun by `Engine.beginTx`
+(E:3839-3863). Where each input comes from in a worker:
+
+| Input | Today | In a worker |
+|---|---|---|
+| The function, its component, module loads | `fnLater`, `componentOf`, `countStartReads` (F:2137, F:1136) | the `version` message: one registry per code version |
+| Run state (`failWhileNotRunning`) | `BackendStateCache`, fed by commits (F:2152, `core/src/backend-state.ts`) | the request carries the state's last-write ts; the worker's cache reads its own store |
+| Environment (`txEnv`) | `engine.environment.reader`, fed by commits (F:1149-1158) | as the run state: last-write ts in the request, rows from the worker's store; component env in `version` |
+| Timeouts, size limits, `udf404OnBadPath` | `Functions` fields and knobs | `init` |
+| Catalog, search-index state | `engine.catalog` (E:3839) | an `epoch` message |
+| Document and index reads | `persistence.get` / `scan` (T:1320, T:1661) | the worker's own connection (§10.2) |
+| `count()` | `tableCount`, synchronous (T:2500) | an op to the main thread, which pins `ts` at dispatch |
+| Text search | `searchHits`, synchronous metadata and search (T:1042, T:2537-2598) | the metadata from the epoch; the search an op |
+| Retention | `retention.minIndexTs` (E:3839) | `minTs` in the request; the main thread checks again after the run, as Convex (§10.3) |
+| Cursor sealing, storage URLs | `cursorCodec` (E:906-913), `fileStorage.reader` | derived keys in `init` |
+| Console lines, `log.audit` lines | thread scopes (`core/src/logs.ts:105`, `log-audit.ts:7`) | captured in the worker, carried in the outcome, replayed on the main thread (the sandbox's `captureLines` / `logChildLine`) |
+| Errors | objects the dispatcher tests with `instanceof` (`errors.ts:49-62`) | STUDY-171 §8.3's codec, rebuilt by name on the main thread; stacks mapped in the worker, where the version's source maps are |
+| The function log's figures | `tx.io()`, `tableStats`, `usage`, user time (F:1545-1555) | new outcome fields |
+
+### 10.2 Store connections
+
+- **SQLite.** The worker opens the file read-only, with its own page cache. It takes no lock, runs no DDL and starts
+  no writer thread. It needs no read transaction: rows are versioned by ts, and `visibleTs` moves only after the
+  writer thread committed (`committer.ts:770`). The read statements move out of `SqlitePersistence` into one module
+  both sides use.
+- **Postgres, MySQL, MongoDB.** Each driver gets a reader open that skips the bootstrap (DDL, the lease). Pools are
+  sized when they open, so the split (Q6) is decided when the server opens its store.
+- **A store opens in a worker only if it describes how** (`Persistence.reader()`). Wrappers (retries, timeouts, test
+  stores) do not forward it, so they run in-thread.
+
+### 10.3 Decided by matching Convex
+
+- **The retention check after a run applies in-thread too.** Convex's `validate_run_function_result`
+  (`crates/function_runner/src/server.rs:222-239`) checks the snapshot of every query and mutation after it ran, and
+  its in-process runner calls it as well (`in_process_function_runner.rs:318`). A run whose window passed mid-way
+  fails with `OutOfRetention` whichever executor ran it.
+- **A query runs the code version its arguments were checked against.** 2a checks a query's arguments in
+  `callSpec` (F:1955) and resolves its function again after the permit (F:1980): a push in between runs the new
+  handler on arguments the old validator accepted. The fix binds the resolved function, and in 2b its version id,
+  to the call. Its own PR, before 2b, with a test that pushes during the permit wait.
+
+### 10.4 Run in-thread, not observable
+
+These calls keep running in the main thread in 2b. None changes an answer: the in-thread executor is the reference
+(§4.14).
+
+- a store without a reader description (memory, `:memory:` SQLite, wrapped stores);
+- the `process` sandbox (AD-44): its child is already off the thread;
+- functions given with `register()` (embedded servers, `@bunvex/testing`), which have no sources to send;
+- a server with a custom `Runtime` (virtual clocks in tests);
+- calls with the system identity, and `_system/` functions (already in-thread in 2a);
+- a call a sampler traces (AD-26), until spans cross in the outcome;
+- a call made while no worker is ready yet (the first calls after a start or a push).
+
+`cancel` stays for PR 4: no query in 2b has a sender for it.
+
+### 10.5 Commits
+
+Each one is green on its own. 0a–0d change nothing observable and run under the codec in the tests (Q7).
+
+| # | Commit | Proof |
+|---|---|---|
+| 0a | `Tx.tableCount` and the search may be asynchronous | every suite; the count and search suites |
+| 0b | the outcome carries errors, console and audit lines, the function log's figures; the retention check after a run (§10.3) | every suite through the codec; sabotage: the codec drops `BunvexError` data, or one line |
+| 0c | `Functions` reaches the engine through a narrow `FunctionsHost`; one registry per code version; a code epoch | push and component suites |
+| 0d | the catalog and search-state codec, and the epoch window (lifted from `packages/sandbox/src/host-call.ts`) | a property test; in tests the in-thread runner reads the catalog through the codec; sabotage: drop `staged` |
+| i | the worker runtime: `init`, `ready`/`failed`, `alive`, `close`; lazy start up to `MAX_ISOLATE_WORKERS`; a dead or stuck worker replaced (Q3); the compiled binary's entry | kill and restart; a stuck worker terminated (first proving `Worker.terminate` stops a tight loop in Bun) |
+| ii | the SQLite reader in a worker | PERSIST-01's reads through the worker; a commit after `ts` is invisible |
+| iii | `version`, `release`, `epoch` | the worker's registry resolves as the main thread's for every example app |
+| iv | queries dispatched to workers on SQLite; `count` and `search` ops | the differential test, in-thread vs workers, on result text, errors, lines and read sets interval by interval; snapshot isolation; a push under load; retention; death; stuck; sabotage: run at `visibleTs`, drop an interval |
+| v | Postgres, MySQL and MongoDB readers; the connection split | the differential test on the Postgres job; connections counted in `pg_stat_activity` |
+| vi | the profile and the DO `c-4` measurement | §6's 2b row |
+
+### 10.6 Owner questions for 2b
+
+Decided by the owner on 2026-10-27, as recommended.
+
+| # | Question | Recommendation (decided) |
+|---|---|---|
+| Q8 | **The connection split (Q6) in numbers.** With MongoDB's pool of 16 the main thread keeps 8 and 16 workers would get half a connection each; and the split would shrink the main pool even when no worker can start. | Split only when workers can start (a store with a reader, `MAX_ISOLATE_WORKERS` > 0). The main thread keeps max(8, ⌊total/4⌋). The worker count is also capped so each has at least 2 connections (min(`MAX_ISOLATE_WORKERS`, cores, ⌊rest/2⌋)). Not observable but in capacity |
+| Q9 | **SQLite's page cache per worker.** AD-46's 256 MiB is one connection's. N workers with their own would use N + 1 times the memory | Keep AD-46's value as the process total: the main thread keeps half, the workers share the other half. `BUNVEX_SQLITE_CACHE_SIZE` keeps its meaning as what the deployment spends |
+| Q10 | **An embedded server on a SQLite file** (`createServer` with a path): workers too, or in-thread unless asked? | Workers, as `bunvex-local-backend`: the same store, the same knob. `createServer({ executionWorkers: 0 })` turns them off |

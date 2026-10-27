@@ -4,12 +4,12 @@
 // event (`add_documents`, `update_documents`, `delete_documents`, `create_table`; the metadata of
 // crates/model/src/deployment_audit_log/types.rs, the root component's `component_id` and `component` added as
 // the `writeDeploymentAuditLog` syscall adds them). They run as Convex's `mutationGeneric("WriteData")`: an app's
-// database (`_`-tables are read-only, the schema is enforced), not the private system tables. `componentId` is
-// accepted and ignored, as bunvex has only the root component (DV-55).
+// database (`_`-tables are read-only, the schema is enforced), not the private system tables. A `componentId` runs
+// them in that component's namespace (`inSystemComponent`), and their events name it, as Convex's.
 import { type AuditLogEvent, insertAuditLogEvents, type Tx } from "@bunvex/core";
 import { BunvexError, decodeId, type Value, v } from "@bunvex/values";
-import { auditActor, auditEvents } from "./audit-log.ts";
-import { UNDEFINED_PLACEHOLDER } from "./data-system-functions.ts";
+import { auditActor, auditComponent, auditEvents } from "./audit-log.ts";
+import { ofCurrentNamespace, UNDEFINED_PLACEHOLDER } from "./data-system-functions.ts";
 import type { SystemEnv, SystemMutation } from "./system-functions.ts";
 
 const componentId = v.optional(v.union(v.string(), v.null()));
@@ -38,12 +38,17 @@ const rewrapped = (e: unknown) => new BunvexError((e as Error)?.message ?? Strin
 async function tableOfId(db: Tx, id: string): Promise<string | undefined> {
   const number = BigInt(decodeId(id).tableNumber);
   const rows = (await db.asSystem(() => db.query("_tables").collect())) as Doc[];
-  const row = rows.find((r) => r.number === number && (r.state ?? "active") === "active" && r.namespace === undefined);
+  const row = rows.find((r) => r.number === number && (r.state ?? "active") === "active" && ofCurrentNamespace(db, r));
   return row?.name as string | undefined;
 }
 
-const audit = (db: Tx, env: SystemEnv, event: AuditLogEvent) =>
-  insertAuditLogEvents(db, [event], auditActor(env.caller));
+/** An event, in the component the write ran in (Convex's `writeDeploymentAuditLog` adds its id and path). */
+const audit = async (db: Tx, env: SystemEnv, event: AuditLogEvent) =>
+  insertAuditLogEvents(
+    db,
+    [{ ...event, metadata: { ...event.metadata, ...(await auditComponent(db, db.componentId)) } }],
+    auditActor(env.caller),
+  );
 
 export const DATA_SYSTEM_MUTATIONS: Record<string, SystemMutation> = {
   // Convex's `addDocument`: inserts each document in order; past 4 096 it answers `success: false` and writes

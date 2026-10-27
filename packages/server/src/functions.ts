@@ -225,7 +225,7 @@ import type { ServerMetrics } from "./server-metrics.ts";
 import { setServiceCallContext } from "./service-tokens.ts";
 import type { FileStorage, StorageMeter } from "./storage.ts";
 import { UnparsedSystemArgs } from "./system-args.ts";
-import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
+import { inSystemComponent, SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
 import type { UsageMeter } from "./usage-limits.ts";
 import { bodyLength } from "./web-response.ts";
 
@@ -2779,7 +2779,12 @@ export class Functions {
         timer,
         () =>
           withUserTimer(timer, async () =>
-            this.checkSystemResult(n, await q!.handler(db, a, { files: this.fileStorage, functions: this, caller })),
+            this.checkSystemResult(
+              n,
+              await inSystemComponent(db, q!, a as Record<string, unknown>, (args) =>
+                q!.handler(db, args as never, { files: this.fileStorage, functions: this, caller }),
+              ),
+            ),
           ),
         this.userTimeoutMs,
       );
@@ -2810,7 +2815,12 @@ export class Functions {
         timer,
         () =>
           withUserTimer(timer, async () =>
-            this.checkSystemResult(n, await m!.handler(db, a, { files: this.fileStorage, functions: this, caller })),
+            this.checkSystemResult(
+              n,
+              await inSystemComponent(db, m!, a as Record<string, unknown>, (args) =>
+                m!.handler(db, args as never, { files: this.fileStorage, functions: this, caller }),
+              ),
+            ),
           ),
         this.userTimeoutMs,
       );
