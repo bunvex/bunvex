@@ -97,8 +97,26 @@ export const filterValueBytes = (key: string) => Math.min(key.length / 2, 32);
 
 const NONE: readonly SearchIndexEntry[] = [];
 
+/** Entries grouped by tablet. */
+function byTablet<E extends { tablet: TabletId }>(entries: Map<string, E>): Map<TabletId, E[]> {
+  const out = new Map<TabletId, E[]>();
+  for (const e of entries.values()) {
+    const list = out.get(e.tablet);
+    if (list) list.push(e);
+    else out.set(e.tablet, [e]);
+  }
+  return out;
+}
+
 export class SearchIndexes {
   private entries = new Map<string, SearchIndexEntry>();
+  /**
+   * The new indexes of a schema push not yet committed (Convex's pending indexes, STUDY-195 §2): built while the
+   * push waits, kept up to date by every commit, never searched (a search is Convex's `IndexBackfillingError`), and
+   * enabled as they are by the commit that makes the schema active (`reconcile`).
+   */
+  private pending = new Map<string, SearchIndexEntry>();
+  private pendingByTablet = new Map<TabletId, SearchIndexEntry[]>();
 
   /** Every index (a snapshot of them, STUDY-96). */
   all(): SearchIndexEntry[] {
@@ -109,8 +127,82 @@ export class SearchIndexes {
 
   private static key = (tablet: TabletId, name: string) => `${tablet}\u0000${name}`;
 
+  /**
+   * The index `name` of `t` a search uses: the active one, else a pending push's, as never ready (Convex's
+   * `require_enabled`: a pending index is backfilling, or staged).
+   */
   get(t: TableDef, name: string): SearchIndexEntry | undefined {
-    return this.entries.get(SearchIndexes.key(t.id, name));
+    const k = SearchIndexes.key(t.id, name);
+    const active = this.entries.get(k);
+    if (active) return active;
+    const p = this.pending.get(k);
+    return p && { ...p, ready: false, bootstrapping: false };
+  }
+
+  /** Whether `e` is still an index the engine holds, active or pending (not dropped or replaced). */
+  holds(e: SearchIndexEntry): boolean {
+    const k = SearchIndexes.key(e.tablet, e.name);
+    return this.entries.get(k) === e || this.pending.get(k) === e;
+  }
+
+  /** The pending push's indexes (STUDY-195 §2). */
+  pendingAll(): SearchIndexEntry[] {
+    return [...this.pending.values()];
+  }
+
+  /**
+   * Make the pending indexes the ones a schema push adds (names its tables' active schema does not have); returns
+   * the new ones, to backfill. One with the same definition keeps its contents.
+   */
+  reconcilePending(
+    wanted: { table: TableDef; name: string; def: SearchIndexDef; staged: boolean }[],
+    visibleTs: bigint,
+  ) {
+    const next = new Map<string, SearchIndexEntry>();
+    const added: SearchIndexEntry[] = [];
+    for (const w of wanted) {
+      const k = SearchIndexes.key(w.table.id, w.name);
+      if (this.entries.has(k)) continue;
+      const old = this.pending.get(k);
+      if (old && JSON.stringify(old.def) === JSON.stringify(w.def)) {
+        old.staged = w.staged;
+        next.set(k, old);
+        continue;
+      }
+      const e = this.entry(k, w, visibleTs, false);
+      next.set(k, e);
+      added.push(e);
+    }
+    this.pending = next;
+    this.pendingByTablet = byTablet(next);
+    return added;
+  }
+
+  private entry(
+    k: string,
+    w: { table: TableDef; name: string; def: SearchIndexDef; staged: boolean },
+    visibleTs: bigint,
+    bootstrapping: boolean,
+  ): SearchIndexEntry {
+    let readIndex = this.readIds.get(k);
+    if (readIndex === undefined) {
+      readIndex = `text:${this.readIds.size + 1}`;
+      this.readIds.set(k, readIndex);
+    }
+    return {
+      readIndex,
+      table: w.table.name,
+      tablet: w.table.id,
+      name: w.name,
+      def: w.def,
+      staged: w.staged,
+      ready: false,
+      bootstrapping,
+      index: new SegmentedTextIndex(w.def.filterFields),
+      log: [],
+      retainedFrom: visibleTs,
+      touched: new Set(),
+    };
   }
 
   /**
@@ -150,37 +242,23 @@ export class SearchIndexes {
         next.set(k, old);
         continue;
       }
-      let readIndex = this.readIds.get(k);
-      if (readIndex === undefined) {
-        readIndex = `text:${this.readIds.size + 1}`;
-        this.readIds.set(k, readIndex);
+      // A pending push's index, now enabled as it stands: built, or still being built by its own backfill.
+      const pending = this.pending.get(k);
+      if (pending && JSON.stringify(pending.def) === JSON.stringify(w.def)) {
+        pending.staged = w.staged;
+        this.pending.delete(k);
+        next.set(k, pending);
+        continue;
       }
-      const e: SearchIndexEntry = {
-        readIndex,
-        table: w.table.name,
-        tablet: w.table.id,
-        name: w.name,
-        def: w.def,
-        staged: w.staged,
-        ready: false,
-        bootstrapping,
-        index: new SegmentedTextIndex(w.def.filterFields),
-        log: [],
-        retainedFrom: visibleTs,
-        touched: new Set(),
-      };
+      const e = this.entry(k, w, visibleTs, bootstrapping);
       next.set(k, e);
       // A staged index is built too (Convex's `Backfilling { staged }`, then `Backfilled { staged }`).
       added.push(e);
     }
     this.entries = next;
     this.changes++;
-    this.byTablet = new Map();
-    for (const e of next.values()) {
-      const list = this.byTablet.get(e.tablet);
-      if (list) list.push(e);
-      else this.byTablet.set(e.tablet, [e]);
-    }
+    this.byTablet = byTablet(next);
+    this.pendingByTablet = byTablet(this.pending);
     return added;
   }
 
@@ -194,13 +272,14 @@ export class SearchIndexes {
     indexed?: Map<SearchIndexEntry, Map<string, IndexedDoc>>,
   ) {
     for (const w of writes)
-      for (const e of this.forTablet(w.table.id)) {
-        e.log.push({ ts, id: w.id, before: e.index.get(w.id) });
-        e.index.set(w.id, w.next ? (indexed?.get(e)?.get(w.id) ?? indexedDoc(e.def, w.next)) : null, ts);
-        e.touched?.add(w.id);
-      }
+      for (const list of [this.forTablet(w.table.id), this.pendingByTablet.get(w.table.id) ?? NONE])
+        for (const e of list) {
+          e.log.push({ ts, id: w.id, before: e.index.get(w.id) });
+          e.index.set(w.id, w.next ? (indexed?.get(e)?.get(w.id) ?? indexedDoc(e.def, w.next)) : null, ts);
+          e.touched?.add(w.id);
+        }
     // Keep the log to the retention window.
-    for (const e of this.entries.values()) {
+    for (const e of [...this.entries.values(), ...this.pending.values()]) {
       let drop = 0;
       while (drop < e.log.length && e.log[drop]!.ts < ts - SEARCH_LOG_RETENTION_NS) drop++;
       if (drop) {
