@@ -61,7 +61,7 @@ opened). Two of the nineteen items are built.
 | A4 | PBKDF2 cap at 150 000 000 work units | **yes** | #888 | a function context's `crypto.subtle` rejects past the bound, and past 64 KiB (`server/src/web-crypto.ts`); differential `pbkdf2-cap.test.ts` |
 | A5 | 204/205/304 with a body throws | **yes** | #889 | `SpecResponse` throws Convex's `TypeError` (`server/src/web-response.ts`); a fetched response's body is already null (Bun); differential `null-body-status.test.ts` |
 | A6 | Action `fetch` drops the app's `Proxy-Authorization` | **yes** | #842 | `request.headers.delete("proxy-authorization")` (`server/src/action-fetch.ts:311`) |
-| A7 | `.staged({ field })` field deltas | no | — | an object is still taken as the whole validator (`core/src/schema.ts:336-341`) |
+| A7 | `.staged({ field })` field deltas | **yes** | #901 | an object is a delta over an object or `v.any()` table, `undefined` removes a field, a union or record table refuses it (`core/src/schema.ts`); differential `staged-field-deltas.test.ts` |
 | A8 | `paginate()` in component queries | **yes** | #899 | the component check is gone; a nested query pages in a scope of its own, merged into its caller's when it returns (`Tx.inQueryScope`); the message names bunvex as Convex's at `04d2f3b`; differential `paginate-components.test.ts` |
 | A9 | Data sync: no hidden tables, by-ts fallback, page 20 000 | no | — | page `16384` (`server/src/data-sync.ts:43`); the selection still takes "active and hidden user tables" (`:292`) |
 | A10 | Resume a backfill at a fresh snapshot, keeping the count | no | — | past retention, the backfill starts over from `FULL_LO` with `done = 0` (`core/src/index-worker.ts:281-290`) |
