@@ -47,7 +47,7 @@ import {
   ExecutorFailure,
   inHandleScope,
   type LogLine,
-  MAX_LOG_LINES,
+  MAX_LOG_LINES_DATABASE_UDFS,
   setAuditScope,
   snapshotOnSettle,
   withEnv,
@@ -580,12 +580,12 @@ class ChildCall extends ChildCallBase implements DbHost {
   }
 
   /**
-   * A console line, for the host. Past `MAX_LOG_LINES` of one call none can be shown: the host keeps the first ones
-   * of the invocation, which this call's first `MAX_LOG_LINES` come before (a query's or mutation's lines are not
-   * streamed, STUDY-20).
+   * A console line, for the host. Past a query's or mutation's limit (`MAX_LOG_LINES_DATABASE_UDFS`) of one call none
+   * can be shown: the host keeps the first ones of the invocation, which this call's first ones come before (a
+   * query's or mutation's lines are not streamed, STUDY-20). Actions run in `child-action.ts`, which sends them all.
    */
   logLine(l: LogLine) {
-    if (this.logged++ < MAX_LOG_LINES) this.lines.push([l.level, l.messages, l.isTruncated, l.timestamp]);
+    if (this.logged++ < MAX_LOG_LINES_DATABASE_UDFS) this.lines.push([l.level, l.messages, l.isTruncated, l.timestamp]);
   }
 
   protected override before() {

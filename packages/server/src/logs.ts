@@ -12,13 +12,20 @@
 // strings, the function log (function-log.ts, STUDY-47) as they are.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { inspect as nodeInspect } from "node:util";
-import { wallClock } from "@bunvex/core";
+import { knob, wallClock } from "@bunvex/core";
 import { withoutLoneSurrogates } from "@bunvex/values";
 import inspect from "object-inspect";
 import { mapStack } from "./stack-map.ts";
 
-/** At most this many lines per invocation; the last one is the overflow notice (Convex's MAX_LOG_LINES). */
-export const MAX_LOG_LINES = 256;
+/**
+ * At most this many lines per execution, the last one the overflow notice, by kind (Convex's knobs of
+ * crates/common/src/knobs.rs, `04e9983` + `0e4f90d`): a query's or mutation's (`MAX_LOG_LINES_DATABASE_UDFS`, 256),
+ * a V8 action's or HTTP action's (`MAX_LOG_LINES_V8_ACTIONS`, 1024) and a "use node" action's
+ * (`MAX_LOG_LINES_NODE_ACTIONS`, 1024, which Convex sends its node executor as `maxLogLines`). Each at least 1.
+ */
+export const MAX_LOG_LINES_DATABASE_UDFS = Math.max(1, knob("MAX_LOG_LINES_DATABASE_UDFS", 256));
+export const MAX_LOG_LINES_V8_ACTIONS = Math.max(1, knob("MAX_LOG_LINES_V8_ACTIONS", 1024));
+export const MAX_LOG_LINES_NODE_ACTIONS = Math.max(1, knob("MAX_LOG_LINES_NODE_ACTIONS", 1024));
 /** A line's messages are cut at this many UTF-8 bytes (Convex's MAX_LOG_LINE_LENGTH: 32 KiB). */
 export const MAX_LOG_LINE_LENGTH = 32768;
 const TRUNCATED_LINE_SUFFIX = " (truncated due to length)";
@@ -62,6 +69,11 @@ export type LogOwner = {
   timer?: unknown;
   /** Where it runs: a "use node" action's lines are written as Convex's node executor writes them. */
   environment?: "isolate" | "node";
+  /**
+   * What it is, for its line limit (`maxLogLines`). None: a sandbox child's capture, whose lines the host counts
+   * (a query's or mutation's limit for what it collects).
+   */
+  readonly udfType?: "Query" | "Mutation" | "Action" | "HttpAction";
   /** Its run's figures, fixed when its result is kept for the cache, so its own entry gives the same ones. */
   ran?(): RunFigures;
   /** On a cache hit, the figures of the run it reused (null when none were kept). */
@@ -146,7 +158,7 @@ export function logChildLine(line: LogLine) {
   const sub = subFunctions.getStore();
   if (sub) line.subFunction = sub;
   e.entries.push(line);
-  e.owner?.onLine?.(line);
+  stream(e.owner, line);
 }
 
 /** The owner of the current execution, if it runs under a logged one. */
@@ -205,7 +217,8 @@ export const cachedQueryLogs = {
         parent.entries.push(own);
         return current.run(own, () => body(...args));
       },
-      capture: () => (own ? { lines: capped(allLines(own)), run: own.owner?.ran?.() ?? null } : NOTHING_KEPT),
+      capture: () =>
+        own ? { lines: capped(allLines(own), limitOf(own)), run: own.owner?.ran?.() ?? null } : NOTHING_KEPT,
     };
   },
   /** A cached run's lines into the current invocation; `hit`: it is served from the cache (the default). */
@@ -248,25 +261,44 @@ function ownLinesOf(execution: Execution): LogLine[] {
       else if (entry.owner === execution.owner) walk(entry);
   };
   walk(execution);
-  return capped(lines);
+  return capped(lines, limitOf(execution));
 }
 
-const logLinesOf = (execution: Execution): string[] => capped(allLines(execution)).map(prettyLogLine);
+const logLinesOf = (execution: Execution): string[] =>
+  capped(allLines(execution), limitOf(execution)).map(prettyLogLine);
+
+/** The line limit of `owner`'s executions, by its kind (a query's or mutation's when it has none). */
+export function maxLogLines(owner: LogOwner | null | undefined): number {
+  if (owner?.udfType === "Action")
+    return owner.environment === "node" ? MAX_LOG_LINES_NODE_ACTIONS : MAX_LOG_LINES_V8_ACTIONS;
+  if (owner?.udfType === "HttpAction") return MAX_LOG_LINES_V8_ACTIONS;
+  return MAX_LOG_LINES_DATABASE_UDFS;
+}
+
+/** An invocation's limit: its own owner's, else that of the first logged execution it ran (its function). */
+function limitOf(execution: Execution): number {
+  if (execution.owner) return maxLogLines(execution.owner);
+  const first = execution.entries.find((e): e is Execution => !isLine(e) && e.owner !== null);
+  return first ? limitOf(first) : MAX_LOG_LINES_DATABASE_UDFS;
+}
+
+/** Convex's notice in the last of `max` lines (`log_overflow_log_line`). */
+const overflowLine = (max: number, timestamp: number): LogLine => ({
+  level: "ERROR",
+  messages: [`Log overflow (maximum ${max}). Remaining log lines omitted.`],
+  isTruncated: false,
+  timestamp,
+});
 
 /**
- * Convex keeps MAX_LOG_LINES - 1 lines and spends the last on an [ERROR] notice. System lines are not the
+ * Convex keeps `max` - 1 lines and spends the last on an [ERROR] notice. System lines are not the
  * function's: they are kept whatever its count (Convex writes them past the limit).
  */
-function capped(all: LogLine[]): LogLine[] {
+function capped(all: LogLine[], max: number): LogLine[] {
   const lines = all.filter((l) => l.systemCode === undefined);
-  if (lines.length < MAX_LOG_LINES) return lines.length === all.length ? all : [...lines, ...systemLines(all)];
-  const kept = lines.slice(0, MAX_LOG_LINES - 1);
-  kept.push({
-    level: "ERROR",
-    messages: [`Log overflow (maximum ${MAX_LOG_LINES}). Remaining log lines omitted.`],
-    isTruncated: false,
-    timestamp: kept[kept.length - 1]!.timestamp,
-  });
+  if (lines.length < max) return lines.length === all.length ? all : [...lines, ...systemLines(all)];
+  const kept = lines.slice(0, max - 1);
+  kept.push(overflowLine(max, (kept[kept.length - 1] ?? lines[0]!).timestamp));
   return [...kept, ...systemLines(all)];
 }
 
@@ -349,7 +381,25 @@ function emit(execution: Execution, level: LogLevel, messages: string[]) {
   const sub = subFunctions.getStore();
   if (sub) line.subFunction = sub;
   execution.entries.push(line);
-  execution.owner?.onLine?.(line);
+  stream(execution.owner, line);
+}
+
+/** The function's lines each owner has streamed so far, the overflow notice included. */
+const streamed = new WeakMap<LogOwner, number>();
+
+/**
+ * A function's line to its owner as it is logged (an action's stream out): up to its limit, the last of which is the
+ * overflow notice, then none, as Convex's action environment stops sending them (`ActionEnvironment::trace`).
+ */
+function stream(owner: LogOwner | null, line: LogLine) {
+  if (!owner?.onLine) return;
+  // A sandbox child's capture (`captureLines`): the host it hands its lines to counts them.
+  if (owner.udfType === undefined) return owner.onLine(line);
+  const n = streamed.get(owner) ?? 0;
+  const max = maxLogLines(owner);
+  if (n >= max) return;
+  streamed.set(owner, n + 1);
+  owner.onLine(n < max - 1 ? line : overflowLine(max, line.timestamp));
 }
 
 let installed = false;
