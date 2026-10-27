@@ -198,6 +198,7 @@ import {
   currentLogLines,
   currentOwner,
   currentOwnLines,
+  droppableLines,
   type LogLine,
   logSystemLine,
   perAttempt,
@@ -2116,28 +2117,14 @@ export class Functions {
     );
   }
 
-  /**
-   * A component's function run in its namespace (STUDY-154): `ctx.db` its tables and schema, what Convex refuses in
-   * a component refused (`Tx.componentFunction`).
-   */
-  private async inAppRun(db: Tx, run: () => unknown): Promise<unknown> {
-    const was = db.componentFunction;
-    db.componentFunction = false;
-    try {
-      return await db.inComponent(null, async () => run());
-    } finally {
-      db.componentFunction = was;
-    }
+  /** A component's function run in its namespace (STUDY-154): `ctx.db` its tables and schema. */
+  private async inComponentRun(db: Tx, component: ComponentRuntime, run: () => unknown): Promise<unknown> {
+    return await db.inComponent(component.id, async () => run());
   }
 
-  private async inComponentRun(db: Tx, component: ComponentRuntime, run: () => unknown): Promise<unknown> {
-    const was = db.componentFunction;
-    db.componentFunction = true;
-    try {
-      return await db.inComponent(component.id, async () => run());
-    } finally {
-      db.componentFunction = was;
-    }
+  /** The app's function called from a component (through a handle, STUDY-155), back in the app's namespace. */
+  private async inAppRun(db: Tx, run: () => unknown): Promise<unknown> {
+    return await db.inComponent(null, async () => run());
   }
 
   /** @internal The engine the functions run on. */
@@ -2443,20 +2430,27 @@ export class Functions {
     const sp = kind === "mutation" ? db.begin() : null;
     let value: unknown;
     const timer = this.newTimer();
-    // A query called from a mutation paginates in a scope of its own; from a query, in its caller's (Convex 8449d41).
-    const run = () =>
-      withUserTimer(timer, () =>
-        withSubFunction(sub, () => withCalleeEnv(env, () => this.invoke(f, db, a, depth + 1))),
-      );
-    try {
-      value = await this.withLimits(db, opts?.transactionLimits, () =>
-        kind === "query" ? db.inQueryScope(run) : run(),
-      );
-      if (sp) mustBeValue(value);
-    } catch (e) {
-      if (sp) db.rollback(sp);
-      throw this.nestedError(e, timer);
-    }
+    const run = async () => {
+      try {
+        const v = await this.withLimits(db, opts?.transactionLimits, () =>
+          withUserTimer(timer, () =>
+            withSubFunction(sub, () => withCalleeEnv(env, () => this.invoke(f, db, a, depth + 1))),
+          ),
+        );
+        if (sp) mustBeValue(v);
+        return v;
+      } catch (e) {
+        if (sp) db.rollback(sp);
+        throw this.nestedError(e, timer);
+      }
+    };
+    // A query paginates in a scope of its own (Convex d7402d6, 8449d41): its page becomes its caller's as it returns,
+    // and a second one is refused in the caller, outside the callee's errors (a plain error, not an uncaught one),
+    // with the callee's lines taken back.
+    if (kind === "query") {
+      const lines = droppableLines();
+      value = await db.inQueryScope(() => lines.run(run), lines.drop);
+    } else value = await run();
     return acrossCall(this.checkReturns(f, value));
   }
 

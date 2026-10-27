@@ -191,6 +191,24 @@ export function perAttempt<A extends unknown[], R>(body: (...args: A) => R): (..
 }
 
 /**
+ * Run `fn`, a nested call, with its lines kept where they are logged; `drop()` takes them back. Convex emits a nested
+ * call's lines once the call returns to its caller, and none when the return itself is refused (a second paginated
+ * query, `runUdf` in crates/isolate/src/environment/udf/async_syscall.rs). Its console timers stay the caller's.
+ */
+export function droppableLines(): { run<T>(fn: () => T): T; drop(): void } {
+  const parent = current.getStore();
+  if (!parent) return { run: (fn) => fn(), drop: () => {} };
+  const own: Execution = { entries: [], timers: parent.timers, owner: parent.owner };
+  parent.entries.push(own);
+  return {
+    run: (fn) => current.run(own, fn),
+    drop: () => {
+      own.entries = [];
+    },
+  };
+}
+
+/**
  * Run `fn` outside any invocation: its lines go only to the server's console. For work that is not the
  * caller's even though it starts inside the caller's call, such as re-running subscriptions after a commit.
  */

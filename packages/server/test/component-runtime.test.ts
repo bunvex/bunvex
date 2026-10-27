@@ -179,15 +179,13 @@ describe("a component's functions, run by an admin", () => {
     expect(second).toMatchObject({ mode: null, key: null, appx: null });
   });
 
-  test("its schema on writes, and what a component may not do (paginate)", async () => {
+  test("its schema on writes, and its own pages (Convex d7402d6)", async () => {
     const d = await deployment();
     await d.push();
     expect((await d.run("counter", "lib:bad")).body!.errorMessage).toContain(
       'Failed to insert or update a document in table "messages" because it does not match the schema',
     );
-    expect((await d.run("counter", "lib:page")).body!.errorMessage).toContain(
-      "paginate() is only supported in the app.",
-    );
+    expect((await d.run("counter", "lib:page")).body).toMatchObject({ status: "success", value: { page: [] } });
   });
 
   test("ctx.meta.getFunctionMetadata() names the instance's component path, as Convex's", async () => {
