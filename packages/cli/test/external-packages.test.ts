@@ -394,9 +394,10 @@ export const bin = action(async () => probe());`,
     expect(await d.rows("_source_packages")).toEqual([]);
   }, 60_000);
 
-  test("the packages count in the size limit (Convex's ModulesTooLarge)", async () => {
+  test("no zipped size limit (Convex's 5695d6d): packages that zip past the old knob deploy", async () => {
     const d = await deployment();
-    // 400 KB that do not compress: over a 300 KB limit with the packages, under it without.
+    // 400 KB that do not compress: past a 300 KB zipped bound with the packages. The unzipped limit (230 MB), which
+    // counts them too, is checked in server/test/push-components.test.ts.
     const BIG: TestPackage = {
       name: "tiny-big",
       version: "1.0.0",
@@ -413,12 +414,7 @@ export const bin = action(async () => probe());`,
     const saved = process.env.MAX_ZIPPED_PACKAGES_SIZE;
     process.env.MAX_ZIPPED_PACKAGES_SIZE = "300000";
     try {
-      const r = await deploy(app, d.url);
-      expect(r.code).toBe(1);
-      expect(r.err.join("\n")).toMatch(
-        /Total module size exceeded the zipped maximum \([\d.]+ KiB > maximum size 292\.97 KiB\)/,
-      );
-      writeFileSync(join(app, "bunvex.json"), "{}");
+      // No zipped limit since Convex's 5695d6d (STUDY-186 A3): the old knob refuses nothing.
       expect((await deploy(app, d.url)).code).toBe(0);
     } finally {
       if (saved === undefined) delete process.env.MAX_ZIPPED_PACKAGES_SIZE;

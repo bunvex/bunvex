@@ -339,9 +339,15 @@ describe("refused, as Convex's push refuses them", () => {
 describe("the packages' size (Convex's upload_packages)", () => {
   test("one check over the total: two packages that fit alone, too large together", () => {
     const big = [mod("a.js", "x".repeat(600))];
-    const limits = { zipped: 1_000_000, unzipped: 1000 };
-    checkPackagesSize([big], null, limits);
-    expect(() => checkPackagesSize([big, big], null, limits)).toThrow(ModulesTooLargeError);
+    checkPackagesSize([big], null, 1000);
+    expect(() => checkPackagesSize([big, big], null, 1000)).toThrow(ModulesTooLargeError);
+  });
+
+  test("the external packages count in the total, once", () => {
+    const small = [mod("a.js", "x".repeat(100))];
+    const external = { id: "x", storageKey: "k", unzipped: 700 };
+    checkPackagesSize([small], external, 1000);
+    expect(() => checkPackagesSize([small, small], external, 1000)).toThrow(ModulesTooLargeError);
   });
 });
 

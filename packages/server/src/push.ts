@@ -721,7 +721,6 @@ export class PushService {
     const external: PackageExternalDeps | null = installed && {
       id: installed.row._id,
       storageKey: installed.row.storageKey,
-      zipped: Number(installed.row.packageSize.zippedSizeBytes),
       unzipped: Number(installed.row.packageSize.unzippedSizeBytes),
     };
     const all = await this.resolveModules(req);

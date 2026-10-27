@@ -7,8 +7,6 @@
 import {
   type Engine,
   formatBytes,
-  type KnobEnv,
-  knob,
   MODULES_TABLE,
   SOURCE_PACKAGES_TABLE,
   type Tx,
@@ -34,19 +32,16 @@ import type { SourcePosition } from "./source-position.ts";
 import { bytesSource, entryBytes, ZipReader } from "./zip-reader.ts";
 import { zipInMemory } from "./zip-writer.ts";
 
-/** Convex's package limits (crates/model/src/source_packages/types.rs): 230 000 000 bytes unzipped, and the
- *  `MAX_ZIPPED_PACKAGES_SIZE` knob zipped (90 000 000 by default). A package at a limit or over it is refused. */
+/**
+ * Convex's package limit (crates/model/src/source_packages/types.rs): 230 000 000 bytes unzipped. A package at the
+ * limit or over it is refused. The zipped one (the `MAX_ZIPPED_PACKAGES_SIZE` knob, 90 000 000) is gone since
+ * Convex's `5695d6d` (STUDY-186 A3).
+ */
 export const MAX_UNZIPPED_PACKAGE_BYTES = 230_000_000;
-export const MAX_ZIPPED_PACKAGE_BYTES = 90_000_000;
 
 /** A package over a limit: Convex's 400 `ModulesTooLarge` (`PackageSize::verify_size`). */
 export class ModulesTooLargeError extends Error {
   readonly code = "ModulesTooLarge";
-}
-
-/** The zipped limit: the `MAX_ZIPPED_PACKAGES_SIZE` knob, a byte count, else Convex's default. */
-function zippedLimit(env: KnobEnv = process.env): number {
-  return knob("MAX_ZIPPED_PACKAGES_SIZE", MAX_ZIPPED_PACKAGE_BYTES, "uint", env);
 }
 
 /** A package as `_source_packages` stores it (Convex's `SerializedSourcePackage`). */
@@ -83,22 +78,32 @@ type PackageMetadata = {
   externalDepsStorageKey: string | null;
 };
 
-/** A push's external packages (STUDY-148), as its package records them: the row, its blob and its sizes. */
-export type PackageExternalDeps = { id: string; storageKey: string; zipped: number; unzipped: number };
+/** A push's external packages (STUDY-148), as its package records them: the row, its blob and its unzipped size. */
+export type PackageExternalDeps = { id: string; storageKey: string; unzipped: number };
 
 /**
  * A push's modules as Convex's package (`write_package`): a zip with each module's source at `modules/<path>`,
  * its source map at `modules/<path>.map`, by path, then `metadata.json` (`externalDepsStorageKey` the external
- * packages' blob, STUDY-148); the unzipped size counts the sources, the maps and the metadata, as Convex's. Over a
- * limit, the external packages' sizes added (Convex's `upload_packages` checks the total), it throws Convex's
+ * packages' blob, STUDY-148); the unzipped size counts the sources, the maps and the metadata, as Convex's. Over the
+ * limit, the external packages' size added (Convex's `upload_packages` checks the total), it throws Convex's
  * `ModulesTooLarge` (`verify_size`), which `start_push` meets first, before anything is analyzed (Convex uploads
  * and checks the package there).
  */
 export function buildPackage(
   modules: ModuleSource[],
-  limits: { zipped: number; unzipped: number } = { zipped: zippedLimit(), unzipped: MAX_UNZIPPED_PACKAGE_BYTES },
+  unzippedLimit = MAX_UNZIPPED_PACKAGE_BYTES,
   external: PackageExternalDeps | null = null,
 ): { zip: Uint8Array; unzipped: number } {
+  const { entries, unzipped } = packageEntries(modules, external);
+  checkSize(unzipped + (external?.unzipped ?? 0), unzippedLimit);
+  return { zip: zipInMemory(entries), unzipped };
+}
+
+/** The package's files, in Convex's order, and their unzipped size. */
+function packageEntries(
+  modules: ModuleSource[],
+  external: PackageExternalDeps | null,
+): { entries: { name: string; data: Uint8Array }[]; unzipped: number } {
   const enc = new TextEncoder();
   const entries: { name: string; data: Uint8Array }[] = [];
   const metadata: PackageMetadata = {
@@ -123,41 +128,29 @@ export function buildPackage(
   const metadataJson = enc.encode(JSON.stringify(metadata));
   entries.push({ name: "metadata.json", data: metadataJson });
   unzipped += metadataJson.length;
-  const zip = zipInMemory(entries);
-  checkSize(zip.length + (external?.zipped ?? 0), unzipped + (external?.unzipped ?? 0), limits);
-  return { zip, unzipped };
+  return { entries, unzipped };
 }
 
-/** Convex's `verify_size` over a push's total: the zipped size, then the unzipped one, in binary units (humansize's BINARY). */
-function checkSize(zippedTotal: number, unzippedTotal: number, limits: { zipped: number; unzipped: number }) {
-  if (zippedTotal >= limits.zipped)
+/** Convex's `verify_size` over a push's total: the unzipped size, in binary units (humansize's BINARY). */
+function checkSize(unzippedTotal: number, unzippedLimit: number) {
+  if (unzippedTotal >= unzippedLimit)
     throw new ModulesTooLargeError(
-      `Total module size exceeded the zipped maximum (${formatBytes(zippedTotal)} > maximum size ${formatBytes(limits.zipped)})`,
-    );
-  if (unzippedTotal >= limits.unzipped)
-    throw new ModulesTooLargeError(
-      `Total module size exceeded the unzipped maximum (${formatBytes(unzippedTotal)} > maximum size ${formatBytes(limits.unzipped)})`,
+      `Total module size exceeded the unzipped maximum (${formatBytes(unzippedTotal)} > maximum size ${formatBytes(unzippedLimit)})`,
     );
 }
 
 /**
  * The size check of a push with components (Convex's `upload_packages`): one package for the app, one per component
- * definition, the external packages counted once, and ONE check over the total.
+ * definition, the external packages counted once, and ONE check over the total. Nothing is zipped for it.
  */
 export function checkPackagesSize(
   packages: ModuleSource[][],
   external: PackageExternalDeps | null = null,
-  limits: { zipped: number; unzipped: number } = { zipped: zippedLimit(), unzipped: MAX_UNZIPPED_PACKAGE_BYTES },
+  unzippedLimit = MAX_UNZIPPED_PACKAGE_BYTES,
 ) {
-  const unlimited = { zipped: Number.POSITIVE_INFINITY, unzipped: Number.POSITIVE_INFINITY };
-  let zipped = external?.zipped ?? 0;
   let unzipped = external?.unzipped ?? 0;
-  for (const modules of packages) {
-    const p = buildPackage(modules, unlimited);
-    zipped += p.zip.length;
-    unzipped += p.unzipped;
-  }
-  checkSize(zipped, unzipped, limits);
+  for (const modules of packages) unzipped += packageEntries(modules, null).unzipped;
+  checkSize(unzipped, unzippedLimit);
 }
 
 /**
@@ -167,11 +160,11 @@ export function checkPackagesSize(
 export async function writePackage(
   store: BlobStore,
   modules: ModuleSource[],
-  limits?: { zipped: number; unzipped: number },
+  unzippedLimit?: number,
   nodeVersion: string | null = null,
   external: PackageExternalDeps | null = null,
 ): Promise<SourcePackageFields> {
-  const { zip, unzipped } = buildPackage(modules, limits, external);
+  const { zip, unzipped } = buildPackage(modules, unzippedLimit, external);
   const written = await store.put(zip);
   return {
     storageKey: written.key,
