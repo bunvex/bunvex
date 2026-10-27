@@ -83,7 +83,7 @@ The rest of STUDY-186 was checked too:
 |---|---|---|
 | §4.3, a V8 action's `setTimeout` past 2^31−1 ms | **yes**, #839 | "a V8 action's timer past 2^31-1 ms waits its whole delay" |
 | Q2 / DV-551, `env list` names only for AI agents | **yes**, #894 | built with A16: `detectAgent` (`cli/src/agent.ts`), `BUNVEX_AGENT_MODE` |
-| Q3, the local dashboard's empty 403 on every non-loopback `Host` | no | only `/api/current_deployment` is checked, with a worded body (`cli/src/dashboard-server.ts:166-168`); DV-476 not yet moved |
+| Q3, the local dashboard's empty 403 on every non-loopback `Host` | **yes**, #907 | `loopbackHostOnly` on the local dashboard: every path an empty 403 for another `Host` (`cli/src/dashboard-server.ts`, `local-dashboard.ts`); DV-476 in "Resolved to match Convex" |
 | Q4 / DV-552, `function.runtime` in log stream events | no | `log-events.ts` has `runtime: "default" \| "node"` only on the function's metadata, nothing on the stream event; DV-552 says "to be built" |
 | Q5, the MySQL retry set | no | `LOST` still holds `EPIPE`, `ETIMEDOUT`, `EHOSTUNREACH`, `ENETUNREACH`, and no `EAI_AGAIN` (`persistence/src/mysql.ts:209-218`) |
 | Q6, Bun's Brotli and root store (outside parity) | no record | no doc or commit mentions the check |

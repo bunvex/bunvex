@@ -283,6 +283,49 @@ describe("frame and security headers (Convex's image, `next.config.js` headers()
   });
 });
 
+describe("the local dashboard's Host check on every path (Convex's isLoopbackHost, 6b0fa75; DV-476 resolved)", () => {
+  test("127.0.0.1 and localhost on its port are served; any other Host is an empty 403, whatever the path or method", async () => {
+    const server = await serveDashboard({
+      dir: built(),
+      port: 0,
+      loopbackHostOnly: true,
+      currentDeployment: { name: "local-app", url: "http://127.0.0.1:3210", adminKey: "local-app|01abc" },
+    });
+    stops.push(server.stop);
+    const { url, port } = server;
+    for (const host of [`127.0.0.1:${port}`, `localhost:${port}`, `LocalHost:${port}`]) {
+      expect([host, (await fetch(url, { headers: { host, ...html } })).status]).toEqual([host, 200]);
+      expect([host, (await fetch(`${url}api/current_deployment`, { headers: { host } })).status]).toEqual([host, 200]);
+    }
+    for (const host of [
+      `evil.example:${port}`,
+      `127.0.0.1:${port + 1}`,
+      "127.0.0.1",
+      "localhost",
+      `localhost.evil.example:${port}`,
+      `[::1]:${port}`,
+    ])
+      for (const [path, method] of [
+        ["", "GET"],
+        ["", "HEAD"],
+        ["", "POST"],
+        ["assets/index-abc.js", "GET"],
+        ["database/users", "GET"],
+        ["assets/missing.js", "GET"],
+        ["api/current_deployment", "GET"],
+      ] as const) {
+        const r = await fetch(`${url}${path}`, { method, headers: { host, ...html } });
+        expect([host, path, method, r.status, await r.text()]).toEqual([host, path, method, 403, ""]);
+      }
+  });
+
+  test("the image's server keeps serving any Host (Convex's image has no such check)", async () => {
+    const server = await serveDashboard({ dir: built(), port: 0, securityHeaders: true });
+    stops.push(server.stop);
+    expect((await fetch(server.url, { headers: { host: `evil.example:${server.port}`, ...html } })).status).toBe(200);
+  });
+});
+
 describe("/api/current_deployment (Convex's local dashboard, with the Host check: DV-476)", () => {
   test("a local project's deployment, to 127.0.0.1 and localhost on the server's port only", async () => {
     const dir = localProject("local-app", 3210, "local-app|01abc");
@@ -510,6 +553,9 @@ describe("bunvex dev's local dashboard, and bunvex dashboard", () => {
     expect((await fetch(`${url}api/current_deployment`, { headers: { host: `evil.example:${port}` } })).status).toBe(
       403,
     );
+    // Every path, as Convex's CLI since 6b0fa75: an empty 403 for any other Host.
+    const rebound = await fetch(url, { headers: { host: `evil.example:${port}` } });
+    expect([rebound.status, await rebound.text()]).toEqual([403, ""]);
     // the key it hands out is the deployment's
     const check = await fetch(`http://127.0.0.1:${cloud}/api/check_admin_key`, {
       headers: { authorization: `Bunvex ${config.adminKey}` },
