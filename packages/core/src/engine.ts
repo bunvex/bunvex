@@ -162,8 +162,10 @@ import {
   maintainedIndexes,
   pushOrder,
   referencedTables,
+  type SearchIndexDef,
   SYSTEM_INDEXES,
   type TableDef,
+  type VectorIndexDef,
 } from "./schema.ts";
 import {
   type SchemaJson,
@@ -212,6 +214,7 @@ import {
   SegmentReplay,
   sameSpec,
   searchCompactionFromEnv,
+  indexRow as searchIndexRow,
   searchSegmentLimitsFromEnv,
   searchWorkersFromEnv,
   segmentRefs,
@@ -632,6 +635,8 @@ export class Engine {
     await this.loadSearchSegments();
     this.reconcileSearch(true);
     this.reconcileVector(true);
+    // A push still waiting builds its new indexes again.
+    this.reconcilePendingSearch();
     this.startSearchWorkers();
     // The log since the segments is held only while the indexes it restores are being built.
     void Promise.allSettled([...this.searchBackfills]).then(() => {
@@ -1309,6 +1314,69 @@ export class Engine {
   }
 
   /**
+   * The search and vector indexes a pending schema push adds, by active table (STUDY-195 §2): the app's pending
+   * schema's, then each component's, each index whose name its table's active schema does not declare. A redefined
+   * index is rebuilt when the push commits, as before.
+   */
+  private *pendingSearchDeclared(): Iterable<{
+    t: TableDef;
+    search: [string, SearchIndexDef, boolean][];
+    vector: [string, VectorIndexDef, boolean][];
+  }> {
+    const spaces: [EngineSchema, EngineSchema, Catalog["tables"]][] = [];
+    if (this.pendingPush) spaces.push([this.pendingPush.schema, this.schema, this.catalog.tables]);
+    for (const [id, c] of this.componentSchemas) {
+      const space = this.catalog.components.get(id);
+      if (c.pendingPush && space) spaces.push([c.pendingPush.schema, c.schema, space.tables]);
+    }
+    for (const [pushed, active, tables] of spaces) {
+      const activeTables = declaredTables(active);
+      for (const [name, declared] of declaredTables(pushed)) {
+        const t = tables.get(name);
+        if (!t) continue;
+        const now = activeTables.get(name);
+        const stagedSearch = new Set(declared.stagedSearch ?? []);
+        const stagedVector = new Set(declared.stagedVector ?? []);
+        const search = Object.entries(declared.searchIndexes ?? {})
+          .filter(([n]) => !now?.searchIndexes?.[n])
+          .map(([n, d]) => [n, d, stagedSearch.has(n)] as [string, SearchIndexDef, boolean]);
+        const vector = Object.entries(declared.vectorIndexes ?? {})
+          .filter(([n]) => !now?.vectorIndexes?.[n])
+          .map(([n, d]) => [n, d, stagedVector.has(n)] as [string, VectorIndexDef, boolean]);
+        if (search.length || vector.length) yield { t, search, vector };
+      }
+    }
+  }
+
+  /**
+   * Build the search and vector indexes a pending schema push adds while the push waits (Convex's pending indexes,
+   * STUDY-195 §2): `schemaPushStatus` stays in progress until they are, and the commit enables them as they are.
+   */
+  private reconcilePendingSearch() {
+    const search = [];
+    const vector = [];
+    for (const { t, search: s, vector: v } of this.pendingSearchDeclared()) {
+      for (const [name, def, staged] of s) search.push({ table: t, name, def, staged });
+      for (const [name, def, staged] of v) vector.push({ table: t, name, def, staged });
+    }
+    for (const e of this.searchIndexes.reconcilePending(search, this.committer.visibleTs)) {
+      const p = this.backfillSearch(e).catch((err) => {
+        if (!this.closed) console.error(`bunvex: search index ${e.table}.${e.name} failed to build: ${err.message}`);
+      });
+      this.searchBackfills.add(p);
+      void p.finally(() => this.searchBackfills.delete(p));
+    }
+    for (const e of this.vectorIndexes.reconcilePending(vector)) {
+      const p = this.backfillVector(e).catch((err) => {
+        if (!this.closed) console.error(`bunvex: vector index ${e.table}.${e.name} failed to build: ${err.message}`);
+      });
+      this.searchBackfills.add(p);
+      void p.finally(() => this.searchBackfills.delete(p));
+    }
+    this.scheduleIndexRowsSync();
+  }
+
+  /**
    * Make the search indexes the active schema's (STUDY-45): after the schema or the tables change. A new
    * index is backfilled from its table at one snapshot; commits meanwhile are applied as they land.
    */
@@ -1607,7 +1675,9 @@ export class Engine {
   private isCurrent(kind: "text" | "vector", e: SearchIndexEntry | VectorIndexEntry): boolean {
     const t = this.catalog.anyTablet(e.tablet);
     if (!t) return false;
-    return (kind === "text" ? this.searchIndexes.get(t, e.name) : this.vectorIndexes.get(t, e.name)) === e;
+    return kind === "text"
+      ? this.searchIndexes.holds(e as SearchIndexEntry)
+      : this.vectorIndexes.holds(e as VectorIndexEntry);
   }
 
   /**
@@ -2122,6 +2192,9 @@ export class Engine {
     const wanted = new Map<string, ["text" | "vector", SearchIndexEntry | VectorIndexEntry]>();
     for (const e of this.searchIndexes.all()) wanted.set(stateKey("text", e.tablet, e.name), ["text", e]);
     for (const e of this.vectorIndexes.all()) wanted.set(stateKey("vector", e.tablet, e.name), ["vector", e]);
+    // A pending push's new indexes have rows too, written in its first transaction (`startSchemaPush`).
+    for (const e of this.searchIndexes.pendingAll()) wanted.set(stateKey("text", e.tablet, e.name), ["text", e]);
+    for (const e of this.vectorIndexes.pendingAll()) wanted.set(stateKey("vector", e.tablet, e.name), ["vector", e]);
     void state
       .update((states) => {
         let changed = false;
@@ -3156,9 +3229,43 @@ export class Engine {
           });
         }
         const after = await readCatalog(db);
+        // The search and vector indexes the push adds: their `_index` rows, backfilling, in this transaction (Convex's
+        // `prepare_new_and_mutated_indexes`), taken over by the rows' writer once it is visible (STUDY-195 §2).
+        const rows: [IndexSegmentsState, string][] = [];
+        const addRows = async (pushed: EngineSchema, active: EngineSchema, namespace?: string) => {
+          if (!this.indexRows) return;
+          const now = declaredTables(active);
+          for (const [name, declared] of declaredTables(pushed)) {
+            const t = activeTables(after.tables, namespace).find((x) => x.name === name);
+            if (!t) continue;
+            const kinds = [
+              ["text", declared.searchIndexes ?? {}, now.get(name)?.searchIndexes ?? {}, declared.stagedSearch],
+              ["vector", declared.vectorIndexes ?? {}, now.get(name)?.vectorIndexes ?? {}, declared.stagedVector],
+            ] as const;
+            for (const [kind, defs, before, staged] of kinds)
+              for (const [index, def] of Object.entries(defs)) {
+                if ((before as Record<string, unknown>)[index] || this.indexRows.rowId(kind, t.tablet, index)) continue;
+                const s: IndexSegmentsState = {
+                  kind,
+                  tablet: t.tablet,
+                  name: index,
+                  def: def as SearchIndexDef | VectorIndexDef,
+                  ts: 0n,
+                  segments: [],
+                  backfill: { cursor: null },
+                  staged: (staged ?? []).includes(index),
+                };
+                rows.push([s, (await db.insert(INDEX_TABLE, searchIndexRow(s) as never)) as string]);
+              }
+          }
+        };
+        if (schema && state !== "active") await addRows(schema, this.schema);
+        for (const [id, s] of components)
+          if (s && inComponents.get(id)?.state !== "active") await addRows(s, this.componentSchema(id), id);
         // Installed as soon as the commit is visible (see `catalogTouches`).
         db.onCommitVisible = () => {
           this.catalog = buildCatalog(after.tables, after.indexes);
+          for (const [s, id] of rows) this.indexRows?.adopt(s, id);
           install(schemaId, state);
         };
         return { schemaId, state, addedIndexes, created, after, inComponents };
@@ -3183,6 +3290,8 @@ export class Engine {
     this.refreshStagedChecks();
     if (staged.size) this.kickStagedWalk();
     if (r.after.indexes.some((i) => i.state === "backfilling")) this.startIndexWorker();
+    // Its new search and vector indexes are built while it waits (STUDY-195 §2).
+    this.reconcilePendingSearch();
     return {
       schemaId: r.schemaId,
       addedIndexes: r.addedIndexes,
@@ -3234,6 +3343,15 @@ export class Engine {
           total++;
           if (i.state !== "backfilling") done++;
         }
+        // The search and vector indexes the push adds, once they are built (Convex's `wait_for_schema` counts every
+        // index of the push, STUDY-195 §2). Only the push the engine holds as pending builds them.
+        const holding = namespace === null ? this.pendingPush : this.componentSchemas.get(namespace)?.pendingPush;
+        if (holding?.id === schemaId)
+          for (const e of [...this.searchIndexes.pendingAll(), ...this.vectorIndexes.pendingAll()]) {
+            if (!userTablets.has(e.tablet) || e.staged) continue;
+            total++;
+            if (e.ready) done++;
+          }
         if (done < total || !validated)
           return {
             type: "inProgress" as const,
@@ -3318,6 +3436,8 @@ export class Engine {
             this.pendingPush = null;
             this.pendingValidators = null;
           }
+          // What a pending push built is enabled above (`reconcileSearch` takes it over); nothing is left pending.
+          this.reconcilePendingSearch();
           this.refreshStagedChecks();
         };
         return {
