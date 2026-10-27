@@ -304,6 +304,8 @@ export type ValidatorJson =
   | { type: "null" }
   | { type: "number" }
   | { type: "bigint" }
+  /** Convex's `v.commitTs()`: an int64, the commit's timestamp. */
+  | { type: "commitTs" }
   | { type: "boolean" }
   | { type: "string" }
   | { type: "bytes" }
