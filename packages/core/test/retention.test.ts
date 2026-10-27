@@ -427,3 +427,28 @@ describe("retention", () => {
     expect(r.stats.advances).toBe(n);
   });
 });
+
+describe("the snapshot is checked again once a function ran (Convex's `validate_run_function_result`)", () => {
+  test("a query the window passed while it ran fails with OutOfRetentionError instead of its result", async () => {
+    const { e } = await open();
+    await e.mutation((db) => db.insert("items", { n: 1 }));
+    const ran = e.query(async (db) => {
+      const docs = await db.query("items").collect();
+      // The window moves past this query's snapshot while it runs.
+      e.retention!.minIndexTs = e.committer.visibleTs + 1n;
+      return docs.length;
+    });
+    await expect(ran).rejects.toBeInstanceOf(OutOfRetentionError);
+  });
+
+  test("a mutation the window passed while it ran fails, and commits nothing", async () => {
+    const { e } = await open();
+    const ran = e.mutation(async (db) => {
+      await db.insert("items", { n: 1 });
+      e.retention!.minIndexTs = e.committer.visibleTs + 1n;
+    });
+    await expect(ran).rejects.toBeInstanceOf(OutOfRetentionError);
+    e.retention!.minIndexTs = 0n;
+    expect(await e.query((db) => db.query("items").collect())).toEqual([]);
+  });
+});
