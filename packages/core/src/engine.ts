@@ -26,6 +26,7 @@ import {
   type Call,
   type CallHost,
   CallRunner,
+  callsRoundTripByDefault,
   inSession,
   isCall,
   outcomeOf,
@@ -419,6 +420,11 @@ export class Engine {
     finish: (tx) => this.finishTx(tx),
   };
   private readonly runner = new CallRunner(this.inThread);
+  /**
+   * Whether calls round-trip through the codec in the thread (STUDY-194 Q7): the `callCodec` option, else on only
+   * where the tests turned it on (`roundTripCallsByDefault`).
+   */
+  readonly callCodec: boolean;
   private callIds = 0;
   /** The deployment's run state, as every user function checks it (STUDY-63). */
   readonly backendState: BackendStateCache;
@@ -542,6 +548,11 @@ export class Engine {
        */
       indexCache?: false | { maxBytes?: number; verifyPercent?: number };
       /**
+       * Whether calls round-trip through the call boundary's codec in the thread (STUDY-194 Q7): by default only
+       * under the tests (`roundTripCallsByDefault`).
+       */
+      callCodec?: boolean;
+      /**
        * How a flush that failed with a transient error is retried (STUDY-25 L4): Convex's backoff, 100 ms
        * doubling up to 10 s with full jitter, as many times as it takes (the lease bounds it).
        */
@@ -569,6 +580,7 @@ export class Engine {
     );
     this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
     this.indexCache = indexCacheOf(persistence, opts.indexCache, this.committer);
+    this.callCodec = opts.callCodec ?? callsRoundTripByDefault();
     this.writeThroughput = new WriteThroughputLimiter(opts.writeThroughput ?? writeThroughputFromEnv(), () =>
       runtime.nowNs(),
     );
@@ -3789,16 +3801,22 @@ export class Engine {
         id,
         ts: start.ts,
         now: start.now,
-        identity: start.identity == null ? null : JSON.stringify(start.identity),
+        // In-thread without the codec the identity object goes beside the request instead (`runRequest`).
+        identity: start.identity == null || !this.callCodec ? null : JSON.stringify(start.identity),
         systemIdentity: start.systemIdentity,
         request: start.request,
         tracked: start.tracked,
         journal: start.journal,
         refused: opts.refused === true,
       };
-      const run = () => this.runner.run(encodeCallRequest(request), call.bodies, call.local);
-      const { wire, local } = await (opts.wrap ? opts.wrap(run) : run)();
-      const outcome = decodeCallOutcome(wire);
+      // Through the codec under the tests; as objects otherwise (STUDY-194 Q7).
+      const run = this.callCodec
+        ? async () => {
+            const r = await this.runner.run(encodeCallRequest(request), call.bodies, call.local);
+            return { outcome: decodeCallOutcome(r.wire), local: r.local };
+          }
+        : () => this.runner.runRequest(request, start.identity ?? null, call.bodies, call.local);
+      const { outcome, local } = await (opts.wrap ? opts.wrap(run) : run)();
       if (outcome.id !== request.id) throw new Error(`call ${request.id} was answered as call ${outcome.id}`);
       const ran = { tx: local.tx, observedTime: outcome.observedTime, now: start.now, outcome };
       if (outcome.status === "failed") return { ...ran, ok: false, error: local.error };

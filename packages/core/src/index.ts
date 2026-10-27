@@ -24,7 +24,16 @@ export {
   readBootstrapIds,
 } from "./bootstrap.ts";
 export { bundledModule, provideBundledModules } from "./bundled-modules.ts";
-export { type Call, type CallBodies, type CallHost, CallRunner, isCall, type TxStart } from "./call-runner.ts";
+export {
+  type Call,
+  type CallBodies,
+  type CallHost,
+  CallRunner,
+  callsRoundTripByDefault,
+  isCall,
+  roundTripCallsByDefault,
+  type TxStart,
+} from "./call-runner.ts";
 export {
   type CallKind,
   type CallOutcome,

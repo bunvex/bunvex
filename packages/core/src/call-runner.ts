@@ -179,12 +179,47 @@ function resultText(value: unknown): string | null {
   }
 }
 
+/**
+ * Whether an engine's calls round-trip through the codec when its options do not say (STUDY-194 Q7, owner,
+ * 2026-10-27): only under the tests, whose preload turns it on, so every suite exercises the codec. Otherwise the
+ * request and the outcome cross the boundary as the same objects, without encoding.
+ */
+let roundTripByDefault = false;
+
+/** @internal The test runs' preload (`test/preload.ts`): every engine round-trips its calls through the codec. */
+export function roundTripCallsByDefault(on = true): void {
+  roundTripByDefault = on;
+}
+
+/** @internal Whether a new engine round-trips its calls (`roundTripCallsByDefault`). */
+export const callsRoundTripByDefault = (): boolean => roundTripByDefault;
+
 /** Runs requests on `host`. */
 export class CallRunner {
   constructor(private readonly host: CallHost) {}
 
+  /** A request as text, its outcome as text: what a worker will do with each message. */
   async run(wire: string, bodies: CallBodies, local: unknown): Promise<{ wire: string; local: CallLocal }> {
     const request = decodeCallRequest(wire);
+    const r = await this.runRequest(
+      request,
+      request.identity === null ? null : JSON.parse(request.identity),
+      bodies,
+      local,
+    );
+    return { wire: encodeCallOutcome(r.outcome), local: r.local };
+  }
+
+  /**
+   * A request and its outcome as objects: the in-thread executor without the codec. `identity` is the caller's
+   * identity itself, which the text form carries as `request.identity`.
+   */
+  async runRequest(
+    request: CallRequest,
+    identity: unknown,
+    bodies: CallBodies,
+    local: unknown,
+  ): Promise<{ outcome: CallOutcome; local: CallLocal }> {
     const kind: CallKind = request.kind;
     const body = bodies.body(request, local);
     const session = request.session;
@@ -195,7 +230,7 @@ export class CallRunner {
         ts: request.ts,
         now: request.now,
         system: false,
-        identity: request.identity === null ? null : JSON.parse(request.identity),
+        identity,
         systemIdentity: request.systemIdentity,
         request: request.request,
         tracked: request.tracked,
@@ -220,7 +255,7 @@ export class CallRunner {
       result = JSON.stringify((run.value as { replayed: SessionRequestOutcome }).replayed);
     } else if (run.ok && kind === "query") result = resultText(run.value);
     return {
-      wire: encodeCallOutcome(outcomeOf(request.id, kind, run, status, result)),
+      outcome: outcomeOf(request.id, kind, run, status, result),
       local: { tx: run.tx, value: run.ok ? run.value : undefined, error: run.ok ? undefined : run.error },
     };
   }

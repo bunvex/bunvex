@@ -57,6 +57,10 @@ async function setup() {
   return { engine, functions, limits, rt, id, queued };
 }
 
+test("a server's engine under the tests round-trips its calls through the codec (STUDY-194 Q7)", async () => {
+  expect((await setup()).engine.callCodec).toBe(true);
+});
+
 test("a query whose arguments fail their validator fails at once, without waiting for a permit", async () => {
   const t = await setup();
   const release = await t.limits.query.acquire();

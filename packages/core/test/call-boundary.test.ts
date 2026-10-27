@@ -1,5 +1,6 @@
 // STUDY-194, STUDY-190 PR 2a: a call crosses the boundary as text. The body runner gets the request decoded (the
 // caller's identity a copy, the arguments as text), and the engine's cache and commit take the outcome decoded.
+// Only under the tests (Q7, owner, 2026-10-27): outside them the same objects cross without the codec.
 import { expect, test } from "bun:test";
 import { v } from "@bunvex/values";
 import type { Call, CallBodies } from "../src/call-runner.ts";
@@ -9,10 +10,11 @@ import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
 import type { Tx } from "../src/tx.ts";
 
-async function engine() {
+async function engine(opts: { callCodec?: boolean } = {}) {
   return new Engine(
     defineSchema({ items: defineTable({ n: v.number() }) }),
     await MemoryPersistence.open(null, { durable: false }),
+    opts,
   ).init();
 }
 
@@ -70,4 +72,26 @@ test("a call's writes are committed from its outcome; a subscription's run carri
   expect(e.committer.changedBetween(run.reads, run.ts, run.ts)).toBe(false);
   await e.mutation((db) => db.insert("items", { n: 6 }));
   expect(e.committer.changedBetween(run.reads, run.ts, e.committer.visibleTs)).toBe(true);
+});
+
+test("under the tests every engine round-trips its calls through the codec (the preload turns it on)", async () => {
+  expect((await engine()).callCodec).toBe(true);
+});
+
+test("without the codec, as outside the tests: the same request and identity objects, the same cache and commit", async () => {
+  const e = await engine({ callCodec: false });
+  expect(e.callCodec).toBe(false);
+  const { seen, call } = recording(async (db) => (await db.query("items").collect()).length);
+  const identity = { tokenIdentifier: "t|1", subject: "1", issuer: "t" };
+  const caller = { identity, key: JSON.stringify(identity) };
+  expect(await e.queryJson(call("query", {}), "key", undefined, caller)).toBe("0");
+  // No text: the identity is the caller's own object, and the request carries none.
+  expect(seen[0]!.identity).toBe(identity);
+  expect(seen[0]!.request.identity).toBe(null);
+  expect(await e.queryJson(call("query", {}), "key", undefined, caller)).toBe("0");
+  expect(seen.length).toBe(1);
+  const writer = recording(async (db, args) => db.insert("items", args as { n: number }));
+  await e.mutationWithTs(writer.call("mutation", { n: 5 }), "m:f");
+  expect(await e.queryJson(call("query", {}), "key", undefined, caller)).toBe("1");
+  expect(seen.length).toBe(2);
 });
