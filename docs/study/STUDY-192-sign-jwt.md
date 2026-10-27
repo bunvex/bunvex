@@ -1,7 +1,8 @@
 # STUDY-192 — `ctx.auth.signJwt` and the deployment JWKS
-<!-- index: `ctx.auth.signJwt` in mutations and `/.well-known/jwks.json`: ES256 tokens signed by a key derived from the instance secret, so a store the Convex binary wrote serves the same keys; the claim rules, limits and errors; the first prerequisite of built-in auth (STUDY-191) | accepted: S-1–S-3 as recommended (DV-578, DV-579); not built -->
+<!-- index: `ctx.auth.signJwt` in mutations and `/.well-known/jwks.json`: ES256 tokens signed by a key derived from the instance secret, so a store the Convex binary wrote serves the same keys; the claim rules, limits and errors; the first prerequisite of built-in auth (STUDY-191) | accepted: S-1–S-3 as recommended (DV-578, DV-579); built (PR 1), the JWKS byte-identical to Convex's for the same secret -->
 
-- **Status:** accepted: S-1–S-3 as recommended (owner, 2026-10-26; DV-578, DV-579). Nothing built.
+- **Status:** accepted: S-1–S-3 as recommended (owner, 2026-10-26; DV-578, DV-579). Built (2026-10-27): §3.6 PR 1,
+  tested as §5 (the JWKS metrics, PR 2, not yet).
 - **Convex source read:** convex/convex-backend `origin/main` on 2026-10-26:
   - the runtime commits `76fe874` (the syscall and the keys), `aafa4d8` (the JWKS route), `2c4c29f` (1 h maximum
     lifetime), `f34ac10` (`sub` must be a string), `74a65e0` (a missing key is an internal error) and `72e88b8`
@@ -267,7 +268,33 @@ None.
 
 ## 6. Open questions
 
-- **How the error reaches the mutation.** A syscall's bad request becomes a thrown error. The differential test
-  pins its exact surface (class, message, whether `ConvexError` data is involved) before the PR claims parity.
-- **Key rotation.** Convex has the generation in the scheme but no API to change it. bunvex keeps generation 0
-  until Convex adds rotation.
+- **How the error reaches the mutation** (answered by the differential test). A refusal is a plain `Error` with the
+  message, which a mutation can catch; uncaught, it is `Uncaught Error: <message>` with **no frame** of the app's:
+  Convex raises it in its syscall. bunvex strips the app's frames from the error it throws (`functions.ts`
+  `mutationAuth`).
+- **Not compared:** a claim value that JSON cannot carry (a `bigint`): Convex's client fails in `JSON.stringify` with
+  V8's message, bunvex with Bun's.
+
+## 7. As built
+
+- **`packages/core/src/deployment-jwt.ts`:** the keys (KBKDF root, per-generation scalars, the in-range retry), the
+  thumbprint, `mint` with §1.3's checks and `parseSignJwtArgs` with §1.2's, serde's messages included
+  (`missing field \`expiresInSeconds\``, `invalid type: …, expected f64` / `a map`). The JWK's fields are in
+  `biscuit`'s order (`use`, `alg`, `kid`, `kty`, `crv`, `x`, `y`), which is what makes the JWKS byte-identical.
+- **`packages/server`:** `ctx.auth.signJwt` on a mutation's context (`functions.ts` `mutationAuth`);
+  `DEPLOYMENT_JWT_MAX_LIFETIME_SECONDS`; `GET /.well-known/jwks.json` (`health.ts` `jwksRoute`, under the API's CORS)
+  with `DEPLOYMENT_JWKS_MAX_AGE_SECONDS`; the types `MutationAuth`, `SignJwtOptions`, `SignJwtClaims`,
+  `ReservedJwtClaim`, `ReservedJwtClaimPrefix`.
+- **`packages/sandbox`:** the `auth.signJwt` operation, mutations only; the child sends the options as JSON and the
+  host signs (DV-579).
+- **Tests:**
+  - `packages/core/test/deployment-jwt.test.ts`: every refusal and its order, the prefixes in any casing, `sub`,
+    lifetimes, the 8000-byte edge, the thumbprint, a pinned JWKS for a fixed secret, verification and forgery;
+  - `packages/server/test/sign-jwt.test.ts`: the mutation's token (`iat` its `Date.now()`), the canonical URL, queries
+    and actions without `signJwt` and a mutation an action runs with it, the refusals, the lifetime knob, the route;
+  - `packages/testing/test/sign-jwt.test.ts`: the app's and a component's token, in-process and under the process
+    sandbox;
+  - `packages/differential/test/sign-jwt.test.ts`, with one instance secret on both: the JWKS byte for byte, the
+    header and claims (and their order), cross-verification, the component's `iss`, and 14 refusals caught and
+    uncaught, word for word apart from DV-578.
+  - Sabotage checks: the `nbf` refusal (core), and the child's `signJwt` (the sandbox test).

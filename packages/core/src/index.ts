@@ -302,6 +302,17 @@ export {
   internalIdString,
   tabletOf,
 } from "./internal-id.ts";
+export {
+  DEPLOYMENT_JWT_MAX_SIZE,
+  type DeploymentJwk,
+  type DeploymentJwks,
+  DeploymentJwtError,
+  DeploymentJwtKeys,
+  type DeploymentJwtRequest,
+  deploymentJwtIssuer,
+  jwkThumbprint,
+  parseSignJwtArgs,
+} from "./deployment-jwt.ts";
 export { instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 export {
   afterValues,
