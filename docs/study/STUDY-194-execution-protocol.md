@@ -1,10 +1,10 @@
 # STUDY-194 — The execution protocol between the main thread and execution workers
-<!-- index: The execution protocol (STUDY-190 PRs 2–4, STUDY-24 A2): Convex's function runner (the request, the snapshot and metadata at a timestamp, the outcome, how the backend commits it), bunvex's in-thread call path, the messages and their encoding (a prototype), snapshots, metadata by epoch, code versions, nested calls, OCC, failures, backpressure, a five-PR plan | decided (owner): Q1–Q6 and AD-47 (2026-10-26), Q7 (2026-10-27); PR 2a is #895; PR 2b planned (§10), Q8–Q10 open -->
+<!-- index: The execution protocol (STUDY-190 PRs 2–4, STUDY-24 A2): Convex's function runner (the request, the snapshot and metadata at a timestamp, the outcome, how the backend commits it), bunvex's in-thread call path, the messages and their encoding (a prototype), snapshots, metadata by epoch, code versions, nested calls, OCC, failures, backpressure, a five-PR plan | decided (owner): Q1–Q6 and AD-47 (2026-10-26), Q7 (2026-10-27); PR 2a is #895; PR 2b planned (§10), Q8–Q10 decided (2026-10-27) -->
 
 - **Status:** decided (owner): every §8 recommendation, Q1–Q6 on 2026-10-26 (Q4 is AD-47) and Q7 on 2026-10-27
   (the codec round-trips in-thread calls under the tests only). PR 2a is #895: the boundary, the codec and the permit
   order (§9); on DO `c-4` uncached +0.7 % and insert −2.2 % against `main`. PR 2b is planned in §10; its Q8–Q10
-  wait for the owner.
+  were decided by the owner on 2026-10-27, as recommended.
 - **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
   - `crates/function_runner/src/{lib,server,in_process_function_runner,in_memory_indexes,module_cache}.rs`;
   - `crates/isolate/src/client.rs`, `crates/isolate/src/environment/udf/{async_syscall,phase,mod}.rs`;
@@ -845,7 +845,9 @@ Each one is green on its own. 0a–0d change nothing observable and run under th
 
 ### 10.6 Owner questions for 2b
 
-| # | Question | Recommendation |
+Decided by the owner on 2026-10-27, as recommended.
+
+| # | Question | Recommendation (decided) |
 |---|---|---|
 | Q8 | **The connection split (Q6) in numbers.** With MongoDB's pool of 16 the main thread keeps 8 and 16 workers would get half a connection each; and the split would shrink the main pool even when no worker can start. | Split only when workers can start (a store with a reader, `MAX_ISOLATE_WORKERS` > 0). The main thread keeps max(8, ⌊total/4⌋). The worker count is also capped so each has at least 2 connections (min(`MAX_ISOLATE_WORKERS`, cores, ⌊rest/2⌋)). Not observable but in capacity |
 | Q9 | **SQLite's page cache per worker.** AD-46's 256 MiB is one connection's. N workers with their own would use N + 1 times the memory | Keep AD-46's value as the process total: the main thread keeps half, the workers share the other half. `BUNVEX_SQLITE_CACHE_SIZE` keeps its meaning as what the deployment spends |
