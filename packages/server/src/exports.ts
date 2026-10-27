@@ -465,11 +465,23 @@ export class ExportService {
     return row;
   }
 
-  /** The ZIP, as Convex's download answers it. */
-  async download(idOrTs: string): Promise<Response> {
+  /**
+   * The ZIP, as Convex's download answers it, recorded in the audit log as `download_export` by `actor` (Convex's
+   * 8281a65): the admin's, or a token's, whoever asked for the token.
+   */
+  async download(idOrTs: string, actor: AuditLogActor = SYSTEM_ACTOR): Promise<Response> {
     const row = await this.completed(idOrTs);
     const body = await this.store.get(row.zip_object_key!);
     if (!body) throw new ExportError(404, "ExportNotFound", `The requested export ${idOrTs} was not found`);
+    try {
+      await this.sys(
+        (db) => insertAuditLogEvents(db, [auditEvents.downloadExport(row._id, row.format.include_storage)], actor),
+        true,
+      );
+    } catch (e) {
+      await body.cancel?.().catch(() => {});
+      throw e;
+    }
     return new Response(body, {
       headers: {
         "content-type": "application/zip",
@@ -480,20 +492,27 @@ export class ExportService {
     });
   }
 
-  /** A short-lived download token for a browser (Convex's `request_zip_export_token`). */
-  async token(idOrTs: string): Promise<string> {
+  /**
+   * A short-lived download token for a browser (Convex's `request_zip_export_token`), naming the member who asked
+   * for it (none for a system caller), whom the download is then recorded for, as Convex's token carries its actor.
+   */
+  async token(idOrTs: string, memberId: bigint | null = null): Promise<string> {
     await this.completed(idOrTs);
     const expires = this.now() + DOWNLOAD_TOKEN_TTL_MS;
-    const mac = createHmac("sha256", this.tokenKey).update(`${idOrTs}:${expires}`).digest("base64url");
-    return `${expires}.${mac}`;
+    const member = memberId === null ? "" : String(memberId);
+    const mac = createHmac("sha256", this.tokenKey).update(`${idOrTs}:${expires}:${member}`).digest("base64url");
+    return `${expires}.${member}.${mac}`;
   }
 
-  checkToken(idOrTs: string, token: string): boolean {
-    const [expires, mac] = token.split(".");
-    if (!expires || !mac || Number(expires) < this.now()) return false;
-    const want = createHmac("sha256", this.tokenKey).update(`${idOrTs}:${expires}`).digest();
+  /** A token's member (null for none), or false when it is not valid for `idOrTs` or has expired. */
+  checkToken(idOrTs: string, token: string): { memberId: bigint | null } | false {
+    const [expires, member, mac, extra] = token.split(".");
+    if (!expires || member === undefined || !mac || extra !== undefined || Number(expires) < this.now()) return false;
+    if (member !== "" && !/^\d+$/.test(member)) return false;
+    const want = createHmac("sha256", this.tokenKey).update(`${idOrTs}:${expires}:${member}`).digest();
     const got = Buffer.from(mac, "base64url");
-    return got.length === want.length && timingSafeEqual(got, want);
+    if (got.length !== want.length || !timingSafeEqual(got, want)) return false;
+    return { memberId: member === "" ? null : BigInt(member) };
   }
 
   /** Convex's `set_export_expiration`: completed exports only, not in the past, at most 60 days ahead. */

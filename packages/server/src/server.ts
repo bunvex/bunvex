@@ -2119,14 +2119,20 @@ export function createServer(opts: ServerOptions) {
       const token = url.searchParams.get("token");
       if (req.method === "GET" && parts[0] === "zip" && parts.length === 2) {
         if (token !== null) {
-          if (!exportService.checkToken(parts[1]!, token))
+          const holder = exportService.checkToken(parts[1]!, token);
+          if (!holder)
             return requestError(403, "InvalidExportToken", "The export download token is invalid or expired.");
-          return await exportService.download(parts[1]!);
+          // The token's member, with this request's address and agent (Convex's `export_download_identity`).
+          return await exportService.download(parts[1]!, {
+            memberId: holder.memberId,
+            ip: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || peer(req),
+            userAgent: req.headers.get("user-agent"),
+          });
         }
         const caller = await callerOfRequest(req);
         if (caller instanceof Response) return caller;
         functions.requireOperation(caller, "DownloadBackups");
-        return await exportService.download(parts[1]!);
+        return await exportService.download(parts[1]!, auditActor(caller));
       }
       if (req.method !== "POST") return requestError(404, "NotFound", `no route for ${url.pathname}`);
       const caller = await callerOfRequest(req);
@@ -2138,7 +2144,7 @@ export function createServer(opts: ServerOptions) {
       }
       if (parts[0] === "zip" && parts[2] === "token" && parts.length === 3) {
         functions.requireOperation(caller, "DownloadBackups");
-        return json({ token: await exportService.token(parts[1]!) });
+        return json({ token: await exportService.token(parts[1]!, auditActor(caller).memberId) });
       }
       if (parts[0] === "set_expiration" && parts.length === 2) {
         // Convex's `SetExportExpirationRequest`, read before the operation's check (its extractor); the
