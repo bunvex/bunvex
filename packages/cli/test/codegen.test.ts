@@ -120,6 +120,16 @@ describe("the generated files", () => {
 });
 
 describe("runCodegen", () => {
+  test("the initial pass keeps a component's component.ts, as Convex's; the final pass owns it", () => {
+    const fns = join(tmp(), "component");
+    write(fns, { "lib.ts": "export const x = 1;", "_generated/component.ts": "// final", "_generated/old.ts": "" });
+    const r = runCodegen(fns, { fileType: "ts" }, { initial: true, keep: ["component.ts"] });
+    expect(r.removed).toEqual(["old.ts"]);
+    expect(readFileSync(join(fns, "_generated/component.ts"), "utf8")).toBe("// final");
+    // Without `keep` (an app's own `_generated/`), it is a stale entry like any other.
+    expect(runCodegen(fns, { fileType: "ts" }, { initial: true }).removed).toEqual(["component.ts"]);
+  });
+
   test("the initial pass writes stubs and api.js, keeps what exists, and removes stale entries", () => {
     const fns = join(tmp(), "bunvex");
     write(fns, { "messages.ts": "export const x = 1;", "_generated/old.ts": "", "_generated/server.js": "// mine" });
