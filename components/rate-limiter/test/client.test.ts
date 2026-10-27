@@ -5,12 +5,15 @@
 //
 // The error a limit throws is a `BunvexError` (Convex's `ConvexError`, DV-538).
 // biome-ignore-all lint/suspicious/noExplicitAny: the app's api is untyped
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { anyApi } from "@bunvex/server";
 import { bunvexTest, type TestBunvex } from "@bunvex/testing";
 import { BunvexError } from "@bunvex/values";
 import { isRateLimitError, type RateLimitError } from "../src/client/index.ts";
+
+// Each test pushes its own deployment first, which takes longer than bun's 5 s default on a busy machine.
+setDefaultTimeout(30_000);
 
 const limits = (anyApi as any).limits;
 const APP = join(import.meta.dir, "fixtures", "app");

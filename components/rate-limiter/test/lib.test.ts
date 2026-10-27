@@ -4,10 +4,13 @@
 // upstream's `vi.setSystemTime(x)` is `setTime(t, x)`, which moves the clock to `x` (running nothing: these limits
 // are transactional, so nothing is scheduled).
 // biome-ignore-all lint/suspicious/noExplicitAny: the inline functions' ctx and the app's api are untyped
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { anyApi } from "@bunvex/server";
 import { bunvexTest, type TestBunvex } from "@bunvex/testing";
+
+// Each test pushes its own deployment first, which takes longer than bun's 5 s default on a busy machine.
+setDefaultTimeout(30_000);
 
 const api = anyApi as any;
 const SECOND = 1_000;

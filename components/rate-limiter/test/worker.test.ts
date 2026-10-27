@@ -7,12 +7,15 @@
 // `@bunvex/testing` has no option for (it runs Convex's limits, DV-540). The read-budget case lowers it for the work
 // query alone instead, through `runQuery`'s own `transactionLimits`, which the query's metrics then report.
 // biome-ignore-all lint/suspicious/noExplicitAny: the inline functions' ctx and the app's api are untyped
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { anyApi } from "@bunvex/server";
 import { bunvexTest, type TestBunvex } from "@bunvex/testing";
 import { BATCH_SIZE, READ_BUDGET_FRACTION, WORKER_NAME } from "../src/component/worker.ts";
 import { type RateLimitConfig, SINGLETON_SHARD } from "../src/shared.ts";
+
+// Each test pushes its own deployment first, which takes longer than bun's 5 s default on a busy machine.
+setDefaultTimeout(30_000);
 
 const api = anyApi as any;
 const SECOND = 1_000;

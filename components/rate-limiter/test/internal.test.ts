@@ -4,11 +4,14 @@
 // upstream's `vi.setSystemTime`. Rows inserted in a transaction take that transaction's time, as upstream's frozen
 // clock gives every call the same one.
 // biome-ignore-all lint/suspicious/noExplicitAny: the inline functions' ctx is untyped
-import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, setSystemTime, test } from "bun:test";
 import { join } from "node:path";
 import { bunvexTest, type TestBunvex } from "@bunvex/testing";
 import { BunvexError } from "@bunvex/values";
 import { _checkRateLimitInternal, checkRateLimitOrThrow, MIN_CHOOSE_TWO } from "../src/component/internal.ts";
+
+// Each test pushes its own deployment first, which takes longer than bun's 5 s default on a busy machine.
+setDefaultTimeout(30_000);
 
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
