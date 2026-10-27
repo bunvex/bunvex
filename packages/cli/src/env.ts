@@ -5,8 +5,10 @@
 // `POST /api/update_environment_variables`.
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { detectAgent } from "./agent.ts";
 import {
   argumentError,
+  conflictingOptions,
   missingArgument,
   missingRequiredArgument,
   optionsIn,
@@ -27,13 +29,17 @@ Commands:
                        or many from a .env file (\`--from-file <file>\`, or piped stdin)
   get <name>           print a variable's value
   remove <name>        unset a variable (aliases: rm, unset)
-  list                 list the variables (\`--names-only\` for their names)
+  list                 list the variables and their values (\`--include-values\`), or their names (\`--names-only\`);
+                       when an AI agent runs it (detected from variables like AI_AGENT or CLAUDECODE), names only
+                       unless --include-values is passed
 
 Options:
 ${TARGET_OPTIONS}
   --from-file <file>   set: read the value (with a name) or variables (without) from a file
   --force              set: overwrite existing variables that have different values
-  --names-only         list: print only the names`;
+  --names-only         list: print only the names
+  --include-values     list: print each value beside its name, in .env format (the default unless an AI agent is
+                       detected, so pass it in scripts that rely on the values)`;
 
 /** The variables the CLI itself reads: never sent to the deployment from a .env file. */
 const CLI_MANAGED = new Set([
@@ -227,18 +233,27 @@ export async function envCommand(args: string[], io: Io): Promise<number> {
   let fromFile: string | undefined;
   let force = false;
   let namesOnly = false;
+  let includeValues = false;
+  let unknown: string | undefined;
   const positional: string[] = [];
   const r = taken.rest;
   for (let i = 0; i < r.length; i++) {
     const a = r[i]!;
     if (a === "--force" && sub === "set") force = true;
     else if (a === "--names-only" && sub === "list") namesOnly = true;
+    else if (a === "--include-values" && sub === "list") includeValues = true;
     else if ((a === "--from-file" || a.startsWith("--from-file=")) && sub === "set") {
       fromFile = a.includes("=") ? a.slice(a.indexOf("=") + 1) : r[++i];
       if (fromFile === undefined) return argumentError(io, missingArgument("--from-file <file>"));
-    } else if (a.startsWith("--")) return argumentError(io, unknownOption(a, optionsIn(ENV_USAGE)));
-    else positional.push(a);
+    } else if (a.startsWith("--")) {
+      // As commander: what follows an unknown option is not read as options.
+      unknown = a;
+      break;
+    } else positional.push(a);
   }
+  // Commander checks conflicts before unknown options: `--include-values` declares its conflict with `--names-only`.
+  if (includeValues && namesOnly) return argumentError(io, conflictingOptions("--include-values", "--names-only"));
+  if (unknown !== undefined) return argumentError(io, unknownOption(unknown, optionsIn(ENV_USAGE)));
   // Each subcommand's arguments: `set [name] [value]`, `get <name>`, `remove <name>`, `list`.
   const command = sub === "rm" || sub === "unset" ? "remove" : sub;
   const expected = command === "set" ? 2 : command === "list" ? 0 : 1;
@@ -267,9 +282,15 @@ export async function envCommand(args: string[], io: Io): Promise<number> {
       else io.out(found.value);
     } else if (sub === "list") {
       const vars = (await b.list()).sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
-      if (!vars.length) io.err("No environment variables set");
+      if (!vars.length) {
+        io.err("No environment variables set");
+        return 0;
+      }
+      // An agent tends to run `env list` to see what is set, which copies every secret into its context: it gets the
+      // names unless it asks for the values (Convex's 7550fdd; detected as DV-551 says).
+      const agent = namesOnly || includeValues ? null : detectAgent(io.env);
       for (const { name, value } of vars) {
-        if (namesOnly) {
+        if (namesOnly || agent !== null) {
           io.out(name);
           continue;
         }
@@ -277,6 +298,10 @@ export async function envCommand(args: string[], io: Io): Promise<number> {
         if (warning) io.err(`Warning (${name}): ${warning}`);
         io.out(`${name}=${formatted}`);
       }
+      if (agent !== null)
+        io.err(
+          `Listed names only because an AI agent (${agent}) appears to be running this command. Pass --include-values to print the values too.`,
+        );
     } else {
       const name = positional[0]!;
       await b.update([{ name, value: null }]);
