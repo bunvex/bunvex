@@ -10,6 +10,7 @@ import { useQueryScope } from "../context.tsx";
 import { capabilitiesQuery, dashboardKeys } from "../data/queries.ts";
 import { toDataSourceError } from "../data-source.ts";
 import { tableRoute } from "../router.tsx";
+import { useComponentSearch, useSelectedComponent } from "./components.tsx";
 import { tableNameProblem } from "./table-name.ts";
 
 /**
@@ -19,14 +20,22 @@ import { tableNameProblem } from "./table-name.ts";
 export function useCanCreateTable(): boolean | undefined {
   const scope = useQueryScope();
   const { data: caps } = useQuery(capabilitiesQuery(scope));
+  // none in an unmounted component: its data is read-only (Convex's "Cannot add documents in an unmounted component.")
+  const unmounted = useSelectedComponent()?.state === "unmounted";
   if (!caps) return undefined;
-  return !caps.readOnly && caps.operations.includes("writeData") && typeof scope.source.createTable === "function";
+  return (
+    !caps.readOnly &&
+    caps.operations.includes("writeData") &&
+    typeof scope.source.createTable === "function" &&
+    !unmounted
+  );
 }
 
 export function CreateTable({ tables }: { tables: string[] }) {
   const { source, scope } = useQueryScope();
   const queryClient = useQueryClient();
   const navigate = tableRoute.useNavigate();
+  const { component } = useComponentSearch();
   const [name, setName] = useState<string>();
   const [refused, setRefused] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -64,7 +73,7 @@ export function CreateTable({ tables }: { tables: string[] }) {
     await queryClient.invalidateQueries({ queryKey: dashboardKeys.tables(scope) });
     setBusy(false);
     setName(undefined);
-    void navigate({ to: "/database/$table", params: { table: name } });
+    void navigate({ to: "/database/$table", params: { table: name }, search: { component } });
   };
 
   return (

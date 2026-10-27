@@ -23,6 +23,7 @@ import {
   type ClientAppInput,
   type ClientBucket,
   type ClientSummary,
+  type ComponentInfo,
   type CronJob,
   type CronRun,
   type DashboardDataSource,
@@ -162,6 +163,15 @@ export type MockDataSourceOptions = FixtureOptions & {
   invalidationIntervalMs?: number;
   /** How often the document room sends a `wave` while its events are tapped (AD-43). Default 3 000 ms. */
   roomEventIntervalMs?: number;
+  /** Installed components (STUDY-152 §4), each with its own tables. Default none: the app alone. */
+  components?: MockComponent[];
+};
+
+/** A component the mock has installed: its path from the app, whether it is mounted, and its tables' documents. */
+export type MockComponent = {
+  path: string;
+  state?: "active" | "unmounted";
+  tables?: Record<string, Record<string, Value>[]>;
 };
 
 /** At most this many documents per insert or delete call, as a server bounds a transaction. */
@@ -646,6 +656,51 @@ export class MockDataSource implements DashboardDataSource {
         error: "Object is missing the required field `owner`.",
       })),
     };
+  }
+
+  // ---------------------------------------------------------------- components (STUDY-152 §4)
+  private readonly inComponents = new Map<string, MockDataSource>();
+  /** Each component's id, made from its path. */
+  private componentInfos(): ComponentInfo[] {
+    return (this.opts.components ?? []).map((c) => ({
+      id: `component_${c.path.replaceAll("/", "_")}`,
+      name: c.path.split("/").pop()!,
+      path: c.path,
+      state: c.state ?? "active",
+    }));
+  }
+
+  listComponents(opts?: CallOptions): Promise<ComponentInfo[]> {
+    return this.call(opts?.signal, () => this.componentInfos());
+  }
+
+  /** The mock's components do not change. */
+  watchComponents(_onChange: () => void, _onError: (e: DataSourceError) => void): Unsubscribe {
+    return () => {};
+  }
+
+  /** A component's Data screen: a mock of its own, with its tables (declared), sharing the app's options. */
+  inComponent(id: string): MockDataSource {
+    const known = this.inComponents.get(id);
+    if (known) return known;
+    const i = this.componentInfos().findIndex((c) => c.id === id);
+    if (i < 0) throw new DataSourceError("not_found", `Component ${id} not found.`);
+    const c = this.opts.components![i]!;
+    const child = new MockDataSource({
+      ...this.opts,
+      components: [],
+      tables: false,
+      executions: 0,
+      scheduled: 0,
+      sampleFiles: false,
+      sampleAudit: false,
+    });
+    for (const [name, docs] of Object.entries(c.tables ?? {})) {
+      child.tables.set(name, { name, indexes: structuredClone(SYSTEM_INDEXES), documents: [], declared: true });
+      for (const d of docs) child.insertDocument(name, d);
+    }
+    this.inComponents.set(id, child);
+    return child;
   }
 
   getSchema(opts?: CallOptions): Promise<SchemaInfo> {
