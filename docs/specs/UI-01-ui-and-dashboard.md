@@ -1790,8 +1790,10 @@ the layout only. Supersedes §13.1's layout, its multi-select filters and its to
   (its time and counts per outcome). **Drag across the strip** to pick a window (a click picks one bucket);
   the keyboard does it with Shift+←/→ and Enter; Escape or **Clear selection** drops it. A preset range is
   drawn as a band and named on the strip. A screen-reader table carries the same numbers.
-- **The grid** (`fill`, edge to edge, down to the bottom): Time, Level, Function (kind letter + path),
-  Outcome / duration, Request, Message (on a phone: Time, Message, …, UX-6). Events interleave as before.
+- **The grid** (`fill`, edge to edge, down to the bottom), in Convex's order (`LogListItem.tsx`): Time, Request,
+  Outcome / duration ("(cached)" for a cached query), Function (kind letter + path), Level (a log line's; an
+  outcome line has none), Message, in the width the others leave (on a phone: Time, Message, …, UX-6). Events
+  interleave as before.
 - **Details** only while a line is selected, docked on the right, following the selection (click, ↑/↓). New
   at the top: the time as ISO, local and relative ("58 seconds ago"), and the level; at the end, the line as
   **raw JSON** (read-only). The rest as before: function, request id (copy), outcome, started by, resources

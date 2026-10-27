@@ -639,6 +639,18 @@ export class SearchSegmentsState {
     };
   }
 
+  /**
+   * A row another transaction wrote for a new index (a schema push's, STUDY-195 §2), taken as this writer's own
+   * once that transaction is visible: its state backfilling from the start. Nothing when the index has a row.
+   */
+  adopt(s: IndexSegmentsState, rowId: string) {
+    const k = stateKey(s.kind, s.tablet, s.name);
+    if (this.ids.has(k)) return;
+    this.states.set(k, s);
+    this.ids.set(k, rowId);
+    this.stored.set(k, rowKey(indexRow(s)));
+  }
+
   /** The id of an index's `_index` row, once written. */
   rowId(kind: "text" | "vector", tablet: TabletId, name: string): string | undefined {
     return this.ids.get(stateKey(kind, tablet, name));

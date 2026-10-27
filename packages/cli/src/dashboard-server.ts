@@ -13,6 +13,9 @@
 //   was started for (Convex's local dashboard, `:66-77`), on a loopback address only, and only to a request whose
 //   `Host` is `127.0.0.1:<port>` or `localhost:<port>` (DV-476): a page that rebinds its own name to 127.0.0.1
 //   cannot read the admin key. Without a deployment it is a 404, as Convex's image answers it.
+// - The local dashboard answers nothing else to such a request either: every path is an empty 403 for a `Host` other
+//   than those two, as Convex's CLI since `6b0fa75` (`isLoopbackHost`; DV-476 resolved, STUDY-186 Q3). The image's
+//   server (`bunvex dashboard serve`) serves any `Host`, as Convex's image.
 // - With `securityHeaders` (`bunvex dashboard serve`, the image's server), every response carries the headers
 //   Convex's image sends on every path (`dashboard-self-hosted/next.config.js` `headers()`, `source: "/:path*"`).
 //   Framing is same-origin only (`X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'`) unless the build allows
@@ -39,6 +42,11 @@ export type DashboardServerOptions = {
   prefill?: { deploymentUrl?: string | null; adminKey?: string | null };
   /** Convex's image headers on every response (`bunvex dashboard serve`); the local dashboard sends none. */
   securityHeaders?: boolean;
+  /**
+   * Answer only a request whose `Host` is `127.0.0.1:<port>` or `localhost:<port>`, any other an empty 403, before
+   * anything else: Convex's local dashboard (`handleDashboard`, `isLoopbackHost`, `6b0fa75`; DV-476 resolved).
+   */
+  loopbackHostOnly?: boolean;
 };
 
 export type DashboardServer = { url: string; port: number; stop: () => Promise<void> };
@@ -160,6 +168,8 @@ export async function serveDashboard(o: DashboardServerOptions): Promise<Dashboa
       headers: { "content-type": "text/html;charset=utf-8", "cache-control": "no-cache" },
     });
   const respond = (req: Request): Response => {
+    if (o.loopbackHostOnly && !allowedHosts.has((req.headers.get("host") ?? "").toLowerCase()))
+      return new Response(null, { status: 403 });
     if (req.method !== "GET" && req.method !== "HEAD")
       return new Response("Method Not Allowed", { status: 405, headers: { allow: "GET, HEAD" } });
     const { pathname } = new URL(req.url);

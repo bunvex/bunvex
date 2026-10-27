@@ -64,9 +64,9 @@ opened). Two of the nineteen items are built.
 | A7 | `.staged({ field })` field deltas | **yes** | #901 | an object is a delta over an object or `v.any()` table, `undefined` removes a field, a union or record table refuses it (`core/src/schema.ts`); differential `staged-field-deltas.test.ts` |
 | A8 | `paginate()` in component queries | **yes** | #899 | the component check is gone; a nested query pages in a scope of its own, merged into its caller's when it returns (`Tx.inQueryScope`); the message names bunvex as Convex's at `04d2f3b`; differential `paginate-components.test.ts` |
 | A9 | Data sync: no hidden tables, by-ts fallback, page 20 000 | **yes** | #903 | `dataSyncTargets` skips hidden tables; an `OutOfRetentionError` from the by-id page falls back to `tsPage`; `DATA_SYNC_PAGE_SIZE_LIMIT` 20 000 (`server/src/data-sync.ts`); differential `data-sync-page.test.ts` |
-| A10 | Resume a backfill at a fresh snapshot, keeping the count | no | — | past retention, the backfill starts over from `FULL_LO` with `done = 0` (`core/src/index-worker.ts:281-290`) |
+| A10 | Resume a backfill at a fresh snapshot, keeping the count | **yes** | #904 | a resume goes on after its cursor at the initialization transaction's snapshot, counts kept, `snapshotTs` moved (`core/src/index-worker.ts`); the note in STUDY-174 §11; `index-backfill-restart.test.ts` |
 | A11 | Mutation permit before the transaction | no | — | the permit is taken inside `perAttempt`, after the transaction began (`server/src/functions.ts:1967`) |
-| A12 | Audit log: integration configs, `download_export` | no | — | integration events carry `{id, type}` only (`server/src/audit-log.ts:86-88`); no `download_export` |
+| A12 | Audit log: integration configs, `download_export` | **yes** | #905 | `auditConfig` / `auditCredentialChanges` and `downloadExport` (`server/src/audit-log.ts`), the token's member (`server/src/exports.ts`); differential `audit-log-integrations.test.ts` |
 | A13 | S3 export API: `FieldFiltersUnsupported`, frozen destination, in-transaction check | **yes** | #862 (+#881) | `FieldFiltersUnsupported` (`server/src/log-sinks-routes.ts:266`); differential `s3-export-api.test.ts`, which #881 skips against an oracle older than `precompiled-2026-10-24` |
 | A14 | `_s3_export_state`, `DATABASE_VERSION` 134 | **yes** (PR 1) | PR 1 (§5.1) | `DATABASE_VERSION = 134n`; `_s3_export_state` (number 556, `by_config_id` on `configId`) in `core/src/catalog.ts` and the engine's system tables; `listConfiguredSinks` adds its `exportProgress`. `cross-open.test.ts` checks that neither binary warns or migrates |
 | A15 | Refuse Node 20 | **yes** | #898 | "Node 20 is no longer supported. Upgrade to a newer Node version." on `start_push`, `evaluate_push` and `evaluate_schema` (`server/src/push.ts`); differential `node-version.test.ts` |
@@ -83,9 +83,9 @@ The rest of STUDY-186 was checked too:
 |---|---|---|
 | §4.3, a V8 action's `setTimeout` past 2^31−1 ms | **yes**, #839 | "a V8 action's timer past 2^31-1 ms waits its whole delay" |
 | Q2 / DV-551, `env list` names only for AI agents | **yes**, #894 | built with A16: `detectAgent` (`cli/src/agent.ts`), `BUNVEX_AGENT_MODE` |
-| Q3, the local dashboard's empty 403 on every non-loopback `Host` | no | only `/api/current_deployment` is checked, with a worded body (`cli/src/dashboard-server.ts:166-168`); DV-476 not yet moved |
+| Q3, the local dashboard's empty 403 on every non-loopback `Host` | **yes**, #907 | `loopbackHostOnly` on the local dashboard: every path an empty 403 for another `Host` (`cli/src/dashboard-server.ts`, `local-dashboard.ts`); DV-476 in "Resolved to match Convex" |
 | Q4 / DV-552, `function.runtime` in log stream events | no | `log-events.ts` has `runtime: "default" \| "node"` only on the function's metadata, nothing on the stream event; DV-552 says "to be built" |
-| Q5, the MySQL retry set | no | `LOST` still holds `EPIPE`, `ETIMEDOUT`, `EHOSTUNREACH`, `ENETUNREACH`, and no `EAI_AGAIN` (`persistence/src/mysql.ts:209-218`) |
+| Q5, the MySQL retry set | **yes**, #911 | `LOST` is `PROTOCOL_CONNECTION_LOST`, `ECONNRESET`, `ECONNREFUSED`, `EAI_AGAIN`, `POOL_CLOSED` (`persistence/src/mysql.ts`); `transient.test.ts` |
 | Q6, Bun's Brotli and root store (outside parity) | no record | no doc or commit mentions the check |
 | §4.2, storage in mutations (study) | no study yet | — |
 | §4.2, signJwt and JWKS (study) | in STUDY-192 (draft #882) | another session |
