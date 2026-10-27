@@ -45,7 +45,7 @@ import {
   issueAdminKey,
 } from "@bunvex/server";
 import { provideProcessExecutor } from "@bunvex/server/executor";
-import { fromJsonValue, toJsonValue, type Value } from "@bunvex/values";
+import { BunvexError, fromJsonValue, isBunvexError, toJsonValue, type Value } from "@bunvex/values";
 
 // The function sandbox (AD-44, STUDY-171 §8): with `BUNVEX_FUNCTION_SANDBOX=process`, a test's functions run in the
 // sandbox's children, as on `bunvex-local-backend`. The server cannot import the sandbox (its child runs the server's
@@ -263,6 +263,21 @@ async function settleJobs(b: Backend, timeoutMs = 30_000) {
 const asReceived = (result: unknown): unknown => fromJsonValue(toJsonValue((result ?? null) as Value));
 
 /**
+ * A function's `BunvexError` as the test's own class. The functions run in the deployment's realm, with its copy of
+ * `@bunvex/values`; convex-test runs them in the test's, so `e instanceof ConvexError` holds there, and a client
+ * (`isRateLimitError`, a test's own check) relies on it. The same `data`, message and stack.
+ */
+function asTestRealmError(e: unknown): unknown {
+  if (!isBunvexError(e) || e instanceof BunvexError) return e;
+  // Another copy's instance: `isBunvexError` tells it, and TypeScript's `instanceof` narrowing does not know so.
+  const theirs = e as BunvexError<Value>;
+  const mine = new BunvexError(theirs.data);
+  mine.message = theirs.message;
+  if (theirs.stack !== undefined) mine.stack = theirs.stack;
+  return mine;
+}
+
+/**
  * Move the virtual clock to `target`, a step at a time: to each job or cron run due on the way, waiting for what it
  * starts before the next step, so a run that takes real time (an action waiting for a service, a round trip to a
  * sandbox child) is not left behind by the clock.
@@ -306,13 +321,17 @@ export class TestBunvex {
       }),
     };
     const a = typeof ref === "function" ? {} : (args ?? {});
-    const result =
-      kind === "query"
-        ? await functions.runQuery(name, a, false, caller)
-        : kind === "mutation"
-          ? await functions.runMutation(name, a, false, caller)
-          : await functions.runAction(name, a, caller, { internal: true });
-    return asReceived(result);
+    try {
+      const result =
+        kind === "query"
+          ? await functions.runQuery(name, a, false, caller)
+          : kind === "mutation"
+            ? await functions.runMutation(name, a, false, caller)
+            : await functions.runAction(name, a, caller, { internal: true });
+      return asReceived(result);
+    } catch (e) {
+      throw asTestRealmError(e);
+    }
   }
 
   /** A reference's function: the app's by name, or a component's (`components.<name>.<module>.<fn>`). */

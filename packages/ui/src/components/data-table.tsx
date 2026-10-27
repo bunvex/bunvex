@@ -150,6 +150,11 @@ type DataTableProps<TData extends RowData> = {
    */
   stickyColumn?: string;
   /**
+   * A column that takes the width the others leave, its own width the least it gets (e.g. a log's message,
+   * last on the row): a wider view widens it alone, not every column evenly. A width the user set wins.
+   */
+  fillColumn?: string;
+  /**
    * Keep the row at the top of the view in place when rows are added or removed above it (a live list).
    * Needs `getRowId`. Default true.
    */
@@ -190,6 +195,7 @@ function DataTable<TData extends RowData>({
   initialHeight = 600,
   resetKey,
   stickyColumn,
+  fillColumn,
   anchorTopRow = true,
   highlightChanges,
   selection,
@@ -645,7 +651,8 @@ function DataTable<TData extends RowData>({
     >
       <table
         className={cn("group/grid min-w-full table-fixed border-collapse text-sm", fill && "shrink-0")}
-        // fixed layout: the widths below are the columns' widths; a wider view stretches them evenly
+        // fixed layout: the widths below are the columns' widths; a wider view stretches them evenly, or the
+        // fill column alone
         style={{ width: columnIds.reduce((sum, id) => sum + widthOf(id), 0) }}
         role={grid ? "grid" : undefined}
         aria-rowcount={rows.length + 1}
@@ -656,7 +663,15 @@ function DataTable<TData extends RowData>({
         </caption>
         <colgroup>
           {columnIds.map((id) => (
-            <col key={id} style={{ width: widthOf(id) }} />
+            // without a width of its own the fill column takes what is left, at least its width (the table's)
+            <col
+              key={id}
+              style={
+                id === fillColumn && columnState?.widths?.[id] === undefined && dragging?.id !== id
+                  ? undefined
+                  : { width: widthOf(id) }
+              }
+            />
           ))}
         </colgroup>
         {/* the column names are labels, not a band: the rows' background, smaller muted text, a shorter row */}

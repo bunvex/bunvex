@@ -161,7 +161,7 @@ describe("the Logs screen's filter column", () => {
     const actions = all.filter((e) => e.function?.kind === "action").length;
     await waitFor(() => expect(shownCount()).toBe(actions));
     expect(screen.getByText(`${actions} of ${all.length} lines`)).toBeDefined();
-    expect(rows().every((r) => within(r).getAllByRole("gridcell")[2]!.textContent!.startsWith("A"))).toBe(true);
+    expect(rows().every((r) => within(r).getAllByRole("gridcell")[3]!.textContent!.startsWith("A"))).toBe(true);
     await expectAccessible();
   });
 
@@ -172,7 +172,7 @@ describe("the Logs screen's filter column", () => {
     const shown = rows();
     // the function cell: the kind's letter (titled with its name) and the route, as Convex names an HTTP action
     for (const r of shown) {
-      const cell = within(r).getAllByRole("gridcell")[2]!;
+      const cell = within(r).getAllByRole("gridcell")[3]!;
       expect(cell.querySelector("abbr")?.getAttribute("title")).toBe("HTTP action");
       expect(cell.textContent).toMatch(/^H(GET|POST) \//);
     }

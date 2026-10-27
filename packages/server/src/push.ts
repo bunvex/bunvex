@@ -16,7 +16,7 @@
 // The pushed version waits in memory between start_push and finish_push (Convex echoes start_push's answer
 // back; a restart in between makes finish_push answer RaceDetected and the CLI push again).
 import { createHash } from "node:crypto";
-import { type AuthInfo, parseAuthConfig } from "@bunvex/auth";
+import { type AuthInfo, authConfigWithoutJsonError, parseAuthConfig } from "@bunvex/auth";
 import {
   type AuditLogActor,
   componentMeta,
@@ -413,14 +413,17 @@ export async function evaluateAuthConfig(
           : describeUncaught(e).message,
     );
   }
-  // Convex reads the config as its JSON (`v8::json::stringify`): what `JSON.stringify` refuses (a bigint, a cycle, a
-  // function) is refused, and what it leaves out is not seen. The sandbox's executor already sends it so.
+  // Convex reads the config as its JSON (`v8::json::stringify`): what `JSON.stringify` refuses (a bigint, a cycle) is
+  // refused, what it gives no JSON for (a function, a symbol) is refused as text that is not JSON, and what it leaves
+  // out is not seen. The sandbox's executor already sends it so (its `NOT_JSON` gives no JSON either).
   if (c !== undefined && c !== null) {
     let json: string | undefined;
     try {
       json = JSON.stringify(c);
-    } catch {}
-    if (json === undefined) throw invalid(new UnserializableAuthConfigError().message);
+    } catch {
+      throw invalid(new UnserializableAuthConfigError().message);
+    }
+    if (json === undefined) throw invalid(authConfigWithoutJsonError().message);
     c = JSON.parse(json);
   }
   try {

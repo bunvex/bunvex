@@ -304,6 +304,8 @@ export type ValidatorJson =
   | { type: "null" }
   | { type: "number" }
   | { type: "bigint" }
+  /** Convex's `v.commitTs()`: an int64, the commit's timestamp. */
+  | { type: "commitTs" }
   | { type: "boolean" }
   | { type: "string" }
   | { type: "bytes" }
@@ -369,6 +371,8 @@ export type LogEntry = {
   execution?: {
     status: "success" | "failure";
     durationMs: number;
+    /** A query whose result came from the cache (Convex's `cachedResult`): the list says "(cached)", not its duration. */
+    cached?: boolean;
     /** What it used (STUDY-12 §10.5), as far as the source measures it. */
     usage?: ExecutionUsage;
     /** Who started the request it belongs to. */

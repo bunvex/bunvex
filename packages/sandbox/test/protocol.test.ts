@@ -223,6 +223,14 @@ describe("a default export across the wire", () => {
       providers: [{ domain: "https://a.example.com", applicationID: "app" }],
     });
     expect(exportDefault(undefined, "authConfig")).toEqual({ kind: "undefined" });
+    expect(exportDefault(null, "authConfig")).toEqual({ kind: "undefined" });
+    // An export, but no JSON: the host hands the push a value that has none either, which it refuses as under `vm`.
+    for (const value of [() => 1, Symbol("s"), { toJSON: () => undefined }]) {
+      expect(exportDefault(value, "authConfig")).toEqual({ kind: "notJson" });
+      const read = evaluatedValue(exportDefault(value, "authConfig"));
+      expect(read).not.toBeUndefined();
+      expect(JSON.stringify(read)).toBeUndefined();
+    }
     expect(exportDefault({ n: 1n }, "authConfig")).toEqual({ kind: "unserializable" });
     expect(() => evaluatedValue({ kind: "unserializable" })).toThrow("auth config file can only contain strings");
   });
