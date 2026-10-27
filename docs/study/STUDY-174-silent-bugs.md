@@ -1189,6 +1189,22 @@ question for the owner (Q8).
 | S7 | **Bug** | `sqlite-open-lock.test.ts`: a directory as the path, or a new read-only file, throws after the lock was taken; the lock stays held in the process. Convex's SQLite store has no lock (STUDY-25 §1.5); the lock is bunvex's. | #793 |
 | S8 | **Divergence** (Q8), decided 2026-10-21: match Convex; **fixed** | `knob-timer-cap.test.ts`: with USAGE_TRACKING_PERIOD_SECS at 60 days, the gauges ran 152 times in 200 ms; a 30-day action timeout timed a 100 ms action out; the runtime's 30-day timers fired at once. Convex's knob is a `Duration` that tokio sleeps for its whole length (`usage_gauges_tracking_worker/src/lib.rs:71`). | #796 (the question), #811 (the fix) |
 
+**Note on S1, 2026-10-26 (STUDY-186 A10, Convex's `6830b7a`).** Convex no longer starts over when a backfill resumes:
+it goes on after its cursor at a fresh snapshot, keeps its count, and moves the row's `snapshotTs` to the new scan
+(`resume_database_index_backfill`). bunvex does the same, and so S1's restart from 0 now only happens when there is no
+cursor yet. This is safe in bunvex for the same reason as a fresh scan, because of its per-document timestamps
+(PERSIST-01 C17):
+- Every commit since the index was created maintains it at the commit's own ts, so it adds the new key and removes the
+  old one.
+- The scan writes each document's entries at that document version's own ts, never at the scan's.
+- A document before the cursor was indexed by the earlier scan, and the commits since kept it current.
+- A document after the cursor is read as it is at the new snapshot. Its entry is the one its last commit wrote, at the
+  same ts, so writing it again changes nothing. A document deleted while the backfill was stopped is not read at all.
+- A write after the new snapshot lands above the scan's entries, as during any scan.
+So the old snapshot never has to be readable, and retention passing it no longer matters.
+`index-backfill-restart.test.ts` checks this with writes before and after the cursor while the backfill is stopped,
+and retention moved past its snapshot.
+
 **Q8. S8: a delay from an operator's knob past 2^31−1 ms (24.8 days).** Decided (owner, 2026-10-21): match Convex, as
 recommended; done in #811 (below).
 - Convex: every such knob is a `Duration` (`crates/common/src/knobs.rs`, `env_config`). Its loop sleeps for the whole
