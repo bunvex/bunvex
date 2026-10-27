@@ -5,6 +5,7 @@ export {
   type AuthConfig,
   type AuthInfo,
   type AuthProvider,
+  authConfigWithoutJsonError,
   normalizeIssuerUrl,
   parseAuthConfig,
 } from "./config.ts";

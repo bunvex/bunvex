@@ -147,12 +147,14 @@ export type WireAnalyzedModule = Omit<AnalyzedModule, "cronSpecs"> & {
 export type WireCronSpec = { udfPath: string; udfArgs: unknown[]; cronSchedule: Record<string, unknown> };
 
 /**
- * A default export, in the form its use takes (Convex's): the auth config's `JSON.stringify` (`undefined` when it
- * gives none, `unserializable` when it throws), a schema's export, or why it is not one.
+ * A default export, in the form its use takes (Convex's): the auth config's `JSON.stringify` (`undefined` for none
+ * or `null`, `notJson` when the export is something else that it gives no JSON for, such as a function,
+ * `unserializable` when it throws), a schema's export, or why it is not one.
  */
 export type EvaluatedDefault =
   | { kind: "undefined" }
   | { kind: "json"; json: string }
+  | { kind: "notJson" }
   | { kind: "unserializable" }
   | { kind: "schema"; json: string }
   | { kind: "notSchema" }
@@ -495,7 +497,7 @@ function evaluated(x: Json, where: string): EvaluatedDefault {
   const o = obj(x, where);
   const kind = oneOf(
     o.kind,
-    ["undefined", "json", "unserializable", "schema", "notSchema", "schemaExportFailed"],
+    ["undefined", "json", "notJson", "unserializable", "schema", "notSchema", "schemaExportFailed"],
     `${where}.kind`,
   );
   if (kind === "json" || kind === "schema") return { kind, json: str(o.json, `${where}.json`) };

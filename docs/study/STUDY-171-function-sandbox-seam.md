@@ -522,7 +522,11 @@ at the first `next()`, not at the call; a `for await` fails at the same statemen
   executor keeps for them.
 - **Note (b).** Under `process` an auth config that `JSON.stringify` refuses is the push's
   `AuthConfigUnserializableError`, "auth config file can only contain strings" (Convex's code and words,
-  `auth_config.rs:286-290`, its docs link left out as DV-04 does).
+  `auth_config.rs:286-290`, its docs link left out as DV-04 does). An export it gives no JSON for (a function, a
+  symbol, a `toJSON` that returns `undefined`) is `notJson`, which the host hands the push as a value with no JSON
+  either; under both executors the push answers Convex's "auth config file must include a list of provider
+  credentials: expected value" (V8 hands serde the text `undefined`), measured on Convex's binary
+  (`packages/differential/test/auth-config-json.test.ts`). `undefined` and `null` are a missing export.
 - **Note (c).** A compiled executable carries no `child.ts` yet: `createProcessExecutor` fails at start saying so,
   never at a push (PR 9/11 make the child the same executable).
 
