@@ -94,6 +94,32 @@
         "@bunvex/values": "workspace:^",
       },
     },
+    "components/rate-limiter": {
+      "name": "@bunvex/rate-limiter",
+      "version": "0.1.0",
+      "dependencies": {
+        "@bunvex/batch-worker": "workspace:^",
+      },
+      "devDependencies": {
+        "@bunvex/react": "workspace:*",
+        "@bunvex/testing": "workspace:*",
+        "@happy-dom/global-registrator": "^20.14.5",
+        "@testing-library/react": "^16.3.3",
+        "@types/react": "^19.3.0",
+        "react": "^19.3.0",
+        "react-dom": "^19.3.0",
+      },
+      "peerDependencies": {
+        "@bunvex/react": "workspace:^",
+        "@bunvex/server": "workspace:^",
+        "@bunvex/values": "workspace:^",
+        "react": "^19.0.0",
+      },
+      "optionalPeers": [
+        "@bunvex/react",
+        "react",
+      ],
+    },
     "components/sharded-counter": {
       "name": "@bunvex/sharded-counter",
       "version": "0.1.0",
@@ -680,8 +706,10 @@
       "devDependencies": {
         "@bunvex/batch-worker": "workspace:*",
         "@bunvex/helpers": "workspace:*",
+        "@bunvex/rate-limiter": "workspace:*",
         "@bunvex/sharded-counter": "workspace:*",
         "@convex-dev/batch-worker": "0.3.6",
+        "@convex-dev/rate-limiter": "0.4.2",
         "@convex-dev/sharded-counter": "0.2.3",
         "convex": "1.48.0",
         "convex-helpers": "0.1.128",
@@ -1078,6 +1106,8 @@
 
     "@bunvex/protocol": ["@bunvex/protocol@workspace:packages/protocol"],
 
+    "@bunvex/rate-limiter": ["@bunvex/rate-limiter@workspace:components/rate-limiter"],
+
     "@bunvex/react": ["@bunvex/react@workspace:packages/react"],
 
     "@bunvex/react-auth0": ["@bunvex/react-auth0@workspace:packages/react-auth0"],
@@ -1143,6 +1173,8 @@
     "@clerk/shared": ["@clerk/shared@3.48.0", "", { "dependencies": { "csstype": "3.1.3", "dequal": "2.0.3", "glob-to-regexp": "0.4.1", "js-cookie": "3.0.7", "std-env": "^3.9.0", "swr": "2.3.4" }, "peerDependencies": { "react": "^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0", "react-dom": "^18.0.0 || ~19.0.3 || ~19.1.4 || ~19.2.3 || ~19.3.0-0" }, "optionalPeers": ["react", "react-dom"] }, "sha512-4VBHItiLUZJGptWNwLazcOvz4yAFBzrjuJaf1yF35KGZWSNg3FrDCNsn8PZdPs5l4kJjx6aIGSmoRZmbOruuSg=="],
 
     "@convex-dev/batch-worker": ["@convex-dev/batch-worker@0.3.6", "", { "dependencies": { "convex-helpers": "^0.1.127" }, "peerDependencies": { "convex": "^1.43.0" } }, "sha512-tR+9DaHR3jG3oqkIFX0ok/6944h7UHEQgT6HTmiuxU+lERYuYMsxA2IWwFD5yTFbCpO3YJhqXU4QdGY90sgUqQ=="],
+
+    "@convex-dev/rate-limiter": ["@convex-dev/rate-limiter@0.4.2", "", { "dependencies": { "@convex-dev/batch-worker": "0.3.5" }, "peerDependencies": { "convex": "^1.43.0", "react": "^18.2.0 || ^19.0.0" }, "optionalPeers": ["react"] }, "sha512-njheoDd//MZgxtw+0PP3LL47PVMkvOKZmXDjYglDKSu5IdrfJtGmz/EHd6px9UcALuk/w7LTo83YwQ3bTGsMIg=="],
 
     "@convex-dev/react-query": ["@convex-dev/react-query@0.1.0", "", { "peerDependencies": { "@tanstack/react-query": "^5.0.0", "convex": "^1.29.3" } }, "sha512-ULmBZCtAQDUePdBhUv7hj1Yy4QiCelhi6uEIOtMpjW8db6W9CFKvQwLt9heLngccFyMFfAZdOfSrT+cP4AH0Jw=="],
 
@@ -2601,6 +2633,8 @@
     "@changesets/write/prettier": ["prettier@2.8.8", "", { "bin": { "prettier": "bin-prettier.js" } }, "sha512-tdN8qQGvNjw4CHbY+XXk0JgCXn9QiF21a55rBe5LJAU+kDyC4WQn4+awm2Xfk2lQMk5fKup9XgzTZtGkjBdP9Q=="],
 
     "@clerk/shared/csstype": ["csstype@3.1.3", "", {}, "sha512-M1uQkMl8rQK/szD0LNhtqxIPLpimGm8sOBwU7lLnCpSbTyY3yeU1Vc7l4KT5zT4s/yOxHH5O7tIuuLOCnLADRw=="],
+
+    "@convex-dev/rate-limiter/@convex-dev/batch-worker": ["@convex-dev/batch-worker@0.3.5", "", { "dependencies": { "convex-helpers": "^0.1.127" }, "peerDependencies": { "convex": "^1.43.0" } }, "sha512-kTxLGy1TXRN6WLcENcoRWWnvPshv1sIZp2EpPqGqCB4FxDI7m8tEHUr+jCLdhGtSZT1UHkWtb1w8YYuEzTxHWQ=="],
 
     "@dotenvx/dotenvx/commander": ["commander@11.1.0", "", {}, "sha512-yPVavfyCcRhmorC7rWlkHn15b4wDVgVmBA7kV4QVBsF7kv/9TKJAbAXVTxvTnwP8HHKjRCJDClKbciiYS7p0DQ=="],
 

@@ -1782,6 +1782,16 @@ export class Functions {
 
   /** An id's table, for `v.id`: `_storage` for a `_file_storage` id, as Convex names it (STUDY-125). */
   private tableOf = (n: number) => this.engine.catalog.publicNameOf(n);
+  /**
+   * The table names `f`'s validators check ids against: its own component's, as Convex checks a function's args and
+   * result with the called component's table mapping (`table_mapping().namespace(called_component_id)`,
+   * `crates/isolate/src/environment/udf/async_syscall.rs`). A component's numbers mean nothing in the root's catalog.
+   */
+  private tableOfFn(f: FunctionDef): (n: number) => string | undefined {
+    const component = this.componentOf.get(f);
+    if (!component) return this.tableOf;
+    return (n) => this.engine.catalog.components.get(component.id)?.publicNameOf(n);
+  }
 
   /**
    * Convex's `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE` (crates/common/src/knobs.rs, STUDY-64
@@ -1834,7 +1844,7 @@ export class Functions {
         `Expected to receive an object as the function's argument. Instead received: ${displayValue((a ?? null) as Value)}`,
       );
     if (f.args) {
-      const msg = checkValue(f.args, a as Value, this.tableOf);
+      const msg = checkValue(f.args, a as Value, this.tableOfFn(f));
       if (msg) throw ValidatorError.args(msg);
     }
     return a as AnyArgs;
@@ -1876,7 +1886,7 @@ export class Functions {
       );
     }
     if (f.returns) {
-      const msg = checkValue(f.returns, (value ?? null) as Value, this.tableOf);
+      const msg = checkValue(f.returns, (value ?? null) as Value, this.tableOfFn(f));
       if (msg) {
         notAValue();
         throw ValidatorError.returns(msg);

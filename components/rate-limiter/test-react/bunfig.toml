@@ -1,0 +1,4 @@
+# The React hook's tests run in their own process with a DOM preloaded (UI-01 §7): the root run ignores this
+# directory, and `bun run test:react` in the package runs it.
+[test]
+preload = ["./dom.ts"]

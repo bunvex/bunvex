@@ -298,7 +298,9 @@ from scratch.
    2. batch-worker: the child of the next three. **Built (2026-10-27, [STUDY-196](STUDY-196-batch-worker.md)):**
       `@bunvex/batch-worker` 0.1.0 in `components/batch-worker/`, matching 0.3.6; upstream's tests ported, and a
       differential test against `@convex-dev/batch-worker` 0.3.6;
-   3. rate-limiter: a child, env, `commitTs`, `useStaleSnapshot`, the React hook;
+   3. rate-limiter: a child, env, `commitTs`, `useStaleSnapshot`, the React hook. **Built (2026-10-27,
+      [STUDY-197](STUDY-197-rate-limiter.md)):** `@bunvex/rate-limiter` 0.1.0 in `components/rate-limiter/`, matching
+      0.4.2; upstream's tests ported, and a differential test against `@convex-dev/rate-limiter` 0.4.2;
    4. workpool: the scheduler, handles, retries, recovery;
    5. aggregate: the B-tree, the comparator, the queued mode;
    6. migrations: handles to the app's functions, the CLI flow.
