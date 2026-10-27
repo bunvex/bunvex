@@ -457,24 +457,20 @@ describe("deploy2 over HTTP", () => {
     expect(await store.get(pkg.storageKey)).toBeNull();
   });
 
-  test("a package at or over MAX_ZIPPED_PACKAGES_SIZE is a 400 ModulesTooLarge, and nothing is deployed", async () => {
+  test("no zipped limit (Convex's 5695d6d): MAX_ZIPPED_PACKAGES_SIZE refuses nothing", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());
     const saved = process.env.MAX_ZIPPED_PACKAGES_SIZE;
     process.env.MAX_ZIPPED_PACKAGES_SIZE = "100";
     try {
       const r = await d.push([messages(1)], schema);
-      expect(r.start.status).toBe(400);
-      expect(r.start.body.code).toBe("ModulesTooLarge");
-      // Wrapped as every start_push error is (Convex's deploy_config2.rs).
-      expect(r.start.body.message).toMatch(
-        /^Hit an error while pushing:\nTotal module size exceeded the zipped maximum \(\d+ B > maximum size 100 B\)$/,
-      );
+      expect(r.start.status).toBe(200);
+      expect(r.finish!.status).toBe(200);
     } finally {
       if (saved === undefined) delete process.env.MAX_ZIPPED_PACKAGES_SIZE;
       else process.env.MAX_ZIPPED_PACKAGES_SIZE = saved;
     }
-    expect((await d.post("/api/get_config_hashes", {})).body.moduleHashes).toEqual([]);
+    expect((await d.post("/api/get_config_hashes", {})).body.moduleHashes).not.toEqual([]);
   });
 
   test("a second push sends only what changed; a wrong hash is a 409", async () => {

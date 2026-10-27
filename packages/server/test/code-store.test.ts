@@ -10,7 +10,6 @@ import { LocalBlobStore, MemoryBlobStore } from "@bunvex/file-storage";
 import { v } from "@bunvex/values";
 import {
   MAX_UNZIPPED_PACKAGE_BYTES,
-  MAX_ZIPPED_PACKAGE_BYTES,
   readablePackage,
   readPackage,
   storedModules,
@@ -352,34 +351,38 @@ describe("the package is Convex's zip (DV-166, crates/model/src/source_packages/
   });
 });
 
-describe("the package limits, as Convex's `PackageSize::verify_size`", () => {
-  test("zipped first, then unzipped; at the limit is over it; binary sizes in the message", async () => {
+describe("the package limit, as Convex's `PackageSize::verify_size`", () => {
+  test("unzipped only; at the limit is over it; binary sizes in the message", async () => {
     const store = new MemoryBlobStore();
-    const modules = [mod("a.js", `export const a = ${JSON.stringify("x".repeat(5000))};`)];
-    const ok = await writePackage(store, modules, { zipped: 1e9, unzipped: 1e9 });
-    const zipped = Number(ok.packageSize.zippedSizeBytes);
+    // Random text: its zip is about as large as itself, past any small zipped bound.
+    const random = Buffer.from(crypto.getRandomValues(new Uint8Array(5000))).toString("base64");
+    const modules = [mod("a.js", `export const a = ${JSON.stringify(random)};`)];
+    const ok = await writePackage(store, modules, 1e9);
     const unzipped = Number(ok.packageSize.unzippedSizeBytes);
-    const refusal = async (limits: { zipped: number; unzipped: number }) => {
+    const refusal = async (limit: number) => {
       try {
-        await writePackage(store, modules, limits);
+        await writePackage(store, modules, limit);
       } catch (e) {
         return { code: (e as { code?: string }).code, message: (e as Error).message };
       }
       return null;
     };
-    expect(await refusal({ zipped: zipped + 1, unzipped: unzipped + 1 })).toBeNull();
-    expect(await refusal({ zipped, unzipped: unzipped + 1 })).toEqual({
+    expect(await refusal(unzipped + 1)).toBeNull();
+    const kib = (unzipped / 1024).toFixed(2).replace(/\.?0+$/, "");
+    expect(await refusal(unzipped)).toEqual({
       code: "ModulesTooLarge",
-      message: `Total module size exceeded the zipped maximum (${zipped} B > maximum size ${zipped} B)`,
+      message: `Total module size exceeded the unzipped maximum (${kib} KiB > maximum size ${kib} KiB)`,
     });
-    expect(await refusal({ zipped: zipped + 1, unzipped })).toEqual({
-      code: "ModulesTooLarge",
-      message: `Total module size exceeded the unzipped maximum (${(unzipped / 1024).toFixed(2).replace(/\.?0+$/, "")} KiB > maximum size ${(unzipped / 1024).toFixed(2).replace(/\.?0+$/, "")} KiB)`,
-    });
-    // Both over: the zipped one speaks. Convex's defaults: 90 000 000 zipped, 230 000 000 unzipped.
-    expect((await refusal({ zipped: 1, unzipped: 1 }))?.message).toStartWith(
-      "Total module size exceeded the zipped maximum",
-    );
-    expect([MAX_ZIPPED_PACKAGE_BYTES, MAX_UNZIPPED_PACKAGE_BYTES]).toEqual([90_000_000, 230_000_000]);
+    // No zipped limit since Convex's 5695d6d (STUDY-186 A3): its old knob changes nothing.
+    const saved = process.env.MAX_ZIPPED_PACKAGES_SIZE;
+    process.env.MAX_ZIPPED_PACKAGES_SIZE = "100";
+    try {
+      expect(await refusal(unzipped + 1)).toBeNull();
+      expect(Number((await writePackage(store, modules)).packageSize.zippedSizeBytes)).toBeGreaterThan(100);
+    } finally {
+      if (saved === undefined) delete process.env.MAX_ZIPPED_PACKAGES_SIZE;
+      else process.env.MAX_ZIPPED_PACKAGES_SIZE = saved;
+    }
+    expect(MAX_UNZIPPED_PACKAGE_BYTES).toBe(230_000_000);
   });
 });
