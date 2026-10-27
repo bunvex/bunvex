@@ -18,7 +18,15 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join, normalize, resolve, sep } from "node:path";
 import { type CurrentDeployment, type DashboardServer, serveDashboard } from "./dashboard-server.ts";
 import type { Io } from "./io.ts";
-import { cacheDir, choosePort, latestVersion, releaseUrls, stateDir, zipEntries } from "./local-deployment.ts";
+import {
+  assertValidBackendVersion,
+  cacheDir,
+  choosePort,
+  latestVersion,
+  releaseUrls,
+  stateDir,
+  zipEntries,
+} from "./local-deployment.ts";
 
 export const DEFAULT_LOCAL_DASHBOARD_PORT = 6790;
 export const DASHBOARD_ZIP = "dashboard.zip";
@@ -77,6 +85,7 @@ export function extractZip(zip: Uint8Array, dir: string) {
 
 /** The app of `version`: cached, else its release's `dashboard.zip` downloaded and unzipped. Returns its directory. */
 export async function ensureDashboardDownloaded(io: Io, version: string): Promise<string> {
+  assertValidBackendVersion(version);
   const out = dashboardOutDir(io.env);
   if (cachedVersion(io.env) === version) return out;
   const url = releaseUrls(io.env).download(version, DASHBOARD_ZIP);
