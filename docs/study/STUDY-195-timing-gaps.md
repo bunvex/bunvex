@@ -1,7 +1,7 @@
 # STUDY-195 — Two timing gaps: purging a deleted table, and a push's search and vector indexes
-<!-- index: a deleted table's `_tables` row and number kept through document retention; a push's search and vector `_index` rows written and built before it finishes | decision pending (owner): Q1 -->
+<!-- index: a deleted table's `_tables` row and number kept through document retention; a push's search and vector `_index` rows written and built before it finishes | decided (owner, 2026-10-27): purge once the window passes (DV-580) -->
 
-- **Status:** decision pending (owner): Q1. Docs only. Nothing is built here.
+- **Status:** decided (owner, 2026-10-27): Q1 as recommended (DV-580). Docs only; (b) is built (#914), (a) is to be built.
 - **Convex source read:** get-convex/convex-backend at `precompiled-2026-10-26-04d2f3b`, the oracle's release
   (STUDY-193).
 - **bunvex code read:** `main` at `e84b3b1a` (after #886).
@@ -181,13 +181,15 @@ No owner question: this matches Convex, and the backfill machinery it needs exis
 
 ## 3. Owner questions
 
-| # | Question | Recommendation |
+Decided (owner, 2026-10-27): as recommended.
+
+| # | Question | Recommendation (decided) |
 |---|---|---|
 | Q1 | Convex reads the list of `Deleting` tablets once, when its retention workers start (§1.1). A table deleted while the backend runs keeps its `_tables` row and number until a restart that comes after its 14-day window. Copy that, or purge as soon as the window has passed, whether or not the server restarted? | **Purge once the window has passed**, recorded as a DV. What an app observes is identical for the 14 days. After that, only how long a number stays reserved differs, and Convex's own comment calls its version an approximation ("retain deleted tablets a little bit longer than necessary"). Tying the purge to restarts would make bunvex's storage depend on how often it is restarted. |
 
 ## 4. Divergences
 
-None yet. Q1 would add one (a DV number from the coordinator) if the owner takes the recommendation.
+DV-580 (owner, 2026-10-27, Q1): a deleted table is purged once its retention window has passed, while the server runs; Convex purges it at the first retention-worker start after the window.
 
 ## 5. Tests
 
