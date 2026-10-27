@@ -46,7 +46,7 @@ import {
 } from "@bunvex/core";
 import { type GenericValidator, jsonText, toJsonValue, type Value, v } from "@bunvex/values";
 import type { DeploymentOp } from "./admin-keys.ts";
-import { type AuditComponent, auditActor, auditEvents } from "./audit-log.ts";
+import { auditActor, auditComponent, auditEvents } from "./audit-log.ts";
 import { readCanonicalUrls } from "./canonical-urls.ts";
 import { DATA_SYSTEM_QUERIES } from "./data-system-functions.ts";
 import { DATA_SYSTEM_MUTATIONS } from "./data-system-mutations.ts";
@@ -102,16 +102,37 @@ export type SystemQuery = {
    * (an action's `runQuery`) never does, whatever its caller. For bunvex's debug queries (STUDY-131 AD-24).
    */
   adminCallOnly?: true;
+  /** It reads its `componentId` itself, instead of being run again in that component (`inSystemComponent`). */
+  ownComponentId?: true;
   handler: (db: Tx, args: never, env: SystemEnv) => Promise<unknown>;
 };
+
+/**
+ * Convex's `queryWithComponent` / `mutationWithComponent` (system-udfs `secretSystemTables.ts`): a system function
+ * given a non-null `componentId` runs again in that component (`currentSystemUdfInComponent`), with `componentId:
+ * null`, so the same functions serve every namespace. An id with no component is Convex's system error
+ * (`must_component_path`).
+ */
+export async function inSystemComponent(
+  db: Tx,
+  def: SystemQuery,
+  args: Record<string, unknown>,
+  run: (args: Record<string, unknown>) => Promise<unknown>,
+): Promise<unknown> {
+  const id = args.componentId;
+  if (def.ownComponentId || !("componentId" in def.args) || id === null || id === undefined) return run(args);
+  if (typeof id !== "string" || (await componentPath(db, id)) === null)
+    throw new Error(`Component Child(${String(id)}) not found`);
+  return db.inComponent(id, () => run({ ...args, componentId: null }));
+}
 export type SystemMutation = SystemQuery;
 
 const noFiles = (): never => {
   throw new Error("File storage is not configured on this server.");
 };
-/** A `_storage` document with its URL first, as Convex's `FileMetadata`. */
-const withUrl = (origin: string, d: Record<string, unknown>, row: { storageId: string }) => ({
-  url: `${origin}/api/storage/${row.storageId}`,
+/** A `_storage` document with its URL first, as Convex's `FileMetadata`; a component's carries `?component=<id>`. */
+const withUrl = (origin: string, d: Record<string, unknown>, row: { storageId: string }, component: string | null) => ({
+  url: `${origin}/api/storage/${row.storageId}${component === null ? "" : `?component=${component}`}`,
   ...d,
 });
 const componentId = v.optional(v.union(v.string(), v.null()));
@@ -311,6 +332,7 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
   // The CLI's `run` lists them when a function is missing (Convex's `_system/cli/modules:apiSpec`).
   "_system/cli/modules:apiSpec": {
     args: { componentId },
+    ownComponentId: true,
     handler: async (_db, a: { componentId?: string | null }, env) => env.functions?.apiSpec(a.componentId) ?? [],
   },
   // The CLI's (STUDY-37, Convex's `_system/cli/queryEnvironmentVariables`): every variable, by name.
@@ -475,9 +497,11 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
   },
   "_system/frontend/tableSize:sizeOfAllTables": {
     args: { componentId },
-    handler: async (db, _args, env) => {
+    handler: async (db) => {
       let total = 0;
-      for (const name of env.functions?.userTableNames() ?? []) total += await db.asSystem(() => db.countTable(name));
+      // the current namespace's user tables (a component's, when run in one)
+      const names = [...db.namespaceCatalog.tables.keys()].filter((n) => !n.startsWith("_"));
+      for (const name of names) total += await db.asSystem(() => db.countTable(name));
       return total;
     },
   },
@@ -546,7 +570,7 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
       const page = await ranged.order(filters?.order ?? "desc").paginate(paginationOpts);
       const rows = await Promise.all(page.page.map((d) => fs.resolve(db, d._id, "storage.getUrl")));
       const origin = await fs.originIn(db);
-      return { ...page, page: page.page.map((d, i) => withUrl(origin, d, rows[i]!)) };
+      return { ...page, page: page.page.map((d, i) => withUrl(origin, d, rows[i]!, db.componentId)) };
     },
   },
   // Convex's system `queryGeneric` masks `db.system` (`maskPublicSystem`, system-udfs secretSystemTables.ts): `get`
@@ -562,7 +586,7 @@ export const SYSTEM_QUERIES: Record<string, SystemQuery> = {
       const d = await db.system.get(storageId);
       if (!d) return null;
       const row = await fs.resolve(db, d._id, "storage.getUrl");
-      return withUrl(await fs.originIn(db), d, row!);
+      return withUrl(await fs.originIn(db), d, row!, db.componentId);
     },
   },
   "_system/frontend/listCronJobRuns": {
@@ -581,7 +605,11 @@ export const SYSTEM_MUTATIONS: Record<string, SystemMutation> = {
     args: { storageId: v.id(STORAGE_TABLE), componentId },
     handler: async (db, { storageId }: { storageId: string }, { files, caller }) => {
       await (files ?? noFiles()).deleteIn(db, storageId);
-      await insertAuditLogEvents(db, [auditEvents.deleteFiles([storageId])], auditActor(caller));
+      await insertAuditLogEvents(
+        db,
+        [auditEvents.deleteFiles([storageId], await auditComponent(db, db.componentId))],
+        auditActor(caller),
+      );
     },
   },
   "_system/frontend/fileStorageV2:deleteFiles": {
@@ -589,15 +617,23 @@ export const SYSTEM_MUTATIONS: Record<string, SystemMutation> = {
     handler: async (db, { storageIds }: { storageIds: string[] }, { files, caller }) => {
       const fs = files ?? noFiles();
       for (const id of storageIds) await fs.deleteIn(db, id);
-      await insertAuditLogEvents(db, [auditEvents.deleteFiles(storageIds)], auditActor(caller));
+      await insertAuditLogEvents(
+        db,
+        [auditEvents.deleteFiles(storageIds, await auditComponent(db, db.componentId))],
+        auditActor(caller),
+      );
     },
   },
   "_system/frontend/fileStorageV2:generateUploadUrl": {
     args: { componentId },
     handler: async (db, _args, { files, caller }) => {
       const fs = files ?? noFiles();
-      const url = fs.uploadUrl(await fs.originIn(db));
-      await insertAuditLogEvents(db, [auditEvents.generateUploadUrl()], auditActor(caller));
+      const url = fs.uploadUrl(await fs.originIn(db), db.componentId);
+      await insertAuditLogEvents(
+        db,
+        [auditEvents.generateUploadUrl(await auditComponent(db, db.componentId))],
+        auditActor(caller),
+      );
       return url;
     },
   },
@@ -612,14 +648,6 @@ export class InvalidIdError extends Error {
   constructor(table: string) {
     super(`Invalid ID for table ${table}`);
   }
-}
-
-/** Component `id`'s audit fields (its path, as Convex's `must_component_path`), the root's for null. */
-async function auditComponent(db: Tx, id: string | null): Promise<AuditComponent> {
-  if (id === null) return { component_id: null, component: null };
-  const path = await componentPath(db, id);
-  if (path === null) throw new Error(`Component not found for id: ${id}`);
-  return { component_id: id, component: path.join("/") };
 }
 
 /**
