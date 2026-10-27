@@ -3,10 +3,13 @@
 // mutations, and the loop runs on the virtual clock as `finishAllScheduledFunctions` moves it, through the
 // component's stale-snapshot work query and the app's worker mutation.
 // biome-ignore-all lint/suspicious/noExplicitAny: the app's api is untyped
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import { anyApi } from "@bunvex/server";
 import { bunvexTest, type TestBunvex } from "@bunvex/testing";
+
+// Each test pushes its own deployment first, which takes longer than bun's 5 s default on a busy machine.
+setDefaultTimeout(30_000);
 
 const worker = (anyApi as any).worker;
 const APP = join(import.meta.dir, "fixtures", "app");
