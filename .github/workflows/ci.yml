@@ -248,6 +248,11 @@ jobs:
           MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
           DO_NOT_REQUIRE_SSL: "1"
         run: bun run conformance
+      - name: a flush whose reconnect times out is retried (mysql2's connect timeout is the call's)
+        env:
+          MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
+          DO_NOT_REQUIRE_SSL: "1"
+        run: bun test packages/persistence/test/mysql-connect-timeout.test.ts
       - name: index cache on MySQL, every hit verified
         env:
           MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
