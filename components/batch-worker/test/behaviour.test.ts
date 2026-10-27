@@ -2,12 +2,15 @@
 // retried by the monitor `monitorLagMs` later, with the same batch), `setCursor`'s error, and the logger's levels and
 // JSON events.
 // biome-ignore-all lint/suspicious/noExplicitAny: the app's api is untyped
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { join } from "node:path";
 import { anyApi } from "@bunvex/server";
 import { bunvexTest, type TestBunvex } from "@bunvex/testing";
 import { createLogger, type LogLevel, shouldLog } from "../src/component/logging.ts";
 import { MONITOR_LAG_MS } from "../src/component/shared.ts";
+
+// Each test pushes its own deployment first, which takes longer than bun's 5 s default on a busy machine.
+setDefaultTimeout(30_000);
 
 const worker = (anyApi as any).worker;
 const APP = join(import.meta.dir, "fixtures", "app");
