@@ -184,7 +184,23 @@ const REQUESTS: Record<string, () => RequestInit> = {
     headers: { "content-type": "multipart/form-data; boundary=nope" },
     body: "not a form",
   }),
-  formUnawaited: () => ({ method: "POST", body: multipart() }),
+  // The body's last bytes come after the handler returned, so `formData()` is still pending then on both executors
+  // (with the whole body sent at once, the process child could parse it before the check, and log no warning).
+  formUnawaited: () => {
+    const sent = new Response(multipart());
+    const type = sent.headers.get("content-type")!;
+    const body = sent.arrayBuffer().then((b) => new Uint8Array(b));
+    const stream = new ReadableStream<Uint8Array>({
+      async start(c) {
+        const bytes = await body;
+        c.enqueue(bytes.subarray(0, bytes.length - 8));
+        await Bun.sleep(200);
+        c.enqueue(bytes.subarray(bytes.length - 8));
+        c.close();
+      },
+    });
+    return { method: "POST", headers: { "content-type": type }, body: stream, duplex: "half" } as RequestInit;
+  },
   formThenStore: () => ({ method: "POST", body: multipart() }),
   storeBody: () => ({ method: "POST", headers: { "content-type": "image/png" }, body: big() }),
 };
