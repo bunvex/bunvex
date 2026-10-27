@@ -242,7 +242,7 @@ describe("the app calling a child component", () => {
       event: { source: { path: string; componentPath?: string | null } };
     })[];
     expect(consoles.map((e) => [e.event.source.path, e.event.source.componentPath ?? null])).toEqual([
-      ["app.js:logged", null],
+      ["app:logged", null],
       ["lib.js:logIt", "counter"],
     ]);
   });
