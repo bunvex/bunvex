@@ -49,7 +49,7 @@ there, then run `bun run docs` (`bun run check` fails while this table is out of
 | [STUDY-05](STUDY-05-index-keys-and-ordering.md) | Value order, index keys and system indexes | implemented / decided: all fixed (B5, B6, B11) or resolved (DV-33–DV-37) |
 | [STUDY-06](STUDY-06-transactions-and-occ.md) | Transactions, OCC, commit and retries | decided; D3, D10, D11 resolved to match Convex (DV-57, DV-60, DV-61); D12 built (DV-62), D13 decided (DV-152); D8 a gap to build (DV-59) |
 | [STUDY-07](STUDY-07-query-semantics.md) | Query semantics (`withIndex`, `take`, `collect`, limits) | implemented / decided: all fixed or resolved (DV-40–DV-43) |
-| [STUDY-08](STUDY-08-cache-and-subscriptions.md) | Query cache and subscriptions | decided; D9, D10 resolved to match Convex (DV-64, DV-57); D6 (sync path, B13) and D8 (DV-63) to build |
+| [STUDY-08](STUDY-08-cache-and-subscriptions.md) | Query cache and subscriptions | decided; D9, D10 resolved to match Convex (DV-64, DV-57); D6 (sync path, B13) and D8 (DV-63) to build; §7 one cache for HTTP and sync (owner, 2026-10-27: match Convex) |
 | [STUDY-09](STUDY-09-persistence-layout.md) | Persistence layout and drivers | decided; D3 fixed (#17, B4); D9 built (DV-62); D5, D6 gaps (DV-65, DV-66; D6 partly built, #117); D4 not tracked |
 | [STUDY-10](STUDY-10-documents-and-values.md) | Documents and values | implemented / decided; D12 (`db.system`) a gap (DV-69) |
 | [STUDY-11](STUDY-11-function-results-and-errors.md) | Function results and errors | implemented / decided: all resolved (DV-31, DV-44, DV-46, DV-49, DV-70, DV-71) |

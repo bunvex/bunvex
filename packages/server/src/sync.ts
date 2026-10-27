@@ -17,6 +17,7 @@
 
 import { AuthenticationError, type VerifiedIdentity } from "@bunvex/auth";
 import {
+  type CachedEntryRef,
   type Caller,
   clearLongTimer,
   DatabaseTimeoutError,
@@ -360,6 +361,8 @@ export type Execution = {
   logged: { kept: CachedRun; returnBytes: number | null; error?: unknown };
   /** What the sync hub knows of its validity, once it has been asked or tracked (`SyncHub.validAt`). */
   validity?: Validity;
+  /** Its result in the query cache (STUDY-08 §7): dropped there as soon as a commit is matched against it. */
+  cached?: CachedEntryRef;
 };
 
 /** What the sync hub knows of an execution's validity (`SyncHub.validAt`). */
@@ -533,6 +536,11 @@ export class SyncHub {
         const e = this.latest.get(key);
         const v = e?.validity;
         if (v && v.invalidAt === null) v.invalidAt = entry.ts;
+        // Its cached result is stale too: dropped now, so the rerun misses without checking it against the log.
+        if (e?.cached) {
+          this.deps.engine.dropCachedResult(e.cached, entry.ts);
+          e.cached = undefined;
+        }
       }
       if (entries.length === 1) hit = found;
       else for (const key of found) hit.add(key);
@@ -903,6 +911,14 @@ export class SyncHub {
   }
 
   private async executeOnce(q: SessionQuery, ts: bigint, caller: Caller): Promise<Execution> {
+    const mayRun = (path: string, c: Caller) => {
+      try {
+        this.deps.functions.checkQueryAccess(path, c);
+        return true;
+      } catch {
+        return false;
+      }
+    };
     this.stats.executions++;
     const generation = this.generation;
     const { engine, functions, fromWire, callArgs } = this.deps;
@@ -915,6 +931,9 @@ export class SyncHub {
     // The run's own lines and figures, kept for the sessions that reuse its result (as the query cache keeps
     // them).
     let kept: CachedRun = { lines: [], run: null };
+    // Served from the query cache: no execution of its own.
+    let hit = false;
+    let cachedEntry: CachedEntryRef | undefined;
     let returnBytes: number | null = null;
     const r = await collectLogs(() =>
       functions.logged(
@@ -940,13 +959,38 @@ export class SyncHub {
               )(db);
             };
           }
-          // Its lines kept around the whole run: a call's body is made on the runner's side (STUDY-194).
-          const wrapped = cachedQueryLogs.wrap(() => engine.queryTracked(body!, parseJournal(q.journal), ts, caller));
-          try {
-            return await wrapped.body();
-          } finally {
-            kept = wrapped.capture();
+          // Only a caller who may run the query looks in the cache (STUDY-34): a run another caller was allowed,
+          // an admin's of an internal or system function, is never handed to one who is not. Its own run fails.
+          const key =
+            q.component === undefined && mayRun(q.udfPath, caller)
+              ? functions.queryCacheKey(q.udfPath, callArgs(q.args, q.udfPath))
+              : undefined;
+          if (key === undefined) {
+            // Its lines kept around the whole run: a call's body is made on the runner's side (STUDY-194).
+            const wrapped = cachedQueryLogs.wrap(() => engine.queryTracked(body!, parseJournal(q.journal), ts, caller));
+            try {
+              return await wrapped.body();
+            } finally {
+              kept = wrapped.capture();
+            }
           }
+          // Through the query cache the HTTP API shares, as Convex's sync worker asks `CacheManager::get`
+          // (STUDY-08 §7). A run's lines are kept for the sessions that reuse it; a hit replays the stored run's
+          // lines as a cache hit, and keeps them likewise.
+          const companion = {
+            wrap: <A extends unknown[], R>(run: (...args: A) => R) => {
+              const w = cachedQueryLogs.wrap(run);
+              return { body: w.body, capture: () => (kept = w.capture()) };
+            },
+            replay: (extra: unknown) => {
+              if (extra) kept = extra as CachedRun;
+              cachedQueryLogs.replay(extra);
+            },
+          };
+          const ran = await engine.cachedQueryTracked(body!, key, companion, parseJournal(q.journal), ts, caller);
+          if (ran.cached) hit = true;
+          cachedEntry = ran.entry;
+          return ran;
         },
         (run) => {
           if (!run.ok) return { error: run.error };
@@ -956,6 +1000,8 @@ export class SyncHub {
         args,
       ),
     );
+    // A hit is no execution of its own (the dashboard's `sync.executions`), though counted when it started.
+    if (hit) this.stats.executions--;
     // An index still being rebuilt after a start (STUDY-79): skipped, not failed, as Convex's sync worker's
     // `TemporarilyUnavailable`; the session runs it again after a delay.
     const failure = !r.ok ? r.error : !r.value.ok ? r.value.error : null;
@@ -1011,6 +1057,7 @@ export class SyncHub {
         logged,
         documentsRead: run.documentsRead,
         bytesRead: run.bytesRead,
+        ...(cachedEntry ? { cached: cachedEntry } : {}),
       };
     }
     const f = this.deps.formatError(run.error);
