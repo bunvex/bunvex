@@ -266,7 +266,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | Index retention: delete expired index entries older than `INDEX_RETENTION_DELAY` (4 min) | `crates/database/retention.rs` `go_delete_indexes` | done (STUDY-33) | `Retention` in `@bunvex/core`, in the lease holder. As Convex's `expired_index_entries`: the document log's revision pairs (`prev_ts`), each replaced version's keys re-derived (DV-154 reversed, STUDY-133 PR 10); chunks of 512, 10 000 a pass. Measured: a hot range rewritten 100 times scans 10–15× faster once pruned. |
 | Document retention: delete old document revisions after `DOCUMENT_RETENTION_DELAY` (14 d; docker-compose sets 2 d) | `retention.rs` `expired_documents` | done (STUDY-33) | As Convex's `expired_documents`: each version's predecessor (`prev_ts`) and a delete's own tombstone, over the document log (PERSIST-01 C12; DV-155 reversed, STUDY-133 PR 10); 14 days by default (DV-157), `DOCUMENT_RETENTION_DELAY` in seconds. |
 | Reads below the minimum snapshot timestamp fail (snapshot invalid) | `retention.rs` `validate_snapshot`; `function_runner/src/server.rs` `validate_run_function_result` | done (STUDY-33; STUDY-194 §10.3) | Checked before and after every store read: `OutOfRetentionError`, "Index snapshot timestamp out of leader retention window: {ts} < {min}" (HTTP 503, close 1013). Checked again once a function's query or mutation ran, in-thread as in a worker, as Convex's runners do: a run the window passed fails instead of answering, and a mutation's writes are dropped. |
-| Purging deleted tables | `retention.rs` `delete_documents_in_tablets` | done (STUDY-42) | A `deleting` table is emptied by a background worker in batches of 1000 ordinary deletes (retention then removes their history), then its `_index` and `_tables` documents; resumed after a restart. Convex purges a deleted tablet's documents directly. |
+| Purging deleted tables | `retention.rs` `delete_documents_in_tablets`; `system_table_cleanup` `cleanup_deleted_tablets` | partial (STUDY-42, STUDY-195 §1) | A `deleting` table is emptied by a background worker in batches of 1000 ordinary deletes (retention then removes their history), then its `_index` and `_tables` documents; resumed after a restart. **Gap (STUDY-195 §1):** Convex drops the `_index` rows at deletion and keeps the `Deleting` `_tables` row, its number and its documents until document retention passes the deletion (14 days), then removes the rows directly. bunvex frees the number within seconds, so a new table takes it and an old id normalizes as the new table's (checked against the binary). |
 | Checkpointing and rate limits (`RETENTION_*` knobs) | `knobs.rs:667-822` | done (STUDY-33) | Convex's defaults: windows advanced every 30 s and recorded first (`min_snapshot_ts`, `document_min_snapshot_ts`), cursors checkpointed every 300 s (each global an int64 of nanoseconds, `{"$integer": …}`, as Convex's: STUDY-134, DV-426), 256 documents/s, backoff 50 ms to 60 s. |
 | System table cleanup: scheduled jobs (7 d), sessions (2 w), expired exports (30 d), import age (7 d) | `crates/application/system_table_cleanup` | done (STUDY-23, STUDY-30, STUDY-42) | Sessions' requests (`session-cleanup.ts`); expired exports and their ZIPs 30 days past expiration (STUDY-42); hidden tables older than twice the import age (14 d), a crashed import's, every 30 minutes, at most 1000 a run (`Engine.dropStaleHiddenTables`, STUDY-42). An import older than 7 days fails ("Import took too long. Try again."). As Convex, `_snapshot_imports` rows and their uploads are not deleted. |
 
@@ -460,8 +460,8 @@ Recounted on 2026-10-20 from the rows' status column, as [the README](README.md)
 
 | Status | Count |
 |---|---|
-| done | 248 |
-| partial | 23 |
+| done | 247 |
+| partial | 24 |
 | missing | 2 |
 | n/a (cloud-only or a decided divergence) | 6 |
 | **total** | **279** |
