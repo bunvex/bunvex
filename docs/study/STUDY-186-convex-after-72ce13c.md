@@ -1,8 +1,11 @@
 # STUDY-186 — Convex after 72ce13c, up to precompiled-2026-10-24-bb31399
 <!-- index: Convex from `72ce13c` to `precompiled-2026-10-24-bb31399`, triaged | decided (owner, 2026-10-25) -->
 
-- **Status:** decided; triage only. The build status of A1–A19 moved to [STUDY-193 §3](STUDY-193-convex-upstream-04d2f3b.md#3-study-186-a1a19-what-is-built). The owner took every §5 recommendation on 2026-10-25 (DV-551, DV-552). Nothing is built here; each item in §4 ships on its own PR
-  (or its own study), with a test and a sabotage check.
+- **Status:** decided; triage only. A1–A19 and the owner answers Q2–Q5 are built, each on its own PR
+  ([STUDY-193 §3](STUDY-193-convex-upstream-04d2f3b.md#3-study-186-a1a19-what-is-built)), and the reference moved past
+  this range to `precompiled-2026-10-26-04d2f3b` ([STUDY-193 §5.5](STUDY-193-convex-upstream-04d2f3b.md#55-pr-21-as-built)).
+  §4.2's new features stay with their own studies. The owner took every §5 recommendation on 2026-10-25 (DV-551,
+  DV-552).
 - **Convex source read:** get-convex/convex-backend from `72ce13c` (the reference since
   [STUDY-173](STUDY-173-convex-reference-2026-10-10.md)) to the release tag `precompiled-2026-10-24-bb31399`
   (2026-10-24). That is 195 commits: the 82 the daily digest (#549) listed up to `95d8719`, and 113 more. Each of the
@@ -313,6 +316,20 @@ item like §4.1's.
 | Q4 | Log stream events carry `function.runtime`: `"convex"` for the isolate, `"node"`, or `null`. Rule 5 forbids `"convex"` | Send `"bunvex"` for V8 functions and `"node"` for `"use node"`, recorded as a rule-5 DV (DV-456 precedent) |
 | Q5 | Convex now retries only ConnectionRefused, ConnectionReset, UnexpectedEof and a temporary DNS failure from MySQL. bunvex also retries `EPIPE`, `ETIMEDOUT`, `EHOSTUNREACH` and `ENETUNREACH`, and not `EAI_AGAIN` | Match Convex's set (add `EAI_AGAIN`, drop the four). Nothing an app observes changes, except fewer retries on a dying network |
 | Q6 | The node-executor Brotli CVE and the eMudhra distrust are Lambda-only in Convex. bunvex runs `"use node"` in Bun, so neither path exists, but whether Bun's own Brotli and root store are affected was not checked | No divergence. A separate check of Bun's zlib/Brotli and its root store for eMudhra, outside parity |
+
+Q5, a note (2026-10-27, after K21 failed on MySQL in merge-group run 40587403398). `9203a3e` was written for alert
+severity (a "packet is too large" error was paged as operational), but the same `DatabaseOperationalError` decides
+the retries too: `is_transient_db_error` (`crates/common/src/errors.rs`) is what the write batcher retries a flush on
+(`write_batcher.rs:231`), and `handle_errors_with_retries` (`crates/mysql/src/connection.rs`) retries a read on it. So
+#911 narrowed the right mechanism. What it missed is a connect that hangs. mysql_async 0.37 has no connect timeout,
+and its pool does not retry a fresh connect that fails (`GetConn` only drops and replaces an idle connection that
+fails its check). Convex bounds `pool.get_conn()` with the same `with_timeout` as every statement
+(`acquire_internal`), so a connect that hangs fails with `DatabaseTimeoutError`, which is transient, and never with
+`Io(TimedOut)`: the kernel's own connect timeout (about 2 minutes on Linux) is far past `MYSQL_TIMEOUT_SECONDS`.
+mysql2 has its own connect timer (`connectTimeout`, set to the call's timeout), and its `connect ETIMEDOUT` fell under
+the dropped `ETIMEDOUT`, so the committer stopped where Convex retries. bunvex now reads mysql2's own connect timeout
+as the call's `DatabaseTimeoutError` (`connectTimedOut`, `persistence/src/mysql.ts`). An `ETIMEDOUT` from a query, or
+from the operating system, stays non-operational, as in Convex.
 
 ## 6. Tests
 

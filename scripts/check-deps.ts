@@ -124,10 +124,11 @@ const TEST_ONLY: Record<string, string[]> = { helpers: ["core", "testing"] };
 const componentKeys = () => [...workspaces.keys()].filter((k) => k.startsWith("components/"));
 /**
  * A component (components/<dir>, STUDY-183 §3.1) is an app's code: it may import the platform's `server` and
- * `values`, `helpers` (STUDY-158 Q-5), and another component (a child, STUDY-158 §3.3); `testing` from its tests only
- * (`bunvexTest`, `registerComponent`), never from `src/` (its `src/test.ts` types the harness structurally).
+ * `values`, `react` for a `./react` entry (STUDY-197 L-2, a peer dependency), `helpers` (STUDY-158 Q-5), and another
+ * component (a child, STUDY-158 §3.3); `testing` from its tests only (`bunvexTest`, `registerComponent`), never from
+ * `src/` (its `src/test.ts` types the harness structurally).
  */
-const COMPONENT_ALLOWED = () => ["server", "values", "helpers", "testing", ...componentKeys()];
+const COMPONENT_ALLOWED = () => ["server", "values", "react", "helpers", "testing", ...componentKeys()];
 const COMPONENT_TEST_ONLY = ["testing"];
 /**
  * Every example (examples/<dir>) may import what a user's app may: the public packages, `helpers` and the component

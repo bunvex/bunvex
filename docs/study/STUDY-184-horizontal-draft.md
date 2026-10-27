@@ -193,6 +193,13 @@ Measurement 3 is in (§5.6). Decided (owner, 2026-10-26, Q5), and recorded in `d
 | DV-118 | A lagging node waits briefly, then refuses `Connect` | **Withdraw.** The leader's sync session answers `Connect`, as Convex's does at once | No node serves from its own, possibly lagging, state |
 | DV-119 | Follower reads use a "read index" round trip to the leader | **Withdraw.** Every read runs at a ts the leader hands out, so read-your-writes is automatic, as in Convex | No follower snapshot to bring up to date |
 
+Reviewed again (owner, 2026-10-27), as recommended:
+- **DV-113 and DV-117** keep their decisions. Their text now describes Convex's shape (execution processes, not
+  followers).
+- **DV-115** drops the forwarding step (A1). Mutations go straight to A2 (STUDY-194 PR 3).
+- **DV-121** now matches Convex. An executor takes its own clock floored at its snapshot, as funrun does
+  (STUDY-194 §10.3), instead of the leader's.
+
 ## 5. Measurements, 2026-10-26
 
 - **Machine:** an Apple M1 Pro, 8 cores and 16 GB, shared with other work. The load average was 4–17 during the

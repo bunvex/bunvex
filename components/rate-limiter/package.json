@@ -1,0 +1,78 @@
+{
+  "name": "@bunvex/rate-limiter",
+  "version": "0.1.0",
+  "description": "A rate limiter component for bunvex: token buckets and fixed windows, transactional or applied in the background, sharded, with a React hook.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "bunvex",
+    "component",
+    "rate limit",
+    "rate limiter"
+  ],
+  "scripts": {
+    "test:react": "cd test-react && bun test"
+  },
+  "exports": {
+    ".": "./src/client/index.ts",
+    "./react": "./src/react/index.ts",
+    "./bunvex.config": {
+      "@bunvex/component-source": "./src/component/bunvex.config.ts",
+      "bunvex": "./src/component/bunvex.config.ts",
+      "default": "./src/component/bunvex.config.ts"
+    },
+    "./bunvex.config.js": {
+      "@bunvex/component-source": "./src/component/bunvex.config.ts",
+      "bunvex": "./src/component/bunvex.config.ts",
+      "default": "./src/component/bunvex.config.ts"
+    },
+    "./_generated/component.js": {
+      "types": "./src/component/_generated/component.ts"
+    },
+    "./test": "./src/test.ts",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@bunvex/react": "workspace:^",
+    "@bunvex/server": "workspace:^",
+    "@bunvex/values": "workspace:^",
+    "react": "^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@bunvex/react": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@bunvex/batch-worker": "workspace:^"
+  },
+  "devDependencies": {
+    "@bunvex/react": "workspace:*",
+    "@bunvex/testing": "workspace:*",
+    "@happy-dom/global-registrator": "^20.14.5",
+    "@testing-library/react": "^16.3.3",
+    "@types/react": "^19.3.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex",
+    "directory": "components/rate-limiter"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.4.2"
+  }
+}

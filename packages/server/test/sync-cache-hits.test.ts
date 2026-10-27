@@ -1,7 +1,7 @@
 // A sync query served without running (STUDY-75), as Convex's query cache logs it: a session that reuses
 // another's result, or joins its run, logs a cache hit — `cached: true`, the run's lines, its own run reason —
 // in the function log and the log streams; a reused failure is logged as a run (Convex never caches errors).
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import type { v1 } from "@bunvex/protocol";
@@ -89,7 +89,16 @@ async function setup() {
     gate.open = new Promise<void>((r) => (release = r));
     return release;
   };
-  return { client, of, until, completions, hold, runs: () => runs };
+  const http = async (path: string) => {
+    const r = await fetch(`http://127.0.0.1:${s.server.port}/api/query`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, args: {}, format: "json" }),
+    });
+    return ((await r.json()) as { value: unknown }).value;
+  };
+  const write = () => engine.mutation((db) => db.insert("items", { n: 2 }));
+  return { client, of, until, completions, hold, http, write, runs: () => runs };
 }
 
 test("a second session reusing a result logs a cache hit with the run's lines", async () => {
@@ -185,4 +194,52 @@ test("a session whose identity changed reuses the run of another with that ident
   await t.until(() => t.of("m:whoami").length === 3);
   expect(t.runs()).toBe(2);
   expect(t.of("m:whoami")[2]).toMatchObject({ run_reason: "identityChange", function: { cached: true } });
+});
+
+// One cache for HTTP and sync (STUDY-08 §7), as Convex's sync worker asks the HTTP API's `CacheManager::get`: a
+// Next.js page's `preloadQuery` and its client's subscription to the same query run it once.
+describe("HTTP and sync share the query cache", () => {
+  const cachedFlags = (t: Awaited<ReturnType<typeof setup>>) =>
+    t.completions.filter((c) => c.identifier === "m:list").map((c) => c.cachedResult);
+
+  test("a query asked over HTTP, then subscribed, runs once: the subscription is a cache hit", async () => {
+    const t = await setup();
+    expect(await t.http("m:list")).toBe(1);
+    const a = await t.client();
+    a.modify([add(1, "m:list")]);
+    await t.until(() => cachedFlags(t).length === 2);
+    expect(t.runs()).toBe(1);
+    expect(cachedFlags(t)).toEqual([false, true]);
+    // The subscription still follows commits: a write into its reads runs it again.
+    t.write();
+    await t.until(() => cachedFlags(t).length === 3);
+    expect(t.runs()).toBe(2);
+  });
+
+  test("a page reload subscribes again to a result no commit changed: a cache hit, not a run", async () => {
+    const t = await setup();
+    const first = await t.client();
+    first.modify([add(1, "m:list")]);
+    await t.until(() => cachedFlags(t).length === 1);
+    first.ws.close();
+    await first.closed;
+    // The new page: its render over HTTP, then its subscription.
+    expect(await t.http("m:list")).toBe(1);
+    const second = await t.client();
+    second.modify([add(1, "m:list")]);
+    await t.until(() => cachedFlags(t).length === 3);
+    expect(t.runs()).toBe(1);
+    expect(cachedFlags(t)).toEqual([false, true, true]);
+  });
+
+  test("a result a subscription ran serves the HTTP API from the cache", async () => {
+    const t = await setup();
+    const a = await t.client();
+    a.modify([add(1, "m:list")]);
+    await t.until(() => cachedFlags(t).length === 1);
+    expect(await t.http("m:list")).toBe(1);
+    await t.until(() => cachedFlags(t).length === 2);
+    expect(t.runs()).toBe(1);
+    expect(cachedFlags(t)).toEqual([false, true]);
+  });
 });
