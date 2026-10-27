@@ -49,6 +49,7 @@ import {
 import {
   type AnyFunctionReference,
   type FunctionReference,
+  type FunctionReference_future,
   getFunctionName,
   type OptionalRestArgs,
 } from "@bunvex/protocol";
@@ -73,7 +74,10 @@ import { type ComponentRuntime, type Functions, type SourcedCaller, THROTTLED } 
 export type SchedulableFunction = AnyFunctionReference | string;
 
 /** A mutation or action to schedule, as Convex's `SchedulableFunctionReference`. */
-export type SchedulableFunctionReference = FunctionReference<"mutation" | "action", "public" | "internal">;
+/** A reference the scheduler takes: a mutation or an action, either kind of reference (Convex 1.48). */
+export type SchedulableFunctionReference =
+  | FunctionReference<"mutation" | "action", "public" | "internal">
+  | FunctionReference_future<"mutation" | "action", "public" | "internal">;
 type ScheduledId = GenericId<"_scheduled_functions">;
 
 /**

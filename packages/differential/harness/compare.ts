@@ -70,6 +70,7 @@ const WORDING: [RegExp, string][] = [
   // DV-04: the sentences that only point at Convex's docs.
   [/\n?For more information see https:\/\/docs\.convex\.dev\/\S*/g, ""],
   [/ See https:\/\/docs\.convex\.dev\/\S*( for (more )?details)?\.?/g, ""],
+  [/ To learn more, see the auth documentation at https:\/\/docs\.convex\.dev\/auth\./g, ""],
   [/\bConvex only supports a single paginated query\b/g, "bunvex only supports a single paginated query"],
   // DV-03: the application error class is `BunvexError`, and its uncaught message names it so.
   [/\bConvexError\b/g, "BunvexError"],

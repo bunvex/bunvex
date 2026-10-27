@@ -205,18 +205,14 @@ const LAYOUT_DDL = [
 /** Convex's `init_lease`: the lease row with ts 0, a no-op when it exists. */
 const INIT_LEASE = "INSERT INTO leases (id, ts) VALUES (1, 0) ON DUPLICATE KEY UPDATE id = id";
 
-/** mysql2 and socket codes of a connection that is gone (Convex: `DriverError::ConnectionClosed`,
- *  `PoolDisconnected`, `Error::Io`). */
-const LOST = new Set([
-  "PROTOCOL_CONNECTION_LOST",
-  "ECONNRESET",
-  "ECONNREFUSED",
-  "EPIPE",
-  "ETIMEDOUT",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "POOL_CLOSED",
-]);
+/**
+ * mysql2 and socket codes of a connection that is gone, as Convex's since `9203a3e` (`is_operational_mysql_io_error`,
+ * STUDY-186 Q5): `DriverError::ConnectionClosed` and `PoolDisconnected` (mysql2's `PROTOCOL_CONNECTION_LOST`, which
+ * is also a socket's unexpected end, and `POOL_CLOSED`), and of the IO errors only a refused or reset connection and
+ * a temporary DNS failure (`EAI_AGAIN`, Convex's "Temporary failure in name resolution"). Any other IO error (a broken
+ * pipe, a timeout, an unreachable host or network) is not operational, as Convex's.
+ */
+const LOST = new Set(["PROTOCOL_CONNECTION_LOST", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "POOL_CLOSED"]);
 /** Server errors Convex expects in operation: 1290 read-only, 2013 server lost, 1053 shutdown, 1040 too many
  *  connections. */
 const OPERATIONAL_ERRNO = new Set([1290, 2013, 1053, 1040]);

@@ -203,8 +203,15 @@ export class IndexWorker {
     if (defs.length === 0) return;
     const { committer } = this.host;
 
-    // The checkpoints (Convex's `IndexBackfillModel`): created at the first pass, read on a resume.
-    const progress = await this.host.system(async (db) => {
+    // The checkpoints (Convex's `IndexBackfillModel`): created at the first pass, read on a resume. As Convex's since
+    // `6830b7a` (STUDY-186 A10), the scan always reads at this transaction's snapshot, a fresh one: a resume goes on
+    // after its cursor there, its counts kept and its rows' `snapshotTs` moved to the new scan
+    // (`resume_database_index_backfill`); a backfill with no cursor yet starts over from 0 with the table's count now
+    // (`initialize_database_index_backfill`). Safe for the same reason a fresh scan is: every commit since the index
+    // was created maintains it, at its own ts, and the scan writes each document's entries at its version's own ts,
+    // below any later commit's. A document before the cursor was indexed by the earlier scan, and kept current by
+    // the commits since; one after it is read as it is now (STUDY-174 S1).
+    const start = await this.host.system(async (db) => {
       const out: IndexBackfillMeta[] = [];
       for (const m of metas) {
         const row = await db
@@ -224,19 +231,29 @@ export class IndexWorker {
         }
         out.push(p);
       }
-      return out;
-    }, "_system/index_worker_backfill_initialization");
-
-    // Resume after the least advanced checkpoint: re-writing an entry another index already has is harmless.
-    let resumeAfter: string | null = null;
-    for (const [i, p] of progress.entries()) {
-      const c = p.cursor?.cursor ?? null;
-      if (c === null) {
-        resumeAfter = null;
-        break;
+      // Resume after the least advanced checkpoint: re-writing an entry another index already has is harmless.
+      let after: string | null = null;
+      for (const [i, p] of out.entries()) {
+        const c = p.cursor?.cursor ?? null;
+        if (c === null) {
+          after = null;
+          break;
+        }
+        if (i === 0 || compareKeys(encodeKey([c]), encodeKey([after!])) < 0) after = c;
       }
-      if (i === 0 || compareKeys(encodeKey([c]), encodeKey([resumeAfter!])) < 0) resumeAfter = c;
-    }
+      for (const [i, p] of out.entries()) {
+        if (after === null) {
+          // From the start: Convex's `initialize_database_index_backfill`, unless the row was just made so.
+          if (p.numDocsIndexed === 0 && p.cursor?.snapshotTs === db.snapshot) continue;
+          p.numDocsIndexed = 0;
+          p.totalDocs = this.host.tableCount?.(metas[i].tablet) ?? (empty ? 0 : null);
+          p.cursor = { snapshotTs: db.snapshot, cursor: null };
+        } else p.cursor = { snapshotTs: db.snapshot, cursor: p.cursor?.cursor ?? null };
+        await db.replace(INDEX_BACKFILLS_TABLE, p._id, backfillRow(p));
+      }
+      return { progress: out, resumeAfter: after, snapshot: db.snapshot };
+    }, "_system/index_worker_backfill_initialization");
+    const { progress, resumeAfter, snapshot } = start;
     let lo = resumeAfter === null ? FULL_LO : prefixEnd(encodeKey([resumeAfter]));
     const perChunk = Math.max(1, Math.ceil(this.opts.chunkSize / defs.length));
     const done = progress.map((p) => p.numDocsIndexed);
@@ -261,7 +278,7 @@ export class IndexWorker {
               indexId: p.indexId,
               numDocsIndexed: done[i],
               totalDocs: p.totalDocs,
-              cursor: { snapshotTs: p.cursor?.snapshotTs ?? 0n, cursor },
+              cursor: { snapshotTs: snapshot, cursor },
             }),
           );
         }
@@ -269,26 +286,9 @@ export class IndexWorker {
       this.stats.checkpoints++;
     };
 
-    // As Convex's `backfill_from_ts`: the table walked at ONE snapshot, the checkpoint's (a resume continues at
-    // it), and each document's entries written at the document's own ts, directly (not a commit): below every
-    // write made after the index was created, which maintains it with entries of its own (DV-127 reversed).
-    // A snapshot retention has passed meanwhile can no longer be read: the backfill starts over at a new one.
-    let snapshot = progress.reduce((s, p) => {
-      const c = p.cursor?.snapshotTs ?? 0n;
-      return c > s ? c : s;
-    }, 0n);
-    // Its progress starts over with it, as Convex's `initialize_backfill` does on a fresh start: the count from 0
-    // and the table's count now (STUDY-174 S1).
-    if (snapshot < this.host.minSnapshotTs() || snapshot > committer.visibleTs) {
-      snapshot = committer.visibleTs;
-      lo = FULL_LO;
-      lastId = null;
-      for (const [i, p] of progress.entries()) {
-        p.cursor = { snapshotTs: snapshot, cursor: null };
-        p.totalDocs = this.host.tableCount?.(metas[i].tablet) ?? null;
-        done[i] = 0;
-      }
-    }
+    // As Convex's `backfill_from_ts`: the table walked at ONE snapshot, this pass's, and each document's entries
+    // written at the document's own ts, directly (not a commit): below every write made after the index was created,
+    // which maintains it with entries of its own (DV-127 reversed).
     for (;;) {
       if (this.stopped) {
         if (sinceCheckpoint > 0) await checkpoint();

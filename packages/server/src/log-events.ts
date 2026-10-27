@@ -162,7 +162,8 @@ const functionJson = (s: FunctionSource) => ({
   // Convex's `component_path`, only for a component's function.
   ...(s.componentPath ? { component_path: s.componentPath } : {}),
   type: { Query: "query", Mutation: "mutation", Action: "action", HttpAction: "http_action" }[s.udfType],
-  cached: s.udfType === "Query" ? s.cached : null,
+  // A query's cache hit, false on an action's streamed line (Convex's `log_action_progress`), else null.
+  cached: s.cached,
   request_id: s.requestId,
   mutation_queue_length: s.mutationQueueLength,
   mutation_retry_count: s.mutationRetryCount,

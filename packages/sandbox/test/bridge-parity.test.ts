@@ -327,7 +327,11 @@ const own = (t: string) =>
 function normalized(o: Outcome) {
   const logLines = JSON.parse(own(JSON.stringify(o.logLines ?? [])));
   if (o.status === "success") return { value: JSON.parse(own(JSON.stringify(o.value ?? null))), logLines };
-  const message = (o.errorMessage ?? "").replace(/^\[Request ID: [0-9a-f]+\] Server Error\n/, "");
+  const message = (o.errorMessage ?? "")
+    .replace(/^\[Request ID: [0-9a-f]+\] Server Error\n/, "")
+    // The frame that constructed the error: JavaScriptCore puts it at the `new` on most runs and at the call's `(`
+    // on some, under either executor (seen once in CI, vm at `new Error(`'s paren, process at its `new`).
+    .replace(/^(Uncaught [^\n]*\n\s+at [^\n]*:\d+:)\d+\)/, "$1<col>)");
   return { error: own(message), data: o.errorData, logLines };
 }
 

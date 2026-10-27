@@ -15,6 +15,28 @@ type AnyFunctionArgs = Record<string, any>;
 /** The name a reference stores. A symbol, so a reference has no enumerable fields to collide with. */
 export const functionName = Symbol.for("functionName");
 
+/** The keys of a function's arguments, `any` when they are `any`. */
+// biome-ignore lint/suspicious/noExplicitAny: `0 extends 1 & T` holds only for `any`
+type ArgKeys<Args> = 0 extends 1 & Args ? any : keyof Args;
+/**
+ * A keys parameter every `FunctionReferenceArgKeys` is assignable to and no `FutureArgKeys` is (Convex's
+ * `UncheckedArgKeys`): two `FunctionReference`s compare by `_args` alone, as before `_fn` existed.
+ */
+type UncheckedArgKeys = (keys: never, unchecked?: unknown) => void;
+/** The second parameter of `FunctionReference`'s `_fn` (Convex's `FunctionReferenceArgKeys`). */
+type FunctionReferenceArgKeys<Args> = 0 extends 1 & Args
+  ? // biome-ignore lint/suspicious/noExplicitAny: as above
+    any
+  : ((keys: (key: ArgKeys<Args>) => void) => void) | UncheckedArgKeys;
+/**
+ * The second parameter of `FunctionReference_future`'s `_fn` (Convex's `FunctionReference_futureArgKeys`): the keys a
+ * caller passes, checked against the function's, two parameters deep.
+ */
+type FutureArgKeys<Args> = 0 extends 1 & Args
+  ? // biome-ignore lint/suspicious/noExplicitAny: as above
+    any
+  : (keys: (key: ArgKeys<Args>) => void, guard?: never) => void;
+
 /** A reference to a registered function: `anyApi.messages.list`, or `makeFunctionReference("messages:list")`. */
 export type FunctionReference<
   Type extends FunctionType = FunctionType,
@@ -29,6 +51,32 @@ export type FunctionReference<
   _args: Args;
   _returnType: ReturnType;
   _componentPath: ComponentPath;
+  /**
+   * The function's signature, as Convex 1.48's: read through `FunctionArgs` and `FunctionReturnType`. A method, so
+   * two references compare as before it existed; against a `FunctionReference_future`, its arguments are checked.
+   */
+  _fn?(args: Args, keys: FunctionReferenceArgKeys<Args>): ReturnType;
+};
+
+/**
+ * Convex's `FunctionReference_future` (1.48): a reference whose arguments and result are carried by an optional `_fn`
+ * signature instead of `_args` / `_returnType`, the arguments checked closer to the way a validator checks them (a
+ * surplus top-level key is refused). Every API that takes a reference takes either kind; it is not assignable to a
+ * plain `FunctionReference`. Types only (a reference holds its name at run time).
+ */
+export type FunctionReference_future<
+  Type extends FunctionType,
+  Visibility extends FunctionVisibility = "public",
+  // biome-ignore lint/suspicious/noExplicitAny: an untyped reference's arguments, as Convex's default
+  Args extends DefaultFunctionArgs = any,
+  // biome-ignore lint/suspicious/noExplicitAny: an untyped reference's result, as Convex's default
+  ReturnType = any,
+  ComponentPath = string | undefined,
+> = {
+  _type: Type;
+  _visibility: Visibility;
+  _componentPath: ComponentPath;
+  _fn?: ((args: Args, keys: FutureArgKeys<Args>) => ReturnType) | undefined;
 };
 
 /**
@@ -51,18 +99,30 @@ export type RoomReference<
 
 // biome-ignore lint/suspicious/noExplicitAny: any reference
 export type AnyFunctionReference = FunctionReference<any, any, any, any>;
-export type FunctionArgs<F extends AnyFunctionReference> = F["_args"];
-export type FunctionReturnType<F extends AnyFunctionReference> = F["_returnType"];
+/** Any `FunctionReference_future`. */
+// biome-ignore lint/suspicious/noExplicitAny: as above
+export type AnyFunctionReferenceFuture = FunctionReference_future<any, any, any, any>;
+/** Either kind of reference: what every API that takes one accepts (Convex 1.48). */
+export type AnyReference = AnyFunctionReference | AnyFunctionReferenceFuture;
+/** A reference's arguments and result: its `_args` and `_returnType`, else its `_fn`'s (Convex's `ExtractSignature`). */
+type ExtractSignature<F> = F extends { _args: infer Args; _returnType: infer R }
+  ? { args: Args; returnType: R }
+  : F extends { _fn?: ((args: infer Args, keys: never) => infer R) | undefined }
+    ? { args: Args; returnType: R }
+    : // biome-ignore lint/suspicious/noExplicitAny: an untyped reference's
+      { args: any; returnType: any };
+export type FunctionArgs<F extends AnyReference> = ExtractSignature<F>["args"];
+export type FunctionReturnType<F extends AnyReference> = ExtractSignature<F>["returnType"];
 /** An object with no fields: the arguments of a function that takes none. */
 export type EmptyObject = Record<string, never>;
 /**
  * `[args?]` when the function takes no arguments, else `[args]`, as Convex's. With an untyped reference
  * (`anyApi`, args `any`) both forms are allowed.
  */
-export type OptionalRestArgs<F extends AnyFunctionReference> =
+export type OptionalRestArgs<F extends AnyReference> =
   FunctionArgs<F> extends EmptyObject ? [args?: EmptyObject] : [args: FunctionArgs<F>];
 /** `OptionalRestArgs` followed by an optional options object, as Convex's `ArgsAndOptions`. */
-export type ArgsAndOptions<F extends AnyFunctionReference, Options> =
+export type ArgsAndOptions<F extends AnyReference, Options> =
   FunctionArgs<F> extends EmptyObject
     ? [args?: EmptyObject, options?: Options]
     : [args: FunctionArgs<F>, options?: Options];
@@ -125,7 +185,7 @@ export function getFunctionAddress(ref: unknown): FunctionAddress {
 }
 
 /** The function name of a reference (e.g. "messages:list"); a plain string is returned as is. */
-export function getFunctionName(ref: AnyFunctionReference | string): string {
+export function getFunctionName(ref: AnyReference | string): string {
   if (typeof ref === "string") return ref;
   const name = (ref as unknown as { [functionName]?: unknown })?.[functionName];
   if (typeof name !== "string") {

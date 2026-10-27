@@ -1,9 +1,9 @@
 // A query and its arguments as one object, as Convex's `browser/query_options.ts` (STUDY-102): the shape
 // `BunvexReactClient.prewarmQuery` takes, and `bunvexQueryOptions`, which only gives it its type.
-import type { AnyFunctionReference, FunctionArgs } from "@bunvex/protocol";
+import type { AnyReference, FunctionArgs } from "@bunvex/protocol";
 
 /** A query function reference and its arguments, as Convex's `QueryOptions`. `args` is required. */
-export type QueryOptions<Query extends AnyFunctionReference & { _type: "query" }> = {
+export type QueryOptions<Query extends AnyReference & { _type: "query" }> = {
   /** The query to run. */
   query: Query;
   /** Its arguments. */
@@ -15,7 +15,7 @@ export type QueryOptions<Query extends AnyFunctionReference & { _type: "query" }
  * object is written (`client.prewarmQuery(bunvexQueryOptions({ query, args }))`). Convex's `convexQueryOptions`,
  * renamed for rule 5 (DV-348); `@internal` there too.
  */
-export function bunvexQueryOptions<Query extends AnyFunctionReference & { _type: "query" }>(
+export function bunvexQueryOptions<Query extends AnyReference & { _type: "query" }>(
   options: QueryOptions<Query>,
 ): QueryOptions<Query> {
   return options;

@@ -96,12 +96,12 @@ test("a second session reusing a result logs a cache hit with the run's lines", 
   const t = await setup();
   const a = await t.client();
   a.modify([add(1, "m:list")]);
-  await t.until(() => t.of("m.js:list").length === 1);
+  await t.until(() => t.of("m:list").length === 1);
   const b = await t.client();
   b.modify([add(1, "m:list")]);
-  await t.until(() => t.of("m.js:list").length === 2);
+  await t.until(() => t.of("m:list").length === 2);
   expect(t.runs()).toBe(1);
-  const [ran, hit] = t.of("m.js:list");
+  const [ran, hit] = t.of("m:list");
   expect(ran.function.cached).toBe(false);
   expect(hit.function.cached).toBe(true);
   expect(hit.run_reason).toBe("initialSubscription");
@@ -149,20 +149,20 @@ test("a session joining a run in flight logs a cache hit once it is served", asy
   b.modify([add(1, "m:gated")]);
   await Bun.sleep(30);
   release();
-  await t.until(() => t.of("m.js:gated").length === 2);
+  await t.until(() => t.of("m:gated").length === 2);
   expect(t.runs()).toBe(1);
-  expect(t.of("m.js:gated").map((e) => e.function.cached)).toEqual([false, true]);
+  expect(t.of("m:gated").map((e) => e.function.cached)).toEqual([false, true]);
 });
 
 test("a reused failure is logged as a failed run, not a cache hit", async () => {
   const t = await setup();
   const a = await t.client();
   a.modify([add(1, "m:broken")]);
-  await t.until(() => t.of("m.js:broken").length === 1);
+  await t.until(() => t.of("m:broken").length === 1);
   const b = await t.client();
   b.modify([add(1, "m:broken")]);
-  await t.until(() => t.of("m.js:broken").length === 2);
-  const second = t.of("m.js:broken")[1];
+  await t.until(() => t.of("m:broken").length === 2);
+  const second = t.of("m:broken")[1];
   expect(second.function.cached).toBe(false);
   expect(second.status).toBe("failure");
   expect(second.error_message).toContain("always");
@@ -176,13 +176,13 @@ test("a session whose identity changed reuses the run of another with that ident
   const admin = await t.client();
   authenticate(admin);
   admin.modify([add(1, "m:whoami")]);
-  await t.until(() => t.of("m.js:whoami").length === 1);
+  await t.until(() => t.of("m:whoami").length === 1);
   // An anonymous session runs it as itself, then authenticates as the same admin: the admin's run serves it.
   const other = await t.client();
   other.modify([add(1, "m:whoami")]);
-  await t.until(() => t.of("m.js:whoami").length === 2);
+  await t.until(() => t.of("m:whoami").length === 2);
   authenticate(other);
-  await t.until(() => t.of("m.js:whoami").length === 3);
+  await t.until(() => t.of("m:whoami").length === 3);
   expect(t.runs()).toBe(2);
-  expect(t.of("m.js:whoami")[2]).toMatchObject({ run_reason: "identityChange", function: { cached: true } });
+  expect(t.of("m:whoami")[2]).toMatchObject({ run_reason: "identityChange", function: { cached: true } });
 });
