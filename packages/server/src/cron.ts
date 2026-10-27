@@ -2,7 +2,7 @@
 // server's second validation of what it exports (crates/model/src/cron_jobs/types.rs
 // `CronSpec::from_exported_json`). bunvex has no push yet, so the crons are handed to `createServer`
 // and checked at start (S1).
-import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
+import { type AnyReference, getFunctionName } from "@bunvex/protocol";
 import { isSimpleObject, rawValueSize, toJsonValue, type Value } from "@bunvex/values";
 import { parseCronExpression } from "./cron-expression.ts";
 
@@ -20,7 +20,8 @@ export type Schedule =
   | { type: "monthly"; day: number; hourUTC: number; minuteUTC?: number };
 
 export type CronJob = { name: string; args: [Record<string, Value>]; schedule: Schedule };
-type Fn = AnyFunctionReference | string;
+// Either kind of reference (Convex 1.48), or a name.
+type Fn = AnyReference | string;
 type Args = Record<string, unknown>;
 
 export const cronJobs = () => new Crons();

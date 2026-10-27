@@ -24,6 +24,7 @@ import type {
   EmptyObject,
   FunctionArgs,
   FunctionReference,
+  FunctionReference_future,
   FunctionReturnType,
   FunctionVisibility,
   OptionalRestArgs,
@@ -43,7 +44,10 @@ import type { PresenceDef, RoomDef } from "./rooms/define.ts";
 import type { PublicHttpAction } from "./router.ts";
 import type { Scheduler } from "./scheduler.ts";
 
-type Callable<Kind extends "query" | "mutation" | "action"> = FunctionReference<Kind, "public" | "internal">;
+/** A reference `ctx.runQuery` and the others take: either kind (Convex 1.48), public or internal. */
+type Callable<Kind extends "query" | "mutation" | "action"> =
+  | FunctionReference<Kind, "public" | "internal">
+  | FunctionReference_future<Kind, "public" | "internal">;
 
 /** Convex's `TransactionLimits`: lower a nested call's limits (STUDY-41). */
 export type TransactionLimits = {
@@ -60,7 +64,9 @@ export type AdvancedRunQueryOptions = { transactionLimits?: TransactionLimits; u
 
 /** Convex's `ArgsAndOptions`: the arguments (optional when there are none), then the options. */
 export type ArgsAndOptions<
-  F extends FunctionReference<"query" | "mutation" | "action", "public" | "internal">,
+  F extends
+    | FunctionReference<"query" | "mutation" | "action", "public" | "internal">
+    | FunctionReference_future<"query" | "mutation" | "action", "public" | "internal">,
   Options,
 > =
   FunctionArgs<F> extends EmptyObject

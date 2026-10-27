@@ -42,6 +42,67 @@ check<
   >
 >(true);
 
+// Both kinds of reference, as `convex` 1.48 reads and takes them: `FunctionArgs` / `FunctionReturnType` read a
+// `FunctionReference_future`'s `_fn`, a `FunctionReference` has the same `_fn`, and a `FunctionReference` is a
+// `FunctionReference_future` exactly when Convex's is (its arguments checked against the caller's).
+type Task = { taskId: string; force: boolean };
+type BFuture = b.FunctionReference_future<"mutation", "internal", Task, null>;
+type CFuture = c.FunctionReference_future<"mutation", "internal", Task, null>;
+check<Equal<b.FunctionArgs<BFuture>, c.FunctionArgs<CFuture>>>(true);
+check<Equal<b.FunctionReturnType<BFuture>, c.FunctionReturnType<CFuture>>>(true);
+check<Equal<b.OptionalRestArgs<BFuture>, c.OptionalRestArgs<CFuture>>>(true);
+check<
+  Mutual<
+    b.FunctionReference<"query", "public", { a: number }, string>,
+    c.FunctionReference<"query", "public", { a: number }, string>
+  >
+>(true);
+/** Whether a `FunctionReference` taking `Args` is a `FunctionReference_future` for `Task`, on each side. */
+type TakesTask<Args extends Record<string, unknown>> = [
+  Assignable<b.FunctionReference<"mutation", "internal", Args, null>, BFuture>,
+  Assignable<c.FunctionReference<"mutation", "internal", Args, null>, CFuture>,
+];
+check<Equal<TakesTask<Task>, [true, true]>>(true);
+check<Equal<TakesTask<{ taskId: string | number; force?: boolean }>, [true, true]>>(true);
+check<Equal<TakesTask<{ taskId: string; force: boolean; reason: string }>, [false, false]>>(true);
+check<Equal<TakesTask<{ taskId: string }>, [false, false]>>(true);
+// A future is not a plain reference, on either side.
+check<
+  Equal<
+    [
+      Assignable<BFuture, b.FunctionReference<"mutation", "internal", Task, null>>,
+      Assignable<CFuture, c.FunctionReference<"mutation", "internal", Task, null>>,
+    ],
+    [false, false]
+  >
+>(true);
+// `ctx.runQuery` / `runMutation` / `runAction`, the scheduler and crons take either kind, typed by its `_fn`.
+// biome-ignore lint/correctness/noUnusedVariables: checked by `tsc`, never run
+async function takesFutures(
+  // biome-ignore lint/suspicious/noExplicitAny: any data model
+  action: b.GenericActionCtx<any>,
+  // biome-ignore lint/suspicious/noExplicitAny: as above
+  mutation: b.GenericMutationCtx<any>,
+  // biome-ignore lint/suspicious/noExplicitAny: as above
+  query: b.GenericQueryCtx<any>,
+  q: b.FunctionReference_future<"query", "internal", { a: number }, string>,
+  m: BFuture,
+  a: b.FunctionReference_future<"action", "public", Record<string, never>, number>,
+) {
+  const s: string = await action.runQuery(q, { a: 1 });
+  const n: null = await action.runMutation(m, { taskId: "t", force: true });
+  const k: number = await action.runAction(a);
+  const s2: string = await mutation.runQuery(q, { a: 1 });
+  const n2: null = await mutation.runMutation(m, { taskId: "t", force: false });
+  const s3: string = await query.runQuery(q, { a: 2 });
+  await mutation.scheduler.runAfter(0, m, { taskId: "t", force: true });
+  await action.scheduler.runAt(0, a);
+  b.cronJobs().interval("x", { minutes: 1 }, m, { taskId: "t", force: true });
+  // @ts-expect-error a missing argument
+  await action.runMutation(m, { taskId: "t" });
+  return [s, n, k, s2, n2, s3];
+}
+
 // The data model.
 check<Equal<b.GenericIndexFields, c.GenericIndexFields>>(true);
 check<Equal<b.GenericTableIndexes, c.GenericTableIndexes>>(true);
