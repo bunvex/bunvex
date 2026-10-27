@@ -331,7 +331,7 @@ describe("deploy2 over HTTP", () => {
     expect((await d.call("mutation", "messages:send", { author: "ada" })).status).toBe("error");
   });
 
-  test("nodeVersion: Convex's 400 InvalidConfig on start_push, evaluate_push and evaluate_schema (STUDY-145)", async () => {
+  test("nodeVersion: Convex's 400 InvalidConfig on start_push, evaluate_push and evaluate_schema (STUDY-145, STUDY-186 A15)", async () => {
     const d = await deployment(tmp());
     stops.push(() => d.s.shutdown());
     const body = (nodeVersion: unknown) => ({
@@ -343,6 +343,7 @@ describe("deploy2 over HTTP", () => {
     for (const step of ["start_push", "evaluate_push", "evaluate_schema"]) {
       for (const [version, message] of [
         ["18", "Node 18 is no longer supported. Upgrade to a newer Node version."],
+        ["20", "Node 20 is no longer supported. Upgrade to a newer Node version."],
         ["16", "Invalid node version: 16"],
         ["", "Invalid node version: "],
         ["v20", "Invalid node version: v20"],
@@ -352,7 +353,7 @@ describe("deploy2 over HTTP", () => {
       }
       const typed = await d.post(`/api/deploy2/${step}`, body(20));
       expect([step, typed.status, typed.body.code]).toEqual([step, 400, "BadJsonBody"]);
-      for (const ok of ["20", "22", "24", null, undefined])
+      for (const ok of ["22", "24", null, undefined])
         expect([step, ok, (await d.post(`/api/deploy2/${step}`, body(ok))).status]).toEqual([step, ok, 200]);
     }
     // Nothing above was pushed: start_push's are never finished.

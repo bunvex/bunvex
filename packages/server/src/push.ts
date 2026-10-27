@@ -299,9 +299,10 @@ export function parseNodeDependencies(raw: unknown): NodeDependency[] {
 
 /**
  * Convex's `StartPushRequest::into_project_config` (crates/application/src/deploy_config.rs) on `nodeVersion`, the
- * first thing `start_push`, `evaluate_push` and `evaluate_schema` check: Convex's `NodeVersion` takes "20", "22"
- * and "24"; "18" is refused as no longer supported; any other string is not a version. Both are 400
- * `InvalidConfig`. The version is only stored (`_source_packages.nodeVersion`): a self-hosted Convex runs its Node
+ * first thing `start_push`, `evaluate_push` and `evaluate_schema` check: Convex's `NodeVersion` parses "18", "20",
+ * "22" and "24", and `check_supported_for_push` refuses "18" and "20" as no longer supported (Node 20 since `1d7e847`,
+ * STUDY-186 A15); any other string is not a version. Both are 400 `InvalidConfig`. A package stored with "20" before
+ * still loads: only a push is refused. The version is only stored (`_source_packages.nodeVersion`): a self-hosted Convex runs its Node
  * actions on the Node it finds, and bunvex runs them in Bun (DV-87).
  */
 export function parseNodeVersion(raw: unknown): string | null {
@@ -312,10 +313,10 @@ export function parseNodeVersion(raw: unknown): string | null {
       "BadJsonBody",
       "Failed to deserialize the JSON body into the target type: nodeVersion: invalid type, expected a string",
     );
-  if (raw === "20" || raw === "22" || raw === "24") return raw;
+  if (raw === "22" || raw === "24") return raw;
   // Convex's message ends with a link to its docs (DV-04).
-  if (raw === "18")
-    throw new PushError("InvalidConfig", "Node 18 is no longer supported. Upgrade to a newer Node version.");
+  if (raw === "18" || raw === "20")
+    throw new PushError("InvalidConfig", `Node ${raw} is no longer supported. Upgrade to a newer Node version.`);
   throw new PushError("InvalidConfig", `Invalid node version: ${raw}`);
 }
 
