@@ -1,7 +1,7 @@
 # STUDY-196 — `@bunvex/batch-worker`
-<!-- index: `@bunvex/batch-worker`, the second own component (STUDY-158 §3.4 step 4.2) and the child of rate-limiter, workpool and aggregate: the loop (a stale-snapshot work query, then the worker mutation in one transaction), the monitor, the cursor, `ping`/`start`/`stop`/`kick`; written from get-convex/batch-worker 0.3.6, one package serving the 0.2.2, 0.3.3 and 0.3.5 that the three dependents ask for | draft: B-1–B-3 open -->
+<!-- index: `@bunvex/batch-worker`, the second own component (STUDY-158 §3.4 step 4.2) and the child of rate-limiter, workpool and aggregate: the loop (a stale-snapshot work query, then the worker mutation in one transaction), the monitor, the cursor, `ping`/`start`/`stop`/`kick`; written from get-convex/batch-worker 0.3.6, one package serving the 0.2.2, 0.3.3 and 0.3.5 that the three dependents ask for | decided (owner, 2026-10-27): B-1–B-3 as recommended; not built -->
 
-- **Status:** draft; B-1–B-3 open (§7). Nothing built.
+- **Status:** decided (owner, 2026-10-27): B-1–B-3 as recommended (§7); B-1 extends DV-539. Nothing built.
 - **Convex source read:** get-convex/batch-worker at `f299a7b` (0.3.6), pinned in
   [upstream.md](../parity/upstream.md#other-repositories), with the tags `v0.2.2`, `v0.3.3` and `v0.3.5` for the
   versions the dependents ask for. Paths are relative to that repository's root. Backend paths are from
@@ -235,7 +235,7 @@ package. workpool's port uses `defineBatchWorkerValidators({batch}).vQueryReturn
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| — | none beyond DV-176 (the env's type) and DV-538; B-1 may extend DV-539 | | |
+| — | none beyond DV-176 (the env's type) and DV-538; B-1 extends DV-539 to the two other deprecated validators | | owner, 2026-10-27 |
 
 ## 4b. Additions
 
@@ -254,6 +254,8 @@ As §3.5.
   `finishAllScheduledFunctions`' default of 100 steps. To check when porting the tests.
 
 ## 7. Questions for the owner
+
+All decided by the owner on 2026-10-27, as recommended.
 
 | # | Question | Recommendation |
 |---|---|---|
