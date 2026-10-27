@@ -55,7 +55,9 @@ function receiver() {
   return { url: `http://127.0.0.1:${server.port}/hook`, got, events, setStatus: (s: number) => (status = s) };
 }
 
-async function setup(opts: { localLogSink?: string; engine?: Engine; fetch?: typeof fetch } = {}) {
+async function setup(
+  opts: { localLogSink?: string; engine?: Engine; fetch?: typeof fetch; changeWakeMs?: number } = {},
+) {
   const engine =
     opts.engine ??
     (await new Engine(
@@ -83,6 +85,7 @@ async function setup(opts: { localLogSink?: string; engine?: Engine; fetch?: typ
       localBackoffMs: [1, 2],
       providerBackoffMs: [1, 2],
       random: () => 0,
+      ...(opts.changeWakeMs === undefined ? {} : { changeWakeMs: opts.changeWakeMs }),
       // Never the real providers: a test that does not route them gets a refusal.
       fetch: opts.fetch ?? ((async () => new Response(null, { status: 403 })) as unknown as typeof fetch),
     },
@@ -438,7 +441,9 @@ test("an S3 export's arguments, stored config and status, as Convex's binary ans
     ).status,
   ).toBe(200);
   const got = (await t.req(`get_log_stream/${id}`)).body;
-  expect(got.status).toEqual({ type: "pending" });
+  // The worker restarts the stream `changeWakeMs` after the update: under load it may have done so already (the next
+  // test pins the `pending`).
+  expect(["pending", "active"]).toContain(got.status.type);
   expect(JSON.stringify(got.selection)).toBe(
     '{"":{"B":"excluded","u":{"_other":"included"},"_other":"excluded"},"_other":"included"}',
   );
@@ -452,6 +457,23 @@ test("an S3 export's arguments, stored config and status, as Convex's binary ans
   expect((await t.req(`get_log_stream/${made.body.id}`)).body.prefix).toBe("");
 });
 
+test("an S3 export reads `pending` until the worker runs after the commit (STUDY-185 §2.2)", async () => {
+  // The worker held back: what a read right after the create or an update sees, before it runs.
+  const t = await setup({ changeWakeMs: 60_000 });
+  const made = await t.req("create_log_stream", {
+    logStreamType: "s3Export",
+    bucket: "bkt",
+    region: "us-east-1",
+    accessKeyId: "AK",
+    secretAccessKey: "SK",
+    period: "daily",
+  });
+  expect(await t.status(made.body.id)).toEqual({ type: "pending" });
+  expect(
+    (await t.req(`update_log_stream/${made.body.id}`, { logStreamType: "s3Export", period: "hourly" })).status,
+  ).toBe(200);
+  expect(await t.status(made.body.id)).toEqual({ type: "pending" });
+});
 test("a second S3 export is refused inside the insert's transaction too (Convex f8b62ad)", async () => {
   const engine = await new Engine(
     defineSchema({ items: defineTable(v.any()) }),
