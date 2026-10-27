@@ -228,7 +228,7 @@ import type { ServerMetrics } from "./server-metrics.ts";
 import { setServiceCallContext } from "./service-tokens.ts";
 import type { FileStorage, StorageMeter } from "./storage.ts";
 import { UnparsedSystemArgs } from "./system-args.ts";
-import { SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
+import { inSystemComponent, SYSTEM_MUTATIONS, SYSTEM_QUERIES, type SystemQuery } from "./system-functions.ts";
 import type { UsageMeter } from "./usage-limits.ts";
 import { bodyLength } from "./web-response.ts";
 
@@ -1955,7 +1955,8 @@ export class Functions {
   queryCall(name: string, args: unknown, fromClient = true, caller?: Caller): TxBody<unknown> | Call {
     const checked = this.callSpec("query", name, args, fromClient, caller);
     if (!checked) return this.queryBody(name, args, fromClient, caller);
-    const local: CallIn | undefined = checked.args ? { args: checked.args } : undefined;
+    // It runs the function its arguments were checked against, whatever a push installs while it waits for its permit.
+    const local: CallIn = { args: checked.args, fn: checked.fn };
     return { spec: checked.spec, bodies: this.bodies, permit: this.queryPermit, local };
   }
 
@@ -1995,7 +1996,7 @@ export class Functions {
     args: unknown,
     fromClient: boolean,
     caller: Caller | undefined,
-  ): { spec: CallSpec; args?: { value: unknown } } | null {
+  ): { spec: CallSpec; fn: FunctionDef; args?: { value: unknown } } | null {
     if (isSystemPath(name)) return null;
     // A query on a deployment known not to run fails before its permit (Convex's `fail_while_not_running`).
     const state = kind === "query" ? this.engine.backendState.latest() : null;
@@ -2010,10 +2011,11 @@ export class Functions {
     }
     const internal = !fromClient || f.visibility === "internal";
     // Without the codec (outside the tests, STUDY-194 Q7) the arguments go beside the request as they are.
-    if (!this.engine.callCodec) return { spec: { kind, name, args: "", internal, session: null }, args: { value: a } };
+    if (!this.engine.callCodec)
+      return { spec: { kind, name, args: "", internal, session: null }, fn: f, args: { value: a } };
     const text = argsText(a);
     if (text === null) return null;
-    return { spec: { kind, name, args: text, internal, session: null } };
+    return { spec: { kind, name, args: text, internal, session: null }, fn: f };
   }
 
   /** The code side of the call boundary (STUDY-194 §4.1): the body a request runs, and a session's record. */
@@ -2029,7 +2031,8 @@ export class Functions {
   private callBody(request: CallRequest, local: CallIn | undefined): TxBody<unknown> {
     const args = local?.args ? local.args.value : parseValue(request.args);
     const callee = <K extends "query" | "mutation">(kind: K) => {
-      const resolved = this.fnLater(request.name, kind, false);
+      const checked = local?.fn as Extract<FunctionDef, { kind: K }> | undefined;
+      const resolved = checked ? () => checked : this.fnLater(request.name, kind, false);
       return () => {
         const f = resolved();
         if ((f as FunctionDef).visibility === "internal" && !request.internal) throw this.notFound(request.name);
@@ -2852,7 +2855,12 @@ export class Functions {
         timer,
         () =>
           withUserTimer(timer, async () =>
-            this.checkSystemResult(n, await q!.handler(db, a, { files: this.fileStorage, functions: this, caller })),
+            this.checkSystemResult(
+              n,
+              await inSystemComponent(db, q!, a as Record<string, unknown>, (args) =>
+                q!.handler(db, args as never, { files: this.fileStorage, functions: this, caller }),
+              ),
+            ),
           ),
         this.userTimeoutMs,
       );
@@ -2883,7 +2891,12 @@ export class Functions {
         timer,
         () =>
           withUserTimer(timer, async () =>
-            this.checkSystemResult(n, await m!.handler(db, a, { files: this.fileStorage, functions: this, caller })),
+            this.checkSystemResult(
+              n,
+              await inSystemComponent(db, m!, a as Record<string, unknown>, (args) =>
+                m!.handler(db, args as never, { files: this.fileStorage, functions: this, caller }),
+              ),
+            ),
           ),
         this.userTimeoutMs,
       );
@@ -3516,6 +3529,11 @@ type CallIn = {
   attempt?: (run: () => Promise<unknown>) => Promise<unknown>;
   /** The arguments themselves, when the request does not carry them as text (no codec, STUDY-194 Q7). */
   args?: { value: unknown };
+  /**
+   * A query's function as `callSpec` resolved it, the one its arguments were checked against (STUDY-194 §10.3).
+   * A worker will get the code version's id instead.
+   */
+  fn?: FunctionDef;
 };
 
 /**

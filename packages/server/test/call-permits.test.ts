@@ -116,3 +116,20 @@ test("a session's request already committed is answered without a permit; a new 
   release();
   expect(await t.functions.runQuery("m:read", { id: t.id })).toBe(1);
 });
+
+test("a query runs the function its arguments were checked against, even if new code lands while it waits for its permit", async () => {
+  const t = await setup();
+  const release = await t.limits.query.acquire();
+  const waiting = t.functions.runQuery("m:typed", { n: 1 });
+  await t.queued("query");
+  // New code for the same path, whose validator would refuse these arguments.
+  t.functions.register("m", {
+    typed: query({ args: { n: v.string() }, handler: (_ctx, { n }) => `new:${typeof n}` }),
+  });
+  release();
+  // The old function, whose validator accepted { n: 1 }: never the new handler on unchecked arguments.
+  expect(await waiting).toBe(1);
+  // A call made now checks against, and runs, the new one (other arguments: `register` keeps the query cache).
+  await expect(t.functions.runQuery("m:typed", { n: 2 })).rejects.toThrow("ArgumentValidationError");
+  expect(await t.functions.runQuery("m:typed", { n: "x" })).toBe("new:string");
+});

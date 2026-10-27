@@ -134,9 +134,15 @@ largest gap in bunvex's favour, and it raises C2 (module state).
 - HTTP routes taking a component id: `shapes2?component=`, `delete_tables`, `get_indexes?component_id=`,
   `run_test_function`, `cancel_job`, `cancel_all_jobs` (also a path filter), `GET /api/storage/{id}?component=`.
   The CLI's `data --component` and `run --component` send a **path** over sync instead.
-- **bunvex today:** system functions accept a `componentId` and ignore it, acting on the root (DV-55), while the
-  HTTP routes refuse one (DV-391); the dashboard (STUDY-149) always sends `null`. The routing is sandbox-86's area
-  (coordinate before changing it).
+- **bunvex today (27 Oct 2026, step 9 started):** the system functions reroute as Convex's: one with a
+  `componentId` arg, given a non-null one, runs again in that component's namespace with `componentId: null`
+  (`inSystemComponent`, server `system-functions.ts`); an id with no component is a system error. Its audit
+  events name the component, its file URLs carry `?component=`, and the table mapping and table size are the
+  namespace's. `apiSpec` reads its `componentId` itself. The HTTP routes `run_test_function`, `cancel_job`,
+  `cancel_all_jobs` and `delete_component` take a component (DV-391 resolved); `delete_tables` and
+  `delete_scheduled_functions_table` still refuse one (`ComponentsNotSupported`: the engine deletes and replaces
+  root tables only). The dashboard (STUDY-149) still always sends `null`: the picker and each screen are the
+  next PRs.
 
 ## 5. Export and import
 
