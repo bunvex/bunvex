@@ -1,17 +1,12 @@
 // Server-rendered query values handed to the client, as Convex's `react/hydration.tsx` (STUDY-46): a
 // `Preloaded` payload from `@bunvex/nextjs`'s `preloadQuery`, and `usePreloadedQuery`, which renders it until
 // the live subscription delivers.
-import {
-  type AnyFunctionReference,
-  type FunctionArgs,
-  type FunctionReturnType,
-  makeFunctionReference,
-} from "@bunvex/client";
+import { type AnyReference, type FunctionArgs, type FunctionReturnType, makeFunctionReference } from "@bunvex/client";
 import { fromJsonValue, type JSONValue } from "@bunvex/values";
 import { useMemo } from "react";
 import { useQuery } from "./hooks.ts";
 
-type QueryRef = AnyFunctionReference & { _type: "query" };
+type QueryRef = AnyReference & { _type: "query" };
 
 /**
  * A query's server-side result, to pass from a Server Component to a Client Component. `_argsJSON` and
