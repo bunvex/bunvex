@@ -1900,9 +1900,10 @@ export class Functions {
    * that does not pass runs as a body here, and fails as it always did, without a permit.
    */
   queryCall(name: string, args: unknown, fromClient = true, caller?: Caller): TxBody<unknown> | Call {
-    const spec = this.callSpec("query", name, args, fromClient, caller);
-    if (!spec) return this.queryBody(name, args, fromClient, caller);
-    return { spec, bodies: this.bodies, permit: this.queryPermit };
+    const checked = this.callSpec("query", name, args, fromClient, caller);
+    if (!checked) return this.queryBody(name, args, fromClient, caller);
+    const local: CallIn | undefined = checked.args ? { args: checked.args } : undefined;
+    return { spec: checked.spec, bodies: this.bodies, permit: this.queryPermit, local };
   }
 
   /**
@@ -1916,12 +1917,12 @@ export class Functions {
     caller: Caller | undefined,
     deadline: Deadline | undefined,
   ): TxBody<unknown> | Call {
-    const spec = this.callSpec("mutation", name, args, fromClient, caller);
-    if (!spec)
+    const checked = this.callSpec("mutation", name, args, fromClient, caller);
+    if (!checked)
       return this.mutationBody(this.fnLater(name, "mutation", fromClient, caller), args, undefined, deadline, false);
     // A retried attempt's console lines replace the aborted one's, as `mutationBody`'s.
-    const local: CallIn = { deadline, attempt: perAttempt((run: () => Promise<unknown>) => run()) };
-    return { spec, bodies: this.bodies, local };
+    const local: CallIn = { deadline, attempt: perAttempt((run: () => Promise<unknown>) => run()), args: checked.args };
+    return { spec: checked.spec, bodies: this.bodies, local };
   }
 
   private readonly queryPermit = () => this.limits.query.acquire();
@@ -1941,7 +1942,7 @@ export class Functions {
     args: unknown,
     fromClient: boolean,
     caller: Caller | undefined,
-  ): CallSpec | null {
+  ): { spec: CallSpec; args?: { value: unknown } } | null {
     if (isSystemPath(name)) return null;
     // A query on a deployment known not to run fails before its permit (Convex's `fail_while_not_running`).
     const state = kind === "query" ? this.engine.backendState.latest() : null;
@@ -1954,9 +1955,12 @@ export class Functions {
     } catch {
       return null;
     }
+    const internal = !fromClient || f.visibility === "internal";
+    // Without the codec (outside the tests, STUDY-194 Q7) the arguments go beside the request as they are.
+    if (!this.engine.callCodec) return { spec: { kind, name, args: "", internal, session: null }, args: { value: a } };
     const text = argsText(a);
     if (text === null) return null;
-    return { kind, name, args: text, internal: !fromClient || f.visibility === "internal", session: null };
+    return { spec: { kind, name, args: text, internal, session: null } };
   }
 
   /** The code side of the call boundary (STUDY-194 §4.1): the body a request runs, and a session's record. */
@@ -1970,7 +1974,7 @@ export class Functions {
    * the permit (the dispatcher holds it).
    */
   private callBody(request: CallRequest, local: CallIn | undefined): TxBody<unknown> {
-    const args = parseValue(request.args);
+    const args = local?.args ? local.args.value : parseValue(request.args);
     const callee = <K extends "query" | "mutation">(kind: K) => {
       const resolved = this.fnLater(request.name, kind, false);
       return () => {
@@ -3423,7 +3427,12 @@ function noCommitTs(name: string, body: (db: Tx) => Promise<unknown>) {
  * What an in-thread call hands the runner beside its request (`Call.local`): a sync mutation's deadline, and the
  * scope that keeps only the last attempt's console lines. A worker will get `cancel` and send lines in the outcome.
  */
-type CallIn = { deadline?: Deadline; attempt?: (run: () => Promise<unknown>) => Promise<unknown> };
+type CallIn = {
+  deadline?: Deadline;
+  attempt?: (run: () => Promise<unknown>) => Promise<unknown>;
+  /** The arguments themselves, when the request does not carry them as text (no codec, STUDY-194 Q7). */
+  args?: { value: unknown };
+};
 
 /**
  * Checked arguments as the request's text, when that text gives them back exactly; else null. The value JSON form,
