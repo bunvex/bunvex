@@ -1,8 +1,8 @@
 # STUDY-193 — Convex up to precompiled-2026-10-26-04d2f3b, and STUDY-186's build status
 <!-- index: Convex from `precompiled-2026-10-24-bb31399` to `precompiled-2026-10-26-04d2f3b`, triaged; STUDY-186 A1–A19 status; the reference move planned | decided (owner, 2026-10-26): oracle first, `convex` 1.48.0 -->
 
-- **Status:** decided; PR 1 (the oracle, A14 and the client pin) is built (§5.4). The owner took both §6 recommendations on
-  2026-10-26.
+- **Status:** built. PR 1 (the oracle, A14 and the client pin, §5.4), every STUDY-186 item of §3 and PR 21 (the
+  reference at `04d2f3b`, §5.5) are merged or in review. The owner took both §6 recommendations on 2026-10-26.
 - **Convex source read:** get-convex/convex-backend from the release tag `precompiled-2026-10-24-bb31399` (the end
   of [STUDY-186](STUDY-186-convex-after-72ce13c.md)) to the release tag `precompiled-2026-10-26-04d2f3b`
   (2026-10-26). That is 3 commits. `scripts/upstream-triage.ts` sorts one as weekly (dashboard) and ignores two (docs).
@@ -11,8 +11,8 @@
   same, and the `convex` npm package is still 1.48.0.
 - **bunvex code read:** `main` at `a90013ff` (after #878).
 - **Process:** the weekly bump of [STUDY-138](STUDY-138-following-convex.md) and
-  [upstream.md](../parity/upstream.md). The reference is still at `precompiled-2026-10-10-72ce13c`; PR 1 moved the
-  oracle to `04d2f3b` (§5.4).
+  [upstream.md](../parity/upstream.md). PR 1 moved the oracle to `04d2f3b` (§5.4), and PR 21 the reference
+  (§5.5).
   STUDY-186 triaged up to `bb31399` and left the move for later. This study plans the move straight to `04d2f3b`.
 - **Related:** [STUDY-186](STUDY-186-convex-after-72ce13c.md) (the previous triage and its A1–A19),
   [STUDY-173](STUDY-173-convex-reference-2026-10-10.md) (the last reference move),
@@ -51,7 +51,8 @@ No new behaviour. Once STUDY-186's §4.1 is built, an app sees the same thing on
 
 Searched on `origin/main` (`a90013ff`): the code, the tests, the parity rows, `git log` and the merged PRs (#836
 merged STUDY-186 on 2026-10-26; every PR merged since was read by title, and the ones that mention STUDY-186 were
-opened). Two of the nineteen items are built.
+opened). Two of the nineteen items were built then. All nineteen are built now (2026-10-27, on `main` at `c30a51c7`),
+each in the PR its row names.
 
 | # | Item | Built | PR | Evidence on `main` |
 |---|---|---|---|---|
@@ -65,7 +66,7 @@ opened). Two of the nineteen items are built.
 | A8 | `paginate()` in component queries | **yes** | #899 | the component check is gone; a nested query pages in a scope of its own, merged into its caller's when it returns (`Tx.inQueryScope`); the message names bunvex as Convex's at `04d2f3b`; differential `paginate-components.test.ts` |
 | A9 | Data sync: no hidden tables, by-ts fallback, page 20 000 | **yes** | #903 | `dataSyncTargets` skips hidden tables; an `OutOfRetentionError` from the by-id page falls back to `tsPage`; `DATA_SYNC_PAGE_SIZE_LIMIT` 20 000 (`server/src/data-sync.ts`); differential `data-sync-page.test.ts` |
 | A10 | Resume a backfill at a fresh snapshot, keeping the count | **yes** | #904 | a resume goes on after its cursor at the initialization transaction's snapshot, counts kept, `snapshotTs` moved (`core/src/index-worker.ts`); the note in STUDY-174 §11; `index-backfill-restart.test.ts` |
-| A11 | Mutation permit before the transaction | **yes** (in review) | #895 | the engine takes a client's mutation permit per attempt before its transaction (`MutationOptions.permit`, `core/src/engine.ts` `attempts`); scheduled and cron mutations keep it in their body; `server/test/call-permits.test.ts`. Under contention (insert, 32 VUs on 16 permits, DO `c-4`), A11 with the boundary measured −2.2 % against `main` (`bce3c564`, STUDY-194 §9) |
+| A11 | Mutation permit before the transaction | **yes** | #895 | the engine takes a client's mutation permit per attempt before its transaction (`MutationOptions.permit`, `core/src/engine.ts` `attempts`); scheduled and cron mutations keep it in their body; `server/test/call-permits.test.ts`. Under contention (insert, 32 VUs on 16 permits, DO `c-4`), A11 with the boundary measured −2.2 % against `main` (`bce3c564`, STUDY-194 §9) |
 | A12 | Audit log: integration configs, `download_export` | **yes** | #905 | `auditConfig` / `auditCredentialChanges` and `downloadExport` (`server/src/audit-log.ts`), the token's member (`server/src/exports.ts`); differential `audit-log-integrations.test.ts` |
 | A13 | S3 export API: `FieldFiltersUnsupported`, frozen destination, in-transaction check | **yes** | #862 (+#881) | `FieldFiltersUnsupported` (`server/src/log-sinks-routes.ts:266`); differential `s3-export-api.test.ts`, which #881 skips against an oracle older than `precompiled-2026-10-24` |
 | A14 | `_s3_export_state`, `DATABASE_VERSION` 134 | **yes** (PR 1) | PR 1 (§5.1) | `DATABASE_VERSION = 134n`; `_s3_export_state` (number 556, `by_config_id` on `configId`) in `core/src/catalog.ts` and the engine's system tables; `listConfiguredSinks` adds its `exportProgress`. `cross-open.test.ts` checks that neither binary warns or migrates |
@@ -75,7 +76,7 @@ opened). Two of the nineteen items are built.
 | A18 | Source-mapped push errors past the line's end | **yes** | #900 | the context block only when the column is within the line by its UTF-8 length, the marks counted in bytes too; else the generated position (`server/src/definition-eval.ts`); differential `source-map-context.test.ts` |
 | A19 | `FunctionHandle_future` type | **yes** | #890 | exported from `server/src/index.ts` (defined in `function-handles.ts`); `api-shapes.test.ts` checks it both ways against `convex` 1.48.0 |
 
-None is partly built. A14 is "no" on purpose: STUDY-186 and #862 tie it to the reference move.
+None is partly built. A14 shipped with the oracle move, as STUDY-186 and #862 planned (PR 1, §5.4).
 
 The rest of STUDY-186 was checked too:
 
@@ -88,7 +89,7 @@ The rest of STUDY-186 was checked too:
 | Q5, the MySQL retry set | **yes**, #911 | `LOST` is `PROTOCOL_CONNECTION_LOST`, `ECONNRESET`, `ECONNREFUSED`, `EAI_AGAIN`, `POOL_CLOSED` (`persistence/src/mysql.ts`); `transient.test.ts` |
 | Q6, Bun's Brotli and root store (outside parity) | no record | no doc or commit mentions the check |
 | §4.2, storage in mutations (study) | no study yet | — |
-| §4.2, signJwt and JWKS (study) | in STUDY-192 (draft #882) | another session |
+| §4.2, signJwt and JWKS (study) | study merged (STUDY-192, #882); implementation to come | another session |
 | §4.2, CLI staged-schema output (`4f81b22`) | no | `--allow-unstaging-schema` is not in `cli/src` |
 | §4.2, `v.function()` | waits for Convex's client | — |
 
@@ -211,6 +212,17 @@ PR 1 runs them, and A19 adds `FunctionHandle_future`.
 - `s3-export-api.test.ts` runs against the new oracle and passes.
 - The whole differential suite against `04d2f3b` (aarch64-apple-darwin) with the 1.48.0 client: 502 pass, 0 fail,
   0 skipped, in 373 s.
+
+### 5.5 PR 21, as built
+
+- [upstream.md](../parity/upstream.md): the reference commit is `04d2f3b`, the last weekly bump is this study, and
+  "After the reference" is empty. "Carried to the next bump" lists what is left: STUDY-186 §4.2's four new features
+  (storage in mutations, signJwt and JWKS, the CLI's staged-schema output, `v.function()`) and Q6's check outside
+  parity, each with its own study or owner.
+- The header lines of `docs/parity/README.md`, `client-sync.md`, `platform.md` and `server-api.md` name
+  `precompiled-2026-10-26-04d2f3b`; their rows were updated by each align PR.
+- A changeset names the release.
+- Not part of the move: STUDY-186 Q6 has no record yet, and the §4.2 features stay with their own studies.
 
 ## 6. Owner questions
 

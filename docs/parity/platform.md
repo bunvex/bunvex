@@ -1,7 +1,7 @@
 ## Platform features around the core (parity inventory)
 
 Scope: everything a self-hosted Convex deployment provides beyond the function/database API and client sync.
-Reference: Convex `convex-backend` at commit `4577b9031`, brought up to the release `precompiled-2026-10-10-72ce13c` by [STUDY-173](../study/STUDY-173-convex-reference-2026-10-10.md). Paths are relative to that repo; `crates/x` means `crates/x/src/…`, and `npm/convex` means `npm-packages/convex/src`.
+Reference: Convex `convex-backend` at commit `4577b9031`, brought up to the release `precompiled-2026-10-26-04d2f3b` by [STUDY-193](../study/STUDY-193-convex-upstream-04d2f3b.md). Paths are relative to that repo; `crates/x` means `crates/x/src/…`, and `npm/convex` means `npm-packages/convex/src`.
 
 **Historical starting point** (where bunvex stood when this inventory was first written, 2026-09-29, from
 ARCHITECTURE.md and `packages/*`; kept for the record and long out of date: the rows below are the current status):
