@@ -55,6 +55,7 @@ export function typeLabel(v: ValidatorJson, expand = false): string {
     case "null":
     case "number":
     case "bigint":
+    case "commitTs":
     case "boolean":
     case "string":
     case "any":

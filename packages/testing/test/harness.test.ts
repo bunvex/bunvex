@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { anyApi } from "@bunvex/server";
+import { BunvexError } from "@bunvex/values";
 import { bunvexTest, type TestBunvex } from "../src/index.ts";
 
 const APP = join(import.meta.dir, "fixtures", "app");
@@ -19,6 +20,16 @@ const make = (env?: Record<string, string>) => {
 };
 
 describe("bunvexTest", () => {
+  test("a function's BunvexError reaches the test as the test's own BunvexError, with its data", async () => {
+    const t = make();
+    const error = await t.mutation(api.messages.refuse, { reason: "no" }).catch((e: unknown) => e);
+    // As convex-test, whose functions run in the test's realm: `instanceof` holds (clients such as
+    // `isRateLimitError` test it), and so do the data and the message.
+    expect(error).toBeInstanceOf(BunvexError);
+    expect((error as BunvexError<{ code: string; reason: string }>).data).toEqual({ code: "refused", reason: "no" });
+    expect((error as Error).message).toContain('{"code":"refused","reason":"no"}');
+  });
+
   test("queries and mutations by reference, on the pushed app", async () => {
     const t = make();
     expect(await t.query(api.messages.list)).toEqual([]);
