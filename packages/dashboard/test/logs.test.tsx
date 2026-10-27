@@ -34,7 +34,7 @@ const cells = (r: HTMLElement) =>
   within(r)
     .getAllByRole("gridcell")
     .map((c) => c.textContent ?? "");
-const COL = { time: 0, level: 1, function: 2, outcome: 3, request: 4, message: 5 };
+const COL = { time: 0, request: 1, outcome: 2, function: 3, level: 4, message: 5 };
 /** With the details open beside the list the message moves up, so it stays in view (UX2-10). */
 const OPEN = { time: 0, level: 1, message: 2, outcome: 3, function: 4, request: 5 };
 const box = (name: string) => screen.getByRole("checkbox", { name });
@@ -305,6 +305,33 @@ describe("the Logs screen", () => {
     await source.insertDocuments("tasks", [{ text: "x" }]);
     await new Promise((r) => setTimeout(r, 50));
     expect(rows().some((r) => cells(r)[COL.level] === "event")).toBe(false);
+  });
+
+  test("Convex's columns: time, request, outcome, function, level, message; a cached query says so", async () => {
+    const source = mount(new MockDataSource({ seed: 7, now: NOW, executions: 60, logIntervalMs: 3_600_000 }));
+    await opened();
+    expect(
+      within(grid())
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).toEqual(["Time", "Request", "Outcome", "Function", "Level", "Message"]);
+    // the message takes the width the others leave: its column has no width of its own
+    const cols = grid().querySelectorAll("col");
+    expect((cols[COL.message] as HTMLElement).style.width).toBe("");
+    expect((cols[COL.function] as HTMLElement).style.width).toBe("240px");
+    // an outcome line has no level: its outcome is said once, in its own column
+    const ends = rows().filter((r) => /^(Success|Failure)/.test(cells(r)[COL.outcome]!));
+    expect(ends.length).toBeGreaterThan(0);
+    expect(ends.every((r) => cells(r)[COL.level] === "")).toBe(true);
+    // a cached query's outcome says "(cached)" in place of its duration, in the list and in its details
+    const history = (await source.listLogs({ numItems: 500, cursor: null })).page;
+    expect(history.some((e) => e.execution?.cached)).toBe(true);
+    const cached = ends.find((r) => cells(r)[COL.outcome] === "Success (cached)")!;
+    expect(cached).toBeDefined();
+    expect(ends.some((r) => /^Success \d+ ms$/.test(cells(r)[COL.outcome]!))).toBe(true);
+    await userEvent.setup().click(within(cached).getAllByRole("gridcell")[COL.message]!);
+    const panel = await screen.findByRole("complementary");
+    expect(within(panel).getByText("Succeeded (cached)")).toBeDefined();
   });
 
   test("a line's details say who started the request and the resources it used", async () => {
