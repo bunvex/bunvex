@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { devCommand } from "../src/dev.ts";
 import { type Io, main } from "../src/index.ts";
+import { ensureDashboardDownloaded } from "../src/local-dashboard.ts";
 import {
   acquireTarget,
   assetName,
@@ -16,6 +17,7 @@ import {
   changesToGitIgnore,
   EXE,
   forgetLatestVersion,
+  isValidBackendVersion,
   latestVersion,
   readLocalConfig,
   startLocalDeployment,
@@ -399,6 +401,63 @@ describe("the executable: download, cache, upgrade", () => {
       startLocalDeployment(io(app(), env).it, { backendVersion: "precompiled-2020-01-01-0000000" }),
     ).rejects.toThrow(/^File not found at http/);
   }, 60_000);
+
+  test("a version that is not a release's name stops before it reaches a path or a URL (Convex's 6a287a3)", async () => {
+    expect(
+      [
+        "precompiled-2026-10-26-04d2f3b",
+        "precompiled-2026-10-26-a.b-c_d",
+        "precompiled-2026-10-26-..",
+        "precompiled-2026-10-26-",
+        "precompiled-2026-10-26-a/b",
+        "precompiled-26-10-26-abc",
+        "../../../etc",
+        "precompiled-2026-10-26-abc\n",
+        "0.1.0",
+        "",
+      ].map(isValidBackendVersion),
+    ).toEqual([true, true, true, false, false, false, false, false, false, false]);
+    const requests: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        requests.push(new URL(req.url).pathname);
+        return new Response("no", { status: 404 });
+      },
+    });
+    stops.push(() => server.stop(true));
+    const home = tmp();
+    const env = { BUNVEX_RELEASES_URL: `http://127.0.0.1:${server.port}`, HOME: home };
+    for (const v of ["../../../tmp/x", "precompiled-2026-10-26-a/../../b", "latest"]) {
+      await expect(startLocalDeployment(io(app(), env).it, { backendVersion: v })).rejects.toThrow(
+        /^Invalid local backend version$/,
+      );
+      await expect(ensureDashboardDownloaded(io(app(), env).it, v)).rejects.toThrow(/^Invalid local backend version$/);
+    }
+    expect(requests).toEqual([]);
+    expect(existsSync(join(home, ".cache"))).toBe(false);
+    // A version in config.json is checked too: here the one kept when the latest cannot be found.
+    const dir = app();
+    mkdirSync(join(dir, ".bunvex/local/default"), { recursive: true });
+    writeFileSync(
+      join(dir, ".bunvex/local/default/config.json"),
+      JSON.stringify({
+        ports: { cloud: freePort(), site: freePort() },
+        backendVersion: "../x",
+        adminKey: "k",
+        instanceSecret: "0".repeat(64),
+        deploymentName: "local-x",
+      }),
+    );
+    forgetLatestVersion();
+    await expect(startLocalDeployment(io(dir, env).it)).rejects.toThrow(/^Invalid local backend version$/);
+    expect(requests).toEqual(["/releases/latest"]);
+    expect(existsSync(join(home, ".cache"))).toBe(false);
+    // `dev` prints it and exits 1.
+    const r = io(app(), env);
+    expect(await devCommand(["--once", "--typecheck=disable", "--local-backend-version", "../x"], r.it)).toBe(1);
+    expect(r.err.at(-1)).toBe("bunvex dev: Invalid local backend version");
+  });
 
   test("the latest version: each failure reported as Convex's findLatestVersionWithBinary reports it (G-L6)", async () => {
     let answer: () => Response = () => Response.json({ tag_name: "precompiled-2026-10-01-aaaaaaa" });

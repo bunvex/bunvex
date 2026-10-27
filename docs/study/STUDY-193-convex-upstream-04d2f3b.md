@@ -71,7 +71,7 @@ opened). Two of the nineteen items are built.
 | A14 | `_s3_export_state`, `DATABASE_VERSION` 134 | **yes** (PR 1) | PR 1 (§5.1) | `DATABASE_VERSION = 134n`; `_s3_export_state` (number 556, `by_config_id` on `configId`) in `core/src/catalog.ts` and the engine's system tables; `listConfiguredSinks` adds its `exportProgress`. `cross-open.test.ts` checks that neither binary warns or migrates |
 | A15 | Refuse Node 20 | no | — | `"20"` accepted (`server/src/push.ts:315`) |
 | A16 | `env list --include-values`; MCP `envList` names by default (and DV-551's agent default) | no | — | only `--names-only` (`cli/src/env.ts:30-36`); MCP `envList` returns values (`cli/src/mcp-tools.ts:347`) |
-| A17 | Validate `--local-backend-version` | no | — | `opts.backendVersion` used unchecked (`cli/src/local-deployment.ts:321`) |
+| A17 | Validate `--local-backend-version` | **yes** | #PR | `isValidBackendVersion` / `assertValidBackendVersion` before `ensureBinary` and `ensureDashboardDownloaded` use it (`cli/src/local-deployment.ts`, `local-dashboard.ts`) |
 | A18 | Source-mapped push errors past the line's end | no | — | the context block is printed whatever `original.col` is (`server/src/definition-eval.ts:257`) |
 | A19 | `FunctionHandle_future` type | no | — | not exported (`server/src/index.ts:141` exports `FunctionHandle` only) |
 

@@ -172,10 +172,24 @@ export function unzipOne(zip: Uint8Array, name: string): Uint8Array {
   throw new Error(`${name} is not in the archive`);
 }
 
+/**
+ * Whether `version` is a release's name, `precompiled-YYYY-MM-DD-…` (Convex's `isValidBackendVersion`, 6a287a3): what
+ * becomes a cache path and a download URL, so no `..` or `/` from `--local-backend-version`, a config file or the
+ * releases API gets there.
+ */
+export const isValidBackendVersion = (version: string): boolean =>
+  /^precompiled-\d{4}-\d{2}-\d{2}-[\w.-]+$/.test(version);
+
+/** Convex's `assertValidBackendVersion`: stop with "Invalid local backend version" before the version is used. */
+export function assertValidBackendVersion(version: string) {
+  if (!isValidBackendVersion(version)) throw new Error("Invalid local backend version");
+}
+
 /** The executable of `version`: cached, else downloaded and unzipped (Convex's `ensureBackendBinaryDownloaded`). */
 export async function ensureBinary(io: Io, version: string): Promise<string> {
   const custom = io.env.BUNVEX_LOCAL_BACKEND_BINARY;
   if (custom) return custom;
+  assertValidBackendVersion(version);
   const path = join(cacheDir(io.env), "binaries", version, EXE);
   if (existsSync(path)) {
     if (process.platform !== "win32") chmodSync(path, 0o755);
