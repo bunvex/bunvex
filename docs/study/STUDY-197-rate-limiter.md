@@ -1,7 +1,7 @@
 # STUDY-197 — `@bunvex/rate-limiter`
-<!-- index: `@bunvex/rate-limiter`, the third own component (STUDY-158 §3.4 step 4.3) and a prerequisite of built-in auth (STUDY-191): token bucket and fixed window, shards with two random choices, reservations, the asynchronous mode on `@bunvex/batch-worker` (a stale-snapshot check, a queue of pending updates), the client `RateLimiter`, the React hook `useRateLimit`; written from get-convex/rate-limiter 0.4.2 | draft: L-1–L-2 open -->
+<!-- index: `@bunvex/rate-limiter`, the third own component (STUDY-158 §3.4 step 4.3) and a prerequisite of built-in auth (STUDY-191): token bucket and fixed window, shards with two random choices, reservations, the asynchronous mode on `@bunvex/batch-worker` (a stale-snapshot check, a queue of pending updates), the client `RateLimiter`, the React hook `useRateLimit`; written from get-convex/rate-limiter 0.4.2 | decided (owner, 2026-10-27): L-1–L-2 as recommended; not built -->
 
-- **Status:** draft; L-1–L-2 open (§7). Nothing built.
+- **Status:** decided (owner, 2026-10-27): L-1–L-2 as recommended (§7). Nothing built.
 - **Convex source read:** get-convex/rate-limiter at `dee5af1` (0.4.2), pinned in
   [upstream.md](../parity/upstream.md#other-repositories). Paths are relative to that repository's root.
 - **bunvex source:** `main`, with `@bunvex/batch-worker` (STUDY-196, #917). Paths are relative to the repository's
@@ -218,6 +218,8 @@ As §3.4.
   the sample is compared through invariants.
 
 ## 7. Questions for the owner
+
+All decided by the owner on 2026-10-27, as recommended.
 
 | # | Question | Recommendation |
 |---|---|---|
