@@ -1,5 +1,5 @@
 import { action, internalMutation, makeFunctionReference, mutation, query } from "@bunvex/server";
-import { v } from "@bunvex/values";
+import { BunvexError, v } from "@bunvex/values";
 
 const sendRef = makeFunctionReference<"mutation">("messages:send");
 
@@ -63,3 +63,11 @@ export const tick = internalMutation({
 });
 
 export const ticks = query({ args: {}, handler: async (ctx) => (await ctx.db.query("ticks").collect()).length });
+
+/** An application error, with data, as a function throws it. */
+export const refuse = mutation({
+  args: { reason: v.string() },
+  handler: async (_ctx, { reason }) => {
+    throw new BunvexError({ code: "refused", reason });
+  },
+});
