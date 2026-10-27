@@ -242,6 +242,17 @@ export function operational(e: unknown): boolean {
   return /connection is in closed state/.test(message);
 }
 
+/**
+ * mysql2's error when its `connectTimeout` fires before the handshake is done (`connect ETIMEDOUT`, its own timer,
+ * marked by the string `errorno` it sets; an operating system's ETIMEDOUT carries a numeric `errno`). Convex's
+ * mysql_async 0.37 has no connect timeout: its connect is bounded by `with_timeout` around `pool.get_conn()`
+ * (`crates/mysql/src/connection.rs`, `acquire_internal`), so a connect that hangs is a `DatabaseTimeoutError`.
+ */
+export function connectTimedOut(e: unknown): boolean {
+  const x = e as { code?: unknown; errorno?: unknown } | null;
+  return !!x && typeof x === "object" && x.code === "ETIMEDOUT" && x.errorno === "ETIMEDOUT";
+}
+
 /** A live index entry's document id and its document at the entry's ts (`found` false: no such version). */
 type JoinedEntry = { id: Buffer; json: Buffer | null; found: boolean; deleted: boolean };
 
@@ -301,6 +312,8 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
       // BIGINT columns (timestamps: nanoseconds, above 2^53) come back exact, as decimal strings.
       supportBigNumbers: true,
       bigNumberStrings: true,
+      // A connect and its handshake are bounded by the call's timeout too (Convex's `with_timeout` around
+      // `get_conn`); `call` reports mysql2's connect timeout as that `DatabaseTimeoutError` (`connectTimedOut`).
       ...(timeoutMs > 0 && timeoutMs < Infinity ? { connectTimeout: timeoutMs } : {}),
     });
     const store = new MysqlPersistence(p, timeoutMs, documentEncoding);
@@ -325,7 +338,12 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
       "MySQL",
       ms,
       async (progress) => {
-        const got = await this.pool.getConnection();
+        const got = await this.pool.getConnection().catch((e: unknown) => {
+          // mysql2's own connect timeout (`connectTimeout`, set to the call's timeout) is this call's timeout
+          // firing while it gets a connection: Convex bounds `pool.get_conn()` by the same `with_timeout`, which
+          // fails with `DatabaseTimeoutError` (transient: the committer retries the flush), never `Io(TimedOut)`.
+          throw connectTimedOut(e) ? new DatabaseTimeoutError("MySQL", ms) : e;
+        });
         if (timedOut) {
           got.release(); // the call has failed already; this connection did nothing wrong
           throw new Error("timed out");

@@ -1,14 +1,14 @@
 # Convex parity
 
 bunvex is a rewrite of Convex for Bun: an app should work the same on both. This directory lists **everything
-Convex has**, read from its source (get-convex/convex-backend @ `4577b9031`, brought up to the release `precompiled-2026-10-10-72ce13c` by [STUDY-173](../study/STUDY-173-convex-reference-2026-10-10.md); how it is kept current: [upstream.md](upstream.md)), and where bunvex stands on each
+Convex has**, read from its source (get-convex/convex-backend @ `4577b9031`, brought up to the release `precompiled-2026-10-26-04d2f3b` by [STUDY-193](../study/STUDY-193-convex-upstream-04d2f3b.md); how it is kept current: [upstream.md](upstream.md)), and where bunvex stands on each
 item. It is the project's to-do list at the scale of the whole product.
 
 | Area | File | Done | Partial | Missing |
 |---|---|--:|--:|--:|
 | Function and database API: `ctx.db`, queries, validators, values, schema, limits | [server-api.md](server-api.md) | 253 | 3 | 0 |
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 163 | 2 | 1 |
-| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables, libraries | [platform.md](platform.md) | 249 | 23 | 2 |
+| Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables, libraries | [platform.md](platform.md) | 248 | 24 | 2 |
 
 Beyond Convex, [additions.md](additions.md) lists 38 additions: 34 built (5 of them dashboard screens on the
 mock), 1 being built (AD-44), 1 accepted, 2 deferred, none proposed (recounted on 2026-10-20, STUDY-181 PR 1: AD-23

@@ -6,12 +6,13 @@ get-convex/convex-backend, and the process that keeps it there. The process is d
 
 ## Where we stand
 
-- **Reference commit:** `72ce13c`, the commit of the release `precompiled-2026-10-10-72ce13c` (2026-10-09). The parity
+- **Reference commit:** `04d2f3b`, the commit of the release `precompiled-2026-10-26-04d2f3b` (2026-10-26). The parity
   files cite `4577b9031` brought up to this commit.
 - **Differential oracle:** `precompiled-2026-10-26-04d2f3b` (`packages/differential/scripts/download-convex-backend.sh`),
-  ahead of the reference: STUDY-193 moved it first (Q1), so each align PR is checked against the release it follows.
-  The suite's `convex` client is 1.48.0, the one that release ships; `sync-e2e` keeps the 1.46.0 floor (Q2).
-- **Last weekly bump:** [STUDY-173](../study/STUDY-173-convex-reference-2026-10-10.md) (2026-10-19), from `d8bdde0`.
+  the reference's release. The suite's `convex` client is 1.48.0, the one that release ships; `sync-e2e` keeps the
+  1.46.0 floor (STUDY-193 Q2).
+- **Last weekly bump:** [STUDY-193](../study/STUDY-193-convex-upstream-04d2f3b.md) (2026-10-27), from `72ce13c`, with
+  the triage of [STUDY-186](../study/STUDY-186-convex-after-72ce13c.md).
 
 ## Other repositories
 
@@ -61,22 +62,14 @@ own PR (CLAUDE.md).
 
 ## Carried to the next bump
 
-Commits up to the reference that the last bump did not cover: none. STUDY-173 resolved the 11 that STUDY-137 carried;
-`f9b2d83` (components, DV-55) is on [STUDY-62 §7.6](../study/STUDY-62-components.md#76-convex-commits-to-take-with-components).
+Commits up to the reference that the last bump did not build, each with its own study:
+- STUDY-186 §4.2's new features: storage in mutations (no study yet), `ctx.auth.signJwt` and `/.well-known/jwks.json`
+  ([STUDY-192](../study/STUDY-192-sign-jwt.md), its implementation to come), the CLI's staged-schema output (`4f81b22`),
+  and `v.function()` (waits for Convex's client).
+- STUDY-186 Q6, Bun's Brotli and root store: a check outside parity, not recorded yet.
+- `f9b2d83` (components, DV-55) is on [STUDY-62 §7.6](../study/STUDY-62-components.md#76-convex-commits-to-take-with-components).
 
 ## After the reference
 
-195 commits on Convex's `main` follow `72ce13c` up to the release `precompiled-2026-10-24-bb31399` (2026-10-24), the
-82 that the daily digest issue (#549) listed and 113 more. [STUDY-186](../study/STUDY-186-convex-after-72ce13c.md)
-triages every one: 19 items to align, four new features for their own studies, six owner questions. The 3 commits
-up to `precompiled-2026-10-26-04d2f3b` change nothing an app observes, and
-[STUDY-193](../study/STUDY-193-convex-upstream-04d2f3b.md) plans the move to that release and tracks which of
-STUDY-186's items are built. The four urgent ones were studied at
-once ([STUDY-173 §5](../study/STUDY-173-convex-reference-2026-10-10.md#5-after-the-reference-the-urgent-commits)):
-
-| Commit | Subject | bunvex |
-|---|---|---|
-| `8449d41` | allow repeated pagination in mutations | affected; fixed in #747 (#718) |
-| `403c3e8` | races around acquiring the lease | part (b), the read-only check, affected; fixed in #748 (the refusal stays `ReadOnlyError`: DV-505, owner 2026-10-19) (#717) |
-| `1a9f5e1` | retry deadlocked commit batches | affected on MySQL; fixed in #746 (#711) |
-| `d62e1c7` | comments around data sync | comments only: no change (#712) |
+None triaged yet: the next weekly bump starts from `04d2f3b`. STUDY-186's A1–A19 and its owner answers are built
+([STUDY-193 §3](../study/STUDY-193-convex-upstream-04d2f3b.md#3-study-186-a1a19-what-is-built)).

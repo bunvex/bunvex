@@ -34,6 +34,8 @@ export type FunctionSource = {
   /** Its component's path (STUDY-154), null or absent for the app's. */
   componentPath?: string | null;
   udfType: "Query" | "Mutation" | "Action" | "HttpAction";
+  /** Where it ran (Convex's `module_environment`): `"use node"` or the isolate; absent when unknown. */
+  environment?: "isolate" | "node";
   cached: boolean | null;
   requestId: string;
   mutationRetryCount: number | null;
@@ -162,6 +164,9 @@ const functionJson = (s: FunctionSource) => ({
   // Convex's `component_path`, only for a component's function.
   ...(s.componentPath ? { component_path: s.componentPath } : {}),
   type: { Query: "query", Mutation: "mutation", Action: "action", HttpAction: "http_action" }[s.udfType],
+  // Convex's `runtime` (`868554b`): "node" for a "use node" action, null when unknown; bunvex's name for its own
+  // runtime where Convex says "convex" (DV-552, rule 5).
+  runtime: s.environment === "node" ? "node" : s.environment === "isolate" ? "bunvex" : null,
   // A query's cache hit, false on an action's streamed line (Convex's `log_action_progress`), else null.
   cached: s.cached,
   request_id: s.requestId,

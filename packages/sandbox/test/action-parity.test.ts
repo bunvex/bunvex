@@ -16,6 +16,7 @@ import { provideProcessExecutor } from "@bunvex/server/executor";
 import { v } from "@bunvex/values";
 import { createProcessExecutor } from "../src/executor.ts";
 import { TestBlobs } from "./fixtures/blobs.ts";
+import { constructedAt } from "./parity-frames.ts";
 
 provideProcessExecutor(createProcessExecutor);
 process.env.TZ = "UTC";
@@ -204,7 +205,7 @@ export const here = presence({ state: v.any() });
 type Outcome = { status: string; value?: unknown; errorMessage?: string; errorData?: unknown; logLines?: string[] };
 
 const own = (t: string) =>
-  t
+  constructedAt(t)
     .replace(/\b[0-9a-z]{31,37}\b/g, "<id>")
     .replace(/\b1\d{12}(?:\.\d+)?\b/g, "<time>")
     .replace(/\b[0-9a-f]{16}\b/g, "<request>")

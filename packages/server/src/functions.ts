@@ -162,6 +162,7 @@ import { readCanonicalUrls, withCanonical } from "./canonical-urls.ts";
 import { tooDeepToStringify } from "./deep-values.ts";
 import { type EnvReader, withAllEnv, withEnv } from "./env-scope.ts";
 import {
+  ArgumentsError,
   describeUncaught,
   FunctionLookupError,
   FunctionPathError,
@@ -171,6 +172,7 @@ import {
   isSystemError,
   neverResolves,
   newRequestId,
+  refusedCallMessage,
   UndecodedArgs,
   ValidatorError,
 } from "./errors.ts";
@@ -364,11 +366,13 @@ function toActionCallerError(e: unknown): unknown {
   // No such function, or one of another kind: Convex's action runtime gets the callee's `JsError` display (its
   // message and a newline) and throws it as a plain `Error` in the caller's code (STUDY-188 §X21).
   if (e instanceof FunctionLookupError) return asCallerError(new Error(`${e.message}\n`));
-  // Refused before the callee ran (its path, its arguments, a `_system/` identity, a timeout): Convex's
-  // syscall error is that message alone, which these errors already are.
+  // Its arguments or result refused by their checks: that `JsError`'s display too.
+  const refused = refusedCallMessage(e, "action");
+  if (refused !== undefined) return asCallerError(new Error(refused));
+  // Refused before the callee ran (its path, a `_system/` identity, a timeout): Convex's syscall error is that
+  // message alone, which these errors already are.
   if (
     e instanceof FunctionPathError ||
-    e instanceof ValidatorError ||
     e instanceof ActionTimeoutError ||
     (e as { code?: unknown } | null)?.code === "SystemIdentityRequired"
   )
@@ -1126,6 +1130,11 @@ export class Functions {
     return key.slice(0, key.lastIndexOf(":"));
   }
 
+  /** A client's query's key in the query cache, shared by the HTTP API and sync (STUDY-08 §7); none when uncacheable. */
+  queryCacheKey(name: string, args: unknown): string | undefined {
+    return this.cacheKey(name, args, true);
+  }
+
   private cacheKey(name: string, args: unknown, fromClient = true): string | undefined {
     if (args instanceof UndecodedArgs || tooDeepToStringify(args)) return undefined;
     try {
@@ -1461,6 +1470,7 @@ export class Functions {
       path: identifier,
       componentPath: r.componentPath,
       udfType: r.udfType,
+      environment: r.udfType !== "Action" || r.started ? r.environment : undefined,
       cached,
       requestId: r.requestId,
       // Every mutation's, 0 on its first attempt (Convex's `backoff.failures()`); none for the rest.
@@ -1824,6 +1834,16 @@ export class Functions {
 
   /** An id's table, for `v.id`: `_storage` for a `_file_storage` id, as Convex names it (STUDY-125). */
   private tableOf = (n: number) => this.engine.catalog.publicNameOf(n);
+  /**
+   * The table names `f`'s validators check ids against: its own component's, as Convex checks a function's args and
+   * result with the called component's table mapping (`table_mapping().namespace(called_component_id)`,
+   * `crates/isolate/src/environment/udf/async_syscall.rs`). A component's numbers mean nothing in the root's catalog.
+   */
+  private tableOfFn(f: FunctionDef): (n: number) => string | undefined {
+    const component = this.componentOf.get(f);
+    if (!component) return this.tableOf;
+    return (n) => this.engine.catalog.components.get(component.id)?.publicNameOf(n);
+  }
 
   /**
    * Convex's `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE` (crates/common/src/knobs.rs, STUDY-64
@@ -1862,11 +1882,11 @@ export class Functions {
     if (valueHasLoneSurrogate(a)) throw new FunctionPathError("Invalid arguments provided");
     const { size, nesting, tooBig } = measured;
     if (nesting > MAX_VALUE_NESTING)
-      throw new FunctionPathError(`Invalid arguments for ${this.pathOf(f)}: ${TOO_NESTED_MESSAGE}`);
+      throw new ArgumentsError(`Invalid arguments for ${this.pathOf(f)}: ${TOO_NESTED_MESSAGE}`);
     // Convex's `parse_udf_args`: an array over 8192 elements or an object over 1024 fields (DV-439).
-    if (tooBig !== undefined) throw new FunctionPathError(`Invalid arguments for ${this.pathOf(f)}: ${tooBig}`);
+    if (tooBig !== undefined) throw new ArgumentsError(`Invalid arguments for ${this.pathOf(f)}: ${tooBig}`);
     if (size > this.maxArgsSize)
-      throw new FunctionPathError(
+      throw new ArgumentsError(
         `Arguments for ${this.pathOf(f)} are too large (actual: ${formatBytes(size)}, limit: ${formatBytes(this.maxArgsSize)})`,
       );
     // Without a validator, Convex hands the handler whatever came (a number, null); with one, the single
@@ -1876,7 +1896,7 @@ export class Functions {
         `Expected to receive an object as the function's argument. Instead received: ${displayValue((a ?? null) as Value)}`,
       );
     if (f.args) {
-      const msg = checkValue(f.args, a as Value, this.tableOf);
+      const msg = checkValue(f.args, a as Value, this.tableOfFn(f));
       if (msg) throw ValidatorError.args(msg);
     }
     return a as AnyArgs;
@@ -1918,7 +1938,7 @@ export class Functions {
       );
     }
     if (f.returns) {
-      const msg = checkValue(f.returns, (value ?? null) as Value, this.tableOf);
+      const msg = checkValue(f.returns, (value ?? null) as Value, this.tableOfFn(f));
       if (msg) {
         notAValue();
         throw ValidatorError.returns(msg);
@@ -2433,8 +2453,9 @@ export class Functions {
         })
         .catch((e) => {
           // No such function, or one of another kind: Convex's `runUdf` syscall error, a plain `Error` of the
-          // caller's, its message alone (STUDY-188 §X21).
-          throw atCallSite(e instanceof FunctionLookupError ? asCallerError(new Error(e.message)) : e, site);
+          // caller's, its message alone (STUDY-188 §X21), as for arguments or a result refused by their checks.
+          const message = e instanceof FunctionLookupError ? e.message : refusedCallMessage(e, "udf");
+          throw atCallSite(message === undefined ? e : asCallerError(new Error(message)), site);
         });
       queue = run.catch(() => {});
       return run;
@@ -3152,6 +3173,7 @@ export class Functions {
         const life: ActionLife = { ended: false };
         const ctx = this.actionCtx(caller, opts.authError ?? null, opts.job, f, f.handler, undefined, life);
         const a = this.checkArgs(f, args);
+        if (currentOwner() instanceof Running) (currentOwner() as Running).started = true;
         // Node actions have their own limiter; scheduled and cron runs wait for a permit (STUDY-68).
         const node = NODE_FUNCTIONS.has(f);
         const limiter = node ? this.limits.nodeAction : this.limits.action;

@@ -197,6 +197,12 @@ bunvex/
 │   │   │                            monitor.ts, kick.ts, _generated/ (committed)
 │   │   ├── src/client/              ping, defineBatchWorkerValidators and the loop's types
 │   │   └── src/test.ts              `register(t, name)` for @bunvex/testing (`./test`)
+│   ├── rate-limiter/                @bunvex/rate-limiter 0.1.0, matching @convex-dev/rate-limiter 0.4.2   ✅
+│   │   ├── src/component/           bunvex.config.ts (`rateLimiter`, child `batchWorker`), schema, lib.ts,
+│   │   │                            internal.ts, worker.ts (the asynchronous mode), time.ts, _generated/
+│   │   ├── src/client/              RateLimiter: check, limit, reset, getValue, hookAPI; isRateLimitError
+│   │   ├── src/react/               useRateLimit (`./react`); its tests in test-react/, with a DOM
+│   │   └── src/test.ts              `register(t, name)` for @bunvex/testing (`./test`)
 │   └── sharded-counter/             @bunvex/sharded-counter 0.1.0, matching @convex-dev/sharded-counter 0.2.3   ✅
 │       ├── src/component/           bunvex.config.ts (`shardedCounter`), schema, public.ts, _generated/ (committed,
 │       │                            `bunvex codegen --component-dir src/component`)
@@ -272,7 +278,7 @@ client ──► protocol, values                    react ──► client, val
 nextjs, react-query ──► react, client, values  react-clerk, react-auth0 ──► react
 cli ──► server, core, values, client, protocol testing ──► server, core, values, cli, file-storage
 helpers ──► server, values (and core and testing in its tests only: an engine in memory, bunvexTest)
-components/* ──► server, values, helpers, another component (a child); testing in their tests only
+components/* ──► server, values, react (a `./react` entry), helpers, another component (a child); testing in their tests only
 sandbox ──► server, core, values, protocol (its child runs the server's loader; the server never imports it)
 bunvex ──► the packages it re-exports, plus core, persistence and sandbox for bin/local-backend
 examples/* ──► bunvex, react-query, helpers, components/* (a user's app, STUDY-90)

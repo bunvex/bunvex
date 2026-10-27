@@ -1,5 +1,5 @@
 # STUDY-08 — Query cache and subscriptions
-<!-- index: Query cache and subscriptions | decided; D9, D10 resolved to match Convex (DV-64, DV-57); D6 (sync path, B13) and D8 (DV-63) to build -->
+<!-- index: Query cache and subscriptions | decided; D9, D10 resolved to match Convex (DV-64, DV-57); D6 (sync path, B13) and D8 (DV-63) to build; §7 one cache for HTTP and sync (owner, 2026-10-27: match Convex) -->
 
 - **Status:** decided — D1–D3 fixed (#11, #13); D6 fixed for the HTTP query cache (#103), the sync path next (Phase 0 B13); D4, D5, D7, D11 resolved to match Convex (DV-44, DV-45, DV-49); D9 resolved to match Convex (#119, #121; DV-64); D10 resolved to match Convex in #134 (DV-57, STUDY-06 §9); D8 built to match Convex (§1.6, §3.6; DV-63), with one decided internal divergence (§3.6, DV-153). Retroactive: the code in §3 was written before the study-first rule.
 - **Convex source read:** commit `4577b9031` of get-convex/convex-backend
@@ -586,8 +586,88 @@ requests never overlap.
 1. ~~Should the query cache become ts-aware?~~ Yes, as Convex's (§3.6): an entry serves any ts at or
    after the one it ran at, until a commit writes into its reads.
 2. Should subscriptions share the cache, as Convex's do, to collapse identical executions across
-   clients and HTTP? Not now: `SyncHub` already shares one execution per key and ts (DV-09); sharing
-   results between HTTP and sync is not observable. Confirmed by the owner, 2026-10-01.
+   clients and HTTP? ~~Not now: `SyncHub` already shares one execution per key and ts (DV-09); sharing
+   results between HTTP and sync is not observable. Confirmed by the owner, 2026-10-01.~~ **Yes (owner,
+   2026-10-27): match Convex** (§7). It is observable: the Logs show a subscription's run where Convex shows a
+   cache hit.
 3. **Decided (owner, 2026-10-01; DV-153):** a cache hit writes its refreshed token back (§3.6), which Convex's comment intends
    and its code does not do. Accepted as recommended: keep it (not observable, about 1.6× the reads/s in the
    CPU-bound mixed benchmark).
+
+## 7. One cache for HTTP and sync (2026-10-27)
+
+- **Convex source read:** `precompiled-2026-10-24-bb31399` (the clone at `db19afd4a`).
+- **bunvex read at:** `main` after #895.
+
+### 7.1 How Convex does it
+
+- **A sync worker's query is a cache lookup.** When a subscription must run, `crates/sync/src/worker.rs:1141`
+  calls `api.execute_public_query(…, ExecuteQueryTimestamp::At(new_ts), query.journal, …)`, the same entry point as
+  the HTTP API's `/api/query`. It goes to `Application::read_only_udf_at_ts`, then `run_query_at_ts`, then
+  `CacheManager::get` (`application_function_runner/mod.rs`, `run_query_at_ts_inner`).
+- **One key for both.** The key is `StoredCacheKey { path, args, identity, journal, allowed_visibility }`
+  (`cache/mod.rs:251`). Sync and the HTTP API are both `PublicOnly`, so a query asked first over HTTP and then by a
+  subscription, with the same arguments, identity and journal, is one entry.
+- **What the cache returns** is what the subscription needs: the result, the log lines, the journal, and the `token`
+  (the read set and the ts it is valid at, `QueryReturn`, `cache/mod.rs`). The worker subscribes to that token.
+- **A hit is logged as a cache hit** (`udf_execution.log_query(…, is_cache_hit, …)`): the function log, and the
+  dashboard's Logs, say "(cached)" for it, whether HTTP or sync asked.
+- **Entries outlive their subscribers.** The cache is an LRU bounded by bytes (`UDF_CACHE_MAX_SIZE`), with no link to
+  who subscribed. A query unsubscribed and subscribed again (a page reload) is served from it while no commit wrote
+  into its reads.
+- **Paginated queries** are stored under the request's journal and under the outcome's
+  (`cache_keys_after_execution`, `cache/mod.rs:209-245`). A fresh caller (empty journal) and the same caller's next
+  request (the outcome's journal) both find the entry.
+
+### 7.2 What an app observes
+
+- **The function log and the dashboard's Logs.** A Next.js page with `preloadQuery` and the same query subscribed by
+  the client runs the query once on Convex. The server render runs it (or hits), and the subscription is a
+  "(cached)" hit. On bunvex the subscription runs it again, every reload. STUDY-75 (cache hits in the log) and #919
+  ("(cached)" in Logs) made this visible. It is how the owner found it, 2026-10-27.
+- **The work done.** Every query of the page runs twice per load on bunvex: once for the render and once for the
+  subscription. Its reads count twice in the usage figures.
+- **A reload.** When the last subscriber of a query goes away (the old page's socket closes), bunvex's `SyncHub` drops
+  its result (`packages/server/src/sync.ts`, `forget`). The new page's subscription runs it again even with no
+  commit in between. Convex serves it from the cache.
+
+So §6 question 2 ("sharing results between HTTP and sync is not observable", owner, 2026-10-01) no longer holds.
+
+### 7.3 How bunvex does it today
+
+- The HTTP API, `query_at_ts` and an action's `ctx.runQuery` go through `Engine.cachedQuery` (§3.6), keyed by
+  `cacheKeyOf(hash, name, visibility, args)` (`packages/server/src/functions.ts`) plus the caller's key.
+- A sync session's queries go through `SyncHub` (`packages/server/src/sync.ts`).
+  - It keeps one execution per (query, args, journal, identity, ts) for the sessions that subscribe (DV-09) and
+    validates it against the write log.
+  - It runs it with `Engine.queryTracked`, which never touches the query cache.
+  - It forgets a key once no session subscribes to it.
+
+### 7.4 How bunvex will do it
+
+- **A subscription's run looks in the query cache first.** On a miss it runs and stores its result there, with the
+  same keys as `cachedQuery`. That is the query's key (the code version's hash, the name, `public`, the arguments),
+  the journal when it is not empty, and the caller's key or `*` when the run did not read the identity. With an empty
+  journal the key is exactly the HTTP API's, so the two share entries.
+- **What a hit gives the session** is what a run gives it: the result's JSON, the read set with the ts it is now
+  valid at (the refreshed token, §3.6), the outcome's journal, and whether the identity was read. Its log lines are
+  replayed as a cache hit, so the Completion says `cachedResult: true`, as Convex's.
+- **Failures** are not cached (Convex: "We do not cache JSErrors"). A failed run still returns its reads, so the
+  subscription reruns when they change, as today.
+- **A paginated query's result** is stored under the request's journal and the outcome's, as Convex's.
+- **`SyncHub` stays** as the layer that shares one execution among the sessions of one transition (DV-09). When a
+  key is forgotten, the result stays in the cache, so a later subscription at a ts where nothing changed is a hit.
+- **The dashboard's figures keep their shapes:** `/stats` `cacheHits`, `cacheMisses`, `subscriptions`,
+  `sync.executions`, `sync.transitions`, and the function log's `cachedResult`. `sync.executions` counts the runs
+  that executed, not the hits.
+- **A component path from the sync protocol** (`q.component`) is resolved inside the run's transaction. It keeps
+  running uncached until its key can be resolved before the run, as `query` does for a component function. Noted
+  here; it does not change what the Next.js case shows.
+
+### 7.5 Divergences
+
+- **DV-09** said Convex has "each connection runs its own queries". In fact Convex's connections share one execution
+  through the cache (`CacheOp::Wait`), and with §7.4 bunvex's subscriptions share through the same cache. The row
+  becomes a match: one execution per key, shared by HTTP, `ctx.runQuery` callers of the same visibility, and every
+  connection.
+- **§6 question 2** is answered again (owner, 2026-10-27): match Convex.

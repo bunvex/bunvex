@@ -254,6 +254,7 @@ export type {
 } from "./engine.ts";
 export {
   type CacheCompanion,
+  type CachedEntryRef,
   type Caller,
   ComponentDeletionError,
   DEFAULT_INSTANCE_NAME,

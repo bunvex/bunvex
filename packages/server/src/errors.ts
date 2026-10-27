@@ -138,13 +138,34 @@ export class FunctionPathNotFoundError extends Error {
 /**
  * An argument or result that misses its validator: Convex checks both in Rust, around the run
  * (`ArgsValidator::check_args`, `ReturnsValidator::check_output`), so the error is a message alone — no
- * `Uncaught`, no frames — and its message is the `JsError`'s display, newline included, for the client and
- * for a function that called this one alike. `ArgumentValidationError: <check>` wraps the check's own
- * `JsError`, so it ends with two newlines (STUDY-67 H6).
+ * `Uncaught`, no frames — and its message is the `JsError`'s display, newline included, for the client.
+ * `ArgumentValidationError: <check>` wraps the check's own `JsError`, so it ends with two newlines (STUDY-67
+ * H6). A function that called this one gets a plain `Error` of its own instead (`refusedCallMessage`).
  */
 export class ValidatorError extends Error {
   static args = (check: string) => new ValidatorError(`ArgumentValidationError: ${check}\n\n`);
   static returns = (check: string) => new ValidatorError(`ReturnsValidationError: ${check}\n`);
+}
+
+/**
+ * Arguments that do not decode into values, or too many or too large ("Invalid arguments for …", "Arguments for
+ * … are too large"): Convex's `parse_udf_args` and `validate_udf_args_size` (crates/udf/src/validation.rs), a
+ * `JsError` of the message alone, as any `FunctionPathError`; marked so a nested call can tell it apart.
+ */
+export class ArgumentsError extends FunctionPathError {}
+
+/**
+ * The message of the plain `Error` a caller gets for a callee refused around its run (its arguments, its
+ * validators), or `undefined` for any other error. Convex makes the caller's error from the refusal's
+ * `JsError`: a query's or mutation's `runUdf` from its message (udf/async_syscall.rs, `InvalidArgs`), an
+ * action's `performAsyncSyscall` from its display, the message and a newline (action/async_syscall.rs). The
+ * error is the caller's, so left uncaught it is `Uncaught Error: …` with the caller's frame.
+ */
+export function refusedCallMessage(e: unknown, caller: "action" | "udf"): string | undefined {
+  // A validator's message is already its `JsError`'s display: one newline more than the message.
+  if (e instanceof ValidatorError) return caller === "action" ? e.message : e.message.slice(0, -1);
+  if (e instanceof ArgumentsError) return caller === "action" ? `${e.message}\n` : e.message;
+  return undefined;
 }
 
 export function describeUncaught(e: unknown): UncaughtError {
