@@ -1409,6 +1409,7 @@ export class Functions {
       path: identifier,
       componentPath: r.componentPath,
       udfType: r.udfType,
+      environment: r.udfType !== "Action" || r.started ? r.environment : undefined,
       cached,
       requestId: r.requestId,
       // Every mutation's, 0 on its first attempt (Convex's `backoff.failures()`); none for the rest.
@@ -3069,6 +3070,7 @@ export class Functions {
         const life: ActionLife = { ended: false };
         const ctx = this.actionCtx(caller, opts.authError ?? null, opts.job, f, f.handler, undefined, life);
         const a = this.checkArgs(f, args);
+        if (currentOwner() instanceof Running) (currentOwner() as Running).started = true;
         // Node actions have their own limiter; scheduled and cron runs wait for a permit (STUDY-68).
         const node = NODE_FUNCTIONS.has(f);
         const limiter = node ? this.limits.nodeAction : this.limits.action;

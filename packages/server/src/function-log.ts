@@ -192,6 +192,11 @@ export class Running implements LogOwner {
   retries = { n: 0 };
   /** Why it ran and its trace (STUDY-131 AD-27). */
   links: ExecutionLinks | null = null;
+  /**
+   * An action found and its arguments accepted, so it ran (Convex's `ModuleEnvironment` known): before that, its log
+   * stream events have no runtime, as Convex's `Invalid` (DV-552).
+   */
+  started = false;
   /** The run's user timer (a query's or mutation's), for its user execution time (STUDY-71). */
   timer: unknown = null;
   /** The clock its times are read from (the engine's runtime); set by `Functions.logged`. */
