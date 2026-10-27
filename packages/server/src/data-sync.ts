@@ -40,7 +40,8 @@ import {
 } from "./streaming-export.ts";
 
 /** Convex's knobs (common/src/knobs.rs). */
-const pageSize = knob("DATA_SYNC_PAGE_SIZE_LIMIT", 16384);
+// 20 000 since Convex's 315ea3e (16 384 before): a multiple of MySQL's query batch.
+const pageSize = knob("DATA_SYNC_PAGE_SIZE_LIMIT", 20000);
 export const DATA_SYNC_LIMITS = {
   pageSize,
   pageBytes: knob("DATA_SYNC_PAGE_BYTES_LIMIT", 1 << 26),
@@ -289,10 +290,16 @@ export type DataSyncPage = {
   targets: Target[];
 };
 
-/** The selected tables (active and hidden user tables), by tablet, and their columns. */
+/**
+ * The selected tables (active user tables), by tablet, and their columns. A hidden table (an import being written)
+ * is left out, as Convex's `include_hidden: false` since cb8be0f: its rows would land in the table it replaces while
+ * it is written; once active, it is a new tablet, truncated and walked anew. Streaming export keeps hidden tables.
+ */
 export function dataSyncTargets(engine: Engine, selection: Selection): Target[] {
   const out: Target[] = [];
+  const hidden = new Set(engine.catalog.hidden.values());
   for (const t of streamedTables(engine)) {
+    if (hidden.has(t)) continue;
     let cols: Columns | null;
     try {
       cols = tableSelection(selection, t.name);
@@ -354,7 +361,15 @@ export async function dataSyncPage(
   const values: DataSyncValue[] = [];
   try {
     if (c.current !== null && latest - c.syncedTs < limits.byIdFreshnessNs)
-      c = await byIdPage(engine, c, byTablet, values, limits);
+      try {
+        c = await byIdPage(engine, c, byTablet, values, limits);
+      } catch (e) {
+        // Fresh by the clock is not inside the index retention window (the newest commit stands still on an idle
+        // deployment): out of it, the page walks the log instead, from the same cursor (Convex's fd5c738).
+        if (!(e instanceof OutOfRetentionError)) throw e;
+        values.length = 0;
+        c = await tsPage(engine, c, latest, byTablet, values, limits);
+      }
     else c = await tsPage(engine, c, latest, byTablet, values, limits);
   } catch (e) {
     if (e instanceof OutOfRetentionError) throw expired();

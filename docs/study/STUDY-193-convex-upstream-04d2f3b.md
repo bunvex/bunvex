@@ -63,7 +63,7 @@ opened). Two of the nineteen items are built.
 | A6 | Action `fetch` drops the app's `Proxy-Authorization` | **yes** | #842 | `request.headers.delete("proxy-authorization")` (`server/src/action-fetch.ts:311`) |
 | A7 | `.staged({ field })` field deltas | **yes** | #901 | an object is a delta over an object or `v.any()` table, `undefined` removes a field, a union or record table refuses it (`core/src/schema.ts`); differential `staged-field-deltas.test.ts` |
 | A8 | `paginate()` in component queries | **yes** | #899 | the component check is gone; a nested query pages in a scope of its own, merged into its caller's when it returns (`Tx.inQueryScope`); the message names bunvex as Convex's at `04d2f3b`; differential `paginate-components.test.ts` |
-| A9 | Data sync: no hidden tables, by-ts fallback, page 20 000 | no | — | page `16384` (`server/src/data-sync.ts:43`); the selection still takes "active and hidden user tables" (`:292`) |
+| A9 | Data sync: no hidden tables, by-ts fallback, page 20 000 | **yes** | #903 | `dataSyncTargets` skips hidden tables; an `OutOfRetentionError` from the by-id page falls back to `tsPage`; `DATA_SYNC_PAGE_SIZE_LIMIT` 20 000 (`server/src/data-sync.ts`); differential `data-sync-page.test.ts` |
 | A10 | Resume a backfill at a fresh snapshot, keeping the count | no | — | past retention, the backfill starts over from `FULL_LO` with `done = 0` (`core/src/index-worker.ts:281-290`) |
 | A11 | Mutation permit before the transaction | no | — | the permit is taken inside `perAttempt`, after the transaction began (`server/src/functions.ts:1967`) |
 | A12 | Audit log: integration configs, `download_export` | no | — | integration events carry `{id, type}` only (`server/src/audit-log.ts:86-88`); no `download_export` |

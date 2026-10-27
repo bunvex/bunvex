@@ -286,3 +286,65 @@ test("a cursor behind the retention window is DataSyncCursorExpired", async () =
   (t.engine as { retention: unknown }).retention = real;
   expect(r.body.code).toBe("DataSyncCursorExpired");
 });
+
+// Convex's cb8be0f, fd5c738 and 315ea3e (STUDY-186 A9).
+test("the page is 20 000 rows by default (Convex's DATA_SYNC_PAGE_SIZE_LIMIT since 315ea3e)", () => {
+  expect(DATA_SYNC_LIMITS.pageSize).toBe(20000);
+});
+
+test("a hidden table (an import being written) is not synced; once active it is truncated and walked", async () => {
+  const t = await setup();
+  await t.call("m:put", { table: "a", n: 2, doc: { v: "old" } });
+  const first = await untilUpToDate(t);
+  // An import's hidden `a`, with rows of its own.
+  const hidden = await t.engine.createHiddenTable("a", { copyIndexesOf: "a" });
+  await t.engine.mutation((db) =>
+    db.asSystem(async () => {
+      for (const v of ["new 1", "new 2", "new 3"]) await db.importInsert(hidden, { v } as never);
+    }),
+  );
+  // Its rows stay out of the sync, from a cold start and from the cursor.
+  const cold = await untilUpToDate(t);
+  const rows = (pages: any[]) =>
+    pages.flatMap((p) => p.values.filter((x: any) => !x.deleted).map((x: any) => x.value.v));
+  expect(rows(cold.pages).sort()).toEqual(["old", "old"]);
+  expect(cold.pages.flatMap((p) => p.truncates)).toEqual([
+    { component: "", table: "a" },
+    { component: "", table: "b" },
+  ]);
+  const after = await untilUpToDate(t, first.cursor);
+  expect(rows(after.pages)).toEqual([]);
+  expect(after.pages.flatMap((p) => p.truncates)).toEqual([]);
+  // Activated, it replaces `a`: the sync truncates `a` and walks the new rows.
+  await t.engine.activateTables([hidden.id], [], async () => {});
+  const active = await untilUpToDate(t, after.cursor);
+  expect(active.pages[0].truncates).toEqual([{ component: "", table: "a" }]);
+  expect(rows(active.pages).sort()).toEqual(["new 1", "new 2", "new 3"]);
+});
+
+test("a by-id page out of the index retention window walks the log instead, from the same cursor", async () => {
+  const t = await setup();
+  await t.call("m:put", { table: "a", n: 3 });
+  const small = { ...DATA_SYNC_LIMITS, pageSize: 1 };
+  const onlyA = { _other: "excluded", "": { _other: "excluded", a: { _other: "included" } } } as never;
+  const page = (cursor: DataSyncCursor | null) => dataSyncPage(t.engine, cursor, onlyA, () => "s", small);
+  const p1 = await page(null);
+  expect(p1.cursor.current?.docsSynced).toBe(1);
+  // A write after the snapshot, then the index window moves past it; the log is still there.
+  const [late] = (await t.call("m:put", { table: "a", n: 1 })) as string[];
+  const r = t.engine.retention!;
+  const before = { minIndexTs: r.minIndexTs, minDocumentTs: r.minDocumentTs };
+  r.minIndexTs = t.engine.committer.visibleTs;
+  r.minDocumentTs = 0n;
+  try {
+    const p2 = await page(p1.cursor);
+    // Along the log: the write after the snapshot is emitted only if its id is at or before the walk's (captured);
+    // the cursor moves on in time, still walking `a` by id from where it was.
+    expect(p2.cursor.syncedTs).toBe(t.engine.committer.visibleTs);
+    expect(p2.cursor.current).toEqual(p1.cursor.current);
+    const at = p1.cursor.current!.currentId!;
+    expect(p2.values.map((v) => JSON.parse(v.json)._id)).toEqual(late <= at ? [late] : []);
+  } finally {
+    Object.assign(r, before);
+  }
+});
