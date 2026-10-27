@@ -199,16 +199,16 @@ test("function.runtime (DV-552): bunvex for a V8 function, none for an action th
   await t.call("action", "m:typed", { n: "x" });
   await t.until(() => t.events.length >= 7);
   const runtime = (path: string) => t.of(path).map((e) => [e.function.type, e.function.runtime]);
-  expect(runtime("m.js:count")).toEqual([["query", "bunvex"]]);
-  expect(runtime("m.js:add")).toEqual([["mutation", "bunvex"]]);
-  expect(runtime("m.js:act")).toEqual([["action", "bunvex"]]);
-  expect(runtime("m.js:typed")).toEqual([
+  expect(runtime("m:count")).toEqual([["query", "bunvex"]]);
+  expect(runtime("m:add")).toEqual([["mutation", "bunvex"]]);
+  expect(runtime("m:act")).toEqual([["action", "bunvex"]]);
+  expect(runtime("m:typed")).toEqual([
     ["action", "bunvex"],
     ["action", null],
   ]);
-  expect(runtime("m.js:nope")).toEqual([["action", null]]);
+  expect(runtime("m:nope")).toEqual([["action", null]]);
   expect(runtime("POST /hook")).toEqual([["http_action", "bunvex"]]);
   // The key sits after `type`, as in Convex's JSON.
-  const keys = Object.keys(t.of("m.js:count")[0]!.function);
+  const keys = Object.keys(t.of("m:count")[0]!.function);
   expect(keys.indexOf("runtime")).toBe(keys.indexOf("type") + 1);
 });
