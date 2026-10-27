@@ -9,6 +9,7 @@ import { componentRow } from "../src/components.ts";
 import { Engine } from "../src/engine.ts";
 import { SqlitePersistence } from "../src/persistence/sqlite.ts";
 import { defineSchema, defineTable } from "../src/schema.ts";
+import type { Tx } from "../src/tx.ts";
 
 const engines: Engine[] = [];
 const dirs: string[] = [];
@@ -115,9 +116,9 @@ describe("refused in a component", () => {
     await e.mutation((db) => db.asSystem(() => db.inComponent(id, () => db.insert("messages", { body: "server" }))));
     const [doc] = await e.query((db) => db.inComponent(id, () => db.query("messages").collect()));
     for (const write of [
-      (db: Parameters<Parameters<Engine["mutation"]>[0]>[0]) => db.patch(doc!._id, { body: "y" }),
-      (db: Parameters<Parameters<Engine["mutation"]>[0]>[0]) => db.replace(doc!._id, { body: "y" }),
-      (db: Parameters<Parameters<Engine["mutation"]>[0]>[0]) => db.delete(doc!._id),
+      (db: Tx) => db.patch(doc!._id, { body: "y" }),
+      (db: Tx) => db.replace(doc!._id, { body: "y" }),
+      (db: Tx) => db.delete(doc!._id),
     ])
       expect(await failure(e.mutation((db) => db.inComponent(id, () => write(db))))).toBe(message);
   });

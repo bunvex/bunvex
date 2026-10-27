@@ -72,6 +72,36 @@ export class ConcurrencyLimiter {
     }
   }
 
+  /**
+   * Take a permit, waiting as `run` does, for a run that does not fit in one function (a call through the boundary,
+   * STUDY-194 §4.13); resolves to its release.
+   */
+  async acquire(opts: { wait?: boolean } = {}): Promise<() => void> {
+    const o = this.outstanding;
+    if (this.inUse >= this.max) {
+      o.queued++;
+      this.onChange?.();
+      try {
+        await this.wait(opts.wait === true);
+      } finally {
+        o.queued--;
+      }
+    } else this.inUse++;
+    if (this.inUse > this.stats.peak) this.stats.peak = this.inUse;
+    o.running++;
+    this.onChange?.();
+    let held = true;
+    return () => {
+      if (!held) return;
+      held = false;
+      o.running--;
+      this.onChange?.();
+      const next = this.waiting.shift();
+      if (next) next();
+      else this.inUse--;
+    };
+  }
+
   private wait(forever: boolean): Promise<void> {
     return new Promise((resolve, reject) => {
       // Queries and mutations wait inside their deterministic execution, where timers are refused: this one

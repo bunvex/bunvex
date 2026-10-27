@@ -25,6 +25,29 @@ export {
 } from "./bootstrap.ts";
 export { bundledModule, provideBundledModules } from "./bundled-modules.ts";
 export {
+  type Call,
+  type CallBodies,
+  type CallHost,
+  CallRunner,
+  callsRoundTripByDefault,
+  isCall,
+  roundTripCallsByDefault,
+  type TxStart,
+} from "./call-runner.ts";
+export {
+  type CallKind,
+  type CallOutcome,
+  type CallRequest,
+  type CallSpec,
+  type CallStatus,
+  type CallWrites,
+  decodeCallOutcome,
+  decodeCallRequest,
+  encodeCallOutcome,
+  encodeCallRequest,
+  MalformedCallMessageError,
+} from "./call-wire.ts";
+export {
   AUTH_TABLE,
   BACKEND_STATE_TABLE,
   CANONICAL_URLS_TABLE,
@@ -232,7 +255,6 @@ export type {
 export {
   type CacheCompanion,
   type Caller,
-  type CallRequest,
   ComponentDeletionError,
   DEFAULT_INSTANCE_NAME,
   Engine,
@@ -248,6 +270,7 @@ export {
   occBackoffMs,
   parseValue,
   type QueryJournal,
+  type RequestMetadata,
   readInstanceRecord,
   readSystemRows,
   SchemaEnforcementError,

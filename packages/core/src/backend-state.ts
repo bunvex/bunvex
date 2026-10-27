@@ -47,6 +47,16 @@ export class BackendStateCache {
     for (const e of entries) if (e.writes.some((w) => w.index === index)) this.writtenTs = e.ts;
   }
 
+  /**
+   * The state as of the last commit that wrote it, when a transaction already read it since; null when unknown.
+   * Outside any transaction and recording no read: what the dispatcher checks before a query's permit (STUDY-194
+   * §4.13), which the query's own transaction then reads again.
+   */
+  latest(): BackendState | null {
+    const c = this.cached;
+    return c !== null && c.from === this.writtenTs ? { ...c.state } : null;
+  }
+
   /** The state at `db`'s snapshot; a system read, out of the function's limits as in Convex. */
   async read(db: Tx): Promise<BackendState> {
     const c = this.cached;
