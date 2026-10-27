@@ -328,16 +328,32 @@ export class TableDefinition<
   stagedDocument: GenericValidator | undefined = undefined;
 
   /**
-   * @internal Stage the table's next document validator (Convex's `TableDefinition.staged`, STUDY-106): an
-   * object of field validators or a validator. It is serialized and stored with the schema, so changing it
-   * alone makes a new schema version, but nothing checks documents against it: the validator given to
-   * `defineTable` stays the one enforced, and the document type does not change.
+   * @internal Stage changes to the table's document validator (Convex's `TableDefinition.staged`, STUDY-106; field
+   * deltas since Convex's `c3d9d79`, STUDY-186 A7). A validator is the whole staged validator. An object of field
+   * validators is a delta over a table defined as an object or `v.any()`: its fields replace or add to the enforced
+   * ones, and a field set to `undefined` is removed; a table defined with any other validator (a union, a record)
+   * refuses it. The result is serialized and stored with the schema, so changing it alone makes a new schema
+   * version, but nothing checks documents against it: the validator given to `defineTable` stays the one enforced,
+   * and the document type does not change.
    */
-  staged(document: Validator<Record<string, unknown>, "required"> | PropertyValidators): this {
+  staged(
+    document: Validator<Record<string, unknown>, "required"> | Record<string, GenericValidator | undefined>,
+  ): this {
     if (this.stagedDocument !== undefined) throw new Error("Table cannot have more than one staged validator.");
-    this.stagedDocument = (document as GenericValidator)?.isValidator
-      ? (document as GenericValidator)
-      : v.object(document as PropertyValidators);
+    if ((document as GenericValidator)?.isValidator) {
+      this.stagedDocument = document as GenericValidator;
+      return this;
+    }
+    const enforced = this.validator as GenericValidator;
+    if (enforced.kind !== "object" && enforced.kind !== "any")
+      throw new Error(
+        "Specifying top-level field changes is only supported for simple table definitions. For a table defined with a union or record validator, you must stage a fully defined object or union validator.",
+      );
+    const base = enforced.kind === "object" ? (enforced as unknown as { fields: PropertyValidators }).fields : {};
+    const fields = Object.fromEntries(
+      Object.entries({ ...base, ...document }).filter((e): e is [string, GenericValidator] => e[1] !== undefined),
+    );
+    this.stagedDocument = v.object(fields);
     return this;
   }
 }
