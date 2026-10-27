@@ -3,7 +3,7 @@
 // in order. Each server transition rebuilds the view from scratch; an update is dropped once its mutation is
 // reflected in the server's results (or failed), so the server's value replaces the guess without flicker.
 import {
-  type AnyFunctionReference,
+  type AnyReference,
   type FunctionArgs,
   type FunctionReturnType,
   getFunctionName,
@@ -16,7 +16,7 @@ import type { FunctionResult } from "./function-result.ts";
 import { errorFor } from "./logging.ts";
 import { canonicalizeUdfPath, type QueryToken, serializePathAndArgs } from "./udf-path.ts";
 
-type QueryRef = AnyFunctionReference & { _type: "query" };
+type QueryRef = AnyReference & { _type: "query" };
 
 /** What an optimistic update reads and writes: the client's current query results. */
 export interface OptimisticLocalStore {

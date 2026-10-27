@@ -1,5 +1,6 @@
-// Log lines as a data grid (STUDY-12 §7): newest first, one row per line — time, level, function, the
-// execution's outcome on its last line, request, message. Arrows move between lines; Enter or a click opens a
+// Log lines as a data grid (STUDY-12 §7): newest first, one row per line — in Convex's order
+// (`LogListItem.tsx`): time, request, the execution's outcome on its last line, function, a log line's level,
+// message. Arrows move between lines; Enter or a click opens a
 // line's details, which then follow the current line.
 
 import { DataTable, type DataTableColumn, dataTableColumns } from "@bunvex/ui/components/data-table";
@@ -52,16 +53,22 @@ const allColumns: DataTableColumn<LogRow>[] = [
     cell: (c) => {
       const x = c.getValue() as LogEntry["execution"];
       if (!x) return null;
-      return <StatusBadge status={x.status}>{formatDuration(x.durationMs)}</StatusBadge>;
+      // a cached result says so in place of its duration, as Convex's list does
+      return (
+        <StatusBadge status={x.status}>
+          {x.cached ? <span className="text-success">(cached)</span> : formatDuration(x.durationMs)}
+        </StatusBadge>
+      );
     },
   }),
   col.accessor((e) => e.level, {
     id: "level",
     header: "Level",
+    // a log line's level; an execution's outcome line has none, its outcome is the Outcome column (as Convex)
     cell: (c) =>
       c.row.original.event ? (
         <span className="font-mono text-xs text-info uppercase">event</span>
-      ) : (
+      ) : c.row.original.execution ? null : (
         <span
           className={cn(
             "font-mono text-xs uppercase",
@@ -108,8 +115,8 @@ const allColumns: DataTableColumn<LogRow>[] = [
 ];
 
 const pick = (order: string[]) => order.map((id) => allColumns.find((c) => c.id === id)!);
-/** Who and how before what (UI-01 §22.4): the message, the widest, last. */
-const columns = pick(["time", "level", "function", "outcome", "request", "message"]);
+/** Convex's order (`LogListItem.tsx`); the message last, in the width the others leave. */
+const columns = pick(["time", "request", "outcome", "function", "level", "message"]);
 /** On a phone the message comes right after the time: it is what a reader wants (UX-6). */
 const PHONE = "(max-width: 639px)";
 const phoneColumns = pick(["time", "message", "level", "function", "outcome", "request"]);
@@ -130,7 +137,8 @@ function useMatches(query: string) {
   return matches;
 }
 
-const WIDTHS: Record<string, number> = { time: 176, request: 92, outcome: 144, level: 76, function: 200, message: 560 };
+/** The message's is the least it gets: it fills the rest of the row (`fillColumn`), mostly empty on outcome lines. */
+const WIDTHS: Record<string, number> = { time: 176, request: 72, outcome: 144, function: 240, level: 72, message: 320 };
 
 export function LogList(props: {
   label: string;
@@ -165,6 +173,7 @@ export function LogList(props: {
       columns={shown}
       // the time stays in view when a long message scrolls the list sideways (UX-5)
       stickyColumn="time"
+      fillColumn="message"
       data={props.lines}
       getRowId={(e) => e.id}
       resetKey={props.resetKey}

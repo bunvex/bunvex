@@ -146,7 +146,7 @@ test("a webhook stream: created, verified and signed; functions' events as V2 JS
   const console_ = events.find((e) => e.topic === "console")!;
   expect(console_).toMatchObject({
     topic: "console",
-    function: { path: "m.js:add", type: "mutation", cached: null, mutation_queue_length: null },
+    function: { path: "m:add", type: "mutation", cached: null, mutation_queue_length: null },
     log_level: "LOG",
     message: "'adding' 1",
     is_truncated: false,
@@ -154,8 +154,8 @@ test("a webhook stream: created, verified and signed; functions' events as V2 JS
   });
   const execs = events.filter((e) => e.topic === "function_execution");
   expect(execs.map((e) => [e.function.path, e.status, e.run_reason])).toEqual([
-    ["m.js:add", "success", "httpApi"],
-    ["m.js:fail", "failure", "httpApi"],
+    ["m:add", "success", "httpApi"],
+    ["m:fail", "failure", "httpApi"],
   ]);
   expect(execs[1].error_message).toContain("nope");
   expect(Object.keys(execs[0].usage)).toContain("database_write_documents");

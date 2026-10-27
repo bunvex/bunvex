@@ -979,6 +979,18 @@ describe("deploy2 over HTTP", () => {
     expect(
       await refused(`export default { providers: [{ domain: "example.com", applicationID: "x", n: 10n }] };`),
     ).toBe(`${PUSHED}auth config file can only contain strings`);
+    // An export with no JSON (a function, a symbol, a `toJSON` that gives none): Convex's isolate hands serde the text
+    // `undefined`, which it refuses before anything else (packages/differential/test/auth-config-json.test.ts).
+    for (const source of [
+      "export default () => 1;",
+      'export default Symbol("s");',
+      "export default { toJSON() { return undefined; } };",
+    ])
+      expect({ source, message: await refused(source) }).toEqual({
+        source,
+        message: `${PUSHED}auth config file must include a list of provider credentials: expected value`,
+      });
+    expect(await refused("export default undefined;")).toBe(`${PUSHED}auth config file is missing default export.`);
     // A punycode top-level domain is one.
     const ok = await d.push([auth(`export default { providers: [{ domain: "foo.xn--p1ai", applicationID: "x" }] };`)]);
     expect(ok.start.body.appAuth).toEqual([{ domain: "foo.xn--p1ai", applicationID: "x" }]);

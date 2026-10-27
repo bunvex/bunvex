@@ -9,13 +9,16 @@ import type { EvaluatedDefault } from "./protocol.ts";
 /** The child's side: a default export, in the form its use takes. */
 export function exportDefault(value: unknown, use: DefaultExportUse): EvaluatedDefault {
   if (use === "authConfig") {
+    // The push reads none and `null` alike: a missing export (Convex's `is_null_or_undefined`).
+    if (value === undefined || value === null) return { kind: "undefined" };
     let json: string | undefined;
     try {
       json = JSON.stringify(value);
     } catch {
       return { kind: "unserializable" };
     }
-    return json === undefined ? { kind: "undefined" } : { kind: "json", json };
+    // A function, a symbol, a `toJSON` that gives `undefined`: an export, but no JSON.
+    return json === undefined ? { kind: "notJson" } : { kind: "json", json };
   }
   // The push reads none, `null` and `undefined` alike: a missing schema export.
   if (value === undefined || value === null) return { kind: "undefined" };
@@ -34,6 +37,12 @@ export function exportDefault(value: unknown, use: DefaultExportUse): EvaluatedD
  */
 export const NOT_A_SCHEMA: unknown = Object.freeze({});
 
+/**
+ * An auth config with no JSON (`notJson`): what the host hands the push for it, a value `JSON.stringify` gives none
+ * for either, so the push refuses it as it refuses the live value under `vm`.
+ */
+export const NOT_JSON: unknown = Symbol("auth config without JSON");
+
 /** The host's side: what the push reads of a default export the child sent. */
 export function evaluatedValue(e: EvaluatedDefault): unknown {
   switch (e.kind) {
@@ -41,6 +50,8 @@ export function evaluatedValue(e: EvaluatedDefault): unknown {
       return undefined;
     case "json":
       return JSON.parse(e.json);
+    case "notJson":
+      return NOT_JSON;
     case "unserializable":
       throw new UnserializableAuthConfigError();
     case "schema":

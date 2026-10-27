@@ -178,7 +178,7 @@ test("an action: its arguments, its unawaited operations by name, its duration, 
   await t.functions.runAction("m:leaves", {});
   // The action's own lines (the queries it ran have theirs); its dangling calls settle before the next test.
   const w = t.consoleEvents
-    .filter((e) => e.function.path === "m.js:leaves" && e.system_code !== null)
+    .filter((e) => e.function.path === "m:leaves" && e.system_code !== null)
     .map((e) => `[${e.log_level}] ${e.message}`);
   await Bun.sleep(100);
   expect(w[0]!.startsWith("[WARN] Large size of the action arguments (actual: ")).toBe(true);

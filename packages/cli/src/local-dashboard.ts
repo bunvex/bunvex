@@ -149,7 +149,7 @@ export async function startLocalDashboard(
     dir = dashboardOutDir(io.env);
   }
   const server = await serveOnFirstFreePort(opts.from ?? DEFAULT_LOCAL_DASHBOARD_PORT, opts.avoid ?? [], (port) =>
-    serveDashboard({ dir, port, currentDeployment: deployment }),
+    serveDashboard({ dir, port, currentDeployment: deployment, loopbackHostOnly: true }),
   );
   saveDashboardConfig(io.cwd, { port: server.port });
   return { server, stop: server.stop };

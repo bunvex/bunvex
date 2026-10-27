@@ -66,6 +66,7 @@ export type FunctionExecution =
       timestamp: number;
       logLines: LogLineJson[];
       executionTime: number;
+      cachedResult?: boolean;
       success: { status?: string } | unknown;
       error: string | null;
       requestId: string;
@@ -185,6 +186,7 @@ export function entriesOf(executions: FunctionExecution[], nextId: () => string)
       execution: {
         status: failure ? "failure" : "success",
         durationMs: e.executionTime * 1000,
+        ...(e.cachedResult === true && { cached: true }),
         ...(usage && { usage }),
         ...(identity && { identity }),
         ...(e.links && { links: e.links }),

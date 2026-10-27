@@ -41,8 +41,13 @@ describe("Postgres (Convex: only timeouts; bunvex: lost connections too, DV-123)
 describe("MySQL (as Convex's classify_mysql_error)", () => {
   test("operational errors and timeouts are transient", () => {
     expect(mysqlTransient(timeout)).toBe(true);
-    for (const code of ["PROTOCOL_CONNECTION_LOST", "ECONNRESET", "ECONNREFUSED", "EPIPE", "POOL_CLOSED"])
+    for (const code of ["PROTOCOL_CONNECTION_LOST", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "POOL_CLOSED"])
       expect(mysqlOperational(err({ code, fatal: true }))).toBe(true);
+    // Convex's 9203a3e: only those IO errors; a broken pipe, a timeout or an unreachable host is not.
+    for (const code of ["EPIPE", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND"]) {
+      expect(mysqlOperational(err({ code, fatal: true }))).toBe(false);
+      expect(mysqlTransient(err({ code, fatal: true }))).toBe(false);
+    }
     for (const errno of [1290, 2013, 1053, 1040]) expect(mysqlTransient(err({ errno }))).toBe(true);
     expect(mysqlOperational(err({ errno: 1105 }, "vttablet: primary is not serving"))).toBe(true);
     expect(mysqlOperational(err({}, "Can't add new command when connection is in closed state"))).toBe(true);
