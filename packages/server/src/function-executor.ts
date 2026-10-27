@@ -61,7 +61,7 @@ export {
   type LogLine,
   logChildLine,
   MAX_LOG_LINE_LENGTH,
-  MAX_LOG_LINES,
+  MAX_LOG_LINES_DATABASE_UDFS,
   makeLogLine,
 } from "./logs.ts";
 export { trackedOperation } from "./pending-ops.ts";
