@@ -62,6 +62,7 @@ const APP = mod("app.js", [
   "export const whoFromMutation = mutation({ args: {}, handler: async (ctx) => ctx.runQuery(c.whoami, {}) });",
   "export const whoFromAction = action({ args: {}, handler: async (ctx) => ctx.runQuery(c.whoami, {}) });",
   "export const fromAction = action({ args: {}, handler: async (ctx) => { await ctx.runMutation(c.add, { body: 'from action' }); let miss = null; try { await ctx.runQuery(c.missing, {}); } catch (e) { miss = e.message; } return { count: await ctx.runQuery(c.count, {}), miss }; } });",
+  "export const noteAcross = mutation({ args: {}, handler: async (ctx) => { try { const id = await ctx.runMutation(c.newNote, {}); return await ctx.runQuery(c.takesNote, { id }); } catch (e) { return e.message; } } });",
   "export const idAcross = mutation({ args: { table: v.string() }, handler: async (ctx, { table }) => { const id = table === 'messages' ? await ctx.db.insert('messages', { text: 't' }) : await ctx.db.insert('items', { n: 1 }); try { return await ctx.runQuery(c.takesId, { id }); } catch (e) { return e.message; } } });",
   "export const errorAcross = mutation({ args: {}, handler: async (ctx) => { try { await ctx.runMutation(c.boom, {}); } catch (e) { return { name: e.name, data: e.data, message: e.message.split('\\n')[0] }; } } });",
   "export const deep = mutation({ args: { n: v.number() }, handler: async (ctx, { n }) => { try { return await ctx.runMutation(c.recurse, { n }); } catch (e) { return e.message; } } });",
@@ -82,7 +83,7 @@ const COUNTER = {
   schema: mod("schema.js", [
     'import { defineSchema, defineTable } from "bunvex/server";',
     'import { v } from "bunvex/values";',
-    "export default defineSchema({ messages: defineTable({ body: v.string() }) });",
+    "export default defineSchema({ messages: defineTable({ body: v.string() }), notes: defineTable({ n: v.number() }) });",
   ]),
   functions: [
     mod("lib.js", [
@@ -94,6 +95,8 @@ const COUNTER = {
       "export const secret = internalQuery({ args: {}, handler: async () => 'internal' });",
       "export const whoami = query({ args: {}, handler: async (ctx) => (await ctx.auth.getUserIdentity())?.subject ?? null });",
       "export const takesId = query({ args: { id: v.id('messages') }, handler: async () => 'accepted' });",
+      "export const newNote = mutation({ args: {}, returns: v.id('notes'), handler: async (ctx) => ctx.db.insert('notes', { n: 1 }) });",
+      "export const takesNote = query({ args: { id: v.id('notes') }, handler: async () => 'accepted' });",
       "export const boom = mutation({ args: {}, handler: async () => { throw new BunvexError({ code: 42 }); } });",
       "export const recurse = mutation({ args: { n: v.number() }, handler: async (ctx, { n }) => n === 0 ? 'bottom' : ctx.runMutation('lib:recurse', { n: n - 1 }) });",
       "export const callBack = mutation({ args: { h: v.string() }, handler: async (ctx, { h }) => ctx.runMutation(h, { text: 'from child' }) });",
@@ -218,10 +221,22 @@ describe("the app calling a child component", () => {
     expect((await asUser("action", "app:whoFromAction")).value).toBeNull();
   });
 
-  test("arguments are checked in the component's namespace: an app id of the same table name and number passes (C4)", async () => {
+  test("arguments are checked in the component's namespace: an id is read by its number in the callee's tables (C4)", async () => {
+    // The app's tables are `items` 10001 and `messages` 10002; the component's `messages` 10001 and `notes` 10002.
+    // As Convex, the component's `v.id("messages")` takes the app's `items` id (its number is the component's
+    // `messages`), and refuses the app's `messages` id (its number is the component's `notes`).
     const d = await deployment();
-    expect((await d.call("mutation", "app:idAcross", { table: "messages" })).value).toBe("accepted");
-    expect((await d.call("mutation", "app:idAcross", { table: "items" })).value).toContain("ArgumentValidationError");
+    expect((await d.call("mutation", "app:idAcross", { table: "items" })).value).toBe("accepted");
+    expect((await d.call("mutation", "app:idAcross", { table: "messages" })).value).toContain(
+      "ArgumentValidationError",
+    );
+  });
+
+  test("a component's ids in its result and arguments are read in its own tables", async () => {
+    // `notes` is the component's 10002, where the app's 10002 is `messages`: read in the app's tables, the id would
+    // fail both `returns: v.id("notes")` and `args: { id: v.id("notes") }`.
+    const d = await deployment();
+    expect((await d.call("mutation", "app:noteAcross", {})).value).toBe("accepted");
   });
 
   test("a BunvexError crosses with its data; the depth limit counts calls inside a component", async () => {
