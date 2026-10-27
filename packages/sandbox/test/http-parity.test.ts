@@ -20,6 +20,7 @@ import { provideProcessExecutor } from "@bunvex/server/executor";
 import { v } from "@bunvex/values";
 import { ProcessExecutor } from "../src/executor.ts";
 import { TestBlobs } from "./fixtures/blobs.ts";
+import { constructedAt } from "./parity-frames.ts";
 
 // No memory cap in the children: the cases past the response's 100 MiB cap hold more than a call's 64 MiB, which fails
 // them first under `process`, as on Convex (STUDY-188 §X17b; `memory-cap.test.ts`).
@@ -215,7 +216,7 @@ type Seen = {
 
 /** Ids, times, ports and request ids, which differ between any two runs. */
 const own = (t: string) =>
-  t
+  constructedAt(t)
     .replace(/\b[0-9a-z]{31,37}\b/g, "<id>")
     .replace(/\b1\d{12}(?:\.\d+)?\b/g, "<time>")
     .replace(/\b[0-9a-f]{16}\b/g, "<request>")
