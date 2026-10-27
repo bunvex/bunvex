@@ -1,8 +1,11 @@
 # STUDY-186 — Convex after 72ce13c, up to precompiled-2026-10-24-bb31399
 <!-- index: Convex from `72ce13c` to `precompiled-2026-10-24-bb31399`, triaged | decided (owner, 2026-10-25) -->
 
-- **Status:** decided; triage only. The build status of A1–A19 moved to [STUDY-193 §3](STUDY-193-convex-upstream-04d2f3b.md#3-study-186-a1a19-what-is-built). The owner took every §5 recommendation on 2026-10-25 (DV-551, DV-552). Nothing is built here; each item in §4 ships on its own PR
-  (or its own study), with a test and a sabotage check.
+- **Status:** decided; triage only. A1–A19 and the owner answers Q2–Q5 are built, each on its own PR
+  ([STUDY-193 §3](STUDY-193-convex-upstream-04d2f3b.md#3-study-186-a1a19-what-is-built)), and the reference moved past
+  this range to `precompiled-2026-10-26-04d2f3b` ([STUDY-193 §5.5](STUDY-193-convex-upstream-04d2f3b.md#55-pr-21-as-built)).
+  §4.2's new features stay with their own studies. The owner took every §5 recommendation on 2026-10-25 (DV-551,
+  DV-552).
 - **Convex source read:** get-convex/convex-backend from `72ce13c` (the reference since
   [STUDY-173](STUDY-173-convex-reference-2026-10-10.md)) to the release tag `precompiled-2026-10-24-bb31399`
   (2026-10-24). That is 195 commits: the 82 the daily digest (#549) listed up to `95d8719`, and 113 more. Each of the
