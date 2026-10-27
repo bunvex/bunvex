@@ -924,7 +924,7 @@ export class SyncHub {
         async () => {
           let body =
             q.component === undefined
-              ? functions.queryBody(q.udfPath, callArgs(q.args, q.udfPath), true, caller)
+              ? functions.queryCall(q.udfPath, callArgs(q.args, q.udfPath), true, caller)
               : null;
           if (q.component !== undefined) {
             const component = q.component;
@@ -940,9 +940,10 @@ export class SyncHub {
               )(db);
             };
           }
-          const wrapped = cachedQueryLogs.wrap(body!);
+          // Its lines kept around the whole run: a call's body is made on the runner's side (STUDY-194).
+          const wrapped = cachedQueryLogs.wrap(() => engine.queryTracked(body!, parseJournal(q.journal), ts, caller));
           try {
-            return await engine.queryTracked(wrapped.body, parseJournal(q.journal), ts, caller);
+            return await wrapped.body();
           } finally {
             kept = wrapped.capture();
           }
@@ -997,7 +998,7 @@ export class SyncHub {
     const linesJson = this.deps.redact ? "[]" : JSON.stringify(r.logLines);
     const tail = `,"logLines":${linesJson},"journal":${JSON.stringify(journal)}`;
     if (run.ok) {
-      const value = stringifyValue(run.value);
+      const value = ("json" in run ? run.json : undefined) ?? stringifyValue(run.value);
       return {
         ts: run.ts,
         reads: run.reads,

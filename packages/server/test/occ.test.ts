@@ -1,7 +1,7 @@
 // The OCC error on the wire (STUDY-21): a mutation that exhausts its retries fails the HTTP request with
 // 503 and Convex's code, as Convex's backend does; inside an action it is an ordinary exception.
 import { expect, test } from "bun:test";
-import { defineSchema, defineTable, Engine } from "@bunvex/core";
+import { defineSchema, defineTable, Engine, isCall, type Tx } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { v } from "@bunvex/values";
 import { action, Functions, mutation } from "../src/functions.ts";
@@ -28,11 +28,32 @@ test("an exhausted mutation answers 503 OptimisticConcurrencyControlFailure; fro
   // m:other commits between m:bump's read and its commit, every time: chain it on each execution.
   const origMutation = engine.mutation.bind(engine);
   const origWithTs = engine.mutationWithTs.bind(engine);
-  engine.mutationWithTs = ((body, source) =>
-    origWithTs(async (db) => {
-      if (source === "m:bump") rival = origMutation((d) => d.patch("counters", id, { n: Math.random() }), "m:other");
-      return body(db);
-    }, source)) as typeof engine.mutationWithTs;
+  // A client's mutation reaches the engine as a call (STUDY-194): its body is made on the runner's side.
+  const onRun = () => {
+    rival = origMutation((d) => d.patch("counters", id, { n: Math.random() }), "m:other");
+  };
+  engine.mutationWithTs = ((body: Parameters<typeof origWithTs>[0], source, caller, opts) => {
+    if (source !== "m:bump") return origWithTs(body, source, caller, opts);
+    const chained = isCall(body)
+      ? {
+          ...body,
+          bodies: {
+            ...body.bodies,
+            body: (r: Parameters<typeof body.bodies.body>[0], l: unknown) => {
+              const b = body.bodies.body(r, l);
+              return (db: Tx) => {
+                onRun();
+                return b(db);
+              };
+            },
+          },
+        }
+      : async (db: Tx) => {
+          onRun();
+          return body(db);
+        };
+    return origWithTs(chained, source, caller, opts);
+  }) as typeof engine.mutationWithTs;
   const { server, stop } = createServer({ engine, functions, port: 0, redactLogsToClient: false });
   try {
     const call = async (kind: string, path: string) => {
