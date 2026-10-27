@@ -6,8 +6,11 @@ import vm from "node:vm";
 import type { UserIdentity } from "@bunvex/auth";
 import {
   boolKnob,
+  type Call,
+  type CallBodies,
   type Caller,
   type CallRequest,
+  type CallSpec,
   checkEnvVarName,
   componentInParent,
   directFetch,
@@ -18,13 +21,16 @@ import {
   IndexesUnavailableError,
   isQueryObject,
   knob,
+  type MutationOptions,
   newUserTimer,
   notRunningMessage,
   OccError,
   observeTime,
   opaqueToInspect,
   outsideExecution,
+  parseValue,
   pausingUserTime,
+  type RequestMetadata,
   rootComponent,
   type SessionRequestId,
   type SessionRequestOutcome,
@@ -35,6 +41,7 @@ import {
   stringifyValue,
   TableReader,
   type Tx,
+  type TxBody,
   type UserTimer,
   userTimeMs,
   wallClock,
@@ -501,7 +508,7 @@ const HTTP_ACTION = { kind: "action", visibility: "public", handler: () => undef
 export type QueryDef = Extract<FunctionDef, { kind: "query" }>;
 
 /** A call that came with no request (a test, an embedded call): a fresh request id, nothing else. */
-const REQUESTLESS = (): CallRequest => ({
+const REQUESTLESS = (): RequestMetadata => ({
   ip: null,
   userAgent: null,
   requestId: newRequestId(),
@@ -1885,14 +1892,103 @@ export class Functions {
 
   /** The body a query runs, for the transports that manage their own transaction (subscriptions). */
   queryBody(name: string, args: unknown, fromClient = true, caller?: Caller, standalone?: QueryDef) {
-    const body = this.queryBodyOf(name, args, fromClient, caller, standalone);
-    return async (db: Tx) => {
-      const value = await body(db);
-      // Convex's check: only a mutation's result may hold `db.vars.commitTs` (STUDY-53).
-      if (hasCommitTs(value))
-        throw new Error(`Function ${name} return value invalid: queries cannot return an unresolved commit timestamp`);
-      return value;
+    return noCommitTs(name, this.queryBodyOf(name, args, fromClient, caller, standalone));
+  }
+
+  /**
+   * A query as the engine runs it (STUDY-194 §4.13): through the call boundary once the main thread checked its path,
+   * its visibility and its arguments, with its permit after that check, as Convex's `CacheManager::get`. A query
+   * that does not pass runs as a body here, and fails as it always did, without a permit.
+   */
+  queryCall(name: string, args: unknown, fromClient = true, caller?: Caller): TxBody<unknown> | Call {
+    const checked = this.callSpec("query", name, args, fromClient, caller);
+    if (!checked) return this.queryBody(name, args, fromClient, caller);
+    const local: CallIn | undefined = checked.args ? { args: checked.args } : undefined;
+    return { spec: checked.spec, bodies: this.bodies, permit: this.queryPermit, local };
+  }
+
+  /**
+   * A client's mutation as the engine runs it: through the call boundary when the main thread's check passes, else
+   * as a body. Either way the engine takes its permit before each attempt's transaction (`ordinary`).
+   */
+  private mutationCall(
+    name: string,
+    args: unknown,
+    fromClient: boolean,
+    caller: Caller | undefined,
+    deadline: Deadline | undefined,
+  ): TxBody<unknown> | Call {
+    const checked = this.callSpec("mutation", name, args, fromClient, caller);
+    if (!checked)
+      return this.mutationBody(this.fnLater(name, "mutation", fromClient, caller), args, undefined, deadline, false);
+    // A retried attempt's console lines replace the aborted one's, as `mutationBody`'s.
+    const local: CallIn = { deadline, attempt: perAttempt((run: () => Promise<unknown>) => run()), args: checked.args };
+    return { spec: checked.spec, bodies: this.bodies, local };
+  }
+
+  private readonly queryPermit = () => this.limits.query.acquire();
+  /** A client's mutation: throttled (STUDY-78), and its permit per attempt before its transaction (STUDY-186 A11). */
+  private readonly ordinary: MutationOptions = { ...THROTTLED, permit: () => this.limits.mutation.acquire() };
+
+  /**
+   * What the main thread checks before a call: the path and the caller's access to it, and a query's arguments, which
+   * Convex's `CacheManager::get` checks before the query's permit (its `ValidatedPathAndArgs`). A mutation's are checked
+   * in its body, under its permit, as Convex's `run_mutation_inner` does: once either way. The request, when all pass;
+   * else null, and the call runs as a body, which fails the same way in its transaction. The `_system/` functions
+   * always do (STUDY-194 §4.14).
+   */
+  private callSpec(
+    kind: "query" | "mutation",
+    name: string,
+    args: unknown,
+    fromClient: boolean,
+    caller: Caller | undefined,
+  ): { spec: CallSpec; args?: { value: unknown } } | null {
+    if (isSystemPath(name)) return null;
+    // A query on a deployment known not to run fails before its permit (Convex's `fail_while_not_running`).
+    const state = kind === "query" ? this.engine.backendState.latest() : null;
+    if (state && notRunningMessage(state) !== null) return null;
+    let f: FunctionDef;
+    let a = args;
+    try {
+      f = this.fn(name, kind, fromClient, caller);
+      if (kind === "query") a = this.checkArgs(f, args);
+    } catch {
+      return null;
+    }
+    const internal = !fromClient || f.visibility === "internal";
+    // Without the codec (outside the tests, STUDY-194 Q7) the arguments go beside the request as they are.
+    if (!this.engine.callCodec) return { spec: { kind, name, args: "", internal, session: null }, args: { value: a } };
+    const text = argsText(a);
+    if (text === null) return null;
+    return { spec: { kind, name, args: text, internal, session: null } };
+  }
+
+  /** The code side of the call boundary (STUDY-194 §4.1): the body a request runs, and a session's record. */
+  private readonly bodies: CallBodies = {
+    body: (request, local) => this.callBody(request, local as CallIn | undefined),
+    record: (value) => ({ result: stringifyValue(value), logLines: currentLogLines() }),
+  };
+
+  /**
+   * A request's body on the runner's side: what `queryBody` and `mutationBody` run, from the request's text, without
+   * the permit (the dispatcher holds it).
+   */
+  private callBody(request: CallRequest, local: CallIn | undefined): TxBody<unknown> {
+    const args = local?.args ? local.args.value : parseValue(request.args);
+    const callee = <K extends "query" | "mutation">(kind: K) => {
+      const resolved = this.fnLater(request.name, kind, false);
+      return () => {
+        const f = resolved();
+        if ((f as FunctionDef).visibility === "internal" && !request.internal) throw this.notFound(request.name);
+        return f;
+      };
     };
+    // A query's arguments were checked on the main thread (`callSpec`): the same text, so not again.
+    if (request.kind === "query") return noCommitTs(request.name, this.queryRun(callee("query"), args, false, true));
+    const body = this.mutationRun(callee("mutation"), args, undefined, local?.deadline, false);
+    const attempt = local?.attempt;
+    return attempt ? (db) => attempt(() => body(db)) : body;
   }
 
   /**
@@ -1930,34 +2026,54 @@ export class Functions {
   /** A query's body; `standalone`, a query that is not deployed, runs as `name` (the function tester's). */
   private queryBodyOf(name: string, args: unknown, fromClient = true, caller?: Caller, standalone?: QueryDef) {
     if (isSystemPath(name) && !standalone) return this.systemQueryBody(name, args, fromClient, caller);
-    const resolved = standalone ? () => standalone : this.fnLater(name, "query", fromClient, caller);
+    return this.queryRun(standalone ? () => standalone : this.fnLater(name, "query", fromClient, caller), args, true);
+  }
+
+  /**
+   * A query's run in its transaction. `permit`: it takes its permit once validated (STUDY-68), as a body; a call
+   * through the boundary holds its own already. A cached result never gets here.
+   */
+  private queryRun(resolved: () => QueryDef, args: unknown, permit: boolean, checked = false) {
     return async (db: Tx) => {
       noteTx(db);
       await this.failWhileNotRunning(db);
       const f = resolved();
-      const a = this.checkArgs(f, args);
+      const a = checked ? (args as AnyArgs) : this.checkArgs(f, args);
       this.countStartReads(db, f);
       const env = await this.txEnv(db, this.componentOf.get(f));
-      // A permit for the run, once it is validated (STUDY-68); a cached result never gets here.
-      return this.limits.query.run(async () => {
+      const run = async () => {
         const timer = timed(this.newTimer());
         const run = () => this.withAudit(db, () => withUserTimer(timer, () => this.invoke(f, db, a, 0)));
         return this.warned(db, a, timer, async () => this.checkReturns(f, await (env ? withEnv(env, run) : run())));
-      });
+      };
+      return permit ? this.limits.query.run(run) : run();
     };
   }
 
   /**
    * The body a mutation runs: per attempt, so a retried run's console lines replace the aborted one's.
-   * `job`: the scheduled job it runs as, if any (a mutation cannot cancel its own job).
+   * `job`: the scheduled job it runs as, if any (a mutation cannot cancel its own job). `permit`: its body takes
+   * its permit once validated, Convex's order for scheduled and cron mutations; a client's is taken before its
+   * transaction (`ordinary`).
    */
   private mutationBody(
     resolved: () => FunctionDef & { kind: "mutation" },
     args: unknown,
     job?: string,
     deadline?: Deadline,
+    permit = true,
   ) {
-    return perAttempt(async (db: Tx) => {
+    return perAttempt(this.mutationRun(resolved, args, job, deadline, permit));
+  }
+
+  private mutationRun(
+    resolved: () => FunctionDef & { kind: "mutation" },
+    args: unknown,
+    job: string | undefined,
+    deadline: Deadline | undefined,
+    permit: boolean,
+  ) {
+    return async (db: Tx) => {
       checkDeadline(deadline);
       noteTx(db);
       await this.failWhileNotRunning(db);
@@ -1965,8 +2081,7 @@ export class Functions {
       const a = this.checkArgs(f, args);
       this.countStartReads(db, f);
       const env = await this.txEnv(db, this.componentOf.get(f));
-      // A permit per attempt (STUDY-68), with the timeout even for a scheduled mutation, as in Convex.
-      return this.limits.mutation.run(async () => {
+      const run = async () => {
         const timer = timed(this.newTimer());
         const run = () => this.withAudit(db, () => withUserTimer(timer, () => this.invoke(f, db, a, 0, job)));
         const value = await this.warned(db, a, timer, async () =>
@@ -1974,8 +2089,10 @@ export class Functions {
         );
         checkDeadline(deadline);
         return value;
-      });
-    });
+      };
+      // A permit per attempt (STUDY-68), with the timeout even for a scheduled mutation, as in Convex.
+      return permit ? this.limits.mutation.run(run) : run();
+    };
   }
 
   /**
@@ -2157,7 +2274,7 @@ export class Functions {
     const getFunctionMetadata = async () => ({ name, componentPath, type: f.kind, visibility: f.visibility });
     // Self-hosted Convex: the instance name, no region, the smallest class.
     const getDeploymentMetadata = async () => ({ name: this.engine.instanceName, region: null, class: "s16" });
-    const request = (): CallRequest => db?.request ?? caller?.request ?? REQUESTLESS();
+    const request = (): RequestMetadata => db?.request ?? caller?.request ?? REQUESTLESS();
     const getRequestMetadata = async () => {
       const r = request();
       return {
@@ -2754,7 +2871,7 @@ export class Functions {
       caller,
       () =>
         this.engine.query(
-          this.queryBody(name, args, fromClient, caller),
+          this.queryCall(name, args, fromClient, caller),
           this.cacheKey(name, args, fromClient),
           cachedQueryLogs,
           caller,
@@ -2771,7 +2888,7 @@ export class Functions {
       caller,
       () =>
         this.engine.queryJson(
-          this.queryBody(name, args, true, caller),
+          this.queryCall(name, args, true, caller),
           this.cacheKey(name, args),
           cachedQueryLogs,
           caller,
@@ -2841,7 +2958,7 @@ export class Functions {
     // As Convex's snapshot manager: a transaction may not begin further back than MAX_TRANSACTION_WINDOW
     // (OutOfRetention, a "try again later" system error). Every other transaction begins at the latest ts.
     this.engine.committer.checkBeginTs(ts);
-    const body = this.queryBody(name, args, true, caller);
+    const body = this.queryCall(name, args, true, caller);
     return this.logged(
       "Query",
       name,
@@ -2878,10 +2995,10 @@ export class Functions {
       caller,
       () =>
         this.engine.mutationWithTs(
-          this.mutationBody(this.fnLater(name, "mutation", fromClient, caller), args, undefined, deadline),
+          this.mutationCall(name, args, fromClient, caller, deadline),
           name,
           caller,
-          THROTTLED,
+          this.ordinary,
         ),
       (r) => returned(r.value),
       args,
@@ -2903,13 +3020,13 @@ export class Functions {
       this.engine.sessionMutation(
         isSystemPath(name)
           ? untilAborted(this.systemMutationBody(name, args, true, caller), deadline)
-          : this.mutationBody(this.fnLater(name, "mutation", true, caller), args, undefined, deadline),
+          : this.mutationCall(name, args, true, caller, deadline),
         name,
         request,
         // Recorded after the handler returns: its result, and the lines of this attempt (logs.ts).
         (value) => ({ result: stringifyValue(value), logLines: currentLogLines() }),
         caller,
-        THROTTLED,
+        isSystemPath(name) ? THROTTLED : this.ordinary,
       );
     // A replayed request did not run: nothing to log.
     return this.logged("Mutation", name, caller, run, (r) => ("value" in r ? returned(r.value) : { skip: true }), args);
@@ -3297,6 +3414,68 @@ export class Functions {
  * already reached the committer — what Convex's dropped future does. `mutationBody` checks it itself; this
  * wraps a system mutation's body.
  */
+/** A query's body, refusing a result that holds `db.vars.commitTs`: only a mutation's may (Convex's check, STUDY-53). */
+function noCommitTs(name: string, body: (db: Tx) => Promise<unknown>) {
+  return async (db: Tx) => {
+    const value = await body(db);
+    if (hasCommitTs(value))
+      throw new Error(`Function ${name} return value invalid: queries cannot return an unresolved commit timestamp`);
+    return value;
+  };
+}
+
+/**
+ * What an in-thread call hands the runner beside its request (`Call.local`): a sync mutation's deadline, and the
+ * scope that keeps only the last attempt's console lines. A worker will get `cancel` and send lines in the outcome.
+ */
+type CallIn = {
+  deadline?: Deadline;
+  attempt?: (run: () => Promise<unknown>) => Promise<unknown>;
+  /** The arguments themselves, when the request does not carry them as text (no codec, STUDY-194 Q7). */
+  args?: { value: unknown };
+};
+
+/**
+ * Checked arguments as the request's text, when that text gives them back exactly; else null. The value JSON form,
+ * with the fields in the order the caller gave them: a top-level call's arguments keep it, where a nested call's are
+ * sorted. A field set to `undefined` (only an in-process caller can pass one) would come back missing.
+ */
+function argsText(a: unknown): string | null {
+  try {
+    checkJsonValue(a as Value);
+  } catch {
+    return null;
+  }
+  const out: string[] = [];
+  return argsJson(a, out) ? out.join("") : null;
+}
+
+function argsJson(v: unknown, out: string[]): boolean {
+  if (typeof v === "string" || typeof v === "boolean" || v === null) out.push(JSON.stringify(v));
+  else if (Array.isArray(v)) {
+    out.push("[");
+    for (let i = 0; i < v.length; i++) {
+      if (i > 0) out.push(",");
+      if (!argsJson(v[i], out)) return false;
+    }
+    out.push("]");
+  } else if (typeof v === "object" && !isBytes(v)) {
+    out.push("{");
+    let first = true;
+    for (const k of Object.keys(v)) {
+      const x = (v as Record<string, unknown>)[k];
+      if (x === undefined) return false;
+      out.push(first ? "" : ",", JSON.stringify(k), ":");
+      first = false;
+      if (!argsJson(x, out)) return false;
+    }
+    out.push("}");
+  }
+  // A number, an int64 or bytes: as `toJsonValue` writes them (`$integer`, `$float`, `$bytes`).
+  else out.push(JSON.stringify(toJsonValue(v as Value)));
+  return true;
+}
+
 function untilAborted<T>(body: (db: Tx) => Promise<T>, deadline: Deadline | undefined): (db: Tx) => Promise<T> {
   if (!deadline) return body;
   return async (db) => {

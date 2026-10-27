@@ -3,6 +3,7 @@ import { isBunvexError, v } from "@bunvex/values";
 import { Engine } from "../src/engine.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { type Doc, defineSchema, defineTable } from "../src/schema.ts";
+import type { Tx } from "../src/tx.ts";
 
 async function engine(n = 0) {
   const schema = defineSchema({ items: defineTable(v.any()).index("by_n", ["n"]) });
@@ -179,8 +180,7 @@ describe(".paginate(), as Convex (STUDY-17)", () => {
 
   test("a re-run with the journal keeps the page's boundary (what a subscription does)", async () => {
     const e = await engine(10);
-    const body = (db: Parameters<Parameters<Engine["query"]>[0]>[0]) =>
-      db.query("items").withIndex("by_n").paginate({ numItems: 3, cursor: null });
+    const body = (db: Tx) => db.query("items").withIndex("by_n").paginate({ numItems: 3, cursor: null });
     const first = await e.queryTracked(body);
     await e.mutation((db) => db.insert("items", { n: 0.5 }));
     const again = await e.queryTracked(body, first.journal);
