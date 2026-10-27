@@ -2,7 +2,7 @@
 // by `tsc` (`bun run typecheck`); each `Equal` must hold and each `@ts-expect-error` must be an error. The tests
 // run what does not throw, and the record cases that the runtime also refuses.
 import { expect, test } from "bun:test";
-import { type GenericId, type Infer, v } from "../../src/index.ts";
+import { asObjectValidator, type GenericId, type Infer, v } from "../../src/index.ts";
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const check = <T extends true>(_: T) => {};
@@ -77,4 +77,13 @@ test("complex types look good", () => {
     >
   >(true);
   expect(obj.kind).toBe("object");
+});
+
+test("asObjectValidator of field validators is a required object validator, usable where a required one goes", () => {
+  const fields = asObjectValidator({ ids: v.array(v.string()) });
+  check<Equal<typeof fields.isOptional, "required">>(true);
+  check<Equal<Infer<typeof fields>, { ids: string[] }>>(true);
+  // As an array's element, which takes required validators only (STUDY-196: `defineBatchWorkerValidators`).
+  v.array(fields);
+  expect(fields.kind).toBe("object");
 });
