@@ -6,7 +6,13 @@
 // too; only the id counts when resolving it.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { type Engine, FUNCTION_HANDLES_TABLE, type Tx } from "@bunvex/core";
-import { type AnyFunctionReference, getFunctionName } from "@bunvex/protocol";
+import {
+  type AnyFunctionReference,
+  type DefaultFunctionArgs,
+  type FunctionType,
+  getFunctionName,
+} from "@bunvex/protocol";
+import type { FunctionReference_future } from "./api-types.ts";
 import { trackedOperation } from "./pending-ops.ts";
 
 export const FUNCTION_HANDLE_PREFIX = "function://";
@@ -35,6 +41,18 @@ export type FunctionHandle<
   _Args = unknown,
   _Return = unknown,
 > = string & { __functionHandle: true };
+
+/**
+ * A {@link FunctionHandle} typed as a {@link FunctionReference_future} (Convex's `FunctionHandle_future`, d938c5b):
+ * a string, and an internal reference whose arguments and result its `_fn` carries. Types only.
+ */
+export type FunctionHandle_future<
+  Type extends FunctionType,
+  // biome-ignore lint/suspicious/noExplicitAny: an untyped handle's arguments, as Convex's default
+  Args extends DefaultFunctionArgs = any,
+  // biome-ignore lint/suspicious/noExplicitAny: an untyped handle's result, as Convex's default
+  ReturnType = any,
+> = string & FunctionReference_future<Type, "internal", Args, ReturnType>;
 
 export const isFunctionHandle = (s: unknown): boolean => typeof s === "string" && s.startsWith(FUNCTION_HANDLE_PREFIX);
 
