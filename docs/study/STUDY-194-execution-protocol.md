@@ -810,6 +810,13 @@ A query's body is `Functions.callBody` → `queryRun` (F:1977, F:2036) in a `Tx`
   `callSpec` (F:1955) and resolves its function again after the permit (F:1980): a push in between runs the new
   handler on arguments the old validator accepted. The fix binds the resolved function, and in 2b its version id,
   to the call. Its own PR, before 2b, with a test that pushes during the permit wait.
+- **A worker's clock is its own, floored at its snapshot** (DV-121, owner, 2026-10-27). Convex's funrun begins its
+  transaction with `CreationTime::for_transaction(ts, rt.generate_timestamp())`
+  (`crates/function_runner/src/in_memory_indexes.rs:100`): the executor's wall clock, floored at the snapshot ts
+  rounded up to a millisecond (`crates/common/src/document.rs:225`). `Date.now()` is derived from it
+  (`server.rs:385`). So the request's `now` (§4.4) becomes that floor, and the worker takes the larger of it and
+  its own clock. In one process the two clocks are one, and nothing changes. It matters for a follower process on
+  another machine.
 
 ### 10.4 Run in-thread, not observable
 
