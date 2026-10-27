@@ -717,6 +717,11 @@ export class SearchSegmentsState {
     return run;
   }
 
+  /** Resolves once every `update` called so far has written its rows (or failed). */
+  idle(): Promise<void> {
+    return this.writes;
+  }
+
   /**
    * The state to start `kind` index `name` of `tablet` from, when it can be trusted at `at`: the same definition,
    * a ts not ahead of the store and within document retention (so the log since is complete); null otherwise.
