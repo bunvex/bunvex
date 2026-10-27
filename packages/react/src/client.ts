@@ -3,7 +3,7 @@
 // on a server without a socket costs nothing. Queries are watched by token, and each watcher's callback runs
 // when a transition changes its query.
 import {
-  type AnyFunctionReference,
+  type AnyReference,
   type AuthTokenFetcher,
   BaseBunvexClient,
   type BaseBunvexClientOptions,
@@ -30,7 +30,8 @@ import type { JSONValue, Value } from "@bunvex/values";
 /** How long `prewarmQuery` keeps its subscription (Convex's DEFAULT_EXTEND_SUBSCRIPTION_FOR). */
 const DEFAULT_EXTEND_SUBSCRIPTION_FOR = 5_000;
 
-type Ref<T extends "query" | "mutation" | "action"> = AnyFunctionReference & { _type: T };
+/** A reference the client takes: either kind, as `convex` 1.48's. */
+type Ref<T extends "query" | "mutation" | "action"> = AnyReference & { _type: T };
 
 /** A mutation as a function, with `withOptimisticUpdate` to attach an optimistic update (only one). */
 export interface ReactMutation<M extends Ref<"mutation">> {
