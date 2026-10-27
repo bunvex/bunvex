@@ -1,8 +1,9 @@
 # STUDY-194 — The execution protocol between the main thread and execution workers
-<!-- index: The execution protocol (STUDY-190 PRs 2–4, STUDY-24 A2): Convex's function runner (the request, the snapshot and metadata at a timestamp, the outcome, how the backend commits it), bunvex's in-thread call path, the messages and their encoding (a prototype), snapshots, metadata by epoch, code versions, nested calls, OCC, failures, backpressure, a five-PR plan | decided (owner, 2026-10-26): every §8 recommendation; AD-47 -->
+<!-- index: The execution protocol (STUDY-190 PRs 2–4, STUDY-24 A2): Convex's function runner (the request, the snapshot and metadata at a timestamp, the outcome, how the backend commits it), bunvex's in-thread call path, the messages and their encoding (a prototype), snapshots, metadata by epoch, code versions, nested calls, OCC, failures, backpressure, a five-PR plan | decided (owner, 2026-10-26): Q1–Q6, AD-47; PR 2a is #895 (draft), Q7 open -->
 
-- **Status:** decided (owner, 2026-10-26): every §8 recommendation (Q1–Q6); Q4 is AD-47. No product code yet; §6's
-  PR 2a is next.
+- **Status:** decided (owner, 2026-10-26): every §8 recommendation (Q1–Q6); Q4 is AD-47. PR 2a is #895 (draft): the
+  boundary, the codec and the permit order (§9). Its measurement misses §6's 3 %: the codec on every in-thread call
+  costs uncached −15 % and insert −12 % on DO `c-4`, the boundary without it about −2 %. Q7 (§8) is open.
 - **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
   - `crates/function_runner/src/{lib,server,in_process_function_runner,in_memory_indexes,module_cache}.rs`;
   - `crates/isolate/src/client.rs`, `crates/isolate/src/environment/udf/{async_syscall,phase,mod}.rs`;
@@ -104,8 +105,10 @@ The backend builds it in `function_runner_execute`
   the path and its visibility and checks the arguments against the function's validator
   (`crates/udf/src/validation.rs:490`, `check_args` at `:692`). A failure is an outcome without a call
   (`application_function_runner/mod.rs:1284-1307`).
-- Then the permit (`cache/mod.rs:699` for a query; `acquire_mutation_permit` per attempt for a mutation,
-  `application_function_runner/mod.rs:990`).
+- Then the permit, for a query (`cache/mod.rs:699`). A mutation takes it earlier, per attempt, before its
+  transaction begins and so before this check (`acquire_mutation_permit`, `application_function_runner/mod.rs:990`;
+  Convex's d328f85, in `bb31399`): its snapshot then has what committed while it waited. A recorded session request
+  is still answered without one. Scheduled and cron mutations keep the old order (transaction, permit, check).
 - `ts` is the transaction's begin timestamp. `existing_writes` are its writes so far, normally none
   (`application_function_runner/mod.rs:460-462`). The function tester's standalone module is one case that has
   some.
@@ -614,10 +617,14 @@ The worker sends `op` messages for state only the main thread has, and waits for
 
 - **Permits stay on the main thread,** before dispatch: Convex's 16 queries, 16 mutations, 64 actions
   (`action-permits.ts`). A cache hit and a nested call take none, as today.
-- Today a call takes its permit after its path and arguments are checked (`functions.ts:1939, 1966`), as Convex's
-  (§1.2). With workers the check runs in the worker, after the permit. To keep the order, the main thread checks the
-  path, the visibility and the arguments first, with the live version's validators it already holds. That is
-  Convex's place for that check. The worker checks them again in the body, which costs a validator walk.
+- Before PR 2a a call took its permit after its path and arguments were checked, in its transaction. Convex at
+  `bb31399` does that for a query only (§1.2). With workers the check would run in the worker, after the permit, so:
+  - **a query:** the main thread checks the path, the visibility and the arguments first, with the live version's
+    validators it already holds, then takes the permit. That is Convex's place for that check. The runner does not
+    check the same text again;
+  - **a client's mutation:** the permit comes first, before the attempt's transaction, and the runner checks the
+    arguments under it, as Convex's d328f85 (STUDY-186 A11). The main thread resolves only the path and the caller's
+    access, which need the caller's admin key. Scheduled and cron mutations keep their order.
 - **Workers are created lazily** up to `MAX_ISOLATE_WORKERS`, by default the core count (DV-574). A call goes to the
   worker with the fewest calls in flight. A new worker is started when every worker has at least one call and the
   cap is not reached.
@@ -710,7 +717,7 @@ STUDY-190's PR 5 (HTTP front threads) follows, unchanged.
 
 ## 8. Owner questions
 
-All decided by the owner on 2026-10-26, as recommended.
+Q1–Q6 decided by the owner on 2026-10-26, as recommended. Q7 is open (PR 2a's measurement, §9).
 
 | # | Question | Recommendation |
 |---|---|---|
@@ -720,3 +727,28 @@ All decided by the owner on 2026-10-26, as recommended.
 | Q4 | **Choosing in-thread execution:** (a) `MAX_ISOLATE_WORKERS=0` means in the main thread, a bunvex meaning for Convex's knob (an addition, AD-47); (b) a bunvex knob of its own; (c) no operator setting, only a `createServer` option for tests, with the memory store and handed-in stores in-thread automatically? | **(a) with (c)'s option.** Convex's 0 admits no function at all, so the value is free. It gives operators a way back if a worker bug appears. Tests pick per server. Recorded as AD-47 |
 | Q5 | **A worker's index cache** (PR 2c): build it only if PR 2b's profile shows store reads in the workers? It would be fed by the commit stream a follower also needs (STUDY-24 §4.3) | **Only if measured.** Convex's runners have none for user tables (their cache holds in-memory system indexes, §1.3). Without it a worker reads its own connection, on its own core |
 | Q6 | **Store connections:** each worker opens its own pool. Keep the total within Convex's `POSTGRES_MAX_CONNECTIONS` / `MYSQL_MAX_CONNECTIONS` (128) by splitting it between the main thread and the worker cap? Or give each worker the full size? | **Split it.** The main thread keeps what its commits and system work need (a quarter, at least 8); the workers share the rest evenly up to the cap. No deployment opens more connections than it does today, and the knob keeps Convex's meaning as a process total. MongoDB's `POOL` the same way |
+| Q7 | **The codec in the thread (PR 2a):** every in-thread call round-trips through the codec, as §6 asked, and costs uncached −15 % and insert −12 % on DO `c-4` (§9). Keep it so until workers replace it? Or round-trip only under tests (the suites keep exercising it), and pass the request and outcome as objects through the same boundary otherwise (−2 %), as §4.14 describes the in-thread executor? Or keep the codec and spend PR 2a on making it cheaper first? | **Round-trip under tests only.** Nothing an app observes differs: the types, the runner and the dispatcher are the same, and the differential test of PR 2b compares in-thread and workers on the decoded outcome. A Bun Worker pays a message per call anyway; the main thread does not need to pay it twice |
+
+## 9. PR 2a, built (#895)
+
+- **The boundary.** `core/src/call-wire.ts` holds `CallRequest`, `CallOutcome` and their codec (§4.2's format; a
+  message that does not parse is refused naming the field, `MalformedCallMessageError`). `core/src/call-runner.ts`
+  holds the runner and `CallHost`, the one interface to what only the main thread has (the store, the catalog,
+  counts, search; its `begin`, `pin`, `finish`). `Engine.execute` dispatches a `Call` to it; the query cache, the
+  subscriptions, OCC and the commit read the decoded outcome (its read set, search reads, writes, catalog touches,
+  identity and time observed, journal, counters).
+- **What crosses.** Every query and mutation a client calls (HTTP, sync, an action's `runQuery` / `runMutation`, a
+  session mutation and its record) whose path and access pass on the main thread and whose arguments survive the
+  text exactly. A `_system/` function, a standalone query, a room's gate, a component path from the sync protocol, a
+  scheduled or cron mutation, and a call that fails the main thread's check run as bodies, in-thread, as before.
+  Arguments cross as value JSON in the caller's field order (a top-level call keeps it).
+- **What stays beside the outcome, for now** (`CallLocal`): the value an in-process caller gets and the error
+  object (PR 2b moves errors to STUDY-171 §8.3's codec), the log lines (they still flow through the thread's log
+  scope), and what a mutation's commit takes from its transaction (after-commit callbacks, derived search and
+  summary data, created tables, commit timestamps: PR 3, §4.10).
+- **Measured** on DO `c-4` (sfo2, Xeon Platinum 8168), SQLite, k6 32 VUs, 3 × 30 s per point, interleaved on the same
+  droplets (`bench/results/cloud/2026-10-27-00-*`): main `8d856153` uncached 1998 / 2052 req/s, insert 1894 / 1919;
+  PR 2a uncached 1730 / 1709 (−15 %), insert 1665 / 1267 (−12 % on the steadier run); the same tree with the codec
+  bypassed (`9e0345c1`, measurement only) uncached 1964 (−3 %), insert 1868 (−2 %). An in-process micro-benchmark
+  on the server box puts the codec at about 45 µs a query and 55 µs an insert there, three to four times what it
+  costs alone in a loop. Q7 asks what to do about it.
