@@ -2,7 +2,7 @@
 // one-shot calls over HTTP, for scripts and servers that do not need a socket. Mutations run one at a time,
 // in order, unless `skipQueue`; `consistentQuery` reads every query of the client at one timestamp.
 import {
-  type AnyFunctionReference,
+  type AnyReference,
   type FunctionArgs,
   type FunctionReturnType,
   getFunctionName,
@@ -40,7 +40,7 @@ export type HttpMutationOptions = {
 /** Extra `fetch` options for every request (e.g. `cache: "no-store"` for Next.js). */
 export type FetchOptions = { cache: "force-cache" | "no-store" };
 
-type Ref<T extends "query" | "mutation" | "action"> = AnyFunctionReference & { _type: T };
+type Ref<T extends "query" | "mutation" | "action"> = AnyReference & { _type: T };
 
 type UdfResponse =
   | { status: "success"; value: JSONValue; logLines?: string[] }

@@ -106,31 +106,31 @@ test("run_reason of a sync query: its initial subscription, a data change, an id
   const t = await setup();
   const c = await v1Client(syncUrl(t.s.server.port));
   c.modify([add(1, "m:count")]);
-  await t.until(() => t.of("m.js:count").length === 1);
+  await t.until(() => t.of("m:count").length === 1);
   await t.call("mutation", "m:add", { tag: "a" });
-  await t.until(() => t.of("m.js:count").length === 2);
+  await t.until(() => t.of("m:count").length === 2);
   c.send({ type: "Authenticate", tokenType: "Admin", value: KEY, baseVersion: 0 } as v1.ClientMessage);
-  await t.until(() => t.of("m.js:count").length === 3);
-  expect(t.of("m.js:count").map((e) => e.run_reason)).toEqual(["initialSubscription", "dataChange", "identityChange"]);
+  await t.until(() => t.of("m:count").length === 3);
+  expect(t.of("m:count").map((e) => e.run_reason)).toEqual(["initialSubscription", "dataChange", "identityChange"]);
   // Other callers' queries: their caller's reason.
   await t.call("query", "m:count");
-  expect(t.of("m.js:count").at(-1)!.run_reason).toBe("httpApi");
+  expect(t.of("m:count").at(-1)!.run_reason).toBe("httpApi");
 });
 
 test("scheduler_info carries the job's id; others have none", async () => {
   const t = await setup();
   const scheduled = (await t.call("mutation", "m:later")) as { value: string };
-  const job = await t.until(() => t.of("m.js:job")[0]);
+  const job = await t.until(() => t.of("m:job")[0]);
   expect(job).toMatchObject({ run_reason: "scheduler", scheduler_info: { job_id: scheduled.value } });
-  expect(t.of("m.js:later")[0]).toMatchObject({ run_reason: "httpApi", scheduler_info: null });
+  expect(t.of("m:later")[0]).toMatchObject({ run_reason: "httpApi", scheduler_info: null });
 });
 
 test("function_args_bytes: the arguments' JSON array; none for an HTTP action", async () => {
   const t = await setup();
   await t.call("mutation", "m:add", { tag: "xyz" });
-  expect(t.of("m.js:add")[0].usage.function_args_bytes).toBe(JSON.stringify([{ tag: "xyz" }]).length);
+  expect(t.of("m:add")[0].usage.function_args_bytes).toBe(JSON.stringify([{ tag: "xyz" }]).length);
   await t.call("action", "m:act");
-  expect(t.of("m.js:act")[0].usage.function_args_bytes).toBe(2 + 2);
+  expect(t.of("m:act")[0].usage.function_args_bytes).toBe(2 + 2);
   await fetch(`http://127.0.0.1:${t.s.site!.port}/hook`, { method: "POST" }).catch(() => null);
   const http = await t.until(() => t.events.find((e) => e.function.type === "http_action"));
   expect(http.usage.function_args_bytes).toBeNull();
@@ -139,7 +139,7 @@ test("function_args_bytes: the arguments' JSON array; none for an HTTP action", 
 test("mutation_retry_count per attempt; the lost attempt has no error, as Convex's", async () => {
   const t = await setup();
   await t.call("mutation", "m:contended");
-  const [lost, won] = t.of("m.js:contended");
+  const [lost, won] = t.of("m:contended");
   expect(lost).toMatchObject({ will_retry: true, status: "success", error_message: null });
   expect(lost.function.mutation_retry_count).toBe(0);
   expect(lost.occ_info).not.toBeNull();
@@ -149,7 +149,7 @@ test("mutation_retry_count per attempt; the lost attempt has no error, as Convex
   expect(won.usage.function_returns_bytes).toBeGreaterThan(0);
   expect(lost.usage.function_returns_bytes).toBe(won.usage.function_returns_bytes);
   await t.call("query", "m:count");
-  expect(t.of("m.js:count")[0].function.mutation_retry_count).toBeNull();
+  expect(t.of("m:count")[0].function.mutation_retry_count).toBeNull();
 });
 
 test("mutation_queue_length: a WebSocket mutation's waiting predecessors; none over HTTP", async () => {
@@ -161,17 +161,17 @@ test("mutation_queue_length: a WebSocket mutation's waiting predecessors; none o
     await Bun.sleep(20); // each frame read before the next is sent
   }
   release();
-  await t.until(() => t.of("m.js:gated").length === 3);
+  await t.until(() => t.of("m:gated").length === 3);
   // The first arrives to an empty queue; the second while the first runs; the third with the second waiting.
-  expect(t.of("m.js:gated").map((e) => e.function.mutation_queue_length)).toEqual([0, 0, 1]);
+  expect(t.of("m:gated").map((e) => e.function.mutation_queue_length)).toEqual([0, 0, 1]);
   await t.call("mutation", "m:add", { tag: "h" });
-  expect(t.of("m.js:add")[0].function.mutation_queue_length).toBeNull();
+  expect(t.of("m:add")[0].function.mutation_queue_length).toBeNull();
 });
 
 test("a scheduled mutation's lost attempt: will_retry, then the next attempt's count", async () => {
   const t = await setup();
   await t.call("mutation", "m:laterContended");
-  const [lost, won] = await t.until(() => t.of("m.js:contendedJob").length === 2 && t.of("m.js:contendedJob"));
+  const [lost, won] = await t.until(() => t.of("m:contendedJob").length === 2 && t.of("m:contendedJob"));
   expect(lost).toMatchObject({ will_retry: true, status: "success", error_message: null, run_reason: "scheduler" });
   expect([lost.function.mutation_retry_count, won.function.mutation_retry_count]).toEqual([0, 1]);
   expect(won).toMatchObject({ will_retry: false, status: "success" });
@@ -181,7 +181,7 @@ test("a scheduled mutation whose conflict escapes the engine's retries: the sche
   // No retries in the engine: the conflict reaches the scheduler, which runs the job again.
   const t = await setup({ maxRetries: 0 });
   await t.call("mutation", "m:laterContended");
-  const [lost, won] = await t.until(() => t.of("m.js:contendedJob").length === 2 && t.of("m.js:contendedJob"));
+  const [lost, won] = await t.until(() => t.of("m:contendedJob").length === 2 && t.of("m:contendedJob"));
   expect(lost).toMatchObject({ will_retry: true, status: "success", error_message: null });
   expect([lost.function.mutation_retry_count, won.function.mutation_retry_count]).toEqual([0, 1]);
 });

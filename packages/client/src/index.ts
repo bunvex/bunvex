@@ -4,11 +4,13 @@
 export {
   type AnyApi,
   type AnyFunctionReference,
+  type AnyReference,
   type ArgsAndOptions,
   anyApi,
   type EmptyObject,
   type FunctionArgs,
   type FunctionReference,
+  type FunctionReference_future,
   type FunctionReturnType,
   getFunctionName,
   makeFunctionReference,

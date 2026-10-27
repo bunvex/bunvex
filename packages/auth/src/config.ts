@@ -25,6 +25,14 @@ const schemaError = (detail: string) =>
   );
 
 /**
+ * A default export `JSON.stringify` gives no JSON for (a function, a symbol, a `toJSON` that returns `undefined`).
+ * Convex's `v8::json::stringify` then hands back the text `undefined`, which serde refuses before anything else
+ * ("expected value at line 1 column 1", the position stripped: crates/isolate/src/environment/auth_config.rs
+ * `check_for_common_confusions`); measured on Convex's binary (packages/differential/test/auth-config-json.test.ts).
+ */
+export const authConfigWithoutJsonError = () => schemaError("expected value");
+
+/**
  * Convex's `ends_with_tld` (STUDY-188 R4): `localhost`, or a host whose last label is one of IANA's top-level
  * domains (the parsed host: lowercased, an internationalized label as its `xn--` form).
  */

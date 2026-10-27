@@ -69,8 +69,37 @@ export type VectorFilter = Map<string, Set<string>>;
 
 const NONE: readonly VectorIndexEntry[] = [];
 
+const newEntry = (
+  w: { table: TableDef; name: string; def: VectorIndexDef; staged: boolean },
+  bootstrapping: boolean,
+): VectorIndexEntry => ({
+  table: w.table.name,
+  tablet: w.table.id,
+  name: w.name,
+  def: w.def,
+  staged: w.staged,
+  ready: false,
+  bootstrapping,
+  index: new SegmentedVectorIndex(w.def.dimensions, w.def.filterFields),
+  touched: new Set(),
+});
+
+/** Entries grouped by tablet. */
+function byTablet(entries: Map<string, VectorIndexEntry>): Map<TabletId, VectorIndexEntry[]> {
+  const out = new Map<TabletId, VectorIndexEntry[]>();
+  for (const e of entries.values()) {
+    const list = out.get(e.tablet);
+    if (list) list.push(e);
+    else out.set(e.tablet, [e]);
+  }
+  return out;
+}
+
 export class VectorIndexes {
   private entries = new Map<string, VectorIndexEntry>();
+  /** A schema push's new indexes, not yet committed, as `SearchIndexes`' (STUDY-195 §2). */
+  private pending = new Map<string, VectorIndexEntry>();
+  private pendingByTablet = new Map<TabletId, VectorIndexEntry[]>();
 
   /** Every index (a snapshot of them, STUDY-96). */
   all(): VectorIndexEntry[] {
@@ -78,8 +107,46 @@ export class VectorIndexes {
   }
   private static key = (tablet: TabletId, name: string) => `${tablet}\u0000${name}`;
 
+  /** The index a search uses: the active one, else a pending push's, as never ready (`SearchIndexes.get`). */
   get(t: TableDef, name: string): VectorIndexEntry | undefined {
-    return this.entries.get(VectorIndexes.key(t.id, name));
+    const k = VectorIndexes.key(t.id, name);
+    const active = this.entries.get(k);
+    if (active) return active;
+    const p = this.pending.get(k);
+    return p && { ...p, ready: false, bootstrapping: false };
+  }
+
+  /** Whether `e` is still an index the engine holds, active or pending. */
+  holds(e: VectorIndexEntry): boolean {
+    const k = VectorIndexes.key(e.tablet, e.name);
+    return this.entries.get(k) === e || this.pending.get(k) === e;
+  }
+
+  /** The pending push's indexes. */
+  pendingAll(): VectorIndexEntry[] {
+    return [...this.pending.values()];
+  }
+
+  /** Make the pending indexes a push's new ones; returns those to backfill (`SearchIndexes.reconcilePending`). */
+  reconcilePending(wanted: { table: TableDef; name: string; def: VectorIndexDef; staged: boolean }[]) {
+    const next = new Map<string, VectorIndexEntry>();
+    const added: VectorIndexEntry[] = [];
+    for (const w of wanted) {
+      const k = VectorIndexes.key(w.table.id, w.name);
+      if (this.entries.has(k)) continue;
+      const old = this.pending.get(k);
+      if (old && JSON.stringify(old.def) === JSON.stringify(w.def)) {
+        old.staged = w.staged;
+        next.set(k, old);
+        continue;
+      }
+      const e = newEntry(w, false);
+      next.set(k, e);
+      added.push(e);
+    }
+    this.pending = next;
+    this.pendingByTablet = byTablet(next);
+    return added;
   }
 
   /**
@@ -109,38 +176,33 @@ export class VectorIndexes {
         next.set(k, old);
         continue;
       }
-      const e: VectorIndexEntry = {
-        table: w.table.name,
-        tablet: w.table.id,
-        name: w.name,
-        def: w.def,
-        staged: w.staged,
-        ready: false,
-        bootstrapping,
-        index: new SegmentedVectorIndex(w.def.dimensions, w.def.filterFields),
-        touched: new Set(),
-      };
+      // A pending push's index, now enabled as it stands.
+      const pending = this.pending.get(k);
+      if (pending && JSON.stringify(pending.def) === JSON.stringify(w.def)) {
+        pending.staged = w.staged;
+        this.pending.delete(k);
+        next.set(k, pending);
+        continue;
+      }
+      const e = newEntry(w, bootstrapping);
       next.set(k, e);
       // A staged index is built too (Convex's `Backfilling { staged }`, then `Backfilled { staged }`).
       added.push(e);
     }
     this.entries = next;
-    this.byTablet = new Map();
-    for (const e of next.values()) {
-      const list = this.byTablet.get(e.tablet);
-      if (list) list.push(e);
-      else this.byTablet.set(e.tablet, [e]);
-    }
+    this.byTablet = byTablet(next);
+    this.pendingByTablet = byTablet(this.pending);
     return added;
   }
 
   /** A commit, as it becomes visible: each written document of an indexed table, in its new state. */
   apply(ts: bigint, writes: Iterable<{ table: TableDef; id: string; next: Doc | null }>) {
     for (const w of writes)
-      for (const e of this.forTablet(w.table.id)) {
-        e.index.set(w.id, w.next ? vectorEntry(e.def, w.next) : null, ts);
-        e.touched?.add(w.id);
-      }
+      for (const list of [this.forTablet(w.table.id), this.pendingByTablet.get(w.table.id) ?? NONE])
+        for (const e of list) {
+          e.index.set(w.id, w.next ? vectorEntry(e.def, w.next) : null, ts);
+          e.touched?.add(w.id);
+        }
   }
 
   /** A document's entry from a snapshot, or its removal (unless a commit already set it; STUDY-96). */

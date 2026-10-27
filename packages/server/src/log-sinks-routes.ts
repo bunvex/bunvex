@@ -5,7 +5,7 @@
 // change with its audit event. Every sink type's arguments are checked as Convex's; bunvex runs webhook,
 // local and S3 export sinks (DV-303).
 
-import type { Caller } from "@bunvex/core";
+import type { AuditLogEvent, Caller } from "@bunvex/core";
 import { type Engine, insertAuditLogEvents, knob, type Tx } from "@bunvex/core";
 import { auditActor, auditEvents } from "./audit-log.ts";
 import type { Functions } from "./functions.ts";
@@ -604,8 +604,7 @@ export async function logStreamRoute(
     // A sequence names its variant first (serde's tagged form); the route reads a map.
     return (Array.isArray(b) ? { logStreamType: b[0] } : b) as Body;
   };
-  const audit = (db: Tx, event: ReturnType<typeof auditEvents.createIntegration>) =>
-    insertAuditLogEvents(db, [event], auditActor(caller));
+  const audit = (db: Tx, event: AuditLogEvent) => insertAuditLogEvents(db, [event], auditActor(caller));
   switch (route) {
     case "list_log_streams": {
       if (req.method !== "GET") break;
@@ -648,7 +647,7 @@ export async function logStreamRoute(
       const config = createConfig(b);
       const newId = await engine.mutation(async (db) => {
         const sinkId = await addOrUpdateSink(db, config);
-        await audit(db, auditEvents.createIntegration(sinkId, config.type));
+        await audit(db, auditEvents.createIntegration(sinkId, config));
         return sinkId;
       }, "_system/create_log_stream");
       deps.wake();
@@ -671,7 +670,7 @@ export async function logStreamRoute(
         if (row.config.type === "s3Export") functions.requireOperation(caller, "ViewData");
         const config = updatedConfig(row.config, b);
         await patchSink(db, row._id, { config });
-        await audit(db, auditEvents.updateIntegration(sinkId, row.config.type));
+        await audit(db, auditEvents.updateIntegration(sinkId, row.config, config));
         // Verified again (Convex's `reset_log_sink_to_pending`).
         await patchSink(db, row._id, { status: { type: "pending" } });
       }, "_system/update_log_stream");
@@ -685,7 +684,7 @@ export async function logStreamRoute(
       await engine.mutation(async (db) => {
         const row = await mustGetSink(db, sinkId);
         await patchSink(db, row._id, { status: { type: "deleting" } });
-        await audit(db, auditEvents.deleteIntegration(row._id, row.config.type));
+        await audit(db, auditEvents.deleteIntegration(row._id, row.config));
       }, "_system/delete_log_stream");
       deps.wake();
       return new Response(null, { status: 200 });
@@ -699,8 +698,9 @@ export async function logStreamRoute(
         if (row.config.type !== "webhook")
           throw bad("NoSecretToRotate", "This log stream does not have a secret to rotate.");
         const hmacSecret = newWebhookSecret();
-        await patchSink(db, row._id, { config: { ...row.config, hmacSecret } });
-        await audit(db, auditEvents.updateIntegration(sinkId, "webhook"));
+        const config = { ...row.config, hmacSecret };
+        await patchSink(db, row._id, { config });
+        await audit(db, auditEvents.updateIntegration(sinkId, row.config, config));
         return hmacSecret;
       }, "_system/rotate_webhook_secret");
       // As Convex's, the running sink keeps signing with the old secret until it restarts.

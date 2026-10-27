@@ -2,7 +2,7 @@
 // `useQueries`, `useMutation` (with `withOptimisticUpdate`), `useAction` and the connection state. Every
 // query of one component tree changes in the same render, since one transition notifies them together.
 import {
-  type AnyFunctionReference,
+  type AnyReference,
   type ConnectionState,
   type EmptyObject,
   type FunctionArgs,
@@ -17,10 +17,10 @@ import { useRequiredClient } from "./context.ts";
 import { type CreateWatch, QueriesObserver, type RequestForQueries } from "./queries-observer.ts";
 import { useSubscription } from "./use-subscription.ts";
 
-type Ref<T extends "query" | "mutation" | "action"> = AnyFunctionReference & { _type: T };
+type Ref<T extends "query" | "mutation" | "action"> = AnyReference & { _type: T };
 
 /** `[args?]` or `[args | "skip"]`: `"skip"` renders `undefined` without subscribing. */
-export type OptionalRestArgsOrSkip<F extends AnyFunctionReference> =
+export type OptionalRestArgsOrSkip<F extends AnyReference> =
   FunctionArgs<F> extends EmptyObject ? [args?: EmptyObject | "skip"] : [args: FunctionArgs<F> | "skip"];
 
 export type UseQueryResult<T, ThrowOnError extends boolean = false> =

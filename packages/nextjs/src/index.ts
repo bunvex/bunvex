@@ -2,7 +2,7 @@
 // `fetchQuery`, `fetchMutation` and `fetchAction` for Server Components, Server Actions and Route Handlers, and
 // `preloadQuery`, whose payload a Client Component renders with `@bunvex/react`'s `usePreloadedQuery`.
 import {
-  type AnyFunctionReference,
+  type AnyReference,
   type ArgsAndOptions,
   BunvexHttpClient,
   type FunctionReturnType,
@@ -11,7 +11,7 @@ import {
 import type { Preloaded } from "@bunvex/react";
 import { fromJsonValue, type JSONValue, toJsonValue, type Value } from "@bunvex/values";
 
-type Ref<T extends "query" | "mutation" | "action"> = AnyFunctionReference & { _type: T };
+type Ref<T extends "query" | "mutation" | "action"> = AnyReference & { _type: T };
 
 /** Options of `preloadQuery`, `fetchQuery`, `fetchMutation` and `fetchAction`. */
 export type NextjsOptions = {

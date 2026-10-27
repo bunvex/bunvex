@@ -257,6 +257,8 @@ export function makeExecution(
   last.execution = {
     status: failed ? "failure" : "success",
     durationMs,
+    // a client's query, now and then answered from the cache; from the sequence, as `startedBy`
+    ...(fn.kind === "query" && !failed && !run && seq % 5 === 0 && { cached: true }),
     usage: usageOf(fn, durationMs, seq, !within),
     identity: startedBy,
   };

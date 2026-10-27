@@ -2,12 +2,7 @@
 // callback (plain and paginated), one-shot queries, mutations and actions, for code that is not React
 // (STUDY-26 §1.5, §8.4). Every transition goes through the paginated query client, which reports the paginated
 // queries it touched with the plain ones.
-import {
-  type AnyFunctionReference,
-  type FunctionArgs,
-  type FunctionReturnType,
-  getFunctionName,
-} from "@bunvex/protocol";
+import { type AnyReference, type FunctionArgs, type FunctionReturnType, getFunctionName } from "@bunvex/protocol";
 import type { JSONValue, Value } from "@bunvex/values";
 import type { AuthTokenFetcher } from "./authentication-manager.ts";
 import {
@@ -22,9 +17,9 @@ import { type ExtendedTransition, PaginatedQueryClient } from "./paginated-query
 import type { PaginatedQueryResult } from "./pagination.ts";
 import { type PaginatedQueryToken, type QueryToken, serializedQueryTokenIsPaginated } from "./udf-path.ts";
 
-type Ref<T extends "query" | "mutation" | "action"> = AnyFunctionReference & { _type: T };
+type Ref<T extends "query" | "mutation" | "action"> = AnyReference & { _type: T };
 /** One item of a paginated query's pages. */
-type PaginatedItem<Q extends AnyFunctionReference> =
+type PaginatedItem<Q extends AnyReference> =
   FunctionReturnType<Q> extends { page: (infer T)[] }
     ? T
     : // biome-ignore lint/suspicious/noExplicitAny: an untyped reference's items
