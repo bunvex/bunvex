@@ -78,7 +78,7 @@ test("one row per search and vector index, in Convex's shape, backfilling; the s
   const p = await MemoryPersistence.open(null, { durable: false });
   const e = await new Engine(full, p, { searchStorage: blobs() }).init();
   await e.searchReady();
-  await Bun.sleep(10);
+  await e.searchIndexRowsWritten();
   // A staged index is built too, then kept Convex's `Backfilled2 { snapshot, staged }` (in the global).
   expect(((await states(p)).search_title!.onDiskState as { state: string }).state).toBe("backfilled2");
   await e.mutation((db) => db.insert("notes", { body: "hello", kind: "a", author: "x", title: "t", v: [1, 0] }));
@@ -148,7 +148,8 @@ test("one row per search and vector index, in Convex's shape, backfilling; the s
     release = r;
   });
   const e3 = await new Engine(changed, p, { searchStorage: blobs(), beforeSearchBackfillPage: () => held }).init();
-  await Bun.sleep(20);
+  // The backfill is held at its first page; the rows the start reconciled are written meanwhile.
+  await e3.searchIndexRowsWritten();
   const during = await rows(e3);
   expect(Object.keys(during.search).sort()).toEqual(["by_v", "search_other"]);
   expect(during.search.search_other!.onDiskState).toEqual({ state: "backfilling", staged: false });
@@ -164,7 +165,7 @@ test("without a segment store the rows are kept: backfilling, in Convex's shape"
   const p = await MemoryPersistence.open(null, { durable: false });
   const e = await new Engine(full, p).init();
   await e.searchReady();
-  await Bun.sleep(10);
+  await e.searchIndexRowsWritten();
   const { search } = await rows(e);
   expect(Object.keys(search).sort()).toEqual(["by_v", "search_body", "search_title"]);
   expect(search.search_body!.onDiskState).toEqual({ state: "backfilling", staged: false });

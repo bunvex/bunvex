@@ -2630,6 +2630,15 @@ export class Engine {
     while (this.searchBackfills.size) await Promise.all([...this.searchBackfills]);
   }
 
+  /**
+   * Wait until the search and vector indexes' `_index` rows (and their states) are written for what the engine
+   * has reconciled so far (tests): the sync scheduled in a microtask, then the writes queued before it.
+   */
+  async searchIndexRowsWritten() {
+    while (this.rowsSyncScheduled) await Promise.resolve();
+    await this.indexRows?.idle();
+  }
+
   /** Mark a pending (or validated) schema `failed` (Convex's `mark_failed`), in its namespace (null: the root's). */
   private async failSchemaPush(
     schemaId: string,
