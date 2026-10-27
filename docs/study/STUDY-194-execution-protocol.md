@@ -1,9 +1,9 @@
 # STUDY-194 — The execution protocol between the main thread and execution workers
-<!-- index: The execution protocol (STUDY-190 PRs 2–4, STUDY-24 A2): Convex's function runner (the request, the snapshot and metadata at a timestamp, the outcome, how the backend commits it), bunvex's in-thread call path, the messages and their encoding (a prototype), snapshots, metadata by epoch, code versions, nested calls, OCC, failures, backpressure, a five-PR plan | decided (owner, 2026-10-26): Q1–Q6, AD-47; PR 2a is #895 (draft), Q7 open -->
+<!-- index: The execution protocol (STUDY-190 PRs 2–4, STUDY-24 A2): Convex's function runner (the request, the snapshot and metadata at a timestamp, the outcome, how the backend commits it), bunvex's in-thread call path, the messages and their encoding (a prototype), snapshots, metadata by epoch, code versions, nested calls, OCC, failures, backpressure, a five-PR plan | decided (owner): Q1–Q6 and AD-47 (2026-10-26), Q7 (2026-10-27); PR 2a is #895 -->
 
-- **Status:** decided (owner, 2026-10-26): every §8 recommendation (Q1–Q6); Q4 is AD-47. PR 2a is #895 (draft): the
-  boundary, the codec and the permit order (§9). Its measurement misses §6's 3 %: the codec on every in-thread call
-  costs uncached −15 % and insert −12 % on DO `c-4`, the boundary without it about −2 %. Q7 (§8) is open.
+- **Status:** decided (owner): every §8 recommendation, Q1–Q6 on 2026-10-26 (Q4 is AD-47) and Q7 on 2026-10-27
+  (the codec round-trips in-thread calls under the tests only). PR 2a is #895: the boundary, the codec and the permit
+  order (§9); on DO `c-4` uncached +0.7 % and insert −2.2 % against `main`.
 - **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
   - `crates/function_runner/src/{lib,server,in_process_function_runner,in_memory_indexes,module_cache}.rs`;
   - `crates/isolate/src/client.rs`, `crates/isolate/src/environment/udf/{async_syscall,phase,mod}.rs`;
@@ -687,7 +687,7 @@ The baseline is the same box's run without the PR.
 
 | # | PR | Tests | Measurement |
 |---|---|---|---|
-| 2a | **The call boundary, in-thread.** `CallRequest` / `CallOutcome` (§4.4, §4.5) and the codec (§4.2). The body runner, which a worker will host, is split from the main thread's dispatcher; every main-only service is reached through one interface (§4.11). The permit moves after a main-thread path and argument check (§4.13). The in-thread executor runs every query and mutation through the boundary, **with** the codec (encode, then decode), so every suite exercises it. No worker yet. | the whole suite under the round-tripping executor; a codec property test (any value, read set and write set round-trips; a malformed message is refused with its path); sabotage: drop one interval in the codec, and the OCC and invalidation suites fail | `uncached`, `insert` on SQLite: no regression beyond 3 % |
+| 2a | **The call boundary, in-thread.** `CallRequest` / `CallOutcome` (§4.4, §4.5) and the codec (§4.2). The body runner, which a worker will host, is split from the main thread's dispatcher; every main-only service is reached through one interface (§4.11). The permit moves after a main-thread path and argument check (§4.13). The in-thread executor runs every query and mutation through the boundary, **with** the codec (encode, then decode), so every suite exercises it: under the tests only (Q7); otherwise the same objects cross without it. No worker yet. | the whole suite under the round-tripping executor; a codec property test (any value, read set and write set round-trips; a malformed message is refused with its path); sabotage: drop one interval in the codec, and the OCC and invalidation suites fail | `uncached`, `insert` on SQLite: no regression beyond 3 % |
 | 2b | **Query workers.** The worker runtime: `init`, epochs, versions, `call`, `count` and `search` ops, `alive`, `cancel`. Its store connection: SQLite read-only, or its own Postgres, MySQL or MongoDB pool (Q6). Lazy creation up to `MAX_ISOLATE_WORKERS`, dispatch by load, the retention check after the run, worker death and stuck workers (§4.12). | **differential, in-thread vs workers**: every query of the examples and of the server's fixtures, and generated queries (STUDY-122's generator), compared on the result text, the error (class, message, data, frames), the log lines and the read set interval by interval; **snapshot isolation**: a query held in a worker across a concurrent commit returns the old snapshot, and its read set invalidates it; **pushes under load**: queries in flight across a push answer from the version they were dispatched with, none fails; **retention**: a run whose `ts` falls out of the window mid-run fails with `OutOfRetention`; **death**: a worker killed mid-call fails its calls as system errors and the next call succeeds; **stuck**: `for (;;) {}` times out and the server answers others meanwhile | `uncached`, `cached`, `mix` on SQLite and Postgres. Expected uncached 1.6–2× on `c-4` (STUDY-190 §4.5's ceiling). The main thread's profile (`bench/offthread/profile.ts`) should show the values and transaction work gone |
 | 2c | **Only if 2b's profile shows store reads in the workers:** an index cache per worker, fed by the commit stream (each commit's index-key writes, what STUDY-24 §4.3 says a follower needs), validated as STUDY-136's against that stream (Q5) | the index cache's own tests run in a worker; a stale-entry sabotage caught by the differential test | `uncached` against 2b |
 | 3 | **Mutation workers.** Writes in the outcome; the documents' segment handed to the SQLite writer; commit timestamps resolved on the main thread; created tables, effects, derived data, the creation cursor; session mutations; retries as new attempts (§4.10) | the differential test extended to mutations: the same documents, index entries (byte for byte), result and lines; **serializability**: STUDY-57's history checker over concurrent bank transfers and counters, with and without workers; **OCC**: a hot key (`increment1`) gives the same conflict messages and retry counts as in-thread; **commit timestamps**: STUDY-53's suite under workers; **death**: a worker killed after its outcome is sent but before the commit commits once, and one killed before it commits nothing; a sabotage that commits an outcome after a cancel is caught | `insert`, `increment1000`, `increment1` on SQLite and Postgres, against PR 1's numbers |
@@ -717,7 +717,7 @@ STUDY-190's PR 5 (HTTP front threads) follows, unchanged.
 
 ## 8. Owner questions
 
-Q1–Q6 decided by the owner on 2026-10-26, as recommended. Q7 is open (PR 2a's measurement, §9).
+Q1–Q6 decided by the owner on 2026-10-26, as recommended; Q7 on 2026-10-27, option 2 (as recommended).
 
 | # | Question | Recommendation |
 |---|---|---|
@@ -727,7 +727,7 @@ Q1–Q6 decided by the owner on 2026-10-26, as recommended. Q7 is open (PR 2a's 
 | Q4 | **Choosing in-thread execution:** (a) `MAX_ISOLATE_WORKERS=0` means in the main thread, a bunvex meaning for Convex's knob (an addition, AD-47); (b) a bunvex knob of its own; (c) no operator setting, only a `createServer` option for tests, with the memory store and handed-in stores in-thread automatically? | **(a) with (c)'s option.** Convex's 0 admits no function at all, so the value is free. It gives operators a way back if a worker bug appears. Tests pick per server. Recorded as AD-47 |
 | Q5 | **A worker's index cache** (PR 2c): build it only if PR 2b's profile shows store reads in the workers? It would be fed by the commit stream a follower also needs (STUDY-24 §4.3) | **Only if measured.** Convex's runners have none for user tables (their cache holds in-memory system indexes, §1.3). Without it a worker reads its own connection, on its own core |
 | Q6 | **Store connections:** each worker opens its own pool. Keep the total within Convex's `POSTGRES_MAX_CONNECTIONS` / `MYSQL_MAX_CONNECTIONS` (128) by splitting it between the main thread and the worker cap? Or give each worker the full size? | **Split it.** The main thread keeps what its commits and system work need (a quarter, at least 8); the workers share the rest evenly up to the cap. No deployment opens more connections than it does today, and the knob keeps Convex's meaning as a process total. MongoDB's `POOL` the same way |
-| Q7 | **The codec in the thread (PR 2a):** every in-thread call round-trips through the codec, as §6 asked, and costs uncached −15 % and insert −12 % on DO `c-4` (§9). Keep it so until workers replace it? Or round-trip only under tests (the suites keep exercising it), and pass the request and outcome as objects through the same boundary otherwise (−2 %), as §4.14 describes the in-thread executor? Or keep the codec and spend PR 2a on making it cheaper first? | **Round-trip under tests only.** Nothing an app observes differs: the types, the runner and the dispatcher are the same, and the differential test of PR 2b compares in-thread and workers on the decoded outcome. A Bun Worker pays a message per call anyway; the main thread does not need to pay it twice |
+| Q7 | **The codec in the thread (PR 2a):** every in-thread call round-trips through the codec, as §6 asked, and costs uncached −15 % and insert −12 % on DO `c-4` (§9). Keep it so until workers replace it? Or round-trip only under tests (the suites keep exercising it), and pass the request and outcome as objects through the same boundary otherwise (−2 %), as §4.14 describes the in-thread executor? Or keep the codec and spend PR 2a on making it cheaper first? | **Decided (owner, 2026-10-27): option 2, round-trip under tests only.** Nothing an app observes differs: the types, the runner and the dispatcher are the same, and the differential test of PR 2b compares in-thread and workers on the decoded outcome. A Bun Worker pays a message per call anyway; the main thread does not need to pay it twice |
 
 ## 9. PR 2a, built (#895)
 
@@ -746,9 +746,18 @@ Q1–Q6 decided by the owner on 2026-10-26, as recommended. Q7 is open (PR 2a's 
   object (PR 2b moves errors to STUDY-171 §8.3's codec), the log lines (they still flow through the thread's log
   scope), and what a mutation's commit takes from its transaction (after-commit callbacks, derived search and
   summary data, created tables, commit timestamps: PR 3, §4.10).
+- **Q7, built.** The root test preload (`test/preload.ts`) calls `roundTripCallsByDefault()`, so every engine of a
+  `bun test` run round-trips its calls through the codec; `Engine`'s `callCodec` option sets it per engine. Outside
+  the tests the dispatcher hands the runner the same `CallRequest` and gets the same `CallOutcome` back
+  (`CallRunner.runRequest`), with the caller's identity and the arguments beside the request as they are. No
+  environment knob. `core/test/call-boundary.test.ts` and `server/test/call-permits.test.ts` fail if a test run's
+  engine does not round-trip; `server/test/call-no-codec.test.ts` runs a server without the codec.
 - **Measured** on DO `c-4` (sfo2, Xeon Platinum 8168), SQLite, k6 32 VUs, 3 × 30 s per point, interleaved on the same
-  droplets (`bench/results/cloud/2026-10-27-00-*`): main `8d856153` uncached 1998 / 2052 req/s, insert 1894 / 1919;
-  PR 2a uncached 1730 / 1709 (−15 %), insert 1665 / 1267 (−12 % on the steadier run); the same tree with the codec
-  bypassed (`9e0345c1`, measurement only) uncached 1964 (−3 %), insert 1868 (−2 %). An in-process micro-benchmark
-  on the server box puts the codec at about 45 µs a query and 55 µs an insert there, three to four times what it
-  costs alone in a loop. Q7 asks what to do about it.
+  droplets (`bench/results/cloud/2026-10-27-15-*`), against `main` `f3a17aa8`:
+  - **as merged** (`bce3c564`, no codec outside the tests): uncached 2058 / 2016 req/s against 2026 / 2021 (+0.7 %),
+    insert 2045 / 2065 against 2100 / 2104 (−2.2 %);
+  - with Q7's switch but the arguments still crossing as text (`ddb23c73`): uncached −3.8 %, insert +0.9 %;
+  - with the codec on every call (`2c68d478`, before Q7; `bench/results/cloud/2026-10-27-00-*`): uncached −15 %,
+    insert −12 %; the boundary without the codec (`9e0345c1`, measurement only) −3 % and −2 %. An in-process
+    micro-benchmark on the server box put the codec at about 45 µs a query and 55 µs an insert there, three to four
+    times what it costs alone in a loop; that is why Q7 was asked.

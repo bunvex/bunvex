@@ -3,9 +3,9 @@
 
 - **Status:** decided (owner, 2026-10-26): every §8 recommendation; DV-573, DV-574. PR 1 (the SQLite writer thread) is #878:
   on DO `c-4` (sfo2, Xeon 8168), insert +46 % and increment1000 +21 %, reads unchanged
-  (`bench/results/cloud/2026-10-26-18-*`). PR 2a (the call boundary in the thread, with its codec; STUDY-194 §9) is
-  #895, a draft: the codec costs uncached −15 % and insert −12 % on DO `c-4`, past its 3 % target (STUDY-194 Q7).
-  PRs 2b–5 are not built; the prototypes are in `bench/offthread/`.
+  (`bench/results/cloud/2026-10-26-18-*`). PR 2a (the call boundary in the thread, its codec round-tripping calls
+  under the tests: STUDY-194 §9, Q7) is #895: on DO `c-4` uncached +0.7 % and insert −2.2 %
+  (`bench/results/cloud/2026-10-27-15-*`). PRs 2b–5 are not built; the prototypes are in `bench/offthread/`.
 - **Convex source read:** `precompiled-2026-10-24-bb31399`. Files:
   - `crates/runtime/src/prod.rs`, `crates/common/src/knobs.rs`;
   - `crates/isolate/src/client.rs`, `crates/function_runner/src/in_process_function_runner.rs`;

@@ -1,0 +1,182 @@
+{
+  "meta": {
+    "suite": "single",
+    "sha": "f3a17aa8",
+    "bun": "1.4.4",
+    "k6": "k6 v2.3.0 (commit/e088784614, go1.26.8, linux/amd64)",
+    "server": {
+      "name": "bunvex-bench-pr2a-server",
+      "id": 613185963,
+      "public": "stripped",
+      "private": "10.120.0.3",
+      "size": "c-4",
+      "hourly": 0.125,
+      "machine": ["4", "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz", "7", "6.8.0-142-generic"]
+    },
+    "load": {
+      "name": "bunvex-bench-pr2a-load",
+      "id": 613185960,
+      "public": "stripped",
+      "private": "10.120.0.2",
+      "size": "c-4",
+      "hourly": 0.125,
+      "machine": ["4", "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz", "7", "6.8.0-142-generic"]
+    },
+    "env": {
+      "REGION": "sfo2",
+      "REPEATS": 3
+    }
+  },
+  "results": [
+    {
+      "persistence": "sqlite",
+      "n": 1,
+      "scenario": "uncached",
+      "vus": 32,
+      "duration": "30s",
+      "rate": 2026.339482270165,
+      "errors": 0,
+      "p99": 31.288891109999998,
+      "serverCores": 0.997095271319764,
+      "boxCores": 1.0083587027947103,
+      "loadCores": 0.5341682376994039,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 2026.339482270165,
+          "errors": 0,
+          "p50": 14.615801000000001,
+          "p90": 19.507652900000004,
+          "p99": 31.288891109999998,
+          "max": 312.719303
+        }
+      ],
+      "repeat": 1
+    },
+    {
+      "persistence": "sqlite",
+      "n": 1,
+      "scenario": "uncached",
+      "vus": 32,
+      "duration": "30s",
+      "rate": 2034.240672091305,
+      "errors": 0,
+      "p99": 30.874822610000002,
+      "serverCores": 0.9879559369547023,
+      "boxCores": 0.9935725141971994,
+      "loadCores": 0.5484587677295426,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 2034.240672091305,
+          "errors": 0,
+          "p50": 14.646134499999999,
+          "p90": 19.643036700000003,
+          "p99": 30.874822610000002,
+          "max": 320.34389
+        }
+      ],
+      "repeat": 2
+    },
+    {
+      "persistence": "sqlite",
+      "n": 1,
+      "scenario": "uncached",
+      "vus": 32,
+      "duration": "30s",
+      "rate": 2012.602936045666,
+      "errors": 0,
+      "p99": 31.62303967999999,
+      "serverCores": 0.9943486228287357,
+      "boxCores": 1.0151109812060803,
+      "loadCores": 0.5861157655443643,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 2012.602936045666,
+          "errors": 0,
+          "p50": 14.8700735,
+          "p90": 19.713503300000003,
+          "p99": 31.62303967999999,
+          "max": 317.176187
+        }
+      ],
+      "repeat": 3
+    },
+    {
+      "persistence": "sqlite",
+      "n": 1,
+      "scenario": "insert",
+      "vus": 32,
+      "duration": "30s",
+      "rate": 2100.3018476101715,
+      "errors": 0,
+      "p99": 45.48624480000001,
+      "serverCores": 0.8675938870519012,
+      "boxCores": 0.8946094605702208,
+      "loadCores": 0.3717455481010589,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 2100.3018476101715,
+          "errors": 0,
+          "p50": 10.403002,
+          "p90": 34.5228604,
+          "p99": 45.48624480000001,
+          "max": 337.35173
+        }
+      ],
+      "repeat": 1
+    },
+    {
+      "persistence": "sqlite",
+      "n": 1,
+      "scenario": "insert",
+      "vus": 32,
+      "duration": "30s",
+      "rate": 2106.098334907739,
+      "errors": 0,
+      "p99": 45.76756757,
+      "serverCores": 0.8460658554490755,
+      "boxCores": 0.8902716772615586,
+      "loadCores": 0.3774281875002658,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 2106.098334907739,
+          "errors": 0,
+          "p50": 10.510501999999999,
+          "p90": 34.2244359,
+          "p99": 45.76756757,
+          "max": 135.766882
+        }
+      ],
+      "repeat": 2
+    },
+    {
+      "persistence": "sqlite",
+      "n": 1,
+      "scenario": "insert",
+      "vus": 32,
+      "duration": "30s",
+      "rate": 2084.288359167345,
+      "errors": 0,
+      "p99": 46.50165911999995,
+      "serverCores": 0.854594957413993,
+      "boxCores": 0.8921068812872837,
+      "loadCores": 0.36863221430366117,
+      "servers": [
+        {
+          "port": 3510,
+          "rate": 2084.288359167345,
+          "errors": 0,
+          "p50": 10.436938999999999,
+          "p90": 34.1999572,
+          "p99": 46.50165911999995,
+          "max": 314.417704
+        }
+      ],
+      "repeat": 3
+    }
+  ]
+}
