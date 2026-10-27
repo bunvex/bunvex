@@ -1,7 +1,7 @@
 // The deployment audit log's events (STUDY-48), as Convex's `DeploymentAuditLogEvent`
 // (crates/model/src/deployment_audit_log/types.rs): each one's `action` and `metadata`, for the changes
 // bunvex can make. (Stored objects come back with their keys in order, as Convex's do.)
-import type { AuditLogActor, AuditLogEvent, Caller } from "@bunvex/core";
+import { type AuditLogActor, type AuditLogEvent, type Caller, componentPath, type Tx } from "@bunvex/core";
 import { isBytes, type Value } from "@bunvex/values";
 import type { AdminCaller } from "./functions.ts";
 import { LOG_TOPICS } from "./log-events.ts";
@@ -23,6 +23,14 @@ export type ComponentDiff = {
   indexDiff: Record<"added_indexes" | "removed_indexes" | "enabled_indexes" | "disabled_indexes", Value[]>;
   schemaDiff: { previous_schema: string | null; next_schema: string | null } | null;
 };
+
+/** Component `id`'s audit fields (its path, as Convex's `must_component_path`), the root's for null. */
+export async function auditComponent(db: Tx, id: string | null): Promise<AuditComponent> {
+  if (id === null) return ROOT;
+  const path = await componentPath(db, id);
+  if (path === null) throw new Error(`Component not found for id: ${id}`);
+  return { component_id: id, component: path.join("/") };
+}
 
 export const auditEvents = {
   createEnvironmentVariable: (name: string) => event("create_environment_variable", { variable_name: name }),
@@ -78,12 +86,17 @@ export const auditEvents = {
       node_version_diff: o.nodeVersionDiff ?? null,
     }),
   /** The Data screen's writes (STUDY-149 PR 3), as Convex's system functions record them. */
-  addDocuments: (table: string, ids: string[]) => event("add_documents", { ...ROOT, table, document_ids: ids }),
-  updateDocuments: (table: string, ids: string[]) => event("update_documents", { ...ROOT, table, document_ids: ids }),
-  deleteDocuments: (table: string, ids: string[]) => event("delete_documents", { ...ROOT, table, document_ids: ids }),
-  createTable: (table: string) => event("create_table", { ...ROOT, table }),
-  deleteFiles: (storageIds: string[]) => event("delete_files", { ...ROOT, storage_ids: storageIds }),
-  generateUploadUrl: () => event("generate_upload_url", { ...ROOT }),
+  // in the component they ran in (Convex's `writeDeploymentAuditLog` adds its `component_id` and `component`)
+  addDocuments: (table: string, ids: string[], component: AuditComponent = ROOT) =>
+    event("add_documents", { ...component, table, document_ids: ids }),
+  updateDocuments: (table: string, ids: string[], component: AuditComponent = ROOT) =>
+    event("update_documents", { ...component, table, document_ids: ids }),
+  deleteDocuments: (table: string, ids: string[], component: AuditComponent = ROOT) =>
+    event("delete_documents", { ...component, table, document_ids: ids }),
+  createTable: (table: string, component: AuditComponent = ROOT) => event("create_table", { ...component, table }),
+  deleteFiles: (storageIds: string[], component: AuditComponent = ROOT) =>
+    event("delete_files", { ...component, storage_ids: storageIds }),
+  generateUploadUrl: (component: AuditComponent = ROOT) => event("generate_upload_url", { ...component }),
   /**
    * Log streams (STUDY-59): the sink's id and type, and its configuration as an audit snapshot (Convex's 3a958a4):
    * a created or deleted sink's, an updated one's before and after with which credentials changed.
