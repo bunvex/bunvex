@@ -6,6 +6,9 @@
 // sets `application/json`, an explicit one too. Bun puts a string's type on the wire only when it writes the body
 // itself, its Blob's in its MIME table's form and its JSON's with `;charset=utf-8`.
 //
+// A body with a null body status (204, 205, 304) throws a `TypeError`, as Convex's constructor (a74b7c3); a fetched
+// response with one, or answering a `HEAD`, has no body, which Bun's `fetch` already gives.
+//
 // A body that is not a stream has a known length, which Convex sends as `content-length`; `bodyLength` tells the
 // HTTP action server so (STUDY-31 §8).
 import { isAnyArrayBuffer } from "node:util/types";
@@ -60,6 +63,9 @@ function bodyType(body: Body): string | null | undefined {
   return null;
 }
 
+/** The statuses whose response has no body: 204, 205 and 304. */
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
+
 export class SpecResponse extends HostResponse {
   constructor(body?: unknown, init?: Init) {
     const converted = body === undefined || body === null ? null : convertBody(body);
@@ -68,6 +74,9 @@ export class SpecResponse extends HostResponse {
       new Headers(init.headers as ConstructorParameters<typeof Headers>[0]).has("content-type");
     super(converted, init);
     if (converted === null) return;
+    // The Fetch standard's null body statuses take no body (Convex's runtime since a74b7c3); Bun's `Response` builds
+    // one anyway. After `super`, so a status out of range or a bad header fails first, as on Convex.
+    if (NULL_BODY_STATUSES.has(this.status)) throw new TypeError("Response with null body status cannot have body");
     if (!(converted instanceof ReadableStream))
       lengths.set(
         this,
