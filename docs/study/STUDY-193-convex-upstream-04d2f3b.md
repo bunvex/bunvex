@@ -85,7 +85,7 @@ The rest of STUDY-186 was checked too:
 | Q2 / DV-551, `env list` names only for AI agents | **yes**, #894 | built with A16: `detectAgent` (`cli/src/agent.ts`), `BUNVEX_AGENT_MODE` |
 | Q3, the local dashboard's empty 403 on every non-loopback `Host` | no | only `/api/current_deployment` is checked, with a worded body (`cli/src/dashboard-server.ts:166-168`); DV-476 not yet moved |
 | Q4 / DV-552, `function.runtime` in log stream events | no | `log-events.ts` has `runtime: "default" \| "node"` only on the function's metadata, nothing on the stream event; DV-552 says "to be built" |
-| Q5, the MySQL retry set | no | `LOST` still holds `EPIPE`, `ETIMEDOUT`, `EHOSTUNREACH`, `ENETUNREACH`, and no `EAI_AGAIN` (`persistence/src/mysql.ts:209-218`) |
+| Q5, the MySQL retry set | **yes**, #911 | `LOST` is `PROTOCOL_CONNECTION_LOST`, `ECONNRESET`, `ECONNREFUSED`, `EAI_AGAIN`, `POOL_CLOSED` (`persistence/src/mysql.ts`); `transient.test.ts` |
 | Q6, Bun's Brotli and root store (outside parity) | no record | no doc or commit mentions the check |
 | §4.2, storage in mutations (study) | no study yet | — |
 | §4.2, signJwt and JWKS (study) | in STUDY-192 (draft #882) | another session |
