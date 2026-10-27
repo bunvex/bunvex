@@ -1074,6 +1074,11 @@ export class Functions {
     return key.slice(0, key.lastIndexOf(":"));
   }
 
+  /** A client's query's key in the query cache, shared by the HTTP API and sync (STUDY-08 §7); none when uncacheable. */
+  queryCacheKey(name: string, args: unknown): string | undefined {
+    return this.cacheKey(name, args, true);
+  }
+
   private cacheKey(name: string, args: unknown, fromClient = true): string | undefined {
     if (args instanceof UndecodedArgs || tooDeepToStringify(args)) return undefined;
     try {

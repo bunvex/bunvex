@@ -376,6 +376,9 @@ const ID_SEP = "\u0001";
  * What a caller keeps with a cached query result and gets back on a hit: the server stores the execution's
  * log lines there, so a cache hit answers them too, as Convex's cache entries do (STUDY-20 D2).
  */
+/** A result in the query cache and the key it is stored under, as a subscription's run found or stored it. */
+export type CachedEntryRef = { key: string; result: CachedResult };
+
 export type CacheCompanion = {
   /**
    * On a miss: the run to make instead (a transaction body, or the call boundary's dispatch), and what to store with
@@ -4095,6 +4098,7 @@ export class Engine {
       observedTime: outcome.observedTime,
       unixMs: Math.floor(now),
       identityObserved: outcome.identityObserved,
+      endCursor: outcome.endCursor,
     };
     this.cache.putReady(stored, result);
     // Waiters at `key` take this result only if it is stored there; otherwise they look again.
@@ -4123,6 +4127,164 @@ export class Engine {
     // writes back a fresh run's result (STUDY-08 §1.1). Not observable: the result is the same.
     else if (r.tokenTs < ts) r.tokenTs = ts;
     return why;
+  }
+
+  /**
+   * A subscription's run through the query cache, as Convex's sync worker asks `CacheManager::get` (STUDY-08 §7):
+   * the same entries as `cachedQuery` (`cacheKey` with the caller's key, or `*` for a run that did not read the
+   * identity), with the journal in the key when it is not empty. A hit answers with the stored result, its reads
+   * valid at the snapshot (the token, refreshed) and its journal, its lines replayed through `companion` as a
+   * hit. A miss runs as `queryTracked` and stores a successful result, under the request's journal and the
+   * outcome's (Convex's `cache_keys_after_execution`). A failure is not stored, and still returns its reads.
+   * Without a `cacheKey`, `queryTracked`.
+   */
+  async cachedQueryTracked<T>(
+    body: TxBody<T> | Call,
+    cacheKey: string | undefined,
+    companion: CacheCompanion | undefined,
+    journal: QueryJournal = {},
+    at?: bigint,
+    caller: Caller = ANONYMOUS,
+  ): Promise<Awaited<ReturnType<Engine["queryTracked"]>> & { cached?: boolean; entry?: CachedEntryRef }> {
+    if (cacheKey === undefined) return this.queryTracked<T>(body, journal, at, caller);
+    const visible = this.committer.visibleTs;
+    const ts = at === undefined || at > visible ? visible : at;
+    const keyed = (j: string | null | undefined) => (j ? `${cacheKey}\u0000j:${j}` : cacheKey);
+    const base = keyed(journal.endCursor);
+    const keys = [`${base}${ID_SEP}${caller.key}`, `${base}${ID_SEP}*`] as const;
+    let hint: string | undefined;
+    let dropped: MissReason | undefined;
+    for (;;) {
+      const found = this.cache.find(keys);
+      const key = found?.key ?? hint ?? keys[0];
+      hint = key;
+      const e = found?.entry;
+      let r: CachedResult;
+      if (e?.kind === "ready" && e.result.originalTs <= ts) r = e.result;
+      else if (e?.kind === "waiting" && e.ts <= ts) {
+        this.stats.cacheWaits++;
+        const waited = await e.result;
+        if (waited === null) {
+          this.cache.removeWaiting(key, e.id);
+          continue;
+        }
+        r = waited;
+      } else {
+        this.cache.noteMiss(keys, e === undefined ? dropped : "snapshot");
+        return this.runCachedTracked<T>(body, ts, keys, key, e === undefined, companion, caller, journal, keyed);
+      }
+      dropped = this.stillValid(key, r, ts);
+      if (dropped !== undefined) continue;
+      this.stats.cacheHits++;
+      companion?.replay(r.extra);
+      return {
+        ok: true,
+        value: parseValue(r.json) as T,
+        json: r.json,
+        reads: r.reads,
+        ts,
+        journal: { endCursor: r.endCursor ?? null },
+        identityObserved: r.identityObserved,
+        documentsRead: 0,
+        bytesRead: 0,
+        cached: true,
+        entry: { key, result: r },
+      };
+    }
+  }
+
+  /** `runCached` for a subscription: `queryTracked`'s run and answer, its successful result stored. */
+  private async runCachedTracked<T>(
+    body: TxBody<T> | Call,
+    ts: bigint,
+    keys: readonly [precise: string, shared: string],
+    key: string,
+    coordinate: boolean,
+    companion: CacheCompanion | undefined,
+    caller: Caller,
+    journal: QueryJournal,
+    keyed: (j: string | null | undefined) => string,
+  ): Promise<Awaited<ReturnType<Engine["queryTracked"]>> & { entry?: CachedEntryRef }> {
+    this.stats.cacheMisses++;
+    const waiting = coordinate ? this.cache.putWaiting(key, ts) : undefined;
+    const epoch = this.cacheEpoch;
+    let wrapped: ReturnType<CacheCompanion["wrap"]> | undefined;
+    // Always through the companion: the session keeps the run's lines for those who reuse it, stored or not.
+    const wrap = companion
+      ? <F extends (...args: never[]) => unknown>(run: F): F => {
+          wrapped = companion.wrap(run as unknown as (...args: unknown[]) => unknown);
+          return wrapped.body as unknown as F;
+        }
+      : undefined;
+    let run: Ran<T>;
+    try {
+      run = await this.execute("query", ts, body, false, caller, {
+        tracked: true,
+        journal: journal.endCursor ?? null,
+        wrap,
+      });
+    } catch (error) {
+      if (waiting) {
+        this.cache.removeWaiting(key, waiting.id);
+        waiting.settle(null);
+      }
+      throw error;
+    }
+    // Captured whether or not it is stored: the companion keeps the run's lines for those who reuse it.
+    const extra = wrapped?.capture();
+    const o = run.outcome;
+    const out = {
+      reads: o.reads,
+      ts,
+      journal: { endCursor: o.endCursor },
+      identityObserved: o.identityObserved,
+      documentsRead: o.documentsRead,
+      bytesRead: o.bytesRead,
+    };
+    // Errors are not cached (Convex: "We do not cache JSErrors"); whoever waited plans again.
+    if (!run.ok || !waiting || epoch !== this.cacheEpoch) {
+      if (waiting) {
+        this.cache.removeWaiting(key, waiting.id);
+        waiting.settle(null);
+      }
+      return run.ok
+        ? { ok: true, value: run.value, ...(o.result === null ? {} : { json: o.result }), ...out }
+        : { ok: false, error: run.error, ...out };
+    }
+    this.cache.removeWaiting(key, waiting.id);
+    const json = o.result ?? stringifyValue(run.value);
+    const result: CachedResult = {
+      json,
+      extra,
+      originalTs: ts,
+      tokenTs: ts,
+      reads: o.reads,
+      observedTime: o.observedTime,
+      unixMs: Math.floor(run.now),
+      identityObserved: o.identityObserved,
+      endCursor: o.endCursor,
+    };
+    const stored = o.identityObserved ? keys[0] : keys[1];
+    this.cache.putReady(stored, result);
+    // Also under the outcome's journal: the same caller's next request asks with it (Convex's
+    // `cache_keys_after_execution`).
+    if ((o.endCursor ?? null) !== (journal.endCursor ?? null)) {
+      const id = stored === keys[0] ? caller.key : "*";
+      this.cache.putReady(`${keyed(o.endCursor)}${ID_SEP}${id}`, result);
+    }
+    waiting.settle(stored === key ? result : null);
+    return { ok: true, value: run.value, json, ...out, entry: { key: stored, result } };
+  }
+
+  /**
+   * Drops a cached result its owner knows a commit at `commitTs` wrote into (a subscription's sync hub matched it):
+   * what `stillValid` would find, without walking the write log. Only if it is still the entry at `key`.
+   */
+  dropCachedResult(ref: CachedEntryRef, commitTs: bigint) {
+    if (ref.result.originalTs >= commitTs) return;
+    const found = this.cache.find([ref.key]);
+    if (found?.entry.kind === "ready" && found.entry.result === ref.result)
+      this.cache.removeReady(ref.key, ref.result.originalTs);
   }
 
   /**
