@@ -166,7 +166,7 @@ describe("formats and values", () => {
     const short = await t.importNow("a,b\n1,2\n3\n", "format=csv&tableName=short");
     expect(short.body).toEqual({
       code: "ImportFailed",
-      message: "Hit an error while importing:\nCSV row 3 doesn't have all of the fields in the header",
+      message: "CSV row 3 doesn't have all of the fields in the header",
     });
     // An empty file imports nothing, as Convex's.
     expect((await t.importNow("", "format=csv&tableName=empty")).body).toEqual({ numWritten: 0 });
@@ -202,8 +202,7 @@ describe("formats and values", () => {
     const [first] = await t.docs("lines");
     expect(typeof first!.a).toBe("number");
     expect(first!.o).toEqual({ x: [1, true, null] });
-    const fail = async (body: string, query: string) =>
-      ((await t.importNow(body, query)).body.message as string).split("\n")[1];
+    const fail = async (body: string, query: string) => (await t.importNow(body, query)).body.message as string;
     expect(await fail('{"$bytes":"AQI="}\n', "format=jsonLines&tableName=b")).toBe(
       "Row 1 wasn't a valid value: Field name $bytes starts with a '$', which is reserved.",
     );
@@ -220,7 +219,8 @@ describe("formats and values", () => {
     expect(await fail('{"a":1}', "format=jsonArray&tableName=f")).toBe("Not a JSON array");
     expect(await fail("[", "format=jsonArray&tableName=g")).toStartWith("Not valid JSON: ");
     expect(await fail('{"_x":1}\n', "format=jsonLines&tableName=h")).toBe(
-      "Field '_x' starts with an underscore, which is only allowed for system fields like '_id'",
+      // Not one of Convex's import errors: the document's own, prefixed as Convex's `wrap_import_err` does.
+      "Hit an error while importing:\nField '_x' starts with an underscore, which is only allowed for system fields like '_id'",
     );
     // Nothing of the failed imports was written.
     expect(await t.docs("b")).toEqual([]);
@@ -249,7 +249,7 @@ describe("modes, ids and the summary", () => {
     const t = await setup();
     await t.functions.runMutation("m:insert", { table: "items", doc: { old: true } });
     expect((await t.importNow('{"a":1}\n', "format=jsonLines&tableName=items")).body.message).toBe(
-      "Hit an error while importing:\nTable items already exists. Please choose a new table name or use replace/append modes.",
+      "Table items already exists. Please choose a new table name or use replace/append modes.",
     );
     await t.importNow('{"a":1}\n', "format=jsonLines&tableName=items&mode=append");
     expect((await t.docs("items")).map(strip)).toEqual([{ old: true }, { a: 1 }]);
@@ -269,8 +269,7 @@ describe("modes, ids and the summary", () => {
     const done = await t.waitState(importId, ["completed", "failed"]);
     expect(done.state).toEqual({
       state: "failed",
-      error_message:
-        "Hit an error while importing:\nTable late already exists. Please choose a new table name or use replace/append modes.",
+      error_message: "Table late already exists. Please choose a new table name or use replace/append modes.",
     });
     expect((await t.docs("late")).map(strip)).toEqual([{ first: true }]);
     // Now that it is not empty, the summary itself fails it: nothing to confirm.

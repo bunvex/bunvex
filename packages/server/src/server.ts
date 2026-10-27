@@ -144,7 +144,14 @@ import { healthRoute, maxEchoBytesFromEnv, SERVER_VERSION, versionRoute } from "
 import { type AppRouting, type HttpNode, httpActionServer, NO_ROUTING } from "./http-actions.ts";
 import { type HttpProxy, httpProxyUrl, proxiedFetch } from "./http-proxy.ts";
 import type { ImportFormat } from "./import-parse.ts";
-import { ImportError, type ImportOptions, ImportRequestError, ImportService, MODE_ARGS } from "./imports.ts";
+import {
+  ImportError,
+  type ImportOptions,
+  ImportRequestError,
+  ImportService,
+  importPartBody,
+  MODE_ARGS,
+} from "./imports.ts";
 import {
   BadJsonBody,
   type BodyShape,
@@ -2236,7 +2243,7 @@ export function createServer(opts: ServerOptions) {
             ["partNumber", { int: "u16" }],
           ]);
           requireImport();
-          return json(await importService.uploadPart(a.uploadToken as string, new Uint8Array(await req.arrayBuffer())));
+          return json(await importService.uploadPart(a.uploadToken as string, await importPartBody(req)));
         }
         case "/api/import/finish_upload": {
           const b = await body<{ import: Parameters<typeof importArgs>[0]; uploadToken: string; partTokens: string[] }>(

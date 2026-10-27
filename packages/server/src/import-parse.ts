@@ -7,19 +7,57 @@
 // - a ZIP: `<table>/documents.jsonl` per table, in the lossless encoding when its `generated_schema.jsonl`
 //   says `"uniform"`; `_tables` (names and numbers), `_storage` (file metadata) and `_storage/<id>[.ext]`
 //   files; other system tables skipped.
+import { isUtf8 } from "node:buffer";
+import { knob } from "@bunvex/core";
 import { fromExportJson, isSimpleObject, type Value, validateObjectField } from "@bunvex/values";
 import { InvalidZipError, type ZipReader } from "./zip-reader.ts";
 
-/** A request or an import refused by its content (Convex's bad requests), with Convex's code. */
+/**
+ * Convex's `ImportError` variants (snapshot_import/import_error.rs), by bunvex's code for each: raised bare, with no
+ * error metadata, so a failed import's message is the error's alone. Every other refusal carries its metadata
+ * already, and `wrap_import_err` prefixes it "Hit an error while importing:"; so does a CSV record past the limit,
+ * which reaches it through the CSV reader's I/O error (679042f).
+ */
+const BARE_CODES = new Set([
+  "TableExists",
+  "InvalidName",
+  "NotUtf8",
+  "Utf8BomNotSupported",
+  "JsonArrayTooLarge",
+  "JsonLineTooLarge",
+  "CsvMissingHeaders",
+  "CsvInvalidHeader",
+  "CsvInvalidRow",
+  "CsvRowMissingFields",
+  "JsonInvalidRow",
+  "InvalidValue",
+  "NotAnObject",
+  "NotJsonArray",
+  "NotJson",
+]);
+
+/**
+ * A request or an import refused by its content (Convex's bad requests), with Convex's code. `bare`: Convex raises it
+ * as one of its `ImportError` variants (`BARE_CODES`), so a failed import's message is it alone.
+ */
 export class ImportError extends Error {
+  readonly bare: boolean;
   constructor(
     readonly code: string,
     message: string,
   ) {
     super(message);
     this.name = "ImportError";
+    this.bare = BARE_CODES.has(code);
   }
 }
+
+/**
+ * Convex's `SNAPSHOT_IMPORT_MAX_LINE_SIZE_BYTES` (a5de16c, 679042f): the most bytes of a JSON Lines line, or of a
+ * CSV record (a quoted field's newlines are inside it), its line ending included.
+ */
+export const importMaxLineBytes = (env = process.env) =>
+  knob("SNAPSHOT_IMPORT_MAX_LINE_SIZE_BYTES", 16 << 20, "uint", env);
 
 /** Convex's TRANSACTION_MAX_USER_WRITE_SIZE_BYTES: a JSON array file's limit. */
 export const JSON_ARRAY_MAX_BYTES = 16 * 1024 * 1024;
@@ -60,38 +98,122 @@ async function* utf8(bytes: AsyncIterable<Uint8Array>, onInvalid: () => Error): 
   }
 }
 
-/** Lines without their `\n` (Rust's `read_line`: a last line without one counts, an empty end does not). */
-async function* lines(text: AsyncIterable<string>): AsyncGenerator<string> {
-  let buf = "";
-  for await (const chunk of text) {
-    buf += chunk;
-    let nl = buf.indexOf("\n");
-    while (nl >= 0) {
-      yield buf.slice(0, nl);
-      buf = buf.slice(nl + 1);
-      nl = buf.indexOf("\n");
+/**
+ * Rust's `Utf8Error` for `b`, as `std::str::from_utf8` words it ("invalid utf-8 sequence of N bytes from index I",
+ * "incomplete utf-8 byte sequence from index I"), or null when `b` is valid UTF-8.
+ */
+export function utf8Error(b: Uint8Array): string | null {
+  const cont = (i: number, lo = 0x80, hi = 0xbf) => i < b.length && b[i]! >= lo && b[i]! <= hi;
+  for (let i = 0; i < b.length; ) {
+    const x = b[i]!;
+    if (x < 0x80) {
+      i++;
+      continue;
     }
+    // The bytes of a sequence that are right so far, and how many it needs.
+    let need = 0;
+    let lo = 0x80;
+    let hi = 0xbf;
+    if (x >= 0xc2 && x <= 0xdf) need = 2;
+    else if (x >= 0xe0 && x <= 0xef) {
+      need = 3;
+      if (x === 0xe0) lo = 0xa0;
+      else if (x === 0xed) hi = 0x9f;
+    } else if (x >= 0xf0 && x <= 0xf4) {
+      need = 4;
+      if (x === 0xf0) lo = 0x90;
+      else if (x === 0xf4) hi = 0x8f;
+    }
+    if (need === 0) return `invalid utf-8 sequence of 1 bytes from index ${i}`;
+    for (let k = 1; k < need; k++) {
+      if (i + k >= b.length) return `incomplete utf-8 byte sequence from index ${i}`;
+      if (!(k === 1 ? cont(i + k, lo, hi) : cont(i + k))) return `invalid utf-8 sequence of ${k} bytes from index ${i}`;
+    }
+    i += need;
   }
-  if (buf) yield buf;
+  return null;
 }
 
-/** The first bytes start with a UTF-8 BOM: refused, as Convex. */
-async function* refuseBom(bytes: AsyncIterable<Uint8Array>): AsyncGenerator<Uint8Array> {
-  let first = true;
-  for await (const b of bytes) {
-    if (first && b.length >= 3 && BOM.every((x, i) => b[i] === x))
-      throw new ImportError("Utf8BomNotSupported", "UTF-8 BOM is not supported. Please save your file without BOM.");
-    first = false;
-    yield b;
+/**
+ * The lines of a byte stream as Convex's `read_bounded_line` reads them (a5de16c): each at most `limit` bytes with its
+ * `\n` (a last one without it too), else `JsonLineTooLarge`, raised before the line is read further; each then
+ * UTF-8, else `onInvalid` with Rust's words. Yielded without the `\n`.
+ */
+async function* boundedLines(
+  bytes: AsyncIterable<Uint8Array>,
+  limit: number,
+  onInvalid: (why: string) => Error,
+): AsyncGenerator<string> {
+  let n = 1;
+  const tooLarge = () =>
+    new ImportError("JsonLineTooLarge", `JSONL line ${n} exceeds the maximum length of ${limit} bytes`);
+  // Each chunk is decoded at once (a `\n` is one byte, so the k-th `\n` of its bytes is the k-th of its text) and
+  // checked line by line; a chunk that is not UTF-8 is read again line by line, for the line and Rust's words.
+  const dec = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  let text = ""; // the line being read, as text
+  let tail: Uint8Array[] = []; // and as bytes
+  let size = 0; // its bytes so far
+  let slow = false;
+  const slowLine = (line: Uint8Array) => {
+    if (!isUtf8(line)) throw onInvalid(utf8Error(line) ?? "invalid utf-8");
+    return Buffer.from(line.buffer, line.byteOffset, line.byteLength).toString("utf8");
+  };
+  const joined = (last: Uint8Array) => (tail.length ? Buffer.concat([...tail, last]) : last);
+  for await (const chunk of bytes) {
+    let decoded: string | null = null;
+    if (!slow)
+      try {
+        decoded = dec.decode(chunk, { stream: true });
+      } catch {
+        slow = true;
+      }
+    let at = 0;
+    let textAt = 0;
+    while (at < chunk.length) {
+      const nl = chunk.indexOf(0x0a, at);
+      const end = nl < 0 ? chunk.length : nl + 1;
+      size += end - at;
+      if (size > limit) throw tooLarge();
+      if (nl < 0) {
+        tail.push(chunk.subarray(at));
+        if (decoded !== null) text += decoded.slice(textAt);
+        break;
+      }
+      let line: string;
+      if (decoded !== null) {
+        const tnl = decoded.indexOf("\n", textAt);
+        line = text + decoded.slice(textAt, tnl);
+        textAt = tnl + 1;
+      } else line = slowLine(joined(chunk.subarray(at, nl)));
+      text = "";
+      tail = [];
+      size = 0;
+      at = end;
+      yield line;
+      n++;
+    }
   }
+  if (size === 0) return;
+  if (!slow)
+    try {
+      yield text + dec.decode();
+      return;
+    } catch {}
+  yield slowLine(joined(new Uint8Array()));
 }
+
+/** Convex's `NotUtf8` for a line that is not UTF-8 (`read_bounded_line`'s error). */
+const lineNotUtf8 = (why: string) => new ImportError("NotUtf8", `Import wasn't valid UTF8: ${why}`);
 
 const notUtf8 = () => new ImportError("NotUtf8", "Import wasn't valid UTF8: stream did not contain valid UTF-8");
 
-async function* jsonLines(bytes: AsyncIterable<Uint8Array>): AsyncGenerator<RawRow> {
+async function* jsonLines(bytes: AsyncIterable<Uint8Array>, limit: number): AsyncGenerator<RawRow> {
   let n = 0;
-  for await (const line of lines(utf8(bytes, notUtf8))) {
+  for await (const line of boundedLines(bytes, limit, lineNotUtf8)) {
     n++;
+    // After the line is read and decoded, as Convex's.
+    if (n === 1 && line.startsWith("\ufeff"))
+      throw new ImportError("Utf8BomNotSupported", "UTF-8 BOM is not supported. Please save your file without BOM.");
     let json: unknown;
     try {
       json = JSON.parse(line);
@@ -120,8 +242,16 @@ export function parseCsvCell(s: string): unknown {
   return Number.isFinite(n) ? n : null;
 }
 
-/** CSV records with the line each starts on (RFC 4180, as the `csv` crate reads it: blank lines skipped). */
-async function* csvRecords(text: AsyncIterable<string>): AsyncGenerator<{ fields: string[]; line: number }> {
+/**
+ * CSV records with the line each starts on (RFC 4180, as the `csv` crate reads it: blank lines skipped). Each record
+ * is at most `limit` bytes of UTF-8, its line ending and a quoted field's newlines included, else
+ * `CsvRecordTooLarge` naming it (counted from the header, 1), as Convex's `limit_csv_records` (679042f); a blank
+ * line between records counts in none.
+ */
+async function* csvRecords(
+  text: AsyncIterable<string>,
+  limit: number,
+): AsyncGenerator<{ fields: string[]; line: number }> {
   let fields: string[] = [];
   let field = "";
   let quoted = false; // inside quotes
@@ -131,6 +261,17 @@ async function* csvRecords(text: AsyncIterable<string>): AsyncGenerator<{ fields
   let empty = true; // nothing read on this record yet
   let pendingQuote = false; // a quote inside quotes: an escaped one or the closing one
   let pendingCr = false;
+  let bytes = 0; // of the record being read
+  let record = 1;
+  /** The record that ended with a `\r`, whose `\n` (if one comes) is its own. */
+  let endedWithCr: number | null = null;
+  const tooLarge = (n: number) =>
+    new ImportError("CsvRecordTooLarge", `CSV record ${n} exceeds the maximum length of ${limit} bytes`);
+  const count = (c: string) => {
+    const cp = c.codePointAt(0)!;
+    bytes += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    if (bytes > limit) throw tooLarge(record);
+  };
   const end = () => {
     fields.push(field);
     const out = { fields, line: start };
@@ -138,14 +279,24 @@ async function* csvRecords(text: AsyncIterable<string>): AsyncGenerator<{ fields
     field = "";
     wasQuoted = false;
     empty = true;
+    bytes = 0;
+    record++;
     return out;
   };
   for await (const chunk of text) {
     for (const c of chunk) {
       if (pendingCr) {
         pendingCr = false;
-        if (c === "\n") continue;
+        const previous = endedWithCr;
+        endedWithCr = null;
+        if (c === "\n") {
+          if (previous !== null && previous + 1 > limit) throw tooLarge(record - 1);
+          continue;
+        }
       }
+      const blank =
+        c === "\r" || c === "\n" ? !quoted && !pendingQuote && empty && !fields.length && !field && !wasQuoted : false;
+      if (!blank) count(c);
       if (quoted) {
         if (pendingQuote) {
           pendingQuote = false;
@@ -165,7 +316,10 @@ async function* csvRecords(text: AsyncIterable<string>): AsyncGenerator<{ fields
       }
       if (c === "\r" || c === "\n") {
         if (c === "\r") pendingCr = true;
-        if (!empty || fields.length || field || wasQuoted) yield end();
+        if (!blank) {
+          if (c === "\r") endedWithCr = bytes;
+          yield end();
+        }
         line++;
         start = line;
         continue;
@@ -190,6 +344,7 @@ async function* csvRecords(text: AsyncIterable<string>): AsyncGenerator<{ fields
 async function* csvRows(bytes: AsyncIterable<Uint8Array>): AsyncGenerator<RawRow> {
   const records = csvRecords(
     utf8(bytes, () => new ImportError("CsvInvalidRow", "Failed to parse CSV row 1: invalid UTF-8")),
+    importMaxLineBytes(),
   );
   // An empty file has an empty header, and no rows (Convex's `CsvMissingHeaders` never happens).
   const first = await records.next();
@@ -259,7 +414,7 @@ export function parseSingleTable(
   const rows = async function* (): AsyncGenerator<RawRow> {
     const bytes = await body();
     if (format.format === "csv") yield* csvRows(bytes);
-    else if (format.format === "jsonl") yield* jsonLines(refuseBom(bytes));
+    else if (format.format === "jsonl") yield* jsonLines(bytes, importMaxLineBytes());
     else {
       const chunks: Uint8Array[] = [];
       let size = 0;
@@ -328,7 +483,7 @@ export async function parseZip(zip: ZipReader): Promise<ParsedImport> {
         uniform: false,
         rows: async function* () {
           let n = 0;
-          for await (const line of lines(utf8(zip.read(entry), notUtf8))) {
+          for await (const line of boundedLines(zip.read(entry), importMaxLineBytes(), notUtf8)) {
             n++;
             const schemaFile = legacy.get(name);
             if (schemaFile !== undefined)
@@ -353,7 +508,7 @@ export async function parseZip(zip: ZipReader): Promise<ParsedImport> {
       refuseComponents(gs[1], entry.name);
       const name = tableNameOf(gs[2]!);
       let first = "";
-      for await (const line of lines(utf8(zip.read(entry), notUtf8))) {
+      for await (const line of boundedLines(zip.read(entry), importMaxLineBytes(), lineNotUtf8)) {
         first = line;
         break;
       }
