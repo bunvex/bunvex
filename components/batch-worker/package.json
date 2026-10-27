@@ -1,0 +1,59 @@
+{
+  "name": "@bunvex/batch-worker",
+  "version": "0.1.0",
+  "description": "A batch worker component for bunvex: a loop that drains a queue in batches, a query that picks the work and a mutation that does it, in one transaction.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "bunvex",
+    "component",
+    "batch",
+    "worker",
+    "queue"
+  ],
+  "exports": {
+    ".": "./src/client/index.ts",
+    "./bunvex.config": {
+      "@bunvex/component-source": "./src/component/bunvex.config.ts",
+      "bunvex": "./src/component/bunvex.config.ts",
+      "default": "./src/component/bunvex.config.ts"
+    },
+    "./bunvex.config.js": {
+      "@bunvex/component-source": "./src/component/bunvex.config.ts",
+      "bunvex": "./src/component/bunvex.config.ts",
+      "default": "./src/component/bunvex.config.ts"
+    },
+    "./_generated/component.js": {
+      "types": "./src/component/_generated/component.ts"
+    },
+    "./test": "./src/test.ts",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@bunvex/server": "workspace:^",
+    "@bunvex/values": "workspace:^"
+  },
+  "dependencies": {
+    "@bunvex/helpers": "workspace:^"
+  },
+  "devDependencies": {
+    "@bunvex/testing": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex",
+    "directory": "components/batch-worker"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.4.2"
+  }
+}

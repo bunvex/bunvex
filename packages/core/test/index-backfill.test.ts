@@ -11,7 +11,7 @@ import { Engine, type IndexBackfillOptions } from "../src/engine.ts";
 import { prefixEnd } from "../src/keyenc.ts";
 import { MemoryPersistence } from "../src/persistence/memory.ts";
 import { type Doc, defineSchema, defineTable, type EngineSchema, indexKey } from "../src/schema.ts";
-import { decodeDoc } from "../src/tx.ts";
+import { decodeDoc, type Tx } from "../src/tx.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -86,7 +86,7 @@ describe("background index backfill (STUDY-29)", () => {
     const e = await open(path, indexed, slow()); // 1000 entries/s: about 3 s of backfill
     const initMs = performance.now() - t0;
     expect(initMs).toBeLessThan(1000);
-    const byN = (db: Parameters<Parameters<Engine["query"]>[0]>[0]) =>
+    const byN = (db: Tx) =>
       db
         .query("items")
         .withIndex("by_n", (q) => q.eq("n", 5))

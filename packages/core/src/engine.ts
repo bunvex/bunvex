@@ -23,6 +23,19 @@ import {
   readBootstrapIds,
 } from "./bootstrap.ts";
 import {
+  type Call,
+  type CallHost,
+  CallRunner,
+  callsRoundTripByDefault,
+  inSession,
+  isCall,
+  outcomeOf,
+  REFUSED,
+  runTransaction,
+  type TxStart,
+} from "./call-runner.ts";
+import { type CallOutcome, type CallRequest, decodeCallOutcome, encodeCallRequest } from "./call-wire.ts";
+import {
   AUTH_TABLE,
   activeTables,
   BACKEND_STATE_TABLE,
@@ -54,26 +67,20 @@ import {
   INDEX_BACKFILLS_INDEX,
   INDEX_BACKFILLS_TABLE,
   INDEX_TABLE,
-  INDEX_WORKER_METADATA_INDEX,
   INDEX_WORKER_METADATA_TABLE,
   INSTANCE_TABLE,
   IndexBackfillingError,
-  type IndexBackfillMeta,
   type IndexMeta,
   IndexStagedError,
-  indexRow,
   indexStatePatch,
   indexTooLarge,
   LOG_SINKS_TABLE,
   MODULES_TABLE,
-  NEXT_PERSISTENCE_INDEX_ID_TABLE,
   planCatalog,
   S3_EXPORT_STATE_INDEX,
   S3_EXPORT_STATE_TABLE,
   SCHEDULED_JOB_ARGS_TABLE,
   SCHEDULED_JOBS_TABLE,
-  SCHEMA_VALIDATION_PROGRESS_TABLE,
-  SCHEMA_VALIDATIONS_TABLE,
   SCHEMAS_TABLE,
   SESSION_REQUESTS_TABLE,
   SNAPSHOT_IMPORTS_TABLE,
@@ -82,7 +89,6 @@ import {
   TABLES_TABLE,
   type TableMeta,
   tableMeta,
-  tableRow,
   UDF_CONFIG_TABLE,
   USAGE_LIMITS_TABLE,
   vectorIndexesUnavailable,
@@ -109,17 +115,12 @@ import {
   type StorageType,
 } from "./database-globals.ts";
 import {
-  type ExecutionKind,
   installDeterminism,
   type LongTimer,
   longInterval,
   longSleep,
   nextUp,
-  type Observed,
-  onWork,
   outsideExecution,
-  runDeterministic,
-  settled,
   timerDelay,
   wallClock,
 } from "./determinism.ts";
@@ -223,8 +224,6 @@ import {
 } from "./search-segments.ts";
 import {
   deleteSessionRequestsBefore,
-  findSessionRequest,
-  recordSessionRequest,
   SESSION_CLEANUP_CHUNK,
   SESSION_REQUESTS_INDEX,
   type SessionRequestId,
@@ -350,7 +349,7 @@ export class OccError extends Error {
  * The request a call comes from (STUDY-44, Convex's `RequestMetadata` and execution context), for
  * `ctx.meta.getRequestMetadata()`: passed down to the functions it calls.
  */
-export type CallRequest = {
+export type RequestMetadata = {
   ip: string | null;
   userAgent: string | null;
   requestId: string;
@@ -368,7 +367,7 @@ export type CallRequest = {
  * Who runs a transaction. `systemIdentity`: an admin or the system acting as itself, not as a user (Convex's
  * `identity.is_admin() || identity.is_system()`): only it reaches the `_system/` functions.
  */
-export type Caller = { identity: unknown; key: string; request?: CallRequest; systemIdentity?: boolean };
+export type Caller = { identity: unknown; key: string; request?: RequestMetadata; systemIdentity?: boolean };
 const ANONYMOUS: Caller = { identity: null, key: "" };
 /** Separates a cache key from its identity part; `*` is the identity-free entry. */
 const ID_SEP = "\u0001";
@@ -378,8 +377,11 @@ const ID_SEP = "\u0001";
  * log lines there, so a cache hit answers them too, as Convex's cache entries do (STUDY-20 D2).
  */
 export type CacheCompanion = {
-  /** On a miss: the body to run instead, and what to store with its result afterwards. */
-  wrap<T>(body: TxBody<T>): { body: TxBody<T>; capture(): unknown };
+  /**
+   * On a miss: the run to make instead (a transaction body, or the call boundary's dispatch), and what to store with
+   * its result afterwards.
+   */
+  wrap<A extends unknown[], R>(run: (...args: A) => R): { body: (...args: A) => R; capture(): unknown };
   /** On a hit: hand back what was stored. */
   replay(extra: unknown): void;
 };
@@ -411,6 +413,22 @@ export class Engine {
   private lastStart = 0;
   /** The last mutation begun: its creation cursor bounds the next start. */
   private lastTx: Tx | null = null;
+  /**
+   * The call boundary's in-thread side (STUDY-194, STUDY-190 PR 2a): the services a call's transaction reaches,
+   * and the body runner on them. The ids number this engine's requests.
+   */
+  private readonly inThread: CallHost = {
+    begin: (start) => this.beginTx(start),
+    pin: (ts) => this.tableSummaries.pin(ts),
+    finish: (tx) => this.finishTx(tx),
+  };
+  private readonly runner = new CallRunner(this.inThread);
+  /**
+   * Whether calls round-trip through the codec in the thread (STUDY-194 Q7): the `callCodec` option, else on only
+   * where the tests turned it on (`roundTripCallsByDefault`).
+   */
+  readonly callCodec: boolean;
+  private callIds = 0;
   /** The deployment's run state, as every user function checks it (STUDY-63). */
   readonly backendState: BackendStateCache;
   /** The search indexes of the active tables, in memory (STUDY-45 S1). */
@@ -533,6 +551,11 @@ export class Engine {
        */
       indexCache?: false | { maxBytes?: number; verifyPercent?: number };
       /**
+       * Whether calls round-trip through the call boundary's codec in the thread (STUDY-194 Q7): by default only
+       * under the tests (`roundTripCallsByDefault`).
+       */
+      callCodec?: boolean;
+      /**
        * How a flush that failed with a transient error is retried (STUDY-25 L4): Convex's backoff, 100 ms
        * doubling up to 10 s with full jitter, as many times as it takes (the lease bounds it).
        */
@@ -560,6 +583,7 @@ export class Engine {
     );
     this.cache = new QueryCache(opts.cacheMaxBytes ?? cacheMaxBytesFromEnv());
     this.indexCache = indexCacheOf(persistence, opts.indexCache, this.committer);
+    this.callCodec = opts.callCodec ?? callsRoundTripByDefault();
     this.writeThroughput = new WriteThroughputLimiter(opts.writeThroughput ?? writeThroughputFromEnv(), () =>
       runtime.nowNs(),
     );
@@ -1268,7 +1292,10 @@ export class Engine {
     }
   }
 
-  /** A commit's search part (STUDY-45 PR 3): its searches to check, its versions and their read-set keys. */
+  /**
+   * A commit's search part (STUDY-45 PR 3): its versions and their read-set keys. Its searches to check come with
+   * the call's outcome (`CallOutcome.searchReads`).
+   */
   private searchCommit(tx: Tx, own: ((ts: bigint) => void) | undefined) {
     const writes = tx.writtenDocs();
     const { docs, keys, indexed } = this.searchIndexes.commitWrites(writes);
@@ -1289,7 +1316,6 @@ export class Engine {
           final.map((w) => ({ tablet: w.table.id, old: w.old, next: w.next })),
         );
       },
-      ...(tx.searchReads.length ? { searchReads: tx.searchReads } : {}),
       ...(docs.length ? { searchDocs: docs, logExtra: keys } : {}),
     };
   }
@@ -2502,7 +2528,7 @@ export class Engine {
    */
   async evaluateSchema(next: EngineSchema, namespace: string | null = null): Promise<SchemaPrediction> {
     if (!this.tableSummaries.ready) throw new TableSummariesUnavailableError();
-    const { value: cat } = await this.execute("query", this.committer.visibleTs, (db) => readCatalog(db), true);
+    const cat = ranValue(await this.execute("query", this.committer.visibleTs, (db) => readCatalog(db), true));
     const active = activeTables(cat.tables, namespace ?? undefined);
     const activeSchema = namespace === null ? this.schema : this.componentSchema(namespace);
     const tabletOf = (name: string) => active.find((t) => t.name === name)?.tablet;
@@ -3455,7 +3481,7 @@ export class Engine {
       "_system/finish_push",
       false,
       ANONYMOUS,
-      false,
+      {},
       FINISH_PUSH_MAX_OCC_FAILURES,
     );
     return r;
@@ -3809,28 +3835,24 @@ export class Engine {
     return this.lastStart;
   }
 
-  /** Run `body` in a new transaction at `snapshot`, as a deterministic execution frozen at its start. */
-  private async execute<T>(
-    kind: ExecutionKind,
-    snapshot: bigint,
-    body: TxBody<T>,
-    system = false,
-    caller: Caller = ANONYMOUS,
-  ) {
-    const now = this.transactionStart(snapshot); // the first _creationTime; Date.now() in the body is its floor
-    const tx = new Tx(this.catalog, this.persistence, snapshot, kind === "mutation", now, system);
+  /** A transaction for a call or the engine's own body, wired to the engine's store and services (`CallHost.begin`). */
+  private beginTx(s: TxStart): Tx {
+    const tx = new Tx(this.catalog, this.persistence, s.ts, s.kind === "mutation", s.now, s.system);
     // Only a mutation hands out creation times: a query begun meanwhile must not hide its cursor.
-    if (kind === "mutation") this.lastTx = tx;
+    if (s.kind === "mutation") this.lastTx = tx;
     tx.retention = this.retention;
-    tx.indexCache = this.indexCache;
-    tx.identity = caller.identity;
-    tx.systemIdentity = caller.systemIdentity === true;
-    tx.request = caller.request ?? null;
+    // A subscription's run never used the index cache.
+    if (!s.tracked) tx.indexCache = this.indexCache;
+    tx.identity = s.identity;
+    tx.systemIdentity = s.systemIdentity;
+    tx.request = s.request;
     tx.cursorCodec = this.cursorCodecOf;
     tx.searchIndexes = this.searchIndexes;
     tx.vectorIndexes = this.vectorIndexes;
     tx.tableCount = this.tableCountOf;
-    if (kind === "mutation") {
+    // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).
+    if (s.tracked) tx.prevEndCursor = s.journal;
+    if (s.kind === "mutation") {
       tx.docValidators = this.docValidators;
       tx.componentValidators = (ns) => this.componentSchemas.get(ns)?.validators;
       tx.pendingValidators = this.pendingValidators;
@@ -3838,36 +3860,95 @@ export class Engine {
       tx.stagedChecks = this.stagedChecks;
     }
     if (this.tracerOf.on) this.indexSpansOf(tx);
-    const observed: Observed = { time: false };
-    // Its count changes are kept while it runs (STUDY-107): a `count()` holds at its snapshot, however old.
-    const unpin = this.tableSummaries.pin(snapshot);
+    return tx;
+  }
+
+  /** What a mutation's transaction writes in itself once its body returned (`CallHost.finish`). */
+  private async finishTx(tx: Tx): Promise<void> {
+    // A write a staged validator refused fails its validation in this same transaction (900fe2c).
+    for (const v of tx.stagedViolations.values()) await markStagedValidationFailed(tx, v.schemaId, v.table, v.error);
+    // A write the pending (or validated) schema refused fails it in this same transaction, as Convex's `enforce`
+    // (`mark_failed`): a push that commits it conflicts, and the transaction that wrote it commits with it.
+    const pv = tx.pendingViolation;
+    if (pv && tx.pendingSchemaId !== null) await markSchemaFailed(tx, tx.pendingSchemaId, pv.error, pv.table, null);
+  }
+
+  /**
+   * Run `body` in a new transaction at `snapshot`, as a deterministic execution frozen at its start: the engine's
+   * own body in the thread, or a call through the boundary (`dispatch`). Settles instead of throwing.
+   */
+  private async execute<T>(
+    kind: "query" | "mutation",
+    snapshot: bigint,
+    body: TxBody<T> | Call,
+    system = false,
+    caller: Caller = ANONYMOUS,
+    opts: ExecuteOptions = {},
+  ): Promise<Ran<T>> {
+    const start: TxStart = {
+      kind,
+      ts: snapshot,
+      now: this.transactionStart(snapshot), // the first _creationTime; Date.now() in the body is its floor
+      system,
+      identity: caller.identity,
+      systemIdentity: caller.systemIdentity === true,
+      request: caller.request ?? null,
+      tracked: opts.tracked === true,
+      journal: opts.journal ?? null,
+    };
+    if (isCall(body)) return this.dispatch<T>(body, start, opts);
+    const run = await runTransaction(this.inThread, start, opts.wrap ? opts.wrap(body) : body);
+    return { ...run, now: start.now, outcome: outcomeOf(0, kind, run, run.ok ? "ok" : "failed", null) };
+  }
+
+  /**
+   * The dispatcher's side of a call (STUDY-194 §4.4, §4.5): a query's permit, the request as text to the body
+   * runner, and its outcome back as text. What the engine then does with the run (the cache, the subscriptions, OCC
+   * and the commit) reads the decoded outcome; `CallLocal` holds the rest for now.
+   */
+  private async dispatch<T>(call: Call, start: TxStart, opts: ExecuteOptions): Promise<Ran<T>> {
+    const id = ++this.callIds;
+    let release: (() => void) | undefined;
     try {
-      const value = settled(
-        observed,
-        await runDeterministic(
-          kind,
-          now,
-          async () => {
-            // What the function waits on outside the store is counted in flight (STUDY-188 §X16).
-            onWork((p) => tx.track(p));
-            const v = await body(tx);
-            // An unawaited write is part of the mutation (Convex runs every syscall to its end): wait for them.
-            if (kind === "mutation") await tx.settle();
-            return v;
-          },
-          observed,
-        ),
-      );
-      // A write a staged validator refused fails its validation in this same transaction (900fe2c).
-      for (const v of tx.stagedViolations.values()) await markStagedValidationFailed(tx, v.schemaId, v.table, v.error);
-      // A write the pending (or validated) schema refused fails it in this same transaction, as Convex's `enforce`
-      // (`mark_failed`): a push that commits it conflicts, and the transaction that wrote it commits with it.
-      const pv = tx.pendingViolation;
-      if (pv && tx.pendingSchemaId !== null) await markSchemaFailed(tx, tx.pendingSchemaId, pv.error, pv.table, null);
-      return { tx, value, observed, now };
+      release = call.permit ? await call.permit() : undefined;
+    } catch (error) {
+      // No permit: the call fails without running, having read nothing.
+      return { ok: false, error, observedTime: false, now: start.now, outcome: notRun(id) };
+    }
+    try {
+      const request: CallRequest = {
+        ...call.spec,
+        id,
+        ts: start.ts,
+        now: start.now,
+        // In-thread without the codec the identity object goes beside the request instead (`runRequest`).
+        identity: start.identity == null || !this.callCodec ? null : JSON.stringify(start.identity),
+        systemIdentity: start.systemIdentity,
+        request: start.request,
+        tracked: start.tracked,
+        journal: start.journal,
+        refused: opts.refused === true,
+      };
+      // Through the codec under the tests; as objects otherwise (STUDY-194 Q7).
+      const run = this.callCodec
+        ? async () => {
+            const r = await this.runner.run(encodeCallRequest(request), call.bodies, call.local);
+            return { outcome: decodeCallOutcome(r.wire), local: r.local };
+          }
+        : () => this.runner.runRequest(request, start.identity ?? null, call.bodies, call.local);
+      const { outcome, local } = await (opts.wrap ? opts.wrap(run) : run)();
+      if (outcome.id !== request.id) throw new Error(`call ${request.id} was answered as call ${outcome.id}`);
+      const ran = { tx: local.tx, observedTime: outcome.observedTime, now: start.now, outcome };
+      if (outcome.status === "failed") return { ...ran, ok: false, error: local.error };
+      const value =
+        outcome.status === "refused"
+          ? REFUSED
+          : outcome.status === "replayed"
+            ? { replayed: JSON.parse(outcome.result ?? "null") }
+            : local.value;
+      return { ...ran, ok: true, value: value as T };
     } finally {
-      tx.indexSpans?.finish();
-      unpin();
+      release?.();
     }
   }
 
@@ -3876,7 +3957,7 @@ export class Engine {
    * (≤ the visible ts) instead of the latest.
    */
   async query<T>(
-    body: TxBody<T>,
+    body: TxBody<T> | Call,
     cacheKey?: string,
     companion?: CacheCompanion,
     caller?: Caller,
@@ -3891,7 +3972,7 @@ export class Engine {
    * stringify (the HTTP API).
    */
   async queryJson(
-    body: TxBody<unknown>,
+    body: TxBody<unknown> | Call,
     cacheKey?: string,
     companion?: CacheCompanion,
     caller?: Caller,
@@ -3913,7 +3994,7 @@ export class Engine {
    * Keys, most specific first: this caller's, then the one of a run that read no identity (STUDY-27).
    */
   private async cachedQuery<T>(
-    body: TxBody<T>,
+    body: TxBody<T> | Call,
     cacheKey: string | undefined,
     companion: CacheCompanion | undefined,
     caller: Caller = ANONYMOUS,
@@ -3921,7 +4002,10 @@ export class Engine {
   ): Promise<{ json: string } | { value: T; json?: string }> {
     const visible = this.committer.visibleTs;
     const ts = at === undefined || at > visible ? visible : at;
-    if (cacheKey === undefined) return { value: (await this.execute("query", ts, body, false, caller)).value };
+    if (cacheKey === undefined) {
+      const ran = await this.execute("query", ts, body, false, caller);
+      return { value: ranValue(ran), json: ran.outcome.result ?? undefined };
+    }
     const keys = [`${cacheKey}${ID_SEP}${caller.key}`, `${cacheKey}${ID_SEP}*`] as const;
     // Where a run is coordinated once a key was found (Convex's `stored_key_hint`): a result stored shared
     // and found invalid is recomputed under the shared key, so callers of other identities wait for it.
@@ -3960,7 +4044,7 @@ export class Engine {
    * for, and the result is stored; without (a newer result or run is there), the result is only returned.
    */
   private async runCached<T>(
-    body: TxBody<T>,
+    body: TxBody<T> | Call,
     ts: bigint,
     keys: readonly [precise: string, shared: string],
     key: string,
@@ -3971,10 +4055,18 @@ export class Engine {
     this.stats.cacheMisses++;
     const waiting = coordinate ? this.cache.putWaiting(key, ts) : undefined;
     const epoch = this.cacheEpoch;
-    const wrapped = waiting ? companion?.wrap(body) : undefined;
-    let run: Awaited<ReturnType<typeof this.execute<T>>>;
+    let wrapped: ReturnType<CacheCompanion["wrap"]> | undefined;
+    const wrap =
+      waiting && companion
+        ? <F extends (...args: never[]) => unknown>(run: F): F => {
+            wrapped = companion.wrap(run as unknown as (...args: unknown[]) => unknown);
+            return wrapped.body as unknown as F;
+          }
+        : undefined;
+    let run: Ran<T>;
     try {
-      run = await this.execute("query", ts, wrapped?.body ?? body, false, caller);
+      run = await this.execute("query", ts, body, false, caller, { wrap });
+      if (!run.ok) throw run.error;
     } catch (error) {
       // Errors are not cached; whoever waited plans again.
       if (waiting) {
@@ -3983,26 +4075,26 @@ export class Engine {
       }
       throw error;
     }
-    if (!waiting) return { value: run.value };
-    const { tx, value, observed, now } = run;
+    const { value, outcome, now } = run;
+    if (!waiting) return { value, json: outcome.result ?? undefined };
     this.cache.removeWaiting(key, waiting.id);
     if (epoch !== this.cacheEpoch) {
       waiting.settle(null);
-      return { value };
+      return { value, json: outcome.result ?? undefined };
     }
     // Keyed by the caller only if the run read the identity (STUDY-27 §1.4). The cache keeps its own
     // serialized copy; the caller keeps `value`.
-    const stored = tx.identityObserved ? keys[0] : keys[1];
-    const json = stringifyValue(value);
+    const stored = outcome.identityObserved ? keys[0] : keys[1];
+    const json = outcome.result ?? stringifyValue(value);
     const result: CachedResult = {
       json,
       extra: wrapped?.capture(),
       originalTs: ts,
       tokenTs: ts,
-      reads: tx.reads,
-      observedTime: observed.time,
+      reads: outcome.reads,
+      observedTime: outcome.observedTime,
       unixMs: Math.floor(now),
-      identityObserved: tx.identityObserved,
+      identityObserved: outcome.identityObserved,
     };
     this.cache.putReady(stored, result);
     // Waiters at `key` take this result only if it is stored there; otherwise they look again.
@@ -4039,13 +4131,13 @@ export class Engine {
    * re-evaluated when those reads change (e.g. a query that throws until a document exists).
    */
   async queryTracked<T>(
-    body: TxBody<T>,
+    body: TxBody<T> | Call,
     journal: QueryJournal = {},
     /** Run at this snapshot (≤ visibleTs) instead of the latest: a sync transition runs all at one ts. */
     at?: bigint,
     caller: Caller = ANONYMOUS,
   ): Promise<
-    ({ ok: true; value: T } | { ok: false; error: unknown }) & {
+    ({ ok: true; value: T; json?: string } | { ok: false; error: unknown }) & {
       reads: Interval[];
       ts: bigint;
       journal: QueryJournal;
@@ -4058,49 +4150,22 @@ export class Engine {
   > {
     const visible = this.committer.visibleTs;
     const snapshot = at === undefined || at > visible ? visible : at;
-    const now = this.transactionStart(snapshot); // as in execute(): the first _creationTime; Date.now() is its floor
-    const tx = new Tx(this.catalog, this.persistence, snapshot, false, now);
-    tx.retention = this.retention;
-    tx.cursorCodec = this.cursorCodecOf;
-    tx.identity = caller.identity;
-    tx.systemIdentity = caller.systemIdentity === true;
-    tx.searchIndexes = this.searchIndexes;
-    tx.vectorIndexes = this.vectorIndexes;
-    tx.tableCount = this.tableCountOf;
-    tx.request = caller.request ?? null;
-    // Reactive pagination: a re-run ends its page where the previous run ended (Convex's QueryJournal).
-    tx.prevEndCursor = journal.endCursor ?? null;
-    const out = () => ({
-      reads: tx.reads,
-      ts: snapshot,
-      journal: { endCursor: tx.nextEndCursor },
-      identityObserved: tx.identityObserved,
-      documentsRead: tx.usage.documentsRead,
-      bytesRead: tx.usage.bytesRead,
+    const run = await this.execute("query", snapshot, body, false, caller, {
+      tracked: true,
+      journal: journal.endCursor ?? null,
     });
-    if (this.tracerOf.on) this.indexSpansOf(tx);
-    const unpin = this.tableSummaries.pin(snapshot); // as in execute()
-    try {
-      const observed: Observed = { time: false };
-      const value = settled(
-        observed,
-        await runDeterministic(
-          "query",
-          now,
-          () => {
-            onWork((p) => tx.track(p));
-            return body(tx);
-          },
-          observed,
-        ),
-      );
-      return { ok: true, value, ...out() };
-    } catch (error) {
-      return { ok: false, error, ...out() };
-    } finally {
-      tx.indexSpans?.finish();
-      unpin();
-    }
+    const o = run.outcome;
+    const out = {
+      reads: o.reads,
+      ts: snapshot,
+      journal: { endCursor: o.endCursor },
+      identityObserved: o.identityObserved,
+      documentsRead: o.documentsRead,
+      bytesRead: o.bytesRead,
+    };
+    return run.ok
+      ? { ok: true, value: run.value, ...(o.result === null ? {} : { json: o.result }), ...out }
+      : { ok: false, error: run.error, ...out };
   }
 
   /**
@@ -4108,8 +4173,8 @@ export class Engine {
    * once the budget is spent. `source` names the mutation (e.g. "messages:send") in the conflict errors of
    * the transactions it beats.
    */
-  mutation<T>(body: TxBody<T>, source?: string, caller?: Caller, opts?: MutationOptions): Promise<T> {
-    return this.runMutation(body, false, source, false, caller, opts?.throttled);
+  mutation<T>(body: TxBody<T> | Call, source?: string, caller?: Caller, opts?: MutationOptions): Promise<T> {
+    return this.runMutation(body, false, source, false, caller, opts);
   }
 
   /**
@@ -4117,12 +4182,12 @@ export class Engine {
    * protocol's MutationResponse carries so a client can wait for its queries to reflect the write.
    */
   mutationWithTs<T>(
-    body: TxBody<T>,
+    body: TxBody<T> | Call,
     source?: string,
     caller?: Caller,
     opts?: MutationOptions,
   ): Promise<{ value: T; ts: bigint }> {
-    return this.runMutation(body, false, source, true, caller, opts?.throttled);
+    return this.runMutation(body, false, source, true, caller, opts);
   }
 
   /**
@@ -4134,27 +4199,26 @@ export class Engine {
    * that commit, which is what a client waiting for its write needs.
    */
   async sessionMutation<T>(
-    body: TxBody<T>,
+    body: TxBody<T> | Call,
     source: string | undefined,
     request: SessionRequestId,
     outcome: (value: T) => SessionRequestOutcome,
     caller?: Caller,
     opts?: MutationOptions,
   ): Promise<{ ts: bigint } & ({ value: T } | { replayed: SessionRequestOutcome })> {
-    const r = await this.runMutation(
-      async (db): Promise<{ value: T } | { replayed: SessionRequestOutcome }> => {
-        const prior = await findSessionRequest(db, request);
-        if (prior) return { replayed: prior };
-        const value = await body(db);
-        await recordSessionRequest(db, request, outcome(value));
-        return { value };
-      },
-      false,
-      source,
-      true,
-      caller,
-      opts?.throttled,
-    );
+    // Whether this attempt's permit was refused: a recorded outcome is still answered (`inSession`).
+    const attempt = { refused: false };
+    const run: TxBody<unknown> | Call = isCall(body)
+      ? {
+          ...body,
+          spec: { ...body.spec, session: request },
+          bodies: { body: (r, local) => body.bodies.body(r, local), record: (v) => outcome(v as T) },
+        }
+      : (db) => inSession(db, request, attempt.refused, async () => body(db), outcome);
+    const r = (await this.runMutation(run, false, source, true, caller, opts, undefined, attempt)) as {
+      value: { value: T } | { replayed: SessionRequestOutcome };
+      ts: bigint;
+    };
     return { ...r.value, ts: r.ts };
   }
 
@@ -4168,56 +4232,79 @@ export class Engine {
   }
 
   private runMutation<T>(
-    body: TxBody<T>,
+    body: TxBody<T> | Call,
     system: boolean,
     source?: string,
     withTs?: false,
     caller?: Caller,
-    throttled?: boolean,
+    opts?: MutationOptions,
     maxRetries?: number,
   ): Promise<T>;
   private runMutation<T>(
-    body: TxBody<T>,
+    body: TxBody<T> | Call,
     system: boolean,
     source: string | undefined,
     withTs: true,
     caller?: Caller,
-    throttled?: boolean,
+    opts?: MutationOptions,
     maxRetries?: number,
+    session?: { refused: boolean },
   ): Promise<{ value: T; ts: bigint }>;
   // `withTs` rather than a wrapper, so the common path costs no extra promise.
   /** `attempts`, counted in `runningMutations` until it settles: a close waits for it to reach the committer. */
   private runMutation<T>(
-    body: TxBody<T>,
+    body: TxBody<T> | Call,
     system: boolean,
     source?: string,
     withTs = false,
     caller: Caller = ANONYMOUS,
-    throttled = false,
+    opts: MutationOptions = {},
     retries?: number,
+    session?: { refused: boolean },
   ): Promise<unknown> {
-    const running = this.attempts(body, system, source, withTs, caller, throttled, retries);
+    const running = this.attempts(body, system, source, withTs, caller, opts, retries, session);
     this.runningMutations.add(running);
     void running.finally(() => this.runningMutations.delete(running)).catch(() => {});
     return running;
   }
 
+  /**
+   * A mutation's attempts. With `opts.permit`, each attempt takes its permit before its transaction begins, so its
+   * snapshot has what committed during the wait (Convex's d328f85, STUDY-186 A11); the engine's own mutations, and
+   * scheduled and cron ones (whose body takes it, in Convex's old order), have none here.
+   */
   private async attempts<T>(
-    body: TxBody<T>,
+    body: TxBody<T> | Call,
     system: boolean,
     source?: string,
     withTs = false,
     caller: Caller = ANONYMOUS,
-    throttled = false,
+    opts: MutationOptions = {},
     retries?: number,
+    session?: { refused: boolean },
   ): Promise<unknown> {
     const maxRetries = retries ?? this.opts.maxRetries ?? OCC_MAX_RETRIES;
     const initialMs = this.opts.occInitialBackoffMs ?? OCC_INITIAL_BACKOFF_MS;
     const maxMs = this.opts.occMaxBackoffMs ?? OCC_MAX_BACKOFF_MS;
+    const throttled = opts.throttled === true;
     for (let failures = 0; ; ) {
       // Each attempt of a mutation first checks the write throughput limit (STUDY-78), as Convex's
-      // `run_mutation_no_udf_log`; refused, it is retried within the OCC budget and backoff, then fails.
-      const limit = throttled ? this.writeThroughput.exceededNow() : null;
+      // `acquire_mutation_permit`; refused, it is retried within the OCC budget and backoff, then fails.
+      let limit = throttled ? this.writeThroughput.exceededNow() : null;
+      // Each attempt after the first starts only on an open engine: a retry after the close would read a closed store.
+      if (!limit && failures > 0 && this.closed) throw new Error("the engine closed");
+      let release: (() => void) | undefined;
+      let refused: { error: unknown } | undefined;
+      if (!limit && opts.permit) {
+        try {
+          release = await opts.permit();
+        } catch (error) {
+          refused = { error };
+        }
+        // Checked again once the permit is held, as Convex's `run_mutation_inner`.
+        limit = release && throttled ? this.writeThroughput.exceededNow() : null;
+        if (limit) release?.();
+      }
       if (limit) {
         if (failures >= maxRetries) throw this.writeThroughput.error(limit);
         const sleep = occBackoffMs(failures, initialMs, maxMs);
@@ -4226,26 +4313,43 @@ export class Engine {
         await longSleep(sleep); // UDF_EXECUTOR_OCC_MAX_BACKOFF_MS is a knob
         continue;
       }
-      // Each attempt after the first starts only on an open engine: a retry after the close would read a closed store.
-      if (failures > 0 && this.closed) throw new Error("the engine closed");
-      const { tx, value: raw } = await this.execute("mutation", this.committer.visibleTs, body, system, caller);
+      // Without a permit only a session's recorded outcome can still answer (Convex runs the attempt's replay check).
+      if (refused && !session) throw refused.error;
+      if (session) session.refused = refused !== undefined;
+      let ran: Ran<T>;
+      try {
+        ran = await this.execute("mutation", this.committer.visibleTs, body, system, caller, {
+          refused: refused !== undefined,
+        });
+      } finally {
+        // Held for the run only, as Convex's (dropped when `function_runner_execute` returns), not the commit.
+        release?.();
+      }
+      if (!ran.ok) throw ran.error;
+      if (ran.value === REFUSED) throw refused?.error;
+      const raw = ran.value;
+      // What the commit still takes from the transaction itself, in-thread until the runner sends it (PR 3).
+      const tx = ran.tx as Tx;
+      const snapshot = tx.snapshot;
+      const writes = ran.outcome.writes;
       // `db.vars.commitTs` in the result resolves to the commit's timestamp (STUDY-53): in nanoseconds.
       const resolved = (ts: bigint) => (hasCommitTs(raw) ? resolveCommitTs(raw, ts) : raw);
-      if (!tx.hasWrites) {
-        const value = resolved(tx.snapshot);
+      if (!writes) {
+        const value = resolved(snapshot);
         runAfterCommit(tx);
-        return withTs ? { value, ts: tx.snapshot } : value;
+        return withTs ? { value, ts: snapshot } : value;
       }
       this.checkMemoryIndexSizes(tx);
-      const { docs, idx } = tx.toWrites();
+      const { docs, idx } = writes;
       try {
         const pending: Parameters<Committer["commit"]>[0] = {
-          snapshot: tx.snapshot,
-          reads: tx.reads,
+          snapshot,
+          reads: ran.outcome.reads,
           docs,
           idx,
           source,
           ...this.searchCommit(tx, tx.onCommitVisible ?? undefined),
+          ...(ran.outcome.searchReads.length ? { searchReads: ran.outcome.searchReads } : {}),
           ...(tx.hasCommitTs
             ? {
                 atTs: (ts: bigint) => {
@@ -4255,7 +4359,7 @@ export class Engine {
               }
             : {}),
         };
-        const touches = tx.catalogTouches();
+        const touches = writes.touches;
         if (touches.length) pending.logExtra = [...(pending.logExtra ?? []), ...touches];
         if (this.tracerOf.on) {
           const parent = this.tracerOf.current();
@@ -4416,7 +4520,50 @@ function writeThroughputFromEnv(): WriteThroughputOptions {
 }
 
 /** How a mutation runs: `throttled`, an app's mutation, checks the write throughput limit (STUDY-78). */
-export type MutationOptions = { throttled?: boolean };
+export type MutationOptions = {
+  throttled?: boolean;
+  /**
+   * The mutation's permit (STUDY-68), taken by each attempt before its transaction begins (Convex's d328f85); resolves
+   * to its release, which the attempt calls once its run returned, before the commit.
+   */
+  permit?: () => Promise<() => void>;
+};
+
+/** A run as the engine sees it once it settled: its outcome, and the transaction while it stays in the thread. */
+type Ran<T> = { tx?: Tx; observedTime: boolean; outcome: CallOutcome; now: number } & (
+  | { ok: true; value: T }
+  | { ok: false; error: unknown }
+);
+
+type ExecuteOptions = {
+  /** A subscription's run (`queryTracked`), with its journal. */
+  tracked?: boolean;
+  journal?: string | null;
+  /** What the run is wrapped in: the query cache's companion, which keeps the log lines a hit replays. */
+  wrap?: <F extends (...args: never[]) => unknown>(run: F) => F;
+  /** This mutation attempt's permit was refused (`CallRequest.refused`). */
+  refused?: boolean;
+};
+
+function ranValue<T>(ran: Ran<T>): T {
+  if (!ran.ok) throw ran.error;
+  return ran.value;
+}
+
+/** The outcome of a call that never ran (its permit refused). */
+const notRun = (id: number): CallOutcome => ({
+  id,
+  status: "failed",
+  result: null,
+  reads: [],
+  searchReads: [],
+  identityObserved: false,
+  observedTime: false,
+  endCursor: null,
+  documentsRead: 0,
+  bytesRead: 0,
+  writes: null,
+});
 
 /**
  * The engine's index cache (STUDY-136), from its option and Convex's knobs: INDEX_CACHE_SIZE (bytes, default

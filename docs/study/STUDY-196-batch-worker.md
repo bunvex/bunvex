@@ -1,7 +1,9 @@
 # STUDY-196 — `@bunvex/batch-worker`
-<!-- index: `@bunvex/batch-worker`, the second own component (STUDY-158 §3.4 step 4.2) and the child of rate-limiter, workpool and aggregate: the loop (a stale-snapshot work query, then the worker mutation in one transaction), the monitor, the cursor, `ping`/`start`/`stop`/`kick`; written from get-convex/batch-worker 0.3.6, one package serving the 0.2.2, 0.3.3 and 0.3.5 that the three dependents ask for | decided (owner, 2026-10-27): B-1–B-3 as recommended; not built -->
+<!-- index: `@bunvex/batch-worker`, the second own component (STUDY-158 §3.4 step 4.2) and the child of rate-limiter, workpool and aggregate: the loop (a stale-snapshot work query, then the worker mutation in one transaction), the monitor, the cursor, `ping`/`start`/`stop`/`kick`; written from get-convex/batch-worker 0.3.6, one package serving the 0.2.2, 0.3.3 and 0.3.5 that the three dependents ask for | decided (owner, 2026-10-27): B-1–B-3 as recommended; built: the package, its tests, the differential test and `examples/batch-worker` -->
 
-- **Status:** decided (owner, 2026-10-27): B-1–B-3 as recommended (§7); B-1 extends DV-539. Nothing built.
+- **Status:** decided (owner, 2026-10-27): B-1–B-3 as recommended (§7); B-1 extends DV-539. Built (2026-10-27):
+  `components/batch-worker/`, its tests and `packages/differential/test/batch-worker.test.ts` (§5), and
+  `examples/batch-worker` (B-2: the queue and the scoreboard; the rate-limited worker waits for `@bunvex/rate-limiter`).
 - **Convex source read:** get-convex/batch-worker at `f299a7b` (0.3.6), pinned in
   [upstream.md](../parity/upstream.md#other-repositories), with the tags `v0.2.2`, `v0.3.3` and `v0.3.5` for the
   versions the dependents ask for. Paths are relative to that repository's root. Backend paths are from
@@ -243,7 +245,26 @@ None.
 
 ## 5. Tests
 
-As §3.5.
+As §3.5, built:
+- `components/batch-worker/test/lib.test.ts`: upstream's 22 component cases. A runner stuck pending in the past is
+  made by scheduling the loop's run at a time 10 minutes ago: the harness's clock runs what falls due as it moves,
+  where upstream moves vitest's clock without running anything.
+- `test/client.test.ts`: upstream's 7 client cases, on an app that installs the package by its name.
+- `test/behaviour.test.ts`: a throwing worker mutation retried after the monitor's lag with the same batch, the
+  cooldown's polls, `setCursor`'s error, and the logger's levels and events.
+- `packages/differential/test/batch-worker.test.ts`: the same queue and cursor-driven worker drained on Convex with
+  `@convex-dev/batch-worker` 0.3.6 and on bunvex give the same batches, status, cursor and component rows; bad
+  arguments give the same errors.
+
+**Sabotage checks** (each one breaks a test): the generation check, the cooldown, the stuck-runner branch, the
+mutation's cursor winning over the query's, the monitor's lag, and the `report` event at `REPORT`. Dropping
+`useStaleSnapshot` breaks none: telling a snapshot read from an ordinary one needs an insert racing the loop's
+transaction, which the harness runs one at a time. The option itself is covered by the server's tests
+(`packages/server/test/nested-calls.test.ts`).
+
+**Found by the differential test, outside the package:** when a caller catches a nested call's argument
+validation error, the message ends with one newline on Convex and two on bunvex (`ValidatorError.args`,
+`packages/server/src/errors.ts`). The test drops that newline and names the gap; the server's fix is its own PR.
 
 ## 6. Not verified yet
 

@@ -112,6 +112,21 @@ describe("checking a value", () => {
   });
 });
 
+describe("v.commitTs()", () => {
+  // as Convex's dashboard (`lib/format.ts`, `defaultValueForValidator.ts`, `ObjectEditor/ast/helpers.ts`): an int64
+  const TS: ValidatorJson = { type: "commitTs" };
+  test("shown, a template and checked as an int64; inside a wide union of objects too", () => {
+    expect(displayValidator(TS)).toBe("v.commitTs()");
+    const doc = obj({ text: opt(S), updatedAt: req(TS), updatedDate: req(N) });
+    const wide: ValidatorJson = { type: "array", value: { type: "union", value: [doc, { type: "null" }] } };
+    expect(displayValidator(wide, { width: 20 })).toContain("updatedAt: v.commitTs(),");
+    expect(defaultValueFor(doc)).toEqual({ updatedAt: encodeInt64(0n), updatedDate: 0 });
+    expect(validateValue(TS, encodeInt64(5n))).toEqual([]);
+    expect(validateValue(TS, 5)[0]!.message).toBe("Type 'number' is not assignable to v.commitTs()");
+    expect(isValidatorJson(obj({ updatedAt: req(TS) }))).toBe(true);
+  });
+});
+
 describe("the JSON form", () => {
   test("recognised, and malformed ones refused", () => {
     expect(isValidatorJson(obj({ a: req({ type: "array", value: { type: "union", value: [S, N] } }) }))).toBe(true);

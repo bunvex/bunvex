@@ -44,6 +44,9 @@ bunvex/
 │   │   │                            filter (STUDY-15) ✅ · paginate (STUDY-17) ✅ ·
 │   │   │                            limit + 256-operator cap (query-ops, STUDY-66) ✅
 │   │   ├── engine                   snapshots, query cache by read-set ✅ · Convex's OCC retries/error (STUDY-21) ✅
+│   ├── call-wire, call-runner   the function call boundary (STUDY-194): a request and its outcome as text, the
+│   │                            body runner a worker will host; every client query and mutation crosses it,
+│   │                            in the main thread for now (STUDY-190 PR 2a)                ✅
 │   │   ├── write-throughput         the 4 MiB/s write throughput limit (STUDY-78)                ✅
 │   │   ├── determinism              frozen Date, seeded Math.random, no fetch/timers in txs   ✅
 │   │   ├── tracing                  spans, W3C trace context, samplers; index reads and commits
@@ -189,6 +192,11 @@ bunvex/
 │
 ├── components/                      bunvex's own components (STUDY-158 step 4; the package model in STUDY-183 §3.1):
 │   │                                `@bunvex/<Convex's name>`, each on its own version, outside the fixed group
+│   ├── batch-worker/                @bunvex/batch-worker 0.1.0, matching @convex-dev/batch-worker 0.3.6   ✅
+│   │   ├── src/component/           bunvex.config.ts (`batchWorker`, env LOG_LEVEL), schema, lib.ts, loop.ts,
+│   │   │                            monitor.ts, kick.ts, _generated/ (committed)
+│   │   ├── src/client/              ping, defineBatchWorkerValidators and the loop's types
+│   │   └── src/test.ts              `register(t, name)` for @bunvex/testing (`./test`)
 │   └── sharded-counter/             @bunvex/sharded-counter 0.1.0, matching @convex-dev/sharded-counter 0.2.3   ✅
 │       ├── src/component/           bunvex.config.ts (`shardedCounter`), schema, public.ts, _generated/ (committed,
 │       │                            `bunvex codegen --component-dir src/component`)

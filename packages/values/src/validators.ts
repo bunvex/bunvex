@@ -410,12 +410,13 @@ export type VOptional<T extends GenericValidator> =
 
 /**
  * An `args` or `returns` given as a validator or as an object of field validators, as a validator (Convex's
- * `AsObjectValidator`): a validator as it is, the fields as an object validator of them.
+ * `AsObjectValidator`): a validator as it is, the fields as an object validator of them, required (Convex's
+ * `Validator` defaults to `"required"`; bunvex's to either, so it is spelled out).
  */
 export type AsObjectValidator<V extends GenericValidator | PropertyValidators> = V extends GenericValidator
   ? V
   : V extends PropertyValidators
-    ? Validator<ObjectType<V>>
+    ? Validator<ObjectType<V>, "required">
     : never;
 
 /** Convex's `asObjectValidator`: a validator as it is, an object of field validators as `v.object(fields)`. */
