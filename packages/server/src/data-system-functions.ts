@@ -1,8 +1,8 @@
 // The Data screen's reads (STUDY-149 PR 2), as Convex's npm-packages/system-udfs/convex/_system/frontend: the
 // table mapping (`getTableMapping.ts`), a page of a table under the dashboard's filters
 // (`paginatedTableDocuments.ts` with `lib/filters.ts`), a table's indexes (`indexes.ts`) and documents by id
-// (`listById.ts`, `getById.ts`). Same names, arguments, result shapes and errors; `componentId` is accepted
-// and ignored, as bunvex has only the root component (DV-55). `tableSize` is in system-functions.ts.
+// (`listById.ts`, `getById.ts`). Same names, arguments, result shapes and errors; a `componentId` runs them in that
+// component's namespace, as Convex's (`inSystemComponent`). `tableSize` is in system-functions.ts.
 import { SCHEMAS_TABLE, schemaStateOf, type TabletId, type Tx, type TxQueryChained, tabletOf } from "@bunvex/core";
 import { decodeId, fromJsonValue, type JSONValue, type Value, v } from "@bunvex/values";
 import { paginationOptsValidator } from "./pagination.ts";
@@ -351,6 +351,13 @@ async function publicSystemGet(db: Tx, id: string) {
   return null;
 }
 
+/**
+ * Whether a `_tables` row is of the namespace `db` runs in: the root's has no `namespace`, a component's names its
+ * id (a system function given a `componentId` runs in that component, `inSystemComponent`).
+ */
+export const ofCurrentNamespace = (db: Tx, row: Record<string, unknown>) =>
+  ((row.namespace as { id?: string } | undefined)?.id ?? null) === db.componentId;
+
 export const DATA_SYSTEM_QUERIES: Record<string, SystemQuery> = {
   // Convex's `getTableMapping`: each active table's number and name, the user tables and the two system tables
   // the dashboard links ids to; the first 1000 by number. Reading `_tables` makes it live, as Convex's table
@@ -360,7 +367,7 @@ export const DATA_SYSTEM_QUERIES: Record<string, SystemQuery> = {
     handler: async (db) => {
       const rows = (await db.asSystem(() => db.query("_tables").collect())) as Row[];
       const tables = rows
-        .filter((r) => (r.state ?? "active") === "active" && r.namespace === undefined)
+        .filter((r) => (r.state ?? "active") === "active" && ofCurrentNamespace(db, r))
         .map((r) => [Number(r.number as bigint), r.name as string] as const)
         .filter(([, name]) => !name.startsWith("_") || name === "_scheduled_jobs" || name === "_file_storage")
         .sort((a, b) => a[0] - b[0])

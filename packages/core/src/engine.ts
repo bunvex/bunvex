@@ -3899,9 +3899,29 @@ export class Engine {
       tracked: opts.tracked === true,
       journal: opts.journal ?? null,
     };
-    if (isCall(body)) return this.dispatch<T>(body, start, opts);
+    if (isCall(body)) return this.retained(start, await this.dispatch<T>(body, start, opts));
     const run = await runTransaction(this.inThread, start, opts.wrap ? opts.wrap(body) : body);
-    return { ...run, now: start.now, outcome: outcomeOf(0, kind, run, run.ok ? "ok" : "failed", null) };
+    return this.retained(start, {
+      ...run,
+      now: start.now,
+      outcome: outcomeOf(0, kind, run, run.ok ? "ok" : "failed", null),
+    });
+  }
+
+  /**
+   * Convex's `validate_run_function_result` (crates/function_runner/src/server.rs): once a function's query or
+   * mutation ran, its snapshot must still be inside the retention window, whichever runner ran it (Convex's
+   * in-process runner checks too). A run the window passed fails with `OutOfRetentionError` instead of its
+   * result, and a mutation's writes are dropped. The engine's own transactions are not functions' runs.
+   */
+  private retained<T>(start: TxStart, ran: Ran<T>): Ran<T> {
+    if (start.system || !this.retention) return ran;
+    try {
+      this.retention.check(start.ts);
+      return ran;
+    } catch (error) {
+      return { ...ran, ok: false, error, outcome: { ...ran.outcome, status: "failed", result: null, writes: null } };
+    }
   }
 
   /**
