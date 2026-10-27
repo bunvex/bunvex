@@ -51,7 +51,7 @@ export type SourcePackageFields = {
   /** The push's `_external_deps_packages` row (STUDY-148), or null. */
   externalPackageId: string | null;
   packageSize: { zippedSizeBytes: bigint; unzippedSizeBytes: bigint };
-  /** The push's `node.nodeVersion` ("20", "22" or "24"), or null (STUDY-145). */
+  /** The push's `node.nodeVersion` ("22" or "24"; "20" if pushed before it was refused), or null (STUDY-145). */
   nodeVersion: string | null;
 };
 export type SourcePackage = SourcePackageFields & { _id: string };
