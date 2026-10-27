@@ -13,6 +13,7 @@ import {
   type LoadOptions,
   type ModuleSource,
   NODE_FUNCTIONS,
+  UnserializableAuthConfigError,
   vmExecutor,
 } from "@bunvex/server/executor";
 import { evaluatedValue, NOT_A_SCHEMA, SandboxProcess } from "../src/index.ts";
@@ -101,7 +102,20 @@ function schemaView(value: unknown) {
     indexReferenceError: indexReferenceError(value),
   };
 }
-const authView = (value: unknown) => (value === undefined ? { undefined: true } : { json: JSON.stringify(value) });
+/**
+ * An auth config as the push reads it (push.ts `evaluateAuthConfig`): as its JSON, which Convex's isolate takes with
+ * `v8::json::stringify` (crates/isolate/src/environment/auth_config.rs:286). In-process the push has the live value
+ * and serializes it itself, refusing what `JSON.stringify` refuses (a bigint, a cycle) with
+ * `UnserializableAuthConfigError`, the error the child's answer decodes to.
+ */
+function authView(value: unknown) {
+  if (value === undefined) return { undefined: true };
+  try {
+    return { json: JSON.stringify(value) };
+  } catch {
+    throw new UnserializableAuthConfigError();
+  }
+}
 
 let child: SandboxProcess;
 beforeAll(async () => {

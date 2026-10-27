@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineSchema, defineTable, Engine } from "@bunvex/core";
+import { DEPLOYMENT_AUDIT_LOG_TABLE, defineSchema, defineTable, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
 import { MemoryBlobStore } from "@bunvex/file-storage";
 import { fromExportJson, v } from "@bunvex/values";
@@ -303,5 +303,45 @@ describe("the export service", () => {
     expect(await svc.cleanup()).toBe(1);
     expect(await keys()).toEqual([]);
     expect(await row()).toBe(null);
+  });
+});
+
+describe("download_export in the audit log (Convex's 8281a65)", () => {
+  test("each download, by the key's member or the token's, with the export's id and format", async () => {
+    const t = await setup();
+    const SEVEN = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET), memberId: 7 });
+    await t.post("/api/export/request/zip?includeStorage=true");
+    const done = await t.waitDone();
+    const ts = String(t.tsOf(done));
+    const downloads = async () =>
+      (await t.engine.query((db) => db.asSystem(() => db.query(DEPLOYMENT_AUDIT_LOG_TABLE).collect())))
+        .filter((e) => e.action === "download_export")
+        .map((e) => [e.member_id ?? null, e.metadata]);
+    const metadata = {
+      id: done._id,
+      component_id: null,
+      component: null,
+      format: "zip_with_storage",
+      requestor: "snapshot_export",
+    };
+    expect(await downloads()).toEqual([]);
+    expect((await t.download(ts, SEVEN)).status).toBe(200);
+    expect((await t.download(done._id as string, KEY)).status).toBe(200);
+    expect(await downloads()).toEqual([
+      [7n, metadata],
+      [0n, metadata],
+    ]);
+    // A token names whoever asked for it.
+    const { token } = (await (await t.post(`/api/export/zip/${ts}/token`, {}, SEVEN)).json()) as { token: string };
+    expect((await t.download(ts, null, `?token=${token}`)).status).toBe(200);
+    expect((await downloads()).at(-1)).toEqual([7n, metadata]);
+    // Its member cannot be swapped.
+    const [expires, , mac] = token.split(".");
+    expect((await t.download(ts, null, `?token=${expires}.8.${mac}`)).status).toBe(403);
+    expect((await t.download(ts, null, `?token=${expires}..${mac}`)).status).toBe(403);
+    // A failed download records nothing.
+    const before = (await downloads()).length;
+    expect((await t.download("123", KEY)).status).toBe(404);
+    expect((await downloads()).length).toBe(before);
   });
 });

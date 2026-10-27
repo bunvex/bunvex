@@ -1,7 +1,8 @@
-// A backfill that starts over (STUDY-174 S1, I-17): its checkpoint's snapshot fell out of retention while it was
-// stopped, so it walks the table again from the start at a new snapshot. Its progress starts over with it, as
-// Convex's `initialize_backfill` (crates/database/src/bootstrap_model/index_backfills/mod.rs: a fresh start replaces
-// the row with `num_docs_indexed: 0`): `numDocsIndexed` never passes the table's count.
+// A backfill that resumes (STUDY-174 S1, I-17; STUDY-186 A10): as Convex's since `6830b7a`
+// (`resume_database_index_backfill`, crates/database/src/bootstrap_model/index_backfills/mod.rs), it goes on after its
+// cursor at a fresh snapshot, even when its checkpoint's snapshot fell out of retention while it was stopped, keeping
+// its count; the row's `snapshotTs` names the new scan. `numDocsIndexed` never passes the table's count, and writes
+// made while it was stopped are in the index as they are now.
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,20 +35,22 @@ async function readProgress(e: Engine) {
   return row && backfillMeta(row);
 }
 
-test("a backfill that starts over at a new snapshot counts its documents from 0", async () => {
+test("a resumed backfill goes on after its cursor at a new snapshot, keeping its count, past retention", async () => {
   const dir = mkdtempSync(join(tmpdir(), "bunvex-backfill-restart-"));
   dirs.push(dir);
   const path = join(dir, "log");
   const N = 3000;
+  const ids: string[] = [];
   {
     const e = await open(path, plain);
     await e.mutation(async (db) => {
-      for (let i = 0; i < N; i++) await db.insert("items", { n: i % 97 });
+      for (let i = 0; i < N; i++) ids.push((await db.insert("items", { n: i % 97 })) as string);
     });
     await e.close();
   }
   // A slow first pass (1 000 entries/s, a checkpoint every 50 ms), stopped after its first checkpoint.
   let snapshotTs: bigint;
+  let indexed1: number;
   let above: bigint;
   {
     const e = await open(path, indexed, { chunkSize: 100, chunkRate: 10, progressIntervalMs: 50 });
@@ -57,7 +60,17 @@ test("a backfill that starts over at a new snapshot counts its documents from 0"
     expect(before!.numDocsIndexed).toBeLessThan(N);
     snapshotTs = before!.cursor!.snapshotTs;
     await e.close(); // the stop checkpoints what it indexed since
-    above = e.committer.visibleTs; // the checkpoints are commits after the snapshot
+    indexed1 = e.indexWorker!.stats.docsIndexed;
+    expect(indexed1).toBeLessThan(N);
+    // Writes while it is stopped, before and after its cursor: the index maintains them (it is backfilling).
+    const w = await open(path, indexed, { enabled: false });
+    await w.mutation(async (db) => {
+      await db.delete(ids[0] as never); // before the cursor
+      await db.patch(ids[N - 1] as never, { n: 1000 }); // after it
+      await db.insert("items", { n: 1000 });
+    });
+    above = w.committer.visibleTs; // the checkpoints and the writes are commits after the snapshot
+    await w.close();
     expect(above).toBeGreaterThan(snapshotTs);
   }
   // Retention moved past the checkpoint's snapshot meanwhile.
@@ -68,12 +81,26 @@ test("a backfill that starts over at a new snapshot counts its documents from 0"
   }
   const e = await open(path, indexed, { chunkRate: null });
   await e.indexesReady();
-  // It started over: every document indexed again, at a newer snapshot.
-  expect(e.indexWorker!.stats.docsIndexed).toBe(N);
+  // It went on after its cursor: only the rest of the table indexed, at a newer snapshot, the count kept.
+  expect(e.indexWorker!.stats.docsIndexed).toBeLessThanOrEqual(N - indexed1 + 1);
   const after = await readProgress(e);
   expect(after!.cursor!.snapshotTs).toBeGreaterThan(snapshotTs);
-  expect(after!.numDocsIndexed).toBe(N);
+  expect(after!.numDocsIndexed).toBeLessThanOrEqual(N + 1);
   expect(after!.totalDocs).toBe(N);
+  // The index holds every document as it is now.
+  const byIndex = await e.query(async (db) =>
+    (
+      await db
+        .query("items")
+        .withIndex("by_n" as never)
+        .collect()
+    ).map((d) => [d._id, d.n]),
+  );
+  const all = await e.query(async (db) => (await db.query("items").collect()).map((d) => [d._id, d.n]));
+  const sort = (r: unknown[][]) => [...r].sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  expect(byIndex).toHaveLength(N);
+  expect(sort(byIndex)).toEqual(sort(all));
+  expect(byIndex.filter(([, n]) => n === 1000)).toHaveLength(2);
   await e.close();
 }, 30_000);
 
