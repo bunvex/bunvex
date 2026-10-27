@@ -14,6 +14,7 @@ import { createServer, Functions } from "@bunvex/server";
 import { provideProcessExecutor } from "@bunvex/server/executor";
 import { v } from "@bunvex/values";
 import { createProcessExecutor } from "../src/executor.ts";
+import { constructedAt } from "./parity-frames.ts";
 
 provideProcessExecutor(createProcessExecutor);
 // Functions run in UTC, as `bunvex-local-backend` sets it (STUDY-171 §10); the child's is always UTC.
@@ -317,7 +318,7 @@ type Outcome = { status: string; value?: unknown; errorMessage?: string; errorDa
  * Ids, creation times, request ids and a console timer's milliseconds: each deployment's own (or its machine's).
  */
 const own = (t: string) =>
-  t
+  constructedAt(t)
     .replace(/\b[0-9a-z]{31,37}\b/g, "<id>")
     .replace(/\b1\d{12}(?:\.\d+)?\b/g, "<time>")
     .replace(/\b[0-9a-f]{16}\b/g, "<request>")
@@ -327,11 +328,7 @@ const own = (t: string) =>
 function normalized(o: Outcome) {
   const logLines = JSON.parse(own(JSON.stringify(o.logLines ?? [])));
   if (o.status === "success") return { value: JSON.parse(own(JSON.stringify(o.value ?? null))), logLines };
-  const message = (o.errorMessage ?? "")
-    .replace(/^\[Request ID: [0-9a-f]+\] Server Error\n/, "")
-    // The frame that constructed the error: JavaScriptCore puts it at the `new` on most runs and at the call's `(`
-    // on some, under either executor (seen once in CI, vm at `new Error(`'s paren, process at its `new`).
-    .replace(/^(Uncaught [^\n]*\n\s+at [^\n]*:\d+:)\d+\)/, "$1<col>)");
+  const message = (o.errorMessage ?? "").replace(/^\[Request ID: [0-9a-f]+\] Server Error\n/, "");
   return { error: own(message), data: o.errorData, logLines };
 }
 
