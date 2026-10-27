@@ -52,6 +52,10 @@ backend is always started with `--disable-beacon`.
   `component-env-app/` (`envc` mounted with its variables bound, and again without): called from the app's query,
   mutation and action, from one component into another and back into the app through handles, before and after the
   app's variables are set, a bad name included; every value compared. Local only.
+- `test/paginate-components.test.ts` (STUDY-186 A8): `paginate()` in the queries of `paginate-components-app/`'s
+  `pager` component, called from the app's queries and mutations in each order: one page per query across the app
+  and its components, refused where the call returns (the callee's lines dropped), none left by a failed call; a
+  component's cursors followed; a subscription keeping its page's end as rows come in. Local only.
 - `test/component-definitions.test.ts` (STUDY-153 PR 1): the same `defineApp` / `defineComponent` / `use` /
   `componentsGeneric` calls with Convex's package and bunvex's, their `export()` and errors compared. No backend
   needed; run by the nightly too.

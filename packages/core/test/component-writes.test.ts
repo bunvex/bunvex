@@ -145,18 +145,13 @@ describe("refused in a component", () => {
     expect(refused).toBe("rejected");
   });
 
-  test(".paginate() in a component's function, after the page's own checks; the app's is fine", async () => {
+  test(".paginate() in a component's namespace pages its table, with the page's own checks (Convex d7402d6)", async () => {
     const e = await open();
     const id = await component(e);
-    const page = (componentFunction: boolean, numItems = 10) =>
-      e.query(async (db) => {
-        db.componentFunction = componentFunction;
-        return db.inComponent(id, () => db.query("messages").paginate({ numItems, cursor: null }));
-      });
-    expect(await failure(page(true))).toBe("paginate() is only supported in the app.");
-    expect(await failure(page(true, 0))).toBe("Must request at least 1 document while paginating");
-    // The engine's own reads in the namespace, and the app's function, page as before.
-    expect((await page(false)).isDone).toBe(true);
+    const page = (numItems = 10) =>
+      e.query(async (db) => db.inComponent(id, () => db.query("messages").paginate({ numItems, cursor: null })));
+    expect((await page()).isDone).toBe(true);
+    expect(await failure(page(0))).toBe("Must request at least 1 document while paginating");
     expect((await e.query((db) => db.query("messages").paginate({ numItems: 1, cursor: null }))).isDone).toBe(true);
   });
 });

@@ -125,7 +125,7 @@ describe(".paginate(), as Convex (STUDY-17)", () => {
         return db.query("items").paginate({ numItems: 1, cursor: null });
       }),
     ).rejects.toThrow(
-      "This query function ran multiple paginated queries. Only a single paginated query is supported in each query function.",
+      "This query function ran multiple paginated queries. bunvex only supports a single paginated query in each query function.",
     );
   });
 

@@ -246,6 +246,9 @@ export const TRANSACTION_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES = knob(
 export const OVER_LIMIT_HELP =
   "Consider using smaller limits in your queries, paginating your queries, or using indexed queries with a selective index range expressions.";
 
+/** Convex's `MultiplePaginatedDatabaseQueries` (crates/isolate/src/environment/udf/async_syscall.rs), naming bunvex. */
+const MULTIPLE_PAGINATED_QUERIES =
+  "This query function ran multiple paginated queries. bunvex only supports a single paginated query in each query function.";
 /**
  * The transaction limit errors Convex tags `ErrorMetadata::pagination_limit` (database/src/reads.rs,
  * writes.rs: too many documents, bytes or reads read; too many writes or bytes written), which `paginate` ends
@@ -494,19 +497,32 @@ export class Tx {
    */
   private pageScope: { paginated: boolean } | null;
   /**
-   * Run `fn`, a query called from here: from a mutation (no scope) it gets a fresh scope of its own, as Convex's
-   * `runUdf` gives a query called from a mutation a new journal; from a query it shares the caller's.
+   * Run `fn`, a query called from here, as Convex's `runUdf` (d7402d6, 8449d41): it paginates in a scope of its own.
+   * Called from a query, it reads its caller's journal, and once it returns, its page becomes its caller's; a second
+   * page in the caller is refused there, where the call returns. A query that fails leaves no page behind. Called
+   * from a mutation, its page is nobody's: a mutation records no end cursor. `refused` runs before that refusal.
    */
-  async inQueryScope<T>(fn: () => T): Promise<Awaited<T>> {
-    if (this.pageScope !== null) return await fn();
-    const savedEnd = this.nextEndCursor;
-    this.pageScope = { paginated: false };
+  async inQueryScope<T>(fn: () => T, refused?: () => void): Promise<Awaited<T>> {
+    const outer = this.pageScope;
+    const outerEnd = this.nextEndCursor;
+    const inner = { paginated: false };
+    this.pageScope = inner;
+    let value: Awaited<T>;
     try {
-      return await fn();
+      value = await fn();
+    } catch (e) {
+      this.nextEndCursor = outerEnd;
+      throw e;
     } finally {
-      this.pageScope = null;
-      this.nextEndCursor = savedEnd;
+      this.pageScope = outer;
     }
+    if (!inner.paginated || outer === null) this.nextEndCursor = outerEnd;
+    else if (outer.paginated) {
+      this.nextEndCursor = outerEnd;
+      refused?.();
+      throw new Error(MULTIPLE_PAGINATED_QUERIES);
+    } else outer.paginated = true;
+    return value;
   }
   /**
    * The store's retention window (STUDY-33): every read from the store is checked against it before and
@@ -1722,10 +1738,7 @@ export class Tx {
       throw new Error("maximumRowsRead and maximumBytesRead must be greater than 0");
     // Convex's `MultiplePaginatedDatabaseQueries`, for a query only (8449d41): a mutation may page through a range.
     const scope = this.pageScope;
-    if (scope?.paginated)
-      throw new Error(
-        "This query function ran multiple paginated queries. Only a single paginated query is supported in each query function.",
-      );
+    if (scope?.paginated) throw new Error(MULTIPLE_PAGINATED_QUERIES);
     if (scope) scope.paginated = true;
     const pipe = new Pipeline(st.ops);
     const fp = queryFingerprint({
@@ -1746,9 +1759,6 @@ export class Tx {
     const start = opts.cursor !== null ? decodeCursor(secret, opts.cursor, fp) : null;
     const endStr = opts.endCursor ?? this.prevEndCursor;
     const end = endStr !== null ? decodeCursor(secret, endStr, fp) : null;
-    // Convex's `PaginationUnsupportedInComponents`, after the page's checks and cursors, for a user's function in a
-    // component (STUDY-154), its docs link left out (DV-04); the engine's own reads there (a schema's walk) page.
-    if (this.spaceId !== null && this.componentFunction) throw new Error("paginate() is only supported in the app.");
     // As Convex's `read_page_from_query`: a limit of 0 never reads, so without an end cursor the page has no
     // cursor at all, and Convex fails with a system error ("Cursor was None").
     if (pipe.done && !end) {
@@ -2070,11 +2080,6 @@ export class Tx {
   schemaTables: ((n: number) => string | undefined) | null = null;
   /** Each component's active schema's document validators, by its `_components` id (STUDY-154). */
   componentValidators: ((namespace: string) => Map<string, GenericValidator> | undefined) | null = null;
-  /**
-   * Whether a component's own function is running (set by the server while it runs one, STUDY-154): what Convex
-   * refuses in a component, it refuses to user code only.
-   */
-  componentFunction = false;
   /** Whether each component written in is mounted, read once per transaction from its `_components` row. */
   private mounted = new Map<string, boolean>();
 

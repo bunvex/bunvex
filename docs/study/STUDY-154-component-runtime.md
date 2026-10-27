@@ -146,7 +146,7 @@
 - **A write into an unmounted component** is Convex's 400 `UnmountedComponent`, in bunvex's words (`bunvex.config.ts`,
   DV-494).
 - **`.paginate()`** in a component is Convex's 400 `PaginationUnsupportedInComponents`, without its docs link
-  (DV-04).
+  (DV-04). Superseded: Convex d7402d6 allows it, and bunvex follows (STUDY-186 A8, #899).
 - **`ctx.auth`** is as today: an admin's direct call has no user identity.
 
 ### 3.3 Entries, errors, logs, cache
@@ -202,7 +202,8 @@
   keeps its synchronous errors at the app's call (the error-frame tests caught the first version).
 - **`.paginate()`.** It is refused after the page's own checks (size, limits, cursors) when
   `Tx.componentFunction` is set, which the server sets while a component's function runs. The engine's own reads
-  in a namespace (a schema's walk) still page.
+  in a namespace (a schema's walk) still page. Superseded by STUDY-186 A8 (#899): a component's queries page, and
+  `Tx.componentFunction` is gone.
 - **Tests** (`core/test/component-writes.test.ts`):
   - its documents against its schema, and the app's against the app's;
   - its ids named in its namespace;
