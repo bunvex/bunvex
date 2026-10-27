@@ -58,6 +58,8 @@ export function flatValidator(v: ValidatorJson): string {
       return "v.float64()";
     case "bigint":
       return "v.int64()";
+    case "commitTs":
+      return "v.commitTs()";
     case "boolean":
       return "v.boolean()";
     case "string":
@@ -106,6 +108,7 @@ export function defaultValueFor(v: ValidatorJson): Value | undefined {
     case "number":
       return 0;
     case "bigint":
+    case "commitTs":
       return encodeInt64(0n);
     case "boolean":
       return false;
@@ -171,6 +174,7 @@ export function validateValue(v: ValidatorJson, value: Value, path: ValidatorPat
     case "bytes":
       return t === v.type ? [] : mismatch();
     case "bigint":
+    case "commitTs":
       return t === "int64" ? [] : mismatch();
     case "id":
       // the table cannot be checked from an id's text; that it is text can
@@ -226,7 +230,7 @@ export function validateValue(v: ValidatorJson, value: Value, path: ValidatorPat
 
 // ------------------------------------------------------------------ shape
 
-const TYPES = new Set(["null", "number", "bigint", "boolean", "string", "bytes", "any", "literal", "id"]);
+const TYPES = new Set(["null", "number", "bigint", "commitTs", "boolean", "string", "bytes", "any", "literal", "id"]);
 
 /** Whether `x` is a validator in Convex's JSON form (for sources and the contract suite). */
 export function isValidatorJson(x: unknown): x is ValidatorJson {
