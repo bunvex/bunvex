@@ -56,7 +56,7 @@ opened). Two of the nineteen items are built.
 | # | Item | Built | PR | Evidence on `main` |
 |---|---|---|---|---|
 | A1 | Log lines: 1024 for actions, 256 for queries and mutations | **yes** | #896 | `maxLogLines` by kind with Convex's three knobs (`server/src/logs.ts`), an action's streamed lines cut at the same limit; differential `log-line-limits.test.ts` |
-| A2 | Import limits: 64 MiB part, 16 MiB JSONL line and CSV record | no | — | `/api/import/upload_part` reads any size (`server/src/server.ts:2233`); `import-parse.ts` has no line or record bound |
+| A2 | Import limits: 64 MiB part, 16 MiB JSONL line and CSV record | **yes** | #902 | `importPartBody` (`server/src/imports.ts`); `boundedLines` and the CSV record count (`server/src/import-parse.ts`); differential `import-limits.test.ts` |
 | A3 | Drop the 90 MB zipped package limit | **yes** | #897 | the zipped check and its knob are gone; `verify_size` checks 230 000 000 bytes unzipped only (`server/src/code-store.ts`); differential `zipped-package-limit.test.ts` |
 | A4 | PBKDF2 cap at 150 000 000 work units | **yes** | #888 | a function context's `crypto.subtle` rejects past the bound, and past 64 KiB (`server/src/web-crypto.ts`); differential `pbkdf2-cap.test.ts` |
 | A5 | 204/205/304 with a body throws | **yes** | #889 | `SpecResponse` throws Convex's `TypeError` (`server/src/web-response.ts`); a fetched response's body is already null (Bun); differential `null-body-status.test.ts` |

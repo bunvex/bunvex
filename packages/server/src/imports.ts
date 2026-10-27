@@ -124,6 +124,44 @@ export class ImportRequestError extends Error {
   }
 }
 
+/** Convex's `MAX_IMPORT_UPLOAD_PART_BYTES` (1056bba): the most bytes one upload part may have. */
+export const maxImportUploadPartBytes = (env = process.env) =>
+  knob("MAX_IMPORT_UPLOAD_PART_BYTES", 64 * 1024 * 1024, "uint", env);
+
+/**
+ * An upload part's body, read up to `limit` bytes (Convex's `to_bytes` with its limit): past it, a 400
+ * `ImportPartTooLarge`, as soon as the declared length or the bytes read pass it; a body that breaks, `ImportFailed`.
+ */
+export async function importPartBody(req: Request, limit = maxImportUploadPartBytes()): Promise<Uint8Array> {
+  const tooLarge = () =>
+    new ImportRequestError(400, "ImportPartTooLarge", `Import upload parts must be at most ${limit} bytes.`);
+  const declared = req.headers.get("content-length");
+  if (declared !== null && Number(declared) > limit) {
+    await req.body?.cancel().catch(() => {});
+    throw tooLarge();
+  }
+  if (!req.body) return new Uint8Array();
+  const reader = req.body.getReader();
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        await reader.cancel().catch(() => {});
+        throw tooLarge();
+      }
+      parts.push(value);
+    }
+  } catch (e) {
+    if (e instanceof ImportRequestError) throw e;
+    throw new ImportRequestError(400, "ImportFailed", "failed to read request body");
+  }
+  return parts.length === 1 ? parts[0]! : new Uint8Array(Buffer.concat(parts));
+}
+
 class Canceled extends Error {}
 
 const STABLE = new Set(["waiting_for_confirmation", "completed", "failed"]);
@@ -488,9 +526,12 @@ export class ImportService {
         failures = 0;
         // Its tables go first, so whoever sees it failed sees nothing left behind.
         await this.dropHidden(next._id);
+        // Convex's `wrap_import_err`: an `ImportError` it raised bare keeps its message alone.
         const msg = isRetryable(e)
           ? INTERNAL_SERVER_ERROR_MESSAGE
-          : `Hit an error while importing:\n${e instanceof Error ? e.message : String(e)}`;
+          : e instanceof ImportError && e.bare
+            ? e.message
+            : `Hit an error while importing:\n${e instanceof Error ? e.message : String(e)}`;
         await this.write((db) => this.setState(db, next._id, () => ({ state: "failed", error_message: msg }))).catch(
           () => {},
         );

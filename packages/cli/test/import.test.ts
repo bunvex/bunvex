@@ -104,7 +104,7 @@ test("bunvex import: a CSV in parts; the summary and its prompt; Convex's messag
   const again = await t.run(["people.csv", "--table", "people"]);
   expect(again.code).toBe(1);
   expect(again.err.at(-1)).toBe(
-    'Importing data from "people.csv" to table "people" failed\n\nHit an error while importing:\nTable people already exists. Please choose a new table name or use replace/append modes.',
+    'Importing data from "people.csv" to table "people" failed\n\nTable people already exists. Please choose a new table name or use replace/append modes.',
   );
 
   // Replacing deletes: asked first; "n" cancels, and nothing changes.
