@@ -223,7 +223,9 @@ export function LogDetails(props: {
         <dt className="text-muted-foreground">Outcome</dt>
         <dd className={cn(end?.execution?.status === "failure" && "text-destructive")}>
           {end?.execution
-            ? `${end.execution.status === "success" ? "Succeeded" : "Failed"} in ${formatDuration(end.execution.durationMs)}`
+            ? end.execution.cached
+              ? "Succeeded (cached)"
+              : `${end.execution.status === "success" ? "Succeeded" : "Failed"} in ${formatDuration(end.execution.durationMs)}`
             : "Not in the loaded lines"}
         </dd>
         {startedBy && (

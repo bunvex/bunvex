@@ -133,28 +133,5 @@ export type PartialApi<API> = {
   [mod in keyof API]?: API[mod] extends FunctionReference<any, any, any, any> ? API[mod] : PartialApi<API[mod]>;
 };
 
-/** The keys of a function's arguments, `any` when they are `any`. */
-// biome-ignore lint/suspicious/noExplicitAny: `0 extends 1 & T` holds only for `any`
-type ArgKeysOf<Args> = 0 extends 1 & Args ? any : keyof Args;
-/** The second parameter of `FunctionReference_future`'s `_fn`: its arguments' keys, as a callback. */
-// biome-ignore lint/suspicious/noExplicitAny: as above
-type FutureArgKeys<Args> = 0 extends 1 & Args ? any : (keys: (key: ArgKeysOf<Args>) => void, guard?: never) => void;
-
-/**
- * Convex's `FunctionReference_future`: a function reference whose arguments and result are carried by an optional
- * `_fn` signature instead of `_args` / `_returnType`. Types only (a reference holds its name at run time).
- */
-export type FunctionReference_future<
-  Type extends FunctionType,
-  Visibility extends FunctionVisibility = "public",
-  // biome-ignore lint/suspicious/noExplicitAny: an untyped reference's arguments, as Convex's default
-  Args extends DefaultFunctionArgs = any,
-  // biome-ignore lint/suspicious/noExplicitAny: an untyped reference's result, as Convex's default
-  ReturnType = any,
-  ComponentPath = string | undefined,
-> = {
-  _type: Type;
-  _visibility: Visibility;
-  _componentPath: ComponentPath;
-  _fn?: ((args: Args, keys: FutureArgKeys<Args>) => ReturnType) | undefined;
-};
+/** Convex's `FunctionReference_future`, defined with the references (`@bunvex/protocol`). */
+export type { FunctionReference_future } from "@bunvex/protocol";

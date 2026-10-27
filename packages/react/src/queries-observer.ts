@@ -2,19 +2,14 @@
 // replaced when its function, arguments or pagination options change, and one listener for all of them. A
 // query with `paginationOptions` is a paginated query (`watchPaginatedQuery`): its value is the loaded pages
 // as one list.
-import {
-  type AnyFunctionReference,
-  getFunctionName,
-  type SubscribeToPaginatedQueryOptions,
-  type v1,
-} from "@bunvex/client";
+import { type AnyReference, getFunctionName, type SubscribeToPaginatedQueryOptions, type v1 } from "@bunvex/client";
 import { toJsonValue, type Value } from "@bunvex/values";
 import type { PaginatedWatch, Watch } from "./client.ts";
 
 export type RequestForQueries = Record<
   string,
   {
-    query: AnyFunctionReference & { _type: "query" };
+    query: AnyReference & { _type: "query" };
     args: Record<string, Value>;
     /** @internal A paginated query: `args` without `paginationOpts`. */
     paginationOptions?: SubscribeToPaginatedQueryOptions;
@@ -22,13 +17,13 @@ export type RequestForQueries = Record<
 >;
 
 export type CreateWatch = (
-  query: AnyFunctionReference & { _type: "query" },
+  query: AnyReference & { _type: "query" },
   args: Record<string, Value>,
   options: { journal?: v1.QueryJournal; paginationOptions?: SubscribeToPaginatedQueryOptions },
 ) => Watch<Value> | PaginatedWatch<Value>;
 
 type QueryInfo = {
-  query: AnyFunctionReference & { _type: "query" };
+  query: AnyReference & { _type: "query" };
   args: Record<string, Value>;
   paginationOptions: SubscribeToPaginatedQueryOptions | undefined;
   watch: Watch<Value> | PaginatedWatch<Value>;
@@ -105,7 +100,7 @@ export class QueriesObserver {
 
   private addQuery(
     id: string,
-    query: AnyFunctionReference & { _type: "query" },
+    query: AnyReference & { _type: "query" },
     args: Record<string, Value>,
     options: { journal?: v1.QueryJournal; paginationOptions?: SubscribeToPaginatedQueryOptions },
   ) {

@@ -72,6 +72,14 @@ describe("entriesOf", () => {
     ] as LogEntry[]);
   });
 
+  test("a cached query's outcome says it was cached (Convex's `cachedResult`); a run's says nothing", () => {
+    const query = { udfType: "Query", identifier: "messages.js:list" } as const;
+    const [hit] = entriesOf([completion({ ...query, cachedResult: true })], ids());
+    const [run] = entriesOf([completion({ ...query, cachedResult: false })], ids());
+    expect(hit!.execution).toEqual({ status: "success", durationMs: 12, cached: true });
+    expect(run!.execution).toEqual({ status: "success", durationMs: 12 });
+  });
+
   test("a failure is an error outcome with its message; an HTTP action fails by its status", () => {
     const [failed] = entriesOf([completion({ error: "Uncaught Error: no" })], ids());
     expect([failed!.level, failed!.message, failed!.execution?.status]).toEqual([

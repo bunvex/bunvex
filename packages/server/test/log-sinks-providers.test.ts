@@ -249,7 +249,7 @@ describe("Sentry", () => {
     expect(event).toMatchObject({
       platform: "node",
       server_name: NAME,
-      tags: { team: "core", func: "m.js:fail", func_type: "mutation", func_runtime: "default" },
+      tags: { team: "core", func: "m:fail", func_type: "mutation", func_runtime: "default" },
       contexts: { BunvexError: { type: "unknown", data: { code: 7 } } },
       sdk: { name: "bunvex", version: "unknown" },
     });
@@ -350,7 +350,7 @@ describe("PostHog", () => {
       $exception_level: "error",
       $exception_types: ["Error"],
       $lib: "bunvex",
-      bunvex_function: "m.js:fail",
+      bunvex_function: "m:fail",
       bunvex_function_type: "mutation",
       bunvex_function_runtime: "default",
       bunvex_deployment: NAME,

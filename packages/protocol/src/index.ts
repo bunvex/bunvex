@@ -20,6 +20,8 @@ export type RequestError = { code: string; message: string };
 export {
   type AnyApi,
   type AnyFunctionReference,
+  type AnyFunctionReferenceFuture,
+  type AnyReference,
   type ArgsAndOptions,
   anyApi,
   type DefaultFunctionArgs,
@@ -27,6 +29,7 @@ export {
   type FunctionAddress,
   type FunctionArgs,
   type FunctionReference,
+  type FunctionReference_future,
   type FunctionReturnType,
   type FunctionType,
   type FunctionVisibility,

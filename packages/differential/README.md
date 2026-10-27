@@ -37,6 +37,9 @@ backend is always started with `--disable-beacon`.
 - `test/backfill-progress.test.ts` (STUDY-174 S1): a push adds an index to a table with documents (the app of
   `backfill-progress-app/`); once backfilled, the `_index_backfills` row is read from each store's SQLite file and
   compared: the count, the table's total, the cursor. Local only.
+- `test/auth-config-json.test.ts` (STUDY-188 R4 follow-up): the app of `auth-config-app/` pushed with auth configs
+  that have no JSON (a function, a symbol, a `toJSON` that gives `undefined`), none (`undefined`, `null`), a function
+  inside, a bigint; the refusal compared with bunvex under `vm` and under `process`. Local only.
 - `test/push-without-schema.test.ts` (STUDY-187 X23): the app of `no-schema-app/` and its component `kv`, deployed
   with and without each `schema.ts`; after each deploy, `get_schema`, the export's JSON Schema and a query by each
   index, and at the end the `_schemas` rows of each store, compared. Local only.
