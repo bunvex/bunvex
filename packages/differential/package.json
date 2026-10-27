@@ -9,8 +9,10 @@
     "bunvex": "workspace:*"
   },
   "devDependencies": {
+    "@bunvex/batch-worker": "workspace:*",
     "@bunvex/helpers": "workspace:*",
     "@bunvex/sharded-counter": "workspace:*",
+    "@convex-dev/batch-worker": "0.3.6",
     "@convex-dev/sharded-counter": "0.2.3",
     "convex": "1.48.0",
     "convex-helpers": "0.1.128",
