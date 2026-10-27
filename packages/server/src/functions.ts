@@ -1304,7 +1304,7 @@ export class Functions {
         // An action's lines stream out as they come (Convex's progress Console events).
         if (this.logManager?.active)
           this.logManager.send([
-            { timestamp: line.timestamp, event: { topic: "console", source: this.eventSource(r, null), line } },
+            { timestamp: line.timestamp, event: { topic: "console", source: this.eventSource(r, false), line } },
           ]);
       };
     // An HTTP action's comes with its route (`Outcome.route`), once it ran to the end.
@@ -1397,7 +1397,8 @@ export class Functions {
    */
   private eventSource(r: Running, cached: boolean | null, identifier = r.identifier): FunctionSource {
     return {
-      path: r.udfType === "HttpAction" ? identifier : this.metricsNameOf(identifier),
+      // Convex's `identifier_str`: the stripped path (`m:f`, a default export `m`), an HTTP action's route.
+      path: identifier,
       componentPath: r.componentPath,
       udfType: r.udfType,
       cached,
