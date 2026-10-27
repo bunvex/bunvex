@@ -275,6 +275,43 @@ describe("refused, as the binary refuses them", () => {
     });
   });
 
+  test("an import error through the source map: the original line when the column is within it (Convex's 45ec26a)", async () => {
+    const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const vlq = (n: number) => {
+      let v = n << 1;
+      let out = "";
+      do {
+        out += B64[(v & 31) | (v > 31 ? 32 : 0)];
+        v >>>= 5;
+      } while (v > 0);
+      return out;
+    };
+    const at = (original: string, line: number, col: number) =>
+      refused(
+        input({
+          source: `import x from "./other.js";export default x;`,
+          sourceMap: JSON.stringify({
+            version: 3,
+            sources: ["a.ts"],
+            sourcesContent: [original],
+            mappings: [0, 0, line, col].map(vlq).join(""),
+          }),
+        }),
+      ).then((r) => r.message);
+    const msg = "Can't import other.js while evaluating app definition";
+    expect(await at("// app\nimport o from './other';\n", 1, 7)).toBe(
+      `bunvex:/bunvex.config.js:1:7: ${msg}\n\nimport o from './other';\n       ${"~".repeat(17)}`,
+    );
+    expect(await at("// app\nshort\n", 1, 5)).toBe(`bunvex:/bunvex.config.js:1:5: ${msg}\n\nshort\n     `);
+    // Past the line's end: the generated position, no context.
+    expect(await at("// app\nshort\n", 1, 40)).toBe(`bunvex:/bunvex.config.js:0:14: ${msg}`);
+    // The line's length is its UTF-8 bytes, as Rust's `str::len`: 10 "é" are 20.
+    expect(await at("éééééééééé\n", 0, 15)).toBe(
+      `bunvex:/bunvex.config.js:0:15: ${msg}\n\néééééééééé\n${" ".repeat(15)}~~~~~`,
+    );
+    expect(await at("éééééééééé\n", 0, 21)).toBe(`bunvex:/bunvex.config.js:0:14: ${msg}`);
+  });
+
   test("a bare import: refused as any other, a 400 (DV-497)", async () => {
     for (const spec of ["lodash", "node:fs"])
       expect(await refused(input({ source: `import x from "${spec}";export default x;` }))).toEqual({

@@ -238,7 +238,8 @@ const resolved = (spec: string) => posix.normalize(posix.join("/", spec)).slice(
 
 /**
  * An error raised while linking an import, located as Convex's `nicely_show_line_number_on_error`: the import's
- * position in the module (0-based), and, with a source map, the original line with the position marked.
+ * position in the module (0-based), and, with a source map, the original line with the position marked (when the
+ * position is within that line).
  */
 function importError(
   source: Omit<ModuleSource, "path" | "environment">,
@@ -253,9 +254,13 @@ function importError(
   const line = before.split("\n").length - 1;
   const col = at - (before.lastIndexOf("\n") + 1);
   const original = source.sourceMap ? originalLine(source.sourceMap, line, col) : null;
-  const message = original
-    ? `${url}:${original.line}:${original.col}: ${error.message}\n\n${original.text}\n${" ".repeat(original.col)}${"~".repeat(Math.max(0, original.text.length - original.col))}`
-    : `${url}:${line}:${col}: ${error.message}`;
+  // As Convex's (`45ec26a`): the original line only when its column is within it, by the line's UTF-8 length (Rust's
+  // `str::len`), which also counts the marks; past it, the generated position alone.
+  const bytes = original ? Buffer.byteLength(original.text) : 0;
+  const message =
+    original && original.col <= bytes
+      ? `${url}:${original.line}:${original.col}: ${error.message}\n\n${original.text}\n${" ".repeat(original.col)}${"~".repeat(bytes - original.col)}`
+      : `${url}:${line}:${col}: ${error.message}`;
   return new DefinitionError(error.code, message);
 }
 

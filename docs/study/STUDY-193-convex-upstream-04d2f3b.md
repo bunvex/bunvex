@@ -72,7 +72,7 @@ opened). Two of the nineteen items are built.
 | A15 | Refuse Node 20 | **yes** | #898 | "Node 20 is no longer supported. Upgrade to a newer Node version." on `start_push`, `evaluate_push` and `evaluate_schema` (`server/src/push.ts`); differential `node-version.test.ts` |
 | A16 | `env list --include-values`; MCP `envList` names by default (and DV-551's agent default) | **yes** | #894 | `--include-values` and the agent default (`cli/src/env.ts`, `agent.ts`); MCP `envList`'s `includeValues` (`cli/src/mcp-tools.ts`); differential `env-list-values.test.ts` |
 | A17 | Validate `--local-backend-version` | **yes** | #892 | `isValidBackendVersion` / `assertValidBackendVersion` before `ensureBinary` and `ensureDashboardDownloaded` use it (`cli/src/local-deployment.ts`, `local-dashboard.ts`) |
-| A18 | Source-mapped push errors past the line's end | no | — | the context block is printed whatever `original.col` is (`server/src/definition-eval.ts:257`) |
+| A18 | Source-mapped push errors past the line's end | **yes** | #900 | the context block only when the column is within the line by its UTF-8 length, the marks counted in bytes too; else the generated position (`server/src/definition-eval.ts`); differential `source-map-context.test.ts` |
 | A19 | `FunctionHandle_future` type | **yes** | #890 | exported from `server/src/index.ts` (defined in `function-handles.ts`); `api-shapes.test.ts` checks it both ways against `convex` 1.48.0 |
 
 None is partly built. A14 is "no" on purpose: STUDY-186 and #862 tie it to the reference move.
