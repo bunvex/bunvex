@@ -48,12 +48,16 @@ async function deployment() {
   return `http://127.0.0.1:${s.server.port}`;
 }
 
-function cli(cwd: string, url: string, o: { stdin?: string | null; prompt?: string | null; key?: string } = {}) {
+function cli(
+  cwd: string,
+  url: string,
+  o: { stdin?: string | null; prompt?: string | null; key?: string; env?: Record<string, string> } = {},
+) {
   const run = async (...args: string[]) => {
     const out: string[] = [];
     const err: string[] = [];
     const it: Io = {
-      env: { BUNVEX_SELF_HOSTED_URL: url, BUNVEX_SELF_HOSTED_ADMIN_KEY: o.key ?? KEY },
+      env: { BUNVEX_SELF_HOSTED_URL: url, BUNVEX_SELF_HOSTED_ADMIN_KEY: o.key ?? KEY, ...o.env },
       cwd,
       out: (l) => out.push(l),
       err: (l) => err.push(l),
@@ -91,6 +95,48 @@ describe("bunvex env", () => {
     const bad = await env("set", "9BAD", "x");
     expect(bad.code).toBe(1);
     expect(bad.err[0]).toContain("The environment variable name 9BAD is invalid.");
+  });
+
+  test("list --include-values; names only when an AI agent runs it (Convex's 5a633b4, 7550fdd; DV-551)", async () => {
+    const url = await deployment();
+    const dir = tmp();
+    await cli(dir, url)("set", "API_KEY", "secret");
+    await cli(dir, url)("set", "MODE", "prod");
+    const VALUES = ["API_KEY=secret", "MODE=prod"];
+    const human = cli(dir, url);
+    expect(await human("list", "--include-values")).toEqual({ code: 0, out: VALUES, err: [] });
+    expect(await human("list")).toEqual({ code: 0, out: VALUES, err: [] });
+    // The two conflict, as commander reports it, before an unknown option.
+    const conflict = {
+      code: 1,
+      out: [],
+      err: ["error: option '--include-values' cannot be used with option '--names-only'"],
+    };
+    expect(await human("list", "--names-only", "--include-values")).toEqual(conflict);
+    expect(await human("list", "--include-values", "--names-only", "--nope")).toEqual(conflict);
+    expect((await human("list", "--nope", "--include-values", "--names-only")).err[0]).toStartWith(
+      "error: unknown option '--nope'",
+    );
+    // An agent: names, and a note on stderr; --include-values and --names-only as for anyone.
+    const note = (agent: string) =>
+      `Listed names only because an AI agent (${agent}) appears to be running this command. Pass --include-values to print the values too.`;
+    const agent = cli(dir, url, { env: { AI_AGENT: "claude-code_2-1-299_agent", CLAUDECODE: "1" } });
+    expect(await agent("list")).toEqual({
+      code: 0,
+      out: ["API_KEY", "MODE"],
+      err: [note("claude-code_2-1-299_agent")],
+    });
+    expect(await agent("list", "--include-values")).toEqual({ code: 0, out: VALUES, err: [] });
+    expect(await agent("list", "--names-only")).toEqual({ code: 0, out: ["API_KEY", "MODE"], err: [] });
+    expect((await cli(dir, url, { env: { BUNVEX_AGENT_MODE: "anonymous" } })("list")).err).toEqual([
+      note("BUNVEX_AGENT_MODE"),
+    ]);
+    // Convex's own variable is not bunvex's (DV-551).
+    expect((await cli(dir, url, { env: { CONVEX_AGENT_MODE: "anonymous" } })("list")).out).toEqual(VALUES);
+    // No variables: Convex's line, no note.
+    await cli(dir, url)("rm", "API_KEY");
+    await cli(dir, url)("rm", "MODE");
+    expect(await agent("list")).toEqual({ code: 0, out: [], err: ["No environment variables set"] });
   });
 
   test("value sources: --from-file, piped stdin, a prompt", async () => {

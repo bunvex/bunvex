@@ -25,7 +25,7 @@ with what is different in bunvex.
 3. **Save the environment variables**, which an export does not contain:
 
    ```sh
-   bunvex env list > ./backups/env.txt
+   bunvex env list --include-values > ./backups/env.txt
    ```
 
 4. **Keep the instance's name and secret.** The admin keys and the signed pagination cursors are derived from the
@@ -105,7 +105,7 @@ the final export has everything.
 
    ```sh
    bunvex export --path ./backups --include-file-storage
-   bunvex env list > ./backups/env.txt
+   bunvex env list --include-values > ./backups/env.txt
    ```
 
 3. Start the **new** release on an empty database (a new SQLite file, a new Postgres/MySQL database or MongoDB
@@ -142,7 +142,7 @@ come back.
    instead of `convex/server`, `convex/react`, …; run `bunx bunvex` instead of `npx convex`. bunvex looks for the functions in `bunvex/` (keep `convex/` with
    `{ "functions": "convex" }` in `bunvex.json`), and for `BUNVEX_SELF_HOSTED_URL` / `BUNVEX_SELF_HOSTED_ADMIN_KEY`.
 2. `npx convex export --path ./backups --include-file-storage` on the Convex deployment, and save its variables
-   (`npx convex env list`).
+   (`npx convex env list --include-values > .env.convex`).
 3. Start bunvex on an empty store, `bunx bunvex deploy`, set the variables, then
    `bunx bunvex import --replace-all ./backups/snapshot_<…>.zip`.
 

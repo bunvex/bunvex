@@ -343,14 +343,31 @@ const updateEnv = async (target: Target, changes: { name: string; value: string 
   if (!r.ok) throw await fetchFailure("POST", url, r);
 };
 
+// Names only unless `includeValues`, so secrets stay out of the agent's context (Convex's eed135d); with it, each
+// variable's name and value, not its whole document.
 const EnvListTool = tool({
   name: "envList",
-  description: "List all environment variables in your bunvex deployment.",
-  inputSchema: z.object({ deploymentSelector: selectorInput("list environment variables from") }),
+  description:
+    "List the names of all environment variables in your bunvex deployment. Values are left out unless includeValues is true.",
+  inputSchema: z.object({
+    deploymentSelector: selectorInput("list environment variables from"),
+    includeValues: z
+      .boolean()
+      .optional()
+      .describe(
+        "Also return each variable's value. Values are often secrets like API keys, so leave this off unless you need every value, and use envGet to read a single variable instead.",
+      ),
+  }),
   handler: async (ctx, args) =>
-    withDeployment(ctx, args.deploymentSelector, "checked", async (target) => ({
-      variables: await systemQuery(target, "_system/cli/queryEnvironmentVariables", {}),
-    })),
+    withDeployment(ctx, args.deploymentSelector, "checked", async (target) => {
+      const variables = (await systemQuery(target, "_system/cli/queryEnvironmentVariables", {})) as {
+        name: string;
+        value: string;
+      }[];
+      return {
+        variables: variables.map(({ name, value }) => (args.includeValues ? { name, value } : { name })),
+      };
+    }),
 });
 
 const EnvGetTool = tool({

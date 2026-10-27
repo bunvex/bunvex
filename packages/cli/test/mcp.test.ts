@@ -172,6 +172,15 @@ describe("bunvex mcp start", () => {
       additionalProperties: false,
       properties: { order: { type: "string", enum: ["asc", "desc"] }, limit: { type: "number", maximum: 1000 } },
     });
+    // envList: names by default, `includeValues` optional (Convex's eed135d).
+    const envList = tools.find((t: { name: string }) => t.name === "envList");
+    expect(envList.description).toBe(
+      "List the names of all environment variables in your bunvex deployment. Values are left out unless includeValues is true.",
+    );
+    expect(envList.inputSchema).toMatchObject({
+      required: ["deploymentSelector"],
+      properties: { includeValues: { type: "boolean" } },
+    });
     for (const t of tools) expect(JSON.stringify(t)).not.toMatch(/convex/i);
   });
 
@@ -341,8 +350,16 @@ describe("bunvex mcp start", () => {
         success: true,
       });
       expect((await c.call("envGet", { deploymentSelector: sel, name: "MCP_VAR" })).value).toEqual({ value: "one" });
-      const list = (await c.call("envList", { deploymentSelector: sel })).value.variables;
-      expect(list).toContainEqual(expect.objectContaining({ name: "MCP_VAR", value: "one" }));
+      // Names only by default; with includeValues, each name and value and nothing else (Convex's eed135d).
+      const names = (await c.call("envList", { deploymentSelector: sel })).value.variables;
+      expect(names).toContainEqual({ name: "MCP_VAR" });
+      for (const v of names) expect(Object.keys(v)).toEqual(["name"]);
+      const values = (await c.call("envList", { deploymentSelector: sel, includeValues: true })).value.variables;
+      expect(values).toContainEqual({ name: "MCP_VAR", value: "one" });
+      for (const v of values) expect(Object.keys(v)).toEqual(["name", "value"]);
+      expect((await c.call("envList", { deploymentSelector: sel, includeValues: false })).value.variables).toEqual(
+        names,
+      );
       expect((await c.call("envRemove", { deploymentSelector: sel, name: "MCP_VAR" })).value).toEqual({
         success: true,
       });

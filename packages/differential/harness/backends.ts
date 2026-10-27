@@ -33,6 +33,11 @@ export type Backend = {
   call: (kind: "query" | "mutation" | "action", path: string, args: unknown) => Promise<Answer>;
   /** Run the backend's own CLI (`convex` or `bunvex`) in the app's project, aimed at this backend: its output. */
   cli: (args: string[]) => Promise<string>;
+  /**
+   * The same CLI with `env` over the process's own (a variable set to undefined is removed): its exit code, stdout and
+   * stderr, whatever the code.
+   */
+  cliOutput: (args: string[], env: Record<string, string | undefined>) => Promise<CliOutput>;
   stop: () => Promise<void>;
   /** An admin key of the deployment (the admin API's tests, e.g. streaming import). */
   adminKey: string;
@@ -43,10 +48,19 @@ export type Backend = {
   output: () => string;
 };
 
-async function run(cmd: string[], cwd: string, env: Record<string, string> = {}): Promise<string> {
-  const p = Bun.spawn(cmd, { cwd, env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
+export type CliOutput = { code: number; out: string; err: string };
+
+async function output(cmd: string[], cwd: string, env: Record<string, string | undefined> = {}): Promise<CliOutput> {
+  const all: Record<string, string | undefined> = { ...process.env, ...env };
+  for (const k of Object.keys(all)) if (all[k] === undefined) delete all[k];
+  const p = Bun.spawn(cmd, { cwd, env: all as Record<string, string>, stdout: "pipe", stderr: "pipe" });
   const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
-  if ((await p.exited) !== 0) throw new Error(`${cmd.join(" ")} failed (in ${cwd}):\n${out}\n${err}`);
+  return { code: await p.exited, out, err };
+}
+
+async function run(cmd: string[], cwd: string, env: Record<string, string> = {}): Promise<string> {
+  const { code, out, err } = await output(cmd, cwd, env);
+  if (code !== 0) throw new Error(`${cmd.join(" ")} failed (in ${cwd}):\n${out}\n${err}`);
   return out;
 }
 
@@ -287,13 +301,21 @@ export async function startConvex(opts: StartOptions = {}): Promise<Backend> {
       await run([ORACLE_BIN, "keygen", "admin-key", "--instance-name", up.name, "--instance-secret", secret], state)
     ).trim();
     const proj = project(state, "convex", opts.app, opts.prepare);
-    const cli = (args: string[]) =>
-      run([join(proj, "node_modules/.bin/convex"), ...args], proj, {
-        CONVEX_SELF_HOSTED_URL: up.url,
-        CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey,
-      });
+    const target = { CONVEX_SELF_HOSTED_URL: up.url, CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey };
+    const cli = (args: string[]) => run([join(proj, "node_modules/.bin/convex"), ...args], proj, target);
+    const cliOutput = (args: string[], env: Record<string, string | undefined>) =>
+      output([join(proj, "node_modules/.bin/convex"), ...args], proj, { ...env, ...target });
     await cli(["deploy", "--yes", "--typecheck=disable"]);
-    return { name: "convex", url: up.url, call: caller(up.url), cli, stop, adminKey, output: up.launched.output };
+    return {
+      name: "convex",
+      url: up.url,
+      call: caller(up.url),
+      cli,
+      cliOutput,
+      stop,
+      adminKey,
+      output: up.launched.output,
+    };
   } catch (e) {
     await stop();
     throw e;
@@ -343,8 +365,19 @@ export async function startBunvex(opts: StartOptions = {}): Promise<Backend> {
     const envFile = join(state, "deployment.env");
     writeFileSync(envFile, `BUNVEX_SELF_HOSTED_URL=${up.url}\nBUNVEX_SELF_HOSTED_ADMIN_KEY=${adminKey}\n`);
     const cli = (args: string[]) => run([process.execPath, BUNVEX_CLI, ...args, "--env-file", envFile], proj);
+    const cliOutput = (args: string[], env: Record<string, string | undefined>) =>
+      output([process.execPath, BUNVEX_CLI, ...args, "--env-file", envFile], proj, env);
     await cli(["deploy", "--typecheck=disable"]);
-    return { name: "bunvex", url: up.url, call: caller(up.url), cli, stop, adminKey, output: up.launched.output };
+    return {
+      name: "bunvex",
+      url: up.url,
+      call: caller(up.url),
+      cli,
+      cliOutput,
+      stop,
+      adminKey,
+      output: up.launched.output,
+    };
   } catch (e) {
     await stop();
     throw e;

@@ -70,7 +70,7 @@ opened). Two of the nineteen items are built.
 | A13 | S3 export API: `FieldFiltersUnsupported`, frozen destination, in-transaction check | **yes** | #862 (+#881) | `FieldFiltersUnsupported` (`server/src/log-sinks-routes.ts:266`); differential `s3-export-api.test.ts`, which #881 skips against an oracle older than `precompiled-2026-10-24` |
 | A14 | `_s3_export_state`, `DATABASE_VERSION` 134 | **yes** (PR 1) | PR 1 (§5.1) | `DATABASE_VERSION = 134n`; `_s3_export_state` (number 556, `by_config_id` on `configId`) in `core/src/catalog.ts` and the engine's system tables; `listConfiguredSinks` adds its `exportProgress`. `cross-open.test.ts` checks that neither binary warns or migrates |
 | A15 | Refuse Node 20 | no | — | `"20"` accepted (`server/src/push.ts:315`) |
-| A16 | `env list --include-values`; MCP `envList` names by default (and DV-551's agent default) | no | — | only `--names-only` (`cli/src/env.ts:30-36`); MCP `envList` returns values (`cli/src/mcp-tools.ts:347`) |
+| A16 | `env list --include-values`; MCP `envList` names by default (and DV-551's agent default) | **yes** | #894 | `--include-values` and the agent default (`cli/src/env.ts`, `agent.ts`); MCP `envList`'s `includeValues` (`cli/src/mcp-tools.ts`); differential `env-list-values.test.ts` |
 | A17 | Validate `--local-backend-version` | **yes** | #892 | `isValidBackendVersion` / `assertValidBackendVersion` before `ensureBinary` and `ensureDashboardDownloaded` use it (`cli/src/local-deployment.ts`, `local-dashboard.ts`) |
 | A18 | Source-mapped push errors past the line's end | no | — | the context block is printed whatever `original.col` is (`server/src/definition-eval.ts:257`) |
 | A19 | `FunctionHandle_future` type | **yes** | #890 | exported from `server/src/index.ts` (defined in `function-handles.ts`); `api-shapes.test.ts` checks it both ways against `convex` 1.48.0 |
@@ -82,7 +82,7 @@ The rest of STUDY-186 was checked too:
 | STUDY-186 item | Built | Evidence |
 |---|---|---|
 | §4.3, a V8 action's `setTimeout` past 2^31−1 ms | **yes**, #839 | "a V8 action's timer past 2^31-1 ms waits its whole delay" |
-| Q2 / DV-551, `env list` names only for AI agents | no | goes with A16; DV-551 says "to be built" |
+| Q2 / DV-551, `env list` names only for AI agents | **yes**, #894 | built with A16: `detectAgent` (`cli/src/agent.ts`), `BUNVEX_AGENT_MODE` |
 | Q3, the local dashboard's empty 403 on every non-loopback `Host` | no | only `/api/current_deployment` is checked, with a worded body (`cli/src/dashboard-server.ts:166-168`); DV-476 not yet moved |
 | Q4 / DV-552, `function.runtime` in log stream events | no | `log-events.ts` has `runtime: "default" \| "node"` only on the function's metadata, nothing on the stream event; DV-552 says "to be built" |
 | Q5, the MySQL retry set | no | `LOST` still holds `EPIPE`, `ETIMEDOUT`, `EHOSTUNREACH`, `ENETUNREACH`, and no `EAI_AGAIN` (`persistence/src/mysql.ts:209-218`) |
