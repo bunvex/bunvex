@@ -457,7 +457,6 @@ test("an S3 export's arguments, stored config and status, as Convex's binary ans
   expect((await t.req(`get_log_stream/${made.body.id}`)).body.prefix).toBe("");
 });
 
-
 test("an S3 export reads `pending` until the worker runs after the commit (STUDY-185 §2.2)", async () => {
   // The worker held back: what a read right after the create or an update sees, before it runs.
   const t = await setup({ changeWakeMs: 60_000 });
@@ -470,9 +469,9 @@ test("an S3 export reads `pending` until the worker runs after the commit (STUDY
     period: "daily",
   });
   expect(await t.status(made.body.id)).toEqual({ type: "pending" });
-  expect((await t.req(`update_log_stream/${made.body.id}`, { logStreamType: "s3Export", period: "hourly" })).status).toBe(
-    200,
-  );
+  expect(
+    (await t.req(`update_log_stream/${made.body.id}`, { logStreamType: "s3Export", period: "hourly" })).status,
+  ).toBe(200);
   expect(await t.status(made.body.id)).toEqual({ type: "pending" });
 });
 test("a second S3 export is refused inside the insert's transaction too (Convex f8b62ad)", async () => {
