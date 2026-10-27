@@ -1,0 +1,120 @@
+name: docs regenerate
+
+# The docs' generated parts (scripts/docs.ts: the study index, the parity counts and the site's copy of them) are
+# regenerated here after merges, never in pull requests: two pull requests that each add a study or move a parity row
+# used to conflict over the same lines in the merge queue. main is protected (pull requests, required checks, the merge
+# queue), so the result lands as a pull request from `docs/regenerate`, queued with auto-merge like any other.
+#
+# DOCS_BOT_TOKEN is a fine-grained token of the owner's (this repository only; Contents and Pull requests read and
+# write): a pull request opened, or a branch pushed, with the default GITHUB_TOKEN would not run CI. Without it the
+# job says so and does nothing.
+
+on:
+  push:
+    branches: [main]
+  # Catches up when a run was skipped (the bot's PR was in the queue) or cancelled.
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: docs-regenerate
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  regenerate:
+    name: regenerate the generated docs
+    runs-on: ubuntu-latest
+    env:
+      BRANCH: docs/regenerate
+      GH_TOKEN: ${{ secrets.DOCS_BOT_TOKEN }}
+      TITLE: "docs: regenerate the study index and the parity counts"
+    steps:
+      - name: the bot's token
+        if: env.GH_TOKEN == ''
+        run: echo "::notice title=docs regenerate::DOCS_BOT_TOKEN is not set, so the generated docs are not regenerated. See .github/workflows/docs-regenerate.yml."
+      - if: env.GH_TOKEN != ''
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.DOCS_BOT_TOKEN }}
+      - if: env.GH_TOKEN != ''
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - if: env.GH_TOKEN != ''
+        run: bun install --frozen-lockfile
+      - if: env.GH_TOKEN != ''
+        run: bun run docs
+      - name: open, update or close the bot's pull request
+        if: env.GH_TOKEN != ''
+        run: |
+          set -euo pipefail
+          # The bot's open pull request, if any: its number, whether it is in the merge queue, its auto-merge, its checks.
+          # shellcheck disable=SC2016 # the query's $variables are GraphQL's
+          pr=$(gh api graphql -F owner="${GITHUB_REPOSITORY%/*}" -F name="${GITHUB_REPOSITORY#*/}" -F head="$BRANCH" -f query='
+            query($owner: String!, $name: String!, $head: String!) {
+              repository(owner: $owner, name: $name) {
+                pullRequests(headRefName: $head, states: OPEN, first: 1) {
+                  nodes {
+                    number
+                    isInMergeQueue
+                    autoMergeRequest { enabledAt }
+                    commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+                  }
+                }
+              }
+            }' --jq '.data.repository.pullRequests.nodes[0] // empty')
+          number=$(jq -r '.number // empty' <<<"$pr")
+
+          if git diff --quiet; then
+            echo "The generated docs are up to date on main."
+            if [ -n "$number" ]; then
+              gh pr close "$number" --delete-branch --comment "main's generated docs are up to date: this is no longer needed."
+            fi
+            exit 0
+          fi
+          git diff --stat
+          mapfile -t files < <(git diff --name-only)
+
+          if [ -n "$number" ]; then
+            queued=$(jq -r '.isInMergeQueue' <<<"$pr")
+            auto=$(jq -r '.autoMergeRequest != null' <<<"$pr")
+            checks=$(jq -r '.commits.nodes[0].commit.statusCheckRollup.state // "NONE"' <<<"$pr")
+            echo "#$number: in the merge queue: $queued; auto-merge: $auto; checks: $checks"
+            # Being merged: leave it. Only this bot edits the generated parts, so it cannot conflict, and the run after
+            # its merge catches up with whatever it misses.
+            if [ "$queued" = true ] || { [ "$auto" = true ] && { [ "$checks" = PENDING ] || [ "$checks" = EXPECTED ]; }; }; then
+              echo "#$number is being merged; the run after its merge catches up."
+              exit 0
+            fi
+            # Already what it would be (e.g. ejected from the queue by another entry): queue it again, without a push
+            # that would restart its checks.
+            if git fetch --quiet origin "$BRANCH" && git diff --quiet FETCH_HEAD -- "${files[@]}"; then
+              echo "#$number already has these changes."
+              gh pr merge "$number" --auto --merge
+              exit 0
+            fi
+          fi
+
+          git add -- "${files[@]}"
+          # The owner's identity, whose token this is, for this one commit only (no git config is written).
+          git -c user.name="Daniel Martins" -c user.email=daniellmarttins@hotmail.com commit --quiet -m "$TITLE"
+          git push --force origin "HEAD:refs/heads/$BRANCH"
+
+          if [ -z "$number" ]; then
+            # shellcheck disable=SC2016 # Markdown backticks
+            body=$(printf '%s\n' \
+              "The generated parts of the docs, regenerated by \`bun run docs\` on main ($GITHUB_SHA):" \
+              "" \
+              "$(printf -- '- `%s`\n' "${files[@]}")" \
+              "" \
+              "Pull requests do not edit these lines (\`bun run check:docs\` refuses it); this workflow keeps them current:" \
+              "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. It updates this pull request while it" \
+              "waits, and closes it if main catches up by itself.")
+            gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$body"
+          fi
+          gh pr merge "$BRANCH" --auto --merge

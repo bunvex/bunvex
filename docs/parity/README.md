@@ -25,8 +25,9 @@ are not counted: 1 in server-api.md, 1 in client-sync.md, 6 in platform.md.
 ## How to use it
 
 - **Every PR that adds or changes a Convex feature updates the matching rows** in the same PR. The counts (the table
-  above, each file's "Summary counts" and the site's copy) are not edited by hand: `bun run docs` writes them from the
-  rows, and `bun run check` fails while they are out of date.
+  above, each file's "Summary counts" and the site's copy) are not edited in a PR, by hand or by `bun run docs`: a bot
+  regenerates them from the rows after merges, in its own PR (`docs/regenerate`), and `bun run check:docs` fails when
+  a PR changes them. They can be behind the rows meanwhile.
 - A row goes from *missing* to *done* only with the study (`docs/study/`) and tests.
 - Rows marked **Divergence?** in their notes are places where bunvex might deliberately differ. The owner
   decides them; until then, the default is to match Convex.

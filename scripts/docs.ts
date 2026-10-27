@@ -1,13 +1,20 @@
-// The docs' generated parts, kept in step with their sources so pull requests do not edit them by hand (two PRs
-// editing the same index row or count is where most rebase conflicts came from). Run: `bun run check:docs` (CI runs
-// it in `check`), and `bun run docs` to write them.
+// The docs' generated parts, written from their sources by a bot after merges, so pull requests never edit them (two
+// PRs editing the same index row or count is where most merge-queue conflicts came from). The bot is
+// .github/workflows/docs-regenerate.yml: after each push to main it runs `bun run docs` and lands the result as its own
+// pull request, from the branch `docs/regenerate`.
+//
+//   `bun run check:docs` (CI): every study's index line is well formed and the generator runs; and, on a pull request,
+//     the generated parts are as they are on its merge base (only `docs/regenerate` may change them). Generated parts
+//     behind their sources are fine: the bot catches up after the merge.
+//   `bun run docs`: writes them (the bot; or a local preview, not committed).
 //
 //   1. docs/study/README.md's index table: one row per study, in number order, each row the study's own
 //      `<!-- index: <topic> | <status> -->` line (the line under its title). A study's row changes in that study.
 //   2. docs/parity/README.md's summary table, the "Summary counts" tables of the area files, and the site's copy of the
 //      counts (apps/site/src/content.ts `PARITY`): each area's rows counted by the word their status starts with
 //      (done, partial, missing; n/a is not counted), as docs/parity/README.md describes.
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..");
@@ -16,6 +23,8 @@ const PARITY = join(ROOT, "docs/parity");
 const SITE = join(ROOT, "apps/site/src/content.ts");
 
 type Change = { file: string; before: string; after: string };
+/** Lines [start, end) of a file. */
+type Span = { start: number; end: number };
 
 // ---------------------------------------------------------------- the study index
 
@@ -33,14 +42,21 @@ export function studyRows(files: { name: string; text: string }[]): string[] {
   return rows.sort((a, b) => a.n - b.n || (a.name < b.name ? -1 : 1)).map((r) => r.row);
 }
 
+/** Where the index table's rows are. */
+function indexTable(lines: string[]): Span | undefined {
+  const head = lines.findIndex((l) => l.startsWith("| Study | Topic | Status |"));
+  if (head < 0 || !/^\|[-|: ]+\|$/.test(lines[head + 1] ?? "")) return undefined;
+  let end = head + 2;
+  while (end < lines.length && lines[end]!.startsWith("|")) end++;
+  return { start: head + 2, end };
+}
+
 /** `readme` with its index table's rows replaced by `rows`. */
 export function withStudyIndex(readme: string, rows: string[]): string {
   const lines = readme.split("\n");
-  const head = lines.findIndex((l) => l.startsWith("| Study | Topic | Status |"));
-  if (head < 0 || !/^\|[-|: ]+\|$/.test(lines[head + 1] ?? "")) throw new Error("docs/study/README.md: no index table");
-  let end = head + 2;
-  while (end < lines.length && lines[end]!.startsWith("|")) end++;
-  return [...lines.slice(0, head + 2), ...rows, ...lines.slice(end)].join("\n");
+  const at = indexTable(lines);
+  if (!at) throw new Error("docs/study/README.md: no index table");
+  return [...lines.slice(0, at.start), ...rows, ...lines.slice(at.end)].join("\n");
 }
 
 function studyIndex(): Change {
@@ -63,6 +79,10 @@ const cells = (line: string) =>
     .slice(1, -1)
     .map((c) => c.trim());
 const SEPARATOR = /^\|[\s:|-]+\|$/;
+/** A summary row of docs/parity/README.md: its area and its file, then the counts. */
+const README_ROW = /^\| [^|]+ \| \[([a-z-]+\.md)\]\(\1\) \| \d+ \| \d+ \| \d+ \|$/;
+/** An area of the site's `PARITY`: its name, then the counts. */
+const SITE_AREA = /^\s*\{ name: "([^"]+)", done: \d+, partial: \d+, missing: \d+ \},?$/;
 
 /** An area file's rows by status: every table with a status column, the "Summary counts" table left out. */
 export function countRows(text: string): Counts {
@@ -85,14 +105,24 @@ export function countRows(text: string): Counts {
   return counts;
 }
 
-/** `text`'s "Summary counts" table (the first table after that heading) with `c`'s numbers. */
+/** Where an area file's "Summary counts" table is (the first table after that heading): its header to its last row. */
+function summaryTable(lines: string[]): Span | undefined {
+  const at = lines.findIndex((l) => /^#+ Summary counts$/.test(l));
+  if (at < 0) return undefined;
+  let start = at + 1;
+  while (start < lines.length && !lines[start]!.startsWith("| Status |")) start++;
+  if (start === lines.length) return undefined;
+  let end = start + 2;
+  while (end < lines.length && lines[end]!.startsWith("|")) end++;
+  return { start, end };
+}
+
+/** `text`'s "Summary counts" table with `c`'s numbers. */
 export function withSummary(text: string, c: Counts): string {
   const lines = text.split("\n");
-  const at = lines.findIndex((l) => /^#+ Summary counts$/.test(l));
-  if (at < 0) return text;
-  let i = at + 1;
-  while (i < lines.length && !lines[i]!.startsWith("| Status |")) i++;
-  for (i += 2; i < lines.length && lines[i]!.startsWith("|"); i++) {
+  const at = summaryTable(lines);
+  if (!at) return text;
+  for (let i = at.start + 2; i < at.end; i++) {
     const [label = ""] = cells(lines[i]!);
     const n = label.startsWith("done")
       ? c.done
@@ -142,9 +172,10 @@ function parityCounts(): Change[] {
   const readmeFile = join(PARITY, "README.md");
   const readme = readFileSync(readmeFile, "utf8");
   // The areas, in the summary table's order.
-  const areas = [...readme.matchAll(/^\| [^|]+ \| \[([a-z-]+\.md)\]\(\1\) \| \d+ \| \d+ \| \d+ \|$/gm)].map(
-    (m) => m[1]!,
-  );
+  const areas = readme
+    .split("\n")
+    .map((l) => README_ROW.exec(l)?.[1])
+    .filter((a) => a !== undefined);
   if (areas.length === 0) throw new Error("docs/parity/README.md: no summary table");
   const byFile = new Map<string, Counts>();
   const changes: Change[] = [];
@@ -168,17 +199,113 @@ function parityCounts(): Change[] {
   return changes;
 }
 
+// ---------------------------------------------------------------- what a pull request leaves alone
+
+/** The branch whose pull requests regenerate the generated parts (.github/workflows/docs-regenerate.yml). */
+export const BOT_BRANCH = "docs/regenerate";
+
+/** Whether `path` (from the repository's root) can hold generated parts. */
+export const holdsGenerated = (path: string) =>
+  path === "docs/study/README.md" || /^docs\/parity\/[^/]+\.md$/.test(path) || path === "apps/site/src/content.ts";
+
+/**
+ * The generated parts of `path`'s `text`, by name: the study index's rows (one part), an area file's "Summary counts"
+ * table, each summary row of docs/parity/README.md (named by its file) and each area line of the site's `PARITY`
+ * (named by its area). Empty for a file that holds none.
+ */
+export function generatedRegions(path: string, text: string): Map<string, string> {
+  const lines = text.split("\n");
+  const regions = new Map<string, string>();
+  const span = (name: string, at: Span | undefined) => {
+    if (at) regions.set(name, lines.slice(at.start, at.end).join("\n"));
+  };
+  if (path === "docs/study/README.md") span("the index table", indexTable(lines));
+  else if (path === "docs/parity/README.md") {
+    for (const l of lines) {
+      const m = README_ROW.exec(l);
+      if (m) regions.set(`the summary row of ${m[1]}`, l);
+    }
+  } else if (path.startsWith("docs/parity/")) span("the Summary counts table", summaryTable(lines));
+  else if (path === "apps/site/src/content.ts") {
+    for (const l of lines) {
+      const m = SITE_AREA.exec(l);
+      if (m) regions.set(`PARITY's "${m[1]}" counts`, l.trim().replace(/,$/, ""));
+    }
+  }
+  return regions;
+}
+
+/**
+ * The generated parts a change from `before` to `after` of `path` edits (`undefined`: the file does not exist). A part
+ * on one side only is not an edit: a new area brings its summary row and its counts, which the bot then keeps.
+ */
+export function changedRegions(path: string, before: string | undefined, after: string | undefined): string[] {
+  if (before === undefined || after === undefined) return [];
+  const after_ = generatedRegions(path, after);
+  return [...generatedRegions(path, before)]
+    .filter(([name, text]) => after_.has(name) && after_.get(name) !== text)
+    .map(([name]) => name);
+}
+
+const git = (...args: string[]) => {
+  const r = spawnSync("git", args, { cwd: ROOT, encoding: "utf8" });
+  return r.status === 0 ? r.stdout : undefined;
+};
+
+/**
+ * The generated parts the working tree changes from its merge base with the base branch, as `<file>: <part>`
+ * (`undefined`: no merge base). The base is DOCS_BASE (CI sets the pull request's base commit), else
+ * `origin/$GITHUB_BASE_REF`, else `origin/main`. Uncommitted edits count too.
+ */
+function changedGenerated(): { base: string; changed: string[] } | undefined {
+  const ref = process.env.DOCS_BASE || `origin/${process.env.GITHUB_BASE_REF || "main"}`;
+  const base = git("merge-base", ref, "HEAD")?.trim();
+  if (!base) return undefined;
+  const files = (git("diff", "--name-only", base) ?? "").split("\n").filter(holdsGenerated);
+  const changed: string[] = [];
+  for (const file of files) {
+    const before = git("show", `${base}:${file}`);
+    const after = existsSync(join(ROOT, file)) ? readFileSync(join(ROOT, file), "utf8") : undefined;
+    for (const part of changedRegions(file, before, after)) changed.push(`${file}: ${part}`);
+  }
+  return { base, changed };
+}
+
+/** The branch checked: the pull request's head branch in CI, else the checked-out one. */
+const branch = () => process.env.GITHUB_HEAD_REF || git("rev-parse", "--abbrev-ref", "HEAD")?.trim() || "";
+
 // ---------------------------------------------------------------- run
 
 if (import.meta.main) {
   const write = process.argv.includes("--write");
+  // Computing them checks every study's index line and the parity tables' shape: a malformed one throws.
   const changes = [studyIndex(), ...parityCounts()].filter((c) => c.after !== c.before);
   if (write) {
     for (const c of changes) writeFileSync(c.file, c.after);
     for (const c of changes) console.log(`wrote ${c.file.slice(ROOT.length + 1)}`);
-  } else if (changes.length) {
-    for (const c of changes) console.error(`${c.file.slice(ROOT.length + 1)} is out of date`);
-    console.error("Run `bun run docs` to write the generated docs (the study index and the parity counts).");
-    process.exit(1);
-  } else console.log("✓ the study index and the parity counts are up to date");
+  } else {
+    for (const c of changes)
+      console.log(`${c.file.slice(ROOT.length + 1)}: behind its sources; the docs bot regenerates it after merges`);
+    const event = process.env.GITHUB_EVENT_NAME;
+    if (branch() === BOT_BRANCH) console.log(`✓ the study index lines are well formed (${BOT_BRANCH} regenerates)`);
+    else if (event && event !== "pull_request") {
+      // A merge group or a push to main: each pull request in it was checked against its own base.
+      console.log(`✓ the study index lines are well formed (${event}: no pull request base to compare with)`);
+    } else {
+      const found = changedGenerated();
+      if (!found) {
+        console.error("No merge base to compare the generated docs with: fetch origin/main, or set DOCS_BASE.");
+        process.exit(1);
+      }
+      if (found.changed.length) {
+        for (const c of found.changed) console.error(`${c}: changed from the merge base (${found.base.slice(0, 12)})`);
+        console.error(
+          "These lines are generated (scripts/docs.ts), and a bot regenerates them after merges (the docs/regenerate\n" +
+            "pull request). Revert them to the merge base's, and do not commit what `bun run docs` writes.",
+        );
+        process.exit(1);
+      }
+      console.log("✓ the study index lines are well formed, and the generated parts are left to the docs bot");
+    }
+  }
 }

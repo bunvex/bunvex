@@ -22,6 +22,13 @@ Convex has, study how Convex does it in its source and write it up** in [`docs/s
 The full inventory of Convex's features and bunvex's status is [`docs/parity/`](docs/parity/README.md);
 update its rows in the PR that changes them.
 
+Some lines of the docs are generated (`scripts/docs.ts`): the study index in `docs/study/README.md`, from each
+study's `<!-- index: … -->` line, and the parity counts (each area's "Summary counts", the summary table of
+`docs/parity/README.md` and the site's `PARITY`), from the rows. A pull request leaves them alone and does not run
+`bun run docs`: after merges, a bot ([`docs-regenerate.yml`](.github/workflows/docs-regenerate.yml)) regenerates
+them in its own pull request, from `docs/regenerate`. `bun run check:docs` fails when a pull request edits one of
+those lines (it compares them with the merge base, `origin/main` locally); they may be behind meanwhile.
+
 bunvex's own code never says "convex" outside comments: no identifier, exported name, string, error message
 or URL may contain it, nor a published package's npm metadata (description, keywords, homepage) (`check:deps`
 rule 5). Cite Convex in comments and in `docs/study/`; name things, and

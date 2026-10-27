@@ -43,4 +43,8 @@ deliberate, documented differences only. Read [ARCHITECTURE.md](ARCHITECTURE.md)
 - `bun run check` before pushing.
   - A behaviour change comes with tests, and with a sabotage check: break the fix and watch the test fail.
   - A change that can affect performance comes with a measurement.
+- Do not run `bun run docs` in a PR. The study index (docs/study/README.md) and the parity counts (each "Summary
+  counts", docs/parity/README.md's summary, the site's `PARITY`) are regenerated after merges by a bot PR
+  (`docs/regenerate`). A PR changes a study's index line and the parity rows only; `check:docs` fails if it edits a
+  generated line.
 - Never start a source file with `// @bun…` (Bun's pre-transpiled pragma).

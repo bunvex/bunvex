@@ -38,7 +38,8 @@ to a spec.
 ## Index
 
 Generated from each study's `<!-- index: <topic> | <status> -->` line, the line under its title: change a study's row
-there, then run `bun run docs` (`bun run check` fails while this table is out of date). Do not edit the table by hand.
+there, and only there. A bot regenerates this table after merges, in its own PR (`docs/regenerate`), so it can be
+behind for a while; a PR does not edit it nor run `bun run docs` (`bun run check:docs` fails if it changes the table).
 
 | Study | Topic | Status |
 |---|---|---|

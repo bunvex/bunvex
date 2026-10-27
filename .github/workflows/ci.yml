@@ -49,6 +49,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # check:docs compares the generated docs with the pull request's merge base.
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -59,8 +62,12 @@ jobs:
         run: bun run typecheck
       - if: needs.changes.outputs.code != 'false'
         run: bun run check:deps
-      # docs-only changes too: the study index and the parity counts are generated (scripts/docs.ts)
-      - run: bun run check:docs
+      # docs-only changes too. The study index and the parity counts are generated (scripts/docs.ts) after merges by
+      # docs-regenerate.yml: a pull request must leave them as on its base (only the bot's docs/regenerate may change
+      # them). In a merge group or on main it checks the study index lines only: each PR was checked on its own base.
+      - env:
+          DOCS_BASE: ${{ github.event.pull_request.base.sha }}
+        run: bun run check:docs
       # includes PERSIST-01 conformance (K1–K7) on the embedded drivers: memory and SQLite,
       # then the UI packages' suites, each in its own process with a DOM (UI-01 §7)
       - if: needs.changes.outputs.code != 'false'
