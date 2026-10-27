@@ -17,9 +17,7 @@ const NOT_EXPORTED: Record<"server" | "values", Record<string, string>> = {
     FileMetadata: "DV-543",
     ValidatedFunction: "DV-543",
     UnvalidatedFunction: "DV-543",
-    // New in 1.48.0, each pending its item (STUDY-193 §5.1): `FunctionHandle_future` is A19; `ctx.auth.signJwt` in
-    // mutations and its types are STUDY-192.
-    FunctionHandle_future: "STUDY-193 A19",
+    // New in 1.48.0, pending its item (STUDY-193 §5.1): `ctx.auth.signJwt` in mutations and its types are STUDY-192.
     MutationAuth: "STUDY-192",
     ReservedJwtClaim: "STUDY-192",
     ReservedJwtClaimPrefix: "STUDY-192",

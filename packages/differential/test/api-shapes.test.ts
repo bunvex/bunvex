@@ -41,6 +41,16 @@ check<
     c.FunctionReference_future<"query", "public", { a: number }, string>
   >
 >(true);
+// A handle typed as a `FunctionReference_future` (STUDY-186 A19, Convex's d938c5b): a string and an internal one.
+check<
+  Mutual<
+    b.FunctionHandle_future<"mutation", { a: number }, string>,
+    c.FunctionHandle_future<"mutation", { a: number }, string>
+  >
+>(true);
+check<Mutual<b.FunctionHandle_future<"action">, c.FunctionHandle_future<"action">>>(true);
+check<Assignable<b.FunctionHandle_future<"query">, string>>(true);
+check<Equal<b.FunctionHandle_future<"query">["_visibility"], "internal">>(true);
 
 // The data model.
 check<Equal<b.GenericIndexFields, c.GenericIndexFields>>(true);

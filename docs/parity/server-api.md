@@ -327,6 +327,7 @@ Key bunvex facts behind the statuses:
 | `components.<name>.<module>.<fn>` references (`componentsGeneric`) | server/components/index.ts | done (STUDY-153 PR 1, STUDY-156 PR 2) | `componentsGeneric` is in `bunvex/server`, its references Convex's (`_reference/childComponent/…`, compared in packages/differential); codegen types `components` with each child's `ComponentApi`, `FunctionReference`'s fifth parameter the component's path, as Convex's (DV-174 closed). The server resolves them in `ctx.runQuery` / `runMutation` / `runAction` among the caller's direct children, public exports only, with Convex's texts (STUDY-155 PR 1, DV-531). |
 | Component env definitions with validators and env refs | server/components/index.ts (`EnvDefinition`) | done (STUDY-153, STUDY-154) | Declared with validators and bound by the parent (STUDY-153 PR 1), checked at push (PR 3b); a component's `process.env` its bindings, a value or the deployment's variable, then the built-ins, `BUNVEX_SITE_URL` with its HTTP prefix (STUDY-154); in every call, as Convex's callee phase (`udf/phase.rs`): a nested one too (the app's query or mutation calling a component, a component calling another or the app through a handle, each callee its own component's), each read in the read set, a name checked first (STUDY-171 §15.7 Q-PR7-1, compared with Convex's binary in `packages/differential/test/component-env.test.ts`). |
 | `createFunctionHandle(fnRef)` returns a string handle usable in `runX` / scheduler | server/components/index.ts | done (STUDY-50) | In queries, mutations and actions; Convex's errors. Across components (STUDY-155 PR 2): `createFunctionHandle(components.…)`, a child's handle called by the app and the app's by a child, each in its own namespace; an unmounted component's handles are not found; scheduled by the app or a component (STUDY-157 PR 1). |
+| `FunctionHandle_future<Type, Args, ReturnType>`: a handle typed as a `FunctionReference_future` (`string & FunctionReference_future<Type, "internal", …>`) | `server/components/index.ts` (`d938c5b`, `convex` 1.48.0) | done (STUDY-186 A19) | Exported from `bunvex/server`, type only, with Convex's definition over bunvex's `FunctionReference_future`. Checked both ways against `convex` 1.48.0's by `packages/differential` `api-shapes.test.ts`; `api-names.test.ts` no longer lists it as pending. |
 | Isolated per-component tables, functions and data | crates (component registry) | partial (STUDY-152 steps 1–7) | Tables: each component's in its own namespace, as Convex stores them; a store the Convex binary wrote with components opens with them apart (step 1). The registry: `_components` rows in Convex's shape, paths resolved through the tree in the transaction, a new component's namespace with its twelve system tables (step 2). Functions inside a component: run by an admin (STUDY-154) and called from the app or a parent component, in the callee's namespace (STUDY-155 PR 1); its scheduler (STUDY-157 PR 1, #740), crons (PR 2, #744), storage (PR 3, #752), HTTP mounts (PR 4, #758) and search and vector indexes (PR 5). Still to build: export and import by component (STUDY-152 step 10, DV-215). |
 
 ### 18. Errors surfaced to apps
@@ -371,8 +372,8 @@ Key bunvex facts behind the statuses:
 
 | Status | Count |
 |---|---|
-| done | 251 |
+| done | 252 |
 | partial | 3 |
 | missing | 0 |
 | n/a (a decided divergence) | 0 |
-| **total** | **254** |
+| **total** | **255** |

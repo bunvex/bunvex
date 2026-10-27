@@ -73,7 +73,7 @@ opened). Two of the nineteen items are built.
 | A16 | `env list --include-values`; MCP `envList` names by default (and DV-551's agent default) | no | — | only `--names-only` (`cli/src/env.ts:30-36`); MCP `envList` returns values (`cli/src/mcp-tools.ts:347`) |
 | A17 | Validate `--local-backend-version` | **yes** | #892 | `isValidBackendVersion` / `assertValidBackendVersion` before `ensureBinary` and `ensureDashboardDownloaded` use it (`cli/src/local-deployment.ts`, `local-dashboard.ts`) |
 | A18 | Source-mapped push errors past the line's end | no | — | the context block is printed whatever `original.col` is (`server/src/definition-eval.ts:257`) |
-| A19 | `FunctionHandle_future` type | no | — | not exported (`server/src/index.ts:141` exports `FunctionHandle` only) |
+| A19 | `FunctionHandle_future` type | **yes** | #890 | exported from `server/src/index.ts` (defined in `function-handles.ts`); `api-shapes.test.ts` checks it both ways against `convex` 1.48.0 |
 
 None is partly built. A14 is "no" on purpose: STUDY-186 and #862 tie it to the reference move.
 
