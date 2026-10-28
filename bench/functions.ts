@@ -1,6 +1,16 @@
 // The benchmark functions the HTTP harness (bench/load/k6.js) calls. Names and behavior follow the
-// convex-bench functions the earlier Mac and VPS tables were measured with.
-import { action, defineSchema, defineTable, internalMutation, internalQuery, mutation, query } from "bunvex/server";
+// convex-bench functions the earlier Mac and VPS tables were measured with. bench/cloud/convex-app.ts deploys this
+// same file to Convex, its imports rewritten, so it uses only what both have.
+import {
+  action,
+  defineSchema,
+  defineTable,
+  internalMutation,
+  internalQuery,
+  makeFunctionReference,
+  mutation,
+  query,
+} from "bunvex/server";
 import { v } from "bunvex/values";
 
 // The same schema as convex-bench/convex/schema.ts, validators included (both sides validate every write).
@@ -103,8 +113,13 @@ export const bench = {
   }),
 
   readThenWrite: action(async (ctx, { tenantId }) => {
-    const latest = (await ctx.runQuery("bench:_latestForTenant", { tenantId })) as { amount: number } | null;
-    await ctx.runMutation("bench:_insertInternal", { tenantId, amount: (latest?.amount ?? 0) + 1 });
+    const latest = (await ctx.runQuery(makeFunctionReference<"query">("bench:_latestForTenant"), {
+      tenantId,
+    })) as { amount: number } | null;
+    await ctx.runMutation(makeFunctionReference<"mutation">("bench:_insertInternal"), {
+      tenantId,
+      amount: (latest?.amount ?? 0) + 1,
+    });
     return null;
   }),
 
