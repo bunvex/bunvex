@@ -2,6 +2,7 @@
 // with validators, as Convex — STUDY-13), the registry that names them ("module:fn"), internal functions,
 // and the calls the transports make. Transactions themselves run in
 // the engine (@bunvex/core); this layer only decides WHICH body runs and with what context.
+import { AsyncLocalStorage } from "node:async_hooks";
 import vm from "node:vm";
 import type { UserIdentity } from "@bunvex/auth";
 import {
@@ -204,6 +205,7 @@ import { collectingAuditLines, resolveAuditLines } from "./log-audit.ts";
 import { type FunctionSource, type LogEvent, type RunReason, stackFrames } from "./log-events.ts";
 import type { LogManager } from "./log-sinks.ts";
 import {
+  apartLines,
   cachedQueryLogs,
   currentLogLines,
   currentOwner,
@@ -212,6 +214,7 @@ import {
   type LogLine,
   logSystemLine,
   perAttempt,
+  replayLines,
   withOwner,
   withSubFunction,
 } from "./logs.ts";
@@ -1992,6 +1995,33 @@ export class Functions {
     body: (request, local) => this.callBody(request, local as CallIn | undefined),
     record: (value) => ({ result: stringifyValue(value), logLines: currentLogLines() }),
     encodeError: (e) => encodeCallError(e, (x) => this.engine.persistence.isTransient?.(x) === true),
+    capture: (run) => {
+      const audit: AuditSent[] = [];
+      const apart = apartLines(() => callAudit.run(audit, run));
+      return {
+        result: apart.result,
+        logs: () => {
+          const lines = apart.lines();
+          return lines.length > 0 || audit.length > 0 ? JSON.stringify({ lines, audit } satisfies CallLogs) : null;
+        },
+      };
+    },
+    replay: (logs, local) => {
+      const put = () => {
+        if (logs === null) return;
+        const { lines, audit } = JSON.parse(logs) as CallLogs;
+        replayLines(lines);
+        for (const a of audit) this.sendAudit(a);
+      };
+      // A mutation's attempt: its lines replace those of the attempt before (`perAttempt`).
+      const attempt = (local as CallIn | undefined)?.attempt;
+      if (attempt)
+        void attempt(() => {
+          put();
+          return Promise.resolve();
+        });
+      else put();
+    },
     decodeError: decodeCallError,
   };
 
@@ -2012,9 +2042,7 @@ export class Functions {
     };
     // A query's arguments were checked on the main thread (`callSpec`): the same text, so not again.
     if (request.kind === "query") return noCommitTs(request.name, this.queryRun(callee("query"), args, false, true));
-    const body = this.mutationRun(callee("mutation"), args, undefined, local?.deadline, false);
-    const attempt = local?.attempt;
-    return attempt ? (db) => attempt(() => body(db)) : body;
+    return this.mutationRun(callee("mutation"), args, undefined, local?.deadline, false);
   }
 
   /**
@@ -2139,6 +2167,10 @@ export class Functions {
     return value;
   }
 
+  /**
+   * A run's audit lines, resolved with its request's variables (over the limits, the run fails with that); a call's
+   * go in its outcome (`bodies.capture`), sent once the dispatcher has it, else they are sent now.
+   */
   private emitAudit(lines: Parameters<typeof resolveAuditLines>[0], db: Tx) {
     const request = db.request;
     const now = wallClock();
@@ -2150,9 +2182,16 @@ export class Functions {
       // Convex's `convex_actor_var`: a member's or an access token's; a self-hosted admin key is neither.
       bunvexActor: null,
     });
+    const sent = { at: now, bodies };
+    const call = callAudit.getStore();
+    if (call) call.push(sent);
+    else this.sendAudit(sent);
+  }
+
+  private sendAudit({ at, bodies }: AuditSent) {
     if (this.logManager?.active)
       outsideExecution(() =>
-        this.logManager!.send(bodies.map((body) => ({ timestamp: now, event: { topic: "custom_audit", body } }))),
+        this.logManager!.send(bodies.map((body) => ({ timestamp: at, event: { topic: "custom_audit", body } }))),
       );
   }
 
@@ -3462,9 +3501,17 @@ function noCommitTs(name: string, body: (db: Tx) => Promise<unknown>) {
   };
 }
 
+/** A run's resolved audit lines and when they were resolved, to send to the log streams. */
+type AuditSent = { at: number; bodies: unknown[] };
+/** What a call's outcome carries of its logs (`CallOutcome.logs`): its console lines and its audit lines. */
+type CallLogs = { lines: LogLine[]; audit: AuditSent[] };
+/** Where a call's run keeps its audit lines for its outcome (`bodies.capture`). */
+const callAudit = new AsyncLocalStorage<AuditSent[]>();
+
 /**
- * What an in-thread call hands the runner beside its request (`Call.local`): a sync mutation's deadline, and the
- * scope that keeps only the last attempt's console lines. A worker will get `cancel` and send lines in the outcome.
+ * What an in-thread call hands the runner beside its request (`Call.local`): a sync mutation's deadline, and on the
+ * dispatcher's side the scope that keeps only the last attempt's console lines (`bodies.replay`). A worker will get
+ * `cancel`.
  */
 type CallIn = {
   deadline?: Deadline;

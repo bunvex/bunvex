@@ -63,6 +63,16 @@ export interface CallBodies {
   body(request: CallRequest, local: unknown): TxBody<unknown>;
   /** A session mutation's outcome as recorded with its writes, from the value it returned. */
   record(value: unknown): SessionRequestOutcome;
+  /**
+   * Run a request's transaction keeping what its code logs apart (its console and audit lines): `logs` is that, as
+   * text for its outcome, once `result` settled; null when there is none.
+   */
+  capture<T>(run: () => Promise<T>): { result: Promise<T>; logs(): string | null };
+  /**
+   * On the dispatcher's side, an outcome's `logs` where the run would have logged them; `local` as `body`'s. Called
+   * for every outcome, so a mutation's attempt replaces the lines of the one before.
+   */
+  replay(logs: string | null, local: unknown): void;
   /** What a run threw, as text for its outcome (STUDY-194 §10.2): its class, name, message, stack and fields. */
   encodeError(error: unknown): string;
   /** The error `encodeError` wrote, made again on the dispatcher's side as the same class. */
@@ -139,6 +149,7 @@ export function outcomeOf(
     status,
     result,
     error,
+    logs: null,
     reads: tx.reads,
     searchReads: tx.searchReads,
     identityObserved: tx.identityObserved,
@@ -229,30 +240,33 @@ export class CallRunner {
     const kind: CallKind = request.kind;
     const body = bodies.body(request, local);
     const session = request.session;
-    const run = await runTransaction(
-      this.host,
-      {
-        kind,
-        ts: request.ts,
-        now: request.now,
-        system: false,
-        identity,
-        systemIdentity: request.systemIdentity,
-        request: request.request,
-        tracked: request.tracked,
-        journal: request.journal,
-      },
-      session
-        ? (db) =>
-            inSession(
-              db,
-              session,
-              request.refused,
-              async () => body(db),
-              (v) => bodies.record(v),
-            )
-        : body,
+    const scope = bodies.capture(() =>
+      runTransaction(
+        this.host,
+        {
+          kind,
+          ts: request.ts,
+          now: request.now,
+          system: false,
+          identity,
+          systemIdentity: request.systemIdentity,
+          request: request.request,
+          tracked: request.tracked,
+          journal: request.journal,
+        },
+        session
+          ? (db) =>
+              inSession(
+                db,
+                session,
+                request.refused,
+                async () => body(db),
+                (v) => bodies.record(v),
+              )
+          : body,
+      ),
     );
+    const run = await scope.result;
     let status: CallStatus = run.ok ? "ok" : "failed";
     let result: string | null = null;
     if (run.ok && run.value === REFUSED) status = "refused";
@@ -261,7 +275,10 @@ export class CallRunner {
       result = JSON.stringify((run.value as { replayed: SessionRequestOutcome }).replayed);
     } else if (run.ok && kind === "query") result = resultText(run.value);
     return {
-      outcome: outcomeOf(request.id, kind, run, status, result, run.ok ? null : bodies.encodeError(run.error)),
+      outcome: {
+        ...outcomeOf(request.id, kind, run, status, result, run.ok ? null : bodies.encodeError(run.error)),
+        logs: scope.logs(),
+      },
       local: { tx: run.tx, value: run.ok ? run.value : undefined },
     };
   }

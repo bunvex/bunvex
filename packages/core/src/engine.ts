@@ -3953,12 +3953,19 @@ export class Engine {
         refused: opts.refused === true,
       };
       // Through the codec under the tests; as objects otherwise (STUDY-194 Q7).
+      // What it logged goes where it would have logged it: inside `wrap` (the query cache keeps it with the result).
       const run = this.callCodec
         ? async () => {
             const r = await this.runner.run(encodeCallRequest(request), call.bodies, call.local);
-            return { outcome: decodeCallOutcome(r.wire), local: r.local };
+            const outcome = decodeCallOutcome(r.wire);
+            call.bodies.replay(outcome.logs, call.local);
+            return { outcome, local: r.local };
           }
-        : () => this.runner.runRequest(request, start.identity ?? null, call.bodies, call.local);
+        : async () => {
+            const r = await this.runner.runRequest(request, start.identity ?? null, call.bodies, call.local);
+            call.bodies.replay(r.outcome.logs, call.local);
+            return r;
+          };
       const { outcome, local } = await (opts.wrap ? opts.wrap(run) : run)();
       if (outcome.id !== request.id) throw new Error(`call ${request.id} was answered as call ${outcome.id}`);
       const ran = { tx: local.tx, observedTime: outcome.observedTime, now: start.now, outcome };
@@ -4739,6 +4746,7 @@ const notRun = (id: number): CallOutcome => ({
   status: "failed",
   result: null,
   error: null,
+  logs: null,
   reads: [],
   searchReads: [],
   identityObserved: false,

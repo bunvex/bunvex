@@ -73,6 +73,8 @@ export type CallOutcome = {
   result: string | null;
   /** `failed`: the error as its call's code wrote it (`CallBodies.encodeError`), which rebuilds it beside the dispatcher. */
   error: string | null;
+  /** What the run logged, as its call's code wrote it (`CallBodies.capture`); null: nothing. */
+  logs: string | null;
   /** The read set, also of a failed run: a subscription reruns it when these change. */
   reads: Interval[];
   searchReads: SearchRead[];
@@ -206,6 +208,7 @@ export function encodeCallOutcome(o: CallOutcome): string {
   w.str(STATUS[o.status]);
   w.opt(o.result);
   w.opt(o.error);
+  w.opt(o.logs);
   w.num(flag(o.identityObserved));
   w.num(flag(o.observedTime));
   w.opt(o.endCursor);
@@ -277,6 +280,8 @@ export function decodeCallOutcome(s: string): CallOutcome {
   const result = r.opt();
   r.at("error");
   const error = r.opt();
+  r.at("logs");
+  const logs = r.opt();
   r.at("identityObserved");
   const identityObserved = r.bool();
   r.at("observedTime");
@@ -345,6 +350,7 @@ export function decodeCallOutcome(s: string): CallOutcome {
     status,
     result,
     error,
+    logs,
     reads,
     searchReads,
     identityObserved,

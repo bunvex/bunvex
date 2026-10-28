@@ -29,6 +29,8 @@ function recording(run: (db: Tx, args: unknown) => Promise<unknown>) {
     record: (value) => ({ result: JSON.stringify(value), logLines: [] }),
     encodeError: (e) => String((e as Error).message),
     decodeError: (text) => new Error(text),
+    capture: (run) => ({ result: run(), logs: () => null }),
+    replay: () => {},
   };
   const call = (kind: "query" | "mutation", args: unknown): Call => ({
     spec: { kind, name: "m:f", args: JSON.stringify(args), internal: false, session: null },
