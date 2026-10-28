@@ -786,7 +786,7 @@ A query's body is `Functions.callBody` → `queryRun` (F:1977, F:2036) in a `Tx`
 | Retention | `retention.minIndexTs` (E:3839) | `minTs` in the request; the main thread checks again after the run, as Convex (§10.3) |
 | Cursor sealing, storage URLs | `cursorCodec` (E:906-913), `fileStorage.reader` | derived keys in `init` |
 | Console lines, `log.audit` lines | thread scopes (`core/src/logs.ts:105`, `log-audit.ts:7`) | captured in the worker, carried in the outcome, replayed on the main thread (the sandbox's `captureLines` / `logChildLine`) |
-| Errors | objects the dispatcher tests with `instanceof` (`errors.ts:49-62`) | STUDY-171 §8.3's codec, rebuilt by name on the main thread; stacks mapped in the worker, where the version's source maps are |
+| Errors | objects the dispatcher tests with `instanceof` (`errors.ts:49-62`) | `server/src/call-errors.ts` (0b): every error class the server's packages and modules export is rebuilt as itself with all its own fields (a test holds the list to the modules); an app's error as STUDY-171 §8.3's, in a realm of its own, unless it was made in the server's realm (a driver's); whether the store calls it transient (`Persistence.isTransient`) is asked where it was made and carried as a mark, as Convex's `ErrorMetadata` crosses its runner; an error whose fields do not cross becomes a system error naming it. Stacks mapped in the worker, where the version's source maps are |
 | The function log's figures | `tx.io()`, `tableStats`, `usage`, user time (F:1545-1555) | new outcome fields |
 
 ### 10.2 Store connections

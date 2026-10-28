@@ -48,6 +48,7 @@ import { fromJsonValue, rawValueSize, type Value } from "@bunvex/values";
 import { TooManyConcurrentRequestsError } from "./action-permits.ts";
 import { BadAdminKeyError } from "./admin-keys.ts";
 import type { BunServerWebSocket } from "./bun-types.ts";
+import { markedTransient } from "./call-errors.ts";
 import { closeFrame, isDeterministicUserError, type SyncFailure } from "./close-frame.ts";
 import { tooDeepToStringify } from "./deep-values.ts";
 import {
@@ -902,11 +903,20 @@ export class SyncHub {
     }
   }
 
-  /** A transient failure: the error, or one it was caused by, is a store timeout, a lost lease, or transient to the store. */
+  /**
+   * A transient failure: the error, or one it was caused by, is a store timeout, a lost lease, or transient to the
+   * store, as the store said where the error was made (`markedTransient`).
+   */
   private isRetriable(e: unknown): boolean {
     const persistence = this.deps.engine.persistence;
     for (let x = e, depth = 0; x instanceof Error && depth < 8; x = x.cause, depth++)
-      if (x instanceof DatabaseTimeoutError || x instanceof LeaseLostError || persistence.isTransient?.(x)) return true;
+      if (
+        x instanceof DatabaseTimeoutError ||
+        x instanceof LeaseLostError ||
+        persistence.isTransient?.(x) ||
+        markedTransient(x)
+      )
+        return true;
     return false;
   }
 

@@ -71,6 +71,8 @@ export type CallOutcome = {
    * none). `replayed`: the session's recorded outcome as JSON text.
    */
   result: string | null;
+  /** `failed`: the error as its call's code wrote it (`CallBodies.encodeError`), which rebuilds it beside the dispatcher. */
+  error: string | null;
   /** The read set, also of a failed run: a subscription reruns it when these change. */
   reads: Interval[];
   searchReads: SearchRead[];
@@ -203,6 +205,7 @@ export function encodeCallOutcome(o: CallOutcome): string {
   const w = new Out(`o${o.id}:`);
   w.str(STATUS[o.status]);
   w.opt(o.result);
+  w.opt(o.error);
   w.num(flag(o.identityObserved));
   w.num(flag(o.observedTime));
   w.opt(o.endCursor);
@@ -272,6 +275,8 @@ export function decodeCallOutcome(s: string): CallOutcome {
             : r.fail(`unknown status ${JSON.stringify(c)}`);
   r.at("result");
   const result = r.opt();
+  r.at("error");
+  const error = r.opt();
   r.at("identityObserved");
   const identityObserved = r.bool();
   r.at("observedTime");
@@ -339,6 +344,7 @@ export function decodeCallOutcome(s: string): CallOutcome {
     id,
     status,
     result,
+    error,
     reads,
     searchReads,
     identityObserved,

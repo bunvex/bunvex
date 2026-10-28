@@ -185,6 +185,7 @@ import {
 
 export { componentFunctionName, splitComponentFunctionName };
 
+import { decodeCallError, encodeCallError } from "./call-errors.ts";
 import {
   type CallerName,
   type Completion,
@@ -1990,6 +1991,8 @@ export class Functions {
   private readonly bodies: CallBodies = {
     body: (request, local) => this.callBody(request, local as CallIn | undefined),
     record: (value) => ({ result: stringifyValue(value), logLines: currentLogLines() }),
+    encodeError: (e) => encodeCallError(e, (x) => this.engine.persistence.isTransient?.(x) === true),
+    decodeError: decodeCallError,
   };
 
   /**

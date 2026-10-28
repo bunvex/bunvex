@@ -3962,7 +3962,8 @@ export class Engine {
       const { outcome, local } = await (opts.wrap ? opts.wrap(run) : run)();
       if (outcome.id !== request.id) throw new Error(`call ${request.id} was answered as call ${outcome.id}`);
       const ran = { tx: local.tx, observedTime: outcome.observedTime, now: start.now, outcome };
-      if (outcome.status === "failed") return { ...ran, ok: false, error: local.error };
+      if (outcome.status === "failed")
+        return { ...ran, ok: false, error: call.bodies.decodeError(outcome.error ?? "") };
       const value =
         outcome.status === "refused"
           ? REFUSED
@@ -4394,7 +4395,7 @@ export class Engine {
       ? {
           ...body,
           spec: { ...body.spec, session: request },
-          bodies: { body: (r, local) => body.bodies.body(r, local), record: (v) => outcome(v as T) },
+          bodies: { ...body.bodies, record: (v) => outcome(v as T) },
         }
       : (db) => inSession(db, request, attempt.refused, async () => body(db), outcome);
     const r = (await this.runMutation(run, false, source, true, caller, opts, undefined, attempt)) as {
@@ -4737,6 +4738,7 @@ const notRun = (id: number): CallOutcome => ({
   id,
   status: "failed",
   result: null,
+  error: null,
   reads: [],
   searchReads: [],
   identityObserved: false,

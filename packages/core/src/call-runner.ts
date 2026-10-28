@@ -5,7 +5,7 @@
 //
 // In PR 2a both sides are in the main thread and every query and mutation a client calls goes through the codec
 // (`call-wire.ts`) and back. What the outcome does not carry yet stays in the thread beside it (`CallLocal`): the
-// value an in-process caller gets, the error object, and what a mutation's commit still takes from its transaction
+// value an in-process caller gets, and what a mutation's commit still takes from its transaction
 // (after-commit callbacks, the search indexes' derived data, created tables, commit timestamps). PR 2b and PR 3 move
 // those into the outcome as each kind of call leaves the thread.
 import { toJsonValue, type Value } from "@bunvex/values";
@@ -63,6 +63,10 @@ export interface CallBodies {
   body(request: CallRequest, local: unknown): TxBody<unknown>;
   /** A session mutation's outcome as recorded with its writes, from the value it returned. */
   record(value: unknown): SessionRequestOutcome;
+  /** What a run threw, as text for its outcome (STUDY-194 §10.2): its class, name, message, stack and fields. */
+  encodeError(error: unknown): string;
+  /** The error `encodeError` wrote, made again on the dispatcher's side as the same class. */
+  decodeError(text: string): unknown;
 }
 
 /** A call the engine runs through the boundary, instead of a transaction body. */
@@ -85,7 +89,7 @@ export const isCall = (b: unknown): b is Call => typeof b === "object" && b !== 
 export type Settled<T> = { tx: Tx; observedTime: boolean } & ({ ok: true; value: T } | { ok: false; error: unknown });
 
 /** What stays in the thread beside an outcome, in PR 2a (see the header). */
-export type CallLocal = { tx: Tx; value: unknown; error: unknown };
+export type CallLocal = { tx: Tx; value: unknown };
 
 /** Run `body` in a new transaction from `host`, as a deterministic execution frozen at `start.now`. */
 export async function runTransaction<T>(host: CallHost, start: TxStart, body: TxBody<T>): Promise<Settled<T>> {
@@ -127,12 +131,14 @@ export function outcomeOf(
   run: Settled<unknown>,
   status: CallStatus,
   result: string | null,
+  error: string | null = null,
 ): CallOutcome {
   const tx = run.tx;
   return {
     id,
     status,
     result,
+    error,
     reads: tx.reads,
     searchReads: tx.searchReads,
     identityObserved: tx.identityObserved,
@@ -255,8 +261,8 @@ export class CallRunner {
       result = JSON.stringify((run.value as { replayed: SessionRequestOutcome }).replayed);
     } else if (run.ok && kind === "query") result = resultText(run.value);
     return {
-      outcome: outcomeOf(request.id, kind, run, status, result),
-      local: { tx: run.tx, value: run.ok ? run.value : undefined, error: run.ok ? undefined : run.error },
+      outcome: outcomeOf(request.id, kind, run, status, result, run.ok ? null : bodies.encodeError(run.error)),
+      local: { tx: run.tx, value: run.ok ? run.value : undefined },
     };
   }
 }

@@ -27,6 +27,8 @@ function recording(run: (db: Tx, args: unknown) => Promise<unknown>) {
       return run(db, parseValue(request.args));
     },
     record: (value) => ({ result: JSON.stringify(value), logLines: [] }),
+    encodeError: (e) => String((e as Error).message),
+    decodeError: (text) => new Error(text),
   };
   const call = (kind: "query" | "mutation", args: unknown): Call => ({
     spec: { kind, name: "m:f", args: JSON.stringify(args), internal: false, session: null },
