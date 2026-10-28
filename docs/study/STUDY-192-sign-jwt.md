@@ -189,8 +189,7 @@ order. It is pure apart from the signature's randomness.
   root bytes to its function runner; bunvex has no reason to.
 - **The types** in `bunvex/server`: `MutationAuth`, `SignJwtOptions`, `SignJwtClaims`, `ReservedJwtClaim` and
   `ReservedJwtClaimPrefix`, with Convex's names (none contains "convex"), and `MutationCtx.auth: MutationAuth`.
-  - The reserved prefixes stay `convex` / `cvx` in the type (STUDY-186 Q1). Those strings are type-level data and
-    a check, the same exception as the runtime check (S-1).
+  - The reserved prefixes are `bunvex` / `bvx` in the type, as at runtime (S-1b, DV-578).
 - **The knobs** keep Convex's names, as bunvex's other knobs do (`knob("HTTP_CACHE_SIZE")`):
   `DEPLOYMENT_JWT_MAX_LIFETIME_SECONDS` (3600) and `DEPLOYMENT_JWKS_MAX_AGE_SECONDS` (300).
 
@@ -231,8 +230,9 @@ PR 1 waits for that move or ships its differential tests with it.
 
 | # | Divergence | Recommendation | Why | Decision |
 |---|---|---|---|---|
-| S-1 | Messages that name Convex ("is set by Convex", "is reserved by Convex") use bunvex's words: "is set by the deployment", "is reserved by the deployment". The reserved prefixes stay `convex` and `cvx`, at runtime and in the types (STUDY-186 Q1, already decided) | **Yes** | Rule 5 on messages. The prefixes are kept for apps that move between the two | **Yes** (owner, 2026-10-26; DV-578) |
-| S-2 | Also reserve a `bunvex` claim prefix | **No**, not until bunvex sets a claim of its own | Convex's apps may set `bunvexFoo`; reserving it is a divergence with no use today. STUDY-191's later additions can ask again if they need one | **No** (owner, 2026-10-26; matches Convex) |
+| S-1 | Messages that name Convex ("is set by Convex", "is reserved by Convex") use bunvex's words: "is set by the deployment", "is reserved by the deployment". The reserved prefixes: see S-1b | **Yes** | Rule 5 on messages. The prefixes are kept for apps that move between the two | **Yes** (owner, 2026-10-26; DV-578) |
+| S-1b | The reserved prefixes: rule 5 (no "convex" in shipped code, no exceptions) does not allow keeping `convex` / `cvx`. Reserve `bunvex` / `bvx` instead, at runtime and in the type; `convex…` and `cvx…` claims sign | Asked when `check:deps` refused S-1's prefixes | Rule 5. An app that sets a `convex…` claim signs on bunvex and is refused on Convex; one that sets a `bunvex…` claim the reverse | **bunvex / bvx** (owner, 2026-10-28; DV-578; supersedes S-1's prefixes and S-2) |
+| S-2 | Also reserve a `bunvex` claim prefix | **No**, not until bunvex sets a claim of its own | Convex's apps may set `bunvexFoo`; reserving it is a divergence with no use today. STUDY-191's later additions can ask again if they need one | **No** (owner, 2026-10-26); superseded by S-1b |
 | S-3 | The process sandbox signs in the host, never giving the child the key (Convex sends the root bytes to its runner) | **Yes** | Not observable; it keeps key material out of sandboxed app code | **Yes** (owner, 2026-10-26; DV-579) |
 
 `JwtSignInQuery`, `InvalidJwtRequest` and `InvalidArguments` keep Convex's codes, since none contains "convex".
@@ -245,7 +245,8 @@ None.
 
 - **Unit** (`packages/core`):
   - each refusal of §1.2–§1.3, with its message and order;
-  - the reserved prefixes in any casing (`CvXfoo`, `CONVEXbar`), and a name with a multibyte first character;
+  - the reserved prefixes in any casing (`BvXfoo`, `BUNVEXbar`), Convex's (`CvXfoo`, `convexFoo`) allowed, and a name
+    with a multibyte first character;
   - `sub` as `""`, a number, `null`;
   - lifetimes 0, 0.5, 1, 1.9 (signs for 1 s), 3600, 3601, `NaN`, `Infinity`;
   - the 8000-byte limit at its edge;

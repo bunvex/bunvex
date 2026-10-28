@@ -3,7 +3,8 @@
 // - the JWKS is byte for byte the same (the keys are a function of the secret), with the same `Cache-Control`;
 // - a token either signs verifies with the other's JWKS, and has the same header and claims (the `iss` each backend's
 //   own origin, under `/components/signer` for the component);
-// - every refusal is the same, caught and uncaught, apart from the words where Convex names itself (DV-578);
+// - every refusal is the same, caught and uncaught, apart from the words where Convex names itself and the reserved
+//   claim-name prefixes, `bunvex` and `bvx` where Convex has `convex` and `cvx` (DV-578);
 // - neither a query nor an action has `signJwt`.
 // Local only: skipped, with a note, when Convex's backend is not there.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -142,8 +143,6 @@ describe.skipIf(!ready)("signJwt and the JWKS: Convex and bunvex with the same i
     const cases: unknown[] = [
       { claims: { iss: "x" }, expiresInSeconds: 60 },
       { claims: { exp: 1 }, expiresInSeconds: 60 },
-      { claims: { CvXfoo: 1 }, expiresInSeconds: 60 },
-      { claims: { convexId: 1 }, expiresInSeconds: 60 },
       { claims: { sub: "" }, expiresInSeconds: 60 },
       { claims: { sub: 7 }, expiresInSeconds: 60 },
       { claims: { nbf: 1 }, expiresInSeconds: 60 },
@@ -170,6 +169,24 @@ describe.skipIf(!ready)("signJwt and the JWKS: Convex and bunvex with the same i
       expect({ options, bunvex: message(xu) }).toEqual({ options, bunvex: inBunvexWords(message(cu)) });
     }
   }, 120_000);
+
+  test("the reserved prefixes: each refuses its own and signs the other's (DV-578)", async () => {
+    const signs = (r: unknown) => typeof (r as { token?: unknown }).token === "string";
+    for (const name of ["CvXfoo", "convexId"]) {
+      const options = { claims: { [name]: 1 }, expiresInSeconds: 60 };
+      expect(signs(await value(bunvex, "mutation", "jwt:sign", { options }))).toBe(true);
+      expect(await value(convex, "mutation", "jwt:sign", { options })).toMatchObject({
+        message: `The '${name}' claim can't be provided: claim names starting with 'convex' or 'cvx' are reserved`,
+      });
+    }
+    for (const name of ["BvXfoo", "bunvexId"]) {
+      const options = { claims: { [name]: 1 }, expiresInSeconds: 60 };
+      expect(signs(await value(convex, "mutation", "jwt:sign", { options }))).toBe(true);
+      expect(await value(bunvex, "mutation", "jwt:sign", { options })).toMatchObject({
+        message: `The '${name}' claim can't be provided: claim names starting with 'bunvex' or 'bvx' are reserved`,
+      });
+    }
+  });
 
   test("neither a query nor an action has signJwt", async () => {
     for (const [kind, path] of [

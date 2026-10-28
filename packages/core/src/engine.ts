@@ -114,6 +114,7 @@ import {
   type StorageTagInitializer,
   type StorageType,
 } from "./database-globals.ts";
+import { DeploymentJwtKeys } from "./deployment-jwt.ts";
 import {
   installDeterminism,
   type LongTimer,
@@ -129,7 +130,6 @@ import { INDEX_CACHE_MAX_BYTES, IndexCache } from "./index-cache.ts";
 import { readNextIndexId } from "./index-ids.ts";
 import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from "./index-worker.ts";
 import { opaqueToInspect } from "./inspect.ts";
-import { DeploymentJwtKeys } from "./deployment-jwt.ts";
 import { canonicalInstanceSecret, instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 import { knob } from "./knobs.ts";
 import {

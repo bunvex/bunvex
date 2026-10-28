@@ -120,15 +120,15 @@ describe("refusals, in Convex's order", () => {
     expect(mint({ convexA: 1, iat: 1 })?.message).toContain("'iat'");
   });
 
-  test("names starting with convex or cvx, in any ASCII casing", () => {
-    for (const name of ["convex", "CONVEXbar", "CvXfoo", "cvx_", "Convex.id"]) {
+  test("names starting with bunvex or bvx, in any ASCII casing (Convex reserves convex and cvx, DV-578)", () => {
+    for (const name of ["bunvex", "BUNVEXbar", "BvXfoo", "bvx_", "Bunvex.id"]) {
       expect(mint({ [name]: 1 })).toEqual({
         code: "InvalidJwtRequest",
-        message: `The '${name}' claim can't be provided: claim names starting with 'convex' or 'cvx' are reserved`,
+        message: `The '${name}' claim can't be provided: claim names starting with 'bunvex' or 'bvx' are reserved`,
       });
     }
-    // Not a prefix: allowed.
-    for (const name of ["cv", "xcvx", "conve", "ćvx", "bunvexFoo"]) expect(mint({ [name]: 1 })).toBeNull();
+    // Not a prefix, or Convex's prefixes: allowed.
+    for (const name of ["bv", "xbvx", "bunve", "ƀvx", "convexFoo", "CvXfoo"]) expect(mint({ [name]: 1 })).toBeNull();
   });
 
   test("sub: a non-empty string", () => {

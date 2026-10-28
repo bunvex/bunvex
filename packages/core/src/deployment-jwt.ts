@@ -19,8 +19,8 @@ const KEY_LABEL = "deployment jwt signing key";
 const SIGNING_GENERATION = 0;
 /** The largest token, in bytes: it has to fit in an auth header. */
 export const DEPLOYMENT_JWT_MAX_SIZE = 8000;
-/** Claim-name prefixes reserved for the platform, compared ASCII case-insensitively (kept as Convex's, S-1). */
-const RESERVED_CLAIM_PREFIXES = ["convex", "cvx"];
+/** Claim-name prefixes reserved for the platform, compared ASCII case-insensitively (bunvex's own, DV-578). */
+const RESERVED_CLAIM_PREFIXES = ["bunvex", "bvx"];
 /** Where a component's issuer lives under the deployment's origin. */
 const COMPONENT_ISSUER_PREFIX = "/components/";
 /** P-256's group order: a scalar must be in [1, n - 1]. */
@@ -113,7 +113,7 @@ class DeploymentJwtKey {
     );
     if (prefixed !== undefined) {
       throw invalidRequest(
-        `The '${prefixed}' claim can't be provided: claim names starting with 'convex' or 'cvx' are reserved`,
+        `The '${prefixed}' claim can't be provided: claim names starting with 'bunvex' or 'bvx' are reserved`,
       );
     }
     // RFC 7519 §4.1.2 makes `sub` a string, and a `customJwt` provider refuses a token whose `sub` is not one.

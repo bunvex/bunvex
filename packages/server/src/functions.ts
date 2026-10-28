@@ -513,7 +513,7 @@ export interface MutationAuth extends Auth {
    * Claims are signed, not encrypted: anyone holding the token can read them. Prefer short lifetimes, since a token
    * can't be revoked; a mutation can always sign a fresh one. A token lives 1 hour at most.
    *
-   * Claims starting with `convex` or `cvx` (in any casing) and the `nbf` claim are reserved and may not be set.
+   * Claims starting with `bunvex` or `bvx` (in any casing) and the `nbf` claim are reserved and may not be set.
    */
   signJwt(options: SignJwtOptions): Promise<string>;
 }
@@ -521,16 +521,16 @@ export interface MutationAuth extends Auth {
 /** Claims that callers may not set on JWTs with {@link MutationAuth.signJwt}. */
 export type ReservedJwtClaim = "iss" | "iat" | "exp" | "nbf";
 
-/** Every ASCII casing of `S`: `AnyCase<"cvx">` is `"cvx" | "cvX" | "cVx" | …`. */
+/** Every ASCII casing of `S`: `AnyCase<"bvx">` is `"bvx" | "bvX" | "bVx" | …`. */
 type AnyCase<S extends string> = S extends `${infer First}${infer Rest}`
   ? `${Lowercase<First> | Uppercase<First>}${AnyCase<Rest>}`
   : S;
 
 /**
- * Claim names starting with `convex` or `cvx`, in any casing, are reserved, as on Convex: they may not be set on
- * JWTs with {@link MutationAuth.signJwt} (kept as Convex's for apps that move between the two, DV-578).
+ * Claim names starting with `bunvex` or `bvx`, in any casing, are reserved: they may not be set on
+ * JWTs with {@link MutationAuth.signJwt} (Convex reserves `convex` and `cvx`, DV-578).
  */
-export type ReservedJwtClaimPrefix = AnyCase<"convex" | "cvx">;
+export type ReservedJwtClaimPrefix = AnyCase<"bunvex" | "bvx">;
 
 /** Refuses claim names starting with a {@link ReservedJwtClaimPrefix}. */
 type ReservedPrefixJwtClaims = {

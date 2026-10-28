@@ -99,9 +99,9 @@ describe("ctx.auth.signJwt", () => {
       name: "Error",
       message: "The 'iss' claim is set by the deployment and can't be provided",
     });
-    expect(await caught({ claims: { cvxRole: 1 }, expiresInSeconds: 60 })).toEqual({
+    expect(await caught({ claims: { bvxRole: 1 }, expiresInSeconds: 60 })).toEqual({
       name: "Error",
-      message: "The 'cvxRole' claim can't be provided: claim names starting with 'convex' or 'cvx' are reserved",
+      message: "The 'bvxRole' claim can't be provided: claim names starting with 'bunvex' or 'bvx' are reserved",
     });
     expect(await caught({ expiresInSeconds: 3601 })).toEqual({
       name: "Error",
