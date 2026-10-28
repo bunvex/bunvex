@@ -118,6 +118,10 @@ async function serve(s: State, target: string, fresh: boolean, splay: "on" | "of
   };
 }
 
+/** How many processes the kernel has killed for want of memory on the server box since it booted. */
+const oomKills = async (s: State) =>
+  Number((await ssh(s.server, "dmesg | grep -c 'Out of memory: Killed process' || true")).trim() || 0);
+
 const rss = async (s: State) =>
   Number((await ssh(s.server, "grep VmRSS /proc/$(cat /root/bench-data/pids)/status | awk '{print $2}'")).trim() || 0) /
   1024;
@@ -185,7 +189,10 @@ async function fanout(s: State, target: string, n: string, splay: "on" | "off") 
   }
 }
 
-type Result = Awaited<ReturnType<typeof http>> | Awaited<ReturnType<typeof fanout>>;
+type Result =
+  | Awaited<ReturnType<typeof http>>
+  | Awaited<ReturnType<typeof fanout>>
+  | { kind: "fanout"; target: string; splay: "on" | "off"; n: number; failed: string };
 
 async function runAll(sha: string) {
   const s = readState();
@@ -213,16 +220,32 @@ async function runAll(sha: string) {
           await server.stop();
           server = await serve(s, target, false, "on");
         }
+        let dead = "";
         for (const n of list("FANOUT", "100,1000,5000,10000")) {
-          const m = await fanout(s, target, n, splay).catch((e: Error) => ({
-            kind: "fanout" as const,
-            target,
-            splay,
-            n: Number(n),
-            failed: e.message.slice(-500),
-          }));
+          // A server that died at a smaller N would die again at a larger one: those points are not run.
+          if (dead) {
+            results.push({ kind: "fanout", target, splay, n: Number(n), failed: `not run: ${dead}` } as Result);
+            continue;
+          }
+          const ooms = await oomKills(s);
+          const m = await fanout(s, target, n, splay).catch(async (e: Error) => {
+            const killed = (await oomKills(s)) > ooms;
+            if (killed) dead = `out of memory at ${n} subscribers`;
+            return {
+              kind: "fanout" as const,
+              target,
+              splay,
+              n: Number(n),
+              failed: killed ? dead : e.message.slice(-500),
+            };
+          });
           console.log(`${target} fan-out splay=${splay} n=${n}: ${JSON.stringify(m)}`);
           results.push(m as Result);
+        }
+        if (dead) {
+          // The next phase starts its own server; this one is gone.
+          await server.stop();
+          if (splay === "off") server = await serve(s, target, false, "off");
         }
       }
     } finally {

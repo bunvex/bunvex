@@ -58,6 +58,8 @@ if (process.env.FANOUT_WORKER) {
   const messages = Number(process.env.MESSAGES ?? 20);
   const interval = Number(process.env.INTERVAL_MS ?? 1000);
   const settle = Number(process.env.SETTLE_MS ?? 10_000);
+  // A server that died (out of memory, say) leaves its clients reconnecting for ever: give up after this long.
+  const timeout = Number(process.env.TIMEOUT_MS ?? 180_000);
   const room = `r${Date.now()}`;
   const t0 = performance.now();
   let subscribed = 0;
@@ -85,7 +87,12 @@ if (process.env.FANOUT_WORKER) {
   const exited = Promise.race(
     workers.map((w) => w.exited.then((code) => Promise.reject(new Error(`a worker exited with ${code}`)))),
   );
-  await Promise.race([subscribedAll, exited]);
+  const deadline = (what: string) =>
+    Bun.sleep(timeout).then(() => {
+      for (const w of workers) w.kill("SIGKILL");
+      return Promise.reject(new Error(`${what} within ${timeout} ms`));
+    });
+  await Promise.race([subscribedAll, exited, deadline(`not every client subscribed`)]);
   const subscribeSeconds = (performance.now() - t0) / 1000;
   for (let i = 0; i < messages; i++) {
     const r = await fetch(`${url}/api/mutation`, {
@@ -99,7 +106,7 @@ if (process.env.FANOUT_WORKER) {
   }
   await Bun.sleep(settle);
   for (const w of workers) w.send({ report: true });
-  await Promise.race([reportedAll, exited]);
+  await Promise.race([reportedAll, exited, deadline("not every worker reported")]);
   const all = reports.flat().sort((a, b) => a - b);
   const at = (q: number) => all[Math.min(all.length - 1, Math.floor(q * all.length))] ?? null;
   console.log(
@@ -115,4 +122,5 @@ if (process.env.FANOUT_WORKER) {
     }),
   );
   await Promise.all(workers.map((w) => w.exited));
+  process.exit(0);
 }
