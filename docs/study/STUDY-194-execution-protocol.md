@@ -850,6 +850,28 @@ Each one is green on its own. 0a–0d change nothing observable and run under th
 | v | Postgres, MySQL and MongoDB readers; the connection split | the differential test on the Postgres job; connections counted in `pg_stat_activity` |
 | vi | the profile and the DO `c-4` measurement | §6's 2b row |
 
+### 10.5.1 0c, as read (2026-10-28)
+
+What a query's or mutation's body takes from `Functions` and the engine, by lifetime:
+
+- **Per code version:** the app's `fns`, `rooms`, `moduleHashes` and `deployed`, each component's `componentFns`,
+  `componentRuntimes` (env, router, hashes), and the maps keyed by function: `componentOf`, `names`, `moduleLoads`,
+  `deployedFns`. None of these has a version id; `CallIn.fn` pins a query's function by object (§10.3).
+- **Deployment-wide, read in the transaction:** `backendState.read`, `environment.reader`, `readCanonicalUrls`.
+- **Deployment-wide, outside it:** the catalog (`tableOfFn`'s `publicNameOf` and components), `fileStorage`, `roomHub`,
+  `instanceName`, the runtime's clocks, the knobs and limits, `builtinEnv`.
+- **The whole `Engine` handed on:** `inHandleScope`, `functionNameOf` and a nested `useStaleSnapshot` query's
+  `engine.query`. These become `FunctionsHost` methods.
+
+**A push is not atomic in memory.** Convex's `finish_push` applies the app's and every component's config in one
+transaction (`crates/application/src/deploy_config.rs:837-880`), so every run sees either all of the old code or all
+of the new. bunvex's `installCodeVersion` swaps the app's functions, then awaits a mutation (the function handles)
+and the crons, and `installComponents` then installs each component in turn with awaits between them
+(`server/src/server.ts:2345-2420`). A query that runs in those gaps sees the new app code with an old component's.
+This is a parity gap of its own, fixed before 0c in its own PR: build the version's whole registry (the app and
+every component), then swap it in one step. 0c's per-version registry is that object, with an epoch the worker's
+`version` message names.
+
 ### 10.6 Owner questions for 2b
 
 Decided by the owner on 2026-10-27, as recommended.
