@@ -785,9 +785,9 @@ A query's body is `Functions.callBody` → `queryRun` (F:1977, F:2036) in a `Tx`
 | Text search | `searchHits`, synchronous metadata and search (T:1042, T:2537-2598) | the metadata from the epoch; the search an op |
 | Retention | `retention.minIndexTs` (E:3839) | `minTs` in the request; the main thread checks again after the run, as Convex (§10.3) |
 | Cursor sealing, storage URLs | `cursorCodec` (E:906-913), `fileStorage.reader` | derived keys in `init` |
-| Console lines, `log.audit` lines | thread scopes (`core/src/logs.ts:105`, `log-audit.ts:7`) | captured in the worker, carried in the outcome, replayed on the main thread (the sandbox's `captureLines` / `logChildLine`) |
+| Console lines, `log.audit` lines | thread scopes (`core/src/logs.ts:105`, `log-audit.ts:7`) | captured where the call runs, carried in the outcome's `report`, replayed on the main thread (0b: `CallBodies.capture` / `replay`, `logs.ts` `apartLines` / `replayLines`, as the sandbox's `captureLines` / `logChildLine`). Audit lines are resolved where the call runs (their limits fail the run) and sent to the log streams by the main thread. A mutation's per-attempt scope is on the main thread's side, so a retried attempt's lines replace the one before |
 | Errors | objects the dispatcher tests with `instanceof` (`errors.ts:49-62`) | `server/src/call-errors.ts` (0b): every error class the server's packages and modules export is rebuilt as itself with all its own fields (a test holds the list to the modules); an app's error as STUDY-171 §8.3's, in a realm of its own, unless it was made in the server's realm (a driver's); whether the store calls it transient (`Persistence.isTransient`) is asked where it was made and carried as a mark, as Convex's `ErrorMetadata` crosses its runner; an error whose fields do not cross becomes a system error naming it. Stacks mapped in the worker, where the version's source maps are |
-| The function log's figures | `tx.io()`, `tableStats`, `usage`, user time (F:1545-1555) | new outcome fields |
+| The function log's figures | `tx.io()`, `tableStats`, `usage`, user time (F:1545-1555) | in the outcome's `report` (0b: `CallFigures`, set on the logged execution as `Running.call`); the run itself no longer reaches its logged execution, in-thread too, so these come only through the outcome |
 
 ### 10.2 Store connections
 
