@@ -109,7 +109,8 @@ if (fresh) {
     const adminKey = (
       await run([convexBin, "keygen", "admin-key", "--instance-name", INSTANCE, "--instance-secret", SECRET])
     ).trim();
-    await run([`${convexApp}/node_modules/.bin/convex`, "deploy", "--yes", "--typecheck=disable"], {
+    // The boxes have no Node: Bun runs Convex's CLI (the deploy is not measured).
+    await run(["bun", `${convexApp}/node_modules/.bin/convex`, "deploy", "--yes", "--typecheck=disable"], {
       cwd: convexApp,
       env: { CONVEX_SELF_HOSTED_URL: origin, CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey },
     });

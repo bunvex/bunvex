@@ -41,11 +41,18 @@ async function up() {
   const region = process.env.REGION ?? "sfo2";
   const key = await sshKeyFingerprint();
   console.log(`creating droplets in ${region} …`);
-  const [server, db, load] = await Promise.all([
+  const created = await Promise.allSettled([
     createDroplet(`${runTag}-server`, process.env.SERVER_SIZE ?? "c-4", region, key),
     createDroplet(`${runTag}-db`, process.env.DB_SIZE ?? "c-4", region, key),
     createDroplet(`${runTag}-load`, process.env.LOAD_SIZE ?? "c-4", region, key),
   ]);
+  const failed = created.find((c) => c.status === "rejected");
+  if (failed) {
+    // The ones that were created bill by the hour: destroy them (by the run's tag) before giving up.
+    await down();
+    throw failed.reason;
+  }
+  const [server, db, load] = created.map((c) => (c as PromiseFulfilledResult<Box>).value) as [Box, Box, Box];
   writeState({ server, db, load, createdAt: new Date().toISOString(), droplets: true });
   const hourly = [server, db, load].reduce((sum, b) => sum + (b.hourly ?? 0), 0);
   console.log(`server ${server.private}, db ${db.private}, load ${load.private}; $${hourly.toFixed(3)}/h`);
