@@ -2,7 +2,7 @@
 // (`dashboard-common/src/features/data/lib/useDataToolbarActions.ts`, `useToolPopup.tsx`, `DataSidebar.tsx`,
 // `ClearTableConfirmation.tsx`, `lib/api.ts`): the `_system/frontend` mutations over the socket (`addDocument`,
 // `patchDocumentsFields` with ids or, for "Edit all", without them, `replaceDocument`, `deleteDocuments`,
-// `clearTablePage` called again on its cursor until it has no more, `createTable`) with `componentId: null`, and
+// `clearTablePage` called again on its cursor until it has no more, `createTable`) with the tables' `componentId`, and
 // `/api/delete_tables` over HTTP. The deployment records each in its audit log; a watched table hears them through
 // its subscriptions (tables.ts).
 import { type DashboardDataSource, DataSourceError, type FieldPatch, type Value } from "@bunvex/dashboard/data-source";
@@ -66,7 +66,8 @@ export function dataWrites(sync: AdminSync, http: AdminHttp, tables: Tables): Wr
   const mutate = async <T>(name: string, args: Args, signal?: AbortSignal): Promise<T> => {
     signal?.throwIfAborted();
     const udfPath = `_system/frontend/${name}`;
-    const r = await sync.client.mutationInternal(udfPath, { ...args, componentId: null });
+    // in the namespace of the component the tables are (Convex passes the selected one's), the app's for null
+    const r = await sync.client.mutationInternal(udfPath, { ...args, componentId: tables.componentId });
     if (!r.success) throw writeError(udfPath, r.errorMessage, r.errorData);
     const value = r.value as T | Outcome;
     if (value !== null && typeof value === "object" && "success" in value && value.success === false)
@@ -113,7 +114,7 @@ export function dataWrites(sync: AdminSync, http: AdminHttp, tables: Tables): Wr
       // a refusal (a declared table, a name that is not one) is the route's 400: `invalid_request`
       await http.request("/api/delete_tables", {
         method: "POST",
-        body: { tableNames: names, componentId: null },
+        body: { tableNames: names, componentId: tables.componentId },
         signal: o?.signal,
       });
       // The route answers over HTTP, ahead of the socket: the mapping the source keeps subscribed hears the

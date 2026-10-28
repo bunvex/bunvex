@@ -159,6 +159,13 @@ export type IndexListEntry = {
   };
 };
 
+/**
+ * A component installed in the deployment (Convex's `_system/frontend/components:list`, STUDY-152 §4), the app
+ * itself left out: its `_components` id, its name, its path from the app (`a/b`), and whether it is still mounted.
+ * An unmounted one keeps its data, read-only.
+ */
+export type ComponentInfo = { id: string; name: string; path: string; state: "active" | "unmounted" };
+
 export type TableInfo = {
   name: string;
   /** System indexes (`by_id`, `by_creation_time`) first, then the declared ones. */
@@ -632,6 +639,21 @@ export interface DashboardDataSource
    * ids are plain text.
    */
   tableOfId?(id: string, opts?: CallOptions): Promise<string | null>;
+
+  // Components (STUDY-152 §4, as Convex's dashboard's component picker, `useNents.ts`). Optional: a source
+  // without them shows the app alone.
+  /** The installed components, the app left out; none when the app uses none. */
+  listComponents?(opts?: CallOptions): Promise<ComponentInfo[]>;
+  /** Tells the caller the component list may have changed (a push mounts or unmounts one). Never synchronously. */
+  watchComponents?(onChange: () => void, onError: (error: DataSourceError) => void): Unsubscribe;
+  /**
+   * The same source with the Data screen's reads and writes in component `id`'s namespace, as Convex's system
+   * functions given a `componentId`: `listTables`, `getSchema`, `listDocuments`, `getDocument`, the table, table
+   * list and index watches, `tableOfId`, `inferDocumentType` (absent where the source cannot infer a component's
+   * shapes), and the writes (the screen offers none in an unmounted component, as Convex's: its data is read-only).
+   * Every other method is the app's. The same object for the same id, while the source lives.
+   */
+  inComponent?(id: string): DashboardDataSource;
 
   listFunctions(opts?: CallOptions): Promise<FunctionInfo[]>;
   /**
