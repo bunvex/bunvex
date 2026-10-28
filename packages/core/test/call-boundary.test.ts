@@ -29,7 +29,7 @@ function recording(run: (db: Tx, args: unknown) => Promise<unknown>) {
     record: (value) => ({ result: JSON.stringify(value), logLines: [] }),
     encodeError: (e) => String((e as Error).message),
     decodeError: (text) => new Error(text),
-    capture: (run) => ({ result: run(), logs: () => null }),
+    capture: (run) => ({ result: run(), report: () => null }),
     replay: () => {},
   };
   const call = (kind: "query" | "mutation", args: unknown): Call => ({

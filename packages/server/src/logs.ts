@@ -162,12 +162,13 @@ export function logChildLine(line: LogLine) {
 }
 
 /**
- * Run a call's body with its lines kept apart from the current execution's, under its owner, for the call's outcome
- * (STUDY-194 §10.2, 2b commit 0b): `replayLines` puts them in on the dispatcher's side, as a worker's will be.
+ * Run a call's body with its lines kept apart from the current execution's, for the call's outcome (STUDY-194 §10.2,
+ * 2b commit 0b): `replayLines` puts them in on the dispatcher's side, as a worker's will be. Without the logged
+ * execution's owner, as in a worker: what the owner learns of the run comes in the outcome.
  */
 export function apartLines<T>(fn: () => T): { result: T; lines(): LogLine[] } {
   installLogCapture();
-  const apart = newExecution(current.getStore()?.owner ?? null);
+  const apart = newExecution(null);
   return { result: current.run(apart, fn), lines: () => capped(allLines(apart), limitOf(apart)) };
 }
 

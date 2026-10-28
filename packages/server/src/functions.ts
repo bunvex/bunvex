@@ -189,7 +189,9 @@ export { componentFunctionName, splitComponentFunctionName };
 import { decodeCallError, encodeCallError } from "./call-errors.ts";
 import {
   type CallerName,
+  type CallFigures,
   type Completion,
+  callIo,
   type ExecutionLinks,
   type FunctionLog,
   type IdentityType,
@@ -680,9 +682,8 @@ function functionSpanEnd(span: Span, r: Running, res: { ok: boolean; error?: unk
     .set("bunvex.function.environment", r.environment)
     .set("bunvex.function.cached", r.cached)
     .set("bunvex.request_id", r.requestId);
-  const tx = r.tx as Tx | null;
-  if (tx) {
-    const used = tx.usage;
+  const used = r.call ?? (r.tx as Tx | null)?.usage;
+  if (used) {
     span.set("bunvex.function.documents_read", used.documentsRead).set("bunvex.function.bytes_read", used.bytesRead);
   }
   if (!res.ok) span.fail(res.error);
@@ -693,6 +694,8 @@ function functionSpanEnd(span: Span, r: Running, res: { ok: boolean; error?: unk
 function noteTx(db: Tx) {
   const owner = currentOwner();
   if (owner) owner.tx = db;
+  const call = callScope.getStore();
+  if (call) call.tx = db;
 }
 
 /** The running action a storage call or `fetch` is charged to (STUDY-71); a Node action's fetch is not. */
@@ -884,6 +887,8 @@ function trackedFormData(request: Request): Request {
 function timed(timer: UserTimer): UserTimer {
   const owner = currentOwner();
   if (owner) owner.timer = timer;
+  const call = callScope.getStore();
+  if (call) call.timer = timer;
   return timer;
 }
 
@@ -1556,7 +1561,7 @@ export class Functions {
         failed: c.error !== null,
         cached: c.cachedResult,
         executionTime: c.executionTime,
-        ...(r.tx ? { tables: (r.tx as Tx).tableStats } : {}),
+        ...(r.call ? { tables: new Map(r.call.tables) } : r.tx ? { tables: (r.tx as Tx).tableStats } : {}),
       });
     this.serverMetrics?.execution(c.udfType, c.error !== null, c.executionTime);
     this.meterCompletion(r, c, true);
@@ -1566,7 +1571,8 @@ export class Functions {
     const end = this.engine.runtime.now();
     const e = o.error;
     // A mutation's writes count once it committed (Convex meters them in `track_commit`).
-    const used = (r.tx as Tx | null)?.io(r.udfType === "Mutation" && e === undefined);
+    const committed = r.udfType === "Mutation" && e === undefined;
+    const used = r.call ? callIo(r.call.io, committed) : (r.tx as Tx | null)?.io(committed);
     const seconds = (end - r.start) / 1000;
     // An HTTP action that ran to the end is named, and measured, by its route.
     if (o.route) r.metricsName = o.route.metricsName;
@@ -1996,22 +2002,33 @@ export class Functions {
     record: (value) => ({ result: stringifyValue(value), logLines: currentLogLines() }),
     encodeError: (e) => encodeCallError(e, (x) => this.engine.persistence.isTransient?.(x) === true),
     capture: (run) => {
-      const audit: AuditSent[] = [];
-      const apart = apartLines(() => callAudit.run(audit, run));
+      const scope: CallScope = { audit: [], tx: null, timer: null };
+      const apart = apartLines(() => callScope.run(scope, run));
       return {
         result: apart.result,
-        logs: () => {
+        report: () => {
           const lines = apart.lines();
-          return lines.length > 0 || audit.length > 0 ? JSON.stringify({ lines, audit } satisfies CallLogs) : null;
+          const { audit, tx, timer } = scope;
+          const figures: CallFigures | null = tx && {
+            userMs: timer ? userTimeMs(timer) : null,
+            io: tx.io(true),
+            tables: [...tx.tableStats],
+            documentsRead: tx.usage.documentsRead,
+            bytesRead: tx.usage.bytesRead,
+          };
+          if (lines.length === 0 && audit.length === 0 && !figures) return null;
+          return JSON.stringify({ lines, audit, figures } satisfies CallReport);
         },
       };
     },
-    replay: (logs, local) => {
+    replay: (report, local) => {
+      const parsed = report === null ? null : (JSON.parse(report) as CallReport);
+      const owner = currentOwner();
+      if (owner instanceof Running) owner.call = parsed?.figures ?? null;
       const put = () => {
-        if (logs === null) return;
-        const { lines, audit } = JSON.parse(logs) as CallLogs;
-        replayLines(lines);
-        for (const a of audit) this.sendAudit(a);
+        if (!parsed) return;
+        replayLines(parsed.lines);
+        for (const a of parsed.audit) this.sendAudit(a);
       };
       // A mutation's attempt: its lines replace those of the attempt before (`perAttempt`).
       const attempt = (local as CallIn | undefined)?.attempt;
@@ -2183,8 +2200,8 @@ export class Functions {
       bunvexActor: null,
     });
     const sent = { at: now, bodies };
-    const call = callAudit.getStore();
-    if (call) call.push(sent);
+    const call = callScope.getStore();
+    if (call) call.audit.push(sent);
     else this.sendAudit(sent);
   }
 
@@ -3503,10 +3520,11 @@ function noCommitTs(name: string, body: (db: Tx) => Promise<unknown>) {
 
 /** A run's resolved audit lines and when they were resolved, to send to the log streams. */
 type AuditSent = { at: number; bodies: unknown[] };
-/** What a call's outcome carries of its logs (`CallOutcome.logs`): its console lines and its audit lines. */
-type CallLogs = { lines: LogLine[]; audit: AuditSent[] };
-/** Where a call's run keeps its audit lines for its outcome (`bodies.capture`). */
-const callAudit = new AsyncLocalStorage<AuditSent[]>();
+/** What a call's outcome reports (`CallOutcome.report`): its console and audit lines, its figures. */
+type CallReport = { lines: LogLine[]; audit: AuditSent[]; figures: CallFigures | null };
+/** Where a call's run keeps what its outcome reports (`bodies.capture`): its audit lines, transaction and timer. */
+type CallScope = { audit: AuditSent[]; tx: Tx | null; timer: UserTimer | null };
+const callScope = new AsyncLocalStorage<CallScope>();
 
 /**
  * What an in-thread call hands the runner beside its request (`Call.local`): a sync mutation's deadline, and on the

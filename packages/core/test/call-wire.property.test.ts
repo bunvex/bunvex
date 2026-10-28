@@ -61,7 +61,7 @@ const outcome: fc.Arbitrary<CallOutcome> = fc.record({
     { nil: null },
   ),
   error: optText,
-  logs: optText,
+  report: optText,
   reads: fc.array(fc.record({ index: id, lo: key, hi: key }), { maxLength: 8 }),
   searchReads: fc.array(
     fc.record({
@@ -191,7 +191,7 @@ describe("the call boundary's codec", () => {
     status: "ok",
     result: "1",
     error: null,
-    logs: null,
+    report: null,
     reads: [
       { index: "i1", lo: new Uint8Array([1]), hi: new Uint8Array([2]) },
       { index: "i2", lo: new Uint8Array([3, 4]), hi: new Uint8Array([5]) },

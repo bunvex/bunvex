@@ -3958,12 +3958,12 @@ export class Engine {
         ? async () => {
             const r = await this.runner.run(encodeCallRequest(request), call.bodies, call.local);
             const outcome = decodeCallOutcome(r.wire);
-            call.bodies.replay(outcome.logs, call.local);
+            call.bodies.replay(outcome.report, call.local);
             return { outcome, local: r.local };
           }
         : async () => {
             const r = await this.runner.runRequest(request, start.identity ?? null, call.bodies, call.local);
-            call.bodies.replay(r.outcome.logs, call.local);
+            call.bodies.replay(r.outcome.report, call.local);
             return r;
           };
       const { outcome, local } = await (opts.wrap ? opts.wrap(run) : run)();
@@ -4746,7 +4746,7 @@ const notRun = (id: number): CallOutcome => ({
   status: "failed",
   result: null,
   error: null,
-  logs: null,
+  report: null,
   reads: [],
   searchReads: [],
   identityObserved: false,

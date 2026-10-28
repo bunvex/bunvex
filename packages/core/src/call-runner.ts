@@ -64,15 +64,16 @@ export interface CallBodies {
   /** A session mutation's outcome as recorded with its writes, from the value it returned. */
   record(value: unknown): SessionRequestOutcome;
   /**
-   * Run a request's transaction keeping what its code logs apart (its console and audit lines): `logs` is that, as
-   * text for its outcome, once `result` settled; null when there is none.
+   * Run a request's transaction keeping its report apart (its console and audit lines, the function log's figures):
+   * `report` is that, as text for its outcome, once `result` settled; null when there is none.
    */
-  capture<T>(run: () => Promise<T>): { result: Promise<T>; logs(): string | null };
+  capture<T>(run: () => Promise<T>): { result: Promise<T>; report(): string | null };
   /**
-   * On the dispatcher's side, an outcome's `logs` where the run would have logged them; `local` as `body`'s. Called
-   * for every outcome, so a mutation's attempt replaces the lines of the one before.
+   * On the dispatcher's side, an outcome's `report`: its lines where the run would have logged them, its figures for
+   * its logged execution; `local` as `body`'s. Called for every outcome, so a mutation's attempt replaces the lines
+   * of the one before.
    */
-  replay(logs: string | null, local: unknown): void;
+  replay(report: string | null, local: unknown): void;
   /** What a run threw, as text for its outcome (STUDY-194 §10.2): its class, name, message, stack and fields. */
   encodeError(error: unknown): string;
   /** The error `encodeError` wrote, made again on the dispatcher's side as the same class. */
@@ -149,7 +150,7 @@ export function outcomeOf(
     status,
     result,
     error,
-    logs: null,
+    report: null,
     reads: tx.reads,
     searchReads: tx.searchReads,
     identityObserved: tx.identityObserved,
@@ -277,7 +278,7 @@ export class CallRunner {
     return {
       outcome: {
         ...outcomeOf(request.id, kind, run, status, result, run.ok ? null : bodies.encodeError(run.error)),
-        logs: scope.logs(),
+        report: scope.report(),
       },
       local: { tx: run.tx, value: run.ok ? run.value : undefined },
     };
