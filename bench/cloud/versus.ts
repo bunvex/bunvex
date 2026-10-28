@@ -9,11 +9,11 @@
 // Needs `doctl` logged in and ~/.ssh/id_ed25519.pub, as cloud.ts.
 //   bun bench/cloud/versus.ts all        up, sync, run, down (down also on failure or Ctrl-C)
 //   bun bench/cloud/versus.ts up | sync | run | down | status
-// Env: RUN (versus), REGION (sfo2), SERVER_SIZE (c-4), DB_SIZE (c-4), LOAD_SIZE (s-8vcpu-16gb),
+// Env: RUN (versus), REGION (sfo2), SERVER_SIZE (c-4), DB_SIZE (c-4), LOAD_SIZE (c-4),
 // TARGETS (convex,bunvex), SCENARIOS (cached,uncached,insert,increment1000,increment1,action,mix), VUS (8,32,128),
 // DURATION (20s), REPEATS (3), FANOUT (100,1000,5000,10000), MESSAGES (20), CONVEX_RELEASE, KEEP=1.
-// c-4 is the largest dedicated-CPU size this account may create (sfo2, blr1, lon1); the load box is the largest
-// shared-CPU one, so the generator is never the limit.
+// c-4 is the largest size this account may create (dedicated CPU; sfo2, blr1, lon1 have it): the load box records its
+// busy cores, so a point where the generator was the limit shows.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { type Box, cpu, remote, root, runOf, sh, status } from "./boxes.ts";
 
@@ -44,7 +44,7 @@ async function up() {
   const [server, db, load] = await Promise.all([
     createDroplet(`${runTag}-server`, process.env.SERVER_SIZE ?? "c-4", region, key),
     createDroplet(`${runTag}-db`, process.env.DB_SIZE ?? "c-4", region, key),
-    createDroplet(`${runTag}-load`, process.env.LOAD_SIZE ?? "s-8vcpu-16gb", region, key),
+    createDroplet(`${runTag}-load`, process.env.LOAD_SIZE ?? "c-4", region, key),
   ]);
   writeState({ server, db, load, createdAt: new Date().toISOString(), droplets: true });
   const hourly = [server, db, load].reduce((sum, b) => sum + (b.hourly ?? 0), 0);
