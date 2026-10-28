@@ -97,35 +97,44 @@ const server =
         stderr: "inherit",
       });
 
-for (let i = 0; ; i++) {
-  if (server.exitCode !== null) throw new Error(`${target} exited with ${server.exitCode}`);
-  if (i === 600) throw new Error(`${target} did not start`);
-  if (await answers()) break;
-  await Bun.sleep(100);
-}
-
-if (fresh) {
-  if (target === "convex") {
-    const adminKey = (
-      await run([convexBin, "keygen", "admin-key", "--instance-name", INSTANCE, "--instance-secret", SECRET])
-    ).trim();
-    // The boxes have no Node: Bun runs Convex's CLI (the deploy is not measured).
-    await run(["bun", `${convexApp}/node_modules/.bin/convex`, "deploy", "--yes", "--typecheck=disable"], {
-      cwd: convexApp,
-      env: { CONVEX_SELF_HOSTED_URL: origin, CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey },
-    });
+const stop = async () => {
+  server.kill("SIGINT");
+  // The next server binds the same port: wait until this one is gone, killed if it lingers.
+  const killer = setTimeout(() => server.kill("SIGKILL"), 15_000);
+  await server.exited;
+  clearTimeout(killer);
+};
+try {
+  for (let i = 0; ; i++) {
+    if (server.exitCode !== null) throw new Error(`${target} exited with ${server.exitCode}`);
+    if (i === 600) throw new Error(`${target} did not start`);
+    if (await answers()) break;
+    await Bun.sleep(100);
   }
-  console.log((await run(["bun", "bench/seed.ts"], { cwd: root, env: { BENCH_URL: origin } })).trim());
+
+  if (fresh) {
+    if (target === "convex") {
+      const adminKey = (
+        await run([convexBin, "keygen", "admin-key", "--instance-name", INSTANCE, "--instance-secret", SECRET])
+      ).trim();
+      // The boxes have no Node: Bun runs Convex's CLI (the deploy is not measured).
+      await run(["bun", `${convexApp}/node_modules/.bin/convex`, "deploy", "--yes", "--typecheck=disable"], {
+        cwd: convexApp,
+        env: { CONVEX_SELF_HOSTED_URL: origin, CONVEX_SELF_HOSTED_ADMIN_KEY: adminKey },
+      });
+    }
+    console.log((await run(["bun", "bench/seed.ts"], { cwd: root, env: { BENCH_URL: origin } })).trim());
+  }
+} catch (e) {
+  // A server left running would answer the next run's checks in its place.
+  await stop();
+  throw e;
 }
 
 writeFileSync(`${data}/pids`, String(server.pid));
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.once(signal, async () => {
-    server.kill("SIGINT");
-    // The next server binds the same port: wait until this one is gone, killed if it lingers.
-    const killer = setTimeout(() => server.kill("SIGKILL"), 15_000);
-    await server.exited;
-    clearTimeout(killer);
+    await stop();
     process.exit(0);
   });
 console.log(`READY ${target}`);
