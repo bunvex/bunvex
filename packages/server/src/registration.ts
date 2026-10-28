@@ -38,7 +38,14 @@ import type {
   Validator,
   Value,
 } from "@bunvex/values";
-import type { Auth, FunctionDef, StorageActionWriter, StorageReader, StorageWriter } from "./functions.ts";
+import type {
+  Auth,
+  FunctionDef,
+  MutationAuth,
+  StorageActionWriter,
+  StorageReader,
+  StorageWriter,
+} from "./functions.ts";
 import type { ActionMeta, MutationMeta, QueryMeta } from "./meta.ts";
 import type { PresenceDef, RoomDef } from "./rooms/define.ts";
 import type { PublicHttpAction } from "./router.ts";
@@ -124,7 +131,7 @@ export interface PresenceReader {
 /** A mutation's context: a writer of the data model, the scheduler, and the functions it may run. */
 export interface GenericMutationCtx<DataModel extends GenericDataModel> {
   db: GenericDatabaseWriter<DataModel>;
-  auth: Auth;
+  auth: MutationAuth;
   storage: StorageWriter;
   scheduler: Scheduler;
   rooms: RoomsBroadcaster;

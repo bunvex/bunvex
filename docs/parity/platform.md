@@ -30,7 +30,7 @@ Status legend: **done** · **partial** · **missing**. "Divergence?" in Notes ma
 | `_auth` system table and auth diff on push | `crates/model/auth` | done (STUDY-48, STUDY-129) | `_auth` as Convex's, put in the push's commit (its diff in `finish_push` and the audit event) and by variable and canonical URL changes; tokens are checked against it. |
 | Re-evaluating the auth config when env vars change | `crates/application/lib.rs` `reevaluate_existing_auth_config` | done (STUDY-37) | An env var update re-evaluates it; one that would make it invalid is refused ("This change would make the auth config invalid"), with Convex's 409 `RaceDetected` retry. |
 | OIDC discovery (`/.well-known/openid-configuration`) and JWKS fetch | `crates/authentication/lib.rs` `validate_id_token` | done (STUDY-27) | `@bunvex/auth` `TokenVerifier` (`jose`): RS256 / EdDSA, exact `iss` / `aud`. |
-| `GET /.well-known/jwks.json`: the deployment's public signing key (`Cache-Control: public, max-age=300`) | `crates/local_backend/src/deployment_jwks.rs` | not built (STUDY-192) | For `ctx.auth.signJwt`'s tokens; verified through a `customJwt` provider like any other. |
+| `GET /.well-known/jwks.json`: the deployment's public signing key (`Cache-Control: public, max-age=300`) | `crates/local_backend/src/deployment_jwks.rs` | done (STUDY-192) | For `ctx.auth.signJwt`'s tokens; verified through a `customJwt` provider like any other. The same instance secret serves Convex's JWKS byte for byte (`packages/differential/test/sign-jwt.test.ts`). |
 | JWKS / discovery caching | `crates/http_client` (`CachedHttpClient`, knob `HTTP_CACHE_SIZE` 16 MiB) | done (STUDY-27) | By `Cache-Control`, plus a rate-limited refetch on an unknown `kid` (DV-101). Bounded at `HTTP_CACHE_SIZE` bytes (16 MiB; each URL's length plus its body's, as Convex's weigher), the least recently used evicted first (STUDY-147). |
 | Provider matching by `iss` / `aud` | `crates/common/auth.rs` `matches_token` | done (STUDY-27) |  |
 | Clock skew and required `exp` (custom JWT) | `crates/authentication/lib.rs` | done (STUDY-27) | 5 s leeway, `exp` required. |
@@ -460,10 +460,10 @@ Recounted on 2026-10-20 from the rows' status column, as [the README](README.md)
 
 | Status | Count |
 |---|---|
-| done | 247 |
+| done | 248 |
 | partial | 24 |
 | missing | 2 |
 | n/a (cloud-only or a decided divergence) | 6 |
-| **total** | **279** |
+| **total** | **280** |
 
 The gaps, ranked by what an app would notice, are in [the README](README.md#gaps-by-impact).

@@ -1,7 +1,8 @@
 # STUDY-192 — `ctx.auth.signJwt` and the deployment JWKS
-<!-- index: `ctx.auth.signJwt` in mutations and `/.well-known/jwks.json`: ES256 tokens signed by a key derived from the instance secret, so a store the Convex binary wrote serves the same keys; the claim rules, limits and errors; the first prerequisite of built-in auth (STUDY-191) | accepted: S-1–S-3 as recommended (DV-578, DV-579); not built -->
+<!-- index: `ctx.auth.signJwt` in mutations and `/.well-known/jwks.json`: ES256 tokens signed by a key derived from the instance secret, so a store the Convex binary wrote serves the same keys; the claim rules, limits and errors; the first prerequisite of built-in auth (STUDY-191) | accepted: S-1–S-3 as recommended (DV-578, DV-579); built (PR 1), the JWKS byte-identical to Convex's for the same secret -->
 
-- **Status:** accepted: S-1–S-3 as recommended (owner, 2026-10-26; DV-578, DV-579). Nothing built.
+- **Status:** accepted: S-1–S-3 as recommended (owner, 2026-10-26; DV-578, DV-579). Built (2026-10-27): §3.6 PR 1,
+  tested as §5 (the JWKS metrics, PR 2, not yet).
 - **Convex source read:** convex/convex-backend `origin/main` on 2026-10-26:
   - the runtime commits `76fe874` (the syscall and the keys), `aafa4d8` (the JWKS route), `2c4c29f` (1 h maximum
     lifetime), `f34ac10` (`sub` must be a string), `74a65e0` (a missing key is an internal error) and `72e88b8`
@@ -188,8 +189,7 @@ order. It is pure apart from the signature's randomness.
   root bytes to its function runner; bunvex has no reason to.
 - **The types** in `bunvex/server`: `MutationAuth`, `SignJwtOptions`, `SignJwtClaims`, `ReservedJwtClaim` and
   `ReservedJwtClaimPrefix`, with Convex's names (none contains "convex"), and `MutationCtx.auth: MutationAuth`.
-  - The reserved prefixes stay `convex` / `cvx` in the type (STUDY-186 Q1). Those strings are type-level data and
-    a check, the same exception as the runtime check (S-1).
+  - The reserved prefixes are `bunvex` / `bvx` in the type, as at runtime (S-1b, DV-578).
 - **The knobs** keep Convex's names, as bunvex's other knobs do (`knob("HTTP_CACHE_SIZE")`):
   `DEPLOYMENT_JWT_MAX_LIFETIME_SECONDS` (3600) and `DEPLOYMENT_JWKS_MAX_AGE_SECONDS` (300).
 
@@ -230,8 +230,9 @@ PR 1 waits for that move or ships its differential tests with it.
 
 | # | Divergence | Recommendation | Why | Decision |
 |---|---|---|---|---|
-| S-1 | Messages that name Convex ("is set by Convex", "is reserved by Convex") use bunvex's words: "is set by the deployment", "is reserved by the deployment". The reserved prefixes stay `convex` and `cvx`, at runtime and in the types (STUDY-186 Q1, already decided) | **Yes** | Rule 5 on messages. The prefixes are kept for apps that move between the two | **Yes** (owner, 2026-10-26; DV-578) |
-| S-2 | Also reserve a `bunvex` claim prefix | **No**, not until bunvex sets a claim of its own | Convex's apps may set `bunvexFoo`; reserving it is a divergence with no use today. STUDY-191's later additions can ask again if they need one | **No** (owner, 2026-10-26; matches Convex) |
+| S-1 | Messages that name Convex ("is set by Convex", "is reserved by Convex") use bunvex's words: "is set by the deployment", "is reserved by the deployment". The reserved prefixes: see S-1b | **Yes** | Rule 5 on messages. The prefixes are kept for apps that move between the two | **Yes** (owner, 2026-10-26; DV-578) |
+| S-1b | The reserved prefixes: rule 5 (no "convex" in shipped code, no exceptions) does not allow keeping `convex` / `cvx`. Reserve `bunvex` / `bvx` instead, at runtime and in the type; `convex…` and `cvx…` claims sign | Asked when `check:deps` refused S-1's prefixes | Rule 5. An app that sets a `convex…` claim signs on bunvex and is refused on Convex; one that sets a `bunvex…` claim the reverse | **bunvex / bvx** (owner, 2026-10-28; DV-578; supersedes S-1's prefixes and S-2) |
+| S-2 | Also reserve a `bunvex` claim prefix | **No**, not until bunvex sets a claim of its own | Convex's apps may set `bunvexFoo`; reserving it is a divergence with no use today. STUDY-191's later additions can ask again if they need one | **No** (owner, 2026-10-26); superseded by S-1b |
 | S-3 | The process sandbox signs in the host, never giving the child the key (Convex sends the root bytes to its runner) | **Yes** | Not observable; it keeps key material out of sandboxed app code | **Yes** (owner, 2026-10-26; DV-579) |
 
 `JwtSignInQuery`, `InvalidJwtRequest` and `InvalidArguments` keep Convex's codes, since none contains "convex".
@@ -244,7 +245,8 @@ None.
 
 - **Unit** (`packages/core`):
   - each refusal of §1.2–§1.3, with its message and order;
-  - the reserved prefixes in any casing (`CvXfoo`, `CONVEXbar`), and a name with a multibyte first character;
+  - the reserved prefixes in any casing (`BvXfoo`, `BUNVEXbar`), Convex's (`CvXfoo`, `convexFoo`) allowed, and a name
+    with a multibyte first character;
   - `sub` as `""`, a number, `null`;
   - lifetimes 0, 0.5, 1, 1.9 (signs for 1 s), 3600, 3601, `NaN`, `Infinity`;
   - the 8000-byte limit at its edge;
@@ -267,7 +269,33 @@ None.
 
 ## 6. Open questions
 
-- **How the error reaches the mutation.** A syscall's bad request becomes a thrown error. The differential test
-  pins its exact surface (class, message, whether `ConvexError` data is involved) before the PR claims parity.
-- **Key rotation.** Convex has the generation in the scheme but no API to change it. bunvex keeps generation 0
-  until Convex adds rotation.
+- **How the error reaches the mutation** (answered by the differential test). A refusal is a plain `Error` with the
+  message, which a mutation can catch; uncaught, it is `Uncaught Error: <message>` with **no frame** of the app's:
+  Convex raises it in its syscall. bunvex strips the app's frames from the error it throws (`functions.ts`
+  `mutationAuth`).
+- **Not compared:** a claim value that JSON cannot carry (a `bigint`): Convex's client fails in `JSON.stringify` with
+  V8's message, bunvex with Bun's.
+
+## 7. As built
+
+- **`packages/core/src/deployment-jwt.ts`:** the keys (KBKDF root, per-generation scalars, the in-range retry), the
+  thumbprint, `mint` with §1.3's checks and `parseSignJwtArgs` with §1.2's, serde's messages included
+  (`missing field \`expiresInSeconds\``, `invalid type: …, expected f64` / `a map`). The JWK's fields are in
+  `biscuit`'s order (`use`, `alg`, `kid`, `kty`, `crv`, `x`, `y`), which is what makes the JWKS byte-identical.
+- **`packages/server`:** `ctx.auth.signJwt` on a mutation's context (`functions.ts` `mutationAuth`);
+  `DEPLOYMENT_JWT_MAX_LIFETIME_SECONDS`; `GET /.well-known/jwks.json` (`health.ts` `jwksRoute`, under the API's CORS)
+  with `DEPLOYMENT_JWKS_MAX_AGE_SECONDS`; the types `MutationAuth`, `SignJwtOptions`, `SignJwtClaims`,
+  `ReservedJwtClaim`, `ReservedJwtClaimPrefix`.
+- **`packages/sandbox`:** the `auth.signJwt` operation, mutations only; the child sends the options as JSON and the
+  host signs (DV-579).
+- **Tests:**
+  - `packages/core/test/deployment-jwt.test.ts`: every refusal and its order, the prefixes in any casing, `sub`,
+    lifetimes, the 8000-byte edge, the thumbprint, a pinned JWKS for a fixed secret, verification and forgery;
+  - `packages/server/test/sign-jwt.test.ts`: the mutation's token (`iat` its `Date.now()`), the canonical URL, queries
+    and actions without `signJwt` and a mutation an action runs with it, the refusals, the lifetime knob, the route;
+  - `packages/testing/test/sign-jwt.test.ts`: the app's and a component's token, in-process and under the process
+    sandbox;
+  - `packages/differential/test/sign-jwt.test.ts`, with one instance secret on both: the JWKS byte for byte, the
+    header and claims (and their order), cross-verification, the component's `iss`, and 14 refusals caught and
+    uncaught, word for word apart from DV-578.
+  - Sabotage checks: the `nbf` refusal (core), and the child's `signJwt` (the sandbox test).

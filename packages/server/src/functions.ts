@@ -13,6 +13,7 @@ import {
   type CallSpec,
   checkEnvVarName,
   componentInParent,
+  DeploymentJwtError,
   directFetch,
   type Engine,
   failExecution,
@@ -28,6 +29,7 @@ import {
   observeTime,
   opaqueToInspect,
   outsideExecution,
+  parseSignJwtArgs,
   parseValue,
   pausingUserTime,
   type RequestMetadata,
@@ -59,6 +61,7 @@ import {
   isBunvexError,
   isBytes,
   isSimpleObject,
+  type JSONValue,
   jsonSurrogateError,
   MAX_VALUE_NESTING,
   measureRawValue,
@@ -495,6 +498,55 @@ const noStorage = new Proxy(
 export interface Auth {
   getUserIdentity(): Promise<UserIdentity | null>;
 }
+
+/**
+ * A mutation's `ctx.auth` (STUDY-192, Convex's `MutationAuth`): it can also sign JWTs with the deployment's key.
+ */
+export interface MutationAuth extends Auth {
+  /**
+   * Sign an ES256 JWT with this deployment's key.
+   *
+   * The deployment sets the header and the `iss`, `iat` and `exp` claims. The `iss` is `process.env.BUNVEX_CLOUD_URL`
+   * for the app and `${process.env.BUNVEX_CLOUD_URL}/components/<name>` for a component; anyone can verify the
+   * token against the public keys at `${process.env.BUNVEX_CLOUD_URL}/.well-known/jwks.json`.
+   *
+   * Claims are signed, not encrypted: anyone holding the token can read them. Prefer short lifetimes, since a token
+   * can't be revoked; a mutation can always sign a fresh one. A token lives 1 hour at most.
+   *
+   * Claims starting with `bunvex` or `bvx` (in any casing) and the `nbf` claim are reserved and may not be set.
+   */
+  signJwt(options: SignJwtOptions): Promise<string>;
+}
+
+/** Claims that callers may not set on JWTs with {@link MutationAuth.signJwt}. */
+export type ReservedJwtClaim = "iss" | "iat" | "exp" | "nbf";
+
+/** Every ASCII casing of `S`: `AnyCase<"bvx">` is `"bvx" | "bvX" | "bVx" | …`. */
+type AnyCase<S extends string> = S extends `${infer First}${infer Rest}`
+  ? `${Lowercase<First> | Uppercase<First>}${AnyCase<Rest>}`
+  : S;
+
+/**
+ * Claim names starting with `bunvex` or `bvx`, in any casing, are reserved: they may not be set on
+ * JWTs with {@link MutationAuth.signJwt} (Convex reserves `convex` and `cvx`, DV-578).
+ */
+export type ReservedJwtClaimPrefix = AnyCase<"bunvex" | "bvx">;
+
+/** Refuses claim names starting with a {@link ReservedJwtClaimPrefix}. */
+type ReservedPrefixJwtClaims = {
+  [K: `${ReservedJwtClaimPrefix}${string}`]: never;
+};
+
+/** The claims passed to {@link MutationAuth.signJwt}: any JSON, but no reserved claim or prefix. */
+export type SignJwtClaims = Record<string, JSONValue> & {
+  [K in ReservedJwtClaim]?: never;
+} & ReservedPrefixJwtClaims;
+
+export type SignJwtOptions = {
+  claims?: SignJwtClaims;
+  /** How long the token stays valid: at least 1 second, at most 1 hour. */
+  expiresInSeconds: number;
+};
 /** The contexts of functions without a data model (`query`, `queryGeneric`, …): any table, any document. */
 // biome-ignore lint/suspicious/noExplicitAny: Convex's builders without a data model take `any`
 export type QueryCtx = GenericQueryCtx<any>;
@@ -2194,6 +2246,37 @@ export class Functions {
   actionTimeoutMs = secondsKnob("V8_ACTION_USER_TIMEOUT_SECS", V8_ACTION_USER_TIMEOUT_MS / 1000);
   nodeActionTimeoutMs = secondsKnob("NODE_ACTION_USER_TIMEOUT_SECS", NODE_ACTION_USER_TIMEOUT_MS / 1000);
 
+  /** Convex's `DEPLOYMENT_JWT_MAX_LIFETIME_SECONDS`: the longest a `ctx.auth.signJwt` token may live (1 h). */
+  jwtMaxLifetimeSeconds = knob("DEPLOYMENT_JWT_MAX_LIFETIME_SECONDS", 3600);
+
+  /**
+   * A mutation's `ctx.auth` (STUDY-192 §3.2): the identity, and `signJwt`, which signs with the deployment's key in
+   * this process (a sandboxed function's child asks it to, never holding the key, DV-579). The `iss` is the cloud
+   * URL (the canonical one, read in the transaction, as Convex's `deployment_origin`) and the component's path; `iat`
+   * is the mutation's frozen time, the one its `Date.now()` returns. A refusal is thrown in the mutation.
+   */
+  private mutationAuth(db: Tx, component: ComponentRuntime | undefined): MutationAuth {
+    return {
+      ...txAuth(db),
+      signJwt: async (options: SignJwtOptions) => {
+        const now = Date.now();
+        try {
+          const { claims, expiresIn } = parseSignJwtArgs(options);
+          const canonical = await db.inComponent(null, () => readCanonicalUrls(db));
+          const origin = canonical.cloud ?? this.builtinEnv.BUNVEX_CLOUD_URL ?? "";
+          return this.engine.deploymentJwtKeys.mint(
+            { origin, signer: component?.path ?? "", claims, expiresIn, maxLifetime: this.jwtMaxLifetimeSeconds },
+            now,
+          );
+        } catch (e) {
+          // Convex's refusal comes from its syscall, raised outside the app's code: no frame of the app's.
+          if (e instanceof DeploymentJwtError) e.stack = `Error: ${e.message}`;
+          throw e;
+        }
+      },
+    };
+  }
+
   /** Run a query's or mutation's handler on `db` at nesting `depth`, with its context. */
   private invoke(f: FunctionDef, db: Tx, args: AnyArgs, depth: number, job?: string): unknown {
     const component = this.componentOf.get(f);
@@ -2212,7 +2295,7 @@ export class Functions {
           }
         : {
             db: db as unknown as MutationCtx["db"],
-            auth: txAuth(db),
+            auth: this.mutationAuth(db, component),
             // The scheduled job this runs under, also when an action it ran called it (Convex propagates
             // `parent_scheduled_job` down the call tree): what it schedules after that job is canceled is
             // born canceled, and it may not cancel that job.

@@ -114,6 +114,7 @@ import {
   type StorageTagInitializer,
   type StorageType,
 } from "./database-globals.ts";
+import { DeploymentJwtKeys } from "./deployment-jwt.ts";
 import {
   installDeterminism,
   type LongTimer,
@@ -904,6 +905,20 @@ export class Engine {
   derivedKey(purpose: string, length = 16): Uint8Array {
     if (!this.instanceSecret) throw new Error("derivedKey: the engine is not initialized");
     return kbkdfCtrHmacSha256(instanceSecretBytes(this.instanceSecret), purpose, length);
+  }
+
+  private deploymentJwtKeysCache: { secret: string; keys: DeploymentJwtKeys } | null = null;
+  /**
+   * The deployment's JWT signing keys (`ctx.auth.signJwt`, `/.well-known/jwks.json`, STUDY-192): derived from the
+   * instance secret as Convex's keybroker derives them, so the same secret signs and publishes the same keys.
+   */
+  get deploymentJwtKeys(): DeploymentJwtKeys {
+    if (!this.instanceSecret) throw new Error("deploymentJwtKeys: the engine is not initialized");
+    const c = this.deploymentJwtKeysCache;
+    if (c && c.secret === this.instanceSecret) return c.keys;
+    const keys = DeploymentJwtKeys.fromSecret(instanceSecretBytes(this.instanceSecret));
+    this.deploymentJwtKeysCache = { secret: this.instanceSecret, keys };
+    return keys;
   }
 
   private cursorCodecCache: CursorCodec | null = null;
