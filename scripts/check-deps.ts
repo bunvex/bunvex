@@ -19,10 +19,15 @@
 //      timeout ends at once (S8). Any other delay (a knob's value, an option, a parameter, a difference of clocks)
 //      goes through `timerDelay`, or core's `longTimeout` / `longInterval` / `longSleep`, which sleep any length,
 //      as Convex's `Duration`s do (owner, 2026-10-21: Q8). The scans are in scripts/rules.ts (tests: rules.test.ts).
+//   7. no `declare` class field in the packages' and components' shipped code (packages/*/src, components/*/src):
+//      Babel refuses one without `allowDeclareFields`, and an Expo app in this repository (examples/react-native)
+//      bundles the workspace's TypeScript sources through Babel. A type-only field is declared by merging an
+//      interface with the class (owner, 2026-10-29).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import {
   checkedTimerCall,
+  declareFields,
   literalConstants,
   metadataNaming,
   timerDelays,
@@ -206,6 +211,10 @@ for (const [name, dir] of dirOfName) {
               `${rel}:${line}: ${call}'s delay \`${delay.replace(/\s+/g, " ").slice(0, 60)}\` may pass 2^31-1 ms — use timerDelay, or longTimeout / longInterval / longSleep from @bunvex/core (rule 6)`,
             );
       }
+      for (const { line, text } of declareFields(stripped))
+        errors.push(
+          `${rel}:${line}: a \`declare\` class field (\`${text.slice(0, 60)}\`), which Babel (React Native's Metro) refuses without allowDeclareFields — declare it by merging an interface (rule 7)`,
+        );
       const code = stripped.split("\n");
       code.forEach((line, n) => {
         if (/convex/i.test(line))
