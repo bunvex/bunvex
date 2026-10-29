@@ -1,6 +1,6 @@
 {
   "name": "@bunvex/rate-limiter",
-  "version": "0.1.0",
+  "version": "0.1.1-alpha.0",
   "description": "A rate limiter component for bunvex: token buckets and fixed windows, transactional or applied in the background, sharded, with a React hook.",
   "license": "Apache-2.0",
   "type": "module",

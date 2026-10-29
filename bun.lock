@@ -999,7 +999,7 @@
     },
     "packages/testing": {
       "name": "@bunvex/testing",
-      "version": "0.0.0",
+      "version": "0.1.0-alpha.1",
       "dependencies": {
         "@bunvex/cli": "workspace:*",
         "@bunvex/core": "workspace:*",

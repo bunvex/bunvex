@@ -1,6 +1,6 @@
 {
   "name": "@bunvex/helpers",
-  "version": "0.0.1",
+  "version": "0.1.0-alpha.0",
   "description": "Helpers for bunvex apps: validators, utilities and server helpers (custom functions, streams, pagination, triggers).",
   "license": "Apache-2.0",
   "type": "module",
