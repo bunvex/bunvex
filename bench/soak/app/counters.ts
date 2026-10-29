@@ -1,6 +1,6 @@
 // A hot counter: every client bumps the same few rows, so mutations conflict and retry (OCC).
-import { mutationGeneric, queryGeneric } from "bunvex/server";
-import { v } from "bunvex/values";
+import { mutationGeneric, queryGeneric } from "@bunvex/server";
+import { v } from "@bunvex/values";
 
 export const get = queryGeneric({
   args: { name: v.string() },

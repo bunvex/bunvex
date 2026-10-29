@@ -1,4 +1,4 @@
-import { BunvexError, v } from "bunvex/values";
+import { BunvexError, v } from "@bunvex/values";
 import { mutation, query } from "./_generated/server";
 
 const MAX_MESSAGES = 20;

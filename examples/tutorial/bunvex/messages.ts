@@ -1,4 +1,4 @@
-import { v } from "bunvex/values";
+import { v } from "@bunvex/values";
 import { mutation, query } from "./_generated/server";
 
 /** The 50 most recent messages, oldest first. */

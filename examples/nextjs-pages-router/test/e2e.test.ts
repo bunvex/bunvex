@@ -2,7 +2,7 @@
 // then `next start` serving the page and the API route, which reads the counter on the server (in Node).
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { fetchQuery } from "bunvex/nextjs";
+import { fetchQuery } from "@bunvex/nextjs";
 import { build, type Deployment, deploy, until } from "bunvex-examples-harness";
 import { api } from "../bunvex/_generated/api.js";
 

@@ -1,4 +1,4 @@
-import { v } from "bunvex/values";
+import { v } from "@bunvex/values";
 import { mutation, query } from "./_generated/server";
 
 /** Every message, oldest first; an image message carries the URL its file is served at. */

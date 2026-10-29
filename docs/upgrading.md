@@ -13,7 +13,7 @@ with what is different in bunvex.
 ## 1. Before you start
 
 1. **Read what changed.** Each published package has a `CHANGELOG.md` (for example
-   [`packages/bunvex/CHANGELOG.md`](../packages/bunvex/CHANGELOG.md), [`packages/server/CHANGELOG.md`](../packages/server/CHANGELOG.md)),
+   [`packages/server/CHANGELOG.md`](../packages/server/CHANGELOG.md), [`packages/client/CHANGELOG.md`](../packages/client/CHANGELOG.md)),
    and each backend executable is a GitHub release `precompiled-<date>-<sha>`.
 2. **Export the deployment, with its files** (§4):
 

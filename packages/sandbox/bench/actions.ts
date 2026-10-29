@@ -22,7 +22,7 @@ const WARMUP = Number(args[1] ?? 100);
 const ONLY = args[2];
 provideProcessExecutor(createProcessExecutor);
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
 const SOURCE = `
 import { action, query } from ${SERVER};
 export const q = query(async (ctx, { i }) => i);

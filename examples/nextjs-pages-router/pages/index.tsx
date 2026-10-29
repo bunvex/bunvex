@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "bunvex/react";
+import { useMutation, useQuery } from "@bunvex/react";
 import Head from "next/head";
 import { api } from "../bunvex/_generated/api";
 

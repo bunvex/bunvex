@@ -3,7 +3,7 @@
 // Prints one JSON line: the latencies (ms) of the queries and of the mutations, and the errors.
 //   bun bench/index-cache-e2e-load.ts <url> <ids.json>     Env: CONC, SECS, WRITE_PCT, SKEW
 import { readFileSync } from "node:fs";
-import { BunvexHttpClient } from "bunvex/browser";
+import { BunvexHttpClient } from "@bunvex/client";
 
 const [url, idsFile] = process.argv.slice(2) as [string, string];
 const { channels, users } = JSON.parse(readFileSync(idsFile, "utf8")) as { channels: string[]; users: string[] };

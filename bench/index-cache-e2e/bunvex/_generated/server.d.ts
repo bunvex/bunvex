@@ -20,8 +20,8 @@ import type {
   QueryBuilder,
   SystemTableNames,
   TableNamesInDataModel,
-} from "bunvex/server";
-import type { TableValidators } from "bunvex/values";
+} from "@bunvex/server";
+import type { TableValidators } from "@bunvex/values";
 import type { DataModel } from "./dataModel.js";
 
 /**

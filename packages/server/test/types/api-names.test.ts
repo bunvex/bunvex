@@ -108,7 +108,7 @@ check<Equal<keyof PaginationOptions, "numItems" | "cursor" | "endCursor" | "maxi
   true,
 );
 
-// `bunvex/values`: `v.optional` gives `VOptional`, `asObjectValidator` an object validator's type.
+// `@bunvex/values`: `v.optional` gives `VOptional`, `asObjectValidator` an object validator's type.
 check<Equal<ReturnType<typeof v.optional<VString<string>>>, VOptional<VString<string>>>>(true);
 check<Equal<VOptional<VString<string>>, VString<string | undefined, "optional">>>(true);
 check<Equal<ReturnType<typeof asObjectValidator<{ a: VString<string> }>>["type"], { a: string }>>(true);

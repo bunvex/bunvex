@@ -32,23 +32,23 @@ const mod = (path: string, lines: string[]): ModuleSource => ({
 const dep = (path: string) => `./_componentDeps/${Buffer.from(path).toString("base64url")}`;
 
 const APP_DEFINITION = mod("bunvex.config.js", [
-  'import { defineApp } from "bunvex/server";',
+  'import { defineApp } from "@bunvex/server";',
   `import counter from "${dep("counter")}";`,
   "const app = defineApp();",
   "app.use(counter);",
   "export default app;",
 ]);
 const NO_COMPONENTS = mod("bunvex.config.js", [
-  'import { defineApp } from "bunvex/server";',
+  'import { defineApp } from "@bunvex/server";',
   "export default defineApp();",
 ]);
 const SCHEMA = mod("schema.js", [
-  'import { defineSchema, defineTable } from "bunvex/server";',
-  'import { v } from "bunvex/values";',
+  'import { defineSchema, defineTable } from "@bunvex/server";',
+  'import { v } from "@bunvex/values";',
   "export default defineSchema({ messages: defineTable({ body: v.string() }) });",
 ]);
 const APP = mod("app.js", [
-  'import { componentsGeneric, mutation, query } from "bunvex/server";',
+  'import { componentsGeneric, mutation, query } from "@bunvex/server";',
   "const c = componentsGeneric().counter.lib;",
   "export const tick = mutation({ args: {}, handler: async (ctx) => { await ctx.db.insert('messages', { body: 'app' }); } });",
   "export const messages = query({ args: {}, handler: async (ctx) => (await ctx.db.query('messages').collect()).map((m) => m.body) });",
@@ -56,7 +56,7 @@ const APP = mod("app.js", [
 ]);
 // The app's cron, of a name the component's shares: each namespace has its own.
 const APP_CRONS = mod("crons.js", [
-  'import { cronJobs } from "bunvex/server";',
+  'import { cronJobs } from "@bunvex/server";',
   "const crons = cronJobs();",
   'crons.interval("tick", { hours: 1 }, "app:tick");',
   "export default crons;",
@@ -64,20 +64,20 @@ const APP_CRONS = mod("crons.js", [
 const COUNTER = {
   definitionPath: "counter",
   definition: mod("bunvex.config.js", [
-    'import { defineComponent } from "bunvex/server";',
+    'import { defineComponent } from "@bunvex/server";',
     'export default defineComponent("counter");',
   ]),
   dependencies: [] as string[],
   schema: SCHEMA,
   functions: [
     mod("lib.js", [
-      'import { action, internalMutation, query } from "bunvex/server";',
+      'import { action, internalMutation, query } from "@bunvex/server";',
       "export const tick = internalMutation({ args: {}, handler: async (ctx) => { await ctx.db.insert('messages', { body: 'tick' }); return 'ticked'; } });",
       "export const act = action({ args: {}, handler: async (ctx) => { await ctx.runMutation('lib:tick', {}); return 'acted'; } });",
       "export const messages = query({ args: {}, handler: async (ctx) => (await ctx.db.query('messages').collect()).map((m) => m.body) });",
     ]),
     mod("crons.js", [
-      'import { cronJobs } from "bunvex/server";',
+      'import { cronJobs } from "@bunvex/server";',
       "const crons = cronJobs();",
       'crons.interval("tick", { hours: 1 }, "lib:tick");',
       'crons.interval("act", { hours: 1 }, "lib:act");',

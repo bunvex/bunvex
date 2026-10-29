@@ -10,8 +10,8 @@
 //   bun bench/rooms.ts            Env: NS (default 10,100,500), SECS (default 10), RATE (default 20), SAMPLE (default 20)
 import { Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
-import { createServer, defineSchema, defineTable, Functions, mutation, presence, query, room } from "bunvex/server";
-import { v } from "bunvex/values";
+import { createServer, defineSchema, defineTable, Functions, mutation, presence, query, room } from "@bunvex/server";
+import { v } from "@bunvex/values";
 
 const NS = (process.env.NS ?? "10,100,500").split(",").map(Number);
 const SECS = Number(process.env.SECS ?? 10);

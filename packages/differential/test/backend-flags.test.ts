@@ -9,7 +9,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { localBackendMain } from "bunvex/server";
+import { localBackendMain } from "@bunvex/server";
 import { ORACLE_BIN } from "../harness/backends.ts";
 
 const ready = existsSync(ORACLE_BIN);

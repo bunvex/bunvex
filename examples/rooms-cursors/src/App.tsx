@@ -1,4 +1,4 @@
-import { usePresence, useRoom } from "bunvex/react";
+import { usePresence, useRoom } from "@bunvex/react";
 import { useEffect, useState } from "react";
 import { api } from "../bunvex/_generated/api";
 

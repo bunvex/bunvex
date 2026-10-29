@@ -2,7 +2,7 @@
 // in the client before anything renders it, and the subscription ends after `extendSubscriptionFor`.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { BunvexReactClient } from "bunvex/react";
+import { BunvexReactClient } from "@bunvex/react";
 import { build, type Deployment, deploy, until } from "bunvex-examples-harness";
 import { api } from "../bunvex/_generated/api.js";
 

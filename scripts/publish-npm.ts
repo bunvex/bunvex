@@ -8,7 +8,7 @@
 //   bun scripts/publish-npm.ts --tag alpha   under another dist-tag (default latest: npm wants one named for a
 //                                            prerelease, and while there is no stable version the alpha is it)
 //
-// `bunvex` (the umbrella) is kept back while npm blocks the name (STUDY-40).
+// npm refuses the unscoped name `bunvex` (STUDY-40 L7): apps install these scoped packages.
 import { mkdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { manifest, PACKAGES, stage } from "./npm-packages.ts";

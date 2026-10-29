@@ -84,10 +84,12 @@ publish their own `bunvex-persistence-<name>` against the published contract and
 through the engine); the bytes go to `@bunvex/file-storage` backends (`/local`, `/s3`), configured with
 `FILE_STORAGE=`.
 
-**D5 — the umbrella package `bunvex`** re-exports `bunvex/server`, `bunvex/values`, `bunvex/browser`,
-`bunvex/react`, `bunvex/nextjs` and ships the CLI as its `bin`. It contains no logic. *Update (owner,
+**D5 — the umbrella package `bunvex`** re-exports `@bunvex/server`, `@bunvex/values`, `@bunvex/client`,
+`@bunvex/react`, `@bunvex/nextjs` and ships the CLI as its `bin`. It contains no logic. *Update (owner,
 2026-10-12):* npm will not allow the name `bunvex`, so it stays a private workspace package and apps install the
-scoped `@bunvex/*` packages for good (STUDY-40 L7).
+scoped `@bunvex/*` packages for good (STUDY-40 L7). *Update (2026-10-29):* npm's security team confirmed the
+name is refused for its likeness to `convex`; the private package is removed, and the repository's examples, tests
+and benchmarks install `@bunvex/*` as an app does. The local backend's entry moved to `apps/local-backend`.
 
 **D6 — dependency rules, enforced in CI** (a check that fails the build on a forbidden import):
 

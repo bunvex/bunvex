@@ -1,7 +1,7 @@
 // Scheduled jobs that record when they were due and when they ran (the soak's scheduler lag, and its check that
 // every job ran exactly once), and one job far in the future that only has to wait.
-import { anyApi, internalMutationGeneric, mutationGeneric, queryGeneric } from "bunvex/server";
-import { v } from "bunvex/values";
+import { anyApi, internalMutationGeneric, mutationGeneric, queryGeneric } from "@bunvex/server";
+import { v } from "@bunvex/values";
 
 export const schedule = mutationGeneric({
   args: { seq: v.number(), delayMs: v.number() },

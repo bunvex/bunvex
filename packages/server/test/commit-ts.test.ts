@@ -133,7 +133,7 @@ test("pushed code: a mutation's result resolves on the wire; the placeholder in 
   const s = createServer({ engine, functions: new Functions(engine), port: 0, deployable: true });
   stops.push(() => s.shutdown());
   await s.codeReady;
-  const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+  const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
   await s.deployCode([
     {
       path: "m.js",

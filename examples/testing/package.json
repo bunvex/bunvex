@@ -8,9 +8,12 @@
     "test": "bun test"
   },
   "dependencies": {
-    "bunvex": "workspace:*"
+    "@bunvex/server": "workspace:*",
+    "@bunvex/values": "workspace:*"
   },
   "devDependencies": {
+    "@bunvex/cli": "workspace:*",
+    "@bunvex/testing": "workspace:*",
     "typescript": "^5.9.0"
   }
 }

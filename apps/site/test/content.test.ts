@@ -146,11 +146,11 @@ describe("content", () => {
     }
   });
 
-  test("the samples import only what an app imports: bunvex/* and its own generated code", () => {
+  test("the samples import only what an app imports: @bunvex/* and its own generated code", () => {
     const modules = FILES.files.flatMap((f) => [...f.code.matchAll(/from "([^"]+)"/g)].map((m) => m[1]));
     expect(modules.length).toBeGreaterThan(0);
     for (const m of modules)
-      expect(m).toMatch(/^(bunvex\/(server|values|react)|\.\/_generated\/server|\.\.\/bunvex\/_generated\/api)$/);
+      expect(m).toMatch(/^(@bunvex\/(server|values|react)|\.\/_generated\/server|\.\.\/bunvex\/_generated\/api)$/);
   });
 
   test("every install command is one the READMEs give", () => {

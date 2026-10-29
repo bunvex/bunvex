@@ -1,4 +1,4 @@
-import { v } from "bunvex/values";
+import { v } from "@bunvex/values";
 import { api } from "./_generated/api";
 import { type ActionCtx, httpAction, mutation, query } from "./_generated/server";
 

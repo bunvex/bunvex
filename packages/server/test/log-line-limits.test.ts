@@ -13,7 +13,7 @@ import { prettyLogLine } from "../src/logs.ts";
 import { httpAction, httpRouter } from "../src/router.ts";
 import { createServer } from "../src/server.ts";
 
-const SERVER = ["bunvex", "server"].join("/");
+const SERVER = ["@bunvex", "server"].join("/");
 const overflow = (n: number) => `[ERROR] Log overflow (maximum ${n}). Remaining log lines omitted.`;
 
 const stops: (() => unknown)[] = [];

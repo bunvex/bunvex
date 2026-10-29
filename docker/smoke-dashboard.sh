@@ -46,12 +46,12 @@ KEY=$(compose exec -T backend ./generate_admin_key.sh 2>/dev/null) || fail "gene
 APP=$(mktemp -d)
 mkdir "$APP/bunvex"
 cat >"$APP/bunvex/items.ts" <<'TS'
-import { mutation } from "bunvex/server";
+import { mutation } from "@bunvex/server";
 export const add = mutation(async ({ db }, { n }: { n: number }) => {
   await db.insert("items", { n });
 });
 TS
-cli() { (cd "$APP" && BUNVEX_SELF_HOSTED_URL="$BACKEND" BUNVEX_SELF_HOSTED_ADMIN_KEY="$KEY" bun "$ROOT/packages/bunvex/bin/bunvex.ts" "$@"); }
+cli() { (cd "$APP" && BUNVEX_SELF_HOSTED_URL="$BACKEND" BUNVEX_SELF_HOSTED_ADMIN_KEY="$KEY" bun "$ROOT/packages/cli/bin/bunvex.ts" "$@"); }
 cli deploy --typecheck=disable >/dev/null 2>&1 || fail "deploy failed"
 cli run items:add '{ n: 42 }' >/dev/null 2>&1 || fail "run failed"
 bun "$ROOT/apps/dashboard/e2e/sign-in-smoke.ts" "$DASHBOARD" "$BACKEND" "$KEY" bunvex-self-hosted || fail "the sign-in failed"

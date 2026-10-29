@@ -1,6 +1,6 @@
 "use client";
 
-import { type Preloaded, useMutation, usePreloadedQuery } from "bunvex/react";
+import { type Preloaded, useMutation, usePreloadedQuery } from "@bunvex/react";
 import { api } from "../bunvex/_generated/api";
 
 export function Counter(props: { preloaded: Preloaded<typeof api.counters.get> }) {

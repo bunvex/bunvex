@@ -2,7 +2,7 @@
 // test's process, with `@bunvex/testing` — the scenarios of convex-test's demo, written for bunvex.
 import { afterEach, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { bunvexTest, type TestBunvex } from "bunvex/testing";
+import { bunvexTest, type TestBunvex } from "@bunvex/testing";
 import { api, internal } from "../bunvex/_generated/api.js";
 
 const DIR = resolve(import.meta.dir, "..");

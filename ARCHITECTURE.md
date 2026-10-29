@@ -181,14 +181,8 @@ bunvex/
 │   │       child-call, child-db     on the host's transaction, user time charged (STUDY-171 §8)
 │   │                                actions, HTTP, components, OS isolation, the pool: PRs 4–12         ·
 │   │
-│   ├── sync-e2e/, jepsen/,          tests only, never published: end-to-end sync (STUDY-26),
-│   │   differential/                consistency runs (STUDY-57), against Convex's backend (STUDY-122) ✅
-│   │
-│   └── bunvex/                      bunvex (private)  internal workspace aggregate, never published
-│       └── (re-exports)             bunvex/server · bunvex/values · bunvex/browser ·
-│                                    bunvex/react · bunvex/nextjs · bunvex/react-clerk ·
-│                                    bunvex/react-auth0 · bin: bunvex (apps install @bunvex/*)
-│       └── bin/local-backend        the bunvex-local-backend executable (STUDY-39, STUDY-40)   ✅
+│   └── sync-e2e/, jepsen/,          tests only, never published: end-to-end sync (STUDY-26),
+│       differential/                consistency runs (STUDY-57), against Convex's backend (STUDY-122) ✅
 │
 ├── components/                      bunvex's own components (STUDY-158 step 4; the package model in STUDY-183 §3.1):
 │   │                                `@bunvex/<Convex's name>`, each on its own version, outside the fixed group
@@ -211,6 +205,8 @@ bunvex/
 │       └── src/test.ts              `register(t, name)` for @bunvex/testing (`./test`)
 │
 ├── apps/
+│   ├── local-backend/               the bunvex-local-backend executable's entry: the server, every persistence
+│   │                                driver and the function sandbox (STUDY-39, STUDY-40); never published ✅
 │   ├── dashboard/                   thin Vite host mounting @bunvex/dashboard on a deployment     🟡
 │   │                                (dashboard-source) or the demo data; its own image, dashboard.zip,
 │   │                                bunvex dev's local dashboard (STUDY-149; docs/dashboard.md)
@@ -261,9 +257,9 @@ import { PostgresPersistence } from "@bunvex/persistence/postgres";
 ```
 
 The scoped `@bunvex/*` packages are the permanent way to install bunvex: the unscoped npm name `bunvex` is
-not available (owner decision, 2026-10-12; STUDY-40 L7). `packages/bunvex` stays a private workspace package
-that re-exports them for the repo's own examples and tests, and `bunvex codegen` writes `@bunvex/*` imports
-when the app's `package.json` depends on `@bunvex/*`.
+not available (owner decision, 2026-10-12; STUDY-40 L7). npm's security policy refuses it, for its likeness to `convex`
+(2026-10-29). The repository's examples, tests and benchmarks install them too, and `bunvex codegen` always writes
+`@bunvex/*` imports.
 
 ## Dependency rules
 
@@ -287,7 +283,8 @@ tests only, never published:
   sync-e2e ──► client, react, nextjs, react-clerk, react-auth0, react-query, server, core, protocol, values,
               dashboard, dashboard-source (the dashboard's contract suite on a live server, STUDY-149)
   jepsen ──► client, server, core, values (consistency runs)
-  differential ──► bunvex (against Convex's backend)
+  differential ──► server, values, client, react, nextjs, the components (against Convex's backend)
+  apps/local-backend ──► server, core, persistence, sandbox (the executable)
 
 ui ◄── dashboard ◄── apps/dashboard (──► ui, dashboard-source)
 dashboard-source ──► client, dashboard
@@ -320,7 +317,7 @@ ui ◄── apps/site
 
 ## Project facts
 
-- Name: **bunvex** — npm package `bunvex`, scope `@bunvex/*`, GitHub `github.com/bunvex/bunvex`.
+- Name: **bunvex** — npm scope `@bunvex/*` (the unscoped name `bunvex` is refused by npm), GitHub `github.com/bunvex/bunvex`.
 - Licence: **Apache-2.0** (`LICENSE`, `NOTICE`).
 
 ## Open decisions

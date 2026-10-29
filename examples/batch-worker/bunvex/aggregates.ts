@@ -2,7 +2,7 @@
 // batches of them into per-team totals. One loop at a time means the hot total rows have a single writer, so scorers
 // never conflict with each other or with it. Scores are never deleted: the cursor alone moves the scan on.
 import { defineBatchWorkerValidators, ping } from "@bunvex/batch-worker";
-import { v } from "bunvex/values";
+import { v } from "@bunvex/values";
 import { components, internal } from "./_generated/api.js";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server.js";
 

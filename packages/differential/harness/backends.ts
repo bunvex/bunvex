@@ -18,8 +18,8 @@ import { join, resolve } from "node:path";
 const PACKAGE = resolve(import.meta.dir, "..");
 const ROOT = resolve(PACKAGE, "../..");
 const APP = join(PACKAGE, "app");
-const BUNVEX_BACKEND = join(ROOT, "packages/bunvex/bin/local-backend.ts");
-const BUNVEX_CLI = join(ROOT, "packages/bunvex/bin/bunvex.ts");
+const BUNVEX_BACKEND = join(ROOT, "apps/local-backend/local-backend.ts");
+const BUNVEX_CLI = join(ROOT, "packages/cli/bin/bunvex.ts");
 
 /** Where Convex's backend binary is: CONVEX_BACKEND_BIN, else what scripts/download-convex-backend.sh fetched. */
 export const ORACLE_BIN = process.env.CONVEX_BACKEND_BIN ?? join(PACKAGE, ".cache/convex-local-backend");
@@ -240,8 +240,8 @@ function project(state: string, dir: "convex" | "bunvex", app = APP, prepare?: S
     let source = readFileSync(join(app, name), "utf8");
     if (dir === "bunvex")
       source = source
-        .replaceAll('"convex/server"', '"bunvex/server"')
-        .replaceAll('"convex/values"', '"bunvex/values"')
+        .replaceAll('"convex/server"', '"@bunvex/server"')
+        .replaceAll('"convex/values"', '"@bunvex/values"')
         // bunvex's name for Convex's application error class (DV-03).
         .replaceAll("ConvexError", "BunvexError");
     writeFileSync(join(functions, name), source);

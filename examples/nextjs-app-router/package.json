@@ -10,12 +10,17 @@
     "start": "next start"
   },
   "dependencies": {
-    "bunvex": "workspace:*",
+    "@bunvex/client": "workspace:*",
+    "@bunvex/nextjs": "workspace:*",
+    "@bunvex/react": "workspace:*",
+    "@bunvex/server": "workspace:*",
+    "@bunvex/values": "workspace:*",
     "next": "16.3.8",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
+    "@bunvex/cli": "workspace:*",
     "@types/node": "26.6.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

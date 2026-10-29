@@ -47,10 +47,10 @@ async function refused(i: DefinitionsInput): Promise<{ code: string; message: st
 describe("evaluating definitions", () => {
   test("the app mounting one component twice with bunvex/server's defineApp: each definition as Convex reads it", async () => {
     const app = {
-      source: `import { defineApp } from "bunvex/server";\nimport counter from "${dep("counter")}";\nconst app = defineApp();\napp.use(counter);\napp.use(counter, { name: "second" });\nexport default app;`,
+      source: `import { defineApp } from "@bunvex/server";\nimport counter from "${dep("counter")}";\nconst app = defineApp();\napp.use(counter);\napp.use(counter, { name: "second" });\nexport default app;`,
     };
     const counter = {
-      source: `import { defineComponent } from "bunvex/server";\nexport default defineComponent("counter");`,
+      source: `import { defineComponent } from "@bunvex/server";\nexport default defineComponent("counter");`,
     };
     const out = await evaluateDefinitions(input(app, ["counter"], { counter }));
     expect([...out.keys()]).toEqual(["counter", ""]);
@@ -188,12 +188,12 @@ describe("refused, as the binary refuses them", () => {
     for (const [source, problem] of cases)
       expect(await refused(input({ source }))).toEqual({
         code: "InvalidDefinition",
-        message: `The default export of \`bunvex.config.ts\` in your app has an invalid value (${problem}). Please make sure that you’re exporting the return value of \`defineApp()\` (\`import { defineApp } from 'bunvex/server'\`).`,
+        message: `The default export of \`bunvex.config.ts\` in your app has an invalid value (${problem}). Please make sure that you’re exporting the return value of \`defineApp()\` (\`import { defineApp } from '@bunvex/server'\`).`,
       });
     expect(await refused(input(plain(APP), ["c"], { c: { source: "export default 1;" } }))).toEqual({
       code: "InvalidDefinition",
       message:
-        "The default export of `bunvex.config.ts` in component `c` has an invalid value (the default export is not an object). Please make sure that the component is exporting the return value of `defineComponent()` (`import { defineComponent } from 'bunvex/server'`).",
+        "The default export of `bunvex.config.ts` in component `c` has an invalid value (the default export is not an object). Please make sure that the component is exporting the return value of `defineComponent()` (`import { defineComponent } from '@bunvex/server'`).",
     });
   });
 

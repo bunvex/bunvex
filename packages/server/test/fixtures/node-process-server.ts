@@ -7,7 +7,7 @@ import { MemoryBlobStore } from "@bunvex/file-storage";
 import { Functions } from "../../src/functions.ts";
 import { createServer } from "../../src/server.ts";
 
-const SERVER = ["bunvex", "server"].join("/");
+const SERVER = ["@bunvex", "server"].join("/");
 const engine = await new Engine(defineSchema({}), await MemoryPersistence.open(null, { durable: false })).init();
 const functions = new Functions(engine);
 // A hang shows as this timeout.

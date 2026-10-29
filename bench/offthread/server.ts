@@ -6,7 +6,7 @@
 //   PERSISTENCE=sqlite OFFTHREAD_WRITER=1 bun bench/offthread/server.ts
 // The rest of the environment is bench/server.ts's.
 import { Engine } from "@bunvex/core";
-import { createServer, Functions, openPersistence, persistenceConfigFromEnv } from "bunvex/server";
+import { createServer, Functions, openPersistence, persistenceConfigFromEnv } from "@bunvex/server";
 import { bench, benchSchema } from "../functions.ts";
 import { OffThreadSqlite } from "./sqlite-offthread.ts";
 

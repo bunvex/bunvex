@@ -1,4 +1,4 @@
-import { v } from "bunvex/values";
+import { v } from "@bunvex/values";
 import { internalMutation, query } from "./_generated/server";
 
 /** Every post, newest first. */

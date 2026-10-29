@@ -77,8 +77,8 @@ export function schemaCode(schema: SchemaInfo, tables: TableInfo[]): SchemaCode 
   const options = !schema.enforced;
   const indent = options ? "    " : "  ";
   const out = [
-    'import { defineSchema, defineTable } from "bunvex/server";',
-    'import { v } from "bunvex/values";',
+    'import { defineSchema, defineTable } from "@bunvex/server";',
+    'import { v } from "@bunvex/values";',
     "",
     ...(options ? ["export default defineSchema(", "  {"] : ["export default defineSchema({"]),
   ];

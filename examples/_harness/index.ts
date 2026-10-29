@@ -6,11 +6,11 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { BunvexClient, BunvexHttpClient } from "bunvex/browser";
+import { BunvexClient, BunvexHttpClient } from "@bunvex/client";
 
 const ROOT = resolve(import.meta.dir, "../..");
-const BACKEND = join(ROOT, "packages/bunvex/bin/local-backend.ts");
-const CLI = join(ROOT, "packages/bunvex/bin/bunvex.ts");
+const BACKEND = join(ROOT, "apps/local-backend/local-backend.ts");
+const CLI = join(ROOT, "packages/cli/bin/bunvex.ts");
 
 /** Run a command; its output is returned, and thrown with it when it fails. */
 async function run(cmd: string[], cwd: string, env: Record<string, string> = {}): Promise<string> {

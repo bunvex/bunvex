@@ -1,5 +1,5 @@
-import { paginationOptsValidator } from "bunvex/server";
-import { v } from "bunvex/values";
+import { paginationOptsValidator } from "@bunvex/server";
+import { v } from "@bunvex/values";
 import { mutation, query } from "./_generated/server";
 
 /** Every message, newest first, a page at a time. */

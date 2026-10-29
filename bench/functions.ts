@@ -10,8 +10,8 @@ import {
   makeFunctionReference,
   mutation,
   query,
-} from "bunvex/server";
-import { v } from "bunvex/values";
+} from "@bunvex/server";
+import { v } from "@bunvex/values";
 
 // The same schema as convex-bench/convex/schema.ts, validators included (both sides validate every write).
 export const benchSchema = defineSchema({

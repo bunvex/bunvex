@@ -22,7 +22,7 @@ const source = (await Bun.file(`${import.meta.dir}/../functions.ts`).text())
       .map((n) => (GENERIC.has(n) ? `${n}Generic as ${n}` : n));
     return `import { ${mapped.join(", ")} } from "convex/server";`;
   })
-  .replaceAll('"bunvex/values"', '"convex/values"');
+  .replaceAll('"@bunvex/values"', '"convex/values"');
 if (/bunvex\//.test(source)) throw new Error("bench/functions.ts imports a bunvex package the rewrite does not map");
 
 rmSync(`${dir}/convex`, { recursive: true, force: true });

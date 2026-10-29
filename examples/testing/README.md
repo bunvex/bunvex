@@ -1,6 +1,6 @@
 # Testing: the app's functions, in a test
 
-`test/functions.test.ts` tests this app's functions with `bunvex/testing` (`@bunvex/testing`). Each test gets a deployment of its own,
+`test/functions.test.ts` tests this app's functions with `@bunvex/testing` (`@bunvex/testing`). Each test gets a deployment of its own,
 inside the test's process: the real engine, on memory and a virtual clock, with `bunvex/` pushed as
 `bunvex deploy` pushes it. There is no front end and nothing to start.
 
