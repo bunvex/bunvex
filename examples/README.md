@@ -1,7 +1,7 @@
 # bunvex examples
 
 Small apps, one feature each, written for bunvex after the scenarios of Convex's demos (STUDY-90). Each has its
-functions in `bunvex/` (with the generated `bunvex/_generated/` committed), a front end (Vite + React, or Next.js),
+functions in `bunvex/` (with the generated `bunvex/_generated/` committed), a front end (Vite + React, Next.js, or Expo for React Native),
 a README, and an end-to-end test.
 
 ## Run one
@@ -52,6 +52,7 @@ drives it in Chromium; any page error or console error fails the test.
 | Example | What it shows |
 |---|---|
 | [tutorial](tutorial) | A chat: a query, a mutation, a page that stays live |
+| [react-native](react-native) | The same chat on iOS and Android with Expo (React Native) |
 | [typescript](typescript) | A schema typing documents end to end (`Doc<"messages">`) |
 | [args-validation](args-validation) | `args` and `returns` validators, and what a refused call says |
 | [custom-errors](custom-errors) | `BunvexError` with a message or data, from mutations and queries |

@@ -1,0 +1,6 @@
+# Expo
+.expo/
+ios/
+android/
+
+.env.local
