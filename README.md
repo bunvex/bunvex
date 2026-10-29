@@ -26,11 +26,12 @@ A [Convex](https://convex.dev)-style reactive backend written in TypeScript for 
 >   supported product that bunvex studies and imitates.
 
 **Status: pre-alpha.** The engine, the persistence drivers, the server (HTTP API, WebSocket sync,
-validation, auth, the scheduler and crons, file storage, HTTP actions), the client SDK with its React and
-Next.js bindings, the CLI and the dashboard ([docs/dashboard.md](docs/dashboard.md)) work; the hot paths are
-benchmarked. Components and built-in authentication are still to come. See [ARCHITECTURE.md](ARCHITECTURE.md) and
-[docs/parity/](docs/parity/README.md) for what exists and what is planned. Moving to a new release, or between
-Convex and bunvex: [docs/upgrading.md](docs/upgrading.md).
+validation, auth with `ctx.auth.signJwt`, the scheduler and crons, file storage, HTTP actions), the client SDK with
+its React and Next.js bindings, the CLI and the dashboard ([docs/dashboard.md](docs/dashboard.md)) work; the hot
+paths are benchmarked. Components work (an app's own, and bunvex's `@bunvex/sharded-counter`, `@bunvex/batch-worker`
+and `@bunvex/rate-limiter`); the other `@convex-dev/*` components and built-in authentication are still to come. See
+[ARCHITECTURE.md](ARCHITECTURE.md) and [docs/parity/](docs/parity/README.md) for what exists and what is planned.
+Moving to a new release, or between Convex and bunvex: [docs/upgrading.md](docs/upgrading.md).
 
 ## Numbers
 
@@ -46,6 +47,23 @@ Same 2-vCPU VPS, same harness, Convex self-hosted vs bunvex on **the same Postgr
 
 ¹ Both spread wide invalidations by default (bunvex as Convex does), which skips intermediate values alike;
 the row compares them with that off (Convex's `raw` profile, measured 29 Sep).
+
+The same comparison with the server, Postgres and the load generator on three droplets of their own
+(DigitalOcean c-4: 4 dedicated vCPUs, 8 GB each), measured on 27 Oct 2026
+([full report](docs/bench/VERSUS-DO-2026-10-27.md)):
+
+| | Convex | bunvex (Postgres) |
+|---|--:|--:|
+| cached read, req/s · server cores busy | 9 005 · 3.07 | 8 457 · 0.84 |
+| uncached indexed read, req/s | 591 | 2 061 |
+| durable insert, req/s | 576 | 2 655 |
+| action (query + mutation), req/s | 262 | 2 005 |
+| 10 000 subscribers, splay off, delivered · p99 | out of memory (8 GB) | 100 % · 443 ms |
+
+The subscribers row turns the splay off with the knob both read (`SUBSCRIPTION_INVALIDATION_DELAY_MULTIPLIER=0`).
+Convex keeps four cores busy and bunvex one process with one JS thread, so the gaps are smaller than on 2 vCPUs.
+Cached reads are where that thread is the ceiling: a tie here, and Convex leads by 1.1× on an 8-core Mac (the report's
+regression check, 28 Oct).
 
 ## Repository layout
 
