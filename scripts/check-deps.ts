@@ -37,6 +37,19 @@ const EXAMPLES = join(ROOT, "examples");
 const COMPONENTS = join(ROOT, "components");
 
 /** Which @bunvex packages each package may import (by directory name; apps as "apps/<dir>"). */
+/** The packages an app installs (STUDY-40 L7: the scoped `@bunvex/*` names; npm refuses the unscoped one). */
+const PUBLIC = [
+  "server",
+  "values",
+  "client",
+  "react",
+  "nextjs",
+  "react-clerk",
+  "react-auth0",
+  "react-query",
+  "testing",
+  "cli",
+];
 const ALLOWED: Record<string, string[]> = {
   values: [],
   // STUDY-45 (owner, 2026-10-02: search in a package of its own): the tokenizer, index and ranking.
@@ -85,25 +98,11 @@ const ALLOWED: Record<string, string[]> = {
   // Test-only, never published: Jepsen-style consistency runs against a server process (STUDY-57).
   jepsen: ["client", "server", "core", "values"],
   // Test-only, never published: the same app on Convex's backend and on bunvex's, compared (STUDY-122);
-  // it uses bunvex as a user would, through the public package and its CLI.
-  differential: ["bunvex"],
-  // bin/local-backend.ts (STUDY-39, STUDY-40) carries the persistence drivers into the executable, and provides the
-  // function sandbox's executor, which the server cannot import (STUDY-171 §8.8).
-  bunvex: [
-    "server",
-    "values",
-    "client",
-    "react",
-    "nextjs",
-    "react-clerk",
-    "react-auth0",
-    "cli",
-    "core",
-    "persistence",
-    "sandbox",
-    // `bunvex/testing` (STUDY-159): an app's tests import it as its functions import `bunvex/server`.
-    "testing",
-  ],
+  // it uses bunvex as a user would, through the public packages and its CLI.
+  differential: ["server", "values", "client", "react", "nextjs", "cli"],
+  // apps/local-backend (STUDY-39, STUDY-40): the executable's entry carries the persistence drivers into it, and
+  // provides the function sandbox's executor, which the server cannot import (STUDY-171 §8.8).
+  "apps/local-backend": ["server", "core", "persistence", "sandbox"],
   // UI-01 §6: the design system depends on no bunvex package; the dashboard sees data only through its
   // injected DashboardDataSource, never the engine or the server.
   ui: [],
@@ -116,7 +115,7 @@ const ALLOWED: Record<string, string[]> = {
   // SITE-01: the website renders content only; it never talks to a deployment.
   "apps/site": ["ui"],
   // STUDY-90: an example is a user's app: the public packages only (and the shared end-to-end helper).
-  "examples/_harness": ["bunvex"],
+  "examples/_harness": PUBLIC,
 };
 /** Packages a package may import from its tests only, never from its shipped code (`src/`). */
 const TEST_ONLY: Record<string, string[]> = { helpers: ["core", "testing"] };
@@ -134,7 +133,7 @@ const COMPONENT_TEST_ONLY = ["testing"];
  * Every example (examples/<dir>) may import what a user's app may: the public packages, `helpers` and the component
  * packages (an app installs them as any npm package; STUDY-183 S-4).
  */
-const EXAMPLE_ALLOWED = () => ["bunvex", "react-query", "examples/_harness", "helpers", ...componentKeys()];
+const EXAMPLE_ALLOWED = () => [...PUBLIC, "examples/_harness", "helpers", ...componentKeys()];
 /** Imports core must never contain (rule 2). */
 const CORE_FORBIDDEN = [/^postgres$/, /^mysql2(\/|$)/, /^mongodb$/, /^@bunvex\/persistence(\/|$)/, /^@bunvex\/server/];
 const CORE_FORBIDDEN_TEXT = [/\bBun\.serve\b/, /\bnew WebSocket\b/];

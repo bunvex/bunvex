@@ -15,7 +15,7 @@ type ClientClass = new (url: string, opts: object) => Sub & { close(): Promise<v
 
 async function load(): Promise<{ Client: ClientClass; latestMessage: unknown }> {
   if (client === "bunvex") {
-    const [{ BunvexClient }, { anyApi }] = await Promise.all([import("bunvex/browser"), import("bunvex/server")]);
+    const [{ BunvexClient }, { anyApi }] = await Promise.all([import("@bunvex/client"), import("@bunvex/server")]);
     return { Client: BunvexClient as unknown as ClientClass, latestMessage: anyApi.bench!.latestMessage };
   }
   const app = `${process.env.CONVEX_APP ?? "/root/convex-app"}/`;

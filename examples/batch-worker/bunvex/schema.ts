@@ -5,8 +5,8 @@
 //   the deleted rows at the front of the table.
 // - `totals`: one row, the running total the worker keeps.
 // - `scoreEvents` and `teamTotals`: scores, never deleted, folded into per-team totals by a single writer.
-import { defineSchema, defineTable } from "bunvex/server";
-import { v } from "bunvex/values";
+import { defineSchema, defineTable } from "@bunvex/server";
+import { v } from "@bunvex/values";
 
 export default defineSchema({
   events: defineTable({

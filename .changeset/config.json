@@ -3,14 +3,7 @@
   "changelog": "@changesets/cli/changelog",
   "commit": false,
   "fixed": [
-    [
-      "@bunvex/*",
-      "bunvex",
-      "!@bunvex/helpers",
-      "!@bunvex/sharded-counter",
-      "!@bunvex/batch-worker",
-      "!@bunvex/rate-limiter"
-    ]
+    ["@bunvex/*", "!@bunvex/helpers", "!@bunvex/sharded-counter", "!@bunvex/batch-worker", "!@bunvex/rate-limiter"]
   ],
   "linked": [],
   "access": "public",

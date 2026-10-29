@@ -14,7 +14,7 @@ import type {
   ApiFromModules,
   FilterApi,
   FunctionReference,
-} from "bunvex/server";
+} from "@bunvex/server";
 
 declare const fullApi: ApiFromModules<{
   messages: typeof messages;

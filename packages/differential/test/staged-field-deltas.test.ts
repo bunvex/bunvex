@@ -2,8 +2,8 @@
 // installed `convex` 1.48.0, for the same declarations: the staged validator each builds (its JSON), and the error
 // each throws. No backend is needed: the staged validator is built by the client library and pushed as JSON.
 import { expect, test } from "bun:test";
-import * as b from "bunvex/server";
-import * as bv from "bunvex/values";
+import * as b from "@bunvex/server";
+import * as bv from "@bunvex/values";
 import * as c from "convex/server";
 import * as cv from "convex/values";
 

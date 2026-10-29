@@ -55,8 +55,8 @@ const SEEN = [
 ];
 
 const APP = mod("app.js", [
-  'import { action, componentsGeneric, mutation, query } from "bunvex/server";',
-  'import { BunvexError, v } from "bunvex/values";',
+  'import { action, componentsGeneric, mutation, query } from "@bunvex/server";',
+  'import { BunvexError, v } from "@bunvex/values";',
   "const c = componentsGeneric().thrower.lib;",
   ...SEEN,
   "const fail = (data) => { if (data) throw new BunvexError({ code: 'APP' }); throw new Error('app boom'); };",
@@ -81,26 +81,26 @@ const NODE = mod(
   "node.js",
   [
     '"use node";',
-    'import { action } from "bunvex/server";',
-    'import { BunvexError, v } from "bunvex/values";',
+    'import { action } from "@bunvex/server";',
+    'import { BunvexError, v } from "@bunvex/values";',
     ...SEEN,
     "export const nodeToMutation = action({ args: { data: v.boolean() }, handler: async (ctx, a) => caught(() => ctx.runMutation('app:throwingMutation', a)) });",
   ],
   "node",
 );
-const SCHEMA = mod("schema.js", ['import { defineSchema } from "bunvex/server";', "export default defineSchema({});"]);
+const SCHEMA = mod("schema.js", ['import { defineSchema } from "@bunvex/server";', "export default defineSchema({});"]);
 const THROWER = {
   definitionPath: "thrower",
   definition: mod("bunvex.config.js", [
-    'import { defineComponent } from "bunvex/server";',
+    'import { defineComponent } from "@bunvex/server";',
     'export default defineComponent("thrower");',
   ]),
   dependencies: [] as string[],
   schema: SCHEMA,
   functions: [
     mod("lib.js", [
-      'import { mutation, query } from "bunvex/server";',
-      'import { BunvexError, v } from "bunvex/values";',
+      'import { mutation, query } from "@bunvex/server";',
+      'import { BunvexError, v } from "@bunvex/values";',
       "const fail = (data) => { if (data) throw new BunvexError({ code: 'COMPONENT' }); throw new Error('component boom'); };",
       "export const boomQuery = query({ args: { data: v.boolean() }, handler: async (_ctx, { data }) => fail(data) });",
       "export const boomMutation = mutation({ args: { data: v.boolean() }, handler: async (_ctx, { data }) => fail(data) });",
@@ -147,7 +147,7 @@ async function deployment() {
     nodeDependencies: [],
     appDefinition: {
       definition: mod("bunvex.config.js", [
-        'import { defineApp } from "bunvex/server";',
+        'import { defineApp } from "@bunvex/server";',
         ...(components ? [`import thrower from "${dep("thrower")}";`] : []),
         "const app = defineApp();",
         ...(components ? ["app.use(thrower);"] : []),

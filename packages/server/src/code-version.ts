@@ -138,15 +138,13 @@ export type LoadOptions = {
 /** The module a function tester's query imports `query` and `internalQuery` from. */
 export const REPL_WRAPPERS = "bunvex:/_system/repl/wrappers.js";
 
-/** The `bunvex/*` modules a bundle leaves external, each linked to the server's own. */
+/** The `@bunvex/*` modules a bundle leaves external, each linked to the server's own. */
 export const BUNVEX_MODULES: Record<string, () => Promise<Record<string, unknown>>> = {
-  "bunvex/server": () => import("./index.ts"),
   "@bunvex/server": () => import("./index.ts"),
-  "bunvex/values": () => import("@bunvex/values"),
   "@bunvex/values": () => import("@bunvex/values"),
 };
 /**
- * The specifiers a push leaves as imports: exactly the modules linked above. Any other `bunvex/*` or `@bunvex/*`
+ * The specifiers a push leaves as imports: exactly the modules linked above. Any other `@bunvex/*`
  * import (a component package, a library, the client) is bundled like any package, as Convex bundles everything but
  * its own linked modules (STUDY-158 G1).
  */
@@ -201,7 +199,7 @@ async function importPackage(path: string, env: Record<string, string>): Promise
 export const moduleName = (path: string) => path.replace(/\.js$/, "");
 const isDeps = (path: string) => path.startsWith("_deps/");
 
-/** What `imports` names for a module that imports the server's library (`bunvex/server`, `bunvex/values`). */
+/** What `imports` names for a module that imports the server's library (`@bunvex/server`, `@bunvex/values`). */
 const SERVER_LIBRARY = "\0library";
 
 /**

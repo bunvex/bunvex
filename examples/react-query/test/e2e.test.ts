@@ -3,9 +3,9 @@
 // path is the functions' own subscription, checked through the client.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";
+import { BunvexReactClient } from "@bunvex/react";
 import { BunvexQueryClient, bunvexQuery } from "@bunvex/react-query";
 import { dehydrate, QueryClient } from "@tanstack/react-query";
-import { BunvexReactClient } from "bunvex/react";
 import { build, type Deployment, deploy, until } from "bunvex-examples-harness";
 import { api } from "../bunvex/_generated/api.js";
 

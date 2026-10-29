@@ -3,7 +3,7 @@
 // POSTGRES_URL / MYSQL_URL too). TLS is required by default: DO_NOT_REQUIRE_SSL=1 for a local store without it.
 //   PERSISTENCE=sqlite bun bench/server.ts
 import { Engine } from "@bunvex/core";
-import { createServer, Functions, openPersistence, persistenceConfigFromEnv } from "bunvex/server";
+import { createServer, Functions, openPersistence, persistenceConfigFromEnv } from "@bunvex/server";
 import { bench, benchSchema } from "./functions.ts";
 
 // The benchmark measures capacity: Convex's 4 MiB/s write throughput limit (MAX_BYTES_WRITTEN_PER_SECOND,

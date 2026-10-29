@@ -15,7 +15,7 @@ import { MemoryBlobStore } from "@bunvex/file-storage";
 import { Functions } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
 const REPO = resolve(import.meta.dir, "../../..");
 
 const NODE_MODULE = `"use node";

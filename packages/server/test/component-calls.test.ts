@@ -34,25 +34,25 @@ const mod = (path: string, lines: string[]): ModuleSource => ({
 const dep = (path: string) => `./_componentDeps/${Buffer.from(path).toString("base64url")}`;
 
 const APP_DEFINITION = mod("bunvex.config.js", [
-  'import { defineApp } from "bunvex/server";',
+  'import { defineApp } from "@bunvex/server";',
   `import counter from "${dep("counter")}";`,
   "const app = defineApp();",
   "app.use(counter);",
   "export default app;",
 ]);
 const NO_COMPONENTS = mod("bunvex.config.js", [
-  'import { defineApp } from "bunvex/server";',
+  'import { defineApp } from "@bunvex/server";',
   "export default defineApp();",
 ]);
 /** The app: its own `messages`, and functions calling `counter`'s. */
 const APP_SCHEMA = mod("schema.js", [
-  'import { defineSchema, defineTable } from "bunvex/server";',
-  'import { v } from "bunvex/values";',
+  'import { defineSchema, defineTable } from "@bunvex/server";',
+  'import { v } from "@bunvex/values";',
   "export default defineSchema({ messages: defineTable({ text: v.string() }), items: defineTable({ n: v.number() }) });",
 ]);
 const APP = mod("app.js", [
-  'import { action, componentsGeneric, createFunctionHandle, mutation, query } from "bunvex/server";',
-  'import { v } from "bunvex/values";',
+  'import { action, componentsGeneric, createFunctionHandle, mutation, query } from "@bunvex/server";',
+  'import { v } from "@bunvex/values";',
   "const components = componentsGeneric();",
   "const c = components.counter.lib;",
   "export const count = query({ args: {}, handler: async (ctx) => ctx.runQuery(c.count, {}) });",
@@ -76,19 +76,19 @@ const APP = mod("app.js", [
 const COUNTER = {
   definitionPath: "counter",
   definition: mod("bunvex.config.js", [
-    'import { defineComponent } from "bunvex/server";',
+    'import { defineComponent } from "@bunvex/server";',
     'export default defineComponent("counter");',
   ]),
   dependencies: [] as string[],
   schema: mod("schema.js", [
-    'import { defineSchema, defineTable } from "bunvex/server";',
-    'import { v } from "bunvex/values";',
+    'import { defineSchema, defineTable } from "@bunvex/server";',
+    'import { v } from "@bunvex/values";',
     "export default defineSchema({ messages: defineTable({ body: v.string() }), notes: defineTable({ n: v.number() }) });",
   ]),
   functions: [
     mod("lib.js", [
-      'import { createFunctionHandle, internalQuery, mutation, query } from "bunvex/server";',
-      'import { BunvexError, v } from "bunvex/values";',
+      'import { createFunctionHandle, internalQuery, mutation, query } from "@bunvex/server";',
+      'import { BunvexError, v } from "@bunvex/values";',
       "export const add = mutation({ args: { body: v.string() }, handler: async (ctx, a) => { await ctx.db.insert('messages', a); } });",
       "export const addThenThrow = mutation({ args: {}, handler: async (ctx) => { await ctx.db.insert('messages', { body: 'gone' }); throw new Error('nope'); } });",
       "export const count = query({ args: {}, handler: async (ctx) => (await ctx.db.query('messages').collect()).length });",

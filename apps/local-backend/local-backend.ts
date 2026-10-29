@@ -25,10 +25,10 @@ provideBundledModules({
 // children. The server cannot import it (its child runs the server's loader), so it is provided here.
 provideProcessExecutor(createProcessExecutor);
 
-// The version is the release's (set at build), else the package's.
+// The version is the release's (set at build), else the package's (the published packages' fixed group).
 declare const BUNVEX_BUILD_VERSION: string | undefined;
 const version =
-  typeof BUNVEX_BUILD_VERSION === "string" ? BUNVEX_BUILD_VERSION : (await import("../package.json")).version;
+  typeof BUNVEX_BUILD_VERSION === "string" ? BUNVEX_BUILD_VERSION : (await import("./package.json")).version;
 
 process.exit(
   await localBackendMain(

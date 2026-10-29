@@ -13,7 +13,7 @@ import { v } from "@bunvex/values";
 import { createProcessExecutor, ProcessExecutor } from "../src/executor.ts";
 import { CUT_OFF_GRACE_MS } from "../src/host-action.ts";
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
 const MODULE = `
 import { action, query, mutation } from ${SERVER};
 let counted = 0;

@@ -1,6 +1,6 @@
+import { BunvexProvider, BunvexReactClient } from "@bunvex/react";
 import { BunvexQueryClient } from "@bunvex/react-query";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BunvexProvider, BunvexReactClient } from "bunvex/react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";

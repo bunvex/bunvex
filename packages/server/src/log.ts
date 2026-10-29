@@ -11,7 +11,7 @@
 // - `custom_audit` needs an entitlement no self-hosted deployment has (DV-304), so no sink receives them: what
 //   an app observes is the API and its checks.
 //
-// This module holds what `bunvex/server` exports, with nothing of the runtime (its isomorphic entry, STUDY-91):
+// This module holds what `@bunvex/server` exports, with nothing of the runtime (its isomorphic entry, STUDY-91):
 // the running function's lines come from log-audit.ts, which sets `setAuditScope`.
 
 import { knob } from "@bunvex/core/knobs";

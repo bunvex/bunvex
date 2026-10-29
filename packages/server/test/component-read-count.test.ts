@@ -37,14 +37,16 @@ const component = (name: string, modules: string[]) => ({
   definitionPath: name,
   definition: mod(
     "bunvex.config.js",
-    `import { defineComponent } from "bunvex/server";\nexport default defineComponent("${name}");`,
+    `import { defineComponent } from "@bunvex/server";\nexport default defineComponent("${name}");`,
   ),
   dependencies: [] as string[],
   schema: mod(
     "schema.js",
-    `import { defineSchema, defineTable } from "bunvex/server";\nimport { v } from "bunvex/values";\nexport default defineSchema({ items: defineTable(v.any()) });`,
+    `import { defineSchema, defineTable } from "@bunvex/server";\nimport { v } from "@bunvex/values";\nexport default defineSchema({ items: defineTable(v.any()) });`,
   ),
-  functions: modules.map((m) => mod(`${m}.js`, `import { mutation, query } from "bunvex/server";\n${reads}\n${write}`)),
+  functions: modules.map((m) =>
+    mod(`${m}.js`, `import { mutation, query } from "@bunvex/server";\n${reads}\n${write}`),
+  ),
   udfServerVersion: "1.46.0",
 });
 
@@ -85,11 +87,11 @@ async function deployment() {
     appDefinition: {
       definition: mod(
         "bunvex.config.js",
-        `import { defineApp } from "bunvex/server";\nimport one from "${dep("one")}";\nimport two from "${dep("two")}";\nconst app = defineApp();\napp.use(one);\napp.use(two);\napp.use(two, { name: "again" });\nexport default app;`,
+        `import { defineApp } from "@bunvex/server";\nimport one from "${dep("one")}";\nimport two from "${dep("two")}";\nconst app = defineApp();\napp.use(one);\napp.use(two);\napp.use(two, { name: "again" });\nexport default app;`,
       ),
       dependencies: ["one", "two"],
       schema: null,
-      changedModules: [mod("app.js", `import { query } from "bunvex/server";\n${reads}`)],
+      changedModules: [mod("app.js", `import { query } from "@bunvex/server";\n${reads}`)],
       unchangedModuleHashes: [],
       udfServerVersion: "1.46.0",
     },

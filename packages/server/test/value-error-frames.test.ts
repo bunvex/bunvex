@@ -11,7 +11,7 @@ import { MemoryBlobStore } from "@bunvex/file-storage";
 import { Functions } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
 
-const SERVER = ["bunvex", "server"].join("/");
+const SERVER = ["@bunvex", "server"].join("/");
 const REPO = resolve(import.meta.dir, "../../..");
 const stops: (() => unknown)[] = [];
 afterEach(async () => {

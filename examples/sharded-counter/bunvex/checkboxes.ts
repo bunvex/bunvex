@@ -1,7 +1,7 @@
 // One million checkboxes (after atrakh/one-million-checkboxes, as the sharded counter's own example): their bits in
 // 250 documents, and how many are checked in a counter of 100 shards, so that many clicks at once rarely conflict.
 import { ShardedCounter } from "@bunvex/sharded-counter";
-import { v } from "bunvex/values";
+import { v } from "@bunvex/values";
 import { api, components } from "./_generated/api";
 import { internalMutation, type MutationCtx, mutation, query } from "./_generated/server";
 import { BOXES_PER_DOCUMENT, isChecked, NUM_DOCUMENTS, shiftBit } from "./boxes";

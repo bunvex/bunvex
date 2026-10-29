@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineSchema, Engine } from "@bunvex/core";
 import { SqlitePersistence } from "@bunvex/core/persistence/sqlite";
-import { adminKeyCipherKey, createServer, Functions, issueAdminKey } from "bunvex/server";
+import { adminKeyCipherKey, createServer, Functions, issueAdminKey } from "@bunvex/server";
 import { MemoryBlobStore } from "../packages/file-storage/src/index.ts";
 
 const CALLS = Number(process.argv.slice(2).find((a) => !a.startsWith("--")) ?? 2000);
@@ -24,8 +24,8 @@ if (SANDBOX === "process") {
 const SECRET = "c3".repeat(32);
 const NAME = "component-env-bench";
 const KEY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET) });
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
-const VALUES = JSON.stringify(["bunvex", "values"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
+const VALUES = JSON.stringify(["@bunvex", "values"].join("/"));
 const mod = (path: string, source: string) => ({ path, source, environment: "isolate" as const });
 const dep = (path: string) => `./_componentDeps/${Buffer.from(path).toString("base64url")}`;
 

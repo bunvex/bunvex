@@ -35,8 +35,8 @@ process.env.TZ = "UTC";
 const SECRET = "c7".repeat(32);
 const NAME = "component-parity-test";
 const KEY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET) });
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
-const VALUES = JSON.stringify(["bunvex", "values"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
+const VALUES = JSON.stringify(["@bunvex", "values"].join("/"));
 
 type Module = { path: string; source: string; environment: "isolate" };
 const mod = (path: string, source: string): Module => ({ path, source, environment: "isolate" });

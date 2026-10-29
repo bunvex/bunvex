@@ -29,7 +29,7 @@ export const DEFINITION_MODULE = "bunvex.config.js";
 const CONFIG_FILES = ["bunvex.config.ts", "bunvex.config.js"];
 const CONDITIONS = ["bunvex", "module"];
 /** Convex's virtual config for an app without one (`bundle.ts` `virtualConfig`). */
-const DEFAULT_APP = 'import { defineApp } from "bunvex/server";\nconst app = defineApp();\nexport default app;\n';
+const DEFAULT_APP = 'import { defineApp } from "@bunvex/server";\nconst app = defineApp();\nexport default app;\n';
 
 /** A component's definition as `start_push` takes it (Convex's `ComponentDefinitionConfig`). */
 export type ComponentDefinitionConfig = {

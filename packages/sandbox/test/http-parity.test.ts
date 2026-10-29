@@ -27,8 +27,8 @@ import { constructedAt } from "./parity-frames.ts";
 provideProcessExecutor(() => new ProcessExecutor({ memoryCap: false }));
 process.env.TZ = "UTC";
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
-const VALUES = JSON.stringify(["bunvex", "values"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
+const VALUES = JSON.stringify(["@bunvex", "values"].join("/"));
 const MiB = 1 << 20;
 
 /** HTTP cases: `ctx` is an HTTP action's, `request` the request, `T` the `fetch` target's origin (`process.env.T`). */

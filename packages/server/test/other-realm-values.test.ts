@@ -46,7 +46,7 @@ describe("an error from another realm", () => {
     const s = createServer({ engine, functions, port: 0, deployable: true, fileStorage: null });
     stops.push(() => s.shutdown());
     await s.codeReady;
-    const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+    const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
     await s.deployCode([
       {
         path: "m.js",

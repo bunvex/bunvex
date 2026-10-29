@@ -1,9 +1,9 @@
 // The Next.js App Router example end to end (STUDY-90): its functions through the client and through
-// `bunvex/nextjs` as its Server Components call them, and `next build` (which loads bunvex's packages in Node:
-// STUDY-91's isomorphic `bunvex/server`).
+// `@bunvex/nextjs` as its Server Components call them, and `next build` (which loads bunvex's packages in Node:
+// STUDY-91's isomorphic `@bunvex/server`).
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { fetchMutation, fetchQuery, preloadedQueryResult, preloadQuery } from "bunvex/nextjs";
+import { fetchMutation, fetchQuery, preloadedQueryResult, preloadQuery } from "@bunvex/nextjs";
 import { build, type Deployment, deploy, until } from "bunvex-examples-harness";
 import { api } from "../bunvex/_generated/api.js";
 

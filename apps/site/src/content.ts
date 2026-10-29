@@ -90,7 +90,7 @@ export const FILES = {
       name: "messages.ts",
       path: "examples/tutorial/bunvex/messages.ts",
       whole: true,
-      code: `import { v } from ${q("bunvex/values")};
+      code: `import { v } from ${q("@bunvex/values")};
 import { mutation, query } from ${q("./_generated/server")};
 
 /** The 50 most recent messages, oldest first. */
@@ -115,7 +115,7 @@ export const send = mutation({
       name: "App.tsx",
       path: "examples/tutorial/src/App.tsx",
       whole: false,
-      code: `import { useMutation, useQuery } from ${q("bunvex/react")};
+      code: `import { useMutation, useQuery } from ${q("@bunvex/react")};
 import { api } from ${q("../bunvex/_generated/api")};
 
 export function App() {
@@ -263,8 +263,8 @@ export const MIGRATE = {
   ],
   /** Two module names on each side of the diff. */
   diff: [
-    { from: `import { query } from ${q("convex/server")};`, to: `import { query } from ${q("bunvex/server")};` },
-    { from: `import { useQuery } from ${q("convex/react")};`, to: `import { useQuery } from ${q("bunvex/react")};` },
+    { from: `import { query } from ${q("convex/server")};`, to: `import { query } from ${q("@bunvex/server")};` },
+    { from: `import { useQuery } from ${q("convex/react")};`, to: `import { useQuery } from ${q("@bunvex/react")};` },
     { from: "npx convex dev", to: "bunx bunvex dev" },
   ],
 } as const;

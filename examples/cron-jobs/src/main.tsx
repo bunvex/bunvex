@@ -1,4 +1,4 @@
-import { BunvexProvider, BunvexReactClient } from "bunvex/react";
+import { BunvexProvider, BunvexReactClient } from "@bunvex/react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";

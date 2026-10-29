@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "bunvex/react";
+import { useMutation, useQuery } from "@bunvex/react";
 import { type FormEvent, useState } from "react";
 import { api } from "../bunvex/_generated/api";
 import type { Id } from "../bunvex/_generated/dataModel";

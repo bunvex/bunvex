@@ -2,7 +2,7 @@
 
 Signed-in users, with Clerk for sign-in:
 
-- `src/main.tsx` wraps the app in Clerk's `ClerkProvider` and `BunvexProviderWithClerk` (`bunvex/react-clerk`),
+- `src/main.tsx` wraps the app in Clerk's `ClerkProvider` and `BunvexProviderWithClerk` (`@bunvex/react-clerk`),
   which hands Clerk's tokens to the client.
 - `bunvex/auth.config.ts` trusts your Clerk instance (its issuer, in the deployment's `CLERK_JWT_ISSUER_DOMAIN`
   variable) for tokens whose audience is `bunvex`.

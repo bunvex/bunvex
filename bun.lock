@@ -39,6 +39,19 @@
         "vite": "^8.3.1",
       },
     },
+    "apps/local-backend": {
+      "name": "@bunvex/local-backend",
+      "version": "0.1.0-alpha.1",
+      "dependencies": {
+        "@bunvex/core": "workspace:*",
+        "@bunvex/persistence": "workspace:*",
+        "@bunvex/sandbox": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "mongodb": "^7.7.0",
+        "mysql2": "^3.24.4",
+        "postgres": "^3.4.9",
+      },
+    },
     "apps/site": {
       "name": "@bunvex/site",
       "version": "0.0.0",
@@ -69,12 +82,13 @@
       "name": "@bunvex/bench",
       "version": "0.0.0",
       "dependencies": {
+        "@bunvex/client": "workspace:*",
         "@bunvex/core": "workspace:*",
         "@bunvex/persistence": "workspace:*",
         "@bunvex/persistence-conformance": "workspace:*",
         "@bunvex/search": "workspace:*",
+        "@bunvex/server": "workspace:*",
         "@bunvex/values": "workspace:*",
-        "bunvex": "workspace:*",
         "mongodb": "^7.7.0",
         "mysql2": "^3.24.4",
         "postgres": "^3.4.9",
@@ -137,10 +151,10 @@
       "name": "bunvex-examples-browser",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
         "bunvex-examples-harness": "workspace:*",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "playwright-core": "1.63.0",
       },
     },
@@ -148,18 +162,24 @@
       "name": "bunvex-examples-harness",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/client": "workspace:*",
+      },
+      "devDependencies": {
+        "@bunvex/cli": "workspace:*",
       },
     },
     "examples/args-validation": {
       "name": "bunvex-example-args-validation",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -173,11 +193,14 @@
       "version": "0.0.0",
       "dependencies": {
         "@bunvex/batch-worker": "workspace:*",
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -190,11 +213,14 @@
       "name": "bunvex-example-cron-jobs",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -207,11 +233,14 @@
       "name": "bunvex-example-custom-errors",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -224,11 +253,14 @@
       "name": "bunvex-example-dall-e-storage-action",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -241,11 +273,14 @@
       "name": "bunvex-example-file-storage",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -258,11 +293,14 @@
       "name": "bunvex-example-file-storage-with-http",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -275,11 +313,14 @@
       "name": "bunvex-example-giphy-action",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -292,11 +333,14 @@
       "name": "bunvex-example-http",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -309,12 +353,17 @@
       "name": "bunvex-example-nextjs-app-router",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/client": "workspace:*",
+        "@bunvex/nextjs": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "next": "16.3.8",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/node": "26.6.3",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
@@ -326,12 +375,17 @@
       "name": "bunvex-example-nextjs-pages-router",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/client": "workspace:*",
+        "@bunvex/nextjs": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "next": "16.3.8",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/node": "26.6.3",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
@@ -343,11 +397,14 @@
       "name": "bunvex-example-pagination",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -360,11 +417,14 @@
       "name": "bunvex-example-prewarming",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -377,13 +437,16 @@
       "name": "bunvex-example-react-query",
       "version": "0.0.0",
       "dependencies": {
+        "@bunvex/react": "workspace:*",
         "@bunvex/react-query": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "@tanstack/react-query": "5.104.1",
-        "bunvex": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -396,11 +459,14 @@
       "name": "bunvex-example-relational-data-modeling",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -413,11 +479,14 @@
       "name": "bunvex-example-rooms-cursors",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -430,11 +499,14 @@
       "name": "bunvex-example-scheduling",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -447,11 +519,14 @@
       "name": "bunvex-example-search",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -465,13 +540,16 @@
       "version": "0.0.0",
       "dependencies": {
         "@bunvex/helpers": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
         "@bunvex/sharded-counter": "workspace:*",
-        "bunvex": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
         "react-window": "2.2.7",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -484,11 +562,14 @@
       "name": "bunvex-example-system-tables",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -501,9 +582,12 @@
       "name": "bunvex-example-testing",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
+        "@bunvex/testing": "workspace:*",
         "typescript": "^5.9.0",
       },
     },
@@ -511,11 +595,14 @@
       "name": "bunvex-example-tutorial",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -528,11 +615,14 @@
       "name": "bunvex-example-typescript",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -545,12 +635,17 @@
       "name": "bunvex-example-users-and-clerk",
       "version": "0.0.0",
       "dependencies": {
+        "@bunvex/client": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/react-clerk": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "@clerk/clerk-react": "5.61.3",
-        "bunvex": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -564,11 +659,14 @@
       "name": "bunvex-example-vector-search",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
+        "@bunvex/cli": "workspace:*",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.1",
@@ -584,40 +682,6 @@
         "@bunvex/values": "workspace:*",
         "jose": "^6.2.12",
       },
-    },
-    "packages/bunvex": {
-      "name": "bunvex",
-      "version": "0.1.0-alpha.1",
-      "bin": {
-        "bunvex": "./bin/bunvex.ts",
-      },
-      "dependencies": {
-        "@bunvex/cli": "workspace:*",
-        "@bunvex/client": "workspace:*",
-        "@bunvex/nextjs": "workspace:*",
-        "@bunvex/react": "workspace:*",
-        "@bunvex/react-auth0": "workspace:*",
-        "@bunvex/react-clerk": "workspace:*",
-        "@bunvex/sandbox": "workspace:*",
-        "@bunvex/server": "workspace:*",
-        "@bunvex/testing": "workspace:*",
-        "@bunvex/values": "workspace:*",
-      },
-      "devDependencies": {
-        "@bunvex/core": "workspace:*",
-        "@bunvex/persistence": "workspace:*",
-        "mongodb": "^7.7.0",
-        "mysql2": "^3.24.4",
-        "postgres": "^3.4.9",
-      },
-      "peerDependencies": {
-        "@auth0/auth0-react": "^2.0.1",
-        "react": "^19.3.0",
-      },
-      "optionalPeers": [
-        "@auth0/auth0-react",
-        "react",
-      ],
     },
     "packages/cli": {
       "name": "@bunvex/cli",
@@ -701,7 +765,11 @@
       "name": "@bunvex/differential",
       "version": "0.0.0",
       "dependencies": {
-        "bunvex": "workspace:*",
+        "@bunvex/client": "workspace:*",
+        "@bunvex/nextjs": "workspace:*",
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
       },
       "devDependencies": {
         "@bunvex/batch-worker": "workspace:*",
@@ -1097,6 +1165,8 @@
     "@bunvex/helpers": ["@bunvex/helpers@workspace:packages/helpers"],
 
     "@bunvex/jepsen": ["@bunvex/jepsen@workspace:packages/jepsen"],
+
+    "@bunvex/local-backend": ["@bunvex/local-backend@workspace:apps/local-backend"],
 
     "@bunvex/nextjs": ["@bunvex/nextjs@workspace:packages/nextjs"],
 
@@ -1709,8 +1779,6 @@
     "bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
 
     "bundle-name": ["bundle-name@4.1.1", "", { "dependencies": { "run-applescript": "^7.0.0" } }, "sha512-DdH81/zPLVS11EUgWq3tEu/xn+EzljlMYooDNdzWEnFha3R3NBMpMV1UqYIpjYHV/SgpFKMIX1Oh7o06SjM/oA=="],
-
-    "bunvex": ["bunvex@workspace:packages/bunvex"],
 
     "bunvex-example-args-validation": ["bunvex-example-args-validation@workspace:examples/args-validation"],
 

@@ -22,8 +22,8 @@ import { constructedAt } from "./parity-frames.ts";
 provideProcessExecutor(createProcessExecutor);
 process.env.TZ = "UTC";
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
-const VALUES = JSON.stringify(["bunvex", "values"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
+const VALUES = JSON.stringify(["@bunvex", "values"].join("/"));
 
 /**
  * Cases a query, a mutation and an action share. `fail(value)` leaves `value` rejected with no handler (`mode`

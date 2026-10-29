@@ -16,7 +16,7 @@ const SECRET = "cd".repeat(32);
 const NAME = "stacks-test";
 const KEY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET) });
 // The app's imports, spelled so the dependency checker does not take them for this test's own.
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
 const API = JSON.stringify("./_generated/api");
 const TINY_LIB = JSON.stringify(["tiny", "lib"].join("-"));
 

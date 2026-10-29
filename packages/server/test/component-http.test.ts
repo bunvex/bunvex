@@ -39,16 +39,16 @@ const route = (path: string, body: string, method = "GET") =>
 /** The app's definition: `httpComponent` mounted as `use` says, the app's own options as given. */
 const appDefinition = (appOptions: string, useOptions: string) =>
   mod("bunvex.config.js", [
-    'import { defineApp } from "bunvex/server";',
+    'import { defineApp } from "@bunvex/server";',
     `import httpComponent from "${dep("httpComponent")}";`,
     `const app = defineApp(${appOptions});`,
     `app.use(httpComponent${useOptions});`,
     "export default app;",
   ]);
-const SCHEMA = mod("schema.js", ['import { defineSchema } from "bunvex/server";', "export default defineSchema({});"]);
+const SCHEMA = mod("schema.js", ['import { defineSchema } from "@bunvex/server";', "export default defineSchema({});"]);
 const httpModule = (lines: string[]) =>
   mod("http.js", [
-    'import { componentsGeneric, httpActionGeneric as httpAction, httpRouter } from "bunvex/server";',
+    'import { componentsGeneric, httpActionGeneric as httpAction, httpRouter } from "@bunvex/server";',
     "const components = componentsGeneric();",
     "const http = httpRouter();",
     ...lines,
@@ -71,7 +71,7 @@ const PREFIX_APP_HTTP = httpModule([
 const HTTP_COMPONENT = {
   definitionPath: "httpComponent",
   definition: mod("bunvex.config.js", [
-    'import { defineComponent } from "bunvex/server";',
+    'import { defineComponent } from "@bunvex/server";',
     `import httpGrandchild from "${dep("httpGrandchild")}";`,
     'const component = defineComponent("httpComponent");',
     'component.use(httpGrandchild, { name: "httpGrandchild", httpPrefix: "/gc/" });',
@@ -95,7 +95,7 @@ const HTTP_COMPONENT = {
 const HTTP_GRANDCHILD = {
   definitionPath: "httpGrandchild",
   definition: mod("bunvex.config.js", [
-    'import { defineComponent } from "bunvex/server";',
+    'import { defineComponent } from "@bunvex/server";',
     'export default defineComponent("httpGrandchild");',
   ]),
   dependencies: [] as string[],
@@ -107,7 +107,7 @@ const HTTP_GRANDCHILD = {
       'http.route({ pathPrefix: "/", method: "GET", handler: httpAction(async () => new Response("grandchild custom 404", { status: 404 })) });',
     ]),
     mod("public.js", [
-      'import { query } from "bunvex/server";',
+      'import { query } from "@bunvex/server";',
       'export const greeting = query({ args: {}, handler: async () => "hello from grandchild query" });',
     ]),
   ],

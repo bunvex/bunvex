@@ -6,7 +6,11 @@
   "license": "Apache-2.0",
   "type": "module",
   "dependencies": {
-    "bunvex": "workspace:*"
+    "@bunvex/client": "workspace:*",
+    "@bunvex/nextjs": "workspace:*",
+    "@bunvex/react": "workspace:*",
+    "@bunvex/server": "workspace:*",
+    "@bunvex/values": "workspace:*"
   },
   "devDependencies": {
     "@bunvex/batch-worker": "workspace:*",

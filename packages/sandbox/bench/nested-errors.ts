@@ -19,8 +19,8 @@ const MODES = (process.env.MODES ?? "vm,process").split(",") as ("vm" | "process
 provideProcessExecutor(createProcessExecutor);
 
 // The pushed module's imports, built so the dependency rules do not read them as this package's own.
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
-const VALUES = JSON.stringify(["bunvex", "values"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
+const VALUES = JSON.stringify(["@bunvex", "values"].join("/"));
 const SOURCE = `
 import { action, mutation, query } from ${SERVER};
 import { BunvexError } from ${VALUES};

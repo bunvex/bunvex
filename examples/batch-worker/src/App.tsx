@@ -1,6 +1,6 @@
 // Two panels, one per named worker (Convex's example's first two): a work queue that sums events, and a scoreboard
 // whose totals one loop keeps. Each shows its worker's status, live.
-import { useMutation, useQuery } from "bunvex/react";
+import { useMutation, useQuery } from "@bunvex/react";
 import { type ReactNode, useState } from "react";
 import { api } from "../bunvex/_generated/api.js";
 

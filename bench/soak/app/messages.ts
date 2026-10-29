@@ -1,7 +1,7 @@
 // A chat: the latest messages of a channel (what the sync clients subscribe to), sending, full-text search, and the
 // cron's trim that keeps the table at a steady size, so memory has no reason to grow with the data.
-import { internalMutationGeneric, mutationGeneric, queryGeneric } from "bunvex/server";
-import { v } from "bunvex/values";
+import { internalMutationGeneric, mutationGeneric, queryGeneric } from "@bunvex/server";
+import { v } from "@bunvex/values";
 
 /** Messages kept: the trim deletes the oldest beyond this. */
 const KEEP = 2000;

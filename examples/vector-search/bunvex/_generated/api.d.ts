@@ -16,7 +16,7 @@ import type {
   ApiFromModules,
   FilterApi,
   FunctionReference,
-} from "bunvex/server";
+} from "@bunvex/server";
 
 declare const fullApi: ApiFromModules<{
   embed: typeof embed;

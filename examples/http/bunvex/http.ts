@@ -1,4 +1,4 @@
-import { httpRouter } from "bunvex/server";
+import { httpRouter } from "@bunvex/server";
 import { getByAuthor, getByAuthorPathSuffix, postMessage } from "./messages";
 
 // The HTTP actions' routes, served on the deployment's site origin. The router is the default export of

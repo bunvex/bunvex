@@ -1,4 +1,4 @@
-// The names `bunvex/server` and `bunvex/values` export, against Convex's (STUDY-180 §3.2): every name the installed
+// The names `@bunvex/server` and `@bunvex/values` export, against Convex's (STUDY-180 §3.2): every name the installed
 // `convex` 1.48.0 exports from `convex/server` and `convex/values` (its `.d.ts`, as the type checker sees them,
 // values and types together) is exported by bunvex's entry under the same name, except the ones listed here. The
 // `convex` package is the differential suite's dev dependency (packages/differential): read from its `.d.ts`

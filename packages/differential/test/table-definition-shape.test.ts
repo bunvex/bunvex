@@ -2,8 +2,8 @@
 // `convex` 1.48.0, for the same declarations. Libraries such as convex-helpers read these lists
 // (`schema.tables[t].indexes.find((i) => i.indexDescriptor === name).fields`). No backend is needed.
 import { expect, test } from "bun:test";
-import * as b from "bunvex/server";
-import * as bv from "bunvex/values";
+import * as b from "@bunvex/server";
+import * as bv from "@bunvex/values";
 import * as c from "convex/server";
 import * as cv from "convex/values";
 

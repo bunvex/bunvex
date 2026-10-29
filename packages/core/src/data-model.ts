@@ -59,7 +59,7 @@ export type NamedIndex<
 > = Indexes<TableInfo>[IndexName];
 
 /**
- * A table's search indexes (Convex's `SearchIndexes`, exported under that name by `bunvex/server`; core's own
+ * A table's search indexes (Convex's `SearchIndexes`, exported under that name by `@bunvex/server`; core's own
  * `SearchIndexes` is the runtime's index set).
  */
 export type TableSearchIndexes<TableInfo extends GenericTableInfo> = TableInfo["searchIndexes"];

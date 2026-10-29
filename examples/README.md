@@ -29,7 +29,7 @@ bun run example tutorial          # from the repository's root; dev options foll
 ```
 
 It runs the example's `bun run dev` with `BUNVEX_LOCAL_BACKEND_BINARY` pointing to a shim that runs
-`packages/bunvex/bin/local-backend.ts` with Bun. The example's local deployment (`.bunvex/`) is the same one
+`apps/local-backend/local-backend.ts` with Bun. The example's local deployment (`.bunvex/`) is the same one
 either way: its data stays.
 
 ## Tests
@@ -75,4 +75,4 @@ drives it in Chromium; any page error or console error fails the test.
 | [batch-worker](batch-worker) | A component from npm: `@bunvex/batch-worker` draining a work queue and folding scores into totals, each resuming from a commit-timestamp cursor |
 | [sharded-counter](sharded-counter) | A component from npm: `@bunvex/sharded-counter` counting a million checkboxes, a trigger counting a table |
 | [testing](testing) | `@bunvex/testing`: the app's functions in tests, on the real engine (no front end) |
-| [users-and-clerk](users-and-clerk) | Signed-in users with Clerk (`bunvex/react-clerk`) |
+| [users-and-clerk](users-and-clerk) | Signed-in users with Clerk (`@bunvex/react-clerk`) |

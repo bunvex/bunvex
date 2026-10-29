@@ -16,7 +16,7 @@ import { memoryStore } from "./memory-store.ts";
 const SECRET = "34".repeat(32);
 const NAME = "inline-test";
 const KEY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET) });
-const SERVER = ["bunvex", "server"].join("/");
+const SERVER = ["@bunvex", "server"].join("/");
 
 const stops: (() => unknown)[] = [];
 const dirs: string[] = [];

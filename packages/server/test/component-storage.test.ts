@@ -32,21 +32,21 @@ const mod = (path: string, lines: string[]): ModuleSource => ({
 const dep = (path: string) => `./_componentDeps/${Buffer.from(path).toString("base64url")}`;
 
 const APP_DEFINITION = mod("bunvex.config.js", [
-  'import { defineApp } from "bunvex/server";',
+  'import { defineApp } from "@bunvex/server";',
   `import counter from "${dep("counter")}";`,
   "const app = defineApp();",
   "app.use(counter);",
   "export default app;",
 ]);
 const SCHEMA = mod("schema.js", [
-  'import { defineSchema, defineTable } from "bunvex/server";',
+  'import { defineSchema, defineTable } from "@bunvex/server";',
   "export default defineSchema({});",
 ]);
 /** `_storage` as the caller's namespace sees it: each file's id. */
 const FILES = "async (ctx) => (await ctx.db.system.query('_storage').collect()).map((f) => f._id)";
 const APP = mod("app.js", [
-  'import { action, componentsGeneric, mutation, query } from "bunvex/server";',
-  'import { v } from "bunvex/values";',
+  'import { action, componentsGeneric, mutation, query } from "@bunvex/server";',
+  'import { v } from "@bunvex/values";',
   "const c = componentsGeneric().counter.lib;",
   "export const uploadUrl = mutation({ args: {}, handler: async (ctx) => ctx.storage.generateUploadUrl() });",
   "export const url = query({ args: { id: v.string() }, handler: async (ctx, { id }) => ctx.storage.getUrl(id) });",
@@ -61,15 +61,15 @@ const APP = mod("app.js", [
 const COUNTER = {
   definitionPath: "counter",
   definition: mod("bunvex.config.js", [
-    'import { defineComponent } from "bunvex/server";',
+    'import { defineComponent } from "@bunvex/server";',
     'export default defineComponent("counter");',
   ]),
   dependencies: [] as string[],
   schema: SCHEMA,
   functions: [
     mod("lib.js", [
-      'import { action, mutation, query } from "bunvex/server";',
-      'import { v } from "bunvex/values";',
+      'import { action, mutation, query } from "@bunvex/server";',
+      'import { v } from "@bunvex/values";',
       "export const uploadUrl = mutation({ args: {}, handler: async (ctx) => ctx.storage.generateUploadUrl() });",
       "export const url = query({ args: { id: v.string() }, handler: async (ctx, { id }) => ctx.storage.getUrl(id) });",
       `export const files = query({ args: {}, handler: ${FILES} });`,

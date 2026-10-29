@@ -2,7 +2,7 @@
 // worker; the worker sums batches of 10 into one total and deletes what it processed. The work query resumes from
 // the cursor it returned last time, a commit timestamp, so it never rescans the deleted rows.
 import { defineBatchWorkerValidators, ping } from "@bunvex/batch-worker";
-import { v } from "bunvex/values";
+import { v } from "@bunvex/values";
 import { components, internal } from "./_generated/api.js";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server.js";
 

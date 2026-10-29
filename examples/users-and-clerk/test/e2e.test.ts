@@ -3,7 +3,7 @@
 // Clerk's "bunvex" JWT template signs: `aud: "bunvex"`, the user's id as `sub`, and their name.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { BunvexHttpClient } from "bunvex/browser";
+import { BunvexHttpClient } from "@bunvex/client";
 import { build, type Deployment, deploy, until } from "bunvex-examples-harness";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { api } from "../bunvex/_generated/api.js";

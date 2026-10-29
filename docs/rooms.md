@@ -38,7 +38,7 @@ Each field is a validator object (or a `v.object(...)`); the generated `api` has
 
 ```ts
 // bunvex/rooms.ts
-import { v } from "bunvex/values";
+import { v } from "@bunvex/values";
 import { presence, room } from "./_generated/server";
 
 export const doc = room({
@@ -79,7 +79,7 @@ export const online = presence({
 ### React
 
 ```tsx
-import { usePresence, useRoom } from "bunvex/react";
+import { usePresence, useRoom } from "@bunvex/react";
 import { api } from "../bunvex/_generated/api";
 
 function Cursors({ docId }) {

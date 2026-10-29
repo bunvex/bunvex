@@ -9,7 +9,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dir, "..");
-const ENTRY = join(ROOT, "packages/bunvex/bin/local-backend.ts");
+const ENTRY = join(ROOT, "apps/local-backend/local-backend.ts");
 /**
  * The Workers the backend starts, each an entry point of its own in the executable (Bun bundles a Worker's module
  * only when it is one). A module of the executable starts a Worker at `new URL("./<file>", import.meta.url)`,
