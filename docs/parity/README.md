@@ -10,8 +10,9 @@ item. It is the project's to-do list at the scale of the whole product.
 | Clients, sync protocol, reactivity, React, HTTP client | [client-sync.md](client-sync.md) | 163 | 2 | 1 |
 | Platform: auth, storage, scheduler, crons, search, HTTP actions, CLI, deploy, import/export, system tables, libraries | [platform.md](platform.md) | 248 | 24 | 2 |
 
-Beyond Convex, [additions.md](additions.md) lists 38 additions: 34 built (5 of them dashboard screens on the
-mock), 1 being built (AD-44), 1 accepted, 2 deferred, none proposed (recounted on 2026-10-20, STUDY-181 PR 1: AD-23
+Beyond Convex, [additions.md](additions.md) lists 39 additions: 34 built (5 of them dashboard screens on the
+mock), 1 being built (AD-44), 1 accepted (AD-47, STUDY-194 Q4), 1 under review (AD-01, since STUDY-191), 2 deferred,
+none proposed (recounted on 2026-10-28; before that 2026-10-20, STUDY-181 PR 1: AD-23
 built, and AD-34 and AD-35 built in STUDY-159; before that 2026-10-19, STUDY-173; before that 2026-10-15, the dashboard audit after STUDY-149; AD-41 deferred; then
 AD-24 and AD-25's screens on a deployment, and AD-04's Topology, STUDY-131 §11; AD-42, rooms and presence scopes,
 accepted in STUDY-164 and built the same day, STUDY-164 §7; AD-43, rooms in the dashboard, accepted in STUDY-165 and built: the read and the counters, STUDY-165 §5.1,
@@ -46,9 +47,11 @@ are not counted: 1 in server-api.md, 1 in client-sync.md, 6 in platform.md.
 The order follows one principle: **first make what exists correct, then make the core behave like Convex,
 then grow outwards.** Each item becomes one or more PRs, each with its study.
 
-**Where it stands (checked against the parity rows on 2026-10-12):** phases 0, 1 and 2 are done. Phase 3 is done
-except built-in auth (item 13); the dashboard on a real deployment (item 12) is done since STUDY-149 PR 8. In phase 4, search, vector search,
-log streaming, metrics, streaming export and Node's `externalPackages` are done; components remain.
+**Where it stands (checked against the parity rows on 2026-10-28):** phases 0, 1 and 2 are done. Phase 3 is done
+except built-in auth (item 13), whose prerequisites are built: `ctx.auth.signJwt` (STUDY-192), `@bunvex/batch-worker`
+(STUDY-196) and `@bunvex/rate-limiter` (STUDY-197). In phase 4, search, vector search, log streaming, metrics,
+streaming export and Node's `externalPackages` are done; components remain (steps 1–7 built, step 8 at three of
+bunvex's own components).
 
 ### Phase 0 — correctness bugs in what already exists
 
@@ -141,8 +144,8 @@ In this order:
     the app on it, the image, `dashboard.zip` and the local dashboard, the CLI's links; [docs/dashboard.md](../dashboard.md));
     the gaps left are in [Gaps by impact](#gaps-by-impact);
 13. built-in auth — open: the core follows Convex Auth v2 (STUDY-191, direction decided 2026-10-26; it replaces
-    STUDY-28's better-auth base, AD-01 under review); prerequisites `signJwt`, `@bunvex/batch-worker`,
-    `@bunvex/rate-limiter`;
+    STUDY-28's better-auth base, AD-01 under review); its prerequisites are built: `signJwt` (STUDY-192),
+    `@bunvex/batch-worker` (STUDY-196) and `@bunvex/rate-limiter` (STUDY-197);
 14. import/export in Convex's snapshot format, so data can move between Convex and bunvex (STUDY-42) —
     done; shape inference and the upgrade path remain (platform §18; cloud backups are cloud-only, *n/a*).
 
@@ -153,8 +156,9 @@ containers up, deploy functions, see them work) before the remaining platform it
 
 - full-text search (STUDY-45, STUDY-111: all 10 rows done, platform §6) and vector search (STUDY-51: all 6
   done, §7) — done;
-- components (§11; DV-55, plan in STUDY-62) — open: steps 1–7 built; step 8, bunvex's own components, started
-  with `@bunvex/sharded-counter` (STUDY-183);
+- components (§11; DV-55, plan in STUDY-62) — open: steps 1–7 built; step 8, bunvex's own components:
+  `@bunvex/sharded-counter` (STUDY-183), `@bunvex/batch-worker` (STUDY-196) and `@bunvex/rate-limiter` (STUDY-197)
+  built, aggregate, workpool and migrations left; step 9, the dashboard, started (#932, #936);
 - Node actions: `"use node"` runs in Bun (DV-87) — done; `node.externalPackages` — done (STUDY-148; DV-470–DV-473
   decided by the owner, 2026-10-12);
 - log streaming (STUDY-47, STUDY-59, STUDY-70) and metrics (§20: 14 done; insights is cloud-only, *n/a*) —
@@ -165,7 +169,7 @@ containers up, deploy functions, see them work) before the remaining platform it
 
 ## Gaps by impact
 
-Checked against main on 2026-10-04, after #370–#395. Since the first ranking, these were built: the action
+Ranked against main on 2026-10-04, after #370–#395; the components entry rechecked on 2026-10-28. Since the first ranking, these were built: the action
 timeout (#371), searches while indexes rebuild (#375), `server-only` and wasm bundling (#376),
 `deploy --cmd` (#378), the `log` export (#380), the write-throughput limit (#374), the SSRF proxy
 (#377–#381), identical database indexes refused (STUDY-66), the sync arguments-size metrics
@@ -179,10 +183,13 @@ gaps.
    namespaced tables and the registry, `bunvex.config.ts` with `defineApp` / `defineComponent` pushed by the CLI,
    a component's functions run and called across components (references, handles), its env, codegen, its
    scheduler, crons, storage, HTTP mounts and search and vector indexes. Left: bunvex's own components (step 8,
-   studied in [STUDY-158](../study/STUDY-158-own-components.md); the first, `@bunvex/sharded-counter`, built in
-   [STUDY-183](../study/STUDY-183-sharded-counter.md)), the dashboard (step 9) and export/import (step 10). Until
-   step 8 is done, an app on the other `@convex-dev/*` components (rate limiter, aggregate, workpool, auth, …) has no
-   package to install.
+   studied in [STUDY-158](../study/STUDY-158-own-components.md); built so far: `@bunvex/sharded-counter`,
+   [STUDY-183](../study/STUDY-183-sharded-counter.md); `@bunvex/batch-worker`,
+   [STUDY-196](../study/STUDY-196-batch-worker.md); `@bunvex/rate-limiter`,
+   [STUDY-197](../study/STUDY-197-rate-limiter.md)), the dashboard (step 9, started: the system functions in a
+   component, #932, and the Database screen's component picker, #936) and export/import (step 10). Until step 8 is
+   done, an app on the other `@convex-dev/*` components (aggregate, workpool, migrations, auth, …) has no package to
+   install.
 
 **Medium: an app hits it in normal use of a feature**
 
