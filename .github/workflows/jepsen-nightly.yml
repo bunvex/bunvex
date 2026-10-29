@@ -28,7 +28,7 @@ permissions:
 jobs:
   jepsen:
     name: jepsen · ${{ matrix.store }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -39,7 +39,7 @@ jobs:
       # the service containers have no verifiable TLS; bunvex requires it by default (STUDY-25 L8)
       DO_NOT_REQUIRE_SSL: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Start ${{ matrix.store }}
         run: |
           case "${{ matrix.store }}" in

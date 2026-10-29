@@ -19,11 +19,11 @@ jobs:
   # always runs everything.
   changes:
     name: changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       code: ${{ steps.diff.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - id: diff
@@ -46,9 +46,9 @@ jobs:
     needs: changes
     # Fail safe: if `changes` itself failed, its output is empty and everything runs.
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -80,9 +80,9 @@ jobs:
     name: tests · index cache on, every hit verified
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -98,9 +98,9 @@ jobs:
     name: examples
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -114,9 +114,9 @@ jobs:
     name: examples · browser (Chromium)
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -132,13 +132,13 @@ jobs:
     name: npm packages on Node.js
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - run: bun install --frozen-lockfile
@@ -151,9 +151,9 @@ jobs:
     name: coverage · critical-file floors
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -166,9 +166,9 @@ jobs:
     name: e2e · dashboard in Chromium
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -185,7 +185,7 @@ jobs:
     name: conformance · Postgres
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:17
@@ -196,7 +196,7 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -224,7 +224,7 @@ jobs:
     name: conformance · MySQL
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       mysql:
         image: mysql:8.4
@@ -235,7 +235,7 @@ jobs:
         options: >-
           --health-cmd "mysqladmin ping -uroot -pbunvex" --health-interval 5s --health-timeout 5s --health-retries 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -267,9 +267,9 @@ jobs:
     name: conformance · MongoDB
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # A service container takes no command arguments, so the single-node replica set is started here.
       - name: MongoDB, single-node replica set
         run: bash scripts/ci-mongo.sh mongo
@@ -292,7 +292,7 @@ jobs:
     name: file storage · S3 (RustFS)
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       AWS_ACCESS_KEY_ID: s3testkey
       AWS_SECRET_ACCESS_KEY: s3testsecret
@@ -308,7 +308,7 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:9000/health/live && break; sleep 1; done
           curl -sf http://127.0.0.1:9000/health/live >/dev/null || { echo "rustfs never became healthy"; exit 1; }
           docker run --rm --network host -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_REGION amazon/aws-cli:2.37.1 --endpoint-url http://127.0.0.1:9000 s3 mb s3://bunvex-test
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -334,7 +334,7 @@ jobs:
     name: PERSIST-01 conformance · Postgres · MySQL · MongoDB
     if: always()
     needs: [changes, conformance-postgres, conformance-mysql, conformance-mongodb]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: all three stores passed (or a docs-only change)
         run: |
