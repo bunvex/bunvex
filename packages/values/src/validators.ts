@@ -40,13 +40,17 @@ export type RecordKeyValidatorJSON =
 /** A record validator's values as JSON (Convex's `RecordValueValidatorJSON`): never optional. */
 export type RecordValueValidatorJSON = ObjectFieldType & { optional: false };
 
+// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: the merged interface holds a type-only field, never set (rule 7)
 abstract class BaseValidator<Type, IsOptional extends OptionalProperty> {
-  /** Only for type inference (`Infer`); never set at runtime. */
-  declare readonly type: Type;
   readonly isValidator = true as const;
   constructor(readonly isOptional: IsOptional) {}
   abstract readonly kind: string;
   abstract get json(): ValidatorJSON;
+}
+// Declared by merging, not as a `declare` field, so Babel (React Native's Metro) reads the source as written.
+interface BaseValidator<Type, IsOptional extends OptionalProperty> {
+  /** Only for type inference (`Infer`); never set at runtime. */
+  readonly type: Type;
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: a validator of any type (composite parts typed where used)

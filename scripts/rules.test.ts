@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   checkedTimerCall,
+  declareFields,
   literalConstants,
   metadataNaming,
   timerDelays,
@@ -99,5 +100,19 @@ describe("rule 5: a published package's metadata", () => {
 
   test("names, dependencies and scripts are not metadata: a dev dependency on the reference is fine", () => {
     expect(metadataNaming({ name: "@bunvex/x", devDependencies: { "convex-helpers": "0.1.128" } })).toEqual([]);
+  });
+});
+
+describe("rule 7: no `declare` class fields", () => {
+  const found = (code: string) => [...declareFields(withoutComments(code))].map((f) => f.line);
+  test("a declare field, with or without modifiers, optional or definite", () => {
+    expect(found("class A {\n  declare readonly type: T;\n}")).toEqual([2]);
+    expect(found("class A {\n  declare private readonly _x: undefined;\n  declare protected q: Q;\n}")).toEqual([2, 3]);
+    expect(found("class A {\n  declare x?: number;\n  declare static y!: string;\n}")).toEqual([2, 3]);
+  });
+  test("not ambient declarations, merged interfaces or comments", () => {
+    expect(found("declare const brand: unique symbol;\ndeclare module 'x' {}\ndeclare global {}")).toEqual([]);
+    expect(found("interface A {\n  readonly type: T;\n}\nclass A {}")).toEqual([]);
+    expect(found("class A {\n  // declare readonly type: T;\n  /* declare x: number; */\n}")).toEqual([]);
   });
 });

@@ -43,12 +43,17 @@ export type SummaryCheckpoint = {
  * Asked for before the summaries are built (Convex's `TableSummariesUnavailable`, a 503: retry). Like the
  * indexes' (STUDY-79), a system error: a function that hits it cannot catch it, and a sync query is retried.
  */
+// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: the merged interface holds a type-only field, never set (rule 7)
 export class TableSummariesUnavailableError extends IndexesUnavailableError {
-  declare readonly code: "TableSummariesUnavailable";
   constructor(message = "Table summary unavailable (still bootstrapping)") {
     super("TableSummariesUnavailable", message);
     this.name = "TableSummariesUnavailableError";
   }
+}
+
+// Narrowed by merging, not as a `declare` field, so Babel (React Native's Metro) reads the source as written.
+export interface TableSummariesUnavailableError {
+  readonly code: "TableSummariesUnavailable";
 }
 
 /** Convex's message for `count()` while the summaries bootstrap (`async_syscall.rs`, `count`). */

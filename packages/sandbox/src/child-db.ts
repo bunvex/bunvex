@@ -377,10 +377,10 @@ export class QueryInitializerImpl extends QueryChain {
 }
 
 /** What a virtual table's queries share (core `VirtualChain`). */
-export abstract class VirtualChain {
+export abstract class VirtualChain<Q extends QueryImpl | QueryInitializerImpl = QueryImpl | QueryInitializerImpl> {
   constructor(
     protected readonly table: string,
-    protected readonly q: QueryImpl | QueryInitializerImpl,
+    protected readonly q: Q,
   ) {}
   protected wrap(q: QueryImpl): VirtualQuery {
     return new VirtualQuery(this.table, q);
@@ -412,8 +412,7 @@ export abstract class VirtualChain {
 }
 
 /** A virtual table's query after its first operator (core `VirtualQuery`): its own iterator. */
-export class VirtualQuery extends VirtualChain {
-  declare protected readonly q: QueryImpl;
+export class VirtualQuery extends VirtualChain<QueryImpl> {
   [Symbol.asyncIterator]() {
     this.q[Symbol.asyncIterator]();
     return this;
@@ -427,8 +426,7 @@ export class VirtualQuery extends VirtualChain {
 }
 
 /** `db.system.query(table)` (core `VirtualQueryInitializer`). */
-export class VirtualQueryInitializer extends VirtualChain {
-  declare protected readonly q: QueryInitializerImpl;
+export class VirtualQueryInitializer extends VirtualChain<QueryInitializerImpl> {
   constructor(
     table: string,
     q: QueryInitializerImpl,
