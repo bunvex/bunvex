@@ -13,8 +13,11 @@ import ts from "typescript";
 
 const ROOT = resolve(import.meta.dir, "..");
 
-/** Dependency order: each after the packages it depends on. */
-export const PACKAGES = [
+/**
+ * The fixed group, released together at one version (changesets' `fixed`), in dependency order: each after the
+ * packages it depends on. A name is a directory under packages/.
+ */
+export const FIXED = [
   "values",
   "search",
   "protocol",
@@ -30,7 +33,26 @@ export const PACKAGES = [
   "react-query",
   "nextjs",
   "cli",
+  "sandbox",
+  "testing",
 ];
+
+/**
+ * Published at their own versions, outside the fixed group (STUDY-181 helpers, STUDY-183 §3.1 components), after
+ * the fixed group and each after what it depends on. A name with a slash is a directory from the repository's root.
+ */
+export const INDEPENDENT = [
+  "helpers",
+  "components/sharded-counter",
+  "components/batch-worker",
+  "components/rate-limiter",
+];
+
+/** Every published package, in dependency order. */
+export const PACKAGES = [...FIXED, ...INDEPENDENT];
+
+/** A package's directory: `packages/<name>`, or the repository path a name with a slash gives. */
+export const packageDir = (dir: string) => (dir.includes("/") ? join(ROOT, dir) : join(ROOT, "packages", dir));
 
 /** Shipped as sources only: the CLI is a Bun program (`bunx bunvex`, STUDY-40 L7) that no app imports. */
 const SOURCES_ONLY = new Set(["cli"]);
@@ -50,7 +72,11 @@ export type Manifest = {
 };
 
 export const manifest = (dir: string): Manifest =>
-  JSON.parse(readFileSync(join(ROOT, "packages", dir, "package.json"), "utf8")) as Manifest;
+  JSON.parse(readFileSync(join(packageDir(dir), "package.json"), "utf8")) as Manifest;
+
+/** Each published package's version, by name: what an internal `workspace:` range becomes. */
+export const versions = (): Map<string, string> =>
+  new Map(PACKAGES.map((d) => manifest(d)).map((m) => [m.name, m.version]));
 
 /** `./src/a/b.ts` → `./dist/<format>/a/b.<ext>`. */
 function built(source: string, format: "esm" | "cjs", ext: "js" | "d.ts"): string {
@@ -59,18 +85,33 @@ function built(source: string, format: "esm" | "cjs", ext: "js" | "d.ts"): strin
   return `./dist/${format}/${m[1]}.${ext}`;
 }
 
+/** The condition that keeps a component's definition on its sources (`--live-component-sources`, DV-533). */
+const SOURCE_CONDITION = "@bunvex/component-source";
+
 /**
  * The published `exports`: Bun the sources, `import` the ES modules, `require` CommonJS, each with its types.
  * A subpath that already has conditions (`@bunvex/server`: `types`, `bun`, `default`) keeps them: its types
- * from `types`, Bun's from `bun`, everyone else's from `default`.
+ * from `types`, Bun's from `bun`, everyone else's from `default`. A component's (STUDY-183 S-1): its
+ * `@bunvex/component-source` stays on the sources, its `bunvex` condition gets the ES module; a subpath with types
+ * only (`./_generated/component.js`) gets the declarations. A target outside src/ (`./package.json`) is kept.
  */
 export function publishedExports(exports: NonNullable<Manifest["exports"]>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [subpath, target] of Object.entries(exports)) {
+    if (typeof target === "string" && !target.startsWith("./src/")) {
+      out[subpath] = target;
+      continue;
+    }
     const t = typeof target === "string" ? { types: target, bun: target, default: target } : target;
     const types = t.types ?? t.default!;
-    const code = t.default!;
+    const code = t.default;
+    if (!code) {
+      out[subpath] = { types: built(types, "esm", "d.ts") };
+      continue;
+    }
     out[subpath] = {
+      ...(t[SOURCE_CONDITION] ? { [SOURCE_CONDITION]: t[SOURCE_CONDITION] } : {}),
+      ...(t.bunvex ? { bunvex: built(t.bunvex, "esm", "js") } : {}),
       bun: t.bun ?? code,
       import: { types: built(types, "esm", "d.ts"), default: built(code, "esm", "js") },
       require: { types: built(types, "cjs", "d.ts"), default: built(code, "cjs", "js") },
@@ -80,23 +121,28 @@ export function publishedExports(exports: NonNullable<Manifest["exports"]>): Rec
   return out;
 }
 
-/** The internal ranges become the release's version: every package is released at once (a fixed group). */
-function pinWorkspace(deps: Record<string, string> | undefined, version: string) {
+/**
+ * An internal range becomes the version of the package it names, as it is published: `workspace:*` that version,
+ * `workspace:^` (a component's peers) `^` and it.
+ */
+function pinWorkspace(deps: Record<string, string> | undefined, published: Map<string, string>) {
   if (!deps) return undefined;
   return Object.fromEntries(
-    Object.entries(deps).map(([name, range]) => [
-      name,
-      range === "workspace:*" ? version : range.startsWith("workspace:") ? `${range.slice(10)}${version}` : range,
-    ]),
+    Object.entries(deps).map(([name, range]) => {
+      if (!range.startsWith("workspace:")) return [name, range];
+      const version = published.get(name);
+      if (!version) throw new Error(`${name} is not published, but a published package depends on it`);
+      return [name, range === "workspace:*" ? version : `${range.slice(10)}${version}`];
+    }),
   );
 }
 
-export function publishedManifest(m: Manifest, build: boolean): Manifest {
+export function publishedManifest(m: Manifest, build: boolean, published = versions()): Manifest {
   const { devDependencies: _dev, scripts: _scripts, ...rest } = m;
   const out: Manifest = {
     ...rest,
-    dependencies: pinWorkspace(m.dependencies, m.version),
-    peerDependencies: pinWorkspace(m.peerDependencies, m.version),
+    dependencies: pinWorkspace(m.dependencies, published),
+    peerDependencies: pinWorkspace(m.peerDependencies, published),
     files: build ? ["dist", "src", "README.md", "LICENSE"] : m.files,
   };
   if (!out.dependencies) delete out.dependencies;
@@ -152,7 +198,7 @@ const TRANSPILE: ts.CompilerOptions = {
 
 /** dist/esm and dist/cjs: each source file compiled on its own (the repository's sources are isolated modules). */
 function transpile(dir: string, outPkg: string) {
-  const pkgDir = join(ROOT, "packages", dir);
+  const pkgDir = packageDir(dir);
   for (const file of sources(join(pkgDir, "src"))) {
     const rel = relative(join(pkgDir, "src"), file).replace(/\.tsx?$/, ".js");
     const text = readFileSync(file, "utf8");
@@ -185,12 +231,12 @@ function declarations(dirs: string[], outDir: string) {
         declaration: true,
         emitDeclarationOnly: true,
         declarationDir: outDir,
-        rootDir: join(ROOT, "packages"),
+        rootDir: ROOT,
         lib: ["ESNext", "DOM", "DOM.Iterable"],
         jsx: "react-jsx",
         rewriteRelativeImportExtensions: true,
       },
-      include: dirs.map((d) => join(ROOT, "packages", d, "src")),
+      include: dirs.map((d) => join(packageDir(d), "src")),
       exclude: ["**/*.test.ts", "**/*.test.tsx"],
     },
     ts.sys,
@@ -238,15 +284,19 @@ export function stage(out: string): Map<string, string> {
   const dts = join(ROOT, "node_modules", ".cache", "bunvex-npm-dts");
   rmSync(dts, { recursive: true, force: true });
   declarations(build, dts);
+  const published = versions();
   for (const dir of PACKAGES) {
-    const pkgDir = join(ROOT, "packages", dir);
+    const pkgDir = packageDir(dir);
     const m = manifest(dir);
     if (m.private) throw new Error(`${m.name} is private`);
     const outPkg = join(out, m.name);
     rmSync(outPkg, { recursive: true, force: true });
     mkdirSync(outPkg, { recursive: true });
     const isBuilt = !SOURCES_ONLY.has(dir);
-    writeFileSync(join(outPkg, "package.json"), `${JSON.stringify(publishedManifest(m, isBuilt), null, 2)}\n`);
+    writeFileSync(
+      join(outPkg, "package.json"),
+      `${JSON.stringify(publishedManifest(m, isBuilt, published), null, 2)}\n`,
+    );
     cpSync(join(pkgDir, "src"), join(outPkg, "src"), {
       recursive: true,
       filter: (p) => !/\.test\.tsx?$/.test(p),
@@ -264,7 +314,8 @@ export function stage(out: string): Map<string, string> {
       );
     if (isBuilt) {
       transpile(dir, outPkg);
-      copyDeclarations(join(dts, dir, "src"), join(dts, dir, "src"), outPkg, pkgDir);
+      const declared = join(dts, relative(ROOT, pkgDir), "src");
+      copyDeclarations(declared, declared, outPkg, pkgDir);
     }
     staged.set(dir, outPkg);
   }

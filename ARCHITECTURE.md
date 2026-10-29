@@ -172,7 +172,7 @@ bunvex/
 │   │   ├── server/stream            stream, mergedStream, filterWith, flatMap, distinct…        ✅
 │   │   └── server/pagination        getPage, streamQuery, paginator                             ✅
 │   │
-│   ├── sandbox/                     @bunvex/sandbox (private for now)  the function sandbox (AD-44,
+│   ├── sandbox/                     @bunvex/sandbox  the function sandbox (AD-44, published for @bunvex/testing;
 │   │   │                            STUDY-168): app code in a separate process
 │   │   ├── child                    loads and analyzes a push with the server's own loader (STUDY-171 §7) ✅
 │   │   ├── protocol, frames         length-prefixed JSON on the child's socket, handshake, size cap   ✅

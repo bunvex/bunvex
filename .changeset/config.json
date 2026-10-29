@@ -22,7 +22,6 @@
     "@bunvex/persistence-conformance",
     "@bunvex/site",
     "@bunvex/sync-e2e",
-    "@bunvex/testing",
     "@bunvex/ui",
     "bunvex-example-*",
     "bunvex-examples-*"
