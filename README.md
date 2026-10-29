@@ -63,7 +63,8 @@ the row compares them with that off (Convex's `raw` profile, measured 29 Sep).
 | `packages/react`, `nextjs`, `react-clerk`, `react-auth0`, `react-query` | React bindings, Next.js server rendering, Clerk and Auth0 providers, TanStack Query |
 | `packages/cli` | the `bunvex` command line: admin-key, codegen, dashboard, data, deploy, deployment, dev, docs, env, export, function-spec, import, logs, mcp, network-test, run, typecheck, update (`@bunvex/cli`) |
 | `packages/ui`, `packages/dashboard`, `packages/dashboard-source`, `apps/dashboard` | the design system, the dashboard's screens, its data source on a deployment, and the app ([docs/dashboard.md](docs/dashboard.md)) |
-| `packages/testing`, `sync-e2e`, `jepsen`, `differential` | test helpers and test suites (not published) |
+| `packages/testing` | `bunvexTest`: an app's functions tested on the real engine in memory (`@bunvex/testing`) |
+| `packages/sync-e2e`, `jepsen`, `differential` | test suites (not published) |
 | `apps/local-backend` | the `bunvex-local-backend` executable's entry (built into the release binaries, never published) |
 | `apps/site` | [bunvex.dev](https://bunvex.dev), the website (landing now, user docs later) |
 | `examples/` | one-feature example apps ([examples/README.md](examples/README.md)) |
