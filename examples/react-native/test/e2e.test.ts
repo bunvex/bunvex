@@ -1,6 +1,6 @@
 // The React Native example end to end (STUDY-90): its functions deployed to a bunvex-local-backend and used through
-// the public client, then its app bundled for iOS by Expo's Metro (`expo export`), which must hold nothing of the
-// server. The app itself runs on a simulator or a device (README); CI has neither.
+// the public client, then its app bundled for iOS, Android and the web by Expo's Metro (`expo export`), which must
+// hold nothing of the server. The app itself runs on a simulator or a device (README); CI has neither.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { build, type Deployment, deploy, until } from "bunvex-examples-harness";
@@ -24,6 +24,6 @@ test("messages show up live, in order, for every subscriber", async () => {
   expect(last.map((m) => `${m.author}: ${m.body}`)).toEqual(["Ada: hi", "Grace: hello"]);
 });
 
-test("the app typechecks and Metro bundles it for iOS", async () => {
+test("the app typechecks and Metro bundles it for iOS, Android and the web", async () => {
   await build(DIR, { EXPO_PUBLIC_BUNVEX_URL: d.url });
 }, 300_000);
