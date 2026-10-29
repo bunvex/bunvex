@@ -1,0 +1,32 @@
+{
+  "name": "bunvex-example-react-native",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A chat on iOS and Android with Expo: the same query and mutation as the tutorial, through @bunvex/react on React Native.",
+  "main": "index.ts",
+  "scripts": {
+    "dev": "bunvex dev --start 'expo start'",
+    "start": "expo start",
+    "ios": "expo start --ios",
+    "android": "expo start --android",
+    "build": "tsc --noEmit && expo export --platform ios --no-bytecode --output-dir dist"
+  },
+  "dependencies": {
+    "@bunvex/react": "workspace:*",
+    "@bunvex/server": "workspace:*",
+    "@bunvex/values": "workspace:*",
+    "expo": "~58.0.21",
+    "expo-device-hub": "^0.19.0",
+    "expo-status-bar": "~58.0.4",
+    "fast-text-encoding": "^1.0.6",
+    "react": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-safe-area-context": "~5.10.1"
+  },
+  "devDependencies": {
+    "@bunvex/cli": "workspace:*",
+    "@types/react": "~19.3.0",
+    "bunvex-examples-harness": "workspace:*",
+    "typescript": "~6.0.3"
+  }
+}
