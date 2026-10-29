@@ -1,5 +1,78 @@
 # @bunvex/core
 
+## 0.1.0-alpha.2
+
+### Minor Changes
+
+- 61a9ab5: The stored data is at Convex's `DATABASE_VERSION` 134 (STUDY-193 A14): a store gets Convex's `_s3_export_state` table (number 556, indexed `by_config_id`), and a store Convex's binary wrote at 134 opens without the "newer" warning. A store at 133 is refused, as any older version is (DV-418): move it with an export, then an import (docs/upgrading.md). The dashboard's `listConfiguredSinks` returns an S3 export's `exportProgress` when the store has its `_s3_export_state` row, as Convex's.
+
+### Patch Changes
+
+- eadda52: A failed `fetch` in an action is Convex's `TypeError`: reqwest's cause (connection refused, DNS, a closed connection) or `fetch to <url> failed: error decoding response body`, with the URL's query string, fragment and credentials dropped; an abort is Convex's `AbortError`. Redirects follow Convex's loop (20 hops, its errors and rules). Requests carry `User-Agent: Bunvex/1.0` by default (OIDC discovery and JWKS too) and no idle timeout; a redirect that sends the body again is metered per hop. bunvex's address screen reports a target it cannot reach as that failure, closes when a target closes early, and tries every address of a name.
+- 2088702: An index backfill that resumes after a restart goes on after its cursor at a fresh snapshot, as Convex's does now: it keeps its count, and its `_index_backfills` row's `snapshotTs` names the new scan. Before, a backfill whose checkpoint's snapshot had passed retention walked the whole table again. A backfill with no cursor yet still starts from the beginning.
+- 0ea0a8d: Require Bun 1.4.4 or newer. CI, the Docker images and every package's `engines.bun` move off 1.4.2.
+
+  A proxy that does not open an `https:` CONNECT fails with Convex's tunnel message: `proxy authorization required` for a 407, `unsuccessful` for any other status (before, the proxy's own 403 or 502 reached the app as a response). Bun 1.4.4 throws that refusal instead of answering it. An `https:` target that bunvex's address screen cannot reach still fails as it would without the screen. After an external package is installed, assigning `process.env` still writes the server's own environment.
+
+- 3f01dcf: A client's queries and mutations run through the function call boundary (STUDY-194, STUDY-190 PR 2a): still in the main thread: the request and its outcome (the result, the read set, the writes) cross as the same objects, and as text in #878's format under the tests (STUDY-194 Q7; `Engine`'s `callCodec` option). A client's mutation takes its permit before its transaction begins, so its snapshot has what committed while it waited, as Convex's d328f85 (STUDY-186 A11); a session's request already committed is answered even without a permit; scheduled and cron mutations keep the old order. `@bunvex/core` exports the boundary (`Call`, `CallRunner`, the codec) and renames the request metadata type `CallRequest` to `RequestMetadata`.
+- a11b239: An internal error inside the committer's drain (a commit's `atTs` throwing, say) stops it with "the committer stopped after an internal error: …" instead of "… after a persistence failure: …", and `persistenceFailure` is false. A new `CommitterInternalError` is the cause; `CommitListenerError` extends it. A failing store, flush or lease still says "persistence failure".
+- 017ef5b: A component's function whose first writes overlap (`Promise.all` of deletes or inserts, as `@convex-dev/sharded-counter`'s
+  `reset` does) no longer fails with "Delete on nonexistent document ID": the check that the component is mounted read
+  the root's `_components` with the root's namespace and system access held across its await, so the writes overlapping
+  it ran in the root's tables (STUDY-183).
+- 73835d5: A component's function counts its start reads as Convex's backend does (STUDY-161 §16.7): its own modules (with the chunk Convex's library would be in) and one more read, and a component's write no longer counts its mounted check against the read limit.
+- 497900c: `_system/frontend/indexes` and `GET /api/get_indexes` report a search or vector index's real state (backfilling, backfilled when staged and built, done), as Convex's, instead of "backfilling" for good: bunvex keeps those indexes' `_index` rows backfilling (DV-415), so the state comes from the engine, and a finished build writes the index's `_index_backfills` row so a subscription to the list hears it. The dashboard's index list shows search, vector and staged indexes as Convex's.
+- 3d41523: Error messages as Convex's (checked against Convex's binary):
+
+  - A cursor that does not open fails with the keybroker's message alone: "Failed to parse cursor",
+    "Key is invalid for instance …", "Missing position field" (no `InvalidCursor: ` prefix). An empty cursor
+    or end cursor is a cursor too, and fails to parse.
+  - `paginate`'s options are checked where Convex checks them: no options is a `TypeError`; only a negative
+    number or a non-number is "must be a positive number"; `numItems: 0` is "Must request at least 1 document
+    while paginating"; a fractional, `NaN` or infinite size, a misfit `maximumRowsRead` / `maximumBytesRead`
+    (a fraction, a negative number, a string…) and a cursor that is not a string fail with serde's message
+    ("Invalid arguments for `queryPage`: …"), in Convex's field order. A null limit is no limit (it read nothing
+    before), and a fractional size is refused instead of rounded down.
+  - A float in a `limit` or `queryPage` argument error is worded as serde_json's (`1e-7`, `1e+21`).
+  - A system function's argument error is `Uncaught Error: <check>`, as Convex's system functions check their
+    own arguments, instead of `ArgumentValidationError: <check>`.
+
+- beca1af: A filter's errors name a value's type as Convex's backend does (STUDY-161 §14): `(type Float64)`, `(type Bytes)`, `(type Null)`, … instead of `float64`, `bytes`, `null`.
+- 8700316: `BUNVEX_FUNCTION_SANDBOX=process` (with `BUNVEX_FUNCTION_SANDBOX_ISOLATION=none`, no OS isolation yet) runs pushed queries and mutations in a separate process, each `ctx` operation on the server's transaction (STUDY-171 §8); actions, HTTP actions, components and rooms say they are not available there yet.
+- 823507c: An instance secret written with a `0x` or `0X` prefix is accepted, as Convex accepts it (`--instance-secret`, `INSTANCE_SECRET`, `keygen admin-key`, `bunvex admin-key`), and is the same secret as its bare spelling: the same admin keys, cursors and storage, export and import tokens. A hex secret in uppercase now derives the same keys as in lowercase too. `0x0x…` and `0x` alone are still refused with Convex's messages.
+- 7d97595: `db.patch`, `db.replace` and `db.delete` with an id whose table number the deployment does not have fail with Convex's message, `` Invalid argument `id` for `db.patch`: Table for ID "…" not found ``, instead of "Update on nonexistent document ID …".
+- 0572b42: Nested calls count their reads as Convex's backend does (STUDY-161 §16.7): only the first nested call in a transaction reads its callee's start (two reads, one more from a component, one more into another namespace, and the callee's modules), later ones nothing; resolving a component reference is not counted.
+- fb0c977: `node.externalPackages` (STUDY-148): `bunvex deploy` leaves the listed packages (or every dependency, with `"*"`) as imports in the `"use node"` bundle, as Convex's CLI does, and names them and their installed versions in the push. The deployment installs them with `bun install` (running every install script), records Convex's `_external_deps_packages` row and blob, reuses one of the last ten installs with the same packages, counts them in the package size limit, and answers a failed install with Convex's 400 `InvalidExternalModules`. Node actions import and `require` them from a per-process directory (file modes kept), and they read the deployment's variables first.
+- 67bb45e: A `db.patch` or `db.replace` that leaves the document as it was writes nothing, as Convex's: the mutation records no write usage, the queries that read the document are not invalidated, and concurrent readers do not conflict with it.
+- 87fde6b: An OCC conflict on a component's table names that table in its message, and the function log's `occInfo.componentPath` is the component's path (null at the root), as Convex's. Before, the message said "some table" and the path was always null.
+- 3b82fa1: `bunvex/server` and `bunvex/values` export every name Convex 1.46.0's `convex/server` and `convex/values` export, with Convex's shapes (STUDY-180), but the rule-5 renames and the five deprecated ones (DV-543). `ctx.storage` is typed by `StorageReader`, `StorageWriter` and `StorageActionWriter`: a query's or a mutation's has no `store`, and ids are `Id<"_storage">`. `ctx.vectorSearch` is typed by the table's vector indexes and a filter by the index's filter fields. `SchemaDefinition` has `doc()` / `id()`; `FieldTypeFromFieldPath` goes over each member of a union; `SearchFilter` is a class the search filter builder's objects extend; `asObjectValidator`, `NumericValue` and `VOptional` are in `bunvex/values`, and `v.optional` returns a `VOptional`. `DefaultFunctionArgs` is `Record<string, unknown>`.
+- e84cf7a: A schema push builds its new search and vector indexes before it finishes, as Convex's does. Their `_index` rows are written, backfilling, in the push's first commit. The push stays in progress until the indexes are built, and its commit enables them as built. A search or vector search right after `deploy` now finds every document instead of failing with `IndexBackfillingError`.
+- d1543b1: Reads count toward the 4 096-read limit as Convex's backend counts them (STUDY-161 §16): per index, the merged intervals a function read (a document read again or patched after a get, adjacent or overlapping ranges add nothing), not the engine's own reads (table and index metadata, a new document's id, a search's terms), plus Convex's reads at a function's start, a table's creation and a first nested call. What subscriptions and OCC record is unchanged.
+- c3b026b: A function's query or mutation checks its snapshot against the retention window again once it ran, as Convex's `validate_run_function_result`: a run the window passed while it ran fails with `OutOfRetentionError` instead of answering, and a mutation's writes are dropped.
+- 77572e8: A schema error's document and validator no longer show `_id` and `_creationTime` (`Object: {}`, `Validator: v.object({name: v.string()})`), as Convex's backend: the document is checked without its system fields against the schema's own validator (STUDY-161 §3).
+- f6745eb: `schema.tables` is Convex's record of table definitions (`schema.tables.messages.validator`, `docValidator("messages", schema.tables.messages)`), the schema's own fields are Convex's (`tables`, `strictTableNameTypes`, `schemaValidation`), and a table definition has Convex's experimental `" indexes"()`. The engine reads `declaredTables(schema)`.
+- 1408599: The SQLite store waits up to 5 s for another connection's lock before failing with `database is locked` (SQLITE_BUSY), as Convex's does (rusqlite's default busy timeout); it failed at once, so opening a store while another process held or was closing it could fail. `close()` now closes the connection at once: its prepared statements kept it open until they were garbage-collected, and its real close (a checkpoint under an exclusive lock) then landed at a random later moment.
+- 88d2e14: `.staged()` takes field deltas, as Convex's: over a table defined as an object or `v.any()`, an object of fields replaces or adds to the enforced ones, and a field set to `undefined` is removed from the staged validator. A whole validator is still taken as is, and a table defined with a union or record refuses a delta.
+- 0ec64a4: A subscription's query looks in the query cache the HTTP API uses, as Convex's sync worker does. A Next.js page's `preloadQuery` and its client's subscription run the query once, and a page reload with no commit in between is a cache hit ("(cached)" in Logs), not a run.
+- 5cb27ae: A written `_id` or `_creationTime` that is not the document's is reported in Convex's display (STUDY-161 §4): `'_id' field 1.0`, and the creation time's message shows the value being written with its `_id` (`{_creationTime: 1.0, _id: "…", k: 1.0}`) rather than the written fields as JSON; an int64 `_creationTime` no longer fails to serialize.
+- 07ad661: A table definition carries Convex's index lists at run time (`indexes`, `stagedDbIndexes`, `searchIndexes`, `stagedSearchIndexes`, `vectorIndexes`, `stagedVectorIndexes`), filled in declaration order as Convex's, so libraries that read `schema.tables[t].indexes` work (STUDY-181 H-5).
+- deab272: `GET /api/debug/topology` (an admin key with ViewMetrics) reports the deployment's topology for the dashboard's
+  Topology screen: this process as the leader alone, with its connections, subscriptions, query cache, commits per
+  second, CPU and memory and a minute of samples, and the store with its driver and lease, read from counters the
+  server already keeps. Each persistence driver names itself (`driver`), and the engine keeps its lease's holder and
+  last renewal round trip (`leaseState`).
+- d2207bc: A mutation's writes it did not await are committed, as Convex's: the engine waits, after the handler, for the store calls still in flight and the code they resume. Before, an unawaited insert that created its table, or a write chained after an unawaited read, came after the commit and was lost while its promise answered an id. `TestRuntime` lets two quiet turns pass before a timer's work counts as settled.
+- 7b1ef5f: A vector search whose filter is an empty `q.or()` (an `or` over an empty list) returns what a search with no filter returns, as Convex's. Before, it returned nothing.
+- c2ac7a5: `db.insert`, `db.patch`, `db.replace` and `db.count` word their argument errors as Convex's backend (STUDY-161 §1, §2): a table name that is not an identifier gives the identifier's own message under `` Invalid argument `table` for `db.insert`:  ``; a value that is not an object is "Value must be an Object" under the value's prefix; a missing value is `Must provide arg 2 …`. A deployed function's value nested past the limit keeps the argument prefix, and a `db.vars.commitTs` inside one of its objects resolves.
+- Updated dependencies [7af9a1f]
+- Updated dependencies [8700316]
+- Updated dependencies [3b82fa1]
+- Updated dependencies [6d4fc1f]
+- Updated dependencies [06c53d7]
+- Updated dependencies [c2ac7a5]
+  - @bunvex/values@0.1.0-alpha.2
+  - @bunvex/search@0.1.0-alpha.2
+
 ## 0.1.0-alpha.1
 
 ### Minor Changes

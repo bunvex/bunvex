@@ -1,5 +1,20 @@
 # @bunvex/values
 
+## 0.1.0-alpha.2
+
+### Patch Changes
+
+- 7af9a1f: Bytes in an error's value display read as Convex's backend shows them, `b"AQI="` (padded standard base64, never cut), instead of `ArrayBuffer(2 bytes)` (STUDY-161 §13).
+- 8700316: `BUNVEX_FUNCTION_SANDBOX=process` (with `BUNVEX_FUNCTION_SANDBOX_ISOLATION=none`, no OS isolation yet) runs pushed queries and mutations in a separate process, each `ctx` operation on the server's transaction (STUDY-171 §8); actions, HTTP actions, components and rooms say they are not available there yet.
+- 3b82fa1: `bunvex/server` and `bunvex/values` export every name Convex 1.46.0's `convex/server` and `convex/values` export, with Convex's shapes (STUDY-180), but the rule-5 renames and the five deprecated ones (DV-543). `ctx.storage` is typed by `StorageReader`, `StorageWriter` and `StorageActionWriter`: a query's or a mutation's has no `store`, and ids are `Id<"_storage">`. `ctx.vectorSearch` is typed by the table's vector indexes and a filter by the index's filter fields. `SchemaDefinition` has `doc()` / `id()`; `FieldTypeFromFieldPath` goes over each member of a union; `SearchFilter` is a class the search filter builder's objects extend; `asObjectValidator`, `NumericValue` and `VOptional` are in `bunvex/values`, and `v.optional` returns a `VOptional`. `DefaultFunctionArgs` is `Record<string, unknown>`.
+- 6d4fc1f: A `Set` or `Map` where a value goes now fails with Convex's text, its entries included (`Set[1] is not a supported
+value type.`), also from a pushed function, whose `Set` is its own context's and printed as `Set {…}`. A result is
+  converted before its size, nesting and `returns` checks, and scheduled and nested-call arguments (which must be an object) before anything
+  else, so their messages are Convex's. `scheduler.runAt` takes a pushed function's own `Date`. An object that only
+  claims the `ArrayBuffer` tag is an object, not empty bytes (STUDY-18 §9).
+- 06c53d7: Pushed functions match Convex in three places (STUDY-171 §9): `process.env` no longer reads `Object.prototype` names (`process.env.constructor` is unset unless set); `db.vars.commitTs` inside a pushed function's objects is refused in scheduled arguments and resolved in a mutation's result; and a cached query result expires after 17 s only when the query read the time (the server's app metrics no longer read the deterministic clock inside every query).
+- c2ac7a5: `db.insert`, `db.patch`, `db.replace` and `db.count` word their argument errors as Convex's backend (STUDY-161 §1, §2): a table name that is not an identifier gives the identifier's own message under `` Invalid argument `table` for `db.insert`:  ``; a value that is not an object is "Value must be an Object" under the value's prefix; a missing value is `Must provide arg 2 …`. A deployed function's value nested past the limit keeps the argument prefix, and a `db.vars.commitTs` inside one of its objects resolves.
+
 ## 0.1.0-alpha.1
 
 ### Minor Changes

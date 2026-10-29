@@ -1,6 +1,6 @@
 {
   "name": "@bunvex/batch-worker",
-  "version": "0.1.0",
+  "version": "0.1.1-alpha.0",
   "description": "A batch worker component for bunvex: a loop that drains a queue in batches, a query that picks the work and a mutation that does it, in one transaction.",
   "license": "Apache-2.0",
   "type": "module",
