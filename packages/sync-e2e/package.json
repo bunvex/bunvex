@@ -37,8 +37,8 @@
     "fast-check": "4.10.2",
     "jose": "6.2.12",
     "playwright-core": "1.63.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "scripts": {
     "test:react": "bun test --preload ../../scripts/test-loopback.ts --preload ./react/dom.ts ./react",
