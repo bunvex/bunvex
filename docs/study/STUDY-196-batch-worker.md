@@ -3,7 +3,7 @@
 
 - **Status:** decided (owner, 2026-10-27): B-1–B-3 as recommended (§7); B-1 extends DV-539. Built (2026-10-27):
   `components/batch-worker/`, its tests and `packages/differential/test/batch-worker.test.ts` (§5), and
-  `examples/batch-worker` (B-2: the queue and the scoreboard; the rate-limited worker waits for `@bunvex/rate-limiter`).
+  `examples/batch-worker` (B-2: the queue and the scoreboard; the rate-limited LLM worker with `@bunvex/rate-limiter`, 2026-10-29, STUDY-197 L-1).
 - **Convex source read:** get-convex/batch-worker at `f299a7b` (0.3.6), pinned in
   [upstream.md](../parity/upstream.md#other-repositories), with the tags `v0.2.2`, `v0.3.3` and `v0.3.5` for the
   versions the dependents ask for. Paths are relative to that repository's root. Backend paths are from
