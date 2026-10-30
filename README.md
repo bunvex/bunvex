@@ -10,7 +10,7 @@ A [Convex](https://convex.dev)-style reactive backend written in TypeScript for 
 - **Serializable transactions** — mutations run as optimistic transactions validated by a single
   committer: no lost updates, no false conflicts between writes to different documents.
 - **Pluggable persistence** — the engine keeps every document version and index entry in an ordered,
-  versioned store: **memory + log**, **SQLite** (built in), **Postgres**, **MySQL**, **MongoDB**. Each
+  versioned store: **memory + log**, **SQLite** (built in), **Postgres**, **MySQL**. Each
   driver must pass a public conformance suite, so you can write your own.
 
 ## Status
@@ -72,7 +72,7 @@ regression check, 28 Oct).
 | `packages/values` | validators, ids, value types (`@bunvex/values`) |
 | `packages/core` | the engine (`@bunvex/core`), including the memory and SQLite drivers |
 | `packages/search` | full-text and vector search: tokenizer, BM25, segments (`@bunvex/search`) |
-| `packages/persistence` | Postgres, MySQL and MongoDB drivers (`@bunvex/persistence/*`) |
+| `packages/persistence` | Postgres and MySQL drivers (`@bunvex/persistence/*`) |
 | `packages/persistence-conformance` | the PERSIST-01 suite every driver must pass |
 | `packages/server` | function runtime, HTTP API, WebSocket sync, scheduler, storage (`@bunvex/server`) |
 | `packages/protocol` | wire messages |
@@ -98,8 +98,7 @@ The full map, with status and dependency rules, is [ARCHITECTURE.md](ARCHITECTUR
 ```sh
 bun install
 bun run check          # lint, typecheck, dependency rules, tests, dashboard and site builds
-bun run conformance    # PERSIST-01 on memory + SQLite (+ PG_URL / MYSQL_URL / MONGO_URL when set;
-                       #   MongoDB must be a replica set — a single-node one is enough;
+bun run conformance    # PERSIST-01 on memory + SQLite (+ PG_URL / MYSQL_URL when set;
                        #   DO_NOT_REQUIRE_SSL=1 for a local Postgres/MySQL without verifiable TLS)
 
 PERSISTENCE=sqlite bun bench/server.ts   # a server with the benchmark functions on :3210
@@ -109,13 +108,11 @@ PERSISTENCE=sqlite bun bench/server.ts   # a server with the benchmark functions
 
 | Variable | Meaning |
 |---|---|
-| `PERSISTENCE` | `memory` (default), `sqlite`, `postgres`, `mysql` or `mongodb` |
-| `PERSISTENCE_URL` | the URL for `postgres`, `mysql` and `mongodb`. For Postgres and MySQL, a URL without a database connects to the instance name's (`-` replaced by `_`), as Convex; a URL that names one keeps it |
+| `PERSISTENCE` | `memory` (default), `sqlite`, `postgres` or `mysql` |
+| `PERSISTENCE_URL` | the URL for `postgres` and `mysql`. A URL without a database connects to the instance name's (`-` replaced by `_`), as Convex; a URL that names one keeps it |
 | `POSTGRES_URL`, `MYSQL_URL`, `DATABASE_URL` | Convex's names, accepted too: without `PERSISTENCE`, the first one set selects Postgres, MySQL or (deprecated) Postgres. bunvex's names win when both are set. Unlike Convex, a URL that names a database is accepted and kept |
 | `DO_NOT_REQUIRE_SSL` | any non-empty value: connect to Postgres/MySQL without requiring TLS. By default, as Convex, the connection must be encrypted and the server's certificate verified (chain and host name); a Postgres connection must also be read-write (never a standby) |
 | `PG_CA_FILE`, `MYSQL_CA_FILE` | a PEM file with the CA that signed the server's certificate, trusted besides the built-in roots |
-
-MongoDB's TLS is what its URL says (`tls=true`).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 

@@ -263,31 +263,6 @@ jobs:
           TLS_MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
         run: bun test packages/persistence/test/tls-db.test.ts
 
-  conformance-mongodb:
-    name: conformance · MongoDB
-    needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      # A service container takes no command arguments, so the single-node replica set is started here.
-      - name: MongoDB, single-node replica set
-        run: bash scripts/ci-mongo.sh mongo
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
-      - run: bun install --frozen-lockfile
-      - name: conformance on MongoDB
-        env:
-          DRIVERS: mongodb
-          KILLS: "4"
-          MONGO_URL: mongodb://127.0.0.1:27017/bunvex_k?replicaSet=rs0
-        run: bun run conformance
-      - name: index cache on MongoDB, every hit verified
-        env:
-          MONGO_URL: mongodb://127.0.0.1:27017/bunvex_k?replicaSet=rs0
-        run: bun test bench/index-cache-verify.test.ts
-
   file-storage-s3:
     name: file storage · S3 (RustFS)
     needs: changes
@@ -330,16 +305,16 @@ jobs:
           AWS_S3_DISABLE_CHECKSUMS: "true"
         run: bun test packages/file-storage/test/blob-stores.test.ts
 
+  # The required check of branch protection: renamed with it when MongoDB's driver went (owner, 2026-10-29).
   conformance:
-    name: PERSIST-01 conformance · Postgres · MySQL · MongoDB
+    name: PERSIST-01 conformance · Postgres · MySQL
     if: always()
-    needs: [changes, conformance-postgres, conformance-mysql, conformance-mongodb]
+    needs: [changes, conformance-postgres, conformance-mysql]
     runs-on: ubuntu-24.04
     steps:
-      - name: all three stores passed (or a docs-only change)
+      - name: both stores passed (or a docs-only change)
         run: |
           if [ "${{ needs.changes.outputs.code }}" = false ]; then echo "docs-only change: conformance not needed"; exit 0; fi
-          echo "postgres=${{ needs.conformance-postgres.result }} mysql=${{ needs.conformance-mysql.result }} mongodb=${{ needs.conformance-mongodb.result }}"
+          echo "postgres=${{ needs.conformance-postgres.result }} mysql=${{ needs.conformance-mysql.result }}"
           test "${{ needs.conformance-postgres.result }}" = success
           test "${{ needs.conformance-mysql.result }}" = success
-          test "${{ needs.conformance-mongodb.result }}" = success

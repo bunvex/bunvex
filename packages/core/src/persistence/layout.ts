@@ -66,13 +66,7 @@ export function checkLayoutVersion(found: unknown, store: string) {
  * created). Any other `documents` / `indexes` (an older bunvex layout, or a stranger's) is refused, never
  * written to. `found` / `want`: per table, its columns as "name type", in any order.
  */
-export function checkStoreTables(
-  store: string,
-  found: Record<string, string[]>,
-  want: Record<string, string[]>,
-  /** How the store names them: "table"/"columns", or "collection"/"fields" (MongoDB). */
-  words: [string, string] = ["table", "columns"],
-) {
+export function checkStoreTables(store: string, found: Record<string, string[]>, want: Record<string, string[]>) {
   for (const [table, cols] of Object.entries(found)) {
     const expected = want[table];
     if (!expected) continue;
@@ -80,7 +74,7 @@ export function checkStoreTables(
     const b = [...expected].sort().join(", ");
     if (a === b) continue;
     throw new LayoutError(
-      `${store} is not in the layout this bunvex reads: its ${words[0]} \`${table}\` has the ${words[1]} ${a || "(none)"}, not ${b}. Point bunvex at an empty database, or at one written in this layout`,
+      `${store} is not in the layout this bunvex reads: its table \`${table}\` has the columns ${a || "(none)"}, not ${b}. Point bunvex at an empty database, or at one written in this layout`,
     );
   }
 }
