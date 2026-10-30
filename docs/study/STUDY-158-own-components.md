@@ -257,7 +257,8 @@ The raw `1.0/getFunctionMetadata` syscall that migrations calls is not a gap. bu
   See DV-538.
 - **Deprecated surface.** These exist only for jobs scheduled by older versions of the packages:
   - workpool's `loop:main`, `loop:updateRunStatus` and `worker:runActionWrapper`;
-  - the aliases `resultValidator`, `vWorkIdValidator` and the like;
+  - the aliases marked deprecated, `resultValidator`, `workIdValidator` and the like (not `vWorkIdValidator` and
+    `vResultValidator`, which workpool calls not deprecated yet: STUDY-199 W-5);
   - batch-worker's `vBatchResult`.
 
   bunvex starts at the current version, so they are not built: the rule of CLAUDE.md (no paths for older stores
