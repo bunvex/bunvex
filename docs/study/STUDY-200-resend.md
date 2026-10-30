@@ -1,9 +1,10 @@
 # STUDY-200 — `@bunvex/resend`
-<!-- index: `@bunvex/resend`, the fifth own component (STUDY-158's list extended) and the email sender of built-in auth (STUDY-191 A-7): a queue of emails sent in batches to Resend's API through two workpools and a rate limiter, webhooks verified with Svix signatures, statuses and delivery events, cleanups; written from get-convex/resend 0.2.10 | open: R-1–R-8 -->
+<!-- index: `@bunvex/resend`, the fifth own component (STUDY-158's list extended) and the email sender of built-in auth (STUDY-191 A-7): a queue of emails sent in batches to Resend's API through two workpools and a rate limiter, webhooks verified with Svix signatures, statuses and delivery events, cleanups; written from get-convex/resend 0.2.10 | decided (owner, 2026-10-30): R-1–R-8 as recommended; DV-581, DV-582, AD-48 -->
 
-- **Status:** open, waiting for the owner on R-1–R-8 (§7).
+- **Status:** decided (owner, 2026-10-30): R-1–R-8 as recommended (§7): DV-581 (R-2), DV-582 (R-3), AD-48 (R-7).
+  To be built (§3.5).
 - **Convex source read:** get-convex/resend (now github.com/convex/resend) at `982bc63` (the tag commit of 0.2.10,
-  2026-10-22), cloned at `../resend`. Paths are relative to that repository's root. R-1 pins it.
+  2026-10-22), cloned at `../resend`. Paths are relative to that repository's root. Pinned (R-1).
 - **Consumer read:** Convex Auth v2 at `84ccfa8d` (`../convex-auth`), `packages/core` (§1.15).
 - **Dependencies inspected from npm tarballs** (the lockfile's versions): `svix` 1.96.1, `standardwebhooks` 1.0.0,
   `resend` 6.17.2, `remeda` 2.39.0; run under Bun 1.4.4 (§1.14).
@@ -612,8 +613,8 @@ keeps the quirks of §2.3 (R-6). The third-party packages are R-3 to R-5:
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| R-2 | `resend`'s child `rateLimiter` is bunvex's rate limiter (0.4.2's shape: its own `batchWorker` child and `pendingUpdates` table), where Convex's 0.2.10 mounts rate-limiter 0.3.2 (neither) | bunvex has one rate limiter, the current one; 0.4 only adds, so a Convex export imports | open |
-| R-3 | (if replaced) webhook signatures verified with WebCrypto, not the `svix` package; the same four messages | no third-party code in the component; the bundle stays small | open |
+| R-2 | `resend`'s child `rateLimiter` is bunvex's rate limiter (0.4.2's shape: its own `batchWorker` child and `pendingUpdates` table), where Convex's 0.2.10 mounts rate-limiter 0.3.2 (neither) | bunvex has one rate limiter, the current one; 0.4 only adds, so a Convex export imports | DV-581 (owner, 2026-10-30) |
+| R-3 | webhook signatures verified with WebCrypto, not the `svix` package; the same four messages | no third-party code in the component; the bundle stays small | DV-582 (owner, 2026-10-30) |
 
 Beyond these, the renames of DV-538, DV-347 and DV-533 (§3.3).
 
@@ -621,7 +622,7 @@ Beyond these, the renames of DV-538, DV-347 and DV-533 (§3.3).
 
 | # | Addition | Why | Decision |
 |---|---|---|---|
-| R-7 | `@bunvex/testing`: a way for a test to answer the `fetch` calls its deployment's actions make (for example `bunvexTest({ fetch: (request) => Response })`) | convex-test runs actions in the test's process, so stubbing the global `fetch` works there; bunvex's actions run in the deployment's realm, where it does not | open |
+| R-7 | `@bunvex/testing`: a way for a test to answer the `fetch` calls its deployment's actions make (for example `bunvexTest({ fetch: (request) => Response })`) | convex-test runs actions in the test's process, so stubbing the global `fetch` works there; bunvex's actions run in the deployment's realm, where it does not | AD-48 (owner, 2026-10-30) |
 
 ## 5. Tests
 
@@ -637,6 +638,8 @@ As §3.4, once built.
 
 ## 7. Questions for the owner
 
+All decided by the owner on 2026-10-30, as recommended (R-6 without an upstream issue).
+
 | # | Question | Recommendation |
 |---|---|---|
 | R-1 | Pin `get-convex/resend` at `982bc63` (0.2.10) in [upstream.md](../parity/upstream.md#other-repositories); it has no row yet | **Yes.** It is the version Convex Auth v2 asks for (`^0.2.8`) and the latest |
@@ -644,6 +647,6 @@ As §3.4, once built.
 | R-3 | `svix`: keep the package (it works under Bun, and check-deps allows it), or verify the signature with ~20 lines of WebCrypto, with the same four messages (§1.14) | **Replace it with WebCrypto.** The same messages and HMAC (checked under Bun); no CommonJS dependency to bundle into the app's functions, and nothing third-party inside a component. The only visible difference is the error class's name in a 500's stack, which keeps `WebhookVerificationError` |
 | R-4 | The `resend` SDK: Convex's package lists it as a dependency but imports it nowhere; only the README's `sendEmailManually` recipe uses it | **Leave it out.** An app that follows the recipe adds `resend` itself (the README says so); the component sends with `fetch`, as Convex's does |
 | R-5 | `remeda` (one `isDeepEqual`) | **Write the check in the package**, keeping its behaviour (an `undefined` key, as it arrives across `runMutation`). Internal, not observable: listed for completeness |
-| R-6 | The quirks of §2.3, notably `lastOptions` being global and last-writer-wins: Convex Auth's sends silence an app's `onEmailEvent` until the app's own next send | **Keep them all**, as W-3 for workpool: match Convex, the oracle as judge. The `lastOptions` one is worth an upstream issue; auth's email method (STUDY-191) notes it for apps that use both |
+| R-6 | The quirks of §2.3, notably `lastOptions` being global and last-writer-wins: Convex Auth's sends silence an app's `onEmailEvent` until the app's own next send | **Keep them all**, as W-3 for workpool: match Convex, the oracle as judge. Auth's email method (STUDY-191) notes the `lastOptions` one for apps that use both |
 | R-7 | The test hook of §4b: let a test answer its deployment's `fetch` calls, so the ported tests (and any app's) can test an action that calls an API | **Yes**, as an addition (AD) to `@bunvex/testing`, in its own PR before the package. Without it, upstream's client and send tests cannot be ported |
 | R-8 | The example: Convex's `example/` sends email through Resend (the SDK for the manual path), with a webhook route and an `onEmailEvent` callback | **Port it as `examples/resend`, after the package**, with the webhook route and the callback. Sending needs `RESEND_API_KEY` (the README says so, as the OpenAI examples do); its e2e test covers the queue, the statuses and a signed webhook without network |
