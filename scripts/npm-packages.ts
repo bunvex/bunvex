@@ -45,6 +45,7 @@ export const INDEPENDENT = [
   "helpers",
   "components/sharded-counter",
   "components/batch-worker",
+  "components/workpool",
   "components/rate-limiter",
 ];
 
