@@ -1,8 +1,10 @@
 # STUDY-199 — `@bunvex/workpool`
-<!-- index: `@bunvex/workpool`, the fourth own component (STUDY-158 §3.4 step 4.4) and a prerequisite of `@bunvex/resend` (STUDY-200) and built-in auth's email (STUDY-191): a pool of actions, mutations and queries run at most `maxParallelism` at a time on `@bunvex/batch-worker`'s loop, with retries, `onComplete` callbacks, cancelation, recovery from the scheduler's state and JSON log events; written from get-convex/workpool 0.4.14 | decided (owner, 2026-10-30): W-1–W-5 as recommended; W-2 extends DV-539 -->
+<!-- index: `@bunvex/workpool`, the fourth own component (STUDY-158 §3.4 step 4.4) and a prerequisite of `@bunvex/resend` (STUDY-200) and built-in auth's email (STUDY-191): a pool of actions, mutations and queries run at most `maxParallelism` at a time on `@bunvex/batch-worker`'s loop, with retries, `onComplete` callbacks, cancelation, recovery from the scheduler's state and JSON log events; written from get-convex/workpool 0.4.14 | decided (owner, 2026-10-30): W-1–W-5 as recommended; W-2 extends DV-539; built: the package and its tests (§3.5 PR 1, without the differential test yet) -->
 
 - **Status:** decided (owner, 2026-10-30): W-1–W-5 as recommended (§7); W-2 extends DV-539. The pin is `7fde769`
-  (W-1). To be built (§3.5).
+  (W-1). Built (2026-10-30): `components/workpool/` and its tests (§5), §3.5's first PR without its differential
+  test, which comes next; the example (W-4) after it. One upstream "BUG" case fails on bunvex because of a platform
+  bug found on the way (§5).
 - **Convex source read:** get-convex/workpool at `7fde769` (after 0.4.14), cloned at `../workpool`. Paths are
   relative to that repository's root.
   - The npm release 0.4.14 is the tag commit `358fb20`; [upstream.md](../parity/upstream.md#other-repositories) pins
@@ -704,7 +706,51 @@ None.
 
 ## 5. Tests
 
-As §3.4, once built.
+As §3.4, built (`components/workpool/test/`, 262 cases, on `@bunvex/testing`'s virtual clock):
+- upstream's cases, ported: `unit.test.ts` (`config`, `logging`, `errors`, `kick`), `lib.test.ts`, `loop.test.ts`,
+  `complete.test.ts`, `recovery.test.ts` (the 15 parameterized cases and the skip rules), `stats.test.ts`,
+  `stateMachine.test.ts` (S1–S12, the three "BUG" cases asserting upstream's behaviour) and `client.test.ts` (the
+  client on an app that installs the package by its name, `test/fixtures/app`, with upstream's type tests checked
+  by `tsc`); not the deprecated forwarders' cases (DV-539). The component's own cases run its functions pushed as an
+  app's (`test/fixtures/standalone`, which mounts the batch worker as the component does).
+- Porting notes:
+  - Recovery uses real scheduled-function states where upstream patches `ctx.db.system.get`: a job that failed, one
+    canceled before it ran, one pending, one that succeeded, and one the scheduler garbage-collected a week after it
+    ran (the "not found" case, upstream's issue #225), on the virtual clock.
+  - Upstream's `vi.fn` callback spy and `actionGate` live in the app fixture's module (the deployment runs its
+    functions in a realm of its own), read and opened through functions; the spy's count is read by a mutation,
+    because a query that reads no table is cached at its first answer.
+  - `failed.error` for a job that throws is the platform's text (`Uncaught Error: work failed\n    at …`) where
+    convex-test gives `work failed`; a `NonRetryableError`'s is its message. An argument error is
+    `ArgumentValidationError: …` where convex-test says `Validator error`. Rows' fractional creation times fall in the
+    millisecond after the clock's reading, so `cancelAll`'s cutoff moves the clock 2 ms where upstream moves 1.
+- More (`messages.test.ts`, `pool.test.ts`, and cases added to the files above): every message of §1.6–§1.15 word for
+  word (thrown errors and leveled log lines, read from the console), the payload thresholds, `boundScheduledTime`,
+  `cancelAll`'s `limit: 1` and `limit: 0` quirks, `danger`'s lines and paging, the events' fields and the report's
+  cadence; `onComplete` in every row of §1.11's table (inline or scheduled, read from the `completed` event's
+  `onCompleteScheduledFunctionId`), with the success callback that throws running twice for an action and a query;
+  `failed.error` of an action, a mutation and a query; recovery of a real `runBatch` that died with three items
+  sharing its scheduled id; and 200 actions draining with `maxParallelism` 200 under the action limiter.
+- §3.2's platform features hold in a component: `recovery:recover` takes `v.id("_scheduled_functions")` of the
+  component's own scheduled function (another table's id is refused), and `stats:scheduledFunctionsInRange` counts the
+  component's scheduled functions in its range, not the app's.
+- **Found on the way (a platform bug, not fixed here):** two `ctx.db.delete`s of one document in flight at once in a
+  transaction both succeed, and so do a concurrent `delete` and `patch`; awaited one after the other, the second
+  delete fails with "Delete on nonexistent document ID", as Convex's does. Upstream's "multiple cancels for same work
+  → BUG: crashes with double delete" therefore does not crash on bunvex: it is kept with upstream's assertion as
+  `it.failing`, to flip once the platform is fixed.
+- The differential test against `@convex-dev/workpool` 0.4.14 on Convex's binary (§3.4) is the next step.
+- **Sabotage checks** (each broke the code, then the suite was run; each was caught):
+  - the `maxParallelism` cap (`run` starting every due start): `loop.test.ts`'s "never starts more than
+    maxParallelism in one iteration" and "picks up overflow…";
+  - the retry decision (`attempts <= maxAttempts`): `complete.test.ts`'s "…reached max attempts" and four client
+    cases ("a failure filter runs once after retry exhaustion", …);
+  - the exactly-once attempt guard (removed): `complete.test.ts`'s "mismatched attempt numbers" and "only process the
+    first call…", `stateMachine.test.ts`'s two attempt cases, `messages.test.ts`'s line;
+  - the cancel-before-start path (the `pendingStart` not removed): S7, `loop.test.ts`'s "removes a pendingStart
+    cancellation…" and 22 client and `pool.test.ts` cases;
+  - the recovery of a missing scheduled job (skipped): the five parameterized "missing" cases, "should handle
+    scheduled job not found", the GC'd-scheduledId recovery case and `messages.test.ts`'s line.
 
 ## 6. Not verified yet
 

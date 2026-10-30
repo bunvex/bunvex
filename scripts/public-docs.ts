@@ -26,6 +26,7 @@ export const CHECKED = [
   "components/batch-worker",
   "components/rate-limiter",
   "components/sharded-counter",
+  "components/workpool",
 ];
 /** Every package an app imports from, for `--list`: all of them are checked now. */
 const ALL = CHECKED;

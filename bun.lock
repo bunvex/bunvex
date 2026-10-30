@@ -145,6 +145,21 @@
         "@bunvex/values": "workspace:^",
       },
     },
+    "components/workpool": {
+      "name": "@bunvex/workpool",
+      "version": "0.1.0",
+      "dependencies": {
+        "@bunvex/batch-worker": "workspace:^",
+        "@bunvex/helpers": "workspace:^",
+      },
+      "devDependencies": {
+        "@bunvex/testing": "workspace:*",
+      },
+      "peerDependencies": {
+        "@bunvex/server": "workspace:^",
+        "@bunvex/values": "workspace:^",
+      },
+    },
     "examples/_browser": {
       "name": "bunvex-examples-browser",
       "version": "0.0.0",
@@ -1344,6 +1359,8 @@
     "@bunvex/ui": ["@bunvex/ui@workspace:packages/ui"],
 
     "@bunvex/values": ["@bunvex/values@workspace:packages/values"],
+
+    "@bunvex/workpool": ["@bunvex/workpool@workspace:components/workpool"],
 
     "@changesets/apply-release-plan": ["@changesets/apply-release-plan@7.1.1", "", { "dependencies": { "@changesets/config": "^3.1.4", "@changesets/get-version-range-type": "^0.4.0", "@changesets/git": "^3.0.4", "@changesets/should-skip-package": "^0.1.2", "@changesets/types": "^6.1.0", "@manypkg/get-packages": "^1.1.3", "detect-indent": "^6.0.0", "fs-extra": "^7.0.1", "lodash.startcase": "^4.4.0", "outdent": "^0.5.0", "prettier": "^2.7.1", "resolve-from": "^5.0.0", "semver": "^7.5.3" } }, "sha512-9qPCm/rLx/xoOFXIHGB229+4GOL76S4MC+7tyOuTsR6+1jYlfFDQORdvwR5hDA6y4FL2BPt3qpbcQIS+dW85LA=="],
 
