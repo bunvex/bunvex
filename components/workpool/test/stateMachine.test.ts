@@ -572,10 +572,9 @@ describe("multi-step / interleaved transitions", () => {
     expect(await observeState(workId)).toMatchObject({ pendingStart: false, running: false, pendingCompletion: false });
   });
 
-  // Upstream's assertion, kept, and failing on bunvex today: two `ctx.db.delete`s of one document in flight at once in
-  // a transaction both succeed, where the second fails on Convex (and in convex-test) with "Delete on nonexistent
-  // document ID". A platform bug, reported with STUDY-199's build; `failing` flips once it is fixed.
-  it.failing("multiple cancels for same work -> BUG: crashes with double delete", async () => {
+  // Two `ctx.db.delete`s of one document in flight at once in a transaction: the second fails, as on Convex, with
+  // "Delete on nonexistent document ID" (the transaction runs its database calls in the order they are made).
+  it("multiple cancels for same work -> BUG: crashes with double delete", async () => {
     const seg = nextSegment();
     await t.run(async (ctx: any) => {
       const wId = await makeDummyWork(ctx, { fnHandle: "h", fnName: "fn" });

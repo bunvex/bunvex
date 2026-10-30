@@ -734,11 +734,10 @@ As §3.4, built (`components/workpool/test/`, 262 cases, on `@bunvex/testing`'s 
 - §3.2's platform features hold in a component: `recovery:recover` takes `v.id("_scheduled_functions")` of the
   component's own scheduled function (another table's id is refused), and `stats:scheduledFunctionsInRange` counts the
   component's scheduled functions in its range, not the app's.
-- **Found on the way (a platform bug, not fixed here):** two `ctx.db.delete`s of one document in flight at once in a
-  transaction both succeed, and so do a concurrent `delete` and `patch`; awaited one after the other, the second
-  delete fails with "Delete on nonexistent document ID", as Convex's does. Upstream's "multiple cancels for same work
-  → BUG: crashes with double delete" therefore does not crash on bunvex: it is kept with upstream's assertion as
-  `it.failing`, to flip once the platform is fixed.
+- **Found on the way, fixed in its own PR (#965):** a transaction's database calls in flight at once interleaved, so
+  two `ctx.db.delete`s of one document both succeeded (and two patches lost each other's fields), where Convex runs
+  them in the order they are made. Upstream's "multiple cancels for same work → BUG: crashes with double delete" now
+  crashes on bunvex too, as upstream's test asserts.
 - The differential test against `@convex-dev/workpool` 0.4.14 on Convex's binary (§3.4) is the next step.
 - **Sabotage checks** (each broke the code, then the suite was run; each was caught):
   - the `maxParallelism` cap (`run` starting every due start): `loop.test.ts`'s "never starts more than
