@@ -1,7 +1,7 @@
-// Rate-limited LLM batches (Convex's `example/convex/rateLimited.ts`): requests queue up in `llmRequests`, the `llm`
-// worker takes them five at a time and spends their estimated input tokens from one `@bunvex/rate-limiter` budget,
-// then schedules the (stubbed) model call for when that budget allows it. The call's output tokens come out of the
-// same budget once they are known, so a batch that wrote a lot pushes the next ones back.
+// Rate-limited LLM batches: requests queue up in `llmRequests`, the `llm` worker takes them five at a time and
+// spends their estimated input tokens from one `@bunvex/rate-limiter` budget, then schedules the (stubbed) model call
+// for when that budget allows it. The call's output tokens come out of the same budget once they are known, so a
+// batch that wrote a lot pushes the next ones back.
 //
 // The budget is tiny on purpose (300 tokens per 5 s, at most 300 at once), so a few clicks are enough to watch the
 // batches wait their turn. A real one follows the provider's tokens-per-minute limit.

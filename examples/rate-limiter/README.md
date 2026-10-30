@@ -1,6 +1,6 @@
 # Rate limiter
 
-`@bunvex/rate-limiter`, after Convex's example of [`@convex-dev/rate-limiter`](https://github.com/get-convex/rate-limiter):
+`@bunvex/rate-limiter`, bunvex's version of the example of [`@convex-dev/rate-limiter`](https://github.com/get-convex/rate-limiter):
 
 - **Playground** ([playground.ts](bunvex/playground.ts)): the limit's config is the page's controls (kind, rate,
   period, capacity, shards). Spend or reserve tokens and watch a timeline of the limit's tokens over the last 10 s.

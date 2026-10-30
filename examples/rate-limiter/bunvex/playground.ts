@@ -1,5 +1,5 @@
-// The playground behind the page's controls (Convex's `example/convex/playground.ts`): one limit, `demo`, whose
-// config the page sends with every call, so changing a control changes the limit at once.
+// The playground behind the page's controls: one limit, `demo`, whose config the page sends with every call, so
+// changing a control changes the limit at once.
 import { RateLimiter } from "@bunvex/rate-limiter";
 import { v } from "@bunvex/values";
 import { components } from "./_generated/api.js";

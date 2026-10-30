@@ -1,5 +1,5 @@
-// Two panels, as in Convex's example of `@convex-dev/rate-limiter`: a playground whose controls are the limit's
-// config, with a live timeline of its tokens, and `useRateLimit` on a fixed limit, saying when the next call fits.
+// Two panels: a playground whose controls are the limit's config, with a live timeline of its tokens, and
+// `useRateLimit` on a fixed limit, saying when the next call fits.
 
 import type { RateLimitConfig } from "@bunvex/rate-limiter";
 import { type GetRateLimitValueQuery, type UseRateLimitOptions, useRateLimit } from "@bunvex/rate-limiter/react";

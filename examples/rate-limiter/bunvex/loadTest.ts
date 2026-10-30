@@ -1,7 +1,7 @@
-// A load test of a sharded limit (Convex's `example/convex/loadTest.ts`): workers in one action call `limit` at
-// about `qps` (times `overRequest`), back off for `retryAfter` when refused, and count what passed, what the limit
-// refused, and what failed on a write conflict. With enough shards, few calls conflict and the rate that passes is
-// the limit's. Run it with `bunx bunvex run loadTest:run '{"qps": 50}'`.
+// A load test of a sharded limit: workers in one action call `limit` at about `qps` (times `overRequest`), back off
+// for `retryAfter` when refused, and count what passed, what the limit refused, and what failed on a write conflict.
+// With enough shards, few calls conflict and the rate that passes is the limit's. Run it with
+// `bunx bunvex run loadTest:run '{"qps": 50}'`.
 import { type RateLimitConfig, RateLimiter, SECOND } from "@bunvex/rate-limiter";
 import { v } from "@bunvex/values";
 import { components } from "./_generated/api.js";

@@ -1,6 +1,6 @@
-// The rate limiter's API, after Convex's example of `@convex-dev/rate-limiter` (`example/convex/example.ts`):
-// limits named once in the constructor, a hook API for `useRateLimit`, a mutation that spends tokens, and internal
-// functions that walk through `limit`, `check`, `reset`, `throws` and an inline config. The e2e test runs them.
+// The rate limiter's API: limits named once in the constructor, a hook API for `useRateLimit`, a mutation that
+// spends tokens, and internal functions that walk through `limit`, `check`, `reset`, `throws` and an inline config.
+// The e2e test runs them.
 import { HOUR, isRateLimitError, MINUTE, type RateLimitConfig, RateLimiter, SECOND } from "@bunvex/rate-limiter";
 import { v } from "@bunvex/values";
 import { components } from "./_generated/api.js";
