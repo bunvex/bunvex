@@ -1,6 +1,6 @@
 # bunvex examples
 
-Small apps, one feature each, written for bunvex after the scenarios of Convex's demos (STUDY-90). Each has its
+Small apps, one feature each, written for bunvex. The scenarios follow Convex's demos. Each has its
 functions in `bunvex/` (with the generated `bunvex/_generated/` committed), a front end (Vite + React, Next.js, or Expo for React Native),
 a README, and an end-to-end test.
 
@@ -53,12 +53,13 @@ drives it in Chromium; any page error or console error fails the test.
 |---|---|
 | [tutorial](tutorial) | A chat: a query, a mutation, a page that stays live |
 | [react-native](react-native) | The same chat on iOS and Android with Expo (React Native) |
+| [tanstack-start](tanstack-start) | The chat on TanStack Start: rendered on the server with `@bunvex/react-query`, then live |
 | [typescript](typescript) | A schema typing documents end to end (`Doc<"messages">`) |
 | [args-validation](args-validation) | `args` and `returns` validators, and what a refused call says |
 | [custom-errors](custom-errors) | `BunvexError` with a message or data, from mutations and queries |
 | [relational-data-modeling](relational-data-modeling) | Channels and messages: `v.id`, an index, a join |
 | [pagination](pagination) | `usePaginatedQuery`, `loadMore`, a page that stays live |
-| [rooms-cursors](rooms-cursors) | `room` and `presence`: live cursors, a wave and who is online, held in memory (AD-42) |
+| [rooms-cursors](rooms-cursors) | `room` and `presence`: live cursors, a wave and who is online, held in memory |
 | [search](search) | Full-text search over a `searchIndex`, live |
 | [vector-search](vector-search) | `vectorSearch` with embeddings from an action (OpenAI) |
 | [file-storage](file-storage) | Upload URLs, `ctx.storage`, serving files |

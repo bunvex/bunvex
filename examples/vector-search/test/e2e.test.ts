@@ -1,4 +1,4 @@
-// The vector search example end to end (STUDY-90): embeddings from an action (a local stand-in for OpenAI's
+// The vector search example end to end: embeddings from an action (a local stand-in for OpenAI's
 // embeddings API: words hashed into the 1536 dimensions, so texts sharing words are close), vector searches with
 // and without filters, and a movie's embedding computed by a scheduled action.
 import { afterAll, beforeAll, expect, test } from "bun:test";

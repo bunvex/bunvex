@@ -2,7 +2,7 @@
 
 The tutorial's chat on iOS, Android and the web: `bunvex/messages.ts` has a query (`list`) and a mutation
 (`send`), and `App.tsx` renders the messages with `useQuery` from `@bunvex/react`, as a web app does. Nothing in bunvex is
-specific to React Native: the same client and hooks run on it, as Convex's do. Expo SDK 58 (React Native 0.88).
+specific to React Native: the same client and hooks run on it. Expo SDK 58 (React Native 0.88).
 
 ## Run it on the iOS simulator
 

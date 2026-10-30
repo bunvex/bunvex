@@ -1,6 +1,6 @@
 # @bunvex/nextjs
 
-Next.js and server rendering (STUDY-46), the counterpart of Convex's `convex/nextjs`. Every function reads the
+Next.js and server rendering, bunvex's version of `convex/nextjs`. Every function reads the
 deployment URL from `NEXT_PUBLIC_BUNVEX_URL` (which `bunvex dev` writes to `.env.local`) unless `url` is given,
 and its requests are never cached by Next.js (`cache: "no-store"`).
 

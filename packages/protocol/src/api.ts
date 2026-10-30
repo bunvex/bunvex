@@ -6,7 +6,8 @@
 
 export type FunctionType = "query" | "mutation" | "action";
 export type FunctionVisibility = "public" | "internal";
-/** A function's arguments: one object (Convex's `DefaultFunctionArgs`). What a reference's `Args` must be. */
+// Convex's `DefaultFunctionArgs`.
+/** A function's arguments: one object. What a reference's `Args` must be. */
 export type DefaultFunctionArgs = Record<string, unknown>;
 /** The arguments of a reference that does not type them: any object. */
 // biome-ignore lint/suspicious/noExplicitAny: a function's arguments object, any shape by default
@@ -176,9 +177,10 @@ export const toReferencePath = Symbol.for("toReferencePath");
 /** How a call names its function (Convex's `getFunctionAddress`): a handle, a name, or a component reference. */
 export type FunctionAddress = { functionHandle: string } | { name: string } | { reference: string };
 
+// Convex's `getFunctionAddress` (components/paths.ts).
 /**
- * Convex's `getFunctionAddress` (components/paths.ts): a `function://` string is a handle, another string a name,
- * a reference its name, and a component reference its path.
+ * The address of a function: a `function://` string is a handle, another string a name, a reference its name, and a
+ * component reference its path.
  */
 export function getFunctionAddress(ref: unknown): FunctionAddress {
   if (typeof ref === "string") return ref.startsWith("function://") ? { functionHandle: ref } : { name: ref };

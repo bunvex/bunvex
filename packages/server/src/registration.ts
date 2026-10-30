@@ -56,7 +56,8 @@ type Callable<Kind extends "query" | "mutation" | "action"> =
   | FunctionReference<Kind, "public" | "internal">
   | FunctionReference_future<Kind, "public" | "internal">;
 
-/** Convex's `TransactionLimits`: lower a nested call's limits (STUDY-41). */
+// Convex's `TransactionLimits` (STUDY-41).
+/** Lower a nested call's limits. */
 export type TransactionLimits = {
   bytesRead?: number;
   bytesWritten?: number;
@@ -66,10 +67,12 @@ export type TransactionLimits = {
   functionsScheduled?: number;
   scheduledFunctionArgsBytes?: number;
 };
-/** Convex's `AdvancedRunQueryOptions` (`useStaleSnapshot` only from a mutation). */
+// Convex's `AdvancedRunQueryOptions`.
+/** The options of `ctx.runQuery` (`useStaleSnapshot` only from a mutation). */
 export type AdvancedRunQueryOptions = { transactionLimits?: TransactionLimits; useStaleSnapshot?: boolean };
 
-/** Convex's `ArgsAndOptions`: the arguments (optional when there are none), then the options. */
+// Convex's `ArgsAndOptions`.
+/** The arguments (optional when there are none), then the options. */
 export type ArgsAndOptions<
   F extends
     | FunctionReference<"query" | "mutation" | "action", "public" | "internal">
@@ -85,9 +88,11 @@ export interface GenericQueryCtx<DataModel extends GenericDataModel> {
   db: GenericDatabaseReader<DataModel>;
   auth: Auth;
   storage: StorageReader;
-  /** The function's, transaction's and deployment's metadata (STUDY-44). */
+  // STUDY-44.
+  /** The function's, transaction's and deployment's metadata. */
   meta: QueryMeta;
-  /** Run a query in this query's transaction: its reads join this query's (STUDY-41). */
+  // STUDY-41.
+  /** Run a query in this query's transaction: its reads join this query's. */
   runQuery<Query extends Callable<"query">>(
     query: Query,
     ...args: ArgsAndOptions<Query, { transactionLimits?: TransactionLimits }>
@@ -135,7 +140,8 @@ export interface GenericMutationCtx<DataModel extends GenericDataModel> {
   storage: StorageWriter;
   scheduler: Scheduler;
   rooms: RoomsBroadcaster;
-  /** The function's, transaction's, deployment's and request's metadata (STUDY-44). */
+  // STUDY-44.
+  /** The function's, transaction's, deployment's and request's metadata. */
   meta: MutationMeta;
   /** Run a query in this mutation's transaction, seeing its writes (or, `useStaleSnapshot`, its snapshot). */
   runQuery<Query extends Callable<"query">>(
@@ -157,12 +163,14 @@ export interface GenericMutationCtx<DataModel extends GenericDataModel> {
   ): Promise<any>;
 }
 
-/** Convex's `GenericQueryCtxWithTable`: a query's context with the table-scoped database (STUDY-66 §2). */
+// Convex's `GenericQueryCtxWithTable` (STUDY-66 §2).
+/** A query's context with the table-scoped database. */
 export type GenericQueryCtxWithTable<DataModel extends GenericDataModel> = Omit<GenericQueryCtx<DataModel>, "db"> & {
   db: GenericDatabaseReaderWithTable<DataModel>;
 };
 
-/** Convex's `GenericMutationCtxWithTable`: a mutation's context with the table-scoped database. */
+// Convex's `GenericMutationCtxWithTable`.
+/** A mutation's context with the table-scoped database. */
 export type GenericMutationCtxWithTable<DataModel extends GenericDataModel> = Omit<
   GenericMutationCtx<DataModel>,
   "db"
@@ -199,12 +207,14 @@ export interface GenericActionCtx<DataModel extends GenericDataModel> {
   scheduler: Scheduler;
   rooms: RoomsReader;
   presence: PresenceReader;
-  /** The function's, deployment's and request's metadata (STUDY-44). */
+  // STUDY-44.
+  /** The function's, deployment's and request's metadata. */
   meta: ActionMeta;
+  // Convex's vector search (STUDY-51).
   /**
-   * Convex's vector search (STUDY-51): the documents of `tableName` whose `vectorField` is most similar to
-   * `query.vector` (cosine), `{_id, _score}` best first; `limit` 10 by default, at most 256; `filter` an OR
-   * of `q.eq` on the index's filter fields.
+   * Vector search: the documents of `tableName` whose `vectorField` is most similar to `query.vector` (cosine),
+   * `{_id, _score}` best first; `limit` 10 by default, at most 256; `filter` an OR of `q.eq` on the index's filter
+   * fields.
    */
   vectorSearch<
     TableName extends TableNamesInDataModel<DataModel>,
@@ -216,9 +226,10 @@ export interface GenericActionCtx<DataModel extends GenericDataModel> {
   ): Promise<Array<{ _id: GenericId<TableName>; _score: number }>>;
 }
 
+// Convex's `VectorSearch`.
 /**
- * `ctx.vectorSearch` for one table and index (Convex's `VectorSearch`): the documents whose vector is most similar
- * to `query.vector`, best first.
+ * `ctx.vectorSearch` for one table and index: the documents whose vector is most similar to `query.vector`, best
+ * first.
  */
 export type VectorSearch<
   DataModel extends GenericDataModel,
@@ -230,10 +241,8 @@ export type VectorSearch<
   query: VectorSearchQuery<NamedTableInfo<DataModel, TableName>, IndexName>,
 ) => Promise<Array<{ _id: GenericId<TableName>; _score: number }>>;
 
-/**
- * What a vector filter's operators return (Convex's `FilterExpression`, which it exports as a type only): an
- * expression whose value is a `T`.
- */
+// Convex's `FilterExpression`, which it exports as a type only.
+/** What a vector filter's operators return: an expression whose value is a `T`. */
 export declare abstract class FilterExpression<T extends Value | undefined> {
   /** Types only: makes the class nominal. */
   private readonly _isFilterExpression: undefined;
@@ -241,7 +250,8 @@ export declare abstract class FilterExpression<T extends Value | undefined> {
   private readonly _value: T;
 }
 
-/** A vector search's filter builder (Convex's `VectorFilterBuilder`): equalities on the index's filter fields, ORed. */
+// Convex's `VectorFilterBuilder`.
+/** A vector search's filter builder: equalities on the index's filter fields, ORed. */
 export interface VectorFilterBuilder<
   Document extends GenericDocument,
   VectorIndexConfig extends GenericVectorIndexConfig,
@@ -255,7 +265,8 @@ export interface VectorFilterBuilder<
   or(...exprs: Array<FilterExpression<boolean>>): FilterExpression<boolean>;
 }
 
-/** A vector search's query (Convex's `VectorSearchQuery`): the vector, how many results (10 by default), a filter. */
+// Convex's `VectorSearchQuery`.
+/** A vector search's query: the vector, how many results (10 by default), a filter. */
 export interface VectorSearchQuery<TableInfo extends GenericTableInfo, IndexName extends VectorIndexNames<TableInfo>> {
   vector: number[];
   limit?: number;
@@ -347,7 +358,8 @@ type Definition<Ctx, ArgsValidator, ReturnsValidator, OneOrZeroArgs extends Args
   | { args?: ArgsValidator; returns?: ReturnsValidator; handler: (ctx: Ctx, ...args: OneOrZeroArgs) => ReturnValue }
   | ((ctx: Ctx, ...args: OneOrZeroArgs) => ReturnValue);
 
-/** `query` / `internalQuery` for a data model (Convex's `QueryBuilder`). */
+// Convex's `QueryBuilder`.
+/** `query` / `internalQuery` for a data model. */
 export type QueryBuilder<DataModel extends GenericDataModel, Visibility extends FunctionVisibility> = <
   ArgsValidator extends PropertyValidators | RequiredValidator | void,
   ReturnsValidator extends PropertyValidators | RequiredValidator | void,
@@ -358,7 +370,8 @@ export type QueryBuilder<DataModel extends GenericDataModel, Visibility extends 
   query: Definition<GenericQueryCtx<DataModel>, ArgsValidator, ReturnsValidator, OneOrZeroArgs, ReturnValue>,
 ) => RegisteredQuery<Visibility, ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
 
-/** `mutation` / `internalMutation` for a data model (Convex's `MutationBuilder`). */
+// Convex's `MutationBuilder`.
+/** `mutation` / `internalMutation` for a data model. */
 export type MutationBuilder<DataModel extends GenericDataModel, Visibility extends FunctionVisibility> = <
   ArgsValidator extends PropertyValidators | RequiredValidator | void,
   ReturnsValidator extends PropertyValidators | RequiredValidator | void,
@@ -369,7 +382,8 @@ export type MutationBuilder<DataModel extends GenericDataModel, Visibility exten
   mutation: Definition<GenericMutationCtx<DataModel>, ArgsValidator, ReturnsValidator, OneOrZeroArgs, ReturnValue>,
 ) => RegisteredMutation<Visibility, ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
 
-/** Convex's `QueryBuilderWithTable`: `query` for a data model, its handler typed with the table-scoped API. */
+// Convex's `QueryBuilderWithTable`.
+/** `query` for a data model, its handler typed with the table-scoped API. */
 export type QueryBuilderWithTable<DataModel extends GenericDataModel, Visibility extends FunctionVisibility> = <
   ArgsValidator extends PropertyValidators | RequiredValidator | void,
   ReturnsValidator extends PropertyValidators | RequiredValidator | void,
@@ -380,7 +394,8 @@ export type QueryBuilderWithTable<DataModel extends GenericDataModel, Visibility
   query: Definition<GenericQueryCtxWithTable<DataModel>, ArgsValidator, ReturnsValidator, OneOrZeroArgs, ReturnValue>,
 ) => RegisteredQuery<Visibility, ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
 
-/** Convex's `MutationBuilderWithTable`. */
+// Convex's `MutationBuilderWithTable`.
+/** `mutation` for a data model, its handler typed with the table-scoped API. */
 export type MutationBuilderWithTable<DataModel extends GenericDataModel, Visibility extends FunctionVisibility> = <
   ArgsValidator extends PropertyValidators | RequiredValidator | void,
   ReturnsValidator extends PropertyValidators | RequiredValidator | void,
@@ -397,7 +412,8 @@ export type MutationBuilderWithTable<DataModel extends GenericDataModel, Visibil
   >,
 ) => RegisteredMutation<Visibility, ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
 
-/** `action` / `internalAction` for a data model (Convex's `ActionBuilder`). */
+// Convex's `ActionBuilder`.
+/** `action` / `internalAction` for a data model. */
 export type ActionBuilder<DataModel extends GenericDataModel, Visibility extends FunctionVisibility> = <
   ArgsValidator extends PropertyValidators | RequiredValidator | void,
   ReturnsValidator extends PropertyValidators | RequiredValidator | void,
@@ -408,7 +424,8 @@ export type ActionBuilder<DataModel extends GenericDataModel, Visibility extends
   action: Definition<GenericActionCtx<DataModel>, ArgsValidator, ReturnsValidator, OneOrZeroArgs, ReturnValue>,
 ) => RegisteredAction<Visibility, ArgsArrayToObject<OneOrZeroArgs>, ReturnValue>;
 
-/** `httpAction` (Convex's `HttpActionBuilder`). */
+// Convex's `HttpActionBuilder`.
+/** `httpAction`: an HTTP action from its handler. */
 export type HttpActionBuilder = (
   // biome-ignore lint/suspicious/noExplicitAny: an HTTP action's context is not bound to the data model
   func: (ctx: GenericActionCtx<any>, request: Request) => Promise<Response>,

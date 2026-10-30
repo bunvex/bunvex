@@ -19,12 +19,14 @@ import { types } from "node:util";
 import { formatBytes } from "@bunvex/core";
 import { describeUncaught } from "./errors.ts";
 
-/** Convex's HTTP_ACTION_RESPONSE_BODY_LIMIT: 100 MiB since 82e5c50 (20 MiB before). */
+// Convex's HTTP_ACTION_RESPONSE_BODY_LIMIT: 100 MiB since 82e5c50 (20 MiB before).
+/** The most bytes an HTTP action's response body may have: 100 MiB. */
 export const HTTP_ACTION_RESPONSE_LIMIT = 100 << 20;
 
+// STUDY-168 PR 6.
 /**
  * What a body yields in place of a chunk that went past the limit and was dropped (the function sandbox's child cut
- * it, the app's own chunk; STUDY-168 PR 6): the body goes on as past a chunk that would cross the limit.
+ * it, the app's own chunk): the body goes on as past a chunk that would cross the limit.
  */
 export const BODY_OVER_LIMIT: unique symbol = Symbol("over the limit");
 
@@ -103,10 +105,11 @@ export type BodyReader = {
   failedEarly(): Promise<{ error: unknown } | null>;
 };
 
+// STUDY-168 PR 6.
 /**
  * A response body's reader that can look for a failure in the handler's turn (`failedEarly`) before it is read on:
  * the reads that look are kept, in order, and `read` hands them out first. The function sandbox's child reads an HTTP
- * action's body with it too, so it fails early exactly where in-process it does (STUDY-168 PR 6).
+ * action's body with it too, so it fails early exactly where in-process it does.
  */
 export function readsAhead(body: ReadableStream<Uint8Array>): BodyReader {
   const reader = body.getReader() as unknown as {
@@ -160,9 +163,10 @@ export function readsAhead(body: ReadableStream<Uint8Array>): BodyReader {
   };
 }
 
+// As Convex's streamer takes it.
 /**
- * A body's chunk as Convex's streamer takes it: its bytes, null for nothing to send (null or undefined, skipped), or
- * the error of a chunk that is not bytes (thrown).
+ * A body's chunk as the response streamer takes it: its bytes, null for nothing to send (null or undefined, skipped),
+ * or the error of a chunk that is not bytes (thrown).
  */
 export function bodyChunk(value: unknown): ArrayBuffer | ArrayBufferView | null {
   if (value === undefined || value === null) return null;

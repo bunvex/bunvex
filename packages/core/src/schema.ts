@@ -26,7 +26,8 @@ import { encodeKey, type KeyValue } from "./keyenc.ts";
 import type { IndexId, TabletId } from "./persistence/index.ts";
 
 export type FieldValue = null | boolean | number | string;
-/** Flatten an intersection for display (Convex's `Expand`). */
+// Convex's `Expand`.
+/** Flatten an intersection for display. */
 export type Expand<T> = T extends object ? { [K in keyof T]: T[K] } : T;
 export type Doc = { _id: string; _creationTime: number; [k: string]: unknown };
 
@@ -83,22 +84,23 @@ export function checkIdentifier(kind: string, s: string) {
     );
 }
 
-/** An index's fields as types (Convex's `GenericIndexFields`). */
+// Convex's `GenericIndexFields`.
+/** An index's fields as types. */
 export type GenericIndexFields = string[];
-/** A table's indexes as types: name → its fields, `_creationTime` appended (Convex's). */
+// Convex's `GenericTableIndexes`.
+/** A table's indexes as types: name → its fields, `_creationTime` appended. */
 export type GenericTableIndexes = Record<string, GenericIndexFields>;
 
-/**
- * A table of a schema: its document validator and its indexes (Convex's `defineTable(...).index(...)`).
- * The type parameters keep the validator and the indexes for `DataModelFromSchemaDefinition` (STUDY-36).
- */
 /** A search index's configuration (Convex's `SearchIndexConfig`), as stored: its filter fields deduplicated. */
 export type SearchIndexDef = { searchField: string; filterFields: string[] };
-/** A search index as types (Convex's `GenericSearchIndexConfig`): its filter fields a union of their paths. */
+// Convex's `GenericSearchIndexConfig`.
+/** A search index as types: its filter fields a union of their paths. */
 export type GenericSearchIndexConfig = { searchField: string; filterFields: string };
-/** A table's search indexes as types (Convex's `GenericTableSearchIndexes`). */
+// Convex's `GenericTableSearchIndexes`.
+/** A table's search indexes as types. */
 export type GenericTableSearchIndexes = Record<string, GenericSearchIndexConfig>;
-/** A search index as `searchIndex(name, config)` declares it (Convex's `SearchIndexConfig`). */
+// Convex's `SearchIndexConfig`.
+/** A search index as `searchIndex(name, config)` declares it. */
 export interface SearchIndexConfig<SearchField extends string, FilterFields extends string> {
   searchField: SearchField;
   filterFields?: FilterFields[];
@@ -106,11 +108,14 @@ export interface SearchIndexConfig<SearchField extends string, FilterFields exte
 
 /** A vector index's configuration (Convex's `VectorIndexConfig`), its filter fields deduplicated. */
 export type VectorIndexDef = { vectorField: string; dimensions: number; filterFields: string[] };
-/** A vector index as types (Convex's `GenericVectorIndexConfig`): its filter fields a union of their paths. */
+// Convex's `GenericVectorIndexConfig`.
+/** A vector index as types: its filter fields a union of their paths. */
 export type GenericVectorIndexConfig = { vectorField: string; dimensions: number; filterFields: string };
-/** A table's vector indexes as types (Convex's `GenericTableVectorIndexes`). */
+// Convex's `GenericTableVectorIndexes`.
+/** A table's vector indexes as types. */
 export type GenericTableVectorIndexes = Record<string, GenericVectorIndexConfig>;
-/** A vector index as `vectorIndex(name, config)` declares it (Convex's `VectorIndexConfig`). */
+// Convex's `VectorIndexConfig`.
+/** A vector index as `vectorIndex(name, config)` declares it. */
 export interface VectorIndexConfig<VectorField extends string, FilterFields extends string> {
   vectorField: VectorField;
   dimensions: number;
@@ -125,6 +130,11 @@ export const MAX_VECTOR_FILTER_FIELDS = 16;
 export const MAX_SEARCH_FILTER_FIELDS = 16;
 export const MAX_INDEXES_PER_TABLE = 64;
 
+// Convex's `TableDefinition` (`defineTable(...).index(...)`, STUDY-36).
+/**
+ * A table of a schema: its document validator and its indexes. The type parameters keep the validator and the
+ * indexes for `DataModelFromSchemaDefinition`.
+ */
 export class TableDefinition<
   // biome-ignore lint/correctness/noUnusedVariables: kept for the data model's types
   DocumentType extends GenericValidator = GenericValidator,
@@ -135,22 +145,28 @@ export class TableDefinition<
   // biome-ignore lint/correctness/noUnusedVariables: kept for the data model's types
   VectorIndexes extends GenericTableVectorIndexes = {},
 > {
-  /** @internal Convex's runtime shape, read by libraries (STUDY-181 H-5): the database indexes, not staged, in order. */
+  // Convex's runtime shape, read by libraries (STUDY-181 H-5).
+  /** @internal The database indexes, not staged, in order. */
   readonly indexes: { indexDescriptor: string; fields: string[] }[] = [];
-  /** @internal Convex's runtime shape (STUDY-181 H-5): the database indexes declared `staged: true`, in order. */
+  // Convex's runtime shape (STUDY-181 H-5).
+  /** @internal The database indexes declared `staged: true`, in order. */
   readonly stagedDbIndexes: { indexDescriptor: string; fields: string[] }[] = [];
-  /** @internal Convex's runtime shape (STUDY-181 H-5): the search indexes, not staged, in order. */
+  // Convex's runtime shape (STUDY-181 H-5).
+  /** @internal The search indexes, not staged, in order. */
   readonly searchIndexes: { indexDescriptor: string; searchField: string; filterFields: string[] }[] = [];
-  /** @internal Convex's runtime shape (STUDY-181 H-5): the search indexes declared `staged: true`, in order. */
+  // Convex's runtime shape (STUDY-181 H-5).
+  /** @internal The search indexes declared `staged: true`, in order. */
   readonly stagedSearchIndexes: { indexDescriptor: string; searchField: string; filterFields: string[] }[] = [];
-  /** @internal Convex's runtime shape (STUDY-181 H-5): the vector indexes, not staged, in order. */
+  // Convex's runtime shape (STUDY-181 H-5).
+  /** @internal The vector indexes, not staged, in order. */
   readonly vectorIndexes: {
     indexDescriptor: string;
     vectorField: string;
     dimensions: number;
     filterFields: string[];
   }[] = [];
-  /** @internal Convex's runtime shape (STUDY-181 H-5): the vector indexes declared `staged: true`, in order. */
+  // Convex's runtime shape (STUDY-181 H-5).
+  /** @internal The vector indexes declared `staged: true`, in order. */
   readonly stagedVectorIndexes: {
     indexDescriptor: string;
     vectorField: string;
@@ -162,18 +178,22 @@ export class TableDefinition<
    * `defineSchema` checks and the engine declares. A name declared twice is in `duplicateIndexes`.
    */
   readonly indexFields: Record<string, string[]> = {};
-  /** Index names declared more than once (Convex refuses them at push, naming the table: see `defineSchema`). */
+  // Convex refuses them at push, naming the table.
+  /** Index names declared more than once (`defineSchema` refuses them, naming the table). */
   readonly duplicateIndexes: string[] = [];
   /** The indexes declared `staged: true`: built in the background, never enabled until un-staged. */
   readonly stagedIndexes: string[] = [];
-  /** Full-text search indexes by name (STUDY-45), and those declared `staged: true`. */
+  // STUDY-45.
+  /** Full-text search indexes by name, and those declared `staged: true`. */
   readonly searchIndexDefs: Record<string, SearchIndexDef> = {};
   readonly stagedSearch: string[] = [];
-  /** Vector indexes by name (STUDY-51), and those declared `staged: true`. */
+  // STUDY-51.
+  /** Vector indexes by name, and those declared `staged: true`. */
   readonly vectorIndexDefs: Record<string, VectorIndexDef> = {};
   readonly stagedVector: string[] = [];
   readonly document: GenericValidator;
-  /** Convex's name for the table's document validator (`schema.tables.x.validator`, `docValidator`). */
+  // Convex's name for the table's document validator.
+  /** The table's document validator (`schema.tables.x.validator`, what `docValidator` reads). */
   get validator(): DocumentType {
     return this.document as DocumentType;
   }
@@ -184,19 +204,21 @@ export class TableDefinition<
     // As Convex's `defineTable`, nothing else is checked here: a push refuses a validator a table cannot have
     // (`documentTypeError`, STUDY-14 §6).
   }
+  // Convex's experimental `" indexes"()` (STUDY-144).
   /**
-   * Convex's experimental `" indexes"()` (STUDY-144): the table's database indexes, not the staged ones, in the
-   * order declared, as `{ indexDescriptor, fields }` (the fields as given, without `_creationTime`).
+   * Experimental: the table's database indexes, not the staged ones, in the order declared, as
+   * `{ indexDescriptor, fields }` (the fields as given, without `_creationTime`).
    */
   " indexes"(): { indexDescriptor: string; fields: string[] }[] {
     return this.indexes;
   }
 
+  // As Convex's `index`, its `{ fields, staged }` form and its types included.
   /**
-   * Declare an index on `fields` (Convex appends `_creationTime` and `_id`). As Convex's, the second
-   * argument may also be `{ fields, staged }`: a staged index is backfilled but not enabled (queries on it
-   * fail) until a later schema declares it without `staged`. As Convex's types, the fields are the document's
-   * paths or `_creationTime`, and a staged index is not in the table's type, so `withIndex` cannot name it.
+   * Declare an index on `fields` (`_creationTime` and `_id` are appended). The second argument may also be
+   * `{ fields, staged }`: a staged index is backfilled but not enabled (queries on it fail) until a later schema
+   * declares it without `staged`. The fields are the document's paths or `_creationTime`, and a staged index is
+   * not in the table's type, so `withIndex` cannot name it.
    */
   index<
     IndexName extends string,
@@ -231,10 +253,11 @@ export class TableDefinition<
     return this;
   }
 
+  // Convex's `searchIndex` (STUDY-45); the checks Convex runs at push run in `defineSchema`.
   /**
-   * Declare a full-text search index (Convex's `searchIndex`, STUDY-45): `searchField` is tokenized, the
-   * `filterFields` can be matched with `.eq()` at query time. `staged: true` builds it without enabling it.
-   * The checks that need the table's name run in `defineSchema`, as Convex runs them at push.
+   * Declare a full-text search index: `searchField` is tokenized, the `filterFields` can be matched with `.eq()`
+   * at query time. `staged: true` builds it without enabling it. The checks that need the table's name run in
+   * `defineSchema`.
    */
   searchIndex<
     const IndexName extends string,
@@ -273,10 +296,10 @@ export class TableDefinition<
     return this;
   }
 
+  // Convex's `vectorIndex` (STUDY-51); checked in `defineSchema`, as Convex checks it at push.
   /**
-   * Declare a vector index (Convex's `vectorIndex`, STUDY-51): `vectorField` holds arrays of `dimensions`
-   * float64s, searched by cosine similarity in actions (`ctx.vectorSearch`); `filterFields` can be matched
-   * with `q.eq` / `q.or`. Checked in `defineSchema`, as Convex checks it at push.
+   * Declare a vector index: `vectorField` holds arrays of `dimensions` float64s, searched by cosine similarity in
+   * actions (`ctx.vectorSearch`); `filterFields` can be matched with `q.eq` / `q.or`. Checked in `defineSchema`.
    */
   vectorIndex<
     const IndexName extends string,
@@ -327,14 +350,14 @@ export class TableDefinition<
   /** The validator `.staged()` proposed, if any. */
   stagedDocument: GenericValidator | undefined = undefined;
 
+  // Convex's `TableDefinition.staged` (STUDY-106); field deltas since Convex's `c3d9d79` (STUDY-186 A7).
   /**
-   * @internal Stage changes to the table's document validator (Convex's `TableDefinition.staged`, STUDY-106; field
-   * deltas since Convex's `c3d9d79`, STUDY-186 A7). A validator is the whole staged validator. An object of field
-   * validators is a delta over a table defined as an object or `v.any()`: its fields replace or add to the enforced
-   * ones, and a field set to `undefined` is removed; a table defined with any other validator (a union, a record)
-   * refuses it. The result is serialized and stored with the schema, so changing it alone makes a new schema
-   * version, but nothing checks documents against it: the validator given to `defineTable` stays the one enforced,
-   * and the document type does not change.
+   * @internal Stage changes to the table's document validator. A validator is the whole staged validator. An
+   * object of field validators is a delta over a table defined as an object or `v.any()`: its fields replace or add
+   * to the enforced ones, and a field set to `undefined` is removed; a table defined with any other validator (a
+   * union, a record) refuses it. The result is serialized and stored with the schema, so changing it alone makes a
+   * new schema version, but nothing checks documents against it: the validator given to `defineTable` stays the one
+   * enforced, and the document type does not change.
    */
   staged(
     document: Validator<Record<string, unknown>, "required"> | Record<string, GenericValidator | undefined>,
@@ -530,14 +553,16 @@ function checkSearchIndexes(table: string, t: TableDefinition) {
   }
 }
 
-/** Convex's `defineTable`: a document validator (or an object of field validators). */
+// Convex's `defineTable`.
+/** Define a table of the schema from a document validator (or an object of field validators). */
 export function defineTable<D extends GenericValidator>(document: D): TableDefinition<D>;
 export function defineTable<F extends PropertyValidators>(fields: F): TableDefinition<VObject<ObjectType<F>, F>>;
 export function defineTable(document: GenericValidator | PropertyValidators): TableDefinition {
   return new TableDefinition(document);
 }
 
-/** The validators of the system fields every document has (Convex's `SystemFieldValidators`). */
+// Convex's `SystemFieldValidators`.
+/** The validators of the system fields every document has. */
 export type SystemFieldValidators<TableName extends string> = {
   _id: VId<GenericId<TableName>>;
   _creationTime: VFloat64<number>;
@@ -553,9 +578,10 @@ type WithSystemFieldValidators<TableName extends string, D extends GenericValida
       >
     : D;
 
+// Convex's `DocValidator`.
 /**
- * The validator of a table's whole documents (Convex's `DocValidator`): the table's own, with `_id` and
- * `_creationTime` added — to each member of a union.
+ * The validator of a table's whole documents: the table's own, with `_id` and `_creationTime` added — to each
+ * member of a union.
  */
 export type DocValidator<TableName extends string, D extends GenericValidator> =
   // biome-ignore lint/suspicious/noExplicitAny: any type, any optionality
@@ -591,9 +617,10 @@ function addSystemFields(tableName: string, validator: GenericValidator): Generi
   }
 }
 
+// Convex's `docValidator(tableName, table)`.
 /**
- * Convex's `docValidator(tableName, table)`: a validator of the table's whole documents, for `args` and
- * `returns`. `schema.doc(tableName)` is the same, with the table looked up in the schema.
+ * A validator of the table's whole documents, for `args` and `returns`. `schema.doc(tableName)` is the same, with
+ * the table looked up in the schema.
  */
 export function docValidator<
   TableName extends string,
@@ -603,7 +630,8 @@ export function docValidator<
   return addSystemFields(tableName, table.validator) as DocValidator<TableName, Table["validator"]>;
 }
 
-/** What `defineSchema` adds to a schema for its tables' validators (Convex's `SchemaDefinition.doc` / `.id`). */
+// Convex's `SchemaDefinition.doc` / `.id`.
+/** What `defineSchema` adds to a schema for its tables' validators. */
 export type SchemaValidators<Schema extends GenericSchema> = {
   /** The validator of a table's whole documents: its validator with `_id` and `_creationTime`. */
   doc<TableName extends keyof Schema & string>(
@@ -628,16 +656,18 @@ export type DeclaredTable = {
   /** The next document validator `.staged()` proposed (STUDY-106): stored with the schema, never enforced. */
   stagedDocument?: GenericValidator;
 };
-/** A schema's tables as types (Convex's `GenericSchema`). */
+// Convex's `GenericSchema`.
+/** A schema's tables as types. */
 export type GenericSchema = Record<
   string,
   TableDefinition<GenericValidator, GenericTableIndexes, GenericTableSearchIndexes, GenericTableVectorIndexes>
 >;
+// Convex's `SchemaDefinition` (STUDY-144, STUDY-180); `strictTableNameTypes` never set at run time, as Convex's.
 /**
- * A schema (Convex's `SchemaDefinition`, STUDY-144, STUDY-180): `tables`, the record of the `TableDefinition`s it was
- * defined with (`schema.tables.messages.validator`), `schemaValidation`, and `doc` / `id` (`SchemaValidators`).
- * `strictTableNameTypes` is a type only, never set at run time, as Convex's. What the engine reads of a schema is
- * `EngineSchema`, and the tables as it declares them: `declaredTables(schema)`.
+ * A schema: `tables`, the record of the `TableDefinition`s it was defined with (`schema.tables.messages.validator`),
+ * `schemaValidation`, and `doc` / `id` (`SchemaValidators`). `strictTableNameTypes` is a type only, never set at run
+ * time. What the engine reads of a schema is `EngineSchema`, and the tables as it declares them:
+ * `declaredTables(schema)`.
  */
 export interface SchemaDefinition<Schema extends GenericSchema, StrictTableTypes extends boolean>
   extends SchemaValidators<Schema> {
@@ -658,7 +688,8 @@ export type EngineSchema = {
   readonly strictTableNameTypes?: boolean;
 };
 
-/** The options of `defineSchema` (Convex's `DefineSchemaOptions`). */
+// Convex's `DefineSchemaOptions`.
+/** The options of `defineSchema`. */
 export interface DefineSchemaOptions<StrictTableNameTypes extends boolean> {
   /** Whether documents written are checked against their table's validator (default true). */
   schemaValidation?: boolean;
@@ -763,10 +794,11 @@ export function schemaOfDeclared(tables: Map<string, DeclaredTable>, schemaValid
   return schema;
 }
 
+// Convex's `defineSchema`: `tables` kept as given (Convex's `schema.tables`), and the checks Convex makes at push.
 /**
- * Convex's `defineSchema`. With `schemaValidation` (the default), every document written to a declared
- * table must match its validator (with `_id` and `_creationTime` added); tables not declared accept anything.
- * `tables` is kept as given (Convex's `schema.tables`); the checks Convex makes at push run here.
+ * Define the app's schema. With `schemaValidation` (the default), every document written to a declared table must
+ * match its validator (with `_id` and `_creationTime` added); tables not declared accept anything. `tables` is kept
+ * as given; the table and index declarations are checked here, as a push would check them.
  */
 export function defineSchema<Schema extends GenericSchema, StrictTableNameTypes extends boolean = true>(
   tables: Schema,

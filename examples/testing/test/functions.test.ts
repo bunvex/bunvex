@@ -1,5 +1,5 @@
-// The testing example (STUDY-159 PR 4): each test runs the app's functions on a deployment of its own, inside the
-// test's process, with `@bunvex/testing` — the scenarios of convex-test's demo, written for bunvex.
+// The testing example: each test runs the app's functions on a deployment of its own, inside the
+// test's process, with `@bunvex/testing`.
 import { afterEach, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { bunvexTest, type TestBunvex } from "@bunvex/testing";

@@ -39,10 +39,12 @@ import { SpecResponse } from "./web-response.ts";
 
 const FRAME_MAPS = Symbol("bunvex.frameMaps");
 
-/** A pushed module, as Convex's `ModuleConfig`: its path in the functions directory, e.g. `dir/file.js`. */
+// Convex's `ModuleConfig`.
+/** A pushed module: its path in the functions directory, e.g. `dir/file.js`. */
 export type ModuleSource = { path: string; source: string; sourceMap?: string; environment: "isolate" | "node" };
 
-/** Convex's `AnalyzedFunction` (crates/model/src/modules/module_versions.rs), as the push reports it. */
+// Convex's `AnalyzedFunction` (crates/model/src/modules/module_versions.rs).
+/** A function the push analyzed, as the push reports it. */
 export type AnalyzedFunction = {
   name: string;
   /** Where its handler is in the app's source, from the module's source map (STUDY-65 M5); null if unknown. */
@@ -62,7 +64,8 @@ export type AnalyzedModule = {
   rooms: { name: string; kind: v1.RoomKind }[];
 };
 
-/** A push whose modules cannot load (Convex's `InvalidModules`, 400). */
+// Convex's `InvalidModules`.
+/** A push whose modules cannot load (`InvalidModules`, 400). */
 export class InvalidModulesError extends Error {
   readonly status = 400;
   readonly code = "InvalidModules";
@@ -75,9 +78,10 @@ export class InvalidModulesError extends Error {
   }
 }
 
+// As Convex reports it.
 /**
- * An error thrown by a function's `exportArgs()` / `exportReturns()` at analysis: Convex reports it as the
- * push's error (a 400 with code `Error`), not as an `InvalidModules` one.
+ * An error thrown by a function's `exportArgs()` / `exportReturns()` at analysis: reported as the push's error (a 400
+ * with code `Error`), not as an `InvalidModules` one.
  */
 export class FunctionExportError extends Error {
   readonly status = 400;
@@ -115,7 +119,8 @@ function uncaughtAtCompile(e: unknown): string {
   return `Uncaught ${e.name}: ${e.message}`;
 }
 
-/** Convex's limits (crates/common/src/knobs.rs). */
+// Convex's limits (crates/common/src/knobs.rs).
+/** The most modules a push may have (`MAX_USER_MODULES`, 4096). */
 export const MAX_USER_MODULES = knob("MAX_USER_MODULES", 4096);
 export const IMPORT_TIMEOUT_MS = secondsKnob("ISOLATE_ANALYZE_USER_TIMEOUT_SECONDS", 4);
 
@@ -143,10 +148,10 @@ export const BUNVEX_MODULES: Record<string, () => Promise<Record<string, unknown
   "@bunvex/server": () => import("./index.ts"),
   "@bunvex/values": () => import("@bunvex/values"),
 };
+// As Convex bundles everything but its own linked modules (STUDY-158 G1).
 /**
- * The specifiers a push leaves as imports: exactly the modules linked above. Any other `@bunvex/*`
- * import (a component package, a library, the client) is bundled like any package, as Convex bundles everything but
- * its own linked modules (STUDY-158 G1).
+ * The specifiers a push leaves as imports: exactly the modules linked above. Any other `@bunvex/*` import (a component
+ * package, a library, the client) is bundled like any package.
  */
 export const LINKED_MODULES: readonly string[] = Object.keys(BUNVEX_MODULES);
 const SERVER_MODULES: Record<string, () => Promise<Record<string, unknown>>> = {
@@ -237,7 +242,8 @@ function moduleLoadCounts(modules: Map<string, Loaded>, imports: Map<string, Set
   }
   return out;
 }
-/** A module's hash, as Convex's `hash_module_source`: sha256 of its source and its source map, in hex (the push's wire form). */
+// Convex's `hash_module_source`.
+/** A module's hash: sha256 of its source and its source map, in hex (the push's wire form). */
 export const moduleHash = (m: ModuleSource) =>
   createHash("sha256")
     .update(m.source)
@@ -358,9 +364,10 @@ type Loaded = {
   hash: string;
 };
 
+// STUDY-171 §8.6.
 /**
- * A loaded code version as the server uses it, whichever executor loaded it (STUDY-171 §8.6): `CodeVersion`
- * in-process, or the function sandbox's stand-in for a version loaded in a child.
+ * A loaded code version as the server uses it, whichever executor loaded it: `CodeVersion` in-process, or the function
+ * sandbox's stand-in for a version loaded in a child.
  */
 export type LoadedCode = {
   readonly modules: ReadonlyMap<string, { readonly source: ModuleSource; readonly hash: string }>;
@@ -388,16 +395,18 @@ export class CodeVersion implements LoadedCode {
     readonly crons: Crons | undefined,
     /** The modules' source maps, which map this version's error frames (`stack-map.ts`) while it lives. */
     readonly frameMaps: SourceMapTokens,
+    // Convex reads each one's `_modules` row as the function's read (STUDY-161 §16.3).
     /**
      * The modules running a module's function loads, by module name: itself and every module it imports, the shared
-     * `_deps` chunks included. Convex reads each one's `_modules` row as the function's read (STUDY-161 §16.3).
+     * `_deps` chunks included.
      */
     readonly moduleLoads: Map<string, string[]> = new Map(),
   ) {}
 
+  // Its errors have Convex's wording.
   /**
-   * Load and analyze a push's modules. Throws `InvalidModulesError` with Convex's wording when a module
-   * does not resolve, throws at import, takes too long, or exports what its file may not.
+   * Load and analyze a push's modules. Throws `InvalidModulesError` when a module does not resolve, throws at import,
+   * takes too long, or exports what its file may not.
    */
   static async load(sources: ModuleSource[], opts: LoadOptions): Promise<CodeVersion> {
     // Convex's `analyze_modules` checks (application/src/lib.rs), its docs link left out (DV-04).
@@ -566,7 +575,8 @@ export class CodeVersion implements LoadedCode {
     return CodeVersion.analyze(modules, frameMaps, imports);
   }
 
-  /** Convex's `udf_analyze` / `http_analyze` / `cron_analyze`, over the evaluated modules. */
+  // Convex's `udf_analyze` / `http_analyze` / `cron_analyze`.
+  /** Analyze the functions, HTTP routes and crons of the evaluated modules. */
   private static analyze(
     modules: Map<string, Loaded>,
     maps: SourceMapTokens,
@@ -664,7 +674,8 @@ export class CodeVersion implements LoadedCode {
     return version;
   }
 
-  /** A cron's target in this version, checked as Convex's `validate_cron_jobs`. */
+  // Checked as Convex's `validate_cron_jobs`.
+  /** A cron's target in this version, checked. */
   private cronTarget(identifier: string, name: string): string {
     const i = name.lastIndexOf(":");
     const [mod, fn] = i === -1 ? [moduleName(name), "default"] : [moduleName(name.slice(0, i)), name.slice(i + 1)];

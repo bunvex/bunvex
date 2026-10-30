@@ -1,4 +1,4 @@
-// The custom errors example end to end (STUDY-90): a `BunvexError`'s data reaches the client as it was thrown,
+// The custom errors example end to end: a `BunvexError`'s data reaches the client as it was thrown,
 // from a mutation and from a live query.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";

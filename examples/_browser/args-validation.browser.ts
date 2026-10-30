@@ -36,6 +36,6 @@ test("arguments the validators refuse: the page shows why, nothing is written, t
     await page.locator("select").selectOption("none");
   }
   await page.getByText("1 messages").waitFor();
-  // The client logs each refused call (as Convex's does); nothing else may be logged.
+  // The client logs each refused call; nothing else may be logged.
   expect(app.errors.filter((e) => !e.includes("ArgumentValidationError"))).toEqual([]);
 });

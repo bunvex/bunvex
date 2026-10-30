@@ -8,22 +8,22 @@ import type { Expand } from "@bunvex/core";
 import { toReferencePath } from "@bunvex/protocol";
 import type { GenericValidator, Infer } from "@bunvex/values";
 
-/** A variable the parent passes down by reference (`app.env.X`, Convex's `EnvRef`). */
+// Convex's `EnvRef`.
+/** A variable the parent passes down by reference (`app.env.X`). */
 export type EnvRef = { __envVarRef: string };
 /** A definition's declared environment variables: each a string validator (`v.string()`, a literal, a union). */
 export type EnvDefinition = Record<string, GenericValidator>;
 /** What `app.env` / `component.env` gives: a reference per declared variable. */
 export type EnvRefs<Env extends EnvDefinition> = { [K in keyof Env]: EnvRef };
-/**
- * The values of declared variables (Convex's `EnvFromDefinition`): a required one's validator type, an optional
- * one's or `undefined`.
- */
+// Convex's `EnvFromDefinition`.
+/** The values of declared variables: a required one's validator type, an optional one's or `undefined`. */
 export type EnvFromDefinition<E extends EnvDefinition> = Expand<
   { [K in keyof E as E[K] extends { isOptional: "optional" } ? never : K]: Infer<E[K]> } & {
     [K in keyof E as E[K] extends { isOptional: "optional" } ? K : never]?: Infer<E[K]> | undefined;
   }
 >;
-/** The values of an app's declared variables (Convex's `EnvFromAppDefinition`). */
+// Convex's `EnvFromAppDefinition`.
+/** The values of an app's declared variables. */
 export type EnvFromAppDefinition<D> =
   D extends AppDefinition<infer Env> ? EnvFromDefinition<Env> : Record<string, never>;
 
@@ -43,7 +43,8 @@ type CommonDefinition = {
     options?: UseOptions,
   ): InstalledComponent<Definition>;
 };
-/** A component's definition (Convex's `ComponentDefinition`), the default export of its `bunvex.config.ts`. */
+// Convex's `ComponentDefinition`.
+/** A component's definition, the default export of its `bunvex.config.ts`. */
 export type ComponentDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: a component's exports are any shape, as Convex's
   Exports = any,
@@ -54,7 +55,8 @@ export type ComponentDefinition<
   readonly __exports?: Exports;
   readonly __env?: Env;
 };
-/** The app's definition (Convex's `AppDefinition`), the default export of the app's `bunvex.config.ts`. */
+// Convex's `AppDefinition`.
+/** The app's definition, the default export of the app's `bunvex.config.ts`. */
 export type AppDefinition<Env extends EnvDefinition = EnvDefinition> = CommonDefinition & {
   readonly env: EnvRefs<Env>;
   readonly __env?: Env;
@@ -66,7 +68,8 @@ type SerializedEnvArg = { type: "value"; value: string } | { type: "envVar"; nam
 type SerializedEnvVar = [string, { type: "value"; value: string; optional?: true }];
 type ChildComponent = { name: string; path: string; args: []; env: [string, SerializedEnvArg][] };
 type ExportTree = { type: "branch"; branch: [] };
-/** What the server reads from the app's definition (Convex's `AppDefinitionAnalysis`). */
+// Convex's `AppDefinitionAnalysis`.
+/** What the server reads from the app's definition. */
 export type AppDefinitionAnalysis = {
   definitionType: { type: "app" };
   httpPrefix?: string;
@@ -75,7 +78,8 @@ export type AppDefinitionAnalysis = {
   exports: ExportTree;
   envVars?: SerializedEnvVar[];
 };
-/** What the server reads from a component's definition (Convex's `ComponentDefinitionAnalysis`). */
+// Convex's `ComponentDefinitionAnalysis`.
+/** What the server reads from a component's definition. */
 export type ComponentDefinitionAnalysis = {
   name: string;
   definitionType: { type: "childComponent"; name: string; args: [] };
@@ -183,9 +187,10 @@ const serializeEnvVars = (env: EnvDefinition): SerializedEnvVar[] =>
     },
   ]);
 
+// Convex's `defineComponent`.
 /**
- * Define a component (Convex's `defineComponent`): its name, and the variables its functions read, each a string
- * validator; the parent passes their values with `use(component, {env})`.
+ * Define a component: its name, and the variables its functions read, each a string validator; the parent passes their
+ * values with `use(component, {env})`.
  */
 export function defineComponent<
   // biome-ignore lint/suspicious/noExplicitAny: a component's exports are any shape, as Convex's
@@ -215,9 +220,9 @@ export function defineComponent<
   } as unknown as ComponentDefinition<Exports, Env>;
 }
 
+// Convex's `defineApp`.
 /**
- * Define the app (Convex's `defineApp`): the components it mounts with `use`, the prefix of its HTTP routes, and
- * the variables it declares.
+ * Define the app: the components it mounts with `use`, the prefix of its HTTP routes, and the variables it declares.
  */
 export function defineApp<Env extends EnvDefinition = EnvDefinition>(options?: {
   httpPrefix?: string;
@@ -242,12 +247,15 @@ export function defineApp<Env extends EnvDefinition = EnvDefinition>(options?: {
   } as unknown as AppDefinition<Env>;
 }
 
-/** A reference to a component's function, or to a module of it (Convex's `AnyComponentReference`). */
+// Convex's `AnyComponentReference`.
+/** A reference to a component's function, or to a module of it. */
 // biome-ignore lint/suspicious/noExplicitAny: references below a component are any path, as Convex's
 export type AnyComponentReference = Record<string, any>;
-/** A definition's mounted children by name (Convex's `AnyChildComponents`). */
+// Convex's `AnyChildComponents`.
+/** A definition's mounted children by name. */
 export type AnyChildComponents = Record<string, AnyComponentReference>;
-/** The app's mounted components, as `_generated/api`'s `components` (Convex's `AnyComponents`). */
+// Convex's `AnyComponents`.
+/** The app's mounted components, as `_generated/api`'s `components`. */
 export type AnyComponents = AnyChildComponents;
 
 function childComponents(parts: readonly string[]): AnyComponents {
@@ -267,13 +275,12 @@ function childComponents(parts: readonly string[]): AnyComponents {
   ) as AnyComponents;
 }
 
-/** The `components` object of `_generated/api` (Convex's `componentsGeneric`): `components.<name>.<module>.<fn>`. */
+// Convex's `componentsGeneric`.
+/** The `components` object of `_generated/api`: `components.<name>.<module>.<fn>`. */
 export const componentsGeneric = (): AnyComponents => childComponents([]);
 
-/**
- * A reference that runs a system function of the dashboard inside a component (Convex's
- * `currentSystemUdfInComponent`, STUDY-152 §4).
- */
+// Convex's `currentSystemUdfInComponent` (STUDY-152 §4).
+/** A reference that runs a system function of the dashboard inside a component. */
 export function currentSystemUdfInComponent(componentId: string): AnyComponentReference {
   return { [toReferencePath]: `_reference/currentSystemUdfInComponent/${componentId}` };
 }
