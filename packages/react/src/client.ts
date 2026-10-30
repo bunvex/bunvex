@@ -279,9 +279,10 @@ export class BunvexReactClient {
     };
   }
 
+  // As Convex's `QueryOptions` and its runtime.
   /**
    * Subscribe to a query ahead of the component that will use it, for `extendSubscriptionFor` ms (5 s). `args` is
-   * required, as in Convex's `QueryOptions`; an untyped caller that leaves it out still runs with `{}`, as Convex.
+   * required; an untyped caller that leaves it out still runs with `{}`.
    */
   prewarmQuery<Q extends Ref<"query">>(opts: QueryOptions<Q> & { extendSubscriptionFor?: number }) {
     const unsubscribe = this.watchQuery(opts.query, opts.args || {}).onUpdate(() => {});

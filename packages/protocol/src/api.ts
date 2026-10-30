@@ -58,11 +58,12 @@ export type FunctionReference<
   _fn?(args: Args, keys: FunctionReferenceArgKeys<Args>): ReturnType;
 };
 
+// Convex's `FunctionReference_future` (1.48).
 /**
- * Convex's `FunctionReference_future` (1.48): a reference whose arguments and result are carried by an optional `_fn`
- * signature instead of `_args` / `_returnType`, the arguments checked closer to the way a validator checks them (a
- * surplus top-level key is refused). Every API that takes a reference takes either kind; it is not assignable to a
- * plain `FunctionReference`. Types only (a reference holds its name at run time).
+ * A reference whose arguments and result are carried by an optional `_fn` signature instead of `_args` / `_returnType`,
+ * the arguments checked closer to the way a validator checks them (a surplus top-level key is refused). Every API that
+ * takes a reference takes either kind; it is not assignable to a plain `FunctionReference`. Types only (a reference
+ * holds its name at run time).
  */
 export type FunctionReference_future<
   Type extends FunctionType,
@@ -102,7 +103,8 @@ export type AnyFunctionReference = FunctionReference<any, any, any, any>;
 /** Any `FunctionReference_future`. */
 // biome-ignore lint/suspicious/noExplicitAny: as above
 export type AnyFunctionReferenceFuture = FunctionReference_future<any, any, any, any>;
-/** Either kind of reference: what every API that takes one accepts (Convex 1.48). */
+// As Convex 1.48.
+/** Either kind of reference: what every API that takes one accepts. */
 export type AnyReference = AnyFunctionReference | AnyFunctionReferenceFuture;
 /** A reference's arguments and result: its `_args` and `_returnType`, else its `_fn`'s (Convex's `ExtractSignature`). */
 type ExtractSignature<F> = F extends { _args: infer Args; _returnType: infer R }
@@ -115,19 +117,22 @@ export type FunctionArgs<F extends AnyReference> = ExtractSignature<F>["args"];
 export type FunctionReturnType<F extends AnyReference> = ExtractSignature<F>["returnType"];
 /** An object with no fields: the arguments of a function that takes none. */
 export type EmptyObject = Record<string, never>;
+// As Convex's `OptionalRestArgs`.
 /**
- * `[args?]` when the function takes no arguments, else `[args]`, as Convex's. With an untyped reference
- * (`anyApi`, args `any`) both forms are allowed.
+ * `[args?]` when the function takes no arguments, else `[args]`. With an untyped reference (`anyApi`, args `any`) both
+ * forms are allowed.
  */
 export type OptionalRestArgs<F extends AnyReference> =
   FunctionArgs<F> extends EmptyObject ? [args?: EmptyObject] : [args: FunctionArgs<F>];
-/** `OptionalRestArgs` followed by an optional options object, as Convex's `ArgsAndOptions`. */
+// Convex's `ArgsAndOptions`.
+/** `OptionalRestArgs` followed by an optional options object. */
 export type ArgsAndOptions<F extends AnyReference, Options> =
   FunctionArgs<F> extends EmptyObject
     ? [args?: EmptyObject, options?: Options]
     : [args: FunctionArgs<F>, options?: Options];
 
-/** An api object: any property path, each one a reference (Convex's `AnyApi`). */
+// Convex's `AnyApi`.
+/** An api object: any property path, each one a reference. */
 export type AnyApi = { [module: string]: AnyApi & AnyFunctionReference };
 
 function createApi(pathParts: string[] = []): AnyApi {

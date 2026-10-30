@@ -27,13 +27,15 @@ const STRING_FIELDS = new Set([
 ]);
 const BOOL_FIELDS = new Set(["emailVerified", "phoneNumberVerified"]);
 
-/** An acting identity that is not one; the message is serde's (or Convex's own for a missing identifier). */
+// The message is serde's, or Convex's own for a missing identifier.
+/** An acting identity that is not one, with the first problem found. */
 export class ActingIdentityError extends Error {}
 
+// In the order Convex finds them.
 /**
- * The acting identity of `json`, `tokenIdentifier` set (`issuer|subject` when not given) and null fields
- * dropped. Throws `ActingIdentityError` with the first problem, in the order Convex finds it: the value's type,
- * then each standard field in the object's order, then the missing identifier.
+ * The acting identity of `json`, `tokenIdentifier` set (`issuer|subject` when not given) and null fields dropped.
+ * Throws `ActingIdentityError` with the first problem, in this order: the value's type, then each standard field in the
+ * object's order, then the missing identifier.
  */
 export function parseActingIdentity(json: unknown): Record<string, unknown> {
   if (typeof json !== "object" || json === null || Array.isArray(json))

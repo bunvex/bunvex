@@ -297,7 +297,8 @@ async function advanceTo(b: Backend, target: number) {
   }
 }
 
-/** A test's view of its deployment, as convex-test's `TestConvex`, with an identity or none. */
+// convex-test's `TestConvex`.
+/** A test's view of its deployment, with an identity or none. */
 export class TestBunvex {
   constructor(
     private readonly backend: Backend,
@@ -375,15 +376,17 @@ export class TestBunvex {
     return this.call("action", ref, args);
   }
 
-  /** convex-test's `t.run`: an inline function in a mutation, to set up or read data directly. */
+  // convex-test's `t.run`.
+  /** Run an inline function in a mutation, to set up or read data directly. */
   // biome-ignore lint/suspicious/noExplicitAny: the inline function's ctx, typed by the caller
   run<R>(fn: InlineFn<any, R>): Promise<R> {
     return this.call("mutation", fn, {}) as Promise<R>;
   }
 
+  // Filled in as convex-test does.
   /**
-   * The same deployment, calling as a user: `subject`, `issuer` and `tokenIdentifier` filled in as convex-test does
-   * (the issuer `https://bunvex.test`).
+   * The same deployment, calling as a user: `subject`, `issuer` and `tokenIdentifier` filled in (the issuer
+   * `https://bunvex.test`).
    */
   withIdentity(identity: Identity): TestBunvex {
     const subject = (identity.subject as string | undefined) ?? defaultSubject(identity);
@@ -397,10 +400,11 @@ export class TestBunvex {
     return new TestBunvex(this.backend, this.identity, request);
   }
 
+  // convex-test's `t.fetch`.
   /**
-   * convex-test's `t.fetch`: a request to the app's HTTP actions (`http.ts`), `path` starting with `/`. With
-   * `withIdentity`, the action runs as that user (an admin key acting as the user, as the dashboard's runner does);
-   * a request's own `Authorization` header wins.
+   * A request to the app's HTTP actions (`http.ts`), `path` starting with `/`. With `withIdentity`, the action runs as
+   * that user (an admin key acting as the user, as the dashboard's runner does); a request's own `Authorization` header
+   * wins.
    */
   async fetch(path: string, init?: RequestInit): Promise<Response> {
     if (!path.startsWith("/")) throw new Error(`bunvexTest: the path must start with "/": ${path}`);
@@ -428,9 +432,9 @@ export class TestBunvex {
     return this.backend.runtime.now();
   }
 
+  // What a convex-test test does with `vi.advanceTimersByTime(ms)` and `finishInProgressScheduledFunctions`.
   /**
-   * Move the virtual clock `ms` forward, running the scheduled functions and crons due on the way, and wait for
-   * them: what a convex-test test does with `vi.advanceTimersByTime(ms)` and `finishInProgressScheduledFunctions`.
+   * Move the virtual clock `ms` forward, running the scheduled functions and crons due on the way, and wait for them.
    */
   async advanceTime(ms: number): Promise<void> {
     await this.backend.start();
@@ -474,11 +478,12 @@ export class TestBunvex {
       : functions.runMutation(udfPath, args, false, caller);
   }
 
+  // convex-test's `registerComponent`.
   /**
-   * convex-test's `registerComponent`, for a component package's own tests: mount the component whose definition
-   * is `definition` (its `bunvex.config.ts`, or the directory holding it) as `name`, in an app of the test's own;
-   * call it before the first call. Its functions are called through the reference this returns
-   * (`componentsGeneric()[name]`). A project with an app of its own mounts its components in its `bunvex.config.ts`.
+   * For a component package's own tests: mount the component whose definition is `definition` (its `bunvex.config.ts`,
+   * or the directory holding it) as `name`, in an app of the test's own; call it before the first call. Its functions
+   * are called through the reference this returns (`componentsGeneric()[name]`). A project with an app of its own
+   * mounts its components in its `bunvex.config.ts`.
    */
   registerComponent(name: string, definition: string): AnyReference {
     if (this.backend.started) throw new Error("bunvexTest: registerComponent must come before the first call");
@@ -503,10 +508,11 @@ function defaultSubject(identity: Identity): string {
   return h.slice(0, 32);
 }
 
+// convex-test's `convexTest`, whose `(schema, modules)` arguments are accepted.
 /**
- * A test deployment of the project at `opts.cwd` (default: the working directory), as convex-test's `convexTest`.
- * The app is pushed on the first call. convex-test's `(schema, modules)` arguments are accepted and not needed: the
- * schema and the functions are the project's own, found as `bunvex deploy` finds them.
+ * A test deployment of the project at `opts.cwd` (default: the working directory), on the real engine in memory. The
+ * app is pushed on the first call; the schema and the functions are the project's own, found as `bunvex deploy` finds
+ * them. `(schema, modules)` arguments are accepted and not needed.
  */
 export function bunvexTest(schemaOrOptions?: unknown, _modules?: unknown): TestBunvex {
   const opts =

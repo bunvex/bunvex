@@ -10,12 +10,13 @@ const LONE_ALL = new RegExp(LONE.source, "g");
 /** True when `s` holds a lone surrogate. */
 export const hasLoneSurrogate = (s: string): boolean => LONE.test(s);
 
-/** `s` with each lone surrogate replaced by U+FFFD, as Convex's lossy conversion into Rust does. */
+// As Convex's lossy conversion into Rust does.
+/** `s` with each lone surrogate replaced by U+FFFD. */
 export const withoutLoneSurrogates = (s: string): string => (LONE.test(s) ? s.replace(LONE_ALL, "\ufffd") : s);
 
 /**
- * True when a string anywhere in `v` (a field name included) holds a lone surrogate. Iterative: a value may
- * nest far deeper than the stack (its nesting is refused with Convex's message after this check).
+ * True when a string anywhere in `v` (a field name included) holds a lone surrogate. Iterative: a value may nest far
+ * deeper than the stack (its nesting is refused after this check).
  */
 export function valueHasLoneSurrogate(v: unknown): boolean {
   const stack: unknown[] = [v];
@@ -51,12 +52,12 @@ const hex = (text: string, at: number) => Number.parseInt(text.slice(at, at + 4)
 const isHigh = (c: number) => c >= 0xd800 && c <= 0xdbff;
 const isLow = (c: number) => c >= 0xdc00 && c <= 0xdfff;
 
+// serde_json's refusal, as Convex reports it (serde_json 1.0.151 `parse_unicode_escape`, `SliceRead::position`).
 /**
- * serde_json's refusal of JSON text that `JSON.stringify` wrote, as Convex reports it: "lone leading surrogate
- * in hex escape" for a low surrogate first (or a high one followed by a `\u` escape that is not a low one),
- * "unexpected end of hex escape" for a high surrogate not followed by `\u`, each "at line 1 column N" where N
- * counts the UTF-8 bytes serde consumed (serde_json 1.0.151 `parse_unicode_escape`, `SliceRead::position`).
- * Null when every escape pairs.
+ * Why JSON text that `JSON.stringify` wrote is refused for a lone surrogate, or null when every escape pairs: "lone
+ * leading surrogate in hex escape" for a low surrogate first (or a high one followed by a `\u` escape that is not a low
+ * one), "unexpected end of hex escape" for a high surrogate not followed by `\u`, each "at line 1 column N", N counted
+ * in UTF-8 bytes.
  */
 export function jsonSurrogateError(text: string): string | null {
   let bytes = 0;
@@ -92,10 +93,11 @@ export function jsonSurrogateError(text: string): string | null {
   return null;
 }
 
+// Convex sends a value to Rust as `JSON.stringify` text, and serde refuses a lone surrogate (STUDY-135); the text is
+// built as Convex's JS builds it.
 /**
- * Convex sends a value to Rust as `JSON.stringify` text, and serde refuses a string with a lone surrogate
- * (STUDY-135): the call fails with "Received invalid json: …", the column counted in that text, whose shape
- * `text` builds as Convex's JS does for the call. Only a value that holds one pays for building it.
+ * Refuse a value holding a string with a lone surrogate: the call fails with "Received invalid json: …", the column
+ * counted in the JSON text `text` builds for the call. Only a value that holds one pays for building it.
  */
 export function refuseLoneSurrogates(value: unknown, text: () => string): void {
   if (!valueHasLoneSurrogate(value)) return;
