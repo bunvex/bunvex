@@ -23,7 +23,7 @@
     "@convex-dev/sharded-counter": "0.2.3",
     "@convex-dev/workpool": "0.4.14",
     "convex": "1.48.0",
-    "convex-helpers": "0.1.128",
+    "convex-helpers": "0.1.129",
     "fast-check": "4.10.2",
     "https-proxy-agent": "9.1.0"
   },
