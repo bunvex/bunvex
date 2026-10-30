@@ -39,7 +39,7 @@ jobs:
       # the service containers have no verifiable TLS; bunvex requires it by default (STUDY-25 L8)
       DO_NOT_REQUIRE_SSL: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Start ${{ matrix.store }}
         run: |
           case "${{ matrix.store }}" in
@@ -63,7 +63,7 @@ jobs:
           --nemesis none,partition,kill,store,all --summary failures.md
       - name: Histories
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: jepsen-${{ matrix.store }}
           path: .data/jepsen/
