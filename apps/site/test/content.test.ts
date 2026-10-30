@@ -158,10 +158,8 @@ describe("content", () => {
     for (const i of INSTALL) for (const line of i.lines) expect(read(where[i.id])).toContain(line);
   });
 
-  test("the drivers are the five the README lists", () => {
-    expect(DRIVERS.map((d): string => d.name).sort()).toEqual(
-      ["MongoDB", "MySQL", "Postgres", "SQLite", "memory + log"].sort(),
-    );
+  test("the drivers are the four the README lists", () => {
+    expect(DRIVERS.map((d): string => d.name).sort()).toEqual(["MySQL", "Postgres", "SQLite", "memory + log"].sort());
     expect(SHIP.map((s) => s.command)).toContain("bunvex dev");
   });
 

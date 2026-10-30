@@ -1,26 +1,21 @@
 {
   "name": "@bunvex/persistence",
   "version": "0.1.0-alpha.2",
-  "description": "External persistence drivers for the bunvex engine: Postgres, MySQL and MongoDB. Install only the native driver you use.",
+  "description": "External persistence drivers for the bunvex engine: Postgres and MySQL. Install only the native driver you use.",
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
     "./postgres": "./src/postgres.ts",
-    "./mysql": "./src/mysql.ts",
-    "./mongodb": "./src/mongodb.ts"
+    "./mysql": "./src/mysql.ts"
   },
   "dependencies": {
     "@bunvex/core": "workspace:*"
   },
   "peerDependencies": {
-    "mongodb": ">=6",
     "mysql2": ">=3",
     "postgres": ">=3.4"
   },
   "peerDependenciesMeta": {
-    "mongodb": {
-      "optional": true
-    },
     "mysql2": {
       "optional": true
     },
@@ -29,7 +24,6 @@
     }
   },
   "devDependencies": {
-    "mongodb": "^7.7.0",
     "mysql2": "^3.24.4",
     "postgres": "^3.4.9"
   },
