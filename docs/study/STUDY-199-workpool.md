@@ -1,7 +1,7 @@
 # STUDY-199 — `@bunvex/workpool`
-<!-- index: `@bunvex/workpool`, the fourth own component (STUDY-158 §3.4 step 4.4) and a prerequisite of `@bunvex/resend` (STUDY-200) and built-in auth's email (STUDY-191): a pool of actions, mutations and queries run at most `maxParallelism` at a time on `@bunvex/batch-worker`'s loop, with retries, `onComplete` callbacks, cancelation, recovery from the scheduler's state and JSON log events; written from get-convex/workpool 0.4.14 | open: W-1–W-4 -->
+<!-- index: `@bunvex/workpool`, the fourth own component (STUDY-158 §3.4 step 4.4) and a prerequisite of `@bunvex/resend` (STUDY-200) and built-in auth's email (STUDY-191): a pool of actions, mutations and queries run at most `maxParallelism` at a time on `@bunvex/batch-worker`'s loop, with retries, `onComplete` callbacks, cancelation, recovery from the scheduler's state and JSON log events; written from get-convex/workpool 0.4.14 | open: W-1–W-5 -->
 
-- **Status:** open, waiting for the owner on W-1–W-4 (§7).
+- **Status:** open, waiting for the owner on W-1–W-5 (§7).
 - **Convex source read:** get-convex/workpool at `7fde769` (after 0.4.14), cloned at `../workpool`. Paths are
   relative to that repository's root.
   - The npm release 0.4.14 is the tag commit `358fb20`; [upstream.md](../parity/upstream.md#other-repositories) pins
@@ -650,14 +650,16 @@ decided:
 - DV-533: `bunvex.config.ts` and `./bunvex.config.js`;
 - DV-539 and W-2: `getBatch` declares batch-worker's `vQueryReturns`.
 
-The deprecated paths (`loop:main`, `loop:updateRunStatus`, `worker:runActionWrapper`) are kept. They are not for
-older clients: a Convex export can hold a scheduled job that names them, and an imported store must run it.
+The deprecated surface is not built (DV-539, STUDY-158 Q-4): the forwarders `loop:main`, `loop:updateRunStatus`
+and `worker:runActionWrapper`, and the aliases marked `@deprecated` (`resultValidator`, `workIdValidator`,
+`vOnCompleteValidator`). A Convex export holding a pending job of an older version fails as a missing function, as
+DV-539 says. The aliases `vWorkIdValidator` and `vResultValidator`, which 0.4.14 marks "not deprecated yet", are W-5.
 
 ### 3.4 Tests
 
 - **The upstream tests, ported** (§1.19) to `@bunvex/testing`, with its virtual clock for vitest's fake timers:
   `config`, `logging`, `errors`, `kick`, `lib`, `loop`, `complete`, `recovery`, `stats`, `stateMachine` (the three
-  "BUG" cases assert the same behaviour), and the client's.
+  "BUG" cases assert the same behaviour), and the client's; not the deprecated forwarders' cases (DV-539).
   - The client tests use convex-test's `defineTestApp`: they run on an app fixture that installs the package by its
     name, as rate-limiter's client tests do.
   - A spy inside a function, and the `actionGate` promise shared between the test and an action: `t.run` inline
@@ -724,3 +726,4 @@ As §3.4, once built.
 | W-2 | `getBatch`'s declared return validator (§4): batch-worker's `vQueryReturns` instead of `vBatchResult` | **Accept**, extending DV-539. Building `vBatchResult` back into batch-worker only to change a declared validator would undo B-1 |
 | W-3 | The quirks of §2.3 (a duplicate `complete` raising `attempts`, two cancelations crashing an iteration, a throwing success `onComplete` run twice, `maxParallelism: 0` stopping completions, `cancelAll({limit: 0})`'s `TypeError`, …) | **Keep them all**, as rate-limiter's quirk: match Convex by default, with the oracle as judge. Each is a candidate for an upstream issue, not a bunvex fix |
 | W-4 | The example: Convex's `example/` (≈1 500 lines: several pools, a crons file, a React page; it also mounts workpool 0.4.7 as `oldWorkpool` and static hosting) | **Port it as `examples/workpool`, after the package**, without the old version and static hosting (as batch-worker's): its e2e test is the end-to-end check of the pools, retries and callbacks |
+| W-5 | `vWorkIdValidator` and `vResultValidator`: 0.4.14 exports them as "Older name, not deprecated yet" (`src/client/index.ts:55-57`), but STUDY-158 §3.3 counted `vWorkIdValidator` among DV-539's deprecated aliases | **Build both.** They are current names an app may import, two lines each; DV-539 covers the deprecated surface, and STUDY-158 listed one of them by mistake |
