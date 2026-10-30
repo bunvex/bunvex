@@ -1,0 +1,61 @@
+# Dependency updates (owner, 2026-10-30). One `bun.lock` at the root covers every workspace (packages, components,
+# apps, examples, bench), so one entry per ecosystem. Updates come grouped by family, once a week, so a week brings a
+# handful of PRs, not dozens; security updates come as they are found (enabled in the repository's settings).
+#
+# Left out on purpose:
+# - `convex` and `@convex-dev/*`: the differential suite's oracle, moved with the weekly upstream bump
+#   (docs/parity/upstream.md), never on their own;
+# - `@tanstack/react-query`: one version across the repository (a second copy of query-core breaks the types against
+#   @bunvex/react-query), moved by hand everywhere at once;
+# - `expo`, `react-native` and Expo's packages: moved together with an Expo SDK (`bunx expo install --fix`);
+# - `fast-check`: pinned, so a property test's shrinking does not change under a seed.
+version: 2
+updates:
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: deps
+    ignore:
+      - dependency-name: convex
+      - dependency-name: "@convex-dev/*"
+      - dependency-name: "@tanstack/react-query"
+      - dependency-name: "@tanstack/react-query-devtools"
+      - dependency-name: expo
+      - dependency-name: "expo-*"
+      - dependency-name: "@expo/*"
+      - dependency-name: react-native
+      - dependency-name: "react-native-*"
+      - dependency-name: fast-check
+    groups:
+      react:
+        patterns: [react, react-dom, "@types/react", "@types/react-dom"]
+      tanstack:
+        patterns: ["@tanstack/*"]
+      vite:
+        patterns: [vite, "@vitejs/*", "@tailwindcss/*", tailwindcss]
+      nextjs:
+        patterns: [next, "eslint-config-next"]
+      database-drivers:
+        patterns: [postgres, mysql2]
+      auth:
+        patterns: [jose, "@auth0/*", "@clerk/*"]
+      dev-tools:
+        dependency-type: development
+        patterns: ["*"]
+      minor-and-patch:
+        update-types: [minor, patch]
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]
