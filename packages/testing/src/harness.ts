@@ -68,6 +68,14 @@ export type BunvexTestOptions = {
   cwd?: string;
   /** The deployment's environment variables, as the dashboard or `bunvex env set` would set them (AD-34). */
   env?: Record<string, string>;
+  // AD-48 (STUDY-200 R-7): convex-test runs actions in the test's process, where a stub of the global `fetch` reaches
+  // them; this deployment runs them in its own realm, so the test hands over what answers instead.
+  /**
+   * What answers the requests the deployment's actions send with `fetch`, in place of the network. It receives each
+   * request as it would go out (redirects followed one request at a time, the default `User-Agent` set) and returns the
+   * response, or throws for a failed request. Without it, actions reach the network.
+   */
+  outboundFetch?: (request: Request) => Response | Promise<Response>;
 };
 
 // biome-ignore lint/suspicious/noExplicitAny: a function reference of any shape, as convex-test's `FunctionReference<…, any>`
@@ -127,6 +135,15 @@ class Backend {
       runtime: this.runtime,
     }).init();
     const functions = new Functions(engine);
+    const answer = this.opts.outboundFetch;
+    if (answer)
+      functions.outboundFetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const request = input instanceof Request ? new Request(input, init) : new Request(String(input), init);
+        const response = await answer(request);
+        // A response made in the test has no URL; one from the network has the request's.
+        if (!response.url) Object.defineProperty(response, "url", { value: request.url });
+        return response;
+      }) as typeof fetch;
     const server = createServer({
       engine,
       functions,

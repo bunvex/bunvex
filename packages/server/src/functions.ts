@@ -1405,7 +1405,7 @@ export class Functions {
         ...(sourced?.subscription && { subscription: sourced.subscription }),
         ...(span && { trace: { traceId: span.traceId, spanId: span.spanId } }),
       };
-    r.send = r.environment === "isolate" ? this.isolateSender : nodeSender;
+    r.send = r.environment === "isolate" ? this.isolateSender : this.nodeSender;
     if (sourced?.source === "Scheduler") r.schedulerJobId = caller?.request?.scheduledFunctionId ?? null;
     if (udfType !== "HttpAction") {
       try {
@@ -1588,7 +1588,9 @@ export class Functions {
   // STUDY-80 §3.2.
   /** An isolate action's `fetch`: through the operator's proxy when there is one. */
   private isolateSender = isolateFetch(proxiedFetch(directFetch, null), resentEgress);
+  private nodeSender = nodeSender;
   private proxy: HttpProxy | null = null;
+  private outbound: typeof fetch | null = null;
   // Convex's `--convex-http-proxy`.
   /** The proxy an isolate action's `fetch` goes through; null for none. */
   get httpProxy(): HttpProxy | null {
@@ -1596,7 +1598,24 @@ export class Functions {
   }
   set httpProxy(p: HttpProxy | null) {
     this.proxy = p;
-    this.isolateSender = isolateFetch(proxiedFetch(directFetch, p), resentEgress);
+    this.rebuildSenders();
+  }
+  // AD-48: `@bunvex/testing`'s `outboundFetch`.
+  /**
+   * What answers the requests an action's `fetch` sends, in place of the network; null (the default) for the network.
+   * The action's own rules still apply around it: the schemes, the redirects, the errors and the default `User-Agent`.
+   */
+  get outboundFetch(): typeof fetch | null {
+    return this.outbound;
+  }
+  set outboundFetch(f: typeof fetch | null) {
+    this.outbound = f;
+    this.rebuildSenders();
+  }
+  private rebuildSenders() {
+    const base = this.outbound ?? directFetch;
+    this.isolateSender = isolateFetch(proxiedFetch(base, this.proxy), resentEgress);
+    this.nodeSender = this.outbound ? nodeFetch(this.outbound) : nodeSender;
   }
 
   // STUDY-61, STUDY-71.
