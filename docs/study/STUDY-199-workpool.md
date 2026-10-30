@@ -738,7 +738,15 @@ As §3.4, built (`components/workpool/test/`, 262 cases, on `@bunvex/testing`'s 
   two `ctx.db.delete`s of one document both succeeded (and two patches lost each other's fields), where Convex runs
   them in the order they are made. Upstream's "multiple cancels for same work → BUG: crashes with double delete" now
   crashes on bunvex too, as upstream's test asserts.
-- The differential test against `@convex-dev/workpool` 0.4.14 on Convex's binary (§3.4) is the next step.
+- **The differential test** (`packages/differential/test/workpool.test.ts`, app `workpool-app/`) runs the same jobs
+  with `@convex-dev/workpool` 0.4.14 on Convex's binary and `@bunvex/workpool` on bunvex. It compares each job's
+  status after its enqueue and once settled, and every `onComplete`'s `context` and `result`: the success values of an
+  action, a mutation and a query; the `failed.error` text of each that throws; a `NonRetryableError`; retries that end
+  in success or run out; a cancelation before the start; and `onCompleteExcludeKinds`. It also compares the client's
+  and the component's refusals word for word. All match. The app's frames are compared without their function names
+  (DV-345) and positions (DV-346), as `error-frames.test.ts` does; a refusal's frames are inside each package's
+  own code, so only its message is compared. Sabotage: retrying while `attempts <= maxAttempts` fails it (the third
+  attempt's text where Convex's has the second's).
 - **Sabotage checks** (each broke the code, then the suite was run; each was caught):
   - the `maxParallelism` cap (`run` starting every due start): `loop.test.ts`'s "never starts more than
     maxParallelism in one iteration" and "picks up overflow…";
@@ -753,16 +761,16 @@ As §3.4, built (`components/workpool/test/`, 262 cases, on `@bunvex/testing`'s 
 
 ## 6. Not verified yet
 
-- **`failed.error` on Convex's backend.** convex-test gives `"work failed"`; the backend's text for an error from a
-  nested `runAction`, `runMutation` or `runQuery`, and a scheduled function's `{kind: "failed", error}`, are read in
-  the differential test first. bunvex's nested-call messages already match Convex's (STUDY-41, #935).
+- **`failed.error` of a recovered job** (a scheduled function's own `{kind: "failed", error}`): the differential test
+  checks the text of an action, a mutation and a query that throw (it is `Uncaught Error: <message>` and the app's
+  frames on both, unlike convex-test's `"work failed"`), not a job recovered from a dead `runBatch`.
 - **A saturated pool under the action limiter.** With `maxParallelism` above 64, `runBatch` actions and the actions
   they call compete for the 64 permits. On Convex, a nested `runAction` that waits past
-  `APPLICATION_ACTION_SEMAPHORE_TIMEOUT` fails (unconfirmed for nested calls); bunvex's limiter follows Convex's. The
-  differential test runs a pool at 100.
+  `APPLICATION_ACTION_SEMAPHORE_TIMEOUT` fails (unconfirmed for nested calls); bunvex's limiter follows Convex's. Not
+  compared yet: the component tests run a pool at 200 on bunvex only.
 - **The interleaving of `Promise.all` writes** in `enqueueBatch` and `runBatch`: bunvex runs a function's database
-  calls in the order they are made, as Convex does; the "BUG" case with two cancelations is checked against the
-  oracle, not only against upstream's test.
+  calls in the order they are made, as Convex does; the "BUG" case with two cancelations now crashes on bunvex
+  as upstream's test asserts (#965); not compared against the oracle.
 
 ## 7. Questions for the owner
 
