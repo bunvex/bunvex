@@ -1125,10 +1125,11 @@ function checkAppEnv(app: NewComponentDefinition, vars: Map<string, string>) {
 type CronDiff = { added: string[]; updated: string[]; deleted: string[] };
 const emptyCronDiff = (): CronDiff => ({ added: [], updated: [], deleted: [] });
 
+// STUDY-156 Q-1, DV-532; as Convex's codegen reads its `forCodegen` push.
 /**
- * What `start_push` answers as `analysis` for a push's definitions, without a deployment (STUDY-156 Q-1, DV-532):
- * the CLI's codegen reads each definition's children, exports and validators from it, as Convex's reads its
- * `forCodegen` push. The app's own functions are left out (its `api` is typed from its code).
+ * What `start_push` answers as `analysis` for a push's definitions, without a deployment: the CLI's codegen reads each
+ * definition's children, exports and validators from it. The app's own functions are left out (its `api` is typed
+ * from its code).
  */
 export async function componentAnalysis(
   appDefinition: { definition?: ModuleSource | null; dependencies?: unknown },

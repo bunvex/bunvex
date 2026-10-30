@@ -26,11 +26,12 @@ export function resultSnapshot(value: unknown, depth = 0): unknown {
   return out;
 }
 
+// Where Convex serializes it: its `invokeFunction` awaits `Promise.resolve(func(ctx, args))`, then `invokeQuery` /
+// `invokeMutation` awaits that and serializes, so the result is read two microtask turns after the handler's promise
+// settles.
 /**
- * What a handler returned, snapshotted where Convex serializes it: `invokeFunction` awaits
- * `Promise.resolve(func(ctx, args))`, then `invokeQuery` / `invokeMutation` awaits that and serializes, so the result is
- * read two microtask turns after the handler's promise settles. The same turns here, from the promise itself (of any
- * realm: `await` would add two more for another realm's), or from `Promise.resolve` of anything else, as Convex's.
+ * What a handler returned, snapshotted two microtask turns after the handler's promise settles: from the promise
+ * itself (of any realm: `await` would add two more for another realm's), or from `Promise.resolve` of anything else.
  */
 export function snapshotOnSettle(returned: unknown): Promise<unknown> {
   const settled =

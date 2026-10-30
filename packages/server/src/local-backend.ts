@@ -188,8 +188,11 @@ const ADMIN_KEY: CommandSpec = {
   ],
 };
 
-/** Convex's instance secret check (`DeploymentSecret::try_from`): 32 bytes, hex-encoded, after one optional `0x` /
- *  `0X` (`const_hex::decode` drops it; `0x0x…` is refused, STUDY-172 §7). */
+// Convex's instance secret check (`DeploymentSecret::try_from`; `const_hex::decode` drops the prefix, STUDY-172 §7).
+/**
+ * Why an instance secret is refused, or null: it must be 32 bytes, hex-encoded, after one optional `0x` / `0X`
+ * (`0x0x…` is refused).
+ */
 export function instanceSecretError(secret: string): string | null {
   const hex = /^0[xX]/.test(secret) ? secret.slice(2) : secret;
   if (!/^[0-9a-fA-F]*$/.test(hex) || hex.length % 2) return "Couldn't hexdecode key";
@@ -230,11 +233,11 @@ function flagsOf(values: Map<string, string | true>, positional: string | undefi
   return f;
 }
 
+// As clap parses Convex's (`command-line.ts`, STUDY-172); INSTANCE_SECRET from `env`: DV-525.
 /**
- * The flags, parsed and checked as clap parses Convex's (`command-line.ts`, STUDY-172); on misuse, clap's whole
- * message (`error: …`, through "For more information, try '--help'."). `env` gives INSTANCE_SECRET when
- * `--instance-secret` is absent (DV-525). What Convex checks once the flags parse (the secret, the origins) is
- * `localBackendFlagsError`'s.
+ * The flags, parsed and checked; on misuse, clap's whole message (`error: …`, through "For more information, try
+ * '--help'."). `env` gives INSTANCE_SECRET when `--instance-secret` is absent. What is checked once the flags parse
+ * (the secret, the origins) is `localBackendFlagsError`'s.
  */
 export function parseLocalBackendFlags(args: string[], env: LocalBackendIo["env"] = {}): LocalBackendFlags | string {
   const r = parseCommand(LOCAL_BACKEND, args, fromEnv(env));

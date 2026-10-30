@@ -257,10 +257,12 @@ function answering(r: Response, request: Request): Answering {
   return out;
 }
 
+// STUDY-171 §12; its reads fail as Convex's.
 /**
- * A response the function sandbox's child made from its host's (STUDY-171 §12) as an action's: its reads fail as
- * Convex's (a body read twice, a body that breaks), and its `url`, `redirected` and `type` are the host's response's,
- * which a `Response` made here cannot have. `request`: what its failures name (its URL, the signal that aborts it).
+ * A response the function sandbox's child made from its host's, as an action's: its reads fail as an action's
+ * response's do (a body read twice, a body that breaks), and its `url`, `redirected` and `type` are the host's
+ * response's, which a `Response` made here cannot have. `request`: what its failures name (its URL, the signal that
+ * aborts it).
  */
 export function asActionResponse(
   r: Response,

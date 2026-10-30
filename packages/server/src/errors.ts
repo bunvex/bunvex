@@ -37,10 +37,10 @@ export const newRequestId = () => randomBytes(8).toString("hex");
  * store read failed under a function (STUDY-20 D8), or a timestamp fell out of the write log's retention
  * (Convex's `OutOfRetention`, STUDY-06 D10).
  */
+// STUDY-171 §8.6; as Convex's internal error for a terminated isolate.
 /**
- * The function sandbox failed a call that is not the function's fault: its child process died or broke the protocol
- * (STUDY-171 §8.6). A system error, as Convex's internal error for a terminated isolate: the client gets the
- * internal-error message, and a function cannot catch it.
+ * The function sandbox failed a call that is not the function's fault: its child process died or broke the protocol.
+ * A system error: the client gets the internal-error message, and a function cannot catch it.
  */
 export class ExecutorFailure extends Error {
   override name = "ExecutorFailure";
@@ -88,16 +88,12 @@ export class FunctionPathError extends Error {
  */
 export class FunctionLookupError extends FunctionPathError {}
 
-/**
- * A query's or mutation's promise that can never resolve (`Tx.watch`): Convex's `JsError::from_message`, its message
- * alone (`environment/udf/mod.rs`, STUDY-188 §X16).
- */
+// Convex's `JsError::from_message`, its message alone (`environment/udf/mod.rs`, STUDY-188 §X16).
+/** A query's or mutation's promise that can never resolve (`Tx.watch`). */
 export const neverResolves = () => new FunctionPathError("Returned promise will never resolve");
 
-/**
- * A function past its memory cap (under the `process` executor, STUDY-188 R12): Convex's `OutOfMemoryError`, its
- * message alone, the same whatever the cap (`crates/isolate/src/termination.rs`).
- */
+// STUDY-188 R12: Convex's `OutOfMemoryError`, its message alone (`crates/isolate/src/termination.rs`).
+/** A function past its memory cap (under the `process` executor): the same message whatever the cap. */
 export const outOfMemory = () =>
   new FunctionPathError("JavaScript execution ran out of memory (maximum memory usage: 64 MB)");
 

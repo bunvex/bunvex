@@ -76,15 +76,17 @@ export type FunctionSandbox = "vm" | "process";
 export const FUNCTION_SANDBOXES: readonly FunctionSandbox[] = ["vm", "process"];
 export const DEFAULT_FUNCTION_SANDBOX: FunctionSandbox = "vm";
 
-/** The layers `process` builds its wall from (STUDY-168 §10.2, §11): `auto` picks the strongest the host has. */
+// STUDY-168 §10.2, §11.
+/** The layers `process` builds its wall from: `auto` picks the strongest the host has. */
 export type SandboxIsolation = "auto" | "namespaces" | "landlock" | "none";
 export const SANDBOX_ISOLATIONS: readonly SandboxIsolation[] = ["auto", "namespaces", "landlock", "none"];
 export const DEFAULT_SANDBOX_ISOLATION: SandboxIsolation = "auto";
 
+// Convex's `evaluate_auth_config`, `evaluate_schema`: Convex `JSON.stringify`s the auth config in the isolate and
+// calls the schema's `export()`.
 /**
- * What a push evaluates a standalone module for (Convex's `evaluate_auth_config`, `evaluate_schema`), so an executor
- * that cannot hand back the live export knows which form to send: the auth config as its JSON (Convex
- * `JSON.stringify`s it in the isolate), the schema as its export (Convex calls its `export()`).
+ * What a push evaluates a standalone module for, so an executor that cannot hand back the live export knows which form
+ * to send: the auth config as its JSON, the schema as its export.
  */
 export type DefaultExportUse = "authConfig" | "schema";
 
@@ -121,11 +123,12 @@ export class MissingEnvironmentVariableError extends Error {
 const missingEnvMessage = (name: string) =>
   `Environment variable ${name} is used in auth config file but its value was not set`;
 
+// The message of Convex's `AuthConfigUnserializableError` (crates/isolate/src/environment/auth_config.rs:286-290),
+// its docs link left out (DV-04); STUDY-188 R4.
 /**
- * An auth config `JSON.stringify` refuses (a bigint, a cycle): the message of Convex's
- * `AuthConfigUnserializableError` (crates/isolate/src/environment/auth_config.rs:286-290), its docs link left out
- * (DV-04), which the push reports as `InvalidAuthConfig` (STUDY-188 R4). Only an executor that sends the config as
- * its JSON throws it (the sandbox's); for `vm`, the push turns the live value into JSON itself.
+ * An auth config `JSON.stringify` refuses (a bigint, a cycle), which the push reports as `InvalidAuthConfig`. Only an
+ * executor that sends the config as its JSON throws it (the sandbox's); for `vm`, the push turns the live value into
+ * JSON itself.
  */
 export class UnserializableAuthConfigError extends Error {
   constructor() {
@@ -134,7 +137,8 @@ export class UnserializableAuthConfigError extends Error {
   }
 }
 
-/** What a function cannot use under the process sandbox yet (STUDY-171 §8.7), and how to run it. */
+// STUDY-171 §8.7.
+/** What a function cannot use under the process sandbox yet, and how to run it. */
 export const sandboxNotYet = (what: string) =>
   `${what} are not available yet under the function sandbox 'process' (BUNVEX_FUNCTION_SANDBOX=process): ` +
   "unset BUNVEX_FUNCTION_SANDBOX to run them in 'vm'";
@@ -237,7 +241,8 @@ export function executorFor(sandbox: FunctionSandbox): Executor {
   return processExecutorFactory!();
 }
 
-/** What a start under `process` logs: the isolation it runs with (STUDY-171 §8.8). */
+// STUDY-171 §8.8.
+/** What a start under `process` logs: the isolation it runs with. */
 export const PROCESS_SANDBOX_WARNING =
   "the function sandbox 'process' runs queries, mutations, actions, HTTP actions and components in a separate " +
   "process, with no OS isolation (BUNVEX_FUNCTION_SANDBOX_ISOLATION=none): it is not a security boundary yet. " +
