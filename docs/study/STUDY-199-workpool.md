@@ -1,10 +1,9 @@
 # STUDY-199 — `@bunvex/workpool`
-<!-- index: `@bunvex/workpool`, the fourth own component (STUDY-158 §3.4 step 4.4) and a prerequisite of `@bunvex/resend` (STUDY-200) and built-in auth's email (STUDY-191): a pool of actions, mutations and queries run at most `maxParallelism` at a time on `@bunvex/batch-worker`'s loop, with retries, `onComplete` callbacks, cancelation, recovery from the scheduler's state and JSON log events; written from get-convex/workpool 0.4.14 | decided (owner, 2026-10-30): W-1–W-5 as recommended; W-2 extends DV-539; built: the package and its tests (§3.5 PR 1, without the differential test yet) -->
+<!-- index: `@bunvex/workpool`, the fourth own component (STUDY-158 §3.4 step 4.4) and a prerequisite of `@bunvex/resend` (STUDY-200) and built-in auth's email (STUDY-191): a pool of actions, mutations and queries run at most `maxParallelism` at a time on `@bunvex/batch-worker`'s loop, with retries, `onComplete` callbacks, cancelation, recovery from the scheduler's state and JSON log events; written from get-convex/workpool 0.4.14 | decided (owner, 2026-10-30): W-1–W-5 as recommended; W-2 extends DV-539; built: the package, its tests, the differential test and the example (W-4) -->
 
 - **Status:** decided (owner, 2026-10-30): W-1–W-5 as recommended (§7); W-2 extends DV-539. The pin is `7fde769`
-  (W-1). Built (2026-10-30): `components/workpool/` and its tests (§5), §3.5's first PR without its differential
-  test, which comes next; the example (W-4) after it. One upstream "BUG" case fails on bunvex because of a platform
-  bug found on the way (§5).
+  (W-1). Built (2026-10-30): `components/workpool/` and its tests (#964), the differential test (#967) and
+  `examples/workpool` (W-4), each with its tests (§5). A platform bug found on the way is fixed in #965.
 - **Convex source read:** get-convex/workpool at `7fde769` (after 0.4.14), cloned at `../workpool`. Paths are
   relative to that repository's root.
   - The npm release 0.4.14 is the tag commit `358fb20`; [upstream.md](../parity/upstream.md#other-repositories) pins
