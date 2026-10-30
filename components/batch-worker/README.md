@@ -5,7 +5,7 @@ transaction, and the loop reschedules itself until the queue is empty. It is bun
 [`@convex-dev/batch-worker`](https://github.com/get-convex/batch-worker) and **matches `@convex-dev/batch-worker`
 0.3.6**: the same client API, component name (`batchWorker`), tables and index, function paths, arguments, results,
 defaults and log events, so an app moves by renaming its imports and a Convex export of the component's data imports
-unchanged ([STUDY-196](../../docs/study/STUDY-196-batch-worker.md)).
+unchanged.
 
 ## Install
 
@@ -130,5 +130,5 @@ await t.finishAllScheduledFunctions();
 
 - Its names are bunvex's: `bunvex.config.js` for `convex.config.js`, and the `./test` entry registers the component
   with `@bunvex/testing` (it has no `modules`: the harness pushes the component's directory).
-- `vBatchQueryArgs`, `vBatchResult` and `vWorkerResult`, deprecated since Convex's 0.3.0, are not there
-  (DV-539): use `defineBatchWorkerValidators`.
+- `vBatchQueryArgs`, `vBatchResult` and `vWorkerResult`, deprecated since Convex's 0.3.0, are not there:
+  use `defineBatchWorkerValidators`.

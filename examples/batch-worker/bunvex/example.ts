@@ -1,4 +1,4 @@
-// The work queue (Convex's `example/convex/example.ts`): each `addEvent` inserts a value and pings the `events`
+// The work queue: each `addEvent` inserts a value and pings the `events`
 // worker; the worker sums batches of 10 into one total and deletes what it processed. The work query resumes from
 // the cursor it returned last time, a commit timestamp, so it never rescans the deleted rows.
 import { defineBatchWorkerValidators, ping } from "@bunvex/batch-worker";

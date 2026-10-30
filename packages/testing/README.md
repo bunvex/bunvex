@@ -1,11 +1,11 @@
 # @bunvex/testing
 
-Test bunvex functions against the real engine, in the test's own process ([STUDY-159](../../docs/study/STUDY-159-testing.md)).
+Test bunvex functions against the real engine, in the test's own process.
 It keeps convex-test's API, renamed: `convexTest` is `bunvexTest`.
 
 ```ts
 import { expect, test } from "bun:test";
-import { bunvexTest } from "@bunvex/testing"; // or "@bunvex/testing"
+import { bunvexTest } from "@bunvex/testing";
 import { api, internal } from "../bunvex/_generated/api";
 
 test("sending a message", async () => {
@@ -20,7 +20,7 @@ test("sending a message", async () => {
 
 - **Each `bunvexTest()` is a deployment of its own**: an engine on memory persistence and a virtual clock, with the
   app's functions, schema, HTTP actions and components installed as a push installs them.
-- **It behaves as a deployment**, not as convex-test's mock: write conflicts and retries, Convex's limits, real ids and
+- **It behaves as a deployment**, not as convex-test's mock: write conflicts and retries, a deployment's limits, real ids and
   storage URLs, deterministic `Date` and `Math.random` in queries and mutations.
 - **Env**: functions see `bunvexTest({ env: { … } })`, not the test's `process.env`.
 - **Time**: scheduled functions and crons run on the test's virtual clock as `finishAllScheduledFunctions()` moves

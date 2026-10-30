@@ -1,4 +1,4 @@
-// The generated-images chat end to end (STUDY-90): an action checks the prompt, asks for an image, downloads it
+// The generated-images chat end to end: an action checks the prompt, asks for an image, downloads it
 // and keeps it in file storage — against a local stand-in for OpenAI, so no network and no key.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";

@@ -1,4 +1,4 @@
-// The Next.js Pages Router example end to end (STUDY-90): the counter live through the client, `next build`,
+// The Next.js Pages Router example end to end: the counter live through the client, `next build`,
 // then `next start` serving the page and the API route, which reads the counter on the server (in Node).
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";
