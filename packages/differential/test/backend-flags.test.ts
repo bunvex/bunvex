@@ -37,7 +37,7 @@ const inBunvexNames = (text: string) =>
     .replaceAll("CONVEX_HTTP_PROXY", "HTTP_PROXY")
     .replaceAll(
       "[possible values: sqlite, mysql-v5, mysql-v5-multitenant, mysql-v6-multitenant, postgres-v5]",
-      "[possible values: sqlite, postgres, mysql, mongodb]",
+      "[possible values: sqlite, postgres, mysql]",
     );
 /** bunvex's argv in Convex's names. */
 const inConvexNames = (args: string[]) =>

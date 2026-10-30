@@ -36,7 +36,7 @@ What runs a deployment, on Bun:
 - `createServer`: the HTTP API and the WebSocket sync on an engine, for embedding;
 - `startLocalBackend` / `localBackendMain`: the `bunvex-local-backend` executable;
 - `openPersistence`, `persistenceConfigFromEnv`: the database chosen by configuration (SQLite, memory,
-  Postgres, MySQL, MongoDB through [`@bunvex/persistence`](../persistence));
+  Postgres and MySQL through [`@bunvex/persistence`](../persistence));
 - `issueAdminKey`, `checkAdminKey`: admin keys, byte for byte Convex's (STUDY-34).
 
 Most apps never call these: `bunvex dev` ([`@bunvex/cli`](../cli/README.md)) runs a local deployment, and

@@ -3,7 +3,7 @@
 A bunvex deployment in a container, brought up as a Convex self-hosted backend is
 ([STUDY-38](../docs/study/STUDY-38-docker.md)): the image runs `bunvex-local-backend` (the backend executable,
 see below) through the same scripts Convex's image uses. By default it keeps everything (the database, files, pushed
-code and its credentials) in a Docker volume, in SQLite. Point it at Postgres, MySQL or MongoDB when you need to.
+code and its credentials) in a Docker volume, in SQLite. Point it at Postgres or MySQL when you need to.
 
 ## Start it
 
@@ -73,7 +73,7 @@ Set these in the shell or in a `.env` file next to `docker-compose.yml`:
 | `PORT`, `SITE_PROXY_PORT` | The host ports (default 3210, 3211). |
 | `BUNVEX_CLOUD_ORIGIN`, `BUNVEX_SITE_ORIGIN` | The public URLs of the API and HTTP actions: file URLs and the built-in `BUNVEX_CLOUD_URL` / `BUNVEX_SITE_URL` (default `http://127.0.0.1:<port>`). |
 | `POSTGRES_URL`, `MYSQL_URL` | Use Postgres or MySQL instead of SQLite. Without a database in the URL, it connects to the instance name's (`bunvex_self_hosted` by default), as Convex. |
-| `PERSISTENCE`, `PERSISTENCE_URL` | Or name the driver: `sqlite`, `postgres`, `mysql`, `mongodb`. |
+| `PERSISTENCE`, `PERSISTENCE_URL` | Or name the driver: `sqlite`, `postgres`, `mysql`. |
 | `DO_NOT_REQUIRE_SSL` | Allow an unencrypted database connection (a local database). |
 | `S3_STORAGE_FILES_BUCKET`, `S3_STORAGE_MODULES_BUCKET`, `S3_STORAGE_EXPORTS_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `S3_ENDPOINT_URL`, `AWS_S3_FORCE_PATH_STYLE` | Keep files, pushed code and exports in S3 (each use case whose bucket is set). |
 | `S3_STORAGE_SEARCH_BUCKET`, `S3_STORAGE_SNAPSHOT_IMPORTS_BUCKET` | The search and vector index segments ([STUDY-111](../docs/study/STUDY-111-search-segments.md)) and uploaded snapshot imports in S3, as Convex's buckets of the same names. Setting any of the five buckets turns S3 on (DV-190); a use case without its bucket stays in the volume (`storage/search`, `storage/snapshot_imports`). |
@@ -131,8 +131,8 @@ Each variable below is read by the backend in the container; add the ones you se
 - **Request timeout.** `HTTP_SERVER_TIMEOUT_SECONDS` (default 300, as Convex's): a request with no response head
   by then is answered 408, on every route ([STUDY-147](../docs/study/STUDY-147-knob-env-overrides.md) §3.3). It is
   one of the knobs of **Tuning** above.
-- **Database call timeouts.** `POSTGRES_TIMEOUT_SECONDS` (30), `MYSQL_TIMEOUT_SECONDS` (19) and
-  `MONGODB_TIMEOUT_SECONDS` (30) bound one database call. This image and the executable read them, as Convex's
+- **Database call timeouts.** `POSTGRES_TIMEOUT_SECONDS` (30) and `MYSQL_TIMEOUT_SECONDS` (19) bound one
+  database call. This image and the executable read them, as Convex's
   binary does, and so does a server embedding `@bunvex/server` (`persistenceConfigFromEnv`). `PG_CA_FILE` and
   `MYSQL_CA_FILE` add a CA certificate for the TLS connection.
 - **Outbound requests.** The image takes the flags (`--http-proxy`, `--deny-addresses`, see **Screening

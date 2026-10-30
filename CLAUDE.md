@@ -38,8 +38,8 @@ deliberate, documented differences only. Read [ARCHITECTURE.md](ARCHITECTURE.md)
 
 - Everything in the repo is in English: code, docs, commits and PRs.
 - `main` is protected. Use one branch and one PR per concern; the owner merges.
-  - CI must pass: lint, typecheck, dependency rules and tests, plus PERSIST-01 conformance on Postgres,
-    MySQL and MongoDB.
+  - CI must pass: lint, typecheck, dependency rules and tests, plus PERSIST-01 conformance on Postgres
+    and MySQL.
 - `bun run check` before pushing.
   - A behaviour change comes with tests, and with a sabotage check: break the fix and watch the test fail.
   - A change that can affect performance comes with a measurement.

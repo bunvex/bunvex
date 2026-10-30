@@ -13,7 +13,6 @@
     "@bunvex/search": "workspace:*",
     "@bunvex/server": "workspace:*",
     "@bunvex/values": "workspace:*",
-    "mongodb": "^7.7.0",
     "mysql2": "^3.24.4",
     "postgres": "^3.4.9"
   }

@@ -16,7 +16,6 @@ const DEFAULT_PORTS: Record<string, number> = {
   "postgres:": 5432,
   "postgresql:": 5432,
   "mysql:": 3306,
-  "mongodb:": 27017,
 };
 
 function faults(name: string, kinds: Fault[], store: boolean): Nemesis {
@@ -45,11 +44,6 @@ function faults(name: string, kinds: Fault[], store: boolean): Nemesis {
         db = new TcpProxy(Number(u.port || DEFAULT_PORTS[u.protocol]), u.hostname);
         u.hostname = "127.0.0.1";
         u.port = String(db.listen());
-        // MongoDB would find the replica set's members by their own addresses, around the proxy
-        if (u.protocol === "mongodb:") {
-          u.searchParams.delete("replicaSet");
-          u.searchParams.set("directConnection", "true");
-        }
         out.PERSISTENCE_URL = u.toString();
       }
       return out;

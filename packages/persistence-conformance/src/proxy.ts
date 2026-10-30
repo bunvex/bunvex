@@ -40,14 +40,13 @@ export type FreezableProxy = {
 };
 
 /**
- * Whether a request commits a transaction: a COMMIT statement (MySQL, a simple Postgres query), MongoDB's
- * commitTransaction, or a Postgres Bind of a statement this connection prepared as COMMIT (postgres.js prepares
- * it once per connection and then sends only its name; `commitNames` learns them from Parse messages).
+ * Whether a request commits a transaction: a COMMIT statement (MySQL, a simple Postgres query), or a Postgres
+ * Bind of a statement this connection prepared as COMMIT (postgres.js prepares it once per connection and then
+ * sends only its name; `commitNames` learns them from Parse messages).
  */
 function isCommit(text: string, commitNames: Set<string>): boolean {
   for (const m of text.matchAll(/P[\s\S]{4}([^\0]+)\0commit\0/gi)) commitNames.add(m[1]);
-  // Not "autocommit", which MongoDB sends with every command of a transaction.
-  if (/commitTransaction|\bcommit\b/i.test(text)) return true;
+  if (/\bcommit\b/i.test(text)) return true;
   for (const name of commitNames) if (text.includes(`\0${name}\0`) && /B[\s\S]{4}\0/.test(text)) return true;
   return false;
 }

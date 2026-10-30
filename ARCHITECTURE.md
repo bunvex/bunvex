@@ -6,7 +6,7 @@ the alternatives that were rejected and why — is in
 [`docs/specs/ARCH-01-monorepo.md`](docs/specs/ARCH-01-monorepo.md).
 
 bunvex is a Convex-style reactive backend written in TypeScript for Bun, with its own database engine on
-top of a pluggable persistence layer (memory + log, SQLite, Postgres, MySQL, MongoDB). The engine keeps
+top of a pluggable persistence layer (memory + log, SQLite, Postgres, MySQL). The engine keeps
 every document version and every index entry stamped with a commit timestamp, runs mutations as
 optimistic serializable transactions validated by one committer, and re-runs subscribed queries whose
 read-set a commit overlaps.
@@ -64,7 +64,6 @@ bunvex/
 │   ├── persistence/                 @bunvex/persistence               ← external databases
 │   │   ├── postgres                 (optional peer: postgres)                                 ✅
 │   │   ├── mysql                    (optional peer: mysql2)                                   ✅
-│   │   ├── mongodb                  (optional peer: mongodb)                                  ✅
 │   │   └── tls (internal)           TLS required + verified by default, as Convex (STUDY-25 L8) ✅
 │   │
 │   ├── persistence-conformance/     @bunvex/persistence-conformance   the PERSIST-01 K-suite ✅ (not
@@ -224,7 +223,7 @@ bunvex/
 │   └── bench/                       benchmark reports                                          ✅
 │
 ├── .github/                         workflows (CI: lint, typecheck, dependency rules, tests, examples,
-│                                    dashboard e2e, conformance against Postgres, MySQL, MongoDB;
+│                                    dashboard e2e, conformance against Postgres and MySQL;
 │                                    nightly differential, Jepsen and soak runs; binaries, Docker image),
 │                                    issue and PR templates
 ├── .changeset/                      per-package versions and changelogs

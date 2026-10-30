@@ -169,7 +169,7 @@ describe("deterministic execution", () => {
       const frozen = Date.now();
       await tick();
       return outsideExecution(async () => {
-        crypto.getRandomValues(new Uint8Array(4)); // what the MongoDB driver does for its sessions
+        crypto.getRandomValues(new Uint8Array(4)); // what a database driver may do for its sessions
         await new Promise((r) => setTimeout(r, 5));
         return { frozen, real: Date.now() };
       });

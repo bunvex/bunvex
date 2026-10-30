@@ -25,15 +25,6 @@ export async function freshDatabase(kind: string, url: string, name: string): Pr
     } finally {
       await sql.close();
     }
-  } else if (kind === "mongodb") {
-    const { MongoClient } = await import("mongodb");
-    const client = new MongoClient(fresh.toString());
-    try {
-      await client.connect();
-      await client.db(name).dropDatabase();
-    } finally {
-      await client.close();
-    }
   } else throw new Error(`no fresh database for ${kind}`);
   return fresh.toString();
 }

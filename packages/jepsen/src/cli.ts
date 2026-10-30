@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Run the Jepsen-style workload (STUDY-57) from the command line:
-//   bun packages/jepsen/src/cli.ts [--store memory|sqlite|postgres|mysql|mongodb] [--seconds 10]
+//   bun packages/jepsen/src/cli.ts [--store memory|sqlite|postgres|mysql] [--seconds 10]
 //     [--clients 5] [--seed N] [--runs 1 | --minutes M] [--nemesis none|partition|kill|skew|store|all[,…]]
 //     [--summary failures.md]
 // Several nemeses, comma-separated, take turns run by run; `--minutes` keeps starting runs until the time is
