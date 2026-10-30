@@ -33,9 +33,6 @@ updates:
       - dependency-name: react-native
       - dependency-name: "react-native-*"
       - dependency-name: fast-check
-      # 9.3 breaks the dashboard grid's context menu (27 tests, #973): held at 9.2 until the grid is fixed for it.
-      - dependency-name: "@tanstack/react-table"
-        versions: [">=9.3.0"]
     groups:
       react:
         update-types: [minor, patch]
