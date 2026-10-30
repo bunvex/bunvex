@@ -694,6 +694,37 @@ export class Tx {
     void this.reads;
     return this.readCount.upTo(floor);
   }
+
+  /**
+   * The writes still in flight (`patch`, `replace`, `delete`), settled in the order the function made them; null
+   * when none is. Convex runs a function's database calls one at a time in that order (its async syscalls), so a
+   * write reads the document as the writes made before it left it, and a read made after a write sees it.
+   */
+  private writesInFlight: Promise<void> | null = null;
+
+  /**
+   * Run the write `fn` after every write made before it. With none in flight it starts at once, so a lone write
+   * runs exactly as it would unqueued.
+   */
+  private inOrder<T>(fn: () => Promise<T>): Promise<T> {
+    const before = this.writesInFlight;
+    const run = before ? before.then(fn) : fn();
+    const settled = run.then(
+      () => {},
+      () => {},
+    );
+    this.writesInFlight = settled;
+    void settled.then(() => {
+      if (this.writesInFlight === settled) this.writesInFlight = null;
+    });
+    return run;
+  }
+
+  /** For a read: wait for the writes made before it, if any is in flight. */
+  private async afterWrites(): Promise<void> {
+    if (this.writesInFlight) await this.writesInFlight;
+  }
+
   private writes = new Map<
     string,
     {
@@ -1245,6 +1276,7 @@ export class Tx {
 
   /** `db.get(table, id)`, or Convex's one-argument `db.get(id)`: the id names its table. */
   async get(tableOrId: string, id?: string): Promise<Doc | null> {
+    if (this.writesInFlight) await this.afterWrites();
     if (id !== undefined) return this.handOut(await this.read(tableOrId, id, "db.get"));
     const table = this.tableOfIdArg(tableOrId, "db.get");
     // A virtual table's id (`_storage`'s) names a system table apps reach through `db.system` only (Convex's
@@ -1481,6 +1513,7 @@ export class Tx {
 
   /** @internal (QueryImpl) */
   async *iterate(st: QState): AsyncGenerator<Doc> {
+    if (this.writesInFlight) await this.afterWrites();
     const pipe = new Pipeline(st.ops);
     if (pipe.done) return;
     if (st.search) {
@@ -1731,6 +1764,7 @@ export class Tx {
    */
   /** @internal (QueryImpl) */
   async paginate(table: string, st: QState, opts: QueryPageArgs): Promise<PaginationResult> {
+    if (this.writesInFlight) await this.afterWrites();
     const pageSize = opts.pageSize;
     if (pageSize === 0) throw new Error("Must request at least 1 document while paginating");
     if (pageSize > TRANSACTION_MAX_READ_SIZE_ROWS) throw new Error(`Requested too many items: ${pageSize}`);
@@ -1930,6 +1964,7 @@ export class Tx {
    */
   // Stryker disable next-line BooleanLiteral: collect() passes no `take`, and a take of its cap stops where the cap does
   async runQuery(st: QState, n: number, take = false): Promise<Doc[]> {
+    if (this.writesInFlight) await this.afterWrites();
     const pipe = take ? new Pipeline(st.ops, n) : new Pipeline(st.ops);
     const cap = take ? Number.POSITIVE_INFINITY : n;
     if (st.search) return this.searchRun(st, pipe, cap);
@@ -2274,7 +2309,11 @@ export class Tx {
     return this.patchIn(a, b as string, c);
   }
 
-  private async patchIn(table: string, id: string, fields: Record<string, unknown>) {
+  private patchIn(table: string, id: string, fields: Record<string, unknown>) {
+    return this.inOrder(() => this.patchNow(table, id, fields));
+  }
+
+  private async patchNow(table: string, id: string, fields: Record<string, unknown>) {
     if (this.spaceId !== null) await this.checkMounted();
     // Convex parses the patch before it reads the document: an object first (`PatchValue`), then each field's
     // value, a value of its own, so the patch object may be one level deeper than the limit.
@@ -2321,7 +2360,11 @@ export class Tx {
     return this.replaceIn(a, b as string, c);
   }
 
-  private async replaceIn(table: string, id: string, value: Record<string, unknown>) {
+  private replaceIn(table: string, id: string, value: Record<string, unknown>) {
+    return this.inOrder(() => this.replaceNow(table, id, value));
+  }
+
+  private async replaceNow(table: string, id: string, value: Record<string, unknown>) {
     if (this.spaceId !== null) await this.checkMounted();
     const x = extractCommitTs(value, this.writtenNesting(), "replace"); // before the read, as in Convex
     refuseLoneSurrogates(x.value, () => JSON.stringify({ id, value: toJsonValue(x.value as Value) }));
@@ -2350,7 +2393,11 @@ export class Tx {
     return this.deleteIn(a, b);
   }
 
-  private async deleteIn(table: string, id: string) {
+  private deleteIn(table: string, id: string) {
+    return this.inOrder(() => this.deleteNow(table, id));
+  }
+
+  private async deleteNow(table: string, id: string) {
     if (this.spaceId !== null) await this.checkMounted();
     const t = this.findTable(table);
     const cur = await this.read(table, id, "db.delete");
