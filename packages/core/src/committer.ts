@@ -864,7 +864,7 @@ export class Committer {
    * ends it. The driver keeps the group it failed to flush, so the retry writes the same rows at the same
    * timestamps, behind the same fence (PERSIST-01 C7, C9). A retry whose earlier attempt did commit finds it through the lease record and
    * succeeds without writing (DV-124; Convex stops); one that lands while the retry writes fails as "unsure"
-   * (a duplicate key, or MongoDB's fence), which is not transient: fail-stop, as Convex. The lease
+   * (a duplicate key), which is not transient: fail-stop, as Convex. The lease
    * bounds the retries in practice: renewals fail too while the store is unreachable, and the engine stops
    * the committer once the TTL runs out without one.
    */

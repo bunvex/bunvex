@@ -11,8 +11,8 @@
 > **v2.5, 1 Oct 2026:** C11 (the log by timestamp) and K25, from STUDY-24 H11 (K24 is the index backfill's,
 > STUDY-29). **v2.6, 1 Oct 2026:** C4 bounded flushes (the committer writes a group in write batches, DV-62)
 > and K26, from STUDY-06 §10. **v2.7, 1 Oct 2026:** C12–C14 (the document log, pruning, globals: what retention
-> needs) and K27–K29, from STUDY-33. **v2.8, 3 Oct 2026:** C15 (index references), from STUDY-09 §1.6; K30–K31. **v2.9, 3 Oct 2026:** C16 (document versions) and K32, for streaming export's per-document timestamps (owner, 2026-10-03). **v3.0, 6 Oct 2026 (STUDY-133 PR 3):** internal ids and `prev_ts` in C1; `scan` returns documents through the exact-ts join (C3, C6; `scanDocs` is gone); `get` returns a version; C15 rewritten for the join; C17 (index entries at past timestamps); K30–K31 rewritten, K34–K36. **v3.1, 6 Oct 2026 (STUDY-133 PR 10):** retention walks the document log by `prev_ts`, as Convex's: C11 (`readLog`) and K25 retired, C12–C13 and K27–K28 rewritten. **v3.2, 6 Oct 2026 (STUDY-133 PR 4):** C10 for drivers in Convex's layout (no layout record, the tables' columns checked; SQLite first), C14's integers above 2^53 and `max_repeatable_ts`, K22 in two forms. **v3.3, 6 Oct 2026 (STUDY-133 PR 5):** C7 newest-wins leases (Convex's, DV-413; Postgres first) and their K10–K21 forms; K22 compares a fresh store's schema with the reference system's. **v3.4, 6 Oct 2026 (STUDY-133 PR 6):** MySQL joins Convex's v5 layout and lease; C1 lets a store re-serialize a document (MySQL's v1 encoding); conformance writes documents in sorted-field JSON and K21's markers match bytes sent as hex. **v3.5, 7 Oct 2026 (STUDY-133 PR 7):** MongoDB in the analogue of Convex's Postgres layout (DV-416) with the newest-wins lease; the unique `_id` refuses a retried group that landed; an interrupted bootstrap is completed (C5). **v3.6, 11 Oct 2026 (STUDY-139 P8):** a store with data and no layout record (an older bunvex's) is refused, no longer stamped (C10, K22). **v3.7, 19 Oct 2026 (#717, Convex 403c3e8):** the read-only flag is checked again when the lease is taken, atomically with it (C10, K23b). Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`,
-> `mongodb` in `@bunvex/persistence`; and third-party ones) implements `Persistence`
+> needs) and K27–K29, from STUDY-33. **v2.8, 3 Oct 2026:** C15 (index references), from STUDY-09 §1.6; K30–K31. **v2.9, 3 Oct 2026:** C16 (document versions) and K32, for streaming export's per-document timestamps (owner, 2026-10-03). **v3.0, 6 Oct 2026 (STUDY-133 PR 3):** internal ids and `prev_ts` in C1; `scan` returns documents through the exact-ts join (C3, C6; `scanDocs` is gone); `get` returns a version; C15 rewritten for the join; C17 (index entries at past timestamps); K30–K31 rewritten, K34–K36. **v3.1, 6 Oct 2026 (STUDY-133 PR 10):** retention walks the document log by `prev_ts`, as Convex's: C11 (`readLog`) and K25 retired, C12–C13 and K27–K28 rewritten. **v3.2, 6 Oct 2026 (STUDY-133 PR 4):** C10 for drivers in Convex's layout (no layout record, the tables' columns checked; SQLite first), C14's integers above 2^53 and `max_repeatable_ts`, K22 in two forms. **v3.3, 6 Oct 2026 (STUDY-133 PR 5):** C7 newest-wins leases (Convex's, DV-413; Postgres first) and their K10–K21 forms; K22 compares a fresh store's schema with the reference system's. **v3.4, 6 Oct 2026 (STUDY-133 PR 6):** MySQL joins Convex's v5 layout and lease; C1 lets a store re-serialize a document (MySQL's v1 encoding); conformance writes documents in sorted-field JSON and K21's markers match bytes sent as hex. **v3.5, 7 Oct 2026 (STUDY-133 PR 7):** MongoDB in the analogue of Convex's Postgres layout (DV-416) with the newest-wins lease; the unique `_id` refuses a retried group that landed; an interrupted bootstrap is completed (C5). **v3.6, 11 Oct 2026 (STUDY-139 P8):** a store with data and no layout record (an older bunvex's) is refused, no longer stamped (C10, K22). **v3.7, 19 Oct 2026 (#717, Convex 403c3e8):** the read-only flag is checked again when the lease is taken, atomically with it (C10, K23b). **v3.8, 29 Oct 2026:** bunvex's MongoDB driver is removed (owner; DV-416 resolved): the first-party remote drivers are Postgres and MySQL. Every persistence driver (`memory`, `sqlite` in `@bunvex/core`; `postgres`, `mysql`
+> in `@bunvex/persistence`; and third-party ones) implements `Persistence`
 > (`packages/core/src/persistence/index.ts`) and must pass `@bunvex/persistence-conformance`
 > (`bun bench/conformance.ts` runs it on every first-party driver). The engine core (OCC, committer,
 > query cache, subscriptions) never looks past this interface — that is what lets a new store be added
@@ -47,7 +47,7 @@ is the next commit.
 
 `scan` MUST return entries in **unsigned byte-wise order** of `key` (memcmp; a shorter key that is a
 prefix of a longer one sorts first). The whole read-set / invalidation model depends on it: a store whose
-native ordering differs (MongoDB compares `BinData` by length first) must re-encode the key into
+native ordering differs (one that compares binary values by length first, say) must re-encode the key into
 something whose native order is byte order (e.g. lowercase hex strings) — inside the driver.
 
 ## C3 — snapshot reads
@@ -126,8 +126,7 @@ change after the fact, two catalogs and two instance secrets). C7 enforces it.
 A driver implements C7 by implementing the `Lease` interface (`acquireLease`, `renewLease`,
 `releaseLease`). v2 is optional per driver: a driver without it behaves as in v1, and the engine then has
 no protection (the driver's docs say so). First-party status: every first-party driver implements C7 —
-**postgres**, **mysql**, **mongodb**, **sqlite** and **memory**. MongoDB needs a replica set (a single-node one
-is enough): a flush is a multi-document transaction whose first write is the fence.
+**postgres**, **mysql**, **sqlite** and **memory**.
 
 - **The lease** is one record in the store: `epoch` (strictly increasing), `holder` (an opaque string
   naming the process), `expires_at`, and `max_ts` (the durable prefix, see below).
@@ -162,10 +161,8 @@ tail) runs only under the lock. Convex's SQLite store has no lock and loses writ
 (STUDY-25 L9, measured); bunvex diverges on purpose (owner, 2026-09-30).
 
 **Newest-wins leases (Convex's, DV-413).** A driver in Convex's layout on a database server (Postgres since
-STUDY-133 PR 5, MySQL since PR 6, MongoDB by analogy since PR 7) uses Convex's lease (`leaseScope = "newest"`)
-instead of the record above. It reverses DV-14 on those drivers. MongoDB's fence is a write of the lease document
-that matches only our ts, at the end of each flush's transaction: a takeover's update waits for it, or one of the
-two aborts on a write conflict.
+STUDY-133 PR 5, MySQL since PR 6) uses Convex's lease (`leaseScope = "newest"`)
+instead of the record above. It reverses DV-14 on those drivers.
 
 - The lease is Convex's `leases` row `(id 1, ts)`: `ts` is its holder's start, in wall-clock nanoseconds.
 - `acquireLease` sets `ts` to the caller's start when that is newer (`ts < $now`): **the newest process wins at
@@ -197,7 +194,7 @@ as Convex):
 - **bounds every call on the client side**, per round trip: getting or opening a connection, each
   statement, BEGIN and COMMIT. A call that gets no answer within the timeout rejects with
   `DatabaseTimeoutError` (`@bunvex/core/persistence`; `withTimeout` implements the rule). The first-party
-  defaults are Convex's: Postgres 30 s, MySQL 19 s; MongoDB 30 s. Each driver takes `timeoutMs` at open.
+  defaults are Convex's: Postgres 30 s, MySQL 19 s. Each driver takes `timeoutMs` at open.
 - **never reuses the connection of a timed-out call.** Its answer may still arrive, or never; the
   connection is closed (Postgres: the driver retires its whole pool, since postgres.js exposes no single
   connection).
@@ -220,9 +217,7 @@ network closed, a server shutting down or not serving — are retried instead of
   connection (Convex: a timeout only; DV-123, owner 2026-10-01); MySQL, a timeout, an operational error
   (Convex's `classify_mysql_error`: lost connection, IO, 1290, 2013, 1053, 1040) or a deadlock (1213
   `ER_LOCK_DEADLOCK`, as Convex's write batcher since 1a9f5e1, `is_db_deadlock_error`: InnoDB rolled the
-  victim back whole; not operational, so its connection is kept and reads are not retried for it); MongoDB
-  (no Convex counterpart; owner-approved), a timeout, a network or server-selection error, or a server
-  shutting down or not primary. A `LeaseLostError`, a duplicate key, a MySQL lock wait timeout (1205), or a
+  victim back whole; not operational, so its connection is kept and reads are not retried for it). A `LeaseLostError`, a duplicate key, a MySQL lock wait timeout (1205), or a
   Postgres deadlock or serialization failure (40P01, 40001) is never transient. A driver without
   `isTransient` (memory, SQLite) has no transient errors.
 - **Flush retries (the committer).** A `flush()` that fails transiently is retried with full-jitter
@@ -235,9 +230,9 @@ network closed, a server shutting down or not serving — are retried instead of
 - **A failed attempt stays failed.** Once a `flush()` has failed, nothing of that attempt may commit after the
   next `flush()` began, except a COMMIT that had already been sent: a call that timed out issues no further
   statement (`withTimeout`'s `progress()` throws once the call has timed out), and a store whose transactions
-  outlive their connection (MongoDB) ends the failed attempt's transaction before the retry. Otherwise the
-  abandoned attempt races the retry (MongoDB's `withTransaction` retried its callback in the background and
-  sometimes committed the group under the retry: found as a flaky K20).
+  outlive their connection ends the failed attempt's transaction before the retry. Otherwise the abandoned
+  attempt races the retry (a transaction helper that reruns its callback in the background can commit the group
+  under the retry: found as a flaky K20).
 - **A group that already landed (DV-124, owner 2026-10-01).** A retry of a group whose earlier attempt did
   commit MUST NOT write the group again. Before re-running a group it failed to flush, the driver reads the
   lease record: if its epoch is ours and its `max_ts` ≥ the group's top, the group committed (C7's fence writes
@@ -248,9 +243,8 @@ network closed, a server shutting down or not serving — are retried instead of
 - **Still unsure.** If the group turns out to be there anyway while it is re-run (an earlier attempt's COMMIT
   that was already sent landed after the lease read), the flush fails with `UnsureCommitError`
   (`@bunvex/core/persistence`), which is never transient: the committer stops, and after a restart the store
-  holds the group exactly once. Per store: Postgres, MySQL and MongoDB (its rows' `_id` is Convex's primary
-  key) see a duplicate key. Before its check, the MongoDB driver ends the failed attempt's session, whose
-  transaction outlives its connection on the server; a third-party driver must make the same check.
+  holds the group exactly once. Per store: Postgres and MySQL see a duplicate key; a third-party driver must make the
+  same check (and, if its transactions outlive their connection, end the failed attempt's first).
 - **Reads (the driver).** A read, or an idempotent init step, that fails because its connection was lost runs
   once more on a fresh connection (`retryOnce`; Convex's `with_retry`, `MYSQL_MAX_QUERY_RETRIES` = 1). Postgres
   also retries after a timeout (so a read waits up to two timeouts); MySQL does not. Never a statement inside
@@ -262,9 +256,7 @@ A store is opened only if it is in a layout the driver reads, and only for writi
 read-only (STUDY-25 L6/L7, as Convex: its configured layout, refused over a different one, and its `read_only`
 table). The helpers and errors are in `@bunvex/core/persistence` (`layout.ts`).
 
-**Drivers in Convex's layout** (STUDY-133; SQLite since PR 4, Postgres since PR 5, MySQL (v5) since PR 6;
-MongoDB since PR 7, in the analogue of Convex's Postgres layout, DV-416: it checks the fields of a document of
-each collection). The store
+**Drivers in Convex's layout** (STUDY-133; SQLite since PR 4, Postgres since PR 5, MySQL (v5) since PR 6). The store
 is Convex's: its DDL, created with `IF NOT EXISTS` on every open as Convex does, and no layout record (DV-418).
 
 - **Open checks, writing nothing.** Before any write (DDL and pragmas included) and without the lease: each of
@@ -295,8 +287,7 @@ current layout is `LAYOUT_VERSION`.
 - **The flag.** A driver implements `ReadOnlyFlag.setReadOnly(on)`: no lease is needed (as Convex's
   `set_read_only`). It is read at open, and again when the lease is taken (as Convex since 403c3e8): without
   `allowReadOnly`, `acquireLease` takes the lease only if the store is not marked read-only, in one atomic step
-  (Postgres and MySQL: `… and not exists (select 1 from read_only)` in the lease UPDATE; MongoDB: the flag read
-  and the lease written in one transaction; SQLite and memory+log: the flag read under the lock, which is let
+  (Postgres and MySQL: `… and not exists (select 1 from read_only)` in the lease UPDATE; SQLite and memory+log: the flag read under the lock, which is let
   go), and otherwise fails with `ReadOnlyError` and leaves the lease as it was. A flag set after that does not
   stop the writer: a running writer keeps writing.
 - A third-party driver claims C10 by passing K22 and K23. Its conformance module then exports an `open` that
@@ -323,7 +314,7 @@ written, C1): the stored document versions of the commits with `afterTs < ts ≤
   `readDocumentLog(lastTsOfThePreviousPage, upTo, n)`.
 - **Cost.** A read of an index led by `documents.ts` and the rows it returns, never a scan of the store. It
   needs no lease and writes nothing; on a remote store it is a read (C8, C9). In Convex's layout it is the
-  primary key `(ts, table_id, id)` (SQLite, Postgres, MySQL; MongoDB an index led by `_id.ts`).
+  primary key `(ts, table_id, id)` (SQLite, Postgres, MySQL).
 
 Retention reads it for both of its passes (STUDY-33, as Convex's `retention.rs`): each row whose `prevTs` is
 set is a revision pair, the version it replaced and itself (C13).
@@ -357,8 +348,7 @@ log; a driver that keeps its log apart from its rows (memory) may forget the log
 
 `getGlobal(key)` returns a JSON value or null; `setGlobal(key, value)` stores one, durable when it returns,
 and only for the lease holder (`LeaseLostError` otherwise). They are Convex's `persistence_globals`: SQL
-stores keep them in that table (with `layout_version` where C10 has a record), MongoDB in a
-`persistence_globals` collection, the memory driver as records of its log. An integer above 2^53 is a `bigint`
+stores keep them in that table (with `layout_version` where C10 has a record), the memory driver as records of its log. An integer above 2^53 is a `bigint`
 both ways, stored as plain JSON digits as Convex's serde_json writes it (`encodeGlobal` / `decodeGlobal`):
 `max_repeatable_ts`, which the engine writes at every start and then as Convex's committer does (5 s after a
 commit, every 1–2 h when idle), is one. Retention keeps its windows and cursors there, and every store keeps
@@ -471,29 +461,22 @@ Notes from validating the suite (each check was sabotaged and had to go red):
 - K11–K14 test expiry and paused holders: they do not apply to a process-scoped lease (an OS lock has
   neither), which K10, K16–K19 cover.
 - K21's landed-group check (v2.3) was sabotaged by making the lease read never find the group: Postgres and
-  MySQL stop with `UnsureCommitError` (duplicate key), MongoDB too (its fence); with MongoDB's fence `maxTs`
-  check removed as well (and fresh `_id`s), the group is stored twice (2 documents, 6 index entries for 1 and
-  3). K21's lost-connection check, with Postgres's `isTransient` back to timeouts only: the committer stops.
-  K20's "sends nothing more" check, with `progress()` no longer throwing after a timeout: Postgres and MongoDB
-  send 2 requests (the group's rows, a COMMIT) after the thaw, every run; MySQL destroys the connection on a
+  MySQL stop with `UnsureCommitError` (duplicate key). K21's lost-connection check, with Postgres's `isTransient` back to timeouts only: the committer stops.
+  K20's "sends nothing more" check, with `progress()` no longer throwing after a timeout: Postgres
+  sends 2 requests (the group's rows, a COMMIT) after the thaw, every run; MySQL destroys the connection on a
   timeout and stays green. Each went red.
-- K21 and K20's retry check were sabotaged four ways: no flush retry (red on all three remote drivers); no read
-  retry (red; MongoDB with `retryReads: false`); a Postgres driver that drops its failed group (the commit is
-  acknowledged with no rows); a MongoDB fence without the `maxTs` check and with fresh `_id`s (the group is
-  acknowledged and stored twice).
-- The proxy recognises a COMMIT as a `COMMIT` statement, MongoDB's `commitTransaction` (not `autocommit`,
-  which every command of a transaction carries), or a Postgres Bind of a statement the connection prepared as
+- K21 and K20's retry check were sabotaged four ways: no flush retry (red on both remote drivers); no read
+  retry (red); a Postgres driver that drops its failed group (the commit is acknowledged with no rows).
+- The proxy recognises a COMMIT as a `COMMIT` statement, or a Postgres Bind of a statement the connection prepared as
   `commit` (postgres.js prepares it once per connection and then sends only its name).
 - K20 was sabotaged by disabling `withTimeout`: every call hung past the suite's guard (8 × the timeout).
-  MongoDB's server monitor is not a call; its streaming check waits up to the heartbeat plus the connect
-  timeout, so the MongoDB module opens with a 1 s heartbeat for K20.
 - K14 (a writer paused *inside* its flush transaction) is covered by K13's bound: a SIGSTOP at a random
   moment lands inside the flush often enough, and the takeover must still finish in time.
 - K26 was sabotaged three ways (STUDY-06 §10.5): no batch bound (all five drivers red: the injected limit stops
   the committer; on a real MySQL with `max_allowed_packet` = 1 MiB the same group fails with the packet error);
   a commit torn across two batches (red: "torn commit"); batches flushed in swapped pairs (red: `maxTs` below
   the last acknowledged commit, flushed commits missing below `maxTs`).
-- K30 went red on Postgres, MySQL and MongoDB before C15 (their `scanDocs` dropped the broken entries and
+- K30 went red on Postgres and MySQL before C15 (their `scanDocs` dropped the broken entries and
   returned the rest); K31 was sabotaged with a Postgres `get` that ignores the table (red: table B read
   table A's document).
 - K33 was sabotaged four ways (STUDY-133 PR 1): SQLite reading `ts` without safe integers (red: `getVersions`),
@@ -507,8 +490,5 @@ Notes from validating the suite (each check was sabotaged and had to go red):
   is K30's v2.8 check moved from `scanDocs` to `scan`.
 - SIGKILL cannot tear a single `write()`: K6 exercises multi-step flushes (remote stores, commit
   markers); K7 covers the power-loss shape for the append-only log.
-- v3.5 (STUDY-133 PR 7), MongoDB in its analogue layout: the fence's lease write removed (K10, K12 red);
-  `landed()` always false (K21 red: the unique `_id` stops the retry with `UnsureCommitError`); the open's field
-  check removed (K22 red: bunvex's previous layout opened and was written to); the key prefix stored as raw
-  BinData, which orders by length first (K1 red). K17 first went red on MongoDB: two concurrent first starts left
-  a store with its bootstrap rows and no globals, which the completion in C5 fixed.
+- v3.5 (STUDY-133 PR 7): K17 first went red on a driver whose two concurrent first starts left a store with its
+  bootstrap rows and no globals, which the completion in C5 fixed.

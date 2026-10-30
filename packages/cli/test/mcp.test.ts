@@ -15,8 +15,8 @@ import { memoryStore } from "./memory-store.ts";
 const SECRET = "56".repeat(32);
 const NAME = "mcp-test";
 const KEY = issueAdminKey({ instanceName: NAME, cipherKey: adminKeyCipherKey(SECRET) });
-const SERVER = ["bunvex", "server"].join("/");
-const VALUES = ["bunvex", "values"].join("/");
+const SERVER = ["@bunvex", "server"].join("/");
+const VALUES = ["@bunvex", "values"].join("/");
 const BIN = join(import.meta.dir, "../bin/bunvex.ts");
 
 const APP: Record<string, string> = {

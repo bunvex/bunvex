@@ -22,9 +22,13 @@ const CLI =
  * Whether Convex's layer wraps this path: `/api/*` (but the sync upgrade) and the health routes; and bunvex's
  * `/stats` (DV-162), which the dashboard reads from its own origin as it reads the `/api` routes (STUDY-67 §9).
  */
+/** The deployment's JWKS (STUDY-192), under the router's layer only, as Convex routes it. */
+const JWKS_PATH = "/.well-known/jwks.json";
+
 export const hasApiCors = (pathname: string) =>
   (pathname.startsWith("/api/") && !/^\/api\/[^/]+\/sync$/.test(pathname)) ||
   HEALTH.has(pathname) ||
+  pathname === JWKS_PATH ||
   pathname === "/stats";
 
 /**

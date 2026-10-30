@@ -1,0 +1,60 @@
+{
+  "name": "@bunvex/workpool",
+  "version": "0.1.0",
+  "description": "A work pool component for bunvex: actions, mutations and queries run at most maxParallelism at a time, with retries, onComplete callbacks, cancelation and recovery.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "bunvex",
+    "component",
+    "workpool",
+    "queue",
+    "retry"
+  ],
+  "exports": {
+    ".": "./src/client/index.ts",
+    "./bunvex.config": {
+      "@bunvex/component-source": "./src/component/bunvex.config.ts",
+      "bunvex": "./src/component/bunvex.config.ts",
+      "default": "./src/component/bunvex.config.ts"
+    },
+    "./bunvex.config.js": {
+      "@bunvex/component-source": "./src/component/bunvex.config.ts",
+      "bunvex": "./src/component/bunvex.config.ts",
+      "default": "./src/component/bunvex.config.ts"
+    },
+    "./_generated/component.js": {
+      "types": "./src/component/_generated/component.ts"
+    },
+    "./test": "./src/test.ts",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@bunvex/server": "workspace:^",
+    "@bunvex/values": "workspace:^"
+  },
+  "dependencies": {
+    "@bunvex/batch-worker": "workspace:^",
+    "@bunvex/helpers": "workspace:^"
+  },
+  "devDependencies": {
+    "@bunvex/testing": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bunvex/bunvex",
+    "directory": "components/workpool"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.4.2"
+  }
+}

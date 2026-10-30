@@ -6,8 +6,8 @@
 //   context; re-entering one still being evaluated is `CyclicImport`.
 // - A definition imports its children as `./_componentDeps/<base64url(definition path)>`: each is answered with a
 //   stand-in module whose default export is `{export: () => <the child's evaluated definition>,
-//   componentDefinitionPath, defaultName}`, as Convex's synthetic module. It may import `bunvex/server` and
-//   `bunvex/values` too, the server's own (DV-495); nothing else.
+//   componentDefinitionPath, defaultName}`, as Convex's synthetic module. It may import `@bunvex/server` and
+//   `@bunvex/values` too, the server's own (DV-495); nothing else.
 // - The context refuses what Convex's definition environment refuses (`Date`, `Math.random`, crypto randomness,
 //   `performance`, `fetch`, timers), each thrown into the definition's code with Convex's message; `console` is
 //   accepted and dropped; `process.env` is the deployment's in the app's definition and refused in a component's.
@@ -105,8 +105,8 @@ function invalidExport(path: string, problem: string): DefinitionError {
   return new DefinitionError(
     "InvalidDefinition",
     path === ""
-      ? `The default export of \`bunvex.config.ts\` in your app has an invalid value (${problem}). Please make sure that you’re exporting the return value of \`defineApp()\` (\`import { defineApp } from 'bunvex/server'\`).`
-      : `The default export of \`bunvex.config.ts\` in component \`${path}\` has an invalid value (${problem}). Please make sure that the component is exporting the return value of \`defineComponent()\` (\`import { defineComponent } from 'bunvex/server'\`).`,
+      ? `The default export of \`bunvex.config.ts\` in your app has an invalid value (${problem}). Please make sure that you’re exporting the return value of \`defineApp()\` (\`import { defineApp } from '@bunvex/server'\`).`
+      : `The default export of \`bunvex.config.ts\` in component \`${path}\` has an invalid value (${problem}). Please make sure that the component is exporting the return value of \`defineComponent()\` (\`import { defineComponent } from '@bunvex/server'\`).`,
   );
 }
 

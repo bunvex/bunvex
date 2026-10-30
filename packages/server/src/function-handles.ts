@@ -35,16 +35,18 @@ export function splitComponentFunctionName(name: string): { id: string; name: st
   return { id: rest.slice(0, i), name: rest.slice(i + 1) };
 }
 
-/** A handle to a function of type `Type` (Convex's `FunctionHandle`): a string, opaque to apps. */
+// Convex's `FunctionHandle`.
+/** A handle to a function of type `Type`: a string, opaque to apps. */
 export type FunctionHandle<
   _Type extends "query" | "mutation" | "action" = "query" | "mutation" | "action",
   _Args = unknown,
   _Return = unknown,
 > = string & { __functionHandle: true };
 
+// Convex's `FunctionHandle_future` (d938c5b).
 /**
- * A {@link FunctionHandle} typed as a {@link FunctionReference_future} (Convex's `FunctionHandle_future`, d938c5b):
- * a string, and an internal reference whose arguments and result its `_fn` carries. Types only.
+ * A {@link FunctionHandle} typed as a {@link FunctionReference_future}: a string, and an internal reference whose
+ * arguments and result its `_fn` carries. Types only.
  */
 export type FunctionHandle_future<
   Type extends FunctionType,
@@ -175,10 +177,10 @@ export async function functionNameOf(ref: unknown, db: Tx | null, engine: Engine
   return db ? resolveHandle(db, name) : engine.query((d) => resolveHandle(d, name));
 }
 
+// Convex's `createFunctionHandle(functionReference)`; in an action, Convex's syscall (STUDY-143).
 /**
- * Convex's `createFunctionHandle(functionReference)`: the handle of a function of this deployment, which
- * can be stored and passed around, and called later by `ctx.runQuery` & co. or the scheduler. In an action, pending
- * as `createFunctionHandle` until it settles (Convex's syscall, STUDY-143).
+ * The handle of a function of this deployment, which can be stored and passed around, and called later by
+ * `ctx.runQuery` & co. or the scheduler. In an action, pending as `createFunctionHandle` until it settles.
  */
 export function createFunctionHandle<Type extends "query" | "mutation" | "action", Args, Return>(
   functionReference: unknown,

@@ -1,0 +1,16 @@
+{
+  "name": "@bunvex/local-backend",
+  "version": "0.1.0-alpha.2",
+  "private": true,
+  "description": "The entry of the bunvex-local-backend executable (STUDY-39, STUDY-40 L1): the server with every persistence driver and the function sandbox. Built by scripts/build-binary.ts; never published. Versioned with the published packages (the fixed group), whose version it reports.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "@bunvex/core": "workspace:*",
+    "@bunvex/persistence": "workspace:*",
+    "@bunvex/sandbox": "workspace:*",
+    "@bunvex/server": "workspace:*",
+    "mysql2": "^3.24.4",
+    "postgres": "^3.4.9"
+  }
+}

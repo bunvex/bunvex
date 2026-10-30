@@ -4,4 +4,4 @@
 [test]
 # The engine's own values frozen in every test (test/preload.ts, TEST-01 §6).
 preload = ["./scripts/test-loopback.ts", "./test/preload.ts"]
-pathIgnorePatterns = ["packages/ui/**", "packages/dashboard/**", "packages/sync-e2e/react/**", "apps/**", "examples/**", "packages/differential/**"]
+pathIgnorePatterns = ["packages/ui/**", "packages/dashboard/**", "packages/sync-e2e/react/**", "apps/**", "examples/**", "packages/differential/**", "components/*/test-react/**"]

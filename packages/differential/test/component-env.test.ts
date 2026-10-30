@@ -27,8 +27,8 @@ function prepare(project: string, dir: "convex" | "bunvex") {
       writeFileSync(
         path,
         readFileSync(path, "utf8")
-          .replaceAll('"convex/server"', '"bunvex/server"')
-          .replaceAll('"convex/values"', '"bunvex/values"')
+          .replaceAll('"convex/server"', '"@bunvex/server"')
+          .replaceAll('"convex/values"', '"@bunvex/values"')
           .replaceAll("./envc/convex.config", "./envc/bunvex.config"),
       );
     }

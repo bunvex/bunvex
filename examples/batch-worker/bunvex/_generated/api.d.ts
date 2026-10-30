@@ -10,16 +10,18 @@
 
 import type * as aggregates from "../aggregates.js";
 import type * as example from "../example.js";
+import type * as rateLimited from "../rateLimited.js";
 
 import type {
   ApiFromModules,
   FilterApi,
   FunctionReference,
-} from "bunvex/server";
+} from "@bunvex/server";
 
 declare const fullApi: ApiFromModules<{
   aggregates: typeof aggregates;
   example: typeof example;
+  rateLimited: typeof rateLimited;
 }>;
 
 /**
@@ -50,4 +52,5 @@ export declare const internal: FilterApi<
 
 export declare const components: {
   batchWorker: import("@bunvex/batch-worker/_generated/component.js").ComponentApi<"batchWorker">;
+  rateLimiter: import("@bunvex/rate-limiter/_generated/component.js").ComponentApi<"rateLimiter">;
 };

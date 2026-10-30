@@ -10,7 +10,7 @@ import { contextGlobals } from "../src/code-version.ts";
 import { Functions } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
 const MODULE = `
 import { action } from ${SERVER};
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -5,7 +5,7 @@
 import { customCtx, customMutation } from "@bunvex/helpers/server/customFunctions";
 import { Triggers } from "@bunvex/helpers/server/triggers";
 import { ShardedCounter } from "@bunvex/sharded-counter";
-import { v } from "bunvex/values";
+import { v } from "@bunvex/values";
 import { components, internal } from "./_generated/api";
 import type { DataModel } from "./_generated/dataModel";
 import { internalAction, internalMutation, mutation, query } from "./_generated/server";

@@ -58,9 +58,7 @@ export class MockTopology {
     this.now = opts.now;
     const p = opts.persistence.toLowerCase();
     this.driver =
-      count > 1
-        ? "postgres"
-        : ((["memory", "sqlite", "postgres", "mysql", "mongodb"] as const).find((d) => d === p) ?? "memory");
+      count > 1 ? "postgres" : ((["memory", "sqlite", "postgres", "mysql"] as const).find((d) => d === p) ?? "memory");
     this.nodes = NAMES.slice(0, count).map((id, i) => this.makeNode(id, i === 0, opts.version, i));
     this.leaseExpiresAt = this.now + LEASE_TTL_MS;
     // a little past: the followers joined after the leader took the lease

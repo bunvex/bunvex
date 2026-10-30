@@ -2,7 +2,8 @@
 // an index name or a function name must be, and the backend's words when it is not (STUDY-161 §1). The engine,
 // the server's path parser and its validator parser share them.
 
-/** Convex's `MAX_IDENTIFIER_LEN`, in UTF-8 bytes. */
+// Convex's `MAX_IDENTIFIER_LEN`.
+/** The longest identifier (a table, index or field name), in UTF-8 bytes. */
 export const MAX_IDENTIFIER_LEN = 64;
 
 const NAMED_ESCAPES: Record<string, string> = {
@@ -27,9 +28,10 @@ export function rustDebugChar(c: string): string {
   return `'${c}'`;
 }
 
+// Convex's `check_valid_identifier`, its messages in its order.
 /**
- * Convex's `check_valid_identifier`: why `s` is not an identifier (its message, in its order: the first character,
- * each other character, the length in bytes, all underscores), or null.
+ * Why `s` is not an identifier (a table, index or field name), or null. The first problem found, in this order: the
+ * first character, each other character, the length in bytes, all underscores.
  */
 export function identifierError(s: string): string | null {
   const chars = [...s];

@@ -1,6 +1,6 @@
-// Two panels, one per named worker (Convex's example's first two): a work queue that sums events, and a scoreboard
-// whose totals one loop keeps. Each shows its worker's status, live.
-import { useMutation, useQuery } from "bunvex/react";
+// Three panels, one per named worker: a work queue that sums events, a scoreboard whose totals one loop keeps, and
+// LLM requests sent in batches as a token budget allows. Each shows its worker's status, live.
+import { useMutation, useQuery } from "@bunvex/react";
 import { type ReactNode, useState } from "react";
 import { api } from "../bunvex/_generated/api.js";
 
@@ -16,6 +16,7 @@ export function App() {
       </p>
       <EventsPanel />
       <ScoresPanel />
+      <LlmPanel />
     </main>
   );
 }
@@ -92,6 +93,64 @@ function ScoresPanel() {
         </div>
       ))}
       <p>{data?.pending ?? 0} scores waiting in the queue</p>
+    </section>
+  );
+}
+
+const PROMPTS = [
+  "What does a batch worker do?",
+  "Why does one writer avoid conflicts?",
+  "How does a token bucket refill?",
+  "What is a debounce?",
+  "When does a loop go idle?",
+];
+
+function LlmPanel() {
+  const requests = useQuery(api.rateLimited.listRequests, {});
+  const stats = useQuery(api.rateLimited.stats, {});
+  const status = useQuery(api.rateLimited.workerStatus, {}) as WorkerStatus;
+  const submitRequest = useMutation(api.rateLimited.submitRequest);
+  const [prompt, setPrompt] = useState("");
+  // About 150 tokens each, against a budget of 300 per 5 s: two requests already fill it.
+  const submit = (text: string) => {
+    if (text.trim()) void submitRequest({ prompt: text.trim(), inputTokens: 120 + text.trim().length });
+  };
+  return (
+    <section>
+      <h2>
+        Rate-limited LLM batches <Status status={status} />
+      </h2>
+      <p>Requests go out five at a time, each batch when the token budget (300 per 5 s) allows it.</p>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit(prompt);
+          setPrompt("");
+        }}
+      >
+        <input
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder="Ask something"
+          aria-label="Prompt"
+        />
+        <button type="submit">Submit</button>
+        <button type="button" onClick={() => PROMPTS.concat(PROMPTS, PROMPTS).forEach(submit)}>
+          +15
+        </button>
+      </form>
+      <Metric label="queued" value={stats?.pending ?? 0} />
+      <Metric label="in flight" value={stats?.started ?? 0} />
+      <Metric label="done" value={stats?.finished ?? 0} />
+      <ul className="requests">
+        {(requests ?? []).map((r, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: the list is display only, newest first
+          <li key={i}>
+            <span className={`state ${r.state}`}>{r.state}</span> {r.prompt}
+            {r.response && <em> {r.response}</em>}
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

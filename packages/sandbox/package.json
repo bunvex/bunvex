@@ -1,7 +1,6 @@
 {
   "name": "@bunvex/sandbox",
-  "version": "0.1.0-alpha.1",
-  "private": true,
+  "version": "0.1.0-alpha.2",
   "description": "The function sandbox's child runtime and its wire protocol: app code in a separate process (STUDY-168).",
   "license": "Apache-2.0",
   "type": "module",
@@ -28,5 +27,8 @@
   ],
   "engines": {
     "bun": ">=1.4.4"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

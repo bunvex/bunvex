@@ -26,8 +26,8 @@ import {
   writeEnvLocal,
 } from "../src/local-deployment.ts";
 
-const ENTRY = resolve(import.meta.dir, "../../bunvex/bin/local-backend.ts");
-const SERVER = ["bunvex", "server"].join("/");
+const ENTRY = resolve(import.meta.dir, "../../../apps/local-backend/local-backend.ts");
+const SERVER = ["@bunvex", "server"].join("/");
 const dirs: string[] = [];
 const stops: (() => unknown)[] = [];
 afterEach(async () => {

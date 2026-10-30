@@ -140,7 +140,7 @@ import {
   isSystemIdentity,
   type SourcedCaller,
 } from "./functions.ts";
-import { healthRoute, maxEchoBytesFromEnv, SERVER_VERSION, versionRoute } from "./health.ts";
+import { healthRoute, jwksRoute, maxEchoBytesFromEnv, SERVER_VERSION, versionRoute } from "./health.ts";
 import { type AppRouting, type HttpNode, httpActionServer, NO_ROUTING } from "./http-actions.ts";
 import { type HttpProxy, httpProxyUrl, proxiedFetch } from "./http-proxy.ts";
 import type { ImportFormat } from "./import-parse.ts";
@@ -1095,6 +1095,8 @@ export function createServer(opts: ServerOptions) {
   /** Bun's default `maxRequestBodySize`, the cap every route but uploads keeps. */
   const cap = opts.maxRequestBodySize ?? 128 * 1024 * 1024;
   const maxEchoBytes = opts.maxEchoBytes ?? maxEchoBytesFromEnv();
+  // Convex's `DEPLOYMENT_JWKS_MAX_AGE_SECONDS`: how long a verifier may cache the JWKS (STUDY-192).
+  const jwksMaxAgeSeconds = knob("DEPLOYMENT_JWKS_MAX_AGE_SECONDS", 300);
   const payloadTooLarge = () => new Response("Payload Too Large", { status: 413 });
   /** A declared body over the cap: 413, as Bun answers it. */
   const bodyCap = (req: Request) => {
@@ -1722,6 +1724,8 @@ export function createServer(opts: ServerOptions) {
       if (url.pathname === "/echo") srv.timeout(req, idleTimeoutSeconds);
       const health = healthRoute(req, url.pathname, engine.instanceName, maxEchoBytes);
       if (health) return health;
+      const jwks = jwksRoute(req, url.pathname, () => engine.deploymentJwtKeys.jwks(), jwksMaxAgeSeconds);
+      if (jwks) return jwks;
       // Prometheus metrics (STUDY-114): a meta route on both ports, as Convex's, open to anyone.
       if (url.pathname === "/metrics") return metricsRoute(req);
       // The OpenAPI documents (STUDY-115), with no auth; `/api/v1/` answers only the documented routes.

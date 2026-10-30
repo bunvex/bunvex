@@ -9,6 +9,9 @@
     ".": "./index.ts"
   },
   "dependencies": {
-    "bunvex": "workspace:*"
+    "@bunvex/client": "workspace:*"
+  },
+  "devDependencies": {
+    "@bunvex/cli": "workspace:*"
   }
 }

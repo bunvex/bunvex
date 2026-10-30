@@ -9,7 +9,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { localBackendMain } from "bunvex/server";
+import { localBackendMain } from "@bunvex/server";
 import { ORACLE_BIN } from "../harness/backends.ts";
 
 const ready = existsSync(ORACLE_BIN);
@@ -37,7 +37,7 @@ const inBunvexNames = (text: string) =>
     .replaceAll("CONVEX_HTTP_PROXY", "HTTP_PROXY")
     .replaceAll(
       "[possible values: sqlite, mysql-v5, mysql-v5-multitenant, mysql-v6-multitenant, postgres-v5]",
-      "[possible values: sqlite, postgres, mysql, mongodb]",
+      "[possible values: sqlite, postgres, mysql]",
     );
 /** bunvex's argv in Convex's names. */
 const inConvexNames = (args: string[]) =>

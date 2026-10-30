@@ -17,22 +17,25 @@ import { withoutLoneSurrogates } from "@bunvex/values";
 import inspect from "object-inspect";
 import { mapStack } from "./stack-map.ts";
 
+// Convex's knobs of crates/common/src/knobs.rs (`04e9983` + `0e4f90d`); Convex sends its node executor
+// `MAX_LOG_LINES_NODE_ACTIONS` as `maxLogLines`.
 /**
- * At most this many lines per execution, the last one the overflow notice, by kind (Convex's knobs of
- * crates/common/src/knobs.rs, `04e9983` + `0e4f90d`): a query's or mutation's (`MAX_LOG_LINES_DATABASE_UDFS`, 256),
- * a V8 action's or HTTP action's (`MAX_LOG_LINES_V8_ACTIONS`, 1024) and a "use node" action's
- * (`MAX_LOG_LINES_NODE_ACTIONS`, 1024, which Convex sends its node executor as `maxLogLines`). Each at least 1.
+ * At most this many lines per execution, the last one the overflow notice, by kind: a query's or mutation's
+ * (`MAX_LOG_LINES_DATABASE_UDFS`, 256), a V8 action's or HTTP action's (`MAX_LOG_LINES_V8_ACTIONS`, 1024) and a
+ * "use node" action's (`MAX_LOG_LINES_NODE_ACTIONS`, 1024). Each at least 1.
  */
 export const MAX_LOG_LINES_DATABASE_UDFS = Math.max(1, knob("MAX_LOG_LINES_DATABASE_UDFS", 256));
 export const MAX_LOG_LINES_V8_ACTIONS = Math.max(1, knob("MAX_LOG_LINES_V8_ACTIONS", 1024));
 export const MAX_LOG_LINES_NODE_ACTIONS = Math.max(1, knob("MAX_LOG_LINES_NODE_ACTIONS", 1024));
-/** A line's messages are cut at this many UTF-8 bytes (Convex's MAX_LOG_LINE_LENGTH: 32 KiB). */
+// Convex's MAX_LOG_LINE_LENGTH.
+/** A line's messages are cut at this many UTF-8 bytes (32 KiB). */
 export const MAX_LOG_LINE_LENGTH = 32768;
 const TRUNCATED_LINE_SUFFIX = " (truncated due to length)";
 
 export type LogLevel = "DEBUG" | "ERROR" | "WARN" | "INFO" | "LOG";
 
-/** One line (Convex's `LogLineStructured`): `timestamp` in wall-clock ms, `isTruncated` when it was cut. */
+// Convex's `LogLineStructured`.
+/** One line: `timestamp` in wall-clock ms, `isTruncated` when it was cut. */
 export type LogLine = {
   level: LogLevel;
   messages: string[];
@@ -139,9 +142,10 @@ export async function withOwner<T>(
   }
 }
 
+// STUDY-171 §11.
 /**
  * Run `fn` with its console lines handed to `onLine` as they are logged, each made as any function's (rendered, cut,
- * stamped), and kept nowhere else: the function sandbox's child (STUDY-171 §11), whose host logs them.
+ * stamped), and kept nowhere else: the function sandbox's child, whose host logs them.
  */
 export function captureLines<T>(onLine: (line: LogLine) => void, fn: () => T): T {
   installLogCapture();
@@ -350,7 +354,8 @@ function cutToBytes(s: string, bytes: number): string {
   return s.slice(0, end);
 }
 
-/** A line of `messages`, cut at MAX_LOG_LINE_LENGTH bytes (Convex's `LogLineStructured::new_developer_log_line`). */
+// Convex's `LogLineStructured::new_developer_log_line`.
+/** A line of `messages`, cut at MAX_LOG_LINE_LENGTH bytes. */
 export function makeLogLine(level: LogLevel, raw: string[], timestamp = wallClock()): LogLine {
   // Convex reads each message into Rust with a lossy conversion: a lone surrogate becomes U+FFFD (STUDY-135).
   const messages = raw.map(withoutLoneSurrogates);

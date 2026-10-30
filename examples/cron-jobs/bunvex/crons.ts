@@ -1,4 +1,4 @@
-import { cronJobs } from "bunvex/server";
+import { cronJobs } from "@bunvex/server";
 import { internal } from "./_generated/api";
 
 const crons = cronJobs();

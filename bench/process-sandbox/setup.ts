@@ -4,7 +4,7 @@
 //   "bwrap":   the same child inside bubblewrap + seccomp + a cgroup (Linux).
 import { Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
-import { Functions } from "bunvex/server";
+import { Functions } from "@bunvex/server";
 import { CodeVersion } from "../../packages/server/src/code-version.ts";
 import { benchSchema } from "../functions.ts";
 import { SandboxedDeployment, type SandboxOptions } from "./host.ts";
@@ -13,7 +13,12 @@ export type Mode = "vm" | "process" | "bwrap" | "seatbelt" | "confine";
 export const APP = `${import.meta.dir}/app/sb.ts`;
 
 export async function bundle(path = APP): Promise<string> {
-  const out = await Bun.build({ entrypoints: [path], external: ["bunvex/*"], format: "esm", target: "browser" });
+  const out = await Bun.build({
+    entrypoints: [path],
+    external: ["@bunvex/server", "@bunvex/values"],
+    format: "esm",
+    target: "browser",
+  });
   if (!out.success) throw new Error(out.logs.join("\n"));
   return out.outputs[0]!.text();
 }

@@ -138,20 +138,20 @@ export async function* streamQuery<DataModel extends GenericDataModel, T extends
   }
 }
 
+// Stitching pages: https://stack.convex.dev/pagination#stitching-the-pages-together.
 /**
  * `ctx.db` for one-off pages that need not be reactive: `paginator(db, schema).query(t).withIndex(…).paginate(opts)`
  * reads as `db.query(t).withIndex(…).paginate(opts)` does, except that:
  *
- * - the end of a page is not recorded for a rerun: pass the current page's `continueCursor` as `endCursor` to keep
- *   it (https://stack.convex.dev/pagination#stitching-the-pages-together);
+ * - the end of a page is not recorded for a rerun: pass the current page's `continueCursor` as `endCursor` to keep it;
  * - it can run several times in a function, and in a component;
  * - its cursors are index keys, not encrypted;
  * - `.filter()` is not supported: filter the `page`, or use `filterWith`;
  * - system tables (`_storage`, `_scheduled_functions`) are not supported;
  * - the schema is required.
  *
- * `opts.cursor` is the previous page's `continueCursor`; `opts.endCursor`, if given, the current page's, and the
- * page ends there instead of at `opts.numItems`.
+ * `opts.cursor` is the previous page's `continueCursor`; `opts.endCursor`, if given, the current page's, and the page
+ * ends there instead of at `opts.numItems`.
  */
 export function paginator<Schema extends SchemaDefinition<any, boolean>>(
   db: GenericDatabaseReader<DataModelFromSchemaDefinition<Schema>>,

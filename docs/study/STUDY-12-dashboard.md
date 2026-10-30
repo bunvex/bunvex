@@ -365,7 +365,7 @@ The contract already has `listFunctions` (path, kind, visibility), `listLogs` (n
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| L1 | Functions has no Statistics tab | the server has no app-metrics API yet (parity §20); like D12 | **closed on the mock** (30 Sep 2026): the Statistics tab is built from the contract's metrics (§12, UI-01 §18.2) |
+| L1 | Functions has no Statistics tab | the server has no app-metrics API yet (parity §20); like D12 | **closed** (30 Sep 2026 on the mock; on the server's app-metrics since STUDY-149): the Statistics tab is built from the contract's metrics (§12, UI-01 §18.2), the same charts as Convex's `PerformanceGraphs.tsx` (DV-25 resolved, 27 Oct 2026) |
 | L2 | Log filters on the client over the loaded list | — (this is Convex's way) | **decided** (29 Sep 2026): match Convex |
 | L3 | An optional `runFunction` in the contract and a Run panel | — (Convex has the runner) | **decided** (29 Sep 2026): build it |
 | L4 | Older logs load at the end of the list (`listLogs` pages); Convex shows only what its stream's ring buffer holds | the contract pages history; a server with a longer history can show it | **decided** (30 Sep 2026): keep the paging |
@@ -581,7 +581,7 @@ functions in `npm-packages/system-udfs/convex/_system/frontend/`, the system tab
 | # | bunvex | why | status |
 |---|---|---|---|
 | S1 | Scheduled functions and cron runs refresh on a `watch…` signal (refetch), not a reactive query | the same approach as the documents (D3) | follows D3 (decided) |
-| S2 | No component picker | bunvex has no components yet | follow-up |
+| S2 | No component picker | bunvex has no components yet | built for the Database screen (STUDY-152 §4, 27 Oct 2026); the other screens follow |
 | F1 | A preview for **text** files too (Convex previews images only) | proposed, **not built**: it would be a divergence | **decided** (30 Sep 2026): images only, as Convex |
 | H1 | The author of an event is the credential ("admin key"), not a team member | a self-hosted deployment has no team members; the audit entry's `member_id` is null there | Decided (owner, 2026-10-01): keep bunvex's (DV-72) |
 | H2 | Events are recorded by the source (the mock records the dashboard's writes, cancellations, file and environment-variable changes); pushes and index builds appear once the server records them | the contract only reads the log | follow-up (server) |

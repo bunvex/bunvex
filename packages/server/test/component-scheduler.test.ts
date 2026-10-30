@@ -34,27 +34,27 @@ const mod = (path: string, lines: string[]): ModuleSource => ({
 const dep = (path: string) => `./_componentDeps/${Buffer.from(path).toString("base64url")}`;
 
 const APP_DEFINITION = mod("bunvex.config.js", [
-  'import { defineApp } from "bunvex/server";',
+  'import { defineApp } from "@bunvex/server";',
   `import counter from "${dep("counter")}";`,
   "const app = defineApp();",
   "app.use(counter);",
   "export default app;",
 ]);
 const NO_COMPONENTS = mod("bunvex.config.js", [
-  'import { defineApp } from "bunvex/server";',
+  'import { defineApp } from "@bunvex/server";',
   "export default defineApp();",
 ]);
 const SCHEMA = mod("schema.js", [
-  'import { defineSchema, defineTable } from "bunvex/server";',
-  'import { v } from "bunvex/values";',
+  'import { defineSchema, defineTable } from "@bunvex/server";',
+  'import { v } from "@bunvex/values";',
   "export default defineSchema({ messages: defineTable({ body: v.string() }) });",
 ]);
 /** A job's document in the caller's namespace, or null when the id names none there. */
 const JOB =
   "async (ctx, { id }) => { const n = ctx.db.system.normalizeId('_scheduled_functions', id); return n && ctx.db.system.get(n); }";
 const APP = mod("app.js", [
-  'import { action, componentsGeneric, createFunctionHandle, mutation, query } from "bunvex/server";',
-  'import { v } from "bunvex/values";',
+  'import { action, componentsGeneric, createFunctionHandle, mutation, query } from "@bunvex/server";',
+  'import { v } from "@bunvex/values";',
   "const c = componentsGeneric().counter.lib;",
   "export const addMessage = mutation({ args: { body: v.string() }, handler: async (ctx, a) => { await ctx.db.insert('messages', a); } });",
   "export const scheduleInParent = mutation({ args: { body: v.string() }, handler: async (ctx, a) => ctx.scheduler.runAfter(0, 'app:addMessage', a) });",
@@ -74,15 +74,15 @@ const APP = mod("app.js", [
 const COUNTER = {
   definitionPath: "counter",
   definition: mod("bunvex.config.js", [
-    'import { defineComponent } from "bunvex/server";',
+    'import { defineComponent } from "@bunvex/server";',
     'export default defineComponent("counter");',
   ]),
   dependencies: [] as string[],
   schema: SCHEMA,
   functions: [
     mod("lib.js", [
-      'import { action, internalQuery, mutation, query } from "bunvex/server";',
-      'import { v } from "bunvex/values";',
+      'import { action, internalQuery, mutation, query } from "@bunvex/server";',
+      'import { v } from "@bunvex/values";',
       "export const add = mutation({ args: { body: v.string() }, handler: async (ctx, a) => { await ctx.db.insert('messages', a); } });",
       "export const count = query({ args: {}, handler: async (ctx) => (await ctx.db.query('messages').collect()).length });",
       "export const secret = internalQuery({ args: {}, handler: async () => 'internal' });",

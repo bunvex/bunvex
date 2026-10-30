@@ -1,4 +1,4 @@
-import { fetchMutation, fetchQuery } from "bunvex/nextjs";
+import { fetchMutation, fetchQuery } from "@bunvex/nextjs";
 import { revalidatePath } from "next/cache";
 import { api } from "../../bunvex/_generated/api";
 

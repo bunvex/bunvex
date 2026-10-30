@@ -1,5 +1,12 @@
 # @bunvex/react-clerk
 
+## 0.1.0-alpha.2
+
+### Patch Changes
+
+- Updated dependencies [f710604]
+  - @bunvex/react@0.1.0-alpha.2
+
 ## 0.1.0-alpha.1
 
 ### Patch Changes

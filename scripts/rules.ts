@@ -176,3 +176,17 @@ export function metadataNaming(pkg: Record<string, unknown>): string[] {
   if (pkg.private === true) return [];
   return METADATA_FIELDS.filter((f) => pkg[f] !== undefined && /convex/i.test(JSON.stringify(pkg[f])));
 }
+
+/**
+ * Rule 7: the lines of `code` (comments blanked) that declare a class field with `declare` (`declare readonly x: T`).
+ * Babel's TypeScript transform refuses them unless `allowDeclareFields` is set, and Expo's Metro (React Native) reads
+ * the workspace's sources through Babel; a type-only field is declared by merging an interface instead.
+ */
+export function* declareFields(code: string): Generator<{ line: number; text: string }> {
+  const lines = code.split("\n");
+  for (const [n, text] of lines.entries())
+    if (
+      /^\s*declare\s+(?:(?:private|protected|public|readonly|static|override)\s+)*[A-Za-z_$][\w$]*[?!]?\s*:/.test(text)
+    )
+      yield { line: n + 1, text: text.trim() };
+}

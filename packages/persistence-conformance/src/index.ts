@@ -1368,9 +1368,9 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
       await e.close().catch(() => {});
 
       // A failed attempt stays failed (C9): once its flush timed out, an attempt sends nothing more when the
-      // store answers again, while the committer's retry waits. Otherwise it races the retry for the group (it
-      // did on MongoDB: withTransaction ran the timed-out callback again and committed the group under the
-      // retry, which then stopped as "unsure" — a flaky K20). The retries are held until 1 s after the thaw;
+      // store answers again, while the committer's retry waits. Otherwise it races the retry for the group (a
+      // driver whose transaction helper reruns a timed-out callback commits the group under the retry, which then
+      // stops as "unsure" — a flaky K20). The retries are held until 1 s after the thaw;
       // in that second, the proxy counts the requests that carry the group's marker or commit.
       let failedOnce = false;
       let releaseRetries = () => {};
@@ -1427,8 +1427,8 @@ export async function runConformance(opts: ConformanceOptions): Promise<{ failur
   //     acknowledged once, its rows stored once.
   //   - L4: a retry of a group whose first attempt did commit finds it through the lease record (a newest-wins
   //     lease: through the group's rows at its top ts, the lease still ours) and
-  //     acknowledges it, exactly once (DV-124); the store holds the group exactly once (MongoDB has no unique
-  //     key on its rows: the lease record is what tells).
+  //     acknowledges it, exactly once (DV-124); the store holds the group exactly once (a store with no unique
+  //     key on its rows learns it from the lease record).
   /** A statement that carries `text`: as text, or as the hex of its bytes (a driver that sends documents and
    *  keys as bytes in a SQL text, e.g. MySQL's v1 documents and its index keys, sends them as `X'…'`). */
   const marker = (text: string) => new RegExp(`${text}|${Buffer.from(text).toString("hex")}`, "i");

@@ -16,7 +16,7 @@ const ONLY = process.argv[4];
 provideProcessExecutor(createProcessExecutor);
 
 // The pushed module's import, built so the dependency rules do not read it as this package's own.
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
 const SOURCE = `
 import { query, mutation } from ${SERVER};
 export const empty = query(async (ctx, { i }) => i);

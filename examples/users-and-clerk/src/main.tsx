@@ -1,6 +1,6 @@
+import { BunvexReactClient } from "@bunvex/react";
+import { BunvexProviderWithClerk } from "@bunvex/react-clerk";
 import { ClerkProvider, useAuth } from "@clerk/clerk-react";
-import { BunvexReactClient } from "bunvex/react";
-import { BunvexProviderWithClerk } from "bunvex/react-clerk";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";

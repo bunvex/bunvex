@@ -257,7 +257,8 @@ The raw `1.0/getFunctionMetadata` syscall that migrations calls is not a gap. bu
   See DV-538.
 - **Deprecated surface.** These exist only for jobs scheduled by older versions of the packages:
   - workpool's `loop:main`, `loop:updateRunStatus` and `worker:runActionWrapper`;
-  - the aliases `resultValidator`, `vWorkIdValidator` and the like;
+  - the aliases marked deprecated, `resultValidator`, `workIdValidator` and the like (not `vWorkIdValidator` and
+    `vResultValidator`, which workpool calls not deprecated yet: STUDY-199 W-5);
   - batch-worker's `vBatchResult`.
 
   bunvex starts at the current version, so they are not built: the rule of CLAUDE.md (no paths for older stores
@@ -298,7 +299,9 @@ from scratch.
    2. batch-worker: the child of the next three. **Built (2026-10-27, [STUDY-196](STUDY-196-batch-worker.md)):**
       `@bunvex/batch-worker` 0.1.0 in `components/batch-worker/`, matching 0.3.6; upstream's tests ported, and a
       differential test against `@convex-dev/batch-worker` 0.3.6;
-   3. rate-limiter: a child, env, `commitTs`, `useStaleSnapshot`, the React hook;
+   3. rate-limiter: a child, env, `commitTs`, `useStaleSnapshot`, the React hook. **Built (2026-10-27,
+      [STUDY-197](STUDY-197-rate-limiter.md)):** `@bunvex/rate-limiter` 0.1.0 in `components/rate-limiter/`, matching
+      0.4.2; upstream's tests ported, and a differential test against `@convex-dev/rate-limiter` 0.4.2;
    4. workpool: the scheduler, handles, retries, recovery;
    5. aggregate: the B-tree, the comparator, the queued mode;
    6. migrations: handles to the app's functions, the CLI flow.

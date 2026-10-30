@@ -13,8 +13,8 @@ import { createProcessExecutor } from "../src/executor.ts";
 
 provideProcessExecutor(createProcessExecutor);
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
-const VALUES = JSON.stringify(["bunvex", "values"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
+const VALUES = JSON.stringify(["@bunvex", "values"].join("/"));
 
 const DYNAMIC = `import { action, mutation, query } from ${SERVER};
 import { v } from ${VALUES};

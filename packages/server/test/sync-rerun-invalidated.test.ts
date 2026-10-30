@@ -127,6 +127,8 @@ test("a commit reruns only the queries it wrote into, and no query's result is c
   // Only group 3 ran, and the other 19 were known valid without a look at the log.
   expect(runs).toEqual(["group 3"]);
   expect(sync.stats.executions - executions).toBe(1);
+  // Not even the rerun's own: the hub dropped its stale result from the query cache when it matched the commit
+  // (STUDY-08 §7), so the rerun misses at once.
   expect(scans.n).toBe(0);
   // The transition carries group 3 alone.
   const last = c.transitions().at(-1)!;

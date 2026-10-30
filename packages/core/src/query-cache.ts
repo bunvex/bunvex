@@ -31,6 +31,8 @@ export type CachedResult = {
   unixMs: number;
   /** Whether the run read the caller's identity: then it is stored under that caller's key. */
   identityObserved: boolean;
+  /** The journal the run ended with (reactive pagination's end cursor), for a subscription served from the cache. */
+  endCursor?: string | null;
 };
 
 export type ReadyEntry = { kind: "ready"; result: CachedResult; size: number };

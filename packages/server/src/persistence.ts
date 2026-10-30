@@ -1,15 +1,15 @@
 // Choosing the persistence driver by configuration (ARCH-01 D3/D-D):
 //   PERSISTENCE=memory|sqlite            ship with @bunvex/core
-//   PERSISTENCE=postgres|mysql|mongodb   from @bunvex/persistence (plus the driver's native package)
+//   PERSISTENCE=postgres|mysql           from @bunvex/persistence (plus the driver's native package)
 //   PERSISTENCE_URL=…                    for the external ones
 //   DATA=./.data  DURABLE=1
 //   POSTGRES_MAX_CONNECTIONS=128  MYSQL_MAX_CONNECTIONS=128   each pool's size (Convex's names and defaults;
-//                                        POOL, bunvex's older name, applies when they are not set; MongoDB: POOL=16)
+//                                        POOL, bunvex's older name, applies when they are not set)
 //   POSTGRES_INACTIVE_CONNECTION_LIFETIME_SECS=90  MYSQL_INACTIVE_CONNECTION_LIFETIME_SECS=90
 //                                        an idle connection is closed after it (STUDY-147 §3.7)
-//   POSTGRES_TIMEOUT_SECONDS=30  MYSQL_TIMEOUT_SECONDS=19  MONGODB_TIMEOUT_SECONDS=30
-//                                        the client-side timeout of one database call (STUDY-25 L3); the
-//                                        first two are Convex's names and defaults
+//   POSTGRES_TIMEOUT_SECONDS=30  MYSQL_TIMEOUT_SECONDS=19
+//                                        the client-side timeout of one database call (STUDY-25 L3), Convex's
+//                                        names and defaults
 //
 // Convex's names are accepted too (DV-88; self-hosted/docker-build/run_backend.sh:17-32): when PERSISTENCE
 // is not set, POSTGRES_URL selects Postgres, else MYSQL_URL selects MySQL, else DATABASE_URL (deprecated
@@ -20,7 +20,7 @@
 // TLS (STUDY-25 L8, DV-109), as Convex (crates/local_backend/src/config.rs:114-118, run_backend.sh:68):
 // Postgres and MySQL connections are encrypted and the certificate verified, unless DO_NOT_REQUIRE_SSL is
 // set to any non-empty value (`0` and `false` too, as the shell's `${VAR:+…}` reads it). PG_CA_FILE and
-// MYSQL_CA_FILE add a trusted CA. MongoDB has no Convex counterpart: its URL decides (`tls=true`).
+// MYSQL_CA_FILE add a trusted CA.
 import { mkdirSync } from "node:fs";
 import { bundledModule, DEFAULT_INSTANCE_NAME, knob, type Persistence, secondsKnob } from "@bunvex/core";
 
@@ -48,7 +48,6 @@ export type PersistenceConfig = {
 const TIMEOUT_ENV: Record<string, [string, number]> = {
   postgres: ["POSTGRES_TIMEOUT_SECONDS", 30],
   mysql: ["MYSQL_TIMEOUT_SECONDS", 19],
-  mongodb: ["MONGODB_TIMEOUT_SECONDS", 30],
 };
 
 /** Each pool's size and idle lifetime (seconds), Convex's knobs and defaults (STUDY-147 §3.7; DV-112 reversed). */
@@ -112,7 +111,7 @@ export function persistenceConfigFromEnv(
   };
 }
 
-/** A pool's size: Convex's knob when set, else `POOL` (bunvex's), else Convex's default (MongoDB: 16). */
+/** A pool's size: Convex's knob when set, else `POOL` (bunvex's), else Convex's default. */
 function poolSize(kind: string, env: Env): number {
   const knobOf = POOL_ENV[kind]?.size;
   if (knobOf && env[knobOf[0]] !== undefined) return knob(knobOf[0], knobOf[1], "positive", env);
@@ -175,12 +174,8 @@ export async function openPersistence(c: PersistenceConfig): Promise<Persistence
       const { MysqlPersistence } = await external<Driver<"MysqlPersistence">>("mysql");
       return MysqlPersistence.open(needDatabase(), c.pool, { ...tls, timeoutMs: c.timeoutMs, idleMs: c.idleMs });
     }
-    case "mongodb": {
-      const { MongoPersistence } = await external<Driver<"MongoPersistence">>("mongodb");
-      return MongoPersistence.open(needUrl(), { pool: c.pool, timeoutMs: c.timeoutMs });
-    }
     default:
-      throw new Error(`unknown PERSISTENCE=${c.kind} (memory, sqlite, postgres, mysql, mongodb)`);
+      throw new Error(`unknown PERSISTENCE=${c.kind} (memory, sqlite, postgres, mysql)`);
   }
 }
 

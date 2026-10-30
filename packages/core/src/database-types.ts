@@ -32,16 +32,18 @@ type FieldOfEachMember<Document, Field, Missing> = Document extends unknown
     : Missing
   : never;
 
+// Convex's `FieldTypeFromFieldPath`.
 /**
- * The type of the value at a dotted field path of a document, as Convex's `FieldTypeFromFieldPath`: over each
- * member of a union of documents (`undefined` where a part may be missing), and any value when it is not one.
+ * The type of the value at a dotted field path of a document: over each member of a union of documents
+ * (`undefined` where a part may be missing), and any value when it is not one.
  */
 export type FieldTypeFromFieldPath<Document extends GenericDocument, FieldPath extends string> =
   FieldTypeFromFieldPathInner<Document, FieldPath> extends Value | undefined
     ? FieldTypeFromFieldPathInner<Document, FieldPath>
     : Value | undefined;
 
-/** `FieldTypeFromFieldPath` before it is clamped to a value (Convex's `FieldTypeFromFieldPathInner`). */
+// Convex's `FieldTypeFromFieldPathInner`.
+/** `FieldTypeFromFieldPath` before it is clamped to a value. */
 export type FieldTypeFromFieldPathInner<
   Document extends GenericDocument,
   FieldPath extends string,
@@ -53,10 +55,12 @@ export type FieldTypeFromFieldPathInner<
     : undefined
   : FieldOfEachMember<Document, FieldPath, undefined>;
 
-/** A filter's value or expression of a type (Convex's `ExpressionOrValue`, exported under that name). */
+// Convex's `ExpressionOrValue`, exported under that name.
+/** A filter's value or expression of a type. */
 export type ExpressionOrValueOf<T extends Value | undefined> = Expression<T> | T;
 
-/** Convex's `FilterBuilder`: field references and operators, typed by the table. */
+// Convex's `FilterBuilder`.
+/** What a `.filter` callback receives: field references and operators, typed by the table. */
 export interface FilterBuilder<TableInfo extends GenericTableInfo> {
   field<FieldPath extends FieldPaths<TableInfo>>(
     fieldPath: FieldPath,
@@ -93,8 +97,9 @@ export interface LowerBoundIndexRangeBuilder<Document extends GenericDocument, F
   lt(field: Field, value: FieldTypeFromFieldPath<Document, Field>): UpperBoundIndexRangeBuilder;
   lte(field: Field, value: FieldTypeFromFieldPath<Document, Field>): UpperBoundIndexRangeBuilder;
 }
+// Convex's `IndexRangeBuilder`.
 /**
- * Convex's `IndexRangeBuilder`: equalities on the index's fields in order, then a range on the next one.
+ * What a `withIndex` callback receives: equalities on the index's fields in order, then a range on the next one.
  * `FieldNum` is how many equalities came before.
  */
 export interface IndexRangeBuilder<
@@ -133,7 +138,8 @@ export type PaginationResultOf<T> = {
   pageStatus?: "SplitRecommended" | "SplitRequired" | null;
 };
 
-/** Convex's `OrderedQuery`: filters and results. */
+// Convex's `OrderedQuery`.
+/** A query whose order is set: filters and results. */
 export interface OrderedQuery<TableInfo extends GenericTableInfo> extends AsyncIterable<DocumentByInfo<TableInfo>> {
   filter(predicate: (q: FilterBuilder<TableInfo>) => ExpressionOrValueOf<boolean>): this;
   paginate(paginationOpts: PaginationOptions): Promise<PaginationResultOf<DocumentByInfo<TableInfo>>>;
@@ -142,15 +148,18 @@ export interface OrderedQuery<TableInfo extends GenericTableInfo> extends AsyncI
   first(): Promise<DocumentByInfo<TableInfo> | null>;
   unique(): Promise<DocumentByInfo<TableInfo> | null>;
 }
-/** Convex's `Query`: an order, then an ordered query. */
+// Convex's `Query`.
+/** A query: an order, then an ordered query. */
 export interface Query<TableInfo extends GenericTableInfo> extends OrderedQuery<TableInfo> {
   order(order: "asc" | "desc"): OrderedQuery<TableInfo>;
 }
-/** Convex's `SearchFilterBuilder`: the search first. */
+// Convex's `SearchFilterBuilder`.
+/** What a `withSearchIndex` callback receives: the search first. */
 export interface SearchFilterBuilder<Document extends GenericDocument, Config extends GenericSearchIndexConfig> {
   search(fieldName: Config["searchField"], query: string): SearchFilterFinalizer<Document, Config>;
 }
-/** Convex's `SearchFilterFinalizer`: equality filters on the index's filter fields. */
+// Convex's `SearchFilterFinalizer`.
+/** A search filter after its search: equality filters on the index's filter fields. */
 export interface SearchFilterFinalizer<Document extends GenericDocument, Config extends GenericSearchIndexConfig>
   extends SearchFilter {
   eq<FieldName extends Config["filterFields"]>(
@@ -159,14 +168,16 @@ export interface SearchFilterFinalizer<Document extends GenericDocument, Config 
   ): SearchFilterFinalizer<Document, Config>;
 }
 
-/** Convex's `QueryInitializer`: the whole table, or an index range. */
+// Convex's `QueryInitializer`.
+/** The start of a query of a table: the whole table, an index range, or a full-text search. */
 export interface QueryInitializer<TableInfo extends GenericTableInfo> extends Query<TableInfo> {
   fullTableScan(): Query<TableInfo>;
   withIndex<IndexName extends IndexNames<TableInfo>>(
     indexName: IndexName,
     indexRange?: (q: IndexRangeBuilder<DocumentByInfo<TableInfo>, NamedIndex<TableInfo, IndexName>>) => IndexRange,
   ): Query<TableInfo>;
-  /** A full-text search (STUDY-45): always in relevance order. */
+  // STUDY-45.
+  /** A full-text search: always in relevance order. */
   withSearchIndex<IndexName extends SearchIndexNames<TableInfo>>(
     indexName: IndexName,
     searchFilter: (
@@ -250,12 +261,14 @@ export interface BaseDatabaseReader<DataModel extends GenericDataModel> {
   ): GenericId<TableName> | null;
 }
 
-/** Convex's `GenericDatabaseReader`: `ctx.db` in a query. */
+// Convex's `GenericDatabaseReader`.
+/** `ctx.db` in a query. */
 export interface GenericDatabaseReader<DataModel extends GenericDataModel> extends BaseDatabaseReader<DataModel> {
   system: BaseDatabaseReader<SystemDataModel>;
 }
 
-/** Convex's `BaseDatabaseReaderWithTable`: the database scoped to a table at a time (STUDY-66 §2). */
+// Convex's `BaseDatabaseReaderWithTable` (STUDY-66 §2).
+/** The database scoped to a table at a time. */
 export interface BaseDatabaseReaderWithTable<DataModel extends GenericDataModel> {
   /** Scope the database to one table. */
   table<TableName extends TableNamesInDataModel<DataModel>>(
@@ -263,7 +276,8 @@ export interface BaseDatabaseReaderWithTable<DataModel extends GenericDataModel>
   ): BaseTableReader<DataModel, TableName>;
 }
 
-/** Convex's `BaseTableReader`: `db.table(name)` in a query. */
+// Convex's `BaseTableReader`.
+/** `db.table(name)` in a query. */
 export interface BaseTableReader<
   DataModel extends GenericDataModel,
   TableName extends TableNamesInDataModel<DataModel>,
@@ -274,27 +288,31 @@ export interface BaseTableReader<
   query(): QueryInitializer<NamedTableInfo<DataModel, TableName>>;
 }
 
-/** Convex's `GenericDatabaseReaderWithTable`: a query's `ctx.db` as the table-scoped API types it. */
+// Convex's `GenericDatabaseReaderWithTable`.
+/** A query's `ctx.db` as the table-scoped API types it. */
 export interface GenericDatabaseReaderWithTable<DataModel extends GenericDataModel>
   extends BaseDatabaseReaderWithTable<DataModel> {
   system: BaseDatabaseReaderWithTable<SystemDataModel>;
 }
 
+// A patch as Convex's types it, `_id` and `_creationTime` included.
 /**
- * A patch, as Convex's: some of the document's fields, an optional one `undefined` to remove it. Only the
- * document's own fields, so a misspelled or another table's field is refused. `_id` and `_creationTime` are in the
- * type, as on Convex; the engine refuses a value that does not match the document's.
+ * A patch: some of the document's fields, an optional one `undefined` to remove it. Only the document's own fields,
+ * so a misspelled or another table's field is refused. `_id` and `_creationTime` are in the type; the engine refuses
+ * a value that does not match the document's.
  */
 export type PatchValue<Document> = {
   [Field in keyof Document]?: undefined extends Document[Field] ? Document[Field] | undefined : Document[Field];
 };
 
-/** Convex's `GenericDatabaseWriter`: `ctx.db` in a mutation. */
+// Convex's `GenericDatabaseWriter`.
+/** `ctx.db` in a mutation. */
 export interface GenericDatabaseWriter<DataModel extends GenericDataModel> extends GenericDatabaseReader<DataModel> {
+  // Convex's `db.vars` (STUDY-53).
   /**
-   * Convex's `db.vars` (STUDY-53): `commitTs`, the placeholder for this transaction's commit timestamp. Write
-   * it in a document (or return it); it resolves at the commit to an int64 (`bigint`) of nanoseconds,
-   * ordered by commit order. Read back within the mutation it is still the placeholder.
+   * `commitTs`, the placeholder for this transaction's commit timestamp. Write it in a document (or return it); it
+   * resolves at the commit to an int64 (`bigint`) of nanoseconds, ordered by commit order. Read back within the
+   * mutation it is still the placeholder.
    */
   readonly vars: { readonly commitTs: CommitTsPlaceholder };
   insert<TableName extends TableNamesInDataModel<DataModel>>(
@@ -326,7 +344,8 @@ export interface GenericDatabaseWriter<DataModel extends GenericDataModel> exten
   delete(id: GenericId<TableNamesInDataModel<DataModel>>): Promise<void>;
 }
 
-/** Convex's `GenericDatabaseWriterWithTable`: a mutation's `ctx.db` as the table-scoped API types it. */
+// Convex's `GenericDatabaseWriterWithTable`.
+/** A mutation's `ctx.db` as the table-scoped API types it. */
 export interface GenericDatabaseWriterWithTable<DataModel extends GenericDataModel>
   extends GenericDatabaseReaderWithTable<DataModel> {
   /** Scope the database to one table. */
@@ -335,7 +354,8 @@ export interface GenericDatabaseWriterWithTable<DataModel extends GenericDataMod
   ): BaseTableWriter<DataModel, TableName>;
 }
 
-/** Convex's `BaseTableWriter`: `db.table(name)` in a mutation. */
+// Convex's `BaseTableWriter`.
+/** `db.table(name)` in a mutation. */
 export interface BaseTableWriter<DataModel extends GenericDataModel, TableName extends TableNamesInDataModel<DataModel>>
   extends BaseTableReader<DataModel, TableName> {
   insert(value: WithoutSystemFields<DocumentByName<DataModel, TableName>>): Promise<GenericId<TableName>>;

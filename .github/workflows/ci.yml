@@ -19,11 +19,11 @@ jobs:
   # always runs everything.
   changes:
     name: changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       code: ${{ steps.diff.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - id: diff
@@ -46,9 +46,9 @@ jobs:
     needs: changes
     # Fail safe: if `changes` itself failed, its output is empty and everything runs.
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -80,9 +80,9 @@ jobs:
     name: tests · index cache on, every hit verified
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -98,9 +98,9 @@ jobs:
     name: examples
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -114,9 +114,9 @@ jobs:
     name: examples · browser (Chromium)
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -132,13 +132,13 @@ jobs:
     name: npm packages on Node.js
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - run: bun install --frozen-lockfile
@@ -151,9 +151,9 @@ jobs:
     name: coverage · critical-file floors
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -166,9 +166,9 @@ jobs:
     name: e2e · dashboard in Chromium
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -185,7 +185,7 @@ jobs:
     name: conformance · Postgres
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:17
@@ -196,7 +196,7 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -224,7 +224,7 @@ jobs:
     name: conformance · MySQL
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       mysql:
         image: mysql:8.4
@@ -235,7 +235,7 @@ jobs:
         options: >-
           --health-cmd "mysqladmin ping -uroot -pbunvex" --health-interval 5s --health-timeout 5s --health-retries 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -248,6 +248,11 @@ jobs:
           MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
           DO_NOT_REQUIRE_SSL: "1"
         run: bun run conformance
+      - name: a flush whose reconnect times out is retried (mysql2's connect timeout is the call's)
+        env:
+          MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
+          DO_NOT_REQUIRE_SSL: "1"
+        run: bun test packages/persistence/test/mysql-connect-timeout.test.ts
       - name: index cache on MySQL, every hit verified
         env:
           MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
@@ -258,36 +263,11 @@ jobs:
           TLS_MYSQL_URL: mysql://root:bunvex@127.0.0.1:3306/bunvex_k
         run: bun test packages/persistence/test/tls-db.test.ts
 
-  conformance-mongodb:
-    name: conformance · MongoDB
-    needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      # A service container takes no command arguments, so the single-node replica set is started here.
-      - name: MongoDB, single-node replica set
-        run: bash scripts/ci-mongo.sh mongo
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.4
-      - run: bun install --frozen-lockfile
-      - name: conformance on MongoDB
-        env:
-          DRIVERS: mongodb
-          KILLS: "4"
-          MONGO_URL: mongodb://127.0.0.1:27017/bunvex_k?replicaSet=rs0
-        run: bun run conformance
-      - name: index cache on MongoDB, every hit verified
-        env:
-          MONGO_URL: mongodb://127.0.0.1:27017/bunvex_k?replicaSet=rs0
-        run: bun test bench/index-cache-verify.test.ts
-
   file-storage-s3:
     name: file storage · S3 (RustFS)
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       AWS_ACCESS_KEY_ID: s3testkey
       AWS_SECRET_ACCESS_KEY: s3testsecret
@@ -303,7 +283,7 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:9000/health/live && break; sleep 1; done
           curl -sf http://127.0.0.1:9000/health/live >/dev/null || { echo "rustfs never became healthy"; exit 1; }
           docker run --rm --network host -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_REGION amazon/aws-cli:2.37.1 --endpoint-url http://127.0.0.1:9000 s3 mb s3://bunvex-test
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -325,16 +305,16 @@ jobs:
           AWS_S3_DISABLE_CHECKSUMS: "true"
         run: bun test packages/file-storage/test/blob-stores.test.ts
 
+  # The required check of branch protection: renamed with it when MongoDB's driver went (owner, 2026-10-29).
   conformance:
-    name: PERSIST-01 conformance · Postgres · MySQL · MongoDB
+    name: PERSIST-01 conformance · Postgres · MySQL
     if: always()
-    needs: [changes, conformance-postgres, conformance-mysql, conformance-mongodb]
-    runs-on: ubuntu-latest
+    needs: [changes, conformance-postgres, conformance-mysql]
+    runs-on: ubuntu-24.04
     steps:
-      - name: all three stores passed (or a docs-only change)
+      - name: both stores passed (or a docs-only change)
         run: |
           if [ "${{ needs.changes.outputs.code }}" = false ]; then echo "docs-only change: conformance not needed"; exit 0; fi
-          echo "postgres=${{ needs.conformance-postgres.result }} mysql=${{ needs.conformance-mysql.result }} mongodb=${{ needs.conformance-mongodb.result }}"
+          echo "postgres=${{ needs.conformance-postgres.result }} mysql=${{ needs.conformance-mysql.result }}"
           test "${{ needs.conformance-postgres.result }}" = success
           test "${{ needs.conformance-mysql.result }}" = success
-          test "${{ needs.conformance-mongodb.result }}" = success

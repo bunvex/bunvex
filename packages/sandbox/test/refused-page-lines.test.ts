@@ -12,7 +12,7 @@ import { createProcessExecutor } from "../src/executor.ts";
 
 provideProcessExecutor(createProcessExecutor);
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
 const MULTIPLE =
   "This query function ran multiple paginated queries. bunvex only supports a single paginated query in each query function.";
 

@@ -36,8 +36,8 @@ import {
   openPersistence,
   persistenceConfigFromEnv,
   query,
-} from "bunvex/server";
-import { v } from "bunvex/values";
+} from "@bunvex/server";
+import { v } from "@bunvex/values";
 
 const NS = (process.env.NS ?? "0,1000,10000,100000").split(",").map(Number);
 const FANOUTS = (process.env.FANOUTS ?? "one,1%,10%").split(",");

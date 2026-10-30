@@ -5,10 +5,9 @@ is gone: where a cursor is, who is typing, a reaction that flies across the scre
 mutation: a transaction, a write to the log and an invalidation of every subscription that reads the table. Rooms
 keep that state **in the server's memory, beside the database and never in it**.
 
-Rooms are a bunvex addition ([AD-42](parity/additions.md); Convex has nothing like them, and its presence component
-keeps its state in tables). They are opt-in: an app that does not define a room, and a client that does not join
-one, see no difference from Convex. The reasoning, and what Convex and its peers do, is in
-[STUDY-164](study/STUDY-164-ephemeral-rooms.md); an app to start from is [examples/rooms-cursors](../examples/rooms-cursors).
+Rooms are a bunvex addition (Convex has nothing like them, and its presence component keeps its state in tables).
+They are opt-in: an app that does not define a room, and a client that does not join one, see no difference. An app
+to start from is [examples/rooms-cursors](../examples/rooms-cursors).
 
 > [!WARNING]
 > **A restart drops every room.** Nothing here is stored. Restart the backend and every member is gone; clients
@@ -38,7 +37,7 @@ Each field is a validator object (or a `v.object(...)`); the generated `api` has
 
 ```ts
 // bunvex/rooms.ts
-import { v } from "bunvex/values";
+import { v } from "@bunvex/values";
 import { presence, room } from "./_generated/server";
 
 export const doc = room({
@@ -79,7 +78,7 @@ export const online = presence({
 ### React
 
 ```tsx
-import { usePresence, useRoom } from "bunvex/react";
+import { usePresence, useRoom } from "@bunvex/react";
 import { api } from "../bunvex/_generated/api";
 
 function Cursors({ docId }) {
@@ -188,10 +187,9 @@ holds more than `ROOM_MAX_BUFFERED_BYTES`) is disconnected and syncs again when 
 
 ## 7. Not in v1
 
-- **One process.** The state is the process's memory. When followers exist, rooms relay through the leader
-  ([STUDY-164](study/STUDY-164-ephemeral-rooms.md) §3.7).
+- **One process.** The state is the process's memory. bunvex runs one process per deployment today; once it can
+  run followers, rooms will relay through the leader.
 - **No `onJoin` / `onLeave` hooks.** An app that wants "last seen" writes it from the client or a mutation.
 - **No room state** (a shared document, a CRDT). Presence and events only.
 
-The cost against the same cursors kept in a table is measured in [STUDY-164](study/STUDY-164-ephemeral-rooms.md) §7
-(`bun bench/rooms.ts`).
+The cost against the same cursors kept in a table is measured by `bun bench/rooms.ts`.

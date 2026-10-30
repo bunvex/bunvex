@@ -11,7 +11,7 @@
 // - `custom_audit` needs an entitlement no self-hosted deployment has (DV-304), so no sink receives them: what
 //   an app observes is the API and its checks.
 //
-// This module holds what `bunvex/server` exports, with nothing of the runtime (its isomorphic entry, STUDY-91):
+// This module holds what `@bunvex/server` exports, with nothing of the runtime (its isomorphic entry, STUDY-91):
 // the running function's lines come from log-audit.ts, which sets `setAuditScope`.
 
 import { knob } from "@bunvex/core/knobs";
@@ -126,7 +126,8 @@ async function auditLine(body: AuditLogBody): Promise<void> {
   addAuditLine(json);
 }
 
-/** A line, as JSON text, added to the running function's (Convex's `emit_audit_log_line`). */
+// Convex's `emit_audit_log_line`.
+/** A line, as JSON text, added to the running function's audit log. */
 export function addAuditLine(json: string) {
   const scope = auditScope();
   if (!scope || typeof scope === "function") throw new Error("Audit logging is not yet supported in actions");
@@ -137,7 +138,8 @@ export function addAuditLine(json: string) {
   scope.bytes += json.length;
 }
 
-/** A function's audit log lines over Convex's limits, once they are resolved: a bad request (HTTP 400). */
+// Convex's limits.
+/** A function's audit log lines over the limits, once they are resolved: a bad request (HTTP 400). */
 export class AuditLogLimitError extends Error {
   constructor(
     readonly code: "TooManyAuditLogLines" | "AuditLogLineTooLarge" | "AuditLogLinesTooLarge" | "UnknownAuditLogVar",
@@ -148,5 +150,6 @@ export class AuditLogLimitError extends Error {
   }
 }
 
-/** Convex's `log` export: `log.audit(body)` and `log.vars`. */
+// Convex's `log` export.
+/** A function's logs: `log.audit(body)` and `log.vars`. */
 export const log: { audit: typeof audit; vars: typeof vars } = { audit, vars };

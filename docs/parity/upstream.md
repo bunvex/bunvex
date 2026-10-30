@@ -6,30 +6,32 @@ get-convex/convex-backend, and the process that keeps it there. The process is d
 
 ## Where we stand
 
-- **Reference commit:** `72ce13c`, the commit of the release `precompiled-2026-10-10-72ce13c` (2026-10-09). The parity
+- **Reference commit:** `04d2f3b`, the commit of the release `precompiled-2026-10-26-04d2f3b` (2026-10-26). The parity
   files cite `4577b9031` brought up to this commit.
 - **Differential oracle:** `precompiled-2026-10-26-04d2f3b` (`packages/differential/scripts/download-convex-backend.sh`),
-  ahead of the reference: STUDY-193 moved it first (Q1), so each align PR is checked against the release it follows.
-  The suite's `convex` client is 1.48.0, the one that release ships; `sync-e2e` keeps the 1.46.0 floor (Q2).
-- **Last weekly bump:** [STUDY-173](../study/STUDY-173-convex-reference-2026-10-10.md) (2026-10-19), from `d8bdde0`.
+  the reference's release. The suite's `convex` client is 1.48.0, the one that release ships; `sync-e2e` keeps the
+  1.46.0 floor (STUDY-193 Q2).
+- **Last weekly bump:** [STUDY-193](../study/STUDY-193-convex-upstream-04d2f3b.md) (2026-10-27), from `72ce13c`, with
+  the triage of [STUDY-186](../study/STUDY-186-convex-after-72ce13c.md).
 
 ## Other repositories
 
 Convex's libraries and components live outside convex-backend. bunvex's `@bunvex/testing`, `@bunvex/helpers` and
 own components are written from scratch against these repositories ([STUDY-158](../study/STUDY-158-own-components.md)).
-Each one is read at the commit below, cloned next to bunvex (`~/sandbox/<clone>`). A study that moves a commit
+Each one is read at the commit below, cloned next to bunvex (`../<clone>`). A study that moves a commit
 records the move here.
 
 | Repository | Clone | Commit | Version | For |
 |---|---|---|---|---|
 | get-convex/convex-test | `convex-test` | `8fe3dda` (2026-10-15) | 0.0.62 | `@bunvex/testing` |
 | get-convex/convex-helpers | `convex-helpers` | `e48f9df` (2026-10-19) | 0.1.128 | `@bunvex/helpers` |
-| get-convex/sharded-counter | `convex-sharded-counter` | `d8f0718` (2026-10-14) | 0.2.3 | `@bunvex/sharded-counter` |
-| get-convex/batch-worker | `convex-batch-worker` | `f299a7b` (2026-10-14) | 0.3.6 | `@bunvex/batch-worker` |
-| get-convex/rate-limiter | `convex-rate-limiter` | `dee5af1` (2026-10-15) | 0.4.2 | `@bunvex/rate-limiter` |
-| get-convex/workpool | `convex-workpool` | `fe6f2b8` (2026-10-15) | 0.4.14 | `@bunvex/workpool` |
-| get-convex/aggregate | `convex-aggregate` | `5a72b01` (2026-10-15) | 0.3.3 | `@bunvex/aggregate` |
-| get-convex/migrations | `convex-migrations` | `dc87b03` (2026-10-15) | 0.3.7 | `@bunvex/migrations` |
+| get-convex/sharded-counter | `sharded-counter` | `d8f0718` (2026-10-14) | 0.2.3 | `@bunvex/sharded-counter` |
+| get-convex/batch-worker | `batch-worker` | `f299a7b` (2026-10-14) | 0.3.6 | `@bunvex/batch-worker` |
+| get-convex/rate-limiter | `rate-limiter` | `dee5af1` (2026-10-15) | 0.4.2 | `@bunvex/rate-limiter` |
+| get-convex/workpool | `workpool` | `7fde769` (2026-10-21; STUDY-199 W-1) | 0.4.14 | `@bunvex/workpool` |
+| get-convex/aggregate | `aggregate` | `5a72b01` (2026-10-15) | 0.3.3 | `@bunvex/aggregate` |
+| get-convex/migrations | `migrations` | `dc87b03` (2026-10-15) | 0.3.7 | `@bunvex/migrations` |
+| get-convex/templates | `convex-templates` | `34364d1` (2026-10-29) | — | the examples after Convex's app templates (`template-tanstack-start`: STUDY-198) |
 
 These are not triaged daily. Each piece's study reads its repository's changes since its commit before it is
 built, and moves the commit.
@@ -61,22 +63,23 @@ own PR (CLAUDE.md).
 
 ## Carried to the next bump
 
-Commits up to the reference that the last bump did not cover: none. STUDY-173 resolved the 11 that STUDY-137 carried;
-`f9b2d83` (components, DV-55) is on [STUDY-62 §7.6](../study/STUDY-62-components.md#76-convex-commits-to-take-with-components).
+Commits up to the reference that the last bump did not build, each with its own study:
+- STUDY-186 §4.2's new features: storage in mutations (no study yet), the CLI's staged-schema output (`4f81b22`),
+  and `v.function()` (waits for Convex's client). `ctx.auth.signJwt` and `/.well-known/jwks.json` are built
+  ([STUDY-192](../study/STUDY-192-sign-jwt.md), #937).
+- STUDY-186 Q6, Bun's Brotli and root store: a check outside parity, not recorded yet.
+- `f9b2d83` (components, DV-55) is on [STUDY-62 §7.6](../study/STUDY-62-components.md#76-convex-commits-to-take-with-components).
 
 ## After the reference
 
-195 commits on Convex's `main` follow `72ce13c` up to the release `precompiled-2026-10-24-bb31399` (2026-10-24), the
-82 that the daily digest issue (#549) listed and 113 more. [STUDY-186](../study/STUDY-186-convex-after-72ce13c.md)
-triages every one: 19 items to align, four new features for their own studies, six owner questions. The 3 commits
-up to `precompiled-2026-10-26-04d2f3b` change nothing an app observes, and
-[STUDY-193](../study/STUDY-193-convex-upstream-04d2f3b.md) plans the move to that release and tracks which of
-STUDY-186's items are built. The four urgent ones were studied at
-once ([STUDY-173 §5](../study/STUDY-173-convex-reference-2026-10-10.md#5-after-the-reference-the-urgent-commits)):
+Not built yet: the next weekly bump starts from `04d2f3b`. The daily digest (issue #549) lists the commits since;
+on 2026-10-28 these touch what bunvex matches:
+- `11e4a17` removes the Vitess-only MySQL handling: error 1105 is operational only for "connection timed out", where
+  bunvex's MySQL driver (`mysql.ts`, `operational`) still accepts Convex's four old messages;
+- `bdee40a` frees a transaction's read set off the committer thread (performance only);
+- `8b36630` reworks streams in the isolate's HTTP and storage ops;
+- `aa977e2` runs a local backend's Node actions with the `node` on `PATH` (bunvex runs them in Bun, DV-87);
+- `6f2292f` requires Node.js 22 in the `convex` package, and `62241ac` adds `npx convex plugins install` (CLI);
+- `2605da1`, `a3099d8` and `72057d6` mirror V5 MySQL deployments into a V6 replica (cloud-only, opt-in).
 
-| Commit | Subject | bunvex |
-|---|---|---|
-| `8449d41` | allow repeated pagination in mutations | affected; fixed in #747 (#718) |
-| `403c3e8` | races around acquiring the lease | part (b), the read-only check, affected; fixed in #748 (the refusal stays `ReadOnlyError`: DV-505, owner 2026-10-19) (#717) |
-| `1a9f5e1` | retry deadlocked commit batches | affected on MySQL; fixed in #746 (#711) |
-| `d62e1c7` | comments around data sync | comments only: no change (#712) |
+STUDY-186's A1–A19 and its owner answers are built ([STUDY-193 §3](../study/STUDY-193-convex-upstream-04d2f3b.md#3-study-186-a1a19-what-is-built)).

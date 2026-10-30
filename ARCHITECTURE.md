@@ -6,7 +6,7 @@ the alternatives that were rejected and why — is in
 [`docs/specs/ARCH-01-monorepo.md`](docs/specs/ARCH-01-monorepo.md).
 
 bunvex is a Convex-style reactive backend written in TypeScript for Bun, with its own database engine on
-top of a pluggable persistence layer (memory + log, SQLite, Postgres, MySQL, MongoDB). The engine keeps
+top of a pluggable persistence layer (memory + log, SQLite, Postgres, MySQL). The engine keeps
 every document version and every index entry stamped with a commit timestamp, runs mutations as
 optimistic serializable transactions validated by one committer, and re-runs subscribed queries whose
 read-set a commit overlaps.
@@ -64,7 +64,6 @@ bunvex/
 │   ├── persistence/                 @bunvex/persistence               ← external databases
 │   │   ├── postgres                 (optional peer: postgres)                                 ✅
 │   │   ├── mysql                    (optional peer: mysql2)                                   ✅
-│   │   ├── mongodb                  (optional peer: mongodb)                                  ✅
 │   │   └── tls (internal)           TLS required + verified by default, as Convex (STUDY-25 L8) ✅
 │   │
 │   ├── persistence-conformance/     @bunvex/persistence-conformance   the PERSIST-01 K-suite ✅ (not
@@ -172,7 +171,7 @@ bunvex/
 │   │   ├── server/stream            stream, mergedStream, filterWith, flatMap, distinct…        ✅
 │   │   └── server/pagination        getPage, streamQuery, paginator                             ✅
 │   │
-│   ├── sandbox/                     @bunvex/sandbox (private for now)  the function sandbox (AD-44,
+│   ├── sandbox/                     @bunvex/sandbox  the function sandbox (AD-44, published for @bunvex/testing;
 │   │   │                            STUDY-168): app code in a separate process
 │   │   ├── child                    loads and analyzes a push with the server's own loader (STUDY-171 §7) ✅
 │   │   ├── protocol, frames         length-prefixed JSON on the child's socket, handshake, size cap   ✅
@@ -181,14 +180,8 @@ bunvex/
 │   │       child-call, child-db     on the host's transaction, user time charged (STUDY-171 §8)
 │   │                                actions, HTTP, components, OS isolation, the pool: PRs 4–12         ·
 │   │
-│   ├── sync-e2e/, jepsen/,          tests only, never published: end-to-end sync (STUDY-26),
-│   │   differential/                consistency runs (STUDY-57), against Convex's backend (STUDY-122) ✅
-│   │
-│   └── bunvex/                      bunvex (private)  internal workspace aggregate, never published
-│       └── (re-exports)             bunvex/server · bunvex/values · bunvex/browser ·
-│                                    bunvex/react · bunvex/nextjs · bunvex/react-clerk ·
-│                                    bunvex/react-auth0 · bin: bunvex (apps install @bunvex/*)
-│       └── bin/local-backend        the bunvex-local-backend executable (STUDY-39, STUDY-40)   ✅
+│   └── sync-e2e/, jepsen/,          tests only, never published: end-to-end sync (STUDY-26),
+│       differential/                consistency runs (STUDY-57), against Convex's backend (STUDY-122) ✅
 │
 ├── components/                      bunvex's own components (STUDY-158 step 4; the package model in STUDY-183 §3.1):
 │   │                                `@bunvex/<Convex's name>`, each on its own version, outside the fixed group
@@ -196,6 +189,12 @@ bunvex/
 │   │   ├── src/component/           bunvex.config.ts (`batchWorker`, env LOG_LEVEL), schema, lib.ts, loop.ts,
 │   │   │                            monitor.ts, kick.ts, _generated/ (committed)
 │   │   ├── src/client/              ping, defineBatchWorkerValidators and the loop's types
+│   │   └── src/test.ts              `register(t, name)` for @bunvex/testing (`./test`)
+│   ├── rate-limiter/                @bunvex/rate-limiter 0.1.0, matching @convex-dev/rate-limiter 0.4.2   ✅
+│   │   ├── src/component/           bunvex.config.ts (`rateLimiter`, child `batchWorker`), schema, lib.ts,
+│   │   │                            internal.ts, worker.ts (the asynchronous mode), time.ts, _generated/
+│   │   ├── src/client/              RateLimiter: check, limit, reset, getValue, hookAPI; isRateLimitError
+│   │   ├── src/react/               useRateLimit (`./react`); its tests in test-react/, with a DOM
 │   │   └── src/test.ts              `register(t, name)` for @bunvex/testing (`./test`)
 │   └── sharded-counter/             @bunvex/sharded-counter 0.1.0, matching @convex-dev/sharded-counter 0.2.3   ✅
 │       ├── src/component/           bunvex.config.ts (`shardedCounter`), schema, public.ts, _generated/ (committed,
@@ -205,6 +204,8 @@ bunvex/
 │       └── src/test.ts              `register(t, name)` for @bunvex/testing (`./test`)
 │
 ├── apps/
+│   ├── local-backend/               the bunvex-local-backend executable's entry: the server, every persistence
+│   │                                driver and the function sandbox (STUDY-39, STUDY-40); never published ✅
 │   ├── dashboard/                   thin Vite host mounting @bunvex/dashboard on a deployment     🟡
 │   │                                (dashboard-source) or the demo data; its own image, dashboard.zip,
 │   │                                bunvex dev's local dashboard (STUDY-149; docs/dashboard.md)
@@ -222,7 +223,7 @@ bunvex/
 │   └── bench/                       benchmark reports                                          ✅
 │
 ├── .github/                         workflows (CI: lint, typecheck, dependency rules, tests, examples,
-│                                    dashboard e2e, conformance against Postgres, MySQL, MongoDB;
+│                                    dashboard e2e, conformance against Postgres and MySQL;
 │                                    nightly differential, Jepsen and soak runs; binaries, Docker image),
 │                                    issue and PR templates
 ├── .changeset/                      per-package versions and changelogs
@@ -255,9 +256,9 @@ import { PostgresPersistence } from "@bunvex/persistence/postgres";
 ```
 
 The scoped `@bunvex/*` packages are the permanent way to install bunvex: the unscoped npm name `bunvex` is
-not available (owner decision, 2026-10-12; STUDY-40 L7). `packages/bunvex` stays a private workspace package
-that re-exports them for the repo's own examples and tests, and `bunvex codegen` writes `@bunvex/*` imports
-when the app's `package.json` depends on `@bunvex/*`.
+not available (owner decision, 2026-10-12; STUDY-40 L7). npm's security policy refuses it, for its likeness to `convex`
+(2026-10-29). The repository's examples, tests and benchmarks install them too, and `bunvex codegen` always writes
+`@bunvex/*` imports.
 
 ## Dependency rules
 
@@ -272,7 +273,7 @@ client ──► protocol, values                    react ──► client, val
 nextjs, react-query ──► react, client, values  react-clerk, react-auth0 ──► react
 cli ──► server, core, values, client, protocol testing ──► server, core, values, cli, file-storage
 helpers ──► server, values (and core and testing in its tests only: an engine in memory, bunvexTest)
-components/* ──► server, values, helpers, another component (a child); testing in their tests only
+components/* ──► server, values, react (a `./react` entry), helpers, another component (a child); testing in their tests only
 sandbox ──► server, core, values, protocol (its child runs the server's loader; the server never imports it)
 bunvex ──► the packages it re-exports, plus core, persistence and sandbox for bin/local-backend
 examples/* ──► bunvex, react-query, helpers, components/* (a user's app, STUDY-90)
@@ -281,7 +282,8 @@ tests only, never published:
   sync-e2e ──► client, react, nextjs, react-clerk, react-auth0, react-query, server, core, protocol, values,
               dashboard, dashboard-source (the dashboard's contract suite on a live server, STUDY-149)
   jepsen ──► client, server, core, values (consistency runs)
-  differential ──► bunvex (against Convex's backend)
+  differential ──► server, values, client, react, nextjs, the components (against Convex's backend)
+  apps/local-backend ──► server, core, persistence, sandbox (the executable)
 
 ui ◄── dashboard ◄── apps/dashboard (──► ui, dashboard-source)
 dashboard-source ──► client, dashboard
@@ -314,7 +316,7 @@ ui ◄── apps/site
 
 ## Project facts
 
-- Name: **bunvex** — npm package `bunvex`, scope `@bunvex/*`, GitHub `github.com/bunvex/bunvex`.
+- Name: **bunvex** — npm scope `@bunvex/*` (the unscoped name `bunvex` is refused by npm), GitHub `github.com/bunvex/bunvex`.
 - Licence: **Apache-2.0** (`LICENSE`, `NOTICE`).
 
 ## Open decisions

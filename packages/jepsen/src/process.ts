@@ -4,7 +4,7 @@
 import type { Subprocess } from "bun";
 
 export type ServerOptions = {
-  /** PERSISTENCE: memory | sqlite | postgres | mysql | mongodb. */
+  /** PERSISTENCE: memory | sqlite | postgres | mysql. */
   store: string;
   /** DATA, for the embedded stores (memory's log, SQLite's file). */
   dataDir: string;

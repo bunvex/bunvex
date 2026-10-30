@@ -10,7 +10,7 @@ const CHILDREN = join(import.meta.dir, "fixtures/children");
 const fake = (name: string) => join(CHILDREN, `${name}.ts`);
 const OPTS = { seed: new Uint32Array([1, 2, 3, 4]), timestamp: 1_760_000_000_000 };
 const mod = (source: string, path = "m.js") => ({ path, source, environment: "isolate" as const });
-const QUERY = mod(`import { query } from "bunvex/server"; export const q = query(async () => 1);`);
+const QUERY = mod(`import { query } from "@bunvex/server"; export const q = query(async () => 1);`);
 
 const started: SandboxProcess[] = [];
 async function start(...args: Parameters<typeof SandboxProcess.start>) {
@@ -65,7 +65,7 @@ describe("a child", () => {
   test("runs requests concurrently, each answered by its own id", async () => {
     const c = await start();
     const sources = ["a", "b", "c", "d"].map((n) =>
-      mod(`import { mutation } from "bunvex/server"; export const ${n} = mutation(async () => 1);`, `${n}.js`),
+      mod(`import { mutation } from "@bunvex/server"; export const ${n} = mutation(async () => 1);`, `${n}.js`),
     );
     const loads = await Promise.all(sources.map((s) => c.load([s], OPTS)));
     expect(loads.map((v) => [...v.functions.keys()])).toEqual([["a:a"], ["b:b"], ["c:c"], ["d:d"]]);
@@ -82,7 +82,7 @@ describe("a child", () => {
       c.load(
         [
           mod(
-            `import { query } from "bunvex/server"; const f = query(async () => 1); f.exportArgs = () => { throw new Error("no"); }; export { f };`,
+            `import { query } from "@bunvex/server"; const f = query(async () => 1); f.exportArgs = () => { throw new Error("no"); }; export { f };`,
           ),
         ],
         OPTS,
@@ -106,7 +106,7 @@ describe("a child", () => {
   test("the deployment's variables reach the import phase, as in-process", async () => {
     const c = await start();
     const flagged = mod(
-      `import { query } from "bunvex/server"; if (process.env.FLAG !== "on") throw new Error("FLAG is " + process.env.FLAG); export const q = query(async () => 1);`,
+      `import { query } from "@bunvex/server"; if (process.env.FLAG !== "on") throw new Error("FLAG is " + process.env.FLAG); export const q = query(async () => 1);`,
     );
     expect([...(await c.load([flagged], { ...OPTS, env: { FLAG: "on" } })).functions.keys()]).toEqual(["m:q"]);
     const e = await rejection(c.load([flagged], { ...OPTS, env: {} }));
@@ -219,7 +219,7 @@ describe("a child that goes wrong is killed, and what waits on it fails with why
   test("the limit holds for the real child's answers too", async () => {
     const c = await start({ maxMessageBytes: 1000 });
     const names = Array.from({ length: 50 }, (_, i) => `export const f${i} = query(async () => ${i});`).join("\n");
-    const e = await rejection(c.load([mod(`import { query } from "bunvex/server";\n${names}`)], OPTS));
+    const e = await rejection(c.load([mod(`import { query } from "@bunvex/server";\n${names}`)], OPTS));
     expect((e as SandboxError).reason).toBe("oversize");
     expect(e.message).toMatch(
       /^the function sandbox's process sent a message of \d+ bytes, over the limit of 1000 bytes$/,

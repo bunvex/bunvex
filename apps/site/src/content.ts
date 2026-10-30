@@ -6,7 +6,7 @@ export const SITE = {
   repo: "https://github.com/bunvex/bunvex",
   title: "bunvex — the reactive backend, built for Bun",
   description:
-    "Write queries and mutations in TypeScript; every client sees changes the moment they commit. Convex's API on its own database engine, on SQLite, Postgres, MySQL or MongoDB. Pre-alpha.",
+    "Write queries and mutations in TypeScript; every client sees changes the moment they commit. Convex's API on its own database engine, on SQLite, Postgres or MySQL. Pre-alpha.",
 } as const;
 
 /** A link to a file of the repository on GitHub. */
@@ -21,7 +21,7 @@ export const HERO = {
   pill: "of Convex's surface, checked row by row",
   headline: ["The reactive backend,", "built for Bun."],
   subline:
-    "Write queries and mutations in TypeScript. Every client sees changes the moment they commit. Convex's API on its own database engine, running on SQLite, Postgres, MySQL or MongoDB.",
+    "Write queries and mutations in TypeScript. Every client sees changes the moment they commit. Convex's API on its own database engine, running on SQLite, Postgres or MySQL.",
 } as const;
 
 /** Each line is a command of packages/cli/README.md (bun) or docker/README.md (docker, binary). */
@@ -90,7 +90,7 @@ export const FILES = {
       name: "messages.ts",
       path: "examples/tutorial/bunvex/messages.ts",
       whole: true,
-      code: `import { v } from ${q("bunvex/values")};
+      code: `import { v } from ${q("@bunvex/values")};
 import { mutation, query } from ${q("./_generated/server")};
 
 /** The 50 most recent messages, oldest first. */
@@ -115,7 +115,7 @@ export const send = mutation({
       name: "App.tsx",
       path: "examples/tutorial/src/App.tsx",
       whole: false,
-      code: `import { useMutation, useQuery } from ${q("bunvex/react")};
+      code: `import { useMutation, useQuery } from ${q("@bunvex/react")};
 import { api } from ${q("../bunvex/_generated/api")};
 
 export function App() {
@@ -232,7 +232,6 @@ export const DRIVERS = [
   { name: "SQLite", note: "built in, bun:sqlite" },
   { name: "Postgres", note: "TLS verified by default" },
   { name: "MySQL", note: "Convex's table layout" },
-  { name: "MongoDB", note: "on a replica set" },
   { name: "memory + log", note: "built in, no dependency" },
 ] as const;
 
@@ -253,7 +252,7 @@ export const MIGRATE = {
     { text: "The official client talks to bunvex: the same sync protocol.", source: "packages/client/README.md" },
     { text: "Snapshots exported from one import into the other.", source: "docs/study/STUDY-42-import-export.md" },
     {
-      text: "25 example apps (22 after Convex's demos, one for rooms, two for components), each tested end to end.",
+      text: "28 example apps (24 after Convex's demos and templates, one for rooms, three for components), each tested end to end.",
       source: "examples/README.md",
     },
     {
@@ -263,8 +262,8 @@ export const MIGRATE = {
   ],
   /** Two module names on each side of the diff. */
   diff: [
-    { from: `import { query } from ${q("convex/server")};`, to: `import { query } from ${q("bunvex/server")};` },
-    { from: `import { useQuery } from ${q("convex/react")};`, to: `import { useQuery } from ${q("bunvex/react")};` },
+    { from: `import { query } from ${q("convex/server")};`, to: `import { query } from ${q("@bunvex/server")};` },
+    { from: `import { useQuery } from ${q("convex/react")};`, to: `import { useQuery } from ${q("@bunvex/react")};` },
     { from: "npx convex dev", to: "bunx bunvex dev" },
   ],
 } as const;
@@ -272,9 +271,9 @@ export const MIGRATE = {
 /** docs/parity/README.md's summary table: done, partial and missing rows per area. */
 export const PARITY = {
   areas: [
-    { name: "Function and database API", done: 252, partial: 3, missing: 0 },
+    { name: "Function and database API", done: 253, partial: 3, missing: 0 },
     { name: "Clients, sync protocol, React", done: 163, partial: 2, missing: 1 },
-    { name: "Platform: auth, storage, scheduler, CLI…", done: 248, partial: 23, missing: 2 },
+    { name: "Platform: auth, storage, scheduler, CLI…", done: 249, partial: 23, missing: 2 },
   ],
   link: blob("docs/parity/README.md"),
 } as const;

@@ -12,8 +12,8 @@ import { AsyncResource } from "node:async_hooks";
 import { existsSync, mkdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pausingUserTime, realRuntime } from "@bunvex/core";
+import { action, mutation, query } from "@bunvex/server";
 import type { Subprocess } from "bun";
-import { action, mutation, query } from "bunvex/server";
 import { decode, encode, replay, type Step, type ToChild, type ToHost, type Wire, type WireError } from "./wire.ts";
 
 // The host's own clock and timers: inside an execution the globals are the deterministic ones (frozen, refused).
@@ -804,7 +804,7 @@ export function confineCommand(app: string, uid: number, pidsMax: number): strin
 
 /**
  * A Seatbelt profile for the child: no network, no writes, and no reads under the user's home except the bun
- * binary, the runner, the app and `bunvex/values`. System paths stay readable (the dyld cache, frameworks), so
+ * binary, the runner, the app and `@bunvex/values`. System paths stay readable (the dyld cache, frameworks), so
  * this is a dev-mode guard, not a cloud boundary: no pid or memory limits, and the kernel surface is all there.
  */
 export function seatbeltCommand(app: string): string[] {

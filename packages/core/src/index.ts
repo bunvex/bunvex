@@ -205,6 +205,17 @@ export type {
   UpperBoundIndexRangeBuilder,
 } from "./database-types.ts";
 export {
+  DEPLOYMENT_JWT_MAX_SIZE,
+  type DeploymentJwk,
+  type DeploymentJwks,
+  DeploymentJwtError,
+  DeploymentJwtKeys,
+  type DeploymentJwtRequest,
+  deploymentJwtIssuer,
+  jwkThumbprint,
+  parseSignJwtArgs,
+} from "./deployment-jwt.ts";
+export {
   chargeUserTime,
   checkUserTime,
   clearLongTimer,
@@ -254,6 +265,7 @@ export type {
 } from "./engine.ts";
 export {
   type CacheCompanion,
+  type CachedEntryRef,
   type Caller,
   ComponentDeletionError,
   DEFAULT_INSTANCE_NAME,

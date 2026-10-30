@@ -44,7 +44,7 @@ Consequences:
 | values, protocol | yes | shared by client and server; the client must not pull the engine |
 | core | yes | the engine; everything else builds on it |
 | memory, SQLite persistence | **no — inside core** | zero dependencies (`bun:sqlite` ships with Bun); `bunvex dev` works with nothing installed |
-| Postgres, MySQL, MongoDB persistence | **one package, subpaths** | native drivers are optional peers; one version and one changelog |
+| Postgres and MySQL persistence | **one package, subpaths** | native drivers are optional peers; one version and one changelog |
 | conformance suite | yes | the bar a third-party driver must clear |
 | server, client | yes | run in different places |
 | react, nextjs | yes | framework-specific peers |
@@ -84,10 +84,12 @@ publish their own `bunvex-persistence-<name>` against the published contract and
 through the engine); the bytes go to `@bunvex/file-storage` backends (`/local`, `/s3`), configured with
 `FILE_STORAGE=`.
 
-**D5 — the umbrella package `bunvex`** re-exports `bunvex/server`, `bunvex/values`, `bunvex/browser`,
-`bunvex/react`, `bunvex/nextjs` and ships the CLI as its `bin`. It contains no logic. *Update (owner,
+**D5 — the umbrella package `bunvex`** re-exports `@bunvex/server`, `@bunvex/values`, `@bunvex/client`,
+`@bunvex/react`, `@bunvex/nextjs` and ships the CLI as its `bin`. It contains no logic. *Update (owner,
 2026-10-12):* npm will not allow the name `bunvex`, so it stays a private workspace package and apps install the
-scoped `@bunvex/*` packages for good (STUDY-40 L7).
+scoped `@bunvex/*` packages for good (STUDY-40 L7). *Update (2026-10-29):* npm's security team confirmed the
+name is refused for its likeness to `convex`; the private package is removed, and the repository's examples, tests
+and benchmarks install `@bunvex/*` as an app does. The local backend's entry moved to `apps/local-backend`.
 
 **D6 — dependency rules, enforced in CI** (a check that fails the build on a forbidden import):
 
@@ -106,7 +108,7 @@ files; internal modules are free to move.
 
 **D8 — tooling**: TypeScript `strict` with project references (`tsc -b`), Biome (lint + format),
 `bun test`, Changesets (per-package versions and changelogs), GitHub Actions (lint, typecheck, tests, the
-dependency-rule check, and the conformance suite against SQLite plus Postgres, MySQL and MongoDB as service
+dependency-rule check, and the conformance suite against SQLite plus Postgres and MySQL as service
 containers; benchmarks run outside CI).
 
 **D9 — open-source hygiene**: `README.md`, `ARCHITECTURE.md` (the living map), `CONTRIBUTING.md`,
@@ -123,7 +125,7 @@ answered in the user docs, never by linking a spec.
 |---|---|---|
 | 1 | workspace root: `package.json` workspaces, `tsconfig.base.json`, `biome.json` | `bun install` |
 | 2 | `packages/core` ← `src/keyenc.ts`, `src/engine.ts` (split into `mvcc`, `committer`, `tx`, `query`, `cache`), `src/subscriptions.ts`, `src/storage.ts` → `persistence/{index,memory,sqlite}` | typecheck |
-| 3 | `packages/persistence` ← `src/storage_remote.ts` (split into `postgres`, `mysql`), `src/storage_mongo.ts` → `mongodb`; native drivers become optional peers | typecheck |
+| 3 | `packages/persistence` ← `src/storage_remote.ts` (split into `postgres`, `mysql`), `src/storage_mongo.ts` → `mongodb` (removed 2026-10-29); native drivers become optional peers | typecheck |
 | 4 | rename `Storage` → `Persistence`, `STORAGE` → `PERSISTENCE`, STORAGE-01 → PERSIST-01 | grep finds no leftover |
 | 5 | `packages/persistence-conformance` ← `bench/conformance.ts` + `bench/drivers.ts` | **K1–K7 green on every driver** |
 | 6 | `packages/server` ← `src/server.ts`, the function registry; `packages/protocol` ← the wire messages | typecheck |
@@ -161,7 +163,7 @@ The migration landed as planned (§5), with these differences, now reflected in 
   naming functions, internal functions and the action context moved to `@bunvex/server` (`functions.ts`).
   Subscriptions take a `publish` callback instead of Bun's server, so core knows no transport.
 - **server → persistence**: `@bunvex/persistence` is an OPTIONAL peer of the server, loaded by name when
-  `PERSISTENCE=postgres|mysql|mongodb`. The dependency rule records it.
+  `PERSISTENCE=postgres|mysql`. The dependency rule records it.
 - **D8**: one root `tsconfig.json` (`tsc -p .`, strict) instead of project references; references come
   with a build step for publishing (packages export their TypeScript sources in the workspace; the published
   copies add compiled JavaScript and declarations, STUDY-160).

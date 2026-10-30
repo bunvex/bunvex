@@ -8,7 +8,7 @@
  * @module
  */
 
-import type { ApiFromModules, FilterApi, FunctionReference } from "bunvex/server";
+import type { ApiFromModules, FilterApi, FunctionReference } from "@bunvex/server";
 import type * as chat from "../chat.js";
 
 declare const fullApi: ApiFromModules<{

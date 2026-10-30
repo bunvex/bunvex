@@ -164,8 +164,8 @@ const appBunvexErrors = new WeakMap<vm.Context, unknown>();
 const appViews = new WeakMap<vm.Context, <T extends object>(v: T) => T>();
 
 /**
- * A server module's namespace as a pushed context imports it: `bunvex/values` with the context's `BunvexError`;
- * `bunvex/server` with `log` seen through the context's wrapper, so an error `log.audit` throws (a key starting with
+ * A server module's namespace as a pushed context imports it: `@bunvex/values` with the context's `BunvexError`;
+ * `@bunvex/server` with `log` seen through the context's wrapper, so an error `log.audit` throws (a key starting with
  * "$", the lines past their limit) has the app's frames, not the server's (Convex makes it in the app's bundle,
  * `audit_logging.ts`).
  */

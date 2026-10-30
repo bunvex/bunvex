@@ -75,34 +75,12 @@ describe("the generated files", () => {
     expect(dts).toContain(`  messages: typeof messages;`);
     expect(dts).not.toMatch(/convex/i);
   });
-  test("@bunvex/* imports by default; bunvex/* for an app on the private aggregate `bunvex` (STUDY-40 L7)", () => {
-    const text = (packages?: "bunvex" | "@bunvex") => {
-      const g = generatedFiles(["a.ts"], { hasSchema: true, fileType: "js/dts", packages });
-      return [...Object.values(g.server), ...Object.values(g.api), ...Object.values(g.dataModel)].join("\n");
-    };
-    for (const scoped of [text(), text("@bunvex")]) {
-      expect(scoped).toContain(`from "${SERVER}"`);
-      expect(scoped).toContain(`from "${VALUES}"`);
-      expect(scoped).not.toMatch(/from "bunvex\//);
-    }
-    const aggregate = text("bunvex");
-    expect(aggregate).toContain(`from ${JSON.stringify(SERVER.slice(1))}`);
-    expect(aggregate).toContain(`from ${JSON.stringify(VALUES.slice(1))}`);
-    expect(aggregate).not.toContain(`"${SERVER}"`);
-    const dir = tmp();
-    // No package.json: an app on the scoped packages, as every app is.
-    expect(codegenConfig(dir).packages).toBe("@bunvex");
-    const config = (pkg: Record<string, unknown>) => {
-      writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
-      return codegenConfig(dir).packages;
-    };
-    expect(config({ dependencies: { "@bunvex/server": "0.1.0" } })).toBe("@bunvex");
-    expect(config({})).toBe("@bunvex");
-    expect(config({ dependencies: { "left-pad": "1.0.0" } })).toBe("@bunvex");
-    // This repository's examples depend on the aggregate, in any dependency field.
-    expect(config({ dependencies: { bunvex: "workspace:*", "@bunvex/react-query": "workspace:*" } })).toBe("bunvex");
-    expect(config({ devDependencies: { bunvex: "workspace:*" } })).toBe("bunvex");
-    expect(config({ peerDependencies: { bunvex: "*" } })).toBe("bunvex");
+  test("the generated files import the @bunvex/* packages, whatever the app depends on (STUDY-40 L7)", () => {
+    const g = generatedFiles(["a.ts"], { hasSchema: true, fileType: "js/dts" });
+    const text = [...Object.values(g.server), ...Object.values(g.api), ...Object.values(g.dataModel)].join("\n");
+    expect(text).toContain(`from "${SERVER}"`);
+    expect(text).toContain(`from "${VALUES}"`);
+    expect(text).not.toMatch(/from "bunvex\//);
   });
 
   test("the modules are the bundler's entry points, in code-unit order", () => {

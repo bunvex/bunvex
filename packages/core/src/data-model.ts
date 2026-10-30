@@ -11,12 +11,14 @@ import type {
   TableDefinition,
 } from "./schema.ts";
 
-/** A document's fields (Convex's `GenericDocument`). */
+// Convex's `GenericDocument`.
+/** A document's fields. */
 export type GenericDocument = Record<string, Value>;
 /** The dotted paths of a document's fields an index or filter may name. */
 export type GenericFieldPaths = string;
 
-/** One table, as types (Convex's `GenericTableInfo`). */
+// Convex's `GenericTableInfo`.
+/** One table, as types. */
 export type GenericTableInfo = {
   document: GenericDocument;
   fieldPaths: GenericFieldPaths;
@@ -25,10 +27,12 @@ export type GenericTableInfo = {
   vectorIndexes: GenericTableVectorIndexes;
 };
 
-/** Every table of an app, as types (Convex's `GenericDataModel`). */
+// Convex's `GenericDataModel`.
+/** Every table of an app, as types. */
 export type GenericDataModel = Record<string, GenericTableInfo>;
 
-/** A data model without a schema: any table, any document, the system indexes (Convex's `AnyDataModel`). */
+// Convex's `AnyDataModel`.
+/** A data model without a schema: any table, any document, the system indexes. */
 export type AnyDataModel = {
   [tableName: string]: {
     // biome-ignore lint/suspicious/noExplicitAny: Convex's AnyDataModel is any by definition
@@ -58,23 +62,27 @@ export type NamedIndex<
   IndexName extends IndexNames<TableInfo>,
 > = Indexes<TableInfo>[IndexName];
 
-/**
- * A table's search indexes (Convex's `SearchIndexes`, exported under that name by `bunvex/server`; core's own
- * `SearchIndexes` is the runtime's index set).
- */
+// Convex's `SearchIndexes`, exported under that name by `@bunvex/server`; core's own `SearchIndexes` is the
+// runtime's index set.
+/** A table's search indexes. */
 export type TableSearchIndexes<TableInfo extends GenericTableInfo> = TableInfo["searchIndexes"];
-/** The names of a table's search indexes (Convex's `SearchIndexNames`). */
+// Convex's `SearchIndexNames`.
+/** The names of a table's search indexes. */
 export type SearchIndexNames<TableInfo extends GenericTableInfo> = keyof TableSearchIndexes<TableInfo>;
-/** A search index's configuration by its name (Convex's `NamedSearchIndex`). */
+// Convex's `NamedSearchIndex`.
+/** A search index's configuration by its name. */
 export type NamedSearchIndex<
   TableInfo extends GenericTableInfo,
   IndexName extends SearchIndexNames<TableInfo>,
 > = TableSearchIndexes<TableInfo>[IndexName];
-/** A table's vector indexes (Convex's `VectorIndexes`, exported under that name as `TableSearchIndexes` is). */
+// Convex's `VectorIndexes`, exported under that name as `TableSearchIndexes` is.
+/** A table's vector indexes. */
 export type TableVectorIndexes<TableInfo extends GenericTableInfo> = TableInfo["vectorIndexes"];
-/** The names of a table's vector indexes (Convex's `VectorIndexNames`). */
+// Convex's `VectorIndexNames`.
+/** The names of a table's vector indexes. */
 export type VectorIndexNames<TableInfo extends GenericTableInfo> = keyof TableVectorIndexes<TableInfo>;
-/** A vector index's configuration by its name (Convex's `NamedVectorIndex`). */
+// Convex's `NamedVectorIndex`.
+/** A vector index's configuration by its name. */
 export type NamedVectorIndex<
   TableInfo extends GenericTableInfo,
   IndexName extends VectorIndexNames<TableInfo>,
@@ -86,12 +94,15 @@ export type SystemTableNames = "_scheduled_functions" | "_storage";
 /** The fields every document has besides `_id`. */
 export type SystemFields = { _creationTime: number };
 export type IdField<TableName extends string> = { _id: GenericId<TableName> };
-/** Convex's `SystemIndexes`: the two indexes every table has. */
+// Convex's `SystemIndexes`.
+/** The two indexes every table has. */
 export type SystemIndexes = { by_id: ["_id"]; by_creation_time: ["_creationTime"] };
-/** The field every index ends with, after its own (Convex's `IndexTiebreakerField`). */
+// Convex's `IndexTiebreakerField`.
+/** The field every index ends with, after its own. */
 export type IndexTiebreakerField = "_creationTime";
 
-/** `Omit` that keeps a union's branches apart (Convex's `BetterOmit`). */
+// Convex's `BetterOmit`.
+/** `Omit` that keeps a union's branches apart. */
 export type BetterOmit<T, K extends keyof T> = {
   [Property in keyof T as Property extends K ? never : Property]: T[Property];
 };
@@ -155,10 +166,10 @@ type TableInfoOf<TableName extends string, T> =
       : never
     : never;
 
+// Convex's `DataModelFromSchemaDefinition`.
 /**
- * The data model of a schema (Convex's `DataModelFromSchemaDefinition`): each table's document (with its
- * system fields), field paths and indexes. With `strictTableNameTypes: false`, any other table name is
- * allowed too, as `AnyDataModel`.
+ * The data model of a schema: each table's document (with its system fields), field paths and indexes. With
+ * `strictTableNameTypes: false`, any other table name is allowed too, as `AnyDataModel`.
  */
 // biome-ignore lint/suspicious/noExplicitAny: any schema's tables, as Convex's `SchemaDefinition<any, boolean>`
 export type DataModelFromSchemaDefinition<SchemaDef extends SchemaDefinition<any, boolean>> =

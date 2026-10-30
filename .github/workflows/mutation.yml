@@ -29,11 +29,11 @@ permissions:
 jobs:
   files:
     name: mutation · files
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       files: ${{ steps.list.outputs.files }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -48,14 +48,14 @@ jobs:
   mutation:
     name: mutation · ${{ matrix.file }}
     needs: files
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 340
     strategy:
       fail-fast: false
       matrix:
         file: ${{ fromJSON(needs.files.outputs.files) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4

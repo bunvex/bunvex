@@ -1,5 +1,5 @@
 // The PERSIST-01 suite on the two embedded drivers, as part of `bun test`. The external drivers
-// (Postgres, MySQL, MongoDB) run in their own CI job against service containers (bun bench/conformance.ts).
+// (Postgres, MySQL) run in their own CI job against service containers (bun bench/conformance.ts).
 import { expect, test } from "bun:test";
 import { runConformance } from "@bunvex/persistence-conformance";
 

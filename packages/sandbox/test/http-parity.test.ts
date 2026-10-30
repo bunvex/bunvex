@@ -20,14 +20,15 @@ import { provideProcessExecutor } from "@bunvex/server/executor";
 import { v } from "@bunvex/values";
 import { ProcessExecutor } from "../src/executor.ts";
 import { TestBlobs } from "./fixtures/blobs.ts";
+import { constructedAt } from "./parity-frames.ts";
 
 // No memory cap in the children: the cases past the response's 100 MiB cap hold more than a call's 64 MiB, which fails
 // them first under `process`, as on Convex (STUDY-188 §X17b; `memory-cap.test.ts`).
 provideProcessExecutor(() => new ProcessExecutor({ memoryCap: false }));
 process.env.TZ = "UTC";
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
-const VALUES = JSON.stringify(["bunvex", "values"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
+const VALUES = JSON.stringify(["@bunvex", "values"].join("/"));
 const MiB = 1 << 20;
 
 /** HTTP cases: `ctx` is an HTTP action's, `request` the request, `T` the `fetch` target's origin (`process.env.T`). */
@@ -60,22 +61,25 @@ const HTTP_CASES = `{
   streamTyped: async () => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("data: 1\\n\\n")); c.close(); } }), { headers: { "content-type": "text/event-stream" } }),
   streamBigAtOnce: async () => new Response(new ReadableStream({ start(c) { for (let i = 0; i < 3; i++) c.enqueue(new Uint8Array(MiB).fill(i)); c.close(); } })),
   streamEmpty: async () => new Response(new ReadableStream({ start(c) { c.close(); } })),
-  streamSlow: async () => { let n = 0; return new Response(new ReadableStream({ async pull(c) { await new Promise((r) => setTimeout(r, 5)); if (n++ < 5) c.enqueue(new Uint8Array(10).fill(n)); else c.close(); } })); },
+  // A stream that waits before or between its chunks waits 100 ms: with less, a slow box (the coverage job) can let
+  // the process child finish the stream before the host starts the response, which then goes out with a
+  // content-length instead of chunked (chunkNothing, CI run 40573040330).
+  streamSlow: async () => { let n = 0; return new Response(new ReadableStream({ async pull(c) { await new Promise((r) => setTimeout(r, 100)); if (n++ < 5) c.enqueue(new Uint8Array(10).fill(n)); else c.close(); } })); },
   streamBig: async () => { let n = 0; return new Response(new ReadableStream({ pull(c) { if (n++ < 50) c.enqueue(new Uint8Array(100000).fill(n)); else c.close(); } })); },
   streamFailsLate: async () => new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array(5)); setTimeout(() => c.error(new Error("the body broke")), 20); } })),
   streamFailsNow: async () => new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array(5)); c.error(new Error("broke at once")); } })),
-  streamFailsString: async () => new Response(new ReadableStream({ async start(c) { c.enqueue(new Uint8Array(3)); await new Promise((r) => setTimeout(r, 20)); c.error("a string"); } })),
+  streamFailsString: async () => new Response(new ReadableStream({ async start(c) { c.enqueue(new Uint8Array(3)); await new Promise((r) => setTimeout(r, 100)); c.error("a string"); } })),
   pullThrows: async () => new Response(new ReadableStream({ pull() { throw new TypeError("no body"); } })),
   pullThrowsAwaited: async () => new Response(new ReadableStream({ async pull() { for (let i = 0; i < 5; i++) await null; throw new TypeError("no body yet"); } })),
   chunkString: async () => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("first ")); c.enqueue("a string"); c.close(); } })),
-  chunkLateNumber: async () => new Response(new ReadableStream({ async start(c) { c.enqueue(new TextEncoder().encode("first ")); await new Promise((r) => setTimeout(r, 20)); c.enqueue(42); c.close(); } })),
-  chunkLateObject: async () => new Response(new ReadableStream({ async start(c) { c.enqueue(new TextEncoder().encode("first ")); await new Promise((r) => setTimeout(r, 20)); c.enqueue({ a: 1 }); c.close(); } })),
-  chunkNothing: async () => new Response(new ReadableStream({ async start(c) { c.enqueue(new TextEncoder().encode("a")); c.enqueue(null); await new Promise((r) => setTimeout(r, 5)); c.enqueue(undefined); c.enqueue(new TextEncoder().encode("b")); c.close(); } })),
+  chunkLateNumber: async () => new Response(new ReadableStream({ async start(c) { c.enqueue(new TextEncoder().encode("first ")); await new Promise((r) => setTimeout(r, 100)); c.enqueue(42); c.close(); } })),
+  chunkLateObject: async () => new Response(new ReadableStream({ async start(c) { c.enqueue(new TextEncoder().encode("first ")); await new Promise((r) => setTimeout(r, 100)); c.enqueue({ a: 1 }); c.close(); } })),
+  chunkNothing: async () => new Response(new ReadableStream({ async start(c) { c.enqueue(new TextEncoder().encode("a")); c.enqueue(null); await new Promise((r) => setTimeout(r, 100)); c.enqueue(undefined); c.enqueue(new TextEncoder().encode("b")); c.close(); } })),
   chunkBuffers: async () => new Response(new ReadableStream({ start(c) { const e = (t) => new TextEncoder().encode(t); c.enqueue(e("ab").buffer); c.enqueue(new DataView(e("dv").buffer)); c.enqueue(new Uint16Array([0x6968])); c.close(); } })),
   overCap: async () => { let n = 0; const sizes = [60, 50, 1, 30]; return new Response(new ReadableStream({ pull(c) { if (n < sizes.length) c.enqueue(new Uint8Array(sizes[n++] * MiB)); else c.close(); } })); },
   bodyCallsCtx: async (ctx) => { let n = 0; return new Response(new ReadableStream({ async pull(c) { if (n++ < 3) { const x = await ctx.runQuery("cases:q", { n }); console.log("chunk", n, x); c.enqueue(new TextEncoder().encode(String(x) + ";")); } else c.close(); } })); },
-  bodyWrites: async (ctx) => new Response(new ReadableStream({ async start(c) { await new Promise((r) => setTimeout(r, 10)); const id = await ctx.runMutation("cases:ins", { k: 77 }); c.enqueue(new TextEncoder().encode(typeof id)); c.close(); } })),
-  bodyReadsEnv: async () => new Response(new ReadableStream({ async start(c) { await new Promise((r) => setTimeout(r, 5)); c.enqueue(new TextEncoder().encode(String(process.env.ENV_SET))); c.close(); } })),
+  bodyWrites: async (ctx) => new Response(new ReadableStream({ async start(c) { await new Promise((r) => setTimeout(r, 100)); const id = await ctx.runMutation("cases:ins", { k: 77 }); c.enqueue(new TextEncoder().encode(typeof id)); c.close(); } })),
+  bodyReadsEnv: async () => new Response(new ReadableStream({ async start(c) { await new Promise((r) => setTimeout(r, 100)); c.enqueue(new TextEncoder().encode(String(process.env.ENV_SET))); c.close(); } })),
   bodyFetches: async () => new Response(new ReadableStream({ async start(c) { const r = await fetch(process.env.T + "/text"); c.enqueue(new TextEncoder().encode(await r.text())); c.close(); } })),
   // the request
   echo: async (ctx, request) => { const h = [...request.headers].filter(([k]) => k.startsWith("x-") || k === "content-type"); return Response.json({ url: request.url, method: request.method, headers: h, hasBody: request.body !== null, id: request.headers.has("bunvex-request-id"), signal: request.signal.aborted, used: request.bodyUsed }); },
@@ -215,7 +219,7 @@ type Seen = {
 
 /** Ids, times, ports and request ids, which differ between any two runs. */
 const own = (t: string) =>
-  t
+  constructedAt(t)
     .replace(/\b[0-9a-z]{31,37}\b/g, "<id>")
     .replace(/\b1\d{12}(?:\.\d+)?\b/g, "<time>")
     .replace(/\b[0-9a-f]{16}\b/g, "<request>")

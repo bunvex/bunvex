@@ -16,10 +16,11 @@ import { fieldValue } from "./schema.ts";
 
 type MaybeValue = Value | undefined;
 
+// `T` for the types only (STUDY-36); `json` as Convex's `ExpressionImpl.serialize()`; the cursor check is STUDY-17 D3.
 /**
- * An expression of a filter; `T` is its value's type (types only, STUDY-36). `json` is its serialized form, as
- * Convex's `ExpressionImpl.serialize()` (`{ $eq: [{ $field: "a" }, { $literal: 1 }] }`): a paginated query's
- * cursor fingerprint covers it, so a cursor of another filter is refused (STUDY-17 D3).
+ * An expression of a filter; `T` is its value's type (types only). `json` is its serialized form
+ * (`{ $eq: [{ $field: "a" }, { $literal: 1 }] }`): a paginated query's cursor fingerprint covers it, so a cursor of
+ * another filter is refused.
  */
 // biome-ignore lint/correctness/noUnusedVariables: T is only for the typed filter builder
 export class Expression<T = unknown> {

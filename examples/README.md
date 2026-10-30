@@ -1,7 +1,7 @@
 # bunvex examples
 
-Small apps, one feature each, written for bunvex after the scenarios of Convex's demos (STUDY-90). Each has its
-functions in `bunvex/` (with the generated `bunvex/_generated/` committed), a front end (Vite + React, or Next.js),
+Small apps, one feature each, written for bunvex. The scenarios follow Convex's demos. Each has its
+functions in `bunvex/` (with the generated `bunvex/_generated/` committed), a front end (Vite + React, Next.js, or Expo for React Native),
 a README, and an end-to-end test.
 
 ## Run one
@@ -29,7 +29,7 @@ bun run example tutorial          # from the repository's root; dev options foll
 ```
 
 It runs the example's `bun run dev` with `BUNVEX_LOCAL_BACKEND_BINARY` pointing to a shim that runs
-`packages/bunvex/bin/local-backend.ts` with Bun. The example's local deployment (`.bunvex/`) is the same one
+`apps/local-backend/local-backend.ts` with Bun. The example's local deployment (`.bunvex/`) is the same one
 either way: its data stays.
 
 ## Tests
@@ -52,12 +52,14 @@ drives it in Chromium; any page error or console error fails the test.
 | Example | What it shows |
 |---|---|
 | [tutorial](tutorial) | A chat: a query, a mutation, a page that stays live |
+| [react-native](react-native) | The same chat on iOS and Android with Expo (React Native) |
+| [tanstack-start](tanstack-start) | The chat on TanStack Start: rendered on the server with `@bunvex/react-query`, then live |
 | [typescript](typescript) | A schema typing documents end to end (`Doc<"messages">`) |
 | [args-validation](args-validation) | `args` and `returns` validators, and what a refused call says |
 | [custom-errors](custom-errors) | `BunvexError` with a message or data, from mutations and queries |
 | [relational-data-modeling](relational-data-modeling) | Channels and messages: `v.id`, an index, a join |
 | [pagination](pagination) | `usePaginatedQuery`, `loadMore`, a page that stays live |
-| [rooms-cursors](rooms-cursors) | `room` and `presence`: live cursors, a wave and who is online, held in memory (AD-42) |
+| [rooms-cursors](rooms-cursors) | `room` and `presence`: live cursors, a wave and who is online, held in memory |
 | [search](search) | Full-text search over a `searchIndex`, live |
 | [vector-search](vector-search) | `vectorSearch` with embeddings from an action (OpenAI) |
 | [file-storage](file-storage) | Upload URLs, `ctx.storage`, serving files |
@@ -72,7 +74,8 @@ drives it in Chromium; any page error or console error fails the test.
 | [react-query](react-query) | TanStack Query (`@bunvex/react-query`), live |
 | [nextjs-app-router](nextjs-app-router) | Next.js App Router: `preloadQuery`, `usePreloadedQuery`, a Server Action |
 | [nextjs-pages-router](nextjs-pages-router) | Next.js Pages Router, and `fetchQuery` from an API route |
-| [batch-worker](batch-worker) | A component from npm: `@bunvex/batch-worker` draining a work queue and folding scores into totals, each resuming from a commit-timestamp cursor |
+| [batch-worker](batch-worker) | A component from npm: `@bunvex/batch-worker` draining a work queue, folding scores into totals, and sending LLM requests as a `@bunvex/rate-limiter` token budget allows, each resuming from a commit-timestamp cursor |
+| [rate-limiter](rate-limiter) | A component from npm: `@bunvex/rate-limiter`, a playground of limits with a live timeline, and `useRateLimit` in the browser |
 | [sharded-counter](sharded-counter) | A component from npm: `@bunvex/sharded-counter` counting a million checkboxes, a trigger counting a table |
 | [testing](testing) | `@bunvex/testing`: the app's functions in tests, on the real engine (no front end) |
-| [users-and-clerk](users-and-clerk) | Signed-in users with Clerk (`bunvex/react-clerk`) |
+| [users-and-clerk](users-and-clerk) | Signed-in users with Clerk (`@bunvex/react-clerk`) |

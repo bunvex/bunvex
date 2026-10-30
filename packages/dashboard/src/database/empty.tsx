@@ -10,19 +10,31 @@ import { useEffect } from "react";
 import { useQueryScope } from "../context.tsx";
 import { tablesQuery } from "../data/queries.ts";
 import { BAR_TITLE, BAR1 } from "../shell/bars.ts";
+import { DatabaseScope, useComponentSearch } from "./components.tsx";
 import { CreateTable, useCanCreateTable } from "./create-table.tsx";
 import { useLiveTables } from "./live.ts";
 import { TablesSidebar } from "./tables-sidebar.tsx";
 
+/** `/database` with no table, in the scope of the component the URL names (STUDY-152 §4). */
 export function EmptyDatabase() {
+  return (
+    <DatabaseScope>
+      <EmptyDatabaseContent />
+    </DatabaseScope>
+  );
+}
+
+function EmptyDatabaseContent() {
+  const { component } = useComponentSearch();
   const canCreate = useCanCreateTable();
   useLiveTables();
   const { data: tables } = useQuery(tablesQuery(useQueryScope()));
   const first = tables?.map((t) => t.name).sort()[0];
   const navigate = useNavigate();
   useEffect(() => {
-    if (first !== undefined) void navigate({ to: "/database/$table", params: { table: first }, replace: true });
-  }, [first, navigate]);
+    if (first !== undefined)
+      void navigate({ to: "/database/$table", params: { table: first }, search: { component }, replace: true });
+  }, [first, navigate, component]);
   return (
     <div className="-m-4 flex min-h-[calc(100svh-3rem)] flex-col md:-m-6 lg:h-[calc(100svh-3rem)] lg:flex-row">
       <TablesSidebar tables={[]} current="" canCreate={canCreate === true} />

@@ -1,4 +1,4 @@
-// The sharded-counter example end to end (STUDY-183 S-4): the component package installed from the workspace and
+// The sharded-counter example end to end: the component package installed from the workspace and
 // mounted twice, its client used from the app's functions, a trigger counting a table, and the checkboxes' count
 // following the clicks live.
 import { afterAll, beforeAll, expect, test } from "bun:test";

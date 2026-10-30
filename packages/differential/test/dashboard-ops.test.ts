@@ -7,7 +7,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { BunvexClient } from "bunvex/browser";
+import { BunvexClient } from "@bunvex/client";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
 import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";

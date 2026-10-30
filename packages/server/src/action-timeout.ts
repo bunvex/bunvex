@@ -100,9 +100,10 @@ export function trackActionTimer(t: unknown) {
 type TimerCallback = (...args: unknown[]) => unknown;
 let timerCallback: ((callback: TimerCallback) => TimerCallback) | null = null;
 
+// STUDY-171 §13.
 /**
  * How the callback of a timer an action's code sets runs: as given in-process; the function sandbox's child runs it in
- * a checkpoint of its action, so what it leaves rejected with no handler fails that action (STUDY-171 §13).
+ * a checkpoint of its action, so what it leaves rejected with no handler fails that action.
  */
 export function setActionTimerCallback(wrap: (callback: TimerCallback) => TimerCallback) {
   timerCallback = wrap;
@@ -188,9 +189,10 @@ export function withActionTimeout<T>(
   });
 }
 
+// STUDY-171 §12.
 /**
  * The running action's signal, aborted with its timeout once it timed out (or its caller did): what the function
- * sandbox's host hears to cut the action off in its child (STUDY-171 §12). Null outside an action.
+ * sandbox's host hears to cut the action off in its child. Null outside an action.
  */
 export const currentActionSignal = (): AbortSignal | null => runs.getStore()?.signal ?? null;
 

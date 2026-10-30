@@ -8,7 +8,8 @@
 import { fromBase64, toBase64, utf8Length } from "./bytes.ts";
 import { type CommitTsPlaceholder, isCommitTsPlaceholder } from "./commit-ts.ts";
 
-/** A Convex value; `CommitTsPlaceholder` is `db.vars.commitTs` before its mutation commits (STUDY-53). */
+// Convex's values (STUDY-53 for the placeholder).
+/** A value bunvex stores and sends; `CommitTsPlaceholder` is `db.vars.commitTs` before its mutation commits. */
 export type Value =
   | null
   | bigint
@@ -19,7 +20,8 @@ export type Value =
   | CommitTsPlaceholder
   | Value[]
   | { [field: string]: Value };
-/** A number a filter's arithmetic takes (Convex's `NumericValue`): a float64 or an int64. */
+// Convex's `NumericValue`.
+/** A number a filter's arithmetic takes: a float64 or an int64. */
 export type NumericValue = bigint | number;
 export type JSONValue = null | boolean | number | string | JSONValue[] | { [field: string]: JSONValue };
 
@@ -28,15 +30,17 @@ const MAX_INT64 = 2n ** 63n - 1n;
 const MAX_FIELD_NAME_LEN = 1024;
 const MAX_VALUE_FOR_ERROR_LEN = 16384;
 
+// Convex's `MAX_NESTING` (crates/value/src/size.rs).
 /**
- * Convex's `MAX_NESTING` (crates/value/src/size.rs): how deeply arrays and objects may nest in any value — an
- * argument, a result, a written value. Documents have their own, lower limit (16).
+ * How deeply arrays and objects may nest in any value — an argument, a result, a written value. Documents have their
+ * own, lower limit (16).
  */
 export const MAX_VALUE_NESTING = 64;
 
+// Convex's `TooNestedError` message; Convex checks the limit from the leaves up, so this level is its.
 /**
- * Convex's `TooNestedError` message. Convex checks the limit as it builds a value from its leaves up, so the
- * level it reports is always the first one past the limit.
+ * The message of a value nested too deeply. The level it reports is always the first one past the limit (the limit is
+ * checked as a value is built from its leaves up).
  */
 export const TOO_NESTED_MESSAGE = `Value is too nested (nested ${MAX_VALUE_NESTING + 1} levels deep > maximum nesting ${MAX_VALUE_NESTING})`;
 
@@ -74,10 +78,11 @@ const branded = (get: () => number, v: unknown) => {
   }
 };
 
+// STUDY-35; an object claiming the tag is an object, as in Convex (STUDY-18 §9).
 /**
- * An ArrayBuffer (a bytes value), from this realm or another: a function's code runs in its own context
- * (STUDY-35), whose `ArrayBuffer` is not this one, so `instanceof` would miss it. The tag, which any object can
- * claim, only picks the candidates: `{ [Symbol.toStringTag]: "ArrayBuffer" }` is an object, as in Convex (STUDY-18 §9).
+ * An ArrayBuffer (a bytes value), from this realm or another: a function's code runs in its own context, whose
+ * `ArrayBuffer` is not this one, so `instanceof` would miss it. The tag, which any object can claim, only picks the
+ * candidates: `{ [Symbol.toStringTag]: "ArrayBuffer" }` is an object.
  */
 export function isBytes(v: unknown): v is ArrayBuffer {
   return (
@@ -134,18 +139,18 @@ const quote = (s: string) =>
   // Stryker disable next-line all: a shortcut; the whole text is cut at the limit at the end.
   JSON.stringify(s.length > MAX_VALUE_FOR_ERROR_LEN ? s.slice(0, MAX_VALUE_FOR_ERROR_LEN + 2) : s);
 
+// As Convex's `stringifyValueForError` prints it (npm-packages/convex/src/values/value.ts).
 /**
- * A value in an error message, as Convex's `stringifyValueForError` prints it (npm-packages/convex/src/values/
- * value.ts): its JSON, with `undefined` as `"undefined"`, a bigint as `"5n"`, a function as `"[Function]"` and
- * a symbol as its description (`"Symbol(s)"`), cut at
- * MAX_VALUE_FOR_ERROR_LEN characters with `[...truncated]`.
+ * A value in an error message: its JSON, with `undefined` as `"undefined"`, a bigint as `"5n"`, a function as
+ * `"[Function]"` and a symbol as its description (`"Symbol(s)"`), cut at MAX_VALUE_FOR_ERROR_LEN characters with
+ * `[...truncated]`.
  *
- * Unlike `JSON.stringify`, it opens only plain data: arrays, plain objects and their fields. A class instance,
- * a `Map`, a `Date` or a function's context object prints as its class name and `{…}`, never its fields, and
- * no `toJSON` or other method of it runs. Function code holds engine objects (`ctx.db`, a query) whose
- * fields reach the transaction, the catalog and the store; serialising them put all of that in a message the
- * client receives. A cycle prints as `"[Circular]"`, and the walk stops once the output is past the limit,
- * so a huge or cyclic value costs no more than the message.
+ * Unlike `JSON.stringify`, it opens only plain data: arrays, plain objects and their fields. A class instance, a `Map`,
+ * a `Date` or a function's context object prints as its class name and `{…}`, never its fields, and no `toJSON` or
+ * other method of it runs. Function code holds engine objects (`ctx.db`, a query) whose fields reach the transaction,
+ * the catalog and the store; serialising them put all of that in a message the client receives. A cycle prints as
+ * `"[Circular]"`, and the walk stops once the output is past the limit, so a huge or cyclic value costs no more than
+ * the message.
  */
 export function stringifyValueForError(value: unknown): string {
   const out: string[] = [];
@@ -287,7 +292,7 @@ function toJson(value: unknown, original: unknown, context: string): JSONValue {
   return out;
 }
 
-/** A Convex value as JSON (throws on anything that is not a Convex value). */
+/** A value as JSON (throws on anything that is not a value). */
 export function toJsonValue(value: Value): JSONValue {
   return toJson(value, value, "");
 }
@@ -407,7 +412,8 @@ function compareBytes(a: Uint8Array, b: Uint8Array): number {
 }
 const utf8 = new TextEncoder();
 
-/** Convex's total order on values (equal to comparing their sort keys). */
+// Convex's order on values.
+/** The total order on values, across types (equal to comparing their sort keys). */
 export function compareValues(a: Value | undefined, b: Value | undefined): number {
   const ra = rank(a);
   const rb = rank(b);
@@ -485,10 +491,11 @@ const MAX_ARRAY_LEN = 8192;
 const MAX_OBJECT_FIELDS = 1024;
 const utf8len = utf8Length;
 
+// Convex's `Size::size` (crates/value); its client exports it as `getConvexSize` (values/size.ts), whose edges this
+// keeps.
 /**
- * Convex's notion of a value's size (`Size::size`, crates/value): the unit of the document limit. Convex's
- * client exports it as `getConvexSize` (values/size.ts), whose edges it keeps: `undefined` is 0, a commit-ts
- * placeholder 9 (an int64), and anything else that is not a value throws `Unsupported value type: <typeof>`.
+ * A value's size: the unit of the document limit. `undefined` is 0, a commit-ts placeholder 9 (an int64), and anything
+ * else that is not a value throws `Unsupported value type: <typeof>`.
  */
 export function valueSize(v: Value | undefined): number {
   return sizeOf(v, true, 1);
@@ -503,10 +510,11 @@ export function rawValueSize(v: Value | undefined): number {
   return sizeOf(v, false, 1);
 }
 
+// Convex checks both as it builds the value.
 /**
- * `rawValueSize` and the nesting, in one walk (a function's arguments and result: Convex checks both as it
- * builds the value). The walk stops going down past `maxNesting`, so a value of any depth is safe to measure:
- * `nesting` is exact up to `maxNesting + 1`, and past that `size` counts only what was walked.
+ * `rawValueSize` and the nesting, in one walk (a function's arguments and result, which are checked for both). The walk
+ * stops going down past `maxNesting`, so a value of any depth is safe to measure: `nesting` is exact up to `maxNesting
+ * + 1`, and past that `size` counts only what was walked.
  */
 export function measureRawValue(
   v: Value | undefined,
@@ -596,9 +604,10 @@ function deeper(depth: number): boolean {
 const SYSTEM_ID_SIZE = 38;
 const SYSTEM_CREATION_TIME_SIZE = 23;
 
+// Convex's `getDocumentSize`, with its estimate.
 /**
- * A document's size as stored (Convex's `getDocumentSize`): `valueSize`, plus Convex's estimate of the system
- * fields it does not have yet — 38 bytes for `_id` (or `customIdLength` + 6), 23 for `_creationTime`.
+ * A document's size as stored: `valueSize`, plus an estimate of the system fields it does not have yet — 38 bytes for
+ * `_id` (or `customIdLength` + 6), 23 for `_creationTime`.
  */
 export function getDocumentSize(value: Record<string, Value>, options?: { customIdLength?: number }): number {
   const size = valueSize(value);

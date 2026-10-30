@@ -34,7 +34,7 @@ permissions:
 jobs:
   soak:
     name: soak · SQLite
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 45 minutes of workload, ~2 to drain, 1.5 of idle tail, the start and the install.
     timeout-minutes: 60
     env:
@@ -46,7 +46,7 @@ jobs:
       SOAK_REPORT_ONLY: ""
       REPORT_ONLY_INPUT: ${{ inputs.report_only }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4

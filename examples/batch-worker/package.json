@@ -2,7 +2,7 @@
   "name": "bunvex-example-batch-worker",
   "version": "0.0.0",
   "private": true,
-  "description": "A work queue and a live scoreboard, each drained in batches by @bunvex/batch-worker.",
+  "description": "A work queue, a live scoreboard and rate-limited LLM batches, each drained in batches by @bunvex/batch-worker.",
   "type": "module",
   "scripts": {
     "dev": "bunvex dev --start 'vite --open'",
@@ -10,11 +10,15 @@
   },
   "dependencies": {
     "@bunvex/batch-worker": "workspace:*",
-    "bunvex": "workspace:*",
+    "@bunvex/rate-limiter": "workspace:*",
+    "@bunvex/react": "workspace:*",
+    "@bunvex/server": "workspace:*",
+    "@bunvex/values": "workspace:*",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
+    "@bunvex/cli": "workspace:*",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",

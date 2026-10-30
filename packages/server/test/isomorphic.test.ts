@@ -1,4 +1,4 @@
-// `bunvex/server` outside Bun (STUDY-91): the isomorphic entry has every value of the package but the runtime's,
+// `@bunvex/server` outside Bun (STUDY-91): the isomorphic entry has every value of the package but the runtime's,
 // the same objects, and it bundles for a browser with nothing of the runtime in it. A new export of
 // src/index.ts fails the first test until it is added to src/isomorphic.ts or listed here as runtime-only.
 import { describe, expect, test } from "bun:test";

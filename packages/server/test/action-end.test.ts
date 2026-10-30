@@ -17,7 +17,7 @@ import { ACTION_ENDED_MESSAGE, trackActionTimer, trackedActionTimers } from "../
 import { Functions } from "../src/functions.ts";
 import { createServer } from "../src/server.ts";
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
 const MODULE = `
 import { action, query, mutation, httpRouter, httpAction } from ${SERVER};
 const state = { fired: 0, ticks: 0, saved: null, late: [] };

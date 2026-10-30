@@ -318,7 +318,7 @@ Add a push test to `packages/server/test/rooms-define.test.ts`. It uses the depl
 ```ts
 test("push finds a module's rooms, beside its functions", async () => {
   const version = await loadVersion({
-    "rooms.js": `import { room, presence, query } from "bunvex/server"; import { v } from "bunvex/values";
+    "rooms.js": `import { room, presence, query } from "@bunvex/server"; import { v } from "@bunvex/values";
       export const doc = room({ args: { id: v.string() }, presence: v.any() });
       export const online = presence({ state: v.any() });
       export const list = query(async () => null);`,

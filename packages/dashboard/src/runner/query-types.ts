@@ -6,8 +6,8 @@ import type { SchemaInfo, TableInfo } from "../data-source.ts";
 import { schemaCode } from "../database/schema-code.ts";
 
 // the specifiers an app's files import, written into the files below (as text, not imported here)
-const SERVER = JSON.stringify("bunvex/server");
-const VALUES = JSON.stringify("bunvex/values");
+const SERVER = JSON.stringify("@bunvex/server");
+const VALUES = JSON.stringify("@bunvex/values");
 
 /** The test query's own model: a module at the project's root, beside `schema.ts`. */
 export const QUERY_FILE = "file:///testQuery.ts";

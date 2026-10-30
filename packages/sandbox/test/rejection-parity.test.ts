@@ -17,12 +17,13 @@ import { createServer, Functions } from "@bunvex/server";
 import { provideProcessExecutor } from "@bunvex/server/executor";
 import { v } from "@bunvex/values";
 import { createProcessExecutor } from "../src/executor.ts";
+import { constructedAt } from "./parity-frames.ts";
 
 provideProcessExecutor(createProcessExecutor);
 process.env.TZ = "UTC";
 
-const SERVER = JSON.stringify(["bunvex", "server"].join("/"));
-const VALUES = JSON.stringify(["bunvex", "values"].join("/"));
+const SERVER = JSON.stringify(["@bunvex", "server"].join("/"));
+const VALUES = JSON.stringify(["@bunvex", "values"].join("/"));
 
 /**
  * Cases a query, a mutation and an action share. `fail(value)` leaves `value` rejected with no handler (`mode`
@@ -112,9 +113,9 @@ type Kind = "query" | "mutation" | "action";
 
 /** What the client gets, without the request id. */
 function normalized(o: Outcome) {
-  const logLines = o.logLines ?? [];
+  const logLines = (o.logLines ?? []).map(constructedAt);
   if (o.status === "success") return { value: o.value ?? null, logLines };
-  const error = (o.errorMessage ?? "").replace(/^\[Request ID: [0-9a-f]+\] Server Error\n/, "");
+  const error = constructedAt((o.errorMessage ?? "").replace(/^\[Request ID: [0-9a-f]+\] Server Error\n/, ""));
   return { error, data: o.errorData, logLines };
 }
 

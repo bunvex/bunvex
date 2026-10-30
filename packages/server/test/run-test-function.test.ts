@@ -18,7 +18,7 @@ const cipherKey = adminKeyCipherKey(SECRET);
 const KEY = issueAdminKey({ instanceName: NAME, cipherKey });
 const READ_ONLY = issueAdminKey({ instanceName: NAME, cipherKey, readOnly: true });
 const OTHER = issueAdminKey({ instanceName: "tacos", cipherKey });
-const SERVER = ["bunvex", "server"].join("/");
+const SERVER = ["@bunvex", "server"].join("/");
 const WRAPPERS = "bunvex:/_system/repl/wrappers.js";
 
 const stops: (() => unknown)[] = [];

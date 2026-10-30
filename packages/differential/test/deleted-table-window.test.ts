@@ -6,7 +6,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { decodeId } from "bunvex/values";
+import { decodeId } from "@bunvex/values";
 import { type Backend, ORACLE_BIN, startAll, startBunvex, startConvex } from "../harness/backends.ts";
 
 const ready = existsSync(ORACLE_BIN);

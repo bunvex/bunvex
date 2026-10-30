@@ -7,8 +7,8 @@
 // - `"use node"` files are bundled apart (their own chunks under `_deps/node/`) and may import Node builtins;
 //   the others keep any builtin import too, and the server refuses it ("only available in \"use node\"
 //   files"), as Convex's browser-platform bundle would fail;
-// - `bunvex/server`, `bunvex/values` and their `@bunvex/*` names stay external: the server links them to its own
-//   modules (`LINKED_MODULES`); every other `bunvex` import, a component package or a library, is bundled;
+// - `@bunvex/server` and `@bunvex/values` stay external: the server links them to its own
+//   modules (`LINKED_MODULES`); every other `@bunvex/*` import, a component package or a library, is bundled;
 // - ESM, code splitting into `_deps/[hash].js` chunks, source maps, `process.env.NODE_ENV` "production";
 // - `schema.ts` and `auth.config.ts` are bundled on their own (`schema.js`, `auth.config.js`);
 // - `node.externalPackages` (STUDY-148): the `"use node"` build leaves the listed packages as imports, and the
