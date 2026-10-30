@@ -1,8 +1,9 @@
 # STUDY-200 — `@bunvex/resend`
-<!-- index: `@bunvex/resend`, the fifth own component (STUDY-158's list extended) and the email sender of built-in auth (STUDY-191 A-7): a queue of emails sent in batches to Resend's API through two workpools and a rate limiter, webhooks verified with Svix signatures, statuses and delivery events, cleanups; written from get-convex/resend 0.2.10 | decided (owner, 2026-10-30): R-1–R-8 as recommended; DV-581, DV-582, AD-48 -->
+<!-- index: `@bunvex/resend`, the fifth own component (STUDY-158's list extended) and the email sender of built-in auth (STUDY-191 A-7): a queue of emails sent in batches to Resend's API through two workpools and a rate limiter, webhooks verified with Svix signatures, statuses and delivery events, cleanups; written from get-convex/resend 0.2.10 | decided (owner, 2026-10-30): R-1–R-8 as recommended; DV-581, DV-582, AD-48; built: the package and its tests (§5) -->
 
 - **Status:** decided (owner, 2026-10-30): R-1–R-8 as recommended (§7): DV-581 (R-2), DV-582 (R-3), AD-48 (R-7).
-  To be built (§3.5).
+  Built (2026-10-30): AD-48's `outboundFetch` in `@bunvex/testing` (#980), then `components/resend/` and its tests
+  (§5). The differential test and `examples/resend` (R-8) are the next steps of §3.5.
 - **Convex source read:** get-convex/resend (now github.com/convex/resend) at `982bc63` (the tag commit of 0.2.10,
   2026-10-22), cloned at `../resend`. Paths are relative to that repository's root. Pinned (R-1).
 - **Consumer read:** Convex Auth v2 at `84ccfa8d` (`../convex-auth`), `packages/core` (§1.15).
@@ -626,7 +627,74 @@ Beyond these, the renames of DV-538, DV-347 and DV-533 (§3.3).
 
 ## 5. Tests
 
-As §3.4, once built.
+As §3.4, built (`components/resend/test/`, 94 cases in 8 files, on `@bunvex/testing`'s virtual clock, Resend answered
+by `outboundFetch`, AD-48):
+- upstream's cases, ported: `lib.test.ts` (the 24 of `src/component/lib.test.ts`: each event type, the five malformed
+  inputs, the parse that keeps `message_id`, templates, `idempotencyKey`, `createManualEmail`'s `cc`/`bcc`),
+  `utils.test.ts` (the four `isValidResendTestEmail` cases) and `client.test.ts` (upstream's client case for `resend`
+  and `customResend`, on an app that installs the package by its name, `test/fixtures/app`). The component's own
+  cases run its functions pushed as an app's (`test/fixtures/standalone`, which mounts the three children as the
+  component does). `setup.test.ts`'s helpers are `test/helpers.ts`.
+- Porting notes:
+  - Upstream stubs the global `fetch` (`vi.stubGlobal`); here `bunvexTest({ outboundFetch })` answers the batch call,
+    and each request is recorded as it goes out (its `User-Agent` is `Bunvex/1.0`, DV-456).
+  - Upstream's `defineTestApp` (DV-546) is the pushed app fixture; its `onEmailEvent` writes the app's `events` table.
+  - An action, an HTTP action included, reads the real clock where queries and mutations read the test's virtual one,
+    so the webhook tests sign with `Date.now()` and keep ±310 s away from the tolerance's edges (the exact edges are
+    checked on the verifier itself).
+- More:
+  - `send.test.ts`: the request (URL, method, `Authorization`, `Content-Type`, `Idempotency-Key` = the first id as
+    enqueued, even when that email was cancelled since; the body's keys in Convex's order, `reply_to: []`, repeated
+    headers keeping the last value, templates with and without a subject); `lastOptions` last-writer-wins; the first
+    send about a second after idle and the batcher idling again; the two-segment lag; 150 emails cut 100 + 50 with the
+    second call ≥ 600 ms after the first; cancelation before and after `makeBatch`; every permanent status and
+    fourteen retried ones (402, 409, 412, 417, 423–425, 429, 451, 500–504); `No data returned`; `retryAttempts` 3
+    (three tries with the backoff) and 0 (one try); a failed request retried; `onEmailComplete`'s success over a late
+    cancel, `canceled` and a null success.
+  - `events.test.ts`: the rank rule for the 8 event types from each of the 8 statuses (64 emails), with the flag,
+    `finalizedAt` and `deliveryEvents` row of each; complained on a final email; repeats; the callback for every
+    valid event of a known email (repeats and `email.sent` included, fields stripped), none without `lastOptions` or
+    without `onEmailEvent`, and a send without it silencing the callback (Convex Auth's case, §2.3).
+  - `webhook.test.ts`: the verifier against Svix's published example (`whsec_MfKQ…`, `v1,g0hM9S…`) and a WebCrypto
+    signature computed in the test; several signatures in the header, only `v1` compared; each of svix's refusals in
+    its order (`Missing required headers`, `Invalid Signature Headers`, `Message timestamp too old`/`too new` at the
+    exact ±300 s edges, `No matching signature found`) as `WebhookVerificationError`; `parseInt`'s reading of
+    `1614265330abc`; JSON's error for a signed non-JSON body; the secret's base64 rules and its coder's two messages.
+    `client.test.ts` posts to the app's `/resend-webhook`: a 201 with no body, and a 500 for each refusal, for
+    `webhook-*` headers and for a missing secret.
+  - `client.test.ts` also: the defaults from `process.env`, `API key is not set`, test mode, the positional overload,
+    an extra key refused by the validator, a send from an action, `get`'s shape, `cancelEmail`, `sendEmailManually`
+    (sent; failed with an `Error`'s message and its `resendId`, or a thrown string's text).
+  - `messages.test.ts`: every message and log line of §1.12 not checked elsewhere, word for word, at its level.
+  - `cleanup.test.ts`: `cleanupOldEmails` over 250 finalized emails (100 + 100 + 50, logged so) leaving the recent and
+    unfinalized ones, and `cleanupAbandonedEmails` over 1 105 (500 + 500 + 105) of any status, each with its body and
+    events; `get`/`getStatus` on old rows, missing bodies and removed emails; `updateManualEmail`'s removals.
+- §3.2's three platform checks hold:
+  - a sibling component (`test/fixtures/authEmail`) calls `resend`'s `lib.sendEmail` through a handle the app made, and
+    the app calls it directly, with Convex Auth's arguments (`testMode: false` honoured; both emails in one batch with
+    auth's key);
+  - index ranges with `Infinity` and `-Infinity` keys (`gt`, `lte`, `lt`, `eq` against `Infinity`, `Number.MAX_VALUE`
+    beside them), and the batcher never batching a `waiting` row at `Infinity`;
+  - bundling: the package keeps no third-party code (R-3–R-5), and the app fixture is bundled and pushed as
+    `bunvex deploy` pushes it.
+- One finding, not a divergence: a `407` from Resend never reaches the component on either backend. The action's
+  `fetch` answers a 407 as a proxy refusal (a `TypeError`, Convex's rule, `action-fetch.ts`), so the batch is retried
+  although 407 is in `PERMANENT_ERROR_CODES`.
+- Sabotage checks, each caught by a test and restored: the two-segment lag (`- 2` → `- 1`) by "takes only emails at
+  least two segments older"; the 100-email cut (101) by "cuts batches at 100 emails"; the permanent-status rule (404
+  dropped, or 429 added) by "a permanent status fails the batch's queued emails at once"; the rank rule (`failed` ranked
+  6) by "every event type from every status"; test mode's address check (the `+` dropped) by `isTestEmail`'s refusal
+  case, and test mode switched off by the `messages.test.ts` and `client.test.ts` refusals.
+- **The differential test** (`packages/differential/test/resend.test.ts`, app `resend-app/`) runs the same calls with
+  `@convex-dev/resend` 0.2.10 on Convex's binary and `@bunvex/resend` on bunvex, without reaching Resend. It compares:
+  - `sendEmail`'s refusals, and for each accepted email its status queued, its status once canceled and its row;
+  - the idempotency key's dedupe;
+  - the webhook route end to end, with payloads signed with the app's secret: each event's answer, the email's status
+    and flags after it, and the `onEmailEvent` callbacks (as a multiset: the callback pool runs them in parallel);
+  - the webhook's refusals.
+  All match. A row's times (`finalizedAt`, `segment`) are compared by kind, keeping their sentinels
+  (`MAX_SAFE_INTEGER`, `Infinity`). Sabotage: letting an equal rank move the status (`>=`) fails it, at the
+  `email.failed` that follows `email.bounced`.
 
 ## 6. Not verified yet
 
