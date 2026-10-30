@@ -4,7 +4,7 @@
 //   bunvex-local-backend [options] [db_spec]
 //   bunvex-local-backend keygen admin-key --instance-name <name> --instance-secret <hex>
 //
-// - `db_spec`: a SQLite file (default `bunvex_local_backend.sqlite3`) or, with `--db postgres|mysql|mongodb`,
+// - `db_spec`: a SQLite file (default `bunvex_local_backend.sqlite3`) or, with `--db postgres|mysql`,
 //   the database's URL (without a database, the instance name's, as Convex: DV-417);
 // - `--port` 3210 and `--site-proxy-port` 3211 on `--interface` (0.0.0.0); `--cloud-origin` / `--site-origin`
 //   (a pair; Convex's `--convex-origin` / `--convex-site`) are the public URLs;
@@ -17,7 +17,7 @@
 //   from the environment's S3 variables, for each use case whose bucket is set: STUDY-38 K4);
 // - `--do-not-require-ssl`, `--redact-logs-to-client`;
 // - the database's variables, which Convex's binary reads from its environment: `POSTGRES_TIMEOUT_SECONDS` /
-//   `MYSQL_TIMEOUT_SECONDS` (its knobs; `MONGODB_TIMEOUT_SECONDS` too) and `PG_CA_FILE` / `MYSQL_CA_FILE` (its
+//   `MYSQL_TIMEOUT_SECONDS` (its knobs) and `PG_CA_FILE` / `MYSQL_CA_FILE` (its
 //   connection code), read as an embedded server reads them (`persistenceConfigFromEnv`);
 // - `--http-proxy <url>` (Convex's `--convex-http-proxy`, STUDY-80): the proxy actions' `fetch`, OIDC
 //   discovery and JWKS, and the log sinks go through; without it, `--deny-addresses` (bunvex's own screen,
@@ -62,7 +62,7 @@ Arguments:
   [DB_SPEC]  SQLite: the file (default bunvex_local_backend.sqlite3); otherwise the database URL
 
 Options:
-  -d, --db <DB>                            sqlite (default), postgres, mysql or mongodb
+  -d, --db <DB>                            sqlite (default), postgres or mysql
   -i, --interface <INTERFACE>              the IPv4 interface to bind to (default 0.0.0.0)
   -p, --port <PORT>                        the API's port (default 3210)
       --site-proxy-port <SITE_PROXY_PORT>  the HTTP actions' port (default 3211)
@@ -112,7 +112,7 @@ export const NO_PROXY_WARNING =
 
 export type LocalBackendFlags = {
   dbSpec: string;
-  db: "sqlite" | "postgres" | "mysql" | "mongodb";
+  db: "sqlite" | "postgres" | "mysql";
   hostname: string;
   port: number;
   sitePort: number;
@@ -129,7 +129,7 @@ export type LocalBackendFlags = {
   functionSandbox?: FunctionSandbox;
 };
 
-const DB_DRIVERS = ["sqlite", "postgres", "mysql", "mongodb"] as const;
+const DB_DRIVERS = ["sqlite", "postgres", "mysql"] as const;
 const HELP: ArgSpec = { id: "help", short: "h", action: "help" };
 
 /**
@@ -263,8 +263,7 @@ export function localBackendFlagsError(f: LocalBackendFlags): string | null {
 
 /**
  * The database variables Convex's binary reads from its environment, for the driver the flags chose (`--db`), whatever
- * the environment's PERSISTENCE says: the call timeout (POSTGRES_TIMEOUT_SECONDS, MYSQL_TIMEOUT_SECONDS;
- * MONGODB_TIMEOUT_SECONDS for bunvex's MongoDB), the CA file (PG_CA_FILE, MYSQL_CA_FILE), and the pool's size and idle
+ * the environment's PERSISTENCE says: the call timeout (POSTGRES_TIMEOUT_SECONDS, MYSQL_TIMEOUT_SECONDS), the CA file (PG_CA_FILE, MYSQL_CA_FILE), and the pool's size and idle
  * lifetime (POSTGRES_/MYSQL_MAX_CONNECTIONS, *_INACTIVE_CONNECTION_LIFETIME_SECS; STUDY-147 §3.7). Read by
  * `persistenceConfigFromEnv`, as an embedded server reads them; the URL and the rest come from the flags.
  */

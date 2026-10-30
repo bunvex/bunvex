@@ -2,7 +2,6 @@
 // drivers produce; the drivers' behaviour against real stores is checked by the conformance suite (K20, K21).
 import { describe, expect, test } from "bun:test";
 import { DatabaseTimeoutError, LeaseLostError, retriedGroupLanded, UnsureCommitError } from "@bunvex/core/persistence";
-import { MongoPersistence, operational as mongoOperational } from "../src/mongodb.ts";
 import { MysqlPersistence, operational as mysqlOperational } from "../src/mysql.ts";
 import { connectionLost, PostgresPersistence } from "../src/postgres.ts";
 
@@ -15,7 +14,6 @@ const named = (name: string, fields: Record<string, unknown> = {}) => {
 // isTransient reads no instance state: call it on the prototype.
 const pgTransient = (e: unknown) => PostgresPersistence.prototype.isTransient.call(null, e);
 const mysqlTransient = (e: unknown) => MysqlPersistence.prototype.isTransient.call(null, e);
-const mongoTransient = (e: unknown) => MongoPersistence.prototype.isTransient.call(null, e);
 const timeout = new DatabaseTimeoutError("Test", 1);
 const never = [new LeaseLostError(), new UnsureCommitError("x"), new Error("boom"), null, undefined, "text"];
 
@@ -64,30 +62,6 @@ describe("MySQL (as Convex's classify_mysql_error)", () => {
   test("lock waits, duplicate keys and other errors are not", () => {
     for (const errno of [1205, 1062, 1064, 1105]) expect(mysqlTransient(err({ errno }))).toBe(false);
     for (const e of never) expect(mysqlTransient(e)).toBe(false);
-  });
-});
-
-describe("MongoDB (no Convex counterpart: as the MySQL list)", () => {
-  test("network errors, a server that is not serving, and timeouts are transient", () => {
-    expect(mongoTransient(timeout)).toBe(true);
-    for (const name of [
-      "MongoNetworkError",
-      "MongoNetworkTimeoutError",
-      "MongoServerSelectionError",
-      "MongoPoolClearedError",
-      "MongoWaitQueueTimeoutError",
-    ])
-      expect(mongoOperational(named(name))).toBe(true);
-    // A subclass of MongoNetworkError counts too.
-    class MongoNetworkError extends Error {}
-    class MongoSomeNetworkError extends MongoNetworkError {}
-    expect(mongoOperational(new MongoSomeNetworkError())).toBe(true);
-    for (const code of [6, 7, 89, 9001, 91, 189, 10107, 11600, 11602, 13435, 13436])
-      expect(mongoTransient(named("MongoServerError", { code }))).toBe(true);
-  });
-  test("write conflicts, duplicate keys and other errors are not", () => {
-    for (const code of [112, 11000, 50, 2]) expect(mongoTransient(named("MongoServerError", { code }))).toBe(false);
-    for (const e of never) expect(mongoTransient(e)).toBe(false);
   });
 });
 

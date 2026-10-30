@@ -6,7 +6,7 @@ export const SITE = {
   repo: "https://github.com/bunvex/bunvex",
   title: "bunvex — the reactive backend, built for Bun",
   description:
-    "Write queries and mutations in TypeScript; every client sees changes the moment they commit. Convex's API on its own database engine, on SQLite, Postgres, MySQL or MongoDB. Pre-alpha.",
+    "Write queries and mutations in TypeScript; every client sees changes the moment they commit. Convex's API on its own database engine, on SQLite, Postgres or MySQL. Pre-alpha.",
 } as const;
 
 /** A link to a file of the repository on GitHub. */
@@ -21,7 +21,7 @@ export const HERO = {
   pill: "of Convex's surface, checked row by row",
   headline: ["The reactive backend,", "built for Bun."],
   subline:
-    "Write queries and mutations in TypeScript. Every client sees changes the moment they commit. Convex's API on its own database engine, running on SQLite, Postgres, MySQL or MongoDB.",
+    "Write queries and mutations in TypeScript. Every client sees changes the moment they commit. Convex's API on its own database engine, running on SQLite, Postgres or MySQL.",
 } as const;
 
 /** Each line is a command of packages/cli/README.md (bun) or docker/README.md (docker, binary). */
@@ -232,7 +232,6 @@ export const DRIVERS = [
   { name: "SQLite", note: "built in, bun:sqlite" },
   { name: "Postgres", note: "TLS verified by default" },
   { name: "MySQL", note: "Convex's table layout" },
-  { name: "MongoDB", note: "on a replica set" },
   { name: "memory + log", note: "built in, no dependency" },
 ] as const;
 
@@ -253,7 +252,7 @@ export const MIGRATE = {
     { text: "The official client talks to bunvex: the same sync protocol.", source: "packages/client/README.md" },
     { text: "Snapshots exported from one import into the other.", source: "docs/study/STUDY-42-import-export.md" },
     {
-      text: "26 example apps (23 after Convex's demos, one for rooms, two for components), each tested end to end.",
+      text: "27 example apps (23 after Convex's demos, one for rooms, three for components), each tested end to end.",
       source: "examples/README.md",
     },
     {

@@ -75,7 +75,7 @@ export interface Persistence {
   readonly readsInMemory?: boolean;
   /**
    * The driver's name, as the dashboard's topology shows the store (STUDY-131 §11): `memory`, `sqlite`, `postgres`,
-   * `mysql`, `mongodb` for bunvex's own; a driver of another package may name itself, or not.
+   * `mysql` for bunvex's own; a driver of another package may name itself, or not.
    */
   readonly driver?: string;
   /**

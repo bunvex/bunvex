@@ -144,7 +144,7 @@ const COMPONENT_TEST_ONLY = ["testing"];
  */
 const EXAMPLE_ALLOWED = () => [...PUBLIC, "examples/_harness", "helpers", ...componentKeys()];
 /** Imports core must never contain (rule 2). */
-const CORE_FORBIDDEN = [/^postgres$/, /^mysql2(\/|$)/, /^mongodb$/, /^@bunvex\/persistence(\/|$)/, /^@bunvex\/server/];
+const CORE_FORBIDDEN = [/^postgres$/, /^mysql2(\/|$)/, /^@bunvex\/persistence(\/|$)/, /^@bunvex\/server/];
 const CORE_FORBIDDEN_TEXT = [/\bBun\.serve\b/, /\bnew WebSocket\b/];
 
 /** Every workspace to check: rule key → its directory. */

@@ -8,7 +8,6 @@ export const DRIVER: Record<StoreDriver, string> = {
   sqlite: "SQLite",
   postgres: "Postgres",
   mysql: "MySQL",
-  mongodb: "MongoDB",
   other: "Other",
 };
 

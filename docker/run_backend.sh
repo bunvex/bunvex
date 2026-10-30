@@ -12,7 +12,7 @@ mkdir -p "$TMPDIR" "$STORAGE_DIR"
 source ./read_credentials.sh
 
 # The database: POSTGRES_URL, else MYSQL_URL, else DATABASE_URL (deprecated), else PERSISTENCE with
-# PERSISTENCE_URL (mongodb too), else SQLite in the volume. A URL names its database.
+# PERSISTENCE_URL, else SQLite in the volume. A URL names its database.
 if [ -n "$POSTGRES_URL" ]; then
   DB_SPEC="$POSTGRES_URL"; DB_FLAGS=(--db postgres)
 elif [ -n "$MYSQL_URL" ]; then
