@@ -14,8 +14,8 @@
     "@bunvex/server": "workspace:*",
     "@bunvex/values": "workspace:*",
     "@tanstack/react-query": "5.104.1",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@bunvex/cli": "workspace:*",

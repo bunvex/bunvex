@@ -15,8 +15,8 @@
     "@bunvex/server": "workspace:*",
     "@bunvex/values": "workspace:*",
     "@clerk/clerk-react": "5.61.3",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@bunvex/cli": "workspace:*",

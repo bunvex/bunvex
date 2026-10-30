@@ -14,8 +14,8 @@
     "@bunvex/server": "workspace:*",
     "@bunvex/sharded-counter": "workspace:*",
     "@bunvex/values": "workspace:*",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "react-window": "2.2.7"
   },
   "devDependencies": {
