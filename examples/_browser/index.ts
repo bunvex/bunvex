@@ -87,10 +87,14 @@ export type App = {
 export async function startApp(dir: string, options: { env?: Record<string, string> } = {}): Promise<App> {
   const d = await deploy(dir, options);
   const port = freePort();
-  const next = "next" in (JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).dependencies ?? {});
-  const cmd = next
-    ? [process.execPath, "x", "next", "dev", "--port", String(port)]
-    : [process.execPath, "x", "vite", "--port", String(port), "--strictPort"];
+  const deps = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).dependencies ?? {};
+  // TanStack Start renders on the server in Vite's process, which loads the workspace's TypeScript sources: under Bun.
+  const cmd =
+    "next" in deps
+      ? [process.execPath, "x", "next", "dev", "--port", String(port)]
+      : "@tanstack/react-start" in deps
+        ? [process.execPath, "--bun", "x", "vite", "dev", "--port", String(port), "--strictPort"]
+        : [process.execPath, "x", "vite", "--port", String(port), "--strictPort"];
   const out: string[] = [];
   const server = Bun.spawn(cmd, {
     cwd: dir,
