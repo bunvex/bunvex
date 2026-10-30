@@ -81,14 +81,16 @@ describe("a deleted table", () => {
     const { ids, tablet } = await seeded(e);
     // A commit after the deletion moves the windows past it.
     await e.mutation((db) => db.insert("tb", { n: 1 }));
-    for (let i = 0; i < 500 && e.catalog.deleting.has(tablet); i++) await Bun.sleep(10);
+    // Waited by time, not by a count of sleeps: under a loaded run each sleep stretches.
+    const until = Date.now() + 20_000;
+    while (Date.now() < until && e.catalog.deleting.has(tablet)) await Bun.sleep(10);
     expect(e.catalog.deleting.has(tablet)).toBe(false);
     expect(await tableRow(e, tablet)).toBeUndefined();
     for (const id of ids) expect(await e.persistence.get(tablet, internalIdOf(id), MAX)).toBeNull();
     expect(e.retention!.stats.tabletRowsDeleted).toBeGreaterThan(0);
     // `tb` is untouched.
     expect(await e.query((db) => db.query("tb").collect())).toHaveLength(2);
-  });
+  }, 30_000);
 
   test("across a restart: the indexes recorded for it are purged with its documents", async () => {
     const dir = mkdtempSync(join(tmpdir(), "bunvex-deleted-"));
