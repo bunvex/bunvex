@@ -47,6 +47,7 @@ export const INDEPENDENT = [
   "components/batch-worker",
   "components/workpool",
   "components/rate-limiter",
+  "components/resend",
 ];
 
 /** Every published package, in dependency order. */

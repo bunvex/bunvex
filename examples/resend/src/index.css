@@ -1,0 +1,45 @@
+body {
+  font-family: system-ui, sans-serif;
+  margin: 2rem auto;
+  max-width: 56rem;
+  padding: 0 1rem;
+}
+form {
+  display: flex;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+input {
+  flex: 1;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+th,
+td {
+  border-bottom: 1px solid #e2e8f0;
+  padding: 0.4rem;
+  text-align: left;
+}
+.status {
+  border-radius: 4px;
+  font-size: 0.8rem;
+  padding: 0 0.4rem;
+  background: #e2e8f0;
+}
+.status.sent,
+.status.delivered {
+  background: #bbf7d0;
+}
+.status.bounced,
+.status.failed {
+  background: #fecaca;
+}
+.status.cancelled {
+  background: #fde68a;
+}
+.error {
+  color: #b91c1c;
+  font-size: 0.85rem;
+}
