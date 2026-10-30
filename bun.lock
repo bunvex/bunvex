@@ -132,6 +132,22 @@
         "react",
       ],
     },
+    "components/resend": {
+      "name": "@bunvex/resend",
+      "version": "0.1.0",
+      "dependencies": {
+        "@bunvex/helpers": "workspace:^",
+        "@bunvex/rate-limiter": "workspace:^",
+        "@bunvex/workpool": "workspace:^",
+      },
+      "devDependencies": {
+        "@bunvex/testing": "workspace:*",
+      },
+      "peerDependencies": {
+        "@bunvex/server": "workspace:^",
+        "@bunvex/values": "workspace:^",
+      },
+    },
     "components/sharded-counter": {
       "name": "@bunvex/sharded-counter",
       "version": "0.1.0",
@@ -1364,6 +1380,8 @@
     "@bunvex/react-clerk": ["@bunvex/react-clerk@workspace:packages/react-clerk"],
 
     "@bunvex/react-query": ["@bunvex/react-query@workspace:packages/react-query"],
+
+    "@bunvex/resend": ["@bunvex/resend@workspace:components/resend"],
 
     "@bunvex/sandbox": ["@bunvex/sandbox@workspace:packages/sandbox"],
 
