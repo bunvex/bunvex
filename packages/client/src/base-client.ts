@@ -291,7 +291,8 @@ export class BaseBunvexClient {
     if (this.maxObservedTimestamp === undefined || this.maxObservedTimestamp <= ts) this.maxObservedTimestamp = ts;
   }
 
-  /** The latest ts this client has seen, sent in `Connect` so a server behind it refuses (STUDY-26 C5). */
+  // STUDY-26 C5.
+  /** The latest ts this client has seen, sent in `Connect` so a server behind it refuses the connection. */
   getMaxObservedTimestamp(): bigint | undefined {
     return this.maxObservedTimestamp;
   }
@@ -359,7 +360,8 @@ export class BaseBunvexClient {
     return this.state.hasAuth();
   }
 
-  /** @internal An admin key (the dashboard), as Convex's `setAdminAuth`. */
+  // Convex's `setAdminAuth`.
+  /** @internal An admin key (the dashboard). */
   setAdminAuth(value: string, impersonating?: v1.JSONValue) {
     this.webSocketManager.sendMessage(this.state.setAdminAuth(value, impersonating));
     this.rooms.onAuthenticate();

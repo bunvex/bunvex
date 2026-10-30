@@ -23,6 +23,10 @@
 //      Babel refuses one without `allowDeclareFields`, and an Expo app in this repository (examples/react-native)
 //      bundles the workspace's TypeScript sources through Babel. A type-only field is declared by merging an
 //      interface with the class (owner, 2026-10-29).
+//   8. the JSDoc of what a published package exports (what an editor shows on hover, and the published `.d.ts`
+//      keeps) names no Convex and no study: it is the documentation of bunvex's users, in bunvex's words; the parity
+//      note goes in a `//` comment above it (owner, 2026-10-29). scripts/public-docs.ts checks it, after this file
+//      (`bun run check:deps` runs both), package by package (its `CHECKED` list).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import {

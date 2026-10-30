@@ -33,6 +33,10 @@ deliberate, documented differences only. Read [ARCHITECTURE.md](ARCHITECTURE.md)
   messages or URLs. Match Convex's behaviour and message *structure* with bunvex's own words (e.g.
   `toJsonValue`, not `convexToJson`; "is not a supported value type", with no docs.convex.dev link). Citing
   Convex in comments and docs is fine. `bun run check:deps` (rule 5) enforces it.
+- **The JSDoc of anything a package exports is its users' documentation** (an editor shows it on hover, and the
+  published `.d.ts` keeps it): say what it does in bunvex's words, with no "Convex" and no `STUDY-NN`. Put the
+  parity note (Convex's name, file or behaviour, the study) in a `//` comment above it. `bun run check:deps`
+  (rule 8, `scripts/public-docs.ts`) enforces it.
 
 ## Conventions
 
