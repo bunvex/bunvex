@@ -148,12 +148,14 @@ export class Crons {
     );
   }
 
-  /** A unix cron string, `"m h dom mon dow"`, in UTC. Checked by the server, as Convex's. */
+  // Checked by the server, as Convex's.
+  /** A unix cron string, `"m h dom mon dow"`, in UTC. Checked by the server. */
   cron(cronIdentifier: string, cron: string, fn: Fn, args?: Args) {
     this.schedule(cronIdentifier, { cron, type: "cron" }, fn, args);
   }
 
-  /** The JSON a push would carry (Convex's `export()`). */
+  // Convex's `export()`.
+  /** The JSON a push would carry. */
   export() {
     return JSON.stringify(
       Object.fromEntries(

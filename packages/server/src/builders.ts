@@ -14,7 +14,8 @@ import type { ActionCtx, MutationCtx, QueryCtx } from "./functions.ts";
 import type { ActionBuilder, MutationBuilder, QueryBuilder } from "./registration.ts";
 import { parseValidatorJson } from "./validator-json.ts";
 
-/** `args`: an object of field validators or a validator (Convex's `asObjectValidator`). */
+// Convex's `asObjectValidator`.
+/** `args`: an object of field validators or a validator. */
 export type ArgsValidator = PropertyValidators | GenericValidator;
 // biome-ignore lint/suspicious/noExplicitAny: without an `args` validator the arguments are any object
 export type AnyArgs = Record<string, any>;
@@ -51,12 +52,14 @@ export type FunctionDef =
 
 /** Every function a builder made: how a code version's analysis tells its functions from other exports. */
 const DEFINED = new WeakSet<object>();
-/** The functions of `"use node"` modules (their code version marks them): the log's `environment` (STUDY-47). */
+// STUDY-47.
+/** The functions of `"use node"` modules (their code version marks them): the log's `environment`. */
 export const NODE_FUNCTIONS = new WeakSet<FunctionDef>();
 
+// STUDY-171 §8.
 /**
- * How a query or mutation of the function sandbox runs (STUDY-171 §8): its handler is in a child process, and the
- * engine calls this in its place, in the function's transaction, with the `ctx` the handler would get (`invoke`).
+ * How a query or mutation of the function sandbox runs: its handler is in a child process, and the engine calls this
+ * in its place, in the function's transaction, with the `ctx` the handler would get (`invoke`).
  */
 export type RemoteRunner = (ctx: object, args: unknown, call: SandboxCall) => unknown;
 /** What a sandboxed call needs of its transaction besides `ctx`. */
@@ -68,9 +71,10 @@ export type SandboxCall = {
 };
 /** The stand-ins of a sandboxed code version's queries and mutations, and how each runs. */
 export const REMOTE_FUNCTIONS = new WeakMap<FunctionDef, RemoteRunner>();
+// AD-42 (room gates); STUDY-171 §12.
 /**
- * The stand-ins of a sandboxed code version's room gates (AD-42: `canJoin`, `canPublish`), and how each runs: as a
- * query in the child (STUDY-171 §12), run by `runGate` as any gate.
+ * The stand-ins of a sandboxed code version's room gates (`canJoin`, `canPublish`), and how each runs: as a query in
+ * the child, run by `runGate` as any gate.
  */
 export const REMOTE_GATES = new WeakMap<object, RemoteRunner>();
 

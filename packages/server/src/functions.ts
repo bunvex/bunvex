@@ -494,13 +494,15 @@ const noStorage = new Proxy(
   },
 ) as never;
 
-/** `ctx.auth` (STUDY-27): the caller's identity, or null without a (valid) token. */
+// STUDY-27.
+/** `ctx.auth`: the caller's identity, or null without a (valid) token. */
 export interface Auth {
   getUserIdentity(): Promise<UserIdentity | null>;
 }
 
+// Convex's `MutationAuth` (STUDY-192).
 /**
- * A mutation's `ctx.auth` (STUDY-192, Convex's `MutationAuth`): it can also sign JWTs with the deployment's key.
+ * A mutation's `ctx.auth`: it can also sign JWTs with the deployment's key.
  */
 export interface MutationAuth extends Auth {
   /**
@@ -526,9 +528,10 @@ type AnyCase<S extends string> = S extends `${infer First}${infer Rest}`
   ? `${Lowercase<First> | Uppercase<First>}${AnyCase<Rest>}`
   : S;
 
+// Convex reserves `convex` and `cvx` (DV-578).
 /**
  * Claim names starting with `bunvex` or `bvx`, in any casing, are reserved: they may not be set on
- * JWTs with {@link MutationAuth.signJwt} (Convex reserves `convex` and `cvx`, DV-578).
+ * JWTs with {@link MutationAuth.signJwt}.
  */
 export type ReservedJwtClaimPrefix = AnyCase<"bunvex" | "bvx">;
 
@@ -572,7 +575,8 @@ const REQUESTLESS = (): RequestMetadata => ({
   scheduledFunctionId: null,
 });
 
-/** Who calls (STUDY-27): the identity, and its canonical JSON for the query cache's per-user entries. */
+// STUDY-27.
+/** Who calls: the identity, and its canonical JSON for the query cache's per-user entries. */
 export const callerOf = (identity: UserIdentity | null): Caller =>
   identity === null ? { identity: null, key: "" } : { identity, key: stringifyValue(identity) };
 
@@ -783,10 +787,11 @@ function resentEgress(bytes: number) {
   if (r && r.environment === "isolate") r.io.networkEgressBytes += bytes;
 }
 
+// The names are Convex's, for its unawaited-operations warning (STUDY-171 §12).
 /**
- * The running action's operations still pending, by Convex's name for each (the unawaited-operations warning). The
- * function sandbox's host reads it to keep counting an operation whose answer its child had not taken when the
- * action returned (STUDY-171 §12). Null outside an action.
+ * The running action's operations still pending, by name (the unawaited-operations warning). The function sandbox's
+ * host reads it to keep counting an operation whose answer its child had not taken when the action returned. Null
+ * outside an action.
  */
 export const currentPendingOps = (): Map<string, number> | null => meteredAction()?.pendingOps ?? null;
 
@@ -1033,10 +1038,11 @@ const VECTOR_FILTER_BUILDER = {
   },
 };
 
+// Convex's JS-side checks of `ctx.vectorSearch` (vector_search_impl.ts), in its order (STUDY-51, STUDY-171 §12).
 /**
- * Convex's JS-side checks of `ctx.vectorSearch` (vector_search_impl.ts), in its order, and the filter's expression
- * (the app's filter function run on the builder), before the engine's checks (STUDY-51). The function sandbox's
- * child runs them at the app's call, and sends the expression (STUDY-171 §12).
+ * The argument checks of `ctx.vectorSearch`, and the filter's expression (the app's filter function run on the
+ * builder), before the engine's checks. The function sandbox's child runs them at the app's call, and sends the
+ * expression.
  */
 export function vectorSearchFilter(
   tableName: unknown,
@@ -1069,7 +1075,8 @@ export class Functions {
   private names = new WeakMap<FunctionDef, string>();
   /** Each module's code hash (a deployed code version's modules); empty for registered (embedded) code. */
   private moduleHashes = new Map<string, string>();
-  /** Each mounted component's functions (STUDY-154), by `componentFunctionName`. */
+  // STUDY-154.
+  /** Each mounted component's functions, by `componentFunctionName`. */
   private componentFns = new Map<string, FunctionDef>();
   /** Each mounted component's runtime and module hashes, by its `_components` id. */
   private componentRuntimes = new Map<
@@ -1079,9 +1086,10 @@ export class Functions {
   /** The component each of its functions belongs to. */
   private componentOf = new WeakMap<FunctionDef, ComponentRuntime>();
 
+  // STUDY-154 (C3, DV-492).
   /**
-   * Install a component instance's code version (STUDY-154): its functions replace its previous ones, the app's and
-   * the other components' untouched. Its modules were evaluated in its own contexts (C3, DV-492).
+   * Install a component instance's code version: its functions replace its previous ones, the app's and the other
+   * components' untouched. Its modules were evaluated in its own contexts.
    */
   installComponent(
     runtime: ComponentRuntime,
@@ -1107,7 +1115,8 @@ export class Functions {
     this.componentRuntimes.set(runtime.id, { runtime, hashes: new Map(moduleHashes), router });
   }
 
-  /** Remove a component's functions (unmounted or deleted): calling one is "not found", as on Convex. */
+  // Calling one is "not found", as on Convex.
+  /** Remove a component's functions (unmounted or deleted): calling one is "not found". */
   removeComponent(id: string) {
     const prefix = componentFunctionName(id, "x:x").slice(0, -"x:x".length);
     for (const key of [...this.componentFns.keys()]) if (key.startsWith(prefix)) this.componentFns.delete(key);
@@ -1130,7 +1139,8 @@ export class Functions {
     return key.slice(0, key.lastIndexOf(":"));
   }
 
-  /** A client's query's key in the query cache, shared by the HTTP API and sync (STUDY-08 §7); none when uncacheable. */
+  // STUDY-08 §7.
+  /** A client's query's key in the query cache, shared by the HTTP API and sync; none when uncacheable. */
   queryCacheKey(name: string, args: unknown): string | undefined {
     return this.cacheKey(name, args, true);
   }
@@ -1151,8 +1161,9 @@ export class Functions {
     }
   }
 
+  // STUDY-35.
   /**
-   * Replace every function at once with a code version's (STUDY-35): the next call of any name runs the new
+   * Replace every function at once with a code version's: the next call of any name runs the new
    * code. The modules whose code changed (added, removed or a new hash), for re-running what read them.
    */
   install(
@@ -1183,23 +1194,26 @@ export class Functions {
    * component's); its own when not known.
    */
   private moduleLoads = new WeakMap<FunctionDef, string[]>();
+  // STUDY-188 §X16.
   /**
-   * The functions of a deployed code version (the app's or a component's), whose promise is watched (`Tx.watch`,
-   * STUDY-188 §X16). Not the ones `register` adds in the server's own process: their code may wait on anything the
+   * The functions of a deployed code version (the app's or a component's), whose promise is watched (`Tx.watch`).
+   * Not the ones `register` adds in the server's own process: their code may wait on anything the
    * server does (a test's gate), which no deployed function can.
    */
   private deployedFns = new WeakSet<FunctionDef>();
+  // Convex's reads before a function's code (STUDY-161 §16.3, §16.7); the component's one more is
+  // `load_component_args`.
   /**
-   * Convex's reads before a function's code (STUDY-161 §16.3, §16.7): its configuration, its environment, the `_modules`
-   * row of each module it loads (its own and the chunks it imports), and for a component's function one more
-   * (`load_component_args`).
+   * Count the reads before a function's code: its configuration, its environment, the `_modules` row of each module
+   * it loads (its own and the chunks it imports), and for a component's function one more.
    */
   private countStartReads(db: Tx, f: FunctionDef) {
     db.countConstantReads(this.componentOf.has(f) ? 3 : 2);
     db.countModuleLoads(this.moduleLoads.get(f) ?? ["\0unknown"]);
   }
 
-  /** Whether the functions are pushed code, which sees the deployment's variables (STUDY-37 E3). */
+  // STUDY-37 E3.
+  /** Whether the functions are pushed code, which sees the deployment's variables. */
   private deployed = false;
   /** The built-in variables (the server's origins), read after the deployment's (which cannot hold them). */
   builtinEnv: Record<string, string> = {};
@@ -1239,7 +1253,8 @@ export class Functions {
     return env;
   }
 
-  /** An action's `process.env`: the variables at its start (Convex's `get_all`, no reactivity). */
+  // Convex's `get_all`.
+  /** An action's `process.env`: the variables at its start, no reactivity. */
   private async actionEnv(): Promise<{ all: Record<string, string>; read: EnvReader } | null> {
     if (!this.deployed) return null;
     const [vars, canonical] = await this.engine.query(
@@ -1276,19 +1291,21 @@ export class Functions {
     return Object.fromEntries(Object.keys(this.builtinEnv).map((k) => [k, env.all[k] ?? this.builtinEnv[k]!]));
   }
 
+  // Convex's `_backend_info.auditLogRetentionDays` (STUDY-48).
   /**
-   * The audit log's retention in days (STUDY-48), as Convex's `_backend_info.auditLogRetentionDays`: -1
-   * keeps everything, null means no audit log access. Set by `createServer`.
+   * The audit log's retention in days: -1 keeps everything, null means no audit log access. Set by `createServer`.
    */
   auditLogRetentionDays: number | null = -1;
 
-  /** The function execution log (STUDY-47); set by `createServer`. */
+  // STUDY-47.
+  /** The function execution log; set by `createServer`. */
   functionLog: FunctionLog | null = null;
 
+  // STUDY-47. System functions are not logged, as in Convex.
   /**
-   * @internal Run one execution of `name` and log it (STUDY-47): a Completion when it ends, and for an
-   * action or HTTP action each line as a Progress event as it is printed. A function an action calls is
-   * logged with the action as its parent, in its request. System functions are not logged, as in Convex.
+   * @internal Run one execution of `name` and log it: a Completion when it ends, and for an action or HTTP action
+   * each line as a Progress event as it is printed. A function an action calls is logged with the action as its
+   * parent, in its request. System functions are not logged.
    */
   logged<T>(
     udfType: UdfType,
@@ -1453,15 +1470,18 @@ export class Functions {
     return n;
   }
 
-  /** The app metrics (STUDY-58); set by `createServer`. */
+  // STUDY-58.
+  /** The app metrics; set by `createServer`. */
   appMetrics: AppMetrics | null = null;
-  /** The Prometheus metrics (STUDY-114); set by `createServer`. */
+  // STUDY-114.
+  /** The Prometheus metrics; set by `createServer`. */
   serverMetrics: ServerMetrics | null = null;
   /** Queries and mutations running now, for the metrics' `function_concurrency`. */
 
-  /** Log a completion, and record it in the app metrics as Convex's `log_execution_app_metrics`. */
+  // Logging a completion records it in the app metrics, as Convex's `log_execution_app_metrics`.
+  // Convex's `FunctionEventSource`.
   /**
-   * Where an event of `r` comes from (Convex's `FunctionEventSource`): an HTTP action's lines by the request
+   * Where an event of `r` comes from: an HTTP action's lines by the request
    * (`r.identifier`), its execution by its Completion's name (`identifier`).
    */
   private eventSource(r: Running, cached: boolean | null, identifier = r.identifier): FunctionSource {
@@ -1492,10 +1512,12 @@ export class Functions {
     };
   }
 
-  /** Log streams (STUDY-59); set by `createServer`. */
+  // STUDY-59.
+  /** Log streams; set by `createServer`. */
   logManager: LogManager | null = null;
 
-  /** Convex's events for a completion: its lines (not an action's, already sent), the execution, an exception. */
+  // Convex's events for a completion.
+  /** The log stream events for a completion: its lines (not an action's, already sent), the execution, an exception. */
   private streamCompletion(r: Running, c: Completion, error: unknown) {
     const source = this.eventSource(r, c.udfType === "Query" ? c.cachedResult : null, c.identifier);
     const at = c.timestamp * 1000;
@@ -1560,12 +1582,15 @@ export class Functions {
     this.logManager!.send(events);
   }
 
-  /** The usage meter (STUDY-61); set by `createServer`. */
+  // STUDY-61.
+  /** The usage meter; set by `createServer`. */
   usageMeter: UsageMeter | null = null;
-  /** An isolate action's `fetch`: through the operator's proxy when there is one (STUDY-80 §3.2). */
+  // STUDY-80 §3.2.
+  /** An isolate action's `fetch`: through the operator's proxy when there is one. */
   private isolateSender = isolateFetch(proxiedFetch(directFetch, null), resentEgress);
   private proxy: HttpProxy | null = null;
-  /** The proxy an isolate action's `fetch` goes through (Convex's `--convex-http-proxy`); null for none. */
+  // Convex's `--convex-http-proxy`.
+  /** The proxy an isolate action's `fetch` goes through; null for none. */
   get httpProxy(): HttpProxy | null {
     return this.proxy;
   }
@@ -1574,7 +1599,8 @@ export class Functions {
     this.isolateSender = isolateFetch(proxiedFetch(directFetch, p), resentEgress);
   }
 
-  /** A run's usage into the meter (STUDY-61, STUDY-71); `tracked`: whether the call counts (not `_system/`). */
+  // STUDY-61, STUDY-71.
+  /** A run's usage into the meter; `tracked`: whether the call counts (not `_system/`). */
   private meterCompletion(r: Running, c: Completion, tracked: boolean) {
     this.usageMeter?.recordExecution({
       udfType: c.udfType,
@@ -1681,13 +1707,16 @@ export class Functions {
     };
   }
 
-  /** Where files go (STUDY-32); set by `createServer`. */
+  // STUDY-32.
+  /** Where files go; set by `createServer`. */
   fileStorage: FileStorage | null = null;
 
-  /** How many actions run at once (STUDY-31): every action, HTTP actions included, takes a permit. */
-  /** How many functions of each kind run at once (STUDY-68). */
+  // How many actions run at once (STUDY-31): every action, HTTP actions included, takes a permit.
+  // STUDY-68.
+  /** How many functions of each kind run at once. */
   readonly limits: FunctionLimits;
-  /** The action limiter (STUDY-31), `limits.action`. */
+  // STUDY-31.
+  /** The action limiter, `limits.action`. */
   readonly actionPermits: ConcurrencyLimiter;
 
   constructor(
@@ -1716,9 +1745,10 @@ export class Functions {
     return this.rooms.get(registryKey(name));
   }
 
+  // Convex's `require_operation`.
   /**
-   * Convex's `require_operation`: the system may do anything, an admin what its key allows
-   * (`OperationNotPermitted`); anyone else is told the deploy key is invalid (`BadDeployKey`).
+   * Check `caller` may do `op`: the system may do anything, an admin what its key allows (`OperationNotPermitted`);
+   * anyone else is told the deploy key is invalid (`BadDeployKey`).
    */
   requireOperation(caller: Caller | undefined, op: DeploymentOp) {
     const admin = adminOf(caller);
@@ -1726,10 +1756,10 @@ export class Functions {
     if (!allows(admin, op)) throw new OperationNotPermittedError(op);
   }
 
+  // Convex's `check_visibility_access` (crates/udf/src/validation.rs).
   /**
-   * Convex's `check_visibility_access` (crates/udf/src/validation.rs) for a client's call: acting as a user
-   * needs `ActAsUser`; an internal function is open to an admin with `RunInternal*`, and missing to
-   * everyone else.
+   * A client's access to a function: acting as a user needs `ActAsUser`; an internal function is open to an admin
+   * with `RunInternal*`, and missing to everyone else.
    */
   private checkAccess(f: FunctionDef | undefined, name: string, kind: FunctionDef["kind"], caller?: Caller) {
     const admin = adminOf(caller);
@@ -1767,9 +1797,9 @@ export class Functions {
     return f as Extract<FunctionDef, { kind: K }>;
   }
 
+  // Convex's `/api/function` (`execute_any_function`).
   /**
-   * A function's kind for Convex's `/api/function` (`execute_any_function`): what it runs as, or null when
-   * it does not exist. System functions too.
+   * A function's kind for `/api/function`: what it runs as, or null when it does not exist. System functions too.
    */
   kindOf(name: string): FunctionDef["kind"] | null {
     if (isSystemPath(name)) {
@@ -1791,8 +1821,9 @@ export class Functions {
     return this.lookup(name)?.visibility === "internal";
   }
 
+  // Convex's `_system/cli/modules:apiSpec`.
   /**
-   * Convex's `_system/cli/modules:apiSpec`: every function, its kind, visibility and validators, then the
+   * `_system/cli/modules:apiSpec`: every function, its kind, visibility and validators, then the
    * HTTP routes as `{ functionType: "HttpAction", method, path }`. The validators are what the function's
    * `exportArgs()` / `exportReturns()` give, as the push stored them: `{ type: "any" }` arguments and a `null`
    * result validator when the function declares none.
@@ -1832,12 +1863,14 @@ export class Functions {
     return [...fns, ...routes];
   }
 
-  /** An id's table, for `v.id`: `_storage` for a `_file_storage` id, as Convex names it (STUDY-125). */
+  // As Convex names it (STUDY-125).
+  /** An id's table, for `v.id`: `_storage` for a `_file_storage` id. */
   private tableOf = (n: number) => this.engine.catalog.publicNameOf(n);
+  // As Convex checks a function's args and result with the called component's table mapping
+  // (`table_mapping().namespace(called_component_id)`, `crates/isolate/src/environment/udf/async_syscall.rs`).
   /**
-   * The table names `f`'s validators check ids against: its own component's, as Convex checks a function's args and
-   * result with the called component's table mapping (`table_mapping().namespace(called_component_id)`,
-   * `crates/isolate/src/environment/udf/async_syscall.rs`). A component's numbers mean nothing in the root's catalog.
+   * The table names `f`'s validators check ids against: its own component's. A component's numbers mean nothing in
+   * the root's catalog.
    */
   private tableOfFn(f: FunctionDef): (n: number) => string | undefined {
     const component = this.componentOf.get(f);
@@ -1845,33 +1878,38 @@ export class Functions {
     return (n) => this.engine.catalog.components.get(component.id)?.publicNameOf(n);
   }
 
+  // Convex's `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE` (crates/common/src/knobs.rs, STUDY-64 §1.7).
   /**
-   * Convex's `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE` (crates/common/src/knobs.rs, STUDY-64
-   * §1.7): 16 MiB each, read from environment variables of the same names.
+   * The largest arguments and result of a function: 16 MiB each, read from the environment variables
+   * `FUNCTION_MAX_ARGS_SIZE` and `FUNCTION_MAX_RESULT_SIZE`.
    */
   maxArgsSize = knob("FUNCTION_MAX_ARGS_SIZE", FUNCTION_MAX_ARGS_SIZE);
   maxResultSize = knob("FUNCTION_MAX_RESULT_SIZE", FUNCTION_MAX_RESULT_SIZE);
+  // Convex's `UDF_404_ON_BAD_PATH` (crates/udf/src/validation.rs, STUDY-147 §3.8).
   /**
-   * Convex's `UDF_404_ON_BAD_PATH` (default false; crates/udf/src/validation.rs): a path naming no public function,
-   * or one of another kind, fails the request (404) instead of being the function's error (STUDY-147 §3.8).
+   * `UDF_404_ON_BAD_PATH` (default false): a path naming no public function, or one of another kind, fails the
+   * request (404) instead of being the function's error.
    */
   udf404OnBadPath = boolKnob("UDF_404_ON_BAD_PATH", false);
 
-  /** Convex's `missing_or_internal_error`: no such public function. */
+  // Convex's `missing_or_internal_error`.
+  /** No such public function. */
   private notFound(name: string): Error {
     const message = `Could not find public function for '${name.replace(/:default$/, "")}'.`;
     return this.udf404OnBadPath
       ? new FunctionPathNotFoundError("FunctionPathNotFound", message)
       : new FunctionLookupError(message);
   }
-  /** The `_system/` functions' (Convex's `deserialize_udf_result`, crates/isolate/src/helpers.rs). */
+  // Convex's `deserialize_udf_result` (crates/isolate/src/helpers.rs).
+  /** The largest result of a `_system/` function. */
   maxSystemResultSize = knob("SYSTEM_FUNCTION_MAX_RESULT_SIZE", SYSTEM_FUNCTION_MAX_RESULT_SIZE);
 
+  // Convex's rules and order: `ValidatedPathAndArgs` in crates/udf/src/validation.rs; undecoded arguments fail as
+  // Convex's `parse_udf_args`.
   /**
-   * Arguments are an object, nested at most 63 levels, no larger than `maxArgsSize`, checked against `args`
-   * when the function declares it (Convex's rules and order: `ValidatedPathAndArgs` in
-   * crates/udf/src/validation.rs). `measured`: `measureArgs(args)`, when the caller has it already. Arguments
-   * that did not decode fail here, once the function is resolved, as Convex's `parse_udf_args`.
+   * Arguments are an object, nested at most 63 levels, no larger than `maxArgsSize`, checked against `args` when the
+   * function declares it. `measured`: `measureArgs(args)`, when the caller has it already. Arguments that did not
+   * decode fail here, once the function is resolved.
    */
   private checkArgs(f: FunctionDef, args: unknown, measured?: ReturnType<typeof measureArgs>): AnyArgs {
     if (args instanceof UndecodedArgs) throw args.error;
@@ -1902,10 +1940,11 @@ export class Functions {
     return a as AnyArgs;
   }
 
+  // Convex measures it as the run returns, in `deserialize_udf_result` (crates/isolate/src/helpers.rs);
+  // `undefined` is null, as in Convex.
   /**
-   * The result: no larger than `maxResultSize` (Convex measures it as the run returns, in
-   * `deserialize_udf_result`, crates/isolate/src/helpers.rs), then checked against `returns` when declared
-   * (`undefined` is null, as in Convex). A failure is the function's error: a mutation writes nothing.
+   * The result: no larger than `maxResultSize`, measured as the run returns, then checked against `returns` when
+   * declared (`undefined` is null). A failure is the function's error: a mutation writes nothing.
    */
   private checkReturns(f: FunctionDef, value: unknown) {
     // Convex's JS sends the result to Rust as JSON text, which serde parses first: a lone surrogate fails it
@@ -1957,7 +1996,8 @@ export class Functions {
     return value;
   }
 
-  /** A function's canonical path for a limit message, as Convex prints `CanonicalizedUdfPath`: `module.js:fn`. */
+  // As Convex prints `CanonicalizedUdfPath`.
+  /** A function's canonical path for a limit message: `module.js:fn`. */
   private pathOf(f: FunctionDef): string {
     return canonicalPath(this.names.get(f) ?? "");
   }
@@ -1967,10 +2007,11 @@ export class Functions {
     return noCommitTs(name, this.queryBodyOf(name, args, fromClient, caller, standalone));
   }
 
+  // STUDY-194 §4.13. The permit after the check, as Convex's `CacheManager::get`.
   /**
-   * A query as the engine runs it (STUDY-194 §4.13): through the call boundary once the main thread checked its path,
-   * its visibility and its arguments, with its permit after that check, as Convex's `CacheManager::get`. A query
-   * that does not pass runs as a body here, and fails as it always did, without a permit.
+   * A query as the engine runs it: through the call boundary once the main thread checked its path, its visibility
+   * and its arguments, with its permit after that check. A query that does not pass runs as a body here, and fails as
+   * it always did, without a permit.
    */
   queryCall(name: string, args: unknown, fromClient = true, caller?: Caller): TxBody<unknown> | Call {
     const checked = this.callSpec("query", name, args, fromClient, caller);
@@ -2000,15 +2041,17 @@ export class Functions {
   }
 
   private readonly queryPermit = () => this.limits.query.acquire();
-  /** A client's mutation: throttled (STUDY-78), and its permit per attempt before its transaction (STUDY-186 A11). */
+  // STUDY-78, STUDY-186 A11.
+  /** A client's mutation: throttled, and its permit per attempt before its transaction. */
   private readonly ordinary: MutationOptions = { ...THROTTLED, permit: () => this.limits.mutation.acquire() };
 
+  // A query's arguments are checked before its permit, as Convex's `CacheManager::get` (its `ValidatedPathAndArgs`);
+  // a mutation's in its body, as Convex's `run_mutation_inner` (STUDY-194 §4.14).
   /**
-   * What the main thread checks before a call: the path and the caller's access to it, and a query's arguments, which
-   * Convex's `CacheManager::get` checks before the query's permit (its `ValidatedPathAndArgs`). A mutation's are checked
-   * in its body, under its permit, as Convex's `run_mutation_inner` does: once either way. The request, when all pass;
-   * else null, and the call runs as a body, which fails the same way in its transaction. The `_system/` functions
-   * always do (STUDY-194 §4.14).
+   * What the main thread checks before a call: the path and the caller's access to it, and a query's arguments,
+   * before the query's permit. A mutation's are checked in its body, under its permit: once either way. The request,
+   * when all pass; else null, and the call runs as a body, which fails the same way in its transaction. The
+   * `_system/` functions always do.
    */
   private callSpec(
     kind: "query" | "mutation",
@@ -2038,7 +2081,8 @@ export class Functions {
     return { spec: { kind, name, args: text, internal, session: null }, fn: f };
   }
 
-  /** The code side of the call boundary (STUDY-194 §4.1): the body a request runs, and a session's record. */
+  // STUDY-194 §4.1.
+  /** The code side of the call boundary: the body a request runs, and a session's record. */
   private readonly bodies: CallBodies = {
     body: (request, local) => this.callBody(request, local as CallIn | undefined),
     record: (value) => ({ result: stringifyValue(value), logLines: currentLogLines() }),
@@ -2066,9 +2110,10 @@ export class Functions {
     return attempt ? (db) => attempt(() => body(db)) : body;
   }
 
+  // Convex's approaching-limit warnings, and when it adds them (STUDY-76).
   /**
-   * Run a query's or mutation's body, then add Convex's approaching-limit warnings to its lines (STUDY-76):
-   * when it returned or threw the app's error; a system failure ends it without them, as in Convex.
+   * Run a query's or mutation's body, then add the approaching-limit warnings to its lines: when it returned or threw
+   * the app's error; a system failure ends it without them.
    */
   private async warned<T>(
     db: Tx,
@@ -2104,8 +2149,9 @@ export class Functions {
     return this.queryRun(standalone ? () => standalone : this.fnLater(name, "query", fromClient, caller), args, true);
   }
 
+  // STUDY-68.
   /**
-   * A query's run in its transaction. `permit`: it takes its permit once validated (STUDY-68), as a body; a call
+   * A query's run in its transaction. `permit`: it takes its permit once validated, as a body; a call
    * through the boundary holds its own already. A cached result never gets here.
    */
   private queryRun(resolved: () => QueryDef, args: unknown, permit: boolean, checked = false) {
@@ -2125,11 +2171,12 @@ export class Functions {
     };
   }
 
+  // Convex's order for scheduled and cron mutations' permits.
   /**
    * The body a mutation runs: per attempt, so a retried run's console lines replace the aborted one's.
    * `job`: the scheduled job it runs as, if any (a mutation cannot cancel its own job). `permit`: its body takes
-   * its permit once validated, Convex's order for scheduled and cron mutations; a client's is taken before its
-   * transaction (`ordinary`).
+   * its permit once validated, for scheduled and cron mutations; a client's is taken before its transaction
+   * (`ordinary`).
    */
   private mutationBody(
     resolved: () => FunctionDef & { kind: "mutation" },
@@ -2170,10 +2217,11 @@ export class Functions {
     };
   }
 
+  // As Convex's function runner does (STUDY-82).
   /**
-   * Run a top-level query or mutation (one attempt) collecting its `log.audit` lines (STUDY-82); when it ends,
-   * whether it succeeded or not, they are resolved with the request's variables and sent to the log streams
-   * as `custom_audit` events, as Convex's function runner does. Over the limits, the run fails with that.
+   * Run a top-level query or mutation (one attempt) collecting its `log.audit` lines; when it ends, whether it
+   * succeeded or not, they are resolved with the request's variables and sent to the log streams as `custom_audit`
+   * events. Over the limits, the run fails with that.
    */
   private async withAudit<T>(db: Tx, fn: () => Promise<T>): Promise<T> {
     const { lines, result } = collectingAuditLines(fn);
@@ -2205,9 +2253,10 @@ export class Functions {
       );
   }
 
+  // Convex checks the run state before it resolves the path.
   /**
    * A function to run, resolved now; when that fails, the error is thrown when the body runs, after
-   * `failWhileNotRunning` — Convex checks the run state before it resolves the path.
+   * `failWhileNotRunning`: the run state is checked before the path.
    */
   private fnLater<K extends FunctionDef["kind"]>(name: string, kind: K, fromClient: boolean, caller?: Caller) {
     try {
@@ -2220,9 +2269,10 @@ export class Functions {
     }
   }
 
+  // Convex's `fail_while_not_running` (crates/udf/src/validation.rs, STUDY-63).
   /**
-   * Convex's `fail_while_not_running` (crates/udf/src/validation.rs, STUDY-63): a user function fails while
-   * the deployment is paused. Read in the function's transaction, so a subscribed query reruns on unpause.
+   * A user function fails while the deployment is paused. Read in the function's transaction, so a subscribed query
+   * reruns on unpause.
    */
   private async failWhileNotRunning(db: Tx): Promise<void> {
     const message = notRunningMessage(await this.engine.backendState.read(db));
@@ -2234,26 +2284,30 @@ export class Functions {
     await this.engine.query((db) => this.failWhileNotRunning(db));
   }
 
+  // Convex's limits on a query's or mutation's own time (STUDY-41).
   /**
-   * Convex's limits on a query's or mutation's own time (STUDY-41): 1 s of user time
-   * (DATABASE_UDF_USER_TIMEOUT_SECONDS) and 15 s awaiting the store (DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS).
-   * Each nested call gets its own; the caller's clock is paused during it.
+   * The limits on a query's or mutation's own time: 1 s of user time (DATABASE_UDF_USER_TIMEOUT_SECONDS) and 15 s
+   * awaiting the store (DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS). Each nested call gets its own; the caller's clock is
+   * paused during it.
    */
   userTimeoutMs = secondsKnob("DATABASE_UDF_USER_TIMEOUT_SECONDS", 1);
   systemTimeoutMs = secondsKnob("DATABASE_UDF_SYSTEM_TIMEOUT_SECONDS", 15);
   private newTimer = () => newUserTimer(this.userTimeoutMs, this.systemTimeoutMs, this.engine.runtime.monotonicNow);
-  /** How long an action may run (STUDY-77): Convex's knobs, 1800 s, and 600 s for a `"use node"` one. */
+  // Convex's knobs (STUDY-77).
+  /** How long an action may run: 1800 s, and 600 s for a `"use node"` one. */
   actionTimeoutMs = secondsKnob("V8_ACTION_USER_TIMEOUT_SECS", V8_ACTION_USER_TIMEOUT_MS / 1000);
   nodeActionTimeoutMs = secondsKnob("NODE_ACTION_USER_TIMEOUT_SECS", NODE_ACTION_USER_TIMEOUT_MS / 1000);
 
-  /** Convex's `DEPLOYMENT_JWT_MAX_LIFETIME_SECONDS`: the longest a `ctx.auth.signJwt` token may live (1 h). */
+  // Convex's `DEPLOYMENT_JWT_MAX_LIFETIME_SECONDS`.
+  /** `DEPLOYMENT_JWT_MAX_LIFETIME_SECONDS`: the longest a `ctx.auth.signJwt` token may live (1 h). */
   jwtMaxLifetimeSeconds = knob("DEPLOYMENT_JWT_MAX_LIFETIME_SECONDS", 3600);
 
+  // STUDY-192 §3.2, DV-579; the `iss` as Convex's `deployment_origin`.
   /**
-   * A mutation's `ctx.auth` (STUDY-192 §3.2): the identity, and `signJwt`, which signs with the deployment's key in
-   * this process (a sandboxed function's child asks it to, never holding the key, DV-579). The `iss` is the cloud
-   * URL (the canonical one, read in the transaction, as Convex's `deployment_origin`) and the component's path; `iat`
-   * is the mutation's frozen time, the one its `Date.now()` returns. A refusal is thrown in the mutation.
+   * A mutation's `ctx.auth`: the identity, and `signJwt`, which signs with the deployment's key in this process (a
+   * sandboxed function's child asks it to, never holding the key). The `iss` is the cloud URL (the canonical one,
+   * read in the transaction) and the component's path; `iat` is the mutation's frozen time, the one its `Date.now()`
+   * returns. A refusal is thrown in the mutation.
    */
   private mutationAuth(db: Tx, component: ComponentRuntime | undefined): MutationAuth {
     return {
@@ -2341,12 +2395,14 @@ export class Functions {
     );
   }
 
-  /** A component's function run in its namespace (STUDY-154): `ctx.db` its tables and schema. */
+  // STUDY-154.
+  /** A component's function run in its namespace: `ctx.db` its tables and schema. */
   private async inComponentRun(db: Tx, component: ComponentRuntime, run: () => unknown): Promise<unknown> {
     return await db.inComponent(component.id, async () => run());
   }
 
-  /** The app's function called from a component (through a handle, STUDY-155), back in the app's namespace. */
+  // STUDY-155.
+  /** The app's function called from a component (through a handle), back in the app's namespace. */
   private async inAppRun(db: Tx, run: () => unknown): Promise<unknown> {
     return await db.inComponent(null, async () => run());
   }
@@ -2361,14 +2417,15 @@ export class Functions {
     return [...this.engine.catalog.tables.keys()].filter((n) => !n.startsWith("_"));
   }
 
-  /** Every function's canonical path (`dir/module.js:function`), for its handle (STUDY-50). */
+  // STUDY-50.
+  /** Every function's canonical path (`dir/module.js:function`), for its handle. */
   functionPaths(): string[] {
     return [...this.fns.keys()].map(canonicalPath);
   }
 
+  // Convex's `setupQueryMeta` / `setupMutationMeta` / `setupActionMeta` and their syscalls (STUDY-44).
   /**
-   * `ctx.meta` (STUDY-44), as Convex's `setupQueryMeta` / `setupMutationMeta` / `setupActionMeta` and their
-   * syscalls: a query's has no request metadata, an action's no transaction metrics nor snapshot.
+   * `ctx.meta`: a query's has no request metadata, an action's no transaction metrics nor snapshot.
    */
   private meta(f: FunctionDef, db: Tx | null, caller: Caller | undefined) {
     // A component's function is registered under its component's id: its own name is the part after it.
@@ -2421,13 +2478,13 @@ export class Functions {
     return f.kind === "mutation" ? { ...meta, getRequestMetadata } : meta;
   }
 
+  // Convex's `1.0/runUdf` (STUDY-41); a failed result check keeps the writes, as in Convex.
   /**
-   * `ctx.runQuery` (queries and mutations) and `ctx.runMutation` (mutations), as Convex's `1.0/runUdf`
-   * (STUDY-41): the function runs in the caller's transaction — its writes, identity and time, its reads
-   * joining the caller's read set — after its path, kind, arguments and the depth are checked; a nested
-   * mutation is a sub-transaction, rolled back if it throws; its result is checked after (a failed check
-   * keeps the writes, as Convex). `useStaleSnapshot` (mutations): a query at the transaction's snapshot,
-   * without its pending writes, its reads discarded. `transactionLimits` lowers the read and write limits
+   * `ctx.runQuery` (queries and mutations) and `ctx.runMutation` (mutations): the function runs in the caller's
+   * transaction — its writes, identity and time, its reads joining the caller's read set — after its path, kind,
+   * arguments and the depth are checked; a nested mutation is a sub-transaction, rolled back if it throws; its result
+   * is checked after (a failed check keeps the writes). `useStaleSnapshot` (mutations): a query at the transaction's
+   * snapshot, without its pending writes, its reads discarded. `transactionLimits` lowers the read and write limits
    * for the call. Any error reaches the caller as a catchable one.
    */
   private nestedCalls(db: Tx, callerKind: "query" | "mutation", depth: number, component?: ComponentRuntime) {
@@ -2469,11 +2526,12 @@ export class Functions {
     };
   }
 
+  // Convex's `ComponentsModel::resolve` (STUDY-155); a V8 action's misses read as Convex's preloaded map's.
   /**
-   * The registry name of the function a call names (Convex's `ComponentsModel::resolve`, STUDY-155): a name in the
-   * caller's own component, any visibility; a reference to a public export of one of the caller's direct children; a
-   * handle. `action`: a V8 action's call, whose misses read as Convex's preloaded map's, "Couldn't resolve …" (a
-   * Node action's calls go through the backend's HTTP API, as a query's or a mutation's do).
+   * The registry name of the function a call names: a name in the caller's own component, any visibility; a reference
+   * to a public export of one of the caller's direct children; a handle. `action`: a V8 action's call, whose misses
+   * read "Couldn't resolve …" (a Node action's calls go through the backend's HTTP API, as a query's or a mutation's
+   * do).
    */
   private async resolveCall(
     ref: unknown,
@@ -2495,18 +2553,20 @@ export class Functions {
     return this.inActionMap(caller && !isSystemPath(name) ? componentFunctionName(caller.id, name) : name, action);
   }
 
+  // Convex's preloaded map (`TaskExecutor::resolve`, crates/isolate/src/environment/action/task_executor.rs,
+  // STUDY-188 §X21).
   /**
-   * A name a V8 action's call resolved, checked against Convex's preloaded map (`TaskExecutor::resolve`, crates/isolate
-   * src/environment/action/task_executor.rs): every function of the caller's component, of any kind or visibility. A
-   * miss is "Couldn't resolve api.<module path>.<function>", a plain `Error` of the action's (STUDY-188 §X21). A
-   * `_system/` name is refused by the call itself (`actionTarget`).
+   * A name a V8 action's call resolved, checked against the functions an action may call: every function of the
+   * caller's component, of any kind or visibility. A miss is "Couldn't resolve api.<module path>.<function>", a plain
+   * `Error` of the action's. A `_system/` name is refused by the call itself (`actionTarget`).
    */
   private inActionMap(name: string, action: boolean): string {
     if (!action || isSystemPath(name) || this.lookup(name)) return name;
     throw asCallerError(unresolvable(splitComponentFunctionName(name)?.name ?? name));
   }
 
-  /** A `_reference/…` path resolved from `caller`'s component (Convex's `resolve` and `resolve_export`). */
+  // Convex's `resolve` and `resolve_export`.
+  /** A `_reference/…` path resolved from `caller`'s component. */
   private async resolveReference(
     reference: string,
     caller: ComponentRuntime | undefined,
@@ -2679,9 +2739,10 @@ export class Functions {
     return acrossCall(this.checkReturns(f, value));
   }
 
+  // STUDY-41 N6, N2.
   /**
-   * What a nested call's failure becomes for its caller: a system error (the store failed) cannot be caught —
-   * the whole request fails (STUDY-41 N6); anything else is the caller's catchable error (N2).
+   * What a nested call's failure becomes for its caller: a system error (the store failed) cannot be caught — the
+   * whole request fails; anything else is the caller's catchable error.
    */
   private nestedError(e: unknown, timer: UserTimer): unknown {
     if (isSystemError(e)) {
@@ -2691,10 +2752,11 @@ export class Functions {
     return toCallerError(e, timer);
   }
 
+  // Convex's `TransactionLimits::from_budget`; Convex never counts file reads or writes in a transaction either.
   /**
-   * Run `fn` with `db`'s limits lowered by `budget` (Convex's `TransactionLimits::from_budget`: each limit
-   * becomes the usage so far plus the budget, never above the current one), restored after. The file limits
-   * are accepted and ignored: Convex never counts file reads or writes in a transaction either.
+   * Run `fn` with `db`'s limits lowered by `budget` (each limit becomes the usage so far plus the budget, never above
+   * the current one), restored after. The file limits are accepted and ignored: file reads and writes are not counted
+   * in a transaction.
    */
   private async withLimits<T>(db: Tx, budget: NestedOptions["transactionLimits"], fn: () => T): Promise<Awaited<T>> {
     if (!budget) return await fn();
@@ -2718,11 +2780,11 @@ export class Functions {
     }
   }
 
+  // Convex's `schedule` and `validate_schedule_args` (STUDY-157, STUDY-155).
   /**
-   * The function a scheduler names (Convex's `schedule` and `validate_schedule_args`, STUDY-157): resolved from the
-   * caller's component as its calls are (STUDY-155: a name in its own component, a child's export, a handle), then
-   * checked to exist, of any kind or visibility (the kind is checked when the job runs). Its component path and
-   * canonical path (`module.js:function`), as the job stores them.
+   * The function a scheduler names: resolved from the caller's component as its calls are (a name in its own
+   * component, a child's export, a handle), then checked to exist, of any kind or visibility (the kind is checked
+   * when the job runs). Its component path and canonical path (`module.js:function`), as the job stores them.
    */
   async scheduleTarget(
     ref: unknown,
@@ -2774,10 +2836,10 @@ export class Functions {
     return undefined;
   }
 
+  // Convex's `UdfArgsJson`, `check_args` and its handler (STUDY-67 H6).
   /**
-   * Arguments sent as an array of other than one (Convex's `UdfArgsJson`: each element an argument): a
-   * function with a validator refuses them (`check_args`), after its path resolves as the run's would; one
-   * without takes the first, as Convex's handler does (STUDY-67 H6).
+   * Arguments sent as an array of other than one (each element an argument): a function with a validator refuses
+   * them, after its path resolves as the run's would; one without takes the first.
    */
   checkArity(name: string, kind: FunctionDef["kind"], args: Value[], caller?: Caller): void {
     if (args.length === 1 || isSystemPath(name)) return;
@@ -2788,11 +2850,12 @@ export class Functions {
       );
   }
 
+  // Convex does not analyze its system modules: each function checks its own arguments inside its handler
+  // (system-udfs `_system/server.ts` `withArgsValidated`, the `validateArgs` op).
   /**
-   * A system function's arguments, checked as Convex's validators. Convex does not analyze its system modules,
-   * so their arguments are not checked before the run: each function checks its own, inside its handler
-   * (system-udfs `_system/server.ts` `withArgsValidated`, the `validateArgs` op), and throws an `Error` with the
-   * check's display. A client sees `Uncaught Error: <check>`, with no frames (the system modules show none).
+   * A system function's arguments, checked against its validators inside its handler, not before the run; a failure
+   * throws an `Error` with the check's display. A client sees `Uncaught Error: <check>`, with no frames (the system
+   * modules show none).
    */
   private systemArgs(args: Record<string, unknown> | unknown, validators: Record<string, GenericValidator>) {
     // Arguments its reader refused (STUDY-161 §6): Convex's wrapper reads them first, after the access check.
@@ -2815,13 +2878,12 @@ export class Functions {
     return a as never;
   }
 
+  // A system query's body (`_system/frontend/*`, system-functions.ts): Convex's names, argument checks and result
+  // shapes. From a client, only an admin (or the system) finds it, and its key must allow the function's operation
+  // (Convex's `queryPrivateSystem("ViewData")`).
+  // Convex's `application_function_runner`.
   /**
-   * A system query's body (`_system/frontend/*`, system-functions.ts): Convex's names, argument checks and
-   * result shapes. From a client, only an admin (or the system) finds it, and its key must allow the
-   * function's operation (Convex's `queryPrivateSystem("ViewData")`).
-   */
-  /**
-   * A client's access to a system function, as Convex's `application_function_runner`: refused to anyone but
+   * A client's access to a system function: refused to anyone but
    * an admin or the system acting as itself (403 `SystemIdentityRequired`, before the function is looked
    * up); then the function must exist, and the key must allow its operation.
    */
@@ -2837,9 +2899,10 @@ export class Functions {
     if (!f.noPermissionRequired) this.requireOperation(caller, f.op ?? fallback);
   }
 
+  // As Convex checks visibility before its cache.
   /**
-   * Whether `caller` may run the query `name` from a client (throws as running it would). Sync checks it
-   * before it reuses another session's run of the same query, as Convex checks visibility before its cache.
+   * Whether `caller` may run the query `name` from a client (throws as running it would). Sync checks it before it
+   * reuses another session's run of the same query.
    */
   checkQueryAccess(name: string, caller?: Caller) {
     if (isSystemPath(name)) {
@@ -2929,12 +2992,13 @@ export class Functions {
     return this.engine.query(this.systemQueryBody(name, args, false, undefined, true));
   }
 
-  /** A dashboard system mutation, in process; one transaction, as Convex's. */
+  /** A dashboard system mutation, in process; one transaction. */
   async runSystemMutation(name: string, args: unknown = {}): Promise<unknown> {
     return this.engine.mutation(this.systemMutationBody(name, args, false, undefined, true), name);
   }
 
-  /** A cron's target, checked at start as Convex checks it at push (`validate_cron_jobs`): its canonical name. */
+  // Convex checks it at push (`validate_cron_jobs`).
+  /** A cron's target, checked at start: its canonical name. */
   cronTarget(identifier: string, name: string): string {
     const key = registryKey(name);
     const canonical = `${key.slice(0, key.lastIndexOf(":"))}.js${key.slice(key.lastIndexOf(":"))}`;
@@ -2949,7 +3013,7 @@ export class Functions {
 
   /**
    * What a scheduled job runs (its kind, and the name to run it by: the app's canonical path, a component's registry
-   * name), or why it cannot run (Convex's run-time check: the module may have changed, or its component gone).
+   * name), or why it cannot run (checked at run time: the module may have changed, or its component gone).
    */
   scheduledKind(canonical: string, component = ""): { kind: "mutation" | "action"; key: string } | { error: string } {
     const key = registryKey(canonical);
@@ -3015,9 +3079,10 @@ export class Functions {
     );
   }
 
+  // Convex's `execute_standalone_module` runs it with `run_query_without_caching` (STUDY-119).
   /**
-   * A query that is not deployed, as JSON (STUDY-119): Convex's `execute_standalone_module` runs the function
-   * tester's query with `run_query_without_caching`, so it never reads or fills the cache. It runs as `name`.
+   * A query that is not deployed (the function tester's), as JSON: it never reads or fills the cache. It runs as
+   * `name`.
    */
   async runStandaloneQueryJson(
     f: QueryDef,
@@ -3044,8 +3109,9 @@ export class Functions {
     );
   }
 
+  // AD-42, STUDY-164 §3.4.
   /**
-   * A room's gate (AD-42, STUDY-164 §3.4): run as a query named `name` (`rooms:doc#canJoin`) with `caller`'s identity, read-only and
+   * A room's gate: run as a query named `name` (`rooms:doc#canJoin`) with `caller`'s identity, read-only and
    * without the query cache, as a standalone query runs. Its value, or what it threw. Not a function: no
    * client can call it by path.
    */
@@ -3067,9 +3133,10 @@ export class Functions {
     );
   }
 
+  // Through the query cache, as in Convex.
   /**
-   * A query at snapshot `ts` (≤ the visible ts), as JSON: the HTTP API's `query_at_ts`. Through the query
-   * cache, as in Convex: a result cached at or before `ts` and still valid at `ts` answers it.
+   * A query at snapshot `ts` (≤ the visible ts), as JSON: the HTTP API's `query_at_ts`. Through the query cache: a
+   * result cached at or before `ts` and still valid at `ts` answers it.
    */
   async runQueryAtJson(name: string, args: unknown, ts: bigint, caller?: Caller): Promise<string> {
     // As Convex's snapshot manager: a transaction may not begin further back than MAX_TRANSACTION_WINDOW
@@ -3122,8 +3189,9 @@ export class Functions {
     );
   }
 
+  // STUDY-23 §4.3.
   /**
-   * A sync session's mutation (STUDY-23 §4.3): run at most once per request. A resend of a request that
+   * A sync session's mutation: run at most once per request. A resend of a request that
    * already committed answers the recorded result and log lines (`replayed`) without running again.
    */
   runSessionMutation(
@@ -3149,8 +3217,9 @@ export class Functions {
     return this.logged("Mutation", name, caller, run, (r) => ("value" in r ? returned(r.value) : { skip: true }), args);
   }
 
+  // Convex passes the identity on.
   /**
-   * An action; the queries and mutations it runs act as its caller (Convex passes the identity on). `job`:
+   * An action; the queries and mutations it runs act as its caller. `job`:
    * the scheduled job it runs as (what it schedules after that job is canceled is born canceled).
    */
   async runAction(
@@ -3240,10 +3309,11 @@ export class Functions {
     );
   }
 
+  // As in Convex: an HTTP action still runs, and Convex passes the actions it calls the same identity (STUDY-66 §5).
   /**
-   * An action's context. `authError`: the request's token failed verification (an HTTP action still runs,
-   * as in Convex): `getUserIdentity()` throws it, and the queries and mutations it calls run with no identity.
-   * The actions it calls get the error too, as Convex passes them the same identity (STUDY-66 §5).
+   * An action's context. `authError`: the request's token failed verification (an HTTP action still runs):
+   * `getUserIdentity()` throws it, and the queries and mutations it calls run with no identity. The actions it calls
+   * get the error too.
    */
   private actionCtx(
     caller: Caller | undefined,

@@ -20,10 +20,12 @@ import type {
 export type { RoomReference };
 
 type UndefinedToNull<T> = T extends void ? null : T;
-/** A result as a client sees it: awaited, `undefined` / `void` as `null` (Convex's `ConvertReturnType`). */
+// Convex's `ConvertReturnType`.
+/** A result as a client sees it: awaited, `undefined` / `void` as `null`. */
 export type ConvertReturnType<T> = UndefinedToNull<Awaited<T>>;
 
-/** A module's export as a reference, if it is a function (Convex's `FunctionReferenceFromExport`). */
+// Convex's `FunctionReferenceFromExport`.
+/** A module's export as a reference, if it is a function. */
 export type FunctionReferenceFromExport<Export> =
   Export extends RegisteredQuery<infer Visibility, infer Args, infer ReturnValue>
     ? FunctionReference<"query", Visibility, Args, ConvertReturnType<ReturnValue>>
@@ -69,7 +71,8 @@ type ApiFromModulesAllowEmptyNodes<AllModules extends Record<string, object>> = 
   >
 >;
 
-/** The api of every module (Convex's `ApiFromModules`): each function as a typed reference. */
+// Convex's `ApiFromModules`.
+/** The api of every module: each function as a typed reference. */
 export type ApiFromModules<AllModules extends Record<string, object>> = FilterApi<
   ApiFromModulesAllowEmptyNodes<AllModules>,
   // biome-ignore lint/suspicious/noExplicitAny: any reference
@@ -112,9 +115,9 @@ export type FilterApi<API, Predicate> = Expand<{
       : FilterApi<API[Mod], Predicate>;
 }>;
 
+// Convex's `filterApi`.
 /**
- * `api` narrowed to the references that match `Predicate`, as Convex's `filterApi`: the same object at runtime,
- * filtered only in its type.
+ * `api` narrowed to the references that match `Predicate`: the same object at runtime, filtered only in its type.
  *
  * ```ts
  * const queries = filterApi<typeof api, FunctionReference<"query">>(api);
@@ -124,9 +127,10 @@ export function filterApi<API, Predicate>(api: API): FilterApi<API, Predicate> {
   return api as FilterApi<API, Predicate>;
 }
 
+// Convex's `PartialApi`.
 /**
- * An api object with any of its modules and functions left out, down every level (Convex's `PartialApi`): what a
- * test's mock of part of an api is typed as.
+ * An api object with any of its modules and functions left out, down every level: what a test's mock of part of an
+ * api is typed as.
  */
 export type PartialApi<API> = {
   // biome-ignore lint/suspicious/noExplicitAny: any reference

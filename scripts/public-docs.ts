@@ -10,7 +10,7 @@ import ts from "typescript";
 
 const ROOT = resolve(import.meta.dir, "..");
 
-/** The packages whose public documentation is checked; the others are listed by `--list` until they are clean. */
+/** The packages whose public documentation is checked (`--list` prints every finding without failing). */
 export const CHECKED = [
   "packages/values",
   "packages/client",
@@ -19,14 +19,17 @@ export const CHECKED = [
   "packages/react-auth0",
   "packages/react-query",
   "packages/nextjs",
+  "packages/server",
   "packages/testing",
   "packages/helpers",
   "components/batch-worker",
   "components/rate-limiter",
   "components/sharded-counter",
 ];
-/** Every package an app imports from, for `--list`. */
-const ALL = [...CHECKED, "packages/server"];
+/** Every package an app imports from, for `--list`: all of them are checked now. */
+const ALL = CHECKED;
+/** `--only <path>`: the findings in files under that path only (with `--list`). */
+const ONLY = process.argv.includes("--only") ? process.argv[process.argv.indexOf("--only") + 1] : undefined;
 
 /** What the documentation of a public symbol may not say: the platform bunvex imitates, or a study's number. */
 export const FORBIDDEN = /convex|STUDY-\d+/i;
@@ -95,7 +98,7 @@ export function publicDocFindings(dirs: string[]): Finding[] {
 
 if (import.meta.main) {
   const list = process.argv.includes("--list");
-  const findings = publicDocFindings(list ? ALL : CHECKED);
+  const findings = publicDocFindings(list ? ALL : CHECKED).filter((f) => !ONLY || f.at.startsWith(ONLY));
   for (const f of findings) console.log(`${f.at}: ${f.name} — its documentation says "${f.text}"`);
   if (list) {
     const counts = new Map<string, number>();

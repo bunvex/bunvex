@@ -113,11 +113,11 @@ function requestUrl(req: Request, pathAndQuery: string): string {
   return `${scheme}://${host}${pathAndQuery}`;
 }
 
+// As Convex's runtime gives it too.
 /**
- * `request.blob()` typed by the request's Content-Type, as the Fetch standard's `blob()` (and Convex's runtime)
- * gives it. Bun's server-side requests return a Blob with an empty type, so `ctx.storage.store(await
- * request.blob())` would lose the file's content type; for a type its MIME table knows, Bun's own Blob gives
- * that table's form (`text/plain;charset=utf-8`).
+ * `request.blob()` typed by the request's Content-Type, as the Fetch standard's `blob()` gives it. Bun's server-side
+ * requests return a Blob with an empty type, so `ctx.storage.store(await request.blob())` would lose the file's
+ * content type; for a type its MIME table knows, Bun's own Blob gives that table's form (`text/plain;charset=utf-8`).
  */
 export function typedBlob(request: Request): void {
   const blob = request.blob.bind(request);
