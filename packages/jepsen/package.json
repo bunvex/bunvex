@@ -20,6 +20,6 @@
     "directory": "packages/jepsen"
   },
   "devDependencies": {
-    "mysql2": "^3.24.4"
+    "mysql2": "^3.24.6"
   }
 }
