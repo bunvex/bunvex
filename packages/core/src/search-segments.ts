@@ -651,6 +651,19 @@ export class SearchSegmentsState {
     this.stored.set(k, rowKey(indexRow(s)));
   }
 
+  /**
+   * Forgets every index of `tablets`, whose `_index` rows another transaction deleted (a table's deletion, STUDY-195
+   * §1): no write follows for them.
+   */
+  forgetTablets(tablets: Set<string>) {
+    for (const [k, s] of [...this.states]) if (tablets.has(s.tablet)) this.states.delete(k);
+    for (const k of [...this.ids.keys()])
+      if (tablets.has(k.split("\u0000")[1]!)) {
+        this.ids.delete(k);
+        this.stored.delete(k);
+      }
+  }
+
   /** The id of an index's `_index` row, once written. */
   rowId(kind: "text" | "vector", tablet: TabletId, name: string): string | undefined {
     return this.ids.get(stateKey(kind, tablet, name));

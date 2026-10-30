@@ -4,7 +4,9 @@
 //       (`prevTs`, as Convex's retention) leaves every snapshot at or above it answering exactly as before,
 //       removes exactly the superseded rows, and is idempotent;
 //   K29 persistence globals (durable across a reopen), and the fence: a writer without the lease can
-//       neither prune nor set a global.
+//       neither prune nor set a global;
+//   K37 a deleted table's purge (`purgeTablet`, PERSIST-01 C18): chunk by chunk, every row of its indexes, then
+//       every version of its documents, and nothing of another table.
 import {
   type DocPrune,
   encodeKey,
@@ -423,6 +425,76 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
     );
   }
 
+  // K37: a deleted table's purge. A table with two indexes and documents in several versions (a delete's tombstone
+  // too), and a neighbour that must keep everything.
+  {
+    const GONE = tid(980);
+    const GONE_BY_ID = tid(980);
+    const GONE_BY_VAL = tid(981);
+    const KEPT = tid(990);
+    const KEPT_BY_ID = tid(990);
+    const gone = Array.from({ length: 23 }, (_, i) => did(`g${i}`));
+    const kept = Array.from({ length: 5 }, (_, i) => did(`k${i}`));
+    let rows = 0;
+    let at = ts + 10_000n;
+    for (const [n, id] of gone.entries()) {
+      for (let version = 0; version < 1 + (n % 3); version++) {
+        at += 1n;
+        st.apply(
+          at,
+          [{ table: GONE, id, json: `{"v":${version}}`, prevTs: version ? at - 1n : null }],
+          [
+            { index: GONE_BY_ID, key: kId(id), table: GONE, id },
+            { index: GONE_BY_VAL, key: kVal(version, id), table: GONE, id },
+          ],
+        );
+        rows += 3;
+      }
+    }
+    at += 1n;
+    st.apply(
+      at,
+      [{ table: GONE, id: gone[0]!, json: null, prevTs: at - 1n }],
+      [{ index: GONE_BY_ID, key: kId(gone[0]!), table: null, id: null }],
+    );
+    rows += 2;
+    for (const id of kept) {
+      at += 1n;
+      st.apply(
+        at,
+        [{ table: KEPT, id, json: `{"v":1}`, prevTs: null }],
+        [{ index: KEPT_BY_ID, key: kId(id), table: KEPT, id }],
+      );
+    }
+    await st.flush();
+    let purged = 0;
+    let calls = 0;
+    let overLimit = false;
+    for (;;) {
+      const n = await st.purgeTablet(GONE, [GONE_BY_ID, GONE_BY_VAL], 7);
+      calls++;
+      // A chunk of documents may take every version of its ids: more rows than the limit, never more ids.
+      if (n > 7 * 3) overLimit = true;
+      if (n === 0 || calls > 1000) break;
+      purged += n;
+    }
+    const top = at + 1n;
+    const left = {
+      byId: (await st.scan(GONE, GONE_BY_ID, FULL_LO, FULL_HI, top, 100_000, false)).length,
+      byVal: (await st.scan(GONE, GONE_BY_VAL, FULL_LO, FULL_HI, top, 100_000, false)).length,
+      docs: (await Promise.all(gone.map((id) => st.get(GONE, id, top)))).filter((d) => d).length,
+    };
+    check(
+      purged === rows && !overLimit && calls > 2 && left.byId + left.byVal + left.docs === 0,
+      `K37 purgeTablet removes the table's index rows and document versions in chunks, then answers 0 (removed ${purged} of ${rows} in ${calls} calls; left ${json(left)})`,
+    );
+    const keptNow = (await st.scan(KEPT, KEPT_BY_ID, FULL_LO, FULL_HI, top, 100_000, false)).map((d) => d.id);
+    check(
+      same(keptNow.sort(), [...kept].sort()) && (await st.purgeTablet(GONE, [GONE_BY_ID, GONE_BY_VAL], 7)) === 0,
+      "K37 another table's rows are left; a purge of a purged table removes nothing",
+    );
+  }
+
   // K29: globals.
   const g0 = await st.getGlobal("k28_missing");
   await st.setGlobal("k29", { x: 1, s: "é", n: [1, 2] });
@@ -461,12 +533,13 @@ export async function retentionChecks(mod: DriverModule, check: Check, log: (l: 
     const r1 = await refused(() => st.pruneIndexes([{ index: BY_ID, key: kId(AFTER), ts: MAX }], MAX));
     const r2 = await refused(() => st.pruneDocuments([{ table: TABLE, id: AFTER, ts: MAX }], MAX));
     const r3 = await refused(() => st.setGlobal("k29", 7));
+    const r6 = await refused(() => st.purgeTablet(TABLE, [BY_ID], 1));
     await st.close();
     st = (await mod.open(false)) as Store;
     await lease(st, "k28-again");
     check(
-      r1 && r2 && r3 && (await untouched(st)),
-      "K29 without the lease, pruneIndexes, pruneDocuments and setGlobal throw LeaseLostError and change nothing",
+      r1 && r2 && r3 && r6 && (await untouched(st)),
+      "K29 without the lease, pruneIndexes, pruneDocuments, purgeTablet and setGlobal throw LeaseLostError and change nothing",
     );
     // A TTL lease taken over by another holder: the old one is refused too.
     if ((st as { leaseScope?: string }).leaseScope !== "process") {

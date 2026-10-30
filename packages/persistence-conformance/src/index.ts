@@ -97,7 +97,8 @@ export type DriverModule = {
   openThrough?(via: { host: string; port: number }, opts: { timeoutMs: number }): Promise<Persistence>;
 };
 
-// K3 also runs K4–K5; K10 runs K10–K19; K27 runs K27–K29; K30 runs K30, K31 and K35
+// K3 also runs K4–K5; K10 runs K10–K19; K27 runs K27–K29 and K37 (a deleted table's purge, C18); K30 runs K30, K31
+// and K35
 export type Check =
   | "K1"
   | "K2"

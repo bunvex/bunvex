@@ -883,6 +883,32 @@ export class MysqlPersistence implements Persistence, Lease, ReadOnlyFlag, Reten
     ]);
   }
 
+  /**
+   * PERSIST-01 C18: up to `limit` rows of the tablet's indexes, else every version of up to `limit` of its documents
+   * (Convex's `delete_tablet_chunk`, the ids read first: MySQL refuses a `LIMIT` inside `IN`).
+   */
+  async purgeTablet(table: TabletId, indexes: IndexId[], limit: number) {
+    await this.assertLease();
+    let n = 0;
+    for (const index of indexes) {
+      if (n >= limit) break;
+      const [r] = (await this.call((c) =>
+        c.query(`delete from indexes where index_id = ? limit ?`, [bin(index), limit - n]),
+      )) as any;
+      n += Number(r.affectedRows);
+    }
+    if (n) return n;
+    const [rows] = (await this.read((c) =>
+      c.query(`select distinct id from documents where table_id = ? limit ?`, [bin(table), limit]),
+    )) as any;
+    const ids = (rows as { id: Buffer }[]).map((r) => r.id);
+    if (!ids.length) return 0;
+    const [r] = (await this.call((c) =>
+      c.query(`delete from documents where table_id = ? and id in (?)`, [bin(table), ids]),
+    )) as any;
+    return Number(r.affectedRows);
+  }
+
   private async deleteChunks<T>(rows: T[], table: string, clause: string, params: (r: T) => unknown[]) {
     let n = 0;
     for (const chunk of smartChunks(rows)) {
