@@ -187,7 +187,8 @@ holds more than `ROOM_MAX_BUFFERED_BYTES`) is disconnected and syncs again when 
 
 ## 7. Not in v1
 
-- **One process.** The state is the process's memory. When followers exist, rooms relay through the leader.
+- **One process.** The state is the process's memory. bunvex runs one process per deployment today; once it can
+  run followers, rooms will relay through the leader.
 - **No `onJoin` / `onLeave` hooks.** An app that wants "last seen" writes it from the client or a mutation.
 - **No room state** (a shared document, a CRDT). Presence and events only.
 
