@@ -74,7 +74,8 @@ drives it in Chromium; any page error or console error fails the test.
 | [react-query](react-query) | TanStack Query (`@bunvex/react-query`), live |
 | [nextjs-app-router](nextjs-app-router) | Next.js App Router: `preloadQuery`, `usePreloadedQuery`, a Server Action |
 | [nextjs-pages-router](nextjs-pages-router) | Next.js Pages Router, and `fetchQuery` from an API route |
-| [batch-worker](batch-worker) | A component from npm: `@bunvex/batch-worker` draining a work queue and folding scores into totals, each resuming from a commit-timestamp cursor |
+| [batch-worker](batch-worker) | A component from npm: `@bunvex/batch-worker` draining a work queue, folding scores into totals, and sending LLM requests as a `@bunvex/rate-limiter` token budget allows, each resuming from a commit-timestamp cursor |
+| [rate-limiter](rate-limiter) | A component from npm: `@bunvex/rate-limiter`, a playground of limits with a live timeline, and `useRateLimit` in the browser |
 | [sharded-counter](sharded-counter) | A component from npm: `@bunvex/sharded-counter` counting a million checkboxes, a trigger counting a table |
 | [testing](testing) | `@bunvex/testing`: the app's functions in tests, on the real engine (no front end) |
 | [users-and-clerk](users-and-clerk) | Signed-in users with Clerk (`@bunvex/react-clerk`) |

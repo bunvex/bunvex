@@ -191,6 +191,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@bunvex/batch-worker": "workspace:*",
+        "@bunvex/rate-limiter": "workspace:*",
         "@bunvex/react": "workspace:*",
         "@bunvex/server": "workspace:*",
         "@bunvex/values": "workspace:*",
@@ -415,6 +416,27 @@
       "name": "bunvex-example-prewarming",
       "version": "0.0.0",
       "dependencies": {
+        "@bunvex/react": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
+        "react": "^19.3.0",
+        "react-dom": "^19.3.0",
+      },
+      "devDependencies": {
+        "@bunvex/cli": "workspace:*",
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "@vitejs/plugin-react": "^6.1.1",
+        "bunvex-examples-harness": "workspace:*",
+        "typescript": "^5.9.0",
+        "vite": "^8.3.1",
+      },
+    },
+    "examples/rate-limiter": {
+      "name": "bunvex-example-rate-limiter",
+      "version": "0.0.0",
+      "dependencies": {
+        "@bunvex/rate-limiter": "workspace:*",
         "@bunvex/react": "workspace:*",
         "@bunvex/server": "workspace:*",
         "@bunvex/values": "workspace:*",
@@ -2120,6 +2142,8 @@
     "bunvex-example-pagination": ["bunvex-example-pagination@workspace:examples/pagination"],
 
     "bunvex-example-prewarming": ["bunvex-example-prewarming@workspace:examples/prewarming"],
+
+    "bunvex-example-rate-limiter": ["bunvex-example-rate-limiter@workspace:examples/rate-limiter"],
 
     "bunvex-example-react-native": ["bunvex-example-react-native@workspace:examples/react-native"],
 

@@ -13,12 +13,13 @@ import { compareValues, isBytes, isSimpleObject, opaque, type Value } from "./va
 /** An id's table name, or undefined when it names no known table (the engine's catalog answers). */
 export type TableOfId = (tableNumber: number) => string | undefined;
 
+// Convex converts first, so its check only sees values.
 /**
  * Display a value as the messages do: `1.0`, `NaN`, `"s"`, `5n`→`5`, `b"AQI="`, `[1, 2]`, `{a: 1}`.
  *
- * Only plain data is opened. What reaches a check before it is converted can be anything a function
- * returned or passed (Convex converts first, so its check only sees values): a class instance, a `Map` or
- * an engine object such as `ctx.db` prints as `Name {…}`, never its fields, and a cycle as `[Circular]`.
+ * Only plain data is opened. What reaches a check before it is converted can be anything a function returned or passed:
+ * a class instance, a `Map` or an engine object such as `ctx.db` prints as `Name {…}`, never its fields, and a cycle as
+ * `[Circular]`.
  */
 export function displayValue(v: Value | undefined): string {
   return display(v, new Set());

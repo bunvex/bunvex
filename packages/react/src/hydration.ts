@@ -8,9 +8,10 @@ import { useQuery } from "./hooks.ts";
 
 type QueryRef = AnyReference & { _type: "query" };
 
+// Typed `string` as Convex's.
 /**
- * A query's server-side result, to pass from a Server Component to a Client Component. `_argsJSON` and
- * `_valueJSON` are typed `string`, as Convex's, but hold the JSON values `toJsonValue` makes.
+ * A query's server-side result, to pass from a Server Component to a Client Component. `_argsJSON` and `_valueJSON` are
+ * typed `string` but hold the JSON values `toJsonValue` makes.
  */
 export type Preloaded<Query extends QueryRef> = {
   __type: Query;
