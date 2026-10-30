@@ -80,7 +80,7 @@ before anything is written to the store (`packages/core/src/database-globals.ts`
 | lower | refuses it, untouched (`LayoutError`): "the store's data is at version <n> …; this bunvex reads version 134 and has no migrations from older versions" |
 
 The tables themselves are checked too: an open finds Convex's columns in `documents`, `indexes` and
-`persistence_globals` (or, on MongoDB, its analogue; the memory log checks its file header), and refuses anything
+`persistence_globals` (the memory log checks its file header), and refuses anything
 else untouched, an older bunvex layout included (PERSIST-01 C10, `packages/core/src/persistence/layout.ts`).
 
 So, unlike Convex, **there is no in-place upgrade across a format change** (Convex's option 1, its migration
@@ -108,8 +108,7 @@ the final export has everything.
    bunvex env list --include-values > ./backups/env.txt
    ```
 
-3. Start the **new** release on an empty database (a new SQLite file, a new Postgres/MySQL database or MongoDB
-   database) and a new storage directory or S3 prefix.
+3. Start the **new** release on an empty database (a new SQLite file, or a new Postgres/MySQL database) and a new storage directory or S3 prefix.
 4. Deploy the app with the new CLI (`bunvex deploy`), and set its variables again (`bunvex env set NAME value`).
 5. Import:
 
@@ -185,7 +184,8 @@ What does not cross over:
   `npx convex deploy`); until then function calls fail as on a deployment with no code. Convex's push also enables
   the search indexes it rebuilt.
 - **Components.** bunvex has none (DV-55): do not cross-open a store whose app uses them.
-- **MongoDB** and **memory-log** stores: Convex has neither; they move by export and import only.
+- **Memory-log** stores: Convex has none; they move by export and import only. bunvex's MongoDB driver is gone
+  (2026-10-29): export a MongoDB deployment with 0.1.0-alpha.2 and import it into another store.
 - **Running both at once.** A Convex process and a bunvex process on the same SQLite file both write (Convex takes
   no lock; bunvex's `.lock` file protects bunvex from bunvex only, DV-411, DV-412). On Postgres and MySQL they share
   Convex's `leases` row, so the newest process wins and the other stops at its next write (DV-413). Stop one before

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # bunvex on the Mac: the HTTP suite (bench/load) for each storage, one at a time.
-# Postgres and MySQL come from scripts/mac-stores.sh start. MongoDB is off the default list.
+# Postgres and MySQL come from scripts/mac-stores.sh start.
 #   scripts/mac-bench.sh
 # The 4 MiB/s write cap stays off unless MAX_BYTES_WRITTEN_PER_SECOND is set. Fan-out is a later harness.
 set -uo pipefail

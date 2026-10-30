@@ -1,7 +1,7 @@
 name: Jepsen nightly
 
 # The long consistency runs (STUDY-57 §5, the owner's call): the Jepsen-style workload with faults on
-# Postgres, MySQL and MongoDB for a while every night. A failure opens (or comments on) a GitHub issue with
+# Postgres and MySQL for a while every night. A failure opens (or comments on) a GitHub issue with
 # the seed, the findings and the smallest failing history; the full histories are the run's artifact.
 # A pull request that changes this file or the harness runs it briefly, so the workflow itself is tested.
 on:
@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        store: [postgres, mysql, mongodb]
+        store: [postgres, mysql]
     env:
       MINUTES: ${{ github.event_name == 'pull_request' && '1' || inputs.minutes || '12' }}
       # the service containers have no verifiable TLS; bunvex requires it by default (STUDY-25 L8)
@@ -51,9 +51,6 @@ jobs:
               docker run -d --name db -p 3306:3306 -e MYSQL_ROOT_PASSWORD=bunvex -e MYSQL_DATABASE=bunvex mysql:8.4
               for i in $(seq 1 90); do docker exec db mysqladmin ping -uroot -pbunvex --silent && break; sleep 2; done
               echo "PERSISTENCE_URL=mysql://root:bunvex@127.0.0.1:3306/bunvex" >> "$GITHUB_ENV" ;;
-            mongodb)
-              bash scripts/ci-mongo.sh db
-              echo "PERSISTENCE_URL=mongodb://127.0.0.1:27017/bunvex?replicaSet=rs0" >> "$GITHUB_ENV" ;;
           esac
       - uses: oven-sh/setup-bun@v2
         with:
