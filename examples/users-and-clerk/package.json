@@ -24,7 +24,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "bunvex-examples-harness": "workspace:*",
-    "jose": "6.2.12",
+    "jose": "6.2.13",
     "typescript": "^5.9.0",
     "vite": "^8.3.1"
   }
