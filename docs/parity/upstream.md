@@ -31,6 +31,7 @@ records the move here.
 | get-convex/workpool | `workpool` | `fe6f2b8` (2026-10-15) | 0.4.14 | `@bunvex/workpool` |
 | get-convex/aggregate | `aggregate` | `5a72b01` (2026-10-15) | 0.3.3 | `@bunvex/aggregate` |
 | get-convex/migrations | `migrations` | `dc87b03` (2026-10-15) | 0.3.7 | `@bunvex/migrations` |
+| get-convex/templates | `convex-templates` | `34364d1` (2026-10-29) | — | the examples after Convex's app templates (`template-tanstack-start`: STUDY-198) |
 
 These are not triaged daily. Each piece's study reads its repository's changes since its commit before it is
 built, and moves the commit.

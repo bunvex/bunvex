@@ -53,6 +53,7 @@ drives it in Chromium; any page error or console error fails the test.
 |---|---|
 | [tutorial](tutorial) | A chat: a query, a mutation, a page that stays live |
 | [react-native](react-native) | The same chat on iOS and Android with Expo (React Native) |
+| [tanstack-start](tanstack-start) | The chat on TanStack Start: rendered on the server with `@bunvex/react-query`, then live |
 | [typescript](typescript) | A schema typing documents end to end (`Doc<"messages">`) |
 | [args-validation](args-validation) | `args` and `returns` validators, and what a refused call says |
 | [custom-errors](custom-errors) | `BunvexError` with a message or data, from mutations and queries |
