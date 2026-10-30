@@ -28,7 +28,7 @@ records the move here.
 | get-convex/sharded-counter | `sharded-counter` | `d8f0718` (2026-10-14) | 0.2.3 | `@bunvex/sharded-counter` |
 | get-convex/batch-worker | `batch-worker` | `f299a7b` (2026-10-14) | 0.3.6 | `@bunvex/batch-worker` |
 | get-convex/rate-limiter | `rate-limiter` | `dee5af1` (2026-10-15) | 0.4.2 | `@bunvex/rate-limiter` |
-| get-convex/workpool | `workpool` | `fe6f2b8` (2026-10-15) | 0.4.14 | `@bunvex/workpool` |
+| get-convex/workpool | `workpool` | `7fde769` (2026-10-21; STUDY-199 W-1) | 0.4.14 | `@bunvex/workpool` |
 | get-convex/aggregate | `aggregate` | `5a72b01` (2026-10-15) | 0.3.3 | `@bunvex/aggregate` |
 | get-convex/migrations | `migrations` | `dc87b03` (2026-10-15) | 0.3.7 | `@bunvex/migrations` |
 | get-convex/templates | `convex-templates` | `34364d1` (2026-10-29) | — | the examples after Convex's app templates (`template-tanstack-start`: STUDY-198) |

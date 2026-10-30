@@ -1,14 +1,15 @@
 # STUDY-199 — `@bunvex/workpool`
-<!-- index: `@bunvex/workpool`, the fourth own component (STUDY-158 §3.4 step 4.4) and a prerequisite of `@bunvex/resend` (STUDY-200) and built-in auth's email (STUDY-191): a pool of actions, mutations and queries run at most `maxParallelism` at a time on `@bunvex/batch-worker`'s loop, with retries, `onComplete` callbacks, cancelation, recovery from the scheduler's state and JSON log events; written from get-convex/workpool 0.4.14 | open: W-1–W-5 -->
+<!-- index: `@bunvex/workpool`, the fourth own component (STUDY-158 §3.4 step 4.4) and a prerequisite of `@bunvex/resend` (STUDY-200) and built-in auth's email (STUDY-191): a pool of actions, mutations and queries run at most `maxParallelism` at a time on `@bunvex/batch-worker`'s loop, with retries, `onComplete` callbacks, cancelation, recovery from the scheduler's state and JSON log events; written from get-convex/workpool 0.4.14 | decided (owner, 2026-10-30): W-1–W-5 as recommended; W-2 extends DV-539 -->
 
-- **Status:** open, waiting for the owner on W-1–W-5 (§7).
+- **Status:** decided (owner, 2026-10-30): W-1–W-5 as recommended (§7); W-2 extends DV-539. The pin is `7fde769`
+  (W-1). To be built (§3.5).
 - **Convex source read:** get-convex/workpool at `7fde769` (after 0.4.14), cloned at `../workpool`. Paths are
   relative to that repository's root.
   - The npm release 0.4.14 is the tag commit `358fb20`; [upstream.md](../parity/upstream.md#other-repositories) pins
     `fe6f2b8`. `7fde769` is two commits later and changes behaviour in one place: `generateReport` pages with the
     built-in `.paginate()` instead of convex-helpers' `paginator` (§1.13). `e6d685b` also changes `src/test.ts`
     (`register` returns `registerComponent`'s result). Nothing else under `src/` differs from 0.4.14
-    (`git diff 358fb20 7fde769 -- src`). W-1 moves the pin.
+    (`git diff 358fb20 7fde769 -- src`). W-1 moved the pin here.
 - **bunvex source:** `main`, with `@bunvex/batch-worker` (STUDY-196) and `@bunvex/rate-limiter` (STUDY-197). Paths
   are relative to the repository's root.
 - **Scope:**
@@ -693,7 +694,7 @@ DV-539 says. The aliases `vWorkIdValidator` and `vResultValidator`, which 0.4.14
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| W-2 | `loop:getBatch` declares batch-worker's `vQueryReturns`, whose work branch has an optional `cursor`, where Convex's declares `vBatchResult` (which bunvex's batch-worker does not build, DV-539) | DV-539; only the function's declared return validator shows it (the dashboard's function spec) | open |
+| W-2 | `loop:getBatch` declares batch-worker's `vQueryReturns`, whose work branch has an optional `cursor`, where Convex's declares `vBatchResult` (which bunvex's batch-worker does not build, DV-539) | DV-539; only the function's declared return validator shows it (the dashboard's function spec) | accepted (owner, 2026-10-30); DV-539 |
 
 Beyond W-2, the renames of DV-538, DV-347 and DV-533 (§3.3).
 
@@ -719,6 +720,8 @@ As §3.4, once built.
   oracle, not only against upstream's test.
 
 ## 7. Questions for the owner
+
+All decided by the owner on 2026-10-30, as recommended.
 
 | # | Question | Recommendation |
 |---|---|---|
