@@ -9,6 +9,9 @@
 #   @bunvex/react-query), moved by hand everywhere at once;
 # - `expo`, `react-native` and Expo's packages: moved together with an Expo SDK (`bunx expo install --fix`);
 # - `fast-check`: pinned, so a property test's shrinking does not change under a seed.
+#
+# The groups take minor and patch updates only: a major version (TypeScript 7, Changesets 3, …) comes in a PR of its
+# own, so one that breaks does not hold back the safe ones (#978 grouped four majors with ten safe updates).
 version: 2
 updates:
   - package-ecosystem: bun
@@ -30,21 +33,31 @@ updates:
       - dependency-name: react-native
       - dependency-name: "react-native-*"
       - dependency-name: fast-check
+      # 9.3 breaks the dashboard grid's context menu (27 tests, #973): held at 9.2 until the grid is fixed for it.
+      - dependency-name: "@tanstack/react-table"
+        versions: [">=9.3.0"]
     groups:
       react:
+        update-types: [minor, patch]
         patterns: [react, react-dom, "@types/react", "@types/react-dom"]
       tanstack:
+        update-types: [minor, patch]
         patterns: ["@tanstack/*"]
       vite:
+        update-types: [minor, patch]
         patterns: [vite, "@vitejs/*", "@tailwindcss/*", tailwindcss]
       nextjs:
+        update-types: [minor, patch]
         patterns: [next, "eslint-config-next"]
       database-drivers:
+        update-types: [minor, patch]
         patterns: [postgres, mysql2]
       auth:
+        update-types: [minor, patch]
         patterns: [jose, "@auth0/*", "@clerk/*"]
       dev-tools:
         dependency-type: development
+        update-types: [minor, patch]
         patterns: ["*"]
       minor-and-patch:
         update-types: [minor, patch]
