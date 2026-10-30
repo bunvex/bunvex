@@ -25,6 +25,7 @@ export const CHECKED = [
   "packages/helpers",
   "components/batch-worker",
   "components/rate-limiter",
+  "components/resend",
   "components/sharded-counter",
   "components/workpool",
 ];
