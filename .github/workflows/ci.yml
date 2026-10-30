@@ -305,10 +305,9 @@ jobs:
           AWS_S3_DISABLE_CHECKSUMS: "true"
         run: bun test packages/file-storage/test/blob-stores.test.ts
 
-  # The name is the required check's (branch protection); MongoDB's driver is gone (owner, 2026-10-29), and the name
-  # changes once the protection does.
+  # The required check of branch protection: renamed with it when MongoDB's driver went (owner, 2026-10-29).
   conformance:
-    name: PERSIST-01 conformance · Postgres · MySQL · MongoDB
+    name: PERSIST-01 conformance · Postgres · MySQL
     if: always()
     needs: [changes, conformance-postgres, conformance-mysql]
     runs-on: ubuntu-24.04
