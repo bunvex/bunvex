@@ -23,6 +23,10 @@ test("sending a message", async () => {
 - **It behaves as a deployment**, not as convex-test's mock: write conflicts and retries, a deployment's limits, real ids and
   storage URLs, deterministic `Date` and `Math.random` in queries and mutations.
 - **Env**: functions see `bunvexTest({ env: { … } })`, not the test's `process.env`.
+- **An API your actions call**: `bunvexTest({ outboundFetch: (request) => new Response(…) })` answers the requests
+  the deployment's actions send with `fetch`, instead of the network. Each request arrives as it would go out (the
+  app's headers, `User-Agent`, the body; a redirect is followed one request at a time), and a handler that throws is
+  the action's failed `fetch`. Without it, actions reach the network.
 - **Time**: scheduled functions and crons run on the test's virtual clock as `finishAllScheduledFunctions()` moves
   it; `t.runCron(name)` runs a cron now. The write limit (4 MiB a second, as a deployment's) counts on that clock
   too: a test that seeds more than that moves the clock between batches (`t.advanceTime(1000)`).
