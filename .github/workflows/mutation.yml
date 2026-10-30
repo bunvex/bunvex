@@ -33,7 +33,7 @@ jobs:
     outputs:
       files: ${{ steps.list.outputs.files }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -55,7 +55,7 @@ jobs:
       matrix:
         file: ${{ fromJSON(needs.files.outputs.files) }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
@@ -65,7 +65,7 @@ jobs:
           FILE: ${{ matrix.file }}
         run: echo "slug=$(echo "$FILE" | tr '/.' '--')" >> "$GITHUB_OUTPUT"
       - name: The previous run's results for this file
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: reports/mutation/incremental.json
           key: mutation-${{ steps.slug.outputs.slug }}-${{ github.run_id }}
@@ -82,13 +82,13 @@ jobs:
           fi
       - name: Keep the results for the next run
         if: always() && github.event_name != 'pull_request'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: reports/mutation/incremental.json
           key: mutation-${{ steps.slug.outputs.slug }}-${{ github.run_id }}
       - name: Report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mutation-report-${{ steps.slug.outputs.slug }}
           path: reports/mutation/
