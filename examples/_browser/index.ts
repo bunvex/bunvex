@@ -1,4 +1,4 @@
-// The examples in a real browser (STUDY-90). Each `<example>.browser.ts` deploys its example with the harness
+// The examples in a real browser. Each `<example>.browser.ts` deploys its example with the harness
 // (this repository's backend, a temporary state: the developer's `.bunvex/` is never touched), serves its front
 // end with its own dev server (Vite or Next.js) pointed at that deployment, and drives the page in Chromium. A
 // page that loads but whose client throws — what `Buffer is not defined` was — fails the test: every page error

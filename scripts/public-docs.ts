@@ -2,9 +2,10 @@
 // every symbol a published package exports, and of its members, is what an editor shows on hover and what the
 // published `.d.ts` keeps: it says what the symbol does in bunvex's words, with no "Convex" and no study reference
 // (`STUDY-NN`). The parity trail (Convex's name, file or behaviour) goes in a `//` comment above it, which neither
-// shows. Run by `bun run check:deps`; `bun scripts/public-docs.ts --list` prints every finding of every package,
+// shows. The user docs (published READMEs, the examples' READMEs, the guides) carry no study, divergence or addition
+// number either, and the examples' code does not name Convex (`userDocFindings`). Run by `bun run check:deps`; `bun scripts/public-docs.ts --list` prints every finding of every package,
 // those not checked yet included.
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import ts from "typescript";
 
@@ -96,6 +97,60 @@ export function publicDocFindings(dirs: string[]): Finding[] {
   return findings;
 }
 
+/** The user docs (owner, 2026-10-29): what bunvex's users read besides the JSDoc. */
+export function userDocFiles(): string[] {
+  const out = ["docs/dashboard.md", "docs/rooms.md", "docs/upgrading.md", "docker/README.md", "examples/README.md"];
+  for (const base of ["packages", "components"])
+    for (const d of readdirSync(join(ROOT, base))) {
+      const pkg = join(ROOT, base, d, "package.json");
+      if (!existsSync(pkg) || (JSON.parse(readFileSync(pkg, "utf8")) as { private?: boolean }).private) continue;
+      if (existsSync(join(ROOT, base, d, "README.md"))) out.push(`${base}/${d}/README.md`);
+    }
+  for (const d of readdirSync(join(ROOT, "examples")))
+    if (!d.startsWith("_") && existsSync(join(ROOT, "examples", d, "README.md"))) out.push(`examples/${d}/README.md`);
+  return out;
+}
+
+/** A study, divergence or addition number: the maintainers' references, which a user cannot follow. */
+export const INTERNAL_REFERENCE = /\b(STUDY|DV|AD)-\d+\b/;
+
+/**
+ * The user docs' internal references (each published package's README, the examples' READMEs, the user guides), and
+ * the examples' code comments that name Convex: an example is an app its reader copies. The docs may name Convex
+ * where a reader moves from or to it; the examples' index credits Convex's demos once, in its README.
+ */
+export function userDocFindings(): Finding[] {
+  const findings: Finding[] = [];
+  for (const file of userDocFiles())
+    readFileSync(join(ROOT, file), "utf8")
+      .split("\n")
+      .forEach((line, n) => {
+        const m = INTERNAL_REFERENCE.exec(line);
+        if (m) findings.push({ pkg: file, name: file, at: `${file}:${n + 1}`, text: m[0] });
+      });
+  const code = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) return ["node_modules", "_generated", "dist", ".expo"].includes(e.name) ? [] : code(p);
+      return /\.(ts|tsx)$/.test(e.name) ? [p] : [];
+    });
+  for (const d of readdirSync(join(ROOT, "examples")))
+    if (!d.startsWith("_") && statSync(join(ROOT, "examples", d)).isDirectory())
+      for (const file of code(join(ROOT, "examples", d)))
+        readFileSync(file, "utf8")
+          .split("\n")
+          .forEach((line, n) => {
+            if (/convex/i.test(line))
+              findings.push({
+                pkg: "examples",
+                name: relative(ROOT, file),
+                at: `${relative(ROOT, file)}:${n + 1}`,
+                text: "Convex",
+              });
+          });
+  return findings;
+}
+
 if (import.meta.main) {
   const list = process.argv.includes("--list");
   const findings = publicDocFindings(list ? ALL : CHECKED).filter((f) => !ONLY || f.at.startsWith(ONLY));
@@ -110,4 +165,13 @@ if (import.meta.main) {
     );
     process.exit(1);
   } else console.log(`✓ the public documentation of ${CHECKED.length} packages is in bunvex's words`);
+  const docs = userDocFindings();
+  for (const f of docs) console.log(`${f.at}: says "${f.text}"`);
+  if (docs.length > 0 && !list) {
+    console.error(
+      `\n${docs.length} line(s) of the user docs with a study, divergence or addition number, or an example naming Convex: say it in plain words (rule 8)`,
+    );
+    process.exit(1);
+  } else if (!list)
+    console.log(`✓ the user docs (${userDocFiles().length} files) and the examples' code are in bunvex's words`);
 }

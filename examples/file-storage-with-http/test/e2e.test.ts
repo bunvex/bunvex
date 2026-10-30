@@ -1,4 +1,4 @@
-// The file-storage-over-HTTP example end to end (STUDY-90): an image POSTed to an HTTP action is stored and
+// The file-storage-over-HTTP example end to end: an image POSTed to an HTTP action is stored and
 // posted, served back by another, and the browser's CORS preflight answers with the configured origin.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";

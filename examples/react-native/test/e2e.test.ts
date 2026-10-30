@@ -1,4 +1,4 @@
-// The React Native example end to end (STUDY-90): its functions deployed to a bunvex-local-backend and used through
+// The React Native example end to end: its functions deployed to a bunvex-local-backend and used through
 // the public client, then its app bundled for iOS, Android and the web by Expo's Metro (`expo export`), which must
 // hold nothing of the server. The app itself runs on a simulator or a device (README); CI has neither.
 import { afterAll, beforeAll, expect, test } from "bun:test";

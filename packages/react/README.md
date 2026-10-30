@@ -1,6 +1,6 @@
 # @bunvex/react
 
-React bindings (STUDY-26 §7), the counterpart of Convex's `convex/react`.
+React bindings, bunvex's version of `convex/react`.
 
 ```tsx
 import { anyApi as api } from "@bunvex/client";

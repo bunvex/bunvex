@@ -9,7 +9,7 @@ bun install
 bun test
 ```
 
-What the tests show (the scenarios of Convex's `convex-test` demo, written for bunvex):
+What the tests show:
 
 - `t.query`, `t.mutation`, `t.action` by reference, internal functions included (`posts`);
 - `t.withIdentity({ name })` for signed-in users (`tasks`);

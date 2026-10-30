@@ -1,7 +1,7 @@
 # @bunvex/cli
 
 The `bunvex` command: develop, deploy and run functions on a [bunvex](https://github.com/bunvex/bunvex)
-deployment, a reactive backend for Bun with Convex's model (queries, mutations, actions, live queries).
+deployment, a reactive backend for Bun (queries, mutations, actions, live queries).
 
 ```sh
 bun add @bunvex/server @bunvex/values

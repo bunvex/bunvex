@@ -1,4 +1,4 @@
-// The example's tables (Convex's `example/convex/schema.ts`, without the rate-limited and e2e parts):
+// The example's tables:
 //
 // - `events`: the work queue, each row a value to sum. `insertedAt` is `ctx.db.vars.commitTs`, an int64 in commit
 //   order once the writing mutation commits, and indexed, so the worker resumes from its cursor instead of scanning

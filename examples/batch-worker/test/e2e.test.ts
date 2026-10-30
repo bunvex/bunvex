@@ -1,4 +1,4 @@
-// The batch-worker example end to end (STUDY-196 B-2): the component package installed from the workspace, two
+// The batch-worker example end to end: the component package installed from the workspace, two
 // named workers draining their queues on the deployment's own scheduler, and the totals and statuses following live.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { resolve } from "node:path";

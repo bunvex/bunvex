@@ -1,4 +1,4 @@
-// The live scoreboard (Convex's `example/convex/aggregates.ts`): each score is a cheap insert, and one loop folds
+// The live scoreboard: each score is a cheap insert, and one loop folds
 // batches of them into per-team totals. One loop at a time means the hot total rows have a single writer, so scorers
 // never conflict with each other or with it. Scores are never deleted: the cursor alone moves the scan on.
 import { defineBatchWorkerValidators, ping } from "@bunvex/batch-worker";
