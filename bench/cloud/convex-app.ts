@@ -14,7 +14,7 @@ if (!dir) throw new Error("usage: bun bench/cloud/convex-app.ts <dir>");
 // Convex's builders without a schema's types are the `…Generic` ones (what convex/_generated/server re-exports).
 const GENERIC = new Set(["query", "mutation", "action", "internalQuery", "internalMutation", "internalAction"]);
 const source = (await Bun.file(`${import.meta.dir}/../functions.ts`).text())
-  .replace(/import \{([^}]*)\} from "bunvex\/server";/, (_, names: string) => {
+  .replace(/import \{([^}]*)\} from "@?bunvex\/server";/, (_, names: string) => {
     const mapped = names
       .split(",")
       .map((n) => n.trim())
