@@ -796,14 +796,6 @@
         "vite": "^8.3.5",
       },
     },
-    "packages/auth": {
-      "name": "@bunvex/auth",
-      "version": "0.1.0-alpha.2",
-      "dependencies": {
-        "@bunvex/values": "workspace:*",
-        "jose": "^6.2.14",
-      },
-    },
     "packages/cli": {
       "name": "@bunvex/cli",
       "version": "0.1.0-alpha.2",
@@ -925,6 +917,14 @@
       "peerDependencies": {
         "@bunvex/server": "workspace:^",
         "@bunvex/values": "workspace:^",
+      },
+    },
+    "packages/identity": {
+      "name": "@bunvex/identity",
+      "version": "0.1.0-alpha.2",
+      "dependencies": {
+        "@bunvex/values": "workspace:*",
+        "jose": "^6.2.14",
       },
     },
     "packages/jepsen": {
@@ -1064,9 +1064,9 @@
       "name": "@bunvex/server",
       "version": "0.1.0-alpha.2",
       "dependencies": {
-        "@bunvex/auth": "workspace:*",
         "@bunvex/core": "workspace:*",
         "@bunvex/file-storage": "workspace:*",
+        "@bunvex/identity": "workspace:*",
         "@bunvex/protocol": "workspace:*",
         "@bunvex/values": "workspace:*",
         "@types/object-inspect": "^1.13.0",
@@ -1341,8 +1341,6 @@
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.6.3", "", { "os": "win32", "cpu": "x64" }, "sha512-GhtOPphBWlnCepqpNk/w5eGN5oGRCzL20EbAkL1XCIpyboeVC9R642noyT43l8LSenGS4qz9IL8sKPfwY37V/Q=="],
 
-    "@bunvex/auth": ["@bunvex/auth@workspace:packages/auth"],
-
     "@bunvex/batch-worker": ["@bunvex/batch-worker@workspace:components/batch-worker"],
 
     "@bunvex/bench": ["@bunvex/bench@workspace:bench"],
@@ -1364,6 +1362,8 @@
     "@bunvex/file-storage": ["@bunvex/file-storage@workspace:packages/file-storage"],
 
     "@bunvex/helpers": ["@bunvex/helpers@workspace:packages/helpers"],
+
+    "@bunvex/identity": ["@bunvex/identity@workspace:packages/identity"],
 
     "@bunvex/jepsen": ["@bunvex/jepsen@workspace:packages/jepsen"],
 

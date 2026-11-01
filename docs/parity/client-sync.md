@@ -47,7 +47,7 @@ is `POST /api/{query,mutation,action,query_ts,query_at_ts}`.
 | `Remove` {queryId} | `browser/sync/protocol.ts` | done (STUDY-23) |  |
 | `Mutation` {requestId, udfPath, args, componentPath?} | `browser/sync/protocol.ts` | done (STUDY-23) | Runs in the connection's queue, answers with the commit ts, and is idempotent by (sessionId, requestId). |
 | `Action` {requestId, udfPath, args, componentPath?} over the WebSocket | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | done (STUDY-23) | Concurrent: up to 1001 in flight, as Convex's check before adding one (STUDY-64 §1.2). |
-| `Authenticate` {tokenType: "User", value, baseVersion} | `browser/sync/protocol.ts`, `browser/sync/local_state.ts` | done (STUDY-27) | Verified by `@bunvex/auth`; the official client's `setAuth` works against bunvex (oracle test). |
+| `Authenticate` {tokenType: "User", value, baseVersion} | `browser/sync/protocol.ts`, `browser/sync/local_state.ts` | done (STUDY-27) | Verified by `@bunvex/identity`; the official client's `setAuth` works against bunvex (oracle test). |
 | `Authenticate` {tokenType: "Admin", value, baseVersion, impersonating?} (dashboard / "act as user") | `browser/sync/protocol.ts` | done (STUDY-34) | The admin key checked as Convex's; `actingAs` accepted too. |
 | `Authenticate` {tokenType: "None", baseVersion} (logout) | `browser/sync/protocol.ts` | done (STUDY-23) | Advances the identity version; every query re-runs. |
 | `Event` {eventType, event} for client telemetry (ClientConnect marks, ClientReceivedTransition, NetworkRecoveryReconnect) | `browser/sync/protocol.ts`, `crates/sync/src/worker.rs` | done (STUDY-23) | Accepted and ignored (P11). |

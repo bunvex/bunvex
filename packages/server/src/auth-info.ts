@@ -1,8 +1,9 @@
 // The stored auth providers (STUDY-129), as Convex's `_auth` (crates/model/src/auth): one document per provider
 // of the deployed `auth.config`, written by a push and by the variable and canonical URL changes that
 // re-evaluate it, read by token checks and the dashboard (`listAuthProviders`).
-import type { AuthInfo } from "@bunvex/auth";
+
 import { AUTH_TABLE, type Tx } from "@bunvex/core";
+import type { AuthInfo } from "@bunvex/identity";
 
 type AuthDoc = Record<string, string | null>;
 

@@ -1,5 +1,5 @@
 ---
-"@bunvex/auth": patch
+"@bunvex/identity": patch
 "@bunvex/core": patch
 "@bunvex/protocol": patch
 "@bunvex/server": patch

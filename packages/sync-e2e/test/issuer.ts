@@ -1,4 +1,4 @@
-// An in-process token issuer for the server's auth tests (the same as @bunvex/auth's): OIDC discovery and a
+// An in-process token issuer for the server's auth tests (the same as @bunvex/identity's): OIDC discovery and a
 // JWKS over HTTP, keys generated per issuer, tokens signed on demand.
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
 

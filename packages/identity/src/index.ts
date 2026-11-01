@@ -1,4 +1,4 @@
-// Package @bunvex/auth — identity for bunvex functions (STUDY-27): the auth config, JWT / OIDC verification,
+// Package @bunvex/identity — identity for bunvex functions (STUDY-27): the auth config, JWT / OIDC verification,
 // and the `UserIdentity` a function's `ctx.auth.getUserIdentity()` returns.
 export {
   AUTH_CONFIG_FILE,
