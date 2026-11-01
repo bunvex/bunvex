@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.3/schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
     "includes": [
@@ -15,6 +15,8 @@
     ]
   },
   "css": { "parser": { "tailwindDirectives": true } },
+  "markdown": { "formatter": { "enabled": false }, "linter": { "enabled": false } },
+  "yaml": { "formatter": { "enabled": false }, "linter": { "enabled": false } },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 120 },
   "javascript": { "formatter": { "quoteStyle": "double", "semicolons": "always", "trailingCommas": "all" } },
   "linter": {
@@ -22,7 +24,8 @@
     "rules": {
       "preset": "recommended",
       "suspicious": { "noExplicitAny": "warn" },
-      "style": { "noNonNullAssertion": "off" }
+      "style": { "noNonNullAssertion": "off" },
+      "correctness": { "noComponentHookFactories": "off" }
     }
   },
   "assist": { "actions": { "source": { "organizeImports": "on" } } },
