@@ -13,7 +13,7 @@
     "directory": "packages/auth"
   },
   "dependencies": {
-    "jose": "^6.2.12",
+    "jose": "^6.2.13",
     "@bunvex/values": "workspace:*"
   },
   "publishConfig": {

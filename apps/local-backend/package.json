@@ -10,7 +10,7 @@
     "@bunvex/persistence": "workspace:*",
     "@bunvex/sandbox": "workspace:*",
     "@bunvex/server": "workspace:*",
-    "mysql2": "^3.24.4",
+    "mysql2": "^3.24.6",
     "postgres": "^3.4.9"
   }
 }
