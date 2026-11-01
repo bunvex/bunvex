@@ -750,7 +750,7 @@
         "@types/react-dom": "^19.3.0",
         "@vitejs/plugin-react": "^6.1.2",
         "bunvex-examples-harness": "workspace:*",
-        "jose": "6.2.13",
+        "jose": "6.2.14",
         "typescript": "^5.9.0",
         "vite": "^8.3.5",
       },
@@ -801,7 +801,7 @@
       "version": "0.1.0-alpha.2",
       "dependencies": {
         "@bunvex/values": "workspace:*",
-        "jose": "^6.2.13",
+        "jose": "^6.2.14",
       },
     },
     "packages/cli": {
@@ -1072,7 +1072,7 @@
       },
       "devDependencies": {
         "@bunvex/persistence": "workspace:*",
-        "jose": "^6.2.13",
+        "jose": "^6.2.14",
         "typescript": "^5.9.0",
       },
       "peerDependencies": {
@@ -1110,7 +1110,7 @@
         "axe-core": "4.13.0",
         "convex": "1.46.0",
         "fast-check": "4.10.2",
-        "jose": "6.2.13",
+        "jose": "6.2.14",
         "playwright-core": "1.63.0",
         "react": "^19.3.1",
         "react-dom": "^19.3.1",
@@ -2683,7 +2683,7 @@
 
     "jiti": ["jiti@2.7.0", "", { "bin": { "jiti": "lib/jiti-cli.mjs" } }, "sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ=="],
 
-    "jose": ["jose@6.2.13", "", {}, "sha512-7TIg10ZE1x82YediN+lcrPNvGMKge9yFHQD+Qho/b8y2adfugU3AsvvHfxV0fzyFllT6l9xCjf4RWY9g/Z9PJQ=="],
+    "jose": ["jose@6.2.14", "", {}, "sha512-3JasLuki1NRLQvY4wCoC37KZk4qxoBx2k2aFqLxT84IezqW0bkJKnNtxnZj/Fu1xsQivoc/lytxaRHJoGLjJ1A=="],
 
     "js-cookie": ["js-cookie@3.0.7", "", {}, "sha512-z/wZZgDrkNV1eA0ULjM/F9/50Ya8fbzgKneSpoPsXSGd0KnpdtHfOZWK+GcwLk+EZbS4F9RBhU+K2RgzuDaItw=="],
 
