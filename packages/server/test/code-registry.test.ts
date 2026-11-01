@@ -3,8 +3,8 @@
 import { expect, test } from "bun:test";
 import { defineSchema, Engine } from "@bunvex/core";
 import { MemoryPersistence } from "@bunvex/core/persistence/memory";
+import type { FunctionDef } from "../src/functions.ts";
 import { Functions, query } from "../src/functions.ts";
-import type { FunctionDef } from "../src/registration.ts";
 
 const said = (word: string) => query({ args: {}, handler: () => word });
 
