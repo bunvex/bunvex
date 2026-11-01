@@ -872,6 +872,37 @@ This is a parity gap of its own, fixed before 0c in its own PR: build the versio
 every component), then swap it in one step. 0c's per-version registry is that object, with an epoch the worker's
 `version` message names.
 
+### 10.5.2 The spike (2026-11-01)
+
+Before 0c, the owner asked whether 2b would pay for itself. A spike answered it: queries on worker threads, with no
+versions, catalog changes or Postgres (branch `spike/query-workers`, not product code). Each worker opened the SQLite
+store read-only through an `Engine` that only reads (`openReader`: the catalog at its newest commit, no lease, no
+committer), registered the bench's functions in a `Functions` on it, and ran the call runner on each request's text.
+The main thread kept the permits, the query cache and the commits. Answers were the same with and without workers,
+and a read after a write saw it.
+
+Measured on two DO `c-4` (Xeon 8168, sfo2), SQLite, 64 VUs (`bench/results/cloud/2026-11-01-s194-spike/`):
+
+| | in-thread | 1 worker | 2 workers | 3 workers |
+|---|--:|--:|--:|--:|
+| uncached, req/s · p99 | 1 850 · 65 ms | 2 750 | **3 990 · 38 ms (2.1×)** | 3 160 (run 1) |
+| cached | 6 500–8 400 in every column (noise) | | | |
+| insert | 2 700 | −4 % | −5 % | −7 % (run 1) |
+
+What it changes in the plan:
+
+- **0c's narrow `FunctionsHost` is not needed.** `Functions` ran unchanged on the read-only engine. 0c keeps the
+  registry per code version and its epoch, and the worker gets a read-only `Engine` (ii), whose writing methods are
+  never reached from a query's body.
+- **0d carries each commit's writes to the workers.** Without an index cache a worker's query cost 165 µs against 68 µs
+  in-thread, measured in one thread: 46 % of it was SQLite scans that the main thread's index cache answers. The cache
+  needs the write log to check an entry, so the epoch window carries each commit's written keys, posted before any
+  request at or past its ts. That is the cost on `insert`; iv sends them batched and as text.
+- **iv must not parse a worker's result on the main thread.** The HTTP API answers with the outcome's text; parsing it
+  for a value nobody read took 2.1× down to 1.8× (run 1).
+- **More workers than cores do not help.** On the `c-4`'s two cores, 3 workers measured as 2. DV-574's default (the
+  core count, workers started lazily) stays. Whether it should be the core count minus one needs a larger box.
+
 ### 10.6 Owner questions for 2b
 
 Decided by the owner on 2026-10-27, as recommended.
