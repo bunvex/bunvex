@@ -181,27 +181,32 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       durable: boolean;
       /** The page cache, in bytes; BUNVEX_SQLITE_CACHE_SIZE by default. */
       cacheBytes?: number;
+      /** SPIKE: a reader on a store another thread writes: no lock, no writer, nothing created. */
+      reader?: boolean;
     } & OpenOptions,
   ) {
     // Checked before the file is touched: a bad setting fails the start and leaves the store as it was.
     const cacheKiB = Math.ceil((opts.cacheBytes ?? sqliteCacheBytes()) / 1024);
     this.allowReadOnly = !!opts.allowReadOnly;
-    if (!this.inMemory) this.lock = ProcessLock.tryTake(path);
+    if (!this.inMemory && !opts.reader) this.lock = ProcessLock.tryTake(path);
     // Everything after the lock gives it back if it throws: a path SQLite cannot open, a store that is not one, or
     // one that cannot be written (STUDY-174 S7). Otherwise this process keeps the store locked until it exits.
     let db: Database | null = null;
     try {
-      db = new Database(path, { create: true });
+      db = opts.reader ? new Database(path, { readonly: true }) : new Database(path, { create: true });
       this.db = db;
       // A connection setting: the file is not changed (checkStore reads it first).
       db.exec(`pragma busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
-      this.checkStore(opts);
+      if (opts.reader) db.exec(`pragma cache_size = -${cacheKiB};`);
+      else this.checkStore(opts);
       // The page cache always set, never left to the build: Bun's SQLite defaults to 2 000 KiB on Linux, 2 000 pages
       // on macOS (AD-46).
-      db.exec(`pragma journal_mode = wal; pragma synchronous = ${opts.durable ? "full" : "off"};
+      if (!opts.reader) {
+        db.exec(`pragma journal_mode = wal; pragma synchronous = ${opts.durable ? "full" : "off"};
         pragma temp_store = memory; pragma cache_size = -${cacheKiB};`);
-      db.exec(SQLITE_LAYOUT);
-      db.exec(`create table if not exists read_only (id integer primary key);`);
+        db.exec(SQLITE_LAYOUT);
+        db.exec(`create table if not exists read_only (id integer primary key);`);
+      }
     } catch (e) {
       // Stryker disable next-line OptionalChaining,CallExpression: a refused handle's connection; left open it only leaks.
       db?.close();
@@ -210,7 +215,9 @@ export class SqlitePersistence implements Persistence, Lease, ReadOnlyFlag, Rete
       throw e;
     }
     if (this.inMemory) this.inline = new SqliteWriter(this.db);
-    else
+    else if (opts.reader) {
+      // No writer.
+    } else
       this.thread = new WriterThread({
         path: resolve(path),
         durable: opts.durable,

@@ -1989,7 +1989,7 @@ export class Functions {
     }
     const internal = !fromClient || f.visibility === "internal";
     // Without the codec (outside the tests, STUDY-194 Q7) the arguments go beside the request as they are.
-    if (!this.engine.callCodec)
+    if (!this.engine.callCodec && !(kind === "query" && this.engine.queryWorkers))
       return { spec: { kind, name, args: "", internal, session: null }, fn: f, args: { value: a } };
     const text = argsText(a);
     if (text === null) return null;
@@ -1997,6 +1997,11 @@ export class Functions {
   }
 
   /** The code side of the call boundary (STUDY-194 §4.1): the body a request runs, and a session's record. */
+  /** SPIKE (STUDY-194 2b): a worker's runner takes these. */
+  get spikeBodies(): CallBodies {
+    return this.bodies;
+  }
+
   private readonly bodies: CallBodies = {
     body: (request, local) => this.callBody(request, local as CallIn | undefined),
     record: (value) => ({ result: stringifyValue(value), logLines: currentLogLines() }),

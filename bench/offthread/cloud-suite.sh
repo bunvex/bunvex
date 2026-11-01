@@ -63,6 +63,11 @@ step front2-writer PROFILE=0 REPEATS=$REPEATS SERVER=bench/offthread/server.ts O
   PERSISTENCES=sqlite SCENARIOS=insert,increment1000
 step front2-profile PROFILE=1 REPEATS=1 SERVER=bench/offthread/server.ts OFFTHREAD_FRONT=2 PERSISTENCES=sqlite \
   SCENARIOS=cached
+# SPIKE (STUDY-194 2b, 2026-11-01): every query on N workers, each reading the SQLite store.
+for q in 0 1 2 3; do
+  step queries$q PROFILE=0 REPEATS=$REPEATS SERVER=bench/offthread/server.ts OFFTHREAD_QUERIES=$q PERSISTENCES=sqlite \
+    SCENARIOS=uncached,cached
+done
 if [ -z "${STEPS:-}" ] || [[ ",$STEPS," == *",micro,"* ]]; then
   bun bench/offthread/messaging.ts >$OUT/messaging.md 2>&1
   bun bench/offthread/values-split.ts >$OUT/values-split.md 2>&1

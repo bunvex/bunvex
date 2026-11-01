@@ -32,6 +32,49 @@ const engine = await new Engine(benchSchema, persistence, {
   lease: { ttlMs: Number(process.env.LEASE_TTL_MS ?? 5000), waitMs: Number(process.env.LEASE_WAIT_MS ?? 0) },
 }).init();
 const functions = new Functions(engine).register("bench", bench);
+// SPIKE (STUDY-194 2b): OFFTHREAD_QUERIES=N runs every query on N workers (query-worker.ts), each reading the store.
+const queryWorkers = Number(process.env.OFFTHREAD_QUERIES ?? 0);
+if (queryWorkers > 0) {
+  if (config.kind !== "sqlite") throw new Error("OFFTHREAD_QUERIES needs PERSISTENCE=sqlite");
+  const pending = new Map<number, { resolve: (outcome: string) => void; reject: (e: Error) => void }>();
+  const load: number[] = [];
+  const workers: Worker[] = [];
+  let ids = 0;
+  await Promise.all(
+    Array.from({ length: queryWorkers }, (_, i) => {
+      const w = new Worker(new URL("./query-worker.ts", import.meta.url).href);
+      workers.push(w);
+      load.push(0);
+      return new Promise<void>((resolve) => {
+        w.onerror = (e) => console.error("query worker error:", e.message);
+        w.onmessage = (e: MessageEvent<"ready" | [number, string | null, string?]>) => {
+          if (e.data === "ready") return resolve();
+          const [id, outcome, error] = e.data;
+          load[i]!--;
+          const p = pending.get(id)!;
+          pending.delete(id);
+          if (outcome === null) p.reject(new Error(`query worker failed: ${error}`));
+          else p.resolve(outcome);
+        };
+        w.postMessage({
+          path: `${config.dataDir}/bunvex.sqlite`,
+          ...engine.spikeIdentity,
+          cacheBytes: Number(process.env.OFFTHREAD_QUERY_CACHE_BYTES ?? 64 * 1024 * 1024),
+        });
+      });
+    }),
+  );
+  engine.queryWorkers = (request) =>
+    new Promise<string>((resolve, reject) => {
+      let best = 0;
+      for (let i = 1; i < load.length; i++) if (load[i]! < load[best]!) best = i;
+      load[best]!++;
+      const id = ++ids;
+      pending.set(id, { resolve, reject });
+      workers[best]!.postMessage([id, request]);
+    });
+  console.log(`bunvex: ${queryWorkers} query workers`);
+}
 // (d) needs the API server's handler itself: `server.fetch(req)` passes it no server object, and the handler uses
 // the server's per-request methods (timeout, requestIP). Bun.serve is wrapped while createServer runs.
 const served: { fetch: (req: Request, srv: unknown) => Response | Promise<Response> }[] = [];

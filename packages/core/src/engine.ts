@@ -24,6 +24,7 @@ import {
 } from "./bootstrap.ts";
 import {
   type Call,
+  type CallBodies,
   type CallHost,
   CallRunner,
   callsRoundTripByDefault,
@@ -617,6 +618,25 @@ export class Engine {
   get environment(): EnvironmentVariables {
     this.env ??= new EnvironmentVariables(() => this.catalog, this.committer);
     return this.env;
+  }
+
+  // SPIKE (STUDY-194 2b, owner 2026-11-01): not product code.
+  /** Where queries run instead of this thread: a request's text in, its outcome's text out. */
+  queryWorkers: ((request: string) => Promise<string>) | null = null;
+  /** SPIKE: the secret and name, for a worker's reader engine. */
+  get spikeIdentity() {
+    return { instanceSecret: this.instanceSecret, instanceName: this.instanceName };
+  }
+  /** SPIKE: open on a store another process writes, reading only: its catalog at its newest commit. */
+  async openReader() {
+    this.instanceSecret = canonicalInstanceSecret(this.opts.instanceSecret ?? "");
+    this.instanceName = this.opts.instanceName ?? "";
+    this.catalog = await loadCatalog(this.persistence, (await this.persistence.maxTs?.()) ?? 0n);
+    return this;
+  }
+  /** SPIKE: a worker's side of a call: a request's text in, the outcome's text out. */
+  async runCallText(request: string, bodies: CallBodies): Promise<string> {
+    return (await this.runner.run(request, bodies, undefined)).wire;
   }
 
   async init() {
@@ -3929,6 +3949,11 @@ export class Engine {
    * runner, and its outcome back as text. What the engine then does with the run (the cache, the subscriptions, OCC
    * and the commit) reads the decoded outcome; `CallLocal` holds the rest for now.
    */
+  /** SPIKE: a query goes to the workers when there are some. */
+  private offloads(call: Call) {
+    return this.queryWorkers !== null && call.spec.kind === "query";
+  }
+
   private async dispatch<T>(call: Call, start: TxStart, opts: ExecuteOptions): Promise<Ran<T>> {
     const id = ++this.callIds;
     let release: (() => void) | undefined;
@@ -3945,7 +3970,8 @@ export class Engine {
         ts: start.ts,
         now: start.now,
         // In-thread without the codec the identity object goes beside the request instead (`runRequest`).
-        identity: start.identity == null || !this.callCodec ? null : JSON.stringify(start.identity),
+        identity:
+          start.identity == null || (!this.callCodec && !this.offloads(call)) ? null : JSON.stringify(start.identity),
         systemIdentity: start.systemIdentity,
         request: start.request,
         tracked: start.tracked,
@@ -3954,18 +3980,26 @@ export class Engine {
       };
       // Through the codec under the tests; as objects otherwise (STUDY-194 Q7).
       // What it logged goes where it would have logged it: inside `wrap` (the query cache keeps it with the result).
-      const run = this.callCodec
+      const workers = this.offloads(call) ? this.queryWorkers : null;
+      const run = workers
         ? async () => {
-            const r = await this.runner.run(encodeCallRequest(request), call.bodies, call.local);
-            const outcome = decodeCallOutcome(r.wire);
+            const outcome = decodeCallOutcome(await workers(encodeCallRequest(request)));
             call.bodies.replay(outcome.report, call.local);
-            return { outcome, local: r.local };
+            const value = outcome.status === "ok" && outcome.result !== null ? parseValue(outcome.result) : null;
+            return { outcome, local: { tx: undefined as unknown as Tx, value } };
           }
-        : async () => {
-            const r = await this.runner.runRequest(request, start.identity ?? null, call.bodies, call.local);
-            call.bodies.replay(r.outcome.report, call.local);
-            return r;
-          };
+        : this.callCodec
+          ? async () => {
+              const r = await this.runner.run(encodeCallRequest(request), call.bodies, call.local);
+              const outcome = decodeCallOutcome(r.wire);
+              call.bodies.replay(outcome.report, call.local);
+              return { outcome, local: r.local };
+            }
+          : async () => {
+              const r = await this.runner.runRequest(request, start.identity ?? null, call.bodies, call.local);
+              call.bodies.replay(r.outcome.report, call.local);
+              return r;
+            };
       const { outcome, local } = await (opts.wrap ? opts.wrap(run) : run)();
       if (outcome.id !== request.id) throw new Error(`call ${request.id} was answered as call ${outcome.id}`);
       const ran = { tx: local.tx, observedTime: outcome.observedTime, now: start.now, outcome };
