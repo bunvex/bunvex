@@ -14,7 +14,9 @@ import { anyApi, componentsGeneric } from "@bunvex/server";
 import { bunvexTest, type TestBunvex } from "@bunvex/testing";
 import { type EmailEvent, type EmailId, Resend, type ResendComponent } from "../src/client/index.ts";
 
-setDefaultTimeout(30_000);
+// The app mounts two resends (each with a rate limiter, two pools and their batch workers) and a sibling component:
+// the heaviest push of the suite. Under a full `bun run check` it can take past 30 s.
+setDefaultTimeout(60_000);
 
 const APP = join(import.meta.dir, "fixtures", "app");
 const internal = anyApi as any;
