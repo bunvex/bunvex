@@ -3,8 +3,8 @@
 # handful of PRs, not dozens; security updates come as they are found (enabled in the repository's settings).
 #
 # Left out on purpose:
-# - `convex` and `@convex-dev/*`: the differential suite's oracle, moved with the weekly upstream bump
-#   (docs/parity/upstream.md), never on their own;
+# - `convex`, `@convex-dev/*`, `convex-helpers` and `convex-test`: the differential suite's oracles and the references
+#   of @bunvex/helpers and @bunvex/testing, pinned in docs/parity/upstream.md and moved with a study, never on their own;
 # - `@tanstack/react-query`: one version across the repository (a second copy of query-core breaks the types against
 #   @bunvex/react-query), moved by hand everywhere at once;
 # - `expo`, `react-native` and Expo's packages: moved together with an Expo SDK (`bunx expo install --fix`);
@@ -25,6 +25,8 @@ updates:
     ignore:
       - dependency-name: convex
       - dependency-name: "@convex-dev/*"
+      - dependency-name: convex-helpers
+      - dependency-name: convex-test
       - dependency-name: "@tanstack/react-query"
       - dependency-name: "@tanstack/react-query-devtools"
       - dependency-name: expo
