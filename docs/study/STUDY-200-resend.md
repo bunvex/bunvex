@@ -685,6 +685,16 @@ by `outboundFetch`, AD-48):
   dropped, or 429 added) by "a permanent status fails the batch's queued emails at once"; the rank rule (`failed` ranked
   6) by "every event type from every status"; test mode's address check (the `+` dropped) by `isTestEmail`'s refusal
   case, and test mode switched off by the `messages.test.ts` and `client.test.ts` refusals.
+- **The differential test** (`packages/differential/test/resend.test.ts`, app `resend-app/`) runs the same calls with
+  `@convex-dev/resend` 0.2.10 on Convex's binary and `@bunvex/resend` on bunvex, without reaching Resend. It compares:
+  - `sendEmail`'s refusals, and for each accepted email its status queued, its status once canceled and its row;
+  - the idempotency key's dedupe;
+  - the webhook route end to end, with payloads signed with the app's secret: each event's answer, the email's status
+    and flags after it, and the `onEmailEvent` callbacks (as a multiset: the callback pool runs them in parallel);
+  - the webhook's refusals.
+  All match. A row's times (`finalizedAt`, `segment`) are compared by kind, keeping their sentinels
+  (`MAX_SAFE_INTEGER`, `Infinity`). Sabotage: letting an equal rank move the status (`>=`) fails it, at the
+  `email.failed` that follows `email.bounced`.
 
 ## 6. Not verified yet
 
