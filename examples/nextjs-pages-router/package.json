@@ -15,7 +15,7 @@
     "@bunvex/react": "workspace:*",
     "@bunvex/server": "workspace:*",
     "@bunvex/values": "workspace:*",
-    "next": "16.3.8",
+    "next": "16.4.3",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
