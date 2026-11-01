@@ -128,7 +128,7 @@ export class CronJobExecutor {
 
   /**
    * The namespaces whose crons run: the app's (null) and each component's whose code is installed, by `_components`
-   * id. A push commits a component's crons before it installs its code, then `refresh()`es: until then they wait.
+   * id. A push commits a component's crons before it installs its code, and `hold()`s the executor until then.
    */
   private namespaces(): (string | null)[] {
     const ids = [...this.engine.catalog.components]
@@ -211,9 +211,21 @@ export class CronJobExecutor {
     return db.inComponent(namespace, () => applyCrons(db, specs, Date.now(), this.o));
   }
 
-  /** Look at the stored crons again (after a commit that changed them). */
-  refresh() {
-    this.poke();
+  /** Pushes between their commit and their code's install: no cron is picked while one is. */
+  private held = 0;
+  /**
+   * Pick no cron until the returned release is called: a push commits its crons before its code goes live, and a cron
+   * due at once must run the code it names, as on Convex, where a run reads the code at its snapshot.
+   */
+  hold(): () => void {
+    this.held++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.held--;
+      this.poke();
+    };
   }
 
   /** A new code version's crons (STUDY-35): the same diff as at start, against what is stored. */
@@ -244,6 +256,12 @@ export class CronJobExecutor {
     while (!this.stopped) {
       const seen = this.pokes;
       let nextAt: number | null = null;
+      if (this.held > 0) {
+        await new Promise<void>((resolve) => {
+          this.wake = resolve;
+        });
+        continue;
+      }
       try {
         const now = this.engine.runtime.now();
         // Stopped (paused): no polling until a commit to `_backend_state` wakes the loop (Convex).
