@@ -3985,8 +3985,7 @@ export class Engine {
         ? async () => {
             const outcome = decodeCallOutcome(await workers(encodeCallRequest(request), request.ts));
             call.bodies.replay(outcome.report, call.local);
-            const value = outcome.status === "ok" && outcome.result !== null ? parseValue(outcome.result) : null;
-            return { outcome, local: { tx: undefined as unknown as Tx, value } };
+                  return { outcome, local: { tx: undefined as unknown as Tx, value: undefined } };
           }
         : this.callCodec
           ? async () => {
@@ -4005,6 +4004,16 @@ export class Engine {
       const ran = { tx: local.tx, observedTime: outcome.observedTime, now: start.now, outcome };
       if (outcome.status === "failed")
         return { ...ran, ok: false, error: call.bodies.decodeError(outcome.error ?? "") };
+      if (this.offloads(call) && outcome.status === "ok") {
+        // SPIKE: the value parsed only if asked for (the HTTP API answers with the result's text).
+        const r = { ...ran, ok: true } as Ran<T>;
+        let parsed: { v: unknown } | null = null;
+        Object.defineProperty(r, "value", {
+          enumerable: true,
+          get: () => (parsed ??= { v: outcome.result === null ? null : parseValue(outcome.result) }).v,
+        });
+        return r;
+      }
       const value =
         outcome.status === "refused"
           ? REFUSED
@@ -4069,7 +4078,8 @@ export class Engine {
     const ts = at === undefined || at > visible ? visible : at;
     if (cacheKey === undefined) {
       const ran = await this.execute("query", ts, body, false, caller);
-      return { value: ranValue(ran), json: ran.outcome.result ?? undefined };
+      if (!ran.ok) throw ran.error;
+      return lazyResult(ran, ran.outcome.result ?? undefined);
     }
     const keys = [`${cacheKey}${ID_SEP}${caller.key}`, `${cacheKey}${ID_SEP}*`] as const;
     // Where a run is coordinated once a key was found (Convex's `stored_key_hint`): a result stored shared
@@ -4140,17 +4150,17 @@ export class Engine {
       }
       throw error;
     }
-    const { value, outcome, now } = run;
-    if (!waiting) return { value, json: outcome.result ?? undefined };
+    const { outcome, now } = run;
+    if (!waiting) return lazyResult(run, outcome.result ?? undefined);
     this.cache.removeWaiting(key, waiting.id);
     if (epoch !== this.cacheEpoch) {
       waiting.settle(null);
-      return { value, json: outcome.result ?? undefined };
+      return lazyResult(run, outcome.result ?? undefined);
     }
     // Keyed by the caller only if the run read the identity (STUDY-27 §1.4). The cache keeps its own
     // serialized copy; the caller keeps `value`.
     const stored = outcome.identityObserved ? keys[0] : keys[1];
-    const json = outcome.result ?? stringifyValue(value);
+    const json = outcome.result ?? stringifyValue(ranValue(run));
     const result: CachedResult = {
       json,
       extra: wrapped?.capture(),
@@ -4165,7 +4175,7 @@ export class Engine {
     this.cache.putReady(stored, result);
     // Waiters at `key` take this result only if it is stored there; otherwise they look again.
     waiting.settle(stored === key ? result : null);
-    return { value, json };
+    return lazyResult(run, json);
   }
 
   /**
@@ -4768,6 +4778,13 @@ type ExecuteOptions = {
   /** This mutation attempt's permit was refused (`CallRequest.refused`). */
   refused?: boolean;
 };
+
+/** SPIKE: a result whose value is read off `ran` only when asked for. */
+function lazyResult<T>(ran: Ran<T>, json: string | undefined): { value: T; json?: string } {
+  const r = { json } as { value: T; json?: string };
+  Object.defineProperty(r, "value", { enumerable: true, get: () => ranValue(ran) });
+  return r;
+}
 
 function ranValue<T>(ran: Ran<T>): T {
   if (!ran.ok) throw ran.error;
