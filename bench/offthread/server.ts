@@ -64,15 +64,20 @@ if (queryWorkers > 0) {
       });
     }),
   );
-  engine.queryWorkers = (request) =>
+  engine.queryWorkers = (request, ts) =>
     new Promise<string>((resolve, reject) => {
       let best = 0;
       for (let i = 1; i < load.length; i++) if (load[i]! < load[best]!) best = i;
       load[best]!++;
       const id = ++ids;
       pending.set(id, { resolve, reject });
-      workers[best]!.postMessage([id, request]);
+      workers[best]!.postMessage([id, request, ts]);
     });
+  // Each commit's writes to every worker, before any request at its ts (a port delivers in order).
+  (engine as any).committer.onCommit((entries: { ts: bigint; writes: { index: string; key: Uint8Array }[] }[]) => {
+    const sent = entries.map((e) => ({ ts: e.ts, writes: e.writes.map((w) => ({ index: w.index, key: w.key })) }));
+    for (const w of workers) w.postMessage(["c", sent]);
+  }, "spike query workers");
   console.log(`bunvex: ${queryWorkers} query workers`);
 }
 // (d) needs the API server's handler itself: `server.fetch(req)` passes it no server object, and the handler uses

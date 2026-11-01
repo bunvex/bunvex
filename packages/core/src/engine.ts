@@ -622,7 +622,7 @@ export class Engine {
 
   // SPIKE (STUDY-194 2b, owner 2026-11-01): not product code.
   /** Where queries run instead of this thread: a request's text in, its outcome's text out. */
-  queryWorkers: ((request: string) => Promise<string>) | null = null;
+  queryWorkers: ((request: string, ts: bigint) => Promise<string>) | null = null;
   /** SPIKE: the secret and name, for a worker's reader engine. */
   get spikeIdentity() {
     return { instanceSecret: this.instanceSecret, instanceName: this.instanceName };
@@ -3983,7 +3983,7 @@ export class Engine {
       const workers = this.offloads(call) ? this.queryWorkers : null;
       const run = workers
         ? async () => {
-            const outcome = decodeCallOutcome(await workers(encodeCallRequest(request)));
+            const outcome = decodeCallOutcome(await workers(encodeCallRequest(request), request.ts));
             call.bodies.replay(outcome.report, call.local);
             const value = outcome.status === "ok" && outcome.result !== null ? parseValue(outcome.result) : null;
             return { outcome, local: { tx: undefined as unknown as Tx, value } };
