@@ -550,6 +550,27 @@
         "vite": "^8.3.5",
       },
     },
+    "examples/resend": {
+      "name": "bunvex-example-resend",
+      "version": "0.0.0",
+      "dependencies": {
+        "@bunvex/react": "workspace:*",
+        "@bunvex/resend": "workspace:*",
+        "@bunvex/server": "workspace:*",
+        "@bunvex/values": "workspace:*",
+        "react": "^19.3.1",
+        "react-dom": "^19.3.1",
+      },
+      "devDependencies": {
+        "@bunvex/cli": "workspace:*",
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "@vitejs/plugin-react": "^6.1.1",
+        "bunvex-examples-harness": "workspace:*",
+        "typescript": "^5.9.0",
+        "vite": "^8.3.1",
+      },
+    },
     "examples/rooms-cursors": {
       "name": "bunvex-example-rooms-cursors",
       "version": "0.0.0",
@@ -2220,6 +2241,8 @@
     "bunvex-example-react-query": ["bunvex-example-react-query@workspace:examples/react-query"],
 
     "bunvex-example-relational-data-modeling": ["bunvex-example-relational-data-modeling@workspace:examples/relational-data-modeling"],
+
+    "bunvex-example-resend": ["bunvex-example-resend@workspace:examples/resend"],
 
     "bunvex-example-rooms-cursors": ["bunvex-example-rooms-cursors@workspace:examples/rooms-cursors"],
 
