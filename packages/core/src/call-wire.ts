@@ -49,6 +49,11 @@ export type CallRequest = CallSpec & {
    * the call ends `refused` without running and the main thread fails it with the permit's error.
    */
   refused: boolean;
+  /**
+   * The metadata's epoch at dispatch (`Engine.metadataEpoch`): the catalog and text indexes' states the transaction
+   * begins with, sent to a worker before the first request that names it.
+   */
+  metadata: number;
 };
 
 /** How a call ended: returned, threw, refused (`CallRequest.refused`), or answered from a session's record. */
@@ -88,15 +93,18 @@ export type CallOutcome = {
   writes: CallWrites | null;
 };
 
+/** The messages between the main thread and a worker: a call's two, and the metadata its transactions read. */
+export type WireMessage = "request" | "outcome" | "metadata" | "catalog" | "search state" | "commits";
+
 /** A message that does not parse: which message, and where in it. */
 export class MalformedCallMessageError extends Error {
   override name = "MalformedCallMessageError";
   constructor(
-    readonly which: "request" | "outcome",
+    readonly which: WireMessage,
     readonly path: string,
     problem: string,
   ) {
-    super(`A malformed call ${which}: ${path}: ${problem}`);
+    super(`A malformed ${which === "request" || which === "outcome" ? `call ${which}` : which}: ${path}: ${problem}`);
   }
 }
 
@@ -131,6 +139,7 @@ export function encodeCallRequest(r: CallRequest): string {
   w.num(flag(r.tracked));
   w.opt(r.journal);
   w.num(flag(r.refused));
+  w.num(r.metadata);
   return w.s;
 }
 
@@ -184,6 +193,8 @@ export function decodeCallRequest(s: string): CallRequest {
   const journal = r.opt();
   r.at("refused");
   const refused = r.bool();
+  r.at("metadata");
+  const metadata = r.int();
   r.close();
   return {
     id,
@@ -200,6 +211,7 @@ export function decodeCallRequest(s: string): CallRequest {
     tracked,
     journal,
     refused,
+    metadata,
   };
 }
 
@@ -362,8 +374,8 @@ export function decodeCallOutcome(s: string): CallOutcome {
   };
 }
 
-/** Builds one message as #878's `WireWriter` does: its parts, joined once into a flat string. */
-class Out {
+/** @internal Builds one message as #878's `WireWriter` does: its parts, joined once into a flat string. */
+export class Out {
   private parts: string[];
   constructor(head: string) {
     this.parts = [head];
@@ -390,8 +402,8 @@ class Out {
   }
 }
 
-/** Reads a message field by field, refusing anything `Out` would not have written. */
-class WireReader {
+/** @internal Reads a message field by field, refusing anything `Out` would not have written. */
+export class WireReader {
   private pos = 0;
   // Where it is, built into a path only when a field is refused.
   private base = "";
@@ -400,7 +412,7 @@ class WireReader {
 
   constructor(
     private readonly s: string,
-    private readonly what: "request" | "outcome",
+    private readonly what: WireMessage,
   ) {}
 
   at(field: string) {
@@ -424,6 +436,10 @@ class WireReader {
     if (this.s[0] !== kind) this.fail(`expected ${JSON.stringify(kind)}, got ${JSON.stringify(this.s.slice(0, 1))}`);
     this.pos = 1;
     return this.int();
+  }
+  /** Past a header the caller checked itself. */
+  skip(n: number) {
+    this.pos += n;
   }
   close() {
     this.at("end");

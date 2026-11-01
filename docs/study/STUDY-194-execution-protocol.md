@@ -903,6 +903,34 @@ What it changes in the plan:
 - **More workers than cores do not help.** On the `c-4`'s two cores, 3 workers measured as 2. DV-574's default (the
   core count, workers started lazily) stays. Whether it should be the core count minus one needs a larger box.
 
+### 10.5.3 0d, as built (2026-11-01)
+
+- **The epoch.** `Engine.metadataEpoch` numbers what a transaction takes when it begins: the catalog and the text
+  indexes' states. It moves when the catalog is replaced (`catalog` is now a setter) or changed in place (a mutation
+  that created a table adds it to the live catalog, `engine.ts`'s commit), and when the text indexes' registry
+  changes (`SearchIndexes.generation`, which now also counts a pending push's indexes, a built index and a resumed
+  one: before, it counted only the set of names, which is all the sandbox's child needs).
+- **The request names it** (`CallRequest.metadata`, in the codec). Under the codec (the tests, Q7), the dispatcher
+  sends each epoch once through `encodeMetadata`/`decodeMetadata` before the first request that names it, keeping
+  the last four as a worker will (`EpochWindow` on the sending side, `MetadataCopies` on the other, as the sandbox's
+  `EpochWindow` and its child's map), and a query's transaction begins with that copy's catalog, not the engine's
+  object. Every core and server suite runs that way. A mutation keeps the live catalog: mutations stay on the main
+  thread in 2b.
+- **The text indexes' states** cross as their definitions and flags (`SearchIndexStates`, answering `get` and
+  `forTablet` as the registry does), not their contents: the search itself is an op to the main thread (0a), which
+  must also return the index's size, charged per search (`textQueryBytes`). That is iv's.
+- **The commits.** `encodeCommits` carries each commit's ts and written keys, the main thread's visible ts and its
+  write log's `purgedTs`. `WriteLogCopy` keeps them in the committer's own `WritesByIndex` and answers
+  `changedBetween` as the committer does (a property test against the whole log, in batches, with purges). The
+  worker's index cache checks against it (iv); before the worker started nothing is proven.
+- **Proof.** Property tests for the catalog, the states, the window and the write log. A call test where a table
+  created by an insert is a new epoch (sabotage: no in-place count → the query misses the table), and one where a
+  query on a staged index through the codec still fails as staged (sabotage: the codec drops `staged` → it answers
+  "backfilling").
+- **Seen on the way, not in 0d.** The sandbox's host keys a child's catalog by the catalog object
+  (`host-call.ts`, `catalogs` WeakMap). A table a mutation creates is added to that same object, so a child that
+  already had it is not sent the new table. Keying on `metadataEpoch` would close it. Not yet reproduced.
+
 ### 10.6 Owner questions for 2b
 
 Decided by the owner on 2026-10-27, as recommended.

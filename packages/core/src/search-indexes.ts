@@ -175,6 +175,7 @@ export class SearchIndexes {
     }
     this.pending = next;
     this.pendingByTablet = byTablet(next);
+    this.changes++;
     return added;
   }
 
@@ -215,7 +216,10 @@ export class SearchIndexes {
   private byTablet = new Map<TabletId, SearchIndexEntry[]>();
   private changes = 0;
 
-  /** How many times the set of indexes changed: what a copy of their names (the sandbox child's) is checked by. */
+  /**
+   * How many times the indexes or their states changed (added, dropped, staged, built, pending): what a copy of
+   * them (the sandbox child's names, a worker's states) is checked by.
+   */
   get generation(): number {
     return this.changes;
   }
@@ -335,6 +339,13 @@ export class SearchIndexes {
   done(e: SearchIndexEntry) {
     e.ready = true;
     e.touched = null;
+    this.changes++;
+  }
+
+  /** An index found built before the process started, after all: a search meanwhile is a new index's error. */
+  resumed(e: SearchIndexEntry) {
+    e.bootstrapping = false;
+    this.changes++;
   }
 
   /**

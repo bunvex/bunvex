@@ -131,6 +131,7 @@ import { INDEX_BACKFILL_DEFAULTS, type IndexBackfillOptions, IndexWorker } from 
 import { opaqueToInspect } from "./inspect.ts";
 import { canonicalInstanceSecret, instanceSecretBytes, kbkdfCtrHmacSha256 } from "./kbkdf.ts";
 import { knob } from "./knobs.ts";
+import { decodeMetadata, EpochWindow, encodeMetadata, MetadataCopies } from "./metadata-wire.ts";
 import {
   hasLease,
   hasRetention,
@@ -397,7 +398,32 @@ export class Engine {
   /** The index cache (STUDY-136): persistence index reads of every transaction; null when off. */
   readonly indexCache: IndexCache | null;
   /** The resolved tables and indexes (ids from `_tables` / `_index`), loaded by `init()`. */
-  catalog: Catalog = new Catalog();
+  get catalog(): Catalog {
+    return this.catalogNow;
+  }
+  set catalog(c: Catalog) {
+    this.catalogNow = c;
+    this.catalogChanges++;
+  }
+  private catalogNow = new Catalog();
+  /** How many times the catalog was replaced or changed in place (a created table). */
+  private catalogChanges = 0;
+  private metadataSeen = { catalog: -1, search: -1, epoch: 0 };
+  /**
+   * A number for the metadata a transaction reads when it begins (the catalog, the text indexes' states): it
+   * changes when they do, so a worker's copy is checked by it.
+   */
+  // STUDY-194 §4.7: the epochs a request names; a worker that lacks one gets it first (2b commit 0d).
+  get metadataEpoch(): number {
+    const m = this.metadataSeen;
+    const search = this.searchIndexes.generation;
+    if (m.catalog !== this.catalogChanges || m.search !== search) {
+      m.catalog = this.catalogChanges;
+      m.search = search;
+      m.epoch++;
+    }
+    return m.epoch;
+  }
   /** Signs pagination cursors: INSTANCE_SECRET, or the one stored in `_instance` (set by init()). */
   private instanceSecret = "";
   /** The deployment's name (Convex's INSTANCE_NAME): admin keys carry it (STUDY-34). Set by `init()`. */
@@ -432,6 +458,17 @@ export class Engine {
    */
   readonly callCodec: boolean;
   private callIds = 0;
+  /**
+   * Under the codec, the metadata as one worker would have it: each epoch a request names, sent once through the
+   * codec before that request, the last few kept (STUDY-194 §4.7, 2b commit 0d).
+   */
+  private readonly metadataSent = new EpochWindow();
+  private readonly metadataCopies = new MetadataCopies();
+  private sendMetadata(epoch: number) {
+    if (this.metadataSent.has(epoch)) return;
+    this.metadataSent.add(epoch);
+    this.metadataCopies.hear(decodeMetadata(encodeMetadata(epoch, this.catalog, this.searchIndexes)));
+  }
   /** The deployment's run state, as every user function checks it (STUDY-63). */
   readonly backendState: BackendStateCache;
   /** The search indexes of the active tables, in memory (STUDY-45 S1). */
@@ -1970,7 +2007,8 @@ export class Engine {
           lastTs = resume.ts;
           this.searchStats.resumed++;
           // Never ready before: a search meanwhile is Convex's `IndexBackfillingError`.
-          e.bootstrapping = false;
+          if (kind === "text") this.searchIndexes.resumed(e as SearchIndexEntry);
+          else e.bootstrapping = false;
         } catch {
           cursor = null;
         }
@@ -3840,7 +3878,12 @@ export class Engine {
 
   /** A transaction for a call or the engine's own body, wired to the engine's store and services (`CallHost.begin`). */
   private beginTx(s: TxStart): Tx {
-    const tx = new Tx(this.catalog, this.persistence, s.ts, s.kind === "mutation", s.now, s.system);
+    // A query's call under the codec begins with the catalog a worker would have been sent (STUDY-194 §4.7).
+    const catalog =
+      this.callCodec && s.kind === "query" && s.metadata !== undefined
+        ? this.metadataCopies.get(s.metadata).catalog
+        : this.catalog;
+    const tx = new Tx(catalog, this.persistence, s.ts, s.kind === "mutation", s.now, s.system);
     // Only a mutation hands out creation times: a query begun meanwhile must not hide its cursor.
     if (s.kind === "mutation") this.lastTx = tx;
     tx.retention = this.retention;
@@ -3951,7 +3994,9 @@ export class Engine {
         tracked: start.tracked,
         journal: start.journal,
         refused: opts.refused === true,
+        metadata: this.metadataEpoch,
       };
+      if (this.callCodec) this.sendMetadata(request.metadata);
       // Through the codec under the tests; as objects otherwise (STUDY-194 Q7).
       // What it logged goes where it would have logged it: inside `wrap` (the query cache keeps it with the result).
       const run = this.callCodec
@@ -4559,6 +4604,8 @@ export class Engine {
         const value = resolved(ts);
         // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
         // durable; a transaction that raced to create the same table conflicted on _tables and retries).
+        // Changed in place, not replaced: counted for the metadata's epoch.
+        if (tx.createdTables.size) this.catalogChanges++;
         for (const { def } of tx.createdTables.values()) {
           let space = this.catalog;
           if (def.namespace !== undefined) {

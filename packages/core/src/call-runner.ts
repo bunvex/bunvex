@@ -41,6 +41,8 @@ export type TxStart = {
   /** A subscription's run: reactive pagination's journal, and no index cache (as `queryTracked` always ran). */
   tracked: boolean;
   journal: string | null;
+  /** A call's metadata epoch (`CallRequest.metadata`); absent for the engine's own transactions. */
+  metadata?: number;
 };
 
 /**
@@ -254,6 +256,7 @@ export class CallRunner {
           request: request.request,
           tracked: request.tracked,
           journal: request.journal,
+          metadata: request.metadata,
         },
         session
           ? (db) =>

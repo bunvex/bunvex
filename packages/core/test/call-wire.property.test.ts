@@ -51,6 +51,7 @@ const request: fc.Arbitrary<CallRequest> = fc.record({
   tracked: fc.boolean(),
   journal: optText,
   refused: fc.boolean(),
+  metadata: fc.nat(),
 });
 
 const outcome: fc.Arbitrary<CallOutcome> = fc.record({
@@ -144,6 +145,7 @@ describe("the call boundary's codec", () => {
             tracked: false,
             journal: null,
             refused: false,
+            metadata: 0,
           }),
         );
         expect(parseValue(r.args)).toEqual(v as Value);
