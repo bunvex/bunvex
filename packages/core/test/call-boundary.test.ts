@@ -131,3 +131,16 @@ test("a query's call through the codec sees an index's state as the engine does:
     "Index items.by_n is currently staged and not available to query until it is enabled.",
   );
 });
+
+// What a subscription does: a commit's listener reruns the query at that commit. A table the commit created is in the
+// catalog by then (before, it was added after the listeners, and a query's copy of the catalog missed it for good).
+test("a query a commit's listener dispatches finds the table that commit created", async () => {
+  const e = await engine();
+  const { call } = recording(async (db) => (await db.query("notes").collect()).length);
+  let rerun: Promise<string> | undefined;
+  e.committer.onCommit(() => {
+    rerun ??= e.queryJson(call("query", {})) as Promise<string>;
+  });
+  await e.mutation((db) => db.insert("notes", { text: "hi" }));
+  expect(await rerun).toBe("1");
+});

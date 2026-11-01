@@ -923,6 +923,13 @@ What it changes in the plan:
   write log's `purgedTs`. `WriteLogCopy` keeps them in the committer's own `WritesByIndex` and answers
   `changedBetween` as the committer does (a property test against the whole log, in batches, with purges). The
   worker's index cache checks against it (iv); before the worker started nothing is proven.
+- **Created tables join the catalog as their commit becomes visible.** They were added after the commit returned,
+  so after the commit listeners, which rerun subscriptions at that commit's ts. In-thread that went unseen: the rerun's
+  transaction held the live catalog, which the engine changed in place before the query read. A copy (a worker's, or
+  the codec's in the tests) missed the table for good: `bunvex run --watch` stayed at `[]` after the first insert.
+  They are now added in the commit's `onVisible`, where the search indexes and table counts are applied, before the
+  listeners. A table a deployment finds missing from its catalog, deleted, also crosses: a table being deleted may be
+  left with no enabled `by_id` (`_scheduled_jobs` in the OpenAPI test), and the codec keeps that as it is.
 - **Proof.** Property tests for the catalog, the states, the window and the write log. A call test where a table
   created by an insert is a new epoch (sabotage: no in-place count → the query misses the table), and one where a
   query on a staged index through the codec still fails as staged (sabotage: the codec drops `staged` → it answers

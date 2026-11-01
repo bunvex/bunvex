@@ -54,20 +54,20 @@ const table = (number: number): fc.Arbitrary<TableDef> =>
           namespace: id,
           indexes: fc.uniqueArray(index(tableName), { selector: (ix) => ix.name, maxLength: 4 }),
           pending: fc.array(index(tableName), { maxLength: 2 }),
+          // A table being deleted can be left with no enabled by_id (its indexes disabled or dropped).
+          hasById: fc.boolean(),
         },
-        { requiredKeys: ["id", "indexes", "pending"] },
+        { requiredKeys: ["id", "indexes", "pending", "hasById"] },
       )
-      .map(({ indexes, ...t }) => {
+      .map(({ indexes, hasById, ...t }) => {
         const byId: IndexDef = { id: `${t.id}/by_id`, table: tableName, name: "by_id", fields: ["_id"] };
+        const others = indexes.filter((ix) => ix.name !== "by_id").map((ix) => [ix.name, ix] as const);
         const out: TableDef = {
           ...t,
           name: tableName,
           number,
-          indexes: new Map([
-            ["by_id", byId],
-            ...indexes.filter((ix) => ix.name !== "by_id").map((ix) => [ix.name, ix] as const),
-          ]),
-          byId,
+          indexes: new Map(hasById ? [["by_id", byId], ...others] : others),
+          byId: (hasById ? byId : undefined) as IndexDef,
         };
         return out;
       }),
@@ -132,16 +132,6 @@ describe("the catalog", () => {
       "A malformed catalog: components: the message ends inside a field",
     );
     expect(() => decodeCatalog(`${s}0:`)).toThrow("A malformed catalog: end: 2 characters past the last field");
-    const noById = new Catalog();
-    noById.tables.set("x", {
-      id: "t",
-      number: 1,
-      name: "x",
-      indexes: new Map(),
-      pending: [],
-      byId: undefined as never,
-    });
-    expect(() => decodeCatalog(encodeCatalog(noById))).toThrow('table "x" has no by_id index');
   });
 });
 

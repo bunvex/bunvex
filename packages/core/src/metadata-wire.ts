@@ -108,9 +108,8 @@ function readTable(r: WireReader, list: string, i: number): TableDef {
   r.item(list, i, "pending");
   const pending: IndexDef[] = new Array(r.count());
   for (let j = 0; j < pending.length; j++) pending[j] = readIndex(r);
-  const byId = indexes.get("by_id");
-  if (!byId) r.fail(`table ${JSON.stringify(name)} has no by_id index`);
-  const t: TableDef = { id, number, name, indexes, pending, byId };
+  // As the catalog derives it: a table whose indexes a deletion or a disable left without one has none.
+  const t: TableDef = { id, number, name, indexes, pending, byId: indexes.get("by_id") as IndexDef };
   if (metaId !== null) t.metaId = metaId;
   if (namespace !== null) t.namespace = namespace;
   return t;

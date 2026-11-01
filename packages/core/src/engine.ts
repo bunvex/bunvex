@@ -1355,6 +1355,45 @@ export class Engine {
    * A commit's search part (STUDY-45 PR 3): its versions and their read-set keys. Its searches to check come with
    * the call's outcome (`CallOutcome.searchReads`).
    */
+  /**
+   * What a mutation's commit does to the engine's own state as it becomes visible, before the commit listeners rerun
+   * anything: the tables it created join the catalog (a rerun begun at its ts must find them), then its own hook.
+   */
+  private visibleHook(tx: Tx): ((ts: bigint) => void) | undefined {
+    const own = tx.onCommitVisible ?? undefined;
+    if (!tx.createdTables.size) return own;
+    return (ts) => {
+      this.addCreatedTables(tx);
+      own?.(ts);
+    };
+  }
+
+  /**
+   * Tables a mutation created exist for everyone from its commit on (their _tables/_index documents are durable; a
+   * transaction that raced to create the same table conflicted on _tables and retried).
+   */
+  private addCreatedTables(tx: Tx) {
+    // Changed in place, not replaced: counted for the metadata's epoch.
+    this.catalogChanges++;
+    for (const { def } of tx.createdTables.values()) {
+      let space = this.catalog;
+      if (def.namespace !== undefined) {
+        space = this.catalog.components.get(def.namespace) ?? new Catalog();
+        this.catalog.components.set(def.namespace, space);
+      }
+      if (space.tables.has(def.name)) continue;
+      const added = space.add(
+        def.name,
+        def.id,
+        def.number,
+        [...def.indexes.values()].map((i) => ({ name: i.name, fields: i.fields, id: i.id })),
+        "active",
+        def.metaId,
+      );
+      if (def.namespace !== undefined) added.namespace = def.namespace;
+    }
+  }
+
   private searchCommit(tx: Tx, own: ((ts: bigint) => void) | undefined) {
     const writes = tx.writtenDocs();
     const { docs, keys, indexed } = this.searchIndexes.commitWrites(writes);
@@ -4662,7 +4701,7 @@ export class Engine {
           docs,
           idx,
           source,
-          ...this.searchCommit(tx, tx.onCommitVisible ?? undefined),
+          ...this.searchCommit(tx, this.visibleHook(tx)),
           ...(ran.outcome.searchReads.length ? { searchReads: ran.outcome.searchReads } : {}),
           ...(tx.hasCommitTs
             ? {
@@ -4681,27 +4720,6 @@ export class Engine {
         }
         const ts = await this.committer.commit(pending);
         const value = resolved(ts);
-        // Tables the mutation created exist for everyone from now on (their _tables/_index documents are
-        // durable; a transaction that raced to create the same table conflicted on _tables and retries).
-        // Changed in place, not replaced: counted for the metadata's epoch.
-        if (tx.createdTables.size) this.catalogChanges++;
-        for (const { def } of tx.createdTables.values()) {
-          let space = this.catalog;
-          if (def.namespace !== undefined) {
-            space = this.catalog.components.get(def.namespace) ?? new Catalog();
-            this.catalog.components.set(def.namespace, space);
-          }
-          if (space.tables.has(def.name)) continue;
-          const added = space.add(
-            def.name,
-            def.id,
-            def.number,
-            [...def.indexes.values()].map((i) => ({ name: i.name, fields: i.fields, id: i.id })),
-            "active",
-            def.metaId,
-          );
-          if (def.namespace !== undefined) added.namespace = def.namespace;
-        }
         runAfterCommit(tx);
         return withTs ? { value, ts } : value;
       } catch (e) {
