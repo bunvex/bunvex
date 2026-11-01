@@ -1,7 +1,8 @@
 # STUDY-201 — Built-in auth, the core
-<!-- index: the first build step of built-in auth (STUDY-191 §3.4 step 3): Convex Auth v2's `auth` component (accounts, sessions, refresh-token rotation, deployment-signed access tokens), `authPassword`, `authUsername`, `authAnonymous`, the username + password and anonymous methods, `getAuthUserId` on the live session, the React client and the browser session manager; written from convex/convex-auth `reboot` at db15c82e | open: C-1–C-8 -->
+<!-- index: the first build step of built-in auth (STUDY-191 §3.4 step 3): Convex Auth v2's `auth` component (accounts, sessions, refresh-token rotation, deployment-signed access tokens), `authPassword`, `authUsername`, `authAnonymous`, the username + password and anonymous methods, `getAuthUserId` on the live session, the React client and the browser session manager; written from convex/convex-auth `reboot` at db15c82e | decided (owner, 2026-11-01): C-1–C-8 as recommended, C-2 a native hasher (AD-49); DV-577 and DV-581 extended -->
 
-- **Status:** open, waiting for the owner on C-1–C-8 (§7). Decided already: STUDY-191's A-1–A-8 (DV-575–DV-577);
+- **Status:** decided (owner, 2026-11-01): C-1–C-8 as recommended, except C-2, where the owner chose the native
+  hasher (AD-49) over v2's WASM; C-3 extends DV-581, C-4 DV-577. To be built (§3.5). Decided before: STUDY-191's A-1–A-8 (DV-575–DV-577);
   the rename of `packages/auth` to `@bunvex/identity`, with `@bunvex/auth` reused for the auth components (A-2,
   confirmed by the owner on 2026-11-01, §3.2).
 - **Scope:** STUDY-191 §3.4 step 3, "the core": the `auth` component; `authAnonymous`, `authUsername`,
@@ -526,6 +527,11 @@ from npm, bundled with bunvex's `PLUGINS` and run inside a `vm` context (script 
 - Per call the cost is the same; the difference is that the WASM runs on the thread that runs every other function
   of the deployment (bunvex runs functions in one process, or one sandbox child), where Convex gives each function
   its own isolate thread.
+- **A second measurement (2026-11-01): `node:crypto` `argon2`**, which Bun implements natively and which takes the salt
+  (`nonce`). With the same 16-byte salt and parameters (`memory: 16384`, `passes: 3`, `parallelism: 1`, `tagLength:
+  32`), its PHC string is **byte for byte** `argon2id-wasm`'s (`$v=19$m=16384,t=3,p=1$Aw4ZJC86RVBbZnF8h5KdqA$…`
+  on both), and the WASM verifies it. The asynchronous `argon2` runs on the thread pool: 8 concurrent hashes in
+  48 ms, at most 11.5 ms of event-loop lag. So the salt can stay the mutation's seeded one, as v2's (C-2).
 
 ### 1.16 Upstream's tests for the core
 
@@ -729,8 +735,12 @@ higher version, so the name is reused on purpose; deprecating the old version on
 Everything §1.14 lists is in bunvex, with the file that provides it, except two things:
 - **`t.jwks()` in `@bunvex/testing`.** convex-test has it since 0.0.65 (`ed7a5ce`, "Support ctx.auth.signJwt in
   mutations"), and upstream's `core.test.ts` verifies every token with it. It is parity with convex-test (STUDY-159), not an addition: built in its own small PR (C-6).
-- **A native hasher** reachable from component code. Only if C-2 chooses it; otherwise nothing is missing (the
-  WASM works in bunvex's bundler and contexts, checked in §1.14).
+- **The native hasher** (C-2, AD-49): an internal runtime operation, `argon2id(password, salt)` and its verify, that
+  `authPassword`'s functions call and the server answers with Bun's `node:crypto` argon2 on its thread pool (in the
+  host under the function sandbox, as `signJwt`'s signing is, DV-579). The salt is drawn in the mutation from its
+  seeded stream, as v2 draws it, so the PHC string is v2's byte for byte (checked: the same salt gives the same
+  string as `argon2id-wasm`). The runtime answers it only to `authPassword`'s functions; the context stays closed
+  otherwise (no `Bun`, no `node:` modules). `argon2id-wasm` is not a dependency.
 
 ### 3.4 Tests
 
@@ -752,22 +762,26 @@ Everything §1.14 lists is in bunvex, with the file that provides it, except two
 
 1. The rename (§3.2).
 2. `t.jwks()` in `@bunvex/testing` (C-6).
-3. The server side: the four components, `setupAuth`, the two methods' server code, `bunvexAuthProvider`,
+3. The native hasher's runtime operation (AD-49), in the function context and the process sandbox, with tests
+   against `argon2id-wasm`'s strings (a test dependency only) and the check that only `authPassword` may call it.
+4. The server side: the four components, `setupAuth`, the two methods' server code, `bunvexAuthProvider`,
    `getAuthUserId`, with the ported tests and the differential test.
-4. The clients: `./react`, `./browser`, the methods' React hooks (and the inert `oauth()` ambient sign-in, C-5).
-5. The examples: username + password, and anonymous.
-6. Later: the `init` CLI (C-8).
+5. The clients: `./react`, `./browser`, the methods' React hooks (and the inert `oauth()` ambient sign-in, C-5).
+6. The examples: username + password, and anonymous.
+7. Later: the `init` CLI (C-8).
 
 ## 4. Divergences
 
 | # | Divergence | Why | Decision |
 |---|---|---|---|
-| C-3 | `authPassword`'s child `rateLimiter` is bunvex's rate limiter, 0.4.2's shape (its own `batchWorker` child and `pendingUpdates` table), where Convex Auth mounts 0.3.2: DV-581 extended | one rate limiter in bunvex; the password limit is one token-bucket `limit` call, the same in both versions | open |
-| C-4 | The names of §2.8 not yet decided, in bunvex's words (storage keys and the OAuth URL parameters under DV-577; the rest under rule 5) | rule 5 | open |
+| C-3 | `authPassword`'s child `rateLimiter` is bunvex's rate limiter, 0.4.2's shape (its own `batchWorker` child and `pendingUpdates` table), where Convex Auth mounts 0.3.2: DV-581 extended | one rate limiter in bunvex; the password limit is one token-bucket `limit` call, the same in both versions | DV-581, extended (owner, 2026-11-01) |
+| C-4 | The names of §2.8 not yet decided, in bunvex's words (storage keys and the OAuth URL parameters under DV-577; the rest under rule 5) | rule 5 | DV-577, extended, and rule 5 (owner, 2026-11-01) |
 
 ## 4b. Additions
 
-None, unless C-2 chooses a native hasher (then an AD, with its own measurement and plumbing).
+| # | Addition | Why | Decision |
+|---|---|---|---|
+| C-2 | Password hashing off the JS thread: an internal runtime operation for `authPassword`, answered with Bun's native argon2, the PHC strings byte for byte v2's | the same cost per hash, but v2's WASM stops the deployment's one JS thread for each (§1.15); measured: 8 native hashes in 48 ms with at most 11 ms of event-loop lag | AD-49 (owner, 2026-11-01) |
 
 ## 5. Tests
 
@@ -782,6 +796,10 @@ As §3.4, once built.
   daily triage when they land upstream; a store of the pinned beta is not migrated (STUDY-191 §3.5).
 
 ## 7. Questions for the owner
+
+All decided by the owner on 2026-11-01 as recommended, except C-2: the native hasher (AD-49), chosen after the
+comparison of §1.15 and a second measurement (Bun's `node:crypto` argon2 takes the salt, so its strings equal the
+WASM's).
 
 | # | Question | Recommendation |
 |---|---|---|
