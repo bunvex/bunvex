@@ -927,9 +927,6 @@ What it changes in the plan:
   created by an insert is a new epoch (sabotage: no in-place count → the query misses the table), and one where a
   query on a staged index through the codec still fails as staged (sabotage: the codec drops `staged` → it answers
   "backfilling").
-- **Seen on the way, not in 0d.** The sandbox's host keys a child's catalog by the catalog object
-  (`host-call.ts`, `catalogs` WeakMap). A table a mutation creates is added to that same object, so a child that
-  already had it is not sent the new table. Keying on `metadataEpoch` would close it. Not yet reproduced.
 
 ### 10.6 Owner questions for 2b
 
